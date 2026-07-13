@@ -17,7 +17,7 @@
  */
 
 import { z } from "zod"
-import { DEFAULT_BUILTIN_TOOLS, type BuiltinToolsConfig } from "@/lib/claude/types"
+import { DEFAULT_BUILTIN_TOOLS, type BuiltinToolsConfig } from "@cognia/agent-config-types"
 
 /** AI SDK protocol families the sidecar's dispatch table understands. Mirrors
  *  BUILTIN_PROTOCOL_NAMES in sidecar/dispatch/protocol-adapters/provider-protocol.mjs. */

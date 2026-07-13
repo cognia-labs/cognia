@@ -9,7 +9,7 @@
 // settings-panel UI state and shouldn't be persisted to localStorage.
 
 import { create } from "zustand"
-import type { McpServer, McpTransport } from "@/lib/claude/types"
+import type { McpServer, McpTransport } from "@cognia/agent-config-types"
 
 export type McpPanelTab = "my-servers" | "presets" | "agents" | "health"
 

@@ -21,7 +21,7 @@ import { verify, type VerifyOutcome } from "@/lib/capacitor/biometric"
 import { clearCompanionConfig } from "@/lib/tauri/transport-companion"
 import { useActiveAnthropicCredential } from "@/lib/subscription/anthropic/hooks"
 import { useSettingsStore } from "@/stores/settings"
-import { DEFAULT_BIOMETRIC_GUARD } from "@/lib/claude/types"
+import { DEFAULT_BIOMETRIC_GUARD } from "@cognia/agent-config-types"
 
 export type SignOutOutcome =
   | { kind: "ok" }

@@ -15,7 +15,7 @@
  * section's owned keys.
  */
 
-import type { AppSettings } from "@/lib/claude/types"
+import type { AppSettings } from "@cognia/agent-config-types"
 import { DEFAULTS } from "@/lib/db/settings"
 
 export const SETTINGS_PROFILE_SCHEMA = "cognia-settings" as const

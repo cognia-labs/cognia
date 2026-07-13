@@ -13,7 +13,7 @@ import {
   type ProviderSettingsEntry,
   type RichCustomProviderEntry,
 } from "@/lib/ai/provider-consumption"
-import type { AppSettings } from "@/lib/claude/types"
+import type { AppSettings } from "@cognia/agent-config-types"
 
 type ProviderSettingsSlice = Pick<
   AppSettings,

@@ -90,7 +90,7 @@ import { render } from "@testing-library/react"
 import { SparklesIcon } from "lucide-react"
 import { ChatPane } from "./chat-view"
 import { MessageList } from "./message-list"
-import type { ChatSession, SendContent } from "@/lib/claude/types"
+import type { ChatSession, SendContent } from "@cognia/agent-config-types"
 
 const mockSession = { id: "s1", title: "Test" } as unknown as ChatSession
 

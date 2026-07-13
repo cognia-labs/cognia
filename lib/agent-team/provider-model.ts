@@ -1,5 +1,5 @@
 import type { LanguageModel } from "ai"
-import type { AppSettings } from "@/lib/claude/types"
+import type { AppSettings } from "@cognia/agent-config-types"
 import {
   createFeatureProviderModel,
   createProviderSettingsSnapshot,

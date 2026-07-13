@@ -20,7 +20,7 @@ import {
   type SubagentModelOverride,
 } from "./schema"
 import { userConfigPath, type FileReader } from "./load"
-import type { BuiltinToolsConfig } from "@/lib/claude/types"
+import type { BuiltinToolsConfig } from "@cognia/agent-config-types"
 
 export interface ConfigMutateFs {
   read: FileReader

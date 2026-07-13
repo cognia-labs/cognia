@@ -1,4 +1,4 @@
-import type { Skill, SkillCategory, SkillSource, SkillStatus } from "@/lib/claude/types"
+import type { Skill, SkillCategory, SkillSource, SkillStatus } from "@cognia/agent-config-types"
 import { BUILT_IN_SKILL_CATALOG, builtinSkillId } from "@/lib/skills/built-in-catalog"
 import { getDb } from "./schema"
 import {

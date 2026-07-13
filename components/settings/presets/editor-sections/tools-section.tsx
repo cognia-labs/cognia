@@ -12,7 +12,7 @@ import { useTranslations } from "next-intl"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { SettingsCard } from "@/components/settings/common/settings-section"
-import type { McpServer, Skill } from "@/lib/claude/types"
+import type { McpServer, Skill } from "@cognia/agent-config-types"
 
 import type { PresetEditorState } from "../preset-editor-state"
 

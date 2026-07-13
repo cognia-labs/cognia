@@ -3,7 +3,7 @@
  */
 import { toBuildContext } from "./to-build-context"
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "./schema"
-import { DEFAULT_BUILTIN_TOOLS } from "@/lib/claude/types"
+import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
 
 function cfg(p: Partial<ResolvedConfig> = {}): ResolvedConfig {
   const base: ResolvedConfig = {

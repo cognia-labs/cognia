@@ -3,7 +3,7 @@
  * Types for scheduled tasks, cron expressions, and task execution
  */
 
-import type { BuiltinToolsConfig, SendOptions } from "@/lib/claude/types"
+import type { BuiltinToolsConfig, SendOptions } from "@cognia/agent-config-types"
 import type { AcpPermissionMode } from "@/types/agent/external-agent"
 import type { GoalConfig } from "@/types/goal"
 

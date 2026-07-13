@@ -16,7 +16,7 @@
  * or when no model is determinable. Callers treat `null` as "silently skip".
  */
 
-import type { AppSettings, ChatSession } from "@/lib/claude/types"
+import type { AppSettings, ChatSession } from "@cognia/agent-config-types"
 import { createLlmClient, type LlmClient } from "@/lib/twin/distill/llm"
 import {
   createProviderSettingsSnapshot,

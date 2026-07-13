@@ -24,7 +24,7 @@
  * leak through the reference.
  */
 
-import type { Character, PackPristineSnapshot, SendOptions } from "@/lib/claude/types"
+import type { Character, PackPristineSnapshot, SendOptions } from "@cognia/agent-config-types"
 import type {
   PluginCharacterAvatarImage,
   PluginCharacterDef,

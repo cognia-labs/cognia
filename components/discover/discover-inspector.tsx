@@ -32,7 +32,7 @@ import type {
   DiscoverExternalAgentPreset,
   DiscoverTeamTemplate,
 } from "@/hooks/discover/use-discover-query"
-import type { Character, McpServer, Skill, Team } from "@/lib/claude/types"
+import type { Character, McpServer, Skill, Team } from "@cognia/agent-config-types"
 import type { PluginRow } from "@/lib/db/plugin-types"
 import type { ConnectorMeta } from "@/lib/connectors/adapter-metadata"
 import type { DiscoverCategoryId, DiscoverView } from "@/lib/discover/categories"
