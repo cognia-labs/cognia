@@ -56,6 +56,9 @@
     "release:sync-keys:check": "node scripts/sync/release-sync-keys.mjs --check",
     "version:sync": "node scripts/sync/version-sync.mjs",
     "version:sync:check": "node scripts/sync/version-sync.mjs --check",
+    "changeset": "changeset",
+    "changeset:status": "changeset status",
+    "release:version": "changeset version && pnpm version:sync",
     "config:sync": "node scripts/sync/config-sync.mjs",
     "config:sync:check": "node scripts/sync/config-sync.mjs --check",
     "config:sync:test": "node --test scripts/sync/config-sync.test.mjs",
@@ -291,6 +294,7 @@
     ]
   },
   "devDependencies": {
+    "@changesets/cli": "^2.31.0",
     "@commitlint/cli": "^20.5.3",
     "@commitlint/config-conventional": "^20.5.3",
     "@playwright/test": "^1.61.1",
