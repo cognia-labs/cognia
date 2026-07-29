@@ -3,45 +3,29 @@ import type { Table } from "dexie"
 import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { AppSettings } from "@cognia/agent-config-types"
+import { CROSS_PLATFORM_SETTING_KEYS } from "@cognia/agent-config-types/settings-sync"
 
 import type { SyncCursor, SyncOutcome } from "../types"
 import { runSyncHandler } from "./base"
 
 /**
- * Settings fields that are safe to mirror from the desktop onto a phone.
+ * Settings fields that are safe to mirror from the host onto a paired client.
  *
- * The singleton `AppSettings` row mixes portable preferences (theme,
- * language, model defaults) with desktop-only / device-local state
- * (filesystem `defaultWorkingDir`, `networkProxy`, `apiKey`, wallpapers,
- * imported VSCode themes, OCR provider config, …). A blind whole-row
- * `bulkPut` would clobber the phone's own device-local fields with the
- * desktop's. We instead merge only this allowlist over the phone's current
- * row, leaving everything else the phone set locally untouched.
+ * The singleton `AppSettings` row mixes portable preferences (theme, language,
+ * model defaults) with desktop-only / device-local state (filesystem
+ * `defaultWorkingDir`, `networkProxy`, `apiKey`, OCR provider config, …). A
+ * blind whole-row `bulkPut` would clobber the client's own device-local fields
+ * with the host's, so we merge only this subset.
+ *
+ * The list is no longer written here: it is derived from the one classification
+ * table in `packages/agent-config-types/src/settings-sync.ts`, which also
+ * generates the Rust write-allowlist. They used to be two hand-maintained lists
+ * and had drifted badly — ~51 fields were writable up but never mirrored back
+ * (so the phone's appearance, TTS, notification and search preferences silently
+ * diverged from the desktop's forever), and the WebRTC/signaling fields were
+ * classified in exactly the wrong direction.
  */
-export const CROSS_PLATFORM_SETTING_KEYS = [
-  "profile",
-  "theme",
-  "language",
-  "fontScale",
-  "density",
-  "radius",
-  "motion",
-  "typographyExt",
-  "a11y",
-  "autoMode",
-  "defaultModel",
-  "defaultSystemPrompt",
-  "defaultMaxThinkingTokens",
-  "permissionMode",
-  "bareMode",
-  "debugMode",
-  "briefMode",
-  "conversationTitle",
-  "conversationTimeline",
-  // ADR-0056 (Wave 3) — mirror the desktop's project-instruction loading config
-  // so the phone's `/me/instructions` page shows the live values it edits back.
-  "instructions",
-] as const satisfies readonly (keyof AppSettings)[]
+export { CROSS_PLATFORM_SETTING_KEYS }
 
 /**
  * Merge the allowlisted cross-platform fields from the desktop's settings

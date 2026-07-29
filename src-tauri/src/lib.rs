@@ -708,6 +708,8 @@ pub fn run() {
             fleet::island_window::island_set_tucked,
             fleet::island_window::island_list_monitors,
             fleet::island_window::island_set_monitor,
+            fleet::island_window::island_get_hide_on_fullscreen,
+            fleet::island_window::island_set_hide_on_fullscreen,
             fleet::island_window::island_debug_geometry,
             fleet::island_window::island_restore,
             tray::commands::tray_set_menu,

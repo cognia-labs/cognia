@@ -12,6 +12,7 @@
 
 import { memo, useMemo } from "react"
 import dynamic from "next/dynamic"
+import { Skeleton } from "@/components/ui/skeleton"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
@@ -47,7 +48,7 @@ const MathBlock = dynamic(
   () => import("@/components/chat/renderers/math-block").then((m) => ({ default: m.MathBlock })),
   {
     ssr: false,
-    loading: () => <div className="my-3 h-12 animate-pulse rounded bg-muted" aria-hidden="true" />,
+    loading: () => <Skeleton className="my-3 h-12" />,
   }
 )
 
@@ -56,7 +57,7 @@ const MathInline = dynamic(
   {
     ssr: false,
     loading: () => (
-      <span className="inline-block h-4 w-12 animate-pulse rounded bg-muted" aria-hidden="true" />
+      <Skeleton className="inline-block h-4 w-12" />
     ),
   }
 )
@@ -66,7 +67,7 @@ const MermaidBlock = dynamic(
     import("@/components/chat/renderers/mermaid-block").then((m) => ({ default: m.MermaidBlock })),
   {
     ssr: false,
-    loading: () => <div className="my-3 h-32 animate-pulse rounded bg-muted" aria-hidden="true" />,
+    loading: () => <Skeleton className="my-3 h-32" />,
   }
 )
 
@@ -74,7 +75,7 @@ const DiffBlock = dynamic(
   () => import("@/components/chat/renderers/diff-block").then((m) => ({ default: m.DiffBlock })),
   {
     ssr: false,
-    loading: () => <div className="my-3 h-16 animate-pulse rounded bg-muted" aria-hidden="true" />,
+    loading: () => <Skeleton className="my-3 h-16" />,
   }
 )
 
@@ -82,7 +83,7 @@ const A2UIBlock = dynamic(
   () => import("@/components/chat/renderers/a2ui-block").then((m) => ({ default: m.A2UIBlock })),
   {
     ssr: false,
-    loading: () => <div className="my-3 h-24 animate-pulse rounded bg-muted" aria-hidden="true" />,
+    loading: () => <Skeleton className="my-3 h-24" />,
   }
 )
 
