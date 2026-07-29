@@ -4062,6 +4062,7 @@
       "title": "智能体有个问题"
     },
     "branch": {
+      "ariaLineage": "跳到「{title}」中创建这条分支的那条消息",
       "cancel": "取消",
       "confirm": "创建分支",
       "createError": "创建分支失败",
@@ -4071,6 +4072,8 @@
         "hint": "原样复制到这条消息为止的对话。",
         "label": "直接分支"
       },
+      "lineage": "分叉自 {title}",
+      "lineageUnknownParent": "已删除的对话",
       "summary": {
         "generating": "正在生成摘要……",
         "hint": "总结目前为止的对话并作为分支起点（让上下文更精简）。",
@@ -4844,6 +4847,9 @@
       "bookmarkTooltip": "收藏",
       "branchLabel": "分支对话",
       "branchTooltip": "从这里分支",
+      "bringBackDone": "已添加到主对话的输入框",
+      "bringBackLabel": "带回主对话",
+      "bringBackTooltip": "引用到主对话",
       "copyDone": "已复制！",
       "copyLabel": "复制消息",
       "copyLinkDone": "链接已复制！",
@@ -5111,15 +5117,12 @@
     },
     "runPanel": {
       "ariaDiscardQueue": "丢弃排队的消息",
-      "ariaEditSteer": "编辑排队的消息",
       "ariaInterrupt": "中断当前回合",
-      "ariaRemoveSteer": "移除排队的消息",
-      "ariaSteerAttachments": "{count} 个附件",
+      "ariaLocateSteer": "跳到第一条未送达的消息",
       "ariaSteerQueue": "待发送消息",
       "ariaSubagent": "子智能体",
       "collapse": "收起运行详情",
       "discardQueue": "丢弃",
-      "emptySteer": "（空）",
       "expand": "展开运行详情",
       "lastRun": "上一轮",
       "lastRunSummary": "{count} 个工具 · {elapsed}",
@@ -5128,6 +5131,10 @@
       "sectionSubagents": "子智能体",
       "sectionSummary": "概要",
       "sectionTools": "工具",
+      "steerNowConfirmAccept": "中断并发送",
+      "steerNowConfirmBody": "这会停止当前回合、取消正在运行的工具调用，并立即发送你排队的消息。已经完成的工作会保留。",
+      "steerNowConfirmCancel": "继续运行",
+      "steerNowConfirmTitle": "要中断这个回合吗？",
       "summarySubagents": "{count} 个子智能体",
       "summaryTodos": "{done}/{total} 项待办",
       "summaryTools": "{count} 个工具"
@@ -5140,7 +5147,8 @@
       "metricSpeed": "{value} tok/s",
       "metricTokens": "{value} tok",
       "queued": "{count} 条待发送",
-      "steerNow": "立即发送",
+      "steerNow": "中断并发送",
+      "steerNowHint": "停止当前回合、取消正在运行的工具，并立即发送你排队的消息",
       "waitingApproval": "等待审批",
       "working": "运行中"
     },
@@ -5205,6 +5213,19 @@
       "styleSamplesHeader": "风格样本（{count}）",
       "usedSources": "{count, plural, =0 {未引用来源} =1 {引用 1 项来源} other {引用 # 项来源}}",
       "viewSource": "查看原文"
+    },
+    "steer": {
+      "accepted": "已送达",
+      "acceptedHint": "已交给正在运行的回合，智能体会在下一步读到",
+      "ariaEdit": "编辑这条补充",
+      "ariaPutBack": "把这条补充放回输入框",
+      "ariaRemove": "移除这条补充",
+      "discard": "删除",
+      "failed": "未送达",
+      "failedHint": "这一轮在它发出前就结束了",
+      "putBack": "放回输入框",
+      "queued": "排队中",
+      "queuedHint": "会在当前回合结束后发送"
     },
     "subagentPart": {
       "abort": "停止子代理",
@@ -5412,6 +5433,15 @@
       "unpin": "取消固定面板",
       "wide": "宽栏模式"
     },
+    "activities": {
+      "ai": "AI",
+      "comments": "评论",
+      "inspect": "检视",
+      "preview-run": "预览 / 运行",
+      "review": "审阅",
+      "templates": "模板",
+      "workspace": "工作区"
+    },
     "activityRailLabel": "上下文工作台活动",
     "aiActions": "AI 操作",
     "aiLoading": "正在准备资源会话…",
@@ -5443,6 +5473,17 @@
       "stale": "锚点已过期",
       "toggleReaction": "切换 {emoji} 表情回应",
       "you": "你"
+    },
+    "customize": {
+      "dragHint": "拖拽以排序",
+      "hidden": "已隐藏",
+      "hiddenEmpty": "暂无隐藏项。",
+      "hideItem": "隐藏",
+      "hint": "隐藏某个活动只会移除它的图标按钮——面板仍可通过命令面板和快捷键到达。",
+      "onRail": "在活动栏上",
+      "onRailEmpty": "活动栏上暂无活动。",
+      "restoreDefaults": "恢复默认",
+      "showItem": "显示"
     },
     "exportResourceSession": "导出此资源会话",
     "metadata": {
@@ -5481,6 +5522,7 @@
     },
     "proposalReview": "提案审阅",
     "resourceChat": "AI 会话",
+    "sessionSidechat": "侧聊",
     "unavailable": {
       "comments": {
         "description": "此资源暂不提供评论线程，其他工作台功能仍可使用。",
@@ -5771,11 +5813,13 @@
       "empty": "未找到匹配项。",
       "groups": {
         "actions": "操作",
+        "navigate": "前往",
         "newChat": "与角色开始新聊天",
         "pluginActions": "插件操作",
         "sessions": "会话",
         "settings": "设置",
         "switchTeam": "切换团队",
+        "workbenchPanels": "工作台面板",
         "workspaces": "切换工作区"
       },
       "placeholder": "输入命令或会话名…",
@@ -5822,6 +5866,9 @@
         "pinnedEmpty": "暂无固定项——所有项都在「更多」菜单中。",
         "restoreDefaults": "恢复默认",
         "showItem": "显示",
+        "side": "导航栏位置",
+        "sideLeft": "左侧",
+        "sideRight": "右侧",
         "title": "自定义侧边栏"
       },
       "directMessages": "私信",
@@ -6192,12 +6239,14 @@
         "section": "选择侧边栏、顶部栏和底部栏显示哪些内容，以及它们的顺序。修改立即生效，并会同步到你的其他设备。",
         "sidebar": "把最常用的项目固定到导航栏，其余的会收进「更多」菜单。拖拽可调整顺序，也可以隐藏从不使用的项目。",
         "status": "底部栏承载环境状态。隐藏的分段会被卸载而不只是不可见，因此隐藏性能监视也会同时停止采样。",
-        "title": "顶部栏承载导航、搜索和窗口控制。隐藏的项目会被完全移除——窗口按钮和应用菜单始终保留。"
+        "title": "顶部栏承载导航、搜索和窗口控制。隐藏的项目会被完全移除——窗口按钮和应用菜单始终保留。",
+        "workbench": "右侧工作台内的图标列。拖拽可调整顺序；隐藏只会移除它的按钮——面板仍可通过命令面板和快捷键到达。"
       },
       "tab": {
         "sidebar": "侧边栏",
         "status": "底部栏",
-        "title": "顶部栏"
+        "title": "顶部栏",
+        "workbench": "工作台"
       },
       "title": "界面布局"
     },
@@ -14798,13 +14847,40 @@
     "marketplaceSources": {
       "add": "添加源",
       "addError": "无法添加源：{message}",
+      "addThisSource": "添加此源",
+      "alreadyAdded": "已添加",
+      "byOwner": "作者 {owner}",
+      "cancel": "取消",
+      "catalogPath": "清单位于 {path}",
       "description": "添加一个包含 marketplace.json 目录清单的仓库，其插件会像 Claude Code 的插件市场一样出现在浏览网格中。",
       "empty": "尚未添加任何源。",
+      "emptyCatalog": "该市场目前没有列出任何插件。仍然可以添加——之后发布的插件会在下次刷新时出现。",
       "emptyError": "请输入仓库。",
+      "fetchError": "无法读取该仓库：{message}",
       "label": "市场仓库",
-      "placeholder": "owner/repo",
+      "neverSynced": "尚未同步",
+      "openOnGithub": "在 GitHub 中打开",
+      "placeholder": "owner/repo 或 github.com 链接",
+      "pluginCount": "{count, plural, =0 {没有插件} other {# 个插件}}",
+      "preview": "预览",
+      "recommendedHint": "也可以在上方粘贴任意 GitHub 仓库。",
+      "recommendedTitle": "推荐的市场源",
+      "refreshAll": "全部刷新",
+      "refreshSource": "刷新 {name}",
       "remove": "移除 {name}",
-      "title": "GitHub 市场源"
+      "removeConfirm": "移除源",
+      "removeDescription": "它的插件会从浏览网格中消失。已经从该源安装的插件仍会保留并继续可用。",
+      "removeTitle": "移除 {name}？",
+      "resolvedRef": "将添加 {ref}",
+      "retry": "重试",
+      "savedTitle": "已添加的源（{count}）",
+      "showLess": "收起",
+      "showMore": "…还有 {count} 个",
+      "syncFailed": "同步失败",
+      "syncedAt": "上次同步 {time}",
+      "syncing": "同步中…",
+      "title": "GitHub 市场源",
+      "unreviewed": "cognia 不审核这些插件。它们会以自己申请的权限运行——安装前请先查看该仓库。"
     },
     "modalRoot": {
       "errorFallback": "插件弹窗渲染失败，详细信息请查看控制台。"
@@ -22571,9 +22647,16 @@
         "clearConfirm": "清空日志",
         "clearConfirmDesc": "将删除全部 {count} 条审计记录，无法恢复。",
         "clearConfirmTitle": "确认清空 MCP 审计日志？",
+        "deniedOnly": "仅看拒绝",
         "description": "最近 50 条调用记录。总计上限 5000 条 — 超出后自动清理旧记录。",
+        "detailAria": "展开或收起 {tool} 的详情",
         "empty": "暂无调用记录。",
+        "filterToolPlaceholder": "按工具筛选…",
         "latency": "延迟",
+        "latencyMs": "{ms} 毫秒",
+        "reason": "原因",
+        "rowLimit": "行数",
+        "rowLimitValue": "{count} 行",
         "scope": "范围",
         "status": "状态",
         "statusDeny": "拒绝",
@@ -22586,7 +22669,40 @@
       "badgeIdle": "空闲",
       "badgeLive": "运行中",
       "badgeWeb": "web",
+      "description": "把本应用的知识与运行时能力开放给外部 MCP 客户端。",
       "loading": "加载中…",
+      "nav": {
+        "badgeScopesAria": "已授予 {total} 项权限范围中的 {granted} 项",
+        "groups": {
+          "accessGroup": "接入",
+          "contentGroup": "内容",
+          "serviceGroup": "服务"
+        },
+        "items": {
+          "audit": {
+            "description": "桥接处理过的每一次调用",
+            "label": "审计日志"
+          },
+          "scopes": {
+            "description": "外部客户端可以调用的能力",
+            "label": "权限范围"
+          },
+          "server": {
+            "description": "启用桥接并管理其令牌",
+            "label": "服务与令牌"
+          },
+          "setup": {
+            "description": "MCP 客户端的配置片段",
+            "label": "客户端接入"
+          },
+          "wiki": {
+            "description": "重建与检查计划",
+            "label": "Wiki 维护"
+          }
+        },
+        "mobileTrigger": "面板",
+        "title": "外部桥接设置"
+      },
       "scopeDescriptions": {
         "agent:dispatch": "⚠ 允许外部代理无界面运行你的内置/插件子代理或角色（工具循环 + 模型调用）。返回文本经 PII 脱敏。默认关闭。",
         "agent:team": "⚠ 允许外部代理无界面启动智能体团队——它们本无法触及的多智能体编排。默认关闭。",
@@ -22610,6 +22726,20 @@
       },
       "scopes": {
         "description": "每个范围默认关闭，需手动启用。默认安装仅开启公开代码 Wiki 相关范围。",
+        "grantedCount": "已授予 {granted}/{total}",
+        "groups": {
+          "agent": "Agent",
+          "inbound": "入站",
+          "inbox": "收件箱",
+          "mcp": "计算机操作",
+          "memory": "记忆",
+          "plugin": "插件",
+          "rag": "检索",
+          "runtime": "运行时",
+          "wiki": "Wiki"
+        },
+        "plannedBadge": "规划中",
+        "plannedReason": "已推迟到 Phase 1 之后：访问用户仓库需要逐仓库授权，该机制尚未实现。此范围保留在 API 中以便处理器继续编译，但无法被授予。",
         "title": "权限范围",
         "toggleAria": "切换 {scope}"
       },
@@ -22617,6 +22747,9 @@
         "bearerTokenLabel": "Bearer Token（仅 HTTP）",
         "copyTokenAria": "复制 Token",
         "hide": "隐藏",
+        "httpPort": "HTTP 端口",
+        "httpPortDiverged": "监听器仍在端口 {bound} 上。重启外部桥接以切换端口。",
+        "httpPortHelp": "HTTP 传输监听的端口，下方的接入片段会使用该值。",
         "regenerateWarning": "⚠ 重新生成将立即作废旧 Token。",
         "rotateConfirmAction": "轮换 Token",
         "rotateConfirmCancel": "取消",
@@ -22630,18 +22763,24 @@
         "title": "MCP 服务器",
         "toastServerStarted": "MCP HTTP 服务器已在 127.0.0.1:{port} 启动",
         "toastServerStopped": "MCP 服务器已停止。",
+        "toastSidecarMissing": "MCP sidecar 未安装，无法启动外部桥接。",
         "toastTokenCopied": "Token 已复制到剪贴板。",
         "toastTokenRegenerated": "新 Token 已生成，旧 Token 立即失效。",
         "toggleAriaLabel": "启用 MCP 服务器",
-        "tokenNone": "（无）"
+        "tokenNone": "（无）",
+        "tokenRotatedAt": "令牌最近轮换于 {time}"
       },
       "setup": {
         "clientLabel": "客户端",
         "copy": "复制",
         "copyAria": "复制代码片段到剪贴板",
         "description": "选择客户端并将代码片段粘贴到其 MCP 配置文件中。HTTP 传输需要 Tauri 侧车进程正在运行。",
+        "sidecarMissing": "stdio sidecar 未安装，此配置片段没有可执行的命令。请改用 HTTP 传输，或重新安装应用以恢复随包分发的 sidecar。",
+        "sidecarMissingPlaceholder": "'<'sidecar 未安装>",
+        "sidecarResolving": "'<'正在解析 sidecar 路径…>",
         "title": "配置代码片段",
         "toastCopied": "代码片段已复制。",
+        "tokenPlaceholder": "'<'粘贴 bearer token>",
         "variantHelp": {
           "claude-desktop-http": "编辑 Claude Desktop 的 claude_desktop_config.json，并确认 Bridge HTTP 传输已启动。上方的「重新生成」按钮会更新 Bearer Token。",
           "claude-desktop-stdio": "编辑 ~/Library/Application Support/Claude/claude_desktop_config.json（macOS）或 %APPDATA%/Claude/claude_desktop_config.json（Windows），保存后重启 Claude Desktop。",
@@ -22655,6 +22794,7 @@
           "goose": "Goose"
         }
       },
+      "title": "外部桥接",
       "wikiIndex": {
         "articleCount": "文章数",
         "description": "为外部 Agent 索引 Cognia 代码库，使其可通过 MCP 查询。",
@@ -22904,6 +23044,7 @@
       "copied": "已复制",
       "copy": "复制",
       "copyKey": "复制密钥",
+      "costUnknown": "—",
       "createKey": "创建密钥",
       "deleteKey": "删除密钥",
       "deleteKeyConfirm": "删除此密钥？正在使用它的工具会立即失效。",
@@ -22956,6 +23097,7 @@
       "keysHeading": "API 密钥",
       "keysHelp": "为每个外部工具签发一把作用域密钥。每把可限制可用模型、设定有效期与独立限流，并可单独停用或删除。",
       "lanWarning": "开启局域网绑定会把网关暴露到本地网络。请收紧 IP 白名单并为每个密钥设定作用域——只有白名单内、且持有效密钥的 IP 才能通过。",
+      "latencyMs": "{ms} 毫秒",
       "listenerHeading": "监听器",
       "listenerHelp": "网关绑定的位置，以及谁可以访问它。",
       "liveBadge": "立即生效",
@@ -22976,6 +23118,8 @@
       "maxRetries": "最大尝试数",
       "maxRetriesHelp": "每个请求尝试的候选上限。0 = 走完整条回退链。",
       "nav": {
+        "badgeNoKeyAria": "没有可用的 API 密钥",
+        "badgeParkedKeysAria": "{count} 个上游密钥已停用",
         "groups": {
           "observabilityGroup": "可观测",
           "routingGroup": "路由与保护",
@@ -24598,6 +24742,13 @@
         "skillsSearch": "聚焦技能搜索",
         "skillsSelectAll": "全选技能",
         "terminalToggle": "切换终端",
+        "workbenchActivityAi": "工作台：AI",
+        "workbenchActivityComments": "工作台：评论",
+        "workbenchActivityInspect": "工作台：检视",
+        "workbenchActivityPreviewRun": "工作台：预览 / 运行",
+        "workbenchActivityReview": "工作台：审阅",
+        "workbenchActivityTemplates": "工作台：模板",
+        "workbenchActivityWorkspace": "工作台：工作区",
         "zoomIn": "放大",
         "zoomOut": "缩小",
         "zoomReset": "重置缩放"

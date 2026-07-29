@@ -83,6 +83,8 @@ import {
   BookmarkIcon,
   CheckIcon,
   CopyIcon,
+  LinkIcon,
+  CornerUpLeftIcon,
   GitBranchIcon,
   ImageIcon,
   PencilIcon,
@@ -90,12 +92,14 @@ import {
   Share2Icon,
 } from "lucide-react"
 import { QuoteCardDialog } from "@/components/share/quote-card-dialog"
+import { toast } from "sonner"
 import type { ToolUIPart, UIMessage } from "ai"
 import type { UsageInfo } from "@/lib/claude/adapter"
 import { UsageBreakdown } from "@/components/chat/usage-breakdown"
 import type { Character } from "@cognia/agent-config-types"
 import React, { memo, useCallback, useMemo, useState, type KeyboardEvent } from "react"
 import { useTranslations } from "next-intl"
+import { buildMessagePermalink } from "@/lib/chat/message-permalink"
 import { cn } from "@/lib/utils"
 import { avatarColor, avatarGlyph } from "@/lib/ui/avatar"
 import { useChatStore } from "@/stores/chat"
@@ -108,6 +112,9 @@ import { loggers } from "@cognia/logging"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { MessagePluginMenu } from "@/components/chat/message-plugin-menu"
 import { BranchDialog } from "@/components/chat/branch-dialog"
+import { SteerStatusBadge } from "@/components/chat/message-parts/steer-status-badge"
+import { dispatchComposerAppend } from "@/components/chat/composer"
+import { useAsideTarget } from "@/components/context-workbench/aside-target"
 import {
   getMessagePartRenderer,
   subscribeMessagePartRenderers,
@@ -196,6 +203,8 @@ function MessageRendererInner({
   // out of render via a lazy state initializer).
   const [nowFallback] = useState(() => new Date())
   const activeSessionId = useChatStore((s) => s.activeSessionId)
+  // Non-null only inside a workbench sidechat — see `AsideTargetProvider`.
+  const asideTargetSessionId = useAsideTarget()
   const branchSessionId =
     (typeof (message as { metadata?: { sessionId?: unknown } }).metadata?.sessionId === "string"
       ? ((message as { metadata?: { sessionId?: string } }).metadata!.sessionId as string)
@@ -311,6 +320,19 @@ function MessageRendererInner({
     }
     if (ok) onCopy?.()
   }, [messageShareContent, messageText, copy, onCopy])
+
+  // A permalink back into THIS app (`?session=…&message=…`), not a published
+  // share link — see `lib/chat/message-permalink.ts`.
+  const [linkCopied, setLinkCopied] = useState(false)
+  const handleCopyLink = useCallback(async () => {
+    if (!branchSessionId) return
+    const ok = await copy(
+      buildMessagePermalink({ sessionId: branchSessionId, messageId: message.id })
+    )
+    if (!ok) return
+    setLinkCopied(true)
+    window.setTimeout(() => setLinkCopied(false), 1500)
+  }, [branchSessionId, message.id, copy])
 
   const handleShare = useCallback(async () => {
     if (!messageShareContent.hasContent) return
@@ -523,6 +545,10 @@ function MessageRendererInner({
           </MessageImageCollectionProvider>
         )}
 
+        {/* Delivery state of a mid-run follow-up. Self-hides for every message
+            that is not a pending steer. */}
+        <SteerStatusBadge message={message} sessionId={branchSessionId} />
+
         <PluginExtensionSlot point="chat.message.after" className="mt-1 empty:hidden" />
 
         {/* Trigger audit badge — surfaces workflows fired by this message via */}
@@ -622,6 +648,24 @@ function MessageRendererInner({
               <Share2Icon className="size-3.5" />
             </MessageAction>
 
+            {branchSessionId && (
+              <MessageAction
+                // Deliberately worded as a *link to this message*, never as
+                // "share": the neighbouring share action publishes content,
+                // this one only navigates, and confusing the two is either a
+                // privacy accident or a dead link.
+                tooltip={linkCopied ? t("copyLinkDone") : t("copyLinkTooltip")}
+                label={t("copyLinkLabel")}
+                onClick={handleCopyLink}
+              >
+                {linkCopied ? (
+                  <CheckIcon className="size-3.5" />
+                ) : (
+                  <LinkIcon className="size-3.5" />
+                )}
+              </MessageAction>
+            )}
+
             {messageShareContent.hasContent && (
               <MessageAction
                 tooltip={t("shareCardTooltip")}
@@ -654,6 +698,30 @@ function MessageRendererInner({
                 onClick={() => setBranchOpen(true)}
               >
                 <GitBranchIcon className="size-3.5" />
+              </MessageAction>
+            )}
+
+            {/* Sidechat only: quote this into the MAIN conversation's composer.
+                Deliberately not auto-sent — an aside's conclusion is usually
+                worth rewording before it costs a turn in the main thread. */}
+            {asideTargetSessionId && (
+              <MessageAction
+                tooltip={t("bringBackTooltip")}
+                label={t("bringBackLabel")}
+                onClick={() => {
+                  const text = extractText(message).trim()
+                  if (!text) return
+                  dispatchComposerAppend({
+                    text: `${text
+                      .split("\n")
+                      .map((line) => `> ${line}`)
+                      .join("\n")}\n\n`,
+                    sessionId: asideTargetSessionId,
+                  })
+                  toast.success(t("bringBackDone"))
+                }}
+              >
+                <CornerUpLeftIcon className="size-3.5" />
               </MessageAction>
             )}
 
@@ -1055,6 +1123,28 @@ function renderPart(
         <ReasoningTrigger />
         <ReasoningContent>{text}</ReasoningContent>
       </Reasoning>
+    )
+  }
+
+  if (type === "data-commentary") {
+    const data = (part as { data?: { text?: string } }).data
+    const text = data?.text ?? ""
+    if (!text.trim()) return null
+    return (
+      <div
+        key={key}
+        role="status"
+        aria-live="polite"
+        className="border-muted-foreground/30 text-muted-foreground border-l-2 pl-3 text-sm"
+      >
+        <MarkdownRenderer
+          content={text}
+          messageId={messageId}
+          isStreaming={isStreaming}
+          projectRoot={projectRoot}
+          className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+        />
+      </div>
     )
   }
 

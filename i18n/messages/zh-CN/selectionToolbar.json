@@ -2,6 +2,10 @@
   "ask": "提问",
   "chooseLanguage": "选择翻译语言",
   "copy": "复制",
+  "errors": {
+    "generic": "该操作未能完成",
+    "piiBlocked": "含敏感信息，未存入记忆"
+  },
   "explain": "解释",
   "languages": {
     "de": "德语",
@@ -16,6 +20,9 @@
     "explain": "请解释这段内容。",
     "translate": "请将这段内容翻译成{language}。"
   },
+  "remember": "记忆",
+  "speak": "朗读",
+  "stopSpeaking": "停止朗读",
   "translate": "翻译",
   "truncated": "已截断",
   "truncatedHint": "选区超过 20,000 个字符，已截断。"

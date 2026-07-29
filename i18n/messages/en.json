@@ -4062,6 +4062,7 @@
       "title": "The agent has a question"
     },
     "branch": {
+      "ariaLineage": "Go to the message this branch was created from, in {title}",
       "cancel": "Cancel",
       "confirm": "Create branch",
       "createError": "Failed to create branch",
@@ -4071,6 +4072,8 @@
         "hint": "Copy the conversation up to this message verbatim.",
         "label": "Direct branch"
       },
+      "lineage": "from {title}",
+      "lineageUnknownParent": "a deleted conversation",
       "summary": {
         "generating": "Generating summary…",
         "hint": "Summarize the conversation so far and seed the branch with it (keeps context small).",
@@ -4844,6 +4847,9 @@
       "bookmarkTooltip": "Bookmark",
       "branchLabel": "Branch conversation",
       "branchTooltip": "Branch from here",
+      "bringBackDone": "Added to the main conversation's message box",
+      "bringBackLabel": "Bring back to the main conversation",
+      "bringBackTooltip": "Quote into the main conversation",
       "copyDone": "Copied!",
       "copyLabel": "Copy message",
       "copyLinkDone": "Link copied!",
@@ -5111,15 +5117,12 @@
     },
     "runPanel": {
       "ariaDiscardQueue": "Discard queued messages",
-      "ariaEditSteer": "Edit queued message",
       "ariaInterrupt": "Interrupt the current turn",
-      "ariaRemoveSteer": "Remove queued message",
-      "ariaSteerAttachments": "{count} attachments",
+      "ariaLocateSteer": "Go to the first undelivered message",
       "ariaSteerQueue": "Queued messages",
       "ariaSubagent": "Sub-agent",
       "collapse": "Hide run details",
       "discardQueue": "Discard",
-      "emptySteer": "(empty)",
       "expand": "Show run details",
       "lastRun": "Last run",
       "lastRunSummary": "{count, plural, one {# tool} other {# tools}} · {elapsed}",
@@ -5128,6 +5131,10 @@
       "sectionSubagents": "Sub-agents",
       "sectionSummary": "Summary",
       "sectionTools": "Tools",
+      "steerNowConfirmAccept": "Interrupt and send",
+      "steerNowConfirmBody": "This stops the current turn, cancelling any tool call still running, and sends your queued messages right away. Work already finished is kept.",
+      "steerNowConfirmCancel": "Keep working",
+      "steerNowConfirmTitle": "Interrupt this turn?",
       "summarySubagents": "{count, plural, one {# sub-agent} other {# sub-agents}}",
       "summaryTodos": "{done}/{total} todos",
       "summaryTools": "{count, plural, one {# tool} other {# tools}}"
@@ -5140,7 +5147,8 @@
       "metricSpeed": "{value} tok/s",
       "metricTokens": "{value} tok",
       "queued": "{count} queued",
-      "steerNow": "Send now",
+      "steerNow": "Interrupt & send",
+      "steerNowHint": "Stops the current turn, cancelling any running tool, and sends your queued messages now",
       "waitingApproval": "Waiting for approval",
       "working": "Working"
     },
@@ -5205,6 +5213,19 @@
       "styleSamplesHeader": "Style samples ({count})",
       "usedSources": "{count, plural, =0 {No sources} =1 {Used 1 source} other {Used # sources}}",
       "viewSource": "View source"
+    },
+    "steer": {
+      "accepted": "Delivered",
+      "acceptedHint": "Handed to the running turn — the agent picks it up at its next step",
+      "ariaEdit": "Edit this follow-up",
+      "ariaPutBack": "Put this follow-up back in the message box",
+      "ariaRemove": "Remove this follow-up",
+      "discard": "Discard",
+      "failed": "Not delivered",
+      "failedHint": "The run ended before this could be sent",
+      "putBack": "Put back",
+      "queued": "Queued",
+      "queuedHint": "Will be sent when the current turn finishes"
     },
     "subagentPart": {
       "abort": "Stop sub-agent",
@@ -5412,6 +5433,15 @@
       "unpin": "Unpin panel",
       "wide": "Wide mode"
     },
+    "activities": {
+      "ai": "AI",
+      "comments": "Comments",
+      "inspect": "Inspect",
+      "preview-run": "Preview / run",
+      "review": "Review",
+      "templates": "Templates",
+      "workspace": "Workspace"
+    },
     "activityRailLabel": "Context Workbench activities",
     "aiActions": "AI actions",
     "aiLoading": "Preparing the resource conversation…",
@@ -5443,6 +5473,17 @@
       "stale": "Outdated anchor",
       "toggleReaction": "Toggle {emoji} reaction",
       "you": "You"
+    },
+    "customize": {
+      "dragHint": "Drag to reorder",
+      "hidden": "Hidden",
+      "hiddenEmpty": "Nothing hidden.",
+      "hideItem": "Hide",
+      "hint": "Hiding an activity removes its rail button only — the panel stays reachable from the command palette and its shortcut.",
+      "onRail": "On the rail",
+      "onRailEmpty": "No activities on the rail.",
+      "restoreDefaults": "Restore defaults",
+      "showItem": "Show"
     },
     "exportResourceSession": "Export this resource conversation",
     "metadata": {
@@ -5481,6 +5522,7 @@
     },
     "proposalReview": "Proposal review",
     "resourceChat": "AI conversation",
+    "sessionSidechat": "Side chat",
     "unavailable": {
       "comments": {
         "description": "This resource does not currently provide comment threads. Other workbench activities remain available.",
@@ -5771,11 +5813,13 @@
       "empty": "No matches found.",
       "groups": {
         "actions": "Actions",
+        "navigate": "Go to",
         "newChat": "New chat with character",
         "pluginActions": "Plugin actions",
         "sessions": "Sessions",
         "settings": "Settings",
         "switchTeam": "Switch to team",
+        "workbenchPanels": "Workbench panels",
         "workspaces": "Switch workspace"
       },
       "placeholder": "Type a command or session name…",
@@ -5822,6 +5866,9 @@
         "pinnedEmpty": "No pinned items — everything is in the More menu.",
         "restoreDefaults": "Restore defaults",
         "showItem": "Show",
+        "side": "Rail position",
+        "sideLeft": "Left",
+        "sideRight": "Right",
         "title": "Customize sidebar"
       },
       "directMessages": "Direct Messages",
@@ -6192,12 +6239,14 @@
         "section": "Choose what appears in the sidebar, the top bar and the bottom bar — and in what order. Changes apply immediately and sync with your other devices.",
         "sidebar": "Pin the items you use most to the rail; the rest collapse into the More menu. Drag to reorder, or hide items you never use.",
         "status": "The bottom bar carries ambient status. Hidden segments are unmounted, not just invisible, so hiding the performance monitor also stops its sampling.",
-        "title": "The top bar carries navigation, search and window controls. Hidden items are removed entirely — the window buttons and the app menu always stay."
+        "title": "The top bar carries navigation, search and window controls. Hidden items are removed entirely — the window buttons and the app menu always stay.",
+        "workbench": "The icon column inside the right-hand workbench. Drag to reorder; hiding one only removes its button — the panel stays reachable from the command palette and its shortcut."
       },
       "tab": {
         "sidebar": "Sidebar",
         "status": "Bottom bar",
-        "title": "Top bar"
+        "title": "Top bar",
+        "workbench": "Workbench"
       },
       "title": "Shell layout"
     },
@@ -14798,13 +14847,40 @@
     "marketplaceSources": {
       "add": "Add source",
       "addError": "Could not add source: {message}",
+      "addThisSource": "Add this source",
+      "alreadyAdded": "Already added",
+      "byOwner": "by {owner}",
+      "cancel": "Cancel",
+      "catalogPath": "Catalog at {path}",
       "description": "Add a repository that ships a marketplace.json catalog. Its plugins appear in the browse grid, just like Claude Code's plugin marketplaces.",
       "empty": "No sources added yet.",
+      "emptyCatalog": "This marketplace lists no plugins yet. You can still add it — anything published later shows up on the next refresh.",
       "emptyError": "Please enter a repository.",
+      "fetchError": "Could not read this repository: {message}",
       "label": "Marketplace repository",
-      "placeholder": "owner/repo",
+      "neverSynced": "Not synced yet",
+      "openOnGithub": "Open on GitHub",
+      "placeholder": "owner/repo or a github.com URL",
+      "pluginCount": "{count, plural, =0 {no plugins} =1 {1 plugin} other {# plugins}}",
+      "preview": "Preview",
+      "recommendedHint": "Or paste any GitHub repository above.",
+      "recommendedTitle": "Recommended marketplaces",
+      "refreshAll": "Refresh all",
+      "refreshSource": "Refresh {name}",
       "remove": "Remove {name}",
-      "title": "GitHub marketplace sources"
+      "removeConfirm": "Remove source",
+      "removeDescription": "Its plugins leave the browse grid. Plugins you already installed from it stay installed and keep working.",
+      "removeTitle": "Remove {name}?",
+      "resolvedRef": "Will add {ref}",
+      "retry": "Retry",
+      "savedTitle": "Added sources ({count})",
+      "showLess": "Show fewer",
+      "showMore": "…and {count} more",
+      "syncFailed": "Sync failed",
+      "syncedAt": "Synced {time}",
+      "syncing": "Syncing…",
+      "title": "GitHub marketplace sources",
+      "unreviewed": "cognia doesn't review these plugins. They run with the permissions they request — check the repository before you install anything from it."
     },
     "modalRoot": {
       "errorFallback": "Plugin modal failed to render. Check the console for details."
@@ -22571,9 +22647,16 @@
         "clearConfirm": "Clear log",
         "clearConfirmDesc": "This removes all {count} rows from the audit log. The history cannot be recovered.",
         "clearConfirmTitle": "Clear MCP audit log?",
+        "deniedOnly": "Denied only",
         "description": "Newest 50 calls. Capped at 5000 total — older rows are pruned automatically.",
+        "detailAria": "Toggle details for {tool}",
         "empty": "No calls yet.",
+        "filterToolPlaceholder": "Filter by tool…",
         "latency": "Latency",
+        "latencyMs": "{ms}ms",
+        "reason": "Reason",
+        "rowLimit": "Rows",
+        "rowLimitValue": "{count} rows",
         "scope": "Scope",
         "status": "Status",
         "statusDeny": "DENY",
@@ -22586,7 +22669,40 @@
       "badgeIdle": "idle",
       "badgeLive": "live",
       "badgeWeb": "web",
+      "description": "Expose this app's knowledge and runtime to external MCP clients.",
       "loading": "Loading…",
+      "nav": {
+        "badgeScopesAria": "{granted} of {total} permission scopes granted",
+        "groups": {
+          "accessGroup": "Access",
+          "contentGroup": "Content",
+          "serviceGroup": "Service"
+        },
+        "items": {
+          "audit": {
+            "description": "Every call the bridge handled",
+            "label": "Audit log"
+          },
+          "scopes": {
+            "description": "What external clients may call",
+            "label": "Permission scopes"
+          },
+          "server": {
+            "description": "Enable the bridge and manage its token",
+            "label": "Server & token"
+          },
+          "setup": {
+            "description": "Config snippets for MCP clients",
+            "label": "Client setup"
+          },
+          "wiki": {
+            "description": "Rebuild and lint schedules",
+            "label": "Wiki maintenance"
+          }
+        },
+        "mobileTrigger": "Panels",
+        "title": "External Bridge settings"
+      },
       "scopeDescriptions": {
         "agent:dispatch": "⚠ Lets external agents run your built-in/plugin subagents or characters headlessly (tool loop + model calls). Returned text is PII-redacted. Default OFF.",
         "agent:team": "⚠ Lets external agents start an Agent Team headlessly — a multi-agent orchestration they couldn't otherwise reach. Default OFF.",
@@ -22610,6 +22726,20 @@
       },
       "scopes": {
         "description": "Each scope is opt-in. Default install ships with only the public-code wiki scopes enabled.",
+        "grantedCount": "{granted}/{total} granted",
+        "groups": {
+          "agent": "Agents",
+          "inbound": "Inbound",
+          "inbox": "Inbox",
+          "mcp": "Computer use",
+          "memory": "Memory",
+          "plugin": "Plugins",
+          "rag": "Retrieval",
+          "runtime": "Runtime",
+          "wiki": "Wiki"
+        },
+        "plannedBadge": "Planned",
+        "plannedReason": "Deferred past Phase 1: user-repository access needs per-repository consent, which does not exist yet. The scope stays in the API so handlers keep compiling, but it cannot be granted.",
         "title": "Permission scopes",
         "toggleAria": "Toggle {scope}"
       },
@@ -22617,6 +22747,9 @@
         "bearerTokenLabel": "Bearer token (HTTP only)",
         "copyTokenAria": "Copy token",
         "hide": "Hide",
+        "httpPort": "HTTP port",
+        "httpPortDiverged": "The listener is still on port {bound}. Restart the bridge to move it.",
+        "httpPortHelp": "Port the HTTP transport listens on. Used in the setup snippets below.",
         "regenerateWarning": "⚠ Regenerating invalidates the old token immediately.",
         "rotateConfirmAction": "Rotate token",
         "rotateConfirmCancel": "Cancel",
@@ -22630,18 +22763,24 @@
         "title": "MCP server",
         "toastServerStarted": "MCP HTTP server listening on 127.0.0.1:{port}",
         "toastServerStopped": "MCP server stopped.",
+        "toastSidecarMissing": "The MCP sidecar is not installed, so the bridge cannot start.",
         "toastTokenCopied": "Token copied to clipboard.",
         "toastTokenRegenerated": "New token generated. Old token is now invalid.",
         "toggleAriaLabel": "Enable MCP server",
-        "tokenNone": "(none)"
+        "tokenNone": "(none)",
+        "tokenRotatedAt": "Token last rotated {time}"
       },
       "setup": {
         "clientLabel": "Client",
         "copy": "Copy",
         "copyAria": "Copy snippet to clipboard",
         "description": "Pick a client and paste the snippet into its MCP configuration file. HTTP transport requires the Tauri sidecar to be running.",
+        "sidecarMissing": "The stdio sidecar is not installed, so this snippet has no command to run. Use the HTTP transport instead, or reinstall the app so the bundled sidecar is restored.",
+        "sidecarMissingPlaceholder": "'<'sidecar not installed>",
+        "sidecarResolving": "'<'resolving sidecar path…>",
         "title": "Setup snippet",
         "toastCopied": "Snippet copied.",
+        "tokenPlaceholder": "'<'paste-bearer-token>",
         "variantHelp": {
           "claude-desktop-http": "Edit Claude Desktop's claude_desktop_config.json and ensure the bridge HTTP transport is running. The bearer token rotates with the regenerate button above.",
           "claude-desktop-stdio": "Edit ~/Library/Application Support/Claude/claude_desktop_config.json (macOS) or %APPDATA%/Claude/claude_desktop_config.json (Windows). Restart Claude Desktop after saving.",
@@ -22655,6 +22794,7 @@
           "goose": "Goose"
         }
       },
+      "title": "External Bridge",
       "wikiIndex": {
         "articleCount": "Articles",
         "description": "Index the Cognia codebase so external agents can query it via MCP.",
@@ -22904,6 +23044,7 @@
       "copied": "Copied",
       "copy": "Copy",
       "copyKey": "Copy key",
+      "costUnknown": "—",
       "createKey": "Create key",
       "deleteKey": "Delete key",
       "deleteKeyConfirm": "Delete this key? Tools using it will stop working immediately.",
@@ -22956,6 +23097,7 @@
       "keysHeading": "API keys",
       "keysHelp": "Issue one scoped key per external tool. Each can be limited to specific models, given an expiry and its own rate limit, and disabled or deleted independently.",
       "lanWarning": "LAN binding exposes the gateway to your local network. Keep the IP allowlist tight and every key scoped — only allow-listed IPs with a valid key get through.",
+      "latencyMs": "{ms}ms",
       "listenerHeading": "Listener",
       "listenerHelp": "Where the gateway binds and who may reach it.",
       "liveBadge": "Applies immediately",
@@ -22976,6 +23118,8 @@
       "maxRetries": "Max attempts",
       "maxRetriesHelp": "Cap on candidates tried per request. 0 = walk the whole fallback chain.",
       "nav": {
+        "badgeNoKeyAria": "No usable API key",
+        "badgeParkedKeysAria": "{count, plural, one {# parked upstream key} other {# parked upstream keys}}",
         "groups": {
           "observabilityGroup": "Observability",
           "routingGroup": "Routing & protection",
@@ -24598,6 +24742,13 @@
         "skillsSearch": "Focus skills search",
         "skillsSelectAll": "Select all skills",
         "terminalToggle": "Toggle terminal",
+        "workbenchActivityAi": "Workbench: AI",
+        "workbenchActivityComments": "Workbench: comments",
+        "workbenchActivityInspect": "Workbench: inspect",
+        "workbenchActivityPreviewRun": "Workbench: preview / run",
+        "workbenchActivityReview": "Workbench: review",
+        "workbenchActivityTemplates": "Workbench: templates",
+        "workbenchActivityWorkspace": "Workbench: workspace",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",
         "zoomReset": "Reset zoom"

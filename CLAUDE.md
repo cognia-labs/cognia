@@ -188,6 +188,8 @@ One line per subsystem — the **full detail lives in the ADR** under `docs/cont
 | 源代码管理 (SCM)           | `crates/cognia-git/`, `components/source-control/`, `lib/git/`, `stores/git/`, `hooks/git/`, `app/source-control/`, settings `components/settings/source-control/`                                 | `AppSettings.gitSettings.panel` (非 Dexie) | 0038                   |
 | Pro IDE (code-server)      | `src-tauri/src/codeserver/`, `lib/codeserver/`, `hooks/codeserver/`, `components/editor/project/{code-server-pane,editor-engine-toggle}.tsx`, `components/settings/pro-ide/`                       | 无（磁盘 + settings.json）                 | 0088                   |
 | 官网 (marketing site)      | `web/` (独立 workspace，`@web/*` alias，零跨包引用)；文案 `web/content/{types,en,zh}.ts`；证据管道 `web/scripts/build-evidence.mjs`；截图/OG `web/scripts/capture-*.mjs`                           | 无（构建期 JSON 快照）                     | 0092                   |
+| 系统级划词工具栏           | `src-tauri/src/selection_toolbar.rs`, `components/selection-toolbar/`, `lib/tauri/selection-toolbar.ts`, `lib/tts/speak-selection.ts`, `components/providers/initializers/selection-toolbar-initializer.tsx` | 无（Tauri store pref + 渲染端测量窗口）    | 0093                   |
+| 会话锚点 / 跳转 / 永久链接 | `lib/chat/{message-anchor,message-permalink}.ts`, `hooks/chat/{use-jump-flash,use-jump-history,use-message-permalink}.ts`, `components/chat/{conversation-jump-pill,jump-flash}.tsx`, `components/chat/minimap/`, `stores/chat/chat-viewport-store.ts` | 无（viewport store，非持久化）             | 0094                   |
 
 ### Cross-cutting hooks (reuse, don't reinvent)
 

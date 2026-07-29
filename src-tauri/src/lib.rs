@@ -51,6 +51,9 @@ pub mod headless;
 mod hooks;
 mod keyring_secrets;
 mod logging;
+// Native local-video pipeline lives in its own subsystem crate; the app crate
+// only re-exports it for generate_handler! command registration.
+pub use cognia_media as media;
 mod mcp_oauth;
 // ADR-0067 follow-up — extracted to `crates/cognia-mcp-server`; re-aliased so
 // `mcp_server::…` (generate_handler! + .manage()) resolves unchanged.
@@ -371,6 +374,7 @@ pub fn run() {
         .manage(codeserver::CodeServerState::new())
         .manage(codeserver::relay::DesktopRelayState::new())
         .manage(ApiKeyState::new())
+        .manage(media::MediaSourceRegistry::default())
         // ADR-0025 — unified subscription module. In-process cache of the
         // active account + resolved env per provider. Populated lazily by
         // `subscription_set_active`; readers (sidecar spawn, external-agent
@@ -653,6 +657,11 @@ pub fn run() {
             pet_window::pet_window_get_surfaces,
             pet_window::is_pet_window_open,
             capture::get_foreground_app,
+            media::commands::video_get_info,
+            media::commands::plugin_media_get_video_frame,
+            media::commands::video_analyze,
+            media::commands::video_cleanup_analysis,
+            media::commands::video_trim,
             pet_window::show_main_window,
             selection_toolbar::selection_toolbar_start,
             selection_toolbar::selection_toolbar_stop,
@@ -663,6 +672,9 @@ pub fn run() {
             selection_toolbar::selection_toolbar_take_pending_stage,
             selection_toolbar::selection_toolbar_reveal,
             selection_toolbar::selection_toolbar_set_interactive,
+            selection_toolbar::selection_toolbar_resize,
+            selection_toolbar::selection_toolbar_set_keep_alive,
+            selection_toolbar::selection_toolbar_finish,
             pet_window::open_pet_popup,
             pet_window::close_pet_popup,
             pet_window::pet_popup_resize,
@@ -936,6 +948,7 @@ pub fn run() {
             mcp_server::commands::mcp_server_stop,
             mcp_server::commands::mcp_server_restart,
             mcp_server::commands::mcp_server_status,
+            mcp_server::commands::mcp_server_sidecar_path,
             mcp_server::commands::orchestration_proxy_response,
             mcp_oauth::mcp_oauth_status,
             mcp_oauth::mcp_oauth_load_entry,
@@ -1046,6 +1059,7 @@ pub fn run() {
             gateway::commands::gateway_push_snapshot,
             gateway::commands::gateway_decision_response,
             gateway::commands::gateway_list_cooldowns,
+            gateway::commands::gateway_probe_upstream,
             workflow::commands::workflow_register_trigger,
             workflow::commands::workflow_unregister_trigger,
             workflow::commands::workflow_persist_run_state,
@@ -1825,6 +1839,28 @@ mod command_registration_tests {
             source.contains(&command),
             "git_diff_stat must remain in tauri::generate_handler!"
         );
+    }
+
+    #[test]
+    fn native_media_commands_are_registered_with_the_tauri_invoke_handler() {
+        let source = include_str!("lib.rs");
+        let production_source = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production lib.rs source");
+        for command in [
+            "media::commands::video_get_info,",
+            "media::commands::plugin_media_get_video_frame,",
+            "media::commands::video_analyze,",
+            "media::commands::video_cleanup_analysis,",
+            "media::commands::video_trim,",
+        ] {
+            assert!(
+                production_source.contains(command),
+                "{command} must remain in tauri::generate_handler!"
+            );
+        }
+        assert!(production_source.contains(".manage(media::MediaSourceRegistry::default())"));
     }
 
     /// The app declares an ACL manifest (build.rs → AppManifest), which turns on

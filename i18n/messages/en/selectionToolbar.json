@@ -2,6 +2,10 @@
   "ask": "Ask",
   "chooseLanguage": "Choose translation language",
   "copy": "Copy",
+  "errors": {
+    "generic": "That action could not be completed",
+    "piiBlocked": "Contains sensitive data — not saved to memory"
+  },
   "explain": "Explain",
   "languages": {
     "de": "German",
@@ -16,6 +20,9 @@
     "explain": "Please explain this selection.",
     "translate": "Please translate this selection into {language}."
   },
+  "remember": "Remember",
+  "speak": "Read aloud",
+  "stopSpeaking": "Stop reading",
   "translate": "Translate",
   "truncated": "Truncated",
   "truncatedHint": "The selection exceeded 20,000 characters and was truncated."
