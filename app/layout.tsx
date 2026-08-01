@@ -82,11 +82,13 @@ import { McpLogProvider } from "@/components/providers/mcp-log-provider"
 import {
   BackgroundApplier,
   ComponentStyleApplier,
+  CursorApplier,
   DensityApplier,
   MotionApplier,
   RadiusApplier,
   TypographyApplier,
 } from "@/lib/appearance"
+import { CursorEffectLayer } from "@/components/appearance/cursor-effect-layer"
 import { CustomThemeApplier } from "@/lib/appearance/custom-theme-applier"
 import { PluginThemeApplier } from "@/lib/appearance/plugin-theme-applier"
 import { DataAdapterProvider } from "@/lib/data-hooks/context"
@@ -98,6 +100,7 @@ import { CaptureMount } from "@/components/capture/capture-mount"
 import { PetWindowShell } from "@/components/pet/pet-window-shell"
 import { TtsNowPlayingBar } from "@/components/tts/tts-now-playing-bar"
 import { AskUserDialog } from "@/components/chat/ask-user-dialog"
+import { SkillRecorderRoot } from "@/components/skills/recorder/recorder-root"
 import "./globals.css"
 
 export const metadata: Metadata = {
@@ -267,6 +270,13 @@ export default async function RootLayout({
                                           <DensityApplier />
                                           <RadiusApplier />
                                           <MotionApplier />
+                                          {/* Pointer art. After MotionApplier so
+                                  the reduce-motion class is already settled
+                                  when the effect layer reads it, and before
+                                  the color appliers because the "follow the
+                                  accent" mode resolves the palette from the
+                                  store rather than from the DOM. */}
+                                          <CursorApplier />
                                           {/* Keeps body[data-bg-*] + the cognia user-css */}
                                           {/* style tag in sync with the appearance store. */}
                                           <BackgroundApplier />
@@ -361,6 +371,10 @@ export default async function RootLayout({
                         {/* Floating virtual-pet widget — gates itself on the pet
                          * setting and degrades on mobile / reduced motion. */}
                         <PetMount />
+                        {/* Pointer particle/trail overlay — renders null unless
+                         * an effect is selected, and stands down under reduced
+                         * motion or on a coarse (touch) pointer. */}
+                        <CursorEffectLayer />
                         {/* Content-capture confirm bubble + clipboard watcher —
                          * self-gates on the capture setting (disabled by default). */}
                         <CaptureMount />
@@ -369,6 +383,11 @@ export default async function RootLayout({
                         {/* Modal for the agent's `ask_user` tool — self-hides when
                          * no prompt is pending. */}
                         <AskUserDialog />
+                        {/* ADR-0106 — mounted at the root, not in the Skills panel:
+                            the command palette, the `skills.record` shortcut and
+                            `/record-skill` all fire on any route. Renders null
+                            unless a recording flow is open. */}
+                        <SkillRecorderRoot />
                         {/* Persistent notice when `settings.load()` fell back to
                          * DEFAULTS. Self-hides unless the store's `loadFailed`
                          * flag is set, so it costs one selector in the normal

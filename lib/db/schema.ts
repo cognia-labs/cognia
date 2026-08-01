@@ -30,6 +30,13 @@ import type {
   ProviderProfile,
   TransportProfile,
 } from "@cognia/provider-types/provider-profile"
+import type {
+  ProviderBalanceSnapshot,
+  ProviderDiagnosticJob,
+  ProviderDiagnosticSample,
+  ProviderDiagnosticsRefreshState,
+  ProviderEndpointChange,
+} from "@cognia/provider-types/provider-diagnostics"
 import type { ProfileStoreMetaRow } from "./provider-profiles"
 import type { AgentCompatibilityRecordRow } from "./agent-compatibility"
 import type { BackupHistoryRow } from "./backup-history"
@@ -144,6 +151,7 @@ import type {
 } from "./provider-catalog"
 import type { OpenRouterCatalogRow } from "./openrouter-catalog"
 import type { SessionStateRow } from "./session-state"
+import type { SkillRecordingRow } from "./skill-recordings"
 import type { TrustedPublisherRow } from "./trusted-publishers"
 import type { TtsProviderKeyRow } from "@cognia/tts/types"
 import type {
@@ -3113,6 +3121,64 @@ export class CogniaDB extends Dexie {
         })
     })
 
+    // v139 — Unified action review (ADR-0102). Additive only; no upgrade hook,
+    // because the table is new.
+    //
+    // Deliberately ONE table. Cross-host handoff (ADR-0103) and the PR chat
+    // workspace (ADR-0105) each claim their own later version alongside their
+    // accessor module, rather than being batched here: a table declared before
+    // anything can read it is the "built but dormant" defect this repo keeps
+    // hitting. Version numbers are cheap and append-only (129 and 133 are
+    // already burned); a dormant table is not.
+    //
+    // `actionReviewReceipts` is the first durable home for an approval
+    // decision. Query columns are FLATTENED off the nested receipt by
+    // `toReceiptRow` (lib/db/action-review-receipts.ts): six single axes plus
+    // the two compounds the audit UI pages through, and a multiEntry
+    // `surfaceIds` so "every credential-auth decision this quarter" is an index
+    // hit rather than a full-table filter. `expiresAt` is the 90-day retention
+    // watermark, indexed so the sweeper is a range delete — and stamped per
+    // row, so changing the retention constant never re-dates existing rows.
+    this.version(139).stores({
+      actionReviewReceipts:
+        "&id, decidedAt, expiresAt, outcome, authority, tier, channel, sessionId, runId, projectId, [channel+decidedAt], [sessionId+decidedAt], *surfaceIds",
+    })
+
+    // v140 — Provider diagnostics control plane. Additive history, balance,
+    // scheduler-state, and endpoint rollback tables; no historical rows need
+    // rewriting and legacy subscription snapshots remain intact.
+    this.version(140).stores({
+      providerDiagnosticJobs: "&id, providerId, status, startedAt, [providerId+startedAt]",
+      providerDiagnosticSamples:
+        "&id, jobId, targetId, providerId, modelId, status, startedAt, [providerId+startedAt], [targetId+startedAt]",
+      providerBalanceSnapshots:
+        "&id, providerId, sourceId, accountId, fetchedAt, [providerId+fetchedAt], [sourceId+fetchedAt]",
+      providerDiagnosticsRefreshState:
+        "&sourceId, providerId, status, nextDueAt, [providerId+nextDueAt]",
+      providerEndpointChanges: "&id, providerId, appliedAt, rolledBackAt, [providerId+appliedAt]",
+    })
+
+    // v141 — Skill recorder source versions (ADR-0106). Additive only; no
+    // upgrade hook, because the table is new.
+    //
+    // DEVICE-LOCAL BY CONSTRUCTION. This table appears in none of the
+    // backup / sync / export allow-lists, and `lib/db/skill-recordings.test.ts`
+    // asserts that rather than leaving the omission to be noticed later. A
+    // recording is a video of the user's screen in all but name.
+    //
+    // The row holds the user's review edits and counts — never the capture. The
+    // trace and every frame live in the native bundle under the app-data
+    // directory, addressed by `bundleId`. That is what keeps a saved source
+    // version immutable (re-opening replays edits over an untouched bundle) and
+    // what keeps a 400-step recording from putting hundreds of megabytes of PNG
+    // into IndexedDB.
+    //
+    // `[skillId+createdAt]` is the compound the "Recording versions" tab pages
+    // through, newest first.
+    this.version(141).stores({
+      skillRecordings: "&id, skillId, status, updatedAt, [skillId+createdAt]",
+    })
+
     // First full-chain construction under Jest: cache the merged spec so every
     // later construction in this worker takes the collapsed fast path above.
     if (isSchemaCollapseEnabled() && !collapsedSchemaCacheSlot().__cogniaCollapsedSchema) {
@@ -3120,6 +3186,10 @@ export class CogniaDB extends Dexie {
     }
   }
 
+  // v141 — Skill recorder source versions (ADR-0106). Provenance + review
+  // edits only; the capture itself lives in the native bundle. See
+  // `lib/db/skill-recordings.ts`.
+  skillRecordings!: Table<SkillRecordingRow, string>
   sessionState!: Table<SessionStateRow, string>
   tts_provider_keys!: Table<TtsProviderKeyRow, string>
   openVsxCache!: Table<OpenVsxCacheRow, string>
@@ -3176,6 +3246,16 @@ export class CogniaDB extends Dexie {
   // v74 — Terminal durable history + unattended-exec audit.
   terminalHistory!: Table<TerminalHistoryRow, string>
   unattendedExecAudit!: Table<UnattendedExecAuditRow, string>
+  // v139 — Unified action-review receipts (ADR-0102). One durable row per
+  // reviewed action across every decision point. See
+  // `lib/db/action-review-receipts.ts`.
+  actionReviewReceipts!: Table<import("./action-review-receipts").ActionReviewReceiptRow, string>
+  // v140 — Provider diagnostics and balance history.
+  providerDiagnosticJobs!: Table<ProviderDiagnosticJob, string>
+  providerDiagnosticSamples!: Table<ProviderDiagnosticSample, string>
+  providerBalanceSnapshots!: Table<ProviderBalanceSnapshot, string>
+  providerDiagnosticsRefreshState!: Table<ProviderDiagnosticsRefreshState, string>
+  providerEndpointChanges!: Table<ProviderEndpointChange, string>
   // v75 — Provider cost rollups. See `lib/db/provider-cost-daily.ts`.
   providerCostDaily!: Table<ProviderCostDailyRow, string>
   // v76 — Semantic tool routes. See `lib/db/tool-routes.ts`.
@@ -3258,6 +3338,8 @@ export type { PetSpritePackRow } from "./pet-sprite-packs"
 export type { TerminalHistoryRow } from "./terminal-history"
 export type { ProviderCostDailyRow } from "./provider-cost-daily"
 export type { UnattendedExecAuditRow } from "./terminal-audit"
+export type { ActionReviewReceiptRow } from "./action-review-receipts"
+export type { SkillRecordingRow, SkillRecordingStatus } from "./skill-recordings"
 export type {
   ConversationLabelRow,
   ConversationAssignmentEventRow,

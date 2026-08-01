@@ -5937,6 +5937,7 @@
         "search": "Search & title",
         "secondarySidebarToggle": "Secondary Side Bar toggle",
         "sync": "Sync status",
+        "terminal": "Terminal",
         "usage": "Usage & limits",
         "workspace": "Workspace"
       },
@@ -6558,6 +6559,9 @@
       "syncLast": "Synced {time}",
       "syncNever": "Not synced",
       "syncNow": "Sync now",
+      "terminal": "{count, plural, =0 {Terminal} one {# terminal} other {# terminals}}",
+      "terminalRunning": "Terminal panel — a session is running",
+      "terminalToggle": "Toggle terminal panel",
       "usage": "Usage & limits",
       "usageOpen": "Open usage & limits"
     },
@@ -6608,6 +6612,8 @@
       "restore": "Restore",
       "searchPlaceholder": "Search or run command…",
       "separator": " — ",
+      "terminalSpawnDenied": "Terminal blocked by a plugin",
+      "terminalSpawnError": "Couldn't open terminal: {message}",
       "workspace": "Workspace",
       "workspaceUntitled": "Untitled workspace"
     }
@@ -7249,6 +7255,42 @@
       "compact": "Compact",
       "grid": "Grid",
       "list": "List"
+    }
+  },
+  "dock": {
+    "a11y": {
+      "host": "Workspace dock",
+      "moveHandle": "Resize the dock"
+    },
+    "commands": {
+      "close": "Close panel",
+      "closeOthers": "Close other panels",
+      "float": "Float",
+      "moveToNewWindow": "Move to new window",
+      "pin": "Keep open",
+      "redo": "Redo layout change",
+      "redock": "Send back to the dock",
+      "reset": "Reset layout",
+      "splitDown": "Split down",
+      "splitLeft": "Split left",
+      "splitRight": "Split right",
+      "splitUp": "Split up",
+      "undo": "Undo layout change"
+    },
+    "errors": {
+      "nativePanelCannotFloat": "{name} runs in a native view that has to stay in the main layout.",
+      "nativePanelInUse": "{name} is already open elsewhere. Move it here?",
+      "panelCrashed": "{name} stopped responding.",
+      "panelCrashedRetry": "Reload panel",
+      "permissionRevoked": "{name} no longer has permission to run here.",
+      "pluginUnavailable": "{name} is unavailable because its plugin is disabled or missing.",
+      "pluginUnavailableHint": "The panel stays here and comes back when the plugin does."
+    },
+    "tabs": {
+      "close": "Close {name}",
+      "dirty": "{name} has unsaved changes",
+      "preview": "{name} — preview tab, double-click to keep it open",
+      "unread": "{count, plural, one {# update} other {# updates}}"
     }
   },
   "docsSite": {
@@ -10382,6 +10424,174 @@
       "toolArgs": "Arguments",
       "toolName": "Tool",
       "totalTokens": "Total"
+    },
+    "workspace": {
+      "advanced": {
+        "capabilities": {
+          "description": "Per-platform capture and artifact availability reported by the active runtime.",
+          "status": "Runtime reported",
+          "title": "Capability diagnostics"
+        },
+        "queues": {
+          "description": "Durable upload progress, retries, cancellations, and last flush watermarks.",
+          "status": "Local queues",
+          "title": "Upload queues"
+        },
+        "schema": {
+          "description": "Versioned structured fields, correlation context, redaction version, and spool sequence.",
+          "status": "ObservabilityEventV1",
+          "title": "Event schema"
+        },
+        "symbols": {
+          "description": "Build-ID keyed source maps and native symbol artifacts used during processing.",
+          "status": "Service managed",
+          "title": "Symbol status"
+        }
+      },
+      "breadcrumbHome": "Home",
+      "consent": {
+        "description": "Nothing is uploaded until you review the redacted report and explicitly submit it.",
+        "descriptionLabel": "Description for support",
+        "descriptionPlaceholder": "Optional: describe what you were doing before the failure",
+        "minidump": "Include native minidump",
+        "minidumpDescription": "May contain process memory. It is unchecked by default and scanned again by the service.",
+        "screenshot": "Include current-state screenshot",
+        "screenshotDescription": "Captured only now after consent; it is never presented as a crash-time screenshot.",
+        "title": "Submission preview"
+      },
+      "delete": {
+        "action": "Delete local report",
+        "cancel": "Keep report",
+        "confirm": "Delete report",
+        "description": "This removes the local diagnostic artifacts from this device. The action cannot be undone.",
+        "title": "Delete this crash report?"
+      },
+      "density": {
+        "comfortable": "Comfortable",
+        "compact": "Compact",
+        "label": "Workspace density",
+        "spacious": "Spacious"
+      },
+      "detail": {
+        "description": "Review redacted local diagnostics and optional attachments.",
+        "loading": "Loading redacted preview…",
+        "noPreview": "Select the report again to load its local preview.",
+        "previewDescription": "This is the local, redacted payload. Optional attachments remain excluded.",
+        "previewTitle": "Redacted preview",
+        "resize": "Resize incident detail pane",
+        "runtime": "Runtime",
+        "state": "State",
+        "title": "Incident detail"
+      },
+      "filters": {
+        "sourceLabel": "Incident source",
+        "sources": {
+          "all": "All devices",
+          "desktop": "Desktop",
+          "mobile": "Mobile"
+        },
+        "stateLabel": "Incident state"
+      },
+      "health": {
+        "cards": {
+          "capture": {
+            "description": "Structured logs and crash markers are retained locally with bounded storage.",
+            "title": "Local capture"
+          },
+          "privacy": {
+            "description": "Versioned redaction runs before IPC, export, or upload, with a second server scan.",
+            "title": "Privacy gate"
+          },
+          "retention": {
+            "description": "Logs and reports remain on this device until retention or an explicit deletion applies.",
+            "title": "Durable retention"
+          },
+          "submission": {
+            "description": "Crash reports require a previewed consent unless automatic submission is separately enabled.",
+            "title": "Controlled submission"
+          }
+        },
+        "description": "A plain-language view of capture, privacy, retention, and submission readiness.",
+        "localIncidents": "Reports retained on this device",
+        "localIncidentsDescription": "These reports have not been treated as uploaded unless a receipt is present.",
+        "status": {
+          "consent": "Consent required",
+          "local": "Local first",
+          "protected": "Redaction active",
+          "ready": "Ready"
+        },
+        "title": "Diagnostics health"
+      },
+      "incidentCount": "{count, plural, =0 {No local incidents} =1 {1 local incident} other {# local incidents}}",
+      "incidents": {
+        "emptyDescription": "New crash reports and abnormal exits will be retained here before submission.",
+        "emptyTitle": "No matching incidents",
+        "error": "Local incident storage could not be read.",
+        "loading": "Loading local incidents…"
+      },
+      "navigation": {
+        "collapse": "Collapse diagnostics navigation",
+        "expand": "Expand diagnostics navigation",
+        "label": "Diagnostics workspace views",
+        "resize": "Resize diagnostics navigation"
+      },
+      "receipts": {
+        "emptyDescription": "Accepted or processing submissions will show their stable support code here.",
+        "emptyTitle": "No submission receipts"
+      },
+      "recovery": {
+        "checkpoints": {
+          "account": {
+            "description": "Keep account access and reporting available in the minimal shell.",
+            "title": "Account and diagnostics"
+          },
+          "automation": {
+            "description": "Enable automation and schedulers last, after all earlier checks remain healthy.",
+            "title": "Automation"
+          },
+          "data": {
+            "description": "Verify read-only local data, backup, and export before enabling writers.",
+            "title": "Local data"
+          },
+          "plugins": {
+            "description": "Enable plugin groups progressively and return to the minimal shell on failure.",
+            "title": "Plugins"
+          },
+          "sidecars": {
+            "description": "Start child runtimes with bounded retries and a health checkpoint.",
+            "title": "Sidecars and connectors"
+          }
+        },
+        "checkpointsDescription": "Safe mode exits by enabling subsystem groups one at a time and recording each health result.",
+        "checkpointsTitle": "Progressive recovery order",
+        "description": "Two unhealthy starts for the same build within ten minutes activate the diagnostics-first minimal shell.",
+        "normalDescription": "No safe-mode activation is currently reported by this renderer. Recovery counters reset after ten stable minutes.",
+        "normalTitle": "Normal startup mode",
+        "title": "Crash-loop recovery"
+      },
+      "refresh": "Refresh",
+      "reset": "Reset layout",
+      "states": {
+        "accepted": "Accepted",
+        "all": "All states",
+        "awaitingConsent": "Awaiting consent",
+        "cancelled": "Cancelled",
+        "deleted": "Deleted",
+        "detected": "Detected",
+        "processing": "Processing",
+        "queued": "Queued",
+        "rejected": "Rejected",
+        "uploading": "Uploading"
+      },
+      "title": "Logs and diagnostics",
+      "views": {
+        "advanced": "Advanced",
+        "health": "Health",
+        "incidents": "Incidents",
+        "logs": "Logs",
+        "receipts": "Receipts",
+        "recovery": "Recovery"
+      }
     }
   },
   "loop": {
@@ -16314,6 +16524,8 @@
     "filesTab": "Files",
     "newFile": "New File",
     "newFolder": "New Folder",
+    "pinTab": "Keep {name} open",
+    "previewTab": "{name} — preview tab, double-click to keep it open",
     "proIde": {
       "cancelDownload": "Cancel",
       "checkingTooltip": "Checking whether Pro IDE is available…",
@@ -16919,6 +17131,181 @@
       "warningHint": "Configured but not verified — run a connection test"
     },
     "detect": "Detect",
+    "diagnostics": {
+      "balance": {
+        "addScript": "Add sandbox balance source",
+        "allowHttp": "Allow plain HTTP",
+        "allowPrivate": "Allow private or loopback addresses",
+        "apiKeySource": "Provider API key",
+        "audit": "Source audit",
+        "credential": "Credential record",
+        "description": "Balances and quota windows remain separate by account and native unit.",
+        "fetchedAt": "Last fetched",
+        "grant": "Network grant",
+        "grantDomain": "Additional domain grant",
+        "grantOptional": "Optional public domain",
+        "grantPolicy": "{https} {http} {private}",
+        "kind": {
+          "declarative": "Declarative template",
+          "official": "Official built-in",
+          "plugin": "Plugin adapter",
+          "sandbox-script": "Sandbox script",
+          "unsupported": "Unsupported or unverified"
+        },
+        "makePrimary": "Make primary",
+        "noSnapshot": "No balance snapshot yet",
+        "policyHttp": "HTTP allowed",
+        "policyHttps": "HTTPS",
+        "policyPrivate": "private network allowed",
+        "primary": "Primary",
+        "refresh": "Refresh",
+        "removeSource": "Remove balance source",
+        "saveScript": "Save secure source",
+        "scriptCode": "QuickJS source",
+        "scriptLabel": "Source label",
+        "scriptOrigin": "Same-origin URL",
+        "scriptRequired": "Label, origin, script, and token are required.",
+        "scriptToken": "Credential token",
+        "scriptTokenHint": "The token is written to the desktop keyring before settings retain only its reference.",
+        "sourceId": "Source ID",
+        "threshold": "Low-balance threshold ({unit})",
+        "thresholdPlaceholder": "Notify below this value",
+        "title": "Balance and quota sources"
+      },
+      "composer": {
+        "capability": "Capability",
+        "concurrency": "Concurrency (1–5)",
+        "credential": "Credential",
+        "description": "Choose a production-resolved target and review its request and cost limits before execution.",
+        "embedding": "Embedding benchmark",
+        "endpoint": "Endpoint",
+        "mode": "Sampling mode",
+        "model": "Model",
+        "open": "Configure run",
+        "poolCredential": "Key pool #{index}",
+        "precise": "Precise · warm-up + 3 samples",
+        "preview": "Up to {requests} request(s), concurrency {concurrency}, {timeout}s timeout per sample.",
+        "primaryCredential": "Primary credential",
+        "probe": "Free protocol probe",
+        "quick": "Quick · 1 sample",
+        "remotePaid": "Allow paid diagnostics from paired devices",
+        "remotePaidDescription": "The desktop still enforces device permission, vault state, configured models, and confirmed limits.",
+        "reviewRun": "Review diagnostic run",
+        "selectModel": "Select a model",
+        "text": "Streaming text benchmark",
+        "timeout": "Timeout (ms)",
+        "title": "Run diagnostics"
+      },
+      "confirm": {
+        "cancel": "Cancel",
+        "description": "This run will make {requests} request(s). Estimated cost: {cost}.",
+        "limits": "Hard limits: {tokens} output tokens per sample, {requests} requests per job, ${budget} known-price budget.",
+        "noFallback": "No routing fallback, tools, memory, or hidden retry will mask a provider failure.",
+        "runFree": "Run free probe",
+        "runPaid": "Confirm cost and run",
+        "title": "Confirm diagnostic execution",
+        "unknownCost": "unknown — explicit confirmation required"
+      },
+      "endpoints": {
+        "add": "Add",
+        "after": "After",
+        "apply": "Apply",
+        "before": "Before",
+        "compareFree": "Compare reachability",
+        "comparePaid": "Compare paid TTFT",
+        "confirmApply": "Apply endpoint",
+        "current": "Current",
+        "description": "Compare allowlisted catalog, configured, explicit, and local CCSwitch endpoints. Production settings never change automatically.",
+        "diffDescription": "Review the exact configuration change. A compare-and-swap rollback journal will protect later manual edits.",
+        "diffTitle": "Review endpoint change",
+        "placeholder": "https://gateway.example/v1",
+        "recommended": "Recommended",
+        "rollback": "Rollback to {endpoint}",
+        "source": {
+          "catalog": "Catalog",
+          "ccswitch": "Local CCSwitch",
+          "current": "Current configuration",
+          "user": "Explicit entry"
+        },
+        "title": "Endpoint comparison"
+      },
+      "error": {
+        "title": "Diagnostic operation failed"
+      },
+      "filters": {
+        "all": "All statuses",
+        "allCapabilities": "All capabilities",
+        "allCredentials": "All credentials",
+        "allDates": "All dates",
+        "allEndpoints": "All endpoints",
+        "allModels": "All models",
+        "batch": "Batch · throughput",
+        "capability": "Filter by capability",
+        "credential": "Filter by credential",
+        "date": "Filter by date",
+        "economy": "Economy · estimated cost",
+        "endpoint": "Filter by endpoint",
+        "interactive": "Interactive · TTFT",
+        "last24h": "Last 24 hours",
+        "last7d": "Last 7 days",
+        "model": "Filter by model",
+        "scenario": "Ranking scenario"
+      },
+      "history": {
+        "chartAria": "Diagnostic latency trend",
+        "clear": "Clear local diagnostic history",
+        "description": "Auditable measured samples with target, capability, status, and date filters.",
+        "empty": "No history matches these filters.",
+        "exportJson": "Export sanitized diagnostic history as JSON",
+        "title": "History"
+      },
+      "matrix": {
+        "cost": "Estimated cost",
+        "description": "Raw metrics and confidence remain visible; no opaque composite score is calculated.",
+        "empty": "Run a diagnostic or change the filters to see comparable results.",
+        "endpoint": "Endpoint",
+        "model": "Model",
+        "reason": {
+          "batch": "{model} leads the current comparable samples by output throughput.",
+          "economy": "{model} has the lowest current known-price estimated cost.",
+          "interactive": "{model} has the lowest current time to first text token."
+        },
+        "recommendation": "Scenario recommendation",
+        "samples": "Samples / confidence",
+        "status": "Status",
+        "throughput": "Output tokens/s",
+        "title": "Benchmark matrix",
+        "total": "Total duration",
+        "ttft": "TTFT"
+      },
+      "progress": {
+        "aria": "Diagnostic progress: {percent}%",
+        "cancelAll": "Cancel all",
+        "cancelTarget": "Cancel target",
+        "count": "{completed} of {total} samples completed",
+        "title": "Diagnostic run in progress"
+      },
+      "stale": {
+        "description": "The latest projection is older than its refresh window or came from the paired-device cache.",
+        "title": "Showing stale diagnostic data"
+      },
+      "status": {
+        "completed": "Completed",
+        "failed": "Failed",
+        "invalid": "Invalid",
+        "reachable": "Reachable",
+        "unknown": "Unknown",
+        "unverified": "Unverified",
+        "verified": "Verified"
+      },
+      "summary": {
+        "auth": "Authentication",
+        "description": "Advisory state for {provider}; routing health is unchanged.",
+        "execution": "Real execution",
+        "title": "Provider summary",
+        "transport": "Transport"
+      }
+    },
     "differentSettings": "Different",
     "disable": "Disable",
     "disableSelected": "Disable Selected",
@@ -17647,6 +18034,7 @@
       "advanced": "Advanced",
       "config": "Config",
       "cost": "Cost",
+      "diagnostics": "Diagnostics",
       "health": "Health",
       "models": "Models",
       "parameters": "Parameters",
@@ -20196,6 +20584,74 @@
           "translucent": "Translucent"
         },
         "tonalityHint": "Tonality only takes effect while a wallpaper is enabled."
+      },
+      "cursor": {
+        "colorHint": "Accent follows the active theme; custom pins one color across every pack.",
+        "colorLabel": "Color",
+        "colorModes": {
+          "accent": "Theme accent",
+          "custom": "Custom color",
+          "pack": "Pack colors"
+        },
+        "customColorLabel": "Custom color",
+        "description": "Replace the pointer with a designed cursor pack, and add an optional particle effect.",
+        "effect": {
+          "clickBurstHint": "Emit an extra burst of particles wherever you click.",
+          "clickBurstLabel": "Burst on click",
+          "colorLabel": "Color",
+          "colorModes": {
+            "accent": "Theme accent",
+            "custom": "Custom color",
+            "pack": "Pack colors",
+            "rainbow": "Rainbow"
+          },
+          "customColorLabel": "Custom color",
+          "description": "Particles drawn behind the pointer as it moves.",
+          "intensityLabel": "Intensity",
+          "kindLabel": "Effect",
+          "kinds": {
+            "bubbles": "Bubbles",
+            "flame": "Flame",
+            "glow": "Glow",
+            "none": "None",
+            "petals": "Petals",
+            "ribbon": "Ribbon",
+            "ripple": "Ripple",
+            "snow": "Snow",
+            "sparkle": "Sparkle",
+            "stardust": "Stardust",
+            "trail": "Trail"
+          },
+          "reducedMotionNotice": "Reduced motion is on, so the effect is not drawn.",
+          "scaleLabel": "Particle size",
+          "title": "Cursor effect",
+          "touchNotice": "Pointer effects are not drawn for touch input."
+        },
+        "enabledHint": "Off keeps your operating system's own pointer.",
+        "enabledLabel": "Custom cursor",
+        "families": {
+          "anime": "Anime",
+          "classic": "Classic",
+          "playful": "Playful",
+          "system": "System"
+        },
+        "nativeRoles": "These roles keep the system pointer: {roles}",
+        "roles": {
+          "crosshair": "Crosshair",
+          "default": "Default",
+          "grab": "Grab",
+          "grabbing": "Grabbing",
+          "notAllowed": "Not allowed",
+          "pointer": "Link",
+          "progress": "Busy",
+          "text": "Text"
+        },
+        "rolesLabel": "Roles",
+        "sizeLabel": "Size",
+        "systemPack": "System",
+        "systemPackHint": "Your OS pointer",
+        "systemSelectedHint": "The system pointer is in use, so there is nothing to preview.",
+        "title": "Cursor"
       },
       "customTheme": {
         "actions": {
@@ -25888,6 +26344,17 @@
         "chatNextAnchor": "Jump to next message anchor",
         "chatPrevAnchor": "Jump to previous message anchor",
         "chatSearchToggle": "Find in conversation",
+        "dockLayoutRedo": "Redo dock layout change",
+        "dockLayoutReset": "Reset the dock layout",
+        "dockLayoutUndo": "Undo dock layout change",
+        "dockPanelClose": "Close the active dock panel",
+        "dockPanelFloat": "Float the active dock panel",
+        "dockPanelPopout": "Move the active dock panel to a new window",
+        "dockPanelRedock": "Send the active dock panel back to the dock",
+        "dockSplitDown": "Split the dock panel downward",
+        "dockSplitLeft": "Split the dock panel to the left",
+        "dockSplitRight": "Split the dock panel to the right",
+        "dockSplitUp": "Split the dock panel upward",
         "observabilityFocusFilter": "Focus filter",
         "observabilityOpenSettings": "Open settings",
         "observabilityRefresh": "Refresh",
@@ -25896,6 +26363,7 @@
         "skillsClearSelection": "Clear selection / close detail",
         "skillsCreate": "Create skill",
         "skillsDelete": "Delete selected skill",
+        "skillsRecord": "Record a skill",
         "skillsSearch": "Focus skills search",
         "skillsSelectAll": "Select all skills",
         "terminalToggle": "Toggle terminal",
@@ -25914,6 +26382,7 @@
         "a2ui": "A2UI workspace",
         "canvasLayout": "Canvas layout",
         "chat": "Chat",
+        "dock": "Dock",
         "navigation": "Navigation",
         "observability": "Observability",
         "panels": "Panels",
@@ -27467,6 +27936,10 @@
     },
     "delete": {
       "body": "\"{name}\" will be removed. Characters using it will silently drop the reference on next save.",
+      "bundles": {
+        "hint": "The capture and its screenshots are removed from this device. This cannot be undone.",
+        "label": "Also delete {count} recording(s) of this skill"
+      },
       "cancel": "Cancel",
       "confirm": "Remove",
       "title": "Remove skill?"
@@ -27723,25 +28196,318 @@
       "viewMode": "Layout"
     },
     "recorder": {
+      "a11y": {
+        "liveGenerating": "Writing the skill.",
+        "livePaused": "Recording paused at {count} steps.",
+        "liveRecording": "Recording. {count} steps captured.",
+        "liveSaved": "Skill saved, switched off."
+      },
       "attachScreenshots": "Attach screenshots as resources",
       "cancel": "Cancel",
       "close": "Close",
+      "closeAria": "Close the skill recorder",
+      "delete": {
+        "bundlesHint": "{count} recordings, {size} on this device. They cannot be recovered.",
+        "bundlesLabel": "Also delete the recordings this skill was made from"
+      },
       "description": "Record a desktop workflow, then turn it into a reusable skill you can review and save.",
       "desktopOnly": "Skill recording is desktop-only.",
+      "draft": {
+        "category": "Category",
+        "content": "Skill",
+        "descriptionField": "Description",
+        "diff": {
+          "acceptAll": "Use the new version",
+          "acceptBlock": "Use this section",
+          "discard": "Discard the new version",
+          "keepMine": "Keep mine",
+          "noChanges": "Nothing changed.",
+          "sectionAdded": "New section",
+          "sectionRemoved": "Section removed",
+          "title": "Compare with the new version"
+        },
+        "edited": "Edited by you",
+        "name": "Name",
+        "openEditor": "Open in the skill editor",
+        "tags": "Tags"
+      },
       "emptyTrace": "No steps were captured.",
+      "entry": {
+        "paletteHint": "Capture a desktop workflow and turn it into a skill",
+        "paletteLabel": "Record a skill",
+        "shortcutLabel": "Record a skill",
+        "slashDescription": "Record a desktop workflow as a skill",
+        "toolbarButton": "Record a skill"
+      },
+      "generate": {
+        "blockedByVariables": "{count, plural, one {# variable still needs confirming} other {# variables still need confirming}} before a skill can be generated.",
+        "blockedByVariablesHint": "Open the review step and confirm or exclude each one.",
+        "failed": "The skill could not be generated.",
+        "manualFallback": "Write it from the timeline instead",
+        "manualFallbackHint": "Produces a complete skill from the steps you reviewed, with no model involved.",
+        "noModel": "No model is configured.",
+        "preview": "What leaves this device",
+        "previewCopy": "Copy",
+        "previewDescription": "This is exactly what is sent — nothing else. Screenshots, excluded steps and secret values are not included.",
+        "previewSystem": "Instructions",
+        "previewUser": "Transcript",
+        "redacted": "Personal information was replaced before sending.",
+        "regenerate": "Regenerate",
+        "run": "Generate",
+        "running": "Writing the skill…",
+        "stale": "The timeline changed after this was written.",
+        "staleHint": "Regenerating creates a new version beside this one; your edits are kept.",
+        "title": "Generate the skill",
+        "tools": {
+          "confirm": "Use these tools",
+          "description": "Only tools that exist on this machine are kept.",
+          "dropped": "Not available here",
+          "kept": "Kept",
+          "none": "No tools required.",
+          "title": "Tools this skill may use",
+          "unknown": "The model suggested {count} tools that do not exist. They were left out."
+        },
+        "truncated": "{count} further steps were left out for length."
+      },
       "generateFailed": "Couldn't generate a skill from this recording.",
       "generating": "Generating skill…",
-      "recording": "Recording… {count} steps captured",
+      "interrupt": {
+        "discard": "Discard",
+        "reason": {
+          "appShutdown": "Cognia quit while recording.",
+          "killSwitch": "Automation was stopped.",
+          "limitReached": "The recording reached its limit.",
+          "nativeFailure": "The recorder ran into a problem.",
+          "permissionLost": "A permission the recorder needs was withdrawn.",
+          "scopeLost": "The window or application being recorded closed.",
+          "userInterrupt": "You stopped it."
+        },
+        "recoverable": "Everything captured so far was kept.",
+        "retry": "Pick up where it stopped",
+        "title": "The recording stopped"
+      },
+      "openAria": "Skill recorder",
+      "pluginDisabled": "The Skill Recorder plugin is turned off. Enable it in Settings → Plugins to record.",
+      "preflight": {
+        "blocker": {
+          "accessibilityMissing": "Grant Accessibility so the recorder can read what you clicked.",
+          "alreadyRecording": "A recording is already in progress.",
+          "automationDisabled": "Automation is turned off in Settings.",
+          "grantMissing": "The recorder is missing a permission it declared: {detail}.",
+          "inputMonitoringMissing": "Grant Input Monitoring so the recorder can observe clicks and typing.",
+          "killSwitchEngaged": "Automation is stopped. Turn it back on in Settings → Automation.",
+          "platformUnsupported": "Recording is available on macOS and Windows only.",
+          "pluginDisabled": "The Skill Recorder plugin is turned off.",
+          "pluginNotInstalled": "The Skill Recorder plugin is not installed.",
+          "screenRecordingMissing": "Grant Screen Recording so the recorder can capture screenshots.",
+          "storageExhausted": "There is no space left for another recording. Delete an old one first.",
+          "uiAutomationUnavailable": "UI Automation is unavailable, so steps cannot be described.",
+          "unknown": "Something is preventing recording on this machine."
+        },
+        "checking": "Checking permissions…",
+        "ocrUnavailable": "No on-device text recognition is available. Steps without a readable label will need a short description from you.",
+        "openSettings": "Open System Settings",
+        "ready": "Ready to record",
+        "retry": "Check again"
+      },
+      "recording": {
+        "elapsed": "Elapsed {time}",
+        "finish": "Finish",
+        "hideSheet": "Hide this panel",
+        "hideSheetHint": "Recording continues. Use the floating controller to stop.",
+        "ignored": "{count} actions outside the recording's scope were ignored",
+        "lastStep": "Last: {description}",
+        "limitWarning": "{kind} is at {percent}% of its limit.",
+        "live": "Recording — {count} steps",
+        "pause": "Pause",
+        "paused": "Paused — {count} steps",
+        "resume": "Resume",
+        "scope": "Recording {scope}",
+        "shortcuts": "Pause {pause} · Undo {undo} · Finish {finish}",
+        "undo": "Undo last step"
+      },
+      "recovery": {
+        "discard": "Delete it",
+        "foundBody": "{count} steps were captured before it stopped.",
+        "foundTitle": "An unfinished recording",
+        "resume": "Review it"
+      },
       "redacted": "Sensitive text was redacted before sending to the model.",
+      "review": {
+        "blockedByVariables": "{count, plural, one {# unconfirmed variable} other {# unconfirmed variables}}",
+        "blockers": {
+          "noIncludedSteps": "Include at least one step.",
+          "sensitiveVariableHasValue": "\"{name}\" is marked secret but still holds a value.",
+          "stepNeedsIntent": "Step {seq} needs a description.",
+          "unconfirmedVariable": "Decide what \"{name}\" should be."
+        },
+        "continue": "Continue",
+        "description": "Exclude what should not be part of the skill, and describe anything the recorder could not.",
+        "emptyHint": "Start again, or add the steps by hand.",
+        "emptyTitle": "Nothing was captured",
+        "exclude": "Exclude",
+        "excluded": "Excluded",
+        "include": "Include",
+        "intent": "What this step does",
+        "intentPlaceholder": "Describe the step in your own words",
+        "intentReset": "Use the recorded description",
+        "manualAdd": "Add a step here",
+        "manualBadge": "Added by you",
+        "manualPlaceholder": "Describe the step to insert",
+        "manualRemove": "Remove step",
+        "manualSave": "Add step",
+        "manualTitle": "Add a step",
+        "moveDown": "Move down",
+        "moveUp": "Move up",
+        "needsIntent": "Needs a description",
+        "needsIntentHint": "The recorder could not read a label here, so an agent would have nothing to act on.",
+        "reorderAria": "Reorder step {seq}",
+        "restore": "Restore",
+        "screenshotCapReached": "Only the first {max} screenshots are attached.",
+        "screenshotNone": "No screenshot for this step",
+        "screenshotSelect": "Attach this screenshot",
+        "selectStep": "Select a step to edit it",
+        "sensitive": "A secret value was typed here. Nothing about it was recorded.",
+        "splitAria": "Resize the timeline",
+        "stepCount": "{included} of {total} steps included",
+        "timelineAria": "Recorded steps",
+        "title": "Review the steps",
+        "variables": {
+          "confirm": "Confirm",
+          "confirmed": "Confirmed",
+          "description": "Decide what varies each time this skill runs. Recorded values stay on this device.",
+          "kindLiteral": "Always this value",
+          "kindSensitive": "Secret, asked for at run time",
+          "kindVariable": "Varies each run",
+          "name": "Name",
+          "sample": "You typed",
+          "sampleLocal": "Stays on this device",
+          "title": "Inputs",
+          "unconfirmed": "{count} inputs still need a decision"
+        },
+        "verify": "Check afterwards",
+        "verifyPlaceholder": "How would you know this step worked?",
+        "viewDetail": "Details",
+        "viewTimeline": "Timeline"
+      },
+      "save": {
+        "assetsPromoted": "{count} screenshots attached",
+        "description": "The skill is saved switched off. Try it once, then turn it on.",
+        "disabledNotice": "Saved as disabled",
+        "failed": "The skill could not be saved. Nothing was written; try again.",
+        "run": "Save skill",
+        "saved": "Saved \"{name}\"",
+        "saving": "Saving…",
+        "title": "Save and test",
+        "trial": {
+          "description": "Opens a new chat with only this skill available, so nothing else can explain the result.",
+          "enabled": "\"{name}\" is on",
+          "opened": "Test chat ready",
+          "skip": "Not now",
+          "start": "Try it in a chat",
+          "starting": "Opening a test chat…",
+          "succeeded": "It worked — turn the skill on"
+        }
+      },
       "saved": "Saved \"{name}\" — review it below.",
+      "setup": {
+        "attachScreenshots": "Capture screenshots",
+        "attachScreenshotsHint": "Stored on this device only. Screenshots are never sent to the model.",
+        "consentNote": "You will be asked to confirm before recording begins.",
+        "locale": "Skill language",
+        "localeDefault": "Match the app language",
+        "model": "Model",
+        "modelNone": "No model configured — a complete template will be written from your timeline instead.",
+        "modelUtilityDefault": "Utility model (default)",
+        "scope": "What should be recorded",
+        "scopeApplication": "One application",
+        "scopeDesktop": "The whole desktop",
+        "scopeDesktopHint": "Captures actions across applications. Cognia's own recorder windows are always excluded.",
+        "scopeHint": "Anything outside this is ignored — no screenshot, no element, just a count.",
+        "scopeWindow": "A single window",
+        "start": "Start recording",
+        "storage": "{used} of {limit} used by recordings",
+        "targetApplication": "Application to record",
+        "targetEmpty": "No open windows to record.",
+        "targetFailed": "Couldn't list open windows. Refresh to try again.",
+        "targetLoading": "Looking for open windows…",
+        "targetMinimized": "Minimized",
+        "targetRefresh": "Refresh",
+        "targetRequired": "Pick a target to record.",
+        "targetWindow": "Window to record"
+      },
+      "srStatus": "Recorder stage {stage}, step {current} of {total}.",
+      "stages": {
+        "generate": "Generate",
+        "recording": "Record",
+        "review": "Review",
+        "save": "Save & test",
+        "setup": "Set up",
+        "stepOf": "Step {current} of {total}"
+      },
       "start": "Start recording",
       "stepKind": {
         "click": "Click",
         "key": "Type",
-        "scroll": "Scroll"
+        "manual": "Step",
+        "outOfScope": "Skipped",
+        "scroll": "Scroll",
+        "type": "Type"
       },
       "stop": "Stop & generate",
-      "title": "Record a skill"
+      "template": {
+        "click": "Click \"{target}\".",
+        "defaultDescription": "A workflow captured with the skill recorder.",
+        "defaultName": "Recorded skill",
+        "inputs": "Inputs",
+        "keys": "Press {chord}.",
+        "noInputs": "This skill takes no inputs.",
+        "noVerify": "Confirm the workflow finished as expected.",
+        "scrollDown": "Scroll down.",
+        "scrollUp": "Scroll up.",
+        "secret": "Enter the secret value for \"{target}\".",
+        "secretSuffix": "provided at run time; never recorded",
+        "steps": "Steps",
+        "type": "Type {value} into \"{target}\".",
+        "unnamedStep": "Perform the next step in the workflow.",
+        "verify": "Verify",
+        "whenToUse": "When to use",
+        "whenToUseBody": "Use this when you need to repeat the workflow recorded on {scope}."
+      },
+      "title": "Record a skill",
+      "versions": {
+        "bundleMissing": "Recording no longer on this device",
+        "bundleSize": "{size} on disk",
+        "capturedAt": "Recorded {date}",
+        "delete": "Delete version",
+        "deleteBody": "The skill stays. The recording and its screenshots are removed from this device.",
+        "deleteConfirm": "Delete recording",
+        "deleteTitle": "Delete this recording?",
+        "duplicate": "Edit as a new version",
+        "duplicateFailed": "That recording could not be copied.",
+        "duplicated": "Version {n} is ready to edit",
+        "empty": "This skill was not made from a recording.",
+        "immutable": "Saved versions are read-only.",
+        "manual": "Written from the timeline",
+        "model": "Written by {model}",
+        "preview": "Preview",
+        "redacted": "Redacted before sending",
+        "regenerate": "Regenerate",
+        "saveAsNew": "Save as another skill",
+        "status": {
+          "captured": "Captured",
+          "discarded": "Discarded",
+          "drafting": "Draft",
+          "interrupted": "Interrupted",
+          "recording": "Recording",
+          "saved": "Saved"
+        },
+        "stepCount": "{count} steps",
+        "stepCounts": "{included} of {total} steps kept",
+        "tabLabel": "Recordings",
+        "title": "Recording versions",
+        "versionLabel": "Version {n}"
+      }
     },
     "refresh": "Refresh",
     "resources": {
@@ -28046,7 +28812,8 @@
       "generic": "Git operation failed: {message}",
       "noRepo": "No repository is bound — open a folder first",
       "pullFailed": "Pull failed: {message}",
-      "pushFailed": "Push failed: {message}"
+      "pushFailed": "Push failed: {message}",
+      "refreshFailed": "Repository changed, but its status could not refresh"
     },
     "explain": {
       "button": "Explain",
@@ -28113,6 +28880,12 @@
       "remove": "Remove Remote",
       "title": "Remotes",
       "urlPlaceholder": "Remote URL"
+    },
+    "repository": {
+      "errorTitle": "Could not load this repository",
+      "loading": "Loading repository status…",
+      "retry": "Retry",
+      "stale": "Showing the last known state. Refresh failed: {message}"
     },
     "reset": {
       "cancel": "Cancel",
@@ -29173,9 +29946,16 @@
       "closePane": "Close pane",
       "closePanel": "Close panel",
       "detachError": "Couldn't detach terminal: {message}",
+      "dragToMove": "Drag to move the terminal dock",
+      "dropZoneBottom": "Drop here to dock the terminal at the bottom",
+      "dropZoneRight": "Drop here to dock the terminal on the right",
       "maximize": "Maximize terminal panel",
+      "moveToBottom": "Dock the terminal at the bottom",
+      "moveToRight": "Dock the terminal on the right",
       "newSession": "New terminal",
+      "overflowTabs": "More terminal tabs",
       "resize": "Drag to resize the terminal dock (arrow keys also work)",
+      "resizeVertical": "Drag to resize the terminal dock (arrow keys also work)",
       "restore": "Restore terminal panel size",
       "spawnDenied": "Terminal blocked by a plugin",
       "spawnError": "Couldn't open terminal: {message}",
@@ -29188,8 +29968,14 @@
         "title": "No terminals yet"
       },
       "mobile": {
+        "action": "+ New terminal",
         "body": "Pair this device with the desktop server to connect to its terminal over LAN.",
         "title": "Remote terminal not configured"
+      },
+      "remote": {
+        "action": "+ New remote terminal",
+        "body": "New terminals open on the connected Cognia host. Spawn one with the button below, or press Ctrl+` to toggle the dock anywhere in the app.",
+        "title": "No terminals on the remote host"
       },
       "unsupported": {
         "body": "The integrated terminal needs the desktop or mobile shell — it isn't available in the plain browser preview.",
@@ -29260,9 +30046,15 @@
       "previous": "Previous match"
     },
     "sessionState": {
+      "chipDetails": "Terminal session status",
+      "chipLabel": "Terminal status: {state}",
       "fullHost": "Full host",
       "integrationDegraded": "Shell integration unavailable",
+      "outputThrottled": "Output throttled — the process was paused to catch up",
+      "outputThrottledBuffered": "Output throttled — buffering in this window",
       "readOnly": "Read-only",
+      "releaseConfirm": "Release control of this session? Another client can then take over.",
+      "releaseControl": "Release control",
       "replayGap": "Output before sequence {firstAvailable} is no longer available.",
       "replayGapMarker": "Earlier terminal output is unavailable because the replay buffer was truncated.",
       "sandboxed": "Sandboxed",
