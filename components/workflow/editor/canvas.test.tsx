@@ -5,7 +5,7 @@ import "fake-indexeddb/auto"
 import "@testing-library/jest-dom"
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { WorkflowEditorCanvas } from "./canvas"
+import { WORKFLOW_MOBILE_WORKBENCH_SHEET, WorkflowEditorCanvas } from "./canvas"
 import { runWorkflow } from "@/lib/workflow/runtime/orchestrator"
 import { toast } from "sonner"
 import type { VisualWorkflow } from "@/types/workflow/visual"
@@ -533,5 +533,19 @@ describe("WorkflowEditorCanvas — persistent workbench rail", () => {
     expect(sidebar).toHaveAttribute("data-has-ensure-visible", "true")
     // Nothing is collapsed on a fresh editor.
     expect(sidebar).not.toHaveAttribute("data-rail-only")
+  })
+
+  it("animates the mobile workbench vertically in both directions without unmounting it", () => {
+    expect(WORKFLOW_MOBILE_WORKBENCH_SHEET.side).toBe("bottom")
+    expect(WORKFLOW_MOBILE_WORKBENCH_SHEET.className).toContain(
+      "data-[state=open]:slide-in-from-bottom"
+    )
+    expect(WORKFLOW_MOBILE_WORKBENCH_SHEET.className).toContain(
+      "data-[state=closed]:slide-out-to-bottom"
+    )
+    expect(WORKFLOW_MOBILE_WORKBENCH_SHEET.className).toContain(
+      "data-[state=closed]:translate-y-full"
+    )
+    expect(WORKFLOW_MOBILE_WORKBENCH_SHEET.forceMount).toBe(true)
   })
 })

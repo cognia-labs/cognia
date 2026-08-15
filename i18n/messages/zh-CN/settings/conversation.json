@@ -148,6 +148,23 @@
       "description": "将可拖拽的侧边栏恢复到默认宽度。",
       "heading": "侧边栏宽度"
     },
+    "sortBy": {
+      "description": "应用于每个分组内部的排序。仅「最近活动」会保留手动拖拽的顺序。",
+      "heading": "会话排序方式",
+      "label": "会话排序",
+      "options": {
+        "created": "创建时间",
+        "oldest": "最早活动",
+        "recent": "最近活动",
+        "title": "标题（A–Z）",
+        "unread": "未读优先"
+      }
+    },
+    "timestamps": {
+      "description": "在会话标题末尾显示最近一次活动的时间。",
+      "heading": "活动时间",
+      "label": "显示活动时间"
+    },
     "title": "会话侧边栏",
     "titleMotion": {
       "description": "悬停时以两端停顿的往返滚动展示溢出标题；开启减少动态效果后始终保持静态。",

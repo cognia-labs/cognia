@@ -1604,6 +1604,46 @@ body[data-bg-enabled="true"][data-bg-scope="global"] [data-slot="ai-context"] {
   -webkit-backdrop-filter: blur(var(--surface-blur-subtle));
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+ * Section 4d — composer scrim.
+ *
+ * The bar behind the chat composer fades the message list into the input box.
+ * It used to be a Tailwind `bg-gradient-to-t from-background …` plus
+ * `data-tonality="glass"`, which cannot work together: the tonality rules in
+ * Section 5 only replace `background-color`, so the opaque gradient
+ * (`background-image`) kept painting over them. With a wallpaper active the
+ * composer therefore sat under a flat slab of `--background` while the message
+ * area a few pixels above showed the image — the seam the two surfaces were
+ * supposed to hide.
+ *
+ * One declaration owns the fade instead, and the wallpaper variant mixes the
+ * same stops down to the glass tonality so the image reads through the whole
+ * bar. `prefers-reduced-transparency` drives the tonality tokens to 100%, which
+ * makes this opaque again on its own — no separate media query needed.
+ * ──────────────────────────────────────────────────────────────────────────*/
+
+.composer-scrim {
+  background-image: linear-gradient(
+    to top,
+    var(--background) 0%,
+    color-mix(in oklch, var(--background) 92%, transparent) 55%,
+    transparent 100%
+  );
+}
+
+/* Every scope whose wallpaper can reach the composer (the composer lives in the
+ * chat surface). `canvas` / `sidebar` scopes leave the chat opaque, so they keep
+ * the solid fade above. */
+body[data-bg-enabled="true"]:not([data-bg-scope="canvas"]):not([data-bg-scope="sidebar"])
+  .composer-scrim {
+  background-image: linear-gradient(
+    to top,
+    color-mix(in oklch, var(--background) var(--surface-tonality-glass), transparent) 0%,
+    color-mix(in oklch, var(--background) calc(var(--surface-tonality-glass) / 2), transparent) 55%,
+    transparent 100%
+  );
+}
+
 /* Section 5 — data-tonality / data-elevation semantic opt-in/opt-out.
  *
  * Run after the auto-rules above so they win on specificity tie. Only

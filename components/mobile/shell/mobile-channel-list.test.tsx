@@ -62,6 +62,12 @@ jest.mock("next-intl", () => ({
       renameAria: "Rename",
       emptyChats: "Empty",
       emptyFiltered: `No "${vars?.query ?? ""}"`,
+      emptyFilters: `No match for ${vars?.count ?? 0} filters`,
+      // Shared `conversationFilters` namespace (the filter menu + chips).
+      clearAll: "Clear filters",
+      label: "Filter and sort",
+      labelActive: `Filter and sort (${vars?.count ?? 0})`,
+      count: `${vars?.shown ?? 0} / ${vars?.total ?? 0}`,
       swipePin: "Pin",
       swipeUnpin: "Unpin",
       swipeDelete: "Delete",
@@ -87,6 +93,16 @@ jest.mock("@/lib/capacitor/haptics", () => ({
 const setChannelListView = jest.fn()
 const setCollapsedFolders = jest.fn()
 const setGroupCollapsed = jest.fn()
+// Quick filters are shared with the desktop sidebar; default to unfiltered so
+// the existing assertions hold.
+let conversationFilters: Record<string, unknown> = {
+  unread: false,
+  pinned: false,
+  branched: false,
+  kind: "all",
+}
+const setConversationFilters = jest.fn()
+const resetConversationFilters = jest.fn()
 jest.mock("@/stores/ui", () => ({
   useUIStore: <T,>(selector: (s: Record<string, unknown>) => T): T =>
     selector({
@@ -96,14 +112,21 @@ jest.mock("@/stores/ui", () => ({
       setCollapsedFolders,
       groupCollapseOverrides: {},
       setGroupCollapsed,
+      conversationFilters,
+      setConversationFilters,
+      resetConversationFilters,
     }),
 }))
 
 // Behavior prefs default to today's behavior; tests override as needed.
 let conversationSidebar: Record<string, unknown> | null = null
+const saveSettings = jest.fn()
 jest.mock("@/stores/settings", () => ({
-  useSettingsStore: <T,>(selector: (s: { settings: unknown }) => T): T =>
-    selector({ settings: conversationSidebar ? { conversationSidebar } : null }),
+  useSettingsStore: <T,>(selector: (s: { settings: unknown; save: typeof saveSettings }) => T): T =>
+    selector({
+      settings: conversationSidebar ? { conversationSidebar } : null,
+      save: saveSettings,
+    }),
 }))
 
 const useChatHistorySearch = jest.fn()
@@ -143,6 +166,10 @@ describe("<MobileChannelList />", () => {
     setChannelListView.mockReset()
     setCollapsedFolders.mockReset()
     setGroupCollapsed.mockReset()
+    setConversationFilters.mockReset()
+    resetConversationFilters.mockReset()
+    saveSettings.mockReset()
+    conversationFilters = { unread: false, pinned: false, branched: false, kind: "all" }
     useProjectStore.setState({ projects: [], activeProjectId: null, loaded: false })
     conversationSidebar = null
     historySearchState = {
@@ -672,5 +699,79 @@ describe("<MobileChannelList />", () => {
       expect(screen.getByTestId("mobile-channel-row-s3")).toBeInTheDocument()
     )
     expect(screen.queryByTestId("mobile-channel-row-s2")).not.toBeInTheDocument()
+  })
+
+  describe("filters and sorting", () => {
+    const renderList = (list: ChatSession[] = sessions) =>
+      render(
+        <MobileChannelList
+          sessions={list}
+          activeSessionId={null}
+          onSelect={jest.fn()}
+          onNewDirect={jest.fn()}
+          onDelete={jest.fn()}
+          onRename={jest.fn()}
+          onArchive={jest.fn()}
+          onUnarchive={jest.fn()}
+        />
+      )
+
+    it("hides the chip row while the list is in its default state", () => {
+      renderList()
+      expect(screen.queryByTestId("mobile-channel-filter-chips")).toBeNull()
+    })
+
+    it("applies the shared pinned filter", () => {
+      // Same UI-store slice the desktop sidebar reads, so a phone and a desktop
+      // never disagree about which conversations exist.
+      conversationFilters = { unread: false, pinned: true, branched: false, kind: "all" }
+      renderList()
+      expect(screen.getByTestId("mobile-channel-row-s1")).toBeInTheDocument()
+      expect(screen.queryByTestId("mobile-channel-row-s2")).toBeNull()
+      expect(screen.getByTestId("mobile-channel-filter-chips-count")).toHaveTextContent("1 / 3")
+    })
+
+    it("applies the shared sort preference", () => {
+      conversationSidebar = { groupBy: "none", sortBy: "title" }
+      renderList([
+        baseSession("s-z", { title: "Zulu", updatedAt: 300 }),
+        baseSession("s-a", { title: "Alpha", updatedAt: 100 }),
+      ])
+      const rows = screen.getAllByTestId(/^mobile-channel-row-/)
+      expect(rows.map((r) => r.getAttribute("data-testid"))).toEqual([
+        "mobile-channel-row-s-a",
+        "mobile-channel-row-s-z",
+      ])
+    })
+
+    it("persists a sort choice through the settings store", async () => {
+      const user = userEvent.setup()
+      renderList()
+      await user.click(screen.getByTestId("mobile-channel-filter"))
+      await user.click(await screen.findByRole("menuitemradio", { name: "sort.options.oldest" }))
+      expect(saveSettings).toHaveBeenCalledWith({ conversationSidebar: { sortBy: "oldest" } })
+    })
+
+    it("clears filters from the empty state when they hide everything", async () => {
+      conversationFilters = { unread: true, pinned: false, branched: false, kind: "all" }
+      const user = userEvent.setup()
+      renderList()
+      expect(screen.getByTestId("mobile-channel-empty")).toHaveTextContent("No match for 1 filters")
+      await user.click(screen.getByTestId("mobile-channel-clear-filters"))
+      expect(resetConversationFilters).toHaveBeenCalled()
+    })
+
+    it("keeps the search empty state when a query is what emptied the list", async () => {
+      conversationFilters = { unread: true, pinned: false, branched: false, kind: "all" }
+      const user = userEvent.setup()
+      renderList()
+      await user.type(screen.getByTestId("mobile-channel-search"), "zzz")
+      // A query is the more specific cause — offering "clear filters" here would
+      // point at the wrong lever.
+      await waitFor(() =>
+        expect(screen.getByTestId("mobile-channel-empty")).toHaveTextContent('No "zzz"')
+      )
+      expect(screen.queryByTestId("mobile-channel-clear-filters")).toBeNull()
+    })
   })
 })

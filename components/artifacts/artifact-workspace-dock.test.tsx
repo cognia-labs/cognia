@@ -192,13 +192,18 @@ import {
   ArtifactWorkspaceDock,
   DOCK_RESIZE_DURATION_MS,
   DOCK_RESIZE_EASE,
+  dockCapForChatFloor,
 } from "./artifact-workspace-dock"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { MOBILE_DURATION, MOBILE_EASE } from "@/lib/ui/motion"
 import { useBreakpoint } from "@/hooks/ui"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
-import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
+import {
+  CHAT_MIN_PX,
+  WORKSPACE_DOCK_BOUNDS,
+  useArtifactDockLayoutStore,
+} from "@/stores/artifact/artifact-dock-layout-store"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 
@@ -1100,6 +1105,40 @@ describe("ArtifactWorkspaceDock", () => {
     )
 
     expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
+  })
+})
+
+/**
+ * The dock's percentages are shares of the `ResizablePanelGroup`, and that group
+ * is not the window: a right-docked terminal takes its cut at the shell row
+ * before the dock sees a pixel. Pure, because the interesting inputs are widths
+ * jsdom cannot produce by laying anything out.
+ */
+describe("chat floor cap", () => {
+  it("does not clamp while the group is unmeasured", () => {
+    // jsdom reports every width as 0, and so does the first layout callback. A
+    // cap derived from that would collapse the dock on mount.
+    expect(dockCapForChatFloor(0)).toBe(100)
+    expect(dockCapForChatFloor(Number.NaN)).toBe(100)
+  })
+
+  it("leaves a roomy group to the profile bounds", () => {
+    // 420 of 1920 is 21.9%, so the cap sits above the workspace profile's own
+    // 65% and the existing bounds keep deciding.
+    expect(dockCapForChatFloor(1920)).toBeGreaterThan(WORKSPACE_DOCK_BOUNDS.max)
+  })
+
+  it("caps the dock once the conversation would fall under the floor", () => {
+    // 1280px window with a 30% right-docked terminal leaves a ~900px group.
+    // The workspace profile would take 65% of it and leave 315px of
+    // conversation; the cap holds the chat column at CHAT_MIN_PX instead.
+    const cap = dockCapForChatFloor(900)
+    expect(cap).toBeLessThan(WORKSPACE_DOCK_BOUNDS.max)
+    expect((900 * (100 - cap)) / 100).toBeCloseTo(CHAT_MIN_PX, 5)
+  })
+
+  it("never returns a negative cap when the group is narrower than the floor", () => {
+    expect(dockCapForChatFloor(200)).toBe(0)
   })
 })
 

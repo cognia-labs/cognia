@@ -5,7 +5,12 @@
  * optional `credentialRef` points at the `cognia-ssh` OS-keyring namespace.
  */
 
-export type SshAuthMethod = "password" | "privateKey"
+/**
+ * `agent` delegates the signature to a running `ssh-agent`, so it needs neither
+ * a `credentialRef` nor a `privateKeyPath` — the agent holds the key material
+ * and never surrenders it.
+ */
+export type SshAuthMethod = "password" | "privateKey" | "agent"
 
 export interface SshHostProfile {
   id: string

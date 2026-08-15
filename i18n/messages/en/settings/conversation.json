@@ -148,6 +148,23 @@
       "description": "Reset the draggable sidebar back to its default width.",
       "heading": "Sidebar width"
     },
+    "sortBy": {
+      "description": "Order applied inside each section. Only “Recent activity” keeps a manual drag order.",
+      "heading": "Sort conversations by",
+      "label": "Conversation sort",
+      "options": {
+        "created": "Date created",
+        "oldest": "Oldest activity",
+        "recent": "Recent activity",
+        "title": "Title (A–Z)",
+        "unread": "Unread first"
+      }
+    },
+    "timestamps": {
+      "description": "Show when each conversation was last active at the end of its title.",
+      "heading": "Activity time",
+      "label": "Show activity time"
+    },
     "title": "Conversation sidebar",
     "titleMotion": {
       "description": "Reveal overflowing titles with a paused back-and-forth scroll on hover. Reduced-motion preferences always stay static.",

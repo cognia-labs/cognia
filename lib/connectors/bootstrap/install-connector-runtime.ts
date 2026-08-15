@@ -52,6 +52,9 @@ import { installUsagePresenceHandlers } from "@/lib/connectors/presence/usage-st
 import {
   connectorsRegisterAdapter,
   connectorsResetAllWs,
+  connectorsRuntimeLeaseAcquire,
+  connectorsRuntimeLeaseRelease,
+  connectorsRuntimeLeaseRenew,
   connectorsStartServer,
   connectorsStopServer,
   connectorsUnregisterAdapter,
@@ -97,6 +100,7 @@ import {
   type ResumeReconnectHandle,
 } from "@/lib/connectors/bootstrap/resume-reconnect"
 import { liveQuery } from "dexie"
+import { createConnectorRuntimeLease } from "@/lib/connectors/runtime-lease"
 import { getConnectorRuntimeSupervisor } from "@/lib/connectors/runtime-supervisor"
 
 export type ConnectorRuntimeLogLevel = "info" | "warn" | "error"
@@ -170,7 +174,7 @@ export const CONNECTOR_RUNTIME_LOCK = "cognia-connector-runtime"
  * request fails for any reason other than our own abort — no guard, but boot
  * must not be blocked.
  */
-function defaultAcquireRuntimeLock(signal: AbortSignal): Promise<boolean> {
+function acquireWebLock(signal: AbortSignal): Promise<boolean> {
   const locks = (globalThis as { navigator?: { locks?: LockManager } }).navigator?.locks
   if (!locks?.request) return Promise.resolve(true)
   if (signal.aborted) return Promise.resolve(false)
@@ -197,6 +201,45 @@ function defaultAcquireRuntimeLock(signal: AbortSignal): Promise<boolean> {
         resolveAcquired(!(err instanceof Error && err.name === "AbortError"))
       })
   })
+}
+
+/**
+ * The desktop's default guard: the Web Lock first, then the Rust runtime
+ * lease. Both are required, and they cover different collisions — the lock
+ * sees this app's other webviews and nothing else; the lease sees every other
+ * process bound to this app's `ConnectorsState`, which is how a brain running
+ * against this desktop's companion gets arbitrated instead of quietly booting
+ * a second copy of every bot.
+ *
+ * The lease FAILS OPEN here (`onUnavailable: "proceed"`). The desktop's
+ * companion surface is optional and the lease arms are ordinary Tauri
+ * commands, but an install where the call errors for any reason must keep
+ * booting exactly as it did before this guard existed — the Web Lock still
+ * holds, only cross-process arbitration is lost, and that is strictly no worse
+ * than the previous behaviour.
+ *
+ * Order matters: taking the lease first would leave it held by a webview that
+ * then loses the Web Lock and never boots.
+ */
+function makeDefaultAcquireRuntimeLock(
+  log: (level: ConnectorRuntimeLogLevel, message: string) => void,
+  onLeaseLost: () => void
+): (signal: AbortSignal) => Promise<boolean> {
+  return (signal) =>
+    acquireWebLock(signal).then((won) => {
+      if (!won) return false
+      return createConnectorRuntimeLease({
+        ownerClass: "desktop",
+        ports: {
+          acquire: connectorsRuntimeLeaseAcquire,
+          renew: connectorsRuntimeLeaseRenew,
+          release: connectorsRuntimeLeaseRelease,
+        },
+        log,
+        onLeaseLost,
+        onUnavailable: "proceed",
+      })(signal)
+    })
 }
 
 /**
@@ -367,7 +410,15 @@ export function installConnectorRuntime(opts: InstallConnectorRuntimeOptions = {
     // instance (it would double-send outbound, double-fire schedules, and
     // cross-reap the first's WS sockets). Runs before the WS reap for the same
     // reason — a second webview must not reap the owner's live sockets.
-    const acquire = opts.acquireRuntimeLock ?? defaultAcquireRuntimeLock
+    // Losing the lease mid-run means another process took ownership; tear
+    // this runtime down the same way an unmount would, so the two never
+    // answer the same message.
+    const acquire =
+      opts.acquireRuntimeLock ??
+      makeDefaultAcquireRuntimeLock(log, () => {
+        cancelled = true
+        ac.abort()
+      })
     const owns = await acquire(ac.signal)
     if (cancelled) return
     if (!owns) {

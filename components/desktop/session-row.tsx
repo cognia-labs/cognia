@@ -27,6 +27,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import {
+  CONVERSATION_TIMESTAMP_FORMATS,
+  conversationTimestampShape,
+} from "@/lib/chat/conversation-timestamp"
 import type { AvatarSubject } from "@/lib/ui/avatar"
 import { loggers } from "@cognia/logging"
 import { isTauri } from "@/lib/tauri"
@@ -50,6 +54,7 @@ import {
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
+  MessageSquareTextIcon,
   CpuIcon,
   MoreHorizontalIcon,
   PencilIcon,
@@ -61,7 +66,7 @@ import {
   WaypointsIcon,
 } from "lucide-react"
 import { toast } from "sonner"
-import { useTranslations } from "next-intl"
+import { useFormatter, useNow, useTranslations } from "next-intl"
 import {
   memo,
   useEffect,
@@ -140,6 +145,24 @@ export interface SessionRowProps {
   metadata?: SessionRowMetadataItem[]
   /** Motion policy for overflowing titles. */
   titleMotion?: "hover" | "off"
+  /** Active search query — emphasized inside the title when it matches. */
+  searchQuery?: string
+  /**
+   * True when this row surfaced *only* because the query hit its message
+   * content. Without the marker a result whose title has nothing to do with the
+   * query reads as a broken search rather than a deeper one.
+   */
+  contentMatch?: boolean
+  /**
+   * Show the trailing activity timestamp ("14:32", "Tue", "Aug 3"). Off by
+   * default so surfaces that don't want the column don't pay for it.
+   *
+   * Formatting happens here rather than in the list because the prop stays a
+   * boolean: a pre-formatted string (or a formatter callback) from the parent
+   * would change identity whenever the locale formatter did and bust this
+   * row's `memo` for the whole list.
+   */
+  showTimestamp?: boolean
   /** @dnd-kit node ref from the Sortable wrapper (applied to the `<li>`). */
   dragRef?: (el: HTMLElement | null) => void
   /** @dnd-kit drag listeners — applied to the hover grip handle. */
@@ -189,6 +212,9 @@ function SessionRowImpl({
   showPreview = false,
   metadata = [],
   titleMotion = "hover",
+  searchQuery,
+  contentMatch = false,
+  showTimestamp = false,
   dragRef,
   dragListeners,
   dragAttributes,
@@ -198,6 +224,11 @@ function SessionRowImpl({
   dropPosition,
 }: SessionRowProps) {
   const t = useTranslations("desktop.sessionRow")
+  // Locale-aware timestamp formatting (the previous hand-rolled "3m"/"2d"
+  // helper rendered raw English abbreviations for zh-CN). `useNow()` without an
+  // update interval is a stable read — no per-row timer.
+  const format = useFormatter()
+  const now = useNow()
   const [editing, setEditing] = useState(false)
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   // Only queried while the confirm is open — this row renders once per session
@@ -365,16 +396,24 @@ function SessionRowImpl({
   const Icon =
     session.kind === "team" ? UsersIcon : session.characterId ? HashIcon : MessageSquareIcon
   const displayTitle = session.title || t("untitled")
+  // `null` when the session has never been stamped — the column is dropped
+  // rather than rendering the epoch.
+  const timestampAt = showTimestamp ? (session.lastMessageAt ?? session.updatedAt ?? null) : null
 
   return (
     <li
       ref={setLiRef}
       style={dragStyle}
       className={cn(
-        "group relative flex items-center gap-2 rounded-md px-2 text-sm transition-colors hover:bg-accent",
-        density === "compact" ? "py-1" : "py-1.5",
-        active && "bg-accent",
-        selected && "bg-accent/60 ring-1 ring-primary/50",
+        "group relative flex items-center gap-2 rounded-lg px-2 text-sm transition-colors duration-150",
+        density === "compact" ? "py-1" : "py-2",
+        // Hover and active were both `bg-accent`, which made every hovered row
+        // look like the open conversation. Active now owns a stronger surface
+        // plus the left accent bar below; hover stays a lighter wash.
+        !active && "hover:bg-accent/60",
+        active &&
+          "bg-accent shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary)_18%,transparent)]",
+        selected && "bg-primary/10 ring-1 ring-primary/45",
         focused && "ring-2 ring-ring",
         dragging && "opacity-40",
         dropPosition === "before" &&
@@ -386,6 +425,15 @@ function SessionRowImpl({
       data-focused={focused || undefined}
       data-drop-position={dropPosition}
     >
+      {/* Left accent bar for the open conversation. A real element rather than
+          a `before:` pseudo — the drop indicator already owns `before:`. */}
+      {active ? (
+        <span
+          aria-hidden
+          data-testid="session-row-active-bar"
+          className="pointer-events-none absolute top-1/2 left-0 h-4 w-0.5 -translate-y-1/2 rounded-r-full bg-primary"
+        />
+      ) : null}
       {dragListeners && !editing ? (
         <button
           type="button"
@@ -428,11 +476,54 @@ function SessionRowImpl({
           ) : (
             <Icon className="size-3.5 shrink-0 text-muted-foreground" />
           )}
-          {session.pinned ? (
-            <PinIcon className="size-3 shrink-0 text-muted-foreground" aria-label={t("pinned")} />
-          ) : null}
-          <span className="flex min-w-0 flex-1 flex-col">
-            <HoverScrollText text={displayTitle} motion={titleMotion} />
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            {/* Title line: title stretches, status/time pin to the trailing
+                edge so every title in the rail starts at the same x. */}
+            <span className="flex min-w-0 items-center gap-1.5">
+              <HoverScrollText
+                className={cn("flex-1", active && "font-medium")}
+                text={displayTitle}
+                motion={titleMotion}
+                highlight={searchQuery}
+              />
+              {session.pinned ? (
+                <PinIcon
+                  className="size-3 shrink-0 text-muted-foreground"
+                  aria-label={t("pinned")}
+                />
+              ) : null}
+              {timestampAt != null ? (
+                <span
+                  className="shrink-0 text-[10px] leading-4 text-muted-foreground/80 tabular-nums"
+                  data-testid="session-row-timestamp"
+                  title={format.dateTime(new Date(timestampAt), {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  })}
+                >
+                  {format.dateTime(
+                    new Date(timestampAt),
+                    CONVERSATION_TIMESTAMP_FORMATS[
+                      conversationTimestampShape(now.getTime(), timestampAt)
+                    ]
+                  )}
+                </span>
+              ) : null}
+              {unread && unread > 0 ? (
+                <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
+                  {unread > 99 ? "99+" : unread}
+                </span>
+              ) : null}
+            </span>
+            {contentMatch ? (
+              <span
+                className="flex min-w-0 items-center gap-1 text-[10px] leading-4 text-muted-foreground"
+                data-testid="session-row-content-match"
+              >
+                <MessageSquareTextIcon className="size-2.5 shrink-0" aria-hidden />
+                <span className="truncate">{t("contentMatch")}</span>
+              </span>
+            ) : null}
             {metadata.length > 0 ? (
               <span
                 className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[10px] leading-4 text-muted-foreground"
@@ -458,16 +549,11 @@ function SessionRowImpl({
               </span>
             ) : null}
             {showPreview && session.lastMessagePreview ? (
-              <span className="truncate text-xs text-muted-foreground">
+              <span className="truncate text-xs leading-4 text-muted-foreground">
                 {session.lastMessagePreview}
               </span>
             ) : null}
           </span>
-          {unread && unread > 0 ? (
-            <span className="shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] leading-none text-primary-foreground">
-              {unread > 99 ? "99+" : unread}
-            </span>
-          ) : null}
         </button>
       )}
       {!editing && session.parentSessionId && onJumpToParent ? (

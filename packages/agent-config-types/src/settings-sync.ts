@@ -149,6 +149,7 @@ export const SETTINGS_SYNC = {
   workbenchRail: { category: "desktop-only" },
   workbenchRailPersistent: { category: "desktop-only" },
   workbenchRailPerProject: { category: "desktop-only" },
+  workbenchPanels: { category: "desktop-only" },
   titleBarLayout: { category: "desktop-only" },
   statusBarLayout: { category: "desktop-only" },
   mobileHomeLayout: { category: "desktop-only" },
@@ -292,6 +293,12 @@ export const SETTINGS_SYNC = {
   providerUIPreferences: { category: "desktop-only" },
   providerOnboardingDismissed: { category: "desktop-only" },
   onboardingDismissedAt: { category: "desktop-only" },
+  onboardingProgress: {
+    category: "device-local",
+    rationale:
+      "Every device legitimately completes onboarding once on its own: a phone's onboarding is substantially the pairing flow, and pairing is per-device. Syncing this would let a desktop completion mark an unpaired phone as onboarded, stranding it in a state that is simultaneously 'done' and unusable.",
+  },
+  onboardingProfile: { category: "shared" },
   modelMappings: { category: "desktop-only" },
   routingConfig: { category: "desktop-only" },
   semanticToolRouting: { category: "desktop-only" },

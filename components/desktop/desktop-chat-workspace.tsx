@@ -29,8 +29,6 @@ import { ChannelList } from "@/components/desktop/channel-list"
 import { MemberList } from "@/components/shell/member-list"
 import { ArtifactWorkspaceDock } from "@/components/artifacts/artifact-workspace-dock"
 import { CanvasShell } from "@/components/canvas/canvas-shell"
-import { OnboardingDialog } from "@/components/shell/onboarding-dialog"
-import { shouldShowOnboarding } from "@/lib/onboarding/should-show"
 import { WorkspaceTrustGate } from "@/components/chat/workspace-trust-gate"
 import type { ComposerHandle } from "@/components/chat/composer"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
@@ -112,12 +110,24 @@ export function DesktopChatWorkspace() {
   const selectedGuild = useUIStore((s) => s.selectedGuild)
   const selectedGuildEpoch = useUIStore((s) => s.selectedGuildEpoch)
   const setSelectedGuild = useUIStore((s) => s.setSelectedGuild)
+  const activeProjectId = useProjectStore((s) => s.activeProjectId)
   const pendingSettingsRequest = useUIStore((s) => s.pendingSettingsRequest)
   const clearPendingSettings = useUIStore((s) => s.clearPendingSettings)
 
+  // The sidebar may list every workspace, but guild reconciliation must only
+  // resume conversations from the workspace that owns the chat pane. Otherwise
+  // an absent foreign active id is selected again on every navigation-epoch
+  // update, producing a maximum-update-depth loop.
+  const guildSessions = useMemo(
+    () =>
+      activeProjectId
+        ? sessions.filter((session) => !session.projectId || session.projectId === activeProjectId)
+        : sessions,
+    [sessions, activeProjectId]
+  )
+
   const [lastErrorShown, setLastErrorShown] = useState<string | null>(null)
   const [characterPickerOpen, setCharacterPickerOpen] = useState(false)
-  const [onboardingOpen, setOnboardingOpen] = useState(false)
 
   const composerRef = useRef<ComposerHandle | null>(null)
 
@@ -141,20 +151,6 @@ export function DesktopChatWorkspace() {
     })
   }, [activeSessionId])
 
-  useEffect(() => {
-    if (!mounted) return
-    const settings = useSettingsStore.getState().settings
-    if (!settings) return
-    let cancelled = false
-    void shouldShowOnboarding(settings, sessions.length).then((show) => {
-      if (cancelled || !show) return
-      log.info("onboarding shown")
-      setOnboardingOpen(true)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [mounted, sessions.length])
 
   // Keep the active chat session in lockstep with the selected guild. The two
   // live in separate stores (guild in useUIStore, session in useChatStore), so
@@ -174,7 +170,7 @@ export function DesktopChatWorkspace() {
       // (eventually-consistent) list, so a conversation that was just created
       // reconciles as itself instead of looking deleted for a render.
       activeSessionPending: activeSessionState === "pending",
-      sessions,
+      sessions: guildSessions,
     })
     switch (action.type) {
       case "none":
@@ -196,7 +192,7 @@ export function DesktopChatWorkspace() {
     selectedGuild,
     selectedGuildEpoch,
     activeSessionEpoch,
-    sessions,
+    guildSessions,
     activeSession,
     activeSessionState,
     select,
@@ -506,27 +502,6 @@ export function DesktopChatWorkspace() {
     [create, select, setSelectedGuild]
   )
 
-  const handleOnboardingOpenChange = useCallback((open: boolean) => {
-    setOnboardingOpen(open)
-    if (!open) {
-      log.info("onboarding dismissed")
-    }
-  }, [])
-
-  const handleOnboardingPickCharacter = useCallback(
-    async (c: Character) => {
-      log.info("onboarding pick-character", { characterId: c.id })
-      const s = await create({
-        title: `Chat with ${c.name}`,
-        kind: "direct",
-        characterId: c.id,
-      })
-      select(s.id)
-      setSelectedGuild({ kind: "dm" })
-    },
-    [create, select, setSelectedGuild]
-  )
-
   // Inline pane gates carry approvals for both kinds; team approvals arrive
   // tagged with the member sub-session id, so route them to useTeamChat.
   const handleApprovalRespond = useCallback(
@@ -668,11 +643,6 @@ export function DesktopChatWorkspace() {
         onPick={handleCharacterPick}
       />
 
-      <OnboardingDialog
-        open={onboardingOpen}
-        onOpenChange={handleOnboardingOpenChange}
-        onPickCharacter={handleOnboardingPickCharacter}
-      />
     </>
   )
 }

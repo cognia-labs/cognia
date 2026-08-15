@@ -31,7 +31,7 @@ import {
 } from "./chat-dock-panels"
 import {
   ContextWorkbench,
-  ContextWorkbenchMobileSheet,
+  ContextWorkbenchMobileDrawer,
 } from "@/components/context-workbench/context-workbench"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useActiveArtifactId } from "@/hooks/artifacts/use-session-artifacts"
@@ -246,6 +246,8 @@ export function ArtifactContextWorkbench({
     sessionProjectId ? state.projects.find((project) => project.id === sessionProjectId) : undefined
   )
   const setDockCollapsed = useArtifactDockLayoutStore((state) => state.setDockCollapsed)
+  const mobileSnapPoint = useArtifactDockLayoutStore((state) => state.mobileSnapPoint)
+  const setMobileSnapPoint = useArtifactDockLayoutStore((state) => state.setMobileSnapPoint)
   // Something arrived while the dock was dismissed. With a persistent rail the
   // marker belongs on the rail itself — that is now the thing the user is
   // looking at — rather than only on the chat header's toggle.
@@ -379,18 +381,19 @@ export function ArtifactContextWorkbench({
   if (!resource) return <SessionContextWorkbench mobile={mobile} railOnly={railOnly} />
 
   return mobile ? (
-    <ContextWorkbenchMobileSheet
+    <ContextWorkbenchMobileDrawer
       open={mobile.open}
       onOpenChange={mobile.onOpenChange}
       workbenchInstanceId={workbenchInstanceId}
       resource={resource}
       panels={panels}
       sessionScopeKey={sessionScopeKey}
-      // The Sheet needs the tabs as much as the dock does — without them a
+      // The drawer needs the tabs as much as the dock does — without them a
       // phone has no way to move between open artifacts at all.
       headerLeading={hasArtifactTabs ? <ArtifactTabStrip className="flex-1" /> : undefined}
-      onCollapse={() => mobile.onOpenChange(false)}
       onEnsureVisible={() => mobile.onOpenChange(true)}
+      snapPoint={mobileSnapPoint}
+      onSnapPointChange={setMobileSnapPoint}
     />
   ) : (
     <ContextWorkbench
@@ -448,6 +451,8 @@ export function SessionContextWorkbench({
   )
   const unresolvedCommentCount = useContextCommentBadge("session", activeSessionId)
   const setDockCollapsed = useArtifactDockLayoutStore((state) => state.setDockCollapsed)
+  const mobileSnapPoint = useArtifactDockLayoutStore((state) => state.mobileSnapPoint)
+  const setMobileSnapPoint = useArtifactDockLayoutStore((state) => state.setMobileSnapPoint)
   const unreadArtifact = useArtifactDockLayoutStore((state) => state.unreadArtifact)
   const workspaceAvailable = hasWorkspaceFsBackend()
   const workspaceLayout = mobile?.panelMode === "mobile" ? "mobile" : "desktop"
@@ -505,15 +510,16 @@ export function SessionContextWorkbench({
   )
 
   return mobile ? (
-    <ContextWorkbenchMobileSheet
+    <ContextWorkbenchMobileDrawer
       open={mobile.open}
       onOpenChange={mobile.onOpenChange}
       workbenchInstanceId={workbenchInstanceId}
       resource={resource}
       panels={panels}
       headerLeading={hasArtifactTabs ? <ArtifactTabStrip className="flex-1" /> : undefined}
-      onCollapse={() => mobile.onOpenChange(false)}
       onEnsureVisible={() => mobile.onOpenChange(true)}
+      snapPoint={mobileSnapPoint}
+      onSnapPointChange={setMobileSnapPoint}
     />
   ) : (
     <ContextWorkbench

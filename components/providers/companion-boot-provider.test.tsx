@@ -405,7 +405,7 @@ describe("<CompanionBootProvider /> — cold-start deeplink replay", () => {
 })
 
 describe("<CompanionBootProvider /> — unpaired", () => {
-  it("redirects to /welcome when unpaired and no mode chosen", async () => {
+  it("redirects to the first-run flow when unpaired and no mode chosen", async () => {
     setMobile()
     hydrateMock.mockResolvedValueOnce(null)
     getSettingsMock.mockResolvedValueOnce({}) // no mobileRuntimeMode yet
@@ -416,7 +416,9 @@ describe("<CompanionBootProvider /> — unpaired", () => {
       </CompanionBootProvider>
     )
 
-    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/welcome"))
+    // The standalone/paired fork moved into the first-run flow (ADR-0122);
+    // an unset mode means that fork was never answered.
+    await waitFor(() => expect(replaceMock).toHaveBeenCalledWith("/onboarding"))
     // Native plugin proxies are registered on every mobile boot, even unpaired.
     expect(registerNativePluginsMock).toHaveBeenCalled()
     // Sync + push should NOT run when there's no pairing.
@@ -481,9 +483,9 @@ describe("<CompanionBootProvider /> — unpaired", () => {
     expect(registerPushMock).not.toHaveBeenCalled()
   })
 
-  it("does not redirect when already on an onboarding route (/welcome)", async () => {
+  it("does not redirect when already on an onboarding route (/onboarding)", async () => {
     setMobile()
-    pathnameMock.mockReturnValue("/welcome")
+    pathnameMock.mockReturnValue("/onboarding")
     hydrateMock.mockResolvedValueOnce(null)
 
     render(

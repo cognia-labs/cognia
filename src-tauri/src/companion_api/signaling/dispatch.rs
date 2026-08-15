@@ -117,6 +117,11 @@ enum EventControl {
     Resume { since: u64 },
     #[serde(rename = "event-ack")]
     Ack { seq: u64 },
+    /// Widen or narrow which channels this data channel receives. The WebRTC
+    /// twin of the `/ws/events` `subscribe` frame, so a peer does not have to
+    /// fall back to the WebSocket just to opt into a stream.
+    #[serde(rename = "event-subscribe")]
+    Subscribe(crate::companion_api::event_channels::SubscribeRequest),
 }
 
 /// Spawn the dispatcher task. The returned `JoinHandle` is cancelled by
@@ -155,6 +160,14 @@ async fn run(
              events still forward, inbound RPCs answer service_unavailable"
         );
     }
+    // Channels this data channel receives. WebRTC peers are always paired
+    // devices — the loopback brain reaches the bus over `/internal/events`,
+    // never over a peer connection — so `Device` is both correct and the
+    // conservative reading if that ever stops being true.
+    let mut subscription = crate::companion_api::event_channels::EventSubscription::defaults_for(
+        crate::companion_api::event_channels::ConnectionScope::Device,
+    );
+
     // Subscribe to EventBus with since=None → start at high-water mark
     // (matches the existing WS subscription default behaviour).
     use crate::companion_api::event_bus::SubscribeResult;
@@ -205,7 +218,9 @@ async fn run(
         } => {
                                             event_rx = receiver;
                                             for frame in replay {
-                                                if !frame.visible_to(&device_id) {
+                                                if !frame.visible_to(&device_id)
+                                                    || !subscription.allows(&frame.event_type)
+                                                {
                                                     continue;
                                                 }
                                                 let outbound = OutboundFrame::Event(EventOutbound {
@@ -234,6 +249,20 @@ async fn run(
                                     log::trace!(
                                         "signaling::dispatch: device {device_id} acked event seq {seq}"
                                     );
+                                }
+                                EventControl::Subscribe(request) => {
+                                    let outcome = subscription.apply(&request);
+                                    // Answer with the resulting set, refusals
+                                    // included. A peer that asked for a channel
+                                    // it may not have needs to hear so, not to
+                                    // wait on a stream that will never arrive.
+                                    let _ = peer.send_bytes(
+                                        serde_json::to_vec(&json!({
+                                            "kind": "event-subscribed",
+                                            "channels": outcome.channels,
+                                            "rejected": outcome.rejected,
+                                        })).unwrap_or_default()
+                                    ).await;
                                 }
                             }
                             continue;
@@ -268,7 +297,9 @@ async fn run(
                 use tokio::sync::broadcast::error::RecvError;
                 match recv_result {
                     Ok(frame) => {
-                        if !frame.visible_to(&device_id) {
+                        if !frame.visible_to(&device_id)
+                            || !subscription.allows(&frame.event_type)
+                        {
                             continue;
                         }
                         let outbound = OutboundFrame::Event(EventOutbound {

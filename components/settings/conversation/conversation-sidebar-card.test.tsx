@@ -138,3 +138,29 @@ test("reset width button restores the default width", async () => {
   await user.click(screen.getByRole("button", { name: "resetWidth.button" }))
   expect(setSidebarWidth).toHaveBeenCalledWith(256)
 })
+
+test("exposes the conversation sort so mobile can reach it too", async () => {
+  const user = userEvent.setup()
+  render(<ConversationSidebarCard />)
+  const trigger = screen.getByLabelText("sortBy.label")
+  // Defaults to recency, matching the sidebar's own default.
+  expect(trigger).toHaveTextContent("sortBy.options.recent")
+  await user.click(trigger)
+  await user.click(await screen.findByRole("option", { name: "sortBy.options.unread" }))
+  expect(save).toHaveBeenCalledWith({ conversationSidebar: { sortBy: "unread" } })
+})
+
+test("reflects a persisted sort choice", () => {
+  settingsValue = { sortBy: "title" }
+  render(<ConversationSidebarCard />)
+  expect(screen.getByLabelText("sortBy.label")).toHaveTextContent("sortBy.options.title")
+})
+
+test("activity timestamps default on and can be switched off", async () => {
+  const user = userEvent.setup()
+  render(<ConversationSidebarCard />)
+  const toggle = screen.getByLabelText("timestamps.label")
+  expect(toggle).toBeChecked()
+  await user.click(toggle)
+  expect(save).toHaveBeenCalledWith({ conversationSidebar: { showTimestamps: false } })
+})

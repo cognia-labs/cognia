@@ -14,6 +14,7 @@ import { Composer, type ComposerHandle, type ComposerWorkflowMention } from "./c
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import { ChatHeader } from "./chat-header"
 import { CharacterMissingBanner } from "./character-missing-banner"
+import { WorkSubmissionNotice } from "./work-submission-notice"
 import {
   EmptyChatState,
   type EmptyStateOverride,
@@ -562,6 +563,10 @@ export function ChatPane({
           nothing when the character resolves or the id is a plain Dexie
           row that's simply missing. */}
       <CharacterMissingBanner characterId={activeSession.characterId} onPickAnother={onCreate} />
+      {/* ADR-0123 — explains a turn that was durably accepted but is waiting,
+          held offline, or stopped for human recovery. Renders nothing when a
+          turn is streaming normally or the feature is off. */}
+      <WorkSubmissionNotice sessionId={activeSession.id} />
       <ExternalAgentSessionPanel />
       <AnimatePresence
         mode="sync"

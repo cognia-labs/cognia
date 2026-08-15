@@ -229,6 +229,7 @@ describe("useUIStore", () => {
         channelListView: "active",
         collapsedFolderIds: [],
         groupCollapseOverrides: {},
+        conversationFilters: { unread: false, pinned: false, branched: false, kind: "all" },
         guildRailCollapsed: true,
         statusBarCollapsed: true,
         barItems: { ...DEFAULT_BAR_ITEMS },
@@ -477,6 +478,71 @@ describe("useUIStore", () => {
       const before = useUIStore.getState().groupCollapseOverrides
       act(() => useUIStore.getState().setGroupCollapsed("agent:a1", true))
       expect(useUIStore.getState().groupCollapseOverrides).toBe(before)
+    })
+  })
+
+  describe("conversationFilters", () => {
+    it("starts unfiltered", () => {
+      const { result } = renderHook(() => useUIStore())
+      expect(result.current.conversationFilters).toEqual({
+        unread: false,
+        pinned: false,
+        branched: false,
+        kind: "all",
+      })
+    })
+
+    it("normalizes a partial write into the complete shape", () => {
+      const { result } = renderHook(() => useUIStore())
+      act(() => result.current.setConversationFilters({ unread: true }))
+      expect(result.current.conversationFilters).toEqual({
+        unread: true,
+        pinned: false,
+        branched: false,
+        kind: "all",
+      })
+    })
+
+    it("degrades an unknown kind to 'all' rather than hiding every row", () => {
+      const { result } = renderHook(() => useUIStore())
+      act(() =>
+        result.current.setConversationFilters({
+          kind: "nonsense",
+        } as unknown as Parameters<typeof result.current.setConversationFilters>[0])
+      )
+      expect(result.current.conversationFilters.kind).toBe("all")
+    })
+
+    it("resetConversationFilters clears every facet", () => {
+      const { result } = renderHook(() => useUIStore())
+      act(() => result.current.setConversationFilters({ unread: true, pinned: true, kind: "team" }))
+      act(() => result.current.resetConversationFilters())
+      expect(result.current.conversationFilters).toEqual({
+        unread: false,
+        pinned: false,
+        branched: false,
+        kind: "all",
+      })
+    })
+
+    it("normalizes a corrupt persisted blob on rehydrate", async () => {
+      window.localStorage.setItem(
+        "cognia-ui",
+        JSON.stringify({
+          state: { conversationFilters: { unread: "yes", kind: "team" } },
+          version: 3,
+        })
+      )
+      await act(async () => {
+        await useUIStore.persist.rehydrate()
+      })
+      expect(useUIStore.getState().conversationFilters).toEqual({
+        // A non-boolean is not "on" — a filter nobody set must not hide rows.
+        unread: false,
+        pinned: false,
+        branched: false,
+        kind: "team",
+      })
     })
   })
 

@@ -25,7 +25,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::time::{interval, Duration, Instant};
 
-use super::{event_bus::SubscribeResult, SharedState};
+use super::{
+    event_bus::SubscribeResult,
+    event_channels::{ConnectionScope, EventSubscription, SubscribeRequest},
+    SharedState,
+};
 
 // ---------------------------------------------------------------------------
 // Timing constants
@@ -96,6 +100,7 @@ pub async fn ws_handler(
         params.since,
         Some(identity.tenant_id),
         identity.device_id,
+        ConnectionScope::Device,
         state,
     )
 }
@@ -139,6 +144,7 @@ pub async fn internal_ws_handler(
         params.since,
         Some(context.account_id),
         context.device_id,
+        ConnectionScope::from_claim(&context.scope),
         state,
     )
 }
@@ -148,6 +154,7 @@ fn upgrade_events_ws(
     since: Option<u64>,
     tenant_id: Option<String>,
     device_id: String,
+    scope: ConnectionScope,
     state: SharedState,
 ) -> Response {
     // Bound inbound frame allocation (DoS guard). The events channel only ever
@@ -157,7 +164,7 @@ fn upgrade_events_ws(
     const MAX_WS_FRAME_BYTES: usize = 64 * 1024;
     ws.max_message_size(MAX_WS_FRAME_BYTES)
         .max_frame_size(MAX_WS_FRAME_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, since, tenant_id, device_id, state))
+        .on_upgrade(move |socket| handle_socket(socket, since, tenant_id, device_id, scope, state))
 }
 
 // ---------------------------------------------------------------------------
@@ -170,8 +177,15 @@ async fn handle_socket(
     since: Option<u64>,
     tenant_id: Option<String>,
     device_id: String,
+    scope: ConnectionScope,
     state: SharedState,
 ) {
+    // Channels this connection receives. Starts at the catalog's `default_on`
+    // set — i.e. exactly what reached clients before subscriptions existed, so
+    // a client that never sends a `subscribe` frame sees no change — and is
+    // widened or narrowed by `subscribe` frames from here on.
+    let mut subscription = EventSubscription::defaults_for(scope);
+
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -213,7 +227,10 @@ async fn handle_socket(
 
     // 2. Send replay frames.
     for frame in replay {
-        if !frame.visible_to(&device_id) || !frame_visible_to_tenant(&frame, tenant_id.as_deref()) {
+        if !frame.visible_to(&device_id)
+            || !frame_visible_to_tenant(&frame, tenant_id.as_deref())
+            || !subscription.allows(&frame.event_type)
+        {
             continue;
         }
         match serde_json::to_string(&frame) {
@@ -273,6 +290,13 @@ async fn handle_socket(
                             // never part of another device's event stream.
                             continue;
                         }
+                        // Deliberately after the revocation branch: that channel
+                        // is not in the catalog because it is never *delivered*
+                        // — it closes the socket. Filtering first would drop the
+                        // frame before it could do its job.
+                        if !subscription.allows(&frame.event_type) {
+                            continue;
+                        }
                         match serde_json::to_string(&frame) {
                             Ok(text) => {
                                 if socket.send(Message::Text(text.into())).await.is_err() {
@@ -300,9 +324,16 @@ async fn handle_socket(
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         last_client_activity = Instant::now();
-                        // Accept pong responses (or any text) to reset the idle timer.
-                        // We don't need to act on the content beyond updating the timer.
-                        let _ = text; // suppress unused-variable warning
+                        // The only inbound frame with meaning is `subscribe`;
+                        // anything else (pongs, keep-alives) just resets the
+                        // idle timer above.
+                        if let Some(reply) =
+                            apply_subscribe_frame(&text, &mut subscription)
+                        {
+                            if socket.send(Message::Text(reply.into())).await.is_err() {
+                                return;
+                            }
+                        }
                     }
                     Some(Ok(Message::Ping(data))) => {
                         last_client_activity = Instant::now();
@@ -343,6 +374,42 @@ async fn handle_socket(
             }
         }
     }
+}
+
+/// Interpret one inbound text frame as a `subscribe` control frame.
+///
+/// Returns the reply to send, or `None` when the frame is not a subscription
+/// request (a pong, a keep-alive, anything else the client sends).
+///
+/// A malformed `subscribe` frame is answered rather than ignored. Silence here
+/// would leave the client believing it had widened its stream while the host
+/// kept sending the default set — the same "success, then nothing" failure the
+/// subscription exists to remove.
+fn apply_subscribe_frame(text: &str, subscription: &mut EventSubscription) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("subscribe") {
+        return None;
+    }
+
+    let reply = match serde_json::from_value::<SubscribeRequest>(value) {
+        Ok(request) => {
+            let outcome = subscription.apply(&request);
+            json!({
+                "type": "subscribed",
+                "channels": outcome.channels,
+                "rejected": outcome.rejected,
+            })
+        }
+        Err(error) => json!({
+            "type": "subscribe_error",
+            "message": error.to_string(),
+            "channels": subscription.channels(),
+        }),
+    };
+
+    Some(serde_json::to_string(&reply).unwrap_or_else(|_| {
+        r#"{"type":"subscribe_error","message":"reply encode failed"}"#.to_owned()
+    }))
 }
 
 fn stream_ready_text(cursor: u64) -> String {

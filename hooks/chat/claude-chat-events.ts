@@ -82,6 +82,7 @@ import {
   finishDirectChatExecutionRun,
   projectDirectChatSdkMessage,
 } from "@/lib/execution/direct-chat-run"
+import { settleChatTurnForSession } from "@/lib/work-submission/chat-adapter"
 import type { UIMessage } from "ai"
 import {
   chatToolCallsById,
@@ -276,6 +277,7 @@ export async function handleEvent(
         }
         chat.clearLastSend(sid)
         await finishDirectChatExecutionRun(sid, "failed", Date.now(), "Sidecar exited")
+        await settleChatTurnForSession(sid, { outcome: "failed", errorCode: "sidecar_exit" })
       }
       return
     }
@@ -389,6 +391,10 @@ export async function handleEvent(
             }
             useChatStore.getState().clearLastSend(evt.sessionId)
             await finishDirectChatExecutionRun(evt.sessionId, "failed", Date.now(), evt.error)
+            await settleChatTurnForSession(evt.sessionId, {
+              outcome: "failed",
+              errorCode: "turn_error",
+            })
           }
         } else {
           // Clean end without a content-bearing result event (e.g. tool-only
@@ -408,6 +414,7 @@ export async function handleEvent(
           }
           useChatStore.getState().clearLastSend(evt.sessionId)
           await finishDirectChatExecutionRun(evt.sessionId, "completed")
+          await settleChatTurnForSession(evt.sessionId, { outcome: "completed" })
         }
         // Turn settled — replay any steer the user queued mid-run. A clean end
         // always drains; an errored end drains only when an explicit
@@ -433,6 +440,10 @@ export async function handleEvent(
           Date.now(),
           evt.error
         )
+        await settleChatTurnForSession(evt.sessionId, {
+          outcome: evt.error ? "failed" : "completed",
+          ...(evt.error ? { errorCode: "turn_error" } : {}),
+        })
       }
       return
     }

@@ -8,6 +8,20 @@
       "protan": "红色弱视（红弱）",
       "tritan": "蓝色弱视（蓝黄）"
     },
+    "groups": {
+      "contrast": {
+        "hint": "主题编辑器检查颜色搭配的严格程度。",
+        "label": "对比度审计"
+      },
+      "motion": {
+        "hint": "界面动画的幅度与速度。",
+        "label": "动态效果"
+      },
+      "vision": {
+        "hint": "叠加在当前主题之上的配色层。",
+        "label": "视觉辅助"
+      }
+    },
     "highContrast": {
       "dark": "高对比度深色",
       "hint": "在当前主题之上叠加一层高对比度配色。",
@@ -23,6 +37,7 @@
         "normal": "正常（1×）",
         "slow": "慢速（0.5×）"
       },
+      "speedDisabledHint": "开启减弱动态效果后不可用。",
       "speedLabel": "动画速度"
     },
     "wcag": {
@@ -522,6 +537,10 @@
         "description": "各表面的色调与投影",
         "label": "组件"
       },
+      "cursor": {
+        "description": "指针样式包与动态特效",
+        "label": "光标"
+      },
       "custom": {
         "description": "直接编辑颜色令牌",
         "label": "自定义主题"
@@ -709,16 +728,33 @@
     "description": "把图片、渐变或纯色用作背景。内置预设已自带，上传的文件保留在本机。",
     "dropHint": "把图片拖到这里，或点击下方按钮",
     "enabledLabel": "启用背景",
+    "focal": {
+      "bottom": "下",
+      "bottomLeft": "左下",
+      "bottomRight": "右下",
+      "center": "居中",
+      "left": "左",
+      "right": "右",
+      "top": "上",
+      "topLeft": "左上",
+      "topRight": "右上"
+    },
+    "focalHint": "指定裁剪后保留画面的哪一部分。",
+    "focalLabel": "焦点",
+    "focalUnavailable": "当前适配方式没有可移动的空间。",
     "formats": "PNG、JPEG、WebP、GIF、AVIF · 不超过 32 MB",
     "galleryTitle": "图库",
     "generator": {
       "accent": "生成的强调色",
       "action": "生成匹配主题",
+      "applyTuning": "应用建议值",
       "created": "已创建并启用匹配的明暗双主题。",
       "description": "在本地提取图片强调色，并生成可读的明暗双主题。",
       "error": "无法分析这张图片，壁纸设置未受影响。",
+      "secondary": "生成的辅助色",
       "themeName": "{name} 配色",
       "title": "从壁纸生成主题",
+      "tuningHint": "针对该壁纸的建议：不透明度 {opacity}%、模糊 {blur}px。",
       "variant": {
         "dark": "暗色基底",
         "light": "亮色基底"
@@ -737,16 +773,30 @@
     "opacity": {
       "autoFix": "一键修复",
       "contrastLabel": "估算文字对比度",
+      "estimated": "估算值 — 尚未采样",
       "fail": "文字几乎无法辨认，请降低不透明度以恢复对比度。",
+      "measured": "基于该壁纸的实测值",
       "warn": "低于 WCAG AA 标准 — 文字可能难以阅读"
     },
     "opacityLabel": "不透明度",
+    "placementHint": "决定壁纸画在哪里，以及保留画面的哪一部分。",
+    "placementTitle": "放置方式",
     "pluginBadge": "插件",
     "positionCenter": "居中",
     "positionContain": "适应",
     "positionCover": "覆盖",
+    "positionFill": "拉伸",
+    "positionHint": {
+      "center": "按原始尺寸显示，不做缩放。",
+      "contain": "完整显示整张图，四周会留白。",
+      "cover": "铺满整个区域，超出的部分被裁掉。",
+      "fill": "拉伸到整个区域 — 会改变原始比例。",
+      "tile": "按原始尺寸在区域内重复平铺。"
+    },
     "positionLabel": "位置",
     "positionTile": "平铺",
+    "readabilityHint": "决定壁纸有多少会透到前景文字背后。",
+    "readabilityTitle": "可读性",
     "scope": {
       "all": {
         "desc": "包含侧栏在内的全部界面",

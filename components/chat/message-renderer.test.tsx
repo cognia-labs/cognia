@@ -504,9 +504,9 @@ describe("commentary parts", () => {
     render(<MessageRenderer message={msg} isStreaming />)
 
     expect(
-      screen.getAllByRole("status").find((node) =>
-        node.textContent?.includes("Checking the affected files")
-      )
+      screen
+        .getAllByRole("status")
+        .find((node) => node.textContent?.includes("Checking the affected files"))
     ).toBeDefined()
     expect(document.querySelector("[data-test='reasoning']")).toBeNull()
   })

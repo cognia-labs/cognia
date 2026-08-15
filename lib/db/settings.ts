@@ -73,7 +73,12 @@ export const DEFAULTS: AppSettings = {
   remoteBrowserEnabled: false,
   cliBridge: { autoSync: false },
   webTools: { enabled: true },
+  // Legacy dismissal stamp — read once by `lib/onboarding/migrate-legacy.ts`,
+  // never written. Fresh installs have no progress at all, which is what makes
+  // `OnboardingGate` route them into the flow.
   onboardingDismissedAt: undefined,
+  onboardingProgress: undefined,
+  onboardingProfile: undefined,
   theme: "system",
   fontScale: "md",
   language: "en",

@@ -225,6 +225,32 @@ export async function connectorsUnregisterAdapter(adapterId: string): Promise<vo
   await invoker("connectors_unregister_adapter", { adapterId })
 }
 
+/**
+ * Single-owner runtime lease (`lib/connectors/runtime-lease.ts`).
+ *
+ * Registered as Tauri commands AND exposed over the companion RPC surface, on
+ * purpose: both bind the same `ConnectorsState`, so a desktop webview and a
+ * brain process attached to that desktop's companion contend for one slot.
+ * `ownerId` carries its priority class as a prefix (`desktop:` / `brain:`).
+ */
+export async function connectorsRuntimeLeaseAcquire(
+  ownerId: string,
+  ttlMs: number
+): Promise<boolean> {
+  return invoker<boolean>("connectors_runtime_lease_acquire", { ownerId, ttlMs })
+}
+
+export async function connectorsRuntimeLeaseRenew(
+  ownerId: string,
+  ttlMs: number
+): Promise<boolean> {
+  return invoker<boolean>("connectors_runtime_lease_renew", { ownerId, ttlMs })
+}
+
+export async function connectorsRuntimeLeaseRelease(ownerId: string): Promise<boolean> {
+  return invoker<boolean>("connectors_runtime_lease_release", { ownerId })
+}
+
 export async function connectorsHealth(): Promise<ConnectorsHealth> {
   return invoker<ConnectorsHealth>("connectors_health")
 }

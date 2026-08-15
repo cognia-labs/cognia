@@ -346,7 +346,14 @@
     },
     "ghostAccept": "Accept",
     "ghostAcceptHint": "Tab",
+    "ghostCycleHint": "Alt+] / Alt+[ to cycle",
     "ghostDismiss": "Dismiss suggestion",
+    "ghostPosition": "{index} of {total}",
+    "ghostSourceAgent": "From the agent",
+    "ghostSourceAi": "Suggested",
+    "ghostSourceCommand": "Command",
+    "ghostSourceHistory": "From your history",
+    "ghostSourcePlugin": "From a plugin",
     "helperHints": {
       "chainingNote": "Put commands on separate lines to run them in order.",
       "cheatsheetDescription": "Keyboard shortcuts and prefixes available in the message composer.",
@@ -1748,5 +1755,19 @@
     "title": "Trust this workspace?",
     "trust": "Trust workspace",
     "workspaceLabel": "Workspace"
+  },
+  "workSubmission": {
+    "queued": {
+      "title": "Waiting to start",
+      "body": "Your message is saved and will run as soon as a runtime is free."
+    },
+    "blocked": {
+      "title": "Waiting to reconnect",
+      "body": "Your message is saved. It will run automatically once this device reaches the execution host again."
+    },
+    "recoveryRequired": {
+      "title": "Needs your attention",
+      "body": "This turn stopped after it had already started using tools, so it was not retried automatically — repeating it could redo work that cannot be undone. Review what happened before sending it again."
+    }
   }
 }

@@ -48,6 +48,45 @@ pub async fn connectors_health(
 }
 
 // ---------------------------------------------------------------------------
+// Single-owner runtime lease
+// ---------------------------------------------------------------------------
+//
+// The same three operations the companion dispatcher exposes over RPC, bound
+// to the SAME `ConnectorsState` this app manages. The desktop webview cannot
+// reach the RPC surface (it speaks Tauri IPC, not its own companion HTTP), so
+// without these it could not contend at all — and a brain process attached to
+// this desktop's companion would happily boot a second copy of every bot.
+//
+// Owner ids carry their class as a prefix (`desktop:` / `brain:`); an
+// always-on brain preempts a desktop holder. See `state::runtime_owner_class`.
+
+#[tauri::command]
+pub async fn connectors_runtime_lease_acquire(
+    state: State<'_, ConnectorsState>,
+    owner_id: String,
+    ttl_ms: u64,
+) -> Result<bool, String> {
+    state.acquire_runtime_lease(&owner_id, ttl_ms)
+}
+
+#[tauri::command]
+pub async fn connectors_runtime_lease_renew(
+    state: State<'_, ConnectorsState>,
+    owner_id: String,
+    ttl_ms: u64,
+) -> Result<bool, String> {
+    state.renew_runtime_lease(&owner_id, ttl_ms)
+}
+
+#[tauri::command]
+pub async fn connectors_runtime_lease_release(
+    state: State<'_, ConnectorsState>,
+    owner_id: String,
+) -> Result<bool, String> {
+    state.release_runtime_lease(&owner_id)
+}
+
+// ---------------------------------------------------------------------------
 // Task 20 — server lifecycle commands
 // ---------------------------------------------------------------------------
 

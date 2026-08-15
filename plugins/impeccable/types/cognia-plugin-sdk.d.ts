@@ -8547,7 +8547,19 @@ interface CursorSettings {
   effect: CursorEffectSettings
 }
 
-type WallpaperPosition = "cover" | "contain" | "tile" | "center"
+/**
+ * How the wallpaper raster is fitted into its surface.
+ *
+ * - `cover`   — fill the surface, cropping whatever overflows (default)
+ * - `contain` — fit entirely inside, letterboxing whatever is left
+ * - `fill`    — stretch both axes to the surface, ignoring aspect ratio
+ * - `center`  — draw at natural size, no scaling
+ * - `tile`    — draw at natural size and repeat
+ *
+ * `cover` / `contain` / `center` honour {@link BackgroundSettings.focalX} /
+ * `focalY`; `fill` and `tile` leave no freedom to anchor, so they ignore it.
+ */
+type WallpaperPosition = "cover" | "contain" | "fill" | "tile" | "center"
 type BackgroundScope = "all" | "global" | "chat" | "canvas" | "sidebar"
 interface BackgroundSettings {
   enabled: boolean
@@ -8559,6 +8571,15 @@ interface BackgroundSettings {
   /** 0..1. Applied as `opacity: N` on the body::before pseudo. */
   opacity: number
   position: WallpaperPosition
+  /**
+   * Horizontal anchor, 0..100 (%). Decides which part of an over-wide image
+   * survives a `cover` crop — the subject of a photo is rarely dead centre.
+   * Optional so settings rows written before this field keep loading; the
+   * applier and the UI both fall back to 50.
+   */
+  focalX?: number
+  /** Vertical anchor, 0..100 (%). See {@link BackgroundSettings.focalX}. */
+  focalY?: number
 }
 /** Discriminated union — exactly one of these shapes per wallpaper. */
 type WallpaperSource =

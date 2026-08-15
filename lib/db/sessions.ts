@@ -47,6 +47,22 @@ export async function listScopedSessions(projectId?: string): Promise<ChatSessio
     .toArray()
 }
 
+/**
+ * How many chat sessions exist on this device, across every workspace.
+ *
+ * Exists for the onboarding gate (ADR-0122), which asks only "has this person
+ * ever had a conversation here?" — a long-time user whose settings row predates
+ * the structured onboarding record is identified by having chats, not by any
+ * stored flag. Counting in Dexie rather than materializing {@link listSessions}
+ * keeps that question off the boot path's allocation budget.
+ *
+ * Deliberately unscoped: a session in *any* workspace proves the user is not
+ * on their first run.
+ */
+export async function countSessions(): Promise<number> {
+  return getDb().sessions.count()
+}
+
 export async function getSession(id: string): Promise<ChatSession | undefined> {
   return getDb().sessions.get(id)
 }

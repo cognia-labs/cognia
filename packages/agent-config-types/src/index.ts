@@ -34,10 +34,12 @@ import type {
 } from "./compression"
 import type { AgentCapabilityId, AgentExecutionSendSpec } from "./agent-execution"
 import type { ClaudeAgentSdkOptionsV1 } from "./claude-agent-sdk-options"
+import type { OnboardingProfile, OnboardingProgress } from "./onboarding"
 
 export * from "./transcript"
 export * from "./working-set"
 export * from "./host-state"
+export * from "./onboarding"
 
 // ---- Outbound (UI → Tauri → sidecar) -------------------------------------
 
@@ -2336,10 +2338,49 @@ export type ConversationSidebarTitleMotion = "hover" | "off"
 export type ConversationGroupBy = "workspace" | "team" | "date" | "agent" | "none"
 
 /**
+ * Order applied *inside* each conversation-list section, under the pinned /
+ * folder / grouping split.
+ *
+ * - `"recent"` — last activity, newest first. The default, and the only mode in
+ *   which a drag-reordered `manualOrder` is honored: every other mode derives
+ *   its order from session data, so a hand-placed row would contradict the
+ *   axis the user just asked to sort by (and the list would silently ignore
+ *   the choice for those rows).
+ * - `"oldest"` — last activity, oldest first.
+ * - `"created"` — creation time, newest first. Diverges from `"recent"` for
+ *   long-running conversations that were revived.
+ * - `"title"` — title A→Z, locale-aware.
+ * - `"unread"` — unread conversations first, then by last activity.
+ */
+export type ConversationSortBy = "recent" | "oldest" | "created" | "title" | "unread"
+
+/** Which conversation kinds a filter admits. `"all"` = no kind restriction. */
+export type ConversationKindFilter = "all" | "dm" | "team"
+
+/**
+ * Quick filters AND-ed on top of the archive view and the search query.
+ *
+ * Every field is optional and falsy-by-default so an absent object means "no
+ * filtering" — read sites normalize through
+ * `lib/chat/conversation-filters.ts:resolveConversationFilters` rather than
+ * reading the fields raw.
+ */
+export interface ConversationFilters {
+  /** Only conversations carrying unread messages. */
+  unread?: boolean
+  /** Only pinned conversations. */
+  pinned?: boolean
+  /** Only conversations branched off another (`parentSessionId` set). */
+  branched?: boolean
+  /** Restrict to one conversation kind. Defaults to `"all"`. */
+  kind?: ConversationKindFilter
+}
+
+/**
  * Behavior preferences for the conversation sidebar (ChannelList). All fields
  * optional; read sites derive the default with `?? <default>` so an absent
  * object (legacy settings) keeps today's behavior. Layout state (width, view,
- * collapsed folders) lives in `useUIStore`, not here.
+ * collapsed folders, active quick filters) lives in `useUIStore`, not here.
  */
 export interface ConversationSidebarSettings {
   /** Row density. Defaults to `"comfortable"`. */
@@ -2348,6 +2389,11 @@ export interface ConversationSidebarSettings {
   showPreview?: boolean
   /** Show each bound Agent/Team's configured image, emoji, and color. Defaults to on. */
   showCustomIcons?: boolean
+  /**
+   * Show the trailing last-activity timestamp on each row. Defaults to on — it
+   * is the field that makes a recency-ordered list legible.
+   */
+  showTimestamps?: boolean
   /**
    * @deprecated Superseded by {@link ConversationSidebarSettings.groupBy}. Kept
    * so a settings blob written before the grouping selector landed still means
@@ -2358,6 +2404,8 @@ export interface ConversationSidebarSettings {
   groupByDate?: boolean
   /** Primary grouping axis for the conversation list. Defaults to `"workspace"`. */
   groupBy?: ConversationGroupBy
+  /** Order applied inside each section. Defaults to `"recent"`. */
+  sortBy?: ConversationSortBy
   /** Show per-conversation unread badges. Defaults to on. */
   showUnreadBadges?: boolean
   /** Whether search also matches message content (async). Defaults to title-only. */
@@ -2923,11 +2971,26 @@ export interface AppSettings {
   composerAssistance?: {
     /** Prompt enhancement (Wand) action. Defaults ON — click-only, no idle cost. */
     enhance?: { enabled?: boolean }
-    /** Inline ghost-text continuation as you type. Defaults OFF — opt-in. */
+    /**
+     * Inline ghost-text completion as you type. Two independent tiers, both
+     * served by the shared engine in `lib/chat/completion/inline/`:
+     */
     ghostText?: {
+      /**
+       * MODEL tier — an LLM-generated continuation of the draft. Defaults OFF
+       * (it bills a model on a debounce, so it stays opt-in).
+       */
       enabled?: boolean
-      /** Debounce before querying, ms. Default 500. Clamped [200, 2000]. */
+      /**
+       * LOCAL tier — completion from this session's input history and the
+       * slash-command names. Free and instant, so it defaults ON (`!== false`).
+       * Turning it off leaves only the model tier.
+       */
+      local?: boolean
+      /** Debounce before querying the model, ms. Default 500. Clamped [200, 2000]. */
       debounceMs?: number
+      /** How many ranked candidates can be cycled through. Default 5. */
+      maxCandidates?: number
     }
     /** AI starter prompts (empty state) + follow-up suggestions (post-reply). */
     suggestions?: {
@@ -3585,6 +3648,18 @@ export interface AppSettings {
     import("@/types/shell/workbench-rail").WorkbenchRailLayout
   >
   /**
+   * Customization of the Context Workbench's *panel tabs* — one level below
+   * `workbenchRail`: the order of the panels inside an activity plus the ones
+   * the user removed from its tab strip.
+   *
+   * Hiding takes away the tab, never the panel — it stays in the workbench's
+   * resolved set, so the command palette, `Ctrl+Shift+E` and `Ctrl+1..7` still
+   * reach it. Same persistence path as `workbenchRail` (settings JSON, no Dexie
+   * migration). See `@/types/shell/workbench-panels` for the model and
+   * `@/lib/shell/workbench-panels` for the catalog + resolver.
+   */
+  workbenchPanels?: import("@/types/shell/workbench-panels").WorkbenchPanelLayout
+  /**
    * Customization of the desktop title bar (the top window bar): the order of
    * its segments plus the ones the user removed. Lives in settings JSON (same
    * pattern as `sidebarLayout`) so it persists without a Dexie migration and
@@ -4148,13 +4223,28 @@ export interface AppSettings {
   /** Whether the user dismissed the first-time providers onboarding banner. */
   providerOnboardingDismissed?: boolean
   /**
-   * ISO 8601 timestamp recorded the first time the user dismissed or
-   * completed the desktop first-run onboarding dialog. Set on any exit path
-   * (skip, OAuth success, character pick, tour finish). The trigger
-   * predicate in `lib/onboarding/should-show.ts` treats any non-empty value
-   * as "do not show again" — re-entry happens via Settings only.
+   * @deprecated Read-only migration source, superseded by {@link onboarding}.
+   *
+   * ISO 8601 timestamp recorded the first time the user dismissed or completed
+   * the old desktop first-run onboarding *dialog*. It collapsed "finished",
+   * "bailed on step 1" and "hit Esc" into one value, which is why nothing
+   * writes it any more. `lib/onboarding/migrate-legacy.ts` reads it once and
+   * projects it to `onboarding.progress.path = "legacy_dismissed"`; the field
+   * itself is retained so the migration stays idempotent across devices and so
+   * an exported backup taken before the migration still restores meaningfully.
    */
   onboardingDismissedAt?: string
+  /**
+   * First-run onboarding completion bookkeeping (ADR-0122). Kept separate from
+   * {@link onboardingProfile} because the two sync differently and
+   * `SETTINGS_SYNC` classifies one entry per top-level key.
+   */
+  onboardingProgress?: OnboardingProgress
+  /**
+   * First-run onboarding personalization (ADR-0122) — the starter card the
+   * user picked and the character they ran it with.
+   */
+  onboardingProfile?: OnboardingProfile
 
   // ---- Provider routing (P4) ----
   /**

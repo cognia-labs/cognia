@@ -10,6 +10,15 @@ const logInfo = jest.fn()
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${JSON.stringify(vars)}` : key,
+  // The row formats its own activity timestamp (see `showTimestamp`). A fixed
+  // formatter keeps the assertions locale- and clock-independent.
+  useFormatter: () => ({
+    dateTime: (value: Date, options: Record<string, unknown>) =>
+      `dt(${value.getTime()}|${Object.keys(options).sort().join(",")})`,
+  }),
+  // Literal, not a hoisted const: jest.mock factories run before module-scope
+  // bindings are initialized (TDZ).
+  useNow: () => new Date(1_750_000_000_000),
 }))
 
 jest.mock("@cognia/logging", () => ({
@@ -489,4 +498,104 @@ test("no lineage chip without a parentSessionId", () => {
 test("no lineage chip when onJumpToParent is not provided", () => {
   setup({ session: { ...baseSession, parentSessionId: "parent-1" } })
   expect(screen.queryByRole("button", { name: "branchedFrom" })).toBeNull()
+})
+
+describe("row chrome", () => {
+  it("marks the open conversation with an accent bar, not just a hover-coloured background", () => {
+    // Hover and active were both `bg-accent`, which made every hovered row look
+    // like the open one. The bar is the unambiguous signal.
+    const { container } = setup({ active: true })
+    expect(screen.getByTestId("session-row-active-bar")).toBeInTheDocument()
+    expect(container.querySelector("li")?.className).toContain("bg-accent")
+  })
+
+  it("renders no accent bar on an inactive row", () => {
+    setup({ active: false })
+    expect(screen.queryByTestId("session-row-active-bar")).toBeNull()
+  })
+
+  it("omits the timestamp column unless asked", () => {
+    setup()
+    expect(screen.queryByTestId("session-row-timestamp")).toBeNull()
+  })
+
+  it("renders the last-activity timestamp when enabled", () => {
+    setup({
+      showTimestamp: true,
+      session: { ...baseSession, lastMessageAt: 1_749_990_000_000 } as ChatSession,
+    })
+    const stamp = screen.getByTestId("session-row-timestamp")
+    // Same day as the mocked `now` → the compact clock-time shape.
+    expect(stamp).toHaveTextContent("dt(1749990000000|hour,minute)")
+    // The full value stays reachable as a tooltip.
+    expect(stamp).toHaveAttribute("title", expect.stringContaining("dateStyle"))
+  })
+
+  it("falls back to updatedAt when the session was never message-stamped", () => {
+    setup({ showTimestamp: true, session: { ...baseSession, updatedAt: 1_749_000_000_000 } })
+    expect(screen.getByTestId("session-row-timestamp")).toHaveTextContent("1749000000000")
+  })
+
+  it("drops the timestamp entirely when there is nothing to stamp", () => {
+    setup({
+      showTimestamp: true,
+      session: { ...baseSession, updatedAt: undefined } as unknown as ChatSession,
+    })
+    expect(screen.queryByTestId("session-row-timestamp")).toBeNull()
+  })
+
+  it("emphasizes the matched run in the title while searching", () => {
+    const { container } = setup({
+      session: { ...baseSession, title: "Quarterly planning" },
+      searchQuery: "plan",
+    })
+    const mark = container.querySelector("mark")
+    expect(mark?.textContent).toBe("plan")
+  })
+
+  it("leaves the title untouched without a query", () => {
+    const { container } = setup({ session: { ...baseSession, title: "Quarterly planning" } })
+    expect(container.querySelector("mark")).toBeNull()
+  })
+
+  it("explains a hit that only matched message content", () => {
+    // Otherwise a result whose title has nothing to do with the query reads as
+    // a broken search rather than a deeper one.
+    setup({ contentMatch: true })
+    expect(screen.getByTestId("session-row-content-match")).toHaveTextContent("contentMatch")
+  })
+
+  it("adds no explanation for a plain title hit", () => {
+    setup({ contentMatch: false })
+    expect(screen.queryByTestId("session-row-content-match")).toBeNull()
+  })
+})
+
+test("choosing a folder from the submenu assigns the session to it", async () => {
+  // The sibling tests above only assert the submenu RENDERS. Radix fires
+  // `onSelect` off the item's own click event, which `fireEvent` can deliver
+  // through the nested portal even where `userEvent`'s pointer sequence can't.
+  const onAssignToFolder = jest.fn()
+  const user = userEvent.setup()
+  const folders = [
+    { id: "f1", name: "Work", projectId: "p", order: 0, createdAt: 0, updatedAt: 0 },
+  ] as never
+  setup({ folders, onAssignToFolder })
+  await user.click(screen.getByRole("button", { name: "actionsMenu" }))
+  await user.hover(await screen.findByText("moveToFolder"))
+  fireEvent.click(await screen.findByText("Work"))
+  expect(onAssignToFolder).toHaveBeenCalledWith("s-1", "f1")
+})
+
+test("Remove from folder detaches the session", async () => {
+  const onAssignToFolder = jest.fn()
+  const user = userEvent.setup()
+  const folders = [
+    { id: "f1", name: "Work", projectId: "p", order: 0, createdAt: 0, updatedAt: 0 },
+  ] as never
+  setup({ session: { ...baseSession, folderId: "f1" }, folders, onAssignToFolder })
+  await user.click(screen.getByRole("button", { name: "actionsMenu" }))
+  await user.hover(await screen.findByText("moveToFolder"))
+  fireEvent.click(await screen.findByText("removeFromFolder"))
+  expect(onAssignToFolder).toHaveBeenCalledWith("s-1", null)
 })

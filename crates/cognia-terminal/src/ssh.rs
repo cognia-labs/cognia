@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use cognia_secrets::keyring_secrets;
 use russh::client;
+use russh::keys::agent::client::{AgentClient, AgentStream};
+use russh::keys::agent::AgentIdentity;
 use russh::keys::key::PrivateKeyWithHashAlg;
 use russh::keys::known_hosts::learn_known_hosts_path;
 use russh::keys::{check_known_hosts_path, load_secret_key, ssh_key};
@@ -56,6 +58,9 @@ impl HostKeyStatus {
 pub enum SshAuthMethod {
     Password,
     PrivateKey,
+    /// Delegate the signature to a running `ssh-agent`. The private key never
+    /// leaves the agent, so nothing is read from the keyring for this method.
+    Agent,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -123,6 +128,16 @@ fn parse_stored_credential(raw: &str) -> Result<StoredCredential, String> {
 }
 
 fn load_stored_credential(request: &SshSpawnRequest) -> Result<StoredCredential, String> {
+    // The agent owns the key material and signs on our behalf, so there is
+    // nothing to resolve. Short-circuit before the keyring lookup so a stale
+    // `credential_ref` left behind by an auth-method switch cannot fail the
+    // connection with a missing-secret error.
+    if request.auth_method == SshAuthMethod::Agent {
+        return Ok(StoredCredential {
+            password: None,
+            passphrase: None,
+        });
+    }
     let Some(reference) = request.credential_ref.as_deref() else {
         if request.auth_method == SshAuthMethod::Password {
             return Err("SSH password credential is required".into());
@@ -241,6 +256,88 @@ async fn probe_remote_shell(
     Ok(classify_remote_shell(&output))
 }
 
+/// Offer every identity the agent holds and stop at the first one the server
+/// accepts.
+///
+/// A rejected identity is ordinary rather than exceptional — an agent commonly
+/// carries keys for hosts other than this one — so a refusal advances to the
+/// next candidate instead of aborting. Only an exhausted list is a failure.
+async fn authenticate_via_agent<S>(
+    agent: &mut AgentClient<S>,
+    handle: &mut client::Handle<ClientHandler>,
+    username: &str,
+) -> Result<bool, String>
+where
+    S: AgentStream + Send + Unpin,
+{
+    let identities = agent
+        .request_identities()
+        .await
+        .map_err(|error| format!("SSH agent did not return identities: {error}"))?;
+    if identities.is_empty() {
+        return Err("SSH agent holds no identities; add one with `ssh-add`".into());
+    }
+    let hash = handle
+        .best_supported_rsa_hash()
+        .await
+        .map_err(|error| format!("SSH RSA negotiation failed: {error}"))?
+        .flatten();
+    for identity in identities {
+        let accepted = match identity {
+            AgentIdentity::PublicKey { key, .. } => handle
+                .authenticate_publickey_with(username, key, hash, agent)
+                .await
+                .map(|result| result.success()),
+            AgentIdentity::Certificate { certificate, .. } => handle
+                .authenticate_certificate_with(username, certificate, hash, agent)
+                .await
+                .map(|result| result.success()),
+        };
+        if matches!(accepted, Ok(true)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Reach the platform's agent and run the identity walk against it.
+///
+/// Unix resolves `SSH_AUTH_SOCK` to a Unix-domain socket. Windows has no such
+/// socket: OpenSSH for Windows exposes a named pipe (which `SSH_AUTH_SOCK`
+/// names when set, otherwise the well-known path), and PuTTY's Pageant is the
+/// other agent in common use, so both are tried before reporting failure.
+#[cfg(unix)]
+async fn authenticate_with_platform_agent(
+    handle: &mut client::Handle<ClientHandler>,
+    username: &str,
+) -> Result<bool, String> {
+    let mut agent = AgentClient::connect_env().await.map_err(|error| {
+        format!("SSH agent is unavailable; check that SSH_AUTH_SOCK is set ({error})")
+    })?;
+    authenticate_via_agent(&mut agent, handle, username).await
+}
+
+#[cfg(windows)]
+async fn authenticate_with_platform_agent(
+    handle: &mut client::Handle<ClientHandler>,
+    username: &str,
+) -> Result<bool, String> {
+    const DEFAULT_AGENT_PIPE: &str = r"\\.\pipe\openssh-ssh-agent";
+    let pipe =
+        std::env::var("SSH_AUTH_SOCK").unwrap_or_else(|_| DEFAULT_AGENT_PIPE.to_string());
+    match AgentClient::connect_named_pipe(pipe.as_str()).await {
+        Ok(mut agent) => authenticate_via_agent(&mut agent, handle, username).await,
+        Err(pipe_error) => {
+            let mut agent = AgentClient::connect_pageant().await.map_err(|pageant_error| {
+                format!(
+                    "SSH agent is unavailable (named pipe {pipe}: {pipe_error}; Pageant: {pageant_error})"
+                )
+            })?;
+            authenticate_via_agent(&mut agent, handle, username).await
+        }
+    }
+}
+
 async fn connect_remote(
     request: &SshSpawnRequest,
     credential: &StoredCredential,
@@ -296,6 +393,9 @@ async fn connect_remote(
                 .await
                 .map_err(|error| format!("SSH private-key authentication failed: {error}"))?
                 .success()
+        }
+        SshAuthMethod::Agent => {
+            authenticate_with_platform_agent(&mut handle, &request.username).await?
         }
     };
     if !authenticated {
@@ -818,8 +918,9 @@ mod tests {
     use russh::keys::{parse_public_key_base64, ssh_key};
 
     use super::{
-        classify_remote_shell, parse_stored_credential, ssh_integration_command,
-        verify_or_learn_host_key, HostKeyStatus, ShellKind, SshAuthMethod, SshSpawnRequest,
+        classify_remote_shell, load_stored_credential, parse_stored_credential,
+        ssh_integration_command, verify_or_learn_host_key, HostKeyStatus, ShellKind, SshAuthMethod,
+        SshSpawnRequest,
     };
 
     const KEY_A: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ";
@@ -888,6 +989,27 @@ mod tests {
         invalid.auth_method = SshAuthMethod::PrivateKey;
         invalid.private_key_path = None;
         assert!(invalid.validate().unwrap_err().contains("private key"));
+
+        // Agent auth carries no local key path — the agent holds the material.
+        let mut agent = request();
+        agent.auth_method = SshAuthMethod::Agent;
+        agent.private_key_path = None;
+        assert!(agent.validate().is_ok());
+    }
+
+    #[test]
+    fn agent_auth_resolves_without_consulting_the_keyring() {
+        let mut agent = request();
+        agent.auth_method = SshAuthMethod::Agent;
+
+        // `request()` still carries the `credential_ref` a password profile
+        // would have written. Switching a profile to agent auth must not strand
+        // it on a keyring entry that was never created, so the reference is
+        // ignored rather than resolved — this returns without a keyring at all.
+        assert!(agent.credential_ref.is_some());
+        let credential = load_stored_credential(&agent).expect("agent needs no stored secret");
+        assert_eq!(credential.password, None);
+        assert_eq!(credential.passphrase, None);
     }
 
     #[test]

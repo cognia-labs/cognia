@@ -5,6 +5,11 @@ import { persist } from "zustand/middleware"
 import { persistLocalStorage } from "@/stores/persist-storage"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import { nextNavEpoch } from "@/lib/ui/nav-epoch"
+import {
+  EMPTY_CONVERSATION_FILTERS,
+  resolveConversationFilters,
+} from "@/lib/chat/conversation-filters"
+import type { ConversationFilters } from "@cognia/agent-config-types"
 
 /** Conversation-sidebar (ChannelList) width bounds, in px. Shared by the
  *  edge-resize handle and the "reset width" settings action. */
@@ -160,6 +165,20 @@ interface UIState {
    */
   groupCollapseOverrides: Record<string, boolean>
   setGroupCollapsed: (key: string, collapsed: boolean) => void
+
+  /**
+   * Quick filters narrowing the ChannelList (unread / pinned / branched /
+   * conversation kind).
+   *
+   * Layout state, so it lives here beside the archive view rather than in
+   * `AppSettings.conversationSidebar` (which owns *behavior* preferences like
+   * grouping and sort). Persisted so a filter survives a reload — the sidebar
+   * pays for that with an always-visible chip row and a one-click reset, so a
+   * narrowed list can never look like a lost one.
+   */
+  conversationFilters: ConversationFilters
+  setConversationFilters: (filters: ConversationFilters) => void
+  resetConversationFilters: () => void
 
   /**
    * Desktop left guild rail (feature switcher) collapse. Persisted across
@@ -324,6 +343,13 @@ export const useUIStore = create<UIState>()(
             : { groupCollapseOverrides: { ...s.groupCollapseOverrides, [key]: collapsed } }
         ),
 
+      conversationFilters: EMPTY_CONVERSATION_FILTERS,
+      setConversationFilters: (filters) =>
+        // Normalize on write so a caller passing a partial (or a persisted blob
+        // from an older build) can't leave an unreadable field in the store.
+        set({ conversationFilters: resolveConversationFilters(filters) }),
+      resetConversationFilters: () => set({ conversationFilters: EMPTY_CONVERSATION_FILTERS }),
+
       guildRailCollapsed: false,
       toggleGuildRail: () => set((s) => ({ guildRailCollapsed: !s.guildRailCollapsed })),
       setGuildRailCollapsed: (collapsed) => set({ guildRailCollapsed: collapsed }),
@@ -442,6 +468,10 @@ export const useUIStore = create<UIState>()(
           ...current,
           ...p,
           barItems: { ...DEFAULT_BAR_ITEMS, ...(p.barItems ?? {}) },
+          // A persisted filter blob written by another build (or hand-edited in
+          // localStorage) must not be able to hide every conversation with no
+          // visible cause — normalize it back into the known shape on rehydrate.
+          conversationFilters: resolveConversationFilters(p.conversationFilters),
         }
       },
       // Don't persist member statuses (tied to in-flight requests that died)
@@ -455,6 +485,7 @@ export const useUIStore = create<UIState>()(
         channelListView: s.channelListView,
         collapsedFolderIds: s.collapsedFolderIds,
         groupCollapseOverrides: s.groupCollapseOverrides,
+        conversationFilters: s.conversationFilters,
         guildRailCollapsed: s.guildRailCollapsed,
         statusBarCollapsed: s.statusBarCollapsed,
         barItems: s.barItems,

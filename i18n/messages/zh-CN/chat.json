@@ -346,7 +346,14 @@
     },
     "ghostAccept": "接受",
     "ghostAcceptHint": "Tab",
+    "ghostCycleHint": "Alt+] / Alt+[ 切换",
     "ghostDismiss": "忽略建议",
+    "ghostPosition": "第 {index} / {total} 条",
+    "ghostSourceAgent": "来自 Agent",
+    "ghostSourceAi": "模型建议",
+    "ghostSourceCommand": "命令",
+    "ghostSourceHistory": "来自历史记录",
+    "ghostSourcePlugin": "来自插件",
     "helperHints": {
       "chainingNote": "将命令分行输入，即可按顺序执行。",
       "cheatsheetDescription": "消息输入框可用的键盘快捷键与前缀。",
@@ -1748,5 +1755,19 @@
     "title": "信任此工作区？",
     "trust": "信任工作区",
     "workspaceLabel": "工作区"
+  },
+  "workSubmission": {
+    "queued": {
+      "title": "等待开始",
+      "body": "消息已保存，等到有空闲运行时就会开始。"
+    },
+    "blocked": {
+      "title": "等待重新连接",
+      "body": "消息已保存。设备重新连上执行主机后会自动开始。"
+    },
+    "recoveryRequired": {
+      "title": "需要你处理",
+      "body": "这一轮在已经开始调用工具之后中断，因此没有自动重试——重放可能重复执行无法撤销的操作。请先确认发生了什么，再决定是否重新发送。"
+    }
   }
 }

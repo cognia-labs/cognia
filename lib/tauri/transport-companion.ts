@@ -1141,14 +1141,20 @@ export class CompanionTransport implements Transport {
       // 408, 429 and 5xx are retryable only when the manifest permits it.
       const errBody = await safeJson(response)
       const detail = nestedError(errBody)
+      // Prefer the host's own answer. A 503 covers both "still booting, try
+      // again" and "this host will never serve that command"
+      // (`headless_host_required`), and the status code alone cannot tell them
+      // apart — retrying the latter just burns the attempt budget.
+      const hostSaysRetryable = detail?.retryable
       lastError = new CompanionError({
         code: detail?.code ?? (response.status >= 500 ? "server_error" : `http_${response.status}`),
         message: detail?.message ?? `HTTP ${response.status}`,
-        retryable: true,
+        retryable: hostSaysRetryable ?? true,
       })
       this.setPlaneHealth({
         rpc: response.status === 503 || response.status === 504 ? "unavailable" : "ready",
       })
+      if (hostSaysRetryable === false) throw lastError
       if (canRetryRequest && attempt + 1 < HTTP_MAX_ATTEMPTS) {
         retryAfterMs = parseRetryAfterMs(response.headers?.get("retry-after") ?? null)
         continue
@@ -1618,13 +1624,19 @@ async function safeJson(response: Response): Promise<Record<string, unknown> | n
 
 function nestedError(
   body: Record<string, unknown> | null
-): { code: string; message: string } | null {
+): { code: string; message: string; retryable?: boolean } | null {
   if (!body) return null
   const candidate =
     body.error && typeof body.error === "object" && !Array.isArray(body.error)
       ? (body.error as Record<string, unknown>)
       : body
   return typeof candidate.code === "string" && typeof candidate.message === "string"
-    ? { code: candidate.code, message: candidate.message }
+    ? {
+        code: candidate.code,
+        message: candidate.message,
+        // The host now states this (RpcError.retryable). Absent on older
+        // hosts, where the caller falls back to its status-code guess.
+        ...(typeof candidate.retryable === "boolean" ? { retryable: candidate.retryable } : {}),
+      }
     : null
 }

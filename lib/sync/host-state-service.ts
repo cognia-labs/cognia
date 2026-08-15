@@ -93,6 +93,16 @@ export function createAgentRpcHostStateDispatcher(
     if (!sessionId) throw new Error("host_state_session_id_required")
     switch (action.action.kind) {
       case "message.enqueue": {
+        // Durably accept before dispatching (ADR-0123). An attached client does
+        // not run the chat controller, so this is the only point at which its
+        // turn becomes recoverable. Non-fatal by construction: a ledger failure
+        // must not swallow a message the user already sent.
+        await import("@/lib/work-submission/host-adapter")
+          .then(({ acceptHostStateChatTurn }) => acceptHostStateChatTurn(action))
+          .catch((error) => {
+            console.error("acceptHostStateChatTurn failed", error)
+            return null
+          })
         if (dependencies.sendMessage) {
           await dependencies.sendMessage(sessionId, action.action.text, action.actionId)
         } else {

@@ -32,6 +32,7 @@ import { useActiveArtifactId } from "@/hooks/artifacts/use-session-artifacts"
 import {
   ARTIFACT_DOCK_BOUNDS,
   CHAT_MIN_PERCENT,
+  CHAT_MIN_PX,
   DOCK_MODE_WIDTH_PERCENT,
   WORKSPACE_DOCK_BOUNDS,
   useArtifactDockLayoutStore,
@@ -151,6 +152,26 @@ function dockFloorPercent(panel: HTMLElement | null, workspaceProfile: boolean):
   const groupWidth = panel?.parentElement?.offsetWidth ?? 0
   if (groupWidth <= 0) return ARTIFACT_DOCK_BOUNDS.min
   return (Number.parseFloat(WORKSPACE_DOCK_BOUNDS.minPx) / groupWidth) * 100
+}
+
+/**
+ * The widest the dock may be while the conversation still clears
+ * `CHAT_MIN_PX`, as a percent of the group.
+ *
+ * The mirror of {@link dockFloorPercent}, and for the same reason: a percentage
+ * of a group that something *outside* the group has already narrowed is not a
+ * usable width. Expressed as a cap on the dock rather than a floor on the chat
+ * because the panel library takes one unit per bound — and a cap covers every
+ * entry point at once (drag, the narrow/wide presets, double-click, a restored
+ * width), where clamping each caller would not.
+ *
+ * `100` — no clamp — until the group has measured. jsdom reports every width as
+ * 0, and so does the first layout callback; a cap derived from that would
+ * collapse the dock on mount.
+ */
+export function dockCapForChatFloor(groupWidthPx: number): number {
+  if (!Number.isFinite(groupWidthPx) || groupWidthPx <= 0) return 100
+  return Math.max(0, ((groupWidthPx - CHAT_MIN_PX) / groupWidthPx) * 100)
 }
 
 /**
@@ -341,6 +362,16 @@ function ArtifactWorkspaceDockDesktop({ children }: { children: ReactNode }) {
    */
   const latestDockPercentRef = useRef(dockSize)
   const dragStartCollapsedRef = useRef(dockCollapsed)
+  /**
+   * The dock cap that keeps the conversation above `CHAT_MIN_PX`, refreshed
+   * from the group's measured width on every layout.
+   *
+   * State rather than a ref because it feeds `maxSize`, which the panel library
+   * reads at render. `onLayoutChanged` is the measurement seam — it already
+   * fires on mount and on every resize, so no observer is needed — and the
+   * write is equality-guarded so a settled layout cannot loop.
+   */
+  const [chatFloorCap, setChatFloorCap] = useState(100)
 
   /**
    * Release-snap. Runs on the divider's `pointerup`, never during the drag, so
@@ -433,9 +464,12 @@ function ArtifactWorkspaceDockDesktop({ children }: { children: ReactNode }) {
    * profile still animates the dock back down — `setDockProfile` routes that
    * clamp through the request token.
    */
-  const effectiveDockMax = Math.max(
-    workspaceProfile ? WORKSPACE_DOCK_BOUNDS.max : ARTIFACT_DOCK_BOUNDS.max,
-    dockSize
+  const effectiveDockMax = Math.min(
+    Math.max(workspaceProfile ? WORKSPACE_DOCK_BOUNDS.max : ARTIFACT_DOCK_BOUNDS.max, dockSize),
+    // A physical limit, so it wins over the widening above — including over a
+    // `dockSize` restored from a session on a wider window, which is the case
+    // that arrives already too big rather than being dragged there.
+    chatFloorCap
   )
   // The chat floor has to yield by the same amount, or it re-imposes the clamp
   // from the other side of the group.
@@ -460,6 +494,12 @@ function ArtifactWorkspaceDockDesktop({ children }: { children: ReactNode }) {
         resizeTargetMinimumSize={{ coarse: 28, fine: 20 }}
         className="flex-1 min-h-0"
         onLayoutChanged={(layout) => {
+          // Ahead of every early-out below: the cap has to track the window even
+          // while the dock is collapsed, or re-opening applies a stale one.
+          const nextCap = dockCapForChatFloor(
+            dockPanelElementRef.current?.parentElement?.offsetWidth ?? 0
+          )
+          setChatFloorCap((previous) => (Math.abs(previous - nextCap) < 0.01 ? previous : nextCap))
           const dock = layout["artifact-dock"]
           if (typeof dock !== "number") return
           // Tracked before the collapsed early-out: dragging *out* of the rail

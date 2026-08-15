@@ -2,6 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
+import { CompositionPicker } from "@/components/agent/composition/composition-picker"
+import { usePresetCatalog } from "@/hooks/agent/use-preset-catalog"
+import { useCodeSandboxPresentations } from "@/hooks/agent/use-code-sandbox-presentations"
+import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
+import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import {
   ChartLineIcon,
   FolderOpenIcon,
@@ -181,6 +186,20 @@ export function SessionSettingsSheet({
 }: SessionSettingsSheetProps) {
   const t = useTranslations("chat.header")
   const tPermission = useTranslations("chat.permissionMode")
+  const tComposition = useTranslations("agentComposition")
+  const [compositionAdvancedOpen, setCompositionAdvancedOpen] = useState(false)
+  // Built-ins plus the user's custom modes plus enabled plugin modes. Reactive,
+  // so a mode authored in Settings while this sheet is open shows up here.
+  const compositionPresets = usePresetCatalog()
+  // Starts native-only and widens once the active confinement probe answers.
+  const hostPresentations = useCodeSandboxPresentations()
+  // Reactive per-session selection, falling back to the app default for a
+  // session that predates the field.
+  const sessionComposition = useAgentRuntimeStore(
+    (s) => s.sessionCompositions[session.id] ?? s.defaultComposition
+  )
+  const setSessionComposition = useAgentRuntimeStore((s) => s.setSessionComposition)
+  const developerMode = usePluginStore((s) => s.pluginSettings.developerModeEnabled)
   const [insightsOpen, setInsightsOpen] = useState(false)
   const [communicationOpen, setCommunicationOpen] = useState(false)
   const updateSession = useUpdateSession()
@@ -526,6 +545,24 @@ export function SessionSettingsSheet({
         </SheetHeader>
 
         <div className="flex-1 space-y-5 overflow-y-auto p-4">
+          {/* Mode composition (ADR-0117) — scoped to THIS session, so changing
+              it here cannot retarget another session or a turn in flight. */}
+          <Section label={tComposition("title")}>
+            <CompositionPicker
+              presets={compositionPresets}
+              selection={sessionComposition}
+              onChange={(selection) => setSessionComposition(session.id, selection)}
+              developerMode={developerMode}
+              advancedOpen={compositionAdvancedOpen}
+              onAdvancedOpenChange={setCompositionAdvancedOpen}
+              // Code presentation needs a strict sandbox (ADR-0117 Phase 4).
+              // When the host cannot provide one the axis simply does not offer
+              // it, and a stored `code` selection degrades to `native` with a
+              // visible warning rather than running unsandboxed.
+              supportedToolPresentations={hostPresentations}
+            />
+          </Section>
+
           {/* 实时状态（仅移动端：桌面端这些在 ChatHeader 内） */}
           {showAmbientStatus && (
             <Section label={t("sheet.sections.status")}>

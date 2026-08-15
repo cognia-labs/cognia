@@ -63,6 +63,12 @@ jest.mock("next-intl", () => ({
   useLocale: () => "en",
   useTranslations: () => (key: string, vars?: Record<string, unknown>) =>
     vars ? `${key}:${JSON.stringify(vars)}` : key,
+  // Rows format their own activity timestamp; a fixed formatter keeps these
+  // assertions locale- and clock-independent.
+  useFormatter: () => ({
+    dateTime: (value: Date) => `dt(${value.getTime()})`,
+  }),
+  useNow: () => new Date(0),
 }))
 
 // Complete logger mock: the import chain (plugin-view-container-panel →
@@ -98,6 +104,16 @@ jest.mock("@/hooks/data", () => ({
 let selectedGuild: SelectedGuild = { kind: "dm" }
 let sidebarCollapsed = false
 const setGroupCollapsed = jest.fn()
+// Quick filters live in the UI store; default to unfiltered so the existing
+// assertions hold, and let individual tests seed a narrowed list.
+let conversationFilters: Record<string, unknown> = {
+  unread: false,
+  pinned: false,
+  branched: false,
+  kind: "all",
+}
+const setConversationFilters = jest.fn()
+const resetConversationFilters = jest.fn()
 jest.mock("@/stores/ui", () => ({
   useUIStore: <T,>(selector: (s: Record<string, unknown>) => T): T =>
     selector({
@@ -108,6 +124,9 @@ jest.mock("@/stores/ui", () => ({
       setCollapsedFolders: () => {},
       groupCollapseOverrides: {},
       setGroupCollapsed,
+      conversationFilters,
+      setConversationFilters,
+      resetConversationFilters,
       sidebarWidth: 256,
       setSidebarWidth: () => {},
       sidebarCollapsed,
@@ -210,7 +229,10 @@ beforeEach(() => {
   isNarrow = false
   sidebarCollapsed = false
   conversationSidebar = null
+  conversationFilters = { unread: false, pinned: false, branched: false, kind: "all" }
   setGroupCollapsed.mockReset()
+  setConversationFilters.mockReset()
+  resetConversationFilters.mockReset()
   saveSettings.mockReset()
   saveSettings.mockResolvedValue(undefined)
   historySearchState = {
@@ -474,8 +496,17 @@ test("desktop history rail opts into the chat wallpaper with sidebar tonality", 
 
   const rail = container.querySelector("aside")
   expect(rail).toHaveAttribute("data-bg-target", "chat")
-  expect(rail).toHaveAttribute("data-slot", "sidebar-inner")
-  expect(container.querySelector("[data-tonality='translucent']")).toBeInTheDocument()
+  // Exactly one tint owner. The rail used to ALSO carry
+  // `data-slot="sidebar-inner"`, whose wallpaper rule stacks a second
+  // `--sidebar`-based slab under this one, so the list read as opaque next to a
+  // chat pane showing the wallpaper.
+  expect(rail).not.toHaveAttribute("data-slot", "sidebar-inner")
+  const surface = container.querySelector("[data-tonality='translucent']")
+  expect(surface).toBeInTheDocument()
+  // A `background-image` gradient would win over the tonality rules, which only
+  // swap `background-color`.
+  expect(surface?.className).not.toContain("bg-gradient-to-b")
+  expect(surface).toHaveClass("bg-background/70")
 })
 
 test("narrow history sheet uses the same chat wallpaper surface", async () => {
@@ -633,8 +664,38 @@ test("typing in the search box filters to a flat result list", async () => {
   // Matching row stays, non-matching row drops (after the 150ms debounce), and
   // the date-bucket header is replaced by the flat search list.
   await waitFor(() => expect(screen.queryByText("Grocery list")).toBeNull())
-  expect(screen.getByText("Trip budget")).toBeInTheDocument()
+  // The title is split across a <mark> and its siblings now that the matched
+  // run is emphasized, so match on the row's accumulated text instead.
+  expect(
+    screen.getByText((_, element) => element?.textContent === "Trip budget", {
+      selector: "[data-slot='hover-scroll-text'] > span",
+    })
+  ).toBeInTheDocument()
   expect(screen.queryByText("bucketOlder")).toBeNull()
+})
+
+test("emphasizes the matched run inside a result title", async () => {
+  const dmMatch = { ...dmSession, id: "s-match", title: "Trip budget" } as ChatSession
+  callQueue.push(characters, [], undefined)
+  const user = userEvent.setup()
+  render(
+    <ChannelList
+      sessions={[dmMatch]}
+      activeSessionId={null}
+      onSelect={jest.fn()}
+      onNewDirect={jest.fn()}
+      onNewTeamConversation={jest.fn()}
+      onDelete={jest.fn()}
+      onRename={jest.fn()}
+    />
+  )
+  await user.type(screen.getByLabelText("searchAria"), "budg")
+  // Highlighting is what tells the user WHY a row survived the filter.
+  await waitFor(() => {
+    const mark = document.querySelector("mark")
+    expect(mark).not.toBeNull()
+    expect(mark?.textContent).toBe("budg")
+  })
 })
 
 test("a search that matches nothing shows the empty-search state", async () => {
@@ -1716,4 +1777,302 @@ test("Canvas guild renders nothing (canvas has its own rail)", () => {
   )
   // The aside renders but its body short-circuits to null.
   expect(container.querySelector("aside")?.textContent).toBe("")
+})
+
+describe("filters and sorting", () => {
+  const renderList = (sessions: ChatSession[]) => {
+    callQueue.push(characters, [], undefined)
+    return render(
+      <ChannelList
+        sessions={sessions}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+  }
+
+  it("hides the chip row while the list is in its default state", () => {
+    renderList([dmSession])
+    expect(screen.queryByTestId("channel-list-filter-chips")).toBeNull()
+  })
+
+  it("badges the trigger and shows a removable chip once a filter is active", async () => {
+    conversationFilters = { unread: false, pinned: true, branched: false, kind: "all" }
+    const user = userEvent.setup()
+    renderList([dmSession, { ...dmSession, id: "s-pin", pinned: true } as ChatSession])
+
+    const trigger = screen.getByTestId("channel-list-filter-trigger")
+    expect(trigger).toHaveAttribute("data-active-filters", "1")
+    expect(screen.getByTestId("channel-list-filter-chips")).toBeInTheDocument()
+    // 1 of the 2 conversations survives the filter — the count has to say so,
+    // or a narrowed list reads as lost data.
+    expect(screen.getByTestId("channel-list-filter-chips-count")).toHaveTextContent(
+      'count:{"shown":1,"total":2}'
+    )
+
+    await user.click(screen.getByLabelText('remove:{"name":"filters.options.pinned"}'))
+    expect(setConversationFilters).toHaveBeenCalledWith({
+      unread: false,
+      pinned: false,
+      branched: false,
+      kind: "all",
+    })
+  })
+
+  it("applies the unread filter even when unread badges are switched off", async () => {
+    // Hiding a badge is a display choice, not a claim that nothing is unread.
+    conversationSidebar = { showUnreadBadges: false }
+    conversationFilters = { unread: true, pinned: false, branched: false, kind: "all" }
+    callQueue.push(characters, [{ sessionId: "s-unread", unreadCount: 3 }], undefined)
+    render(
+      <ChannelList
+        sessions={[
+          { ...dmSession, id: "s-unread", title: "Has unread" } as ChatSession,
+          { ...dmSession, id: "s-read", title: "All read" } as ChatSession,
+        ]}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    expect(await screen.findByText("Has unread")).toBeInTheDocument()
+    expect(screen.queryByText("All read")).toBeNull()
+  })
+
+  it("offers a reset when filters hide everything, and says so distinctly", async () => {
+    conversationFilters = { unread: false, pinned: true, branched: false, kind: "all" }
+    const user = userEvent.setup()
+    renderList([dmSession])
+    // Not the search empty state — the exit here is dropping the filter.
+    expect(screen.getByText('emptyFiltered:{"count":1}')).toBeInTheDocument()
+    await user.click(screen.getByTestId("channel-list-empty-clear-filters"))
+    expect(resetConversationFilters).toHaveBeenCalled()
+  })
+
+  it("persists a sort choice to the sidebar settings", async () => {
+    const user = userEvent.setup()
+    renderList([dmSession])
+    await user.click(screen.getByTestId("channel-list-filter-trigger"))
+    await user.click(await screen.findByRole("menuitemradio", { name: "sort.options.title" }))
+    expect(saveSettings).toHaveBeenCalledWith({ conversationSidebar: { sortBy: "title" } })
+  })
+
+  it("reorders rows under a title sort", async () => {
+    conversationSidebar = { sortBy: "title", groupBy: "none" }
+    renderList([
+      { ...dmSession, id: "s-z", title: "Zulu", updatedAt: 3 } as ChatSession,
+      { ...dmSession, id: "s-a", title: "Alpha", updatedAt: 1 } as ChatSession,
+    ])
+    const titles = await screen.findAllByText(/Zulu|Alpha/)
+    expect(titles.map((n) => n.textContent)).toEqual(["Alpha", "Zulu"])
+  })
+
+  it("pins a sort chip so a non-default order is never a mystery", () => {
+    conversationSidebar = { sortBy: "title" }
+    renderList([dmSession])
+    expect(screen.getByTestId("channel-list-filter-chips")).toHaveTextContent("sort.options.title")
+  })
+
+  it("drops the drag handles under a sort that cannot keep a manual order", async () => {
+    conversationSidebar = { sortBy: "title" }
+    renderList([dmSession])
+    // The grip would otherwise promise an order the list discards on the next
+    // render — see `sortSupportsManualOrder`.
+    expect(await screen.findByText("Hi Alice")).toBeInTheDocument()
+    expect(screen.queryByLabelText("dragHandle")).toBeNull()
+  })
+
+  it("keeps the drag handles under the default recency sort", async () => {
+    renderList([dmSession])
+    expect(await screen.findByText("Hi Alice")).toBeInTheDocument()
+    expect(screen.getAllByLabelText("dragHandle").length).toBeGreaterThan(0)
+  })
+})
+
+describe("channel-list branch coverage top-ups", () => {
+  const renderList = (
+    sessions: ChatSession[],
+    extra: Partial<React.ComponentProps<typeof ChannelList>> = {}
+  ) => {
+    callQueue.push(characters, [], undefined)
+    return render(
+      <ChannelList
+        sessions={sessions}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+        {...extra}
+      />
+    )
+  }
+
+  it("narrows to team conversations from the kind facet", async () => {
+    const user = userEvent.setup()
+    renderList([dmSession, teamSession])
+    await user.click(screen.getByTestId("channel-list-filter-trigger"))
+    await user.click(await screen.findByRole("menuitemradio", { name: "kind.options.team" }))
+    expect(setConversationFilters).toHaveBeenCalledWith({
+      unread: false,
+      pinned: false,
+      branched: false,
+      kind: "team",
+    })
+  })
+
+  it("renders the kind filter as applied when the store already holds it", async () => {
+    conversationFilters = { unread: false, pinned: false, branched: false, kind: "team" }
+    renderList([dmSession, teamSession])
+    expect(await screen.findByText("Squad meeting")).toBeInTheDocument()
+    expect(screen.queryByText("Hi Alice")).toBeNull()
+  })
+
+  it("Escape drops the keyboard focus ring once nothing is selected", async () => {
+    const user = userEvent.setup()
+    const { container } = renderList([dmSession])
+    const list = container.querySelector('[tabindex="0"]') as HTMLElement
+    list.focus()
+    await user.keyboard("{ArrowDown}")
+    await waitFor(() => expect(container.querySelector("li[data-focused]")).not.toBeNull())
+    await user.keyboard("{Escape}")
+    expect(container.querySelector("li[data-focused]")).toBeNull()
+  })
+
+  it("warns that content-search results were clipped", async () => {
+    conversationSidebar = { searchScope: "titleAndContent" }
+    historySearchState = { ...historySearchState, moreOlderHistory: true }
+    const user = userEvent.setup()
+    renderList([dmSession])
+    await user.type(screen.getByLabelText("searchAria"), "alice")
+    // Silently truncated results read as "that conversation is gone".
+    expect(await screen.findByText("searchTruncated")).toBeInTheDocument()
+  })
+
+  it("starts a team conversation from the header CTA inside a team guild", async () => {
+    selectedGuild = { kind: "team", teamId: "t-1" }
+    const onNewTeamConversation = jest.fn()
+    const user = userEvent.setup()
+    callQueue.push(characters, [], [team])
+    render(
+      <ChannelList
+        sessions={[teamSession]}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={onNewTeamConversation}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    await user.click(await screen.findByRole("button", { name: "newConversation" }))
+    expect(onNewTeamConversation).toHaveBeenCalledWith("t-1")
+  })
+
+  it("invites the user to fill an empty folder instead of showing a bare header", async () => {
+    renderList([dmSession], {
+      folders: [{ id: "f-1", name: "Reading", order: 0, createdAt: 0, updatedAt: 0 }],
+    })
+    expect(await screen.findByText("emptyFolder")).toBeInTheDocument()
+  })
+
+  it("abandons a folder rename on Escape without persisting the draft", async () => {
+    const onRenameFolder = jest.fn()
+    const user = userEvent.setup()
+    renderList([dmSession], {
+      folders: [{ id: "f-1", name: "Reading", order: 0, createdAt: 0, updatedAt: 0 }],
+      onRenameFolder,
+    })
+    await user.click(await screen.findByRole("button", { name: "folderActions" }))
+    await user.click(await screen.findByText("renameFolder"))
+    const input = await screen.findByLabelText("renameFolder")
+    await user.clear(input)
+    await user.type(input, "Archive{Escape}")
+    expect(onRenameFolder).not.toHaveBeenCalled()
+  })
+})
+
+describe("unread badges and identity rendering", () => {
+  it("shows the per-row unread count when badges are enabled", async () => {
+    callQueue.push(characters, [{ sessionId: "s-1", unreadCount: 4 }], undefined)
+    render(
+      <ChannelList
+        sessions={[dmSession]}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    expect(await screen.findByText("4")).toBeInTheDocument()
+  })
+
+  it("renders a team's own identity and name on its rows", async () => {
+    selectedGuild = { kind: "team", teamId: "t-1" }
+    conversationSidebar = { metadata: ["agent"] }
+    callQueue.push(characters, [], [team])
+    render(
+      <ChannelList
+        sessions={[teamSession]}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    // The team supplies both the row avatar subject and the `agent` detail —
+    // a team conversation must not fall back to a character it has no binding to.
+    expect(await screen.findByTestId("session-row-metadata")).toHaveTextContent("Squad")
+  })
+
+  it("selects the whole visible list with Ctrl+A", async () => {
+    const user = userEvent.setup()
+    callQueue.push(characters, [], undefined)
+    const { container } = render(
+      <ChannelList
+        sessions={[dmSession, { ...dmSession, id: "s-9", title: "Second" } as ChatSession]}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    const list = container.querySelector('[tabindex="0"]') as HTMLElement
+    list.focus()
+    await user.keyboard("{Control>}a{/Control}")
+    await waitFor(() => expect(container.querySelectorAll("li[data-selected]")).toHaveLength(2))
+  })
+
+  it("hands the middle column to a plugin view container instead of the session list", () => {
+    selectedGuild = { kind: "plugin-view", containerId: "pv-1" } as SelectedGuild
+    const { container } = render(
+      <ChannelList
+        sessions={[dmSession]}
+        activeSessionId={null}
+        onSelect={jest.fn()}
+        onNewDirect={jest.fn()}
+        onNewTeamConversation={jest.fn()}
+        onDelete={jest.fn()}
+        onRename={jest.fn()}
+      />
+    )
+    // The plugin container owns the column; the session list must not also
+    // render into it.
+    expect(container.querySelector("aside")?.textContent).not.toContain("Hi Alice")
+    expect(screen.queryByLabelText("searchAria")).toBeNull()
+  })
 })

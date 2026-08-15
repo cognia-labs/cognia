@@ -213,6 +213,7 @@ export function SshHosts() {
                   <SelectContent>
                     <SelectItem value="password">{t("auth.password")}</SelectItem>
                     <SelectItem value="privateKey">{t("auth.privateKey")}</SelectItem>
+                    <SelectItem value="agent">{t("auth.agent")}</SelectItem>
                   </SelectContent>
                 </Select>
                 {profile.authMethod === "privateKey" ? (

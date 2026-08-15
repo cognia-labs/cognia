@@ -67,7 +67,13 @@ import {
 
 // Onboarding routes where the boot provider must NOT redirect (the chooser /
 // pair / oauth flows own navigation there).
-const ONBOARDING_PREFIXES = ["/welcome", "/pair", "/oauth"]
+// `/onboarding` replaced the standalone `/welcome` mode chooser (ADR-0122):
+// the standalone-vs-paired fork is now the first-run flow's welcome step,
+// so the boot provider must recognise it as an onboarding surface or it
+// would redirect the user straight back out of the flow.
+import { ONBOARDING_ROUTE } from "@/lib/onboarding/route"
+
+const ONBOARDING_PREFIXES = ["/onboarding", "/pair", "/oauth"]
 
 const log = loggers.shell
 
@@ -267,7 +273,11 @@ export function CompanionBootProvider({ children }: { children: React.ReactNode 
         const onOnboarding = ONBOARDING_PREFIXES.some((prefix) =>
           pathnameRef.current.startsWith(prefix)
         )
-        if (!onOnboarding) routerRef.current.replace(mode === "paired" ? "/pair" : "/welcome")
+        // A paired phone that lost its config needs re-pairing, not onboarding.
+        // An unset mode means the fork was never answered — that is the
+        // first-run flow's welcome step now.
+        if (!onOnboarding)
+          routerRef.current.replace(mode === "paired" ? "/pair" : ONBOARDING_ROUTE)
         return
       }
 

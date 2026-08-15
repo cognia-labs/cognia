@@ -9,6 +9,30 @@ const RUNTIME_LEASE_MIN_TTL_MS: u64 = 5_000;
 const RUNTIME_LEASE_MAX_TTL_MS: u64 = 60_000;
 const RUNTIME_LEASE_MAX_OWNER_BYTES: usize = 128;
 
+/// Which kind of process holds (or wants) the runtime lease.
+///
+/// Encoded as the owner-id prefix the callers already use (`brain:<uuid>` /
+/// `desktop:<uuid>`) so no separate field has to travel the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RuntimeOwnerClass {
+    /// A desktop webview runtime. Intermittent by nature — the machine sleeps,
+    /// the window closes — so it yields to an always-on brain.
+    Desktop,
+    /// A `cognia-agent serve` brain process, local or in the cloud.
+    Brain,
+}
+
+/// Classify an owner id. Anything unprefixed is treated as `Desktop`, the
+/// lower-priority class: an unrecognised owner must never be able to evict a
+/// brain by accident.
+pub fn runtime_owner_class(owner_id: &str) -> RuntimeOwnerClass {
+    if owner_id.starts_with("brain:") {
+        RuntimeOwnerClass::Brain
+    } else {
+        RuntimeOwnerClass::Desktop
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ConnectorRuntimeLease {
     owner_id: String,
@@ -44,6 +68,13 @@ impl ConnectorsState {
     /// The lease lives in the Rust host rather than the renderer, so multiple
     /// Node brain processes and desktop webviews cannot each boot the same
     /// connector transports. An expired lease may be taken over by a new owner.
+    ///
+    /// A live lease is also preemptible **upward by class**: a `brain:` owner
+    /// takes over from a `desktop:` one immediately rather than waiting out
+    /// the TTL. Without that, closing a laptop lid would strand the bots for
+    /// up to a full TTL, and a desktop that happened to boot first would keep
+    /// the always-on process shut out indefinitely. The reverse is refused —
+    /// a desktop never evicts a running brain.
     pub fn acquire_runtime_lease(&self, owner_id: &str, ttl_ms: u64) -> Result<bool, String> {
         self.acquire_runtime_lease_at(owner_id, ttl_ms, Instant::now())
     }
@@ -76,12 +107,13 @@ impl ConnectorsState {
     ) -> Result<bool, String> {
         validate_runtime_lease(owner_id, ttl_ms)?;
         let expires_at = lease_expiry(now, ttl_ms)?;
+        let want = runtime_owner_class(owner_id);
         let mut inner = self.inner.lock();
-        if inner
-            .runtime_lease
-            .as_ref()
-            .is_some_and(|lease| lease.expires_at > now && lease.owner_id != owner_id)
-        {
+        if inner.runtime_lease.as_ref().is_some_and(|lease| {
+            lease.expires_at > now
+                && lease.owner_id != owner_id
+                && want <= runtime_owner_class(&lease.owner_id)
+        }) {
             return Ok(false);
         }
         inner.runtime_lease = Some(ConnectorRuntimeLease {
@@ -103,6 +135,8 @@ impl ConnectorsState {
         let Some(lease) = inner.runtime_lease.as_mut() else {
             return Ok(false);
         };
+        // A preempted owner learns it lost here: renew answers false and the
+        // caller tears its transports down, exactly as on TTL loss.
         if lease.expires_at <= now {
             inner.runtime_lease = None;
             return Ok(false);
@@ -197,6 +231,76 @@ mod tests {
         assert!(state.release_runtime_lease("brain-a").unwrap());
         assert!(state
             .acquire_runtime_lease_at("brain-b", 15_000, start + Duration::from_millis(1_001))
+            .unwrap());
+    }
+
+    #[test]
+    fn owner_class_is_read_off_the_id_prefix_and_defaults_to_desktop() {
+        assert_eq!(runtime_owner_class("brain:abc"), RuntimeOwnerClass::Brain);
+        assert_eq!(
+            runtime_owner_class("desktop:abc"),
+            RuntimeOwnerClass::Desktop
+        );
+        // Anything unrecognised is the LOWER class — an owner id we cannot
+        // classify must never be able to evict a running brain by accident.
+        for unknown in ["brain-a", "", "Brain:abc", "cli:abc"] {
+            assert_eq!(runtime_owner_class(unknown), RuntimeOwnerClass::Desktop);
+        }
+        assert!(RuntimeOwnerClass::Brain > RuntimeOwnerClass::Desktop);
+    }
+
+    #[test]
+    fn a_brain_preempts_a_live_desktop_lease_but_not_the_reverse() {
+        let state = ConnectorsState::new();
+        let start = Instant::now();
+
+        // Desktop boots first and holds a live lease.
+        assert!(state
+            .acquire_runtime_lease_at("desktop:one", 15_000, start)
+            .unwrap());
+        // The always-on process takes over immediately rather than waiting out
+        // the TTL — otherwise a desktop that happened to boot first would keep
+        // the bots off the brain indefinitely.
+        assert!(state
+            .acquire_runtime_lease_at("brain:one", 15_000, start + Duration::from_millis(1))
+            .unwrap());
+        // The evicted desktop learns it lost on its next renew.
+        assert!(!state
+            .renew_runtime_lease_at("desktop:one", 15_000, start + Duration::from_millis(2))
+            .unwrap());
+        // ...and cannot take it back while the brain's lease is live.
+        assert!(!state
+            .acquire_runtime_lease_at("desktop:one", 15_000, start + Duration::from_millis(3))
+            .unwrap());
+        // Nor can it release someone else's lease out from under them.
+        assert!(!state.release_runtime_lease("desktop:one").unwrap());
+    }
+
+    #[test]
+    fn a_desktop_takes_over_once_the_brain_lease_expires() {
+        let state = ConnectorsState::new();
+        let start = Instant::now();
+        assert!(state
+            .acquire_runtime_lease_at("brain:one", 15_000, start)
+            .unwrap());
+        // Priority only applies to a LIVE lease; a brain that stopped
+        // renewing must not strand the bots forever.
+        assert!(state
+            .acquire_runtime_lease_at("desktop:one", 15_000, start + Duration::from_millis(15_001))
+            .unwrap());
+    }
+
+    #[test]
+    fn two_brains_still_contend_first_come_first_served() {
+        let state = ConnectorsState::new();
+        let start = Instant::now();
+        assert!(state
+            .acquire_runtime_lease_at("brain:one", 15_000, start)
+            .unwrap());
+        // Same class → no preemption, or two cloud replicas would flap the
+        // lease between them on every renew interval.
+        assert!(!state
+            .acquire_runtime_lease_at("brain:two", 15_000, start + Duration::from_millis(1))
             .unwrap());
     }
 

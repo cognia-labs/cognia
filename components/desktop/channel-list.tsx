@@ -91,6 +91,7 @@ import {
 import { CSS } from "@dnd-kit/utilities"
 import type {
   ConversationGroupBy,
+  ConversationKindFilter,
   ConversationSidebarMetadata,
   ConversationSidebarSettings,
   ConversationSidebarDensity,
@@ -106,6 +107,19 @@ import {
   resolveConversationSidebarMetadata,
   toggleConversationSidebarMetadata,
 } from "@/lib/chat/conversation-grouping"
+import {
+  countActiveConversationFilters,
+  resolveConversationFilters,
+  resolveConversationSortBy,
+  setConversationKindFilter,
+  sortSupportsManualOrder,
+  toggleConversationFilter,
+  type ConversationFilterToggle,
+} from "@/lib/chat/conversation-filters"
+import {
+  ConversationFilterChips,
+  ConversationFilterMenu,
+} from "@/components/chat/conversation-filter-controls"
 import { getModelDisplayName, getProviderDisplayName } from "@/lib/ai/icons"
 import type { Character, ChatSession, SessionFolder, Team } from "@cognia/agent-config-types"
 import { filterExposedSessions } from "@/lib/chat/session-exposure"
@@ -154,6 +168,17 @@ const log = loggers.ui
  */
 const EMPTY_FOLDERS: SessionFolder[] = []
 const EMPTY_SESSION_METADATA: SessionRowMetadataItem[] = []
+
+/**
+ * Sticky treatment shared by every section header (date bucket, folder, group).
+ *
+ * Opaque enough that rows scrolling underneath don't bleed through, translucent
+ * enough that a wallpaper still reads. A `background-color` and not a gradient —
+ * the tonality rules only swap colors, so a gradient would paint over the
+ * wallpaper the chat pane beside it is showing (globals.css §4d).
+ */
+const STICKY_SECTION_HEADER =
+  "sticky top-0 z-10 bg-background/85 supports-[backdrop-filter]:bg-background/60 supports-[backdrop-filter]:backdrop-blur-sm"
 
 /** Maps a date bucket to its `desktop.channelList` label key. */
 const BUCKET_LABEL_KEY: Record<DateBucket, string> = {
@@ -301,7 +326,12 @@ export function ChannelList(props: Props) {
       aria-hidden={sidebarCollapsed || undefined}
       inert={sidebarCollapsed || undefined}
       data-bg-target="chat"
-      data-slot="sidebar-inner"
+      // Deliberately NOT `data-slot="sidebar-inner"`. That slot's wallpaper
+      // rule (globals.css, "when a wallpaper is painting under a shadcn
+      // sidebar") tints with `--sidebar` at a hardcoded 55% / 8px blur — a
+      // second slab stacked under the body's own `data-tonality` surface, and
+      // keyed to a different base colour than the header and message area. The
+      // rail carries one tint now, owned by `ChannelListBody` below.
       data-collapsed={sidebarCollapsed || undefined}
     >
       {/* Fixed-width inner layer: keeps the list from reflowing as the aside's
@@ -386,6 +416,9 @@ function ChannelListBody({
   onReorderSessions,
 }: Props) {
   const t = useTranslations("desktop.channelList")
+  // Filter vocabulary is shared with the mobile list — see
+  // `components/chat/conversation-filter-controls.tsx`.
+  const tFilters = useTranslations("conversationFilters")
   const selectedGuild = useUIStore((s) => s.selectedGuild)
 
   // Behavior preferences (Settings → Conversation). Absent settings fall back
@@ -397,7 +430,9 @@ function ChannelListBody({
   const density: ConversationSidebarDensity = sidebarSettings?.density ?? "comfortable"
   const showPreview = sidebarSettings?.showPreview ?? false
   const showCustomIcons = sidebarSettings?.showCustomIcons ?? true
+  const showTimestamps = sidebarSettings?.showTimestamps ?? true
   const groupBy = resolveConversationGroupBy(sidebarSettings)
+  const sortBy = resolveConversationSortBy(sidebarSettings)
   const showUnreadBadges = sidebarSettings?.showUnreadBadges ?? true
   const searchScope: ConversationSearchScope = sidebarSettings?.searchScope ?? "title"
   const metadataFields = useMemo(
@@ -454,6 +489,15 @@ function ChannelListBody({
   }, [characters])
 
   const sessionStates = useClientLiveQuery(() => listSessionStates(), [], [])
+  // Two derivations of the same table on purpose: `unreadIds` drives the unread
+  // *filter* and *sort*, which must keep working when the user has turned the
+  // per-row badges off — hiding a badge is a display choice, not a statement
+  // that unread no longer exists.
+  const unreadIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const s of sessionStates ?? []) if (s.unreadCount > 0) ids.add(s.sessionId)
+    return ids
+  }, [sessionStates])
   const unreadById = useMemo(() => {
     const map = new Map<string, number>()
     if (!showUnreadBadges) return map
@@ -564,15 +608,37 @@ function ChannelListBody({
   const groupCollapseOverrides = useUIStore((s) => s.groupCollapseOverrides)
   const setGroupCollapsed = useUIStore((s) => s.setGroupCollapsed)
 
-  // Grouping/filtering/search now live in the shared headless model
+  // Quick filters live in the UI store (layout state, like the archive view) so
+  // the choice survives reloads; the chip row below keeps a narrowed list from
+  // ever looking like a lost one.
+  const persistedFilters = useUIStore((s) => s.conversationFilters)
+  const setConversationFilters = useUIStore((s) => s.setConversationFilters)
+  const resetConversationFilters = useUIStore((s) => s.resetConversationFilters)
+  const filters = useMemo(() => resolveConversationFilters(persistedFilters), [persistedFilters])
+  const activeFilters = countActiveConversationFilters(filters)
+  const handleToggleFilter = useCallback(
+    (key: ConversationFilterToggle, enabled: boolean) =>
+      setConversationFilters(toggleConversationFilter(filters, key, enabled)),
+    [filters, setConversationFilters]
+  )
+  const handleSetKindFilter = useCallback(
+    (kind: ConversationKindFilter) =>
+      setConversationFilters(setConversationKindFilter(filters, kind)),
+    [filters, setConversationFilters]
+  )
+
+  // Grouping/filtering/sorting/search now live in the shared headless model
   // (pinned → folders → the chosen axis, or a flat result list while searching).
-  const { sections, total, filteredCount, orderedIds } = useConversationListModel({
+  const { sections, total, filteredCount, orderedIds, contentOnlyIds } = useConversationListModel({
     sessions: filtered,
     folders: modelFolders,
     query,
     view,
     collapsedFolderIds,
     groupBy,
+    sortBy,
+    filters,
+    unreadIds,
     workspaces: workspaceGroups,
     agents: agentGroups,
     activeWorkspaceId: activeProjectId,
@@ -760,7 +826,10 @@ function ChannelListBody({
   )
 
   // Drag-and-drop: reorder any conversation section or drop a conversation onto
-  // a folder. A short activation distance keeps plain clicks from starting drags.
+  // a folder. Only under the default recency sort — every other mode derives its
+  // order from session data, so a persisted manual order would be ignored and
+  // the grip would be promising something the list cannot keep.
+  const reorderable = sortSupportsManualOrder(sortBy)
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -836,7 +905,13 @@ function ChannelListBody({
     <PerfBoundary id="sidebar:channel-list">
       <div
         ref={containerRef}
-        className="flex h-full flex-col bg-gradient-to-b from-background/70 to-background/35 outline-none"
+        // Flat `bg-background/70`, not a gradient. `bg-gradient-to-b
+        // from-background/70 to-background/35` is a `background-image`, and the
+        // tonality rules only swap `background-color` — so the gradient painted
+        // over the wallpaper the chat pane beside it was showing (the same
+        // defect as the composer bar, see globals.css §4d). One flat surface
+        // also matches the chat header, which is on this same tier.
+        className="flex h-full flex-col bg-background/70 outline-none"
         data-tonality="translucent"
         tabIndex={0}
         onKeyDown={handleContainerKeyDown}
@@ -848,6 +923,7 @@ function ChannelListBody({
           density={density}
           showPreview={showPreview}
           showCustomIcons={showCustomIcons}
+          showTimestamps={showTimestamps}
           groupBy={groupBy}
           showUnreadBadges={showUnreadBadges}
           searchScope={searchScope}
@@ -863,7 +939,32 @@ function ChannelListBody({
           onNewDirect={handleNewDirect}
           onNewTeamConversation={handleNewTeamConversation}
         />
-        <ChannelListSearch inputRef={searchInputRef} onQueryChange={setQuery} />
+        <div className="flex items-center gap-1.5 px-3 pb-2.5">
+          <ChannelListSearch inputRef={searchInputRef} onQueryChange={setQuery} />
+          <ConversationFilterMenu
+            sortBy={sortBy}
+            filters={filters}
+            activeFilters={activeFilters}
+            onSortChange={(next) => saveSidebarSettings({ sortBy: next })}
+            onToggleFilter={handleToggleFilter}
+            onKindChange={handleSetKindFilter}
+            onReset={resetConversationFilters}
+            triggerClassName="size-9 rounded-xl"
+            testId="channel-list-filter-trigger"
+          />
+        </div>
+        <ConversationFilterChips
+          filters={filters}
+          activeFilters={activeFilters}
+          sortBy={sortBy}
+          shown={filteredCount}
+          total={total}
+          onToggleFilter={handleToggleFilter}
+          onKindChange={handleSetKindFilter}
+          onReset={resetConversationFilters}
+          className="px-3 pb-2"
+          testId="channel-list-filter-chips"
+        />
         <ChannelListBulkActions
           visible={toolbarVisible}
           selected={selected}
@@ -898,9 +999,27 @@ function ChannelListBody({
               }
             />
           ) : filteredCount === 0 ? (
-            <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-              {t("emptySearch", { query: query.trim() })}
-            </p>
+            // Three different reasons a non-empty view can show nothing, and
+            // they need different exits: refine the query, drop the filters, or
+            // both. A single "no results" line leaves the user hunting for the
+            // filter they forgot they set.
+            <div className="flex flex-col items-center gap-3 px-4 py-6 text-center">
+              <p className="text-xs text-muted-foreground">
+                {query.trim()
+                  ? t("emptySearch", { query: query.trim() })
+                  : t("emptyFiltered", { count: activeFilters })}
+              </p>
+              {activeFilters > 0 ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={resetConversationFilters}
+                  data-testid="channel-list-empty-clear-filters"
+                >
+                  {tFilters("clearAll")}
+                </Button>
+              ) : null}
+            </div>
           ) : (
             <DndContext
               sensors={dndSensors}
@@ -916,6 +1035,10 @@ function ChannelListBody({
                 focusedId={focusedId}
                 density={density}
                 showPreview={showPreview}
+                showTimestamps={showTimestamps}
+                searchQuery={query.trim()}
+                contentOnlyIds={contentOnlyIds}
+                reorderable={reorderable}
                 metadataFor={metadataFor}
                 titleMotion={titleMotion}
                 unreadById={unreadById}
@@ -973,7 +1096,7 @@ function ChannelListSearch({
   }, [cancelQueryChange, onQueryChange])
 
   return (
-    <div className="px-3 pb-2.5">
+    <div className="min-w-0 flex-1">
       <InputGroup className="h-9 rounded-xl border-transparent bg-muted/60 shadow-none">
         <InputGroupAddon align="inline-start" className="pr-0 pl-2">
           <SearchIcon className="size-3.5" aria-hidden />
@@ -1051,6 +1174,7 @@ function Header({
   density,
   showPreview,
   showCustomIcons,
+  showTimestamps,
   groupBy,
   showUnreadBadges,
   searchScope,
@@ -1068,6 +1192,7 @@ function Header({
   density: ConversationSidebarDensity
   showPreview: boolean
   showCustomIcons: boolean
+  showTimestamps: boolean
   groupBy: ConversationGroupBy
   showUnreadBadges: boolean
   searchScope: ConversationSearchScope
@@ -1145,6 +1270,12 @@ function Header({
               onCheckedChange={(checked) => onUpdateDisplay({ showCustomIcons: Boolean(checked) })}
             >
               {t("showCustomIcons")}
+            </DropdownMenuCheckboxItem>
+            <DropdownMenuCheckboxItem
+              checked={showTimestamps}
+              onCheckedChange={(checked) => onUpdateDisplay({ showTimestamps: Boolean(checked) })}
+            >
+              {t("showTimestamps")}
             </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
@@ -1246,6 +1377,10 @@ function ConversationSections({
   focusedId,
   density,
   showPreview,
+  showTimestamps,
+  searchQuery,
+  contentOnlyIds,
+  reorderable,
   metadataFor,
   titleMotion,
   unreadById,
@@ -1273,6 +1408,13 @@ function ConversationSections({
   focusedId: string | null
   density: ConversationSidebarDensity
   showPreview: boolean
+  showTimestamps: boolean
+  /** Trimmed active query — emphasized inside matching titles. */
+  searchQuery: string
+  /** Hits that matched message content only; they get an explanatory marker. */
+  contentOnlyIds: ReadonlySet<string>
+  /** False under a non-recency sort: no grip handles, no sortable contexts. */
+  reorderable: boolean
   metadataFor: (session: ChatSession) => SessionRowMetadataItem[]
   titleMotion: ConversationSidebarTitleMotion
   unreadById: Map<string, number>
@@ -1303,6 +1445,9 @@ function ConversationSections({
     focused: s.id === focusedId,
     density,
     showPreview,
+    showTimestamp: showTimestamps,
+    searchQuery: searchQuery || undefined,
+    contentMatch: contentOnlyIds.has(s.id),
     metadata: metadataFor(s),
     titleMotion,
     accentColor: accentFor(s),
@@ -1319,13 +1464,16 @@ function ConversationSections({
     onAssignToFolder,
     onJumpToParent,
   })
-  const renderSortableRow = (s: ChatSession) => (
-    <SortableSessionRow
-      key={s.id}
-      {...rowProps(s)}
-      dropPosition={dropPreview?.targetId === s.id ? dropPreview.position : undefined}
-    />
-  )
+  const renderSortableRow = (s: ChatSession) =>
+    reorderable ? (
+      <SortableSessionRow
+        key={s.id}
+        {...rowProps(s)}
+        dropPosition={dropPreview?.targetId === s.id ? dropPreview.position : undefined}
+      />
+    ) : (
+      <SessionRow key={s.id} {...rowProps(s)} />
+    )
   const renderStaticRow = (s: ChatSession) => <SessionRow key={s.id} {...rowProps(s)} />
 
   return (
@@ -1376,6 +1524,7 @@ function ConversationSections({
                 ? t(BUCKET_LABEL_KEY[section.bucket])
                 : null
         const key = section.kind === "date" ? `date:${section.bucket}` : section.kind
+        const sortable = section.kind !== "search" && reorderable
         const rows = (
           <ul className="flex flex-col gap-0.5">
             {section.sessions.map(section.kind === "search" ? renderStaticRow : renderSortableRow)}
@@ -1384,15 +1533,11 @@ function ConversationSections({
         return (
           <section key={key} aria-label={label ?? t("searchAria")}>
             {label ? (
-              <div className="flex items-center gap-2 px-2 pb-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {label}
-                </span>
-              </div>
+              <SectionHeading label={label} count={section.sessions.length} />
+            ) : section.kind === "search" ? (
+              <SectionHeading label={t("sectionResults")} count={section.sessions.length} />
             ) : null}
-            {section.kind === "search" ? (
-              rows
-            ) : (
+            {sortable ? (
               <SortableContext
                 id={key}
                 items={section.sessions.map((session) => session.id)}
@@ -1400,10 +1545,30 @@ function ConversationSections({
               >
                 {rows}
               </SortableContext>
+            ) : (
+              rows
             )}
           </section>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * Section label. Sticky against the ScrollArea viewport so the bucket a row
+ * belongs to stays on screen while scrolling a long history — without it, a
+ * date-grouped list loses its only orientation cue after the first screenful.
+ */
+function SectionHeading({ label, count }: { label: string; count: number }) {
+  return (
+    <div className={cn("flex items-center gap-2 px-2 pt-0.5 pb-1", STICKY_SECTION_HEADER)}>
+      <span className="truncate text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+        {label}
+      </span>
+      {count > 0 ? (
+        <span className="shrink-0 text-[10px] text-muted-foreground/70 tabular-nums">{count}</span>
+      ) : null}
     </div>
   )
 }
@@ -1472,7 +1637,7 @@ function GroupSection({
         aria-label={name}
         className="rounded-md transition-colors duration-200 data-[state=open]:bg-muted/10"
       >
-        <div className="flex items-center gap-1 px-2 pb-1">
+        <div className={cn("flex items-center gap-1 px-2 pt-0.5 pb-1", STICKY_SECTION_HEADER)}>
           <CollapsibleTrigger asChild>
             <Button
               type="button"
@@ -1599,7 +1764,9 @@ function FolderSectionHeader({
   }
 
   return (
-    <div className="group/folder flex items-center gap-1 px-2 pb-1">
+    <div
+      className={cn("group/folder flex items-center gap-1 px-2 pt-0.5 pb-1", STICKY_SECTION_HEADER)}
+    >
       {editing ? (
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           {collapsed ? (

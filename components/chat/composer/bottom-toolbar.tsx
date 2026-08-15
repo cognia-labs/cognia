@@ -10,12 +10,17 @@
 // qualifier) and the permission chip, with the context ring beside them.
 //
 // Turn capabilities (enhance, web search, skills) live under the composer's `+`
-// on both desktop and mobile. This toolbar's "⋯" is reserved for session-shape
-// controls (sandbox, agent mode, external agent, runtime) and plugin slots.
+// on both desktop and mobile.
+//
+// The "⋯" overflow is a PACKING device, not a tier: it exists only where the
+// row genuinely cannot hold the roster (mobile / the narrow workflow sidebar).
+// On a wide composer the remaining session-shape controls — Agent mode, the
+// sandbox indicator, plugin slots — render inline, because collapsing them
+// there hid state the user is expected to read at a glance (which mode, is the
+// sandbox on) behind a button with no affordance for what it contains.
 
-import { useCallback, useRef, type ReactNode } from "react"
+import { useRef, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { useRouter } from "next/navigation"
 import { MoreHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -31,10 +36,8 @@ import { PermissionModeIndicator } from "../permission-mode-indicator"
 import { ModelPicker } from "./model-picker"
 import { SandboxShield } from "./sandbox-shield"
 import { AgentRuntimeSelector } from "@/components/agent/mode/runtime-selector"
-import { AgentModeSelector } from "@/components/agent/mode/mode-selector"
-import { ExternalAgentSelector } from "@/components/agent/external-agent/selector"
+import { CompositionChip } from "@/components/agent/composition/composition-chip"
 import { useAgentRuntimeStore } from "@/stores/agent"
-import { useExternalAgentStore } from "@/stores/agent/external-agent-store"
 import { PluginExtensionSlotWithOverflow } from "@/components/plugins/plugin-extension-slot-with-overflow"
 import { PluginQuickActionsMenu } from "./plugin-quick-actions-menu"
 import { WorkflowBottomToolbar } from "./workflow-bottom-toolbar"
@@ -79,7 +82,6 @@ function GenericBottomToolbar({
   leading,
 }: BottomToolbarProps) {
   const t = useTranslations("chat.composer.toolbar")
-  const router = useRouter()
   const focusedStatus = useChatStore((s) => s.status)
   const status = paneStatus ?? focusedStatus
   const setPermissionMode = useChatStore((s) => s.setPermissionMode)
@@ -87,26 +89,11 @@ function GenericBottomToolbar({
   const toolbarWidth = useElementWidth(rootRef)
   const defaultModel = useSettingsStore((s) => s.settings?.defaultModel)
   const defaultProvider = useSettingsStore((s) => s.settings?.defaultProvider)
-  const modeId = useAgentRuntimeStore((s) => s.modeId)
-  const setModeId = useAgentRuntimeStore((s) => s.setModeId)
   const runtime = useAgentRuntimeStore((s) => s.runtime)
-  const externalAgentId = useAgentRuntimeStore((s) => s.externalAgentId)
-  const setExternalAgentId = useAgentRuntimeStore((s) => s.setExternalAgentId)
 
   // Disable toolbar controls while a turn is in flight so mid-stream
   // configuration changes (model, runtime, mode, etc.) can't race the send.
   const isStreaming = status === "streaming" || status === "awaiting_approval"
-
-  // Bridge externalAgentId between the runtime store (toolbar source of truth)
-  // and the external-agent store (consumed by the execution layer). The two
-  // stores track the active agent independently; this callback keeps them in sync.
-  const handleExternalAgentChange = useCallback(
-    (agentId: string | null) => {
-      setExternalAgentId(agentId)
-      useExternalAgentStore.getState().setActiveAgent(agentId)
-    },
-    [setExternalAgentId]
-  )
 
   // Mirrors `lib/claude/build-options.ts` model resolution: per-session
   // override > app default. (Character / member overrides aren't loaded
@@ -118,45 +105,43 @@ function GenericBottomToolbar({
   // only; falls back to the message-derived estimate inside the indicator).
   const { snapshot: sdkUsage } = useSdkContextUsage(session?.id ?? null, providerId)
 
-  // The measured width now only decides how the same set of controls is
-  // packed, not which of them exist — every branch renders the identical
-  // roster, so no control mounts in two places. (That invariant is why the
-  // overflow is a Popover: re-mounting a trigger-owning control inside a
-  // `DropdownMenuItem` desyncs its open state.) `toolbarWidth === 0`
-  // (pre-measure) takes the wide branch, matching the common chat pane.
+  // The measured width only decides how the same set of controls is packed,
+  // not which of them exist — every branch renders the identical roster, so no
+  // control mounts in two places. (That invariant is why the overflow is a
+  // Popover: re-mounting a trigger-owning control inside a `DropdownMenuItem`
+  // desyncs its open state.) `toolbarWidth === 0` (pre-measure) takes the wide
+  // branch, matching the common chat pane.
   const compact = toolbarWidth > 0 && toolbarWidth < COMPACT_TOOLBAR_PX
   const tierActive = runtime !== "claude-sdk"
 
+  // Runtime AND the external agent it dispatches to are one choice in one
+  // dropdown (see `runtime-selector.tsx`) — there is no second "which agent"
+  // control to place, and no way to sit on an external lane with nothing
+  // selected.
   const runtimeControl = <AgentRuntimeSelector disabled={isStreaming} />
 
-  const tier3 = (
-    <>
-      {runtime === "claude-sdk" && (
-        <AgentModeSelector
-          selectedModeId={modeId}
-          onModeChange={(mode) => setModeId(mode.id)}
-          onSelectTeam={(teamId) =>
-            router.push(`/agent-teams/workspace?teamId=${encodeURIComponent(teamId)}`)
-          }
-          onCreateTeam={() => router.push("/agent-teams")}
-          disabled={isStreaming}
-        />
-      )}
-      {runtime === "external" && (
-        <ExternalAgentSelector
-          selectedAgentId={externalAgentId}
-          onAgentChange={handleExternalAgentChange}
-          disabled={isStreaming}
-        />
-      )}
-      <SandboxShield session={session} />
-    </>
-  )
+  // Agent Mode composes the preset the Claude SDK runtime runs under; it is
+  // meaningless for an external CLI agent, which brings its own.
+  //
+  // Scoped to THIS session (ADR-0117). The chip it replaced wrote the app-wide
+  // default, so it could not change the conversation it sat under once the
+  // settings sheet had recorded a per-session choice — and it rendered any
+  // session running Minimal/Code/Creator as "General Assistant", because those
+  // presets have no `AgentModeConfig` to look up.
+  const modeControl =
+    runtime === "claude-sdk" ? (
+      <CompositionChip sessionId={session?.id} disabled={isStreaming} />
+    ) : null
+
+  // Passive indicator, not a control — it belongs beside the context ring
+  // rather than inside a menu the user has to open to learn whether this turn
+  // is sandboxed.
+  const sandboxIndicator = <SandboxShield session={session} />
 
   // Plugin-contributed composer actions. Each renders arbitrary plugin UI,
-  // often with its own trigger, and this Popover is the container already
-  // proven safe for that. All three self-hide when no plugin contributes, so
-  // the default install pays nothing for them.
+  // often with its own trigger, and the overflow Popover is the container
+  // already proven safe for that. All three self-hide when no plugin
+  // contributes, so the default install pays nothing for them — inline or not.
   const pluginSlots = (
     <>
       <PluginExtensionSlotWithOverflow
@@ -183,8 +168,7 @@ function GenericBottomToolbar({
 
   // The permanent execution row answers the two highest-frequency questions:
   // which model, and which Agent runtime. Permission remains adjacent because
-  // it changes what that runtime may do. Detailed mode/agent selection stays
-  // in More so the row remains compact.
+  // it changes what that runtime may do.
   const modelAndPermission = (
     <div className="flex min-w-0 flex-nowrap items-center gap-1">
       <ModelPicker session={session} disabled={isStreaming} className="max-w-[11rem]" />
@@ -211,21 +195,22 @@ function GenericBottomToolbar({
     />
   )
 
-  // Everything that is not "what will this turn run as". A Popover, not a
-  // DropdownMenu: the agent-mode / external-agent selectors and the plugin
-  // slots own their own overlays, and re-mounting those inside a
+  // Narrow packing only. A Popover, not a DropdownMenu: the agent-mode selector
+  // and the plugin slots own their own overlays, and re-mounting those inside a
   // `DropdownMenuItem` desyncs their open state.
   const overflow = (
     <ToolbarMoreMenu label={t("moreControls")} active={tierActive} disabled={isStreaming}>
       <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2">{tier3}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          {modeControl}
+          {sandboxIndicator}
+        </div>
         <div className="flex flex-wrap items-center gap-2">{pluginSlots}</div>
       </div>
     </ToolbarMoreMenu>
   )
 
-  // All three layouts now agree: [model · effort] [permission] … [context] [⋯].
-  // The variants differ only in how the row is packed, not in what it holds.
+  // Both narrow layouts pack the tail into "⋯"; the wide one lays it out.
   if (variant === "embedded") {
     return (
       <div
@@ -261,7 +246,10 @@ function GenericBottomToolbar({
     )
   }
 
-  // Wide (web / desktop): one row, context usage pinned right via `ml-auto`.
+  // Wide (web / desktop): one row, status cluster pinned right via the context
+  // indicator's `ml-auto`. Nothing is collapsed here — the row has the space,
+  // and a "⋯" that hides the active Agent mode costs a click to answer a
+  // question the user asks on every turn.
   return (
     <div
       ref={rootRef}
@@ -270,8 +258,10 @@ function GenericBottomToolbar({
     >
       {leading}
       {executionGroup}
+      {modeControl}
+      <div className="flex shrink-0 items-center gap-1 empty:hidden">{pluginSlots}</div>
       {contextIndicator}
-      {overflow}
+      {sandboxIndicator}
     </div>
   )
 }

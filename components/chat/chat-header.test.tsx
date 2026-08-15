@@ -504,6 +504,23 @@ describe("ChatHeader", () => {
     })
   })
 
+  // Regression: the bar hardcoded `bg-background/80` and never opted into the
+  // tonality system, so it stayed an opaque slab over an active wallpaper while
+  // the message area directly below it showed the image.
+  it("opts the bar into the wallpaper-aware translucent tonality", () => {
+    const Wrapper = withAdapter(makeAdapter())
+    const { container } = render(
+      <Wrapper>
+        <ChatHeader session={mkSession()} />
+      </Wrapper>
+    )
+    const header = container.querySelector("header")
+    expect(header).toHaveAttribute("data-tonality", "translucent")
+    // The Tailwind class stays as the no-wallpaper fallback — the tonality
+    // rules only fire under `body[data-bg-enabled="true"]`.
+    expect(header).toHaveClass("bg-background/80")
+  })
+
   it("stays within the chat-header chrome control budget", () => {
     // Plain direct session, no character, credentials fine — the header a user
     // sees for most of the day. Ratchet, not a target (lib/ui/chrome-budget.ts).

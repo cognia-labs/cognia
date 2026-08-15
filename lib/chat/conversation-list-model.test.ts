@@ -567,3 +567,243 @@ describe("buildConversationSections", () => {
     expect(collapsed.orderedIds).toEqual(["loose"])
   })
 })
+
+describe("sortBy", () => {
+  // Distinct activity, creation, and title orderings so each mode is provably
+  // reading the field it claims to.
+  const sessions = [
+    session("beta", { title: "Beta", updatedAt: NOW - 2 * DAY, createdAt: NOW - 9 * DAY }),
+    session("alpha", { title: "Alpha", updatedAt: NOW - 3 * DAY, createdAt: NOW - 1 * DAY }),
+    session("gamma", { title: "Gamma", updatedAt: NOW - 1 * DAY, createdAt: NOW - 5 * DAY }),
+  ]
+  const flat = (
+    sortBy: BuildSectionsOptions["sortBy"],
+    extra: Partial<BuildSectionsOptions> = {}
+  ) =>
+    buildConversationSections(sessions, [], opts({ groupBy: "none", sortBy, ...extra })).orderedIds
+
+  it("defaults to newest activity first", () => {
+    expect(flat(undefined)).toEqual(["gamma", "beta", "alpha"])
+    expect(flat("recent")).toEqual(["gamma", "beta", "alpha"])
+  })
+
+  it("reverses to oldest activity first", () => {
+    expect(flat("oldest")).toEqual(["alpha", "beta", "gamma"])
+  })
+
+  it("sorts by creation time, which can disagree with activity", () => {
+    expect(flat("created")).toEqual(["alpha", "gamma", "beta"])
+  })
+
+  it("sorts titles A→Z", () => {
+    expect(flat("title")).toEqual(["alpha", "beta", "gamma"])
+  })
+
+  it("orders titles naturally, not lexicographically", () => {
+    const numbered = [session("s10", { title: "Draft 10" }), session("s2", { title: "Draft 2" })]
+    const model = buildConversationSections(
+      numbered,
+      [],
+      opts({ groupBy: "none", sortBy: "title" })
+    )
+    expect(model.orderedIds).toEqual(["s2", "s10"])
+  })
+
+  it("floats unread conversations without losing recency underneath", () => {
+    expect(flat("unread", { unreadIds: new Set(["alpha"]) })).toEqual(["alpha", "gamma", "beta"])
+  })
+
+  it("degrades to recency when the unread sort has no unread set", () => {
+    expect(flat("unread")).toEqual(["gamma", "beta", "alpha"])
+  })
+
+  it("applies inside every section, not just the flat list", () => {
+    const model = buildConversationSections(
+      [
+        session("p-b", { title: "B", pinned: true, updatedAt: NOW }),
+        session("p-a", { title: "A", pinned: true, updatedAt: NOW - DAY }),
+        session("loose", { title: "C", updatedAt: NOW }),
+      ],
+      [],
+      opts({ groupBy: "none", sortBy: "title" })
+    )
+    const pinned = model.sections.find((s) => s.kind === "pinned")
+    expect(pinned?.sessions.map((s) => s.id)).toEqual(["p-a", "p-b"])
+  })
+
+  it("keeps a total order when the primary key ties", () => {
+    // Equal titles must not let a live-query refresh visibly swap two rows.
+    const tied = [
+      session("z", { title: "Same", updatedAt: NOW, createdAt: NOW }),
+      session("a", { title: "Same", updatedAt: NOW, createdAt: NOW }),
+    ]
+    const forward = buildConversationSections(tied, [], opts({ groupBy: "none", sortBy: "title" }))
+    const reversed = buildConversationSections(
+      [...tied].reverse(),
+      [],
+      opts({ groupBy: "none", sortBy: "title" })
+    )
+    expect(forward.orderedIds).toEqual(["a", "z"])
+    expect(reversed.orderedIds).toEqual(forward.orderedIds)
+  })
+
+  it("honors a manual drag order only under recency", () => {
+    const dragged = [
+      session("first", {
+        title: "Zulu",
+        updatedAt: NOW,
+        manualOrder: 0,
+        manualOrderSection: "recent",
+      }),
+      session("second", { title: "Alpha", updatedAt: NOW - DAY }),
+    ]
+    // Recency: the hand-placed row wins.
+    expect(
+      buildConversationSections(dragged, [], opts({ groupBy: "none", sortBy: "recent" })).orderedIds
+    ).toEqual(["first", "second"])
+    // Title: the axis the user just chose wins instead — otherwise the list
+    // would silently ignore "A→Z" for an arbitrary subset of rows.
+    expect(
+      buildConversationSections(dragged, [], opts({ groupBy: "none", sortBy: "title" })).orderedIds
+    ).toEqual(["second", "first"])
+  })
+})
+
+describe("quick filters", () => {
+  const sessions = [
+    session("unread-dm", { updatedAt: NOW }),
+    session("pinned-dm", { pinned: true, updatedAt: NOW - DAY }),
+    session("branch-dm", { parentSessionId: "unread-dm", updatedAt: NOW - 2 * DAY }),
+    session("team-chat", { kind: "team", teamId: "t1", updatedAt: NOW - 3 * DAY }),
+  ]
+  const unreadIds = new Set(["unread-dm", "team-chat"])
+  const run = (filters: BuildSectionsOptions["filters"]) =>
+    buildConversationSections(sessions, [], opts({ groupBy: "none", filters, unreadIds }))
+
+  it("passes everything through when unfiltered", () => {
+    const model = run(undefined)
+    expect(model.filteredCount).toBe(4)
+    expect(model.activeFilterCount).toBe(0)
+  })
+
+  it("keeps `total` describing the view so an over-filtered list is distinguishable", () => {
+    // `total` is the archive-view count, deliberately BEFORE filters: it is what
+    // separates "this view is empty" from "your filters matched nothing".
+    const model = run({ unread: true, pinned: true })
+    expect(model.total).toBe(4)
+    expect(model.filteredCount).toBe(0)
+    expect(model.sections).toEqual([])
+  })
+
+  it("narrows to unread", () => {
+    const model = run({ unread: true })
+    expect(model.orderedIds).toEqual(["unread-dm", "team-chat"])
+    expect(model.activeFilterCount).toBe(1)
+  })
+
+  it("narrows to pinned, which still floats into the pinned section", () => {
+    const model = run({ pinned: true })
+    expect(model.orderedIds).toEqual(["pinned-dm"])
+    expect(model.sections[0]?.kind).toBe("pinned")
+  })
+
+  it("narrows to branched conversations", () => {
+    expect(run({ branched: true }).orderedIds).toEqual(["branch-dm"])
+  })
+
+  it("narrows by conversation kind", () => {
+    expect(run({ kind: "team" }).orderedIds).toEqual(["team-chat"])
+    // `pinned-dm` leads because pinned still floats above the flat list.
+    expect(run({ kind: "dm" }).orderedIds).toEqual(["pinned-dm", "unread-dm", "branch-dm"])
+  })
+
+  it("ANDs facets and reports the count", () => {
+    const model = run({ unread: true, kind: "dm" })
+    expect(model.orderedIds).toEqual(["unread-dm"])
+    expect(model.activeFilterCount).toBe(2)
+  })
+
+  it("narrows date buckets too, so a bucket count matches what is rendered", () => {
+    const model = buildConversationSections(
+      sessions,
+      [],
+      opts({ groupBy: "date", filters: { kind: "dm" }, unreadIds })
+    )
+    const bucketed = model.sections.flatMap((s) => (s.kind === "date" ? s.sessions : []))
+    expect(bucketed.every((s) => s.kind !== "team")).toBe(true)
+  })
+
+  it("applies before search, so a filtered-out session cannot be found by title", () => {
+    const model = buildConversationSections(
+      sessions,
+      [],
+      opts({ query: "team", filters: { kind: "dm" }, unreadIds })
+    )
+    expect(model.filteredCount).toBe(0)
+  })
+})
+
+describe("search ranking", () => {
+  const sessions = [
+    session("anywhere", { title: "Reindex the corpus", updatedAt: NOW }),
+    session("word-start", { title: "The index rebuild", updatedAt: NOW - DAY }),
+    session("prefix", { title: "Index maintenance", updatedAt: NOW - 2 * DAY }),
+    session("content", { title: "Unrelated title", updatedAt: NOW - 3 * DAY }),
+  ]
+
+  it("ranks prefix over word-start over anywhere, despite recency", () => {
+    // All three titles match "index"; the one the user almost certainly meant
+    // is the one that starts with it, even though it is the least recent.
+    const model = buildConversationSections(sessions, [], opts({ query: "index" }))
+    expect(model.orderedIds).toEqual(["prefix", "word-start", "anywhere"])
+  })
+
+  it("sorts content-only hits below every title hit", () => {
+    const model = buildConversationSections(
+      sessions,
+      [],
+      opts({ query: "index", contentMatchIds: new Set(["content"]) })
+    )
+    expect(model.orderedIds).toEqual(["prefix", "word-start", "anywhere", "content"])
+  })
+
+  it("reports which hits matched only on content", () => {
+    const model = buildConversationSections(
+      sessions,
+      [],
+      opts({ query: "index", contentMatchIds: new Set(["content", "prefix"]) })
+    )
+    // `prefix` matched its title too, so it is not a content-only hit.
+    expect([...model.contentOnlyIds]).toEqual(["content"])
+  })
+
+  it("exposes no content-only ids outside search mode", () => {
+    expect(buildConversationSections(sessions, [], opts()).contentOnlyIds.size).toBe(0)
+  })
+
+  it("breaks rank ties with the active sort", () => {
+    const tied = [
+      session("b", { title: "Index B", updatedAt: NOW - DAY }),
+      session("a", { title: "Index A", updatedAt: NOW }),
+    ]
+    expect(buildConversationSections(tied, [], opts({ query: "index" })).orderedIds).toEqual([
+      "a",
+      "b",
+    ])
+    expect(
+      buildConversationSections(tied, [], opts({ query: "index", sortBy: "title" })).orderedIds
+    ).toEqual(["a", "b"])
+    expect(
+      buildConversationSections(tied, [], opts({ query: "index", sortBy: "oldest" })).orderedIds
+    ).toEqual(["b", "a"])
+  })
+
+  it("treats punctuation and symbols as word boundaries", () => {
+    const punctuated = [
+      session("mid", { title: "reindexer", updatedAt: NOW }),
+      session("dashed", { title: "re-index run", updatedAt: NOW - DAY }),
+    ]
+    const model = buildConversationSections(punctuated, [], opts({ query: "index" }))
+    expect(model.orderedIds).toEqual(["dashed", "mid"])
+  })
+})

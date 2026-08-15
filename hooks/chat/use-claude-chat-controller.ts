@@ -60,7 +60,12 @@ import { isEmbeddedSession } from "@/lib/chat/session-exposure"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
 import { clearSessionGrants } from "@/lib/claude/computer-use-session-grants"
 import { releaseSkillLoadContext } from "@/lib/skills/runtime-loader"
-import { listMessages, persistMessages, persistStreamingMessages } from "@/lib/db/messages"
+import {
+  commitMessageDelta,
+  listMessages,
+  persistMessages,
+  persistStreamingMessages,
+} from "@/lib/db/messages"
 import { enqueueHostStateIntentIfAvailable } from "@/lib/db/mobile-outbound-queue"
 import { SessionCoalescingRegistry } from "@/hooks/chat/stream-coalescing"
 import {
@@ -83,6 +88,7 @@ import {
   projectDirectChatCaptureEvent,
   startDirectChatExecutionRun,
 } from "@/lib/execution/direct-chat-run"
+import { acceptChatTurn, bindChatTurnContext } from "@/lib/work-submission/chat-adapter"
 import {
   canonicalEventFromExternalEvent,
   captureEventFromCanonical,
@@ -975,6 +981,36 @@ export function useClaudeChat() {
         ? resolveSessionWorkspaceRoot(executionContext)
         : undefined
       const executionRunId = runIdForTurn(sessionId, chatRunId)
+      // Durable acceptance (ADR-0123), phase A. `effectiveContent` has been
+      // final since the Workbench payload gate — plugin hooks, pipes and
+      // redaction all ran before it, and nothing below reassigns it — so
+      // freezing it here captures exactly what the model will be sent.
+      // `sendOptions` is NOT final yet (cwd, task workspace and routing are
+      // still to come), which is why the context is frozen separately, just
+      // before dispatch. Returns null when the feature is off or no runtime
+      // target is active, in which case the turn proceeds exactly as before.
+      await acceptChatTurn({
+        sessionId,
+        runId: executionRunId,
+        messageId: userMsg.id,
+        content: effectiveContent,
+        visibleMessageIds: next.map((message) => message.id),
+        ...(session?.projectId ? { projectId: session.projectId } : {}),
+        // The user message lands in the SAME transaction as the submission.
+        // Without this the row would still reach Dexie eventually, via the
+        // debounced transcript writer — but a crash in between would leave a
+        // submission whose message is not in the transcript, which is the
+        // mirror image of the bug this feature exists to remove. A delta
+        // upsert, not `persistMessages`: the latter treats omissions as
+        // deletions and would wipe history we are not holding here.
+        ...(skipAppend
+          ? {}
+          : { writeTranscript: () => commitMessageDelta(sessionId, { upserts: [userMsg] }) }),
+      }).catch((error) => {
+        // Never block a send on the ledger: the legacy path still runs.
+        console.error("acceptChatTurn failed", error)
+        return null
+      })
       try {
         await startDirectChatExecutionRun({
           sessionId,
@@ -1439,6 +1475,20 @@ export function useClaudeChat() {
             })
           }
         }
+        // Durable acceptance (ADR-0123), phase B. This is the last point at
+        // which `sendOptions` is still changing — cwd, task workspace and
+        // routing have all settled by now — so it is the only honest moment to
+        // freeze the execution context. Write-once: on a retry the stored
+        // bundle wins, which is what stops a replay from silently re-resolving
+        // the project root against whatever the host looks like later.
+        await bindChatTurnContext({
+          runId: executionRunId,
+          context: {
+            ...(sendOptions.cwd ? { cwd: sendOptions.cwd } : {}),
+            ...(session?.projectId ? { projectId: session.projectId } : {}),
+            ...(boundWorkspaceRoot ? { workspaceBindingRef: executionRunId } : {}),
+          },
+        })
         if (isStandaloneChatMode()) {
           // Standalone (BYOK): run the turn in-renderer against the user's own
           // provider. Fire-and-forget like `sendPrompt` — streaming reaches the
