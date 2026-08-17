@@ -18,9 +18,11 @@
 // the opt-in localStorage flag hide it entirely (the option is never
 // rendered, not just disabled).
 
+import { useEffect, useState } from "react"
 import { useTranslations } from "next-intl"
 import { useDevtoolsGate } from "@/hooks/plugins"
 import { usePluginsStore } from "@/stores/plugins"
+import { isTauri } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { PLUGIN_NAV_SECTIONS } from "./plugin-nav-config"
@@ -31,8 +33,16 @@ export function PluginNavSidebar() {
   const setActiveSection = usePluginsStore((s) => s.setActiveSection)
   const devtoolsEnabled = useDevtoolsGate()
 
+  // Resolved after mount, not during render: the static export renders this
+  // component once at build time, where `isTauri()` is always false. Reading
+  // it inline would make the desktop shell hydrate with a rail that disagrees
+  // with its server HTML. `useDevtoolsGate` defers for the same reason.
+  const [isDesktop, setIsDesktop] = useState(false)
+  useEffect(() => setIsDesktop(isTauri()), [])
+
   const visibleSections = PLUGIN_NAV_SECTIONS.filter((item) => {
     if (item.featureFlag === "devtools") return devtoolsEnabled
+    if (item.featureFlag === "desktop") return isDesktop
     return true
   })
 
