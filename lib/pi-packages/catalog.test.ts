@@ -114,6 +114,37 @@ describe("piCatalogMessageKey", () => {
     expect(piCatalogMessageKey("pi-mcp-adapter", "summary")).toBe("catalog.pi-mcp-adapter.summary")
     expect(piCatalogMessageKey("pi-mcp-adapter", "risk")).toBe("catalog.pi-mcp-adapter.risk")
   })
+
+  /**
+   * `pnpm lint:i18n` cannot check these: the keys are built at runtime from
+   * `id`, so it counts them as dynamic references and skips them. This is the
+   * only gate that catches a catalog row shipped without prose, which would
+   * render as the raw key in the UI.
+   */
+  it.each(["en", "zh-CN"])("has prose for every catalog entry in %s", (locale) => {
+    const messages = require(
+      `../../i18n/messages/${locale}/plugins/agentPackages.json`
+    ) as { catalog: Record<string, Record<string, string>> }
+
+    const missing: string[] = []
+    for (const entry of PI_PACKAGE_CATALOG) {
+      for (const field of ["summary", "risk", "removeWhen"] as const) {
+        if (!messages.catalog?.[entry.id]?.[field]?.trim()) {
+          missing.push(piCatalogMessageKey(entry.id, field))
+        }
+      }
+    }
+    expect(missing).toEqual([])
+  })
+
+  /** The inverse: prose for a row that no longer exists is dead weight. */
+  it.each(["en", "zh-CN"])("has no orphaned catalog prose in %s", (locale) => {
+    const messages = require(
+      `../../i18n/messages/${locale}/plugins/agentPackages.json`
+    ) as { catalog: Record<string, unknown> }
+    const ids = new Set(PI_PACKAGE_CATALOG.map((entry) => entry.id))
+    expect(Object.keys(messages.catalog).filter((id) => !ids.has(id))).toEqual([])
+  })
 })
 
 describe("piCatalogEntry", () => {
