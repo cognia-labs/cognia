@@ -5462,6 +5462,7 @@
       "openBrowser": "打开浏览器面板",
       "openInCodexApp": "在 Codex App 中打开",
       "openInCodexAppFailed": "无法在 Codex App 中打开此任务。",
+      "openInInbox": "在收件箱打开",
       "openedInCodexApp": "已在 Codex App 中打开。",
       "permissionModeAppDefault": "使用应用默认",
       "permissionModeLabel": "权限模式",
@@ -5718,6 +5719,7 @@
       "bringBackDone": "已添加到主对话的输入框",
       "bringBackLabel": "带回主对话",
       "bringBackTooltip": "引用到主对话",
+      "continueInNewChat": "在新聊天中继续",
       "copyDone": "已复制！",
       "copyLabel": "复制消息",
       "copyLinkDone": "链接已复制！",
@@ -5778,6 +5780,13 @@
         "timeout": "请求耗时过长——请重试，或调高超时时间。",
         "unauthorized": "身份验证失败——请在设置中检查 API 密钥或令牌。"
       },
+      "imPicker": {
+        "description": "选择这条消息要发往的平台会话。",
+        "empty": "没有匹配的会话。",
+        "noPlatformSessions": "还没有绑定平台的会话。",
+        "search": "按标题、会话键或平台搜索会话…",
+        "title": "发送到 IM 会话"
+      },
       "moreLabel": "更多消息操作",
       "pluginMenu": "插件操作",
       "quoteLabel": "引用到输入框",
@@ -5789,6 +5798,10 @@
       },
       "regenerateLabel": "重新生成",
       "regenerateTooltip": "重新生成",
+      "sendToIm": "发送到 IM…",
+      "sendToImDone": "已发送到 IM 会话。",
+      "sendToImFailed": "无法发送到 IM 会话。",
+      "sendToImOpen": "在收件箱打开",
       "shareCardLabel": "分享为卡片",
       "shareCardTooltip": "分享为卡片",
       "shareDone": "已分享！",
@@ -9926,6 +9939,7 @@
       "piExtensionPolicyLabel": "扩展策略",
       "piExtensionPolicyTrustedProject": "同时信任项目本地文件",
       "piExtensionPolicyTrustedProjectWarning": "项目本地的 Pi 文件可以执行所打开仓库中的任意代码。请仅对你信任的仓库启用。",
+      "piManagePackages": "管理 Pi 扩展包",
       "piMigration": {
         "blocker": {
           "command_missing": "未安装 Pi，或其不在 PATH 中。",
@@ -10179,15 +10193,21 @@
     "groups": {
       "messagesInChats": "提到“{query}”的会话"
     },
+    "inbox": {
+      "openAdapter": "在收件箱打开",
+      "openConversation": "打开会话"
+    },
     "jumpFailed": "无法打开匹配的消息。",
     "kinds": {
       "action": "命令",
       "character": "角色",
+      "inbox-contact": "联系人",
       "inbox-conversation": "收件箱会话",
       "mcp-server": "MCP 服务器",
       "memory": "记忆",
       "message": "消息",
       "navigation": "页面",
+      "pi-package": "Pi 扩展包",
       "plugin": "插件",
       "plugin-action": "插件操作",
       "scheduled-task": "计划任务",
@@ -10209,6 +10229,11 @@
     "people": {
       "members": "{count} 位成员",
       "newChatWith": "新建会话"
+    },
+    "piPackages": {
+      "avoid": "不推荐",
+      "cost": "{tools} 个工具 · {tokens} tokens",
+      "free": "无常驻开销"
     },
     "placeholder": "搜索或跳转…（> 命令，@ 人物）",
     "placeholders": {
@@ -10249,6 +10274,7 @@
       "before": "before:2026-08-16 — 早于某时间",
       "from": "from:me · from:assistant — 消息作者",
       "in": "in:messages · in:skills — 只搜某一类",
+      "inPi": "in:pi —— Pi agent 扩展包",
       "is": "is:archived — 包含已归档会话",
       "prefixes": "> 命令 · @ 人物",
       "title": "title:词 — 仅匹配会话标题",
@@ -10912,6 +10938,7 @@
       "unmerge": "取消合并"
     },
     "conversation": {
+      "jumpFailed": "无法打开链接的消息。",
       "loading": "加载中…"
     },
     "conversationHeader": {
@@ -10973,6 +11000,7 @@
       "more": "更多",
       "moreAttention": "更多 — 有待处理项",
       "openContact": "联系人资料",
+      "openInChat": "在主聊天打开",
       "openOverrides": "会话设置",
       "openOverridesAria": "打开该会话的覆盖设置",
       "openSidebar": "打开侧边栏",
@@ -13733,10 +13761,12 @@
         "tableLabels": {
           "adapterInstances": "连接器",
           "characters": "角色",
+          "connectorDrafts": "连接器草稿",
           "conversationOverrides": "会话覆盖",
           "goals": "目标",
           "memories": "记忆",
           "messages": "消息",
+          "outboundQueue": "出站投递状态",
           "plugins": "插件",
           "sessions": "会话",
           "settings": "应用设置",
@@ -15616,6 +15646,10 @@
     }
   },
   "observability": {
+    "droppedSpans": {
+      "label": "{count, plural, other {丢失 # 条 span}}",
+      "tooltip": "{count, plural, other {有 # 条 provider span 未被记录}}，原因是调用未传递 trace 上下文。下方的瀑布图缺少这些 span。"
+    },
     "empty": {
       "hint": "Agent 运行、工具调用、对话和工作流都会在此记录 span。发起一次对话或运行一个 Agent，或放宽时间范围以查看更早的遥测数据。",
       "title": "该时间窗口内暂无遥测数据",
@@ -15653,6 +15687,8 @@
     "noData": "该时间窗口内暂无数据",
     "panels": {
       "byModel": "按模型分布",
+      "byProject": "按项目",
+      "byProvider": "按提供商",
       "bySurface": "按来源分布",
       "cacheHitRate": "缓存命中率",
       "costOverTime": "成本走势",
@@ -18233,8 +18269,10 @@
     "dependencyGraph": {
       "conflictsTitle": "{count} 个冲突",
       "cyclesTitle": "{count} 个依赖循环",
+      "graphLabel": "依赖关系图，按安装顺序分层",
       "loading": "解析依赖中…",
       "missing": "缺失",
+      "noDependencies": "该插件没有声明任何依赖。",
       "root": "根",
       "title": "依赖图",
       "unresolved": "未解决",
@@ -28191,6 +28229,7 @@
       "teams": "多角色协作 — 轮询 / 主管 / 手动。",
       "terminal": "集成终端面板 — 默认 shell、字体、回滚行数，以及按项目覆盖。",
       "tools": "内置 shell、文件系统、git、进程与环境工具 — 全局开关、风险等级与「始终允许」管理。",
+      "usageCost": "支出上限与本机链路调试会话",
       "workflows": "面向角色、团队、技能、孪生与连接器的 n8n 风格可视化编排。可通过定时、Webhook、平台消息或手动触发。",
       "workspaceTrust": "在智能体于文件夹内执行命令前先信任它。未受信任的工作区以受限模式运行。"
     },
@@ -31409,6 +31448,7 @@
       "teams": "团队",
       "terminal": "终端",
       "tools": "内置工具",
+      "usageCost": "用量与成本",
       "workflows": "工作流",
       "workspaceTrust": "工作区信任"
     },
@@ -32026,6 +32066,24 @@
         "remove": "删除字段",
         "required": "必填",
         "submitOnEnter": "回车提交"
+      }
+    },
+    "usageCost": {
+      "budget": {
+        "dailyLabel": "每日上限（美元）",
+        "description": "美元硬性上限。与「提供商」下的路由预算不同，达到上限会拦截下一次请求，直到你确认放行。",
+        "hardBlockHint": "达到 80% 与 95% 时提醒；达到 100% 时下一次请求会被拦截，需你确认后才放行一次。",
+        "monthlyLabel": "每月上限（美元）",
+        "noLimit": "不限制",
+        "title": "支出上限"
+      },
+      "debug": {
+        "activeBadge": "{minutes, plural, =0 {即将到期} =1 {剩余 1 分钟} other {剩余 # 分钟}}",
+        "armFor": "{minutes} 分钟",
+        "description": "在本机捕获流式增量、提示词与工具载荷，用于复现问题。到期自动关闭，数据不会离开本设备。",
+        "disarm": "立即停止",
+        "privacyHint": "捕获的内容不会进入备份、导出或诊断报告。会话默认时长为 {minutes} 分钟。",
+        "title": "链路调试会话"
       }
     },
     "workflow": {

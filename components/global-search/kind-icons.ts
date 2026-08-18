@@ -9,11 +9,13 @@ import {
   CalendarClockIcon,
   CommandIcon,
   CompassIcon,
+  ContactIcon,
   FolderIcon,
   InboxIcon,
   LayoutTemplateIcon,
   MessageSquareIcon,
   MessageSquareTextIcon,
+  PackageIcon,
   PanelRightIcon,
   PlugIcon,
   PuzzleIcon,
@@ -46,7 +48,9 @@ export const KIND_ICONS: Readonly<Record<GlobalSearchKind, LucideIcon>> = {
   "plugin-action": PuzzleIcon,
   "mcp-server": ServerCogIcon,
   "inbox-conversation": InboxIcon,
+  "inbox-contact": ContactIcon,
   "workbench-panel": PanelRightIcon,
+  "pi-package": PackageIcon,
 }
 
 export function kindIcon(kind: GlobalSearchKind): LucideIcon {

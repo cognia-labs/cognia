@@ -138,6 +138,7 @@
     "unmerge": "Unmerge"
   },
   "conversation": {
+    "jumpFailed": "The linked message could not be opened.",
     "loading": "Loading…"
   },
   "conversationHeader": {
@@ -199,6 +200,7 @@
     "more": "More",
     "moreAttention": "More — needs attention",
     "openContact": "Contact profile",
+    "openInChat": "Open in chat",
     "openOverrides": "Conversation settings",
     "openOverridesAria": "Open per-conversation settings",
     "openSidebar": "Open sidebar",

@@ -78,6 +78,7 @@ import { WorkflowRunToaster } from "@/components/workflow/runs/workflow-run-toas
 import { OrchestrationDispatchProvider } from "@/components/providers/orchestration-dispatch-provider"
 import { SubscriptionUsageProvider } from "@/components/providers/subscription-usage-provider"
 import { McpLogProvider } from "@/components/providers/mcp-log-provider"
+import { SidecarSpanProvider } from "@/components/providers/sidecar-span-provider"
 import {
   BackgroundApplier,
   ComponentStyleApplier,
@@ -308,6 +309,7 @@ export default async function RootLayout({
                                               <ConnectorDeepLinkRouter>
                                                 <SubscriptionUsageProvider>
                                                   <McpLogProvider>
+                                                   <SidecarSpanProvider>
                                                     <CompanionBootProvider>
                                                       <WebCompanionBootProvider>
                                                         <DesktopSyncSourceProvider>
@@ -334,6 +336,7 @@ export default async function RootLayout({
                                                         </DesktopSyncSourceProvider>
                                                       </WebCompanionBootProvider>
                                                     </CompanionBootProvider>
+                                                   </SidecarSpanProvider>
                                                   </McpLogProvider>
                                                 </SubscriptionUsageProvider>
                                               </ConnectorDeepLinkRouter>

@@ -17,7 +17,8 @@
 //     downloads; editing `settings.json` only records intent. The dialog says so
 //     rather than presenting the two as equivalent.
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { AlertTriangleIcon, PackageIcon, RefreshCwIcon, TerminalIcon } from "lucide-react"
 import { toast } from "sonner"
@@ -30,6 +31,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { usePiPackages } from "@/hooks/plugins"
 import type { PiCatalogEntry, PiStackPresetId } from "@/lib/pi-packages/catalog"
 import { piConfigPath } from "@/lib/pi-packages/config-templates"
+import { PI_INSTALL_PARAM, readPiInstallParam } from "@/lib/pi-packages/deep-link"
 import { planPiMutation, type PiMutationPlan } from "@/lib/pi-packages/mutate"
 import type { PiPackageScope } from "@/lib/pi-packages/types"
 import { PiCatalogList } from "./pi-catalog-list"
@@ -47,6 +49,26 @@ export function AgentPackagesPane() {
   const [busySpec, setBusySpec] = useState<string | null>(null)
   const [applyingPreset, setApplyingPreset] = useState<PiStackPresetId | null>(null)
   const [configSpec, setConfigSpec] = useState<string | null>(null)
+
+  // ⌘K's `install` action and the external-agent settings entry point both land
+  // here with `?piInstall=<spec>`. Staging it opens the normal pre-install gate
+  // — the deep link chooses a package, it never installs one. The param is
+  // stripped straight away so a reload, or a Back into this route, does not
+  // reopen a dialog the user already dismissed.
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+  const requestedInstall = readPiInstallParam(searchParams)
+
+  useEffect(() => {
+    if (!requestedInstall) return
+    setPending({ spec: requestedInstall, scope: "user" })
+    const next = new URLSearchParams(searchParams?.toString() ?? "")
+    next.delete(PI_INSTALL_PARAM)
+    const query = next.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedInstall])
 
   const installedSpecs = useMemo(() => pi.resolved.map((entry) => entry.pkg), [pi.resolved])
 

@@ -138,6 +138,7 @@
     "unmerge": "取消合并"
   },
   "conversation": {
+    "jumpFailed": "无法打开链接的消息。",
     "loading": "加载中…"
   },
   "conversationHeader": {
@@ -199,6 +200,7 @@
     "more": "更多",
     "moreAttention": "更多 — 有待处理项",
     "openContact": "联系人资料",
+    "openInChat": "在主聊天打开",
     "openOverrides": "会话设置",
     "openOverridesAria": "打开该会话的覆盖设置",
     "openSidebar": "打开侧边栏",

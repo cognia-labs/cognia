@@ -23,9 +23,11 @@ import { messagesToMarkdown } from "@/components/ai-elements/conversation"
 import { jumpToSessionMessage } from "@/lib/chat/cross-session-jump"
 import { guildFromSession } from "@/lib/claude/guild"
 import { revealActiveWorkbenchPanel } from "@/lib/context-workbench/active-context"
+import { inboxConversationHref } from "@/lib/inbox/conversation-href"
 import type { BuiltinCommandId } from "@/lib/global-search/providers/actions"
 import { clearAllGlobalSearchRecents, recordRecentItem } from "@/lib/global-search/recents"
 import type { GlobalSearchAction, GlobalSearchItem } from "@/lib/global-search/types"
+import { piPackageInstallHref } from "@/lib/pi-packages/deep-link"
 import { getQuickAction, runQuickAction } from "@/lib/plugin/registries/quick-action-registry"
 import { isTauri } from "@/lib/tauri"
 import { checkForUpdate } from "@/lib/tauri/updater"
@@ -224,6 +226,9 @@ export function useGlobalSearchActions({
         case "open-session":
           openSession(action.sessionId, action.messageId)
           return
+        case "open-inbox-conversation":
+          router.push(inboxConversationHref(action.conversationKey, action.messageId))
+          return
         case "navigate":
           router.push(action.href)
           return
@@ -267,6 +272,13 @@ export function useGlobalSearchActions({
           useUIStore.getState().setSelectedGuild({ kind: "dm" })
           return
         }
+        case "install":
+          // Route to the owning surface with the spec pre-selected; it opens
+          // its own pre-install gate. The palette never installs directly —
+          // skipping that gate would skip the overlap and budget warnings,
+          // which for Pi packages are the only warnings there are.
+          router.push(piPackageInstallHref(action.spec))
+          return
         case "callback":
           await action.run()
           return

@@ -5462,6 +5462,7 @@
       "openBrowser": "Open browser panel",
       "openInCodexApp": "Open in Codex app",
       "openInCodexAppFailed": "Couldn't open this task in the Codex app.",
+      "openInInbox": "Open in Inbox",
       "openedInCodexApp": "Opened in the Codex app.",
       "permissionModeAppDefault": "Use app default",
       "permissionModeLabel": "Permission mode",
@@ -5718,6 +5719,7 @@
       "bringBackDone": "Added to the main conversation's message box",
       "bringBackLabel": "Bring back to the main conversation",
       "bringBackTooltip": "Quote into the main conversation",
+      "continueInNewChat": "Continue in a new chat",
       "copyDone": "Copied!",
       "copyLabel": "Copy message",
       "copyLinkDone": "Link copied!",
@@ -5778,6 +5780,13 @@
         "timeout": "The request took too long — retry, or raise the timeout.",
         "unauthorized": "Authentication failed — check your API key or token in Settings."
       },
+      "imPicker": {
+        "description": "Choose the platform conversation this message goes to.",
+        "empty": "No matching conversations.",
+        "noPlatformSessions": "No platform-bound conversations yet.",
+        "search": "Search conversations by title, key or platform…",
+        "title": "Send to IM conversation"
+      },
       "moreLabel": "More message actions",
       "pluginMenu": "Plugin actions",
       "quoteLabel": "Quote in composer",
@@ -5789,6 +5798,10 @@
       },
       "regenerateLabel": "Regenerate",
       "regenerateTooltip": "Regenerate",
+      "sendToIm": "Send to IM…",
+      "sendToImDone": "Sent to the IM conversation.",
+      "sendToImFailed": "Couldn't send to the IM conversation.",
+      "sendToImOpen": "Open in Inbox",
       "shareCardLabel": "Share as card",
       "shareCardTooltip": "Share as card",
       "shareDone": "Shared!",
@@ -9926,6 +9939,7 @@
       "piExtensionPolicyLabel": "Extension policy",
       "piExtensionPolicyTrustedProject": "Also trust project-local files",
       "piExtensionPolicyTrustedProjectWarning": "Project-local Pi files can execute arbitrary code from the repository you open. Only use this for repositories you trust.",
+      "piManagePackages": "Manage Pi packages",
       "piMigration": {
         "blocker": {
           "command_missing": "Pi is not installed, or not on PATH.",
@@ -10179,15 +10193,21 @@
     "groups": {
       "messagesInChats": "Conversations mentioning “{query}”"
     },
+    "inbox": {
+      "openAdapter": "Open in Inbox",
+      "openConversation": "Open conversation"
+    },
     "jumpFailed": "The matching message could not be opened.",
     "kinds": {
       "action": "Commands",
       "character": "Characters",
+      "inbox-contact": "Contacts",
       "inbox-conversation": "Inbox conversations",
       "mcp-server": "MCP servers",
       "memory": "Memories",
       "message": "Messages",
       "navigation": "Pages",
+      "pi-package": "Pi package",
       "plugin": "Plugins",
       "plugin-action": "Plugin actions",
       "scheduled-task": "Scheduled tasks",
@@ -10209,6 +10229,11 @@
     "people": {
       "members": "{count, plural, one {# member} other {# members}}",
       "newChatWith": "New chat"
+    },
+    "piPackages": {
+      "avoid": "Not recommended",
+      "cost": "{tools} tools · {tokens} tokens",
+      "free": "No always-on cost"
     },
     "placeholder": "Search or jump to… (> commands, @ people)",
     "placeholders": {
@@ -10249,6 +10274,7 @@
       "before": "before:2026-08-16 — older than",
       "from": "from:me · from:assistant — message author",
       "in": "in:messages · in:skills — one kind only",
+      "inPi": "in:pi — Pi agent packages",
       "is": "is:archived — include archived conversations",
       "prefixes": "> commands · @ people",
       "title": "title:word — conversation titles only",
@@ -10912,6 +10938,7 @@
       "unmerge": "Unmerge"
     },
     "conversation": {
+      "jumpFailed": "The linked message could not be opened.",
       "loading": "Loading…"
     },
     "conversationHeader": {
@@ -10973,6 +11000,7 @@
       "more": "More",
       "moreAttention": "More — needs attention",
       "openContact": "Contact profile",
+      "openInChat": "Open in chat",
       "openOverrides": "Conversation settings",
       "openOverridesAria": "Open per-conversation settings",
       "openSidebar": "Open sidebar",
@@ -13733,10 +13761,12 @@
         "tableLabels": {
           "adapterInstances": "Connectors",
           "characters": "Characters",
+          "connectorDrafts": "Connector drafts",
           "conversationOverrides": "Conversation overrides",
           "goals": "Goals",
           "memories": "Memories",
           "messages": "Messages",
+          "outboundQueue": "Outbound delivery status",
           "plugins": "Plugins",
           "sessions": "Sessions",
           "settings": "App settings",
@@ -15616,6 +15646,10 @@
     }
   },
   "observability": {
+    "droppedSpans": {
+      "label": "{count, plural, =1 {# span dropped} other {# spans dropped}}",
+      "tooltip": "{count, plural, =1 {# provider span was} other {# provider spans were}} not recorded because no trace context was threaded through the call. The waterfall below is missing them."
+    },
     "empty": {
       "hint": "Agent runs, tool calls, chats and workflows record spans here. Start a conversation or run an agent, or widen the time range to see older telemetry.",
       "title": "No telemetry in this window",
@@ -15653,6 +15687,8 @@
     "noData": "No data in this window",
     "panels": {
       "byModel": "Spans by model",
+      "byProject": "By project",
+      "byProvider": "By provider",
       "bySurface": "Spans by surface",
       "cacheHitRate": "Cache hit rate",
       "costOverTime": "Cost over time",
@@ -18233,8 +18269,10 @@
     "dependencyGraph": {
       "conflictsTitle": "{count} conflicts",
       "cyclesTitle": "{count} dependency cycles",
+      "graphLabel": "Dependency graph, ranked by install order",
       "loading": "Resolving dependencies…",
       "missing": "missing",
+      "noDependencies": "This plugin declares no dependencies.",
       "root": "root",
       "title": "Dependency graph",
       "unresolved": "Unresolved",
@@ -28191,6 +28229,7 @@
       "teams": "Multi-character coordination — round-robin, supervisor, manual.",
       "terminal": "Integrated terminal dock — default shell, font, scrollback, and per-project overrides.",
       "tools": "Built-in shell, filesystem, git, process and environment tools — global on/off, risk levels, and always-allow management.",
+      "usageCost": "Spending limits and the local trace debug session",
       "workflows": "Visual n8n-style orchestration over characters, teams, skills, twins, and connectors. Trigger via cron, webhook, platform message, or manual run.",
       "workspaceTrust": "Trust folders before agents run commands in them. Untrusted workspaces run in Restricted Mode."
     },
@@ -31409,6 +31448,7 @@
       "teams": "Teams",
       "terminal": "Terminal",
       "tools": "Tools",
+      "usageCost": "Usage & cost",
       "workflows": "Workflows",
       "workspaceTrust": "Workspace Trust"
     },
@@ -32026,6 +32066,24 @@
         "remove": "Remove field",
         "required": "Required",
         "submitOnEnter": "Enter submits"
+      }
+    },
+    "usageCost": {
+      "budget": {
+        "dailyLabel": "Daily limit (USD)",
+        "description": "Hard USD ceilings. Unlike the routing budget under Providers, reaching one of these blocks the next request until you approve it.",
+        "hardBlockHint": "You are warned at 80% and 95%. At 100% the next request is held until you approve one more.",
+        "monthlyLabel": "Monthly limit (USD)",
+        "noLimit": "No limit",
+        "title": "Spending limits"
+      },
+      "debug": {
+        "activeBadge": "{minutes, plural, =0 {expiring} =1 {1 min left} other {# min left}}",
+        "armFor": "{minutes} min",
+        "description": "Captures streaming deltas, prompts and tool payloads locally so a problem can be reproduced. Expires on its own and never leaves this device.",
+        "disarm": "Stop now",
+        "privacyHint": "Captured content is excluded from backups, exports and diagnostic reports. Sessions default to {minutes} minutes.",
+        "title": "Trace debug session"
       }
     },
     "workflow": {
