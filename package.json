@@ -155,6 +155,8 @@
     "lint:i18n": "ts-node --project scripts/tsconfig.audit.json scripts/gates/lint-i18n.ts",
     "lint:i18n:baseline": "ts-node --project scripts/tsconfig.audit.json scripts/gates/lint-i18n.ts --write-baseline",
     "lint:i18n:staged": "ts-node --project scripts/tsconfig.audit.json scripts/gates/lint-i18n.ts --staged",
+    "lint:plugin-externals": "node scripts/gates/check-plugin-externals.mjs",
+    "lint:plugin-externals:test": "node --test scripts/gates/check-plugin-externals.test.mjs",
     "lint:plugin-sdk-wit": "node scripts/gates/check-plugin-sdk-wit.mjs",
     "lint:static-export": "node scripts/gates/check-static-export.mjs",
     "lint:static-export:test": "node --test scripts/gates/check-static-export.test.mjs",

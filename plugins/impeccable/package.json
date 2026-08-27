@@ -4,7 +4,7 @@
   "private": true,
   "description": "Impeccable design skill v4.0.4 for frontend critique, audit, refinement, and design direction.",
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=cjs --platform=neutral --target=es2022 --outfile=dist/index.js --external:@cognia/plugin-sdk --log-level=info",
+    "build": "esbuild src/index.ts --bundle --format=cjs --platform=neutral --target=es2022 --outfile=dist/index.js --external:react --external:react/jsx-runtime --external:react/jsx-dev-runtime --external:@cognia/plugin-sdk --external:@cognia/plugin-ui --external:lucide-react --log-level=info",
     "test": "jest --config jest.config.cjs --runInBand",
     "typecheck": "tsc --noEmit"
   },

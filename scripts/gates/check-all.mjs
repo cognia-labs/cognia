@@ -219,6 +219,10 @@ const REGISTRY = [
   { script: "audit:root-loading", group: "audit" },
   { script: "lint:static-export", group: "audit" },
   { script: "lint:plugin-sdk-wit", group: "audit" },
+  // The bundler externals contract is written down four times in three
+  // languages. Two of those copies are package.json build scripts that no Rust
+  // test runs — and those are the ones a plugin author actually executes.
+  { script: "lint:plugin-externals", group: "audit" },
   { script: "lint:frozen-wasm-api", group: "audit" },
   { script: "lint:claude-md", group: "audit" },
   { script: "plugin:author-imports", group: "audit" },
@@ -247,6 +251,7 @@ const REGISTRY = [
   { script: "audit:external-agent-runtimes:test", group: "gate-tests" },
   { script: "test:coverage:runner:test", group: "gate-tests" },
   { script: "sidecar:codeserver-agent:test", group: "gate-tests" },
+  { script: "lint:plugin-externals:test", group: "gate-tests" },
 
   // The plugin SDK's cross-language contract surface.
   { script: "sdk:ts:build", group: "plugin-sdk", resource: "package-build" },
