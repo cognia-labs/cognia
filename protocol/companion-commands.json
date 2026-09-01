@@ -13167,6 +13167,18 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "team_run_start",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "agent.run",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "transports": ["http", "websocket", "webrtc"],
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "team_run_pause",
       "target": "execution",
       "operation": "side-effect",

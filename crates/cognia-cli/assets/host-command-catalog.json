@@ -35988,7 +35988,10 @@
               "templateInstances",
               "plans",
               "connectorDrafts",
-              "outboundQueue"
+              "outboundQueue",
+              "agentTeams",
+              "agentTeammates",
+              "agentTeamTasks"
             ],
             "description": "Allowlist; mirror of `lib/sync/types.ts:SyncableTable` (live\nregistry: `sync_registry.rs::default_tables`, listable via\n`sync_list_tables`). Any other value returns 400 to prevent a\nmalicious phone from asking for arbitrary tables.\n`agentTeamBoard` (v104) is the one-way Agent-Team board mirror —\nboard edits travel back as `team_*` control RPCs, never as sync\nwrites.\n"
           },
@@ -38686,6 +38689,49 @@
         ],
         "properties": {
           "teamId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": [
+          "object",
+          "array",
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ],
+        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
+        "x-cognia-schema-owner": "team"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "team_run_start",
+      "category": "agents",
+      "resource": "team",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "agent.run",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "team_run_start (agent.run)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "teamId"
+        ],
+        "properties": {
+          "teamId": {
+            "type": "string"
+          },
+          "goal": {
             "type": "string"
           }
         },
@@ -45577,5 +45623,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "9eeba67d43cf91761d7f7fb8e61bda9baf5bc7574588e7688de53b3140b70d67"
+  "catalogHash": "dce4c0938d0f6379700b8f48fcc49478acd30bf58689c7046c8b6f4cdc9a64f0"
 }

@@ -10765,6 +10765,15 @@
       },
       "additionalProperties": false
     },
+    "team_run_start": {
+      "type": "object",
+      "required": ["teamId"],
+      "properties": {
+        "teamId": { "type": "string" },
+        "goal": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "team_run_pause": {
       "type": "object",
       "required": [

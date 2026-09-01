@@ -8075,6 +8075,9 @@
     "task_workspace_undo": {
       "$ref": "#/$defs/TaskWorkspaceApplyOutcome"
     },
+    "team_run_start": {
+      "$ref": "#/$defs/LegacyResult"
+    },
     "team_run_pause": {
       "$ref": "#/$defs/LegacyResult"
     },

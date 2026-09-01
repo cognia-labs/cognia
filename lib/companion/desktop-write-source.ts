@@ -59,6 +59,7 @@ import {
 } from "@/lib/companion/device-presence-registry"
 import {
   handleTeamRunPause,
+  handleTeamRunStart,
   handleTeamRunResume,
   handleTeamRunStop,
   handleTeamTaskComment,
@@ -471,6 +472,8 @@ export async function dispatchCommand(
       return handleTeamTaskCreate(payload)
     case "team_task_comment":
       return handleTeamTaskComment(payload)
+    case "team_run_start":
+      return handleTeamRunStart(payload)
     case "team_run_pause":
       return handleTeamRunPause(payload)
     case "team_run_resume":

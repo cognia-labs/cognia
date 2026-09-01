@@ -5,6 +5,7 @@ import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { agentTeamManager } from "@/lib/ai/agent/agent-team"
 import {
   handleTeamRunPause,
+  handleTeamRunStart,
   handleTeamRunResume,
   handleTeamRunStop,
   handleTeamTaskComment,
@@ -40,6 +41,11 @@ jest.mock("@cognia/logging", () => {
 
 jest.mock("@/stores/project/project-store", () => ({
   useProjectStore: { getState: () => ({ activeProjectId: null }) },
+}))
+
+const startSquadRun = jest.fn(async () => ({ started: true, runId: "run_1" }))
+jest.mock("@/lib/ai/agent/team/start-squad-run", () => ({
+  startSquadRun: (...a: unknown[]) => startSquadRun(...(a as [])),
 }))
 
 const seed = () => {
@@ -185,5 +191,83 @@ describe("run controls", () => {
     useAgentTeamStore.getState().setTeamStatus(team.id, "paused")
     expect(await handleTeamRunResume({ teamId: team.id })).toEqual({ ok: true })
     expect(agentTeamManager.resume).toHaveBeenCalledWith(team.id)
+  })
+})
+
+describe("handleTeamRunStart", () => {
+  /**
+   * A phone could pause, resume and stop a Squad and never start one, which is
+   * a remote control with a brake and no accelerator.
+   */
+  it("starts through the ADR-0140 funnel, not the manager", async () => {
+    const { team } = seed()
+    startSquadRun.mockResolvedValueOnce({ started: true, runId: "run_1" })
+    const result = await handleTeamRunStart({ teamId: team.id, goal: "ship it" })
+    expect(result).toEqual({ ok: true, runId: "run_1" })
+    expect(startSquadRun).toHaveBeenCalledWith(
+      expect.objectContaining({ squadId: team.id, goal: "ship it", origin: "companion" })
+    )
+  })
+
+  /**
+   * Rust stamps the verified device id after schema validation, so the arm
+   * forwards whatever arrived rather than trusting a client-supplied field.
+   */
+  it("carries the host-stamped device id onto the run", async () => {
+    const { team } = seed()
+    await handleTeamRunStart({ teamId: team.id, callerDeviceId: "dev_9" })
+    expect(startSquadRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        triggeredFrom: { source: "companion", deviceId: "dev_9" },
+      })
+    )
+  })
+
+  it("refuses a Squad that is already holding a run open", async () => {
+    const { team } = seed()
+    useAgentTeamStore.getState().setTeamStatus(team.id, "executing")
+    expect(await handleTeamRunStart({ teamId: team.id })).toEqual({
+      ok: false,
+      reason: "team-busy",
+    })
+    expect(startSquadRun).not.toHaveBeenCalled()
+  })
+
+  /** Resuming and starting are different verbs, and only one of them applies. */
+  it("sends a paused Squad to resume rather than restarting it", async () => {
+    const { team } = seed()
+    useAgentTeamStore.getState().setTeamStatus(team.id, "paused")
+    expect(await handleTeamRunStart({ teamId: team.id })).toEqual({
+      ok: false,
+      reason: "team-paused",
+    })
+  })
+
+  it("validates the payload and the Squad before dispatching", async () => {
+    expect(await handleTeamRunStart({})).toEqual({ ok: false, reason: "invalid-payload" })
+    expect(await handleTeamRunStart({ teamId: "ghost" })).toEqual({
+      ok: false,
+      reason: "team-not-found",
+    })
+    expect(startSquadRun).not.toHaveBeenCalled()
+  })
+
+  /** A denial is a normal result, never a thrown error the caller must catch. */
+  it("reports a dispatch refusal without throwing", async () => {
+    const { team } = seed()
+    startSquadRun.mockResolvedValueOnce({ started: false, reason: "squad_not_found" })
+    expect(await handleTeamRunStart({ teamId: team.id })).toEqual({
+      ok: false,
+      reason: "squad_not_found",
+    })
+  })
+
+  it("survives the funnel throwing", async () => {
+    const { team } = seed()
+    startSquadRun.mockRejectedValueOnce(new Error("boom"))
+    expect(await handleTeamRunStart({ teamId: team.id })).toEqual({
+      ok: false,
+      reason: "dispatch_error",
+    })
   })
 })

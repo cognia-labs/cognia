@@ -9,9 +9,16 @@
  * desktop UI would refuse. Denials are normal `{ ok: false, reason }`
  * results, not thrown errors — the caller renders them as toasts.
  *
- * Wired into `dispatchCommand` in `lib/companion/desktop-write-source.ts`;
- * the Rust side gates all six commands behind the remote-control
+ * Wired into `dispatchCommand` in `lib/companion/desktop-write-source.ts`.
+ * The Rust side gates all seven commands behind the remote-control
  * capability (`CONTROL_COMMANDS` in `companion_api/rpc.rs`).
+ *
+ * `team_run_start` is the odd one out and arrived last. For a long time a
+ * phone could pause, resume and stop a Squad but never start one, which is a
+ * remote control with a brake and no accelerator. It goes through
+ * `startSquadRun`, the ADR-0140 funnel, rather than `agentTeamManager.start`,
+ * so a phone-started run gets the same run id convention, execution row and
+ * workspace stamp as one started from the desktop.
  */
 
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
@@ -27,6 +34,8 @@ export interface TeamCommandResult {
   reason?: string
   taskId?: string
   commentId?: string
+  /** Present when starting produced one, so a phone can follow the run. */
+  runId?: string
 }
 
 const TASK_STATUSES: ReadonlySet<string> = new Set([
@@ -112,6 +121,50 @@ export async function handleTeamTaskComment(
     text,
   })
   return comment ? { ok: true, commentId: comment.id } : { ok: false, reason: "empty-comment" }
+}
+
+/**
+ * Start a Squad from a paired device.
+ *
+ * Refuses a Squad that is already holding a run open, the same predicate the
+ * issues adapter applies, rather than double-dispatching one. Fire-and-forget
+ * for the same reason `resume` is: the lifecycle runs for minutes, so the RPC
+ * acks acceptance and progress flows back through the board sync mirror.
+ *
+ * No `session`: a phone command is not a conversation on this host, so the run
+ * is uncarded and says so on its row. `triggeredFrom.deviceId` is stamped by
+ * Rust from the verified JWT before this arm ever sees the payload.
+ */
+export async function handleTeamRunStart(
+  payload: Record<string, unknown>
+): Promise<TeamCommandResult> {
+  const teamId = readString(payload, "teamId")
+  if (!teamId) return { ok: false, reason: "invalid-payload" }
+  const team = useAgentTeamStore.getState().teams[teamId]
+  if (!team) return { ok: false, reason: "team-not-found" }
+  if (team.status === "planning" || team.status === "executing") {
+    return { ok: false, reason: "team-busy" }
+  }
+  if (team.status === "paused") return { ok: false, reason: "team-paused" }
+
+  const goal = readString(payload, "goal")
+  const { startSquadRun } = await import("@/lib/ai/agent/team/start-squad-run")
+  const result = await startSquadRun({
+    squadId: teamId,
+    goal: goal ?? "",
+    origin: "companion",
+    triggeredFrom: {
+      source: "companion",
+      ...(readString(payload, "callerDeviceId")
+        ? { deviceId: readString(payload, "callerDeviceId")! }
+        : {}),
+    },
+  }).catch((err) => {
+    log.warn("team_run_start dispatch failed", { teamId, err: String(err) })
+    return { started: false, reason: "dispatch_error" as const }
+  })
+  if (!result.started) return { ok: false, reason: result.reason ?? "dispatch_error" }
+  return { ok: true, ...("runId" in result && result.runId ? { runId: result.runId } : {}) }
 }
 
 export async function handleTeamRunPause(
