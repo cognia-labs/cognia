@@ -99,13 +99,39 @@ pub(crate) fn build_only(crate_root: &Path, manifest: &serde_json::Value) -> Res
     run_esbuild(crate_root, manifest)
 }
 
+/// The host's shared-module whitelist, mirrored from `PLUGIN_SHARED_MODULES` in
+/// `lib/plugin/core/shared-modules.ts`. `externals_match_host_shared_modules`
+/// asserts set equality with [`ESBUILD_EXTERNALS`] minus `react-dom` (SDK
+/// subpaths folded into the `@cognia/plugin-sdk/*` wildcard), so the two lists
+/// cannot drift apart in either direction.
+///
+/// Test-only: it exists to give that assertion something to compare against.
+/// The shipped list is [`ESBUILD_EXTERNALS`].
+#[cfg(test)]
+const HOST_SHARED_MODULES: &[&str] = &[
+    "react",
+    "react/jsx-runtime",
+    "react/jsx-dev-runtime",
+    "@cognia/plugin-sdk",
+    "@cognia/plugin-sdk/api/effort-surface",
+    "@cognia/plugin-ui",
+    "lucide-react",
+];
+
+/// Shared SDK subpaths are externalised through one wildcard, not one entry
+/// each. Test-only, like [`HOST_SHARED_MODULES`].
+#[cfg(test)]
+const SDK_SUBPATH_PREFIX: &str = "@cognia/plugin-sdk/";
+#[cfg(test)]
+const SDK_SUBPATH_WILDCARD: &str = "@cognia/plugin-sdk/*";
+
 /// Specifiers the bundle must leave for the host to resolve.
 ///
-/// The first two are the host's path aliases. The rest mirror the loader's
-/// shared-module whitelist (`lib/plugin/core/shared-modules.ts`) exactly, and
-/// the mirroring is load-bearing in both directions:
+/// Exactly [`HOST_SHARED_MODULES`] plus `react-dom`, with shared SDK subpaths
+/// covered by the `@cognia/plugin-sdk/*` wildcard, and the correspondence is
+/// load-bearing in both directions:
 ///
-///   * Inlining any of them is fatal for `react` and its jsx runtimes — a
+///   * Inlining any shared module is fatal for `react` and its jsx runtimes — a
 ///     second React instance carries its own hook dispatcher, so a plugin
 ///     component rendered inside the host's tree throws `Invalid hook call`.
 ///     Note `--external:react` does NOT cover `react/jsx-runtime`: esbuild
@@ -117,9 +143,16 @@ pub(crate) fn build_only(crate_root: &Path, manifest: &serde_json::Value) -> Res
 ///     Keeping it external means it is never bundled, and the author gets the
 ///     loader's explicit "not available to plugins" error instead of a second
 ///     reconciler quietly rendering into a detached tree.
+///
+/// This list used to also carry `@/types/plugin` and `@/lib/*`, described as
+/// "the host's path aliases". That was a contradiction with the rest of the
+/// system, not a feature: `assertNoHostPrivateImports` scans the bundle text
+/// before `(0, eval)` and refuses ANY surviving `@/` specifier, so externalising
+/// those two guaranteed the artifact could never load. A plugin that reaches for
+/// app internals is now stopped by the pre-build source scan
+/// (`commands::lint::scan_author_imports`), which names the author's own file
+/// instead of failing at install time on someone else's machine.
 const ESBUILD_EXTERNALS: &[&str] = &[
-    "@/types/plugin",
-    "@/lib/*",
     "react",
     "react/jsx-runtime",
     "react/jsx-dev-runtime",
@@ -263,25 +296,87 @@ mod tests {
     /// contract split across two languages. If they drift, plugins break at
     /// load time with either "Invalid hook call" (module inlined that should
     /// have been shared) or "not available to plugins" (module externalised
-    /// that the host does not hand out). Keep this list in sync with
-    /// `PLUGIN_SHARED_MODULES` in `lib/plugin/core/shared-modules.ts`.
+    /// that the host does not hand out).
+    ///
+    /// Asserted as SET EQUALITY, not containment. The previous version only
+    /// checked that every shared module appears in the externals — which passed
+    /// happily while the list also carried `@/types/plugin` and `@/lib/*`, two
+    /// entries that made every bundle using them unloadable. An extra external
+    /// is as much a defect as a missing one.
     #[test]
-    fn esbuild_externalises_every_host_shared_module() {
+    fn externals_match_host_shared_modules() {
         let args = esbuild_args(Path::new("src/index.ts"), Path::new("dist/index.js"));
-        for shared in [
-            "react",
-            "react/jsx-runtime",
-            "react/jsx-dev-runtime",
-            "@cognia/plugin-sdk",
-            "@cognia/plugin-sdk/*",
-            "@cognia/plugin-ui",
-            "lucide-react",
-        ] {
-            assert!(
-                args.iter().any(|a| a == &format!("--external:{shared}")),
-                "missing --external:{shared} — it would be inlined into the plugin bundle"
-            );
-        }
+        let mut actual: Vec<&str> = args
+            .iter()
+            .filter_map(|arg| arg.strip_prefix("--external:"))
+            .collect();
+        actual.sort_unstable();
+
+        // `react-dom` is externalised without being shared, on purpose: never
+        // bundled, and `require()` then fails with the loader's explicit
+        // message instead of a second reconciler rendering into a detached tree.
+        // Every `@cognia/plugin-sdk/<subpath>` the host shares is covered by the
+        // one `@cognia/plugin-sdk/*` wildcard rather than listed on its own.
+        let mut expected: Vec<&str> = HOST_SHARED_MODULES
+            .iter()
+            .copied()
+            .filter(|module| !module.starts_with(SDK_SUBPATH_PREFIX))
+            .chain(["react-dom", SDK_SUBPATH_WILDCARD])
+            .collect();
+        expected.sort_unstable();
+
+        assert_eq!(
+            actual, expected,
+            "externals must equal PLUGIN_SHARED_MODULES + react-dom exactly, with SDK \
+             subpaths folded into the wildcard: a missing entry gets inlined, an extra \
+             one gets refused at load"
+        );
+    }
+
+    /// The Rust copy of the host whitelist must match the TypeScript source of
+    /// truth. Parsed rather than hand-compared so a rename on either side is a
+    /// test failure instead of silent drift. Line comments are stripped first:
+    /// the TS list documents entries inline, and those comments carry commas.
+    #[test]
+    fn host_shared_modules_match_the_typescript_source_of_truth() {
+        let source = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib/plugin/core/shared-modules.ts"),
+        )
+        .expect("read lib/plugin/core/shared-modules.ts");
+
+        let after_open = source
+            .split_once("PLUGIN_SHARED_MODULES = [")
+            .expect("PLUGIN_SHARED_MODULES not found — the parser is stale")
+            .1;
+        let uncommented: String = after_open
+            .lines()
+            .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body = uncommented
+            .split_once(']')
+            .expect("unterminated PLUGIN_SHARED_MODULES array")
+            .0;
+
+        let parsed: Vec<&str> = body
+            .split(',')
+            .filter_map(|entry| {
+                let entry = entry.trim();
+                entry
+                    .strip_prefix('"')
+                    .and_then(|rest| rest.strip_suffix('"'))
+                    .filter(|value| !value.is_empty())
+            })
+            .collect();
+
+        assert!(
+            !parsed.is_empty(),
+            "parsed zero entries from PLUGIN_SHARED_MODULES — the parser is stale"
+        );
+        assert_eq!(
+            parsed, HOST_SHARED_MODULES,
+            "HOST_SHARED_MODULES has drifted from lib/plugin/core/shared-modules.ts"
+        );
     }
 
     #[test]

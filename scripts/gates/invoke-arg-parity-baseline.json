@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "note": "Renderer invoke() call sites whose argument keys disagree with the #[tauri::command] signature they name. THIS LIST MAY ONLY SHRINK — `pnpm audit:invoke-arg-parity` fails when a key appears that is not listed here. Regenerate with `--write-baseline` only after fixing call sites, never to admit a new mismatch.",
+  "findings": [
+    "lib/plugin/core/context.ts:plugin_window_maximize:unknown-argument:windowId",
+    "lib/plugin/core/context.ts:plugin_window_minimize:unknown-argument:windowId",
+    "lib/plugin/core/context.ts:plugin_window_set_always_on_top:unknown-argument:windowId",
+    "lib/plugin/core/context.ts:plugin_window_unmaximize:unknown-argument:windowId",
+    "lib/plugin/core/manager.ts:plugin_install:missing-argument:payload",
+    "lib/plugin/core/manager.ts:plugin_install:missing-argument:plugin_id",
+    "lib/plugin/core/manager.ts:plugin_install:unknown-argument:installType",
+    "lib/plugin/core/manager.ts:plugin_install:unknown-argument:pluginDir",
+    "lib/plugin/core/manager.ts:plugin_uninstall:unknown-argument:pluginPath",
+    "lib/plugin/package/marketplace.ts:plugin_install:missing-argument:payload",
+    "lib/plugin/package/marketplace.ts:plugin_install:missing-argument:plugin_id",
+    "lib/plugin/package/marketplace.ts:plugin_install:unknown-argument:installType",
+    "lib/plugin/package/marketplace.ts:plugin_install:unknown-argument:pluginDir",
+    "stores/plugin-runtime/plugin-store.ts:plugin_uninstall:unknown-argument:pluginPath"
+  ]
+}

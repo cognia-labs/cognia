@@ -74,6 +74,8 @@ export const EXEMPTIONS = {
   "audit:unreachable-components:baseline":
     "writer — regenerates the unreachable-component baseline",
   "audit:rpc-semantic-parity:baseline": "writer — regenerates the RPC semantic-parity baseline",
+  "audit:invoke-arg-parity:baseline":
+    "writer — regenerates the invoke/command argument-parity baseline",
   "audit:rpc-semantic-parity:report":
     "reporter — prints every finding including the ungated ones (opaque response schemas, desktop-dead arms); the gated half is `audit:rpc-semantic-parity`",
   "audit:host-parity:baseline": "writer — regenerates the host-parity baseline",

@@ -16,10 +16,19 @@ export async function buildPlugin({ outputDirectory = resolve(pluginRoot, "dist"
     format: "cjs",
     platform: "neutral",
     target: "es2022",
-    // The host loader hands out its own `@cognia/plugin-sdk` instance
-    // (`lib/plugin/core/shared-modules.ts`); inlining it would bundle the
-    // host's capability layer into the plugin.
-    external: ["@cognia/plugin-sdk"],
+    // Exactly the host's shared-module set (`lib/plugin/core/shared-modules.ts`),
+    // with every SDK subpath covered by one wildcard: the loader hands out its
+    // own instances, and an inlined copy would split from the host's state.
+    // `scripts/gates/check-plugin-externals.mjs` pins this list.
+    external: [
+      "react",
+      "react/jsx-runtime",
+      "react/jsx-dev-runtime",
+      "@cognia/plugin-sdk",
+      "@cognia/plugin-sdk/*",
+      "@cognia/plugin-ui",
+      "lucide-react",
+    ],
     write: false,
   })
   const bundle = result.outputFiles[0].contents
