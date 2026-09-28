@@ -12,6 +12,7 @@ import { joinPath } from "@/lib/claude/instructions/paths"
 import type { ImportedConversation } from "@/lib/data/importers/types"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { walkFiles } from "../fs"
+import { mapBounded } from "../pacing"
 import { buildImportedSessionGraph } from "../graph"
 import {
   buildMessage,
@@ -231,16 +232,20 @@ export const continueDevSessionSource: AgentSessionSourceAdapter = {
       const files = await walkFiles(
         input.fs,
         root,
-        (n) => n.toLowerCase().endsWith(".json") && n !== "sessions.json"
+        (n) =>
+          n.toLowerCase().endsWith(".json") &&
+          n.replace(/\\/g, "/").split("/").pop() !== "sessions.json"
       )
-      for (const file of files) {
+      const scanned = await mapBounded(files, 8, async (file) => {
         try {
           const parsed = parseContinueSession(await input.fs.readTextFile(file), file)
-          if (parsed.messages.length > 0) summaries.push(summarize(parsed, file))
+          return parsed.messages.length > 0 ? summarize(parsed, file) : undefined
         } catch {
           // Skip unreadable session.
+          return undefined
         }
-      }
+      })
+      for (const summary of scanned) if (summary) summaries.push(summary)
     }
     return summaries
   },

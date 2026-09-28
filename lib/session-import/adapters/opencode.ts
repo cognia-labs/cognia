@@ -197,6 +197,14 @@ export function opencodeToConversation(
 interface ShareRecord {
   key?: string
   content?: Record<string, unknown>
+  type?: string
+  data?: unknown
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
 }
 
 function numOr(v: unknown): number {
@@ -230,7 +238,8 @@ function readOpencodeUsage(
 /**
  * Reconstruct `OpencodeSession[]` from an OpenCode share-export JSON. Accepts
  * either a flat `ShareRecord[]` (keyed by "session/…", "message/…", "part/…")
- * or an already-nested `{ session, messages }` object.
+ * or a nested legacy `{ session, messages }` / CLI `{ info, messages }` object.
+ * Current ShareNext responses use `{ type, data }` instead of `{ key, content }`.
  */
 export function parseOpencodeExport(content: string): OpencodeSession[] {
   let data: unknown
@@ -242,7 +251,7 @@ export function parseOpencodeExport(content: string): OpencodeSession[] {
   // Already nested form.
   if (data && typeof data === "object" && !Array.isArray(data)) {
     const obj = data as Record<string, unknown>
-    if (obj.messages && (obj.id || obj.session)) {
+    if (obj.messages && (obj.id || obj.session || obj.info)) {
       const s = normalizeNested(obj)
       return s ? [s] : []
     }
@@ -259,8 +268,11 @@ export function parseOpencodeExport(content: string): OpencodeSession[] {
   for (const raw of data) {
     if (!raw || typeof raw !== "object") continue
     const rec = raw as ShareRecord
-    const key = rec.key ?? ""
-    const c = rec.content ?? (raw as Record<string, unknown>)
+    const isShareNext = typeof rec.type === "string" && rec.data !== undefined
+    if (isShareNext && !["session", "message", "part"].includes(rec.type!)) continue
+    const key = typeof rec.key === "string" ? rec.key : isShareNext ? rec.type! : ""
+    const c = asRecord(rec.content ?? (isShareNext ? rec.data : raw))
+    if (!c) continue
     if (key.startsWith("session") || (c.id && c.title && c.time)) {
       const time = (c.time as Record<string, unknown>) ?? {}
       sessions.set(String(c.id), {
@@ -300,19 +312,27 @@ export function parseOpencodeExport(content: string): OpencodeSession[] {
 }
 
 function normalizeNested(obj: Record<string, unknown>): OpencodeSession | null {
-  const sessionInfo = (obj.session as Record<string, unknown>) ?? obj
+  const sessionInfo = asRecord(obj.session) ?? asRecord(obj.info) ?? obj
   const id = String(sessionInfo.id ?? "")
   if (!id) return null
   const time = (sessionInfo.time as Record<string, unknown>) ?? {}
   const rawMsgs = Array.isArray(obj.messages) ? obj.messages : []
-  const messages: OpencodeMessage[] = rawMsgs.map((m) => {
-    const mm = m as Record<string, unknown>
-    return {
-      role: String(mm.role ?? "user"),
-      parts: Array.isArray(mm.parts) ? (mm.parts as OpencodePart[]) : [],
-      createdAt: Number((mm.time as Record<string, unknown>)?.created ?? 0),
-      ...readOpencodeUsage(mm),
-    }
+  const messages: OpencodeMessage[] = rawMsgs.flatMap((m) => {
+    const wrapper = asRecord(m)
+    if (!wrapper) return []
+    const info = asRecord(wrapper.info) ?? wrapper
+    return [
+      {
+        role: String(info.role ?? "user"),
+        parts: Array.isArray(wrapper.parts)
+          ? wrapper.parts.filter(
+              (part): part is OpencodePart => !!asRecord(part) && typeof part.type === "string"
+            )
+          : [],
+        createdAt: Number(asRecord(info.time)?.created ?? 0),
+        ...readOpencodeUsage(info),
+      },
+    ]
   })
   return {
     id,
@@ -486,9 +506,16 @@ function sessionTree(sessions: OpencodeSession[]): {
 // per-input cache turns the previous O(selected sessions × full-DB read) into a
 // single DB read per run. Keyed weakly: a fresh scan builds a fresh input, so
 // there is no staleness across runs and no explicit invalidation needed.
-const sessionCache = new WeakMap<SessionScanInput, Promise<OpencodeSession[]>>()
+interface SessionIndex {
+  sessions: OpencodeSession[]
+  firstById: Map<string, OpencodeSession>
+  lastById: Map<string, OpencodeSession>
+  childrenByParent: Map<string, OpencodeSession[]>
+}
 
-async function collectSessions(input: SessionScanInput): Promise<OpencodeSession[]> {
+const sessionCache = new WeakMap<SessionScanInput, Promise<SessionIndex>>()
+
+async function collectSessions(input: SessionScanInput): Promise<SessionIndex> {
   const cached = sessionCache.get(input)
   if (cached) return cached
   const promise = input.pickedFiles?.length
@@ -501,10 +528,27 @@ async function collectSessions(input: SessionScanInput): Promise<OpencodeSession
   // Evict a FAILED read so the next attempt actually retries. A rejected promise
   // left in the cache would make one locked-database moment poison every later
   // scan that happens to reuse this input.
-  const guarded = promise.catch((error: unknown) => {
-    sessionCache.delete(input)
-    throw error
-  })
+  const guarded = promise
+    .then((sessions): SessionIndex => {
+      const firstById = new Map<string, OpencodeSession>()
+      const lastById = new Map<string, OpencodeSession>()
+      const childrenByParent = new Map<string, OpencodeSession[]>()
+      for (const session of sessions) {
+        // Conversation lookup historically uses find (first), while graph
+        // structured state uses Map construction (last). Keep both on duplicates.
+        if (!firstById.has(session.id)) firstById.set(session.id, session)
+        lastById.set(session.id, session)
+        if (session.messages.length === 0 || !session.parentId) continue
+        const children = childrenByParent.get(session.parentId) ?? []
+        children.push(session)
+        childrenByParent.set(session.parentId, children)
+      }
+      return { sessions, firstById, lastById, childrenByParent }
+    })
+    .catch((error: unknown) => {
+      sessionCache.delete(input)
+      throw error
+    })
   sessionCache.set(input, guarded)
   return guarded
 }
@@ -537,10 +581,12 @@ export const opencodeSessionSource: AgentSessionSourceAdapter = {
         const data = JSON.parse(f.content)
         if (Array.isArray(data)) {
           return data.some(
-            (r) => typeof r?.key === "string" && /^(session|message|part)/.test(r.key)
+            (r) =>
+              (typeof r?.key === "string" && /^(session|message|part)/.test(r.key)) ||
+              (["session", "message", "part"].includes(r?.type) && !!asRecord(r?.data))
           )
         }
-        return !!(data?.messages && (data?.id || data?.session))
+        return !!(data?.messages && (data?.id || data?.session || data?.info))
       } catch {
         return false
       }
@@ -549,7 +595,7 @@ export const opencodeSessionSource: AgentSessionSourceAdapter = {
   },
 
   async listSessions(input: SessionScanInput) {
-    const sessions = await collectSessions(input)
+    const { sessions } = await collectSessions(input)
     const tree = sessionTree(sessions)
     return tree.roots
       .map((session) => {
@@ -564,8 +610,8 @@ export const opencodeSessionSource: AgentSessionSourceAdapter = {
   },
 
   async parseSession(ref: SessionRef, input: SessionScanInput) {
-    const sessions = await collectSessions(input)
-    const found = sessions.find((s) => s.id === ref.originalSessionId)
+    const { firstById, childrenByParent } = await collectSessions(input)
+    const found = firstById.get(ref.originalSessionId)
     if (!found) {
       // Empty shell rather than throwing — keeps a multi-import batch resilient.
       return opencodeToConversation({
@@ -575,14 +621,6 @@ export const opencodeSessionSource: AgentSessionSourceAdapter = {
         updatedAt: Date.now(),
         messages: [],
       })
-    }
-    const importable = sessions.filter((session) => session.messages.length > 0)
-    const childrenByParent = new Map<string, OpencodeSession[]>()
-    for (const session of importable) {
-      if (!session.parentId) continue
-      const children = childrenByParent.get(session.parentId) ?? []
-      children.push(session)
-      childrenByParent.set(session.parentId, children)
     }
     const buildTree = (session: OpencodeSession, seen: Set<string>): ImportedConversation => {
       const conversation = opencodeToConversation(session)
@@ -597,7 +635,7 @@ export const opencodeSessionSource: AgentSessionSourceAdapter = {
     return buildTree(found, new Set())
   },
   async parseGraph(ref: SessionRef, input: SessionScanInput) {
-    const sessions = await collectSessions(input)
+    const { lastById } = await collectSessions(input)
     const graph = buildImportedSessionGraph(await this.parseSession(ref, input), {
       sourceRuntime: this.id,
       sourceVersion: this.verifiedVersion,
@@ -605,10 +643,9 @@ export const opencodeSessionSource: AgentSessionSourceAdapter = {
       importFidelity: this.codec?.importFidelity ?? "structured",
       codec: this.codec,
     })
-    const sessionById = new Map(sessions.map((session) => [session.id, session]))
     for (const node of graph.nodes) {
       const nativeId = node.conversation.session.id.replace(/^import:opencode:/, "")
-      const native = sessionById.get(nativeId)
+      const native = lastById.get(nativeId)
       if (!native) continue
       const state = opencodeStructuredState(native)
       if (state.tasks.length > 0) node.session.tasks = state.tasks

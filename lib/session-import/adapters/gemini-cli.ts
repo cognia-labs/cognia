@@ -14,6 +14,7 @@ import { joinPath } from "@/lib/claude/instructions/paths"
 import type { ImportedConversation } from "@/lib/data/importers/types"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { walkFiles } from "../fs"
+import { everyBudget, mapBounded } from "../pacing"
 import { buildImportedSessionGraph } from "../graph"
 import { importedUsageMetadata } from "../usage"
 import {
@@ -235,6 +236,22 @@ function replayGeminiRecording(content: string): GeminiRecord[] {
 
   const metadata: GeminiRecord = {}
   const messages = new Map<string, GeminiRecord>()
+  const orderedIds: string[] = []
+  const positions = new Map<string, number>()
+  const put = (id: string, value: GeminiRecord) => {
+    if (!messages.has(id)) {
+      positions.set(id, orderedIds.length)
+      orderedIds.push(id)
+    }
+    messages.set(id, value)
+  }
+  const truncate = (from: number) => {
+    while (orderedIds.length > from) {
+      const id = orderedIds.pop()!
+      messages.delete(id)
+      positions.delete(id)
+    }
+  }
   let anonymousIndex = 0
   for (const line of content.split("\n")) {
     const lineText = line.trim()
@@ -245,23 +262,19 @@ function replayGeminiRecording(content: string): GeminiRecord[] {
     } catch {
       continue
     }
+    if (!record || typeof record !== "object" || Array.isArray(record)) continue
     if (isRewindRecord(record)) {
-      const ids = [...messages.keys()]
-      const target = ids.indexOf(record.$rewindTo)
-      if (target < 0) {
-        messages.clear()
-      } else {
-        for (const id of ids.slice(target)) messages.delete(id)
-      }
+      truncate(positions.get(record.$rewindTo) ?? 0)
       continue
     }
     if (isSetRecord(record)) {
       const update = record.$set
       if (Array.isArray(update.messages)) {
-        messages.clear()
+        truncate(0)
         for (const message of update.messages) {
+          if (!message || typeof message !== "object") continue
           const id = message.id || `anonymous-${anonymousIndex++}`
-          messages.set(id, message)
+          put(id, message)
         }
       }
       Object.assign(metadata, { ...update, messages: undefined })
@@ -270,7 +283,7 @@ function replayGeminiRecording(content: string): GeminiRecord[] {
     const value = record as GeminiRecord
     if (value.type) {
       const id = value.id || `anonymous-${anonymousIndex++}`
-      messages.set(id, value)
+      put(id, value)
     } else {
       Object.assign(metadata, value)
     }
@@ -279,11 +292,13 @@ function replayGeminiRecording(content: string): GeminiRecord[] {
 }
 
 function exportContentsToRecords(contents: GeminiExportContent[]): GeminiRecord[] {
-  return contents.map((content, index) => ({
-    id: `export-${index}`,
-    type: content.role === "model" ? "gemini" : "user",
-    content: content.parts ?? [],
-  }))
+  return contents
+    .filter((content) => content && typeof content === "object")
+    .map((content, index) => ({
+      id: `export-${index}`,
+      type: content.role === "model" ? "gemini" : "user",
+      content: content.parts ?? [],
+    }))
 }
 
 export function parseGeminiChat(
@@ -488,6 +503,40 @@ function isAcceptedFile(name: string): boolean {
   return ACCEPTED.some((extension) => lower.endsWith(extension))
 }
 
+interface PickedCorpus {
+  byPath: Map<string, ParsedSession>
+  children: Map<string, Array<{ path: string; parsed: ParsedSession }>>
+}
+
+const pickedCorpora = new WeakMap<SessionScanInput, Promise<PickedCorpus>>()
+
+function pickedCorpus(input: SessionScanInput): Promise<PickedCorpus> {
+  const cached = pickedCorpora.get(input)
+  if (cached) return cached
+  const pending = (async () => {
+    const byPath = new Map<string, ParsedSession>()
+    const children: PickedCorpus["children"] = new Map()
+    const pace = everyBudget()
+    for (const file of input.pickedFiles ?? []) {
+      if (!isAcceptedFile(file.name)) continue
+      await pace()
+      const parsed = parseGeminiChat(file.content, file.path)
+      // The selected-file lookup has always used the first matching path.
+      if (!byPath.has(file.path)) byPath.set(file.path, parsed)
+      const parent = inferParentNativeSessionId(file.path, parsed)
+      if (parent) {
+        const siblings = children.get(parent) ?? []
+        siblings.push({ path: file.path, parsed })
+        children.set(parent, siblings)
+      }
+    }
+    return { byPath, children }
+  })()
+  pickedCorpora.set(input, pending)
+  void pending.catch(() => pickedCorpora.delete(input))
+  return pending
+}
+
 export const geminiCliSessionSource: AgentSessionSourceAdapter = {
   id: "gemini-cli",
   displayName: "Gemini CLI",
@@ -509,11 +558,51 @@ export const geminiCliSessionSource: AgentSessionSourceAdapter = {
     const hinted = files.filter((f) => f.path.replace(/\\/g, "/").includes(".gemini/tmp"))
     if (hinted.length > 0) return hinted.length === files.length ? "match" : "maybe"
     const looks = files.some((f) => {
+      try {
+        const whole: unknown = JSON.parse(f.content)
+        if (Array.isArray(whole)) {
+          return (
+            whole.length > 0 &&
+            whole.every(
+              (entry) =>
+                entry &&
+                (entry.role === "user" || entry.role === "model") &&
+                Array.isArray(entry.parts)
+            )
+          )
+        }
+        if (whole && typeof whole === "object" && "messages" in whole) {
+          const rec = whole as GeminiRecord & { projectHash?: unknown }
+          if (
+            typeof rec.sessionId === "string" &&
+            Array.isArray(rec.messages) &&
+            (typeof rec.projectHash === "string" ||
+              rec.messages.some((message) => message?.type === "gemini"))
+          )
+            return true
+        }
+      } catch {
+        // Fall through to the JSONL metadata header.
+      }
       const first = f.content.split("\n").find((l) => l.trim())
       if (!first) return false
       try {
         const rec = JSON.parse(first) as GeminiRecord
-        return typeof rec.sessionId === "string" && "projectHash" in (rec as object)
+        if (!rec || typeof rec.sessionId !== "string") return false
+        if ("projectHash" in rec) return true
+        // Nested recordings may omit the project hash. Their metadata and
+        // direct Gemini content records still distinguish them from other JSONL.
+        if (rec.kind === "subagent" || rec.kind === "main") {
+          return f.content.split("\n").some((line) => {
+            try {
+              const row = JSON.parse(line) as GeminiRecord | null
+              return (row?.type === "user" || row?.type === "gemini") && Array.isArray(row.content)
+            } catch {
+              return false
+            }
+          })
+        }
+        return false
       } catch {
         return false
       }
@@ -531,44 +620,51 @@ export const geminiCliSessionSource: AgentSessionSourceAdapter = {
     const summaries: SessionSummary[] = []
     for (const root of this.scanRoots(input.home, input.roots)) {
       const files = await walkFiles(input.fs, root, isAcceptedFile)
-      for (const file of files) {
+      const scanned = await mapBounded(files, 8, async (file) => {
         try {
           const parsed = parseGeminiChat(await input.fs.readTextFile(file), file)
           const summary = summarize(parsed, file)
           if (parsed.messages.length > 0 && summary.relationKind !== "subagent") {
-            summaries.push(summary)
+            return summary
           }
         } catch {
           // Skip unreadable chat.
         }
-      }
+        return undefined
+      })
+      for (const summary of scanned) if (summary) summaries.push(summary)
     }
     return summaries.sort((a, b) => b.updatedAt - a.updatedAt)
   },
 
   async parseSession(ref: SessionRef, input: SessionScanInput) {
-    let content: string
-    if (input.pickedFiles?.length) {
-      content = input.pickedFiles.find((f) => f.path === ref.locator)?.content ?? ""
-    } else {
-      content = await input.fs.readTextFile(ref.locator)
+    // A single picked history has no sibling corpus to index. Avoid retaining
+    // and cloning a second complete copy of a long conversation.
+    if (input.pickedFiles?.length === 1) {
+      const file = input.pickedFiles[0]
+      return toConversation(
+        parseGeminiChat(file.path === ref.locator ? file.content : "", ref.locator),
+        ref.locator
+      )
     }
+    if (input.pickedFiles?.length) {
+      const corpus = await pickedCorpus(input)
+      const parsed = corpus.byPath.get(ref.locator) ?? parseGeminiChat("", ref.locator)
+      const conversation = toConversation(structuredClone(parsed), ref.locator)
+      if (parsed.kind !== "subagent") {
+        const nested = (corpus.children.get(parsed.originalSessionId) ?? [])
+          .filter((child) => child.path !== ref.locator)
+          .map((child) => toConversation(structuredClone(child.parsed), child.path))
+        if (nested.length) conversation.nested = nested
+      }
+      return conversation
+    }
+    const content = await input.fs.readTextFile(ref.locator)
     const parsed = parseGeminiChat(content, ref.locator)
     const conversation = toConversation(parsed, ref.locator)
     const nested: ImportedConversation[] = []
     if (parsed.kind !== "subagent") {
-      if (input.pickedFiles?.length) {
-        for (const file of input.pickedFiles) {
-          if (file.path === ref.locator || !isAcceptedFile(file.name)) continue
-          const child = parseGeminiChat(file.content, file.path)
-          if (
-            child.kind === "subagent" &&
-            inferParentNativeSessionId(file.path, child) === parsed.originalSessionId
-          ) {
-            nested.push(toConversation(child, file.path))
-          }
-        }
-      } else {
+      {
         const chatDir = ref.locator.replace(/[\\/][^\\/]+$/, "")
         const childDir = joinPath(chatDir, parsed.originalSessionId)
         if (await input.fs.exists(childDir)) {

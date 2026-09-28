@@ -37,6 +37,16 @@ export function parseAiderHistory(
   locatorId: string,
   projectId?: string
 ): ParsedSession {
+  const { messageCount: _count, ...parsed } = readAiderHistory(content, locatorId, projectId, false)
+  return parsed
+}
+
+function readAiderHistory(
+  content: string,
+  locatorId: string,
+  projectId: string | undefined,
+  summaryOnly: boolean
+): ParsedSession & { messageCount: number } {
   const finalId = importedSessionId("aider", locatorId)
   const messages: StoredMessage[] = []
   let counter = 0
@@ -53,6 +63,10 @@ export function parseAiderHistory(
     userBuf = []
     if (!text) return
     if (!firstUserText) firstUserText = text
+    if (summaryOnly) {
+      counter++
+      return
+    }
     messages.push(
       buildMessage({
         sessionId: finalId,
@@ -68,6 +82,10 @@ export function parseAiderHistory(
     const text = asstBuf.join("\n").trim()
     asstBuf = []
     if (!text) return
+    if (summaryOnly) {
+      counter++
+      return
+    }
     messages.push(
       buildMessage({
         sessionId: finalId,
@@ -113,17 +131,21 @@ export function parseAiderHistory(
     originalSessionId: locatorId,
     title: deriveTitle(firstUserText, "Aider session"),
     messages,
+    messageCount: counter,
     createdAt: createdAt || now,
     updatedAt: updatedAt || now,
   }
 }
 
-function summarize(parsed: ParsedSession, locator: string): SessionSummary {
+function summarize(
+  parsed: ParsedSession & { messageCount: number },
+  locator: string
+): SessionSummary {
   return {
     ref: { sourceId: "aider", originalSessionId: parsed.originalSessionId, locator },
     title: parsed.title,
     sourceId: "aider",
-    messageCount: parsed.messages.length,
+    messageCount: parsed.messageCount,
     updatedAt: parsed.updatedAt,
   }
 }
@@ -170,7 +192,7 @@ export const aiderSessionSource: AgentSessionSourceAdapter = {
     if (!input.pickedFiles?.length) return [] // no scan root
     return input.pickedFiles
       .filter((f) => f.name.toLowerCase().endsWith(".md"))
-      .map((f) => summarize(parseAiderHistory(f.content, f.path), f.path))
+      .map((f) => summarize(readAiderHistory(f.content, f.path, undefined, true), f.path))
       .filter((s) => s.messageCount > 0)
   },
 

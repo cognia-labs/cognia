@@ -694,7 +694,7 @@ async function readJsonFiles(
 ): Promise<Array<{ path: string; value: Record<string, unknown> }>> {
   const values: Array<{ path: string; value: Record<string, unknown> }> = []
   const picked = input.pickedFiles?.filter((file) => accept(file.path))
-  if (picked?.length) {
+  if (picked) {
     for (const file of picked) {
       try {
         const value = record(JSON.parse(file.content))
@@ -829,6 +829,11 @@ function addTeamMembers(
   const existingNativeIds = new Set(
     nested.map((child) => child.session.importRuntimeBinding?.nativeSessionId).filter(Boolean)
   )
+  // Resolve ownership once, retaining task order when a member matches both
+  // its display name and agent ID. Undefined owners deliberately remain keys:
+  // older artifacts may omit either member field, and the old scan matched it.
+  let firstTaskByOwner:
+    Map<string | undefined, { task: CanonicalSessionTask; index: number }> | undefined
   for (const member of snapshot.members) {
     const nativeId =
       stringValue(member.sessionId) || stringValue(member.agentId) || stringValue(member.name)
@@ -836,10 +841,17 @@ function addTeamMembers(
       continue
     const memberName = stringValue(member.name)
     const memberAgentId = stringValue(member.agentId)
-    const ownedTask = snapshot.tasks.find((task) => {
-      const owner = snapshot.taskOwnerById.get(task.taskId)
-      return owner === memberName || owner === memberAgentId
-    })
+    if (!firstTaskByOwner) {
+      firstTaskByOwner = new Map()
+      for (const [index, task] of snapshot.tasks.entries()) {
+        const owner = snapshot.taskOwnerById.get(task.taskId)
+        if (!firstTaskByOwner.has(owner)) firstTaskByOwner.set(owner, { task, index })
+      }
+    }
+    const byName = firstTaskByOwner.get(memberName)
+    const byAgentId = firstTaskByOwner.get(memberAgentId)
+    const ownedTask =
+      !byName || (byAgentId && byAgentId.index < byName.index) ? byAgentId?.task : byName.task
     const id = importedSessionId("claude-code", nativeId)
     const session = buildSession({
       id,
