@@ -79,6 +79,7 @@ import {
   type EventStreamConnection,
 } from "@/lib/companion/device-presence-registry"
 import {
+  handleTeamRunStart,
   handleTeamTaskComment,
   handleTeamTaskCreate,
   handleTeamTaskMove,
@@ -596,6 +597,8 @@ export async function dispatchCommand(
       return handleTeamTaskCreate(payload)
     case "team_task_comment":
       return handleTeamTaskComment(payload)
+    case "team_run_start":
+      return handleTeamRunStart(payload)
     // Retired with ADR-0169: a team-addressed control carried no revision and
     // no decision. An older client that still sends one is told to upgrade.
     case "team_run_pause":

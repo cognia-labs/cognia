@@ -568,6 +568,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "team_task_move",
     "team_task_create",
     "team_task_comment",
+    "team_run_start",
     "team_run_pause",
     "team_run_resume",
     "team_run_stop",
@@ -1556,6 +1557,7 @@ const CONTROL_COMMANDS: &[&str] = &[
     "team_task_move",
     "team_task_create",
     "team_task_comment",
+    "team_run_start",
     "team_run_pause",
     "team_run_resume",
     "team_run_stop",
@@ -2002,6 +2004,11 @@ const CALLER_DEVICE_ID_COMMANDS: &[&str] = &[
     // a submission, and the submission row records which browser sent it. Both
     // depend on an id the renderer cannot work out for itself and that a
     // client must not be able to choose.
+    // Starting a Squad from a phone: the run row records who dispatched it,
+    // and `triggeredFrom.deviceId` is documented as stamped server-side and
+    // never client-supplied. Injection happens AFTER schema validation, which
+    // is why the request schema carries no such property.
+    "team_run_start",
     "browser_companion_capability",
     "browser_context_submit",
     "browser_context_list",

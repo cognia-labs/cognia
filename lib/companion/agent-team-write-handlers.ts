@@ -9,9 +9,16 @@
  * desktop UI would refuse. Denials are normal `{ ok: false, reason }`
  * results, not thrown errors — the caller renders them as toasts.
  *
- * Wired into `dispatchCommand` in `lib/companion/desktop-write-source.ts`;
- * the Rust side gates all six commands behind the remote-control
+ * Wired into `dispatchCommand` in `lib/companion/desktop-write-source.ts`.
+ * The Rust side gates these commands behind the remote-control
  * capability (`CONTROL_COMMANDS` in `companion_api/rpc.rs`).
+ *
+ * `team_run_start` is the odd one out and arrived last. For a long time a
+ * phone could pause, resume and stop a Squad but never start one, which is a
+ * remote control with a brake and no accelerator. It goes through
+ * `startSquadRun`, the one launch seam (ADR-0140, hardened by ADR-0169), so a
+ * phone-started run gets the same readiness check, run id convention and
+ * execution row as one started from the desktop.
  */
 
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
@@ -26,6 +33,8 @@ export interface TeamCommandResult {
   reason?: string
   taskId?: string
   commentId?: string
+  /** Present when starting produced one, so a phone can follow the run. */
+  runId?: string
 }
 
 const TASK_STATUSES: ReadonlySet<string> = new Set([
@@ -117,3 +126,46 @@ export async function handleTeamTaskComment(
 // retired with ADR-0169. Run control is `execution_run_control`
 // (`lib/companion/execution-run-control-handler.ts`), and the old
 // team-addressed commands answer `upgrade-required`.
+
+/**
+ * Start a Squad from a paired device.
+ *
+ * Goes through `startSquadRun`, the one launch seam, which owns readiness,
+ * the one-live-run rule and the transactional journal. A second start while a
+ * run is open is refused as `already_running` with that run's id, so the phone
+ * can follow it instead of forking a duplicate. Fire-and-forget: the seam
+ * launches the lifecycle without awaiting it, so the RPC acks acceptance and
+ * progress flows back through the board sync mirror.
+ *
+ * No `session`: a phone command is not a conversation on this host, so the run
+ * is uncarded. `callerDeviceId` is stamped by Rust from the verified device JWT
+ * before this arm ever sees the payload, never supplied by the client.
+ */
+export async function handleTeamRunStart(
+  payload: Record<string, unknown>
+): Promise<TeamCommandResult> {
+  const teamId = readString(payload, "teamId")
+  if (!teamId) return { ok: false, reason: "invalid-payload" }
+  if (!useAgentTeamStore.getState().teams[teamId]) return { ok: false, reason: "team-not-found" }
+
+  const goal = readString(payload, "goal")
+  const deviceId = readString(payload, "callerDeviceId")
+  const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
+  const result = await startSquadRun({
+    squadId: teamId,
+    goal: goal ?? "",
+    origin: "companion",
+    triggeredFrom: { source: "api", ...(deviceId ? { deviceId } : {}) },
+  }).catch((err) => {
+    log.warn("team_run_start dispatch failed", { teamId, err: String(err) })
+    return { started: false, reason: "dispatch_error" as const, runId: undefined }
+  })
+  if (!result.started) {
+    return {
+      ok: false,
+      reason: result.reason ?? "dispatch_error",
+      ...(result.runId ? { runId: result.runId } : {}),
+    }
+  }
+  return { ok: true, ...(result.runId ? { runId: result.runId } : {}) }
+}

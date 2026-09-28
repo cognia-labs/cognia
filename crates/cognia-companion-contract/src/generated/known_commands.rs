@@ -19,7 +19,7 @@ use super::{
 pub const CONTRACT_VERSION: u32 = 3;
 
 /// The sha256 of the Headless command catalog rendered from this contract.
-pub const CATALOG_HASH: &str = "706f93be043fac71ec484a1ea1bc824d67090833f77dce8a2018cf3d4d15acff";
+pub const CATALOG_HASH: &str = "2925daeb66e92366dc44e0aac753f158969ec728eb8c722ca35c6fe504d4a81e";
 
 /// Every command in the contract, in contract order.
 #[rustfmt::skip]
@@ -1173,6 +1173,7 @@ pub static WIRE_COMMANDS: &[WireCommand] = &[
     WireCommand { name: "task_workspace_stop_watch", arm: "task_workspace_stop_watch", resource: "task.workspace.watch", verb: "stop", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "task_workspace_undo", arm: "task_workspace_undo", resource: "task.workspace", verb: "undo", target: CommandTarget::Execution, operation: CommandOperation::SideEffect, capability: "workspace.write", risk: CommandRisk::High, approval: CommandApproval::Interactive, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Http, CommandTransport::Websocket, CommandTransport::Webrtc], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "task_workspace_watch", arm: "task_workspace_watch", resource: "task.workspace.watch", verb: "start", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "team_run_start", arm: "team_run_start", resource: "team.run", verb: "start", target: CommandTarget::Execution, operation: CommandOperation::SideEffect, capability: "agent.run", risk: CommandRisk::High, approval: CommandApproval::Interactive, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Http, CommandTransport::Websocket, CommandTransport::Webrtc], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "team_run_pause", arm: "team_run_pause", resource: "team.run", verb: "pause", target: CommandTarget::Execution, operation: CommandOperation::SideEffect, capability: "agent.run", risk: CommandRisk::High, approval: CommandApproval::Interactive, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Http, CommandTransport::Websocket, CommandTransport::Webrtc], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "team_run_resume", arm: "team_run_resume", resource: "team.run", verb: "resume", target: CommandTarget::Execution, operation: CommandOperation::SideEffect, capability: "agent.run", risk: CommandRisk::High, approval: CommandApproval::Interactive, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Http, CommandTransport::Websocket, CommandTransport::Webrtc], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "team_run_stop", arm: "team_run_stop", resource: "team.run", verb: "stop", target: CommandTarget::Execution, operation: CommandOperation::SideEffect, capability: "agent.run", risk: CommandRisk::High, approval: CommandApproval::Interactive, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Http, CommandTransport::Websocket, CommandTransport::Webrtc], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
@@ -2569,6 +2570,7 @@ pub static RENAMED_COMMANDS: &[(&str, &str)] = &[
     ("task_workspace_watch", "task.workspace.watch.start"),
     ("team_run_pause", "team.run.pause"),
     ("team_run_resume", "team.run.resume"),
+    ("team_run_start", "team.run.start"),
     ("team_run_stop", "team.run.stop"),
     ("team_task_comment", "team.task.comment"),
     ("team_task_create", "team.task.create"),

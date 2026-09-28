@@ -56279,6 +56279,67 @@
       "outputTyped": true
     },
     {
+      "name": "team_run_start",
+      "category": "agents",
+      "resource": "team",
+      "target": "execution",
+      "operation": "side-effect",
+      "capability": "agent.run",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "team_run_start (agent.run)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "teamId"
+        ],
+        "properties": {
+          "teamId": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "lib/companion/agent-team-write-handlers.ts handleTeamRunStart. A refusal is a normal ok:false answer; already_running carries the open run's id.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "invalid-payload",
+              "team-not-found",
+              "squad_not_found",
+              "no_squad_id",
+              "dispatch_error",
+              "not_ready",
+              "already_running",
+              "journal_failed",
+              "runtime_not_ready"
+            ]
+          },
+          "runId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "team_run_stop",
       "category": "agents",
       "resource": "team",
@@ -64455,5 +64516,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "706f93be043fac71ec484a1ea1bc824d67090833f77dce8a2018cf3d4d15acff"
+  "catalogHash": "2925daeb66e92366dc44e0aac753f158969ec728eb8c722ca35c6fe504d4a81e"
 }

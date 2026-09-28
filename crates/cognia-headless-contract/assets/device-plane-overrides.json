@@ -7280,6 +7280,29 @@
         "additionalProperties": false
       }
     },
+    "team_run_start": {
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "teamId",
+          "adminLease"
+        ],
+        "properties": {
+          "teamId": {
+            "type": "string"
+          },
+          "goal": {
+            "type": "string"
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "team_run_stop": {
       "inputSchemaSource": "contract",
       "inputSchema": {

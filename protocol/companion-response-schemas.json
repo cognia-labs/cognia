@@ -6552,6 +6552,30 @@
       },
       "additionalProperties": false
     },
+    "TeamRunStartResult": {
+      "type": "object",
+      "x-cognia-wire-source": "lib/companion/agent-team-write-handlers.ts handleTeamRunStart. A refusal is a normal ok:false answer; already_running carries the open run's id.",
+      "required": ["ok"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "invalid-payload",
+            "team-not-found",
+            "squad_not_found",
+            "no_squad_id",
+            "dispatch_error",
+            "not_ready",
+            "already_running",
+            "journal_failed",
+            "runtime_not_ready"
+          ]
+        },
+        "runId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "WorkflowHumanInputSubmitResult": {
       "type": "object",
       "required": ["ok"],
@@ -11861,6 +11885,9 @@
     },
     "task_workspace_undo": {
       "$ref": "#/$defs/ApplyOutcome"
+    },
+    "team_run_start": {
+      "$ref": "#/$defs/TeamRunStartResult"
     },
     "team_run_pause": {
       "$ref": "#/$defs/LegacyResult"

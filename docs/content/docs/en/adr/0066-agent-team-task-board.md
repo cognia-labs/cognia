@@ -72,13 +72,20 @@ on runtime state is unchanged). Cross-device visibility is a **one-way projectio
 - **Sync**: `agentTeamBoard` joins `SyncableTable`, the desktop delta reader
   (cursors `updatedAt`), the handler registry, and the Rust `sync_registry`
   (tombstoned). Dexie never writes back to the store.
-- **Control plane**: six Companion-control-gated RPCs (`team_task_move|create|comment`,
-  `team_run_pause|resume|stop`) travel the generic desktop-writes bridge. The TS
+- **Control plane**: Companion-control-gated RPCs (`team_task_move|create|comment`,
+  `team_run_start`) travel the generic desktop-writes bridge. `team_run_pause|resume|stop`
+  were retired by ADR-0169 and answer `upgrade-required`; run control is
+  `execution_run_control`. `team_run_start` arrived last: for a long time a phone
+  could brake a Squad but never start one. It goes through `startSquadRun`, the
+  one launch seam (ADR-0140, hardened by ADR-0169), so a phone-started run gets
+  the same readiness check, run id and execution row as a desktop-started one; a
+  start while a run is open answers `already_running` with that run's id, and
+  Rust stamps the verified caller device onto it. The TS
   arms (`lib/companion/agent-team-write-handlers.ts`) revalidate through the live
   `canMoveTask`, answering `{ ok, reason }` — a stale phone snapshot can never
   push a move the desktop board would refuse. They are deliberately **not** in the
   mobile offline queue: a command must validate against live run state, not replay
-  hours later. `team_run_resume` acks fire-and-forget (the lifecycle runs long).
+  hours later. `team_run_start` acks fire-and-forget (the lifecycle runs long).
 - **Mobile board** (`components/mobile/agent-teams/team-board-mobile.tsx`): renders
   the mirror via liveQuery (works offline on the last-synced snapshot), moves via
   an action sheet whose targets come from the same guard, comments via RPC. The
@@ -104,9 +111,12 @@ first; companion soft-cancel (a `cancelled` row) is still honored.
 
 - **`ctx.team`** (`lib/plugin/api/team-api.ts`, modeled on `goal-api.ts`): reads +
   `subscribe` behind `team:read`; `createTask`/`addComment`/`moveTask`-through-guard
-  behind `team:write` (non-dangerous tier, like `goal:write`). **No run control**
-  for plugins — starting a team consumes real compute and stays a human /
-  Companion control-plane decision.
+  behind `team:write` (non-dangerous tier, like `goal:write`). Lifecycle
+  (`createTeam`/`deleteTeam`/`duplicateTeam`/`saveAsTemplate`) is `team:write`
+  too, since none of it spends anything. Run control DOES exist for plugins and
+  this line used to say it did not: `start` takes `agent:dispatch`, the same
+  permission `ctx.agent.runTeam` has always taken to conjure and run a Squad
+  from an ad-hoc config, and `pause`/`resume`/`stop` take `agent:control`.
 - **Twin visibility**: the deep runtime integration (per-teammate twin injection,
   `twin_knowledge_search`) was invisible in the UI. The board now shows twin badges
   on swimlanes/cards, a knowledge-twins chip row, and ranks the create-form

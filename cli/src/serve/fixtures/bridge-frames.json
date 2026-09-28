@@ -15,7 +15,7 @@
         "writes",
         "media"
       ],
-      "catalogHash": "706f93be043fac71ec484a1ea1bc824d67090833f77dce8a2018cf3d4d15acff",
+      "catalogHash": "2925daeb66e92366dc44e0aac753f158969ec728eb8c722ca35c6fe504d4a81e",
       "contractVersion": 3
     },
     "helloAck": {
@@ -24,7 +24,7 @@
       "serverVersion": "0.9.0",
       "protocol": 3,
       "accountId": "local_acct_a",
-      "catalogHash": "706f93be043fac71ec484a1ea1bc824d67090833f77dce8a2018cf3d4d15acff",
+      "catalogHash": "2925daeb66e92366dc44e0aac753f158969ec728eb8c722ca35c6fe504d4a81e",
       "contractVersion": 3
     },
     "eventSyncPull": {

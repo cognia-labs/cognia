@@ -3455,6 +3455,9 @@
     "team_run_resume": {
       "to": "team.run.resume"
     },
+    "team_run_start": {
+      "to": "team.run.start"
+    },
     "team_run_stop": {
       "to": "team.run.stop"
     },
