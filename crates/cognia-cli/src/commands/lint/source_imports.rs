@@ -17,15 +17,19 @@
 //!
 //! ## What is forbidden
 //!
-//! Author code may import the roots `@cognia/plugin-sdk` and
-//! `@cognia/plugin-ui`, and nothing else from this project:
+//! Author code may import `@cognia/plugin-sdk` (its root and its published
+//! subpaths such as `api/i18n`, which the loader binds to the host's own
+//! instances) and the `@cognia/plugin-ui` root, and nothing else from this
+//! project:
 //!
 //!   * every `@/` alias — those resolve only inside the cognia monorepo, so a
 //!     plugin using one cannot be built anywhere else;
-//!   * every `@cognia/plugin-{sdk,ui}` SUBPATH — the package still exports
-//!     several for host and tooling use, but the author-facing contract is one
-//!     root surface, which is what lets those subpaths be reorganised without
-//!     breaking a published plugin.
+//!   * `@cognia/plugin-sdk/host` and anything under it — the host's side of
+//!     the SDK, never the author's;
+//!   * every `@cognia/plugin-ui` SUBPATH — the loader shares exactly the root,
+//!     so a deep import resolves at build time and fails at `require()`;
+//!   * every other `@cognia/*` package — host-internal. The author list is an
+//!     allowlist so each new workspace package starts out private.
 //!
 //! The same policy is enforced over first-party plugins in CI by
 //! `scripts/plugin/check-author-imports.mjs`; keep the two in step.
@@ -42,7 +46,10 @@ const SOURCE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 const SKIPPED_DIRS: &[&str] = &["node_modules", "dist", "target", "build", "out", ".git"];
 
 const HOST_PRIVATE_ALIAS: &str = "@/";
-const SDK_PACKAGES: &[&str] = &["@cognia/plugin-sdk/", "@cognia/plugin-ui/"];
+const COGNIA_SCOPE: &str = "@cognia/";
+const SDK_ROOT: &str = "@cognia/plugin-sdk";
+const SDK_HOST: &str = "@cognia/plugin-sdk/host";
+const UI_ROOT: &str = "@cognia/plugin-ui";
 
 /// A specifier the author may not use, with why.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,8 +62,11 @@ pub struct ForbiddenImport {
 pub enum ForbiddenKind {
     /// `@/…` — an alias private to the cognia monorepo.
     HostPrivate,
-    /// `@cognia/plugin-sdk/x` — real package, but not the author surface.
+    /// `@cognia/plugin-sdk/host…` or `@cognia/plugin-ui/x` — a real package
+    /// path, but not the author surface.
     SdkSubpath,
+    /// `@cognia/<other>` — a workspace package that is host-internal.
+    HostPackage,
 }
 
 impl ForbiddenKind {
@@ -64,6 +74,7 @@ impl ForbiddenKind {
         match self {
             Self::HostPrivate => "source.import.host_private",
             Self::SdkSubpath => "source.import.sdk_subpath",
+            Self::HostPackage => "source.import.host_package",
         }
     }
 
@@ -75,9 +86,14 @@ impl ForbiddenKind {
                  there, it is not part of the plugin contract yet."
             }
             Self::SdkSubpath => {
-                "Import from the package root instead — `@cognia/plugin-sdk` or \
-                 `@cognia/plugin-ui`. Subpaths are host/tooling internals and several of \
-                 them do not resolve outside this repository at all."
+                "`@cognia/plugin-sdk/host` is the host's side of the SDK, and the loader \
+                 shares only the `@cognia/plugin-ui` root. Import from `@cognia/plugin-sdk`, \
+                 one of its published `api/*` subpaths, or the `@cognia/plugin-ui` root."
+            }
+            Self::HostPackage => {
+                "Only `@cognia/plugin-sdk` and `@cognia/plugin-ui` are plugin-facing; every \
+                 other `@cognia/*` package is host-internal. If you need something from it, \
+                 it has to be re-exported through the SDK first."
             }
         }
     }
@@ -87,13 +103,32 @@ fn classify(specifier: &str) -> Option<ForbiddenKind> {
     if specifier.starts_with(HOST_PRIVATE_ALIAS) {
         return Some(ForbiddenKind::HostPrivate);
     }
-    if SDK_PACKAGES
-        .iter()
-        .any(|package| specifier.starts_with(package) && specifier.len() > package.len())
+    if !specifier.starts_with(COGNIA_SCOPE) {
+        return None;
+    }
+    if specifier == SDK_HOST
+        || specifier
+            .strip_prefix(SDK_HOST)
+            .is_some_and(|rest| rest.starts_with('/'))
     {
         return Some(ForbiddenKind::SdkSubpath);
     }
-    None
+    if specifier
+        .strip_prefix(UI_ROOT)
+        .is_some_and(|rest| rest.starts_with('/'))
+    {
+        return Some(ForbiddenKind::SdkSubpath);
+    }
+    let in_package = |root: &str| {
+        specifier == root
+            || specifier
+                .strip_prefix(root)
+                .is_some_and(|rest| rest.starts_with('/'))
+    };
+    if in_package(SDK_ROOT) || specifier == UI_ROOT {
+        return None;
+    }
+    Some(ForbiddenKind::HostPackage)
 }
 
 /// True when `prefix` (everything before an opening quote) puts that string in
@@ -274,23 +309,61 @@ mod tests {
     }
 
     #[test]
-    fn flags_sdk_subpaths_but_allows_both_roots() {
+    fn allows_the_published_sdk_surface_and_the_ui_root() {
+        // Mirrors `scripts/plugin/check-author-imports.mjs`: SDK subpaths are
+        // published and the loader binds each to the host's instance.
+        assert!(specifiers(
+            r#"
+            import { definePlugin } from "@cognia/plugin-sdk"
+            import { Button } from "@cognia/plugin-ui"
+            import { usePluginTranslations } from "@cognia/plugin-sdk/api/i18n"
+            import { definePluginManifest } from "@cognia/plugin-sdk/manifest"
+            import { createMockContext } from "@cognia/plugin-sdk/testing"
+            "#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn flags_the_host_side_of_the_sdk_and_ui_subpaths() {
         assert_eq!(
             specifiers(
                 r#"
-                import { definePlugin } from "@cognia/plugin-sdk"
-                import { Button } from "@cognia/plugin-ui"
-                import { definePlugin as d } from "@cognia/plugin-sdk/manifest"
-                import type { Ctx } from "@cognia/plugin-sdk/context"
+                import { gate } from "@cognia/plugin-sdk/host"
+                import { x } from "@cognia/plugin-sdk/host/registry"
                 import { cn } from "@cognia/plugin-ui/cn"
+                import { y } from "@cognia/plugin-sdk/hosted-thing"
                 "#
             ),
             vec![
-                "@cognia/plugin-sdk/manifest",
-                "@cognia/plugin-sdk/context",
+                "@cognia/plugin-sdk/host",
+                "@cognia/plugin-sdk/host/registry",
                 "@cognia/plugin-ui/cn",
             ]
         );
+    }
+
+    #[test]
+    fn flags_every_other_cognia_package() {
+        let found = find_forbidden_imports(
+            r#"
+            import { redact } from "@cognia/redact"
+            import { loggers } from "@cognia/logging"
+            import { a } from "@cognia/plugin-sdk-extra"
+            "#,
+        );
+        assert_eq!(
+            found
+                .iter()
+                .map(|f| f.specifier.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "@cognia/redact",
+                "@cognia/logging",
+                "@cognia/plugin-sdk-extra"
+            ]
+        );
+        assert!(found.iter().all(|f| f.kind == ForbiddenKind::HostPackage));
     }
 
     #[test]
@@ -347,15 +420,17 @@ mod tests {
     }
 
     #[test]
-    fn classifies_the_two_kinds_apart() {
+    fn classifies_the_three_kinds_apart() {
         let found = find_forbidden_imports(
             r#"
             import a from "@/lib/a"
-            import b from "@cognia/plugin-sdk/manifest"
+            import b from "@cognia/plugin-sdk/host"
+            import c from "@cognia/redact"
             "#,
         );
         assert_eq!(found[0].kind, ForbiddenKind::HostPrivate);
         assert_eq!(found[1].kind, ForbiddenKind::SdkSubpath);
+        assert_eq!(found[2].kind, ForbiddenKind::HostPackage);
     }
 
     #[test]
