@@ -1381,6 +1381,20 @@ describe("editor groups and command palette", () => {
     )
   })
 
+  it("⌘⇧P opens the palette at once under Tauri, where it is no native accelerator", () => {
+    const win = window as unknown as Record<string, unknown>
+    win.__TAURI_INTERNALS__ = {}
+    try {
+      render(<Harness />)
+      fireEvent.keyDown(screen.getByTestId("monaco"), { key: "p", metaKey: true, shiftKey: true })
+      expect(quickOpenProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ open: true, seedQuery: { text: ">" } })
+      )
+    } finally {
+      delete win.__TAURI_INTERNALS__
+    }
+  })
+
   it("commands the workbench registers ride the palette's command list", () => {
     render(<Harness />)
     const commands = quickOpenProps.mock.calls.at(-1)?.[0]?.commands as

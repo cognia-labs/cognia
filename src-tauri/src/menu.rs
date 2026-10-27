@@ -137,9 +137,12 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .build()?;
 
     // -------------------- View --------------------
+    // No accelerator: the palette's chord is the app shortcut
+    // `app.commandPalette.toggle` (⌘K by default, rebindable). A native
+    // accelerator is taken by the OS before the webview, so it would shadow
+    // the editor's own ⌘K chords and any rebinding.
     let command_palette = MenuItemBuilder::new("Command Palette…")
         .id("command-palette")
-        .accelerator("CmdOrCtrl+Shift+P")
         .build(handle)?;
     let toggle_sidebar = MenuItemBuilder::new("Toggle Sidebar")
         .id("toggle-sidebar")
@@ -226,9 +229,6 @@ pub fn install(app: &App) -> tauri::Result<()> {
     let go = go.build()?;
 
     // -------------------- Tools --------------------
-    let tools_command_palette = MenuItemBuilder::new("Command Palette…")
-        .id("command-palette")
-        .build(handle)?;
     let automation_kill = MenuItemBuilder::new("Automation Kill-Switch")
         .id("automation-kill-switch")
         .accelerator("CmdOrCtrl+Alt+K")
@@ -249,8 +249,6 @@ pub fn install(app: &App) -> tauri::Result<()> {
         .id("clear-cache")
         .build(handle)?;
     let tools = SubmenuBuilder::new(handle, "Tools")
-        .item(&tools_command_palette)
-        .separator()
         .item(&automation_kill)
         .item(&manage_connectors)
         .item(&manage_mcp)
@@ -384,6 +382,24 @@ mod tests {
         for (id, label) in go_menu_items() {
             assert!(!label.trim().is_empty(), "Go menu item {id} has no label");
         }
+    }
+
+    /// The palette lives once, under View, and binds no native accelerator:
+    /// its chord is the app shortcut `app.commandPalette.toggle` (⌘K), which
+    /// a native accelerator would take from the webview before it is seen.
+    #[test]
+    fn command_palette_is_built_once_without_accelerator() {
+        let source = include_str!("menu.rs");
+        let builders = &source[..source.find("#[cfg(test)]").expect("test module")];
+        let id = ".id(\"command-palette\")";
+        assert_eq!(builders.matches(id).count(), 1, "one Command Palette item");
+        let at = builders.find(id).expect("Command Palette builder");
+        let chain = &builders[at..];
+        let chain = &chain[..chain.find(".build(handle)").expect("builder end")];
+        assert!(
+            !chain.contains(".accelerator("),
+            "the Command Palette item must not bind an accelerator"
+        );
     }
 
     #[test]

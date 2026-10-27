@@ -2,8 +2,8 @@
  * Keyboard claims on native-menu accelerators.
  *
  * Under Tauri a handful of chords are native menu accelerators
- * (`src-tauri/src/menu.rs`): ⌘⇧P → `command-palette`, ⌘B → `toggle-sidebar`,
- * ⌘1 / ⌘2 → `go-inbox` / `go-workflows`. They reach the renderer as
+ * (`src-tauri/src/menu.rs`): ⌘B → `toggle-sidebar`, ⌘1 / ⌘2 → `go-inbox` /
+ * `go-workflows`. They reach the renderer as
  * `menu://<id>` events through `useMenuEventRouter`, which knows nothing about
  * focus — so pressing ⌘B inside the project editor toggled the conversation
  * sidebar and ⌘2 navigated away to Workflows, taking the user out of the file

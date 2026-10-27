@@ -163,7 +163,7 @@ interface UseProjectEditorWorkbenchArgs extends UseProjectEditorArgs {
  * native menu, so the keydown only stamps a claim and the menu router runs
  * the workbench action.
  */
-type NativeMenuChord = "command-palette" | "toggle-sidebar" | "go-inbox" | "go-workflows"
+type NativeMenuChord = "toggle-sidebar" | "go-inbox" | "go-workflows"
 
 /** The live Monaco handles a read needs, as ProjectMonaco hands them over. */
 export interface MonacoReadHandles {
@@ -995,8 +995,11 @@ export function useProjectEditorWorkbench({
       }
       if (!(event.metaKey || event.ctrlKey)) return
       // ⌘⇧P / Ctrl+Shift+P — command palette: quick open seeded with ">".
+      // Not a native accelerator (the app palette's chord is ⌘K), so the
+      // workbench answers it directly in every shell.
       if (key === "p" && event.shiftKey && !event.altKey) {
-        menuChord("command-palette", () => openQuickOpen(">"))
+        consume()
+        openQuickOpen(">")
         return
       }
       // ⌘P / Ctrl+P — the file picker.
