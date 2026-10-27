@@ -36,6 +36,7 @@ import { isTauri } from "@/lib/platform/detect"
 import { usePlatform } from "@/hooks/use-platform"
 import { startMainPetBridge } from "@/lib/pet/events/cross-window-bridge"
 import { onPetConsoleRequest } from "@/lib/pet/console-request"
+import { petConsoleHref } from "@/lib/pet/console-tabs"
 import { startPetSettingsFollower, updatePetSettings } from "@/lib/pet/settings-sync"
 import { PetMainRuntime } from "./pet-main-runtime"
 
@@ -109,13 +110,13 @@ export function PetMount() {
   // router themselves. The shared availability gate limits this to Tauri.
   useEffect(() => {
     if (!petEnabled) return
-    return onPetConsoleRequest(({ tab }) => router.push(tab ? `/pet?tab=${tab}` : "/pet"))
+    return onPetConsoleRequest(({ tab }) => router.push(petConsoleHref(tab)))
   }, [petEnabled, router])
 
   useEffect(() => {
     if (!petEnabled || !isTauri()) return
     const dispose = startMainPetBridge({
-      onOpenConsole: (tab) => router.push(`/pet?tab=${tab}`),
+      onOpenConsole: (tab) => router.push(petConsoleHref(tab)),
     })
     return dispose
   }, [petEnabled, router])

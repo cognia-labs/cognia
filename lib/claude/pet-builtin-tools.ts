@@ -32,7 +32,11 @@
  */
 
 import type { PetAvailability } from "@/lib/pet/access/availability"
-import type { PetConsoleTab } from "@/lib/pet/console-tabs"
+import {
+  PET_CONSOLE_DESTINATIONS,
+  isPetConsoleTab,
+  type PetConsoleTab,
+} from "@/lib/pet/console-tabs"
 import type { PetOneShot } from "@/types/pet"
 
 export const PET_BUILTIN_PLUGIN_ID = "cognia-pet-builtin"
@@ -80,18 +84,9 @@ const REWARD_KINDS = ["goalComplete", "teamRun", "workflowRun", "success", "revi
 
 const EMOTIONS: readonly PetOneShot[] = ["happy", "sad", "surprised", "love", "sleepy", "wave"]
 
-const CONSOLE_TABS: readonly PetConsoleTab[] = [
-  "nurture",
-  "chat",
-  "shop",
-  "customize",
-  "insights",
-  "journal",
-  "dex",
-  "achievements",
-  "binding",
-  "plugins",
-]
+/** The console places the agent may name. Ids of the earlier layout
+ *  (`nurture`, `customize`, `binding`) are still accepted at call time. */
+const CONSOLE_TABS: readonly PetConsoleTab[] = PET_CONSOLE_DESTINATIONS
 
 const MAX_SAY_CHARS = 200
 
@@ -502,9 +497,7 @@ export async function runPetBuiltinTool(
         // this returned `opened: true` while doing nothing.
         const target = str(args, "target") ?? "console"
         const tabRaw = str(args, "tab")
-        const tab = CONSOLE_TABS.includes(tabRaw as PetConsoleTab)
-          ? (tabRaw as PetConsoleTab)
-          : undefined
+        const tab = isPetConsoleTab(tabRaw) ? tabRaw : undefined
         const availability = deps.availability()
         if (!availability.available) {
           // Raising the overlay is a summon, and a summon switches the pet on

@@ -1,85 +1,54 @@
-// The interaction panel shown when the widget is expanded (and inside the pet
-// popup window): the stat card, the vitals card (level + needs), and all seven
-// care actions (feed/play/pet/talk/sleep/clean/treat). The action grid, the
-// vitals card, and the talk composer are shared with the /pet nurture tab —
-// this panel only owns the compact w-72 arrangement and the plugin slot.
+// The desktop popup's pet panel: a mini version of the /pet console's Home,
+// read in the same order. Who the pet is (stat card, level and needs), what
+// it needs most right now with the care that answers it, every care action,
+// and a quick line to talk. The window actions (click-through, put away, open
+// the pet page, appearance & settings) are the popup's own, below this panel.
+//
+// The stat card, vitals, suggestion, action grid and talk composer are the
+// same components the console's Home uses, so the popup shares its cooldown
+// gate, its "most needed" choice, IME-safe Enter and ↑/↓ phrase recall.
+//
+// Inventory and plugin actions are not here: consuming an item emits a pet
+// event and this window has no controller to process it (the bridge carries
+// only the seven care interactions), and plugins run only in the main window.
+// Both live on the console's Home.
 
 "use client"
 
-import { useState } from "react"
-import { MessagesSquareIcon } from "lucide-react"
-import { useTranslations } from "next-intl"
-import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import type { PetProfile, PetSkinSelection } from "@/types/pet"
 import type { PetView } from "@/lib/pet/runtime/pet-view"
+import type { PetInteractionKind } from "@/lib/pet/needs/decay"
+import { cn } from "@/lib/utils"
 import { usePetStore } from "@/stores/pet/pet-store"
-import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
-import type { PetConsoleTab } from "@/lib/pet/console-tabs"
 import { PetStatCard } from "./pet-stat-card"
 import { PetVitalsCard } from "./pet-vitals-card"
-import { PetWalletStrip } from "./pet-wallet-strip"
 import { PetActionGrid } from "./pet-action-grid"
-import { PetInventoryStrip } from "./pet-inventory-strip"
-import { PetQuickNav } from "./pet-quick-nav"
+import { PetCareSuggestion } from "./pet-care-suggestion"
 import { PetTalkComposer } from "./pet-talk-composer"
 
 export interface PetInteractionPanelProps {
   profile: PetProfile
   view: PetView
-  onFeed: () => void
-  onPlay: () => void
-  onPet: () => void
-  /** Talk action. Submitted composer text rides along; bare click omits it. */
+  /** Run one of the six care actions. */
+  onCare: (kind: Exclude<PetInteractionKind, "talked">) => void
+  /** Talk action. Submitted composer text rides along; empty submit omits it. */
   onTalk: (text?: string) => void
-  onSleep: () => void
-  onClean: () => void
-  onTreat: () => void
   /** Effective skin for the stat-card preview (so it matches the live pet). */
   skinId?: string
   selection?: PetSkinSelection
-  /**
-   * Navigate to a /pet console tab. Enables the wallet's shop jump and the
-   * quick-nav row; the widget routes in-app, the desktop popup goes over the
-   * cross-window bridge. Omit to hide both (no navigation target).
-   */
-  onOpenConsole?: (tab: PetConsoleTab) => void
-  /**
-   * Show the owned-consumables quick-use strip. Must be false in the popup
-   * window: consuming emits a local pet event and the popup has no controller
-   * to process it (the bridge only carries the seven care interactions).
-   */
-  showInventory?: boolean
-  /**
-   * Render the `pet.panel.actions` plugin slot. Must be false in the popup
-   * window: plugins run only in the main window (the plugin runtime refuses
-   * to start in a secondary webview), so the slot there could only ever be
-   * empty while looking like a place plugins can reach.
-   */
-  showPluginActions?: boolean
   className?: string
 }
 
 export function PetInteractionPanel({
   profile,
   view,
-  onFeed,
-  onPlay,
-  onPet,
+  onCare,
   onTalk,
-  onSleep,
-  onClean,
-  onTreat,
   skinId,
   selection,
-  onOpenConsole,
-  showInventory = true,
-  showPluginActions = true,
   className,
 }: PetInteractionPanelProps) {
-  const t = useTranslations("pet")
   const grewStats = usePetStore((s) => s.lastGrewStats)
-  const [talkOpen, setTalkOpen] = useState(false)
 
   return (
     <div
@@ -100,12 +69,6 @@ export function PetInteractionPanel({
         selection={selection}
       />
 
-      <PetWalletStrip
-        coins={profile.coins}
-        streak={profile.streak}
-        onOpenShop={onOpenConsole ? () => onOpenConsole("shop") : undefined}
-      />
-
       <PetVitalsCard
         xp={profile.xp}
         needs={view.needs}
@@ -113,49 +76,23 @@ export function PetInteractionPanel({
         condition={view.condition}
       />
 
-      <PetActionGrid
-        onFeed={onFeed}
-        onPlay={onPlay}
-        onPet={onPet}
-        onSleep={onSleep}
-        onClean={onClean}
-        onTreat={onTreat}
-        talkOpen={talkOpen}
-        onToggleTalk={() => setTalkOpen((o) => !o)}
+      <PetCareSuggestion
+        size="compact"
+        needs={view.needs}
+        petName={profile.soul?.name}
+        onCare={(kind) => (kind === "talked" ? onTalk() : onCare(kind))}
       />
 
-      {showInventory && <PetInventoryStrip />}
+      <PetActionGrid
+        onFeed={() => onCare("fed")}
+        onPlay={() => onCare("played")}
+        onPet={() => onCare("petted")}
+        onSleep={() => onCare("slept")}
+        onClean={() => onCare("cleaned")}
+        onTreat={() => onCare("treated")}
+      />
 
-      {showPluginActions && (
-        <PluginExtensionSlot
-          point="pet.panel.actions"
-          limit={4}
-          className="flex items-center gap-1 empty:hidden"
-          context={{
-            level: profile.level,
-            stage: profile.stage,
-            mood: view.mood,
-            condition: view.condition,
-          }}
-        />
-      )}
-
-      {talkOpen && <PetTalkComposer onTalk={onTalk} />}
-
-      {onOpenConsole && (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 justify-start gap-2"
-          data-testid="pet-open-chat"
-          onClick={() => onOpenConsole("chat")}
-        >
-          <MessagesSquareIcon className="size-3.5" />
-          {t("chat.openPanel")}
-        </Button>
-      )}
-
-      {onOpenConsole && <PetQuickNav onNavigate={onOpenConsole} />}
+      <PetTalkComposer onTalk={onTalk} autoFocus={false} />
     </div>
   )
 }

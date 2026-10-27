@@ -7,8 +7,6 @@ function reset() {
     visualState: "idle",
     oneShotQueue: [],
     bubble: null,
-    minimized: false,
-    position: null,
     lastGrewStats: [],
     careAlert: null,
     interactionRefusal: null,
@@ -29,10 +27,8 @@ describe("usePetStore", () => {
     }
     usePetStore.getState().setProfileSnapshot(snapshot)
     expect(usePetStore.getState().profileSnapshot).toEqual(snapshot)
-    expect(usePetStore.persist.getOptions().partialize?.(usePetStore.getState())).toEqual({
-      minimized: false,
-      position: null,
-    })
+    // Nothing in this store is persisted: no `persist` middleware at all.
+    expect((usePetStore as unknown as { persist?: unknown }).persist).toBeUndefined()
     usePetStore.getState().setProfileSnapshot(null)
     expect(usePetStore.getState().profileSnapshot).toBeNull()
   })
@@ -62,13 +58,6 @@ describe("usePetStore", () => {
     expect(usePetStore.getState().bubble).toEqual({ text: "hi", origin: "template" })
     usePetStore.getState().setBubble(null)
     expect(usePetStore.getState().bubble).toBeNull()
-  })
-
-  it("tracks minimized + position", () => {
-    usePetStore.getState().setMinimized(true)
-    usePetStore.getState().setPosition({ x: 10, y: 20 })
-    expect(usePetStore.getState().minimized).toBe(true)
-    expect(usePetStore.getState().position).toEqual({ x: 10, y: 20 })
   })
 
   it("tracks the last grown stats", () => {

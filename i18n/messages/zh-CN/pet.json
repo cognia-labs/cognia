@@ -231,7 +231,6 @@
       "failed": "未能开启宠物聊天，请重试。"
     },
     "openFullChat": "打开完整对话",
-    "openPanel": "聊天",
     "petFallbackName": "宠物",
     "scrollToBottom": "滚动到最新宠物消息",
     "sending": "{name} 正在思考…",
@@ -255,31 +254,24 @@
     "recoveryHint": "想让它恢复，就把精力和心情都提升到 {threshold} 以上：让它睡一觉、陪它玩，或者喂点零食。商店里的急救包能让它恢复得更快。"
   },
   "console": {
-    "groups": {
-      "extensions": "扩展",
-      "nurture": "养成",
-      "personalize": "个性化",
-      "records": "记录"
-    },
     "hatch": "孵化",
     "hatchPrompt": "你的蛋可以孵化了。",
     "live2dFallback": "Live2D 暂时不可用，正在显示内置形象。",
     "loading": "正在唤醒你的宠物…",
     "navigation": "宠物导航",
-    "navigationDescription": "选择一个宠物工作区。",
-    "openNavigation": "打开宠物导航",
     "subtitle": "养育它、装扮它，一起成长。",
     "tabs": {
-      "achievements": "成就",
-      "binding": "角色",
-      "chat": "聊天",
-      "customize": "自定义",
+      "home": "首页",
+      "chat": "对话",
+      "shop": "商店",
+      "collection": "收藏",
+      "activity": "动态",
       "dex": "图鉴",
-      "insights": "洞察",
+      "achievements": "成就",
       "journal": "日记",
-      "nurture": "养育",
-      "plugins": "插件",
-      "shop": "商店"
+      "insights": "洞察",
+      "appearance": "外观与设置",
+      "plugins": "插件"
     },
     "title": "你的宠物",
     "unavailable": {
@@ -306,12 +298,6 @@
       "captureDescription": "你采集的网页和笔记会成为雷达分析的素材，可以在这里选择采集哪些内容。",
       "captureTitle": "采集来源"
     },
-    "nurture": {
-      "care": "照顾",
-      "stats": "档案",
-      "status": "宠物现在的状态",
-      "wallet": "钱包"
-    },
     "renameFailed": "改名失败，请重试。",
     "stages": {
       "adult": "成年",
@@ -325,9 +311,13 @@
       "badge": "桌面端",
       "title": "「{tab}」在桌面端使用",
       "why": "它依赖保存在桌面端的皮肤、模型和插件，因此无法在此设备上运行。",
-      "remedy": "请在桌面端打开 Cognia，进入 宠物 → {tab}。",
+      "remedy": {
+        "appearance": "请在桌面端打开 Cognia，进入 宠物 → 外观与设置。",
+        "insights": "请在桌面端打开 Cognia，进入 宠物 → 动态 → 洞察。",
+        "plugins": "请在桌面端打开 Cognia，进入 宠物 → 插件。"
+      },
       "what": {
-        "customize": "修改宠物的物种、配色、皮肤和大小。",
+        "appearance": "修改宠物的物种、配色、皮肤、大小和行为。",
         "insights": "查看雷达从你的活动中发现的内容，并选择要捕获的来源。",
         "plugins": "桌面端插件为宠物控制台添加的面板。"
       }
@@ -384,6 +374,28 @@
         "title": "桌面端还没有宠物",
         "description": "先打开一次 Cognia 桌面客户端来创建宠物，然后再回到这里。"
       }
+    },
+    "home": {
+      "status": "宠物现在的状态",
+      "next": "下一步",
+      "mostNeeded": "现在最需要：",
+      "needValue": "{need} {value}%",
+      "cooling": "{seconds} 秒后可{action}",
+      "content": "{name} 状态很好，现在不需要照顾。",
+      "contentNoName": "你的宠物状态很好，现在不需要照顾。",
+      "care": "照顾",
+      "backpack": "背包",
+      "talk": "说说话",
+      "openChat": "完整对话",
+      "stats": "档案",
+      "talkInChat": "和宠物的对话会记录在「对话」中。"
+    },
+    "appearance": {
+      "title": "外观与设置",
+      "description": "宠物的样子和行为，包括桌面上的表现。",
+      "index": "外观与设置分区",
+      "binding": "角色外观",
+      "bindingDescription": "为某个角色指定专属的物种或皮肤。与该角色对话时会显示它的外观，而不是全局外观。"
     }
   },
   "customize": {
@@ -557,22 +569,13 @@
     "level": "等级 {level}"
   },
   "quickMenu": {
-    "clean": "清洁",
     "clickThrough": "鼠标穿透",
-    "clickThroughDescription": "鼠标点击会穿过桌宠，落到后面的窗口上。可在托盘菜单或「设置 → 宠物」中关闭。",
-    "feed": "喂食",
+    "clickThroughDescription": "点击会穿过宠物落到后面的窗口。可在托盘菜单或 宠物 → 外观与设置 中关闭。",
     "hideDesktopPet": "隐藏桌宠",
-    "minimize": "最小化",
-    "openConsole": "打开宠物面板",
-    "openSettings": "打开设置",
-    "pet": "抚摸",
-    "play": "玩耍",
+    "openConsole": "打开宠物页",
     "showDesktopPet": "显示桌宠",
-    "showMainWindow": "显示主窗口",
-    "sleep": "休息",
-    "talk": "聊天",
-    "treat": "奖励",
-    "windowActions": "桌宠窗口"
+    "windowActions": "桌宠窗口",
+    "openAppearance": "外观与设置"
   },
   "rarity": {
     "common": "普通",
@@ -731,11 +734,6 @@
   },
   "wallet": {
     "multiplier": "金币 ×{multiplier}"
-  },
-  "widget": {
-    "minimize": "最小化宠物",
-    "restore": "显示宠物",
-    "toggle": "打开宠物"
   },
   "achievementsProgress": {
     "summary": "已解锁 {unlocked} / {total}",

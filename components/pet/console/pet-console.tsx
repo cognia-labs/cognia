@@ -1,13 +1,19 @@
-// The /pet console: a full-page home for the pet with nurture, chat, shop,
-// customization, records and character-binding tabs. Structured like the
-// sibling consoles (`EvalWorkspace`, `MemoryConsole`): a full-height flex
-// column with a persistent identity header, the tab navigation, and a
-// scrolling content region measured as `@container/pet-pane`.
+// The /pet console: a full-page home for the pet. Built on the shared
+// `FeaturePageShell` + `FeaturePageHeader`, like `/memory` and
+// `/conversations`: the header carries the pet's identity, the actions and the
+// navigation row; the center pane scrolls and is measured as
+// `@container/pet-pane`.
+//
+// Five places, in the order a visit goes: Home (how the pet is and what it
+// needs next), Chat, Shop, Collection (dex, achievements) and Activity
+// (journal, insights), plus a plugins tab while a plugin fills it. Appearance
+// & settings is a sub-page the header opens, with a breadcrumb back. Where a
+// link lands is `lib/pet/console-tabs.ts`.
 //
 // This file composes; the pieces live beside it: `PetConsoleHeader`,
-// `PetConsoleNav` (one Radix tablist that is a strip on a phone and a rail
-// above it), `HatchPanel`, `PetConsoleSkeleton`, and for remote care the
-// status band and the desktop-only notice.
+// `PetConsoleNav`, `HomeTab`, `PetConsoleSegments`, `AppearanceView`,
+// `HatchPanel`, `PetConsoleSkeleton`, and for remote care the status band and
+// the desktop-only notice.
 //
 // Two modes (ADR-0219, `lib/pet/console/console-mode.ts`). In the desktop
 // app's main window the console drives its own pet. On a phone or browser
@@ -24,7 +30,6 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { MonitorIcon, MonitorSmartphoneIcon, PawPrintIcon } from "lucide-react"
-import { useIsNarrow } from "@/hooks/ui/use-media-query"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -35,6 +40,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
+import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { usePet, type UsePetResult } from "@/hooks/pet/use-pet"
 import { useActiveCharacterId } from "@/hooks/pet/use-active-character-id"
 import { usePetConsoleMode } from "@/hooks/pet/use-pet-console-mode"
@@ -48,21 +54,30 @@ import {
 } from "@/components/plugins/plugin-extension-slot"
 import { DEFAULT_PET_SETTINGS } from "@/types/pet"
 import type { PetAssetDiagnostic, PetSkinSelection } from "@/types/pet"
-import { PET_CONSOLE_TABS, isPetConsoleTab, type PetConsoleTab } from "@/lib/pet/console-tabs"
+import {
+  PET_CONSOLE_DEFAULT_TARGET,
+  PET_CONSOLE_SECTIONS,
+  isPetConsoleSection,
+  type PetActivitySegment,
+  type PetCollectionSegment,
+  type PetConsoleSection,
+  type PetConsoleTarget,
+} from "@/lib/pet/console-tabs"
 import { petConsoleDesktopOnlyTabs } from "@/lib/pet/console/action-capabilities"
 import type { PetConsoleUnavailableReason } from "@/lib/pet/console/console-mode"
 import { toPetAssetDiagnostics } from "@/lib/pet/live2d/compatibility-diagnostics"
 import { getPetSkinRuntime } from "@/lib/pet/skin-runtime"
 import { resolveEffectiveSkinSelection } from "../skins/resolve-effective-skin"
-import { NurtureTab } from "./nurture-tab"
+import { PetSkinStatus } from "../settings/pet-skin-status"
+import { HomeTab } from "./home-tab"
 import { ChatTab } from "./chat-tab"
 import { ShopTab } from "./shop-tab"
-import { CustomizeTab } from "./customize-tab"
 import { DexTab } from "./dex-tab"
 import { JournalTab } from "./journal-tab"
 import { AchievementsTab } from "./achievements-tab"
-import { BindingTab } from "./binding-tab"
 import { InsightsTab } from "./insights-tab"
+import { AppearanceView } from "./appearance-view"
+import { PetConsoleSegments } from "./pet-console-segments"
 import { PetConsoleHeader } from "./pet-console-header"
 import { PetConsoleNav } from "./pet-console-nav"
 import { HatchPanel } from "./hatch-panel"
@@ -72,17 +87,18 @@ import { usePetConsoleActions } from "./pet-console-actions-context"
 import { PetRemoteStatusBand } from "./pet-remote-status-band"
 import { DesktopOnlyNotice } from "./desktop-only-notice"
 
-const TABS: readonly PetConsoleTab[] = PET_CONSOLE_TABS
-
 /** A paired device draws the plain vector pet: skins are desktop-local blobs. */
 const REMOTE_SELECTION: PetSkinSelection = { skinId: "svg" }
 
 export interface PetConsoleProps {
-  /** Initial tab (deep link `?tab=` / bridge navigation). Default "nurture". */
-  initialTab?: PetConsoleTab
+  /**
+   * Where to open (deep link `?tab=` / `?view=`, bridge navigation), from
+   * `petConsoleTargetFromParams`. Default: Home.
+   */
+  initialTarget?: PetConsoleTarget
 }
 
-export function PetConsole({ initialTab }: PetConsoleProps = {}) {
+export function PetConsole({ initialTarget }: PetConsoleProps = {}) {
   const resolution = usePetConsoleMode()
   // The console reads the pet the way the floating widget does: through the
   // open session's character binding. Without it the console showed the
@@ -108,7 +124,7 @@ export function PetConsole({ initialTab }: PetConsoleProps = {}) {
       pet={pet}
       activeCharacterId={activeCharacterId}
     >
-      <PetConsoleBody initialTab={initialTab} pet={pet} />
+      <PetConsoleBody initialTarget={initialTarget} pet={pet} />
     </PetConsoleActionsProvider>
   )
 }
@@ -184,10 +200,10 @@ function PetConsoleUnavailable({
 }
 
 function PetConsoleBody({
-  initialTab,
+  initialTarget,
   pet: petState,
 }: {
-  initialTab?: PetConsoleTab
+  initialTarget?: PetConsoleTarget
   pet: UsePetResult
 }) {
   const t = useTranslations("pet")
@@ -195,17 +211,44 @@ function PetConsoleBody({
   const remote = actions.remote
   const appSettings = useSettingsStore((s) => s.settings)
   const { profile, view } = petState
-  const [tab, setTab] = useState<PetConsoleTab>(initialTab ?? "nurture")
-  const narrow = useIsNarrow()
+  const [target, setTarget] = useState<PetConsoleTarget>(
+    initialTarget ?? PET_CONSOLE_DEFAULT_TARGET
+  )
+  // Each segmented section remembers its own segment while the reader moves
+  // between sections.
+  const [collectionSegment, setCollectionSegment] = useState<PetCollectionSegment>(
+    initialTarget?.view === "main" && initialTarget.section === "collection"
+      ? ((initialTarget.segment as PetCollectionSegment | undefined) ?? "dex")
+      : "dex"
+  )
+  // Where "back" from the appearance sub-page returns to.
+  const [returnSection, setReturnSection] = useState<PetConsoleSection>("home")
+  const [activitySegment, setActivitySegment] = useState<PetActivitySegment>(
+    initialTarget?.view === "main" && initialTarget.section === "activity"
+      ? ((initialTarget.segment as PetActivitySegment | undefined) ?? "journal")
+      : "journal"
+  )
 
   // Follow later deep links too: navigating /pet?tab=shop while the console is
   // already mounted only changes the prop, not the mounted state. Adjusted
   // during render (not in an effect) per the React "derive from prop change"
   // pattern.
-  const [prevInitialTab, setPrevInitialTab] = useState(initialTab)
-  if (initialTab !== prevInitialTab) {
-    setPrevInitialTab(initialTab)
-    if (initialTab) setTab(initialTab)
+  // Compared by value: a caller that rebuilds the same target must not reset
+  // the reader's place on every render.
+  const targetKey = initialTarget ? JSON.stringify(initialTarget) : ""
+  const [prevTargetKey, setPrevTargetKey] = useState(targetKey)
+  if (targetKey !== prevTargetKey) {
+    setPrevTargetKey(targetKey)
+    if (initialTarget) {
+      setTarget(initialTarget)
+      if (initialTarget.view === "main" && initialTarget.segment) {
+        if (initialTarget.section === "collection") {
+          setCollectionSegment(initialTarget.segment as PetCollectionSegment)
+        } else if (initialTarget.section === "activity") {
+          setActivitySegment(initialTarget.segment as PetActivitySegment)
+        }
+      }
+    }
   }
 
   // Resolve the effective skin so the console previews match the floating
@@ -256,8 +299,11 @@ function PetConsoleBody({
   // The "Plugins" tab is host-owned and appears only while ≥1 plugin has
   // registered a `pet.console.tab` extension.
   const hasPluginTabs = usePluginSlotHasExtensions("pet.console.tab")
-  const visibleTabs = hasPluginTabs ? TABS : TABS.filter((id) => id !== "plugins")
-  const desktopOnlyTabs = petConsoleDesktopOnlyTabs(actions.mode, visibleTabs)
+  const sections = hasPluginTabs
+    ? PET_CONSOLE_SECTIONS
+    : PET_CONSOLE_SECTIONS.filter((id) => id !== "plugins")
+  const desktopOnly = petConsoleDesktopOnlyTabs(actions.mode, [...sections, "insights"] as const)
+  const desktopOnlySections = new Set(sections.filter((id) => desktopOnly.has(id)))
   const statusBand = remote ? <PetRemoteStatusBand remote={remote} /> : null
 
   if (!profile || !view) {
@@ -293,144 +339,237 @@ function PetConsoleBody({
     actions.capability(id) === "available"
 
   // A `?tab=plugins` deep link can arrive before (or after the last of) the
-  // plugins that fill it; the pane falls back to nurture until one registers,
+  // plugins that fill it; the pane falls back to Home until one registers,
   // without forgetting that plugins is what was asked for.
-  const activeTab: PetConsoleTab = tab === "plugins" && !hasPluginTabs ? "nurture" : tab
+  const activeSection: PetConsoleSection =
+    target.view === "main" && !(target.section === "plugins" && !hasPluginTabs)
+      ? target.section
+      : "home"
 
-  const selectTab = (value: string) => {
-    if (isPetConsoleTab(value)) setTab(value)
+  const openSection = (section: PetConsoleSection) => setTarget({ view: "main", section })
+  const openAppearance = () => {
+    if (target.view === "main") setReturnSection(activeSection)
+    setTarget({ view: "appearance" })
   }
 
-  /** The panel for `id`, or the desktop-only notice in its place. */
-  const panel = (id: PetConsoleTab, content: () => ReactNode) =>
-    desktopOnlyTabs.has(id) ? <DesktopOnlyNotice tab={id} /> : content()
+  const selectSection = (value: string) => {
+    if (isPetConsoleSection(value)) openSection(value)
+  }
 
-  return (
-    <div
-      data-testid="pet-console"
-      data-mode={actions.mode}
-      className="flex h-full min-h-0 flex-col"
-    >
-      <PetConsoleHeader
-        profile={profile}
-        view={view}
+  const desktopToggle =
+    profile.soul && can("desktop.toggle")
+      ? {
+          onDesktop: actions.desktop.visible,
+          pending: actions.desktop.pending,
+          onToggle: () => void actions.toggleDesktop(),
+        }
+      : undefined
+  // A hatched pet only: an egg on the desktop has nothing to do.
+  const desktopStatus =
+    profile.soul && !can("desktop.toggle") ? { visible: actions.desktop.visible } : undefined
+
+  const headerProps = {
+    profile,
+    view,
+    effectiveSkinId: effectiveSkin,
+    selection,
+    lowPower,
+    onRename: (name: string) => void actions.rename(name),
+    desktop: desktopToggle,
+    desktopStatus,
+  }
+
+  // Why the pet looks the way it does, when it is not the look that was
+  // picked: the skin fallback with its repair actions on the desktop, and the
+  // simplified vector look on a paired device.
+  const skinNotice =
+    remote !== null ? (
+      requestedSkinId !== "svg" ? (
+        <p data-testid="pet-console-simplified-look" className="text-xs text-muted-foreground">
+          {t("console.remote.simplifiedLook")}
+        </p>
+      ) : null
+    ) : (
+      <PetSkinStatus
         requestedSkinId={requestedSkinId}
         effectiveSkinId={effectiveSkin}
-        selection={selection}
-        lowPower={lowPower}
-        diagnostics={remote ? [] : diagnostics}
-        onRetrySkin={
+        diagnostics={diagnostics}
+        onRetry={
           can("skin.retry") && runtimeDiagnostic && assetKey
             ? () => runtime.retryAsset(assetKey)
             : undefined
         }
-        onConfigureSkin={
-          can("skin.configure") && pet.skinId !== "svg" ? () => setTab("customize") : undefined
-        }
-        onRename={(name) => void actions.rename(name)}
-        // A hatched pet only: an egg on the desktop has nothing to do.
-        desktop={
-          profile.soul && can("desktop.toggle")
-            ? {
-                onDesktop: actions.desktop.visible,
-                pending: actions.desktop.pending,
-                onToggle: () => void actions.toggleDesktop(),
-              }
-            : undefined
-        }
-        desktopStatus={
-          profile.soul && !can("desktop.toggle") ? { visible: actions.desktop.visible } : undefined
-        }
-        simplifiedLook={remote !== null && requestedSkinId !== "svg"}
+        onConfigure={can("skin.configure") && pet.skinId !== "svg" ? openAppearance : undefined}
       />
+    )
 
+  const pane = (children: ReactNode) => (
+    <div className="flex min-h-0 flex-1 flex-col">
       {statusBand}
-
-      <Tabs
-        value={activeTab}
-        onValueChange={selectTab}
-        // Arrow keys follow the layout: across the phone strip, down the rail.
-        orientation={narrow ? "horizontal" : "vertical"}
-        className="min-h-0 flex-1 gap-0 md:grid md:grid-cols-[3.75rem_minmax(0,1fr)] lg:grid-cols-[13rem_minmax(0,1fr)]"
+      <main
+        data-testid="pet-console-pane"
+        className="@container/pet-pane min-h-0 min-w-0 flex-1 overflow-auto px-4 py-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] md:px-6 md:py-6"
       >
-        <PetConsoleNav visibleTabs={visibleTabs} desktopOnlyTabs={desktopOnlyTabs} />
-
-        <main className="@container/pet-pane min-h-0 min-w-0 flex-1 overflow-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <TabsContent value="nurture">
-            {profile.soul ? (
-              <NurtureTab
-                profile={profile}
-                view={view}
-                skinId={effectiveSkin}
-                selection={selection}
-                lowPower={lowPower}
-                onFeed={() => void actions.care("fed")}
-                onPlay={() => void actions.care("played")}
-                onPet={() => void actions.care("petted")}
-                onTalk={(text) => void actions.care("talked", text ? { text } : {})}
-                onSleep={() => void actions.care("slept")}
-                onClean={() => void actions.care("cleaned")}
-                onTreat={() => void actions.care("treated")}
-                onOpenShop={() => setTab("shop")}
-                cooldownRemaining={actions.cooldownRemaining}
-                talkMode={actions.mode === "remote" ? "direct" : "composer"}
-              />
-            ) : (
-              <HatchPanel
-                bones={view.effectiveBones}
-                skinId={effectiveSkin}
-                selection={selection}
-                lowPower={lowPower}
-                onHatch={actions.hatch}
-              />
-            )}
-          </TabsContent>
-          <TabsContent value="chat" className="h-full">
-            <ChatTab petName={profile.soul?.name} />
-          </TabsContent>
-          <TabsContent value="shop">
-            <ShopTab />
-          </TabsContent>
-          <TabsContent value="customize">
-            {panel("customize", () => (
-              <CustomizeTab />
-            ))}
-          </TabsContent>
-          <TabsContent value="insights">
-            {panel("insights", () => (
-              <InsightsTab />
-            ))}
-          </TabsContent>
-          <TabsContent value="journal">
-            <JournalTab />
-          </TabsContent>
-          <TabsContent value="dex">
-            <DexTab bones={view.bones} />
-          </TabsContent>
-          <TabsContent value="achievements">
-            <AchievementsTab />
-          </TabsContent>
-          <TabsContent value="binding">
-            <BindingTab readOnly={!can("binding.edit")} />
-          </TabsContent>
-          {hasPluginTabs ? (
-            <TabsContent value="plugins">
-              {panel("plugins", () => (
-                <PluginExtensionSlot
-                  point="pet.console.tab"
-                  className="mx-auto flex w-full max-w-3xl flex-col gap-4"
-                  context={{
-                    level: profile.level,
-                    stage: profile.stage,
-                    mood: view.mood,
-                    condition: view.condition,
-                  }}
-                />
-              ))}
-            </TabsContent>
-          ) : null}
-        </main>
-      </Tabs>
+        {children}
+      </main>
     </div>
+  )
+
+  if (target.view === "appearance") {
+    return (
+      <div
+        data-testid="pet-console"
+        data-mode={actions.mode}
+        data-view="appearance"
+        className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col"
+      >
+        <FeaturePageShell
+          storageId="pet-appearance"
+          header={
+            <PetConsoleHeader
+              mode="appearance"
+              {...headerProps}
+              onBack={() => openSection(returnSection)}
+            />
+          }
+        >
+          {pane(
+            <AppearanceView
+              canCustomize={can("appearance.customize")}
+              canEditBinding={can("binding.edit")}
+              focus={target.focus}
+            />
+          )}
+        </FeaturePageShell>
+      </div>
+    )
+  }
+
+  return (
+    <Tabs
+      value={activeSection}
+      onValueChange={selectSection}
+      data-testid="pet-console"
+      data-mode={actions.mode}
+      data-view="main"
+      className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col gap-0"
+    >
+      <FeaturePageShell
+        storageId="pet"
+        header={
+          <PetConsoleHeader
+            mode="main"
+            {...headerProps}
+            navigation={
+              <PetConsoleNav sections={sections} desktopOnlySections={desktopOnlySections} />
+            }
+            onOpenAppearance={openAppearance}
+            appearanceDesktopOnly={!can("appearance.customize")}
+          />
+        }
+      >
+        {pane(
+          <>
+            <TabsContent value="home">
+              {profile.soul ? (
+                <HomeTab
+                  profile={profile}
+                  view={view}
+                  skinId={effectiveSkin}
+                  selection={selection}
+                  lowPower={lowPower}
+                  onCare={(kind) => void actions.care(kind)}
+                  onTalk={(text) => void actions.care("talked", text ? { text } : {})}
+                  onOpenShop={() => openSection("shop")}
+                  onOpenChat={() => openSection("chat")}
+                  cooldownRemaining={actions.cooldownRemaining}
+                  talkMode={actions.mode === "remote" ? "direct" : "composer"}
+                  showPluginActions={actions.mode === "local"}
+                  notice={skinNotice}
+                />
+              ) : (
+                <HatchPanel
+                  bones={view.effectiveBones}
+                  skinId={effectiveSkin}
+                  selection={selection}
+                  lowPower={lowPower}
+                  onHatch={actions.hatch}
+                />
+              )}
+            </TabsContent>
+            <TabsContent value="chat" className="h-full">
+              <ChatTab petName={profile.soul?.name} />
+            </TabsContent>
+            <TabsContent value="shop">
+              <ShopTab />
+            </TabsContent>
+            <TabsContent value="collection">
+              <PetConsoleSegments
+                testId="pet-collection"
+                label={t("console.tabs.collection")}
+                value={collectionSegment}
+                onValueChange={setCollectionSegment}
+                segments={[
+                  {
+                    id: "dex",
+                    label: t("console.tabs.dex"),
+                    content: () => <DexTab bones={view.bones} />,
+                  },
+                  {
+                    id: "achievements",
+                    label: t("console.tabs.achievements"),
+                    content: () => <AchievementsTab />,
+                  },
+                ]}
+              />
+            </TabsContent>
+            <TabsContent value="activity">
+              <PetConsoleSegments
+                testId="pet-activity"
+                label={t("console.tabs.activity")}
+                value={activitySegment}
+                onValueChange={setActivitySegment}
+                segments={[
+                  {
+                    id: "journal",
+                    label: t("console.tabs.journal"),
+                    content: () => <JournalTab />,
+                  },
+                  {
+                    id: "insights",
+                    label: t("console.tabs.insights"),
+                    desktopOnly: desktopOnly.has("insights"),
+                    content: () =>
+                      desktopOnly.has("insights") ? (
+                        <DesktopOnlyNotice tab="insights" />
+                      ) : (
+                        <InsightsTab />
+                      ),
+                  },
+                ]}
+              />
+            </TabsContent>
+            {hasPluginTabs ? (
+              <TabsContent value="plugins">
+                {desktopOnly.has("plugins") ? (
+                  <DesktopOnlyNotice tab="plugins" />
+                ) : (
+                  <PluginExtensionSlot
+                    point="pet.console.tab"
+                    className="mx-auto flex w-full max-w-3xl flex-col gap-4"
+                    context={{
+                      level: profile.level,
+                      stage: profile.stage,
+                      mood: view.mood,
+                      condition: view.condition,
+                    }}
+                  />
+                )}
+              </TabsContent>
+            ) : null}
+          </>
+        )}
+      </FeaturePageShell>
+    </Tabs>
   )
 }

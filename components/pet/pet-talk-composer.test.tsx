@@ -49,6 +49,11 @@ describe("PetTalkComposer", () => {
     expect(input).toHaveFocus()
   })
 
+  it("leaves focus alone when it is always on the page", () => {
+    const { input } = setup({ autoFocus: false })
+    expect(input).not.toHaveFocus()
+  })
+
   it("requires text in chat mode and reflects the in-flight status", () => {
     const { onTalk } = setup({ mode: "chat", status: "submitted", allowEmpty: false })
     const submit = screen.getByLabelText("Send")

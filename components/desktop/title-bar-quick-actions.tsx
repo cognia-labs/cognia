@@ -3,41 +3,49 @@
 /**
  * Title-bar quick-actions cluster — one-click access to the desktop pet,
  * screen OCR, and content capture. Each control reuses an existing entry
- * point: the pet toggle drives `usePetStore.setMinimized`; OCR opens its
- * settings section via the shared `requestOpenSettings` request; capture opens
- * the pet console's Insights tab, which is the only place
- * `CaptureSettingsPanel` is mounted (it used to open Settings → Pet, which has
- * no capture controls). Gated by the parent (`barItems.quickActions`).
+ * point: the pet toggle is the same "show / put away the desktop pet" as the
+ * /pet console header and the popup (`toggleDesktopPetWindow`, which persists
+ * `PetSettings.desktopPet.enabled`); OCR opens its settings section via the
+ * shared `requestOpenSettings` request; capture opens the pet console's
+ * Insights (Activity), which is the only place `CaptureSettingsPanel` is
+ * mounted. Gated by the parent (`barItems.quickActions`).
+ *
+ * The pet toggle used to flip `usePetStore.minimized`, which only the in-app
+ * widget read; that widget was never mounted, so the button changed nothing.
  *
  * The pet and capture controls are desktop-shell only, like the pet itself
- * (ADR-0058 D9): the title bar also renders in the web shell, where the widget
- * never mounts and the pet console only explains that. The pet toggle further
- * needs the pet switched on, because it hides and shows a widget that only
- * exists then.
+ * (ADR-0058 D9): the title bar also renders in the web shell, where the pet
+ * console only explains that. The pet toggle further needs the pet switched
+ * on: switching it on is the master switch's job in Appearance & settings.
  */
 
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { useRouter } from "next/navigation"
 import { ClipboardIcon, PawPrintIcon, ScanTextIcon } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { usePlatform } from "@/hooks/use-platform"
 import { cn } from "@/lib/utils"
-import { usePetStore } from "@/stores/pet/pet-store"
+import { toggleDesktopPetWindow } from "@/lib/pet/commands"
+import { petConsoleHref } from "@/lib/pet/console-tabs"
 import { useSettingsStore } from "@/stores/settings"
 import { useUIStore } from "@/stores/ui/ui-store"
-import { DEFAULT_PET_SETTINGS } from "@/types/pet"
+import { DEFAULT_PET_DESKTOP_OVERLAY, DEFAULT_PET_SETTINGS } from "@/types/pet"
 
 function QuickButton({
   label,
   testId,
   active,
+  disabled,
   onClick,
   children,
 }: {
   label: string
   testId: string
   active?: boolean
+  disabled?: boolean
   onClick: () => void
   children: React.ReactNode
 }) {
@@ -49,6 +57,7 @@ function QuickButton({
       aria-label={label}
       title={label}
       aria-pressed={active}
+      disabled={disabled}
       onClick={onClick}
       className={cn(
         "h-7 w-7 rounded-sm text-muted-foreground transition-colors hover:text-foreground",
@@ -63,14 +72,26 @@ function QuickButton({
 
 export function TitleBarQuickActions({ className }: { className?: string }) {
   const t = useTranslations("desktop.titleBar.quickActions")
-  const minimized = usePetStore((s) => s.minimized)
-  const setMinimized = usePetStore((s) => s.setMinimized)
   const requestOpenSettings = useUIStore((s) => s.requestOpenSettings)
-  const petEnabled = useSettingsStore(
-    (s) => (s.settings?.petSettings ?? DEFAULT_PET_SETTINGS).enabled
-  )
+  const petSettings = useSettingsStore((s) => s.settings?.petSettings ?? DEFAULT_PET_SETTINGS)
+  const petEnabled = petSettings.enabled
+  const onDesktop = (petSettings.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY).enabled
+  const [toggling, setToggling] = useState(false)
   const router = useRouter()
   const desktopShell = usePlatform() === "tauri"
+
+  const toggleDesktopPet = async () => {
+    setToggling(true)
+    try {
+      const opened = await toggleDesktopPetWindow()
+      // Asked to show it and it is still not out: say so instead of nothing.
+      if (!onDesktop && !opened) toast.error(t("petToggleFailed"))
+    } catch {
+      toast.error(t("petToggleFailed"))
+    } finally {
+      setToggling(false)
+    }
+  }
 
   return (
     <div
@@ -79,10 +100,11 @@ export function TitleBarQuickActions({ className }: { className?: string }) {
     >
       {desktopShell && petEnabled ? (
         <QuickButton
-          label={minimized ? t("showPet") : t("hidePet")}
+          label={onDesktop ? t("hidePet") : t("showPet")}
           testId="quick-action-pet"
-          active={!minimized}
-          onClick={() => setMinimized(!minimized)}
+          active={onDesktop}
+          disabled={toggling}
+          onClick={() => void toggleDesktopPet()}
         >
           <PawPrintIcon className="size-4" aria-hidden />
         </QuickButton>
@@ -98,7 +120,7 @@ export function TitleBarQuickActions({ className }: { className?: string }) {
         <QuickButton
           label={t("capture")}
           testId="quick-action-capture"
-          onClick={() => router.push("/pet?tab=insights")}
+          onClick={() => router.push(petConsoleHref("insights"))}
         >
           <ClipboardIcon className="size-4" aria-hidden />
         </QuickButton>

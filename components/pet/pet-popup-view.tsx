@@ -2,9 +2,10 @@
 // `app/pet-popup/page.tsx` inside the frameless always-on-top "pet-popup" Tauri
 // window (window role "popup"), opened when the user right-clicks the sprite.
 //
-// This is a thin shell over the existing `PetInteractionPanel` (the same panel
-// the in-app widget shows when expanded) plus a small row of overlay-only window
-// actions. It owns no pet controller: usePet reads the main window's profile
+// This is a thin shell over `PetInteractionPanel` (a mini version of the /pet
+// console's Home: who the pet is, what it needs most, every care action and a
+// quick line to talk) plus a row of window actions. It owns no pet
+// controller: usePet reads the main window's profile
 // projection over the bridge, and interactions are posted back to the
 // main window over the cross-window bridge, which awards XP exactly once.
 //
@@ -19,12 +20,7 @@
 
 import { useEffect, useRef, useState, type ComponentType } from "react"
 import { useTranslations } from "next-intl"
-import {
-  AppWindowIcon,
-  EyeOffIcon,
-  MousePointerClickIcon,
-  SlidersHorizontalIcon,
-} from "lucide-react"
+import { EyeOffIcon, HomeIcon, MousePointerClickIcon, SlidersHorizontalIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useSettingsStore } from "@/stores/settings"
 import { usePetStore } from "@/stores/pet/pet-store"
@@ -37,9 +33,9 @@ import { startOverlayPetBridge, type OverlayPetBridge } from "@/lib/pet/events/c
 import type { PetBridgeInteractionKind } from "@/lib/pet/events/cross-window-protocol"
 import type { PetConsoleTab } from "@/lib/pet/console-tabs"
 import { schedulePetWindowReveal } from "@/lib/pet/reveal"
+import { hideDesktopPetWindow } from "@/lib/pet/commands"
 import {
   closePetPopup,
-  closePetWindow,
   onPetPopupHidden,
   onPetPopupShown,
   resizePetPopup,
@@ -54,7 +50,7 @@ import { PetInteractionPanel } from "./pet-interaction-panel"
  * window edge (the wrapper centers the card with this much breathing room). */
 const SHADOW_MARGIN = 16
 
-type PopupWindowActionId = "click-through" | "settings" | "main-window" | "hide"
+type PopupWindowActionId = "click-through" | "hide" | "console" | "appearance"
 
 interface PopupWindowAction {
   id: PopupWindowActionId
@@ -190,18 +186,16 @@ export function PetPopupView() {
       .finally(() => closePetPopup())
       .catch(() => {})
   }
+  // The same "put away" as the console header and the title bar: close the
+  // sprite window AND persist it, so the pet stays away after a restart.
   // Hiding the sprite window also hides this popup (handled in Rust), so no
   // explicit close call is needed here.
-  const onHideDesktopPet = () => void closePetWindow()
+  const onHideDesktopPet = () => void hideDesktopPetWindow()
   const openConsoleTab = (tab: PetConsoleTab) => {
     // Console navigation happens in the main window (it owns the router);
     // raise it first, then dismiss like a menu selection.
     void showMainWindow()
     bridgeRef.current?.sendOpenConsole(tab)
-    void closePetPopup()
-  }
-  const onShowMainWindow = () => {
-    void showMainWindow()
     void closePetPopup()
   }
 
@@ -211,12 +205,12 @@ export function PetPopupView() {
     switch (id) {
       case "click-through":
         return onClickThrough()
-      case "settings":
-        return openConsoleTab("customize")
-      case "main-window":
-        return onShowMainWindow()
       case "hide":
         return onHideDesktopPet()
+      case "console":
+        return openConsoleTab("home")
+      case "appearance":
+        return openConsoleTab("appearance")
     }
   }
   const windowActions: PopupWindowAction[] = [
@@ -226,9 +220,9 @@ export function PetPopupView() {
       description: t("clickThroughDescription"),
       Icon: MousePointerClickIcon,
     },
-    { id: "settings", label: t("openSettings"), Icon: SlidersHorizontalIcon },
-    { id: "main-window", label: t("showMainWindow"), Icon: AppWindowIcon },
     { id: "hide", label: t("hideDesktopPet"), Icon: EyeOffIcon },
+    { id: "console", label: t("openConsole"), Icon: HomeIcon },
+    { id: "appearance", label: t("openAppearance"), Icon: SlidersHorizontalIcon },
   ]
 
   return (
@@ -243,20 +237,10 @@ export function PetPopupView() {
             key={panelSession}
             profile={profile}
             view={view}
-            onFeed={() => send("fed")}
-            onPlay={() => send("played")}
-            onPet={() => send("petted")}
+            onCare={(kind) => send(kind)}
             onTalk={(text) => send("talked", text)}
-            onSleep={() => send("slept")}
-            onClean={() => send("cleaned")}
-            onTreat={() => send("treated")}
             skinId={effectiveSkin}
             selection={selection}
-            // No controller in this window: the consume event would be lost.
-            showInventory={false}
-            // No plugin runtime in this window: the slot could only be empty.
-            showPluginActions={false}
-            onOpenConsole={openConsoleTab}
           />
         ) : null}
         {/* Window actions: a compact 2×2 grid instead of a stacked list, so

@@ -5,13 +5,15 @@
 // paired phone or browser, where it reads a mirror of the pet tables and sends
 // every action to the desktop over `pet_*` RPCs.
 //
-// Remote care covers the care loop: nurture, shop, inventory, hatch, rename,
-// chat and the records (journal, dex, achievements). Some of the console works
-// with things that exist only on the desktop and stays there on purpose:
+// Remote care covers the care loop: home, shop, inventory, hatch, rename, chat
+// and the records (journal, dex, achievements). Some of the console works with
+// things that exist only on the desktop and stays there on purpose:
 //
-//   - Customize: skins, Live2D models and sprite packs are device-local blobs,
-//     and the size sliders shape a desktop window.
-//   - Insights: the radar reads the desktop's capture sources and activity.
+//   - Appearance & settings: skins, Live2D models and sprite packs are
+//     device-local blobs, and the size sliders shape a desktop window. The
+//     sub-page still opens remotely, for the read-only character binding.
+//   - Insights (Activity's second segment): the radar reads the desktop's
+//     capture sources and activity.
 //   - Plugins: `pet.console.tab` extensions are the desktop's plugins.
 //   - Character binding edits, the customization reset, the "on the desktop"
 //     toggle and the skin retry/configure actions: each one writes desktop
@@ -21,17 +23,19 @@
 //
 //  1. **Type**: this table is the one place a capability is classified, and
 //     `petConsoleCapability` is how every caller asks.
-//  2. **UI**: in remote mode the desktop-only tabs stay in the nav with a
-//     "Desktop" badge and render `components/pet/console/desktop-only-notice.tsx`,
-//     the binding tab is read-only, and the desktop toggle becomes a status
-//     chip (`components/pet/console/pet-console.tsx`).
+//  2. **UI**: in remote mode the desktop-only places stay reachable with a
+//     "Desktop" badge (the plugins tab, the insights segment, the header's
+//     appearance entry) and render
+//     `components/pet/console/desktop-only-notice.tsx`, the binding section is
+//     read-only, and the desktop toggle becomes a status chip
+//     (`components/pet/console/pet-console.tsx`).
 //  3. **Test**: pinned by `lib/pet/console/action-capabilities.test.ts` and
 //     `components/pet/console/pet-console.remote.test.tsx`.
 //
 // A desktop running the console locally has every capability; only `remote`
 // consults the table.
 
-import type { PetConsoleTab } from "@/lib/pet/console-tabs"
+import type { PetConsoleDestination } from "@/lib/pet/console-tabs"
 
 export type PetConsoleMode = "local" | "remote"
 
@@ -39,17 +43,20 @@ export type PetConsoleMode = "local" | "remote"
 export type PetConsoleCapability = "available" | "desktop-only"
 
 export const PET_CONSOLE_CAPABILITY_IDS = [
-  // Tabs.
-  "tab.nurture",
+  // Places (one per console destination).
+  "tab.home",
   "tab.chat",
   "tab.shop",
-  "tab.customize",
-  "tab.binding",
-  "tab.insights",
-  "tab.journal",
+  "tab.collection",
   "tab.dex",
   "tab.achievements",
+  "tab.activity",
+  "tab.journal",
+  "tab.insights",
+  "tab.appearance",
   "tab.plugins",
+  /** The appearance sub-page's customization workspace (not its binding). */
+  "appearance.customize",
   // Actions.
   "care",
   "shop.purchase",
@@ -74,16 +81,20 @@ export type PetConsoleCapabilityId = (typeof PET_CONSOLE_CAPABILITY_IDS)[number]
 export const PET_CONSOLE_CAPABILITIES: Readonly<
   Record<PetConsoleCapabilityId, PetConsoleCapability>
 > = Object.freeze({
-  "tab.nurture": "available",
+  "tab.home": "available",
   "tab.chat": "available",
   "tab.shop": "available",
-  "tab.customize": "desktop-only",
-  // The tab opens; its edit controls are `binding.edit`, which is not.
-  "tab.binding": "available",
-  "tab.insights": "desktop-only",
-  "tab.journal": "available",
+  "tab.collection": "available",
   "tab.dex": "available",
   "tab.achievements": "available",
+  // Activity opens; its insights segment is the desktop's.
+  "tab.activity": "available",
+  "tab.journal": "available",
+  "tab.insights": "desktop-only",
+  // The sub-page opens for the read-only binding; its customization workspace
+  // is `appearance.customize` and its binding edits are `binding.edit`.
+  "tab.appearance": "available",
+  "appearance.customize": "desktop-only",
   "tab.plugins": "desktop-only",
   care: "available",
   "shop.purchase": "available",
@@ -109,16 +120,16 @@ export function petConsoleCapability(
   return PET_CONSOLE_CAPABILITIES[id]
 }
 
-/** The capability that opens a console tab. */
-export function petConsoleTabCapability(tab: PetConsoleTab): PetConsoleCapabilityId {
+/** The capability that opens a console destination. */
+export function petConsoleTabCapability(tab: PetConsoleDestination): PetConsoleCapabilityId {
   return `tab.${tab}`
 }
 
-/** Tabs that render the desktop-only notice instead of their panel in `mode`. */
-export function petConsoleDesktopOnlyTabs(
+/** Destinations that render the desktop-only notice instead of their panel in `mode`. */
+export function petConsoleDesktopOnlyTabs<T extends PetConsoleDestination>(
   mode: PetConsoleMode,
-  tabs: readonly PetConsoleTab[]
-): ReadonlySet<PetConsoleTab> {
+  tabs: readonly T[]
+): ReadonlySet<T> {
   return new Set(
     tabs.filter(
       (tab) => petConsoleCapability(mode, petConsoleTabCapability(tab)) === "desktop-only"

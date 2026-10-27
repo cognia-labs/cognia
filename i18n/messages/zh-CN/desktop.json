@@ -943,7 +943,8 @@
       "capture": "内容采集",
       "hidePet": "隐藏桌面宠物",
       "ocr": "屏幕 OCR",
-      "showPet": "显示桌面宠物"
+      "showPet": "显示桌面宠物",
+      "petToggleFailed": "无法把宠物放到桌面上，请重试。"
     },
     "restore": "还原",
     "searchPlaceholder": "搜索或运行命令…",

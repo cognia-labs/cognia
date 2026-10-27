@@ -1,15 +1,12 @@
 // Thin transient store for the pet's runtime UI state. The canonical record
 // (profile / needs / bindings / achievements) lives in Dexie and is read
 // reactively via `useLiveQuery` in main; this store holds ephemeral things the
-// renderer needs frame-to-frame, a read-only profile projection for secondary
-// windows, and the persisted widget placement.
-//
-// Modeled on the persist+partialize pattern in
-// `stores/agent/agent-team-store/store.ts`.
+// renderer needs frame-to-frame and a read-only profile projection for
+// secondary windows. Nothing here is persisted: the in-app widget whose
+// placement it used to remember is gone (the desktop overlay window keeps its
+// own position in `PetSettings.desktopPet`).
 
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
-import { persistLocalStorage } from "@/stores/persist-storage"
 import type { PetBubbleAction } from "@/lib/pet/bubbles/action"
 import type { PetBridgeProfileSnapshot } from "@/lib/pet/events/cross-window-protocol"
 import type {
@@ -32,11 +29,6 @@ export interface PetBubble {
    * alone.
    */
   action?: PetBubbleAction
-}
-
-export interface PetUiPosition {
-  x: number
-  y: number
 }
 
 /** Transient "the pet just became unwell" signal consumed by the care-alert hook. */
@@ -70,10 +62,6 @@ interface PetStoreState {
   oneShotQueue: PetOneShot[]
   /** Currently displayed speech bubble, or null. */
   bubble: PetBubble | null
-  /** Whether the widget is collapsed to a minimized handle. */
-  minimized: boolean
-  /** Drag-offset from the docked anchor (persisted so it survives reloads). */
-  position: PetUiPosition | null
   /** Stat keys that grew on the most recent event (drives the "grew" pulse). */
   lastGrewStats: PetStatKey[]
   /** Pending "became unwell" signal, or null. Set by the controller, drained
@@ -95,8 +83,6 @@ interface PetStoreState {
   dequeueOneShot: () => PetOneShot | null
   clearOneShots: () => void
   setBubble: (bubble: PetBubble | null) => void
-  setMinimized: (minimized: boolean) => void
-  setPosition: (position: PetUiPosition | null) => void
   setLastGrewStats: (keys: PetStatKey[]) => void
   setCareAlert: (alert: PetCareAlert | null) => void
   setInteractionRefusal: (refusal: PetInteractionRefusalSignal | null) => void
@@ -105,45 +91,31 @@ interface PetStoreState {
   setProfileSnapshot: (snapshot: PetBridgeProfileSnapshot | null) => void
 }
 
-export const usePetStore = create<PetStoreState>()(
-  persist(
-    (set, get) => ({
-      visualState: "idle",
-      oneShotQueue: [],
-      bubble: null,
-      minimized: false,
-      position: null,
-      lastGrewStats: [],
-      careAlert: null,
-      interactionRefusal: null,
-      appearanceSelection: null,
-      lookTarget: null,
-      profileSnapshot: null,
+export const usePetStore = create<PetStoreState>()((set, get) => ({
+  visualState: "idle",
+  oneShotQueue: [],
+  bubble: null,
+  lastGrewStats: [],
+  careAlert: null,
+  interactionRefusal: null,
+  appearanceSelection: null,
+  lookTarget: null,
+  profileSnapshot: null,
 
-      setVisualState: (visualState) => set({ visualState }),
-      enqueueOneShot: (shot) => set((s) => ({ oneShotQueue: [...s.oneShotQueue, shot] })),
-      dequeueOneShot: () => {
-        const [head, ...rest] = get().oneShotQueue
-        if (head === undefined) return null
-        set({ oneShotQueue: rest })
-        return head
-      },
-      clearOneShots: () => set({ oneShotQueue: [] }),
-      setBubble: (bubble) => set({ bubble }),
-      setMinimized: (minimized) => set({ minimized }),
-      setPosition: (position) => set({ position }),
-      setLastGrewStats: (lastGrewStats) => set({ lastGrewStats }),
-      setCareAlert: (careAlert) => set({ careAlert }),
-      setInteractionRefusal: (interactionRefusal) => set({ interactionRefusal }),
-      setAppearanceSelection: (appearanceSelection) => set({ appearanceSelection }),
-      setLookTarget: (lookTarget) => set({ lookTarget }),
-      setProfileSnapshot: (profileSnapshot) => set({ profileSnapshot }),
-    }),
-    {
-      name: "cognia-pet-ui",
-      storage: persistLocalStorage(),
-      // Only the widget placement is durable; visual/bubble/queue are ephemeral.
-      partialize: (state) => ({ minimized: state.minimized, position: state.position }),
-    }
-  )
-)
+  setVisualState: (visualState) => set({ visualState }),
+  enqueueOneShot: (shot) => set((s) => ({ oneShotQueue: [...s.oneShotQueue, shot] })),
+  dequeueOneShot: () => {
+    const [head, ...rest] = get().oneShotQueue
+    if (head === undefined) return null
+    set({ oneShotQueue: rest })
+    return head
+  },
+  clearOneShots: () => set({ oneShotQueue: [] }),
+  setBubble: (bubble) => set({ bubble }),
+  setLastGrewStats: (lastGrewStats) => set({ lastGrewStats }),
+  setCareAlert: (careAlert) => set({ careAlert }),
+  setInteractionRefusal: (interactionRefusal) => set({ interactionRefusal }),
+  setAppearanceSelection: (appearanceSelection) => set({ appearanceSelection }),
+  setLookTarget: (lookTarget) => set({ lookTarget }),
+  setProfileSnapshot: (profileSnapshot) => set({ profileSnapshot }),
+}))

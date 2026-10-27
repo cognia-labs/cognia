@@ -19,7 +19,7 @@ function LoadingStatus({ label }: { label: string }) {
   return <span className="sr-only">{label}</span>
 }
 
-/** The whole console while the profile loads: header, nav, nurture columns. */
+/** The whole console while the profile loads: header band, nav row, Home. */
 export function PetConsoleSkeleton() {
   const t = useTranslations("pet")
   return (
@@ -30,35 +30,39 @@ export function PetConsoleSkeleton() {
       className="flex h-full min-h-0 flex-col"
     >
       <LoadingStatus label={t("console.loading")} />
-      <div className="flex items-center gap-3 px-4 py-3">
-        <Skeleton className="size-10 rounded-full md:size-12" />
-        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <Skeleton className="h-5 w-32" />
-          <Skeleton className="h-3.5 w-48" />
+      <div className="shrink-0 border-b border-border/70">
+        <div className="flex min-h-[var(--chrome-h-tall)] items-center gap-2.5 px-3 py-2 md:px-4">
+          <Skeleton className="size-9 rounded-xl" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-3 w-44" />
+          </div>
+          <Skeleton className="size-8 md:w-40" />
+          <Skeleton className="size-8 md:w-36" />
         </div>
-        <Skeleton className="size-11 md:h-8 md:w-36" />
-      </div>
-      <div className="grid min-h-0 flex-1 md:grid-cols-[3.75rem_minmax(0,1fr)] lg:grid-cols-[13rem_minmax(0,1fr)]">
-        <div className="flex gap-2 overflow-hidden border-b px-3 py-2 md:flex-col md:border-r md:border-b-0 md:p-2 lg:p-3">
-          {Array.from({ length: 6 }, (_, i) => (
-            <Skeleton key={i} className="h-9 w-20 shrink-0 md:w-full" />
+        <div
+          data-testid="pet-console-loading-nav"
+          className="flex min-h-[var(--chrome-h)] items-center gap-1.5 border-t border-border/55 px-3 py-1.5 md:px-4"
+        >
+          {/* One per place: Home, Chat, Shop, Collection, Activity. */}
+          {Array.from({ length: 5 }, (_, i) => (
+            <Skeleton key={i} data-skeleton-tab className="h-7 w-20 shrink-0" />
           ))}
         </div>
-        <div className="@container/pet-pane min-w-0 p-4">
-          <PetNurtureSkeleton />
-        </div>
+      </div>
+      <div className="@container/pet-pane min-w-0 px-4 py-5 md:px-6 md:py-6">
+        <PetHomeSkeleton />
       </div>
     </div>
   )
 }
 
-/** The nurture tab's two columns: pet + vitals, then actions + inventory. */
-function PetNurtureSkeleton() {
+/** Home's two columns: pet + vitals, then next step + actions + backpack. */
+function PetHomeSkeleton() {
   return (
     <div className="mx-auto grid w-full max-w-5xl gap-6 @3xl/pet-pane:grid-cols-[18rem_minmax(0,1fr)]">
       <div className="flex flex-col items-center gap-4">
-        <Skeleton className="size-40 rounded-full" />
-        <Skeleton className="h-5 w-24" />
+        <Skeleton className="h-48 w-full rounded-xl" />
         <div className="flex w-full flex-col gap-3">
           {Array.from({ length: 4 }, (_, i) => (
             <Skeleton key={i} className="h-2.5 w-full" />
@@ -66,14 +70,15 @@ function PetNurtureSkeleton() {
         </div>
       </div>
       <div className="flex flex-col gap-4">
+        <Skeleton className="h-11 w-full" />
         <Skeleton className="h-4 w-20" />
-        <div className="grid grid-cols-4 gap-2">
-          {Array.from({ length: 7 }, (_, i) => (
+        <div className="grid grid-cols-3 gap-2">
+          {Array.from({ length: 6 }, (_, i) => (
             <Skeleton key={i} className="h-14" />
           ))}
         </div>
         <Skeleton className="h-11 w-full" />
-        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-24 w-full" />
       </div>
     </div>
   )

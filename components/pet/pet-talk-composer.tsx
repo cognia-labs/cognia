@@ -25,6 +25,12 @@ export interface PetTalkComposerProps {
   mode?: "compact" | "chat"
   status?: ChatStatus
   allowEmpty?: boolean
+  /**
+   * Focus the field on mount. Right for a composer the reader just opened (the
+   * talk toggle, the chat tab); wrong for one that is always on the page (the
+   * console's Home), where it would pull focus away from everything above it.
+   */
+  autoFocus?: boolean
 }
 
 export function PetTalkComposer({
@@ -33,6 +39,7 @@ export function PetTalkComposer({
   mode = "compact",
   status,
   allowEmpty = mode === "compact",
+  autoFocus = true,
 }: PetTalkComposerProps) {
   const t = useTranslations("pet")
   const [text, setText] = useState("")
@@ -54,7 +61,7 @@ export function PetTalkComposer({
     >
       <PromptInputBody>
         <PromptInputTextarea
-          autoFocus
+          autoFocus={autoFocus}
           value={text}
           placeholder={t("talkInput.placeholder")}
           aria-label={t("talkInput.placeholder")}

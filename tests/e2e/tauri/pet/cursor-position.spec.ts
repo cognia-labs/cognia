@@ -60,18 +60,20 @@ test.describe("tauri: pet — durable nurture lifecycle", () => {
     await expect(hatch).toBeVisible()
     await hatch.getByRole("button").click()
 
-    await expect(page.getByTestId("pet-nurture-tab")).toBeVisible()
+    await expect(page.getByTestId("pet-home-tab")).toBeVisible()
     await expect
       .poll(() => readDexieRow<PersistedPetProfile>(page, { table: "petProfile", key: "global" }))
       .toMatchObject({ id: "global", soul: expect.objectContaining({ name: expect.any(String) }) })
 
     // Enter the shared inline editor from the identity header and persist a
     // deterministic name so the reload assertion is independent of soul RNG.
-    await page.locator("header").getByRole("button").first().click()
+    await page.getByTestId("pet-console-header").getByRole("button", { name: "Rename" }).click()
     const editor = page.getByTestId("pet-name-editor")
     await editor.getByRole("textbox").fill(RENAMED_PET)
     await editor.getByRole("textbox").press("Enter")
-    await expect(page.locator("header").getByText(RENAMED_PET, { exact: true })).toBeVisible()
+    await expect(
+      page.getByTestId("pet-console-header").getByText(RENAMED_PET, { exact: true })
+    ).toBeVisible()
     await expect
       .poll(async () => {
         const row = await readDexieRow<PersistedPetProfile>(page, {
@@ -122,8 +124,10 @@ test.describe("tauri: pet — durable nurture lifecycle", () => {
     expect(persistedAfterCare?.coins ?? 0).toBeGreaterThan(beforeCare?.coins ?? 0)
 
     await page.reload({ waitUntil: "domcontentloaded" })
-    await expect(page.getByTestId("pet-nurture-tab")).toBeVisible()
-    await expect(page.locator("header").getByText(RENAMED_PET, { exact: true })).toBeVisible()
+    await expect(page.getByTestId("pet-home-tab")).toBeVisible()
+    await expect(
+      page.getByTestId("pet-console-header").getByText(RENAMED_PET, { exact: true })
+    ).toBeVisible()
 
     const restored = await readDexieRow<PersistedPetProfile>(page, {
       table: "petProfile",
@@ -139,7 +143,8 @@ test.describe("tauri: pet — governed appearance", () => {
   test("persists the local-only gaze preference", async ({ page }) => {
     await page.goto("/")
     await resetCogniaDb(page)
-    await page.goto("/settings?section=pet", { waitUntil: "domcontentloaded" })
+    // The pet's settings live on the pet page now; Settings → Pet points here.
+    await page.goto("/pet?view=appearance", { waitUntil: "domcontentloaded" })
 
     const gaze = page.getByRole("switch", { name: "Follow pointer" })
     await expect(gaze).toBeVisible()

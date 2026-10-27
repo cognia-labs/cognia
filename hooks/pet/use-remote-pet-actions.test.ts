@@ -102,7 +102,7 @@ describe("useRemotePetActions", () => {
 
   it("labels the desktop-owned capabilities as such", async () => {
     const { result } = await setup()
-    expect(result.current.capability("tab.customize")).toBe("desktop-only")
+    expect(result.current.capability("appearance.customize")).toBe("desktop-only")
     expect(result.current.capability("binding.edit")).toBe("desktop-only")
     expect(result.current.capability("care")).toBe("available")
     await act(async () => {

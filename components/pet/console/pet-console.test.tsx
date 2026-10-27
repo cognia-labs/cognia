@@ -96,10 +96,25 @@ jest.mock("@/components/plugins/plugin-extension-slot", () => ({
   },
 }))
 jest.mock("./achievements-tab", () => ({ AchievementsTab: () => <div data-testid="tab-ach" /> }))
-jest.mock("./binding-tab", () => ({ BindingTab: () => <div data-testid="tab-bind" /> }))
+jest.mock("./journal-tab", () => ({ JournalTab: () => <div data-testid="tab-journal" /> }))
+jest.mock("./insights-tab", () => ({ InsightsTab: () => <div data-testid="tab-insights" /> }))
+const bindingProps = jest.fn()
+jest.mock("./binding-tab", () => ({
+  BindingTab: (props: unknown) => {
+    bindingProps(props)
+    return <div data-testid="tab-bind" />
+  },
+}))
+jest.mock("@/components/pet/settings/pet-customization-workspace", () => ({
+  PetCustomizationWorkspace: () => <div data-testid="pet-customization-workspace" />,
+}))
+jest.mock("@/components/platform/capability-gate", () => ({
+  CapabilityGate: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}))
 
 import { toast } from "sonner"
 import { usePet } from "@/hooks/pet/use-pet"
+import { resolvePetConsoleTarget } from "@/lib/pet/console-tabs"
 import { PetConsole } from "./pet-console"
 import { createDefaultProfile } from "@/lib/pet/defaults"
 import { computePetView } from "@/lib/pet/runtime/pet-view"
@@ -137,6 +152,7 @@ beforeEach(() => {
   ;(toast.error as jest.Mock).mockClear()
   rendererProps.mockClear()
   slotProps.mockClear()
+  bindingProps.mockClear()
   hasPluginExtensions = false
   settingsValue = {}
   toggleDesktopPetWindow.mockReset()
@@ -189,7 +205,7 @@ describe("PetConsole", () => {
 
   it("reads the pet through the open session's character and names it in chat", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
-    render(<PetConsole initialTab="chat" />)
+    render(<PetConsole initialTarget={resolvePetConsoleTarget("chat")} />)
     expect(mockUsePet).toHaveBeenCalledWith("char-1")
     // The chat itself reads the character through the console's actions.
     expect(chatTabProps).toHaveBeenCalledWith({ petName: "Boba" })
@@ -204,62 +220,117 @@ describe("PetConsole", () => {
     expect(screen.queryByTestId("pet-console-desktop-status")).toBeNull()
   })
 
-  it("shows the nurture layout for a hatched pet and switches tabs", () => {
+  it("opens on Home for a hatched pet and moves between the five places", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
     render(<PetConsole />)
-    expect(screen.getByTestId("pet-nurture-tab")).toBeInTheDocument()
+    expect(screen.getByTestId("pet-home-tab")).toBeInTheDocument()
     // Radix tabs activate on mousedown (and on focus/keys), not on click.
     const clickTab = (id: string) =>
       fireEvent.mouseDown(document.querySelector(`[data-tab="${id}"]`) as Element)
+    const clickSegment = (id: string) =>
+      fireEvent.mouseDown(document.querySelector(`[data-segment="${id}"]`) as Element)
     clickTab("shop")
     expect(screen.getByTestId("tab-shop")).toBeInTheDocument()
-    clickTab("dex")
+    clickTab("collection")
     expect(screen.getByTestId("tab-dex")).toBeInTheDocument()
-    clickTab("achievements")
+    clickSegment("achievements")
     expect(screen.getByTestId("tab-ach")).toBeInTheDocument()
-    clickTab("binding")
-    expect(screen.getByTestId("tab-bind")).toBeInTheDocument()
+    clickTab("activity")
+    expect(screen.getByTestId("tab-journal")).toBeInTheDocument()
+    clickSegment("insights")
+    expect(screen.getByTestId("tab-insights")).toBeInTheDocument()
+    // Each section keeps its own segment.
+    clickTab("collection")
+    expect(screen.getByTestId("tab-ach")).toBeInTheDocument()
   })
 
-  it("renders one grouped tablist whose tabs control the content panel", () => {
+  it("builds on the shared feature shell and header", () => {
+    mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
+    render(<PetConsole />)
+    // The shell owns the wallpaper marker, like every feature route.
+    expect(screen.getByTestId("feature-shell-pet")).toHaveAttribute("data-bg-target", "chat")
+    expect(screen.getByTestId("pet-console-header")).toHaveAttribute(
+      "data-slot",
+      "feature-page-header"
+    )
+  })
+
+  it("renders one tablist of five places whose tabs control the content panel", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
     render(<PetConsole />)
 
     const nav = screen.getByTestId("pet-console-nav")
     expect(nav).toHaveAttribute("role", "tablist")
-    // The phone no longer goes through a hamburger Sheet.
-    expect(screen.queryByTestId("pet-console-mobile-nav-trigger")).toBeNull()
-    const nurture = within(nav).getByRole("tab", { name: /nurture/i })
-    expect(nurture).toHaveAttribute("aria-selected", "true")
+    expect(
+      within(nav)
+        .getAllByRole("tab")
+        .map((tab) => tab.dataset.tab)
+    ).toEqual(["home", "chat", "shop", "collection", "activity"])
+    const home = within(nav).getByRole("tab", { name: /home/i })
+    expect(home).toHaveAttribute("aria-selected", "true")
     const panel = screen.getByRole("tabpanel")
-    expect(nurture).toHaveAttribute("aria-controls", panel.id)
-    expect(panel).toContainElement(screen.getByTestId("pet-nurture-tab"))
-    for (const group of ["nurture", "personalize", "records"]) {
-      expect(nav.querySelector(`[data-nav-group="${group}"]`)).not.toBeNull()
-    }
+    expect(home).toHaveAttribute("aria-controls", panel.id)
+    expect(panel).toContainElement(screen.getByTestId("pet-home-tab"))
   })
 
-  it("opens at the deep-linked initial tab and follows later deep links", () => {
+  it("opens at the deep-linked target and follows later deep links", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
-    const { rerender } = render(<PetConsole initialTab="dex" />)
+    const { rerender } = render(<PetConsole initialTarget={resolvePetConsoleTarget("dex")} />)
     expect(screen.getByTestId("tab-dex")).toBeInTheDocument()
-    rerender(<PetConsole initialTab="achievements" />)
+    rerender(<PetConsole initialTarget={resolvePetConsoleTarget("achievements")} />)
     expect(screen.getByTestId("tab-ach")).toBeInTheDocument()
+    rerender(<PetConsole initialTarget={resolvePetConsoleTarget("insights")} />)
+    expect(screen.getByTestId("tab-insights")).toBeInTheDocument()
   })
 
-  it("jumps from the nurture wallet strip to the shop tab", () => {
+  it("keeps the reader's place when the same target is rebuilt", () => {
+    mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
+    const { rerender } = render(<PetConsole initialTarget={resolvePetConsoleTarget("home")} />)
+    fireEvent.mouseDown(document.querySelector('[data-tab="shop"]') as Element)
+    // A new object naming the same place is not a new deep link.
+    rerender(<PetConsole initialTarget={resolvePetConsoleTarget("home")} />)
+    expect(screen.getByTestId("tab-shop")).toBeInTheDocument()
+  })
+
+  it("jumps from Home's wallet strip to the shop and from talk to the chat", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
     render(<PetConsole />)
     fireEvent.click(screen.getByTestId("pet-wallet-strip"))
     expect(screen.getByTestId("tab-shop")).toBeInTheDocument()
+    fireEvent.mouseDown(document.querySelector('[data-tab="home"]') as Element)
+    fireEvent.click(screen.getByTestId("pet-home-open-chat"))
+    expect(screen.getByTestId("tab-chat")).toBeInTheDocument()
   })
 
-  it("resolves the effective skin and passes it to the header renderer and nurture tab", () => {
+  it("opens Appearance & settings from the header and comes back", () => {
+    mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
+    render(<PetConsole />)
+    fireEvent.mouseDown(document.querySelector('[data-tab="shop"]') as Element)
+    fireEvent.click(screen.getByTestId("pet-console-open-appearance"))
+    expect(screen.getByTestId("pet-console")).toHaveAttribute("data-view", "appearance")
+    expect(screen.getByTestId("pet-customization-workspace")).toBeInTheDocument()
+    expect(screen.getByTestId("tab-bind")).toBeInTheDocument()
+    expect(bindingProps).toHaveBeenLastCalledWith({ readOnly: false })
+    expect(screen.queryByTestId("pet-console-nav")).toBeNull()
+    fireEvent.click(screen.getByTestId("pet-console-back"))
+    // Back to where the reader was.
+    expect(screen.getByTestId("tab-shop")).toBeInTheDocument()
+  })
+
+  it("lands an earlier layout's customize and binding links on the sub-page", () => {
+    mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
+    const { rerender } = render(<PetConsole initialTarget={resolvePetConsoleTarget("customize")} />)
+    expect(screen.getByTestId("pet-appearance-view")).toBeInTheDocument()
+    rerender(<PetConsole initialTarget={resolvePetConsoleTarget("nurture")} />)
+    expect(screen.getByTestId("pet-home-tab")).toBeInTheDocument()
+  })
+
+  it("resolves the effective skin and passes it to the header renderer and Home", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
     useActiveLive2dModel.mockReturnValue({ modelId: "m1", row: undefined, coreReady: true })
     settingsValue = { petSettings: { skinId: "live2d" } }
     render(<PetConsole />)
-    // Header hero + nurture-tab hero both go through the mocked renderer.
+    // Header avatar + Home hero both go through the mocked renderer.
     expect(rendererProps).toHaveBeenCalledWith(expect.objectContaining({ skinId: "live2d" }))
     expect(rendererProps).not.toHaveBeenCalledWith(expect.objectContaining({ skinId: "svg" }))
   })
@@ -269,7 +340,7 @@ describe("PetConsole", () => {
     settingsValue = { petSettings: { skinId: "live2d" } }
     render(<PetConsole />)
     expect(rendererProps).toHaveBeenCalledWith(expect.objectContaining({ skinId: "svg" }))
-    // The header explains why the built-in mascot is showing.
+    // Home explains why the built-in mascot is showing.
     expect(screen.getByText(/requested skin.*live2d/i)).toBeInTheDocument()
     expect(screen.getByText(/effective skin.*vector mascot/i)).toBeInTheDocument()
   })
@@ -348,11 +419,22 @@ describe("PetConsole", () => {
     )
   })
 
-  it("falls back to nurture for a plugins deep link with no plugin tab yet", () => {
+  it("falls back to Home for a plugins deep link with no plugin tab yet", () => {
     mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
-    render(<PetConsole initialTab="plugins" />)
-    expect(screen.getByTestId("pet-nurture-tab")).toBeInTheDocument()
-    expect(screen.queryByTestId("pet-plugin-slot")).toBeNull()
+    render(<PetConsole initialTarget={resolvePetConsoleTarget("plugins")} />)
+    expect(screen.getByTestId("pet-home-tab")).toBeInTheDocument()
+    // Home's own `pet.panel.actions` slot mounts; the console tab's does not.
+    expect(slotProps).not.toHaveBeenCalledWith(
+      expect.objectContaining({ point: "pet.console.tab" })
+    )
+  })
+
+  it("hosts the plugin care actions on Home", () => {
+    mockUsePet.mockReturnValue(petResult({ name: "Boba", personality: "x", hatchDate: "" }))
+    render(<PetConsole />)
+    expect(slotProps).toHaveBeenCalledWith(
+      expect.objectContaining({ point: "pet.panel.actions", limit: 4 })
+    )
   })
 
   it("shows a layout-matched placeholder while the profile loads", () => {

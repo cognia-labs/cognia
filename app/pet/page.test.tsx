@@ -21,20 +21,36 @@ beforeEach(() => {
 })
 
 describe("PetPage", () => {
-  it("renders the console with no initial tab by default", () => {
+  it("renders the console with no initial target by default", () => {
     render(<PetPage />)
     expect(screen.getByTestId("pet-console-stub")).toBeInTheDocument()
-    expect(consoleProps).toHaveBeenCalledWith(expect.objectContaining({ initialTab: undefined }))
+    expect(consoleProps).toHaveBeenCalledWith(expect.objectContaining({ initialTarget: undefined }))
   })
 
-  it("passes a valid ?tab= deep link through and drops an invalid one", () => {
-    searchParams = new URLSearchParams("tab=shop")
+  it("resolves a ?tab= deep link and drops an invalid one", () => {
+    searchParams = new URLSearchParams("tab=insights")
     render(<PetPage />)
-    expect(consoleProps).toHaveBeenCalledWith(expect.objectContaining({ initialTab: "shop" }))
+    expect(consoleProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialTarget: { view: "main", section: "activity", segment: "insights" },
+      })
+    )
 
     consoleProps.mockClear()
     searchParams = new URLSearchParams("tab=not-a-tab")
     render(<PetPage />)
-    expect(consoleProps).toHaveBeenCalledWith(expect.objectContaining({ initialTab: undefined }))
+    expect(consoleProps).toHaveBeenCalledWith(expect.objectContaining({ initialTarget: undefined }))
+  })
+
+  it("opens the appearance sub-page from ?view= and from a legacy ?tab=", () => {
+    searchParams = new URLSearchParams("view=appearance")
+    render(<PetPage />)
+    expect(consoleProps).toHaveBeenLastCalledWith({ initialTarget: { view: "appearance" } })
+
+    searchParams = new URLSearchParams("tab=binding")
+    render(<PetPage />)
+    expect(consoleProps).toHaveBeenLastCalledWith({
+      initialTarget: { view: "appearance", focus: "binding" },
+    })
   })
 })

@@ -46,7 +46,7 @@ subsystems (chat/agent-team/goal/scheduler/connector/terminal/workflow/twin/rada
     → components/pet/pet-renderer.tsx → skins/{svg-skin.tsx | live2d-skin.tsx | sprite-v2-skin.tsx}
 ```
 
-**Dexie 与 Zustand 的分离**是有意为之：持久记录（档案、需求、XP/level/stage、成就、绑定）仅存于 Dexie，由已解锁的主窗口响应式读取。`usePetStore`（Zustand）还保存供悬浮窗和弹出窗口使用的临时只读档案投影；这两个窗口不解锁账号数据库。`PetMainRuntime` 通过既有宠物桥接发布投影和当前角色绑定，辅助窗口中的 `usePet` 从桥接读取。投影复用 `projectPetProfileForSync`，用镜像占位值替换 provider fingerprint，并携带生成的外观。桥接启动时主动发布快照，避免辅助窗口早于主窗口挂载时丢失首次请求；主运行时卸载时清空投影。只有 `{ minimized, position }` 持久化到 `localStorage`（键 `cognia-pet-ui`）。辅助路由的页面加载和语言包加载均使用空 fallback，主界面的启动动画不会出现在宠物窗口中（2026-10-18）。
+**Dexie 与 Zustand 的分离**是有意为之：持久记录（档案、需求、XP/level/stage、成就、绑定）仅存于 Dexie，由已解锁的主窗口响应式读取。`usePetStore`（Zustand）还保存供悬浮窗和弹出窗口使用的临时只读档案投影；这两个窗口不解锁账号数据库。`PetMainRuntime` 通过既有宠物桥接发布投影和当前角色绑定，辅助窗口中的 `usePet` 从桥接读取。投影复用 `projectPetProfileForSync`，用镜像占位值替换 provider fingerprint，并携带生成的外观。桥接启动时主动发布快照，避免辅助窗口早于主窗口挂载时丢失首次请求；主运行时卸载时清空投影。自 D15 起其中不再持久化任何内容（此前保存已下线挂件的 `{ minimized, position }`，键 `cognia-pet-ui`）。辅助路由的页面加载和语言包加载均使用空 fallback，主界面的启动动画不会出现在宠物窗口中（2026-10-18）。
 
 ### 事件总线
 
@@ -189,6 +189,37 @@ Live2D 导入现在校验完整引用图，并在非索引模型元数据中持�
 `openDesktopPetWindow`。已经保存的隐藏状态仍然保留；隐藏桌宠或窗口打开失败都不会
 回退到应用内挂件。旧的位置及挂件大小字段保留以兼容已有配置，但产品中移除对应控件，
 只保留现有的桌宠大小设置。
+
+### D15 — 五个入口、统一外壳、设置只有一个家（2026-10-27）
+
+D8 的十个分组 Tab 仍然让用户在养成、商店、自定义、角色、洞察、日记、图鉴、成就之间
+自己挑选，没有第一步；页面也用自己的页头，而 `/memory`、`/conversations`、`/files`
+共用 `FeaturePageShell` + `FeaturePageHeader`。D14 已经下线应用内挂件，但组件本身、
+它的 11 项菜单，以及只会翻转挂件 `minimized` 标志的标题栏宠物按钮都还留着，「隐藏桌宠」
+在不同入口有三种不同效果。
+
+**决策**：
+
+- `/pet` 改用 `FeaturePageShell` + `FeaturePageHeader`。页头的身份图块直接绘制宠物
+  （`FeaturePageHeader.avatar`），标题是可编辑的名字，右侧操作为「外观与设置」和桌宠开关。
+  导航是页头第二行的五个入口（首页、对话、商店、收藏、动态），有插件注册时再加插件 Tab。
+  收藏分为图鉴、成就两段；动态分为日记、洞察两段。
+- 首页以「现在最需要」开场：`lib/pet/care/suggest-care.ts` 取最低的需求，按
+  `INTERACTION_EFFECTS` 排序恢复动作（跳过冷却中的），由 `PetCareSuggestion` 作为页面主按钮。
+  其下依次是照料动作与 `pet.panel.actions` 插件槽、背包与金币、快捷说话、档案。
+- 外观与设置是子页面（`/pet?view=appearance`），包含 `PetCustomizationWorkspace` 和角色外观，
+  并带分区目录。设置 → 宠物以及「宠物已关闭」通知都指向这里。远程照料（ADR-0219）时工作区为
+  `appearance.customize: desktop-only`，角色外观保持只读。
+- `lib/pet/console-tabs.ts` 列出所有目的地，并继续接受旧 id（`nurture` → 首页，`customize`、
+  `binding` → 子页面），气泡、弹窗、`pet_show` 和旧链接都能落到正确位置。`petConsoleHref`
+  是拼 `/pet` 链接的唯一方式。
+- 弹窗是迷你首页（属性卡、需求、最需要、照料、快捷说话），窗口操作为点击穿透、收回、
+  打开宠物页、外观与设置。
+- 所有「收回」都走 `hideDesktopPetWindow`（关闭窗口并持久化 `desktopPet.enabled = false`）；
+  标题栏宠物按钮改用 `toggleDesktopPetWindow`。删除 `PetWidget`、`PetQuickMenu`、
+  `PetQuickNav`、`usePetWidgetThrow` 以及 store 中持久化的 `minimized` / `position`。
+
+`PetSettings`、`PetProfile`、Dexie 与 wire shape 均不变。
 
 ## 后果
 

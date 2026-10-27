@@ -1,4 +1,4 @@
-import { PET_CONSOLE_TABS } from "@/lib/pet/console-tabs"
+import { PET_CONSOLE_DESTINATIONS } from "@/lib/pet/console-tabs"
 import {
   PET_CONSOLE_CAPABILITIES,
   PET_CONSOLE_CAPABILITY_IDS,
@@ -14,8 +14,8 @@ describe("pet console capabilities (ADR-0219)", () => {
     )
   })
 
-  it("has a capability for every console tab", () => {
-    for (const tab of PET_CONSOLE_TABS) {
+  it("has a capability for every console destination", () => {
+    for (const tab of PET_CONSOLE_DESTINATIONS) {
       expect(PET_CONSOLE_CAPABILITY_IDS).toContain(petConsoleTabCapability(tab))
     }
   })
@@ -34,13 +34,13 @@ describe("pet console capabilities (ADR-0219)", () => {
     )
     expect(desktopOnly.sort()).toEqual(
       [
+        "appearance.customize",
         "binding.edit",
         "chat.enable",
         "desktop.toggle",
         "reset",
         "skin.configure",
         "skin.retry",
-        "tab.customize",
         "tab.insights",
         "tab.plugins",
       ].sort()
@@ -57,25 +57,26 @@ describe("pet console capabilities (ADR-0219)", () => {
       "hatch",
       "chat.send",
       "chat.clear",
+      "tab.home",
+      "tab.collection",
+      "tab.activity",
       "tab.journal",
       "tab.dex",
       "tab.achievements",
-      "tab.binding",
+      // Opens for the read-only character binding.
+      "tab.appearance",
     ] as const) {
       expect(petConsoleCapability("remote", id)).toBe("available")
     }
   })
 
-  it("lists the tabs that render the desktop-only notice", () => {
-    expect([...petConsoleDesktopOnlyTabs("remote", PET_CONSOLE_TABS)].sort()).toEqual([
-      "customize",
+  it("lists the destinations that render the desktop-only notice", () => {
+    expect([...petConsoleDesktopOnlyTabs("remote", PET_CONSOLE_DESTINATIONS)].sort()).toEqual([
       "insights",
       "plugins",
     ])
-    expect(petConsoleDesktopOnlyTabs("local", PET_CONSOLE_TABS).size).toBe(0)
-    // Only among the tabs the console offers.
-    expect([...petConsoleDesktopOnlyTabs("remote", ["nurture", "customize"])]).toEqual([
-      "customize",
-    ])
+    expect(petConsoleDesktopOnlyTabs("local", PET_CONSOLE_DESTINATIONS).size).toBe(0)
+    // Only among the destinations asked about.
+    expect([...petConsoleDesktopOnlyTabs("remote", ["home", "plugins"])]).toEqual(["plugins"])
   })
 })

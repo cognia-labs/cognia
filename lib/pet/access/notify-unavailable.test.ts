@@ -29,7 +29,7 @@ describe("notifyPetInteractionUnavailable", () => {
       directed: false,
       ttlMs: PET_UNAVAILABLE_TTL_MS,
     })
-    expect(PET_UNAVAILABLE_HREF).toBe("/settings?section=pet")
+    expect(PET_UNAVAILABLE_HREF).toBe("/pet?view=appearance")
   })
 
   it("folds repeated presses into one row through a stable dedupe key", async () => {

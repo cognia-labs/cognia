@@ -29,8 +29,10 @@ export interface PetActionGridProps {
   onClean: () => void
   onTreat: () => void
   /** Whether the talk composer is open (highlights the talk toggle). */
-  talkOpen: boolean
-  onToggleTalk: () => void
+  talkOpen?: boolean
+  /** The talk toggle. Omitted, the grid has no talk button: the surface
+   *  already shows its composer (console Home, popup). */
+  onToggleTalk?: () => void
   className?: string
   /**
    * `compact` keeps the popup panel short; `comfortable` gives every action a
@@ -65,7 +67,7 @@ export function PetActionGrid({
   onSleep,
   onClean,
   onTreat,
-  talkOpen,
+  talkOpen = false,
   onToggleTalk,
   className,
   size = "compact",
@@ -114,7 +116,12 @@ export function PetActionGrid({
     <div
       data-testid="pet-action-grid"
       data-size={size}
-      className={cn("grid grid-cols-4 gap-2", className)}
+      className={cn(
+        "grid gap-2",
+        // Six care actions alone sit in two rows of three; with talk, 4 + 3.
+        onToggleTalk ? "grid-cols-4" : "grid-cols-3 @lg/pet-pane:grid-cols-6",
+        className
+      )}
     >
       {actions.map((a) => {
         const rem = remaining(a.kind)
@@ -147,16 +154,22 @@ export function PetActionGrid({
           </Button>
         )
       })}
-      <Button
-        size="sm"
-        variant={talkOpen ? "default" : "secondary"}
-        aria-label={t("actions.talk")}
-        className={buttonClass}
-        onClick={onToggleTalk}
-      >
-        <AnimatedActionIcon icon={AnimatedMessageCircleIcon} size={16} animateOnChange={talkOpen} />
-        <span className={labelClass}>{t("actions.talk")}</span>
-      </Button>
+      {onToggleTalk ? (
+        <Button
+          size="sm"
+          variant={talkOpen ? "default" : "secondary"}
+          aria-label={t("actions.talk")}
+          className={buttonClass}
+          onClick={onToggleTalk}
+        >
+          <AnimatedActionIcon
+            icon={AnimatedMessageCircleIcon}
+            size={16}
+            animateOnChange={talkOpen}
+          />
+          <span className={labelClass}>{t("actions.talk")}</span>
+        </Button>
+      ) : null}
     </div>
   )
 }

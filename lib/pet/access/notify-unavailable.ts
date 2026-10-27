@@ -38,8 +38,8 @@ export interface PetUnavailableNotifyDeps {
 /** One row however many times the shortcut is pressed. */
 export const PET_UNAVAILABLE_DEDUPE_KEY = "pet-interaction-unavailable"
 
-/** Where the pet is switched back on. */
-export const PET_UNAVAILABLE_HREF = "/settings?section=pet"
+/** Where the pet is switched back on: the console's Appearance & settings. */
+export const PET_UNAVAILABLE_HREF = "/pet?view=appearance"
 
 /** Long enough to notice, short enough not to linger after the fact. */
 export const PET_UNAVAILABLE_TTL_MS = 5 * 60_000

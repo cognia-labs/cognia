@@ -4,7 +4,6 @@ const usePetEventBus = jest.fn()
 const ensurePetAccountId = jest.fn().mockResolvedValue("acct-1")
 const ensurePetProfile = jest.fn().mockResolvedValue(undefined)
 const useActiveCharacterId = jest.fn<string | undefined, []>()
-const petWidgetProps = jest.fn()
 const getPetWindowRole = jest.fn<"main" | "overlay" | "popup" | "web", []>()
 const isTauri = jest.fn<boolean, []>()
 const usePlatform = jest.fn<"tauri" | "mobile" | "web", []>()
@@ -77,12 +76,6 @@ jest.mock("@/lib/pet/events/cross-window-bridge", () => ({
 }))
 const routerPush = jest.fn()
 jest.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }))
-jest.mock("./pet-widget", () => ({
-  PetWidget: (props: unknown) => {
-    petWidgetProps(props)
-    return <div data-testid="pet-widget" />
-  },
-}))
 
 let settingsValue: unknown = {}
 jest.mock("@/stores/settings", () => {
@@ -100,7 +93,6 @@ beforeEach(() => {
   ensurePetProfile.mockClear()
   useActiveCharacterId.mockReset()
   useActiveCharacterId.mockReturnValue(undefined)
-  petWidgetProps.mockClear()
   getPetWindowRole.mockReset()
   getPetWindowRole.mockReturnValue("main")
   isTauri.mockReset()
@@ -177,7 +169,6 @@ describe("PetMount", () => {
     }
     const { container } = render(<PetMount />)
     expect(container).toBeEmptyDOMElement()
-    expect(petWidgetProps).not.toHaveBeenCalled()
     expect(petMainRuntimeProps).toHaveBeenCalled()
     expect(usePetEventBus).toHaveBeenCalledWith(true, undefined)
   })
@@ -364,7 +355,7 @@ describe("PetMount", () => {
     expect(openPetWindow).not.toHaveBeenCalled()
   })
 
-  it("routes the popup's open-console request to /pet?tab=…", () => {
+  it("routes the popup's open-console request to the console's canonical href", () => {
     settingsValue = ENABLED_SETTINGS
     getPetWindowRole.mockReturnValue("main")
     isTauri.mockReturnValue(true)
@@ -375,6 +366,9 @@ describe("PetMount", () => {
     expect(deps.onOpenConsole).toBeDefined()
     deps.onOpenConsole?.("shop")
     expect(routerPush).toHaveBeenCalledWith("/pet?tab=shop")
+    // The earlier layout's ids still land, on the place they now mean.
+    deps.onOpenConsole?.("customize")
+    expect(routerPush).toHaveBeenLastCalledWith("/pet?view=appearance")
   })
 
   it("registers the window + interaction commands while enabled on the main desktop window, disposing on unmount", () => {
@@ -518,13 +512,11 @@ describe("PetMount — desktop surfaces and window lifecycle", () => {
     expect(petMainRuntimeProps).toHaveBeenCalledWith(
       expect.objectContaining({ activeCharacterId: "char-3" })
     )
-    expect(petWidgetProps).not.toHaveBeenCalled()
   })
 
-  it("hides the in-app widget while the pet is out on the desktop, keeping the runtime", () => {
+  it("keeps the runtime while the pet is out on the desktop", () => {
     settingsValue = desktopSettings({ enabled: true })
-    const { queryByTestId } = render(<PetMount />)
-    expect(queryByTestId("pet-widget")).toBeNull()
+    render(<PetMount />)
     // The runtime still speaks for the overlay over the bridge.
     expect(petMainRuntimeProps).toHaveBeenCalled()
   })
@@ -533,7 +525,6 @@ describe("PetMount — desktop surfaces and window lifecycle", () => {
     settingsValue = desktopSettings({ enabled: false })
     const { container } = render(<PetMount />)
     expect(container).toBeEmptyDOMElement()
-    expect(petWidgetProps).not.toHaveBeenCalled()
     expect(openPetWindow).not.toHaveBeenCalled()
     expect(petMainRuntimeProps).toHaveBeenCalled()
   })
@@ -543,7 +534,6 @@ describe("PetMount — desktop surfaces and window lifecycle", () => {
     const { container } = render(<PetMount />)
     await waitFor(() => expect(openPetWindow).toHaveBeenCalledTimes(1))
     expect(container).toBeEmptyDOMElement()
-    expect(petWidgetProps).not.toHaveBeenCalled()
   })
 
   it("does not fall back to an in-app pet when the native window cannot open", async () => {
@@ -552,7 +542,6 @@ describe("PetMount — desktop surfaces and window lifecycle", () => {
     const { container } = render(<PetMount />)
     await waitFor(() => expect(openPetWindow).toHaveBeenCalled())
     expect(container).toBeEmptyDOMElement()
-    expect(petWidgetProps).not.toHaveBeenCalled()
   })
 
   it("follows pet-settings writes from the other windows and stops on unmount", () => {

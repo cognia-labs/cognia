@@ -29,13 +29,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from "@/components/ui/empty"
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { FieldDescription } from "@/components/ui/field"
 import { Switch } from "@/components/ui/switch"
 import { CapabilityGate } from "@/components/platform/capability-gate"
 import { SettingsBlock, SettingsStack } from "@/components/settings/common/settings-block"
@@ -163,22 +157,27 @@ export function PetCustomizationWorkspace() {
     >
       <SettingsStack className="min-w-0">
         <SettingsBlock
+          settingId="pet-enabled"
           icon={<PawPrintIcon />}
           title={t("enabled.label")}
           description={t("enabled.description")}
+          // The master switch is the block itself: a row repeating the block's
+          // own title and description under it said everything twice.
+          action={
+            <Switch
+              id="pet-enabled"
+              aria-label={t("enabled.label")}
+              checked={pet.enabled}
+              onCheckedChange={setPetEnabled}
+            />
+          }
+          contentClassName="mt-0"
         >
-          <FieldGroup>
-            <Field orientation="responsive">
-              <FieldContent>
-                <FieldLabel htmlFor="pet-enabled">{t("enabled.label")}</FieldLabel>
-                <FieldDescription>{t("enabled.description")}</FieldDescription>
-              </FieldContent>
-              <Switch id="pet-enabled" checked={pet.enabled} onCheckedChange={setPetEnabled} />
-            </Field>
-          </FieldGroup>
+          {null}
         </SettingsBlock>
 
         <SettingsBlock
+          settingId="pet-look"
           icon={<BrushIcon />}
           title={tc("look.title")}
           description={
@@ -203,6 +202,7 @@ export function PetCustomizationWorkspace() {
         </SettingsBlock>
 
         <SettingsBlock
+          settingId="pet-appearance"
           icon={<SettingsIcon />}
           title={tc("appearance.title")}
           description={tc("appearance.description")}
@@ -211,6 +211,7 @@ export function PetCustomizationWorkspace() {
         </SettingsBlock>
 
         <SettingsBlock
+          settingId="pet-interaction"
           icon={<MessageCircleIcon />}
           title={tc("interaction.title")}
           description={tc("interaction.description")}
@@ -219,6 +220,7 @@ export function PetCustomizationWorkspace() {
         </SettingsBlock>
 
         <SettingsBlock
+          settingId="pet-sound"
           icon={<Volume2Icon />}
           title={tc("sound.title")}
           description={tc("sound.description")}
@@ -227,6 +229,7 @@ export function PetCustomizationWorkspace() {
         </SettingsBlock>
 
         <SettingsBlock
+          settingId="pet-care"
           icon={<HeartPulseIcon />}
           title={tc("care.title")}
           description={tc("care.description")}
@@ -235,6 +238,7 @@ export function PetCustomizationWorkspace() {
         </SettingsBlock>
 
         <SettingsBlock
+          settingId="pet-twin-awareness"
           icon={<SparklesIcon />}
           title={t("twinAwareness.title")}
           description={t("twinAwareness.description")}
@@ -244,6 +248,7 @@ export function PetCustomizationWorkspace() {
 
         <CapabilityGate profiles={["desktop"]}>
           <SettingsBlock
+            settingId="pet-desktop"
             icon={<MonitorIcon />}
             title={tc("desktop.title")}
             description={tc("desktop.description")}
@@ -253,6 +258,7 @@ export function PetCustomizationWorkspace() {
         </CapabilityGate>
 
         <SettingsBlock
+          settingId="pet-reset"
           icon={<RotateCcwIcon />}
           title={t("reset.label")}
           description={t("reset.description")}

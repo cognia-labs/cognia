@@ -126,7 +126,6 @@
   "components/pet/pet-bubble.tsx": 3,
   "components/pet/pet-popup-view.tsx": 2,
   "components/pet/pet-stat-card.tsx": 1,
-  "components/pet/pet-widget.tsx": 4,
   "components/plugins/detail/plugin-config-form.tsx": 3,
   "components/plugins/detail/plugin-detail-header.tsx": 1,
   "components/plugins/detail/plugin-python-host-settings.tsx": 1,

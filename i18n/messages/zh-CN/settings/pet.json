@@ -394,5 +394,16 @@
       "unsupported": "此处无法导入该格式。请在本机桌面端使用 DSH 视频角色包或 WebP/PNG 帧动画包。",
       "decoderMissing": "视频转换需要支持 VP8/VP9 的 FFmpeg。请安装 FFmpeg，或改为导入 WebP/PNG 帧动画包。"
     }
+  },
+  "pointer": {
+    "title": "宠物设置在宠物页中",
+    "description": "宠物相关的一切都集中在一处：打开 宠物 → 外观与设置。",
+    "action": "打开外观与设置",
+    "covers": {
+      "look": "外观、皮肤、Live2D 模型和动画包",
+      "desktop": "桌面窗口：大小、漫游、点击穿透",
+      "behavior": "说话、声音、照顾提醒和分身感知",
+      "characters": "各角色的专属外观"
+    }
   }
 }

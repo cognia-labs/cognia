@@ -943,7 +943,8 @@
       "capture": "Content capture",
       "hidePet": "Hide desktop pet",
       "ocr": "Screen OCR",
-      "showPet": "Show desktop pet"
+      "showPet": "Show desktop pet",
+      "petToggleFailed": "Couldn't bring the pet out to the desktop. Try again."
     },
     "restore": "Restore",
     "searchPlaceholder": "Search or run command…",

@@ -2,18 +2,19 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, fireEvent } from "@testing-library/react"
+import { act, render, screen, fireEvent } from "@testing-library/react"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
-const petRef = { minimized: false }
-const setMinimized = jest.fn()
-jest.mock("@/stores/pet/pet-store", () => ({
-  usePetStore: (selector: (s: { minimized: boolean; setMinimized: jest.Mock }) => unknown) =>
-    selector({ minimized: petRef.minimized, setMinimized }),
+const toggleDesktopPetWindow = jest.fn()
+jest.mock("@/lib/pet/commands", () => ({
+  toggleDesktopPetWindow: () => toggleDesktopPetWindow(),
 }))
+
+const toastError = jest.fn()
+jest.mock("sonner", () => ({ toast: { error: (message: string) => toastError(message) } }))
 
 const requestOpenSettings = jest.fn()
 jest.mock("@/stores/ui/ui-store", () => ({
@@ -28,16 +29,22 @@ let mockPlatform: "tauri" | "web" | "mobile" = "tauri"
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => mockPlatform }))
 
 let mockPetEnabled = true
+let mockOnDesktop = true
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: (selector: (s: unknown) => unknown) =>
-    selector({ settings: { petSettings: { enabled: mockPetEnabled } } }),
+    selector({
+      settings: {
+        petSettings: { enabled: mockPetEnabled, desktopPet: { enabled: mockOnDesktop } },
+      },
+    }),
 }))
 
 import { TitleBarQuickActions } from "./title-bar-quick-actions"
 
 beforeEach(() => {
-  petRef.minimized = false
-  setMinimized.mockClear()
+  mockOnDesktop = true
+  toggleDesktopPetWindow.mockReset().mockResolvedValue(false)
+  toastError.mockClear()
   requestOpenSettings.mockClear()
   routerPush.mockClear()
   mockPlatform = "tauri"
@@ -45,23 +52,51 @@ beforeEach(() => {
 })
 
 describe("TitleBarQuickActions", () => {
-  it("toggles the pet from visible to hidden", () => {
+  it("puts the desktop pet away through the shared, persisted toggle", async () => {
     render(<TitleBarQuickActions />)
     const pet = screen.getByTestId("quick-action-pet")
     expect(pet).toHaveAttribute("aria-pressed", "true")
     expect(pet).toHaveAttribute("aria-label", "hidePet")
-    fireEvent.click(pet)
-    expect(setMinimized).toHaveBeenCalledWith(true)
+    await act(async () => {
+      fireEvent.click(pet)
+    })
+    expect(toggleDesktopPetWindow).toHaveBeenCalledTimes(1)
+    expect(toastError).not.toHaveBeenCalled()
   })
 
-  it("toggles the pet from hidden to visible", () => {
-    petRef.minimized = true
+  it("sends the pet out to the desktop when it is away", async () => {
+    mockOnDesktop = false
+    toggleDesktopPetWindow.mockResolvedValue(true)
     render(<TitleBarQuickActions />)
     const pet = screen.getByTestId("quick-action-pet")
     expect(pet).toHaveAttribute("aria-pressed", "false")
     expect(pet).toHaveAttribute("aria-label", "showPet")
-    fireEvent.click(pet)
-    expect(setMinimized).toHaveBeenCalledWith(false)
+    await act(async () => {
+      fireEvent.click(pet)
+    })
+    expect(toggleDesktopPetWindow).toHaveBeenCalledTimes(1)
+    expect(toastError).not.toHaveBeenCalled()
+  })
+
+  it("says so when the pet would not come out", async () => {
+    mockOnDesktop = false
+    toggleDesktopPetWindow.mockResolvedValue(false)
+    render(<TitleBarQuickActions />)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("quick-action-pet"))
+    })
+    expect(toastError).toHaveBeenCalledWith("petToggleFailed")
+  })
+
+  it("recovers from a toggle that throws", async () => {
+    toggleDesktopPetWindow.mockRejectedValue(new Error("ipc"))
+    render(<TitleBarQuickActions />)
+    const pet = screen.getByTestId("quick-action-pet")
+    await act(async () => {
+      fireEvent.click(pet)
+    })
+    expect(toastError).toHaveBeenCalledWith("petToggleFailed")
+    expect(pet).not.toBeDisabled()
   })
 
   it("opens OCR settings", () => {
@@ -70,9 +105,9 @@ describe("TitleBarQuickActions", () => {
     expect(requestOpenSettings).toHaveBeenCalledWith("ocr")
   })
 
-  it("opens the capture settings where they live: the pet console's Insights tab", () => {
+  it("opens the capture settings where they live: the pet console's Insights", () => {
     // Settings → Pet has no capture controls; `CaptureSettingsPanel` is mounted
-    // only in the console's Insights tab.
+    // only in the console's Insights (inside Activity).
     render(<TitleBarQuickActions />)
     fireEvent.click(screen.getByTestId("quick-action-capture"))
     expect(routerPush).toHaveBeenCalledWith("/pet?tab=insights")

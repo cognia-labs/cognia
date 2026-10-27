@@ -5,8 +5,9 @@
 //      device emits on the pet bus or writes its pet tables (they are a mirror,
 //      and there is no controller here to hear an event);
 //   2. what only the desktop can do is labelled, not hidden or broken: the
-//      desktop-only tabs are badged and render the notice, the binding tab is
-//      read-only, the desktop toggle is a status chip (CLAUDE.md rule 7).
+//      desktop-only places (the insights segment, the appearance entry) are
+//      badged and render the notice, the character binding is read-only, the
+//      desktop toggle is a status chip (CLAUDE.md rule 7).
 
 import {
   act,
@@ -102,14 +103,17 @@ jest.mock("../pet-renderer", () => ({
   },
 }))
 // Tabs whose own suites cover them; here only whether they mount.
-jest.mock("./customize-tab", () => ({ CustomizeTab: () => <div data-testid="tab-customize" /> }))
+jest.mock("@/components/pet/settings/pet-customization-workspace", () => ({
+  PetCustomizationWorkspace: () => <div data-testid="tab-customize" />,
+}))
 jest.mock("./insights-tab", () => ({ InsightsTab: () => <div data-testid="tab-insights" /> }))
 jest.mock("./journal-tab", () => ({ JournalTab: () => <div data-testid="tab-journal" /> }))
 jest.mock("./dex-tab", () => ({ DexTab: () => <div data-testid="tab-dex" /> }))
 jest.mock("./achievements-tab", () => ({ AchievementsTab: () => <div data-testid="tab-ach" /> }))
+const pluginSlot = jest.fn((_props: unknown) => null)
 jest.mock("@/components/plugins/plugin-extension-slot", () => ({
   usePluginSlotHasExtensions: () => false,
-  PluginExtensionSlot: () => null,
+  PluginExtensionSlot: (props: unknown) => pluginSlot(props),
 }))
 
 // The mirror: the desktop's pet tables as the phone last pulled them.
@@ -141,6 +145,7 @@ import { createDefaultProfile } from "@/lib/pet/defaults"
 import { computePetView } from "@/lib/pet/runtime/pet-view"
 import type { PetRemoteSnapshot } from "@/lib/pet/remote/types"
 import type { PetProfile } from "@/types/pet"
+import { resolvePetConsoleTarget } from "@/lib/pet/console-tabs"
 import { PetConsole } from "./pet-console"
 
 const client = (liveTransport as unknown as { __client: Record<string, jest.Mock> }).__client
@@ -202,9 +207,15 @@ function snapshot(over: Partial<PetRemoteSnapshot> = {}): PetRemoteSnapshot {
 
 const clickTab = (id: string) =>
   fireEvent.mouseDown(document.querySelector(`[data-tab="${id}"]`) as Element)
+const clickSegment = (id: string) =>
+  fireEvent.mouseDown(document.querySelector(`[data-segment="${id}"]`) as Element)
+const gridAction = (kind: string) =>
+  screen.getByTestId("pet-action-grid").querySelector(`[data-action="${kind}"]`) as HTMLElement
 
 async function renderRemote(initialTab?: "shop" | "binding") {
-  render(<PetConsole initialTab={initialTab} />)
+  render(
+    <PetConsole initialTarget={initialTab ? resolvePetConsoleTarget(initialTab) : undefined} />
+  )
   await waitFor(() =>
     expect(screen.getByTestId("pet-remote-status-band")).toHaveAttribute("data-state", "info")
   )
@@ -264,7 +275,7 @@ describe("PetConsole remote care", () => {
   it("sends care to the desktop and tells the reward", async () => {
     await renderRemote()
     await act(async () => {
-      fireEvent.click(document.querySelector('[data-action="fed"]') as Element)
+      fireEvent.click(gridAction("fed"))
     })
     expect(client.act).toHaveBeenCalledWith("fed", {})
     expect(toast.success).toHaveBeenCalledWith(expect.stringContaining("+3 XP"))
@@ -272,8 +283,8 @@ describe("PetConsole remote care", () => {
 
   it("greys an action that is cooling down on the desktop's clock", async () => {
     await renderRemote()
-    expect(document.querySelector('[data-action="played"]')).toBeDisabled()
-    expect(document.querySelector('[data-action="fed"]')).not.toBeDisabled()
+    expect(gridAction("played")).toBeDisabled()
+    expect(gridAction("fed")).not.toBeDisabled()
   })
 
   it("makes talk a direct care action rather than a composer", async () => {
@@ -283,6 +294,14 @@ describe("PetConsole remote care", () => {
     })
     expect(client.act).toHaveBeenCalledWith("talked", {})
     expect(screen.queryByTestId("pet-talk-composer")).toBeNull()
+    // Words go through the chat tab, which records the turn.
+    expect(screen.getByTestId("pet-home-open-chat")).toBeInTheDocument()
+  })
+
+  it("keeps plugin care actions off a paired device (plugins are the desktop's)", async () => {
+    await renderRemote()
+    expect(screen.getByTestId("pet-home-tab")).toBeInTheDocument()
+    expect(pluginSlot).not.toHaveBeenCalled()
   })
 
   it("buys and uses items in the desktop's shop", async () => {
@@ -319,28 +338,42 @@ describe("PetConsole remote care", () => {
   })
 
   describe("what stays on the desktop (CLAUDE.md rule 7)", () => {
-    it("badges the desktop-only tabs and keeps them in the nav", async () => {
+    it("keeps every place in the nav, with only the desktop-only parts badged", async () => {
       await renderRemote()
       const nav = screen.getByTestId("pet-console-nav")
-      for (const tab of ["customize", "insights"]) {
-        const trigger = nav.querySelector(`[data-tab="${tab}"]`) as HTMLElement
-        expect(trigger).toHaveAttribute("data-desktop-only", "true")
-        expect(within(trigger).getByTestId("pet-console-desktop-badge")).toBeInTheDocument()
-      }
-      for (const tab of ["nurture", "chat", "shop", "journal", "dex", "achievements", "binding"]) {
+      for (const tab of ["home", "chat", "shop", "collection", "activity"]) {
         expect(nav.querySelector(`[data-tab="${tab}"]`)).not.toHaveAttribute("data-desktop-only")
       }
+      const appearance = screen.getByTestId("pet-console-open-appearance")
+      expect(appearance).toHaveAttribute("data-desktop-only", "true")
+      clickTab("activity")
+      const insights = document.querySelector('[data-segment="insights"]') as HTMLElement
+      expect(insights).toHaveAttribute("data-desktop-only", "true")
+      expect(within(insights).getByTestId("pet-console-desktop-badge")).toBeInTheDocument()
+      expect(document.querySelector('[data-segment="journal"]')).not.toHaveAttribute(
+        "data-desktop-only"
+      )
     })
 
-    it.each(["customize", "insights"])(
-      "renders the notice for %s instead of its controls",
-      async (tab) => {
-        await renderRemote()
-        clickTab(tab)
-        expect(screen.getByTestId("pet-desktop-only-notice")).toHaveAttribute("data-tab", tab)
-        expect(screen.queryByTestId(`tab-${tab}`)).toBeNull()
-      }
-    )
+    it("renders the notice for insights instead of its controls", async () => {
+      await renderRemote()
+      clickTab("activity")
+      clickSegment("insights")
+      expect(screen.getByTestId("pet-desktop-only-notice")).toHaveAttribute("data-tab", "insights")
+      expect(screen.queryByTestId("tab-insights")).toBeNull()
+    })
+
+    it("opens Appearance & settings with the notice in place of the workspace", async () => {
+      await renderRemote()
+      fireEvent.click(screen.getByTestId("pet-console-open-appearance"))
+      expect(screen.getByTestId("pet-desktop-only-notice")).toHaveAttribute(
+        "data-tab",
+        "appearance"
+      )
+      expect(screen.queryByTestId("tab-customize")).toBeNull()
+      // The binding still reads, read-only.
+      expect(screen.getByTestId("pet-binding")).toHaveAttribute("data-read-only")
+    })
 
     it("shows the character bindings read-only", async () => {
       await renderRemote("binding")
@@ -350,11 +383,11 @@ describe("PetConsole remote care", () => {
 
     it("reads the journal, dex and achievements from the mirror", async () => {
       await renderRemote()
-      clickTab("journal")
+      clickTab("activity")
       expect(screen.getByTestId("tab-journal")).toBeInTheDocument()
-      clickTab("dex")
+      clickTab("collection")
       expect(screen.getByTestId("tab-dex")).toBeInTheDocument()
-      clickTab("achievements")
+      clickSegment("achievements")
       expect(screen.getByTestId("tab-ach")).toBeInTheDocument()
     })
   })

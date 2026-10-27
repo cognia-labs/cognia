@@ -155,25 +155,30 @@ Insights" (D10).
 
 ## Console and customization workspace
 
-`/pet` uses a responsive master-detail shell rather than a horizontal tab carousel. On desktop, a fixed
-grouped rail exposes Nurture, Chat, Shop, Customize, Characters, Insights, Journal, Dex, Achievements, and
-registered plugin tabs while the detail pane scrolls independently. In a narrow container, the same groups
-move into a Sheet; `PetConsoleTab`, `?tab=` deep links, plugin visibility, and the cross-window navigation
-protocol keep their existing values and wire shapes.
+`/pet` renders on the shared `FeaturePageShell` + `FeaturePageHeader`, like `/memory` and
+`/conversations` (ADR-0058 D15). The header draws the pet in its identity tile, carries the editable
+name with a level · stage · coins line, and offers "Appearance & settings" and the desktop toggle. Its
+second row is the navigation: Home, Chat, Shop, Collection (dex, achievements), Activity (journal,
+insights), and a Plugins tab while a plugin registers one.
 
-`PetCustomizationWorkspace` is mounted by both `/pet → Customize` and `Settings → Pet`. It is the only
-owner that reads `DEFAULT_PET_SETTINGS` and persists merged settings through `updatePetSettings()`, so
-both entry points expose the same SVG genetics overrides, Live2D import/compatibility/transform/motion/
-expression/parameter mapping, Sprite v2 creation/import/activation, dock and motion behavior, speech and
-memory, sound and quiet hours, care alerts, Twin awareness, and capability-gated desktop-window controls.
-Its responsive preview renders the effective SVG, Live2D, or Sprite selection and surfaces governed
-fallback diagnostics and retry. Resetting the pet profile is destructively confirmed and remains separate
-from resetting Settings configuration.
+Home opens on "Most needed now": the lowest need and the care that restores it most
+(`lib/pet/care/suggest-care.ts`, ranked from the controller's effect table), as the page's primary button.
+Below it come the care actions with the `pet.panel.actions` plugin slot, the backpack with coins and the
+way to the shop, a quick-talk field with the way to the full conversation, and the pet's stats. The pet
+itself sits on the console's one accent surface beside them.
 
-The page and configuration dialogs use flat sections, Fields, Items, Empty states, Alerts, and AI Elements
-conversation primitives. Compact widget, overlay, and popup frames retain their small bounded shells. This
-UI ownership change does not alter `PetSettings`, `PetProfile`, asset records, Dexie versions, progression,
-economy, interactions, or Tauri window protocols; no schema migration is involved.
+Appearance & settings is a sub-page (`/pet?view=appearance`) with a breadcrumb back. It holds
+`PetCustomizationWorkspace`, the only owner that reads `DEFAULT_PET_SETTINGS` and persists merged settings
+through `updatePetSettings()`, and the per-character looks, with a section index on a wide pane.
+Settings → Pet and the "pet is off" notification point to it. Every `/pet` link is built with
+`petConsoleHref` from `lib/pet/console-tabs.ts`, which also keeps the earlier ids (`nurture`, `customize`,
+`binding`) landing on the place they now mean.
+
+The desktop popup is a mini Home: stat card, needs, "Most needed now", care actions and quick talk, then
+click-through, put away, open the pet page, and appearance & settings. Every "put away" (console header,
+title bar, popup, tray, hotkey) persists `desktopPet.enabled = false` through `hideDesktopPetWindow`.
+None of this changes `PetSettings`, `PetProfile`, asset records, Dexie versions, progression, economy,
+interactions, or Tauri window protocols.
 
 ## Related
 

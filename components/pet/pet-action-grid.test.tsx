@@ -111,3 +111,13 @@ describe("PetActionGrid", () => {
     expect(document.querySelector('[data-action="fed"]')).not.toHaveClass("min-h-14")
   })
 })
+
+describe("without a talk toggle", () => {
+  it("draws only the six care actions, in rows of three", () => {
+    const { onToggleTalk: _omit, ...handlers } = makeHandlers()
+    render(<PetActionGrid {...handlers} />)
+    expect(screen.queryByRole("button", { name: /talk/i })).toBeNull()
+    expect(screen.getAllByRole("button")).toHaveLength(6)
+    expect(screen.getByTestId("pet-action-grid").className).toMatch(/grid-cols-3/)
+  })
+})

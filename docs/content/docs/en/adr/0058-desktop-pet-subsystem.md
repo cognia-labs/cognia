@@ -26,7 +26,7 @@ The pet's Next.js route tree is shared across three Tauri webview roles, resolve
 
 | Role | Window label | Route | Owns |
 |------|-------------|-------|------|
-| `main` | `"main"` | (app shell) | The event bus + controller (XP/needs/progression) + the in-app floating widget (`components/pet/pet-widget.tsx`) |
+| `main` | `"main"` | (app shell) | The event bus + controller (XP/needs/progression) + `PetMainRuntime` (voice, bubbles, appearance publishing); the in-app widget was retired (D14, D15) |
 | `overlay` | `"pet"` | `/pet-overlay` | Presentation only — the transparent, always-on-top, frameless sprite window (`components/pet/pet-overlay-view.tsx`) |
 | `popup` | `"pet-popup"` | `/pet-popup` | Presentation only — the right-click quick-menu + talk composer, a dedicated window (not a resize of the overlay, to avoid a resize/reposition race — see `src-tauri/src/pet_window/popup.rs`) |
 
@@ -43,12 +43,12 @@ subsystems (chat/agent-team/goal/scheduler/connector/terminal/workflow/twin/rada
          ├─ lib/pet/state/reducer.ts → PetVisualState (pure)
          └─ lib/pet/achievements/check.ts
     → Dexie (lib/db/pet.ts) persists the durable PetProfile
-    → stores/pet/pet-store.ts (Zustand — ephemeral visualState/oneShotQueue/bubble/minimized/position only)
+    → stores/pet/pet-store.ts (Zustand — ephemeral visualState/oneShotQueue/bubble only, nothing persisted since D15)
     → hooks/pet/use-pet.ts (Dexie useLiveQuery + lib/pet/runtime/pet-view.ts's pure view derivation)
     → components/pet/pet-renderer.tsx → skins/{svg-skin.tsx | live2d-skin.tsx | sprite-v2-skin.tsx}
 ```
 
-**Dexie vs. Zustand split** is deliberate: the durable record (profile, needs, XP/level/stage, achievements, bindings) lives only in Dexie and is read reactively in the unlocked main window. `usePetStore` (Zustand) also holds a transient, read-only profile projection for the overlay and popup, which do not unlock an account database. `PetMainRuntime` publishes this projection and the active binding over the existing pet bridge; `usePet` consumes it in secondary windows. The projection reuses `projectPetProfileForSync`, replacing the provider fingerprint with the mirror sentinel and carrying generated bones. Bridge startup publishes the current snapshot even if an overlay's initial request arrived before main mounted; runtime teardown clears it. Only `{ minimized, position }` is persisted to `localStorage` (key `cognia-pet-ui`). The secondary routes keep both route and locale-loading fallbacks empty, so the main workspace startup animation never paints into a pet window (2026-10-18).
+**Dexie vs. Zustand split** is deliberate: the durable record (profile, needs, XP/level/stage, achievements, bindings) lives only in Dexie and is read reactively in the unlocked main window. `usePetStore` (Zustand) also holds a transient, read-only profile projection for the overlay and popup, which do not unlock an account database. `PetMainRuntime` publishes this projection and the active binding over the existing pet bridge; `usePet` consumes it in secondary windows. The projection reuses `projectPetProfileForSync`, replacing the provider fingerprint with the mirror sentinel and carrying generated bones. Bridge startup publishes the current snapshot even if an overlay's initial request arrived before main mounted; runtime teardown clears it. Nothing in it is persisted since D15 (it used to keep the retired widget's `{ minimized, position }` under `cognia-pet-ui`). The secondary routes keep both route and locale-loading fallbacks empty, so the main workspace startup animation never paints into a pet window (2026-10-18).
 
 ### Event bus
 
@@ -199,6 +199,50 @@ switch. A persisted hidden desktop window stays hidden; hiding it or failing to
 open it never creates an in-app fallback. Legacy anchor and widget-size fields
 remain readable for settings compatibility but have no controls in the product.
 The existing desktop size control remains the single sizing control.
+
+### D15 — Five places, one shell, one settings home (2026-10-27)
+
+D8's ten-tab grouped rail still left the reader to choose among nurture,
+shop, customize, characters, insights, journal, dex and achievements with no
+first step, and the page used its own header while `/memory`,
+`/conversations` and `/files` share `FeaturePageShell` + `FeaturePageHeader`.
+D14 had retired the in-app widget, but its component, its 11-item menu and the
+title bar's pet button (which only flipped the widget's `minimized` flag)
+remained, and "hide the desktop pet" had three different effects.
+
+**Decision**:
+
+- `/pet` renders on `FeaturePageShell` + `FeaturePageHeader`. The header's
+  identity tile draws the pet (`FeaturePageHeader.avatar`), the title is the
+  editable name, and the actions are "Appearance & settings" and the desktop
+  toggle. The navigation is five places in the header's second row (Home,
+  Chat, Shop, Collection, Activity) plus the plugins tab while a plugin fills
+  it. Collection segments dex and achievements; Activity segments journal and
+  insights.
+- Home opens on "Most needed now": `lib/pet/care/suggest-care.ts` picks the
+  lowest need and ranks its restorers from `INTERACTION_EFFECTS` (skipping one
+  that is cooling down), shown by `PetCareSuggestion` as the page's primary
+  button. Below it: care actions with the `pet.panel.actions` plugin slot,
+  backpack and coins, a quick-talk field, and the stats.
+- Appearance & settings is a sub-page (`/pet?view=appearance`) holding
+  `PetCustomizationWorkspace` and the character binding, with a section index.
+  Settings → Pet becomes a pointer to it, and so does the "pet is off"
+  notification. Remotely (ADR-0219) the workspace is
+  `appearance.customize: desktop-only` and the binding stays read-only.
+- `lib/pet/console-tabs.ts` names every destination and keeps the earlier ids
+  readable (`nurture` → Home, `customize` and `binding` → the sub-page), so
+  bubbles, the popup, `pet_show` and old links still land. `petConsoleHref`
+  is the one way to build a `/pet` link.
+- The popup is a mini Home (stat card, needs, most-needed, care, quick talk)
+  with window actions click-through, put away, open the pet page, and
+  appearance & settings.
+- Every "put away" goes through `hideDesktopPetWindow` (close + persist
+  `desktopPet.enabled = false`); the title bar's pet button uses
+  `toggleDesktopPetWindow`. `PetWidget`, `PetQuickMenu`, `PetQuickNav`,
+  `usePetWidgetThrow` and the store's persisted `minimized` / `position` are
+  deleted.
+
+No `PetSettings`, `PetProfile`, Dexie or wire-shape change.
 
 ## Consequences
 

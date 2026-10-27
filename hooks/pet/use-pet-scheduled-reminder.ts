@@ -1,7 +1,7 @@
 // When a scheduled task becomes due, the pet reminds the user: an attention
 // flourish (the `surprised` one-shot) plus a durable Notification-Center
 // reminder (center + functional toast + OS). Main window only — mounted by
-// `PetWidget` alongside `usePetSpeak`/`usePetProactive`; the overlay/popup
+// `PetMainRuntime` alongside `usePetSpeak`/`usePetProactive`; the overlay/popup
 // windows are presentation-only and would double-fire.
 //
 // The reminder is a real reminder, so it is gated ONLY on the pet being enabled

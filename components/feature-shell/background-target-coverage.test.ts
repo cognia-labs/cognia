@@ -20,7 +20,6 @@ const EXEMPT: Record<string, string> = {
   invite: "standalone public landing, reachable before sign-in and outside the shell",
   island: "transparent island window — wallpaper is force-disabled there",
   onboarding: "owns a full-bleed narrative backdrop (ADR-0141)",
-  pet: "transparent pet window — wallpaper is force-disabled there",
   "pet-overlay": "transparent pet window — wallpaper is force-disabled there",
   "pet-popup": "transparent pet window — wallpaper is force-disabled there",
   portal: "standalone public surface, not the app shell",

@@ -238,7 +238,6 @@
       "failed": "Couldn't turn on pet chat. Try again."
     },
     "openFullChat": "Open full chat",
-    "openPanel": "Chat",
     "petFallbackName": "Pet",
     "scrollToBottom": "Scroll to the latest pet message",
     "sending": "{name} is thinking…",
@@ -262,31 +261,24 @@
     "recoveryHint": "To help it recover, bring both energy and mood back above {threshold}: let it sleep, play together, or give it a treat. A first-aid kit from the shop speeds this up."
   },
   "console": {
-    "groups": {
-      "extensions": "Extensions",
-      "nurture": "Care",
-      "personalize": "Personalization",
-      "records": "Records"
-    },
     "hatch": "Hatch",
     "hatchPrompt": "Your egg is ready to hatch.",
     "live2dFallback": "Live2D is unavailable right now — showing the built-in mascot.",
     "loading": "Waking up your pet…",
     "navigation": "Pet navigation",
-    "navigationDescription": "Choose a pet workspace.",
-    "openNavigation": "Open pet navigation",
     "subtitle": "Raise it, dress it, grow together.",
     "tabs": {
-      "achievements": "Achievements",
-      "binding": "Characters",
+      "home": "Home",
       "chat": "Chat",
-      "customize": "Customize",
+      "shop": "Shop",
+      "collection": "Collection",
+      "activity": "Activity",
       "dex": "Dex",
-      "insights": "Insights",
+      "achievements": "Achievements",
       "journal": "Journal",
-      "nurture": "Nurture",
-      "plugins": "Plugins",
-      "shop": "Shop"
+      "insights": "Insights",
+      "appearance": "Appearance & settings",
+      "plugins": "Plugins"
     },
     "title": "Your Pet",
     "unavailable": {
@@ -313,12 +305,6 @@
       "captureDescription": "Pages and notes you capture are part of what the radar reads. Choose what gets captured here.",
       "captureTitle": "Capture sources"
     },
-    "nurture": {
-      "care": "Care",
-      "stats": "Profile",
-      "status": "How your pet is doing",
-      "wallet": "Wallet"
-    },
     "renameFailed": "Couldn't rename your pet. Try again.",
     "stages": {
       "adult": "Adult",
@@ -332,9 +318,13 @@
       "badge": "Desktop",
       "title": "{tab} is on your desktop",
       "why": "It works with skins, models and plugins stored on your desktop, so it can't run on this device.",
-      "remedy": "Open Cognia on your desktop and go to Pet → {tab}.",
+      "remedy": {
+        "appearance": "Open Cognia on your desktop and go to Pet → Appearance & settings.",
+        "insights": "Open Cognia on your desktop and go to Pet → Activity → Insights.",
+        "plugins": "Open Cognia on your desktop and go to Pet → Plugins."
+      },
       "what": {
-        "customize": "Change your pet's species, colors, skin and size.",
+        "appearance": "Change your pet's species, colors, skin, size and behavior.",
         "insights": "See what the radar noticed from your activity, and choose what gets captured.",
         "plugins": "Panels that your desktop's plugins add to the pet console."
       }
@@ -391,6 +381,28 @@
         "title": "No pet on your desktop yet",
         "description": "Open the Cognia desktop app once to create your pet, then come back here."
       }
+    },
+    "home": {
+      "status": "How your pet is doing",
+      "next": "What to do next",
+      "mostNeeded": "Most needed now:",
+      "needValue": "{need} {value}%",
+      "cooling": "{action} in {seconds}s",
+      "content": "{name} is doing well. Nothing needs care right now.",
+      "contentNoName": "Your pet is doing well. Nothing needs care right now.",
+      "care": "Care",
+      "backpack": "Backpack",
+      "talk": "Say something",
+      "openChat": "Full conversation",
+      "stats": "Profile",
+      "talkInChat": "Conversations with your pet are recorded in Chat."
+    },
+    "appearance": {
+      "title": "Appearance & settings",
+      "description": "How your pet looks and behaves, on screen and on the desktop.",
+      "index": "Appearance & settings sections",
+      "binding": "Character looks",
+      "bindingDescription": "Give a character its own species or skin. A conversation with that character shows its look instead of the global one."
     }
   },
   "customize": {
@@ -567,22 +579,13 @@
     "level": "Level {level}"
   },
   "quickMenu": {
-    "clean": "Clean",
     "clickThrough": "Click-through",
-    "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Settings → Pet.",
-    "feed": "Feed",
+    "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Pet → Appearance & settings.",
     "hideDesktopPet": "Hide desktop pet",
-    "minimize": "Minimize",
-    "openConsole": "Open pet panel",
-    "openSettings": "Open settings",
-    "pet": "Pet",
-    "play": "Play",
+    "openConsole": "Open pet page",
     "showDesktopPet": "Show desktop pet",
-    "showMainWindow": "Show main window",
-    "sleep": "Sleep",
-    "talk": "Talk",
-    "treat": "Treat",
-    "windowActions": "Desktop pet window"
+    "windowActions": "Desktop pet window",
+    "openAppearance": "Appearance & settings"
   },
   "rarity": {
     "common": "Common",
@@ -741,11 +744,6 @@
   },
   "wallet": {
     "multiplier": "×{multiplier} coins"
-  },
-  "widget": {
-    "minimize": "Minimize pet",
-    "restore": "Show pet",
-    "toggle": "Open pet"
   },
   "achievementsProgress": {
     "summary": "{unlocked} of {total} unlocked",

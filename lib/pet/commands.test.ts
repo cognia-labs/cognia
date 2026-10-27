@@ -46,6 +46,7 @@ jest.mock("@/lib/pet/settings-sync", () => ({
 }))
 
 import {
+  hideDesktopPetWindow,
   openDesktopPetWindow,
   PET_INTERACTION_COMMAND_IDS,
   PET_WINDOW_COMMAND_ID,
@@ -65,6 +66,27 @@ beforeEach(() => {
   mockIsTauriValue = true
   save.mockReset().mockResolvedValue(undefined)
   settingsValue = { petSettings: { enabled: true, anchor: "bottom-right", size: 96 } }
+})
+
+describe("hideDesktopPetWindow", () => {
+  it("closes the window and keeps it away after a restart", async () => {
+    await hideDesktopPetWindow()
+    expect(closePetWindow).toHaveBeenCalledTimes(1)
+    expect(save).toHaveBeenCalledWith({
+      petSettings: expect.objectContaining({
+        // The pet itself stays on: only the window intent is cleared.
+        enabled: true,
+        desktopPet: expect.objectContaining({ enabled: false }),
+      }),
+    })
+  })
+
+  it("is a no-op off Tauri", async () => {
+    mockIsTauriValue = false
+    await hideDesktopPetWindow()
+    expect(closePetWindow).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+  })
 })
 
 describe("toggleDesktopPetWindow", () => {

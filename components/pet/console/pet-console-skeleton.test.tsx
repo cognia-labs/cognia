@@ -14,6 +14,13 @@ describe("PetConsoleSkeleton", () => {
       region.querySelectorAll('[data-slot="skeleton"][aria-hidden="true"]').length
     ).toBeGreaterThan(5)
   })
+
+  it("draws one tab placeholder per place the console has", () => {
+    render(<PetConsoleSkeleton />)
+    expect(
+      screen.getByTestId("pet-console-loading-nav").querySelectorAll("[data-skeleton-tab]")
+    ).toHaveLength(5)
+  })
 })
 
 describe("PetTabSkeleton", () => {

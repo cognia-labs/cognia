@@ -271,3 +271,20 @@ test("keeps the title visible at every width when navigation has its own row", (
 
   expect(screen.getByRole("heading", { name: "Logs" })).not.toHaveClass("sr-only")
 })
+
+test("draws an avatar in the identity tile without the icon sizing", () => {
+  renderHeader(
+    <FeaturePageHeader
+      title="Boba"
+      icon={<PlusIcon data-testid="identity-icon" />}
+      avatar={<svg data-testid="identity-avatar" />}
+    />
+  )
+
+  const tile = document.querySelector('[data-slot="feature-header-avatar"]')
+  expect(tile).toContainElement(screen.getByTestId("identity-avatar"))
+  // The icon-only rule would shrink a drawn picture to a 16px glyph.
+  expect(tile?.className).not.toMatch(/\[&_svg\]/)
+  // The avatar replaces the icon rather than sitting beside it.
+  expect(screen.queryByTestId("identity-icon")).toBeNull()
+})

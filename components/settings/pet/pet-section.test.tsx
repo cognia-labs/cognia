@@ -1,14 +1,17 @@
 import { render, screen } from "@testing-library/react"
 
-jest.mock("@/components/pet/settings/pet-customization-workspace", () => ({
-  PetCustomizationWorkspace: () => <div data-testid="pet-customization-workspace" />,
-}))
-
 import { PetSection } from "./pet-section"
 
 describe("PetSection", () => {
-  it("renders the complete shared customization workspace", () => {
+  it("points to the pet page's Appearance & settings instead of a second copy", () => {
     render(<PetSection />)
-    expect(screen.getByTestId("pet-customization-workspace")).toBeInTheDocument()
+    const link = screen.getByRole("link", { name: /Open Appearance & settings/ })
+    expect(link).toHaveAttribute("href", "/pet?view=appearance")
+    expect(screen.queryByTestId("pet-customization-workspace")).toBeNull()
+  })
+
+  it("says what lives there", () => {
+    render(<PetSection />)
+    expect(screen.getByTestId("settings-pet-pointer")).toHaveTextContent(/desktop window/i)
   })
 })

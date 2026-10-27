@@ -55,6 +55,12 @@ export interface FeatureHeaderAction {
 export interface FeaturePageHeaderProps {
   variant?: FeaturePageHeaderVariant
   icon?: React.ReactNode
+  /**
+   * A picture that stands in for the icon tile: the page's subject drawn as
+   * itself (the pet on `/pet`). Same tile, without the icon sizing that would
+   * shrink a rendered picture to a 16px glyph. Wins over `icon`.
+   */
+  avatar?: React.ReactNode
   title: React.ReactNode
   description?: React.ReactNode
   context?: React.ReactNode
@@ -168,6 +174,7 @@ function OverflowActionItem({ action }: { action: FeatureHeaderAction }) {
 export function FeaturePageHeader({
   variant = "management",
   icon,
+  avatar,
   title,
   description,
   context,
@@ -231,7 +238,18 @@ export function FeaturePageHeader({
           </div>
         ) : null}
 
-        {icon ? (
+        {avatar ? (
+          <span
+            data-slot="feature-header-avatar"
+            className={cn(
+              "grid shrink-0 place-items-center overflow-hidden border border-primary/15 bg-gradient-to-br from-primary/14 via-primary/8 to-background",
+              isCompact ? "size-7 rounded-lg" : "size-9 rounded-xl"
+            )}
+            aria-hidden="true"
+          >
+            {avatar}
+          </span>
+        ) : icon ? (
           <span
             className={cn(
               "grid shrink-0 place-items-center border border-primary/15 bg-gradient-to-br from-primary/14 via-primary/8 to-background text-primary shadow-xs",

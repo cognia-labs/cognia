@@ -41,16 +41,32 @@ export async function toggleDesktopPetWindow(): Promise<boolean> {
   if (!isTauri()) return false
 
   if (await isPetWindowOpen()) {
-    await closePetWindow()
-    // Against the persisted record (`updatePetSettings`), never a snapshot:
-    // the overlay writes its resting position from its own window.
-    await updatePetSettings((latest) => ({
-      ...latest,
-      desktopPet: { ...(latest.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY), enabled: false },
-    }))
+    await hideDesktopPetWindow()
     return false
   }
   return openDesktopPetWindow()
+}
+
+/**
+ * Put the desktop pet away: close the overlay window and persist
+ * `PetSettings.desktopPet.enabled = false`, so it stays away after a restart.
+ *
+ * The one meaning every "put away" control shares (the console header, the
+ * title bar, the popup, the hotkey and the tray all reach it, directly or via
+ * {@link toggleDesktopPetWindow}). The popup's button used to close the window
+ * without persisting, so the pet came back on the next launch while every
+ * other control kept it away. Never switches the pet itself off: that stays
+ * the master switch's job. Safe from any pet window; off Tauri it is a no-op.
+ */
+export async function hideDesktopPetWindow(): Promise<void> {
+  if (!isTauri()) return
+  await closePetWindow()
+  // Against the persisted record (`updatePetSettings`), never a snapshot:
+  // the overlay writes its resting position from its own window.
+  await updatePetSettings((latest) => ({
+    ...latest,
+    desktopPet: { ...(latest.desktopPet ?? DEFAULT_PET_DESKTOP_OVERLAY), enabled: false },
+  }))
 }
 
 /**

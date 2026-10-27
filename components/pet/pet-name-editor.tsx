@@ -39,7 +39,9 @@ export function PetNameEditor({ name, onRename, className, nameClassName }: PetN
 
   if (!editing) {
     return (
-      <div className={cn("flex min-w-0 items-center gap-1.5", className)}>
+      // Spans, not divs: the console renders the editor as its page heading,
+      // and a heading only holds phrasing content.
+      <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
         <span className={cn("truncate font-semibold", nameClassName)}>{name}</span>
         <Button
           type="button"
@@ -51,12 +53,12 @@ export function PetNameEditor({ name, onRename, className, nameClassName }: PetN
         >
           <PencilIcon className="size-3.5" />
         </Button>
-      </div>
+      </span>
     )
   }
 
   return (
-    <div
+    <span
       className={cn("flex min-w-0 items-center gap-1.5", className)}
       data-testid="pet-name-editor"
     >
@@ -93,6 +95,6 @@ export function PetNameEditor({ name, onRename, className, nameClassName }: PetN
       >
         <XIcon className="size-4" />
       </Button>
-    </div>
+    </span>
   )
 }

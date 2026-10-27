@@ -25,31 +25,15 @@ jest.mock("@/hooks/pet/use-active-live2d-model", () => ({
 // assert they reach the bridge. (The real panel is tested on its own.)
 jest.mock("./pet-interaction-panel", () => ({
   PetInteractionPanel: ({
-    onFeed,
-    onPlay,
-    onPet,
+    onCare,
     onTalk,
-    onSleep,
-    onClean,
-    onTreat,
     skinId,
     selection,
-    onOpenConsole,
-    showInventory,
-    showPluginActions,
   }: {
-    onFeed: () => void
-    onPlay: () => void
-    onPet: () => void
+    onCare: (kind: string) => void
     onTalk: (text?: string) => void
-    onSleep: () => void
-    onClean: () => void
-    onTreat: () => void
     skinId?: string
     selection?: { skinId: string; modelId?: string; packId?: string }
-    onOpenConsole?: (tab: string) => void
-    showInventory?: boolean
-    showPluginActions?: boolean
   }) => (
     <div
       data-testid="pet-interaction-panel"
@@ -61,19 +45,22 @@ jest.mock("./pet-interaction-panel", () => ({
             ? `${selection.skinId}:${selection.packId}`
             : selection?.skinId
       }
-      data-show-inventory={String(showInventory ?? true)}
-      data-show-plugin-actions={String(showPluginActions ?? true)}
     >
-      <button onClick={() => onFeed()}>feed</button>
-      <button onClick={() => onPlay()}>play</button>
-      <button onClick={() => onPet()}>pet</button>
+      <button onClick={() => onCare("fed")}>feed</button>
+      <button onClick={() => onCare("played")}>play</button>
+      <button onClick={() => onCare("petted")}>pet</button>
       <button onClick={() => onTalk("hi pet")}>talk</button>
-      <button onClick={() => onSleep()}>sleep</button>
-      <button onClick={() => onClean()}>clean</button>
-      <button onClick={() => onTreat()}>treat</button>
-      <button onClick={() => onOpenConsole?.("shop")}>open shop</button>
+      <button onClick={() => onCare("slept")}>sleep</button>
+      <button onClick={() => onCare("cleaned")}>clean</button>
+      <button onClick={() => onCare("treated")}>treat</button>
     </div>
   ),
+}))
+
+// The persisted "put away" (closes the window AND clears the intent).
+const hideDesktopPetWindow = jest.fn().mockResolvedValue(undefined)
+jest.mock("@/lib/pet/commands", () => ({
+  hideDesktopPetWindow: () => hideDesktopPetWindow(),
 }))
 
 // Cross-window bridge.
@@ -193,6 +180,7 @@ beforeEach(() => {
   schedulePetWindowReveal.mockClear()
   closePetPopup.mockClear()
   closePetWindow.mockClear()
+  hideDesktopPetWindow.mockClear()
   resizePetPopup.mockClear()
   setPetClickThrough.mockClear()
   showMainWindow.mockClear()
@@ -354,24 +342,20 @@ describe("PetPopupView", () => {
     expect(setPetClickThrough).not.toHaveBeenCalled()
   })
 
-  it("hide closes the sprite window; show-main restores the app and closes the popup", () => {
+  it("puts the pet away the same persisted way as every other control", () => {
     render(<PetPopupView />)
     fireEvent.click(screen.getByText("hideDesktopPet"))
-    expect(closePetWindow).toHaveBeenCalledTimes(1)
+    expect(hideDesktopPetWindow).toHaveBeenCalledTimes(1)
+    // A bare window close came back on the next launch.
+    expect(closePetWindow).not.toHaveBeenCalled()
+  })
 
-    fireEvent.click(screen.getByText("showMainWindow"))
+  it("opens the pet page in the main window and closes the popup", () => {
+    render(<PetPopupView />)
+    fireEvent.click(screen.getByText("openConsole"))
     expect(showMainWindow).toHaveBeenCalledTimes(1)
+    expect(bridgeSendOpenConsole).toHaveBeenCalledWith("home")
     expect(closePetPopup).toHaveBeenCalledTimes(1)
-  })
-
-  it("disables the inventory strip (no controller in this window)", () => {
-    render(<PetPopupView />)
-    expect(screen.getByTestId("pet-interaction-panel").dataset.showInventory).toBe("false")
-  })
-
-  it("omits the plugin slot (no plugin runtime in this window)", () => {
-    render(<PetPopupView />)
-    expect(screen.getByTestId("pet-interaction-panel").dataset.showPluginActions).toBe("false")
   })
 
   it("lays the window actions out as one labelled group of four", () => {
@@ -382,7 +366,7 @@ describe("PetPopupView", () => {
     const ids = Array.from(group.querySelectorAll("[data-window-action]")).map((el) =>
       el.getAttribute("data-window-action")
     )
-    expect(ids).toEqual(["click-through", "settings", "main-window", "hide"])
+    expect(ids).toEqual(["click-through", "hide", "console", "appearance"])
     // Click-through explains how to undo it before the user loses the pointer.
     expect(group.querySelector('[data-window-action="click-through"]')).toHaveAttribute(
       "title",
@@ -390,11 +374,11 @@ describe("PetPopupView", () => {
     )
   })
 
-  it("settings opens the customization tab in the main window and closes the popup", () => {
+  it("opens Appearance & settings in the main window and closes the popup", () => {
     render(<PetPopupView />)
-    fireEvent.click(screen.getByText("openSettings"))
+    fireEvent.click(screen.getByText("openAppearance"))
     expect(showMainWindow).toHaveBeenCalledTimes(1)
-    expect(bridgeSendOpenConsole).toHaveBeenCalledWith("customize")
+    expect(bridgeSendOpenConsole).toHaveBeenCalledWith("appearance")
     expect(closePetPopup).toHaveBeenCalledTimes(1)
   })
 
@@ -411,14 +395,6 @@ describe("PetPopupView", () => {
     const { unmount } = render(<PetPopupView />)
     unmount()
     expect(popupShownDispose).toHaveBeenCalledTimes(1)
-  })
-
-  it("quick-nav raises the main window, sends open-console, and closes the popup", () => {
-    render(<PetPopupView />)
-    fireEvent.click(screen.getByText("open shop"))
-    expect(showMainWindow).toHaveBeenCalledTimes(1)
-    expect(bridgeSendOpenConsole).toHaveBeenCalledWith("shop")
-    expect(closePetPopup).toHaveBeenCalledTimes(1)
   })
 
   it("Esc closes the popup", () => {

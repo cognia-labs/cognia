@@ -103,11 +103,13 @@ lib/pet/
 
 ## 控制台与自定义工作区
 
-`/pet` 使用响应式主从布局，不再依赖横向滚动的 Tab。桌面端由固定分组导航轨道提供养成、聊天、商店、自定义、角色、洞察、日记、图鉴、成就和已注册插件入口，详情面板独立滚动；窄容器中，相同分组进入 Sheet。`PetConsoleTab`、`?tab=` 深链、插件显隐规则以及跨窗口导航协议的值和 wire shape 保持不变。
+`/pet` 与 `/memory`、`/conversations` 一样使用共享的 `FeaturePageShell` + `FeaturePageHeader`（ADR-0058 D15）。页头的身份图块直接绘制宠物，标题是可编辑的名字并附带「等级 · 阶段 · 金币」，右侧提供「外观与设置」和桌宠开关。页头第二行是导航：首页、对话、商店、收藏（图鉴、成就）、动态（日记、洞察），有插件注册时再加插件 Tab。
 
-`PetCustomizationWorkspace` 同时由 `/pet → Customize` 与 `Settings → Pet` 直接挂载。它是唯一读取 `DEFAULT_PET_SETTINGS` 并通过 `updatePetSettings()` 合并持久化配置的所有者，因此两个入口完整提供 SVG 遗传外观覆盖、Live2D 导入/兼容性/transform/motion/expression/parameter mapping、Sprite v2 创建/导入/激活、停靠与运动、说话与记忆、声音与安静时段、照料提醒、Twin awareness，以及受能力门禁约束的桌宠窗口控制。响应式预览会渲染实际生效的 SVG、Live2D 或 Sprite 选择，并明确显示受治理的 fallback 诊断与重试。重置宠物档案需要破坏性确认，并与 Settings Shell 的配置重置保持区分。
+首页以「现在最需要」开场：最低的需求以及恢复它最多的照料动作（`lib/pet/care/suggest-care.ts`，按控制器的效果表排序），作为页面主按钮。其下是照料动作与 `pet.panel.actions` 插件槽、背包与金币（含去商店入口）、快捷说话（含完整对话入口）以及档案。宠物本身站在控制台唯一的强调底色上。
 
-页面与配置 Dialog 统一使用平铺 Section、Field、Item、Empty、Alert 和 AI Elements 对话组件；紧凑 widget、overlay 与 popup 仍保留小型边界外框。本次改动不改变 `PetSettings`、`PetProfile`、资产记录、Dexie 版本、成长/经济/互动规则或 Tauri 窗口协议，因此不需要 schema migration。
+外观与设置是带面包屑返回的子页面（`/pet?view=appearance`），包含 `PetCustomizationWorkspace`（唯一读取 `DEFAULT_PET_SETTINGS` 并通过 `updatePetSettings()` 合并持久化的所有者）和各角色外观，宽屏时带分区目录。设置 → 宠物与「宠物已关闭」通知都指向这里。所有 `/pet` 链接都由 `lib/pet/console-tabs.ts` 的 `petConsoleHref` 生成，旧 id（`nurture`、`customize`、`binding`）仍会落到对应的新位置。
+
+桌面右键弹窗是迷你首页：属性卡、需求、「现在最需要」、照料动作和快捷说话，之后是点击穿透、收回、打开宠物页、外观与设置。所有「收回」（控制台页头、标题栏、弹窗、托盘、快捷键）都通过 `hideDesktopPetWindow` 持久化 `desktopPet.enabled = false`。以上改动不改变 `PetSettings`、`PetProfile`、资产记录、Dexie 版本、成长/经济/互动规则或 Tauri 窗口协议。
 
 ## 相关文档
 

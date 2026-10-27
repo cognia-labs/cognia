@@ -394,5 +394,16 @@
       "unsupported": "This format cannot be imported here. Use a DSH video pack or a WebP/PNG frame pack on the local desktop.",
       "decoderMissing": "Video conversion needs FFmpeg with VP8/VP9 support. Install FFmpeg or import a WebP/PNG frame pack."
     }
+  },
+  "pointer": {
+    "title": "Pet settings live on the pet page",
+    "description": "Everything about your pet is in one place now: open Pet → Appearance & settings.",
+    "action": "Open Appearance & settings",
+    "covers": {
+      "look": "Look, skins, Live2D models and animation packs",
+      "desktop": "The desktop window: size, wandering, click-through",
+      "behavior": "Speech, sound, care alerts and twin awareness",
+      "characters": "Per-character looks"
+    }
   }
 }

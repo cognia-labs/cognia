@@ -2,15 +2,17 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { TitleBarQuickActions } from "./title-bar-quick-actions"
 import { resetStores } from "@/lib/storybook/seed-stores"
-import { usePetStore } from "@/stores/pet/pet-store"
+import { useSettingsStore } from "@/stores/settings"
 
-// Quick-actions cluster: pet show/hide toggle, OCR, and capture entry points.
+// Quick-actions cluster: the desktop-pet show / put-away toggle, OCR, and the
+// capture entry point. The pet and capture buttons are desktop-shell only, so
+// Storybook (a browser) shows the OCR button alone.
 const meta = {
   title: "Desktop/TitleBar/QuickActions",
   component: TitleBarQuickActions,
   parameters: { layout: "centered" },
   beforeEach: () => {
-    resetStores(usePetStore)
+    resetStores(useSettingsStore)
   },
   decorators: [
     (Story) => (
@@ -25,10 +27,3 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const Default: Story = {}
-
-export const PetHidden: Story = {
-  beforeEach: () => {
-    resetStores(usePetStore)
-    usePetStore.setState({ minimized: true })
-  },
-}

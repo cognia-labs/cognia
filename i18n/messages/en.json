@@ -14883,6 +14883,7 @@
         "capture": "Content capture",
         "hidePet": "Hide desktop pet",
         "ocr": "Screen OCR",
+        "petToggleFailed": "Couldn't bring the pet out to the desktop. Try again.",
         "showPet": "Show desktop pet"
       },
       "restore": "Restore",
@@ -32915,7 +32916,6 @@
         "title": "Turn on pet chat"
       },
       "openFullChat": "Open full chat",
-      "openPanel": "Chat",
       "petFallbackName": "Pet",
       "scrollToBottom": "Scroll to the latest pet message",
       "sending": "{name} is thinking…",
@@ -32939,6 +32939,13 @@
       "unwell": "Needs care"
     },
     "console": {
+      "appearance": {
+        "binding": "Character looks",
+        "bindingDescription": "Give a character its own species or skin. A conversation with that character shows its look instead of the global one.",
+        "description": "How your pet looks and behaves, on screen and on the desktop.",
+        "index": "Appearance & settings sections",
+        "title": "Appearance & settings"
+      },
       "chat": {
         "clear": "Clear conversation",
         "clearConfirm": {
@@ -32952,10 +32959,14 @@
       },
       "desktopOnly": {
         "badge": "Desktop",
-        "remedy": "Open Cognia on your desktop and go to Pet → {tab}.",
+        "remedy": {
+          "appearance": "Open Cognia on your desktop and go to Pet → Appearance & settings.",
+          "insights": "Open Cognia on your desktop and go to Pet → Activity → Insights.",
+          "plugins": "Open Cognia on your desktop and go to Pet → Plugins."
+        },
         "title": "{tab} is on your desktop",
         "what": {
-          "customize": "Change your pet's species, colors, skin and size.",
+          "appearance": "Change your pet's species, colors, skin, size and behavior.",
           "insights": "See what the radar noticed from your activity, and choose what gets captured.",
           "plugins": "Panels that your desktop's plugins add to the pet console."
         },
@@ -32965,16 +32976,25 @@
         "failed": "Couldn't change the desktop pet. Try again.",
         "openFailed": "The desktop pet couldn't be opened."
       },
-      "groups": {
-        "extensions": "Extensions",
-        "nurture": "Care",
-        "personalize": "Personalization",
-        "records": "Records"
-      },
       "hatch": "Hatch",
       "hatchFailed": "Couldn't hatch the egg. Try again.",
       "hatchPrompt": "Your egg is ready to hatch.",
       "hatching": "Hatching… this can take a few seconds.",
+      "home": {
+        "backpack": "Backpack",
+        "care": "Care",
+        "content": "{name} is doing well. Nothing needs care right now.",
+        "contentNoName": "Your pet is doing well. Nothing needs care right now.",
+        "cooling": "{action} in {seconds}s",
+        "mostNeeded": "Most needed now:",
+        "needValue": "{need} {value}%",
+        "next": "What to do next",
+        "openChat": "Full conversation",
+        "stats": "Profile",
+        "status": "How your pet is doing",
+        "talk": "Say something",
+        "talkInChat": "Conversations with your pet are recorded in Chat."
+      },
       "insights": {
         "captureDescription": "Pages and notes you capture are part of what the radar reads. Choose what gets captured here.",
         "captureTitle": "Capture sources"
@@ -32982,14 +33002,6 @@
       "live2dFallback": "Live2D is unavailable right now — showing the built-in mascot.",
       "loading": "Waking up your pet…",
       "navigation": "Pet navigation",
-      "navigationDescription": "Choose a pet workspace.",
-      "nurture": {
-        "care": "Care",
-        "stats": "Profile",
-        "status": "How your pet is doing",
-        "wallet": "Wallet"
-      },
-      "openNavigation": "Open pet navigation",
       "remote": {
         "band": {
           "connected": "Caring for your desktop pet",
@@ -33044,13 +33056,14 @@
       "tabLoading": "Loading…",
       "tabs": {
         "achievements": "Achievements",
-        "binding": "Characters",
+        "activity": "Activity",
+        "appearance": "Appearance & settings",
         "chat": "Chat",
-        "customize": "Customize",
+        "collection": "Collection",
         "dex": "Dex",
+        "home": "Home",
         "insights": "Insights",
         "journal": "Journal",
-        "nurture": "Nurture",
         "plugins": "Plugins",
         "shop": "Shop"
       },
@@ -33279,21 +33292,12 @@
       "level": "Level {level}"
     },
     "quickMenu": {
-      "clean": "Clean",
       "clickThrough": "Click-through",
-      "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Settings → Pet.",
-      "feed": "Feed",
+      "clickThroughDescription": "Clicks pass through the pet to what's behind it. Turn it back off from the tray menu or Pet → Appearance & settings.",
       "hideDesktopPet": "Hide desktop pet",
-      "minimize": "Minimize",
-      "openConsole": "Open pet panel",
-      "openSettings": "Open settings",
-      "pet": "Pet",
-      "play": "Play",
+      "openAppearance": "Appearance & settings",
+      "openConsole": "Open pet page",
       "showDesktopPet": "Show desktop pet",
-      "showMainWindow": "Show main window",
-      "sleep": "Sleep",
-      "talk": "Talk",
-      "treat": "Treat",
       "windowActions": "Desktop pet window"
     },
     "rarity": {
@@ -33453,11 +33457,6 @@
     },
     "wallet": {
       "multiplier": "×{multiplier} coins"
-    },
-    "widget": {
-      "minimize": "Minimize pet",
-      "restore": "Show pet",
-      "toggle": "Open pet"
     }
   },
   "plan": {
@@ -53846,6 +53845,17 @@
       "mutedBubbles": {
         "description": "Keep the pet quiet (it still animates).",
         "label": "Mute bubbles"
+      },
+      "pointer": {
+        "action": "Open Appearance & settings",
+        "covers": {
+          "behavior": "Speech, sound, care alerts and twin awareness",
+          "characters": "Per-character looks",
+          "desktop": "The desktop window: size, wandering, click-through",
+          "look": "Look, skins, Live2D models and animation packs"
+        },
+        "description": "Everything about your pet is in one place now: open Pet → Appearance & settings.",
+        "title": "Pet settings live on the pet page"
       },
       "proactive": {
         "description": "The pet speaks up on its own — celebrating milestones, chatting when idle, greeting by time of day. Quiet hours are always respected.",
