@@ -33,3 +33,22 @@ describe("PetMouth", () => {
     }
   })
 })
+
+describe("eye catchlights", () => {
+  it("lights the open eyes and leaves the closed ones dark", () => {
+    const lit = (kind: PetEyes) => {
+      const { container, unmount } = render(
+        <svg>
+          <PetEyesGroup kind={kind} />
+        </svg>
+      )
+      const n = container.querySelectorAll('[data-pet-part="catchlight"]').length
+      unmount()
+      return n
+    }
+    expect(lit("dot")).toBe(2)
+    expect(lit("wide")).toBe(2)
+    expect(lit("sleepy")).toBe(0)
+    expect(lit("star")).toBe(0)
+  })
+})

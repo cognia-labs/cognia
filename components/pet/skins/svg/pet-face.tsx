@@ -11,6 +11,11 @@ const RIGHT_EYE_X = 62
 const EYE_Y = 50
 const INK = "var(--pet-ink, #2a2a33)"
 
+/** The glint that makes an eye read as wet and alive rather than a dot. */
+function Catchlight({ cx, cy, r }: { cx: number; cy: number; r: number }) {
+  return <circle data-pet-part="catchlight" cx={cx} cy={cy} r={r} fill="#ffffff" />
+}
+
 function Eye({ cx, kind, wink }: { cx: number; kind: PetEyes; wink?: boolean }) {
   // A winking pet closes its right eye into an arc.
   if (wink) {
@@ -26,12 +31,18 @@ function Eye({ cx, kind, wink }: { cx: number; kind: PetEyes; wink?: boolean }) 
   }
   switch (kind) {
     case "dot":
-      return <circle cx={cx} cy={EYE_Y} r={4} fill={INK} />
+      return (
+        <g>
+          <ellipse cx={cx} cy={EYE_Y} rx={4.2} ry={4.6} fill={INK} />
+          <Catchlight cx={cx + 1.5} cy={EYE_Y - 1.7} r={1.4} />
+        </g>
+      )
     case "wide":
       return (
         <g>
           <circle cx={cx} cy={EYE_Y} r={6.5} fill="#fff" stroke={INK} strokeWidth={1.5} />
-          <circle cx={cx} cy={EYE_Y + 1} r={3} fill={INK} />
+          <circle cx={cx} cy={EYE_Y + 1} r={3.4} fill={INK} />
+          <Catchlight cx={cx + 1.3} cy={EYE_Y - 0.4} r={1.2} />
         </g>
       )
     case "sleepy":

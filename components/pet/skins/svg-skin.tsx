@@ -17,7 +17,7 @@ import { resolveBlink } from "@/lib/pet/animation/blink-spec"
 import { useIdleQuiescence } from "@/hooks/pet/use-idle-quiescence"
 import { stageScale, isEggStage } from "@/lib/pet/skins/stage-visual"
 import { resolveFlavorVfx } from "@/lib/pet/skins/flavor-vfx"
-import { PetBody } from "./svg/pet-body"
+import { PET_OUTLINE, PetBody, PetShadeDefs, usePetShadeIds } from "./svg/pet-body"
 import { PetEyesGroup, PetMouth } from "./svg/pet-face"
 import { PetVfx } from "./svg/pet-vfx"
 
@@ -56,6 +56,7 @@ function PetSvgContent({
   // After a stretch of plain idle the breathing loop has nothing to express;
   // quiescing collapses it to a still frame (zero rAF) until something changes.
   const quiescent = useIdleQuiescence(state, oneShot, lowPower)
+  const eggShade = usePetShadeIds()
   // `paused` renders the same still frame as reduced motion (the face still
   // expresses the emotion) — used while the window is hidden / minimized.
   const still = reducedMotion || Boolean(paused) || quiescent
@@ -167,13 +168,25 @@ function PetSvgContent({
       >
         {egg ? (
           <g data-pet-part="egg">
+            {/* Shaded like the hatched body, so the egg is the same object. */}
+            <PetShadeDefs ids={eggShade} />
             <ellipse cx={50} cy={60} rx={24} ry={30} fill={bones.palette.primary} />
+            <g fill={bones.palette.secondary} opacity={0.9}>
+              <ellipse cx={41} cy={44} rx={3.2} ry={2.4} />
+              <ellipse cx={60} cy={50} rx={2.4} ry={1.8} />
+              <ellipse cx={44} cy={74} rx={2.8} ry={2} />
+              <ellipse cx={61} cy={72} rx={3.4} ry={2.4} />
+            </g>
             <path
               d="M 30 58 l 8 -6 l 6 6 l 6 -6 l 6 6 l 6 -6 l 8 6"
               stroke={bones.palette.secondary}
               strokeWidth={2.5}
+              strokeLinejoin="round"
               fill="none"
             />
+            <ellipse cx={50} cy={60} rx={24} ry={30} fill={`url(#${eggShade.shade})`} />
+            <ellipse cx={50} cy={60} rx={24} ry={30} fill={`url(#${eggShade.shine})`} />
+            <ellipse cx={50} cy={60} rx={24} ry={30} fill="none" {...PET_OUTLINE} />
           </g>
         ) : (
           <>

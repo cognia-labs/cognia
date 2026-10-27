@@ -62,6 +62,14 @@ describe("svgSkin", () => {
     expect(container.querySelector('[data-pet-part="body"]')).toBeNull()
   })
 
+  it("shades the egg with its own gradients, like the hatched body", () => {
+    const { container } = render(<>{svgSkin.render(props({ stage: "egg" }))}</>)
+    const egg = container.querySelector('[data-pet-part="egg"]') as Element
+    const ids = Array.from(egg.querySelectorAll("radialGradient, linearGradient")).map((g) => g.id)
+    expect(ids).toHaveLength(2)
+    for (const id of ids) expect(egg.querySelector(`[fill="url(#${id})"]`)).not.toBeNull()
+  })
+
   it("renders the body (not an egg) for a hatched stage", () => {
     const { container } = render(<>{svgSkin.render(props({ stage: "adult" }))}</>)
     expect(container.querySelector('[data-pet-part="body"]')).not.toBeNull()

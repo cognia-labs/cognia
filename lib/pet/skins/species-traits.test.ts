@@ -14,7 +14,26 @@ describe("species traits", () => {
       expect(t.ears).toBeDefined()
       expect(t.tail).toBeDefined()
       expect(t.face).toBeDefined()
+      expect(["mochi", "box", "ghost", "tentacles"]).toContain(t.silhouette)
+      expect(["paws", "webbed", "none"]).toContain(t.feet)
+      expect(["nubs", "wings", "none"]).toContain(t.arms)
+      expect(t.feature).toBeDefined()
     }
+  })
+
+  it("gives every species a distinct combination of parts", () => {
+    const keys = ALL_PET_SPECIES.map((species) => {
+      const t = getSpeciesTraits(species)
+      return [t.silhouette, t.ears, t.tail, t.face, t.feet, t.arms, t.feature].join("/")
+    })
+    expect(new Set(keys).size).toBe(ALL_PET_SPECIES.length)
+  })
+
+  it("stands the birds on webbed feet and gives the hem-bodied species none", () => {
+    expect(getSpeciesTraits("duck").feet).toBe("webbed")
+    expect(getSpeciesTraits("penguin").feet).toBe("webbed")
+    expect(getSpeciesTraits("ghost").feet).toBe("none")
+    expect(getSpeciesTraits("octopus").feet).toBe("none")
   })
 
   it("gives the blob max roundness and the robot the least", () => {
