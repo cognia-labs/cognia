@@ -5,7 +5,7 @@
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MaxQian888/cognia-next.git",
+    "url": "git+https://github.com/cognia-labs/cognia.git",
     "directory": "cli"
   },
   "keywords": [

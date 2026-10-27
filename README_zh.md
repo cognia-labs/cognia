@@ -115,8 +115,8 @@
 从源码安装共享依赖与 Node sidecar：
 
 ```bash
-git clone https://github.com/MaxQian888/cognia-next
-cd cognia-next
+git clone https://github.com/cognia-labs/cognia
+cd cognia
 pnpm install
 pnpm sidecars:install
 ```
@@ -343,4 +343,4 @@ workspace 清单、框架入口和工具配置，供现有命令自动发现。
 ## 支持
 
 - 阅读 [`docs/content/docs/zh/adr/`](./docs/content/docs/zh/adr/) 下对应 ADR。
-- 在[问题跟踪器](https://github.com/MaxQian888/cognia-next/issues)中说明问题和复现步骤。
+- 在[问题跟踪器](https://github.com/cognia-labs/cognia/issues)中说明问题和复现步骤。

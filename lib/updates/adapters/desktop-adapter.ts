@@ -164,5 +164,5 @@ function withMacHandoff(candidate: UpdateCandidate, os: OsFamily): UpdateCandida
 /** Signed, notarized DMG for a version, on the public release page. */
 export function macReleaseUrl(version: string): string {
   const tag = version.startsWith("v") ? version : `v${version}`
-  return `https://github.com/MaxQian888/cognia-next/releases/tag/${encodeURIComponent(tag)}`
+  return `https://github.com/cognia-labs/cognia/releases/tag/${encodeURIComponent(tag)}`
 }

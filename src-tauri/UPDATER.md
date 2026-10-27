@@ -85,7 +85,7 @@ publishes that release only after the complete matrix succeeds, exposing the
 manifest at:
 
 ```
-https://github.com/MaxQian888/cognia-next/releases/latest/download/latest.json
+https://github.com/cognia-labs/cognia/releases/latest/download/latest.json
 ```
 
 — the endpoint configured in `plugins.updater.endpoints`.

@@ -25,7 +25,7 @@ type SiteEnv = {
 }
 
 /** The GitHub repository the docs and the product live in. */
-export const REPO_URL = "https://github.com/MaxQian888/cognia-next"
+export const REPO_URL = "https://github.com/cognia-labs/cognia"
 
 /** Strip trailing slashes so callers can always concatenate `/`-prefixed paths. */
 function normalize(value: string): string {

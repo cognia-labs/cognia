@@ -33,9 +33,9 @@ import {
   getCliReleaseVerificationMode,
 } from "@/lib/cli-bridge/embedded-pubkey"
 
-const RELEASES_URL = "https://github.com/MaxQian888/cognia-next/releases"
+const RELEASES_URL = "https://github.com/cognia-labs/cognia/releases"
 const CARGO_INSTALL_CMD =
-  "cargo install --locked --git https://github.com/MaxQian888/cognia-next cognia-cli"
+  "cargo install --locked --git https://github.com/cognia-labs/cognia cognia-cli"
 
 export interface CogniaCliInstallDialogProps {
   open: boolean

@@ -67,7 +67,7 @@ sequenceDiagram
 
 关键机制（`src-tauri/src/cli_bridge/download.rs`）：
 
-- **URL 构造**（`:224-231`）—— 规范仓库 `MaxQian888/cognia-next`（`:29`），`releases/latest/download/<artifact>` 或 `releases/download/<tag>/<artifact>`；产物 `cognia-<triple>.tar.gz`，三元组 `{x86_64,aarch64}-{pc-windows-msvc,apple-darwin,unknown-linux-gnu}`（`resolve_target_triple`，`:65-78`）
+- **URL 构造**（`:224-231`）—— 规范仓库 `cognia-labs/cognia`（`:29`），`releases/latest/download/<artifact>` 或 `releases/download/<tag>/<artifact>`；产物 `cognia-<triple>.tar.gz`，三元组 `{x86_64,aarch64}-{pc-windows-msvc,apple-darwin,unknown-linux-gnu}`（`resolve_target_triple`，`:65-78`）
 - **checksums.txt**（`checksum_for`，`:107`）—— `<sha256hex>  <filename>`（接受星号前缀的文件名）；不匹配是硬错误，消息里带上两个摘要
 - **签名**（`:256-275`）—— `.sig` 接受原始 64 字节或 base64（`normalize_signature`，`:313-324`）；占位符密钥 ⇒ 跳过并报 `release signing key is a placeholder; skipping Ed25519 verification (SHA-256 enforced)`；真实密钥 ⇒ 失败即中止安装
 - **离线校验** —— `cognia release-verify <artifact> --checksums <checksums.txt> [--signature <sig>] [--json]` 在不下载、不安装的情况下复用同一套 checksum 与 release-key 策略。发布密钥是真实密钥时，默认读取 `<artifact>.sig`；`--signature` 只是覆盖这个 sidecar 路径。JSON 会报告两个摘要、`checksumVerified`、`signatureStatus` 和 release-key fingerprint。

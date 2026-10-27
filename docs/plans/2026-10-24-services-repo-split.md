@@ -106,7 +106,7 @@ Contract changes therefore land in `cognia-services` first, then a pin bump PR h
    status (new lane: worker/probe/admin tests), diagnostic (from `test.yml`), logto-email,
    images (`ghcr.io/cognia-labs/cognia-{signaling,share,diagnostics}`), compose-e2e (diagnostic
    compose project), deploy (all Workers + Fly). The status deploy job checks out
-   `MaxQian888/cognia-next@<integrations/cognia-next.json>` to run `build-status-site.mjs --dest`.
+   `cognia-labs/cognia@<integrations/cognia-next.json>` to run `build-status-site.mjs --dest`.
 6. Exit check: every lane green on `cognia-services` from a fresh clone.
 
 ### P2 — Switch this repo (one change, after P1 is green)

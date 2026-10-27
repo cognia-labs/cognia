@@ -5,7 +5,7 @@ description = "cognia-next — AI-powered desktop application built with Next.js
 authors = ["AstroAir <astro_air@126.com>"]
 license.workspace = true
 publish.workspace = true
-repository = "https://github.com/MaxQian888/cognia-next"
+repository = "https://github.com/cognia-labs/cognia"
 edition.workspace = true
 # Rust 1.95 is required by oar-ocr 0.9.x, which is now part of the standard
 # desktop build through the default `ocr-paddle` feature.

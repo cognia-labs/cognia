@@ -2,7 +2,7 @@
 
 **研究日期：** 2026-08-24  
 **外部源码基线：** `Wangnov/claude-app-mirror@a21125ce29b1275c405eddb209e5f69bd2444fe6`；共享依赖 `Wangnov/agents-mirror-kit@8ea9a358824fd57abdf3324d040bbbb03096a19c`  
-**Cognia 对照基线：** `MaxQian888/cognia-next@2f28a3be514780765b133e13cd83f26003fd288d`  
+**Cognia 对照基线：** `cognia-labs/cognia@2f28a3be514780765b133e13cd83f26003fd288d`  
 **研究边界：** 只使用仓库源码、GitHub API / Releases / Actions / Issues、同作者共享仓库，以及 Anthropic 当前官方文档；没有下载或执行约 800 MB 的安装包，也没有触发发布工作流。
 
 ## 结论先行
@@ -11,7 +11,7 @@
 
 它最值得 Cognia 借鉴的是三组工程手法：**轻量 probe 与大文件下载解耦、公开 manifest/校验和、主调度加低频兜底调度**。但不能照搬其信任模型和发布顺序：流水线没有验证 macOS code signature/notarization 或 Windows Authenticode，只在下载后自己计算 hash；同一发布通道提供的 checksum 不是独立可信根；GitHub Release 先于 R2 同步发布，R2 失败后下一轮会因 manifest 相同而跳过，不能自动自愈；release job 还会在 R2 secrets 环境中执行由可移动 tag 引入的共享脚本。[下载校验](https://github.com/Wangnov/claude-app-mirror/blob/a21125ce29b1275c405eddb209e5f69bd2444fe6/scripts/download-artifacts.sh#L43-L78) [发布与 R2 顺序](https://github.com/Wangnov/claude-app-mirror/blob/a21125ce29b1275c405eddb209e5f69bd2444fe6/.github/workflows/mirror.yml#L92-L179) [共享依赖加载](https://github.com/Wangnov/claude-app-mirror/blob/a21125ce29b1275c405eddb209e5f69bd2444fe6/.github/workflows/mirror.yml#L62-L67)
 
-Cognia 已经由 Tauri 构建一次并生成 updater 签名、`*.sig` 和 `latest.json`，以嵌入应用的 minisign 公钥验证更新；完整平台矩阵先进入 draft，全部成功后才发布。因此若要吸收此项目，应新增**字节不变的次级镜像 / 故障转移分发层**，复制已经签名的产物和签名文件，不应再建第二套 build、repackage 或 signing pipeline。[Cognia updater 基线](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L1-L18) [draft-to-publish 设计](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L72-L97) [内置 updater 公钥与端点](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/tauri.conf.json#L87-L93)
+Cognia 已经由 Tauri 构建一次并生成 updater 签名、`*.sig` 和 `latest.json`，以嵌入应用的 minisign 公钥验证更新；完整平台矩阵先进入 draft，全部成功后才发布。因此若要吸收此项目，应新增**字节不变的次级镜像 / 故障转移分发层**，复制已经签名的产物和签名文件，不应再建第二套 build、repackage 或 signing pipeline。[Cognia updater 基线](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L1-L18) [draft-to-publish 设计](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L72-L97) [内置 updater 公钥与端点](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/tauri.conf.json#L87-L93)
 
 ## 1. 目的与价值主张
 
@@ -176,7 +176,7 @@ CI 没有对真实 upstream probe、manifest diff、R2 promotion 或安装包可
 
 ### P0：字节不变的 signed updater 次级镜像
 
-Cognia 不需要第二套构建或签名系统。现有 release matrix 已由 `tauri-action` 生成 installers、`*.sig`、`latest.json`，内置 updater public key 验签，并在完整矩阵成功后发布 draft。建议在该**已发布、已签名** release 后增加 mirror job：复制原始 bytes、对应 `.sig` 与 `latest.json` 到一个备用对象存储；上传后逐对象比较 GitHub asset digest/size，并用 Cognia 的 updater public key 做一次离线验签；最终只切换一个版本化 pointer。禁止重新打包、重命名内容或再签名。[Cognia 现有信任链](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L41-L59) [发布产物与原子发布](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L72-L97)
+Cognia 不需要第二套构建或签名系统。现有 release matrix 已由 `tauri-action` 生成 installers、`*.sig`、`latest.json`，内置 updater public key 验签，并在完整矩阵成功后发布 draft。建议在该**已发布、已签名** release 后增加 mirror job：复制原始 bytes、对应 `.sig` 与 `latest.json` 到一个备用对象存储；上传后逐对象比较 GitHub asset digest/size，并用 Cognia 的 updater public key 做一次离线验签；最终只切换一个版本化 pointer。禁止重新打包、重命名内容或再签名。[Cognia 现有信任链](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L41-L59) [发布产物与原子发布](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L72-L97)
 
 故障转移应仍以 embedded public key 为信任根，而不是以镜像域名或 checksum 为信任根；镜像只改善 availability。需要先验证 Tauri updater 对多个 endpoint 的具体 fallback 语义，再决定是在 `endpoints` 中增加备用 manifest，还是由受控 gateway 做健康选择。
 
@@ -209,10 +209,10 @@ build/sign once → draft release → mirror staging → verify every object/sig
 
 ### 不建议复用
 
-- 不把 GitHub/R2 同通道生成的 `SHA256SUMS.txt` 当成签名或 trusted provenance；Cognia 已有更强的 Tauri updater key 信任链。[Cognia updater public key](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L41-L46)
+- 不把 GitHub/R2 同通道生成的 `SHA256SUMS.txt` 当成签名或 trusted provenance；Cognia 已有更强的 Tauri updater key 信任链。[Cognia updater public key](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L41-L46)
 - 不把五个 mutable `latest/*` 对象依次覆盖；用 content-addressed/versioned objects 加一个原子 pointer，客户端取得 pointer 后始终落到同一版本集合。
 - 不为 15 分钟新鲜度机械制造每次 GitHub Action run；可让低成本边缘 probe 只在 fingerprint 变化或 mirror health 失败时 dispatch 重 job。
-- 不复制第二套 Claude/Cognia installer build 或签名逻辑；镜像层必须保持 Tauri 官方 pipeline 产物 bytes 不变。[Cognia 单一构建/签名 pipeline](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L72-L97)
+- 不复制第二套 Claude/Cognia installer build 或签名逻辑；镜像层必须保持 Tauri 官方 pipeline 产物 bytes 不变。[Cognia 单一构建/签名 pipeline](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md#L72-L97)
 
 ## 10. 最终判断
 
@@ -245,6 +245,6 @@ build/sign once → draft release → mirror staging → verify every object/sig
 
 ### Cognia 对照
 
-- [Tauri updater 设计与发布说明](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md)
-- [Tauri updater endpoint 与 minisign public key](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/tauri.conf.json#L87-L93)
-- [Tauri release workflow](https://github.com/MaxQian888/cognia-next/blob/2f28a3be514780765b133e13cd83f26003fd288d/.github/workflows/build-tauri.yml)
+- [Tauri updater 设计与发布说明](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/UPDATER.md)
+- [Tauri updater endpoint 与 minisign public key](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/src-tauri/tauri.conf.json#L87-L93)
+- [Tauri release workflow](https://github.com/cognia-labs/cognia/blob/2f28a3be514780765b133e13cd83f26003fd288d/.github/workflows/build-tauri.yml)

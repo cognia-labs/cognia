@@ -115,8 +115,8 @@ For implementation entry points and limits, read [unified agent execution](./doc
 Install shared dependencies and Node sidecars from source:
 
 ```bash
-git clone https://github.com/MaxQian888/cognia-next
-cd cognia-next
+git clone https://github.com/cognia-labs/cognia
+cd cognia
 pnpm install
 pnpm sidecars:install
 ```
@@ -344,4 +344,4 @@ Follow the project rules in [`AGENTS.md`](./AGENTS.md) and the development guida
 ## Support
 
 - Read the relevant ADR under [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/).
-- Describe the problem and steps to reproduce it in the [issue tracker](https://github.com/MaxQian888/cognia-next/issues).
+- Describe the problem and steps to reproduce it in the [issue tracker](https://github.com/cognia-labs/cognia/issues).

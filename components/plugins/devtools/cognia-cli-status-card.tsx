@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils"
 import { InstalledMarker } from "@/components/plugins/_shared/installed-marker"
 import { CogniaCliInstallDialog } from "./cognia-cli-install-dialog"
 
-const DOCS_URL = "https://github.com/MaxQian888/cognia-next/tree/master/crates/cognia-cli"
+const DOCS_URL = "https://github.com/cognia-labs/cognia/tree/master/crates/cognia-cli"
 
 export function CogniaCliStatusCard({ className }: { className?: string }) {
   const t = useTranslations("plugins.cliStatus")

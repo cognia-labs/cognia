@@ -2,7 +2,7 @@
 // root, not to `docs/`, and this component has tests.
 import { formatDocsDate } from "../lib/time-zone"
 
-const REPO = "MaxQian888/cognia-next"
+const REPO = "cognia-labs/cognia"
 const BRANCH = "master"
 
 type Props = {

@@ -71,7 +71,7 @@ Props `{open, onOpenChange, onInstalled?}` —— 父级把 `status.refresh` 作
 | Tab | 内容 |
 | --- | --- |
 | Download（仅 Tauri，`:104-132`） | 由 `onProgress` 阶段驱动的进度条、内联错误文本、区分 `Downloaded. Signature verified.` 与 `Downloaded. SHA-256 verified.` 的成功 toast |
-| Build from source（`:135-151`） | 复制按钮命令：`cargo install --locked --git https://github.com/MaxQian888/cognia-next cognia-cli` |
+| Build from source（`:135-151`） | 复制按钮命令：`cargo install --locked --git https://github.com/cognia-labs/cognia cognia-cli` |
 | Release tarball（`:153-163`） | 指向 GitHub Releases 的深链 |
 
 页脚（`:166-169`）携带诚实的校验说明，与[占位符发布密钥](./detection-and-managed-install#the-release-key-mirror-renderer-side) 挂钩。i18n 命名空间：`plugins.cliInstall`。

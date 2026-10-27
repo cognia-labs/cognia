@@ -191,7 +191,7 @@ edition = "2021"
 rust-version = "1.96"
 license = "AGPL-3.0-or-later"
 publish = false
-repository = "https://github.com/MaxQian888/cognia-next"
+repository = "https://github.com/cognia-labs/cognia"
 
 # ADR-0196 — one version for each third-party dependency that three or more
 # members declare. Members inherit with `x.workspace = true` and add their own

@@ -26,7 +26,7 @@ use super::release_key;
 
 /// Default GitHub repo to pull releases from. Overridable per-call so a
 /// fork / enterprise mirror can point elsewhere without a rebuild.
-const DEFAULT_REPO: &str = "MaxQian888/cognia-next";
+const DEFAULT_REPO: &str = "cognia-labs/cognia";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

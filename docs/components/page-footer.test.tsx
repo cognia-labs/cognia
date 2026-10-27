@@ -7,7 +7,7 @@ const SHARED_SOURCE = "docs/content/docs/plugin-dev/api-overview.mdx"
 describe("buildEditPath", () => {
   it("links to the file fumadocs reported, not a reconstructed path", () => {
     expect(buildEditPath(SOURCE)).toBe(
-      "https://github.com/MaxQian888/cognia-next/edit/master/docs/content/docs/en/getting-started.mdx"
+      "https://github.com/cognia-labs/cognia/edit/master/docs/content/docs/en/getting-started.mdx"
     )
   })
 

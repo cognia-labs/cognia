@@ -21,6 +21,6 @@ describe("docs layout branding", () => {
   })
 
   it("links the repository", () => {
-    expect(baseOptions("en").githubUrl).toBe("https://github.com/MaxQian888/cognia-next")
+    expect(baseOptions("en").githubUrl).toBe("https://github.com/cognia-labs/cognia")
   })
 })

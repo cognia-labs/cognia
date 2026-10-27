@@ -12,7 +12,7 @@ import {
 
 describe("external-urls", () => {
   it("points the repo at the real source (not anthropics/claude-code)", () => {
-    expect(GITHUB_URL).toBe("https://github.com/MaxQian888/cognia-next")
+    expect(GITHUB_URL).toBe("https://github.com/cognia-labs/cognia")
   })
 
   it("derives sub-URLs from the repo root", () => {

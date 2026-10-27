@@ -44,7 +44,7 @@ function renderHome(overrides: Partial<React.ComponentProps<typeof HomePage>> = 
       groups={groups}
       gettingStartedHref="/en/docs/getting-started"
       overviewHref="/en/docs"
-      repoUrl="https://github.com/MaxQian888/cognia-next"
+      repoUrl="https://github.com/cognia-labs/cognia"
       websiteUrl="https://cognia.example"
       {...overrides}
     />
@@ -90,7 +90,7 @@ describe("HomePage hero", () => {
     expect(screen.queryByRole("link", { name: /website/ })).toBeNull()
     expect(screen.getByRole("link", { name: /github/ })).toHaveAttribute(
       "href",
-      "https://github.com/MaxQian888/cognia-next"
+      "https://github.com/cognia-labs/cognia"
     )
   })
 })

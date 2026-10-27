@@ -451,7 +451,7 @@ it("opens the Chinese setup guide through the shared external opener", async () 
   render(<GitHubRunnerPanel />)
   fireEvent.click(await screen.findByRole("button", { name: "setupGuide" }))
   expect(openExternal).toHaveBeenCalledWith(
-    "https://github.com/MaxQian888/cognia-next/blob/dev/deploy/github-runner/README.zh-CN.md"
+    "https://github.com/cognia-labs/cognia/blob/dev/deploy/github-runner/README.zh-CN.md"
   )
 })
 

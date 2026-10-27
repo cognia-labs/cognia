@@ -18,20 +18,20 @@ cognia 的大部分功能无需配置命令行工具。以下两种情况需要�
 
 ### 下载预编译二进制（推荐）
 
-DevTools 安装对话框会从 [GitHub Releases](https://github.com/MaxQian888/cognia-next/releases) 下载适配当前平台的预编译二进制，校验其校验和（发布签名密钥上线后还会校验签名），并放入应用的托管目录 —— 无需修改 PATH。
+DevTools 安装对话框会从 [GitHub Releases](https://github.com/cognia-labs/cognia/releases) 下载适配当前平台的预编译二进制，校验其校验和（发布签名密钥上线后还会校验签名），并放入应用的托管目录 —— 无需修改 PATH。
 
 ### 从源码构建
 
 需要 [Rust](https://rustup.rs/) 1.82 或更高版本：
 
 ```bash
-cargo install --locked --git https://github.com/MaxQian888/cognia-next cognia-cli
+cargo install --locked --git https://github.com/cognia-labs/cognia cognia-cli
 cognia --help
 ```
 
 ### 发布归档
 
-从[发布页](https://github.com/MaxQian888/cognia-next/releases)下载归档，解压后将 `cognia` 放到 `PATH` 上的任意目录。
+从[发布页](https://github.com/cognia-labs/cognia/releases)下载归档，解压后将 `cognia` 放到 `PATH` 上的任意目录。
 
 ## 插件可能需要的外部工具
 
