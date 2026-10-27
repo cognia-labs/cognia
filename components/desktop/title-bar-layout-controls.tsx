@@ -3,8 +3,10 @@
 /**
  * VS Code-style layout controls for the desktop title bar: one-click toggles
  * for the Primary Side Bar, Panel, and Secondary Side Bar, plus a dropdown for
- * the full visibility set (guild rail, sidebars, panel, status bar) and
- * layout customization.
+ * the full visibility set (guild rail, sidebars, panel, status bar), layout
+ * customization and the webview zoom. Theme and language are not here: they
+ * are in the View menu and Settings, and a layout menu is not where anyone
+ * looks for them.
  *
  * The direct cluster deliberately mirrors VS Code's three high-value workbench
  * toggles. Lower-frequency Activity/Guild rail and Status Bar controls remain
@@ -27,7 +29,6 @@ import {
   SlidersHorizontalIcon,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
-import { useTheme } from "next-themes"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -36,8 +37,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
@@ -60,9 +59,6 @@ import { ShellLayoutDialog } from "@/components/shell/shell-layout-dialog"
 import { MENU_CONTENT_PERF } from "@/components/shared/menu-kit"
 
 const log = loggers.ui
-
-/** Theme choices, in cycle order. Labels resolve under `desktop.titleBar.layout.theme*`. */
-const THEMES = ["light", "dark", "system"] as const
 
 export type TitleBarLayoutControl = "sidebar" | "panel" | "rightSidebar" | "customize"
 
@@ -152,12 +148,9 @@ export function TitleBarLayoutControls({
   const panelOpen = useTerminalStore((s) => s.panelOpen)
   const togglePanel = useTerminalStore((s) => s.togglePanel)
 
-  // Appearance preferences, relocated from the status bar: set once, then left
-  // alone, so they belong behind a menu rather than in permanent chrome.
-  const { theme, setTheme } = useTheme()
+  // Zoom, relocated from the status bar: set once, then left alone, so it
+  // belongs behind a menu rather than in permanent chrome.
   const persistedZoom = useSettingsStore((s) => s.settings?.webviewZoom)
-  const language = useSettingsStore((s) => s.language)
-  const setLanguage = useSettingsStore((s) => s.setLanguage)
   const saveSettings = useSettingsStore((s) => s.save)
   const zoom = clampZoom(persistedZoom ?? DEFAULT_ZOOM)
 
@@ -166,27 +159,6 @@ export function TitleBarLayoutControls({
   const showArtifactUnread = rightSidebarCollapsed && unreadArtifact
   const guildRailOn = !guildRailCollapsed
   const statusBarOn = !statusBarCollapsed
-
-  const handleTheme = (next: string) => {
-    log.info("views setTheme", { to: next })
-    setTheme(next)
-    // Persist too: without it `SettingsSyncProvider` re-applies the stale stored
-    // theme on the next settings change and silently reverts this choice.
-    void saveSettings({ theme: next as "light" | "dark" | "system" }).catch((err) =>
-      log.warn("views theme persist failed", {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    )
-  }
-
-  const handleLanguage = (next: string) => {
-    log.info("views setLanguage", { to: next })
-    void setLanguage(next as "en" | "zh-CN").catch((err) =>
-      log.warn("views setLanguage failed", {
-        error: err instanceof Error ? err.message : String(err),
-      })
-    )
-  }
 
   const handleZoom = async (kind: "in" | "out" | "reset") => {
     const target =
@@ -318,32 +290,11 @@ export function TitleBarLayoutControls({
               {t("customizeBars")}
             </DropdownMenuItem>
 
-            {/* Relocated from the status bar, where theme / zoom / locale held
-              three permanent slots between them. */}
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>{t("appearanceGroup")}</DropdownMenuLabel>
-            <DropdownMenuRadioGroup value={theme ?? "system"} onValueChange={handleTheme}>
-              {THEMES.map((value) => (
-                <DropdownMenuRadioItem
-                  key={value}
-                  value={value}
-                  data-testid={`views-theme-${value}`}
-                >
-                  {t(`theme${value[0].toUpperCase()}${value.slice(1)}`)}
-                </DropdownMenuRadioItem>
-              ))}
-            </DropdownMenuRadioGroup>
-
-            <DropdownMenuSeparator />
-            <DropdownMenuRadioGroup value={language} onValueChange={handleLanguage}>
-              <DropdownMenuRadioItem value="en" data-testid="views-locale-en">
-                {t("localeEn")}
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="zh-CN" data-testid="views-locale-zh">
-                {t("localeZh")}
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-
+            {/* Zoom stays here, the one appearance control without another home:
+              theme and language live in the View menu (native on macOS,
+              in-window on Windows / Linux) and in Settings, but zoom has no
+              Settings control and no native menu item, so on macOS this row is
+              the only place that shows the level. */}
             <DropdownMenuSeparator />
             {/* `onSelect` is prevented so stepping the zoom doesn't close the menu
               — adjusting it is inherently repeated. */}

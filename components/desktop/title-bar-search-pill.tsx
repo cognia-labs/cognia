@@ -1,8 +1,10 @@
 "use client"
 
 /**
- * The title bar's command-palette pill: app name + active conversation, a
- * streaming dot while a turn is in flight, and the ⌘K hint.
+ * The title bar's command-palette pill: the app name and what is in front (the
+ * conversation on the chat home, the page's name elsewhere — `useBarTitle`),
+ * a streaming dot while that conversation's turn is in flight, and the
+ * palette's key hint.
  *
  * Chat headers already show the conversation title. Their compact variant
  * retains search and run indicators without repeating that title in a pill.
@@ -12,7 +14,7 @@
  * every segment has to be importable.
  *
  * The chat-store status (which changes per token during streaming) and the
- * `useActiveSessionLabel` live query stay scoped to this leaf rather than
+ * title's live query stay scoped to this leaf rather than
  * sitting on `TitleBar`: on the bar itself they forced the whole menubar tree
  * to re-render whenever the active chat changed.
  */
@@ -21,7 +23,7 @@ import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { SearchIcon } from "lucide-react"
 
-import { useActiveSessionLabel } from "@/hooks/chat/use-active-session-label"
+import { useBarTitle } from "@/hooks/desktop/use-bar-title"
 import { useAppShortcutLabel } from "@/hooks/shortcuts/use-app-shortcut-label"
 import { aggregateRunState } from "@/lib/chat/aggregate-run-state"
 import { cn } from "@/lib/utils"
@@ -51,13 +53,20 @@ export function TitleBarSearchPill({
     () => aggregateRunState({ sessions, activeSessionId }),
     [sessions, activeSessionId]
   )
-  const { label: doc } = useActiveSessionLabel()
+  const { title: subject, label: doc } = useBarTitle()
   const title = doc ? `${appName}${separator}${doc}` : appName
   // The dot belongs to the conversation this pill NAMES, so it stays focused.
   // What was missing is the other half: with the named conversation idle and
   // two more streaming, the pill was the shell's most prominent "nothing is
   // happening" claim. The count says otherwise without stealing the dot.
-  const isStreaming = run.focused === "streaming"
+  //
+  // On another page the pill names that page, so no conversation owns the
+  // dot: every turn in flight is "elsewhere", the focused one included. The
+  // compact pill always sits beside the chat header that names the focused
+  // conversation, so it keeps the dot.
+  const namesConversation = compact || subject.kind === "conversation"
+  const isStreaming = namesConversation && run.focused === "streaming"
+  const showCount = namesConversation ? run.activeElsewhere : run.active > 0
   const backgroundHint = t("runningCount", { count: run.active })
   // The palette's effective chord — the user's rebinding, in this platform's
   // glyphs. A fixed "Ctrl+K" string printed Ctrl on a Mac.
@@ -95,7 +104,7 @@ export function TitleBarSearchPill({
           {title}
         </span>
       )}
-      {run.activeElsewhere ? (
+      {showCount ? (
         <span
           data-testid="title-bar-background-count"
           title={backgroundHint}
@@ -108,10 +117,7 @@ export function TitleBarSearchPill({
       {!compact && kbdHint && (
         <span
           aria-hidden
-          className={cn(
-            "hidden text-[10px] opacity-60 sm:inline",
-            !run.activeElsewhere && "ml-auto"
-          )}
+          className={cn("hidden text-[10px] opacity-60 sm:inline", !showCount && "ml-auto")}
         >
           {kbdHint}
         </span>

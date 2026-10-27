@@ -12,13 +12,14 @@ import { SHELL_DOCK_TIMING_CLASS } from "@/lib/ui/shell-dock-motion"
 import { useShellColumnsStore } from "@/stores/ui/shell-columns-store"
 import { DEFAULT_SIDEBAR_SIDE } from "@/types/shell/sidebar"
 import { computeTitleBarGeometry } from "@/lib/desktop/title-bar-geometry"
+import { menubarFolds, navigationFolds } from "@/lib/desktop/title-bar-density"
 import { goAction } from "@/lib/desktop/menu-actions"
 import { cn } from "@/lib/utils"
 import { useSettingsStore } from "@/stores/settings"
 import { MaximizeIcon, MinimizeIcon, MinusIcon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { usePathname, useRouter } from "next/navigation"
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { TitleBarZone, type TitleBarItemContext } from "@/components/desktop/title-bar-zone"
 import { TitleBarAppMenu } from "@/components/desktop/title-bar-app-menu"
@@ -29,26 +30,8 @@ import { ShellLayoutDialog } from "@/components/shell/shell-layout-dialog"
 import { useBarLayout } from "@/components/shell/use-bar-layout"
 import { recordNavigation } from "@/hooks/desktop/use-nav-history"
 import { useTitleBarWindow } from "@/hooks/desktop/use-title-bar-window"
+import { useTitleBarTier } from "@/hooks/desktop/use-title-bar-tier"
 import { useAppMenuController, useRecentSessions } from "@/hooks/desktop/use-app-menu-controller"
-
-const NARROW_QUERY = "(max-width: 760px)"
-
-function useNarrow(): boolean {
-  return useSyncExternalStore(
-    (notify) => {
-      if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {}
-      const mq = window.matchMedia(NARROW_QUERY)
-      const handler = () => notify()
-      mq.addEventListener("change", handler)
-      return () => mq.removeEventListener("change", handler)
-    },
-    () => {
-      if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false
-      return window.matchMedia(NARROW_QUERY).matches
-    },
-    () => false
-  )
-}
 
 /** Ignore pointer gestures that land on real controls rather than the bare drag region. */
 function onControl(target: EventTarget): boolean {
@@ -96,7 +79,9 @@ export function TitleBar() {
   // Segment order + visibility, per zone. Edited in the customizer, persisted
   // in settings; see `components/shell/use-bar-layout.ts`.
   const { resolved: bar } = useBarLayout("title")
-  const narrow = useNarrow()
+  // How much of the bar fits — the one input every fold below reads
+  // (`lib/desktop/title-bar-density.ts`).
+  const tier = useTitleBarTier()
 
   // ---- Column-header projection (see `components/shell/title-bar-outlets.tsx`)
   //
@@ -150,9 +135,9 @@ export function TitleBar() {
   const barPx = useElementWidth(barRef)
   const leftChromePx = useElementWidth(leftChromeRef)
   const rightChromePx = useElementWidth(rightChromeRef)
-  // Match the workspace segment's `lg` floor. Chat projection alone must never
-  // move navigation into an overflow menu.
-  const navigationFolded = narrow || (barPx > 0 && barPx < 1024)
+  // Beside a projected chat header, navigation folds below the workspace
+  // segment's `lg` floor. Chat projection alone never moves it into a menu.
+  const navigationFolded = navigationFolds(tier)
   const navigationItems = bar.zones.center.filter((item) => item.id !== "search")
   const searchItems = bar.zones.center.filter((item) => item.id === "search")
 
@@ -203,8 +188,8 @@ export function TitleBar() {
   // With the conversation rail's header in the bar the application menu would
   // sit over that column and push its header off its own rail, so the menus
   // fold into the hamburger whenever the start zone is projected — the same
-  // fold the bar already does when it is narrow.
-  const menubarFolded = narrow || projected.start
+  // fold the bar already does when it is compact.
+  const menubarFolded = menubarFolds(tier, projected.start)
 
   const onTitleBarContextMenu = (event: React.MouseEvent) => {
     // Only the bare drag region opens the system menu.
@@ -260,7 +245,7 @@ export function TitleBar() {
         )}
       >
         <div ref={leftChromeRef} className="flex items-center gap-1">
-          <TitleBarZone items={bar.zones.start} ctx={itemCtx} />
+          <TitleBarZone items={bar.zones.start} ctx={itemCtx} tier={tier} region="start" />
           <PluginExtensionSlot
             point="toolbar.left"
             className="flex items-center gap-1 empty:hidden"
@@ -303,11 +288,11 @@ export function TitleBar() {
           >
             {projected.center && !navigationFolded && (
               <div className="order-first flex shrink-0 items-center gap-1">
-                <TitleBarZone items={navigationItems} ctx={itemCtx} />
+                <TitleBarZone items={navigationItems} ctx={itemCtx} tier={tier} />
               </div>
             )}
           </div>
-          {!projected.center && <TitleBarZone items={bar.zones.center} ctx={itemCtx} />}
+          {!projected.center && <TitleBarZone items={bar.zones.center} ctx={itemCtx} tier={tier} />}
           <PluginExtensionSlot
             point="toolbar.center"
             className="ml-2 flex items-center gap-1 empty:hidden"
@@ -347,6 +332,7 @@ export function TitleBar() {
             <TitleBarZone
               items={navigationFolded ? bar.zones.center : searchItems}
               ctx={itemCtx}
+              tier={tier}
               compact
             />
           )}
@@ -355,7 +341,7 @@ export function TitleBar() {
             className="flex items-center gap-1 px-1 empty:hidden"
           />
 
-          <TitleBarZone items={bar.zones.end} ctx={itemCtx} />
+          <TitleBarZone items={bar.zones.end} ctx={itemCtx} tier={tier} region="end" />
 
           <div
             ref={actionsOutletRef}

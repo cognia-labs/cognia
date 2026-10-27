@@ -25,6 +25,10 @@ function focusedOnly(status: Status) {
   chatRef.activeSessionId = "a"
 }
 
+// The pill names what is in front (`useBarTitle`): the chat home by default.
+const pathRef = { value: "/" }
+jest.mock("next/navigation", () => ({ usePathname: () => pathRef.value }))
+
 const labelRef = { value: undefined as string | undefined }
 jest.mock("@/hooks/chat/use-active-session-label", () => ({
   useActiveSessionLabel: () => ({ label: labelRef.value }),
@@ -53,6 +57,7 @@ const renderPill = () =>
   )
 
 beforeEach(() => {
+  pathRef.value = "/"
   shortcutRef.label = "⌘K"
   shortcutRef.aria = "Meta+K"
   shortcutHook.mockClear()
@@ -180,5 +185,32 @@ describe("the shortcut hint", () => {
     const button = screen.getByRole("button", { name: "Search" })
     expect(button).toHaveAttribute("title", "Search")
     expect(button).not.toHaveAttribute("aria-keyshortcuts")
+  })
+})
+
+// On another page the pill names that page, so it stops claiming the last
+// conversation — and no conversation owns the streaming dot there.
+describe("on a page other than the chat home", () => {
+  it("names the page instead of the last conversation", () => {
+    pathRef.value = "/settings"
+    labelRef.value = "Refactor the parser"
+    renderPill()
+    expect(screen.getByTestId("title-bar-title")).toHaveTextContent("Cognia — settings")
+    expect(screen.getByTestId("title-bar-title")).not.toHaveTextContent("Refactor the parser")
+  })
+
+  it("counts the focused turn as running elsewhere instead of drawing the dot", () => {
+    pathRef.value = "/workflows"
+    focusedOnly("streaming")
+    renderPill()
+    expect(screen.queryByTestId("title-bar-streaming-dot")).toBeNull()
+    expect(screen.getByTestId("title-bar-background-count")).toHaveTextContent("1")
+  })
+
+  it("shows no badge while nothing runs", () => {
+    pathRef.value = "/workflows"
+    focusedOnly("idle")
+    renderPill()
+    expect(screen.queryByTestId("title-bar-background-count")).toBeNull()
   })
 })

@@ -1179,6 +1179,20 @@ test("hamburger > Command Palette dispatches the shortcut", async () => {
   await waitFor(() => expect(logInfo).toHaveBeenCalledWith("title-bar menu command-palette"))
 })
 
+// One folding rule (`lib/desktop/title-bar-density.ts`): a segment below its
+// floor moves into its zone's "…" menu. It used to vanish through a Tailwind
+// `hidden lg:flex`, leaving the workspace switcher unreachable from the bar.
+test("a narrow window folds the workspace switcher into the overflow menu", async () => {
+  isTauriMock.mockReturnValue(true)
+  setPlatform("Win32")
+  narrowState.matches = true
+  render(<TitleBar />)
+  await screen.findByTestId("title-bar-nav-arrows")
+  expect(screen.queryByTestId("title-bar-workspace-seg")).toBeNull()
+  fireEvent.click(screen.getByTestId("title-bar-navigation-menu"))
+  expect(await screen.findByTestId("title-bar-workspace-seg")).toBeInTheDocument()
+})
+
 test("a viewport crossing the narrow breakpoint swaps the menubar for the hamburger", async () => {
   isTauriMock.mockReturnValue(true)
   setPlatform("Win32")

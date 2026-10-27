@@ -28,8 +28,9 @@ import { TitleBarSearchPill } from "@/components/desktop/title-bar-search-pill"
 import { TitleBarWorkspace } from "@/components/desktop/title-bar-workspace"
 import type { MenuActionId } from "@/lib/desktop/menu-actions"
 import type { BarCatalogItem } from "@/lib/shell/bar-items"
+import { fitsTier, type TitleBarTier } from "@/lib/desktop/title-bar-density"
 import { cn } from "@/lib/utils"
-import type { BarItemMinWidth } from "@/types/shell/bars"
+import type { BarZone } from "@/types/shell/bars"
 
 /** Everything a title-bar segment can need from the bar that hosts it. */
 export interface TitleBarItemContext {
@@ -43,29 +44,40 @@ export interface TitleBarItemContext {
 }
 
 /**
- * Viewport floor → Tailwind classes. This is what keeps a fully-populated bar
- * from clipping its trailing controls on a narrow window: the low-priority
- * segments drop out before the row runs out of room. `inline` picks the
- * inline-flex variant for segments that sit inside a text run.
+ * Overflow ("…") menu label and test id per region. The centre's carries the
+ * navigation segments, which is what it has always been called.
  */
-function minWidthClass(minWidth: BarItemMinWidth | undefined, inline = false): string {
-  if (!minWidth) return ""
-  const shown = inline ? "inline-flex" : "flex"
-  return minWidth === "xl" ? `hidden xl:${shown}` : `hidden lg:${shown}`
-}
+const OVERFLOW = {
+  start: { labelKey: "titleBar.moreControls", testId: "title-bar-start-overflow-menu" },
+  center: { labelKey: "titleBar.navigationMenu", testId: "title-bar-navigation-menu" },
+  end: { labelKey: "titleBar.moreControls", testId: "title-bar-end-overflow-menu" },
+} as const
 
+/**
+ * One zone, laid out by the bar's width tier (`lib/desktop/title-bar-density.ts`):
+ * a segment whose `minWidth` floor the tier does not reach moves into the
+ * zone's "…" menu instead of vanishing. `compact` is the chat view's projected
+ * mode — search stays on the bar and everything else in the zone folds.
+ */
 export function TitleBarZone({
   items,
   ctx,
+  tier = "wide",
+  region = "center",
   compact = false,
 }: {
   items: BarCatalogItem[]
   ctx: TitleBarItemContext
+  tier?: TitleBarTier
+  region?: BarZone
   compact?: boolean
 }) {
   const t = useTranslations("desktop")
-  const visible = compact ? items.filter((item) => item.id === "search") : items
-  const folded = compact ? items.filter((item) => item.id !== "search") : []
+  const stays = (item: BarCatalogItem) =>
+    compact ? item.id === "search" : fitsTier(item.minWidth, tier)
+  const visible = items.filter(stays)
+  const folded = items.filter((item) => !stays(item))
+  const overflow = OVERFLOW[region]
   return (
     <>
       {visible.map((item) => (
@@ -79,9 +91,9 @@ export function TitleBarZone({
               size="icon"
               variant="ghost"
               className="size-7 shrink-0 text-muted-foreground"
-              aria-label={t("titleBar.navigationMenu")}
-              title={t("titleBar.navigationMenu")}
-              data-testid="title-bar-navigation-menu"
+              aria-label={t(overflow.labelKey)}
+              title={t(overflow.labelKey)}
+              data-testid={overflow.testId}
             >
               <EllipsisIcon className="size-4" aria-hidden />
             </Button>
@@ -90,12 +102,12 @@ export function TitleBarZone({
             align="end"
             collisionPadding={8}
             className="flex max-h-[var(--radix-popover-content-available-height)] w-64 max-w-[calc(100vw-1rem)] flex-col gap-1 overflow-y-auto p-2"
-            aria-label={t("titleBar.navigationMenu")}
+            aria-label={t(overflow.labelKey)}
           >
             {folded.map((item) =>
               item.id === "workspace" ? (
                 <div key={item.id} className="min-w-0 empty:hidden">
-                  <TitleBarSegment item={{ ...item, minWidth: undefined }} ctx={ctx} inMenu />
+                  <TitleBarSegment item={item} ctx={ctx} inMenu />
                 </div>
               ) : (
                 <div
@@ -106,7 +118,7 @@ export function TitleBarZone({
                     {t(`barCustomize.items.${item.i18nKey}`)}
                   </p>
                   <div className="flex min-w-0 flex-wrap items-center gap-1">
-                    <TitleBarSegment item={{ ...item, minWidth: undefined }} ctx={ctx} />
+                    <TitleBarSegment item={item} ctx={ctx} />
                   </div>
                 </div>
               )
@@ -141,11 +153,7 @@ function TitleBarSegment({
     case "navArrows":
       return <TitleBarNavArrows className="shrink-0" />
     case "workspace":
-      return (
-        <TitleBarWorkspace
-          className={inMenu ? "w-full min-w-0" : `shrink-0 ${minWidthClass(item.minWidth)}`}
-        />
-      )
+      return <TitleBarWorkspace className={inMenu ? "w-full min-w-0" : "shrink-0"} />
     case "search":
       // The pill and the command-centre caret are one control: the caret is
       // the pill's right half (VS Code's command centre), so they render as a
@@ -173,7 +181,7 @@ function TitleBarSegment({
         </div>
       )
     case "quickActions":
-      return <TitleBarQuickActions className={minWidthClass(item.minWidth)} />
+      return <TitleBarQuickActions />
     case "accountTop":
       return <AccountBarButton className="mx-0.5" />
     case "primarySidebarToggle":

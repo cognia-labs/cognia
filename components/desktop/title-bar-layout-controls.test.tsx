@@ -102,46 +102,7 @@ jest.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </div>
   ),
-  DropdownMenuRadioGroup: ({
-    children,
-    value,
-    onValueChange,
-  }: {
-    children: React.ReactNode
-    value?: string
-    onValueChange?: (v: string) => void
-  }) => (
-    <div data-radio-value={value} onClick={(e) => radioClick(e, onValueChange)}>
-      {children}
-    </div>
-  ),
-  DropdownMenuRadioItem: ({
-    children,
-    value,
-    ...rest
-  }: {
-    children: React.ReactNode
-    value: string
-  }) => (
-    // `aria-checked` is required for the role; the real Radix item derives it
-    // from the group. The mock has no group context, so it reports unchecked —
-    // the assertions read `data-radio-value` on the group instead.
-    <div role="menuitemradio" aria-checked={false} data-value={value} {...rest}>
-      {children}
-    </div>
-  ),
 }))
-
-// Radix routes a radio item's click up to the group's `onValueChange`; the
-// inline mock reproduces that by reading the clicked item's `data-value`.
-function radioClick(
-  e: React.MouseEvent<HTMLDivElement>,
-  onValueChange?: (v: string) => void
-): void {
-  const item = (e.target as HTMLElement).closest("[data-value]")
-  const value = item?.getAttribute("data-value")
-  if (value) onValueChange?.(value)
-}
 
 const mockLogInfo = jest.fn()
 const mockLogWarn = jest.fn()
@@ -155,21 +116,12 @@ jest.mock("@cognia/logging", () => ({
   },
 }))
 
-const mockSetTheme = jest.fn()
-const themeRef = { value: "system" as string | undefined }
-jest.mock("next-themes", () => ({
-  useTheme: () => ({ theme: themeRef.value, setTheme: mockSetTheme }),
-}))
-
-const mockSetLanguage = jest.fn().mockResolvedValue(undefined)
 const mockSaveSettings = jest.fn().mockResolvedValue(undefined)
-const settingsRef = { webviewZoom: 1.0 as number | undefined, language: "en" as "en" | "zh-CN" }
+const settingsRef = { webviewZoom: 1.0 as number | undefined }
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: (selector: (s: unknown) => unknown) =>
     selector({
       settings: { webviewZoom: settingsRef.webviewZoom },
-      language: settingsRef.language,
-      setLanguage: mockSetLanguage,
       save: mockSaveSettings,
     }),
 }))
@@ -199,15 +151,11 @@ beforeEach(() => {
   mockArtifactDockState.openBrowser.mockClear()
   mockToggleGuildRail.mockClear()
   mockToggleStatusBar.mockClear()
-  mockSetTheme.mockClear()
-  mockSetLanguage.mockReset().mockResolvedValue(undefined)
   mockSaveSettings.mockReset().mockResolvedValue(undefined)
   mockApplyZoom.mockClear()
   mockLogInfo.mockClear()
   mockLogWarn.mockClear()
-  themeRef.value = "system"
   settingsRef.webviewZoom = 1.0
-  settingsRef.language = "en"
 })
 
 describe("TitleBarLayoutControls", () => {
@@ -330,28 +278,14 @@ describe("TitleBarLayoutControls", () => {
   })
 
   // Theme / locale / zoom used to hold three permanent slots in the status bar.
-  // They are preferences, not status, so they moved in here — but they must
-  // still work, or the de-crowding pass would just be a removal.
-  describe("relocated appearance controls", () => {
-    it("switches the theme and persists it", () => {
+  // Theme and locale have homes in the View menu and Settings; zoom has no
+  // other visible control (no Settings row, no native menu item), so it stays.
+  describe("appearance controls", () => {
+    it("offers no theme or language choice — those live in the View menu and Settings", () => {
       render(<TitleBarLayoutControls />)
-      fireEvent.click(screen.getByTestId("views-theme-dark"))
-      expect(mockSetTheme).toHaveBeenCalledWith("dark")
-      // Without the save, SettingsSyncProvider re-applies the stored theme and
-      // silently reverts the choice.
-      expect(mockSaveSettings).toHaveBeenCalledWith({ theme: "dark" })
-    })
-
-    it("marks the active theme", () => {
-      themeRef.value = "light"
-      const { container } = render(<TitleBarLayoutControls />)
-      expect(container.querySelector("[data-radio-value='light']")).not.toBeNull()
-    })
-
-    it("switches the locale", () => {
-      render(<TitleBarLayoutControls />)
-      fireEvent.click(screen.getByTestId("views-locale-zh"))
-      expect(mockSetLanguage).toHaveBeenCalledWith("zh-CN")
+      expect(screen.queryByTestId("views-theme-dark")).toBeNull()
+      expect(screen.queryByTestId("views-locale-zh")).toBeNull()
+      expect(screen.queryByText("appearanceGroup")).toBeNull()
     })
 
     it("steps and resets the zoom, persisting each result", async () => {
@@ -369,22 +303,6 @@ describe("TitleBarLayoutControls", () => {
       await waitFor(() => expect(mockApplyZoom).toHaveBeenCalledWith(1))
     })
 
-    it("logs instead of throwing when the theme fails to persist", async () => {
-      mockSaveSettings.mockRejectedValueOnce(new Error("disk full"))
-      render(<TitleBarLayoutControls />)
-      fireEvent.click(screen.getByTestId("views-theme-dark"))
-      // The theme still applies in-session — only the write failed.
-      expect(mockSetTheme).toHaveBeenCalledWith("dark")
-      await waitFor(() => expect(mockLogWarn).toHaveBeenCalled())
-    })
-
-    it("logs instead of throwing when the locale fails to switch", async () => {
-      mockSetLanguage.mockRejectedValueOnce(new Error("nope"))
-      render(<TitleBarLayoutControls />)
-      fireEvent.click(screen.getByTestId("views-locale-zh"))
-      await waitFor(() => expect(mockLogWarn).toHaveBeenCalled())
-    })
-
     it("logs instead of throwing when the zoom fails to persist", async () => {
       mockSaveSettings.mockRejectedValueOnce(new Error("nope"))
       render(<TitleBarLayoutControls />)
@@ -392,34 +310,16 @@ describe("TitleBarLayoutControls", () => {
       await waitFor(() => expect(mockLogWarn).toHaveBeenCalled())
     })
 
-    // Each of the three rejection paths stringifies non-Error throws too — a
-    // rejected promise carrying a bare string must still reach the log with a
-    // readable reason rather than "[object Object]".
-    it.each([
-      [
-        "theme",
-        "views-theme-dark",
-        () => mockSaveSettings.mockRejectedValueOnce("disk full"),
-        "views theme persist failed",
-      ],
-      [
-        "locale",
-        "views-locale-zh",
-        () => mockSetLanguage.mockRejectedValueOnce("nope"),
-        "views setLanguage failed",
-      ],
-      [
-        "zoom",
-        "views-zoom-in",
-        () => mockSaveSettings.mockRejectedValueOnce("nope"),
-        "views zoom persist failed",
-      ],
-    ])("stringifies a non-Error %s failure", async (_what, testId, arrange, message) => {
-      arrange()
+    // A rejected promise carrying a bare string must still reach the log with
+    // a readable reason rather than "[object Object]".
+    it("stringifies a non-Error zoom failure", async () => {
+      mockSaveSettings.mockRejectedValueOnce("nope")
       render(<TitleBarLayoutControls />)
-      fireEvent.click(screen.getByTestId(testId))
+      fireEvent.click(screen.getByTestId("views-zoom-in"))
       await waitFor(() =>
-        expect(mockLogWarn).toHaveBeenCalledWith(message, { error: expect.any(String) })
+        expect(mockLogWarn).toHaveBeenCalledWith("views zoom persist failed", {
+          error: expect.any(String),
+        })
       )
     })
 
@@ -433,15 +333,6 @@ describe("TitleBarLayoutControls", () => {
       settingsRef.webviewZoom = undefined
       render(<TitleBarLayoutControls />)
       expect(screen.getByTestId("views-zoom-value")).toHaveTextContent("100%")
-    })
-
-    it("falls back to the system theme when next-themes has not rehydrated", () => {
-      themeRef.value = undefined
-      const { container } = render(<TitleBarLayoutControls />)
-      // The mocked radio item cannot report `aria-checked` (no group context),
-      // so read the group's resolved value — same convention as "marks the
-      // active theme" above.
-      expect(container.querySelector("[data-radio-value='system']")).not.toBeNull()
     })
 
     it("keeps the menu open while stepping the zoom", () => {

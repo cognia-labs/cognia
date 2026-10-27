@@ -11,6 +11,9 @@ jest.mock("@/hooks/chat/use-active-session-label", () => ({
   }),
 }))
 
+const pathRef = { value: "/" }
+jest.mock("next/navigation", () => ({ usePathname: () => pathRef.value }))
+
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: { count: number; title: string }) =>
     key === "appName"
@@ -36,6 +39,7 @@ jest.mock(
 )
 
 beforeEach(() => {
+  pathRef.value = "/"
   labelRef.value = null
   isTauriMock.mockReturnValue(false)
   setTitleMock.mockClear()
@@ -67,6 +71,24 @@ describe("useWindowTitle", () => {
     labelRef.value = "Plan the migration"
     renderHook(() => useWindowTitle())
     expect(document.title).toBe("Plan the migration · Cognia")
+  })
+
+  // The title names what is in front — the same subject as the title bar.
+  it("names the page in front instead of the last conversation", () => {
+    pathRef.value = "/workflows"
+    labelRef.value = "Plan the migration"
+    renderHook(() => useWindowTitle())
+    expect(document.title).toBe("workflows · Cognia")
+  })
+
+  it("keeps naming the conversation in an auxiliary window on its own route", async () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
+      metadata: { currentWebview: { label: "pet" } },
+    }
+    pathRef.value = "/pet"
+    labelRef.value = "Sprite"
+    renderHook(() => useWindowTitle())
+    await waitFor(() => expect(document.title).toBe("Sprite · Cognia"))
   })
 
   it("does not call the Tauri window API outside Tauri", () => {

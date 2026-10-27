@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
-import { useActiveSessionLabel } from "@/hooks/chat/use-active-session-label"
+import { useBarTitle } from "@/hooks/desktop/use-bar-title"
 import { isTauri } from "@/lib/tauri"
 import { isMainAppWindow } from "@/lib/pet/window-role"
 import { loggers } from "@cognia/logging"
@@ -10,8 +10,9 @@ import { loggers } from "@cognia/logging"
 const log = loggers.ui
 
 /**
- * Build the OS/document window title: `"<conversation> · <appName>"`, or just
- * the app name when no conversation label is available. Doc-first to match the
+ * Build the OS/document window title: `"<subject> · <appName>"` — the
+ * conversation or the page in front — or just the app name when there is
+ * nothing to name. Doc-first to match the
  * existing share-view convention (`app/share/view/page.tsx`).
  */
 export function computeWindowTitle(doc: string | null | undefined, appName: string): string {
@@ -36,10 +37,13 @@ export function computeDocumentTitle(
 
 /**
  * Sync the OS window title (taskbar / app switcher / Alt-Tab) and the browser
- * `document.title` to the active conversation. Derived from the **persisted**
- * session title via {@link useActiveSessionLabel} — never from streaming
- * status — so it does not flicker per token, and it only writes when the
- * computed string actually changes. In Tauri it also calls
+ * `document.title` to what is in front: the active conversation on the chat
+ * home, the page's name elsewhere — the same subject the title bar names
+ * (`useBarTitle`). The conversation side is the **persisted** session title,
+ * never streaming status, so it does not flicker per token, and it only writes
+ * when the computed string actually changes. The auxiliary windows (pet,
+ * island, selection toolbar) keep naming the conversation: their routes are
+ * not pages the user navigated to. In Tauri it also calls
  * `getCurrentWindow().setTitle`; in the browser / Capacitor shells the
  * `document.title` write is the meaningful one.
  *
@@ -51,7 +55,7 @@ export function computeDocumentTitle(
 export function useWindowTitle(attentionCount = 0): void {
   const t = useTranslations("desktop.titleBar")
   const appName = t("appName")
-  const { label } = useActiveSessionLabel()
+  const { label } = useBarTitle({ followRoute: isMainAppWindow() })
   const title = computeWindowTitle(label, appName)
   const documentTitle = isTauri()
     ? title

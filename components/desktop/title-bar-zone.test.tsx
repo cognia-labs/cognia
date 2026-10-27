@@ -142,16 +142,44 @@ describe("TitleBarZone", () => {
     expect(onCommandPalette).toHaveBeenCalled()
   })
 
-  it("applies each segment's responsive floor so a narrow window sheds them first", () => {
-    render(<TitleBarZone items={pick("workspace", "quickActions")} ctx={ctx} />)
-    expect(screen.getByTestId("seg-workspace").className).toContain("hidden lg:flex")
-    expect(screen.getByTestId("seg-quickActions").className).toContain("hidden xl:flex")
+  // One rule for every zone: a segment whose floor the tier does not reach
+  // moves into the zone's "…" menu instead of vanishing.
+  it("moves a segment below its floor into the zone's overflow menu", () => {
+    render(<TitleBarZone items={pick("navArrows", "workspace")} ctx={ctx} tier="medium" />)
+    expect(screen.getByTestId("seg-navArrows")).toBeInTheDocument()
+    expect(screen.queryByTestId("seg-workspace")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("title-bar-navigation-menu"))
+    expect(screen.getByTestId("seg-workspace")).toBeInTheDocument()
   })
 
-  it("leaves segments without a floor unconstrained", () => {
-    render(<TitleBarZone items={pick("navArrows", "accountTop")} ctx={ctx} />)
-    expect(screen.getByTestId("seg-navArrows").className).not.toContain("hidden")
-    expect(screen.getByTestId("seg-accountTop").className).not.toContain("hidden")
+  it("keeps every segment on the bar once the tier reaches its floor", () => {
+    render(<TitleBarZone items={pick("workspace", "quickActions")} ctx={ctx} tier="wide" />)
+    expect(screen.getByTestId("seg-workspace")).toBeInTheDocument()
+    expect(screen.getByTestId("seg-quickActions")).toBeInTheDocument()
+    expect(screen.queryByTestId("title-bar-navigation-menu")).not.toBeInTheDocument()
+  })
+
+  it("names the end zone's overflow menu for what it holds", () => {
+    render(
+      <TitleBarZone
+        items={pick("quickActions", "accountTop")}
+        ctx={ctx}
+        tier="regular"
+        region="end"
+      />
+    )
+    expect(screen.getByTestId("seg-accountTop")).toBeInTheDocument()
+    const more = screen.getByTestId("title-bar-end-overflow-menu")
+    expect(more).toHaveAttribute("aria-label", "More controls")
+    fireEvent.click(more)
+    expect(screen.getByTestId("seg-quickActions")).toBeInTheDocument()
+  })
+
+  it("keeps segments without a floor on the bar at any tier", () => {
+    render(<TitleBarZone items={pick("navArrows", "accountTop")} ctx={ctx} tier="compact" />)
+    expect(screen.queryByTestId("title-bar-navigation-menu")).not.toBeInTheDocument()
+    expect(screen.getByTestId("seg-navArrows")).toBeInTheDocument()
+    expect(screen.getByTestId("seg-accountTop")).toBeInTheDocument()
   })
 
   it("renders nothing for an empty zone", () => {
