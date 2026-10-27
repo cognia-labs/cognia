@@ -1,68 +1,103 @@
 ---
 title: "QQ Official Bot Setup"
-description: "Create a QQ Official Bot, get the App ID and Client Secret, and connect through an HTTPS webhook."
+description: "Connect QQ official bots with group/C2C files, binary/chunked uploads, native Markdown, quote replies, button keyboards and interaction callbacks."
 ---
 
 # QQ Official Bot Setup Guide
 
-This guide explains how to create an authorized bot in the **QQ Open Platform** and obtain its **App ID** and **Client Secret**.
-It then shows how to connect cognia-next through an HTTPS webhook.
-This official QQ bot channel is separate from the unofficial OneBot / NapCat path.
+Cognia connects to the **QQ Open Platform** with an official bot's **App ID** and **AppSecret** (called **Client Secret** in Cognia). This connector is separate from personal-account access through [OneBot / NapCat](./qq-via-onebot-faq).
 
----
+Group/C2C supports native Markdown, visible quote replies and native button keyboards. Button interactions return through the same verified transport and callback authorization pipeline. Incoming quotes, nested messages/chat records and ARK cards are normalized for the transcript; quote indexes are kept separately from passive-send authorization.
 
-## 1. Create a Bot in the QQ Open Platform
+Group/C2C file sends accept public URLs and the original bytes of user-selected local attachments. The updated native host uses direct binary upload up to 5,000,000 bytes and chunked upload above that, with a 200,000,000-byte native source cap, then sends the file through the same passive-reply rules.
 
-1. Open [https://q.qq.com](https://q.qq.com) and sign in to the QQ Open Platform.
-2. Create a bot application, then open **Bot → Development Settings**.
-3. Record these credentials:
-   - **App ID** — the bot application identifier, usually shaped like `102xxxxxx`.
-   - **AppSecret** — the application secret; cognia-next calls this **Client Secret**.
-4. Complete the platform-side setup you need:
-   - Configure event subscription **intents**. cognia-next subscribes to channel messages, group / C2C messages, and direct-message events.
-   - Test in the **sandbox environment** first.
-   - Submit the bot for production review before expecting it to receive and send messages in the live environment.
+## 1. Prepare the QQ application
 
----
+1. Open [QQ Open Platform](https://q.qq.com), create a bot, and record its App ID and AppSecret under **Development settings**. The old static Token is deprecated.
+2. Configure the sandbox participants and the conversation permissions available to your application. Complete the platform's production review before testing production access.
+3. If your application requires an **IP whitelist**, add the connector host's public outbound IP. A public callback tunnel supplies inbound HTTPS; it does not necessarily change the host's outbound IP. Recheck the whitelist after network/proxy changes.
+4. Choose the events you need in the QQ console:
 
-## 2. Configure the Adapter in cognia-next
+| Conversation                       | Event                     | Requirement                                                           |
+| ---------------------------------- | ------------------------- | --------------------------------------------------------------------- |
+| QQ group mentions                  | `GROUP_AT_MESSAGE_CREATE` | Group messaging enabled for the application.                          |
+| All QQ group messages              | `GROUP_MESSAGE_CREATE`    | Enable QQ's receive-all-messages feature and subscribe to this event. |
+| QQ private chat                    | `C2C_MESSAGE_CREATE`      | C2C messaging enabled.                                                |
+| Group/C2C button presses            | `INTERACTION_CREATE`      | Enable interaction events; gateway adds `INTERACTION` (`1 << 26`). |
+| Channel mentions                   | `AT_MESSAGE_CREATE`       | Public-guild messaging permission.                                    |
+| All private-guild channel messages | `MESSAGE_CREATE`          | Private-guild `GUILD_MESSAGES` permission.                            |
+| Channel direct messages            | `DIRECT_MESSAGE_CREATE`   | Channel direct-message permission.                                    |
 
-1. Open cognia-next and navigate to **Settings → Platform Connections → Adapters**.
-2. Click **Add connector**, then choose **QQ Official Bot**.
-3. Fill in:
-   - **Display name** — a recognizable name for this bot, for example "My QQ Bot".
-   - **App ID** — the application identifier from **Bot → Development Settings**.
-   - **Client Secret** — the QQ Open Platform **AppSecret**. cognia-next uses it to mint access tokens.
-4. Click **Create**.
+Platform permissions and Cognia's response rules are separate. Receiving an ordinary group message does not automatically authorize an AI response. The default mention-only policy still requires addressing the bot; choose the conversation's always-respond policy only if that is the behavior you want.
 
-New configurations default to **HTTPS webhook**. Save the adapter, reopen it, and copy its callback URL into the QQ console. The desktop host needs a reachable HTTPS ingress (shown in the form); a loopback URL is not a public callback. Complete the console’s callback validation and event subscriptions.
+## 2. Add the connector
 
-The credentials are encrypted in the OS keyring and exchanged at `https://bots.qq.com/app/getAppAccessToken`. **Test credentials** in webhook mode checks token issuance only; validate real event delivery separately. The optional gateway compatibility mode additionally resolves `GET /gateway`; resolving a URL does not establish a WebSocket session. Existing gateway adapters retain their transport. Tencent’s [BotGo guidance](https://github.com/tencent-connect/botgo) recommends webhook; only select gateway when your app still has access.
+1. Open **Settings → Platform Connections → Adapters**, click **Add connector**, and choose **QQ Official Bot**.
+2. Enter a display name, App ID and Client Secret.
+3. Keep **HTTPS webhook**, the default for new connectors, and save.
+4. Reopen the adapter, copy its callback URL, and configure that exact URL and event subscriptions in the QQ console. The connector host needs reachable public HTTPS; a loopback address cannot receive QQ callbacks. QQ documents callback ports **80, 443, 8080 and 8443**.
+5. Complete QQ's callback verification. Cognia verifies signed requests and answers the validation challenge on the native host.
 
----
+For a private-guild bot with the appropriate permission, enable **Receive all channel messages**. In gateway mode this adds the `GUILD_MESSAGES` intent; in Webhook mode you must also subscribe to `MESSAGE_CREATE` in the console. Leave this off for public-guild bots without that permission. This switch does not enable QQ group full-message access; configure `GROUP_MESSAGE_CREATE` on QQ separately.
 
-## 3. Verify the Connection
+Credentials are stored in the OS keyring. Cognia exchanges them at `https://api.bot.qq.com/app/getAppAccessToken`, refreshes cached tokens near expiry, and uses `Authorization: QQBot <access_token>` for REST calls.
 
-1. Mention the bot in a channel, or send it a direct / group message if those abilities are enabled for your bot.
-2. The message should appear in cognia-next within a few seconds.
-3. Check **Platform Connections** — the adapter status should show **running**.
+**Test credentials** in Webhook mode checks token issuance only. A running adapter or a successful credential test does not establish callback reachability, subscriptions or actual message delivery.
 
-If the adapter shows **stopped** or **degraded**:
+### Gateway compatibility mode
 
-- Confirm the **App ID** and **Client Secret** are correct.
-- Confirm the bot has passed QQ Open Platform production review and the required event intents are enabled.
-- Open **Settings → Platform Connections → Audit Log** for the detailed error.
+Select **Gateway WebSocket** only when the QQ application has gateway access. Existing gateway adapters keep their transport. The credential test additionally resolves `GET /gateway`; a returned URL is not an authenticated session.
 
----
+Gateway mode uses HELLO / IDENTIFY / heartbeat / RESUME with reconnect backoff. These operations do not apply to Webhook callbacks. The current QQ docs still describe gateways, while Tencent's BotGo guidance recommends Webhook; availability depends on the application.
 
-## Notes
+## 3. Verify the actual flow
 
-- **Official channel**: this is the official QQ bot integration, separate from the OneBot / NapCat path. If you want to connect a personal QQ account, see [QQ via OneBot — FAQ](./qq-via-onebot-faq).
-- **Automatic access-token refresh**: QQ uses short-lived application access tokens, not a static bot token. The adapter caches them per `(App ID, Client Secret)` and refreshes about one minute before expiry. The gateway IDENTIFY frame and every REST send use the same `Authorization: QQBot <access_token>` scheme.
-- **Conversation coverage depends on QQ platform approval**: channel, group, and C2C availability depend on the abilities granted to your bot in QQ Open Platform. cognia-next subscribes to the supported event families, but a conversation type only works after the platform grants that scope.
-- **Gateway compatibility only**: cognia-next connects over the QQ WebSocket gateway using Discord-like HELLO / IDENTIFY / heartbeat / RESUME flow. Disconnects are retried with exponential backoff and resumed when possible.
-- **Message capability scope**: the current adapter receives messages and sends text-only passive replies. QQ Markdown templates and interactive buttons require per-template platform approval, so rich / interactive assistant output falls back to the plain-text mirror.
+1. Send a controlled private message or mention the bot in an authorized group/channel, and confirm the message appears in Cognia.
+2. Confirm one expected reply arrives in QQ. Ordinary unmentioned group/channel messages can be stored without triggering a reply under mention-only rules.
+3. For receive-all access, send an unmentioned message and verify that it arrives. A mention test alone does not verify this permission. If full-message mention detection has no confirmed identity, use the adapter's identity probe; subsequent events use the updated result. Do not infer bot identity from an unrelated member mention.
+4. If delivery fails, inspect **Platform Connections → Audit Log**, console subscriptions, permissions, callback reachability and the outbound-IP whitelist.
+5. To verify native quoting, reply to a received group/C2C message, then quote a bot response in QQ and confirm the parent/preview appears in Cognia. Repeat after restarting the connector with a fresh passive context. A quote needs an index observed by this installation; an old message alone does not renew the send window.
+6. Verify file delivery with a small binary attachment and a local file larger than 5,000,000 bytes. Confirm that QQ receives the original bytes and filename, including when the host uses a proxy. An upload result alone is not message delivery; Cognia waits for the final send's definitive message ID.
+
+QQ business errors can accompany HTTP success statuses. Cognia checks `err_code` (with legacy `code` compatibility) and retains trace identifiers for diagnosis. Pending platform audits, duplicate rejections and responses without a definitive message ID require reconciliation and are not automatically resent. Such jobs are not proof of successful delivery; inspect the platform outcome before manually retrying.
+
+## Message capabilities and limits
+
+- **Text, media and files:** passive text replies in all four scenes; group/C2C supports images, video, SILK voice and files (`file_type=4`), while channel/direct retains public-URL images only. A file is sent as native media, rather than a text link.
+- **Binary and chunked uploads:** group/C2C accepts base64 data URLs and inline `dataBase64` on file/image segments. The group/C2C composer accepts arbitrary file types and forwards their original bytes without document extraction, image resizing or video sampling. Arbitrary path strings and `file:` URLs are rejected at the final serializer because connector-send permission is not a filesystem grant. These require the updated native connector host; no public tunnel is needed for a local attachment. Up to **5,000,000 bytes** uses JSON `file_data` base64. Larger sources use `upload_prepare`, raw PUTs to the supplied storage URLs, `upload_part_finish` and `/files` merge. The uploader calculates whole-file MD5/SHA1, the exact first-10,002,432-byte MD5, and each part's MD5. It validates the complete part plan before any PUT and applies shared pacing below the documented 10 QPS limit.
+- **Upload limits and failures:** the native uploader reads one bounded snapshot, capped at **200,000,000 bytes**. The composer preserves original bytes and retains its shared limit of **10 MiB per file and six files per message**; its attachments can still use chunked upload above the direct-upload threshold. Known file sizes are checked before upload, and actual native bytes are checked on the host. Native images/voice above 20,000,000 bytes and video above 30,000,000 bytes upload as files, following QQ's soft-limit behavior. URL uploads remain server-side downloads and still depend on QQ's format, quota and permission checks. Chunk uploads are sequential with a 300-second total deadline; persistent cross-restart upload resume is not implemented. Upload failure prevents the message send. A long upload may exhaust the passive window, which is checked again before sending.
+- **Upload authorization:** all upload stages use `srv_send_msg=false` where applicable; chunks never consume passive reply slots. The final media message consumes one slot per part. QQ API credentials stay off presigned storage requests, which require public HTTPS, reject redirects and follow the host's checked proxy path. No upload is converted into a proactive send.
+- **Passive budgets:** a group message allows up to **5 replies within 5 minutes**; C2C allows up to **4 replies within 60 minutes**. Multipart sends share that budget. Cognia conservatively counts C2C typing notifications as replies and reserves the final slot for the answer. Channel/direct replies retain the 5-minute window. Expired context is rejected rather than converted into a proactive send.
+- **Native Markdown:** group/C2C assistant replies and explicit Markdown segments use `msg_type=2` with `markdown.content`; no template registration is needed. Headings, emphasis, lists, links and inline images are passed to QQ's Markdown renderer. Plain-text messages remain text. When a request mixes literal text with Markdown, the literal text is escaped; the Markdown source is preserved. Channel/channel-direct Markdown retains a reported text fallback because channel permission is invitation-only and is not enabled by this adapter.
+- **Markdown with media:** standalone attachments are sent separately from native Markdown, in segment order. Every resulting part consumes the same passive reply budget; over-budget messages are rejected before any upload or send. Native Markdown rejection is reported rather than silently resent as text. Inline image links in Markdown use QQ's own resource handling and do not require a separate attachment part.
+- **Native quote replies:** explicit group/C2C replies use the received message's `message_scene.ext.msg_idx`, or a bot response's `ext_info.ref_idx`, in `message_reference.message_id`. The current real inbound `msg_id` still supplies passive authorization, so quoting another message cannot bypass expiry or reply limits. Native text, Markdown and media parts retain the same selected quote. Scoped mappings persist across connector restarts, including every confirmed part of multipart sends; the cache is bounded, and missing/conflicting/pruned indexes make an explicit native quote fail before sending. Legacy reply segments without a known index retain their reported text alternative. Channel/direct behavior is unchanged.
+- **Structured incoming content:** `message_scene.ext` preserves padded indexes and strips `auth_token`; `msg_elements` supports bounded recursive messages and chat records. Native quotes keep a read-only preview and resolve known parents to stored messages; unknown parents remain previews without an invented jump or bot identity. ARK cards show allowlisted titles, descriptions, sources/tags, addresses, safe links and previews. Unknown card fields and credential-bearing/non-public URLs are omitted. Card portraits do not become sender identities. Quoted/chat-record media and card previews are display context, not new model attachments; current message attachments retain the normal media policy.
+- **Native buttons:** group/C2C A2UI `Button` components become custom `keyboard.content.rows` buttons. Callback buttons use action type 1, HTTP(S) link buttons use type 0, and a Button's optional `qqCommand` string uses type 2 to insert a command. Rows, columns, cards and text retain a readable body; unsupported inputs retain a reported text alternative. Guild scenes keep the text alternative. There is no message editing or automatic removal of a completed card's buttons.
+- **Interaction callbacks:** enable `INTERACTION_CREATE` in the QQ console. Cognia checks a per-delivery token against its persisted, confirmed outbound receipt, adapter, scene, conversation, expiry and any provided button/origin ID. Group callbacks require `group_member_openid`; C2C uses `user_openid`. Group/C2C callbacks often omit the origin message ID, so it is never invented. Author-owned workflow/tool/skill approval bindings retain their original kind, actor restrictions and consume-once rules. Chat allow/blocklists still apply; a deliberate button press does not require an @ mention.
+- **Acknowledgement and replies:** the native host's Webhook transport ACK and `PUT /interactions/{id}` are separate. Cognia reports callback admission without waiting for the model/workflow to finish; an ACK is not proof that the action completed. Redeliveries share one press ID, while a fresh click gets a new ID; binding lookup uses the separate stored action key. Transient routing failures remain retryable without a second ACK attempt. Replies and approval confirmations preserve that click's captured `event_id`, never substitute it for `msg_id`, and retain passive expiry, quote and aggregate part-budget checks.
+- **Other limitations:** C2C streaming, proactive/wakeup sends, unrelated event-triggered sends, global menus/command-panel management, reusable Markdown material management and outbound generic ARK cards remain outside the current adapter. Only managed per-message button callbacks are routed; quick-menu, feedback and authorization events do not become model messages.
+- **Recall and scene-specific features:** native recall endpoints are available subject to QQ's restrictions; typing is C2C-only and reactions are channel-only.
+
+### Keyboard bounds and native cards
+
+Cognia uses at most five rows of five buttons. QQ labels are limited to ten characters; generated A2UI labels are shortened while the full readable mirror is retained. Explicit native payloads with invalid labels, duplicate IDs, unsafe links or unsupported fields fail before sending. Links accept HTTP(S) without URL credentials. Command `enter=true` and `anchor=1` are C2C-only; image-picker anchors also depend on the QQ mobile client. Deprecated `click_limit`, guild-only role restrictions, mini-program jumps and modal-confirmation fields are not exposed by this adapter.
+
+For an explicit platform card, use a `MessageSegment` with `type: "card"`, `card.kind: "qq-keyboard"`, and `card.payload` containing `content` or `markdown: { content }` plus `keyboard`. `content` and Markdown are exclusive. The keyboard accepts a template `id` or custom `content.rows`, never both. Explicit custom callback `action.data` must name an existing live callback binding in the same conversation; Cognia replaces it with a per-delivery token. Template/external callbacks without a managed receipt are rejected. Unknown opaque card kinds remain unsupported.
+
+Callback receipts persist across connector restarts, expire after at most 30 days and cannot outlive a shorter author binding. Already-consumed approval bindings cannot grant again. Callback envelopes delayed more than five minutes are rejected locally. A keyboard message is its own ordered part; mixing Markdown, keyboards and media may exceed the conversation's shared 5/4-reply budget and is rejected before upload/send.
+
+For acceptance, send a button card in both group and C2C, press a generic button twice, retry a one-shot approval, and verify that only the permitted user can approve. Repeat through the configured HTTPS callback, confirm the reply stays in the same conversation, and check failure/denial feedback separately from final action completion. These steps require the application's live QQ grants and a compatible QQ client.
 
 ## Avatars
 
-Channel and channel-direct messages preserve the platform's actual `author.avatar`. Older channel rows can resolve member information through the bound guild; channel rows can use the guild icon. Official group/C2C open IDs are unrelated to QQ UINs and are never used to construct numeric QQ avatar URLs. Their current message/profile contracts do not provide a general portrait, so those scenes keep their placeholder. An ARK card's avatar field is message content, not the sender's identity. See [channel User](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/channel/manage/user/model.html).
+Channel and channel-direct messages preserve `author.avatar`. Existing channel rows can resolve member information through the bound guild and use the guild icon. Group/C2C open IDs are not numeric QQ account IDs and are never used to construct numeric avatar URLs. Those scenes retain placeholders when no authoritative portrait is available. An ARK card's avatar is message content rather than the sender's identity.
+
+## Official references
+
+See [access tokens](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/access-token.html), [Webhook callbacks](https://bot.q.qq.com/wiki/develop/api-v2/dev-prepare/event-emit/webhook.html), [full group events](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html), [message rules](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/overview.html), [custom Markdown](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/type/markdown.html) and [BotGo setup guidance](https://github.com/tencent-connect/botgo). Capabilities were checked against the official documentation on **2026-10-28**; live grants remain application-specific.
+
+Native references and structured fields follow the official [group send](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html), [C2C send](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html) and [C2C event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/c2c_message_create.html) contracts.
+
+File uploads follow [group uploads](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_files.post.html), [C2C uploads](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_files.post.html), [prepare](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_id_upload_prepare.post.html) and [part-finish](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_id_upload_part_finish.post.html). The official [Node SDK usage](https://github.com/tencent-connect/qqbot-nodejs/blob/main/USAGE.md) confirms base64 `fileData`; its older size table differs from the newer upload pages, so the explicit adapter bounds above govern this implementation.
+
+Button contracts follow the current [group send](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_groups_group_openid_messages.post.html), [C2C send](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html), [interaction event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/interaction_create.html) and [interaction acknowledgement](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/interactions_interaction_id.put.html) pages, checked on **2026-10-28**.
