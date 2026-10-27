@@ -25,6 +25,7 @@ import {
 import type {
   BrowserActionResult,
   BrowserDialogState,
+  BrowserNetworkRule,
   BrowserSelection,
 } from "@cognia/plugin-sdk/api/browser"
 import type {
@@ -959,6 +960,75 @@ const definition = definePlugin({
       }
       if (action === "set") return engine.setStorage(area, key as string, String(input.value))
       return engine.clearStorage(area)
+    })
+
+    // Only the extension backend has these; elsewhere the method is absent.
+    const extensionOnly = <K extends "networkRules" | "recordings">(engine: Engine, method: K) => {
+      const fn = engine[method]
+      if (typeof fn !== "function") {
+        throw Object.assign(
+          new Error(
+            "This needs the user's own browser through the Cognia extension, started from its side panel"
+          ),
+          { code: "browser_feature_unsupported" }
+        )
+      }
+      return (fn as (...args: unknown[]) => unknown).bind(engine) as NonNullable<Engine[K]>
+    }
+
+    reg("browser_network_rules", async (input, callCtx) => {
+      const action = String(input.action ?? "")
+      if (action !== "set" && action !== "list" && action !== "clear") {
+        return { ok: false, error: `Unknown network rules action: ${action}` }
+      }
+      if (action === "set" && !Array.isArray(input.rules)) {
+        return { ok: false, error: "set needs a rules array" }
+      }
+      const { engine } = await currentRoute(callCtx)
+      const networkRules = extensionOnly(engine, "networkRules")
+      const result =
+        action === "set"
+          ? await networkRules({ action, rules: input.rules as BrowserNetworkRule[] })
+          : await networkRules({ action })
+      return { ok: true, ...result }
+    })
+
+    reg("browser_recordings", async (input, callCtx) => {
+      const action = String(input.action ?? "")
+      if (action !== "list" && action !== "get" && action !== "start" && action !== "stop") {
+        return { ok: false, error: `Unknown recordings action: ${action}` }
+      }
+      if (action === "get" && (typeof input.id !== "string" || !input.id)) {
+        return { ok: false, error: "get needs a recording id" }
+      }
+      const { engine } = await currentRoute(callCtx)
+      const recordings = extensionOnly(engine, "recordings")
+      if (action !== "get") {
+        const result = await recordings({ action })
+        // Titles are the pages' own: framed as untrusted data.
+        return "recordings" in result
+          ? { ok: true, recordings: result.recordings.map(framedPage) }
+          : {
+              ok: true,
+              ...("recording" in result ? { recording: framedPage(result.recording) } : {}),
+            }
+      }
+      const format = input.format === "playwright" ? "playwright" : "steps"
+      const result = await recordings({ action, id: input.id as string, format })
+      if (!("recording" in result)) return { ok: false, error: "The browser sent no recording" }
+      const { steps, ...summary } = result.recording as typeof result.recording & {
+        steps?: unknown
+      }
+      // Steps carry typed values and page-authored names; the test is built
+      // from them. Both are the site's data, never instructions.
+      return {
+        ok: true,
+        recording: framedPage(summary),
+        steps: untrustedText(steps ?? []),
+        ...("playwright" in result && typeof result.playwright === "string"
+          ? { playwright: untrustedText(result.playwright) }
+          : {}),
+      }
     })
 
     reg("browser_fill_credential", async (input, callCtx) => {

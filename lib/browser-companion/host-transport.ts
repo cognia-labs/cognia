@@ -78,6 +78,9 @@ export const BROWSER_READ_OPERATIONS: ReadonlySet<string> = new Set([
   "screenshot",
   "list_cookies",
   "get_storage",
+  "list_network_rules",
+  "list_recordings",
+  "get_recording",
 ])
 
 /** The command one operation travels as on this Host. */

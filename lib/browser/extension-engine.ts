@@ -48,8 +48,12 @@ import type {
   BrowserLoginForm,
   BrowserMutationResult,
   BrowserNetworkRequestDetail,
+  BrowserNetworkRulesArgs,
+  BrowserNetworkRulesResult,
   BrowserPdfOptions,
   BrowserPdfResult,
+  BrowserRecordingsArgs,
+  BrowserRecordingsResult,
   BrowserStorageArea,
   BrowserStorageResult,
   BrowserZoomResult,
@@ -399,6 +403,33 @@ export class ExtensionBrowserEngine implements BrowserEngine {
   }
   clearStorage(area: BrowserStorageArea): Promise<BrowserMutationResult> {
     return this.op("clear_storage", { area })
+  }
+  // The browser refuses either family with `browser_feature_unsupported`
+  // when its extension predates it; the Host refuses first when it knows.
+  networkRules(args: BrowserNetworkRulesArgs): Promise<BrowserNetworkRulesResult> {
+    switch (args.action) {
+      case "set":
+        return this.op("set_network_rules", { rules: args.rules })
+      case "clear":
+        return this.op("clear_network_rules")
+      case "list":
+        return this.op("list_network_rules")
+    }
+  }
+  recordings(args: BrowserRecordingsArgs): Promise<BrowserRecordingsResult> {
+    switch (args.action) {
+      case "start":
+        return this.op("start_recording")
+      case "stop":
+        return this.op("stop_recording")
+      case "list":
+        return this.op("list_recordings")
+      case "get":
+        return this.op("get_recording", {
+          id: args.id,
+          ...(args.format ? { format: args.format } : {}),
+        })
+    }
   }
   async networkRequest(_requestId: string): Promise<BrowserNetworkRequestDetail> {
     throw extensionUnsupported("networkRequest")

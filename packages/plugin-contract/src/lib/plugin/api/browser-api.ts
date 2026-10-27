@@ -93,4 +93,6 @@ export const PRIVILEGED_BROWSER_ENGINE_METHODS = [
   "networkRequest",
   "listCookies",
   "clearCookies",
+  "networkRules",
+  "recordings",
 ] as const

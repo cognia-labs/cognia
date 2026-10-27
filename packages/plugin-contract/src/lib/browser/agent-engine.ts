@@ -105,7 +105,116 @@ export interface BrowserEngine {
    * `targetPath`: the user picks the destination in a native save dialog.
    */
   saveDownload(downloadId: string, targetPath?: string): Promise<BrowserDownloadSummary>
+  /**
+   * The request rules this conversation set in its own tabs: they answer,
+   * fail, delay or redirect requests, or rewrite their headers. Only the
+   * extension backend, and only an extension whose `hello` named
+   * `network-rules-v1`; the rules end with the conversation's tabs.
+   */
+  networkRules?(args: BrowserNetworkRulesArgs): Promise<BrowserNetworkRulesResult>
+  /**
+   * What the person recorded in the browser, to turn into a test, and
+   * recording in this conversation's own tabs (`recording-v1`, extension only).
+   */
+  recordings?(args: BrowserRecordingsArgs): Promise<BrowserRecordingsResult>
 }
+
+/** How a rule picks requests and what it does to them (ADR-0242). */
+export interface BrowserNetworkRule {
+  /** `*` wildcards, `/regex/flags`, or else a case-insensitive part of the absolute URL. */
+  match: string
+  /** One method, or any when absent. */
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+  action:
+    "fail" | "respond" | "modify" | "delay" | "redirect" | "request_headers" | "response_headers"
+  /** `respond`: the status (200–599). `modify`: a status to replace the real one. */
+  status?: number
+  /** `respond`: the body. `modify`: JSON merged into the real body, or text replacing it. */
+  body?: string
+  /** `respond`/`modify`: response headers. `*_headers`: headers to set. */
+  headers?: Record<string, string>
+  /** `*_headers`: header names to remove. */
+  removeHeaders?: string[]
+  /** `delay`, or before any other action: milliseconds (≤ 30 000). */
+  delayMs?: number
+  /** `redirect`: the absolute URL requests go to instead. */
+  redirectTo?: string
+  /** Stop after this many matches; absent or 0 means every match. */
+  times?: number
+}
+
+/** A rule as the browser holds it. */
+export interface BrowserNetworkRuleState extends BrowserNetworkRule {
+  id: string
+  /**
+   * Matches the page counted. `null` for an `all-requests` rule: the browser
+   * applies it and, without reading the person's history, cannot count it.
+   */
+  hits: number | null
+  /**
+   * What the browser can apply it to: every request of the tab (headers,
+   * blocking and redirects), or only the page's own `fetch`/XHR (made-up and
+   * modified bodies).
+   */
+  coverage: "all-requests" | "page-requests"
+}
+
+export type BrowserNetworkRulesArgs =
+  { action: "set"; rules: BrowserNetworkRule[] } | { action: "clear" } | { action: "list" }
+
+export interface BrowserNetworkRulesResult {
+  rules: BrowserNetworkRuleState[]
+}
+
+export interface BrowserRecordingSummary {
+  id: string
+  title: string
+  url: string
+  startedAt: number
+  stoppedAt?: number
+  stepCount: number
+  /** Recorded in an agent's tab rather than by the person. */
+  byAgent: boolean
+}
+
+/** One recorded step, in the agent's own action vocabulary. */
+export interface BrowserRecordedStep {
+  action:
+    | "navigate"
+    | "click"
+    | "double_click"
+    | "hover"
+    | "fill"
+    | "select"
+    | "press_key"
+    | "scroll"
+    | "assert"
+  /** Locators best first: test id, role and name, label, placeholder, text, CSS. */
+  target?: { locators: string[]; role?: string; name?: string }
+  /** Typed text, a chosen option, a key chord. Never set for a secret field. */
+  value?: string
+  /** A secret field: the value was not recorded; a test reads it from its environment. */
+  secret?: boolean
+  url?: string
+  /** `assert`: what is checked — visible, text, value, count or url. */
+  assertion?: { kind: "visible" | "text" | "value" | "count" | "url"; expected?: string | number }
+  at: number
+}
+
+export type BrowserRecordingsArgs =
+  | { action: "start" }
+  | { action: "stop" }
+  | { action: "list" }
+  | { action: "get"; id: string; format?: "steps" | "playwright" }
+
+export type BrowserRecordingsResult =
+  | { recording: BrowserRecordingSummary }
+  | { recordings: BrowserRecordingSummary[] }
+  | {
+      recording: BrowserRecordingSummary & { steps: BrowserRecordedStep[] }
+      /** `format: "playwright"`: a Playwright test the browser generated from the steps. */
+      playwright?: string
+    }
 
 /** Options for {@link BrowserEngine.evaluate}. */
 export interface EvaluateOptions {

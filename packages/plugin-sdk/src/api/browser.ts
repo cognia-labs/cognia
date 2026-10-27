@@ -11,6 +11,10 @@
 export type {
   BrowserEngine,
   BrowserMutationResult,
+  BrowserNetworkRule,
+  BrowserNetworkRuleState,
+  BrowserRecordedStep,
+  BrowserRecordingSummary,
   BrowserZoomResult,
   FindOptions,
   HandleDialogArgs,

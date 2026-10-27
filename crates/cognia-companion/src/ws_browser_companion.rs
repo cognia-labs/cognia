@@ -118,7 +118,43 @@ pub const OPERATIONS: &[&str] = &[
     "set_storage",
     "clear_storage",
     "finalize_tabs",
+    "set_network_rules",
+    "clear_network_rules",
+    "list_network_rules",
+    "start_recording",
+    "stop_recording",
+    "list_recordings",
+    "get_recording",
 ];
+
+/// The operations a browser takes only when its `hello` names the capability
+/// that brings them, besides the profile. The extension and the Host ship
+/// apart, so a Host that knows an operation can meet a browser that does not:
+/// this refuses it here, by name, instead of sending what the browser would
+/// reject as unknown. `browser-agent-protocol.json` publishes the same map.
+pub const OPERATION_FEATURES: &[(&str, &str)] = &[
+    ("set_network_rules", NETWORK_RULES_FEATURE),
+    ("clear_network_rules", NETWORK_RULES_FEATURE),
+    ("list_network_rules", NETWORK_RULES_FEATURE),
+    ("start_recording", RECORDING_FEATURE),
+    ("stop_recording", RECORDING_FEATURE),
+    ("list_recordings", RECORDING_FEATURE),
+    ("get_recording", RECORDING_FEATURE),
+];
+
+/// Session-scoped request rules: answer, fail, delay, redirect or rewrite
+/// the headers of the requests the agent's own tabs make.
+pub const NETWORK_RULES_FEATURE: &str = "network-rules-v1";
+/// The person's recorded steps, and recording in the agent's own tabs.
+pub const RECORDING_FEATURE: &str = "recording-v1";
+
+/// The capability `operation` needs beyond the profile, if any.
+fn required_feature(operation: &str) -> Option<&'static str> {
+    OPERATION_FEATURES
+        .iter()
+        .find(|(name, _)| *name == operation)
+        .map(|(_, feature)| *feature)
+}
 
 /// The operations that only look: they change nothing on the page or in the
 /// browser that a second run would change again, so a caller may repeat one
@@ -146,6 +182,9 @@ pub const READ_OPERATIONS: &[&str] = &[
     "screenshot",
     "list_cookies",
     "get_storage",
+    "list_network_rules",
+    "list_recordings",
+    "get_recording",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -751,6 +790,14 @@ pub async fn call(
                 "Update the browser extension: the cancellation-safe agent profile is required",
             ));
         }
+        if let Some(feature) = required_feature(operation) {
+            if !connection.features.iter().any(|offered| offered == feature) {
+                return Err(OperationError::new(
+                    "browser_feature_unsupported",
+                    format!("Update the browser extension: {operation} needs {feature}"),
+                ));
+            }
+        }
         let pending = Arc::clone(&connection.pending);
         {
             let mut guard = pending.lock();
@@ -1126,7 +1173,9 @@ pub fn rpc_notify_status(device_id: &str) {
 /// request, the Owner's grant, the browser's connection, or the page.
 pub fn operation_error_response(error: OperationError) -> RpcFailure {
     let (status, retryable) = match error.code.as_str() {
-        "browser_protocol_incompatible" => (StatusCode::PRECONDITION_FAILED, false),
+        "browser_protocol_incompatible" | "browser_feature_unsupported" => {
+            (StatusCode::PRECONDITION_FAILED, false)
+        }
         "browser_operation_unknown" | "browser_operation_wrong_command" => {
             (StatusCode::BAD_REQUEST, false)
         }
@@ -1262,6 +1311,11 @@ mod tests {
         assert_eq!(contract["envelopeVersion"], HELLO_VERSION);
         assert_eq!(contract["agentProfile"], AGENT_PROFILE);
         assert_eq!(contract["operations"], serde_json::json!(OPERATIONS));
+        let features: serde_json::Map<String, Value> = OPERATION_FEATURES
+            .iter()
+            .map(|(operation, feature)| ((*operation).to_string(), Value::from(*feature)))
+            .collect();
+        assert_eq!(contract["operationFeatures"], Value::Object(features));
         assert_eq!(negotiated_profile(&["agent-v1".into()]), None);
         assert_eq!(negotiated_profile(&[]), None);
         assert_eq!(negotiated_profile(&["agent-safe-v2".into()]), None);
@@ -1511,11 +1565,81 @@ mod tests {
         assert!(pending.lock().is_empty(), "no waiter should be installed");
     }
 
+    #[tokio::test]
+    async fn a_capability_operation_reaches_only_a_browser_that_names_it() {
+        let (_scope, _store) = store_with_browser("tenant-feature", "browser-feature");
+        set_drive_allowed("tenant-feature", "browser-feature", true).unwrap();
+        let previous = super::super::browser_access::submissions_enabled();
+        super::super::browser_access::set_submissions_enabled(true);
+
+        let (mut connection, mut frames, _shutdown) = test_connection("profile-only");
+        connection.features = vec![AGENT_PROFILE.into()];
+        let pending = Arc::clone(&connection.pending);
+        install(
+            ("tenant-feature".into(), "browser-feature".into()),
+            connection,
+        );
+        let refused = call(
+            "tenant-feature",
+            "browser-feature",
+            "set_network_rules",
+            Value::Null,
+            Duration::from_millis(1),
+        )
+        .await;
+        remove("tenant-feature", "browser-feature", "profile-only");
+        let error = refused.unwrap_err();
+        assert_eq!(error.code, "browser_feature_unsupported");
+        assert!(error.message.contains(NETWORK_RULES_FEATURE));
+        assert!(
+            frames.try_recv().is_err(),
+            "an older extension must receive no operation it cannot run"
+        );
+        assert!(pending.lock().is_empty(), "no waiter should be installed");
+
+        let (mut connection, mut frames, _shutdown) = test_connection("with-rules");
+        connection.features = vec![AGENT_PROFILE.into(), NETWORK_RULES_FEATURE.into()];
+        install(
+            ("tenant-feature".into(), "browser-feature".into()),
+            connection,
+        );
+        let sent = call(
+            "tenant-feature",
+            "browser-feature",
+            "set_network_rules",
+            Value::Null,
+            Duration::from_millis(1),
+        )
+        .await;
+        let refused = call(
+            "tenant-feature",
+            "browser-feature",
+            "start_recording",
+            Value::Null,
+            Duration::from_millis(1),
+        )
+        .await;
+        remove("tenant-feature", "browser-feature", "with-rules");
+        super::super::browser_access::set_submissions_enabled(previous);
+        assert_eq!(sent.unwrap_err().code, "browser_operation_timeout");
+        assert!(
+            frames.try_recv().is_ok(),
+            "the named capability's operation is sent"
+        );
+        assert_eq!(refused.unwrap_err().code, "browser_feature_unsupported");
+        assert!(frames.try_recv().is_err(), "the unnamed one is not");
+    }
+
     #[test]
     fn a_failed_operation_keeps_its_code_and_says_whose_problem_it_is() {
         let cases = [
             (
                 "browser_protocol_incompatible",
+                StatusCode::PRECONDITION_FAILED,
+                false,
+            ),
+            (
+                "browser_feature_unsupported",
                 StatusCode::PRECONDITION_FAILED,
                 false,
             ),
@@ -1841,6 +1965,37 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(body.code, "browser_operation_unknown");
+    }
+
+    #[test]
+    fn every_gated_operation_is_an_operation_and_names_a_known_feature() {
+        for (operation, feature) in OPERATION_FEATURES {
+            assert!(OPERATIONS.contains(operation), "{operation}");
+            assert!(
+                [NETWORK_RULES_FEATURE, RECORDING_FEATURE].contains(feature),
+                "{feature}"
+            );
+            // A feature name survives `receive_hello`'s 32-character cut.
+            assert!(feature.len() <= 32, "{feature}");
+        }
+        assert_eq!(required_feature("snapshot"), None);
+        assert_eq!(
+            required_feature("set_network_rules"),
+            Some(NETWORK_RULES_FEATURE)
+        );
+        assert_eq!(required_feature("get_recording"), Some(RECORDING_FEATURE));
+        // Looking at rules or recordings is a read; changing them is not.
+        for operation in ["list_network_rules", "list_recordings", "get_recording"] {
+            assert!(READ_OPERATIONS.contains(&operation), "{operation}");
+        }
+        for operation in [
+            "set_network_rules",
+            "clear_network_rules",
+            "start_recording",
+            "stop_recording",
+        ] {
+            assert!(!READ_OPERATIONS.contains(&operation), "{operation}");
+        }
     }
 
     #[test]

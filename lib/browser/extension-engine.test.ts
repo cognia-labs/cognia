@@ -70,6 +70,32 @@ describe("ExtensionBrowserEngine", () => {
     expect(engine.backend).toBe("extension")
   })
 
+  it("sends request rules and recordings as their own operations", async () => {
+    const { engine, calls } = harness()
+    const rule = { match: "/api/orders*", action: "respond" as const, status: 503 }
+    await engine.networkRules({ action: "set", rules: [rule] })
+    await engine.networkRules({ action: "list" })
+    await engine.networkRules({ action: "clear" })
+    await engine.recordings({ action: "start" })
+    await engine.recordings({ action: "stop" })
+    await engine.recordings({ action: "list" })
+    await engine.recordings({ action: "get", id: "rec-1", format: "playwright" })
+    await engine.recordings({ action: "get", id: "rec-2" })
+    expect(calls.map((call) => [call.operation, call.args])).toEqual([
+      ["set_network_rules", { session: "session-1", startTabId: 42, rules: [rule] }],
+      ["list_network_rules", { session: "session-1", startTabId: 42 }],
+      ["clear_network_rules", { session: "session-1", startTabId: 42 }],
+      ["start_recording", { session: "session-1", startTabId: 42 }],
+      ["stop_recording", { session: "session-1", startTabId: 42 }],
+      ["list_recordings", { session: "session-1", startTabId: 42 }],
+      [
+        "get_recording",
+        { session: "session-1", startTabId: 42, id: "rec-1", format: "playwright" },
+      ],
+      ["get_recording", { session: "session-1", startTabId: 42, id: "rec-2" }],
+    ])
+  })
+
   it("gives waits their own budget plus slack, within the ceiling", async () => {
     const { engine, calls } = harness()
     await engine.waitForText("Done", { timeoutMs: 45_000 })

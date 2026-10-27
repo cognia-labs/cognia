@@ -41,6 +41,22 @@
     "get_storage",
     "set_storage",
     "clear_storage",
-    "finalize_tabs"
-  ]
+    "finalize_tabs",
+    "set_network_rules",
+    "clear_network_rules",
+    "list_network_rules",
+    "start_recording",
+    "stop_recording",
+    "list_recordings",
+    "get_recording"
+  ],
+  "operationFeatures": {
+    "set_network_rules": "network-rules-v1",
+    "clear_network_rules": "network-rules-v1",
+    "list_network_rules": "network-rules-v1",
+    "start_recording": "recording-v1",
+    "stop_recording": "recording-v1",
+    "list_recordings": "recording-v1",
+    "get_recording": "recording-v1"
+  }
 }

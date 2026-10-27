@@ -6,7 +6,7 @@ The browser extension is maintained in [cognia-labs/cognia-browser-extension](ht
 
 The extraction retains the full panel, capture modes, attachments, appearance, saved prompts, pairing/device credentials, origin binding, delivery/status handling and agent runtime. It includes the current revocation fixes: urgent Stop/Take over, durable pause until explicit Resume, worker-owned permission writes, operation deadlines, safe protocol negotiation and Host authorization fences across queued sends and separate CLI processes.
 
-The extension declares the `agent-safe-v1` profile over envelope v1 and requires overlay ABI 1. Older peers retain capture/status; driving requires a compatible Host, a drive grant, local agent mode and site permission. Repository ownership does not change runtime identities or broaden install permissions.
+The extension declares the `agent-safe-v1` profile over envelope v1 and requires overlay ABI 1. Capabilities beyond the profile are named separately in `hello.features` (`network-rules-v1`, `recording-v1`); `operationFeatures` in `packages/companion-client/src/browser-agent-protocol.json` maps their operations, and the Host refuses a capability's operations for a browser that did not name it ([ADR-0242](../content/docs/en/adr/0242-the-browser-companion-names-the-capabilities-it-adds.md)). Older peers retain capture/status; driving requires a compatible Host, a drive grant, local agent mode and site permission. Repository ownership does not change runtime identities or broaden install permissions.
 
 ## Consumer CI replaces the local workspace
 

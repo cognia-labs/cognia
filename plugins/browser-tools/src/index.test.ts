@@ -47,6 +47,63 @@ jest.mock("@cognia/plugin-sdk/api/browser", () => {
     getStorage: jest.fn(async (area: string) => ({ area, entries: { k: "v" } })),
     setStorage: jest.fn(async () => ({ ok: true })),
     clearStorage: jest.fn(async () => ({ ok: true })),
+    networkRules: jest.fn(async (_args: unknown) => ({
+      rules: [
+        {
+          id: "rule-1",
+          match: "/api/orders*",
+          action: "respond",
+          status: 503,
+          hits: 2,
+          coverage: "page-requests",
+        },
+        {
+          id: "rule-2",
+          match: "/track",
+          action: "fail",
+          hits: null,
+          coverage: "all-requests",
+        },
+      ],
+    })),
+    recordings: jest.fn(async (args: { action: string }) =>
+      args.action === "list"
+        ? {
+            recordings: [
+              {
+                id: "rec-1",
+                title: "Sign in",
+                url: "http://localhost/",
+                startedAt: 1,
+                stepCount: 2,
+                byAgent: false,
+              },
+            ],
+          }
+        : args.action === "get"
+          ? {
+              recording: {
+                id: "rec-1",
+                title: "Sign in",
+                url: "http://localhost/",
+                startedAt: 1,
+                stepCount: 1,
+                byAgent: false,
+                steps: [{ action: "click", target: { locators: ["getByRole('button')"] }, at: 2 }],
+              },
+              playwright: "test('sign in', async ({ page }) => {})",
+            }
+          : {
+              recording: {
+                id: "rec-2",
+                title: "Agent",
+                url: "http://localhost/",
+                startedAt: 3,
+                stepCount: 0,
+                byAgent: true,
+              },
+            }
+    ),
     networkRequest: jest.fn(async () => ({ id: "r1", url: "u", method: "GET", status: 200 })),
     fillCredential: jest.fn(async () => ({ filled: true, username: "me@a.test", reason: null })),
     listExtensions: jest.fn(async () => [
@@ -254,6 +311,8 @@ describe("browser-tools plugin", () => {
         "browser_network_request",
         "browser_fill_credential",
         "browser_extensions",
+        "browser_network_rules",
+        "browser_recordings",
         "browser_tabs_finalize",
       ])
     )
@@ -1211,6 +1270,89 @@ describe("browser-tools ADR-0201 surface", () => {
     })
     expect(engine.clearCookies).toHaveBeenCalledWith(undefined)
     await expect(tools.browser_cookies({ action: "peek" })).resolves.toMatchObject({ ok: false })
+  })
+
+  it("browser_network_rules sets, lists and clears the conversation's request rules", async () => {
+    const tools = await collectTools()
+    const rules = [{ match: "/api/orders*", action: "respond", status: 503 }]
+    await expect(tools.browser_network_rules({ action: "set", rules })).resolves.toMatchObject({
+      ok: true,
+      rules: [
+        expect.objectContaining({ id: "rule-1", coverage: "page-requests", hits: 2 }),
+        expect.objectContaining({ id: "rule-2", coverage: "all-requests", hits: null }),
+      ],
+    })
+    expect(engine.networkRules).toHaveBeenLastCalledWith({ action: "set", rules })
+    await tools.browser_network_rules({ action: "list" })
+    expect(engine.networkRules).toHaveBeenLastCalledWith({ action: "list" })
+    await tools.browser_network_rules({ action: "clear" })
+    expect(engine.networkRules).toHaveBeenLastCalledWith({ action: "clear" })
+    engine.networkRules.mockClear()
+    await expect(tools.browser_network_rules({ action: "set" })).resolves.toEqual({
+      ok: false,
+      error: "set needs a rules array",
+    })
+    await expect(tools.browser_network_rules({ action: "drop" })).resolves.toMatchObject({
+      ok: false,
+    })
+    expect(engine.networkRules).not.toHaveBeenCalled()
+  })
+
+  it("browser_recordings frames the page's words and the generated test as untrusted", async () => {
+    const tools = await collectTools()
+    const listed = (await tools.browser_recordings({ action: "list" })) as {
+      recordings: { title: string }[]
+    }
+    expect(listed.recordings[0]!.title).toBe(wrapUntrustedContent("Sign in"))
+    const got = (await tools.browser_recordings({
+      action: "get",
+      id: "rec-1",
+      format: "playwright",
+    })) as Record<string, unknown>
+    expect(engine.recordings).toHaveBeenLastCalledWith({
+      action: "get",
+      id: "rec-1",
+      format: "playwright",
+    })
+    expect(got.steps).toBe(
+      wrapUntrustedContent(
+        JSON.stringify(
+          [{ action: "click", target: { locators: ["getByRole('button')"] }, at: 2 }],
+          null,
+          2
+        )
+      )
+    )
+    expect(got.playwright).toBe(wrapUntrustedContent("test('sign in', async ({ page }) => {})"))
+    expect(got.recording).not.toHaveProperty("steps")
+    await expect(tools.browser_recordings({ action: "start" })).resolves.toMatchObject({
+      ok: true,
+      recording: { id: "rec-2", byAgent: true },
+    })
+    await expect(tools.browser_recordings({ action: "get" })).resolves.toEqual({
+      ok: false,
+      error: "get needs a recording id",
+    })
+  })
+
+  it("refuses request rules and recordings on an engine without them", async () => {
+    const tools = await collectTools()
+    const networkRules = engine.networkRules
+    const recordings = engine.recordings
+    delete (engine as Partial<typeof engine>).networkRules
+    delete (engine as Partial<typeof engine>).recordings
+    try {
+      await expect(tools.browser_network_rules({ action: "list" })).resolves.toMatchObject({
+        ok: false,
+        code: "browser_feature_unsupported",
+      })
+      await expect(tools.browser_recordings({ action: "list" })).resolves.toMatchObject({
+        ok: false,
+        code: "browser_feature_unsupported",
+      })
+    } finally {
+      Object.assign(engine, { networkRules, recordings })
+    }
   })
 
   it("browser_storage lists keys freely but asks before reading values on every origin", async () => {
