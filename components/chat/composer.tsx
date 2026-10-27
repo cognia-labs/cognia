@@ -470,6 +470,14 @@ const COMPOSER_MAX_HEIGHT_PX = COMPOSER_MAX_HEIGHT_REM * 16
 
 // --- Helpers ---------------------------------------------------------------
 
+function supportsQQOriginalFiles(session?: ChatSession | null): boolean {
+  const binding = session?.platformBinding
+  return (
+    binding?.platform === "qq-official" &&
+    (binding.conversationRef.scene === "group" || binding.conversationRef.scene === "c2c")
+  )
+}
+
 // Accept images plus every text/binary document type lib/document can extract
 // (pdf, docx, xlsx, pptx, csv, md, code, …). A folder picked from the attach
 // menu takes the @-mention reference path instead (absolute path, read on
@@ -477,8 +485,7 @@ const COMPOSER_MAX_HEIGHT_PX = COMPOSER_MAX_HEIGHT_REM * 16
 // since a drop carries no absolute path.
 const ATTACHMENT_ACCEPT = ["image/*", ...getDocumentAcceptExtensions("chat")].join(",")
 // Plus videos, which are sampled into frames at staging time. Not offered in a
-// conversation bound to an IM platform: those files go to a person as they
-// are, and the intake refuses a video there anyway.
+// model conversation only. Native QQ group/C2C uses original-file intake instead.
 const MOTION_ATTACHMENT_ACCEPT = [
   ATTACHMENT_ACCEPT,
   "video/*",
@@ -840,6 +847,7 @@ function ComposerInner(props: InnerProps) {
     t,
     tAttach,
     acceptMotion: !props.session?.platformBinding,
+    originalFiles: supportsQQOriginalFiles(props.session),
   })
   // Files handed back from outside (a put-back follow-up) pass the same
   // size/count/type gate as a drop or a paste.
@@ -3631,7 +3639,11 @@ function ComposerInner(props: InnerProps) {
           acceptGhost={acceptGhost}
           fileInputRef={fileInputRef}
           attachmentAccept={
-            props.session?.platformBinding ? ATTACHMENT_ACCEPT : MOTION_ATTACHMENT_ACCEPT
+            supportsQQOriginalFiles(props.session)
+              ? "*/*"
+              : props.session?.platformBinding
+                ? ATTACHMENT_ACCEPT
+                : MOTION_ATTACHMENT_ACCEPT
           }
           onFilePick={onFilePick}
           openFileDialog={openFileDialog}
@@ -4904,7 +4916,10 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
             {/* Owns per-attachment extraction / order / OCR opt-in. Must sit INSIDE
               the prompt-input provider: it derives everything from that
               provider's file list. */}
-            <StagedAttachmentsProvider motion={!session?.platformBinding}>
+            <StagedAttachmentsProvider
+              motion={!session?.platformBinding}
+              originalFiles={supportsQQOriginalFiles(session)}
+            >
               {session?.platformBinding && (
                 <div className="mb-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                   <PlatformBadge platform={session.platformBinding.platform} />

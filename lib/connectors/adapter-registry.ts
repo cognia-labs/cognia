@@ -452,6 +452,10 @@ export async function buildQQOfficialAdapter(row: AdapterInstanceRow): Promise<P
     id: row.id,
     displayName: row.displayName,
     transportMode: row.transportMode === "webhook" ? "webhook" : "gateway",
+    receiveGuildMessages: row.settings.receiveGuildMessages === true,
+    // Startup identity confirmation happens after start(), so read its latest
+    // persisted result instead of retaining the row used to build the adapter.
+    selfId: async () => (await getAdapterInstance(row.id))?.selfIdentity?.platformAccountId ?? "",
     accessToken: async () => {
       const { appId, secret } = await credentials()
       return getQQAccessToken(appId, secret)

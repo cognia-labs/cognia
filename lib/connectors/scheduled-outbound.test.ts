@@ -1445,3 +1445,63 @@ describe("the digest turn's tool requests (ADR-0239)", () => {
     expect(result).toMatchObject({ success: false, terminalReason: "needs-approval" })
   })
 })
+
+it("answers a callback with its captured event target even after the session receives a newer message", async () => {
+  const conversationKey = "qq-official:adp_discord:chat"
+  const deliveryTarget = {
+    address: {
+      platform: "qq-official" as const,
+      adapterId: "adp_discord",
+      conversationKey,
+      scopeKind: "group" as const,
+      containerId: "chat",
+    },
+    conversationRef: {
+      platform: "qq-official" as const,
+      adapterId: "adp_discord",
+      scene: "group",
+      sceneId: "chat",
+      eventId: "press",
+      receivedAt: Date.now(),
+    },
+    refreshedAt: Date.now(),
+  }
+  sessionLookup = jest.fn(async () => ({
+    ...mockSession,
+    platformBinding: {
+      ...mockSession.platformBinding!,
+      platform: "qq-official" as const,
+      conversationKey,
+      deliveryTarget: {
+        ...deliveryTarget,
+        conversationRef: {
+          platform: "qq-official" as const,
+          adapterId: "adp_discord",
+          scene: "group",
+          sceneId: "chat",
+          msgId: "newer-message",
+        },
+      },
+    },
+  }))
+  __setDigestSendPromptForTesting(
+    jest.fn(async () => ({
+      text: "Callback answer",
+      messageId: "callback-answer",
+      a2uiSurfaces: {},
+      a2uiSurfaceOrder: [],
+    })) as never
+  )
+  const result = await runConnectorDigestTurn({
+    adapterId: "adp_discord",
+    conversationKey,
+    prompt: "Answer click",
+    deliveryTarget,
+    authorization: { kind: "origin-reply", inboundConversationKey: conversationKey },
+  })
+  expect(result.success).toBe(true)
+  const jobs = await getDb().outboundQueue.toArray()
+  expect(jobs).toHaveLength(1)
+  expect(jobs[0]!.request.conversationRef).toEqual(deliveryTarget.conversationRef)
+  expect(jobs[0]!.request.conversationRef).not.toHaveProperty("msgId")
+})

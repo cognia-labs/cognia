@@ -6,6 +6,7 @@ import type {
   ConnectorCallbackDecision,
   ConnectorCallbackEvent,
 } from "@/types/connectors/interaction"
+import { getDb } from "@/lib/db/schema"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { getBus, __resetBusForTesting } from "./bus"
 import { appendAudit } from "./audit"
@@ -587,4 +588,71 @@ describe("ConnectorBus callback decisions", () => {
       })
     )
   })
+})
+
+it("uses a stored binding action separately from unique press dedup identity", async () => {
+  const bus = getBus()
+  bus.callbackHandler = jest.fn(async () => undefined)
+  jest.mocked(resolveCallbackBinding).mockResolvedValue(binding("callback_query"))
+  await bus.dispatchConnectorCallback(
+    event({ triggerId: "press-one", bindingActionId: "stored-action" })
+  )
+  await bus.dispatchConnectorCallback(
+    event({ triggerId: "press-two", bindingActionId: "stored-action" })
+  )
+  expect(resolveCallbackBinding).toHaveBeenCalledWith("lark-bot", "stored-action")
+  expect(isRecordedInbound).toHaveBeenCalledWith("lark-bot", "press-one", "callback")
+  expect(isRecordedInbound).toHaveBeenCalledWith("lark-bot", "press-two", "callback")
+  expect(bus.callbackHandler).toHaveBeenCalledTimes(2)
+})
+
+it("retries QQ anchor storage failure before consuming a one-shot approval", async () => {
+  const bus = getBus()
+  const conversationKey = "qq-official:lark-bot:chat"
+  const callback = event({
+    platform: "qq-official",
+    triggerId: "press-storage",
+    bindingActionId: "stored-action",
+    conversationKey,
+    deliveryTarget: {
+      address: {
+        platform: "qq-official",
+        adapterId: "lark-bot",
+        conversationKey,
+        scopeKind: "group",
+        containerId: "chat",
+      },
+      conversationRef: {
+        platform: "qq-official",
+        adapterId: "lark-bot",
+        scene: "group",
+        sceneId: "chat",
+        eventId: "press-storage",
+        receivedAt: Date.now(),
+      },
+      refreshedAt: Date.now(),
+    },
+  })
+  const consume = jest.fn(async () => undefined)
+  jest
+    .mocked(resolveCallbackBinding)
+    .mockResolvedValue(binding("tool_approve", { requestId: "request" }))
+  jest
+    .mocked(authorizeConnectorCallback)
+    .mockResolvedValue({ allowed: true, mode: "enforce", consume })
+  const transaction = jest
+    .spyOn(getDb(), "transaction")
+    .mockRejectedValueOnce(new Error("temporary target storage failure"))
+    .mockResolvedValueOnce(undefined)
+  try {
+    await expect(bus.dispatchConnectorCallback(callback)).resolves.toBe("retry")
+    expect(consume).not.toHaveBeenCalled()
+    expect(applyToolApprovalCallback).not.toHaveBeenCalled()
+    expect(recordAndCheckInbound).not.toHaveBeenCalled()
+    await expect(bus.dispatchConnectorCallback(callback)).resolves.toBe("terminal")
+    expect(consume).toHaveBeenCalledTimes(1)
+    expect(applyToolApprovalCallback).toHaveBeenCalledTimes(1)
+  } finally {
+    transaction.mockRestore()
+  }
 })

@@ -184,3 +184,50 @@ describe("handleWorkflowFanoutCallback", () => {
     ).toHaveLength(0)
   })
 })
+
+it("preserves captured QQ interaction authority in its confirmation", async () => {
+  const conversationKey = "qq-official:qq:chat"
+  const deliveryTarget = {
+    address: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      conversationKey,
+      scopeKind: "group" as const,
+      containerId: "chat",
+    },
+    conversationRef: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      scene: "group",
+      sceneId: "chat",
+      eventId: "press",
+      receivedAt: Date.now(),
+    },
+    refreshedAt: Date.now(),
+  }
+  await handleWorkflowFanoutCallback({
+    adapterId: "qq",
+    platform: "qq-official",
+    conversationKey,
+    deliveryTarget,
+    cancelled: true,
+    binding: {
+      id: "qq:cancel",
+      adapterId: "qq",
+      actionId: "cancel",
+      kind: "wf_fanout_cancel",
+      surfaceId: "qq-surface",
+      conversationKey,
+      createdAt: Date.now(),
+      payload: {
+        workflowId: "wf",
+        target: { adapterId: "qq", conversationKey: "qq-official:qq:chat" },
+        createdBy: "user",
+      },
+    },
+  })
+  const jobs = await getDb().outboundQueue.toArray()
+  expect(jobs).toHaveLength(1)
+  expect(jobs[0]!.request.conversationRef).toEqual(deliveryTarget.conversationRef)
+  expect(jobs[0]!.request.deliveryTarget).toEqual(deliveryTarget)
+})

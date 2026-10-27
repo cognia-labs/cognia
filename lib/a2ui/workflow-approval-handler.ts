@@ -19,7 +19,7 @@ import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import { getDb } from "@/lib/db/schema"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
-import { parseConversationKey } from "@/types/connectors/event"
+import { type ConversationDeliveryTarget, parseConversationKey } from "@/types/connectors/event"
 import { startWorkflowFromIM } from "@/lib/workflow/runtime/start-from-im"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 
@@ -29,6 +29,7 @@ export interface HandleWorkflowApprovalInput {
   adapterId: string
   platform: PlatformKind
   conversationKey?: string
+  deliveryTarget?: ConversationDeliveryTarget
 }
 
 interface ApprovalPayload {
@@ -79,13 +80,18 @@ async function pushOutboundText(args: {
   platform: PlatformKind
   conversationKey: string
   text: string
+  deliveryTarget?: ConversationDeliveryTarget
   idempotencyKey: string
 }): Promise<void> {
   await enqueueOutbound({
     adapterId: args.adapterId,
     conversationKey: args.conversationKey,
     request: {
-      conversationRef: { platform: args.platform, adapterId: args.adapterId },
+      ...(args.deliveryTarget ? { deliveryTarget: args.deliveryTarget } : {}),
+      conversationRef: args.deliveryTarget?.conversationRef ?? {
+        platform: args.platform,
+        adapterId: args.adapterId,
+      },
       segments: [{ type: "text", text: args.text }],
       metadata: { idempotencyKey: args.idempotencyKey },
     },
@@ -126,6 +132,7 @@ export async function handleWorkflowApprovalCallback(
       adapterId: input.adapterId,
       platform,
       conversationKey,
+      ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
       text: `⊘ ${payload.workflowName ?? "Workflow"} 已取消`,
       idempotencyKey: `wfcan:${input.binding.surfaceId}`,
     })
@@ -145,6 +152,7 @@ export async function handleWorkflowApprovalCallback(
       adapterId: input.adapterId,
       platform,
       conversationKey,
+      ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
       text: `✗ 无法启动「${payload.workflowName ?? payload.workflowId}」：${
         result.reason === "workflow-not-found" ? "workflow not found" : "unknown error"
       }`,
@@ -158,6 +166,7 @@ export async function handleWorkflowApprovalCallback(
     adapterId: input.adapterId,
     platform,
     conversationKey,
+    ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
     text: `✅ ${payload.workflowName ?? "Workflow"} 已启动 (runId=${result.runId})`,
     idempotencyKey: `wfok:${input.binding.surfaceId}`,
   })

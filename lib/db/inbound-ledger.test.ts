@@ -13,6 +13,21 @@ beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
 describe("inbound-ledger", () => {
+  it("keeps independently capped QQ aliases from evicting inbound dedup or delivery evidence", async () => {
+    await recordInbound("qq", "alias-1", "qq-reference")
+    await recordInbound("qq", "alias-2", "qq-reference")
+    await recordInbound("qq", "in-1")
+    await recordInbound("qq", "sent-1", "outbound")
+    await pruneOldest(1, 1)
+    expect(await isInboundRecorded("qq", "in-1")).toBe(true)
+    expect(await isInboundRecorded("qq", "sent-1", "outbound")).toBe(true)
+    expect(await getDb().inboundLedger.where("namespace").equals("qq-reference").count()).toBe(2)
+    await recordInbound("qq", "in-2")
+    await pruneOldest(1, 1)
+    expect(await getDb().inboundLedger.where("namespace").equals("inbound").count()).toBe(1)
+    expect(await getDb().inboundLedger.where("namespace").equals("outbound").count()).toBe(1)
+  })
+
   it("recordInbound returns true on first call for a message", async () => {
     const isNew = await recordInbound("adp_1", "msg_abc")
     expect(isNew).toBe(true)

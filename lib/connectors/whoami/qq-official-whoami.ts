@@ -3,7 +3,7 @@
  *
  * Mints an app access token from the keyring `appId` + `clientSecret`
  * (reusing the adapter's cached `getQQAccessToken`) and calls
- * `GET https://api.sgroup.qq.com/users/@me` with `Authorization: QQBot
+ * `GET https://api.bot.qq.com/users/@me` with `Authorization: QQBot
  * <token>`, then persists the result into
  * `adapterInstances.lastWhoamiResult` so the Adapters → Config detail tab
  * can show the connected bot identity.

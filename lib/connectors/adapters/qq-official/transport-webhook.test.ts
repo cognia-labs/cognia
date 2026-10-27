@@ -97,3 +97,28 @@ describe("startWebhookTransport (qq-official)", () => {
     expect(cap.unlisten).toHaveBeenCalledTimes(1)
   })
 })
+
+it("forwards verified interaction envelopes without treating transport ACK as interaction ACK", async () => {
+  const cap = captureListener()
+  const ctrl = new AbortController()
+  const gen = startWebhookTransport({ adapterId: "qq-1", signal: ctrl.signal })
+  const first = gen.next()
+  await new Promise((r) => setTimeout(r, 5))
+  const event = {
+    op: 0,
+    t: "INTERACTION_CREATE",
+    d: {
+      id: "press",
+      type: 11,
+      scene: "group",
+      group_openid: "GO",
+      group_member_openid: "owner",
+      data: { resolved: { button_data: "token" } },
+    },
+  }
+  cap.get()({ payload: event })
+  expect((await first).value).toEqual(event)
+  ctrl.abort()
+  await gen.return(undefined)
+  expect(cap.unlisten).toHaveBeenCalledTimes(1)
+})

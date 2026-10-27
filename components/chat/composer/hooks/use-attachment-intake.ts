@@ -93,6 +93,8 @@ export interface UseAttachmentIntakeOptions {
    * platform conversation, whose files go to a person rather than a model.
    */
   acceptMotion: boolean
+  /** Preserve arbitrary files for a native platform recipient. */
+  originalFiles?: boolean
   /** `useTranslations("chat.composer")` — smart-snapshot copy. */
   t: (key: string, values?: Record<string, string | number | Date>) => string
   /** `useTranslations("chat.composer.attachments")` — gate copy. */
@@ -108,6 +110,7 @@ export function useAttachmentIntake({
   setCaret,
   isDesktop,
   acceptMotion,
+  originalFiles,
   t,
   tAttach,
 }: UseAttachmentIntakeOptions) {
@@ -166,6 +169,7 @@ export function useAttachmentIntake({
         const prepared = await prepareComposerAttachments(list, {
           maxFileSize: MAX_FILE_SIZE,
           audio: acceptMotion,
+          originalFiles,
           ...(acceptMotion ? { motion: { maxSourceBytes: COMPOSER_VIDEO_SOURCE_MAX_BYTES } } : {}),
         })
         if (options.isCurrent && !options.isCurrent()) return []
@@ -216,7 +220,7 @@ export function useAttachmentIntake({
         if (imageCount > 0) setPreparingImageCount((count) => Math.max(0, count - imageCount))
       }
     },
-    [acceptMotion, attachmentCitations, attachments, tAttach]
+    [acceptMotion, originalFiles, attachmentCitations, attachments, tAttach]
   )
 
   const [smartSnapshotPending, setSmartSnapshotPending] = useState(false)

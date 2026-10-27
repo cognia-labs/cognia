@@ -34,7 +34,7 @@
  */
 
 import type { PlatformKind } from "./platform-kind"
-import type { PlatformIdentity } from "./event"
+import type { ConversationDeliveryTarget, PlatformIdentity } from "./event"
 
 export type ConnectorCallbackActionType =
   // A2UI Button.action — `value` carries the action identifier
@@ -67,6 +67,10 @@ export interface ConnectorCallbackEvent {
    * platform fabricate one from `(adapterId, signature, payloadHash)`.
    */
   triggerId: string
+  /** Stored action key when the transport provides a distinct per-press ID. */
+  bindingActionId?: string
+  /** Captured, verified delivery authority for this click, never inferred from an action value. */
+  deliveryTarget?: ConversationDeliveryTarget
   /**
    * A2UI surface this callback targets. Recovered from the
    * `connectorCallbackBindings` Dexie table or directly parsed out of

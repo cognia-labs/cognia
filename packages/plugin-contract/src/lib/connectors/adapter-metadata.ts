@@ -85,7 +85,7 @@ export const CONNECTOR_METADATA: readonly ConnectorMeta[] = [
     oauth: false,
     richMessages: false,
   },
-  { type: "qq-official", iconName: "Bot", status: "stable", oauth: true, richMessages: false },
+  { type: "qq-official", iconName: "Bot", status: "stable", oauth: true, richMessages: true },
   { type: "matrix", iconName: "Network", status: "stable", oauth: false, richMessages: true },
   { type: "kook", iconName: "MessageCircle", status: "planned", oauth: true, richMessages: true },
   { type: "line", iconName: "MessageCircle", status: "planned", oauth: true, richMessages: true },

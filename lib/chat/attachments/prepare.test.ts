@@ -275,3 +275,23 @@ it("rejects originals above source quota before image optimization", async () =>
   expect(result.files).toEqual([])
   expect(optimizeImage).not.toHaveBeenCalled()
 })
+
+it("preserves arbitrary original files and enforces the unchanged byte ceiling", async () => {
+  const binary = new File([new Uint8Array([0, 255, 128, 65])], "sample.bin", {
+    type: "application/octet-stream",
+  })
+  const optimizeImage = jest.fn(async () => sizedFile("small.png", "image/png", 1))
+  const result = await prepareComposerAttachments(
+    [binary, sizedFile("large.png", "image/png", 5)],
+    {
+      originalFiles: true,
+      maxFileSize: 4,
+      optimizeImage,
+    }
+  )
+  expect(result.files).toEqual([binary])
+  expect(result.files[0]).toBe(binary)
+  expect(result.unsupportedCount).toBe(0)
+  expect(result.tooLargeCount).toBe(1)
+  expect(optimizeImage).not.toHaveBeenCalled()
+})

@@ -90,7 +90,7 @@ describe("connector runtime capability matrix", () => {
       ambiguousDelivery: "reconciliation_required",
     })
     expect(builtInConnectorRuntimeCapabilities("qq-official")).toMatchObject({
-      unmentionedDelivery: false,
+      unmentionedDelivery: true,
       ambiguousDelivery: "reconciliation_required",
     })
     expect(builtInConnectorRuntimeCapabilities("wechat-oa")).toMatchObject({
@@ -113,5 +113,13 @@ describe("connector runtime capability matrix", () => {
     expect(hasExplicitRuntimeCapabilityOverride("email")).toBe(false)
     expect(hasExplicitRuntimeCapabilityOverride("kook")).toBe(false)
     expect(hasExplicitRuntimeCapabilityOverride("nope" as never)).toBe(false)
+  })
+})
+
+it("advertises QQ native group/C2C controls without message editing or global menus", () => {
+  expect(builtInConnectorRuntimeCapabilities("qq-official")).toMatchObject({
+    interactiveControls: true,
+    messageEditing: false,
+    staticMenus: false,
   })
 })

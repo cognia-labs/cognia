@@ -16,7 +16,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 }))
 
 jest.mock("@/lib/connectors/adapters/qq-official/auth", () => ({
-  QQ_API_BASE: "https://api.sgroup.qq.com",
+  QQ_API_BASE: "https://api.bot.qq.com",
   qqAuthHeaders: (token: string) => ({
     Authorization: `QQBot ${token}`,
     "Content-Type": "application/json",
@@ -90,7 +90,7 @@ describe("probeQQOfficialIdentity", () => {
     })
     expect(mockGetToken).toHaveBeenCalledWith("app-1", "secret-1")
     expect(mockHttp).toHaveBeenCalledWith({
-      url: "https://api.sgroup.qq.com/users/@me",
+      url: "https://api.bot.qq.com/users/@me",
       method: "GET",
       headers: { Authorization: "QQBot ACCESS", "Content-Type": "application/json" },
     })

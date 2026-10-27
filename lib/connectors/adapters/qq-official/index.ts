@@ -9,10 +9,20 @@
  *     callback (`axum_app.rs::qq_official_webhook_handler` verifies the
  *     seeded-Ed25519 signature and answers the op-13 validation in-band).
  *
- * Both transports feed the same `parseQQDispatch → gate → emit` pipeline;
- * outbound always goes through the QQ REST API with passive replies.
+ * Both transports feed the shared dispatch pipeline: messages are parsed,
+ * gated and emitted; verified button interactions use the callback bus.
+ * Outbound always uses QQ REST with captured message/event reply authority.
  */
 
+import { QQKeyboardValidationError } from "./keyboard"
+import { getBus } from "@/lib/connectors/bus"
+import {
+  parseQQInteraction,
+  resolveQQInteraction,
+  qqInteractionAckId,
+  qqInteractionResultCode,
+} from "./interactions"
+import type { ConnectorCallbackDecision } from "@/types/connectors/interaction"
 import type {
   AdapterContext,
   AdapterHealth,
@@ -24,18 +34,27 @@ import type { OutboundRequest, OutboundResult } from "@/types/connectors/outboun
 import type { ReactionRef } from "@/types/connectors/adapter"
 import { builtInConnectorRuntimeCapabilities } from "@/types/connectors/runtime-capability"
 import { conversationBoundRoute } from "@/lib/connectors/adapters/_shared/message-route"
-import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
+import {
+  connectorsHttpRequest,
+  connectorsMediaUpload,
+  type TauriHttpResponse,
+} from "@/lib/connectors/tauri/commands"
 import { gateInboundEvent } from "@/lib/connectors/at-gate"
+import { recordDeliveredMessage } from "@/lib/connectors/delivered-messages"
+import { buildConversationKey } from "@/types/connectors/event"
 import { QQ_OFFICIAL_A2UI_CAPABILITY, QQ_OFFICIAL_CAPS } from "./capability"
 import { QQ_API_BASE, clearQQTokenCacheByToken, getQQGatewayUrl, qqAuthHeaders } from "./auth"
-import { parseQQDispatch, type QQDispatch, type QQScene } from "./parse"
+import { parseQQDispatch, qqReferenceIndex, type QQDispatch, type QQScene } from "./parse"
+import { findQQReference, recordQQReference } from "./references"
 import {
   QQ_MAX_PASSIVE_REPLIES,
   QQ_PASSIVE_WINDOW_MS,
   QQValidationError,
+  type QQBinarySource,
   decodeQQMessageId,
   encodeQQMessageId,
   qqPassiveMsgSeq,
+  qqQuoteTarget,
   qqPassiveReplyCount,
   registerQQPassiveReply,
   serializeDelete,
@@ -43,7 +62,12 @@ import {
   serializeReaction,
   serializeTyping,
 } from "./serialize"
-import { startQQGateway } from "./gateway-client"
+import {
+  prepareQQKeyboards,
+  recordQQKeyboardReceipts,
+  type PreparedQQKeyboards,
+} from "./a2ui-mapper"
+import { DEFAULT_QQ_INTENTS, startQQGateway } from "./gateway-client"
 import { startWebhookTransport } from "./transport-webhook"
 import { enrichQQInboundMedia } from "./inbound-media"
 
@@ -69,6 +93,10 @@ export interface QQOfficialAdapterOptions {
    * tunnel URL pasted into the QQ console).
    */
   transportMode?: TransportMode
+  /** Opt in only after the app has the private-guild GUILD_MESSAGES permission. */
+  receiveGuildMessages?: boolean
+  /** Resolve the current confirmed identity; startup probes can finish after start(). */
+  selfId?: () => Promise<string>
 }
 
 const QQ_CONFIG_SCHEMA = {
@@ -86,6 +114,11 @@ const QQ_CONFIG_SCHEMA = {
       enum: ["gateway", "webhook"],
       default: "gateway",
     },
+    receiveGuildMessages: {
+      type: "boolean",
+      description: "Receive all private-guild channel messages; requires GUILD_MESSAGES permission",
+      default: false,
+    },
   },
   additionalProperties: false,
 }
@@ -93,15 +126,24 @@ const QQ_CONFIG_SCHEMA = {
 /**
  * Platform code for "msg limit exceed" — QQ's rejection when a passive
  * msg_id has expired (group/channel/direct 5 min, C2C 60 min) or has hit
- * its 5-reply cap. Non-retryable: the msg_id will never become valid again.
+ * its per-scene reply cap. Non-retryable: the msg_id will never become valid again.
  */
 const QQ_CODE_MSG_LIMIT_EXCEED = 22009
+const QQ_PASSIVE_LIMIT_CODES = new Set([
+  QQ_CODE_MSG_LIMIT_EXCEED,
+  304027,
+  304103,
+  40034005,
+  40034128,
+])
+const QQ_PENDING_AUDIT_CODES = new Set([304023, 304024])
 
 class QQApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly platformCode?: number
+    readonly platformCode?: number,
+    readonly reconciliationRequired = false
   ) {
     super(message)
     this.name = "QQApiError"
@@ -127,21 +169,41 @@ const LAST_INBOUND_CAP = 500
 /**
  * A typing indicator consumes one passive-reply slot of the inbound msg_id.
  * Only fire while strictly fewer than this many slots are used, so the real
- * reply (slot 5) always still fits after the indicator (slot ≤4).
+ * reply (slot 4) always still fits after the indicator (slot ≤3).
  * UNVERIFIED: QQ does not document whether `input_notify` counts against the
- * 5-reply cap; treating it as consuming is the conservative reading.
+ * C2C reply cap; treating it as consuming is the conservative reading.
  */
-const TYPING_MAX_USED_SLOTS = QQ_MAX_PASSIVE_REPLIES - 1
+const TYPING_MAX_USED_SLOTS = QQ_MAX_PASSIVE_REPLIES.c2c - 1
 
-/** Extract `{ id, code, message }` from a QQ JSON body (tolerates non-JSON). */
+/** Prefer the current err_code while retaining legacy code compatibility. */
 function parseQQBody(raw: string): {
   id?: string
   message?: string
   code?: number
   file_info?: string
+  traceId?: string
+  referenceIndex?: string
 } {
   try {
-    return JSON.parse(raw) as { id?: string; message?: string; code?: number; file_info?: string }
+    const value: unknown = JSON.parse(raw)
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+    const body = value as Record<string, unknown>
+    return {
+      id: typeof body.id === "string" ? body.id : undefined,
+      file_info: typeof body.file_info === "string" ? body.file_info : undefined,
+      message: typeof body.message === "string" ? body.message : undefined,
+      code:
+        typeof body.err_code === "number"
+          ? body.err_code
+          : typeof body.code === "number"
+            ? body.code
+            : undefined,
+      traceId: typeof body.trace_id === "string" ? body.trace_id : undefined,
+      referenceIndex:
+        body.ext_info && typeof body.ext_info === "object" && !Array.isArray(body.ext_info)
+          ? qqReferenceIndex((body.ext_info as Record<string, unknown>).ref_idx)
+          : undefined,
+    }
   } catch {
     return {}
   }
@@ -155,6 +217,84 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
   let lastActivityAt: number | undefined
   let gatewaySelfId = ""
   const lastInbound = new Map<string, QQLastInbound>()
+  const interactionTasks = new Map<string, Promise<void>>()
+  const acknowledgedInteractions = new Set<string>()
+  const interactionTimers = new Set<ReturnType<typeof setTimeout>>()
+
+  function handleInteraction(selfId: string, dispatch: QQDispatch, active: () => boolean): void {
+    const interactionId = qqInteractionAckId(dispatch)
+    if (!interactionId || interactionTasks.has(interactionId)) return
+    let terminal = false
+    const task = (async () => {
+      let responded = false
+      const respond = (decision: ConnectorCallbackDecision) => {
+        if (responded) return
+        responded = true
+        if (timer) {
+          clearTimeout(timer)
+          interactionTimers.delete(timer)
+        }
+        if (!active() || acknowledgedInteractions.has(interactionId)) return
+        acknowledgedInteractions.add(interactionId)
+        if (acknowledgedInteractions.size > 500)
+          acknowledgedInteractions.delete(acknowledgedInteractions.values().next().value!)
+        void qqRequest("PUT", `/interactions/${encodeURIComponent(interactionId)}`, {
+          code: qqInteractionResultCode(decision),
+        }).catch(() => {
+          healthReason = "QQ interaction acknowledgement failed"
+        })
+      }
+      const timer = setTimeout(() => respond({ status: "failed" }), 3_000)
+      interactionTimers.add(timer)
+      try {
+        const interaction = parseQQInteraction(dispatch)
+        const callback = interaction
+          ? await resolveQQInteraction(opts.id, selfId, interaction)
+          : null
+        if (!callback || !active()) {
+          terminal = true
+          respond({ status: "expired" })
+          return
+        }
+        const allowed = await gateInboundEvent(opts.id, {
+          platform: callback.platform,
+          adapterId: opts.id,
+          selfId,
+          conversationRef: callback.deliveryTarget!.conversationRef,
+          conversationKey: callback.conversationKey!,
+          messageId: interactionId,
+          sender: callback.user,
+          channel: {
+            id: callback.conversationKey!,
+            kind: interaction!.scene === "group" ? "group" : "private",
+            platformChannelId: interaction!.sceneId,
+          },
+          plainText: "",
+          segments: [],
+          mentions: { selfMentioned: true, users: [] },
+          timestamp: callback.timestamp,
+          raw: callback.raw,
+          kind: "create",
+          canReplyToMessage: false,
+        })
+        if (!allowed || !active()) {
+          terminal = true
+          respond({ status: "denied", reason: "chat_policy" })
+          return
+        }
+        terminal =
+          (await getBus().dispatchConnectorCallback(callback, { onDecision: respond })) ===
+          "terminal"
+        respond({ status: "failed" })
+      } catch {
+        respond({ status: "failed" })
+      }
+    })().finally(() => {
+      if (!terminal) interactionTasks.delete(interactionId)
+    })
+    interactionTasks.set(interactionId, task)
+    if (interactionTasks.size > 500) interactionTasks.delete(interactionTasks.keys().next().value!)
+  }
 
   /** Shared per-dispatch pipeline: parse → at-gate → bus emit. */
   async function handleDispatch(
@@ -164,6 +304,18 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
     active: () => boolean
   ): Promise<void> {
     if (!active()) return
+    if (!selfId && opts.selfId) {
+      try {
+        selfId = await opts.selfId()
+      } catch {
+        // Missing identity must not lose history or invent a self mention.
+      }
+      if (!active()) return
+    }
+    if (dispatch.t === "INTERACTION_CREATE") {
+      handleInteraction(selfId, dispatch, active)
+      return
+    }
     const event = parseQQDispatch(opts.id, selfId, dispatch)
     if (!event) return
     if (event.kind === "delete" || event.kind === "edit") {
@@ -175,6 +327,8 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       sceneId?: string
       msgId?: string
       receivedAt?: number
+      qqMsgIndex?: string
+      qqReplyIndex?: string
     }
     if (ref.scene && ref.sceneId && ref.msgId) {
       rememberInbound(event.conversationKey, {
@@ -183,6 +337,24 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         msgId: ref.msgId,
         receivedAt: ref.receivedAt ?? Date.now(),
       })
+      if (ref.scene === "group" || ref.scene === "c2c") {
+        const scope = { adapterId: opts.id, scene: ref.scene, sceneId: ref.sceneId }
+        if (ref.qqMsgIndex) {
+          try {
+            await recordQQReference(scope, event.messageId, ref.qqMsgIndex)
+          } catch {
+            // Preserve the event; unavailable quote aliases fail closed at send time.
+          }
+        }
+        if (ref.qqReplyIndex && event.replyTo) {
+          const parent = await findQQReference(scope, { referenceIndex: ref.qqReplyIndex })
+          if (parent) {
+            event.replyTo.messageId = parent.messageId
+            for (const segment of event.segments)
+              if (segment.type === "reply") segment.messageId = parent.messageId
+          }
+        }
+      }
     }
     if (!(await gateInboundEvent(opts.id, event)) || !active()) return
     // Download what the parser could only reference, so a picture sent to the
@@ -213,8 +385,8 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         try {
           for await (const dispatch of startWebhookTransport({ adapterId: opts.id, signal })) {
             if (signal.aborted) break
-            // Webhook mode has no READY event, so selfId stays "" unless a
-            // prior gateway run populated it.
+            // Webhook mode has no READY event; use the confirmed identity
+            // supplied by the registry when available.
             await handleDispatch(ctx, gatewaySelfId, dispatch, active)
           }
         } catch (err) {
@@ -231,6 +403,7 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       accessToken: opts.accessToken,
       gatewayUrl: async () => getQQGatewayUrl(await opts.accessToken(), apiBase),
       signal,
+      intents: DEFAULT_QQ_INTENTS | (opts.receiveGuildMessages ? 1 << 9 : 0),
       // OP 9 INVALID_SESSION: the platform rejected our IDENTIFY/RESUME —
       // evict the cached token so the reconnect re-mints instead of looping
       // on the same rejected credential.
@@ -257,6 +430,10 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
   }
 
   async function stop(): Promise<void> {
+    interactionTimers.forEach(clearTimeout)
+    interactionTimers.clear()
+    interactionTasks.clear()
+    acknowledgedInteractions.clear()
     abortController?.abort()
     abortController = null
     healthState = "down"
@@ -281,47 +458,153 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
    * One authenticated REST round-trip. Retries exactly once on 401/403 with
    * a re-minted token (the cached app token, ~2h TTL, may be stale after a
    * console-side secret rotation — without the retry every call stays
-   * bricked for hours). Throws `QQApiError` for any non-2xx status.
+   * bricked for hours). Also recognizes current business errors carried
+   * by HTTP-success responses and legacy `code` envelopes.
    */
   async function qqRequest(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
-    body?: Record<string, unknown>
+    body?: Record<string, unknown>,
+    binary?: QQBinarySource & { fileType: number }
   ): Promise<{
     status: number
-    body: { id?: string; message?: string; code?: number; file_info?: string }
+    body: ReturnType<typeof parseQQBody>
   }> {
-    const doCall = (token: string) =>
-      connectorsHttpRequest({
+    const doCall = async (token: string): Promise<TauriHttpResponse> => {
+      if (binary) {
+        let raw: string
+        try {
+          raw = await connectorsMediaUpload({
+            uploadUrl: `${apiBase}${path}`,
+            headers: qqAuthHeaders(token),
+            sourceUrl: binary.sourceUrl,
+            qq: { fileType: binary.fileType, fileName: binary.fileName },
+            responseMode: "http",
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (message.startsWith("QQ upload validation:")) throw new QQValidationError(message)
+          throw error
+        }
+        let response: unknown
+        try {
+          response = JSON.parse(raw)
+        } catch {
+          throw new QQApiError("QQ native upload returned an invalid response", 502)
+        }
+        if (
+          !response ||
+          typeof response !== "object" ||
+          !("status" in response) ||
+          !Number.isInteger(response.status) ||
+          !("body" in response) ||
+          typeof response.body !== "string" ||
+          !("headers" in response) ||
+          !response.headers ||
+          typeof response.headers !== "object" ||
+          Array.isArray(response.headers) ||
+          Object.values(response.headers).some((value) => typeof value !== "string")
+        )
+          throw new QQApiError("QQ native upload returned an invalid response", 502)
+        return response as TauriHttpResponse
+      }
+      return connectorsHttpRequest({
         url: `${apiBase}${path}`,
         method,
         headers: qqAuthHeaders(token),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       })
+    }
     let token = await opts.accessToken()
     let resp = await doCall(token)
-    if (resp.status === 401 || resp.status === 403) {
+    let parsed = parseQQBody(resp.body)
+    if (resp.status === 401 || resp.status === 403 || parsed.code === 11243) {
       clearQQTokenCacheByToken(token)
       await opts.clearTokenCache?.()
       token = await opts.accessToken()
       resp = await doCall(token)
+      parsed = parseQQBody(resp.body)
     }
-    const parsed = parseQQBody(resp.body)
-    if (resp.status < 200 || resp.status >= 300) {
-      // Surface the platform's numeric `code` and the X-Tps-trace-id
-      // header — both are what QQ support asks for when triaging.
-      const traceId = resp.headers["X-Tps-trace-id"] ?? resp.headers["x-tps-trace-id"]
-      const detail = `${parsed.message ?? resp.body.slice(0, 200)}${
+    const pending =
+      resp.status === 202 || (parsed.code !== undefined && QQ_PENDING_AUDIT_CODES.has(parsed.code))
+    const traceId =
+      Object.entries(resp.headers).find(([key]) => key.toLowerCase() === "x-tps-trace-id")?.[1] ??
+      parsed.traceId
+    parsed.traceId = traceId
+    if (
+      resp.status < 200 ||
+      resp.status >= 300 ||
+      pending ||
+      (parsed.code !== undefined && parsed.code !== 0)
+    ) {
+      const detail = `${parsed.message ?? (binary ? "Native upload rejected" : resp.body.slice(0, 200))}${
         parsed.code !== undefined ? ` (code ${parsed.code})` : ""
       }${traceId ? ` [trace ${traceId}]` : ""}`
-      throw new QQApiError(`QQ ${method} ${path} failed: ${detail}`, resp.status, parsed.code)
+      throw new QQApiError(
+        `QQ ${method} ${path} failed: ${detail}`,
+        resp.status,
+        parsed.code,
+        pending
+      )
     }
     return { status: resp.status, body: parsed }
   }
 
   async function send(req: OutboundRequest): Promise<OutboundResult> {
     let calls: ReturnType<typeof serializeOutboundParts>
+    let keyboards: PreparedQQKeyboards
     try {
+      try {
+        keyboards = await prepareQQKeyboards(req)
+        req = keyboards.request
+      } catch (error) {
+        if (error instanceof QQKeyboardValidationError) throw new QQValidationError(error.message)
+        return {
+          ok: false,
+          error: {
+            code: "temporary_unavailable",
+            message: "QQ keyboard binding storage is temporarily unavailable",
+            retryable: true,
+          },
+        }
+      }
+      const ref = req.conversationRef as {
+        scene?: QQScene
+        sceneId?: string
+        msgId?: string
+        qqMsgIndex?: string
+      }
+      if ((ref.scene === "group" || ref.scene === "c2c") && ref.sceneId) {
+        const target = qqQuoteTarget(req)
+        let index: string | undefined
+        if (target) {
+          const scope = { adapterId: opts.id, scene: ref.scene, sceneId: ref.sceneId }
+          if (target.startsWith("qq-ref:")) {
+            let alias: string | undefined
+            try {
+              alias = qqReferenceIndex(decodeURIComponent(target.slice(7)))
+            } catch {
+              /* Invalid alias fails validation below. */
+            }
+            // Unknown quoted parents are display context only; do not invent placement.
+            if (alias)
+              index = (await findQQReference(scope, { referenceIndex: alias }))?.referenceIndex
+          } else {
+            const decoded = decodeQQMessageId(target)
+            if (decoded && (decoded.scene !== ref.scene || decoded.sceneId !== ref.sceneId))
+              throw new QQValidationError("QQ quote target belongs to a different conversation")
+            const messageId = decoded?.id ?? target
+            index = messageId === ref.msgId ? qqReferenceIndex(ref.qqMsgIndex) : undefined
+            index ??= (await findQQReference(scope, { messageId }))?.referenceIndex
+          }
+          if (!index && req.replyTo)
+            throw new QQValidationError(
+              "QQ native reply requires a known quote index in this conversation"
+            )
+        }
+        // Only the scoped lookup/current captured event may authorize this quote.
+        req = { ...req, conversationRef: { ...req.conversationRef, qqQuoteIndex: index } }
+      }
       calls = serializeOutboundParts(req, false)
     } catch (err) {
       if (!(err instanceof QQValidationError)) throw err
@@ -336,7 +619,14 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       const uploaded = new Map<number, string>()
       for (const [index, call] of calls.entries()) {
         if (!call.upload) continue
-        const { body } = await qqRequest("POST", call.upload.path, call.upload.payload)
+        const { body } = await qqRequest(
+          "POST",
+          call.upload.path,
+          call.upload.payload,
+          call.upload.binary
+            ? { ...call.upload.binary, fileType: call.upload.payload.file_type }
+            : undefined
+        )
         if (typeof body.file_info !== "string" || !body.file_info)
           throw new QQApiError("QQ media upload returned no file_info", 502)
         uploaded.set(index, body.file_info)
@@ -348,12 +638,40 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         const payload = fileInfo
           ? { ...call.payload, media: { file_info: fileInfo } }
           : call.payload
-        const { body } = await qqRequest("POST", call.path, payload)
+        const { body, status } = await qqRequest("POST", call.path, payload)
+        if (!body.id || status === 202) {
+          throw new QQApiError(
+            `QQ send delivery is unconfirmed (status ${status}); reconcile before resending${body.traceId ? ` [trace ${body.traceId}]` : ""}`,
+            status,
+            body.code,
+            true
+          )
+        }
         delivered += 1
         platformMessageId =
           body.id && ref.scene && ref.sceneId
             ? encodeQQMessageId(ref.scene, ref.sceneId, body.id)
             : body.id
+        await recordQQKeyboardReceipts(keyboards.bindings, call.payload.keyboard, body.id)
+        if (ref.scene && ref.sceneId) {
+          // Record each confirmed part, including parts before a later failure.
+          await recordDeliveredMessage(
+            opts.id,
+            buildConversationKey("qq-official", opts.id, ref.sceneId),
+            platformMessageId!
+          )
+          if ((ref.scene === "group" || ref.scene === "c2c") && body.referenceIndex) {
+            try {
+              await recordQQReference(
+                { adapterId: opts.id, scene: ref.scene, sceneId: ref.sceneId },
+                body.id,
+                body.referenceIndex
+              )
+            } catch {
+              // Delivery already happened. Missing alias must not trigger a resend.
+            }
+          }
+        }
         lastActivityAt = Date.now()
       }
       if (healthState === "running") healthReason = undefined
@@ -373,8 +691,14 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       if (err instanceof QQValidationError)
         return { ok: false, error: { code: "validation", message: err.message, retryable: false } }
       if (err instanceof QQApiError) {
+        if (err.reconciliationRequired || err.platformCode === 40054005)
+          return {
+            ok: false,
+            error: { code: "reconciliation_required", message: err.message, retryable: false },
+          }
         if (
-          err.platformCode === QQ_CODE_MSG_LIMIT_EXCEED &&
+          err.platformCode !== undefined &&
+          QQ_PASSIVE_LIMIT_CODES.has(err.platformCode) &&
           calls.some((call) => "msg_id" in call.payload)
         ) {
           // Distinct, non-retryable: the passive reply window elapsed (group
@@ -384,15 +708,15 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
             ok: false,
             error: {
               code: "platform_4xx",
-              message: `QQ passive reply rejected: the reply window for msg_id has closed (group 5 min / C2C 60 min, max 5 replies). ${err.message}`,
+              message: `QQ passive reply rejected: the reply window for msg_id has closed (group 5 min / C2C 60 min, group max 5 / C2C max 4 replies). ${err.message}`,
               retryable: false,
             },
           }
         }
         const code =
-          err.status === 429
+          err.status === 429 || err.platformCode === 40034100
             ? "rate_limited"
-            : err.status === 401 || err.status === 403
+            : err.status === 401 || err.status === 403 || err.platformCode === 11243
               ? "auth_failed"
               : err.status >= 500
                 ? "platform_5xx"

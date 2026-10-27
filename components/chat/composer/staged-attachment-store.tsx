@@ -240,11 +240,14 @@ export interface StagedAttachmentsProviderProps {
    * frames nobody will read would only spend the CPU. Default on.
    */
   motion?: boolean
+  /** Stage original platform files without extracting model content. */
+  originalFiles?: boolean
 }
 
 export function StagedAttachmentsProvider({
   children,
   motion = true,
+  originalFiles = false,
 }: StagedAttachmentsProviderProps) {
   const attachments = usePromptInputAttachments()
   /**
@@ -459,6 +462,11 @@ export function StagedAttachmentsProvider({
       // provider mints ids internally and `add()` returns nothing.
       const seedIdx = seedQueueRef.current.findIndex((e) => e.filename === file.filename)
       const entry = seedIdx >= 0 ? seedQueueRef.current.splice(seedIdx, 1)[0] : undefined
+      if (originalFiles) {
+        extractAsDocumentOrImage(file)
+        continue
+      }
+
       const restoredContent = readAttachmentExtractedContent(entry?.state.restoredContent)
       if (restoredContent) restoredContentRef.current.set(file.id, restoredContent)
       if (entry?.state.ocrText)
@@ -531,6 +539,21 @@ export function StagedAttachmentsProvider({
           const source = file.sourceFile
             ? getOriginalComposerAttachment(file.sourceFile)
             : undefined
+          if (originalFiles) {
+            const blob = source ?? (await (await fetch(url)).blob())
+            if (blob.size > COMPOSER_MAX_ATTACHMENT_BYTES) throw new Error("attachment_too_large")
+            const bytes = await readBlobBytes(blob)
+            if (!stillStaged(file.id) || controller.signal.aborted) return
+            motionRunsRef.current.delete(file.id)
+            setResults((prev) =>
+              new Map(prev).set(file.id, {
+                status: "ready",
+                sizeBytes: blob.size,
+                bytes,
+              })
+            )
+            return
+          }
           const restoredLargeImage =
             isImage && file.sourceFile && file.sourceFile.size > COMPOSER_MAX_ATTACHMENT_BYTES
           let payload: Awaited<ReturnType<typeof blobToDataUrl>>

@@ -2,7 +2,7 @@
  * QQ Official Bot authentication.
  *
  * QQ's open platform uses an app-level access token (not a static bot token):
- *   POST https://bots.qq.com/app/getAppAccessToken { appId, clientSecret }
+ *   POST https://api.bot.qq.com/app/getAppAccessToken { appId, clientSecret }
  *     → { access_token, expires_in }
  *
  * The token is short-lived (~2h) and shared by the gateway IDENTIFY and every
@@ -12,9 +12,9 @@
 
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 
-const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 /** Official API domain unified on 2026-08-10. */
 export const QQ_API_BASE = "https://api.bot.qq.com"
+const TOKEN_URL = `${QQ_API_BASE}/app/getAppAccessToken`
 
 interface CacheEntry {
   token: string

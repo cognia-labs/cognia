@@ -523,6 +523,20 @@ describe("connectorsMediaUpload", () => {
     await expect(connectorsMediaUpload(req)).resolves.toBe("mxc://matrix.org/uploaded")
     expect(mockInvoke).toHaveBeenCalledWith("connectors_media_upload", { req })
   })
+
+  it("forwards QQ native upload mode through the existing registered media command", async () => {
+    const req: ConnectorMediaUploadRequest = {
+      uploadUrl: "https://api.bot.qq.com/v2/groups/group/files",
+      localPath: "/tmp/file.bin",
+      qq: { fileType: 4, fileName: "file.bin" },
+      responseMode: "http",
+    }
+    mockInvoke.mockResolvedValueOnce(
+      JSON.stringify({ status: 200, headers: {}, body: '{"file_info":"ready"}' })
+    )
+    await connectorsMediaUpload(req)
+    expect(mockInvoke).toHaveBeenCalledWith("connectors_media_upload", { req })
+  })
 })
 
 describe("connectorsDiscordUpload", () => {

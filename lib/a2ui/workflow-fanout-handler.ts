@@ -17,7 +17,7 @@ import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction
 import type { PlatformKind } from "@/types/connectors/platform-kind"
 import { getDb } from "@/lib/db/schema"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
-import { parseConversationKey } from "@/types/connectors/event"
+import { type ConversationDeliveryTarget, parseConversationKey } from "@/types/connectors/event"
 import { createFanoutSubscription } from "@/lib/db/workflow-fanout-subscriptions"
 
 export interface HandleWorkflowFanoutInput {
@@ -26,6 +26,7 @@ export interface HandleWorkflowFanoutInput {
   adapterId: string
   platform: PlatformKind
   conversationKey?: string
+  deliveryTarget?: ConversationDeliveryTarget
 }
 
 interface FanoutPayload {
@@ -72,13 +73,18 @@ async function pushOutboundText(args: {
   platform: PlatformKind
   conversationKey: string
   text: string
+  deliveryTarget?: ConversationDeliveryTarget
   idempotencyKey: string
 }): Promise<void> {
   await enqueueOutbound({
     adapterId: args.adapterId,
     conversationKey: args.conversationKey,
     request: {
-      conversationRef: { platform: args.platform, adapterId: args.adapterId },
+      ...(args.deliveryTarget ? { deliveryTarget: args.deliveryTarget } : {}),
+      conversationRef: args.deliveryTarget?.conversationRef ?? {
+        platform: args.platform,
+        adapterId: args.adapterId,
+      },
       segments: [{ type: "text", text: args.text }],
       metadata: { idempotencyKey: args.idempotencyKey },
     },
@@ -119,6 +125,7 @@ export async function handleWorkflowFanoutCallback(
       adapterId: input.adapterId,
       platform,
       conversationKey,
+      ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
       text: `⊘ 已取消订阅「${labelName}」`,
       idempotencyKey: `wf-fanout-cancel:${input.binding.surfaceId}`,
     })
@@ -136,6 +143,7 @@ export async function handleWorkflowFanoutCallback(
     adapterId: input.adapterId,
     platform,
     conversationKey,
+    ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
     text: `✅ 已订阅「${labelName}」的运行进度到当前会话`,
     idempotencyKey: `wf-fanout-ok:${input.binding.surfaceId}`,
   })

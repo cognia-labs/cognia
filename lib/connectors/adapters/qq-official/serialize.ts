@@ -8,14 +8,14 @@
  *   - direct  → POST /dms/{guild_id}/messages
  *
  * Passing `msg_id` makes the send a (free) passive reply inside the reply
- * window. We use the request's explicit `replyTo` when present, else the
- * inbound `msgId` captured on the conversationRef.
+ * window. Group/C2C use the captured inbound `msgId` or interaction `eventId`;
+ * a visible quote uses a separate index in `message_reference`.
  *
  * Passive-reply constraints enforced here (per the v2 send docs):
  *   - `msg_seq` pairs with `msg_id` on group/C2C sends; it defaults to 1 when
  *     omitted and the same msg_id+msg_seq combo is rejected as a duplicate,
  *     so every distinct reply to the same inbound message needs its own seq.
- *   - Each msg_id accepts at most 5 passive replies.
+ *   - Each msg_id accepts at most 4 C2C or 5 group passive replies.
  *   - msg_id expires: group / channel / direct after 5 minutes, C2C after
  *     60 minutes. An expired msg_id fails the whole send.
  *
@@ -27,20 +27,97 @@
  * rejection is an error, not the original message id (UNVERIFIED: the exact
  * error code QQ returns for a duplicate pair). The per-msg_id bookkeeping
  * that remains only tracks how many DISTINCT replies (idempotency keys) a
- * msg_id has consumed, to honour the 5-reply cap.
+ * msg_id has consumed, to honour its scene's reply cap.
  */
 
+import { validateQQKeyboard } from "./keyboard"
 import type { OutboundRequest, SegmentDowngrade } from "@/types/connectors/outbound"
 import type { MessageSegment } from "@/types/connectors/segment"
 import { fnv1a32 } from "../_shared/fnv1a"
 import { isPublicHttpUrl } from "../_shared/inbound-media"
-import type { QQScene } from "./parse"
+import { escapeMarkdown } from "../_shared/inbound-markdown"
+import { qqReferenceIndex, type QQScene } from "./parse"
 
 export interface QQSendCall {
   downgrades?: SegmentDowngrade[]
   path: string
   payload: Record<string, unknown>
-  upload?: { path: string; payload: { file_type: number; url: string; srv_send_msg: false } }
+  upload?: {
+    path: string
+    payload: { file_type: number; url?: string; file_name?: string; srv_send_msg: false }
+    binary?: QQBinarySource
+  }
+}
+
+export interface QQBinarySource {
+  sourceUrl: string
+  fileName: string
+}
+export const QQ_MAX_UPLOAD_BYTES = 200_000_000
+
+function qqBinarySource(
+  resource: Extract<MessageSegment, { type: "image" | "file" | "video" | "voice" }>
+): { url?: string; binary?: QQBinarySource; fileName: string } {
+  const fileName =
+    resource.type === "file"
+      ? resource.name.trim().split(/[\\/]/).at(-1)!
+      : resource.type === "image"
+        ? "image.png"
+        : resource.type === "video"
+          ? "video.mp4"
+          : "voice.silk"
+  if (
+    !fileName ||
+    fileName === "." ||
+    fileName === ".." ||
+    fileName.length > 256 ||
+    /[\u0000-\u001f\u007f]/.test(fileName)
+  )
+    throw new QQValidationError("QQ upload requires a valid file name")
+  if (
+    resource.type === "file" &&
+    (!Number.isSafeInteger(resource.sizeBytes) ||
+      resource.sizeBytes < 0 ||
+      resource.sizeBytes > QQ_MAX_UPLOAD_BYTES)
+  )
+    throw new QQValidationError(
+      "QQ file exceeds the 200000000-byte upload limit or has an invalid size"
+    )
+  let source = resource.url
+  if ("dataBase64" in resource && resource.dataBase64 !== undefined) {
+    const mime =
+      resource.mimeType || (resource.type === "image" ? "image/png" : "application/octet-stream")
+    if (!/^[\w.+-]+\/[\w.+-]+$/.test(mime))
+      throw new QQValidationError("QQ inline media has an invalid MIME type")
+    source = `data:${mime};base64,${resource.dataBase64}`
+  }
+  if (source.startsWith("data:")) {
+    const separator = source.indexOf(",")
+    const encoded = source.slice(separator + 1)
+    if (
+      separator < 0 ||
+      separator > 4096 ||
+      !source.slice(0, separator).endsWith(";base64") ||
+      !encoded.length ||
+      encoded.length > Math.ceil(QQ_MAX_UPLOAD_BYTES / 3) * 4 ||
+      encoded.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
+    )
+      throw new QQValidationError("QQ inline media requires bounded valid base64 data")
+    return { fileName, binary: { sourceUrl: source, fileName } }
+  }
+  // Public connector segments (including plugin hooks) are not filesystem
+  // grants. User-selected files arrive as bytes through the composer intake.
+  try {
+    const url = new URL(source)
+    if (url.username || url.password || !isPublicHttpUrl(url.href))
+      throw new Error("invalid public URL")
+    return { url: source, fileName }
+  } catch {
+    throw new QQValidationError(
+      "QQ media requires a public HTTP(S) URL or explicit inline bytes; local path strings are not authorized"
+    )
+  }
 }
 
 export class QQValidationError extends Error {
@@ -61,8 +138,8 @@ export const QQ_PASSIVE_WINDOW_MS: Record<QQScene, number> = {
   direct: 5 * 60_000,
 }
 
-/** QQ accepts at most 5 passive replies per inbound msg_id. */
-export const QQ_MAX_PASSIVE_REPLIES = 5
+/** Scene-specific reply limits; guild endpoints do not use this counter. */
+export const QQ_MAX_PASSIVE_REPLIES = { group: 5, c2c: 4 } as const
 
 /** Bound on the per-msg_id reply-key map — old inbound msg_ids age out anyway. */
 const MSG_SEQ_MAP_CAP = 300
@@ -85,7 +162,7 @@ export function qqPassiveMsgSeq(idempotencyKey: string): number {
 /**
  * Per-msg_id set of distinct reply keys (insertion-ordered for eviction).
  * Module-level so consecutive `send()` calls correlated to the same inbound
- * message are counted against the 5-reply cap, while a RETRY of the same
+ * message are counted against its scene's reply cap, while a RETRY of the same
  * job (same key) does not consume a second slot. Bounded: the oldest msg_id
  * is evicted past `MSG_SEQ_MAP_CAP` (an evicted msg_id is by then far
  * outside its passive window, so a reset count is harmless).
@@ -114,6 +191,18 @@ export function registerQQPassiveReply(msgId: string, key: string): number {
 /** How many distinct passive replies `msgId` has consumed so far (0 when unknown). */
 export function qqPassiveReplyCount(msgId: string): number {
   return passiveKeysByMsgId.get(msgId)?.size ?? 0
+}
+
+/** One native quote per logical message, also covering explicit reply segments. */
+export function qqQuoteTarget(req: OutboundRequest): string | undefined {
+  const targets = new Set(
+    [
+      req.replyTo?.messageId,
+      ...req.segments.flatMap((segment) => (segment.type === "reply" ? [segment.messageId] : [])),
+    ].filter((id): id is string => typeof id === "string" && Boolean(id))
+  )
+  if (targets.size > 1) throw new QQValidationError("QQ message has conflicting quote targets")
+  return targets.values().next().value
 }
 
 /** Test-only: reset the module-level msg_seq state. */
@@ -180,25 +269,30 @@ export function buildQQContent(
 /**
  * Passive `msg_id` + `msg_seq` fields for group/C2C payloads.
  *
- * Proactive push was withdrawn on 2025-04-21. Exhausted passive context
- * must fail explicitly; removing msg_id cannot make the send deliverable.
+ * This adapter currently supports passive sends only. Exhausted context
+ * must fail explicitly rather than authorizing a different proactive send.
  */
 function passiveReplyFields(
+  scene: "group" | "c2c",
   msgId: string | undefined,
   idempotencyKey: string,
-  reserve: boolean
+  reserve: boolean,
+  eventId?: string
 ): Record<string, unknown> {
   if (!msgId) return {}
   // A request without an idempotency key (should not happen — the runner
   // always stamps one) still needs a unique seq per send; fall back to a
   // synthetic key that is unique per registration.
   const key = idempotencyKey || `anon:${msgId}:${qqPassiveReplyCount(msgId) + 1}`
-  const fields = { msg_id: msgId, msg_seq: qqPassiveMsgSeq(key) }
+  const fields = {
+    ...(eventId ? { event_id: eventId } : { msg_id: msgId }),
+    msg_seq: qqPassiveMsgSeq(key),
+  }
   // A retry (same key) reproduces the same pair without consuming a slot.
   if (passiveKeysByMsgId.get(msgId)?.has(key)) return fields
-  if (qqPassiveReplyCount(msgId) >= QQ_MAX_PASSIVE_REPLIES)
+  if (qqPassiveReplyCount(msgId) >= QQ_MAX_PASSIVE_REPLIES[scene])
     throw new QQValidationError(
-      "QQ passive reply exceeds the 5-reply limit; proactive push is unavailable"
+      `QQ passive reply exceeds the ${QQ_MAX_PASSIVE_REPLIES[scene]}-reply limit; proactive push is unavailable`
     )
   if (reserve) registerQQPassiveReply(msgId, key)
   return fields
@@ -209,12 +303,50 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
     scene?: QQScene
     sceneId?: string
     msgId?: string
+    eventId?: string
     receivedAt?: number
+    qqMsgIndex?: string
+    qqQuoteIndex?: string
   }
   const scene = ref.scene
   const sceneId = ref.sceneId
   if (!scene || !sceneId) return null
+  const nativeQuoteScene = scene === "group" || scene === "c2c"
+  const quoteTarget = nativeQuoteScene ? qqQuoteTarget(req) : undefined
+  const quoteIndex = quoteTarget
+    ? qqReferenceIndex(ref.qqQuoteIndex ?? (quoteTarget === ref.msgId ? ref.qqMsgIndex : undefined))
+    : undefined
+  const bodySegments =
+    nativeQuoteScene && quoteIndex
+      ? req.segments.filter((segment) => segment.type !== "reply")
+      : req.segments
 
+  const cards = nativeQuoteScene
+    ? req.segments.filter((s) => s.type === "card" && s.card.kind === "qq-keyboard")
+    : []
+  if (cards.length > 1) throw new QQValidationError("QQ requires separate keyboard message parts")
+  const nativeCard =
+    cards[0]?.type === "card" ? (cards[0].card.payload as Record<string, unknown>) : undefined
+  let keyboard: ReturnType<typeof validateQQKeyboard> | undefined
+  if (nativeCard) {
+    try {
+      keyboard = validateQQKeyboard(nativeCard.keyboard, scene as "group" | "c2c")
+    } catch (error) {
+      throw new QQValidationError(error instanceof Error ? error.message : "Invalid QQ keyboard")
+    }
+    if (nativeCard.content !== undefined && typeof nativeCard.content !== "string")
+      throw new QQValidationError("QQ keyboard content must be text")
+    if (
+      nativeCard.markdown !== undefined &&
+      (!nativeCard.markdown ||
+        typeof nativeCard.markdown !== "object" ||
+        typeof (nativeCard.markdown as { content?: unknown }).content !== "string")
+    )
+      throw new QQValidationError("QQ keyboard Markdown must have content")
+    if (nativeCard.content && nativeCard.markdown)
+      throw new QQValidationError("QQ content and Markdown are exclusive")
+  }
+  const cardMarkdown = (nativeCard?.markdown as { content?: string } | undefined)?.content
   const media = req.segments.filter(
     (segment) =>
       segment.type === "image" ||
@@ -224,19 +356,20 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
   )
   if (media.length > 1) throw new QQValidationError("QQ requires one media resource per message")
   const resource = media[0]
-  if (resource?.type === "file")
-    throw new QQValidationError("QQ public API does not support file uploads")
+  const useMarkdown =
+    (scene === "group" || scene === "c2c") &&
+    (req.segments.some((segment) => segment.type === "markdown") || cardMarkdown !== undefined)
+  if (keyboard && resource)
+    throw new QQValidationError("QQ keyboards and media require separate parts")
+  if (useMarkdown && resource)
+    throw new QQValidationError("QQ Markdown and media require separate message parts")
+  let uploadSource: ReturnType<typeof qqBinarySource> | undefined
   if (resource) {
-    let url: URL
-    try {
-      url = new URL(resource.url)
-    } catch {
-      throw new QQValidationError("QQ media requires a public HTTP(S) URL")
-    }
-    if (!isPublicHttpUrl(url.href))
-      throw new QQValidationError("QQ media requires a public HTTP(S) URL")
     if ((scene === "channel" || scene === "direct") && resource.type !== "image")
       throw new QQValidationError(`QQ ${scene} does not support ${resource.type} media`)
+    uploadSource = qqBinarySource(resource)
+    if ((scene === "channel" || scene === "direct") && uploadSource.binary)
+      throw new QQValidationError("QQ guild images require a public HTTP(S) URL")
     if (
       resource.type === "voice" &&
       resource.mimeType &&
@@ -245,21 +378,58 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
       throw new QQValidationError("QQ voice resources must use SILK encoding")
   }
   const downgrades: SegmentDowngrade[] = []
-  const content = buildQQContent(
-    req.segments.filter((segment) => segment !== resource),
-    downgrades
-  )
+  if (nativeCard?.fallback)
+    downgrades.push({ from: "a2ui", to: "text", reason: "qq_a2ui_widgets_text_alternative" })
+  for (const segment of req.segments)
+    if (segment.type === "a2ui")
+      downgrades.push({
+        from: "a2ui",
+        to: "text",
+        reason: nativeQuoteScene ? "qq_a2ui_text_alternative" : "qq_a2ui_scene_unsupported",
+      })
+  const content = nativeCard
+    ? (cardMarkdown ?? (nativeCard.content as string) ?? " ")
+    : useMarkdown
+      ? bodySegments
+          .map((segment) =>
+            segment.type === "markdown"
+              ? segment.md
+              : escapeMarkdown(buildQQContent([segment], downgrades))
+          )
+          .join("\n")
+      : buildQQContent(
+          bodySegments.filter((segment) => segment !== resource),
+          downgrades
+        )
+  if (useMarkdown && !content.trim()) throw new QQValidationError("QQ Markdown content is empty")
+  if (!useMarkdown) {
+    for (const segment of req.segments) {
+      if (segment.type === "markdown")
+        downgrades.push({
+          from: "markdown",
+          to: "text",
+          reason: "qq_markdown_scene_unsupported",
+        })
+    }
+  }
   const idempotencyKey = req.metadata?.idempotencyKey ?? ""
-  const msgId = req.replyTo?.messageId ?? ref.msgId
+  if (ref.eventId && ref.msgId)
+    throw new QQValidationError("QQ event_id and msg_id are mutually exclusive")
+  if (ref.eventId && !nativeQuoteScene)
+    throw new QQValidationError("QQ event replies require group/C2C")
+  const msgId = nativeQuoteScene
+    ? ref.eventId
+      ? `event:${ref.eventId}`
+      : ref.msgId
+    : (req.replyTo?.messageId ?? ref.msgId)
   if (!msgId)
     throw new QQValidationError("QQ requires passive reply context; proactive push is unavailable")
 
   // Never remove an expired reply context: proactive push is unavailable.
-  // A separately selected reply id has no known timestamp here; only apply
-  // the captured timestamp to the message it actually describes.
+  // A selected quote never renews or replaces the passive authorization.
   if (
     msgId &&
-    (!req.replyTo?.messageId || req.replyTo.messageId === ref.msgId) &&
+    (nativeQuoteScene || !req.replyTo?.messageId || req.replyTo.messageId === ref.msgId) &&
     typeof ref.receivedAt === "number" &&
     Date.now() - ref.receivedAt > QQ_PASSIVE_WINDOW_MS[scene]
   ) {
@@ -267,6 +437,9 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
       "QQ passive reply window has expired; proactive push is unavailable"
     )
   }
+  if (req.replyTo && nativeQuoteScene && !quoteIndex)
+    throw new QQValidationError("QQ native reply requires a known quote index in this conversation")
+  const quoteFields = quoteIndex ? { message_reference: { message_id: quoteIndex } } : {}
 
   switch (scene) {
     case "group":
@@ -274,19 +447,31 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         ...(downgrades.length ? { downgrades } : {}),
         path: `/v2/groups/${encodeURIComponent(sceneId)}/messages`,
         payload: {
-          content: resource ? content || " " : content,
-          msg_type: resource ? 7 : 0,
-          ...passiveReplyFields(msgId, idempotencyKey, reserve),
+          ...(useMarkdown
+            ? { msg_type: 2, markdown: { content } }
+            : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
+          ...passiveReplyFields(scene, msgId, idempotencyKey, reserve, ref.eventId),
+          ...(keyboard ? { keyboard } : {}),
+          ...quoteFields,
         },
         ...(resource
           ? {
               upload: {
                 path: `/v2/groups/${encodeURIComponent(sceneId)}/files`,
                 payload: {
-                  file_type: resource.type === "image" ? 1 : resource.type === "video" ? 2 : 3,
-                  url: resource.url,
+                  file_type:
+                    resource.type === "image"
+                      ? 1
+                      : resource.type === "video"
+                        ? 2
+                        : resource.type === "voice"
+                          ? 3
+                          : 4,
+                  ...(uploadSource?.url ? { url: uploadSource.url } : {}),
+                  ...(resource.type === "file" ? { file_name: uploadSource!.fileName } : {}),
                   srv_send_msg: false as const,
                 },
+                ...(uploadSource?.binary ? { binary: uploadSource.binary } : {}),
               },
             }
           : {}),
@@ -296,19 +481,31 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         ...(downgrades.length ? { downgrades } : {}),
         path: `/v2/users/${encodeURIComponent(sceneId)}/messages`,
         payload: {
-          content: resource ? content || " " : content,
-          msg_type: resource ? 7 : 0,
-          ...passiveReplyFields(msgId, idempotencyKey, reserve),
+          ...(useMarkdown
+            ? { msg_type: 2, markdown: { content } }
+            : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
+          ...passiveReplyFields(scene, msgId, idempotencyKey, reserve, ref.eventId),
+          ...(keyboard ? { keyboard } : {}),
+          ...quoteFields,
         },
         ...(resource
           ? {
               upload: {
                 path: `/v2/users/${encodeURIComponent(sceneId)}/files`,
                 payload: {
-                  file_type: resource.type === "image" ? 1 : resource.type === "video" ? 2 : 3,
-                  url: resource.url,
+                  file_type:
+                    resource.type === "image"
+                      ? 1
+                      : resource.type === "video"
+                        ? 2
+                        : resource.type === "voice"
+                          ? 3
+                          : 4,
+                  ...(uploadSource?.url ? { url: uploadSource.url } : {}),
+                  ...(resource.type === "file" ? { file_name: uploadSource!.fileName } : {}),
                   srv_send_msg: false as const,
                 },
+                ...(uploadSource?.binary ? { binary: uploadSource.binary } : {}),
               },
             }
           : {}),
@@ -337,18 +534,43 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
   }
 }
 
-/** Preserve segment order across QQ's one-media-per-message wire contract. */
+/** Preserve order across QQ's exclusive Markdown/media message types. */
 export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQSendCall[] {
   const parts: MessageSegment[][] = []
   let current: MessageSegment[] = []
+  const scene = (req.conversationRef as { scene?: QQScene }).scene
+  const nativeMarkdown = scene === "group" || scene === "c2c"
+  if (nativeMarkdown) {
+    const target = qqQuoteTarget(req)
+    const index = qqReferenceIndex(
+      req.conversationRef.qqQuoteIndex ??
+        (target === req.conversationRef.msgId ? req.conversationRef.qqMsgIndex : undefined)
+    )
+    if (index)
+      req = {
+        ...req,
+        ...(target ? { replyTo: { messageId: target } } : {}),
+        segments: req.segments.filter((segment) => segment.type !== "reply"),
+      }
+  }
   for (const segment of req.segments) {
-    current.push(segment)
-    if (
+    if (nativeMarkdown && segment.type === "card" && segment.card.kind === "qq-keyboard") {
+      if (current.length) parts.push(current)
+      current = []
+      parts.push([segment])
+      continue
+    }
+    const media =
       segment.type === "image" ||
       segment.type === "voice" ||
       segment.type === "video" ||
       segment.type === "file"
-    ) {
+    if (nativeMarkdown && media && current.some((part) => part.type === "markdown")) {
+      parts.push(current)
+      current = []
+    }
+    current.push(segment)
+    if (media) {
       parts.push(current)
       current = []
     }
@@ -369,14 +591,20 @@ export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQ
   const preview = requests.map((part) => serializeOutbound(part, false))
   if (preview.some((call) => !call))
     throw new QQValidationError("QQ send: unaddressable conversationRef")
-  const ref = req.conversationRef as { scene?: QQScene; msgId?: string }
-  const msgId = req.replyTo?.messageId ?? ref.msgId
+  const ref = req.conversationRef as { scene?: QQScene; msgId?: string; eventId?: string }
+  const msgId = nativeMarkdown
+    ? ref.eventId
+      ? `event:${ref.eventId}`
+      : ref.msgId
+    : (req.replyTo?.messageId ?? ref.msgId)
   if (msgId && (ref.scene === "group" || ref.scene === "c2c")) {
     const newKeys = requests.filter(
       (part) => !passiveKeysByMsgId.get(msgId)?.has(part.metadata.idempotencyKey)
     ).length
-    if (qqPassiveReplyCount(msgId) + newKeys > QQ_MAX_PASSIVE_REPLIES)
-      throw new QQValidationError("QQ multipart message exceeds the remaining 5-reply limit")
+    if (qqPassiveReplyCount(msgId) + newKeys > QQ_MAX_PASSIVE_REPLIES[ref.scene])
+      throw new QQValidationError(
+        `QQ multipart message exceeds the remaining ${QQ_MAX_PASSIVE_REPLIES[ref.scene]}-reply limit`
+      )
   }
   return reserve ? requests.map((part) => serializeOutbound(part)!) : (preview as QQSendCall[])
 }

@@ -62,6 +62,268 @@ describe("buildQQContent", () => {
 })
 
 describe("serializeOutbound", () => {
+  it.each(["group", "c2c"] as const)(
+    "prepares native %s URL and explicit inline file uploads",
+    (scene) => {
+      const file = {
+        type: "file" as const,
+        url: "https://cdn.example.org/report.pdf",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 4,
+      }
+      expect(serializeOutbound(req(scene, "target", [file], {}, "trigger"), false)).toMatchObject({
+        payload: { msg_type: 7, msg_id: "trigger" },
+        upload: {
+          path: `/v2/${scene === "group" ? "groups" : "users"}/target/files`,
+          payload: { file_type: 4, file_name: "report.pdf", url: file.url, srv_send_msg: false },
+        },
+      })
+      for (const source of ["data:application/pdf;base64,AP+AQQ=="]) {
+        const call = serializeOutbound(
+          req(scene, "target", [{ ...file, url: source }], {}, "trigger"),
+          false
+        )!
+        expect(call.upload).toMatchObject({
+          payload: { file_type: 4, srv_send_msg: false },
+          binary: { fileName: "report.pdf" },
+        })
+        expect(call.upload!.payload).not.toHaveProperty("url")
+      }
+      const inline = serializeOutbound(
+        req(scene, "target", [{ ...file, dataBase64: "AP+AQQ==" }], {}, "trigger"),
+        false
+      )!
+      expect(inline.upload).toMatchObject({
+        binary: { sourceUrl: "data:application/pdf;base64,AP+AQQ==" },
+      })
+    }
+  )
+
+  it("validates file limits, names and inline sources before reserving a passive slot", () => {
+    for (const file of [
+      { url: "https://cdn.example.org/a", name: "", sizeBytes: 1 },
+      { url: "https://cdn.example.org/a", name: "a\nsecret", sizeBytes: 1 },
+      { url: "https://cdn.example.org/a", name: "a", sizeBytes: 200_000_001 },
+      { url: "data:application/pdf;base64,%%%", name: "a", sizeBytes: 1 },
+      { url: "https://user:secret@cdn.example.org/a", name: "a", sizeBytes: 1 },
+    ])
+      expect(() =>
+        serializeOutboundParts(
+          req(
+            "group",
+            "target",
+            [{ type: "file", mimeType: "application/pdf", ...file }],
+            {},
+            "trigger"
+          )
+        )
+      ).toThrow()
+    expect(qqPassiveReplyCount("trigger")).toBe(0)
+    expect(() =>
+      serializeOutbound(
+        req(
+          "channel",
+          "target",
+          [
+            {
+              type: "file",
+              url: "https://cdn.example.org/a",
+              name: "a",
+              mimeType: "application/pdf",
+              sizeBytes: 1,
+            },
+          ],
+          {},
+          "trigger"
+        )
+      )
+    ).toThrow(/does not support file/)
+  })
+
+  it.each(["group", "c2c"] as const)(
+    "uses the same native quote on every %s Markdown/media part and on retry",
+    (scene) => {
+      const request = req(
+        scene,
+        "target",
+        [
+          { type: "reply", messageId: "current", snippet: "do not duplicate this preview" },
+          { type: "markdown", md: "**before**" },
+          { type: "image", url: "https://cdn.example.org/p.png" },
+          { type: "text", text: "after" },
+        ],
+        {},
+        "current"
+      )
+      request.conversationRef.qqMsgIndex = "REFIDX_current=="
+      const calls = serializeOutboundParts(request)
+      expect(calls).toHaveLength(3)
+      for (const call of calls) {
+        expect(call.payload).toMatchObject({
+          msg_id: "current",
+          message_reference: { message_id: "REFIDX_current==" },
+        })
+        expect(JSON.stringify(call)).not.toContain("do not duplicate this preview")
+      }
+      expect(serializeOutboundParts(request).map((call) => call.payload.msg_seq)).toEqual(
+        calls.map((call) => call.payload.msg_seq)
+      )
+      expect(qqPassiveReplyCount("current")).toBe(3)
+      expect(calls.flatMap((call) => call.downgrades ?? [])).not.toContainEqual(
+        expect.objectContaining({ from: "reply" })
+      )
+    }
+  )
+
+  it.each(["group", "c2c"] as const)(
+    "keeps %s quote targets separate from passive authorization",
+    (scene) => {
+      const request = req(
+        scene,
+        "target",
+        HI,
+        { replyTo: { messageId: "older-message" } },
+        "current-trigger",
+        Date.now()
+      )
+      request.conversationRef.qqQuoteIndex = "REFIDX_older=="
+      const call = serializeOutbound(request)!
+      expect(call.payload).toMatchObject({
+        msg_id: "current-trigger",
+        message_reference: { message_id: "REFIDX_older==" },
+      })
+      expect(qqPassiveReplyCount("older-message")).toBe(0)
+      expect(qqPassiveReplyCount("current-trigger")).toBe(1)
+      request.conversationRef.receivedAt = Date.now() - QQ_PASSIVE_WINDOW_MS[scene] - 1
+      expect(() => serializeOutbound(request)).toThrow(/expired/)
+      delete request.conversationRef.msgId
+      expect(() => serializeOutbound(request)).toThrow(/passive reply context/)
+    }
+  )
+
+  it.each(["group", "c2c"] as const)("quotes the current %s event using its own index", (scene) => {
+    const request = req(
+      scene,
+      "target",
+      [{ type: "markdown", md: "**answer**" }],
+      { replyTo: { messageId: "trigger" } },
+      "trigger"
+    )
+    request.conversationRef.qqMsgIndex = "REFIDX_trigger=="
+    expect(serializeOutbound(request)?.payload).toMatchObject({
+      msg_id: "trigger",
+      msg_type: 2,
+      message_reference: { message_id: "REFIDX_trigger==" },
+    })
+    delete request.conversationRef.qqMsgIndex
+    expect(() => serializeOutbound(request)).toThrow(/quote index/)
+  })
+
+  it.each(["group", "c2c"] as const)(
+    "serializes native %s Markdown without a conflicting text body",
+    (scene) => {
+      const md = "# Heading\n\n**bold** [link](https://example.com)\n\n- item"
+      const call = serializeOutbound(
+        req(scene, "target", [{ type: "markdown", md }], {}, "inbound")
+      )!
+      expect(call.payload).toEqual({
+        msg_type: 2,
+        markdown: { content: md },
+        msg_id: "inbound",
+        msg_seq: qqPassiveMsgSeq("k"),
+      })
+      expect(call.upload).toBeUndefined()
+    }
+  )
+
+  it.each(["group", "c2c"] as const)("escapes literal text beside %s Markdown", (scene) => {
+    const call = serializeOutbound(
+      req(
+        scene,
+        "target",
+        [
+          { type: "text", text: "[literal](https://example.com) *not bold*" },
+          { type: "markdown", md: "**actual bold**" },
+        ],
+        {},
+        "inbound"
+      )
+    )!
+    expect(call.payload.markdown).toEqual({
+      content: "\\[literal\\](https://example.com) \\*not bold\\*\n**actual bold**",
+    })
+    expect(call.payload).not.toHaveProperty("content")
+  })
+
+  it.each(["channel", "direct"] as const)(
+    "keeps %s Markdown as a reported text fallback",
+    (scene) => {
+      const call = serializeOutbound(
+        req(scene, "target", [{ type: "markdown", md: "**fallback**" }], {}, "inbound")
+      )!
+      expect(call.payload).toEqual({ content: "**fallback**", msg_id: "inbound" })
+      expect(call.downgrades).toContainEqual({
+        from: "markdown",
+        to: "text",
+        reason: "qq_markdown_scene_unsupported",
+      })
+    }
+  )
+
+  it.each(["group", "c2c"] as const)(
+    "splits %s Markdown and media in order with stable retry keys",
+    (scene) => {
+      const input = req(
+        scene,
+        "target",
+        [
+          { type: "markdown", md: "**before**" },
+          { type: "image", url: "https://cdn.example.org/a.png" },
+          { type: "markdown", md: "_after_" },
+        ],
+        {},
+        "mixed"
+      )
+      const preview = serializeOutboundParts(input, false)
+      expect(preview.map((call) => call.payload.msg_type)).toEqual([2, 7, 2])
+      expect(preview[0].payload.markdown).toEqual({ content: "**before**" })
+      expect(preview[1].payload).not.toHaveProperty("markdown")
+      expect(preview[2].payload.markdown).toEqual({ content: "_after_" })
+      expect(qqPassiveReplyCount("mixed")).toBe(0)
+      expect(serializeOutboundParts(input)).toEqual(preview)
+      expect(serializeOutboundParts(input)).toEqual(preview)
+      expect(qqPassiveReplyCount("mixed")).toBe(3)
+    }
+  )
+
+  it("preflights the C2C reply budget after Markdown/media splitting", () => {
+    const input = req(
+      "c2c",
+      "user",
+      [
+        { type: "markdown", md: "first" },
+        { type: "image", url: "https://cdn.example.org/a.png" },
+        { type: "markdown", md: "second" },
+        { type: "image", url: "https://cdn.example.org/b.png" },
+        { type: "markdown", md: "third" },
+      ],
+      {},
+      "over-budget"
+    )
+    expect(() => serializeOutboundParts(input)).toThrow("4-reply")
+    expect(qqPassiveReplyCount("over-budget")).toBe(0)
+  })
+
+  it("rejects whitespace-only Markdown without reserving a reply", () => {
+    expect(() =>
+      serializeOutboundParts(
+        req("group", "target", [{ type: "markdown", md: " \n\t" }], {}, "empty-md")
+      )
+    ).toThrow(/Markdown.*empty/)
+    expect(qqPassiveReplyCount("empty-md")).toBe(0)
+  })
+
   it("preflights every multipart reply without spending slots or dropping trailing text", () => {
     const input = req(
       "group",
@@ -154,15 +416,15 @@ describe("serializeOutbound", () => {
     expect(call?.path).toBe("/dms/GUILD/messages")
   })
 
-  it("prefers an explicit replyTo over the captured msg_id", () => {
+  it("retains legacy explicit msg_id behavior for guild channels", () => {
     const call = serializeOutbound(
-      req("group", "GO", HI, { replyTo: { messageId: "explicit" } }, "captured")
+      req("channel", "GO", HI, { replyTo: { messageId: "explicit" } }, "captured")
     )
     expect(call?.payload.msg_id).toBe("explicit")
   })
-  it("does not age an explicit different reply id using the captured message timestamp", () => {
+  it("retains legacy guild timestamp handling for explicit different IDs", () => {
     expect(
-      serializeOutbound(req("group", "GO", HI, { replyTo: { messageId: "different" } }, "old", 1))
+      serializeOutbound(req("channel", "GO", HI, { replyTo: { messageId: "different" } }, "old", 1))
         ?.payload.msg_id
     ).toBe("different")
   })
@@ -184,6 +446,46 @@ describe("qqPassiveMsgSeq", () => {
 })
 
 describe("serializeOutbound — msg_seq", () => {
+  it.each(["c2c", "group"] as const)(
+    "enforces the %s reply budget and permits retries",
+    (scene) => {
+      const limit = scene === "c2c" ? 4 : 5
+      for (let i = 0; i < limit; i++) {
+        expect(
+          serializeOutbound(
+            req(scene, "target", HI, { metadata: { idempotencyKey: `reply-${i}` } }, "budget")
+          )
+        ).not.toBeNull()
+      }
+      expect(() =>
+        serializeOutbound(
+          req(scene, "target", HI, { metadata: { idempotencyKey: "overflow" } }, "budget")
+        )
+      ).toThrow(`${limit}-reply`)
+      expect(
+        serializeOutbound(
+          req(scene, "target", HI, { metadata: { idempotencyKey: "reply-0" } }, "budget")
+        )
+      ).not.toBeNull()
+      expect(qqPassiveReplyCount("budget")).toBe(limit)
+    }
+  )
+
+  it("rejects a five-part C2C reply before reserving any slots", () => {
+    const input = req(
+      "c2c",
+      "user",
+      Array.from({ length: 5 }, (_, i) => ({
+        type: "image" as const,
+        url: `https://cdn.example.org/${i}.png`,
+      })),
+      {},
+      "multipart-c2c"
+    )
+    expect(() => serializeOutboundParts(input)).toThrow("4-reply")
+    expect(qqPassiveReplyCount("multipart-c2c")).toBe(0)
+  })
+
   const withKey = (key: string, msgId = "m1", scene: QQScene = "group", sceneId = "GO") =>
     req(scene, sceneId, HI, { metadata: { idempotencyKey: key } }, msgId)
 
@@ -214,13 +516,13 @@ describe("serializeOutbound — msg_seq", () => {
   })
 
   it("rejects a sixth distinct passive reply without removing its context", () => {
-    for (let i = 1; i <= QQ_MAX_PASSIVE_REPLIES; i++) {
+    for (let i = 1; i <= QQ_MAX_PASSIVE_REPLIES.group; i++) {
       const call = serializeOutbound(withKey(`job-${i}`))
       expect(call?.payload.msg_seq).toBe(qqPassiveMsgSeq(`job-${i}`))
     }
     expect(() => serializeOutbound(withKey("job-6"))).toThrow("5-reply")
     // The rejected job does not consume a slot; a retry of an earlier job still passes.
-    expect(qqPassiveReplyCount("m1")).toBe(QQ_MAX_PASSIVE_REPLIES)
+    expect(qqPassiveReplyCount("m1")).toBe(QQ_MAX_PASSIVE_REPLIES.group)
     expect(serializeOutbound(withKey("job-1"))?.payload.msg_seq).toBe(qqPassiveMsgSeq("job-1"))
   })
 
@@ -460,3 +762,70 @@ describe("QQ text alternatives", () => {
     })
   })
 })
+
+it.each(["group", "c2c"] as const)(
+  "uses event_id exclusively for %s interaction replies and budgets",
+  (scene) => {
+    const input = req(scene, "target", HI, {}, undefined, Date.now())
+    input.conversationRef.eventId = "press-1"
+    const call = serializeOutbound(input)!
+    expect(call.payload.event_id).toBe("press-1")
+    expect(call.payload).not.toHaveProperty("msg_id")
+    expect(qqPassiveReplyCount("event:press-1")).toBe(1)
+    input.conversationRef.msgId = "message"
+    expect(() => serializeOutbound(input)).toThrow(/exclusive|ambiguous/i)
+  }
+)
+
+it.each(["group", "c2c"] as const)(
+  "preserves %s native keyboard ordering, quotes and preflight budgets",
+  (scene) => {
+    const card: MessageSegment = {
+      type: "card",
+      card: {
+        kind: "qq-keyboard",
+        payload: {
+          markdown: { content: "**Choose**" },
+          keyboard: {
+            content: {
+              rows: [
+                {
+                  buttons: [
+                    {
+                      id: "b",
+                      render_data: { label: "Help" },
+                      action: { type: 2, data: "/help", permission: { type: 2 } },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    }
+    const input = req(
+      scene,
+      "target",
+      [{ type: "text", text: "before" }, card, { type: "text", text: "after" }],
+      {},
+      "inbound",
+      Date.now()
+    )
+    input.conversationRef.qqQuoteIndex = "REFIDX_quote=="
+    input.replyTo = { messageId: "parent" }
+    const calls = serializeOutboundParts(input, false)
+    expect(calls.map((call) => call.payload.msg_type)).toEqual([0, 2, 0])
+    expect(calls[1]!.payload).toMatchObject({
+      markdown: { content: "**Choose**" },
+      keyboard: expect.any(Object),
+      message_reference: { message_id: "REFIDX_quote==" },
+    })
+    expect(calls.every((call) => !call.payload.keyboard || call === calls[1])).toBe(true)
+    expect(qqPassiveReplyCount("inbound")).toBe(0)
+    for (let i = 0; i < (scene === "group" ? 3 : 2); i++)
+      registerQQPassiveReply("inbound", `used:${i}`)
+    expect(() => serializeOutboundParts(input)).toThrow(/limit/)
+    expect(qqPassiveReplyCount("inbound")).toBe(scene === "group" ? 3 : 2)
+  }
+)

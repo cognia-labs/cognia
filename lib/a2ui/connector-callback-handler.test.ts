@@ -146,3 +146,38 @@ describe("defaultConnectorCallbackHandler", () => {
     expect(await getDb().a2uiEventHistory.count()).toBe(1)
   })
 })
+
+it("passes captured QQ event authority to the callback AI turn", async () => {
+  const deliveryTarget = {
+    address: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      conversationKey: "qq-official:qq:chat",
+      scopeKind: "group" as const,
+      containerId: "chat",
+    },
+    conversationRef: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      scene: "group",
+      sceneId: "chat",
+      eventId: "press",
+      receivedAt: 123,
+    },
+    refreshedAt: 123,
+  }
+  await defaultConnectorCallbackHandler(
+    {
+      ...baseEvent,
+      platform: "qq-official",
+      adapterId: "qq",
+      triggerId: "press",
+      conversationKey: deliveryTarget.address.conversationKey,
+      deliveryTarget,
+    },
+    deliveryTarget.address.conversationKey
+  )
+  expect(mockRunDigest).toHaveBeenCalledWith(
+    expect.objectContaining({ deliveryTarget, sourceTaskId: "cb:press" })
+  )
+})

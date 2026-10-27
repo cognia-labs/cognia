@@ -1510,6 +1510,8 @@
     "openConsole": "Open QQ Bot console",
     "openConsoleAria": "Open the QQ Bot console development settings for this bot",
     "quietHoursIncomplete": "Quiet hours need a start, end, and timezone.",
+    "receiveGuildMessagesHelp": "Private-guild bots only: enable after QQ grants GUILD_MESSAGES. Gateway mode subscribes to this intent; webhook mode also requires MESSAGE_CREATE in the QQ console. Group full-message delivery is configured separately in QQ. Response rules still apply.",
+    "receiveGuildMessagesLabel": "Receive all channel messages",
     "save": "Save",
     "sectionAdvanced": "Advanced",
     "sectionAdvancedDesc": "Quiet hours and mute.",

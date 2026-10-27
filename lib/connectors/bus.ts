@@ -2920,7 +2920,10 @@ export class ConnectorBus {
       // most adapters bake the action_id into the platform-side button
       // (`buildActionId(surfaceId, componentId, action)` formatted), so
       // `triggerId` (when assignable) lives in the `actionId` column.
-      resolvedBinding = await resolveCallbackBinding(event.adapterId, event.triggerId)
+      resolvedBinding = await resolveCallbackBinding(
+        event.adapterId,
+        event.bindingActionId ?? event.triggerId
+      )
       if (resolvedBinding) {
         bindingFound = true
         resolvedSurfaceId = resolvedBinding.surfaceId
@@ -3025,6 +3028,51 @@ export class ConnectorBus {
       // quiet" step has no aggregate to watch.
       recordConnectorMetric("lark_callback_auth_would_deny_total")
     }
+    // QQ interactions carry event_id authority, rather than a chat message ID.
+    // Keep manual/restart anchors fresh without replacing a newer incoming event.
+    if (event.platform === "qq-official" && event.deliveryTarget) {
+      const target = event.deliveryTarget
+      if (
+        target.address.adapterId !== event.adapterId ||
+        target.address.conversationKey !== resolvedConversationKey ||
+        target.conversationRef.eventId !== event.triggerId
+      )
+        throw new Error("Invalid QQ callback delivery target")
+      try {
+        const db = getDb()
+        await db.transaction("rw", db.connectorConversationStates, db.sessions, async () => {
+          const current = await db.connectorConversationStates.get(target.address.conversationKey)
+          if (!current?.deliveryTarget || current.deliveryTarget.refreshedAt <= target.refreshedAt)
+            await refreshConnectorConversationDeliveryTarget(target)
+          const sessions = await db.sessions
+            .where("platformConversationKey")
+            .equals(target.address.conversationKey)
+            .toArray()
+          for (const session of sessions) {
+            if (
+              session.platformBinding?.adapterId !== event.adapterId ||
+              (session.platformBinding.deliveryTarget?.refreshedAt ?? 0) > target.refreshedAt
+            )
+              continue
+            await db.sessions.update(session.id, {
+              "platformBinding.conversationRef": target.conversationRef,
+              "platformBinding.deliveryTarget": target,
+            })
+          }
+        })
+      } catch {
+        decide({ status: "failed" })
+        await appendAudit({
+          adapterId: event.adapterId,
+          kind: "adapter.error",
+          at: Date.now(),
+          conversationKey: resolvedConversationKey ?? undefined,
+          reason: "callback_delivery_target_unavailable",
+        }).catch(() => undefined)
+        return false
+      }
+    }
+
     if (authDecision.allowed && authDecision.consume) {
       await authDecision.consume()
     }
@@ -3125,7 +3173,10 @@ export class ConnectorBus {
       await settleApprovalCard({
         adapterId: event.adapterId,
         conversationKey: resolvedConversationKey,
-        conversationRef: { platform: event.platform, adapterId: event.adapterId },
+        conversationRef: event.deliveryTarget?.conversationRef ?? {
+          platform: event.platform,
+          adapterId: event.adapterId,
+        },
         surfaceId: resolvedSurfaceId!,
         messageId: event.originatingMessageId,
         state,
@@ -3158,6 +3209,7 @@ export class ConnectorBus {
           adapterId: event.adapterId,
           platform: event.platform,
           conversationKey: resolvedConversationKey ?? undefined,
+          ...(event.deliveryTarget ? { deliveryTarget: event.deliveryTarget } : {}),
         })
         await settleCallbackCard(cancelled ? "denied" : "processed")
       } catch (err) {
@@ -3205,6 +3257,7 @@ export class ConnectorBus {
           adapterId: event.adapterId,
           platform: event.platform,
           conversationKey: resolvedConversationKey ?? undefined,
+          ...(event.deliveryTarget ? { deliveryTarget: event.deliveryTarget } : {}),
         })
         await settleCallbackCard(cancelled ? "denied" : "processed")
       } catch (err) {
@@ -3683,7 +3736,10 @@ export class ConnectorBus {
         adapterId: event.adapterId,
         selfId: event.selfId,
         messageId: `help-cmd:${event.triggerId}`,
-        conversationRef: {
+        ...(event.deliveryTarget
+          ? { conversationAddress: event.deliveryTarget.address, canReplyToMessage: false }
+          : {}),
+        conversationRef: event.deliveryTarget?.conversationRef ?? {
           platform: event.platform,
           adapterId: event.adapterId,
           channelId: parsed.remoteChatId,
@@ -3693,7 +3749,7 @@ export class ConnectorBus {
         sender: event.user,
         channel: {
           id: convKey,
-          kind: parsed.threadId ? "thread" : "group",
+          kind: event.deliveryTarget?.address.scopeKind ?? (parsed.threadId ? "thread" : "group"),
           platformChannelId: parsed.remoteChatId,
         },
         segments: [{ type: "text", text }],

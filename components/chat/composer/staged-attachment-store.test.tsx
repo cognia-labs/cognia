@@ -95,10 +95,13 @@ function Probe() {
   )
 }
 
-function mount({ motion }: { motion?: boolean } = {}) {
+function mount({ motion, originalFiles }: { motion?: boolean; originalFiles?: boolean } = {}) {
   return render(
     <PromptInputProvider>
-      <StagedAttachmentsProvider {...(motion === undefined ? {} : { motion })}>
+      <StagedAttachmentsProvider
+        originalFiles={originalFiles}
+        {...(motion === undefined ? {} : { motion })}
+      >
         <Probe />
       </StagedAttachmentsProvider>
     </PromptInputProvider>
@@ -828,4 +831,69 @@ describe("StagedAttachmentsProvider — videos", () => {
     })
     expect(preprocessMock).not.toHaveBeenCalled()
   })
+})
+
+it("stages original binary bytes without document extraction or model preprocessing", async () => {
+  mount({ originalFiles: true, motion: false })
+  await act(async () =>
+    captured.addFiles([
+      new File([new Uint8Array([0, 255, 128, 65])], "sample.bin", {
+        type: "application/octet-stream",
+      }),
+    ])
+  )
+  await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"))
+  await captured.store.whenSettled()
+  const state = captured.store.byId.get(captured.store.order[0]!)!
+  expect(state.bytes).toEqual(new Uint8Array([0, 255, 128, 65]))
+  expect(state.sizeBytes).toBe(4)
+  expect(state.extracted).toBeUndefined()
+  expect(captured.store.totalTokens).toBe(0)
+  expect(extractMock).not.toHaveBeenCalled()
+  expect(preprocessMock).not.toHaveBeenCalled()
+})
+
+it("consumes a QQ draft seed before restoring a model draft with the same filename", async () => {
+  const { rerender } = mount({ originalFiles: true })
+  await act(async () => {
+    captured.store.seedIncoming([
+      {
+        filename: "same.txt",
+        sizeBytes: 4,
+        state: { status: "ready", sizeBytes: 4, ocrText: "QQ seed" },
+      },
+    ])
+    captured.addFiles([txt("same.txt")])
+  })
+  await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"))
+  await act(async () => captured.removeFile(captured.store.order[0]!))
+  rerender(
+    <PromptInputProvider>
+      <StagedAttachmentsProvider>
+        <Probe />
+      </StagedAttachmentsProvider>
+    </PromptInputProvider>
+  )
+  await act(async () => {
+    captured.store.seedIncoming([
+      {
+        filename: "same.txt",
+        sizeBytes: 4,
+        state: { status: "ready", sizeBytes: 4, ocrText: "Model seed", includeOcr: true },
+      },
+    ])
+    captured.addFiles([txt("same.txt")])
+  })
+  await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("ready"))
+  expect(captured.store.byId.get(captured.store.order[0]!)?.ocrText).toBe("Model seed")
+  expect(extractMock).toHaveBeenCalledTimes(1)
+})
+
+it("rejects oversized original draft files before reading or extracting them", async () => {
+  mount({ originalFiles: true })
+  const oversized = new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.bin")
+  await act(async () => captured.addFiles([oversized]))
+  await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("rejected"))
+  expect(captured.store.byId.get(captured.store.order[0]!)?.bytes).toBeUndefined()
+  expect(extractMock).not.toHaveBeenCalled()
 })

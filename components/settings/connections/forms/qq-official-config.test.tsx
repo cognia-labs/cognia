@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { TauriHttpResponse } from "@/lib/connectors/tauri/commands"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 
@@ -82,6 +83,24 @@ beforeEach(() => {
 })
 
 describe("QQOfficialConfigDialog", () => {
+  it("persists private-guild opt-in only when the operator enables it", async () => {
+    const user = userEvent.setup()
+    render(<QQOfficialConfigDialog open onOpenChange={jest.fn()} row={null} />)
+    const toggle = screen.getByRole("switch", { name: /receive all channel messages/i })
+    expect(toggle).not.toBeChecked()
+    await user.click(toggle)
+    await user.type(screen.getByLabelText(/app id/i), "102000")
+    await user.type(screen.getByLabelText(/client secret/i), "secret")
+    await user.click(screen.getByRole("button", { name: /add connector/i }))
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settings: { receiveGuildMessages: true },
+        })
+      )
+    )
+  })
+
   it("renders the create title and credential inputs", () => {
     render(<QQOfficialConfigDialog open onOpenChange={jest.fn()} row={null} />)
     expect(screen.getByText(/add qq official bot/i)).toBeInTheDocument()

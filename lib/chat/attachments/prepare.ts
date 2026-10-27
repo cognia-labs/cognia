@@ -66,6 +66,8 @@ export function getOriginalComposerAttachment(file: File): File {
 export interface PrepareComposerAttachmentsOptions {
   /** Only the local composer has a staged transcription configuration UI. */
   audio?: boolean
+  /** Forward arbitrary files unchanged to a native platform recipient. */
+  originalFiles?: boolean
   maxFileSize: number
   optimizeImage?: (file: File) => Promise<File>
   /**
@@ -137,6 +139,11 @@ export async function prepareComposerAttachments(
   let motionTooLargeCount = 0
 
   for (const original of incoming) {
+    if (options.originalFiles) {
+      if (original.size > options.maxFileSize) tooLargeCount++
+      else files.push(original)
+      continue
+    }
     const descriptor = { name: original.name, mediaType: original.type }
     // Source retention has its own ceiling: optimizing a giant preview must
     // not admit an original that the source store can never retain.

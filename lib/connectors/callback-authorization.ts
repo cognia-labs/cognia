@@ -447,7 +447,8 @@ export async function notifyCallbackDenied(
     adapterId: event.adapterId,
     conversationKey,
     request: {
-      conversationRef: {
+      ...(event.deliveryTarget ? { deliveryTarget: event.deliveryTarget } : {}),
+      conversationRef: event.deliveryTarget?.conversationRef ?? {
         platform: event.platform,
         adapterId: event.adapterId,
         channelId: parsed?.remoteChatId ?? conversationKey,

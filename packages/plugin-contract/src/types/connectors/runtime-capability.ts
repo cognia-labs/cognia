@@ -105,10 +105,15 @@ const BUILT_IN_OVERRIDES: Partial<Record<PlatformKind, Partial<ConnectorRuntimeC
     // DingTalk stream-mode bots only receive @-messages / DMs, and neither
     // the group nor the oto send API takes an idempotency token.
     dingtalk: { unmentionedDelivery: false, ambiguousDelivery: "reconciliation_required" },
-    // QQ pushes only @-messages / C2C; passive `msg_seq` is derived from the
+    // QQ can push full group/private-guild messages when enabled upstream.
+    // Passive `msg_seq` is derived from the
     // idempotency key so a retry is REJECTED (not delivered twice), but the
     // rejection is an error rather than the original id → still reconcile.
-    "qq-official": { unmentionedDelivery: false, ambiguousDelivery: "reconciliation_required" },
+    "qq-official": {
+      unmentionedDelivery: true,
+      interactiveControls: true,
+      ambiguousDelivery: "reconciliation_required",
+    },
     // Every subscriber message reaches the official account (no @ concept);
     // customer-service sends carry no idempotency token.
     "wechat-oa": { unmentionedDelivery: true, ambiguousDelivery: "reconciliation_required" },

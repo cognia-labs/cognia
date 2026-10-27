@@ -17,6 +17,7 @@ import { updateSession } from "@/lib/db/sessions"
 import { shouldRespondToMessage } from "./at-gate"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import { parseQQDispatch } from "./adapters/qq-official/parse"
 
 function event(options: {
   mentioned: boolean
@@ -80,6 +81,46 @@ function privateThreadEvent(
 }
 
 describe("conversation admission", () => {
+  it("normalizes QQ full-message input while retaining mention-only response admission", () => {
+    const input = parseQQDispatch("qq", "bot", {
+      op: 0,
+      t: "GROUP_MESSAGE_CREATE",
+      d: {
+        id: "full",
+        group_openid: "group",
+        content: "ordinary input",
+      },
+    })!
+    expect(input).not.toBeNull()
+    expect(
+      evaluateAdmissionPolicy({
+        event: input,
+        adapter: { type: "qq-official", atResponseStrategy: "mention_only" },
+      })
+    ).toEqual({ kind: "deny", reason: "at_mention_required" })
+    expect(
+      evaluateAdmissionPolicy({
+        event: input,
+        adapter: { type: "qq-official", atResponseStrategy: "always" },
+      })
+    ).toEqual({ kind: "allow" })
+    const addressed = parseQQDispatch("qq", "bot", {
+      op: 0,
+      t: "GROUP_AT_MESSAGE_CREATE",
+      d: {
+        id: "at",
+        group_openid: "group",
+        content: "addressed",
+      },
+    })!
+    expect(
+      evaluateAdmissionPolicy({
+        event: addressed,
+        adapter: { type: "qq-official", atResponseStrategy: "mention_only" },
+      })
+    ).toEqual({ kind: "allow" })
+  })
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

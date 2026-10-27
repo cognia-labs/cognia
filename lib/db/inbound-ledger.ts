@@ -33,6 +33,8 @@ const DEFAULT_CAP = 10_000
 const DEFAULT_DELIVERED_CAP = 50_000
 const DELIVERED_NAMESPACE: InboundLedgerNamespace = "outbound"
 const LANDED_NAMESPACE: InboundLedgerNamespace = "landed-chat"
+/** QQ aliases enforce their own bounded cap in the adapter's reference store. */
+const QQ_REFERENCE_NAMESPACE: InboundLedgerNamespace = "qq-reference"
 
 /**
  * Compose the conversation-scoped dedup key stored in the row's
@@ -164,9 +166,16 @@ export async function pruneOldest(
   // One row per conversation and chat a delivery landed in: bounded by the
   // conversations, and needed for as long as they are.
   const landed = await db.inboundLedger.where("namespace").equals(LANDED_NAMESPACE).count()
+  const references = await db.inboundLedger
+    .where("namespace")
+    .equals(QQ_REFERENCE_NAMESPACE)
+    .count()
   await dropOldest(
-    total - delivered - landed - cap,
-    (row) => row.namespace !== DELIVERED_NAMESPACE && row.namespace !== LANDED_NAMESPACE
+    total - delivered - landed - references - cap,
+    (row) =>
+      row.namespace !== DELIVERED_NAMESPACE &&
+      row.namespace !== LANDED_NAMESPACE &&
+      row.namespace !== QQ_REFERENCE_NAMESPACE
   )
   await dropOldest(delivered - deliveredCap, (row) => row.namespace === DELIVERED_NAMESPACE)
 }

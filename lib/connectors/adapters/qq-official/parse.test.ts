@@ -18,6 +18,191 @@ describe("stripChannelMention", () => {
 })
 
 describe("parseQQDispatch", () => {
+  it("bounds element count and total structured text without deduplicating legitimate repeated content", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "bounded",
+        author: { user_openid: "user" },
+        message_type: 101,
+        msg_elements: Array.from({ length: 200 }, () => ({ content: "repeated" })),
+      })
+    )!
+    expect(event.segments.length).toBe(127)
+    expect(event.plainText.match(/repeated/g)).toHaveLength(127)
+    const large = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "large",
+        author: { user_openid: "user" },
+        msg_elements: Array.from({ length: 4 }, () => ({ content: "x".repeat(40_000) })),
+      })
+    )!
+    expect(large.plainText.length).toBe(65_536)
+  })
+
+  it.each(["GROUP_MESSAGE_CREATE", "C2C_MESSAGE_CREATE"])(
+    "separates native quote indexes, passive IDs and quoted content in %s",
+    (t) => {
+      const event = parseQQDispatch(
+        ADAPTER,
+        SELF,
+        dispatch(t, {
+          id: "real-trigger",
+          group_openid: "group",
+          author: { user_openid: "user" },
+          content: "my answer",
+          message_type: 103,
+          message_scene: {
+            source: "default",
+            ext: [
+              "msg_idx=REFIDX_current==",
+              "ref_msg_idx=REFIDX_parent==",
+              "auth_token=must-not-persist",
+            ],
+          },
+          msg_elements: [
+            {
+              msg_idx: "REFIDX_parent==",
+              content: "quoted text",
+              attachments: [{ url: "https://cdn.example.org/old.png", content_type: "image/png" }],
+            },
+          ],
+        } as never)
+      )!
+      expect(event.messageId).toBe("real-trigger")
+      expect(event.conversationRef).toMatchObject({
+        msgId: "real-trigger",
+        qqMsgIndex: "REFIDX_current==",
+        qqReplyIndex: "REFIDX_parent==",
+      })
+      expect(event.replyTo).toEqual({
+        messageId: "qq-ref:REFIDX_parent%3D%3D",
+        snippet: "quoted text\n[image] https://cdn.example.org/old.png",
+      })
+      expect(event.segments).toEqual([
+        {
+          type: "reply",
+          messageId: "qq-ref:REFIDX_parent%3D%3D",
+          snippet: "quoted text\n[image] https://cdn.example.org/old.png",
+        },
+        { type: "text", text: "my answer" },
+      ])
+      expect(JSON.stringify(event)).not.toContain("must-not-persist")
+      expect(JSON.stringify(event)).not.toContain("auth_token")
+      expect(event.replyTo?.parentSenderId).toBeUndefined()
+    }
+  )
+
+  it("retains nested chat records and safe ARK data without granting quoted/card media to the model", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "records",
+        author: { user_openid: "user" },
+        message_type: 102,
+        msg_elements: [
+          null,
+          { content: "first", msg_elements: [{ content: "first" }] },
+          {
+            message_type: 3,
+            ark_data: {
+              ark_type: "miniapp",
+              ark_name: "Mini app",
+              fields: {
+                title: "Title",
+                desc: "Description",
+                source: "Source",
+                jump_url: "https://example.org/open",
+                preview: "https://cdn.example.org/card.png",
+                auth_token: "secret",
+                arbitrary: "not-content",
+              },
+            },
+          },
+        ],
+      } as never)
+    )!
+    expect(event.plainText.match(/first/g)).toHaveLength(2)
+    expect(event.plainText).toContain("Title")
+    expect(event.plainText).toContain("Description")
+    expect(event.plainText).toContain("https://example.org/open")
+    expect(event.segments.every((segment) => segment.type === "text")).toBe(true)
+    expect(JSON.stringify(event)).not.toMatch(/secret|not-content/)
+  })
+
+  it("does not guess conflicting scene indexes or crash on malformed/deep structured fields", () => {
+    let nested: object = { content: "too deep" }
+    for (let i = 0; i < 30; i++) nested = { msg_elements: [nested] }
+    const event = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "malformed",
+        author: { user_openid: "user" },
+        content: "kept",
+        message_scene: { ext: [null, "msg_idx=first", "msg_idx=second", "ref_msg_idx="] },
+        msg_elements: [null, "invalid", nested, { content: "valid sibling" }],
+        ark_data: {
+          fields: {
+            title: {},
+            jump_url: "javascript:alert(1)",
+            preview: "https://user:password@example.org/private",
+          },
+        },
+      } as never)
+    )!
+    expect(event.conversationRef.qqMsgIndex).toBeUndefined()
+    expect(event.replyTo).toBeUndefined()
+    expect(event.plainText).toContain("valid sibling")
+    expect(event.plainText).not.toContain("too deep")
+    expect(JSON.stringify(event)).not.toMatch(/javascript:|password/)
+  })
+
+  it.each(["GROUP_MESSAGE_CREATE", "MESSAGE_CREATE"])(
+    "preserves unmentioned %s messages for storage and applies the normal response policy",
+    (t) => {
+      const out = parseQQDispatch(
+        ADAPTER,
+        SELF,
+        dispatch(t, {
+          id: "full-1",
+          group_openid: "GROUP",
+          channel_id: "CHANNEL",
+          author: { id: "sender", member_openid: "member" },
+          content: "<@123> hello someone else",
+        })
+      )
+      expect(out).toMatchObject({
+        kind: "create",
+        plainText: "<@123> hello someone else",
+        mentions: { selfMentioned: false, users: [] },
+      })
+    }
+  )
+
+  it.each(["GROUP_MESSAGE_CREATE", "MESSAGE_CREATE"])(
+    "recognizes a verified bot identity in %s mention metadata",
+    (t) => {
+      const data = {
+        id: "full-at",
+        group_openid: "GROUP",
+        channel_id: "CHANNEL",
+        content: "hello",
+        mentions: [null, { id: SELF }, { id: "other" }],
+      }
+      const wire = dispatch(t, data as unknown as QQDispatch["d"])
+      expect(parseQQDispatch(ADAPTER, SELF, wire)?.mentions).toEqual({
+        selfMentioned: true,
+        users: [SELF, "other"],
+      })
+      expect(parseQQDispatch(ADAPTER, "", wire)?.mentions.selfMentioned).toBe(false)
+    }
+  )
+
   it.each(["PUBLIC_MESSAGE_DELETE", "MESSAGE_DELETE", "DIRECT_MESSAGE_DELETE"])(
     "normalizes the official %s recall notification",
     (t) => {

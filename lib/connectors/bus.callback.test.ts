@@ -1396,3 +1396,85 @@ describe("ConnectorBus.dispatchConnectorCallback: ask_user kind", () => {
     void pending
   })
 })
+
+it("routes QQ quick-command callbacks with captured event_id and refreshes manual session anchors", async () => {
+  const bus = getBus()
+  const conversationKey = "qq-official:qq:target"
+  const now = Date.now()
+  const target = {
+    address: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      conversationKey,
+      scopeKind: "private" as const,
+      containerId: "target",
+    },
+    conversationRef: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      scene: "c2c",
+      sceneId: "target",
+      eventId: "quick-press",
+      receivedAt: now,
+    },
+    refreshedAt: now,
+  }
+  await recordCallbackBinding({
+    adapterId: "qq",
+    actionId: "help-action",
+    kind: "help_quick_command",
+    surfaceId: "help",
+    conversationKey,
+    payload: { action: { type: "command", value: "/help" } },
+  })
+  await getDb().sessions.put({
+    id: "qq-session",
+    title: "QQ",
+    kind: "direct",
+    platformConversationKey: conversationKey,
+    platformBinding: {
+      platform: "qq-official",
+      adapterId: "qq",
+      conversationKey,
+      conversationRef: {
+        platform: "qq-official",
+        adapterId: "qq",
+        scene: "c2c",
+        sceneId: "target",
+        msgId: "old",
+      },
+    },
+    createdAt: now,
+    updatedAt: now,
+  })
+  const inbound = jest.spyOn(bus, "dispatchInboundFull").mockResolvedValue(undefined)
+  await bus.dispatchConnectorCallback(
+    makeEvent({
+      platform: "qq-official",
+      adapterId: "qq",
+      triggerId: "quick-press",
+      bindingActionId: "help-action",
+      conversationKey,
+      deliveryTarget: target,
+      originatingMessageId: undefined,
+      timestamp: now,
+      user: {
+        id: "qq:target:target",
+        platform: "qq-official",
+        adapterId: "qq",
+        remoteUserId: "target",
+      },
+    })
+  )
+  expect(inbound).toHaveBeenCalledWith(
+    expect.objectContaining({
+      conversationRef: target.conversationRef,
+      canReplyToMessage: false,
+      channel: expect.objectContaining({ kind: "private" }),
+    })
+  )
+  expect((await getDb().sessions.get("qq-session"))?.platformBinding?.deliveryTarget).toEqual(
+    target
+  )
+  inbound.mockRestore()
+})

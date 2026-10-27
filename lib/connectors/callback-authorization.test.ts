@@ -505,3 +505,46 @@ it("anchors a topic denial to the originating message", async () => {
     })
   )
 })
+
+it("uses the captured QQ target for a denied callback notice", async () => {
+  const conversationKey = "qq-official:qq:chat"
+  const deliveryTarget = {
+    address: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      conversationKey,
+      scopeKind: "group" as const,
+      containerId: "chat",
+    },
+    conversationRef: {
+      platform: "qq-official" as const,
+      adapterId: "qq",
+      scene: "group",
+      sceneId: "chat",
+      eventId: "press",
+      receivedAt: Date.now(),
+    },
+    refreshedAt: Date.now(),
+  }
+  const enqueue = jest.fn(async () => undefined as never)
+  await notifyCallbackDenied(
+    {
+      ...callbackEvent(),
+      platform: "qq-official",
+      adapterId: "qq",
+      conversationKey,
+      deliveryTarget,
+    },
+    conversationKey,
+    "actor_forbidden",
+    { enqueue }
+  )
+  expect(enqueue).toHaveBeenCalledWith(
+    expect.objectContaining({
+      request: expect.objectContaining({
+        conversationRef: deliveryTarget.conversationRef,
+        deliveryTarget,
+      }),
+    })
+  )
+})

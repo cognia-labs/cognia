@@ -10,7 +10,7 @@ import {
   connectorsWsSend,
   connectorsWsClose,
 } from "@/lib/connectors/tauri/commands"
-import { startQQGateway } from "./gateway-client"
+import { DEFAULT_QQ_INTENTS, startQQGateway } from "./gateway-client"
 
 const mockListen = listen as jest.Mock
 const mockWsOpen = connectorsWsOpen as jest.Mock
@@ -88,68 +88,95 @@ beforeEach(() => {
 })
 
 describe("startQQGateway", () => {
-  it("identifies with the QQBot token and yields a group message dispatch", async () => {
+  it("forwards full group and private-guild events to the common parser", async () => {
     const session = createFakeWsSession()
     mockListen.mockImplementation(session.listenImpl)
     const ctrl = new AbortController()
-
     const client = startQQGateway({
-      accessToken: async () => "ACCESS_TOKEN",
+      accessToken: async () => "token",
       gatewayUrl: async () => "wss://fake",
       signal: ctrl.signal,
-      _backoffBaseMs: 1,
     })
-
-    const out: Array<{ t: string }> = []
+    const out: string[] = []
     const collector = (async () => {
-      for await (const d of client.dispatches) {
-        out.push(d)
-        if (out.length >= 2) break
+      for await (const message of client.dispatches) {
+        out.push(message.t)
+        if (out.length === 2) ctrl.abort()
       }
     })()
-
     await session.waitForListeners()
-    session.push(null)
-    session.push([])
-    session.push({ op: 10, d: null })
-    session.push({ op: 0, t: "READY", d: null })
-    session.push({ op: 10, d: { heartbeat_interval: 100000 } })
-    await new Promise((r) => setTimeout(r, 20))
-    session.push({ op: 0, t: "READY", s: 1, d: { user: { id: "bot-1" }, session_id: "s1" } })
-    await new Promise((r) => setTimeout(r, 10))
-    session.push({
-      op: 0,
-      t: "GROUP_AT_MESSAGE_CREATE",
-      s: 2,
-      d: { id: "m1", content: "hi", group_openid: "GO" },
-    })
-    session.push({
-      op: 0,
-      t: "PUBLIC_MESSAGE_DELETE",
-      s: 3,
-      d: { message: { id: "parent", channel_id: "channel" }, op_user: { id: "moderator" } },
-    })
-    await new Promise((r) => setTimeout(r, 20))
-
-    ctrl.abort()
+    for (const t of ["GROUP_MESSAGE_CREATE", "MESSAGE_CREATE"])
+      session.push({ op: 0, t, d: { id: t } })
     await collector
+    expect(out).toEqual(["GROUP_MESSAGE_CREATE", "MESSAGE_CREATE"])
+  })
 
-    expect(out).toHaveLength(2)
-    expect(out[0].t).toBe("GROUP_AT_MESSAGE_CREATE")
-    expect(out[1].t).toBe("PUBLIC_MESSAGE_DELETE")
-    expect(client.selfId).toBe("bot-1")
+  it.each(["GROUP_AT_MESSAGE_CREATE", "INTERACTION_CREATE"])(
+    "identifies and forwards %s dispatches",
+    async (eventType) => {
+      const session = createFakeWsSession()
+      mockListen.mockImplementation(session.listenImpl)
+      const ctrl = new AbortController()
 
-    // The IDENTIFY frame carried the `QQBot ` token prefix.
-    const identifyCall = mockWsSend.mock.calls.find((c) => {
-      try {
-        return JSON.parse(c[1]).op === 2
-      } catch {
-        return false
-      }
-    })
-    expect(identifyCall).toBeDefined()
-    expect(JSON.parse(identifyCall![1]).d.token).toBe("QQBot ACCESS_TOKEN")
-  }, 10000)
+      const client = startQQGateway({
+        accessToken: async () => "ACCESS_TOKEN",
+        gatewayUrl: async () => "wss://fake",
+        signal: ctrl.signal,
+        _backoffBaseMs: 1,
+      })
+
+      const out: Array<{ t: string }> = []
+      const collector = (async () => {
+        for await (const d of client.dispatches) {
+          out.push(d)
+          if (out.length >= 2) break
+        }
+      })()
+
+      await session.waitForListeners()
+      session.push(null)
+      session.push([])
+      session.push({ op: 10, d: null })
+      session.push({ op: 0, t: "READY", d: null })
+      session.push({ op: 10, d: { heartbeat_interval: 100000 } })
+      await new Promise((r) => setTimeout(r, 20))
+      session.push({ op: 0, t: "READY", s: 1, d: { user: { id: "bot-1" }, session_id: "s1" } })
+      await new Promise((r) => setTimeout(r, 10))
+      session.push({
+        op: 0,
+        t: eventType,
+        s: 2,
+        d: { id: "m1", content: "hi", group_openid: "GO" },
+      })
+      session.push({
+        op: 0,
+        t: "PUBLIC_MESSAGE_DELETE",
+        s: 3,
+        d: { message: { id: "parent", channel_id: "channel" }, op_user: { id: "moderator" } },
+      })
+      await new Promise((r) => setTimeout(r, 20))
+
+      ctrl.abort()
+      await collector
+
+      expect(out).toHaveLength(2)
+      expect(out[0].t).toBe(eventType)
+      expect(out[1].t).toBe("PUBLIC_MESSAGE_DELETE")
+      expect(client.selfId).toBe("bot-1")
+
+      // The IDENTIFY frame carried the `QQBot ` token prefix.
+      const identifyCall = mockWsSend.mock.calls.find((c) => {
+        try {
+          return JSON.parse(c[1]).op === 2
+        } catch {
+          return false
+        }
+      })
+      expect(identifyCall).toBeDefined()
+      expect(JSON.parse(identifyCall![1]).d.token).toBe("QQBot ACCESS_TOKEN")
+    },
+    10000
+  )
 
   it("reconnects and recovers when the access token mint fails once during HELLO", async () => {
     const sessions = createMultiWsSessions()
@@ -362,4 +389,8 @@ describe("startQQGateway", () => {
     expect(out).toHaveLength(0)
     expect(mockWsOpen).not.toHaveBeenCalled()
   })
+})
+
+it("subscribes to native button interactions by default", () => {
+  expect(DEFAULT_QQ_INTENTS & (1 << 26)).not.toBe(0)
 })

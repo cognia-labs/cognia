@@ -46,6 +46,7 @@ export async function defaultConnectorCallbackHandler(
   await runConnectorDigestTurn({
     adapterId: event.adapterId,
     conversationKey,
+    ...(event.deliveryTarget ? { deliveryTarget: event.deliveryTarget } : {}),
     // Character isn't known to the callback — let the runner fall back
     // to the session's stored characterId. Passing undefined skips the
     // optional getCharacter lookup.

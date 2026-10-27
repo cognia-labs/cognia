@@ -6,6 +6,12 @@
  */
 
 import { invoke } from "@tauri-apps/api/core"
+import { getAdapterInstance } from "@/lib/db/adapter-instances"
+
+jest.mock("@/lib/db/adapter-instances", () => ({
+  ...jest.requireActual("@/lib/db/adapter-instances"),
+  getAdapterInstance: jest.fn(),
+}))
 
 const mockInvoke = invoke as jest.Mock
 
@@ -172,6 +178,30 @@ beforeEach(() => {
 })
 
 describe("buildQQOfficialAdapter", () => {
+  it("forwards the private-guild opt-in and confirmed bot identity", async () => {
+    const row = makeRow({
+      type: "qq-official",
+      settings: { receiveGuildMessages: true },
+      selfIdentity: { platformAccountId: "bot-openid", source: "whoami", confirmedAt: 1 },
+    })
+    await buildQQOfficialAdapter(row)
+    expect(mockCreateQQOfficialAdapter).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receiveGuildMessages: true,
+        selfId: expect.any(Function),
+      })
+    )
+    const opts = mockCreateQQOfficialAdapter.mock.calls.at(-1)![0] as {
+      selfId: () => Promise<string>
+    }
+    jest
+      .mocked(getAdapterInstance)
+      .mockResolvedValueOnce({ ...row, selfIdentity: undefined })
+      .mockResolvedValueOnce(row)
+    expect(await opts.selfId()).toBe("")
+    expect(await opts.selfId()).toBe("bot-openid")
+  })
+
   it("uses transportMode as the sole transport source", async () => {
     const row = makeRow({
       id: "qq-transport",

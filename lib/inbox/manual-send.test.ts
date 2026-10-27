@@ -11,6 +11,7 @@ jest.mock("@/lib/connectors/inbox-writes", () => ({
 }))
 
 import { sendManualReply } from "@/lib/connectors/inbox-writes"
+import { serializeOutboundParts } from "@/lib/connectors/adapters/qq-official/serialize"
 import {
   NotPlatformBoundError,
   sendManualTextToConversation,
@@ -104,6 +105,75 @@ describe("sendManualTextToConversation", () => {
 })
 
 describe("sendManualMessageToConversation", () => {
+  it.each(["group", "c2c"] as const)(
+    "sends user-selected %s QQ file bytes through the existing relay and native upload serializer",
+    async (scene) => {
+      await sendManualMessageToConversation({
+        session: {
+          ...bound,
+          platformBinding: {
+            ...bound.platformBinding!,
+            platform: "qq-official",
+            conversationKey: "qq-official:a1:target",
+            conversationRef: {
+              platform: "qq-official",
+              adapterId: "a1",
+              scene,
+              sceneId: "target",
+              msgId: "trigger",
+            },
+          },
+        },
+        text: "file",
+        files: [
+          {
+            url: "data:application/octet-stream;base64,AP+AQQ==",
+            filename: "sample.bin",
+            mediaType: "application/octet-stream",
+          },
+        ],
+      })
+      const accepted = sendManualReplyMock.mock.calls[0][0]
+      expect(accepted.segments).toContainEqual({
+        type: "file",
+        url: "data:application/octet-stream;base64,AP+AQQ==",
+        name: "sample.bin",
+        mimeType: "application/octet-stream",
+        sizeBytes: 4,
+      })
+      const calls = serializeOutboundParts(
+        { ...accepted, metadata: { idempotencyKey: "manual-key" } },
+        false
+      )
+      expect(calls[0].upload).toMatchObject({
+        payload: { file_type: 4 },
+        binary: { sourceUrl: "data:application/octet-stream;base64,AP+AQQ==" },
+      })
+      expect(calls[0].upload?.binary).not.toHaveProperty("localPath")
+    }
+  )
+
+  it.each(["channel", "direct", undefined])(
+    "retains QQ inline attachment rejection for unsupported or unknown scene %s",
+    async (scene) => {
+      await expect(
+        sendManualMessageToConversation({
+          session: {
+            ...bound,
+            platformBinding: {
+              ...bound.platformBinding!,
+              platform: "qq-official",
+              conversationRef: { platform: "qq-official", adapterId: "a1", scene },
+            },
+          },
+          text: "file",
+          files: [{ url: "data:text/plain;base64,aGk=", filename: "note.txt" }],
+        })
+      ).rejects.toMatchObject({ name: "UnsupportedPlatformAttachmentsError" })
+      expect(sendManualReplyMock).not.toHaveBeenCalled()
+    }
+  )
+
   it("sends original attachment bytes, platform reply identity and thread through the shared relay", async () => {
     await sendManualMessageToConversation({
       session: {

@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Switch } from "@/components/ui/switch"
 import { createAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
 import { emitCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { getQQAccessToken, getQQGatewayUrl } from "@/lib/connectors/adapters/qq-official/auth"
@@ -74,6 +75,9 @@ export function QQOfficialConfigDialog({
   const [transportMode, setTransportMode] = useState<"gateway" | "webhook">(
     isNew || row?.transportMode === "webhook" ? "webhook" : "gateway"
   )
+  const [receiveGuildMessages, setReceiveGuildMessages] = useState(
+    row?.settings.receiveGuildMessages === true
+  )
   const [muted, setMuted] = useState<boolean>(row?.muted ?? false)
   const [quietHours, setQuietHours] = useState<QuietHoursValue | null>(row?.quietHours ?? null)
   const [testing, setTesting] = useState(false)
@@ -102,6 +106,7 @@ export function QQOfficialConfigDialog({
     displayName.trim() !== row?.displayName ||
     credentials.dirty ||
     transportMode !== (row?.transportMode === "webhook" ? "webhook" : "gateway") ||
+    receiveGuildMessages !== (row?.settings.receiveGuildMessages === true) ||
     muted !== (row?.muted ?? false) ||
     quietHours !== (row?.quietHours ?? null)
 
@@ -153,7 +158,7 @@ export function QQOfficialConfigDialog({
           displayName: displayName.trim(),
           enabled: true,
           transportMode,
-          settings: {},
+          settings: { receiveGuildMessages },
           credentialsRef: {
             keyringService: "com.cognia.platforms",
             accounts: [...QQ_CREDENTIALS],
@@ -170,6 +175,7 @@ export function QQOfficialConfigDialog({
         await updateAdapterInstance(adapterId, {
           displayName: displayName.trim(),
           transportMode,
+          settings: { ...row.settings, receiveGuildMessages },
           muted,
           quietHours: quietHours ?? undefined,
         })
@@ -332,6 +338,22 @@ export function QQOfficialConfigDialog({
             </div>
           </div>
         </RadioGroup>
+
+        <div className="flex items-start gap-3 py-2">
+          <Switch
+            id="qq-receive-guild-messages"
+            checked={receiveGuildMessages}
+            onCheckedChange={setReceiveGuildMessages}
+            disabled={saving || testing}
+            aria-describedby="qq-receive-guild-messages-help"
+          />
+          <div className="space-y-0.5">
+            <Label htmlFor="qq-receive-guild-messages">{t("receiveGuildMessagesLabel")}</Label>
+            <p id="qq-receive-guild-messages-help" className="text-xs text-muted-foreground">
+              {t("receiveGuildMessagesHelp")}
+            </p>
+          </div>
+        </div>
 
         {transportMode === "webhook" && (
           <WebhookUrlCard

@@ -110,7 +110,8 @@ export interface PlatformIdentityRow extends PlatformIdentity {
  * the host's deliveries through a conversation landed in (same module); they
  * are never pruned.
  */
-export type InboundLedgerNamespace = "inbound" | "callback" | "welcome" | "outbound" | "landed-chat"
+export type InboundLedgerNamespace =
+  "inbound" | "callback" | "welcome" | "outbound" | "landed-chat" | "qq-reference"
 
 export interface InboundLedgerRow {
   /** `${adapterId}:${namespace}:${platformMessageId}` (or legacy form). */
@@ -120,6 +121,8 @@ export interface InboundLedgerRow {
   namespace: InboundLedgerNamespace
   platformMessageId: string
   receivedAt: number
+  /** Non-indexed QQ alias data; null is a conflicting, unusable mapping. */
+  qqReference?: { messageId: string; referenceIndex: string } | null
 }
 
 /**

@@ -91,7 +91,14 @@ export async function sendManualMessageToConversation({
   if (!binding) throw new NotPlatformBoundError(session.id)
   // These adapters require public media URLs or render media as text links.
   // Inline bytes cannot be delivered there; reject before accepting any text/job.
-  if (files.length > 0 && ["dingtalk", "wechat-oa", "qq-official"].includes(binding.platform))
+  const unsupportedQQScene =
+    binding.platform === "qq-official" &&
+    binding.conversationRef.scene !== "group" &&
+    binding.conversationRef.scene !== "c2c"
+  if (
+    files.length > 0 &&
+    (["dingtalk", "wechat-oa"].includes(binding.platform) || unsupportedQQScene)
+  )
     throw new UnsupportedPlatformAttachmentsError(binding.platform)
   const segments: MessageSegment[] = text.trim() ? [{ type: "text", text: text.trim() }] : []
   for (const file of files) {

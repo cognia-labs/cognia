@@ -64,7 +64,7 @@ jest.mock("@/lib/chat/attachments/dispatch", () => ({
   })),
 }))
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Composer } from "./composer"
@@ -405,5 +405,73 @@ it.each(["/clear", "!echo hello", "#remember this", "/local explain this"])(
       )
     )
     expect(onSend).not.toHaveBeenCalled()
+  }
+)
+
+it.each(["group", "c2c"] as const)(
+  "forwards arbitrary original files from the %s QQ picker",
+  async (scene) => {
+    const originalCreate = URL.createObjectURL
+    const originalFetch = global.fetch
+    const originalRevoke = URL.revokeObjectURL
+    URL.revokeObjectURL = jest.fn()
+    const binary = new File([new Uint8Array([0, 255, 128, 65])], "sample.bin", {
+      type: "application/octet-stream",
+    })
+    URL.createObjectURL = jest.fn(() => "blob:qq-original")
+    global.fetch = jest.fn(async () => ({ blob: async () => binary }) as unknown as Response)
+    try {
+      ;(sendManualMessageToConversation as jest.Mock).mockResolvedValue({ route: "remote" })
+      const session = boundSession()
+      session.platformBinding = {
+        platform: "qq-official",
+        adapterId: "qq",
+        conversationKey: "qq-official:qq:target",
+        conversationRef: { platform: "qq-official", adapterId: "qq", sceneId: "target", scene },
+      }
+      const { ta, onSend } = renderComposer(session)
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement
+      expect(input.accept).toBe("*/*")
+      fireEvent.change(input, { target: { files: [binary] } })
+      await screen.findAllByRole("button", { name: /^Preview sample\.bin$/ })
+      fireEvent.change(ta, { target: { value: "Original file" } })
+      fireEvent.keyDown(ta, { key: "Enter" })
+      await waitFor(() =>
+        expect(sendManualMessageToConversation).toHaveBeenCalledWith(
+          expect.objectContaining({
+            files: [
+              expect.objectContaining({
+                filename: "sample.bin",
+                mediaType: "application/octet-stream",
+                url: "data:application/octet-stream;base64,AP+AQQ==",
+              }),
+            ],
+          })
+        )
+      )
+      expect(onSend).not.toHaveBeenCalled()
+    } finally {
+      cleanup()
+      URL.revokeObjectURL = originalRevoke
+      URL.createObjectURL = originalCreate
+      global.fetch = originalFetch
+    }
+  }
+)
+
+it.each(["guild-channel", "guild-direct", undefined])(
+  "keeps generic file intake disabled for QQ scene %s",
+  (scene) => {
+    const session = boundSession()
+    session.platformBinding = {
+      platform: "qq-official",
+      adapterId: "qq",
+      conversationKey: "qq-official:qq:target",
+      conversationRef: { platform: "qq-official", adapterId: "qq", scene, sceneId: "target" },
+    }
+    renderComposer(session)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    expect(input.accept).not.toBe("*/*")
+    expect(input.accept).toContain("image/*")
   }
 )

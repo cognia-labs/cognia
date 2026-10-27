@@ -9,12 +9,13 @@ import {
  *
  * QQ's open messaging API delivers plain text (`msg_type: 0`) for group / C2C /
  * channel / direct messages, with passive replies (`msg_id`) free inside the
- * reply window. Markdown and interactive keyboards exist but require
- * per-template review on the QQ console, so they are out of scope for v1 —
- * markdown segments degrade to text via the default chain, which is honest
- * about what the adapter actually delivers. Outbound media (rich media upload)
- * uses public-URL uploads for group/C2C image, video and SILK voice. Guild
- * channel/direct scenes support native images; file uploads are not public.
+ * reply window. Native custom Markdown (`msg_type: 2`) is supported for
+ * group/C2C without approved templates. Channel/direct Markdown remains a
+ * reported text fallback. Group/C2C keyboards project A2UI buttons natively.
+ * Outbound media (rich media upload)
+ * supports group/C2C images, video, SILK voice and files through URL uploads
+ * or native binary/chunked uploads. Guild channel/direct supports URL images;
+ * files and native byte uploads remain unsupported in those guild scenes.
  *
  * Scene-limited mutations (the flag is declared platform-wide; the adapter
  * throws `unsupported` outside the scene):
@@ -29,18 +30,25 @@ import {
 export const QQ_OFFICIAL_CAPS: readonly Capability[] = [
   "send.reply",
   "send.text",
+  "send.markdown",
+  "send.a2ui",
   "send.image",
   "send.video",
   "send.voice",
+  "send.file",
   "delete",
   "typing",
   "send.reaction",
 ] as const
 
 /**
- * A2UI matrix — every component falls back to `plainTextMirror`. QQ's
- * approved-template requirement for buttons/markdown means we cannot project
- * interactive surfaces natively in v1; the assistant stays free to emit A2UI
- * and it degrades to the text mirror.
+ * Group/C2C button keyboards are native; unsupported input widgets retain
+ * their plain-text mirror, and guild scenes retain the reported fallback.
  */
-export const QQ_OFFICIAL_A2UI_CAPABILITY: A2UICapabilityMatrix = buildA2UICapabilityMatrix({})
+export const QQ_OFFICIAL_A2UI_CAPABILITY: A2UICapabilityMatrix = buildA2UICapabilityMatrix({
+  Button: "native",
+  Text: "native",
+  Row: "native",
+  Column: "native",
+  Card: "native",
+})

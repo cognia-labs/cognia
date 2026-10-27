@@ -10,8 +10,12 @@ import type { OutboundRequest } from "@/types/connectors/outbound"
 import { createQQOfficialAdapter } from "./index"
 import { __resetQQMsgSeqForTesting, qqPassiveMsgSeq } from "./serialize"
 import { startQQGateway } from "./gateway-client"
+import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 
-jest.mock("./gateway-client", () => ({ startQQGateway: jest.fn() }))
+jest.mock("./gateway-client", () => ({
+  ...jest.requireActual("./gateway-client"),
+  startQQGateway: jest.fn(),
+}))
 jest.mock("@/lib/connectors/at-gate", () => ({ gateInboundEvent: jest.fn(async () => true) }))
 
 const mockInvoke = invoke as jest.Mock
@@ -120,18 +124,46 @@ describe("QQ Official adapter contract suite", () => {
     })
   })
 
+  describe("send.markdown capability", () => {
+    it.each(["group", "c2c"] as const)(
+      "delivers assistant Markdown natively to %s through the existing send path",
+      async (scene) => {
+        const text = "# Result\n\n**ready** [details](https://example.com)"
+        const result = await makeAdapter().send(
+          req(scene, "target", "input", assistantReplyToSegments({ text }))
+        )
+        expect(result).toMatchObject({ ok: true, platformMessageId: `${scene}:target:sent-1` })
+        expect(lastHttpCall().body).toEqual({
+          msg_type: 2,
+          markdown: { content: text },
+          msg_id: "input",
+          msg_seq: qqPassiveMsgSeq("k-contract"),
+        })
+      }
+    )
+  })
+
   describe("send.reply capability", () => {
-    it("OutboundRequest.replyTo becomes the passive msg_id with an idempotency-derived msg_seq", async () => {
+    it("OutboundRequest.replyTo uses a native quote index alongside the captured passive msg_id", async () => {
       await makeAdapter().send(
         req("group", "GO", "captured", [{ type: "text", text: "re" }], {
-          replyTo: { messageId: "explicit" },
+          replyTo: { messageId: "captured" },
+          conversationRef: {
+            platform: "qq-official",
+            adapterId: "qq-contract",
+            scene: "group",
+            sceneId: "GO",
+            msgId: "captured",
+            qqMsgIndex: "REFIDX_captured==",
+          },
         })
       )
       const call = lastHttpCall()
       expect(call.body).toEqual({
         content: "re",
         msg_type: 0,
-        msg_id: "explicit",
+        msg_id: "captured",
+        message_reference: { message_id: "REFIDX_captured==" },
         msg_seq: qqPassiveMsgSeq("k-contract"),
       })
     })

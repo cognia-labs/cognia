@@ -48719,6 +48719,8 @@
         "openConsole": "打开 QQ 机器人控制台",
         "openConsoleAria": "在 QQ 机器人控制台打开当前机器人的开发设置",
         "quietHoursIncomplete": "免打扰时段需要开始、结束时间和时区。",
+        "receiveGuildMessagesHelp": "仅适用于私域频道机器人：获得 GUILD_MESSAGES 权限后开启。网关模式会订阅该事件；Webhook 模式还需在 QQ 控制台订阅 MESSAGE_CREATE。群聊全量消息需另行在 QQ 平台开启，自动回复仍遵循会话规则。",
+        "receiveGuildMessagesLabel": "接收全部频道消息",
         "save": "保存",
         "sectionAdvanced": "高级",
         "sectionAdvancedDesc": "免打扰时段与静音。",

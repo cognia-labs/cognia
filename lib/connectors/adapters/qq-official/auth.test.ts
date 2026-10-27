@@ -23,6 +23,9 @@ describe("getQQAccessToken", () => {
   it("fetches and returns the access token", async () => {
     mockInvoke.mockResolvedValue(httpResp(200, { access_token: "tok-1", expires_in: "7200" }))
     await expect(getQQAccessToken("app1", "sec1")).resolves.toBe("tok-1")
+    expect(mockInvoke).toHaveBeenCalledWith("connectors_http_request", {
+      req: expect.objectContaining({ url: "https://api.bot.qq.com/app/getAppAccessToken" }),
+    })
   })
 
   it("caches the token within its lifetime (single HTTP call)", async () => {

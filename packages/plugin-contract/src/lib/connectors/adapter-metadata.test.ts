@@ -59,13 +59,14 @@ describe("lib/connectors/adapter-metadata", () => {
       "discord",
       "slack",
       "lark",
+      "qq-official",
     ] as const) {
       expect(getConnectorMeta(kind)).toMatchObject({ status: "stable", richMessages: true })
     }
   })
 
   it("stable text-only adapters do not overclaim rich outbound support", () => {
-    for (const kind of ["qq-official", "wechat-oa"] as const) {
+    for (const kind of ["wechat-oa"] as const) {
       expect(getConnectorMeta(kind)).toMatchObject({ status: "stable", richMessages: false })
     }
   })

@@ -263,6 +263,8 @@ export type DigestApprover =
  * safeSendPrompt → assistantReplyToSegments → enqueueOutbound).
  */
 export interface RunDigestInput {
+  /** Verified callback anchor captured before another message can replace it. */
+  deliveryTarget?: ConversationDeliveryTarget
   adapterId: string
   conversationKey: string
   /** Optional character override; falls back to session.characterId. */
@@ -424,6 +426,13 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
     return { success: false, error: `No ChatSession for ${conversationKey}` }
   }
 
+  if (
+    input.deliveryTarget &&
+    (input.deliveryTarget.address.adapterId !== adapterId ||
+      input.deliveryTarget.address.conversationKey !== conversationKey)
+  )
+    return { success: false, error: "Callback delivery target belongs to another conversation" }
+
   // ── Step 2: load adapter / override / character / settings ───────────
   // All best-effort. Missing rows degrade gracefully — resolveSendOptions
   // tolerates absent character/appSettings and the inbox policy reads
@@ -500,7 +509,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
   // explicit `conversation` actor scope. When the platform cannot be resolved
   // at all (no adapter row, malformed key) the card could never be addressed,
   // so the registration is skipped and the tool falls back to the desktop.
-  const digestDeliveryTarget = session.platformBinding?.deliveryTarget
+  const digestDeliveryTarget = input.deliveryTarget ?? session.platformBinding?.deliveryTarget
   let elicitationPlatform: PlatformKind | undefined =
     adapterRow?.type ?? digestDeliveryTarget?.address.platform
   if (!elicitationPlatform) {
@@ -600,7 +609,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
       : result
 
   // ── Step 5: project text + A2UI surfaces into outbound segments ─────
-  const deliveryTarget = session.platformBinding?.deliveryTarget
+  const deliveryTarget = input.deliveryTarget ?? session.platformBinding?.deliveryTarget
   if (!deliveryTarget || deliveryTarget.address.adapterId !== adapterId) {
     return { success: false, error: "Scheduled digest has no persisted delivery target" }
   }

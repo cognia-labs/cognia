@@ -163,6 +163,8 @@ export interface AttachmentCleanupReport {
 }
 
 export interface ConnectorMediaUploadRequest {
+  /** QQ-only native binary/chunked protocol; always uploads without sending. */
+  qq?: { fileType: number; fileName: string }
   /** Optional multipart file part; contentType applies to that part. */
   multipart?: { fieldName: string; filename: string; fields: Record<string, string> }
   /** http returns a serialized {status, headers, body}; default extracts content_uri. */

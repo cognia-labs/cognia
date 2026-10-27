@@ -63,7 +63,13 @@ function file(name: string, type = "text/plain") {
 
 /** Mounts the hook over a controllable text buffer + attachment sink. */
 function mount(
-  opts: { isDesktop?: boolean; staged?: number; initialText?: string; acceptMotion?: boolean } = {}
+  opts: {
+    isDesktop?: boolean
+    staged?: number
+    initialText?: string
+    acceptMotion?: boolean
+    originalFiles?: boolean
+  } = {}
 ) {
   const add = jest.fn()
   const sink = { add }
@@ -99,6 +105,7 @@ function mount(
       setCaret,
       isDesktop: opts.isDesktop ?? true,
       acceptMotion: opts.acceptMotion ?? true,
+      originalFiles: opts.originalFiles,
       t,
       tAttach,
     })
@@ -718,5 +725,24 @@ describe("misc intake", () => {
     ;(view.result.current.fileInputRef as { current: HTMLInputElement | null }).current = input
     act(() => view.result.current.openFileDialog())
     expect(click).toHaveBeenCalled()
+  })
+})
+
+it("preserves arbitrary platform files through the real intake gate", async () => {
+  prepared.mockImplementationOnce(
+    jest.requireActual("@/lib/chat/attachments/prepare").prepareComposerAttachments
+  )
+  const binary = new File([new Uint8Array([0, 255, 128, 65])], "sample.bin", {
+    type: "application/octet-stream",
+  })
+  const { view, add } = mount({ acceptMotion: false, originalFiles: true })
+  await act(async () => {
+    await view.result.current.acceptFiles([binary])
+  })
+  expect(add).toHaveBeenCalledWith([binary])
+  expect(prepared).toHaveBeenCalledWith([binary], {
+    maxFileSize: 1024,
+    audio: false,
+    originalFiles: true,
   })
 })

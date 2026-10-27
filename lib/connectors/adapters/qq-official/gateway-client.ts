@@ -30,9 +30,9 @@ const OP_HEARTBEAT_ACK = 11
 
 /**
  * PUBLIC_GUILD_MESSAGES (1<<30) | GROUP_AND_C2C_EVENT (1<<25) |
- * DIRECT_MESSAGE (1<<12) = 1107300352.
+ * DIRECT_MESSAGE (1<<12) | INTERACTION (1<<26) = 1174409216.
  */
-export const DEFAULT_QQ_INTENTS = (1 << 30) | (1 << 25) | (1 << 12)
+export const DEFAULT_QQ_INTENTS = (1 << 30) | (1 << 25) | (1 << 12) | (1 << 26)
 
 export interface QQGatewayOptions {
   /** Resolves a fresh access token for IDENTIFY (without the `QQBot ` prefix). */
@@ -244,7 +244,10 @@ export function startQQGateway(opts: QQGatewayOptions): QQGatewayClient {
                   // the backoff counter so a later disconnect doesn't start
                   // from an inflated attempt count.
                   attempts = 0
-                } else if (msg.t && QQ_MESSAGE_EVENTS.includes(msg.t)) {
+                } else if (
+                  msg.t &&
+                  (QQ_MESSAGE_EVENTS.includes(msg.t) || msg.t === "INTERACTION_CREATE")
+                ) {
                   yield { t: msg.t, s: msg.s, op: OP_DISPATCH, d: msg.d as QQDispatch["d"] }
                 }
                 break

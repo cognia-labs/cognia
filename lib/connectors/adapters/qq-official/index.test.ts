@@ -1,12 +1,34 @@
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import type { AdapterContext } from "@/types/connectors/adapter"
 import type { OutboundRequest } from "@/types/connectors/outbound"
 import { createQQOfficialAdapter } from "./index"
 import { __resetQQMsgSeqForTesting, qqPassiveMsgSeq, qqPassiveReplyCount } from "./serialize"
 import { startQQGateway } from "./gateway-client"
 import { gateInboundEvent } from "@/lib/connectors/at-gate"
+import { findQQReference, recordQQReference } from "./references"
+import { wasDeliveredByUs } from "@/lib/connectors/delivered-messages"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { ensureConnectorInboundJob } from "@/lib/db/connector-inbound-jobs"
+import { getBus, __resetBusForTesting } from "@/lib/connectors/bus"
+import { getDb } from "@/lib/db/schema"
+import { recordCallbackBinding } from "../_shared/a2ui-mapper"
+import { parseQQDispatch } from "./parse"
+import {
+  inboundEventFromStoredMessage,
+  inboundEventToStoredParts,
+} from "@/lib/connectors/inbound-stored-parts"
+import { inboundReplyLookupIds, resolveInboundReplyTo } from "@/lib/connectors/inbound-reply-to"
+import { evaluatePolicy } from "@/lib/connectors/policy-eval"
+import type { NormalizedInboundEvent } from "@/types/connectors/event"
+
+const quoteDbFixture = createDbTestFixture()
+beforeAll(quoteDbFixture.initialize)
+beforeEach(quoteDbFixture.restore)
+afterAll(quoteDbFixture.dispose)
 
 jest.mock("./gateway-client", () => ({
+  ...jest.requireActual("./gateway-client"),
   startQQGateway: jest.fn(),
 }))
 
@@ -98,9 +120,659 @@ beforeEach(() => {
   mockStartGateway.mockReset()
   jest.mocked(gateInboundEvent).mockReset().mockResolvedValue(true)
   __resetQQMsgSeqForTesting()
+  __resetBusForTesting()
 })
 
 describe("createQQOfficialAdapter", () => {
+  it.each(["group", "c2c"] as const)(
+    "never turns arbitrary %s segment paths into privileged filesystem reads",
+    async (scene) => {
+      for (const url of [
+        "/etc/passwd",
+        "file:///etc/passwd",
+        "C:\\private\\secret.txt",
+        "file://localhost/etc/passwd",
+      ]) {
+        const result = await adapter().send(
+          sendReq({
+            conversationRef: {
+              platform: "qq-official",
+              adapterId: "qq-1",
+              scene,
+              sceneId: "target",
+              msgId: "trigger",
+            },
+            segments: [
+              { type: "file", url, name: "file.txt", mimeType: "text/plain", sizeBytes: 1 },
+            ],
+          })
+        )
+        expect(result).toMatchObject({ ok: false, error: { code: "validation", retryable: false } })
+      }
+      expect(mockInvoke).not.toHaveBeenCalled()
+      expect(qqPassiveReplyCount("trigger")).toBe(0)
+    }
+  )
+
+  it.each(["group", "c2c"] as const)(
+    "uploads %s inline files on the native host before the passive message",
+    async (scene) => {
+      mockInvoke.mockImplementation(async (command: string) =>
+        command === "connectors_media_upload"
+          ? JSON.stringify(httpResp(200, { file_info: "binary-file" }))
+          : httpResp(200, { id: "sent" })
+      )
+      const result = await adapter().send(
+        sendReq({
+          conversationRef: {
+            platform: "qq-official",
+            adapterId: "qq-1",
+            scene,
+            sceneId: "target",
+            msgId: "trigger",
+            qqMsgIndex: "REFIDX_trigger",
+          },
+          replyTo: { messageId: "trigger" },
+          segments: [
+            {
+              type: "file",
+              url: "data:application/octet-stream;base64,AP+AQQ==",
+              name: "sample.bin",
+              mimeType: "application/octet-stream",
+              sizeBytes: 4,
+            },
+          ],
+        })
+      )
+      expect(result).toMatchObject({ ok: true, platformMessageId: `${scene}:target:sent` })
+      expect(mockInvoke).toHaveBeenCalledWith("connectors_media_upload", {
+        req: expect.objectContaining({
+          uploadUrl: `https://api.bot.qq.com/v2/${scene === "group" ? "groups" : "users"}/target/files`,
+          qq: { fileType: 4, fileName: "sample.bin" },
+          sourceUrl: "data:application/octet-stream;base64,AP+AQQ==",
+          responseMode: "http",
+          headers: expect.objectContaining({ Authorization: "QQBot tok" }),
+        }),
+      })
+      expect(JSON.parse(httpCalls()[0].body!)).toMatchObject({
+        msg_id: "trigger",
+        msg_type: 7,
+        media: { file_info: "binary-file" },
+        message_reference: { message_id: "REFIDX_trigger" },
+      })
+      expect(qqPassiveReplyCount("trigger")).toBe(1)
+    }
+  )
+
+  it("refreshes one native upload token rejection without reserving a message slot on failure", async () => {
+    let uploads = 0
+    mockInvoke.mockImplementation(async (command: string) =>
+      command === "connectors_media_upload"
+        ? JSON.stringify(
+            httpResp(
+              200,
+              ++uploads === 1 ? { err_code: 11243, message: "expired" } : { file_info: "ready" }
+            )
+          )
+        : httpResp(200, { id: "sent" })
+    )
+    const accessToken = jest.fn().mockResolvedValueOnce("old").mockResolvedValue("new")
+    const clearTokenCache = jest.fn()
+    const request = sendReq({
+      segments: [
+        {
+          type: "file",
+          url: "data:application/pdf;base64,aGk=",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 1,
+        },
+      ],
+    })
+    expect((await adapter({ accessToken, clearTokenCache }).send(request)).ok).toBe(true)
+    expect(clearTokenCache).toHaveBeenCalledTimes(1)
+    expect(uploads).toBe(2)
+    expect(qqPassiveReplyCount("m1")).toBe(1)
+    __resetQQMsgSeqForTesting()
+    mockInvoke.mockImplementation(async () =>
+      JSON.stringify(httpResp(200, { err_code: 40093002, message: "daily quota" }))
+    )
+    expect(await adapter().send(request)).toMatchObject({ ok: false })
+    expect(qqPassiveReplyCount("m1")).toBe(0)
+  })
+
+  it.each(["C2C_MESSAGE_CREATE", "GROUP_AT_MESSAGE_CREATE"])(
+    "uses confirmed Webhook identity for native %s replies to the bot",
+    async (t) => {
+      const scene = t === "C2C_MESSAGE_CREATE" ? "c2c" : "group"
+      const send = sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "initial",
+        },
+      })
+      mockInvoke.mockResolvedValue(
+        httpResp(200, { id: "bot-answer", ext_info: { ref_idx: "REFIDX_bot==" } })
+      )
+      expect((await adapter().send(send)).ok).toBe(true)
+      const handlers: Array<(event: { payload: unknown }) => void> = []
+      jest.mocked(listen).mockImplementation(async (_name, handler) => {
+        handlers.push(handler as (event: { payload: unknown }) => void)
+        return jest.fn()
+      })
+      const a = adapter({ transportMode: "webhook", selfId: async () => "confirmed-bot" })
+      const ctx = fakeCtx()
+      try {
+        await a.start(ctx)
+        for (let i = 0; i < 30 && !handlers.length; i++)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        handlers[0]({
+          payload: {
+            op: 0,
+            t,
+            d: {
+              id: "quote",
+              group_openid: "target",
+              author: { user_openid: "target", member_openid: "member" },
+              content: "follow up",
+              message_type: 103,
+              message_scene: { ext: ["msg_idx=REFIDX_quote==", "ref_msg_idx=REFIDX_bot=="] },
+              msg_elements: [{ content: "bot answer" }],
+            },
+          },
+        })
+        for (let i = 0; i < 30 && !(ctx.emit as jest.Mock).mock.calls.length; i++)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        const event = (ctx.emit as jest.Mock).mock.calls[0][0] as NormalizedInboundEvent
+        expect(event.selfId).toBe("confirmed-bot")
+        expect(event.replyTo?.messageId).toBe("bot-answer")
+        const candidates = inboundReplyLookupIds(event)
+        const delivered = await Promise.all(
+          candidates.map((id) => wasDeliveredByUs("qq-1", event.conversationKey, id))
+        )
+        expect(delivered).toContain(true)
+        // Exercise the shared bus's exact delivered-parent rule, then the real evaluator.
+        event.replyTo!.parentSenderId = delivered.includes(true) ? event.selfId : undefined
+        expect(
+          evaluatePolicy(
+            { rules: [{ kind: "reply-to-bot" }], blockers: [], storeUnmatchedInDraftMode: false },
+            event,
+            { recentBotReplyAtByConversation: {}, recentByUserAndChannel: {} }
+          ).matched
+        ).toBe(true)
+      } finally {
+        await a.stop()
+        jest.mocked(listen).mockReset()
+      }
+    }
+  )
+
+  it("keeps quote indexes through durable job compaction and stored-text replay", async () => {
+    const event = parseQQDispatch("qq-1", "bot", {
+      ...C2C_DISPATCH,
+      d: {
+        ...C2C_DISPATCH.d,
+        message_scene: { ext: ["msg_idx=REFIDX_current==", "auth_token=secret"] },
+      },
+    })!
+    const { job } = await ensureConnectorInboundJob(event, "queue", { historyOnly: true })
+    expect(job.sourceMessageId).toBe("in-1")
+    expect(job.event.conversationRef).toMatchObject({
+      msgId: "in-1",
+      qqMsgIndex: "REFIDX_current==",
+    })
+    expect(job.event.raw).toBeUndefined()
+    const replay = inboundEventFromStoredMessage(event, {
+      parts: inboundEventToStoredParts(event),
+    } as never)
+    expect(replay.conversationRef.qqMsgIndex).toBe("REFIDX_current==")
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "answer" }))
+    expect(
+      await adapter().send(
+        sendReq({ conversationRef: replay.conversationRef, replyTo: { messageId: "in-1" } })
+      )
+    ).toMatchObject({ ok: true })
+    expect(JSON.parse(httpCalls()[0].body!)).toMatchObject({
+      msg_id: "in-1",
+      message_reference: { message_id: "REFIDX_current==" },
+    })
+  })
+
+  it("keeps confirmed earlier-part quote indexes when a later part fails", async () => {
+    let sent = 0
+    mockInvoke.mockImplementation(async (_command: string, args: { req: { url: string } }) =>
+      args.req.url.endsWith("/files")
+        ? httpResp(200, { file_info: "file" })
+        : ++sent === 1
+          ? httpResp(200, { id: "first", ext_info: { ref_idx: "REFIDX_first" } })
+          : httpResp(400, { err_code: 40001, message: "rejected" })
+    )
+    const result = await adapter().send(
+      sendReq({
+        segments: [
+          { type: "markdown", md: "first" },
+          { type: "image", url: "https://cdn.example.org/p.png" },
+        ],
+      })
+    )
+    expect(result).toMatchObject({
+      ok: false,
+      platformMessageId: "group:GO:first",
+      error: { code: "reconciliation_required", retryable: false },
+    })
+    expect(
+      await findQQReference(
+        { adapterId: "qq-1", scene: "group", sceneId: "GO" },
+        { referenceIndex: "REFIDX_first" }
+      )
+    ).toMatchObject({ messageId: "first" })
+    expect(await wasDeliveredByUs("qq-1", "qq-official:qq-1:GO", "group:GO:first")).toBe(true)
+  })
+
+  it("does not persist a quote alias for an unconfirmed asynchronous send", async () => {
+    mockInvoke.mockResolvedValue(
+      httpResp(202, { id: "pending", ext_info: { ref_idx: "REFIDX_pending" } })
+    )
+    expect(await adapter().send(sendReq())).toMatchObject({
+      ok: false,
+      error: { code: "reconciliation_required" },
+    })
+    expect(
+      await findQQReference(
+        { adapterId: "qq-1", scene: "group", sceneId: "GO" },
+        { messageId: "pending" }
+      )
+    ).toBeUndefined()
+    expect(await wasDeliveredByUs("qq-1", "qq-official:qq-1:GO", "group:GO:pending")).toBe(false)
+  })
+
+  it.each(["group", "c2c"] as const)(
+    "persists every %s sent reference and quotes it after recreation",
+    async (scene) => {
+      let sent = 0
+      mockInvoke.mockImplementation(async (_command: string, args: { req: { url: string } }) =>
+        args.req.url.endsWith("/files")
+          ? httpResp(200, { file_info: "file" })
+          : httpResp(200, { id: `sent-${++sent}`, ext_info: { ref_idx: `REFIDX_sent-${sent}==` } })
+      )
+      const request = sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "trigger",
+        },
+        segments: [
+          { type: "markdown", md: "**one**" },
+          { type: "image", url: "https://cdn.example.org/image.png" },
+        ],
+      })
+      expect(await adapter().send(request)).toMatchObject({
+        ok: true,
+        platformMessageId: `${scene}:target:sent-2`,
+      })
+      expect(
+        await findQQReference(
+          { adapterId: "qq-1", scene, sceneId: "target" },
+          { messageId: "sent-1" }
+        )
+      ).toMatchObject({ referenceIndex: "REFIDX_sent-1==" })
+      expect(
+        await wasDeliveredByUs("qq-1", "qq-official:qq-1:target", `${scene}:target:sent-1`)
+      ).toBe(true)
+      const result = await adapter().send({
+        ...request,
+        segments: [{ type: "text", text: "follow up" }],
+        replyTo: { messageId: `${scene}:target:sent-1` },
+        metadata: { idempotencyKey: "next" },
+      })
+      expect(result.ok).toBe(true)
+      expect(JSON.parse(httpCalls().at(-1)!.body!)).toMatchObject({
+        msg_id: "trigger",
+        message_reference: { message_id: "REFIDX_sent-1==" },
+      })
+    }
+  )
+
+  it("records inbound indexes before admission and resolves native replies to actual message IDs", async () => {
+    await recordQQReference(
+      { adapterId: "qq-1", scene: "c2c", sceneId: "UO" },
+      "previous-real-id",
+      "REFIDX_parent=="
+    )
+    const a = adapter()
+    const ctx = fakeCtx()
+    let yielded = false
+    mockStartGateway.mockReturnValue({
+      selfId: "bot",
+      dispatches: fakeDispatches(() => {
+        if (yielded) return new Promise(() => {})
+        yielded = true
+        return Promise.resolve({
+          done: false,
+          value: {
+            ...C2C_DISPATCH,
+            d: {
+              ...C2C_DISPATCH.d,
+              message_type: 103,
+              message_scene: { ext: ["msg_idx=REFIDX_current==", "ref_msg_idx=REFIDX_parent=="] },
+              msg_elements: [{ content: "parent" }],
+            },
+          },
+        })
+      }),
+    })
+    await a.start(ctx)
+    for (let i = 0; i < 30 && !(ctx.emit as jest.Mock).mock.calls.length; i++)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(ctx.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "in-1",
+        replyTo: { messageId: "previous-real-id", snippet: "parent" },
+      })
+    )
+    const emitted = (ctx.emit as jest.Mock).mock.calls[0][0]
+    expect(inboundReplyLookupIds(emitted)).toEqual(["previous-real-id", "c2c:UO:previous-real-id"])
+    expect(
+      await resolveInboundReplyTo({
+        event: emitted,
+        findParent: async (id) =>
+          id === "previous-real-id"
+            ? { id: "local-parent", parts: [{ type: "text", text: "stored parent" }] }
+            : undefined,
+      })
+    ).toEqual({
+      messageId: "local-parent",
+      preview: "stored parent",
+      platformMessageId: "previous-real-id",
+    })
+    expect(
+      await findQQReference(
+        { adapterId: "qq-1", scene: "c2c", sceneId: "UO" },
+        { messageId: "in-1" }
+      )
+    ).toMatchObject({ referenceIndex: "REFIDX_current==" })
+    await a.stop()
+  })
+
+  it("refuses unavailable or cross-conversation quote indexes before HTTP", async () => {
+    await recordQQReference(
+      { adapterId: "qq-1", scene: "group", sceneId: "different" },
+      "older",
+      "REFIDX_other"
+    )
+    for (const messageId of ["older", "group:different:older"]) {
+      const result = await adapter().send(sendReq({ replyTo: { messageId } }))
+      expect(result).toMatchObject({ ok: false, error: { code: "validation", retryable: false } })
+    }
+    expect(httpCalls()).toHaveLength(0)
+  })
+
+  it.each(["group", "c2c"] as const)(
+    "uploads once and sends native Markdown/media parts in %s order",
+    async (scene) => {
+      let sent = 0
+      mockInvoke.mockImplementation(async (_command: string, args: { req: { url: string } }) =>
+        args.req.url.endsWith("/files")
+          ? httpResp(200, { file_info: "file" })
+          : httpResp(200, { id: `sent-${++sent}` })
+      )
+      const result = await adapter().send(
+        sendReq({
+          conversationRef: {
+            platform: "qq-official",
+            adapterId: "qq-1",
+            scene,
+            sceneId: "target",
+            msgId: "mixed-md",
+          },
+          segments: [
+            { type: "markdown", md: "**before**" },
+            { type: "image", url: "https://cdn.example.org/a.png" },
+            { type: "markdown", md: "_after_" },
+          ],
+        })
+      )
+      expect(result).toMatchObject({ ok: true, platformMessageId: `${scene}:target:sent-3` })
+      const calls = httpCalls()
+      expect(calls).toHaveLength(4)
+      expect(calls[0].url).toMatch(/\/files$/)
+      const bodies = calls.slice(1).map((call) => JSON.parse(call.body!) as Record<string, unknown>)
+      expect(bodies.map((body) => body.msg_type)).toEqual([2, 7, 2])
+      expect(bodies[0].markdown).toEqual({ content: "**before**" })
+      expect(bodies[1].media).toEqual({ file_info: "file" })
+      expect(bodies[2].markdown).toEqual({ content: "_after_" })
+      for (const body of [bodies[0], bodies[2]]) {
+        expect(body).not.toHaveProperty("content")
+        expect(body).not.toHaveProperty("media")
+        expect(body.msg_id).toBe("mixed-md")
+      }
+      expect(qqPassiveReplyCount("mixed-md")).toBe(3)
+    }
+  )
+
+  it("rejects an over-budget C2C Markdown/media reply before HTTP or reservations", async () => {
+    const result = await adapter().send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "user",
+          msgId: "budget-md",
+        },
+        segments: [
+          { type: "markdown", md: "one" },
+          { type: "image", url: "https://cdn.example.org/a.png" },
+          { type: "markdown", md: "two" },
+          { type: "image", url: "https://cdn.example.org/b.png" },
+          { type: "markdown", md: "three" },
+        ],
+      })
+    )
+    expect(result).toMatchObject({ ok: false, error: { code: "validation", retryable: false } })
+    expect(httpCalls()).toHaveLength(0)
+    expect(qqPassiveReplyCount("budget-md")).toBe(0)
+  })
+
+  it("surfaces native Markdown rejection without silently resending a text alternative", async () => {
+    mockInvoke.mockResolvedValue(httpResp(200, { err_code: 304036, message: "Markdown denied" }))
+    expect(
+      await adapter().send(sendReq({ segments: [{ type: "markdown", md: "**answer**" }] }))
+    ).toMatchObject({
+      ok: false,
+      error: { code: "platform_4xx", retryable: false },
+    })
+    expect(httpCalls()).toHaveLength(1)
+    expect(JSON.parse(httpCalls()[0].body!).msg_type).toBe(2)
+  })
+
+  it("does not treat HTTP 202 with a provisional id and zero code as delivered", async () => {
+    mockInvoke.mockResolvedValue(httpResp(202, { id: "pending-id", err_code: 0 }))
+    expect(await adapter().send(sendReq())).toMatchObject({
+      ok: false,
+      error: { code: "reconciliation_required", retryable: false },
+    })
+    expect(httpCalls()).toHaveLength(1)
+  })
+
+  it("refreshes a repeated HTTP-200 token rejection only once", async () => {
+    mockInvoke.mockResolvedValue(httpResp(200, { err_code: 11243, message: "invalid token" }))
+    const clearTokenCache = jest.fn()
+    expect(await adapter({ clearTokenCache }).send(sendReq())).toMatchObject({
+      ok: false,
+      error: { code: "auth_failed", retryable: false },
+    })
+    expect(httpCalls()).toHaveLength(2)
+    expect(clearTokenCache).toHaveBeenCalledTimes(1)
+  })
+
+  it("gates and emits full-group Webhook events using confirmed identity without inventing mentions", async () => {
+    const handlers: Array<(event: { payload: unknown }) => void> = []
+    const unlisten = jest.fn()
+    jest.mocked(listen).mockImplementation(async (_name, handler) => {
+      handlers.push(handler as (event: { payload: unknown }) => void)
+      return unlisten
+    })
+    let confirmedIdentity = ""
+    const a = adapter({ transportMode: "webhook", selfId: async () => confirmedIdentity })
+    const ctx = fakeCtx()
+    try {
+      await a.start(ctx)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      for (const mentioned of [false, true]) {
+        confirmedIdentity = mentioned ? "bot-openid" : ""
+        handlers[0]({
+          payload: {
+            op: 0,
+            t: "GROUP_MESSAGE_CREATE",
+            d: {
+              id: mentioned ? "mentioned" : "unmentioned",
+              group_openid: "group",
+              content: "hello",
+              mentions: mentioned ? [{ member_openid: "bot-openid" }] : [],
+            },
+          },
+        })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(ctx.emit).toHaveBeenCalledTimes(2)
+      expect(
+        jest.mocked(ctx.emit).mock.calls.map(([event]) => event.mentions.selfMentioned)
+      ).toEqual([false, true])
+      expect(gateInboundEvent).toHaveBeenCalledTimes(2)
+    } finally {
+      await a.stop()
+      jest.mocked(listen).mockReset()
+    }
+    expect(unlisten).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])(
+    "subscribes to private-guild events only for explicit opt-in=%s",
+    async (enabled) => {
+      const a = adapter({ receiveGuildMessages: enabled })
+      await startWithDispatch(a, C2C_DISPATCH)
+      expect(mockStartGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          intents: (1 << 30) | (1 << 25) | (1 << 12) | (1 << 26) | (enabled ? 1 << 9 : 0),
+        })
+      )
+      await a.stop()
+    }
+  )
+
+  it.each([null, [], "bad json", {}])(
+    "does not claim delivery for malformed or incomplete success bodies: %j",
+    async (body) => {
+      mockInvoke.mockResolvedValue(httpResp(200, body))
+      expect(await adapter().send(sendReq())).toMatchObject({
+        ok: false,
+        error: { code: "reconciliation_required", retryable: false },
+      })
+    }
+  )
+
+  it("treats a duplicate rejection as ambiguous delivery without resending", async () => {
+    mockInvoke.mockResolvedValue(httpResp(200, { err_code: 40054005, message: "duplicate" }))
+    expect(await adapter().send(sendReq())).toMatchObject({
+      ok: false,
+      error: { code: "reconciliation_required", retryable: false },
+    })
+    expect(httpCalls()).toHaveLength(1)
+  })
+
+  it("rejects media-upload business errors before sending or reserving a reply", async () => {
+    mockInvoke.mockResolvedValue(httpResp(200, { err_code: 850031, message: "too large" }))
+    const result = await adapter().send(
+      sendReq({ segments: [{ type: "image", url: "https://cdn.example.org/a.png" }] })
+    )
+    expect(result).toMatchObject({ ok: false, error: { code: "platform_4xx", retryable: false } })
+    expect(result.error?.message).toContain("850031")
+    expect(httpCalls()).toHaveLength(1)
+    expect(httpCalls()[0].url).toContain("/files")
+    expect(qqPassiveReplyCount("m1")).toBe(0)
+  })
+
+  it.each([200, 400])(
+    "rejects HTTP %s err_code failures and preserves body trace_id",
+    async (status) => {
+      mockInvoke.mockResolvedValue(
+        httpResp(status, {
+          err_code: 40034005,
+          code: 0,
+          message: "expired",
+          trace_id: "body-trace",
+        })
+      )
+      const result = await adapter().send(sendReq())
+      expect(result).toMatchObject({ ok: false, error: { code: "platform_4xx", retryable: false } })
+      expect(result.error?.message).toContain("40034005")
+      expect(result.error?.message).toContain("body-trace")
+      expect(httpCalls()).toHaveLength(1)
+    }
+  )
+
+  it.each([201, 202])(
+    "requires reconciliation for HTTP %s pending message audits",
+    async (status) => {
+      mockInvoke.mockResolvedValue(
+        httpResp(status, { err_code: 304024, message: "awaiting audit", trace_id: "audit-trace" })
+      )
+      const result = await adapter().send(sendReq())
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "reconciliation_required", retryable: false },
+      })
+      expect(result.error?.message).toContain("audit-trace")
+      expect(result.error?.message).toContain("304024")
+      expect(httpCalls()).toHaveLength(1)
+    }
+  )
+
+  it("refreshes an HTTP-200 rejected token once and accepts a definitive send", async () => {
+    mockInvoke
+      .mockResolvedValueOnce(httpResp(200, { err_code: 11243, message: "bad token" }))
+      .mockResolvedValueOnce(httpResp(200, { err_code: 0, id: "sent" }))
+    const accessToken = jest.fn().mockResolvedValueOnce("old").mockResolvedValueOnce("fresh")
+    const clearTokenCache = jest.fn()
+    expect(await adapter({ accessToken, clearTokenCache }).send(sendReq())).toMatchObject({
+      ok: true,
+      platformMessageId: "group:GO:sent",
+    })
+    expect(clearTokenCache).toHaveBeenCalledTimes(1)
+    expect(httpCalls().map((call) => call.body)).toHaveLength(2)
+  })
+
+  it("emits unmentioned full-group input without marking it as addressed to the bot", async () => {
+    const a = adapter()
+    const ctx = fakeCtx()
+    mockStartGateway.mockReturnValue({
+      selfId: "bot",
+      dispatches: (async function* () {
+        yield {
+          op: 0,
+          t: "GROUP_MESSAGE_CREATE",
+          d: { id: "full-input", group_openid: "group", content: "hello all" },
+        }
+      })(),
+    })
+    await a.start(ctx)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(ctx.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "full-input",
+        mentions: { selfMentioned: false, users: [] },
+      })
+    )
+    await a.stop()
+  })
+
   it("does not emit a stopped run's delayed admission or overwrite restart health", async () => {
     let entered!: () => void
     const ready = new Promise<void>((resolve) => {
@@ -273,6 +945,13 @@ describe("createQQOfficialAdapter", () => {
     mockInvoke.mockClear()
     const failed = await adapter().send(
       sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "channel",
+          sceneId: "channel",
+          msgId: "m1",
+        },
         segments: [
           {
             type: "file",
@@ -312,10 +991,13 @@ describe("createQQOfficialAdapter", () => {
     })
   })
 
-  it("send() returns no platformMessageId when the platform body carries no id", async () => {
+  it("send() requires reconciliation when a response has no definitive message id", async () => {
     mockInvoke.mockResolvedValue(httpResp(200, {}))
     const res = await adapter().send(sendReq())
-    expect(res.ok).toBe(true)
+    expect(res).toMatchObject({
+      ok: false,
+      error: { code: "reconciliation_required", retryable: false },
+    })
     expect(res.platformMessageId).toBeUndefined()
   })
 
@@ -521,13 +1203,28 @@ describe("createQQOfficialAdapter — typing (c2c only)", () => {
     await a.stop()
   })
 
-  it("stops once 4 passive slots of the inbound msg_id are used and when the window has elapsed", async () => {
+  it("reserves the fourth C2C slot for the final reply and respects expiry", async () => {
     const a = adapter()
     await startWithDispatch(a, C2C_DISPATCH)
     mockInvoke.mockResolvedValue(httpResp(200, {}))
     for (let i = 0; i < 6; i++) await a.setTyping!("qq-official:qq-1:UO", true)
-    // Slots 1..4 fired; the 5th slot is reserved for the real reply.
-    expect(httpCalls()).toHaveLength(4)
+    // Slots 1..3 fired; the fourth slot is reserved for the real reply.
+    expect(httpCalls()).toHaveLength(3)
+    expect(qqPassiveReplyCount("in-1")).toBe(3)
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "final" }))
+    expect(
+      await a.send(
+        sendReq({
+          conversationRef: {
+            platform: "qq-official",
+            adapterId: "qq-1",
+            scene: "c2c",
+            sceneId: "UO",
+            msgId: "in-1",
+          },
+        })
+      )
+    ).toMatchObject({ ok: true, platformMessageId: "c2c:UO:final" })
     expect(qqPassiveReplyCount("in-1")).toBe(4)
 
     // Fresh adapter, expired window → no-op.
@@ -676,4 +1373,333 @@ it("rejects a trailing QQ opaque card before any upload or send", async () => {
   expect(result).toMatchObject({ ok: false, error: { code: "validation", retryable: false } })
   expect(httpCalls()).toEqual([])
   expect(qqPassiveReplyCount("m1")).toBe(0)
+})
+
+const keyboardSurface = {
+  type: "a2ui" as const,
+  surfaceId: "qq-controls",
+  plainTextMirror: "Choose [Approve]",
+  content: {
+    rootId: "root",
+    dataModel: {},
+    components: {
+      root: { component: "Column", children: ["body", "approve"] },
+      body: { component: "Text", text: "Choose" },
+      approve: { component: "Button", text: "Approve", action: "approve" },
+    },
+  },
+}
+
+it.each(["group", "c2c"] as const)(
+  "sends %s A2UI buttons as native keyboard content",
+  async (scene) => {
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "keyboard-message" }))
+    const result = await adapter().send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "trigger",
+        },
+        segments: [keyboardSurface],
+      })
+    )
+    expect(result.ok).toBe(true)
+    const payload = JSON.parse(httpCalls()[0]!.body!)
+    expect(payload.keyboard.content.rows[0].buttons[0]).toMatchObject({
+      render_data: { label: "Approve" },
+      action: { type: 1, permission: { type: 2 } },
+    })
+    expect(payload.keyboard.content.rows[0].buttons[0].action.data).toMatch(/^qqkb:/)
+    expect(payload.msg_id).toBe("trigger")
+  }
+)
+
+async function until(predicate: () => boolean): Promise<void> {
+  for (let i = 0; i < 100; i++) {
+    if (predicate()) return
+    await new Promise((r) => setTimeout(r, 2))
+  }
+  expect(predicate()).toBe(true)
+}
+
+it.each(["group", "c2c"] as const)(
+  "round-trips %s native buttons through the real callback bus and acknowledges before work finishes",
+  async (scene) => {
+    mockInvoke.mockImplementation(async (command: string, args: { req?: { method?: string } }) => {
+      if (command === "connectors_http_request")
+        return args.req?.method === "PUT"
+          ? httpResp(204, "")
+          : httpResp(200, { id: "sent-keyboard" })
+      return undefined
+    })
+    const a = adapter()
+    await a.send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "trigger",
+        },
+        segments: [keyboardSurface],
+      })
+    )
+    const buttonData = JSON.parse(httpCalls()[0]!.body!).keyboard.content.rows[0].buttons[0].action
+      .data
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const handler = jest.fn(async () => pending)
+    getBus().callbackHandler = handler
+    const ctx = fakeCtx()
+    const dispatch = {
+      op: 0,
+      t: "INTERACTION_CREATE",
+      d: {
+        id: "press-one",
+        type: 11,
+        scene,
+        chat_type: scene === "group" ? 1 : 2,
+        group_openid: scene === "group" ? "target" : undefined,
+        group_member_openid: scene === "group" ? "owner" : undefined,
+        user_openid: scene === "c2c" ? "target" : undefined,
+        timestamp: new Date().toISOString(),
+        data: { type: 11, resolved: { button_data: buttonData, button_id: "b0" } },
+      },
+    }
+    let sequence = 0
+    mockStartGateway.mockReturnValue({
+      selfId: "bot",
+      dispatches: fakeDispatches(() =>
+        sequence++ < 2 ? Promise.resolve({ done: false, value: dispatch }) : new Promise(() => {})
+      ),
+    })
+    await a.start(ctx)
+    try {
+      await until(() => httpCalls().some((call) => call.method === "PUT"))
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(ctx.emit).not.toHaveBeenCalled()
+      const ack = httpCalls().filter((call) => call.method === "PUT")
+      expect(ack).toHaveLength(1)
+      expect(ack[0]!.url).toMatch(/interactions\/press-one$/)
+      expect(JSON.parse(ack[0]!.body!)).toEqual({ code: 0 })
+      const event = (handler.mock.calls as unknown[][])[0]![0] as {
+        deliveryTarget: { conversationRef: unknown }
+      }
+      expect(event.deliveryTarget.conversationRef).toMatchObject({
+        scene,
+        sceneId: "target",
+        eventId: "press-one",
+      })
+      expect(
+        (await getDb().connectorConversationStates.get("qq-official:qq-1:target"))?.deliveryTarget
+          ?.conversationRef.eventId
+      ).toBe("press-one")
+    } finally {
+      finish()
+      await a.stop()
+      await new Promise((r) => setTimeout(r, 5))
+    }
+  }
+)
+
+it("refuses blocked callback chats before bus dispatch and returns denied acknowledgement", async () => {
+  mockInvoke.mockResolvedValue(httpResp(200, { id: "sent-keyboard" }))
+  const a = adapter()
+  await a.send(sendReq({ segments: [keyboardSurface] }))
+  const buttonData = JSON.parse(httpCalls()[0]!.body!).keyboard.content.rows[0].buttons[0].action
+    .data
+  const handler = jest.fn(async () => undefined)
+  getBus().callbackHandler = handler
+  jest.mocked(gateInboundEvent).mockResolvedValue(false)
+  await startWithDispatch(a, {
+    op: 0,
+    t: "INTERACTION_CREATE",
+    d: {
+      id: "blocked",
+      type: 11,
+      scene: "group",
+      group_openid: "GO",
+      group_member_openid: "user",
+      timestamp: new Date().toISOString(),
+      data: { type: 11, resolved: { button_data: buttonData } },
+    },
+  })
+  try {
+    await until(() => httpCalls().some((call) => call.method === "PUT"))
+    expect(handler).not.toHaveBeenCalled()
+    expect(JSON.parse(httpCalls().find((call) => call.method === "PUT")!.body!)).toEqual({
+      code: 4,
+    })
+  } finally {
+    await a.stop()
+  }
+})
+
+it("creates no callback receipt for an unconfirmed native keyboard send", async () => {
+  mockInvoke.mockResolvedValue(httpResp(202, { id: "pending" }))
+  const result = await adapter().send(sendReq({ segments: [keyboardSurface] }))
+  expect(result.ok).toBe(false)
+  expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+})
+
+it("retries the same interaction after a transient bus failure without acknowledging twice", async () => {
+  mockInvoke.mockResolvedValue(httpResp(200, { id: "sent" }))
+  const a = adapter()
+  await a.send(sendReq({ segments: [keyboardSurface] }))
+  const token = JSON.parse(httpCalls()[0]!.body!).keyboard.content.rows[0].buttons[0].action.data
+  const dispatch = {
+    op: 0,
+    t: "INTERACTION_CREATE",
+    d: {
+      id: "retry-press",
+      type: 11,
+      scene: "group",
+      group_openid: "GO",
+      group_member_openid: "user",
+      timestamp: new Date().toISOString(),
+      data: { type: 11, resolved: { button_data: token } },
+    },
+  }
+  let nextDelivery!: (value: IteratorResult<unknown>) => void
+  let initial = true
+  mockStartGateway.mockReturnValue({
+    selfId: "bot",
+    dispatches: fakeDispatches(() => {
+      if (initial) {
+        initial = false
+        return Promise.resolve({ done: false, value: dispatch })
+      }
+      return new Promise((resolve) => {
+        nextDelivery = resolve
+      })
+    }),
+  })
+  const bus = getBus()
+  const spy = jest
+    .spyOn(bus, "dispatchConnectorCallback")
+    .mockImplementationOnce(async (_event, options) => {
+      options?.onDecision?.({ status: "failed" })
+      return "retry"
+    })
+    .mockImplementationOnce(async (_event, options) => {
+      options?.onDecision?.({ status: "accepted", kind: "generic" })
+      return "terminal"
+    })
+  try {
+    await a.start(fakeCtx())
+    await until(
+      () => spy.mock.calls.length === 1 && httpCalls().some((call) => call.method === "PUT")
+    )
+    await new Promise((r) => setTimeout(r, 5))
+    nextDelivery({ done: false, value: dispatch })
+    await until(() => spy.mock.calls.length === 2)
+    expect(httpCalls().filter((call) => call.method === "PUT")).toHaveLength(1)
+  } finally {
+    await a.stop()
+    spy.mockRestore()
+  }
+})
+
+it.each(["group", "c2c"] as const)(
+  "preserves %s Markdown, keyboard, media, quote and aggregate passive preflight",
+  async (scene) => {
+    let sequence = 0
+    mockInvoke.mockImplementation(async (_command: string, args: { req: { url: string } }) =>
+      args.req.url.endsWith("/files")
+        ? httpResp(200, { file_info: "uploaded" })
+        : httpResp(200, { id: `part-${++sequence}` })
+    )
+    const a = adapter()
+    const input = sendReq({
+      conversationRef: {
+        platform: "qq-official",
+        adapterId: "qq-1",
+        scene,
+        sceneId: "target",
+        msgId: "trigger",
+        qqMsgIndex: "REFIDX_current==",
+        receivedAt: Date.now(),
+      },
+      replyTo: { messageId: "trigger" },
+      segments: [
+        { type: "markdown", md: "**Before**" },
+        keyboardSurface,
+        { type: "image", url: "https://cdn.example.org/image.png" },
+        { type: "text", text: "after" },
+      ],
+    })
+    expect((await a.send(input)).ok).toBe(true)
+    const sends = httpCalls()
+      .filter((call) => call.url.endsWith("/messages"))
+      .map((call) => JSON.parse(call.body!))
+    expect(sends.map((call) => call.msg_type)).toEqual([2, 0, 7, 0])
+    expect(sends[1]!.keyboard).toBeDefined()
+    expect(sends[0]!.keyboard).toBeUndefined()
+    expect(sends[2]!.media).toEqual({ file_info: "uploaded" })
+    for (const call of sends)
+      expect(call.message_reference).toEqual({ message_id: "REFIDX_current==" })
+    const priorCalls = httpCalls().length
+    const refused = await a.send({ ...input, metadata: { idempotencyKey: "over-cap" } })
+    expect(refused.ok).toBe(false)
+    expect(httpCalls()).toHaveLength(priorCalls)
+  }
+)
+
+it("keeps transient authored-binding storage failures retryable without a native call or consumed slot", async () => {
+  await recordCallbackBinding({
+    adapterId: "qq-1",
+    actionId: "wfapp:storage-test",
+    kind: "wf_approve",
+    surfaceId: "qq-controls",
+    componentId: "approve",
+    conversationKey: "qq-official:qq-1:GO",
+  })
+  const content = {
+    ...keyboardSurface.content,
+    components: {
+      ...keyboardSurface.content.components,
+      approve: { ...keyboardSurface.content.components.approve, value: "wfapp:storage-test" },
+    },
+  }
+  const input = sendReq({ segments: [{ ...keyboardSurface, content }] })
+  const a = adapter()
+  const where = jest
+    .spyOn(getDb().connectorCallbackBindings, "where")
+    .mockImplementationOnce(() => {
+      throw new Error("temporary storage read failure")
+    })
+  try {
+    const failed = await a.send(input)
+    expect(failed).toMatchObject({ ok: false, error: { retryable: true } })
+    expect(mockInvoke).not.toHaveBeenCalled()
+    expect(qqPassiveReplyCount("m1")).toBe(0)
+  } finally {
+    where.mockRestore()
+  }
+  mockInvoke.mockResolvedValue(httpResp(200, { id: "recovered" }))
+  expect((await a.send(input)).ok).toBe(true)
+})
+
+it("retains the confirmed platform ID if the keyboard receipt write fails", async () => {
+  mockInvoke.mockResolvedValue(httpResp(200, { id: "confirmed-keyboard" }))
+  const write = jest
+    .spyOn(getDb().connectorCallbackBindings, "bulkPut")
+    .mockRejectedValueOnce(new Error("temporary receipt write failure"))
+  try {
+    const result = await adapter().send(sendReq({ segments: [keyboardSurface] }))
+    expect(result).toMatchObject({
+      ok: false,
+      platformMessageId: "group:GO:confirmed-keyboard",
+      error: { code: "reconciliation_required", retryable: false },
+    })
+    expect(httpCalls()).toHaveLength(1)
+  } finally {
+    write.mockRestore()
+  }
 })
