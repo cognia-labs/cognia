@@ -1,10 +1,14 @@
 "use client"
 
 /**
- * Dropdown affordance attached to the right of the command-center pill —
- * VSCode's command-center caret. The pill itself still opens the command
- * palette on click; this caret reveals quick targets (palette, recent
- * sessions, go-to-view) without disturbing the render-stable pill leaf.
+ * Dropdown affordance attached to the right of the search pill — VSCode's
+ * command-center caret. The pill itself still opens the command palette on
+ * click; this caret reveals quick targets (palette, recent sessions,
+ * go-to-view) without disturbing the render-stable pill leaf.
+ *
+ * Not a bar segment of its own: the `search` segment draws the pill and this
+ * caret as one group (`title-bar-zone.tsx`), so the caret can never be
+ * reordered, hidden or folded away from the pill it is the right half of.
  *
  * Everything lives in ONE flat menu — no second-level submenus. Radix renders
  * a `DropdownMenuSubContent` as a NON-portaled `position: fixed` descendant of
@@ -31,13 +35,12 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { MENU_CONTENT_PERF } from "@/components/shared/menu-kit"
+import type { RecentSessionEntry } from "@/hooks/desktop/use-app-menu-controller"
+import { useAppShortcutLabel } from "@/hooks/shortcuts/use-app-shortcut-label"
 import { getGoMenuItem, type GoMenuItem } from "@/lib/desktop/go-menu"
 import type { MenuActionId } from "@/lib/desktop/menu-actions"
 import { cn } from "@/lib/utils"
-
-// Kill the WebView2-expensive enter/exit keyframes and soften the shadow.
-const MENU_CONTENT_PERF =
-  "data-[state=open]:!animate-none data-[state=closed]:!animate-none shadow-sm"
 
 // Curated "Go to View" targets — a subset of the Go menu surfaced inline. The
 // label and icon of each come from the Go-menu table (`lib/desktop/go-menu.ts`),
@@ -60,11 +63,7 @@ const GO_TARGETS: readonly GoMenuItem[] = GO_TARGET_IDS.map(getGoMenuItem).filte
 // Cap the inline recent list so the flat menu stays a sane height.
 const MAX_RECENT = 6
 
-export interface RecentSessionEntry {
-  id: string
-  title: string
-  characterId?: string
-}
+export type { RecentSessionEntry }
 
 export function TitleBarCommandCenterMenu({
   recentSessions,
@@ -72,19 +71,21 @@ export function TitleBarCommandCenterMenu({
   onOpenRecentSession,
   onGo,
   className,
-  variant = "toolbar",
+  compact = false,
 }: {
   recentSessions: RecentSessionEntry[]
   onCommandPalette: () => void
   onOpenRecentSession: (sessionId: string) => void
   onGo: (id: MenuActionId) => void
   className?: string
-  variant?: "toolbar" | "menu"
+  /** Beside the icon-only pill: borderless, as tall as the icon button. */
+  compact?: boolean
 }) {
   const t = useTranslations("desktop.titleBar.commandCenter")
   const tMenu = useTranslations("desktop.menu")
   const tRail = useTranslations("desktop.guildRail")
   const recent = recentSessions.slice(0, MAX_RECENT)
+  const paletteShortcut = useAppShortcutLabel("app.commandPalette.toggle")
 
   return (
     <DropdownMenu>
@@ -96,27 +97,28 @@ export function TitleBarCommandCenterMenu({
           aria-label={t("menuLabel")}
           title={t("menuLabel")}
           className={cn(
-            variant === "menu"
-              ? "h-auto min-h-8 w-full justify-between gap-2 rounded-md px-2 py-1.5 text-left whitespace-normal"
-              : "h-6 w-5 shrink-0 rounded-md rounded-l-none border border-l-0 border-border",
-            "bg-background/60 text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
+            compact
+              ? "h-7 w-4 shrink-0 rounded-sm"
+              : "h-6 w-5 shrink-0 rounded-md rounded-l-none border border-l-0 border-border bg-background/60",
+            "text-muted-foreground transition-colors hover:bg-background hover:text-foreground",
             "motion-safe:transition-transform motion-safe:active:scale-90",
             className
           )}
         >
-          {variant === "menu" && <span className="min-w-0">{t("menuLabel")}</span>}
           <ChevronDownIcon className="size-3 shrink-0" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align={variant === "menu" ? "end" : "center"}
+        align={compact ? "end" : "center"}
         collisionPadding={8}
         className={cn("w-64 max-w-[calc(100vw-1rem)]", MENU_CONTENT_PERF)}
       >
         <DropdownMenuItem onSelect={onCommandPalette} data-testid="cc-command-palette">
           <SearchIcon aria-hidden />
           <span className="min-w-0 flex-1 truncate">{tMenu("view.commandPalette")}</span>
-          <DropdownMenuShortcut>{tMenu("shortcut.cmdOrCtrlShiftP")}</DropdownMenuShortcut>
+          {paletteShortcut.label ? (
+            <DropdownMenuShortcut>{paletteShortcut.label}</DropdownMenuShortcut>
+          ) : null}
         </DropdownMenuItem>
 
         <DropdownMenuSeparator />

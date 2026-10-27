@@ -62,6 +62,12 @@ describe("bar item catalogs", () => {
     expect(desktopOnly.sort()).toEqual(["network", "perf", "sync", "terminal", "usage"])
   })
 
+  it("draws the command-centre caret as part of search, not as its own segment", () => {
+    const ids = TITLE_BAR_ITEMS.map((m) => m.id)
+    expect(ids).toContain("search")
+    expect(ids).not.toContain("commandCenter")
+  })
+
   it("has no desktop-only title-bar items", () => {
     // The whole title bar only mounts under Tauri, so per-item gating would be
     // dead weight there.
@@ -72,7 +78,6 @@ describe("bar item catalogs", () => {
     const withMinWidth = ALL.filter((m) => m.minWidth).map((m) => [m.id, m.minWidth])
     expect(withMinWidth).toEqual([
       ["workspace", "lg"],
-      ["commandCenter", "lg"],
       ["quickActions", "xl"],
       // The execution-host segment carries a host label, so it is the widest
       // thing in the start cluster. It drops before the row can clip.

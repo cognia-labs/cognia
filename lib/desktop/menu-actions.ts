@@ -1,5 +1,6 @@
 "use client"
 
+import { DOCS_URL } from "@/lib/constants/external-urls"
 import { settingsHref } from "@/lib/settings/deep-link"
 import { newAgentHref } from "@/lib/agents/routes"
 import { invoke } from "@tauri-apps/api/core"
@@ -508,7 +509,7 @@ export async function documentationAction(): Promise<void> {
   log.info("menu action documentation")
   try {
     const { openExternal } = await import("@/lib/tauri/opener")
-    await openExternal("https://v2.tauri.app")
+    await openExternal(DOCS_URL)
   } catch (err) {
     log.error("menu action documentation failed", err)
   }

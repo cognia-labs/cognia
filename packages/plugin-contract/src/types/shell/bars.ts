@@ -91,14 +91,12 @@ export const TITLE_BAR_ITEMS: readonly BarItemMeta[] = [
   { id: "appIcon", bar: "title", zone: "start", i18nKey: "appIcon" },
   { id: "navArrows", bar: "title", zone: "center", i18nKey: "navArrows" },
   { id: "workspace", bar: "title", zone: "center", i18nKey: "workspace", minWidth: "lg" },
+  // The search pill and its command-centre caret are one segment. The caret
+  // was its own `commandCenter` id once, which let it be reordered or folded
+  // away from the pill it is drawn as the right half of; a stored layout that
+  // still names that id resolves without it (`resolveOrderedLayout` drops ids
+  // the catalog no longer has).
   { id: "search", bar: "title", zone: "center", i18nKey: "search" },
-  {
-    id: "commandCenter",
-    bar: "title",
-    zone: "center",
-    i18nKey: "commandCenter",
-    minWidth: "lg",
-  },
   {
     id: "quickActions",
     bar: "title",

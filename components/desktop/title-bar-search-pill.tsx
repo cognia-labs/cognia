@@ -22,6 +22,7 @@ import { useTranslations } from "next-intl"
 import { SearchIcon } from "lucide-react"
 
 import { useActiveSessionLabel } from "@/hooks/chat/use-active-session-label"
+import { useAppShortcutLabel } from "@/hooks/shortcuts/use-app-shortcut-label"
 import { aggregateRunState } from "@/lib/chat/aggregate-run-state"
 import { cn } from "@/lib/utils"
 import { useChatStore } from "@/stores/chat/chat-store"
@@ -30,7 +31,6 @@ export function TitleBarSearchPill({
   appName,
   separator,
   placeholder,
-  kbdHint,
   onClick,
   className,
   compact = false,
@@ -38,7 +38,6 @@ export function TitleBarSearchPill({
   appName: string
   separator: string
   placeholder: string
-  kbdHint: string
   onClick: () => void
   className?: string
   compact?: boolean
@@ -60,6 +59,9 @@ export function TitleBarSearchPill({
   // happening" claim. The count says otherwise without stealing the dot.
   const isStreaming = run.focused === "streaming"
   const backgroundHint = t("runningCount", { count: run.active })
+  // The palette's effective chord — the user's rebinding, in this platform's
+  // glyphs. A fixed "Ctrl+K" string printed Ctrl on a Mac.
+  const { label: kbdHint, aria: kbdAria } = useAppShortcutLabel("app.commandPalette.toggle")
 
   return (
     <button
@@ -68,7 +70,8 @@ export function TitleBarSearchPill({
       data-testid="title-bar-search-pill"
       data-compact={compact || undefined}
       aria-label={placeholder}
-      title={compact ? `${placeholder} (${kbdHint})` : undefined}
+      aria-keyshortcuts={kbdAria}
+      title={compact ? (kbdHint ? `${placeholder} (${kbdHint})` : placeholder) : undefined}
       className={cn(
         "group flex items-center gap-2 rounded-md text-xs",
         compact
@@ -102,7 +105,7 @@ export function TitleBarSearchPill({
           {run.active}
         </span>
       ) : null}
-      {!compact && (
+      {!compact && kbdHint && (
         <span
           aria-hidden
           className={cn(

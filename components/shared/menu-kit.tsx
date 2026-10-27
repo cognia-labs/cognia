@@ -23,24 +23,33 @@
 import type { ComponentType, MouseEvent as ReactMouseEvent, ReactNode } from "react"
 
 import {
+  ContextMenuCheckboxItem,
   ContextMenuItem,
   ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu"
 import {
+  DropdownMenuCheckboxItem,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  MenubarCheckboxItem,
   MenubarItem,
   MenubarLabel,
+  MenubarRadioGroup,
+  MenubarRadioItem,
   MenubarSeparator,
   MenubarSub,
   MenubarSubContent,
@@ -56,6 +65,8 @@ export interface MenuKitItemProps {
   onClick?: (event: ReactMouseEvent) => void
   /** The current choice in a list (the conversation's folder, its workspace). */
   "aria-current"?: "true"
+  /** `destructive` tints an irreversible action; a surface without the variant ignores it. */
+  variant?: "default" | "destructive"
   "data-testid"?: string
 }
 
@@ -72,6 +83,45 @@ export interface MenuKit {
   SubContent: ComponentType<{ children?: ReactNode; className?: string }>
   /** A trailing key hint; a surface without keyboard shortcuts renders nothing. */
   Shortcut: ComponentType<{ children?: ReactNode }>
+}
+
+/**
+ * Classes for a chrome menu's content (title bar, its menus, its carets).
+ *
+ * The shadcn primitives ship `animate-in` / `animate-out` keyframes plus a
+ * soft `shadow-md`, which on Windows WebView2 repaint a large area on every
+ * open and every cross-menu hover switch. Killing the animations and dropping
+ * the shadow weight removes that per-frame paint cost; tailwind-merge dedupes
+ * against the vendor classes, so `components/ui` stays unforked.
+ *
+ * Do NOT add `will-change:transform` (or any transform / filter) here. Radix
+ * positions submenu content with `position: fixed` without portalling it, so
+ * a transform on the parent becomes that child's containing block and the
+ * parent's `overflow-hidden` clips the second-level submenu out of view.
+ */
+export const MENU_CONTENT_PERF =
+  "data-[state=open]:!animate-none data-[state=closed]:!animate-none shadow-sm"
+
+/**
+ * The stateful items a full application menu needs on top of {@link MenuKit}:
+ * a checkbox and a radio group. Kept apart because the row-action surfaces
+ * (and the mobile sheet kit) never draw either.
+ */
+export interface MenuChoiceKit {
+  CheckboxItem: ComponentType<{
+    children?: ReactNode
+    checked?: boolean
+    disabled?: boolean
+    onCheckedChange?: (checked: boolean) => void
+    "data-testid"?: string
+  }>
+  RadioGroup: ComponentType<{ children?: ReactNode; value?: string }>
+  RadioItem: ComponentType<{
+    children?: ReactNode
+    value: string
+    onSelect?: (event: Event) => void
+    "data-testid"?: string
+  }>
 }
 
 /** Trailing key hint, drawn the way the Radix menus' own `*Shortcut` parts draw it. */
@@ -111,4 +161,22 @@ export const MENUBAR_MENU_KIT: MenuKit = {
   SubTrigger: MenubarSubTrigger,
   SubContent: MenubarSubContent,
   Shortcut: MenuShortcut,
+}
+
+export const DROPDOWN_MENU_CHOICE_KIT: MenuChoiceKit = {
+  CheckboxItem: DropdownMenuCheckboxItem,
+  RadioGroup: DropdownMenuRadioGroup,
+  RadioItem: DropdownMenuRadioItem,
+}
+
+export const CONTEXT_MENU_CHOICE_KIT: MenuChoiceKit = {
+  CheckboxItem: ContextMenuCheckboxItem,
+  RadioGroup: ContextMenuRadioGroup,
+  RadioItem: ContextMenuRadioItem,
+}
+
+export const MENUBAR_MENU_CHOICE_KIT: MenuChoiceKit = {
+  CheckboxItem: MenubarCheckboxItem,
+  RadioGroup: MenubarRadioGroup,
+  RadioItem: MenubarRadioItem,
 }

@@ -30,6 +30,14 @@ jest.mock("@/hooks/chat/use-active-session-label", () => ({
   useActiveSessionLabel: () => ({ label: labelRef.value }),
 }))
 
+// The hint is the palette's effective chord (`app.commandPalette.toggle`),
+// resolved by the shared label hook; driven here so the tests can rebind it.
+const shortcutRef = { label: "⌘K", aria: "Meta+K" as string | undefined }
+const shortcutHook = jest.fn((_id: string) => shortcutRef)
+jest.mock("@/hooks/shortcuts/use-app-shortcut-label", () => ({
+  useAppShortcutLabel: (id: string) => shortcutHook(id),
+}))
+
 import { TitleBarSearchPill } from "./title-bar-search-pill"
 
 const onClick = jest.fn()
@@ -40,12 +48,14 @@ const renderPill = () =>
       appName="Cognia"
       separator=" — "
       placeholder="Search or jump to…"
-      kbdHint="⌘K"
       onClick={onClick}
     />
   )
 
 beforeEach(() => {
+  shortcutRef.label = "⌘K"
+  shortcutRef.aria = "Meta+K"
+  shortcutHook.mockClear()
   onClick.mockClear()
   focusedOnly("idle")
   labelRef.value = undefined
@@ -120,7 +130,6 @@ describe("compact search beside the conversation title", () => {
         appName="Cognia"
         separator=" — "
         placeholder="Search"
-        kbdHint="⌘K"
         onClick={onClick}
         compact
       />
@@ -134,5 +143,42 @@ describe("compact search beside the conversation title", () => {
     expect(screen.getByTestId("title-bar-background-count")).toBeInTheDocument()
     fireEvent.click(button)
     expect(onClick).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("the shortcut hint", () => {
+  it("prints the palette's effective chord and exposes it to assistive tech", () => {
+    renderPill()
+    expect(shortcutHook).toHaveBeenCalledWith("app.commandPalette.toggle")
+    expect(screen.getByText("⌘K")).toBeInTheDocument()
+    expect(screen.getByTestId("title-bar-search-pill")).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Meta+K"
+    )
+  })
+
+  it("follows a rebinding instead of a fixed string", () => {
+    shortcutRef.label = "Ctrl+J"
+    shortcutRef.aria = "Control+J"
+    renderPill()
+    expect(screen.getByText("Ctrl+J")).toBeInTheDocument()
+    expect(screen.queryByText("⌘K")).not.toBeInTheDocument()
+  })
+
+  it("prints no hint while the palette is unbound", () => {
+    shortcutRef.label = ""
+    shortcutRef.aria = undefined
+    render(
+      <TitleBarSearchPill
+        appName="Cognia"
+        separator=" — "
+        placeholder="Search"
+        onClick={onClick}
+        compact
+      />
+    )
+    const button = screen.getByRole("button", { name: "Search" })
+    expect(button).toHaveAttribute("title", "Search")
+    expect(button).not.toHaveAttribute("aria-keyshortcuts")
   })
 })

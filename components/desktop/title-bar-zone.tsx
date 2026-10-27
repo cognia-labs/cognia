@@ -20,7 +20,7 @@ import { EllipsisIcon, SparklesIcon } from "lucide-react"
 
 import { AccountBarButton } from "@/components/account/account-bar-button"
 import { TitleBarCommandCenterMenu } from "@/components/desktop/title-bar-command-center-menu"
-import type { RecentSessionEntry } from "@/components/desktop/title-bar-command-center-menu"
+import type { RecentSessionEntry } from "@/hooks/desktop/use-app-menu-controller"
 import { TitleBarLayoutControls } from "@/components/desktop/title-bar-layout-controls"
 import { TitleBarNavArrows } from "@/components/desktop/title-bar-nav-arrows"
 import { TitleBarQuickActions } from "@/components/desktop/title-bar-quick-actions"
@@ -28,6 +28,7 @@ import { TitleBarSearchPill } from "@/components/desktop/title-bar-search-pill"
 import { TitleBarWorkspace } from "@/components/desktop/title-bar-workspace"
 import type { MenuActionId } from "@/lib/desktop/menu-actions"
 import type { BarCatalogItem } from "@/lib/shell/bar-items"
+import { cn } from "@/lib/utils"
 import type { BarItemMinWidth } from "@/types/shell/bars"
 
 /** Everything a title-bar segment can need from the bar that hosts it. */
@@ -35,7 +36,6 @@ export interface TitleBarItemContext {
   appName: string
   separator: string
   searchPlaceholder: string
-  kbdHint: string
   recentSessions: RecentSessionEntry[]
   onCommandPalette: () => void
   onOpenRecentSession: (sessionId: string) => void
@@ -93,7 +93,7 @@ export function TitleBarZone({
             aria-label={t("titleBar.navigationMenu")}
           >
             {folded.map((item) =>
-              item.id === "workspace" || item.id === "commandCenter" ? (
+              item.id === "workspace" ? (
                 <div key={item.id} className="min-w-0 empty:hidden">
                   <TitleBarSegment item={{ ...item, minWidth: undefined }} ctx={ctx} inMenu />
                 </div>
@@ -147,26 +147,30 @@ function TitleBarSegment({
         />
       )
     case "search":
+      // The pill and the command-centre caret are one control: the caret is
+      // the pill's right half (VS Code's command centre), so they render as a
+      // group and fold, hide and reorder together.
       return (
-        <TitleBarSearchPill
-          compact={compact}
-          appName={ctx.appName}
-          separator={ctx.separator}
-          placeholder={ctx.searchPlaceholder}
-          kbdHint={ctx.kbdHint}
-          onClick={ctx.onCommandPalette}
-        />
-      )
-    case "commandCenter":
-      return (
-        <TitleBarCommandCenterMenu
-          variant={inMenu ? "menu" : "toolbar"}
-          className={minWidthClass(item.minWidth, true)}
-          recentSessions={ctx.recentSessions}
-          onCommandPalette={ctx.onCommandPalette}
-          onOpenRecentSession={ctx.onOpenRecentSession}
-          onGo={ctx.onGo}
-        />
+        <div
+          data-testid="title-bar-command-center"
+          className={cn("flex items-center", compact ? "shrink-0" : "min-w-0 max-w-[500px] flex-1")}
+        >
+          <TitleBarSearchPill
+            compact={compact}
+            appName={ctx.appName}
+            separator={ctx.separator}
+            placeholder={ctx.searchPlaceholder}
+            onClick={ctx.onCommandPalette}
+            className={compact ? undefined : "rounded-r-none"}
+          />
+          <TitleBarCommandCenterMenu
+            compact={compact}
+            recentSessions={ctx.recentSessions}
+            onCommandPalette={ctx.onCommandPalette}
+            onOpenRecentSession={ctx.onOpenRecentSession}
+            onGo={ctx.onGo}
+          />
+        </div>
       )
     case "quickActions":
       return <TitleBarQuickActions className={minWidthClass(item.minWidth)} />

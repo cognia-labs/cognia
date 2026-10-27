@@ -42,14 +42,13 @@ export const CompactNavigation: Story = {
       <TitleBarZone
         compact
         items={getBarCatalog("title", "tauri").filter((item) =>
-          ["navArrows", "workspace", "search", "commandCenter"].includes(item.id)
+          ["navArrows", "workspace", "search"].includes(item.id)
         )}
         ctx={{
           ...args,
           appName: "Cognia",
           separator: " — ",
           searchPlaceholder: "",
-          kbdHint: "⌘K",
         }}
       />
     </div>

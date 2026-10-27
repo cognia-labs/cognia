@@ -57,6 +57,7 @@ import { useTerminalStore } from "@/stores/terminal/terminal-store"
 import { useUIStore } from "@/stores/ui/ui-store"
 import { useShellColumnsStore } from "@/stores/ui/shell-columns-store"
 import { ShellLayoutDialog } from "@/components/shell/shell-layout-dialog"
+import { MENU_CONTENT_PERF } from "@/components/shared/menu-kit"
 
 const log = loggers.ui
 
@@ -71,14 +72,6 @@ const ALL_LAYOUT_CONTROLS: readonly TitleBarLayoutControl[] = [
   "rightSidebar",
   "customize",
 ]
-
-// Mirror of the title bar's popover perf override (kept local to avoid an
-// import cycle with title-bar.tsx): kill the enter/exit keyframes that repaint
-// large areas on Windows WebView2; keep a light shadow. No `will-change`/
-// transform — it would establish a containing block that clips Radix's
-// fixed-positioned submenu content under the parent's `overflow-hidden`.
-const MENU_CONTENT_PERF =
-  "data-[state=open]:!animate-none data-[state=closed]:!animate-none shadow-sm"
 
 function LayoutToggleButton({
   label,

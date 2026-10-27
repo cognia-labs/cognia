@@ -556,7 +556,7 @@ test("clearCacheAction reports partial failures via thrown error", async () => {
 
 test("documentationAction opens the docs URL through the opener helper", async () => {
   await documentationAction()
-  expect(openExternal).toHaveBeenCalledWith("https://v2.tauri.app")
+  expect(openExternal).toHaveBeenCalledWith("https://docs.cognia.app")
 })
 
 test("documentationAction logs an error when the opener throws", async () => {

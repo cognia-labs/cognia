@@ -13952,7 +13952,6 @@
         "appIcon": "应用图标",
         "attention": "待处理事项",
         "branch": "Git 分支",
-        "commandCenter": "命令中心",
         "connectivity": "连接状态",
         "executionHost": "执行主机",
         "jobs": "运行中的任务",
@@ -14485,35 +14484,23 @@
         "keyboardShortcutsTitle": "键盘快捷键",
         "label": "帮助"
       },
-      "run": {
-        "killSwitch": "自动化紧急停止",
-        "label": "运行",
-        "newWorkflowRun": "新建工作流运行",
-        "openScheduler": "打开调度器",
-        "squads": "小队"
-      },
       "shortcut": {
-        "cmdOrCtrl0": "Ctrl+0",
         "cmdOrCtrlAltI": "Ctrl+Alt+I",
         "cmdOrCtrlB": "Ctrl+B",
         "cmdOrCtrlComma": "Ctrl+,",
         "cmdOrCtrlF": "Ctrl+F",
-        "cmdOrCtrlMinus": "Ctrl+-",
         "cmdOrCtrlN": "Ctrl+N",
         "cmdOrCtrlO": "Ctrl+O",
-        "cmdOrCtrlPlus": "Ctrl+=",
         "cmdOrCtrlR": "Ctrl+R",
-        "cmdOrCtrlSemicolon": "⌘; / Ctrl+;",
         "cmdOrCtrlShiftL": "Ctrl+Shift+L",
         "cmdOrCtrlShiftN": "Ctrl+Shift+N",
-        "cmdOrCtrlShiftP": "Ctrl+Shift+P",
         "ctrlAltK": "Ctrl+Alt+K",
         "f11": "F11"
       },
       "terminal": {
+        "aiShellToggle": "切换 AI Shell 面板",
         "label": "终端",
         "new": "新建终端",
-        "restartSidecar": "重启 Sidecar",
         "togglePanel": "切换终端面板"
       },
       "tools": {
@@ -14524,7 +14511,6 @@
         "clearCacheConfirm": "清除搜索结果、TTS 音频和请求快照的缓存？设置和会话不受影响。",
         "clearCacheToastDone": "缓存已清除。",
         "clearCacheToastFail": "清除缓存失败：{message}",
-        "commandPalette": "命令面板…",
         "label": "工具",
         "manageConnectors": "管理连接器…",
         "manageMcpServer": "管理 MCP 服务器…",
@@ -14540,7 +14526,6 @@
         "language": "语言",
         "languageChinese": "简体中文",
         "languageEnglish": "English",
-        "openLogs": "打开日志",
         "reduceMotion": "减弱动效",
         "reload": "重新加载",
         "theme": "主题",
@@ -14866,7 +14851,6 @@
         "untitled": "未命名"
       },
       "forward": "前进",
-      "kbdHint": "Ctrl+K",
       "layout": {
         "appearanceGroup": "外观",
         "customize": "自定义布局",

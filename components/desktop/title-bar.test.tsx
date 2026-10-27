@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react"
+import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 const logInfo = jest.fn()
@@ -621,22 +621,24 @@ test("Win/Linux menubar renders File / Edit / View / Go / Window / Help triggers
   expect(screen.getByText("desktop.menu.help.label")).toBeInTheDocument()
 })
 
-test("wide menubar exposes the Run and Terminal menus", async () => {
+// The Run menu only repeated File → New Workflow, Go → Scheduler / Squads and
+// Tools → Kill-Switch, so it is gone (`lib/desktop/app-menu.ts`).
+test("wide menubar exposes the Terminal menu and no Run menu", async () => {
   isTauriMock.mockReturnValue(true)
   setPlatform("Win32")
   render(<TitleBar />)
-  await waitFor(() => expect(screen.getByText("desktop.menu.run.label")).toBeInTheDocument())
-  expect(screen.getByText("desktop.menu.terminal.label")).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByText("desktop.menu.terminal.label")).toBeInTheDocument())
+  expect(screen.queryByText("desktop.menu.run.label")).toBeNull()
 })
 
-test("Run > Open Scheduler navigates to /scheduler", async () => {
+test("Go > Scheduler navigates to /scheduler", async () => {
   isTauriMock.mockReturnValue(true)
   setPlatform("Win32")
   const user = userEvent.setup()
   render(<TitleBar />)
-  await waitFor(() => expect(screen.getByText("desktop.menu.run.label")).toBeInTheDocument())
-  await user.click(screen.getByText("desktop.menu.run.label"))
-  await user.click(await screen.findByText("desktop.menu.run.openScheduler"))
+  await waitFor(() => expect(screen.getByText("desktop.menu.go.label")).toBeInTheDocument())
+  await user.click(screen.getByText("desktop.menu.go.label"))
+  await user.click(await screen.findByTestId("go-menu-menubar-go-scheduler"))
   await waitFor(() => expect(routerPush).toHaveBeenCalledWith("/scheduler"))
 })
 
@@ -671,7 +673,7 @@ test("Terminal menu dispatches the focused AI Shell registration", async () => {
   render(<TitleBar />)
   await user.click(await screen.findByText("desktop.menu.terminal.label"))
   await user.click(
-    await screen.findByRole("menuitem", { name: "desktop.statusBar.terminalAiShellToggle" })
+    await screen.findByRole("menuitem", { name: "desktop.menu.terminal.aiShellToggle" })
   )
   expect(toggle).toHaveBeenCalledTimes(1)
 })
@@ -686,7 +688,7 @@ test("Terminal menu disables AI Shell for serial devices", async () => {
   render(<TitleBar />)
   await user.click(await screen.findByText("desktop.menu.terminal.label"))
   expect(
-    await screen.findByRole("menuitem", { name: "desktop.statusBar.terminalAiShellToggle" })
+    await screen.findByRole("menuitem", { name: "desktop.menu.terminal.aiShellToggle" })
   ).toHaveAttribute("aria-disabled", "true")
 })
 
@@ -935,7 +937,7 @@ test("Window > Always on Top toggles state", async () => {
   await waitFor(() => expect(setAlwaysOnTop).toHaveBeenCalledWith(true))
 })
 
-test("Help > Documentation opens the Tauri docs URL", async () => {
+test("Help > Documentation opens the Cognia docs site", async () => {
   isTauriMock.mockReturnValue(true)
   setPlatform("Win32")
   const user = userEvent.setup()
@@ -943,7 +945,7 @@ test("Help > Documentation opens the Tauri docs URL", async () => {
   await waitFor(() => expect(screen.getByText("desktop.menu.help.label")).toBeInTheDocument())
   await user.click(screen.getByText("desktop.menu.help.label"))
   await user.click(await screen.findByText("desktop.menu.help.documentation"))
-  await waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://v2.tauri.app"))
+  await waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://docs.cognia.app"))
 })
 
 test("Help > Documentation logs error when openExternal throws", async () => {
@@ -1173,7 +1175,7 @@ test("hamburger > Command Palette dispatches the shortcut", async () => {
   const user = userEvent.setup()
   render(<TitleBar />)
   await user.click(await screen.findByTestId("title-bar-hamburger"))
-  await user.click(await screen.findByText("desktop.menu.tools.commandPalette"))
+  await user.click(await screen.findByText("desktop.menu.view.commandPalette"))
   await waitFor(() => expect(logInfo).toHaveBeenCalledWith("title-bar menu command-palette"))
 })
 
@@ -1468,7 +1470,6 @@ test.each([
   ["view.commandPalette"],
   ["view.toggleSidebar"],
   ["view.reload"],
-  ["view.openLogs"],
   ["view.zoomIn"],
   ["view.zoomOut"],
   ["view.zoomReset"],
@@ -1743,21 +1744,29 @@ test.each([
 // Tools menu
 // ---------------------------------------------------------------------------
 
-test("Tools > Command Palette asks the palette to open", async () => {
+// Command Palette lives under View only; Tools used to repeat it.
+test("Tools does not repeat the Command Palette", async () => {
   isTauriMock.mockReturnValue(true)
   setPlatform("Win32")
-  const seen: unknown[] = []
-  const listener = (e: Event) => seen.push((e as CustomEvent).detail)
-  window.addEventListener(COMMAND_PALETTE_REQUEST_EVENT, listener)
-  try {
-    const user = userEvent.setup()
-    render(<TitleBar />)
-    await user.click(await screen.findByText("desktop.menu.tools.label"))
-    await user.click(await screen.findByText("desktop.menu.tools.commandPalette"))
-    expect(seen).toHaveLength(1)
-  } finally {
-    window.removeEventListener(COMMAND_PALETTE_REQUEST_EVENT, listener)
-  }
+  const user = userEvent.setup()
+  render(<TitleBar />)
+  await user.click(await screen.findByText("desktop.menu.tools.label"))
+  expect(await screen.findByText("desktop.menu.tools.manageConnectors")).toBeInTheDocument()
+  expect(screen.queryByText("desktop.menu.view.commandPalette")).toBeNull()
+})
+
+// The palette answers its registry chord (`app.commandPalette.toggle`, ⌘K /
+// Ctrl+K). The menus used to advertise Ctrl+Shift+P, which only the native
+// macOS menu binds.
+test("View > Command Palette prints the chord the palette answers", async () => {
+  isTauriMock.mockReturnValue(true)
+  setPlatform("Win32")
+  const user = userEvent.setup()
+  render(<TitleBar />)
+  await user.click(await screen.findByText("desktop.menu.view.label"))
+  const item = await screen.findByTestId("app-menu-menubar-command-palette")
+  expect(item).toHaveTextContent("Ctrl+K")
+  expect(item).not.toHaveTextContent("cmdOrCtrlShiftP")
 })
 
 test("Tools > Automation Kill-Switch invokes the automation client", async () => {
@@ -1879,11 +1888,12 @@ test("Help > Keyboard Shortcuts opens the shortcuts dialog", async () => {
   render(<TitleBar />)
   await user.click(await screen.findByText("desktop.menu.help.label"))
   await user.click(await screen.findByText("desktop.menu.help.keyboardShortcuts"))
-  await waitFor(() => expect(screen.getByTestId("keyboard-shortcuts-dialog")).toBeInTheDocument())
-  expect(screen.getByText("desktop.menu.view.toggleSidechat")).toBeInTheDocument()
-  expect(screen.getByText("desktop.menu.shortcut.cmdOrCtrlSemicolon")).toBeInTheDocument()
-  // Spot-check one shortcut row.
-  expect(screen.getByText("desktop.menu.shortcut.cmdOrCtrlShiftP")).toBeInTheDocument()
+  const dialog = await screen.findByTestId("keyboard-shortcuts-dialog")
+  expect(within(dialog).getByText("desktop.menu.view.toggleSidechat")).toBeInTheDocument()
+  // App shortcuts print their effective chord; native accelerators their label.
+  expect(within(dialog).getByText("Ctrl+;")).toBeInTheDocument()
+  expect(within(dialog).getByText("Ctrl+K")).toBeInTheDocument()
+  expect(within(dialog).getByText("desktop.menu.shortcut.cmdOrCtrlN")).toBeInTheDocument()
 })
 
 test("the shortcuts dialog no longer claims ⌘1–⌘8 for the Go menu", async () => {
@@ -2177,6 +2187,23 @@ describe("column-header projection", () => {
     expect(center).toContainElement(screen.getByTestId("title-bar-nav-arrows"))
     expect(center.parentElement).not.toContainElement(screen.getByTestId("title-bar-search-pill"))
     expect(screen.queryByTestId("title-bar-center-counterweight")).not.toBeInTheDocument()
+  })
+
+  // The caret is the pill's right half. It used to be a segment of its own, so
+  // projection moved the pill to the right chrome and left the half-rounded
+  // caret behind in the centre, beside the workspace button.
+  test("the command-centre caret travels with the search pill", async () => {
+    isTauriMock.mockReturnValue(true)
+    setPlatform("Win32")
+    renderProjecting(["center"])
+    const center = await screen.findByTestId("title-bar-outlet-center")
+    await waitFor(() => expect(center).toContainElement(screen.getByTestId("projected-center")))
+    const group = screen.getByTestId("title-bar-command-center")
+    expect(screen.getByTestId("title-bar-right-chrome")).toContainElement(group)
+    expect(group).toContainElement(screen.getByTestId("title-bar-search-pill"))
+    expect(group).toContainElement(screen.getByTestId("title-bar-command-center-menu"))
+    expect(screen.getAllByTestId("title-bar-command-center-menu")).toHaveLength(1)
+    expect(center).not.toContainElement(screen.getByTestId("title-bar-command-center-menu"))
   })
 
   test("with nothing projected the centre zone has no counterweight", async () => {

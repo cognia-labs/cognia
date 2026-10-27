@@ -4,10 +4,14 @@
 import { render, screen } from "@testing-library/react"
 
 import {
+  CONTEXT_MENU_CHOICE_KIT,
   CONTEXT_MENU_KIT,
+  DROPDOWN_MENU_CHOICE_KIT,
   DROPDOWN_MENU_KIT,
+  MENUBAR_MENU_CHOICE_KIT,
   MENUBAR_MENU_KIT,
   MenuShortcut,
+  type MenuChoiceKit,
   type MenuKit,
 } from "./menu-kit"
 
@@ -22,6 +26,13 @@ test("every kit supplies the full primitive set", () => {
     "Shortcut",
   ]
   for (const kit of [DROPDOWN_MENU_KIT, CONTEXT_MENU_KIT, MENUBAR_MENU_KIT]) {
+    for (const part of parts) expect(kit[part]).toBeTruthy()
+  }
+})
+
+test("every choice kit supplies the checkbox and radio primitives", () => {
+  const parts: (keyof MenuChoiceKit)[] = ["CheckboxItem", "RadioGroup", "RadioItem"]
+  for (const kit of [DROPDOWN_MENU_CHOICE_KIT, CONTEXT_MENU_CHOICE_KIT, MENUBAR_MENU_CHOICE_KIT]) {
     for (const part of parts) expect(kit[part]).toBeTruthy()
   }
 })

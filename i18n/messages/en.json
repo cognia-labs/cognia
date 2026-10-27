@@ -13952,7 +13952,6 @@
         "appIcon": "App icon",
         "attention": "Needs attention",
         "branch": "Git branch",
-        "commandCenter": "Command centre",
         "connectivity": "Connectivity",
         "executionHost": "Execution host",
         "jobs": "Running jobs",
@@ -14485,35 +14484,23 @@
         "keyboardShortcutsTitle": "Keyboard Shortcuts",
         "label": "Help"
       },
-      "run": {
-        "killSwitch": "Automation Kill-Switch",
-        "label": "Run",
-        "newWorkflowRun": "New Workflow Run",
-        "openScheduler": "Open Scheduler",
-        "squads": "Squads"
-      },
       "shortcut": {
-        "cmdOrCtrl0": "Ctrl+0",
         "cmdOrCtrlAltI": "Ctrl+Alt+I",
         "cmdOrCtrlB": "Ctrl+B",
         "cmdOrCtrlComma": "Ctrl+,",
         "cmdOrCtrlF": "Ctrl+F",
-        "cmdOrCtrlMinus": "Ctrl+-",
         "cmdOrCtrlN": "Ctrl+N",
         "cmdOrCtrlO": "Ctrl+O",
-        "cmdOrCtrlPlus": "Ctrl+=",
         "cmdOrCtrlR": "Ctrl+R",
-        "cmdOrCtrlSemicolon": "⌘; / Ctrl+;",
         "cmdOrCtrlShiftL": "Ctrl+Shift+L",
         "cmdOrCtrlShiftN": "Ctrl+Shift+N",
-        "cmdOrCtrlShiftP": "Ctrl+Shift+P",
         "ctrlAltK": "Ctrl+Alt+K",
         "f11": "F11"
       },
       "terminal": {
+        "aiShellToggle": "Toggle AI Shell Panel",
         "label": "Terminal",
         "new": "New Terminal",
-        "restartSidecar": "Restart Sidecar",
         "togglePanel": "Toggle Terminal Panel"
       },
       "tools": {
@@ -14524,7 +14511,6 @@
         "clearCacheConfirm": "Clear cached search results, TTS audio, and request snapshots? Settings and conversations are untouched.",
         "clearCacheToastDone": "Cache cleared.",
         "clearCacheToastFail": "Clear cache failed: {message}",
-        "commandPalette": "Command Palette…",
         "label": "Tools",
         "manageConnectors": "Manage Connectors…",
         "manageMcpServer": "Manage MCP Server…",
@@ -14540,7 +14526,6 @@
         "language": "Language",
         "languageChinese": "简体中文",
         "languageEnglish": "English",
-        "openLogs": "Open Logs",
         "reduceMotion": "Reduce Motion",
         "reload": "Reload",
         "theme": "Theme",
@@ -14866,7 +14851,6 @@
         "untitled": "Untitled"
       },
       "forward": "Go forward",
-      "kbdHint": "Ctrl+K",
       "layout": {
         "appearanceGroup": "Appearance",
         "customize": "Customize layout",

@@ -37,8 +37,8 @@ jest.mock("@/components/desktop/title-bar-search-pill", () => ({
   ),
 }))
 jest.mock("@/components/desktop/title-bar-command-center-menu", () => ({
-  TitleBarCommandCenterMenu: ({ className }: { className?: string }) => (
-    <div data-testid="seg-commandCenter" className={className} />
+  TitleBarCommandCenterMenu: ({ compact }: { compact?: boolean }) => (
+    <div data-testid="seg-commandCenterCaret" data-compact={compact || undefined} />
   ),
 }))
 jest.mock("@/components/desktop/title-bar-quick-actions", () => ({
@@ -86,7 +86,6 @@ const ctx: TitleBarItemContext = {
   appName: "Cognia",
   separator: " — ",
   searchPlaceholder: "Search",
-  kbdHint: "⌘K",
   recentSessions: [],
   onCommandPalette,
   onOpenRecentSession: jest.fn(),
@@ -112,7 +111,28 @@ describe("TitleBarZone", () => {
     const ids = Array.from(container.querySelectorAll("[data-testid]")).map((el) =>
       el.getAttribute("data-testid")
     )
-    expect(ids).toEqual(["seg-search", "seg-navArrows"])
+    expect(ids).toEqual([
+      "title-bar-command-center",
+      "seg-search",
+      "seg-commandCenterCaret",
+      "seg-navArrows",
+    ])
+  })
+
+  it("draws the search pill and the command-centre caret as one group", () => {
+    render(<TitleBarZone items={pick("search")} ctx={ctx} />)
+    const group = screen.getByTestId("title-bar-command-center")
+    expect(group).toContainElement(screen.getByTestId("seg-search"))
+    expect(group).toContainElement(screen.getByTestId("seg-commandCenterCaret"))
+    expect(group.className).toContain("flex-1")
+  })
+
+  it("keeps the caret beside the compact pill", () => {
+    render(<TitleBarZone items={pick("search")} ctx={ctx} compact />)
+    const group = screen.getByTestId("title-bar-command-center")
+    expect(group).toContainElement(screen.getByTestId("seg-commandCenterCaret"))
+    expect(screen.getByTestId("seg-commandCenterCaret")).toHaveAttribute("data-compact", "true")
+    expect(group.className).toContain("shrink-0")
   })
 
   it("passes the bar's context down to the search pill", () => {
@@ -123,9 +143,8 @@ describe("TitleBarZone", () => {
   })
 
   it("applies each segment's responsive floor so a narrow window sheds them first", () => {
-    render(<TitleBarZone items={pick("workspace", "commandCenter", "quickActions")} ctx={ctx} />)
+    render(<TitleBarZone items={pick("workspace", "quickActions")} ctx={ctx} />)
     expect(screen.getByTestId("seg-workspace").className).toContain("hidden lg:flex")
-    expect(screen.getByTestId("seg-commandCenter").className).toContain("hidden lg:inline-flex")
     expect(screen.getByTestId("seg-quickActions").className).toContain("hidden xl:flex")
   })
 
@@ -150,19 +169,14 @@ describe("TitleBarZone", () => {
 })
 
 it("folds secondary chat navigation while preserving its existing controls and hidden preferences", () => {
-  render(
-    <TitleBarZone
-      items={pick("search", "navArrows", "workspace", "commandCenter")}
-      ctx={ctx}
-      compact
-    />
-  )
+  render(<TitleBarZone items={pick("search", "navArrows", "workspace")} ctx={ctx} compact />)
   expect(screen.getByTestId("seg-search")).toHaveAttribute("data-compact", "true")
   expect(screen.queryByTestId("seg-workspace")).not.toBeInTheDocument()
   fireEvent.click(screen.getByTestId("title-bar-navigation-menu"))
   expect(screen.getByTestId("seg-navArrows")).toBeInTheDocument()
   expect(screen.getByTestId("seg-workspace")).not.toHaveClass("hidden")
-  expect(screen.getByTestId("seg-commandCenter")).not.toHaveClass("hidden")
+  // The caret never folds away from the pill.
+  expect(screen.getAllByTestId("seg-commandCenterCaret")).toHaveLength(1)
   expect(screen.queryByTestId("seg-accountTop")).not.toBeInTheDocument()
 })
 it("does not add an empty navigation menu when the user keeps only search", () => {
@@ -172,7 +186,7 @@ it("does not add an empty navigation menu when the user keeps only search", () =
 
 it("does not leave a workspace heading when the shared switcher hides itself", () => {
   mockWorkspaceVisible = false
-  render(<TitleBarZone items={pick("navArrows", "workspace", "commandCenter")} ctx={ctx} compact />)
+  render(<TitleBarZone items={pick("navArrows", "workspace")} ctx={ctx} compact />)
   fireEvent.click(screen.getByTestId("title-bar-navigation-menu"))
   expect(screen.queryByText("Workspace")).not.toBeInTheDocument()
 })

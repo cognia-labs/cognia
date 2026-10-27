@@ -37,6 +37,11 @@ jest.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }))
 
+const shortcutRef = { label: "Ctrl+K", aria: "Control+K" as string | undefined }
+jest.mock("@/hooks/shortcuts/use-app-shortcut-label", () => ({
+  useAppShortcutLabel: () => shortcutRef,
+}))
+
 import { TitleBarCommandCenterMenu } from "./title-bar-command-center-menu"
 
 function setup(overrides: Partial<React.ComponentProps<typeof TitleBarCommandCenterMenu>> = {}) {
@@ -52,6 +57,10 @@ function setup(overrides: Partial<React.ComponentProps<typeof TitleBarCommandCen
   }
   return { props, ...render(<TitleBarCommandCenterMenu {...props} />) }
 }
+
+beforeEach(() => {
+  shortcutRef.label = "Ctrl+K"
+})
 
 describe("TitleBarCommandCenterMenu", () => {
   it("opens the command palette from the first item", () => {
@@ -117,12 +126,30 @@ describe("TitleBarCommandCenterMenu", () => {
     )
   })
 
-  it("reuses the same menu with a labelled trigger inside an overflow panel", () => {
-    const { props } = setup({ variant: "menu" })
-    expect(screen.getByTestId("title-bar-command-center-menu")).toHaveTextContent(
-      "desktop.titleBar.commandCenter.menuLabel"
-    )
-    fireEvent.click(screen.getByTestId("cc-recent-s2"))
-    expect(props.onOpenRecentSession).toHaveBeenCalledWith("s2")
+  it("is the bordered right half of the pill beside the full pill", () => {
+    setup()
+    const caret = screen.getByTestId("title-bar-command-center-menu")
+    expect(caret.className).toContain("rounded-l-none")
+    expect(caret.className).toContain("border-l-0")
+  })
+
+  it("drops the border beside the icon-only pill", () => {
+    setup({ compact: true })
+    const caret = screen.getByTestId("title-bar-command-center-menu")
+    expect(caret.className).not.toContain("border-l-0")
+    expect(caret.className).toContain("h-7")
+  })
+
+  // The palette answers `app.commandPalette.toggle`; the caret used to print
+  // Ctrl+Shift+P, a chord only the native macOS menu binds.
+  it("labels the palette item with the palette's effective chord", () => {
+    setup()
+    expect(screen.getByTestId("cc-command-palette")).toHaveTextContent("Ctrl+K")
+  })
+
+  it("prints no hint while the palette is unbound", () => {
+    shortcutRef.label = ""
+    setup()
+    expect(screen.getByTestId("cc-command-palette")).not.toHaveTextContent("Ctrl")
   })
 })
