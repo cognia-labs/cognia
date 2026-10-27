@@ -1,118 +1,122 @@
 <p align="center">
   <img src="./assets/readme/workspace-cover.webp" width="100%"
-       alt="Cognia: an AI workspace for coding, knowledge work, and automation, with built-in and external agents, desktop, browser, mobile, and standalone CLI clients.">
+       alt="Cognia: an AI workspace for coding, knowledge work, and automation.">
+</p>
+
+<h3 align="center">One AI workspace for agents, code, knowledge, and automation<br>on desktop, browser, mobile, and the terminal.</h3>
+
+<p align="center">
+  <a href="./LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
+  <img alt="Node ≥ 26" src="https://img.shields.io/badge/node-%E2%89%A526-339933?logo=node.js&logoColor=white">
+  <img alt="pnpm 11" src="https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white">
+  <img alt="Next.js 16" src="https://img.shields.io/badge/Next.js-16-black?logo=next.js">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white">
+  <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2.12-FFC131?logo=tauri&logoColor=black">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-1.99-000000?logo=rust&logoColor=white">
+  <img alt="Capacitor 8" src="https://img.shields.io/badge/Capacitor-8-119EFF?logo=capacitor&logoColor=white">
 </p>
 
 <p align="center">
-  <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
-  <img alt="Node" src="https://img.shields.io/badge/node-%E2%89%A526-339933?logo=node.js&logoColor=white">
-  <img alt="pnpm" src="https://img.shields.io/badge/pnpm-11-F69220?logo=pnpm&logoColor=white">
-  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-16-black?logo=next.js">
-  <img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white">
-  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-2.12-FFC131?logo=tauri&logoColor=black">
-  <img alt="Capacitor" src="https://img.shields.io/badge/Capacitor-8-119EFF?logo=capacitor&logoColor=white">
-</p>
-
-<p align="center">
-  <a href="./README_zh.md">中文</a> ·
-  <a href="#what-cognia-does">Explore features</a> ·
+  <b>English</b> · <a href="./README_zh.md">简体中文</a>
+  <br>
+  <a href="#highlights">Highlights</a> ·
   <a href="#quick-start">Quick start</a> ·
-  <a href="#how-it-works">Architecture</a> ·
-  <a href="./docs/content/docs/en/adr/">ADRs</a> ·
-  <a href="./CLAUDE.md">Working rules</a>
+  <a href="#architecture">Architecture</a> ·
+  <a href="#development">Development</a> ·
+  <a href="#documentation">Documentation</a>
 </p>
 
-**Cognia** is an AI workspace for coding, knowledge work, and automation. Use its built-in multi-provider agent or connect external agents such as Codex, Claude Code, Gemini CLI, OpenCode, and Pi. Conversations, project files, terminals, browsers, artifacts, and task runs share one workbench.
+---
 
-The desktop app runs a local Rust host and Node agent sidecar. Browser and mobile clients can connect to a paired host. The standalone `cognia-agent` CLI runs terminal conversations and automation without a desktop window. Available features depend on host capabilities, device grants, and plugin compatibility.
+**Cognia** brings conversations, project files, terminals, browsers, artifacts, and agent runs into one workbench. Use the built-in multi-provider agent, or bring the coding agents you already use, such as Claude Code, Codex, Gemini CLI, OpenCode, and Pi.
+
+The desktop app runs a local **Rust host** and a **Node agent sidecar**. Browsers and phones pair with a host to use its files, tools, and agents. The standalone **`cognia-agent`** CLI runs the same agents in a terminal, with no window needed.
 
 > [!WARNING]
-> **This project is undergoing major refactoring.** APIs, data schemas, and features may change or stop working without notice. Availability is **not guaranteed** at this stage. If you depend on Cognia, use a commit that you have verified.
+> **Cognia is under heavy refactoring.** APIs, data schemas, and features can change or break without notice, and availability is not guaranteed. If you depend on it, pin a commit you have verified.
 
-## What Cognia does
+## Highlights
 
-The images below are concept illustrations based on Cognia’s original artwork. They are not product screenshots.
+<table>
+  <tr>
+    <td width="50%"><img src="./assets/readme/context-and-twin.webp" alt="The Cognia character faces her digital twin while conversations and documents connect to a memory pane."></td>
+    <td width="50%">
+      <h3>🧠 Agents that know your work</h3>
+      <ul>
+        <li>Pick an agent per conversation: built-in, external CLI, or a paired host's.</li>
+        <li>Bind a chat to a workspace. Files, Git, terminals, and previews sit beside it.</li>
+        <li>Carry knowledge forward with long-term memory, project knowledge, imported histories, and an Employee Digital Twin.</li>
+      </ul>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%">
+      <h3>🧩 Teams, workflows, and automation</h3>
+      <ul>
+        <li>Run Squads of agents with task boards, approvals, and runs you can resume.</li>
+        <li>Connect steps in a visual workflow editor. Trigger them from schedules, webhooks, chat, or messages.</li>
+        <li>Let agents drive a desktop through Computer Use or a sandbox, with review and audit.</li>
+      </ul>
+    </td>
+    <td width="50%"><img src="./assets/readme/workflow-studio.webp" alt="The Cognia character connects conversation, tool, branch, and document blocks into a workflow."></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="./assets/readme/connected-devices.webp" alt="The Cognia character links a desktop, a phone, and chat bubbles through a nine-light hub."></td>
+    <td width="50%">
+      <h3>🔗 Every device and channel</h3>
+      <ul>
+        <li>Pair phones and browsers with a desktop or headless host over LAN or WAN.</li>
+        <li>Answer Telegram, Slack, Lark, WeCom, and 7 more platforms from one inbox.</li>
+        <li>Extend with plugins, skills, MCP servers, themes, and the browser extension.</li>
+      </ul>
+    </td>
+  </tr>
+</table>
 
-### Work with agents, projects, and knowledge
+<sub>The illustrations are concept art drawn from Cognia's original artwork. They are not product screenshots.</sub>
 
-<p align="center">
-  <img src="./assets/readme/context-and-twin.webp" width="100%"
-       alt="The Cognia character faces her digital twin as conversations and documents connect to a memory pane.">
-</p>
+### Capabilities
 
-- **Choose an agent runtime**: Select Cognia’s built-in runtime, a configured external agent, or a paired host’s agent configuration for each conversation. The built-in runtime uses the Claude Agent SDK or AI SDK according to the provider.
-- **Work in project context**: Bind conversations to a workspace and execution directory. Inspect files, Git changes, terminals, browser previews, and generated artifacts in the workbench.
-- **Reuse knowledge and history**: Use project knowledge, long-term memory, and the Employee Digital Twin. Import external agent histories. Skills, slash commands, hooks, and Model Context Protocol (MCP) extend conversations.
+| Area                        | What you get                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Agent runtimes**          | A built-in agent on the Claude Agent SDK or the AI SDK, depending on the provider. External agents: Claude Code, Codex, Gemini CLI, OpenCode, Pi, Aider, Crush, Continue, Codebuff, Rovo, and OpenClaude. Protocols: ACP and A2A. DeepSeek Harness is experimental. Best-of-N runs one task across several agents. |
+| **Project workbench**       | Workspace files and source control, including stacked PRs and a queue for reviewing agent changesets. Also an integrated terminal, a Monaco or code-server editor, an embedded Chromium browser, and a tabbed chat dock.                                                                                           |
+| **Outputs**                 | Artifacts and Canvas, adaptive A2UI surfaces, and a Files library to keep, trash, and share results. Public share links are end-to-end encrypted.                                                                                                                                                                  |
+| **Orchestration**           | Squads (Agent Team), a plan execution hub, `/goal`, background project coordinators, issues and delivery cycles. Runs are durable and recover from interruption.                                                                                                                                                   |
+| **Automation**              | Visual workflows, a scheduler, bots, and event triggers from webhooks and connectors.                                                                                                                                                                                                                              |
+| **Knowledge**               | Long-term memory, RAG over project knowledge, Employee Digital Twin, web search and reader, OCR, and ⌘K global search. Session import covers Claude Code, Codex, Cursor, Gemini CLI, OpenCode, Pi, and more.                                                                                                       |
+| **Messaging**               | Telegram, Discord, Slack, Lark, OneBot, WeCom, DingTalk, Matrix, QQ, WeChat OA, and personal WeChat. They share a unified inbox, quiet hours, circuit breakers, and rich A2UI cards.                                                                                                                               |
+| **Extensibility**           | Plugins in JavaScript, Python, or WASM, plus compatible VS Code extensions. Cogpacks bundle plugin sets, and Pi packages and other plugin formats can be converted. Skills, slash commands, hooks, and MCP. A Prompt Center and evidence-based config governance.                                                  |
+| **Safety**                  | Permission rules, a PII redaction gate on model calls, and outbound action authorization (shadow mode by default). Docker and remote sandboxes with snapshots. Computer Use requires human review and keeps audit records.                                                                                         |
+| **Devices & collaboration** | Device pairing and grants, WebRTC relay, always-on headless hosts, remote desktop, and shared conversations. Encrypted account sync is experimental.                                                                                                                                                               |
+| **Desktop extras**          | Tray glance panel, desktop pet, selection toolbar, and voice / TTS.                                                                                                                                                                                                                                                |
 
-### Coordinate tasks, teams, and automation
+What is available depends on the host's capabilities, device grants, and plugin compatibility. For entry points and limits, read the [subsystem docs](./docs/content/docs/en/subsystems/).
 
-<p align="center">
-  <img src="./assets/readme/workflow-studio.webp" width="100%"
-       alt="The Cognia character connects conversation, tool, branch, and document blocks to illustrate workflows and automation.">
-</p>
+### Clients
 
-- **Squads and run management**: Coordinate agents, inspect runs and task boards, and handle approvals, interruptions, and recoverable execution.
-- **Goals and delivery tracking**: Manage goals, issues, delivery projects, and cycles. Link planning to agent execution.
-- **Visual workflows**: Connect execution steps in a React Flow editor. Start tasks from schedules, webhooks, connectors, or chat.
-- **Computer Use and sandboxes**: Use native desktop automation or configured remote desktop sandboxes with permission checks, human review, and audit records. The desktop app can manage Docker desktop sandboxes and inspect or control their desktops.
-
-### Connect devices, messages, and extensions
-
-<p align="center">
-  <img src="./assets/readme/connected-devices.webp" width="100%"
-       alt="The Cognia character connects a desktop, phone, and conversation bubbles through a nine-light hub.">
-</p>
-
-- **Messages and integrations**: Handle connected platform messages in a unified inbox. Use connectors, bots, and plugins to integrate external services.
-- **Devices and remote hosts**: Connect to desktop or headless hosts over a local or wide area network (LAN or WAN). Manage pairing, grants, and execution hosts in the device console.
-- **Plugins and browser extension**: Install tools, skills, UI contributions, themes, and workflows. The Chrome/Edge companion extension sends pages or selected text to the local Cognia host when you request it.
-
-<details>
-<summary><strong>Explore the full capability map and technical details</strong></summary>
-
-<p align="center">
-  <img src="./assets/readme/capabilities.svg" width="100%"
-       alt="Early capability concept map: agent conversations, plugins, workflows, digital twin, messaging connectors, desktop automation, OCR, and mobile connectivity.">
-</p>
-
-The current implementation includes these capabilities. The illustration’s groups show concepts:
-
-- **Agent runtimes**: Built-in Claude Agent SDK and provider-neutral AI SDK loops. External adapters include Agent Client Protocol (ACP), Codex App Server, OpenCode V2, Pi RPC, Aider CLI, and Agent2Agent (A2A). DeepSeek Harness uses a managed runtime and remains experimental. Model, tool, and approval support differs by adapter.
-- **Models and providers**: Configure provider credentials, model catalogs, model selection, and reasoning settings. Inspect usage and costs. External agents supply their own authentication and model lists.
-- **Session history**: Import histories from Claude Code, Codex, OpenCode, Gemini CLI, Pi, Cursor, and other sources. Desktop scans and watches local histories. Native resume depends on the source, session format, and configured agent.
-- **Project workbench**: Browse and edit workspace files, inspect Git changes, use terminals and Monaco or code-server editors, and open browser and artifact previews. File and process operations run on the selected execution host.
-- **Artifacts and Canvas**: Inspect generated documents, code, and interactive content. Edit documents in Canvas. Public share links encrypt content and keep the decryption key in the URL fragment.
-- **Squads and run recovery**: Coordinate agent tasks through boards and run consoles. Retain durable execution records and handle checkpoints, approvals, and interruption recovery.
-- **Workflows, schedules, and bots**: Combine agent, tool, and branch nodes. Configure scheduled and event triggers, then inspect results. Bots use configured connectors and integrations.
-- **Goals and issue tracking**: Manage goals, issues, delivery projects, cycles, and milestones. Code workspaces and delivery projects have separate management surfaces.
-- **Knowledge, memory, and digital twin**: Ingest documents, retrieve project knowledge, retain long-term memory, and use knowledge and style examples in conversations. Retrieval-augmented generation (RAG) and twin processing use a shared personally identifiable information (PII) redaction gate.
-- **Plugin ecosystem**: JavaScript, Python, WASM, compatible VS Code extensions, character packs, and themes. Plugins contribute tools, skills, MCP configurations, UI, connectors, and workflows. Pi package management and conversion preserve Pi-specific extensions and themes, which still require Pi.
-- **Messaging connectors**: `ConnectorBus` includes adapters for Telegram, Discord, Slack, Lark, OneBot, WeCom, DingTalk, Matrix, QQ, WeChat OA, and personal WeChat. Shared controls include a unified inbox, quiet hours, circuit breakers, and an A2UI rich-content bridge. Availability depends on platform authentication, permissions, and protocol support.
-- **Shared conversations**: Share sessions, invite participants, and synchronize run state under organization and workspace membership permissions. Deploy the collaboration service, build with `NEXT_PUBLIC_SHARED_CHAT_ENABLED=true`, and enable the local shared-chat preference.
-- **Computer Use, sandboxes, and OCR**: Use operating-system automation backends, remote desktop sandboxes, and a shared OCR interface. Docker sandboxes, native OCR, recording, and browser control have their own runtime and permission requirements.
-- **Clients and CLI**: Tauri desktop, Capacitor mobile, browser companion, Chrome/Edge extension, and standalone `cognia-agent`. The CLI supports interactive terminal chat, one-shot runs, JSON/JSONL output, external-agent backends, and host API calls.
-
-For implementation entry points and limits, read [unified agent execution](./docs/content/docs/en/subsystems/unified-agent-execution/), [the plugin system](./docs/content/docs/en/subsystems/plugin-system/), [sandboxes](./docs/content/docs/en/subsystems/sandbox/), and [the CLI guide](./cli/README.md).
-
-</details>
-
-### From a request to a result
-
-<p align="center">
-  <img src="./assets/readme/task-flow.svg" width="100%"
-       alt="Conceptual task path: bring a question, document, or conversation; use skills, MCP, plugins, and workflows; review the response and output.">
-</p>
-
-**Add context → use tools → review the result.** The diagram shows how the capabilities work together. The steps depend on the task, configured tools, and permissions.
+| Client                                 | Where it runs            | Notes                                                                                                    |
+| -------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------- |
+| 🖥️ **Desktop**                         | macOS · Windows · Linux  | Full local host: Rust core and Node sidecar                                                              |
+| 🗄️ **Headless host** (`cognia-server`) | Servers, always-on boxes | The host without a window; paired clients connect to it                                                  |
+| 🌐 **Browser**                         | Any modern browser       | Standalone with your own provider keys, or paired with a host                                            |
+| 📱 **Mobile**                          | iOS · Android            | Capacitor app; pairs with a host over LAN or WAN                                                         |
+| ⌨️ **CLI / TUI** (`cognia-agent`)      | Terminal                 | Interactive chat, one-shot runs, JSON/JSONL output, host API calls ([guide](./cli/README.md))            |
+| 🧭 **Browser extension**               | Chrome · Edge            | Sends pages or selections to your host ([repo](https://github.com/cognia-labs/cognia-browser-extension)) |
 
 ## Quick start
 
-<p align="center">
-  <img src="./assets/readme/section-quickstart.svg" width="100%"
-       alt="Quick start: clone the repository, install dependencies, and launch the dev server.">
-</p>
+### Requirements
 
-Install shared dependencies and Node sidecars from source:
+| Target                    | Needs                                                                                                                                         |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend and CLI          | Node.js ≥ 26, pnpm 11.18.0 (pinned in `package.json`)                                                                                         |
+| Desktop and headless host | The above, Rust (toolchain pinned in `rust-toolchain.toml`, MSRV 1.96), and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) |
+| iOS                       | Xcode 26+, CocoaPods                                                                                                                          |
+| Android                   | JDK 21, Android SDK (Android Studio can manage both)                                                                                          |
+| Optional                  | Docker for local sandboxes; external agents installed and signed in; TURN for WebRTC relay                                                    |
+
+### Install
 
 ```bash
 git clone https://github.com/cognia-labs/cognia
@@ -121,227 +125,189 @@ pnpm install
 pnpm sidecars:install
 ```
 
-Choose the launch path for your task:
+### Launch
 
-| Task                               | Command                                             | Execution location                                                                                |
-| ---------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| Desktop workspace                  | `pnpm tauri dev`                                    | Local Rust host and Node sidecar; also starts the frontend dev server                             |
-| Browser UI development             | `pnpm dev`                                          | `http://localhost:3000`; the UI server alone does not start a native host                         |
-| Browser with a local headless host | `pnpm dev:web-headless`                             | Starts the frontend, `cognia-server`, and workspace browser runtime; pair the client on first use |
-| Standalone terminal agent          | `pnpm cli:dev chat`                                 | CLI starts the runtime directly; no desktop window                                                |
-| iOS app                            | `pnpm mobile:sync:ios`, then `pnpm mobile:open:ios` | Mobile-target build and Xcode project                                                             |
-| Android live development           | `pnpm mobile:dev:android`                           | Mobile dev server and an authorized Android device                                                |
-| Android offline package            | `pnpm mobile:build:android`                         | Full mobile-target build and debug APK                                                            |
+| I want to…                                   | Run                                                 |
+| -------------------------------------------- | --------------------------------------------------- |
+| Use the desktop app                          | `pnpm tauri dev`                                    |
+| Work on the UI in a browser (no native host) | `pnpm dev` → <http://localhost:3000>                |
+| Use the browser with a local headless host   | `pnpm dev:web-headless`                             |
+| Chat in the terminal                         | `pnpm cli:dev chat`                                 |
+| Build for iOS                                | `pnpm mobile:sync:ios`, then `pnpm mobile:open:ios` |
+| Develop on an Android device                 | `pnpm mobile:dev:android`                           |
+| Build an Android debug APK                   | `pnpm mobile:build:android`                         |
 
-Desktop and headless launch paths compile Rust hosts. The first build downloads tools and resources. `dev:web-headless` confines paired clients to this checkout by default. Use `--workspaces-dir PATH` to select another allowed directory. Read the requirements below, [the CLI guide](./cli/README.md), and [mobile workflows](./mobile/README.md).
+The first desktop or headless launch compiles the Rust host and downloads tools, so expect it to take a while. `dev:web-headless` limits paired clients to this checkout by default; pass `--workspaces-dir PATH` to allow another directory. See also the [mobile guide](./mobile/README.md).
 
-**Requirements for source development**
+### First run
 
-| Target                     | Requirements                                                                                                                      |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Shared frontend and CLI    | Node.js ≥ 26; pnpm 11.18.0, as declared in `package.json`                                                                         |
-| Desktop and headless hosts | Shared tools, Rust ≥ 1.96, and the platform C/C++ toolchain ([Tauri prerequisites](https://tauri.app/start/prerequisites/))       |
-| iOS                        | Shared tools, Xcode 26+, and CocoaPods                                                                                            |
-| Android                    | Shared tools, JDK 21, and the Android SDK; Android Studio can manage the toolchain                                                |
-| Optional capabilities      | Docker for local desktop sandboxes; external agents need their runtimes and authentication; WebRTC relay needs TURN configuration |
-
-Configure your first session:
-
-1. Complete onboarding. Configure provider authentication and a default model, or choose an authenticated external agent. Desktop onboarding can scan existing configuration and import histories you select.
-2. Choose standalone or host-connected mode on browser and mobile clients. Standalone mode uses your provider credentials and is limited by Cross-Origin Resource Sharing (CORS) and tool compatibility. Host files and external-agent processes need an available execution host. Network-based agents follow their endpoint requirements.
-3. In host-connected mode, pair with a host through the device flow and grant the permissions your task needs. Chat and external-agent Agent Control grants are separate. Offline hosts and missing grants expose recovery actions in the UI.
-4. Choose a code workspace and conversation runtime. Enable the plugins, skills, MCP services, or connectors you need. Discovery alone does not grant an extension permission to run.
-
-The root `prepare` script configures Husky hooks automatically.
+1. **Onboard.** Add provider credentials and a default model, or pick an external agent you have already signed in to. Desktop onboarding can find existing configuration and import the histories you choose.
+2. **Pick a mode** (browser and mobile). Standalone mode uses your own keys and is limited by CORS and tool support. Host mode needs a paired host.
+3. **Pair and grant.** Pair through the device flow, then grant only what the task needs. Chat grants and Agent Control grants are separate.
+4. **Choose a workspace and agent**, and enable the plugins, skills, MCP servers, or connectors you need. Discovering an extension does not give it permission to run.
 
 <details>
-<summary>Optional: fail-closed agent proxy on macOS</summary>
+<summary><b>Optional: fail-closed agent proxy (macOS)</b></summary>
 
-**Fail-closed agent proxy (macOS)**: Start a CLI agent that supports HTTP proxy variables. Seatbelt restricts network access for the agent and all child processes to one local proxy port:
+`pnpm agent:proxy` launches a CLI agent under Seatbelt. The agent and every child process can reach only one local HTTP proxy port:
 
 ```bash
 AGENT_PROXY_URL=http://127.0.0.1:7890 pnpm agent:proxy -- claude
-AGENT_PROXY_URL=http://127.0.0.1:7890 pnpm agent:proxy -- codex
-AGENT_PROXY_URL=http://127.0.0.1:7890 pnpm agent:proxy -- gemini
 AGENT_PROXY_URL=http://127.0.0.1:7890 pnpm agent:proxy --check
 ```
 
-The launcher sets both uppercase and lowercase `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`, then clears `NO_PROXY`. It validates an HTTP CONNECT tunnel and checks that a second local port is blocked. Agents that ignore the proxy variables cannot connect directly. To change the TLS-capable preflight destination, set `AGENT_PROXY_CHECK_TARGET=host:port`. The launcher rejects SOCKS and remote proxy endpoints.
+The launcher sets `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` in both cases and clears `NO_PROXY`. It checks the CONNECT tunnel and confirms that other local ports are blocked. It rejects SOCKS and remote proxies. Set `AGENT_PROXY_CHECK_TARGET=host:port` to change the preflight target.
 
 </details>
 
-## How it works
+## Architecture
 
-<p align="center">
-  <img src="./assets/readme/architecture.svg" width="100%"
-       alt="Architecture concept: a shared Next.js codebase supports browser, Tauri desktop, and Capacitor mobile shells. The desktop adds a Rust core and Node agent sidecar. Mobile connects over LAN/WAN, and signaling and share services deploy separately.">
-</p>
+```mermaid
+flowchart TB
+  subgraph UI["Next.js 16 static export (out/)"]
+    direction LR
+    browser["🌐 Browser"]
+    desktop["🖥️ Tauri desktop"]
+    mobile["📱 Capacitor mobile"]
+  end
 
-The shared Next.js 16 app builds static assets for each target. Web/Tauri and Capacitor use the same `out/` path with different compile targets. **Tauri 2** loads desktop assets and runs a local host. **Capacitor 8** packages mobile assets and can connect to desktop or headless hosts. Browsers can use standalone mode or connect to a host through the Companion protocol.
+  subgraph Host["Rust host: Tauri app or cognia-server"]
+    core["Files · Git · Terminals · Scheduler<br/>Vectors · OCR · Automation · MCP · Device grants"]
+  end
 
-Execution has these parts:
+  sidecar["Node sidecar<br/>Claude Agent SDK · AI SDK · external agent adapters"]
+  cli["⌨️ cognia-agent CLI / TUI"]
+  ext["🧭 Browser extension"]
+  services[("cognia-services<br/>signaling · share · status · identity & sync")]
 
-- **Rust host**: The Tauri app or renderer-free `cognia-server` supplies files, Git, terminals, device grants, scheduling, vector storage, OCR, automation, and MCP. Implementations live in `crates/`; desktop integration and command entry points live in `src-tauri/`.
-- **Agent processes**: `sidecar/agent-host.mjs` selects the Claude Agent SDK or AI SDK from the execution configuration. Protocol adapters connect external agents; stdio processes start on the selected host. The standalone CLI reuses agent and tool logic with its own configuration.
-- **Browser and editor runtimes**: Local desktop capabilities or a workspace runtime handle browser control. code-server and the VS Code extension host supply editor capabilities. Browser companions, mobile clients, and the Chrome/Edge extension do not contain a desktop process host.
-- **Data and collaboration**: Dexie stores client-local data and host-state mirrors. Rust hosts retain SQLite data and durable execution state. The collaboration service owns membership permissions and shared conversation state.
+  desktop --> Host
+  browser -. "Companion protocol" .-> Host
+  mobile -. "LAN / WAN pairing" .-> Host
+  ext -. "Companion protocol" .-> Host
+  cli -. "host API" .-> Host
+  Host <--> sidecar
+  Host -. "relay · share · sync" .-> services
+```
 
-Services run separately according to the deployment, for example:
+- **One frontend, three shells.** One static export, built per target, serves the browser, Tauri, and Capacitor. There is no runtime `app/api/`; anything that needs a server lives in the Rust host.
+- **Rust host.** The logic lives in layered crates under [`crates/`](./crates/). [`src-tauri/`](./src-tauri/) only assembles the desktop app. `cognia-server` runs the same host without a window.
+- **Agent sidecar.** Strict TypeScript that Node runs without a build step ([`sidecar/`](./sidecar/)). It runs the built-in agent and adapts external ones; stdio agents start on the selected host.
+- **Data.** Clients keep local data and host mirrors in Dexie (IndexedDB). Hosts keep SQLite, sqlite-vec vectors, and durable run state.
 
-- `services/workspace-runtime/`: Workspace browser runtime.
-- The cloud and self-hosted services (signaling, share links, status, account identity and sync, updates, diagnostics) live in [cognia-labs/cognia-services](https://github.com/cognia-labs/cognia-services), with the wire contracts they share with the app. This repository pins one revision of it in `integrations/cognia-services.json`.
+Related repositories:
 
-The product website is maintained in [cognia-labs/cognia-website](https://github.com/cognia-labs/cognia-website), with independent development, CI and static deployment. `docs/` remains the Fumadocs workspace in this repository. Generate assets for the correct target before packaging.
+| Repository                                                                                      | Contents                                                                                                                                                                    |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [cognia-labs/cognia-services](https://github.com/cognia-labs/cognia-services)                   | Signaling, share links, status page, identity and sync, updates, diagnostics, and their wire contracts. This repo pins one revision in `integrations/cognia-services.json`. |
+| [cognia-labs/cognia-website](https://github.com/cognia-labs/cognia-website)                     | Marketing website                                                                                                                                                           |
+| [cognia-labs/cognia-browser-extension](https://github.com/cognia-labs/cognia-browser-extension) | Chrome / Edge companion extension                                                                                                                                           |
 
-Major architecture decisions are recorded in [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/). Read the subsystem documentation for current behavior and verify it against the implementation and tests. An ADR explains why a decision was made.
+Major decisions are recorded as [ADRs](./docs/content/docs/en/adr/). An ADR explains why a choice was made; for current behavior, read the subsystem docs and check the code and tests.
 
 ## Development
 
-<p align="center">
-  <img src="./assets/readme/section-development.svg" width="100%"
-       alt="Development — scripts, tests, coverage, and desktop and mobile builds.">
-</p>
+Run everything from the repository root, one frontend launch path at a time.
 
-Run development commands from the repository root. This table lists common commands; each inline code item is a separate command. Run one frontend launch path at a time: desktop development and `dev:web-headless` already start the app server.
+| Task             | Commands                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------- |
+| App              | `pnpm dev` · `pnpm build` · `pnpm lint` · `pnpm format` · `pnpm typecheck`                               |
+| Unit tests       | `pnpm test` · `pnpm test:changed` · `pnpm test -- path/to/file.test.ts`                                  |
+| E2E (Playwright) | `pnpm test:e2e` · `pnpm test:e2e:changed` · `pnpm test:e2e:mobile` · `pnpm test:e2e:tauri`               |
+| Desktop          | `pnpm tauri dev` · `pnpm tauri build` · `pnpm tauri info`                                                |
+| Headless hosts   | `pnpm dev:headless` · `pnpm dev:web-headless` · `pnpm dev:workspace-runtime`                             |
+| CLI              | `pnpm cli:dev chat` · `pnpm cli:build` · `pnpm cli:test`                                                 |
+| Sidecar          | `pnpm sidecars:install` · `pnpm sidecar:test` · `pnpm sidecar:typecheck`                                 |
+| Mobile           | `pnpm mobile:sync:ios` · `pnpm mobile:sync:android` · `pnpm mobile:deploy`                               |
+| Docs (port 3001) | `pnpm docs:dev` · `pnpm docs:build`                                                                      |
+| Gates            | `pnpm audit:colocated-tests` · `pnpm lint:i18n` · `pnpm i18n:build:check` · `pnpm cognia-services:check` |
 
-| Task                         | Commands                                                                                                    |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| App                          | `pnpm dev`, `pnpm build`, `pnpm start`, `pnpm lint`, `pnpm format`, `pnpm typecheck`                        |
-| Unit tests                   | `pnpm test`, `pnpm test:watch`; run `pnpm test:coverage` only when a coverage check is requested            |
-| Desktop                      | `pnpm tauri dev`, `pnpm tauri build`, `pnpm tauri info`                                                     |
-| Headless and browser hosts   | `pnpm dev:headless`, `pnpm dev:web-headless`, `pnpm dev:workspace-runtime`                                  |
-| Standalone CLI               | `pnpm cli:dev chat`, `pnpm cli:build`, `pnpm cli:test`, `pnpm cli:api:check`                                |
-| Mobile build and sync        | `pnpm mobile:sync:ios`, `pnpm mobile:sync:android`                                                          |
-| Mobile IDE                   | `pnpm mobile:open:ios`, `pnpm mobile:open:android`                                                          |
-| Android development and APKs | `pnpm mobile:dev:android`, `pnpm mobile:build:android`, `pnpm mobile:deploy`, `pnpm mobile:deploy:fast`     |
-| Docs, port 3001              | `pnpm docs:dev`, `pnpm docs:build`                                                                          |
-| Product website              | [Standalone website commands](https://github.com/cognia-labs/cognia-website)                                |
-| Chrome/Edge extension        | [Standalone extension commands](https://github.com/cognia-labs/cognia-browser-extension#develop-and-verify) |
-| Sidecars                     | `pnpm sidecars:install`, `pnpm sidecar:start`, `pnpm sidecar:test`, `pnpm sidecars:build`                   |
-| E2E                          | `pnpm test:e2e`, `pnpm test:e2e:workflows`, `pnpm test:e2e:mobile`, `pnpm test:e2e:tauri`                   |
-| Repository checks            | `pnpm audit:slots`, `pnpm i18n:build:check`, `pnpm lint:i18n`, `pnpm cognia-services:check`                 |
+[`package.json`](./package.json) has the full list.
 
-See [`package.json`](./package.json) for the complete script list.
+- **Tests** sit next to their source as `*.test.ts(x)`. Rust tests are in-file `#[cfg(test)]` modules. The sidecar uses Node's built-in test runner. Coverage runs only on request (`pnpm test:coverage`).
+- **i18n.** Every user-facing string goes through `next-intl`. Add keys to both `i18n/messages/en/**` and `i18n/messages/zh-CN/**`, then run `pnpm i18n:build`. The aggregated `en.json` and `zh-CN.json` are generated; never edit them.
+- **Commits.** Husky runs lint-staged (ESLint and Prettier) and commitlint (Conventional Commits). Never bypass hooks with `--no-verify`. User-facing changes need a changeset (`pnpm changeset`).
+- **Builds.** `pnpm build` writes the static export to `out/`, and `pnpm tauri build` produces the desktop installers. Mobile apps are signed in Xcode or Android Studio. Desktop OCR defaults to `ocr-paddle`. Other backends are Cargo features, and Apple Vision is built in on macOS.
 
-**Testing**: Place `*.test.ts(x)` beside the source file. Use in-file `#[cfg(test)]` modules for Rust and `src-tauri/tests/` for Rust integration tests. The sidecar uses Node’s built-in runner (`pnpm sidecar:test`). Playwright provides E2E tests, including mobile and Tauri projects; the Tauri project runs a real debug bundle. Coverage checks are opt-in. When requested, use `pnpm test:coverage` and the ≥ 90% line, branch, and function target.
+The full rules (reuse before writing, no stubs, co-located tests, and the shared-tree git rules) are in [`CLAUDE.md`](./CLAUDE.md) and [`docs/development/WORKFLOW.md`](./docs/development/WORKFLOW.md).
 
-**Commit hooks**: `pre-commit` runs `lint-staged` with `eslint --fix` and `prettier --write`. `commit-msg` enforces Conventional Commits through `commitlint`. If a hook fails, fix the cause, stage the affected files again, and create a **new** commit. Do not bypass hooks with `--no-verify`.
-
-**Builds**: `pnpm build` produces the web/Tauri static export in `out/`. `pnpm tauri build` produces desktop installation packages. Mobile sync commands build for the mobile target; use Xcode or Android Studio to sign and archive the app. The default desktop build enables `ocr-paddle`. Other native OCR backends depend on Cargo features (`ocr-tesseract`, `ocr-windows`, `ocr-ocrs`) and runtime prerequisites. Apple Vision is available on macOS without an extra feature.
-
-## Reference
-
-<p align="center">
-  <img src="./assets/readme/section-reference.svg" width="100%"
-       alt="Reference — configuration, project layout, tech stack, and critical notes.">
-</p>
-
-### Project layout
+<details>
+<summary><b>Project layout</b></summary>
 
 ```text
-cognia-next/
-├── app/                   Next.js App Router (static export)
-├── components/            React components (ui/ = shadcn, ai-elements/ = vendored)
-├── hooks/  lib/  types/   Business logic, hooks, shared types
-├── plugins/               First-party in-tree plugins
-├── packages/             Shared SDKs and business packages (agent, plugin-sdk, provider-*)
-├── crates/               Rust hosts, protocols, security, and runtimes
-├── cli/                  cognia-agent standalone terminal / headless agent
-├── i18n/                  next-intl request + messages (en, zh-CN)
-├── src-tauri/             Tauri 2 Rust core (axum HTTP, scheduler, automation, OCR, …)
-├── sidecar/               Node agent / extension hosts; separate dependencies and lockfiles
-├── mobile/                Capacitor 8 shell (workspace package)
-├── docs/                  Fumadocs site, ADRs, and contributor guides (port 3001)
-│   └── development/      CI/CD, testing, and development workflow guides
-├── deploy/                Container builds, Compose, Kubernetes, and runner deployment
-│   └── docker/           Dockerfiles built with the repository root as context
-├── services/              Services bundled with the desktop
-│   └── workspace-runtime/ Workspace browser runtime
-├── tests/e2e/             Playwright suites (workflows, mobile, tauri)
-└── scripts/               Build, audit, and migration helpers
+cognia/
+├── app/                 Next.js App Router routes (static export)
+├── components/          React UI (ui/ = shadcn, ai-elements/ = vendored)
+├── hooks/ lib/ stores/  Hooks, business logic, Zustand stores
+├── types/               Shared types
+├── i18n/                next-intl config and split message sources (en, zh-CN)
+├── packages/            Workspace packages: agents, plugin SDK, providers, memory, TTS…
+├── crates/              Rust crates: host services, protocols, security, runtimes
+├── src-tauri/           Tauri 2 desktop shell
+├── sidecar/             Node agent and extension hosts (separate lockfile)
+├── cli/                 cognia-agent terminal / headless agent
+├── mobile/              Capacitor 8 shell
+├── plugins/ skills/     First-party plugins and bundled skills
+├── services/            Workspace browser runtime bundled with the desktop
+├── deploy/              Docker, Compose, Kubernetes, runner deployment
+├── docs/                Fumadocs site, ADRs, development guides
+├── tests/e2e/           Playwright suites
+└── scripts/             Build, gate, and release tooling
 ```
 
-See the [directory guide](docs/README.md) for file placement, development guides,
-and generated output. Root-level manifests, framework entry points, and tool
-configuration stay at the root so the existing commands can discover them.
+The [directory guide](./docs/README.md) says where new files belong.
 
-### Configuration
+</details>
 
-- **Environment**: Copy `.env.example` to `.env.local` with `cp .env.example .env.local`. `NEXT_PUBLIC_*` variables are visible to the browser. `lib/env.ts` validates required values when first accessed. Never commit `.env.local`.
-- **Tauri**: `src-tauri/tauri.conf.json` defines the product name (`Cognia`), identifier (`com.cognia.desktop`), deep-link scheme (`cognia://`), Content Security Policy (CSP), custom title bar, and bundled sidecar resources.
-- **Path aliases**: Use `@/components`, `@/lib`, `@/ui`, `@/hooks`, and `@/utils`.
-- **Styling**: Use Tailwind v4 through `@tailwindcss/postcss`, oklch CSS variables, and class-based dark mode (`@custom-variant dark (&:is(.dark *))`).
+<details>
+<summary><b>Configuration</b></summary>
 
-### Tech stack
+- **Environment.** Run `cp .env.example .env.local`. `NEXT_PUBLIC_*` values reach the browser, and `lib/env.ts` validates required values on first access. Never commit `.env.local`.
+- **Shared conversations** need a deployed collaboration service, a build with `NEXT_PUBLIC_SHARED_CHAT_ENABLED=true`, and the local shared-chat preference turned on.
+- **Desktop.** [`src-tauri/tauri.conf.json`](./src-tauri/tauri.conf.json) sets the app ID (`com.cognia.desktop`), the `cognia://` deep link, the CSP, and the bundled sidecar resources.
+- **Path aliases.** `@/*` maps to the repo root and `@cognia/*` to `packages/*/src`.
 
-| Layer                 | Tools                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| Frontend              | Next.js 16, React 19, TypeScript, Tailwind v4, shadcn/ui (`new-york`), Radix UI, `next-intl`                      |
-| State / data          | Zustand 5, Dexie 4 + `dexie-react-hooks`, `zundo`, React Hook Form, Zod 4                                         |
-| Editor / viz          | React Flow, Monaco, CodeMirror, Mermaid, KaTeX, three / r3f, Recharts, `motion`                                   |
-| AI                    | Claude Agent SDK, Vercel AI SDK v7, `@ai-sdk/*`, MCP, ACP, Codex App Server, OpenCode V2, Pi RPC                  |
-| Desktop core          | Tauri 2.12, Rust 1.99+, `axum`, `tokio`, `rusqlite` + `sqlite-vec`, `webrtc-rs`, `wasmtime` 49, `keyring`, `git2` |
-| Mobile                | Capacitor 8 (iOS / Android), barcode scanner, biometric / secure-storage / voice-recorder plugins                 |
-| Sidecar               | Node 26+ ESM / TypeScript, agent host, VS Code extension host, page snapshots, and editor bridge                  |
-| Terminal / extensions | Ink / React TUI, WXT browser extension, JavaScript / Python / WASM plugin runtimes                                |
-| Quality               | Jest 30 + RTL, Playwright, ESLint 9, Prettier 3, Husky + lint-staged + commitlint                                 |
+</details>
 
-### Critical notes
+<details>
+<summary><b>Troubleshooting</b></summary>
 
-- **Package manager**: Install dependencies from the repository root with the pnpm version declared in `package.json`. Preserve `pnpm-lock.yaml`.
-- **Static exports**: Preserve the production `output: "export"` configuration in `next.config.ts`. Tauri and Capacitor consume `out/`, but require their own build targets. The docs site has a separate static-export configuration in `docs/next.config.ts`.
-- **HTTP services**: The app has no `app/api/` server at runtime. Desktop or headless hosts supply MCP, webhook reception, and Companion APIs. Workspace browser services run separately.
-- **Browser dependencies**: Keep Node-only operations outside the browser bundle. `next.config.ts` uses `NODE_ONLY_MODULES` and browser stubs to resolve Node built-ins reached through third-party dependencies. Check both Turbopack and Webpack handling when extending these aliases.
+| Symptom                                           | Try                                                                                                                    |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Port 3000 is in use                               | Stop the other process if that is safe, or run `pnpm dev --port 3002`                                                  |
+| Tauri build fails                                 | Run `pnpm tauri info` and check the platform prerequisites                                                             |
+| Module not found                                  | Run `pnpm install --frozen-lockfile` from the root, and `pnpm sidecars:install` for the sidecar                        |
+| `Cannot find module 'collections/server'` in docs | Run `pnpm docs:dev` once to generate `docs/.source/`                                                                   |
+| i18n check fails                                  | Run `pnpm i18n:build`, then fix the reported key gap. Don't reset the baseline to hide it                              |
+| Monaco assets missing                             | Run `pnpm monaco:copy` (`predev` and `prebuild` also run it)                                                           |
+| Browser or phone can't send, or asks to pair      | Check the selected host, the pairing, and the chat grant. `pnpm dev` starts only the UI                                |
+| External agent won't start                        | Check the agent's install, version, and sign-in on the execution host. Paired clients also need an Agent Control grant |
+| Plugin found but can't be enabled                 | Read the compatibility and permission diagnostics. Native plugins need a host                                          |
+| Android fast deploy rejects assets                | Run `pnpm mobile:build:android` again before deploying                                                                 |
 
-### Conventions
-
-Follow the project rules in [`AGENTS.md`](./AGENTS.md) and the development guidance in [`CLAUDE.md`](./CLAUDE.md):
-
-1. **Research before implementing.** Search `lib/`, `components/`, `hooks/`, `src-tauri/`, and the relevant ADR before adding a utility, hook, or component. Extend an existing implementation when possible.
-2. **Implement the full behavior.** If a blocker prevents completion, report it. Do not omit required behavior silently.
-3. **Keep tests beside the source.** New or edited files under `components/**`, `hooks/**`, `lib/**`, and `src-tauri/src/**` need co-located tests. The vendored `components/ui/` and `components/ai-elements/` directories are exempt. Coverage checks require an explicit request.
-4. **Use i18n for user-facing text.** Do not hard-code strings in `.tsx`. Add keys to both split source trees, `i18n/messages/en/**` and `i18n/messages/zh-CN/**`. Run `pnpm i18n:build`, `pnpm i18n:build:check`, and `pnpm lint:i18n`. Do not edit the generated `i18n/messages/en.json` or `i18n/messages/zh-CN.json` files.
-5. **Reuse shared modules.** Use the existing PII redaction (`packages/redact/src/index.ts`), quiet-hours control (`lib/connectors/outbound-runner`), build-options pipeline (`lib/claude/build-options.ts`), and A2UI ⇄ IM bridge (`lib/connectors/a2ui-bridge/`). Extend these entry points instead of creating parallel implementations.
-
-### Troubleshooting
-
-| Symptom                                               | Next step                                                                                                                                                               |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Port 3000 is in use                                   | Identify the process and stop it only if it is safe to do so, or use `pnpm dev --port 3002`.                                                                            |
-| Tauri build fails                                     | Run `pnpm tauri info`, then check the build error and platform prerequisites.                                                                                           |
-| Module is missing                                     | Run `pnpm install --frozen-lockfile` from the root. For sidecar dependencies, run `pnpm sidecars:install`. Preserve the lockfile.                                       |
-| Docs report `Cannot find module 'collections/server'` | Run `pnpm docs:dev` to generate `docs/.source/`.                                                                                                                        |
-| i18n check fails                                      | Run `pnpm i18n:build`, `pnpm i18n:build:check`, and `pnpm lint:i18n`. Fix the reported source or parity issue; do not reset the baseline merely to suppress it.         |
-| Monaco assets are missing                             | Run `pnpm monaco:copy`. `predev` and `prebuild` also run this step.                                                                                                     |
-| Browser or mobile cannot send, or requests pairing    | Check the selected host, pairing credential, and chat grant. `pnpm dev` starts the UI only; use `pnpm dev:web-headless` when you need a local host.                     |
-| External agent cannot start                           | Check the installed runtime, version, authentication, and execution host. Paired clients also need an Agent Control grant. Follow the agent settings diagnostics.       |
-| Plugin is discovered but cannot enable                | Inspect compatibility and permission diagnostics. Native plugins cannot run directly in an unpaired browser or mobile client. Pi-specific resources need their runtime. |
-| Android fast deployment rejects existing assets       | Assets are stale, modified, or built for another target. Run `pnpm mobile:build:android` before deploying again.                                                        |
+</details>
 
 ## Contributing
 
-1. Fork the repository and create a feature branch such as `<type>/<short-kebab>` (for example, `feat/connector-wecom`).
-2. Make focused changes. Follow [Conventions](#conventions).
-3. Add or update co-located tests.
-4. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, and any relevant `pnpm test:e2e:*`.
-5. Use Conventional Commits and open a PR with the relevant ADRs and validation results.
+1. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the working rules in [`CLAUDE.md`](./CLAUDE.md).
+2. Create a branch named `<type>/<short-kebab>`, for example `feat/connector-wecom`.
+3. Keep the change focused and update its co-located tests. Add a changeset for user-facing changes.
+4. Run `pnpm lint`, `pnpm typecheck`, `pnpm test:changed`, and any relevant E2E suite.
+5. Open a PR with a Conventional Commit title, and link the relevant ADRs and how you verified the change.
 
-## Learn more
+## Documentation
 
-- **ADRs**: [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/) (rendered at <http://localhost:3001> once `pnpm docs:dev` is running)
-- **Standalone agent CLI**: [`cli/README.md`](./cli/README.md)
-- **Agent execution and recovery**: [`unified-agent-execution/`](./docs/content/docs/en/subsystems/unified-agent-execution/)
-- **Mobile workflows**: [`mobile/README.md`](./mobile/README.md)
-- **Browser companion extension**: [cognia-labs/cognia-browser-extension](https://github.com/cognia-labs/cognia-browser-extension)
-- **Plugin SDK**: [`packages/plugin-sdk/`](./packages/plugin-sdk/)
-- **Working rules**: [`CLAUDE.md`](./CLAUDE.md)
-- **External docs**: [Tauri 2](https://tauri.app/) · [Next.js 16](https://nextjs.org/docs) · [shadcn/ui](https://ui.shadcn.com/) · [Capacitor](https://capacitorjs.com/docs) · [Fumadocs](https://fumadocs.dev/)
+| Topic                  | Where                                                                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Getting started        | [`docs/content/docs/en/getting-started.mdx`](./docs/content/docs/en/getting-started.mdx)                                                                    |
+| Subsystems             | [`docs/content/docs/en/subsystems/`](./docs/content/docs/en/subsystems/)                                                                                    |
+| Architecture decisions | [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/) (rendered at <http://localhost:3001> after `pnpm docs:dev`)                                      |
+| Agent execution        | [Unified agent execution](./docs/content/docs/en/subsystems/unified-agent-execution/) · [Agent packages](./docs/content/docs/en/subsystems/agent-packages/) |
+| Plugins                | [Plugin system](./docs/content/docs/en/subsystems/plugin-system/) · [Plugin SDK](./packages/plugin-sdk/)                                                    |
+| Clients                | [CLI](./cli/README.md) · [Mobile](./mobile/README.md)                                                                                                       |
+| Development            | [Workflow](./docs/development/WORKFLOW.md) · [Testing](./docs/development/TESTING.md) · [CI/CD](./docs/development/CI_CD.md)                                |
 
-## License
+## License and support
 
-[AGPL-3.0-or-later](./LICENSE).
+Cognia is licensed under [AGPL-3.0-or-later](./LICENSE).
 
-## Support
-
-- Read the relevant ADR under [`docs/content/docs/en/adr/`](./docs/content/docs/en/adr/).
-- Describe the problem and steps to reproduce it in the [issue tracker](https://github.com/cognia-labs/cognia/issues).
+Report bugs, with steps to reproduce, in the [issue tracker](https://github.com/cognia-labs/cognia/issues). Report security issues as described in [`SECURITY.md`](./SECURITY.md).
