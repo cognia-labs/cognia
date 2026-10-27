@@ -2,11 +2,11 @@ import type { Meta, StoryObj } from "@storybook/nextjs"
 
 import { AutomationSection } from "./automation-section"
 
-// Composite five-tab section (Overview / Permissions / Whitelist / Audit /
-// Inspector / Sandboxes), driven by the `?autoTab=` query param via the App
-// Router mocks the Storybook preview supplies. The automation engine only runs
-// under Tauri, so the Overview tab shows its "requires the desktop runtime"
-// alert in the browser; the Audit tab reads the (empty) Dexie table.
+// Status strip over a master/detail pane (Overview / Permissions / Access rules /
+// Behavior / Audit / Inspector / Diagnostics), driven by the `?autoTab=` query
+// param via the App Router mocks the Storybook preview supplies. The automation
+// engine only runs under Tauri, so in the browser the section renders its
+// header and the "runs on the desktop app" notice.
 const meta = {
   title: "Settings/Automation/AutomationSection",
   component: AutomationSection,
@@ -23,5 +23,5 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-// Default tab (Overview) — web branch alert under the tab bar + header.
+// Web branch: header + unavailable notice.
 export const Default: Story = {}

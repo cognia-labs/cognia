@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * Settings then Automation then Access rules.
+ * Settings then UI Automation then Access rules.
  *
  * One editor for what used to be two, in two different Settings sections that
  * never mentioned each other: the global whitelist here, and the per-action
@@ -23,10 +23,10 @@ import { useTranslations } from "next-intl"
 import { CrosshairIcon, PlusIcon, Trash2Icon, TrashIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { SettingsBlock, SettingsStack } from "@/components/settings/common/settings-block"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -182,165 +182,161 @@ export function AccessRulesTab() {
     }))
 
   return (
-    <div className="space-y-4" data-testid="automation-access-rules">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex flex-wrap items-center gap-2">
-            <span>{t("title")}</span>
-            {saving && (
-              <Badge variant="outline" className="text-[10px]" data-testid="access-rules-saving">
-                {t("saving")}
-              </Badge>
-            )}
-          </CardTitle>
-          <CardDescription>{t("description")}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Alert>
-            <AlertDescription className="text-xs">{t("hardBoundaryNote")}</AlertDescription>
-          </Alert>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t("stageAdmitTitle")}</CardTitle>
-          <CardDescription>{t("stageAdmitDescription")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5 text-sm">
-          {isAdmitEmpty(rules.admit) && (
-            <p className="text-xs text-muted-foreground" data-testid="admit-empty-note">
-              {t("admit.emptyNote")}
-            </p>
+    <SettingsStack>
+      {/* The panel heading already names this; the intro carries what the
+          two stages share instead of a second "Access rules" title. */}
+      <div className="space-y-3" data-testid="automation-access-rules">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <p className="min-w-0 flex-1 text-xs text-pretty text-muted-foreground">
+            {t("description")}
+          </p>
+          {saving && (
+            <Badge variant="outline" className="text-[10px]" data-testid="access-rules-saving">
+              {t("saving")}
+            </Badge>
           )}
+        </div>
+        <Alert>
+          <AlertDescription className="text-xs">{t("hardBoundaryNote")}</AlertDescription>
+        </Alert>
+        {saveError && (
+          <p className="text-xs text-rose-500" role="alert" data-testid="access-rules-save-error">
+            {t("restrict.saveError", { error: saveError })}
+          </p>
+        )}
+      </div>
 
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => void captureFocus()}>
-                <CrosshairIcon className="size-4" aria-hidden="true" />
-                {t("admit.captureFocused")}
-              </Button>
-              {focus && (
-                <span className="min-w-0 truncate text-xs text-muted-foreground">
-                  {focus.processName ?? t("admit.none")} · {focus.windowTitle ?? t("admit.none")}
-                </span>
-              )}
-            </div>
-          </div>
+      <SettingsBlock
+        title={t("stageAdmitTitle")}
+        description={t("stageAdmitDescription")}
+        headingLevel={4}
+        settingId="automation-access-admit"
+        contentClassName="space-y-5 text-sm"
+      >
+        {isAdmitEmpty(rules.admit) && (
+          <p className="text-xs text-muted-foreground" data-testid="admit-empty-note">
+            {t("admit.emptyNote")}
+          </p>
+        )}
 
-          <BadgeListEditor
-            label={t("admit.processNames")}
-            description={t("admit.processNamesHint")}
-            placeholder={t("admit.processPlaceholder")}
-            addLabel={t("admit.add")}
-            removeAriaFor={(entry) => t("admit.removeEntryAria", { entry })}
-            emptyLabel={t("admit.emptyProcess")}
-            value={processInput}
-            onValueChange={setProcessInput}
-            onAdd={addAdmitProcess}
-            entries={rules.admit.processNames}
-            onRemove={removeAdmitProcess}
-            testId="admit-process-names"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void captureFocus()}>
+            <CrosshairIcon className="size-4" aria-hidden="true" />
+            {t("admit.captureFocused")}
+          </Button>
+          {focus && (
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              {focus.processName ?? t("admit.none")} · {focus.windowTitle ?? t("admit.none")}
+            </span>
+          )}
+        </div>
 
-          <BadgeListEditor
-            label={t("admit.windowTitles")}
-            description={t("admit.windowTitlesHint")}
-            placeholder={t("admit.windowPlaceholder")}
-            addLabel={t("admit.add")}
-            removeAriaFor={(entry) => t("admit.removeEntryAria", { entry })}
-            emptyLabel={t("admit.emptyWindow")}
-            value={titleInput}
-            onValueChange={setTitleInput}
-            onAdd={addAdmitTitle}
-            entries={rules.admit.windowTitlePatterns}
-            onRemove={removeAdmitTitle}
-            testId="admit-window-titles"
-          />
-        </CardContent>
-      </Card>
+        <BadgeListEditor
+          label={t("admit.processNames")}
+          description={t("admit.processNamesHint")}
+          placeholder={t("admit.processPlaceholder")}
+          addLabel={t("admit.add")}
+          removeAriaFor={(entry) => t("admit.removeEntryAria", { entry })}
+          emptyLabel={t("admit.emptyProcess")}
+          value={processInput}
+          onValueChange={setProcessInput}
+          onAdd={addAdmitProcess}
+          entries={rules.admit.processNames}
+          onRemove={removeAdmitProcess}
+          testId="admit-process-names"
+        />
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t("stageRestrictTitle")}</CardTitle>
-          <CardDescription>{t("stageRestrictDescription")}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6 text-sm">
-          <StringListEditor
-            label={t("restrict.allowedProcessNames.label")}
-            description={t("restrict.allowedProcessNames.description")}
-            placeholder={t("restrict.allowedProcessNames.placeholder")}
-            values={rules.restrict.allowedProcessNames}
-            validate={() => true}
-            testId="restrict-process-names"
-            onChange={(values) =>
-              updateRules((prev) => ({
-                ...prev,
-                restrict: { ...prev.restrict, allowedProcessNames: values },
-              }))
-            }
-          />
+        <BadgeListEditor
+          label={t("admit.windowTitles")}
+          description={t("admit.windowTitlesHint")}
+          placeholder={t("admit.windowPlaceholder")}
+          addLabel={t("admit.add")}
+          removeAriaFor={(entry) => t("admit.removeEntryAria", { entry })}
+          emptyLabel={t("admit.emptyWindow")}
+          value={titleInput}
+          onValueChange={setTitleInput}
+          onAdd={addAdmitTitle}
+          entries={rules.admit.windowTitlePatterns}
+          onRemove={removeAdmitTitle}
+          testId="admit-window-titles"
+        />
+      </SettingsBlock>
 
-          <StringListEditor
-            label={t("restrict.allowedWindowTitlePatterns.label")}
-            description={t("restrict.allowedWindowTitlePatterns.description")}
-            placeholder={t("restrict.allowedWindowTitlePatterns.placeholder")}
-            values={rules.restrict.allowedWindowTitlePatterns}
-            validate={isValidRegex}
-            invalidMessage={t("restrict.regexInvalid")}
-            testId="restrict-window-titles"
-            onChange={(values) =>
-              updateRules((prev) => ({
-                ...prev,
-                restrict: { ...prev.restrict, allowedWindowTitlePatterns: values },
-              }))
-            }
-          />
+      <SettingsBlock
+        title={t("stageRestrictTitle")}
+        description={t("stageRestrictDescription")}
+        headingLevel={4}
+        settingId="automation-access-restrict"
+        contentClassName="space-y-6 text-sm"
+      >
+        <StringListEditor
+          label={t("restrict.allowedProcessNames.label")}
+          description={t("restrict.allowedProcessNames.description")}
+          placeholder={t("restrict.allowedProcessNames.placeholder")}
+          values={rules.restrict.allowedProcessNames}
+          validate={() => true}
+          testId="restrict-process-names"
+          onChange={(values) =>
+            updateRules((prev) => ({
+              ...prev,
+              restrict: { ...prev.restrict, allowedProcessNames: values },
+            }))
+          }
+        />
 
-          <StringListEditor
-            label={t("restrict.allowedUrlPatterns.label")}
-            description={t("restrict.allowedUrlPatterns.description")}
-            placeholder={t("restrict.allowedUrlPatterns.placeholder")}
-            values={rules.restrict.allowedUrlPatterns}
-            validate={isValidRegex}
-            invalidMessage={t("restrict.regexInvalid")}
-            testId="restrict-url-patterns"
-            onChange={(values) =>
-              updateRules((prev) => ({
-                ...prev,
-                restrict: { ...prev.restrict, allowedUrlPatterns: values },
-              }))
-            }
-          />
+        <StringListEditor
+          label={t("restrict.allowedWindowTitlePatterns.label")}
+          description={t("restrict.allowedWindowTitlePatterns.description")}
+          placeholder={t("restrict.allowedWindowTitlePatterns.placeholder")}
+          values={rules.restrict.allowedWindowTitlePatterns}
+          validate={isValidRegex}
+          invalidMessage={t("restrict.regexInvalid")}
+          testId="restrict-window-titles"
+          onChange={(values) =>
+            updateRules((prev) => ({
+              ...prev,
+              restrict: { ...prev.restrict, allowedWindowTitlePatterns: values },
+            }))
+          }
+        />
 
-          <ScreenRegionEditor
-            label={t("restrict.forbiddenScreenRegions.label")}
-            description={t("restrict.forbiddenScreenRegions.description")}
-            removeLabel={t("restrict.remove")}
-            addLabel={t("restrict.add")}
-            rects={rules.restrict.forbiddenScreenRegions}
-            axisLabels={{
-              x: t("restrict.forbiddenScreenRegions.x"),
-              y: t("restrict.forbiddenScreenRegions.y"),
-              width: t("restrict.forbiddenScreenRegions.width"),
-              height: t("restrict.forbiddenScreenRegions.height"),
-            }}
-            onChange={(rects) =>
-              updateRules((prev) => ({
-                ...prev,
-                restrict: { ...prev.restrict, forbiddenScreenRegions: rects },
-              }))
-            }
-          />
-        </CardContent>
-      </Card>
+        <StringListEditor
+          label={t("restrict.allowedUrlPatterns.label")}
+          description={t("restrict.allowedUrlPatterns.description")}
+          placeholder={t("restrict.allowedUrlPatterns.placeholder")}
+          values={rules.restrict.allowedUrlPatterns}
+          validate={isValidRegex}
+          invalidMessage={t("restrict.regexInvalid")}
+          testId="restrict-url-patterns"
+          onChange={(values) =>
+            updateRules((prev) => ({
+              ...prev,
+              restrict: { ...prev.restrict, allowedUrlPatterns: values },
+            }))
+          }
+        />
 
-      {saveError && (
-        <p className="text-xs text-rose-500" role="alert" data-testid="access-rules-save-error">
-          {t("restrict.saveError", { error: saveError })}
-        </p>
-      )}
-    </div>
+        <ScreenRegionEditor
+          label={t("restrict.forbiddenScreenRegions.label")}
+          description={t("restrict.forbiddenScreenRegions.description")}
+          removeLabel={t("restrict.remove")}
+          addLabel={t("restrict.add")}
+          rects={rules.restrict.forbiddenScreenRegions}
+          axisLabels={{
+            x: t("restrict.forbiddenScreenRegions.x"),
+            y: t("restrict.forbiddenScreenRegions.y"),
+            width: t("restrict.forbiddenScreenRegions.width"),
+            height: t("restrict.forbiddenScreenRegions.height"),
+          }}
+          onChange={(rects) =>
+            updateRules((prev) => ({
+              ...prev,
+              restrict: { ...prev.restrict, forbiddenScreenRegions: rects },
+            }))
+          }
+        />
+      </SettingsBlock>
+    </SettingsStack>
   )
 }
 

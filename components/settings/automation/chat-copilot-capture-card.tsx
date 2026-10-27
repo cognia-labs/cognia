@@ -11,7 +11,7 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsBlock } from "@/components/settings/common/settings-block"
 import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { AutomationSettings, SurfacePolicy, Whitelist } from "@/lib/automation/client"
@@ -70,63 +70,64 @@ export function ChatCopilotCaptureCard({
   }
 
   return (
-    <Card data-testid="chat-copilot-capture-card">
-      <CardHeader>
-        <CardTitle>{t("title")}</CardTitle>
-        <CardDescription>{t("description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4 text-sm">
-        <fieldset className="space-y-2" disabled={saving}>
-          <legend className="font-medium">{t("modeLabel")}</legend>
-          <RadioGroup
-            value={mode}
-            onValueChange={(value) =>
-              write({
-                ...(policy?.whitelist ? { whitelist: policy.whitelist } : {}),
-                tier: value === "allowListed" ? "whitelist" : "off",
-              })
-            }
-          >
-            <div className="flex items-start gap-2">
-              <RadioGroupItem value="ask" id="chat-copilot-mode-ask" className="mt-0.5" />
-              <div className="space-y-0.5">
-                <Label htmlFor="chat-copilot-mode-ask">{t("modeAsk")}</Label>
-                <p className="text-xs text-muted-foreground">{t("modeAskHint")}</p>
-              </div>
+    <SettingsBlock
+      title={t("title")}
+      description={t("description")}
+      headingLevel={4}
+      testid="chat-copilot-capture-card"
+      settingId="automation-chat-copilot"
+      contentClassName="text-sm"
+    >
+      <fieldset className="space-y-2" disabled={saving}>
+        <legend className="font-medium">{t("modeLabel")}</legend>
+        <RadioGroup
+          value={mode}
+          onValueChange={(value) =>
+            write({
+              ...(policy?.whitelist ? { whitelist: policy.whitelist } : {}),
+              tier: value === "allowListed" ? "whitelist" : "off",
+            })
+          }
+        >
+          <div className="flex items-start gap-2">
+            <RadioGroupItem value="ask" id="chat-copilot-mode-ask" className="mt-0.5" />
+            <div className="space-y-0.5">
+              <Label htmlFor="chat-copilot-mode-ask">{t("modeAsk")}</Label>
+              <p className="text-xs text-muted-foreground">{t("modeAskHint")}</p>
             </div>
-            <div className="flex items-start gap-2">
-              <RadioGroupItem
-                value="allowListed"
-                id="chat-copilot-mode-allow-listed"
-                className="mt-0.5"
-              />
-              <div className="space-y-0.5">
-                <Label htmlFor="chat-copilot-mode-allow-listed">{t("modeAllowListed")}</Label>
-                <p className="text-xs text-muted-foreground">{t("modeAllowListedHint")}</p>
-              </div>
+          </div>
+          <div className="flex items-start gap-2">
+            <RadioGroupItem
+              value="allowListed"
+              id="chat-copilot-mode-allow-listed"
+              className="mt-0.5"
+            />
+            <div className="space-y-0.5">
+              <Label htmlFor="chat-copilot-mode-allow-listed">{t("modeAllowListed")}</Label>
+              <p className="text-xs text-muted-foreground">{t("modeAllowListedHint")}</p>
             </div>
-          </RadioGroup>
-        </fieldset>
+          </div>
+        </RadioGroup>
+      </fieldset>
 
-        {mode === "allowListed" && (
-          <BadgeListEditor
-            label={t("processNames")}
-            description={t("processNamesHint")}
-            placeholder={t("processPlaceholder")}
-            addLabel={t("add")}
-            removeAriaFor={(entry) => t("removeEntryAria", { entry })}
-            emptyLabel={t("empty")}
-            value={draft}
-            onValueChange={setDraft}
-            onAdd={addEntry}
-            entries={list.processNames}
-            onRemove={removeEntry}
-            testId="chat-copilot-process-names"
-          />
-        )}
+      {mode === "allowListed" && (
+        <BadgeListEditor
+          label={t("processNames")}
+          description={t("processNamesHint")}
+          placeholder={t("processPlaceholder")}
+          addLabel={t("add")}
+          removeAriaFor={(entry) => t("removeEntryAria", { entry })}
+          emptyLabel={t("empty")}
+          value={draft}
+          onValueChange={setDraft}
+          onAdd={addEntry}
+          entries={list.processNames}
+          onRemove={removeEntry}
+          testId="chat-copilot-process-names"
+        />
+      )}
 
-        <p className="text-xs text-muted-foreground">{t("permissionNote")}</p>
-      </CardContent>
-    </Card>
+      <p className="text-xs text-muted-foreground">{t("permissionNote")}</p>
+    </SettingsBlock>
   )
 }

@@ -5282,24 +5282,25 @@
         "target": "Target",
         "time": "Time"
       },
+      "countTotal": "{count, plural, one {# record} other {# records}}",
       "description": "Automation call records, newest first.",
       "empty": "No audit records match the current filters.",
       "exportCsv": "Export CSV",
       "filters": {
         "allDecisions": "All decisions",
         "allSurfaces": "All surfaces",
-        "decisionAllow": "allow",
-        "decisionConsent": "consent",
-        "decisionDeny": "deny",
+        "decisionAllow": "Allowed",
+        "decisionConsent": "Asked",
+        "decisionDeny": "Denied",
         "surfaceChatCopilot": "Chat copilot",
         "surfaceComputerUse": "Computer Use",
         "surfaceMcp": "MCP",
         "surfacePlugin": "Plugin",
+        "surfaceSandbox": "Sandbox",
         "surfaceWorkflow": "Workflow"
       },
       "loadFailed": "Failed to load the audit log",
-      "loading": "Loading audit log…",
-      "title": "Audit Log"
+      "loading": "Loading audit log…"
     },
     "behavior": {
       "consentTimeout": {
@@ -5310,7 +5311,9 @@
         "help": "When consecutive screenshots are identical, send a short text note instead of the duplicate image. Saves tokens on long tasks.",
         "label": "Skip unchanged screenshots"
       },
-      "description": "How screenshots and typing are presented to the model.",
+      "description": "How the screen is shown to the model.",
+      "inputDescription": "How long text is entered, and how long a consent prompt waits.",
+      "inputTitle": "Typing and consent",
       "pasteThreshold": {
         "help": "Type actions longer than this many characters paste via the clipboard instead of typing key-by-key. 0 disables.",
         "label": "Paste threshold (characters)"
@@ -5325,7 +5328,7 @@
         "maxHeight": "Max height",
         "maxWidth": "Max width"
       },
-      "title": "Model behavior"
+      "title": "Screenshots"
     },
     "consent": {
       "actions": {
@@ -5378,9 +5381,52 @@
       },
       "title": "Automation requests your consent"
     },
+    "diagnostics": {
+      "backend": {
+        "description": "The platform backend that captures the screen and simulates input.",
+        "failed": "Failed",
+        "failedTitle": "The {platform} backend failed to start",
+        "ok": "Running",
+        "okDetail": "No startup failure was reported this session.",
+        "title": "Automation backend"
+      },
+      "permissions": {
+        "description": "What the operating system lets Cognia do. Changes take effect after you check again.",
+        "hint": {
+          "accessibility": "Needed to click, type and read app interfaces.",
+          "screenRecording": "Needed for every screenshot.",
+          "uiAutomation": "Windows UI Automation, needed to read app interfaces."
+        },
+        "noneRequired": "This platform needs no extra permission for automation.",
+        "openSystemSettings": "Open System Settings",
+        "probeFailed": "Couldn't read the system permission state.",
+        "recheck": "Check again",
+        "state": {
+          "missing": "Not granted",
+          "notApplicable": "Not needed",
+          "ok": "Granted",
+          "unknown": "Unknown"
+        },
+        "title": "System permissions"
+      },
+      "screenOff": {
+        "backend": "Backend",
+        "description": "Health of the virtual display driver. Set it up and test it under Behavior.",
+        "lastError": "Last error",
+        "open": "Behavior",
+        "title": "Screen-off mode"
+      }
+    },
+    "feedback": {
+      "engineDisabled": "Automation engine off",
+      "engineEnabled": "Automation engine on",
+      "killSwitchEngaged": "Emergency stop engaged. All in-flight calls were rejected.",
+      "killSwitchFailed": "Emergency stop failed",
+      "saveFailed": "Couldn't save the automation settings"
+    },
     "header": {
-      "description": "Configure revision-bound desktop automation, app approvals, capture, and policy.",
-      "title": "Automation"
+      "description": "Let agents see and drive this computer's screen, keyboard and mouse, and decide who may and how freely.",
+      "title": "UI Automation"
     },
     "inspector": {
       "actionFailed": "Action failed",
@@ -5559,6 +5605,52 @@
       "workspaceNotice": "Import an empty guest replica before selecting this VM for a task. Import is bounded to 512 files and 8 MiB and excludes credentials and Git metadata. Review changes before approval; adoption stops the VM and uses the original source revision. Text patches are limited to 64 files and 1 MiB; download changed binary files separately.",
       "workspaceRoot": "Selected Host workspace directory"
     },
+    "nav": {
+      "attentionBadge": "Needs attention",
+      "groups": {
+        "configGroup": "Configure",
+        "monitorGroup": "Monitor",
+        "statusGroup": "Status",
+        "toolsGroup": "Tools"
+      },
+      "items": {
+        "accessRules": {
+          "description": "Which apps, windows and screen areas automation may touch.",
+          "label": "Access rules"
+        },
+        "audit": {
+          "description": "Every automation call, newest first.",
+          "label": "Audit log"
+        },
+        "behavior": {
+          "description": "How screenshots and typing reach the model.",
+          "label": "Behavior"
+        },
+        "diagnostics": {
+          "description": "OS permissions, backend capabilities and driver health.",
+          "label": "Diagnostics"
+        },
+        "inspector": {
+          "description": "Read an app's accessibility tree and test a click.",
+          "label": "Inspector"
+        },
+        "overview": {
+          "description": "What blocks automation, recent activity and the current policy.",
+          "label": "Overview"
+        },
+        "permissions": {
+          "description": "Which sources may drive the screen, and whether they ask first.",
+          "label": "Permissions"
+        }
+      },
+      "mobileTrigger": "Sections",
+      "title": "UI Automation"
+    },
+    "osPermissions": {
+      "accessibility": "Accessibility",
+      "screenRecording": "Screen Recording",
+      "uiAutomation": "UI Automation"
+    },
     "overview": {
       "capabilities": {
         "a11yTree": "Accessibility Tree",
@@ -5569,31 +5661,19 @@
         "uia": "UI Automation"
       },
       "capabilityProbeFailed": "Failed to read platform capabilities.",
-      "engineStatus": "Engine Status",
-      "engineStatusDescription": "Toggle the automation engine on or off. When off the kill switch is engaged and all calls are rejected at the gate.",
-      "engineToggle": "Enable automation engine",
-      "engineToggleHint": "When enabled, automations respect the permission tiers configured below.",
-      "initFailure": {
-        "body": "The platform automation backend ({platform}) failed to start: {error}. Computer Use calls will return UnsupportedPlatform until the underlying issue is resolved. Check the troubleshooting guide for your OS or restart the app after fixing permissions.",
-        "dismiss": "Dismiss",
-        "title": "Backend initialization failed"
-      },
-      "killSwitch": "Engage Kill Switch",
-      "killSwitchHint": "Immediately rejects all in-flight automation calls. Use when the engine behaves unexpectedly.",
       "metrics": {
         "allow": "Allowed",
         "consent": "Consent",
         "deny": "Denied",
-        "description": "Activity counters from the audit log. Updates on tab mount and every 60s.",
-        "lastScreenshotDescription": "Time the most recent successful screenshot was captured.",
+        "description": "Counted from the audit log; refreshes every minute.",
         "lastScreenshotHours": "{hours}h ago",
         "lastScreenshotMinutes": "{minutes}m ago",
         "lastScreenshotNever": "No screenshot in the last 24h.",
         "lastScreenshotRelative": "{seconds}s ago",
         "lastScreenshotTitle": "Last screenshot",
         "loadFailed": "Failed to read audit log.",
+        "openAudit": "Audit log",
         "title": "Last 24 hours",
-        "topFailingDescription": "Commands with the most deny / consent-decline outcomes in the last 24h. Investigate when a single command dominates.",
         "topFailingEmpty": "No denied calls in the last 24h.",
         "topFailingTitle": "Top failing commands",
         "total": "Total"
@@ -5601,6 +5681,49 @@
       "no": "No",
       "noPlanned": "Planned",
       "platformCapabilities": "Platform Capabilities",
+      "platformCapabilitiesDescription": "What the automation backend on this machine reports it can do.",
+      "policy": {
+        "admitCount": "{count, plural, one {# rule} other {# rules}}",
+        "admitEmpty": "Any app",
+        "admitRules": "Admitted apps and windows",
+        "chatCopilot": "Chat copilot capture",
+        "chatCopilotAllowListed": "Listed apps without asking",
+        "chatCopilotAsk": "Asks every time",
+        "defaultTier": "Default tier",
+        "description": "What each source may do right now. Select a value to change it.",
+        "inherited": "{tier} (default)",
+        "title": "Current policy"
+      },
+      "sandboxes": {
+        "description": "Docker, Lume and managed cloud desktops moved to Devices, under this device's Sandbox card.",
+        "open": "Open in Devices",
+        "title": "Sandboxes"
+      },
+      "setup": {
+        "allDenied": "Every source is set to Off, so every call is denied.",
+        "capabilitiesFailed": "The automation backend did not report its capabilities.",
+        "enable": "Turn on",
+        "engine": {
+          "off": "The automation engine is off.",
+          "stopped": "The emergency stop is engaged."
+        },
+        "gapCount": "{count, plural, one {# to fix} other {# to fix}}",
+        "gapsDescription": "Fix these before automation can run, most blocking first.",
+        "initFailure": {
+          "body": "The platform automation backend ({platform}) failed to start: {error}. Computer Use calls will return UnsupportedPlatform until the underlying issue is resolved. Check the troubleshooting guide for your OS or restart the app after fixing permissions.",
+          "dismiss": "Dismiss",
+          "title": "Backend initialization failed"
+        },
+        "openDiagnostics": "Open diagnostics",
+        "openPermissions": "Open permissions",
+        "openSystemSettings": "Open System Settings",
+        "permissionMissing": "{permission} permission is not granted.",
+        "ready": "Ready",
+        "readyDescription": "Nothing on this machine is blocking automation.",
+        "recheck": "Check again",
+        "resume": "Resume",
+        "title": "Setup"
+      },
       "yes": "Yes"
     },
     "permissions": {
@@ -5621,17 +5744,21 @@
         "title": "Chat copilot capture"
       },
       "defaultTier": "Default Tier",
-      "defaultTierDescription": "The tier applied when no per-surface override is set.",
+      "defaultTierDescription": "The tier every source runs at unless it sets its own.",
+      "inheritDefault": "Default ({tier})",
+      "openAccessRules": "Add access rules",
       "perPlugin": {
-        "clearOverride": "Clear",
         "description": "Plugins that declare native:input or native:screen permissions can be granted a different tier than the catch-all Plugin surface. Useful for trusting one specific automation plugin without loosening every plugin's policy.",
         "empty": "No installed plugin currently declares native:input. Install or enable a plugin (e.g. cognia-computer-use) to manage per-plugin overrides here.",
-        "rowInheriting": "Inherits the Plugin surface tier above.",
-        "rowOverridden": "Override: {tier}",
-        "title": "Per-Plugin Overrides"
+        "followDefault": "Default ({tier})",
+        "inheritSource": "Plugin source",
+        "overrideCount": "{count, plural, one {# override} other {# overrides}}",
+        "rowInheriting": "Follows the Plugin source: {tier}",
+        "rowOverridden": "Own tier: {tier}",
+        "title": "Per-plugin overrides"
       },
-      "perSurface": "Per-Surface Overrides",
-      "perSurfaceDescription": "Each automation surface can override the default tier.",
+      "perSurface": "Per-source tiers",
+      "perSurfaceDescription": "A source left on its default follows the tier above.",
       "surfaces": {
         "computerUseDescription": "Anthropic-native computer-use tool calls.",
         "mcpDescription": "MCP tool invocations from connected servers.",
@@ -5642,7 +5769,13 @@
         "off": "Off",
         "perCall": "Per Call",
         "whitelist": "Whitelist"
-      }
+      },
+      "tierExplain": {
+        "off": "Every call is denied.",
+        "perCall": "Reading the screen runs freely; every click and keystroke asks you first.",
+        "whitelist": "Calls on apps and windows admitted under Access rules run without asking. With no rules, every app is admitted."
+      },
+      "whitelistEmptyWarning": "A source runs at Whitelist but no access rule admits anything, so every app is allowed without asking."
     },
     "pictureInPicture": {
       "actions": {
@@ -5839,24 +5972,26 @@
       "activeMonitor": {
         "label": "Virtual monitor"
       },
-      "description": "Keep Computer Use working when the monitor is off or asleep (the session must stay unlocked). Uses a bundled virtual display so screenshots never go black.",
+      "beta": "Beta",
+      "description": "Keep Computer Use working with the physical display asleep while the session stays unlocked.",
       "driverVersion": {
-        "label": "Driver"
+        "label": "Backend version"
       },
       "enabledHint": "Enable per character under Computer Use settings (screen-off mode).",
-      "howItWorks": "When a screen-off character drives the computer, a virtual display is created and made primary; it is released after 5 minutes idle, on the kill switch, or when the session closes.",
+      "howItWorks": "Screen-off mode creates one virtual display for capture and input. It releases it after 5 minutes idle, on the kill switch, when the session closes, or when the app exits.",
       "ipcError": {
         "label": "Error"
       },
       "lastError": {
         "label": "Last error"
       },
-      "probeBlack": "Capture returned a black frame — check the driver.",
+      "macosBetaNote": "macOS beta uses a private Apple API in the Developer ID build only (not the Mac App Store). Keep the lid open. Screen Recording and Accessibility permissions are required. One 1920×1080 display at 1× scale.",
+      "probeBlack": "The frame has little image data. Confirm fresh content and display identity with the hardware test.",
       "probeButton": "Test screen-off capture",
-      "probeOk": "Captured {width}×{height} via {monitor} — not black.",
+      "probeOk": "Captured {width}×{height} from virtual display {monitor}.",
       "probeRunning": "Testing…",
       "setupButton": "Set up driver",
-      "setupNote": "Until the driver is installed, screen-off turns error instead of capturing a black screen.",
+      "setupNote": "Install the Windows driver before trying screen-off mode.",
       "setupRunning": "Installing…",
       "status": {
         "down": "Unavailable",
@@ -5864,15 +5999,24 @@
         "setup": "Setup required"
       },
       "title": "Screen-off mode",
-      "windowsOnlyNote": "Screen-off mode is Windows-only. On this platform Computer Use uses the physical display."
+      "unsupportedNote": "This platform has no screen-off backend. Computer Use uses the physical display."
     },
-    "tabs": {
-      "accessRules": "Access rules",
-      "audit": "Audit",
-      "inspector": "Inspector",
-      "overview": "Overview",
-      "permissions": "Permissions",
-      "sandboxes": "Sandboxes"
+    "status": {
+      "engine": {
+        "off": "Automation is off",
+        "running": "Automation is on",
+        "stopped": "Emergency stop engaged"
+      },
+      "engineHint": {
+        "off": "Every automation call is rejected until you turn it on.",
+        "running": "Calls are checked against the permissions you configured.",
+        "stopped": "All calls are rejected. Turn the engine on to resume."
+      },
+      "engineToggle": "Engine",
+      "killSwitch": "Emergency stop",
+      "killSwitchHint": "Immediately rejects every in-flight and future automation call until you turn the engine back on.",
+      "permissionsMissing": "{count, plural, one {# system permission missing} other {# system permissions missing}}",
+      "permissionsReady": "System permissions granted"
     },
     "unavailable": {
       "description": "Controlling a screen, keyboard and mouse is a capability of the machine being driven, so the engine only runs inside the Cognia desktop app on that machine. Open Settings then Automation there to view or change these settings.",

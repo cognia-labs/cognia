@@ -5282,24 +5282,25 @@
         "target": "目标",
         "time": "时间"
       },
+      "countTotal": "共 {count} 条",
       "description": "自动化调用记录，最新在前。",
       "empty": "当前筛选条件下无审计记录。",
       "exportCsv": "导出 CSV",
       "filters": {
         "allDecisions": "全部裁决",
         "allSurfaces": "全部界面",
-        "decisionAllow": "allow",
-        "decisionConsent": "consent",
-        "decisionDeny": "deny",
+        "decisionAllow": "已放行",
+        "decisionConsent": "已询问",
+        "decisionDeny": "已拒绝",
         "surfaceChatCopilot": "聊天副驾",
         "surfaceComputerUse": "桌面自动化",
         "surfaceMcp": "MCP",
         "surfacePlugin": "插件",
+        "surfaceSandbox": "沙箱",
         "surfaceWorkflow": "工作流"
       },
       "loadFailed": "加载审计日志失败",
-      "loading": "正在加载审计日志……",
-      "title": "审计日志"
+      "loading": "正在加载审计日志……"
     },
     "behavior": {
       "consentTimeout": {
@@ -5310,7 +5311,9 @@
         "help": "连续截图内容相同时，发送一条简短文本说明而不是重复图片。长任务可大幅节省 token。",
         "label": "跳过未变化的截图"
       },
-      "description": "控制截图与输入以何种形式呈现给模型。",
+      "description": "屏幕画面以什么形式交给模型。",
+      "inputDescription": "长文本如何输入，以及确认弹窗等待多久。",
+      "inputTitle": "输入与确认",
       "pasteThreshold": {
         "help": "超过该字符数的输入操作改走剪贴板粘贴，而不是逐键输入。0 表示禁用。",
         "label": "粘贴阈值（字符数）"
@@ -5325,7 +5328,7 @@
         "maxHeight": "最大高度",
         "maxWidth": "最大宽度"
       },
-      "title": "模型行为"
+      "title": "截图"
     },
     "consent": {
       "actions": {
@@ -5378,9 +5381,52 @@
       },
       "title": "自动化操作请求授权"
     },
+    "diagnostics": {
+      "backend": {
+        "description": "负责截取屏幕和模拟输入的平台后端。",
+        "failed": "失败",
+        "failedTitle": "{platform} 后端启动失败",
+        "ok": "运行中",
+        "okDetail": "本次运行没有报告启动失败。",
+        "title": "自动化后端"
+      },
+      "permissions": {
+        "description": "操作系统允许 Cognia 做什么。修改后需重新检测才会更新。",
+        "hint": {
+          "accessibility": "点击、输入和读取应用界面都需要它。",
+          "screenRecording": "每一次截图都需要它。",
+          "uiAutomation": "Windows UI 自动化，读取应用界面需要它。"
+        },
+        "noneRequired": "这个平台的自动化不需要额外权限。",
+        "openSystemSettings": "打开系统设置",
+        "probeFailed": "无法读取系统权限状态。",
+        "recheck": "重新检测",
+        "state": {
+          "missing": "未授予",
+          "notApplicable": "不需要",
+          "ok": "已授予",
+          "unknown": "未知"
+        },
+        "title": "系统权限"
+      },
+      "screenOff": {
+        "backend": "后端",
+        "description": "虚拟显示器驱动的健康状态。安装和测试在「模型行为」里。",
+        "lastError": "最近错误",
+        "open": "模型行为",
+        "title": "熄屏模式"
+      }
+    },
+    "feedback": {
+      "engineDisabled": "自动化引擎已关闭",
+      "engineEnabled": "自动化引擎已开启",
+      "killSwitchEngaged": "已紧急停止，正在进行的调用已全部拒绝。",
+      "killSwitchFailed": "紧急停止失败",
+      "saveFailed": "自动化设置保存失败"
+    },
     "header": {
-      "description": "配置绑定 revision 的桌面自动化、应用授权、捕获与策略。",
-      "title": "自动化"
+      "description": "让智能体查看并操作这台电脑的屏幕、键盘和鼠标，并决定谁可以这样做、能做到什么程度。",
+      "title": "UI 自动化"
     },
     "inspector": {
       "actionFailed": "操作失败",
@@ -5559,6 +5605,52 @@
       "workspaceNotice": "为任务选择此 VM 前，先向空 guest 工作区导入副本。导入上限为 512 个文件、8 MiB，排除凭据和 Git 元数据。采纳前须审阅差异；采纳会停止 VM，并校验导入时的源版本。文本补丁上限为 64 个文件、1 MiB；二进制更改请单独下载。",
       "workspaceRoot": "已选择的 Host 工作区目录"
     },
+    "nav": {
+      "attentionBadge": "需要处理",
+      "groups": {
+        "configGroup": "配置",
+        "monitorGroup": "监控",
+        "statusGroup": "状态",
+        "toolsGroup": "工具"
+      },
+      "items": {
+        "accessRules": {
+          "description": "自动化可以触及哪些应用、窗口和屏幕区域。",
+          "label": "访问规则"
+        },
+        "audit": {
+          "description": "每一次自动化调用，最新在前。",
+          "label": "审计日志"
+        },
+        "behavior": {
+          "description": "截图和输入以什么形式交给模型。",
+          "label": "模型行为"
+        },
+        "diagnostics": {
+          "description": "系统权限、后端能力和驱动健康状态。",
+          "label": "平台诊断"
+        },
+        "inspector": {
+          "description": "读取应用的无障碍树，并测试一次点击。",
+          "label": "检查器"
+        },
+        "overview": {
+          "description": "阻碍自动化的问题、最近活动和当前策略。",
+          "label": "概览"
+        },
+        "permissions": {
+          "description": "哪些来源可以操作屏幕，以及是否先征求同意。",
+          "label": "权限等级"
+        }
+      },
+      "mobileTrigger": "分区",
+      "title": "UI 自动化"
+    },
+    "osPermissions": {
+      "accessibility": "辅助功能",
+      "screenRecording": "屏幕录制",
+      "uiAutomation": "UI 自动化"
+    },
     "overview": {
       "capabilities": {
         "a11yTree": "无障碍树",
@@ -5569,31 +5661,19 @@
         "uia": "UI 自动化"
       },
       "capabilityProbeFailed": "读取平台能力失败。",
-      "engineStatus": "引擎状态",
-      "engineStatusDescription": "开启或关闭自动化引擎。关闭时紧急停止生效，所有调用在网关层被拒绝。",
-      "engineToggle": "启用自动化引擎",
-      "engineToggleHint": "启用后，自动化操作遵循下方配置的权限策略。",
-      "initFailure": {
-        "body": "平台自动化后端（{platform}）启动失败：{error}。在底层问题修复前，Computer Use 调用都会返回 UnsupportedPlatform。请查阅你操作系统的故障排查文档，或在调整权限后重启应用。",
-        "dismiss": "知道了",
-        "title": "后端初始化失败"
-      },
-      "killSwitch": "紧急停止",
-      "killSwitchHint": "立即拒绝所有正在进行的自动化调用。当引擎行为异常时使用。",
       "metrics": {
         "allow": "允许",
         "consent": "同意",
         "deny": "拒绝",
-        "description": "来自审计日志的活动计数。打开该标签页时刷新，并每 60 秒自动更新。",
-        "lastScreenshotDescription": "最近一次成功截屏的时间。",
+        "description": "根据审计日志统计，每分钟刷新一次。",
         "lastScreenshotHours": "{hours} 小时前",
         "lastScreenshotMinutes": "{minutes} 分钟前",
         "lastScreenshotNever": "最近 24 小时未截屏。",
         "lastScreenshotRelative": "{seconds} 秒前",
         "lastScreenshotTitle": "最近一次截屏",
         "loadFailed": "读取审计日志失败。",
+        "openAudit": "审计日志",
         "title": "最近 24 小时",
-        "topFailingDescription": "最近 24 小时拒绝 / 同意被否决最多的命令。若集中在某条命令，应当排查原因。",
         "topFailingEmpty": "最近 24 小时无被拒绝的调用。",
         "topFailingTitle": "失败率最高的命令",
         "total": "总数"
@@ -5601,6 +5681,49 @@
       "no": "否",
       "noPlanned": "计划中",
       "platformCapabilities": "平台能力",
+      "platformCapabilitiesDescription": "这台电脑上的自动化后端报告它能做什么。",
+      "policy": {
+        "admitCount": "{count} 条规则",
+        "admitEmpty": "任何应用",
+        "admitRules": "准入的应用和窗口",
+        "chatCopilot": "聊天副驾截屏",
+        "chatCopilotAllowListed": "列表内应用免询问",
+        "chatCopilotAsk": "每次询问",
+        "defaultTier": "默认等级",
+        "description": "各来源现在能做什么。点击取值即可去修改。",
+        "inherited": "{tier}（默认）",
+        "title": "当前策略"
+      },
+      "sandboxes": {
+        "description": "Docker、Lume 和托管云桌面已移到「设备」页，在本机的「沙箱」卡片里。",
+        "open": "在设备中打开",
+        "title": "沙箱"
+      },
+      "setup": {
+        "allDenied": "所有来源都处于关闭状态，所有调用都会被拒绝。",
+        "capabilitiesFailed": "自动化后端没有报告它的能力。",
+        "enable": "开启",
+        "engine": {
+          "off": "自动化引擎已关闭。",
+          "stopped": "紧急停止正在生效。"
+        },
+        "gapCount": "{count} 项待处理",
+        "gapsDescription": "处理完以下问题后自动化才能运行，最影响的排在前面。",
+        "initFailure": {
+          "body": "平台自动化后端（{platform}）启动失败：{error}。在底层问题修复前，Computer Use 调用都会返回 UnsupportedPlatform。请查阅你操作系统的故障排查文档，或在调整权限后重启应用。",
+          "dismiss": "知道了",
+          "title": "后端初始化失败"
+        },
+        "openDiagnostics": "查看诊断",
+        "openPermissions": "调整权限",
+        "openSystemSettings": "打开系统设置",
+        "permissionMissing": "未授予「{permission}」权限。",
+        "ready": "已就绪",
+        "readyDescription": "这台电脑上没有阻碍自动化的问题。",
+        "recheck": "重新检测",
+        "resume": "恢复",
+        "title": "准备情况"
+      },
       "yes": "是"
     },
     "permissions": {
@@ -5621,17 +5744,21 @@
         "title": "聊天副驾截屏"
       },
       "defaultTier": "默认等级",
-      "defaultTierDescription": "未设置界面级覆盖时使用的权限等级。",
+      "defaultTierDescription": "除非某个来源单独设置，所有来源都按这个等级运行。",
+      "inheritDefault": "默认（{tier}）",
+      "openAccessRules": "添加访问规则",
       "perPlugin": {
-        "clearOverride": "清除",
         "description": "声明了 native:input 或 native:screen 权限的插件，可以单独设置一个与 Plugin 界面默认值不同的等级。适合只信任某个具体插件，但不想放宽全部插件策略的场景。",
         "empty": "当前没有任何已启用的插件声明 native:input。安装或启用一个相关插件（例如 cognia-computer-use）后，即可在此为单个插件设定覆盖等级。",
-        "rowInheriting": "继承上方 Plugin 界面的等级。",
-        "rowOverridden": "已覆盖：{tier}",
+        "followDefault": "默认（{tier}）",
+        "inheritSource": "跟随插件来源",
+        "overrideCount": "{count} 项覆盖",
+        "rowInheriting": "跟随插件来源：{tier}",
+        "rowOverridden": "单独设置：{tier}",
         "title": "按插件覆盖"
       },
-      "perSurface": "按界面覆盖",
-      "perSurfaceDescription": "每个自动化界面可单独覆盖默认等级。",
+      "perSurface": "按来源设置",
+      "perSurfaceDescription": "保持「默认」的来源跟随上方的默认等级。",
       "surfaces": {
         "computerUseDescription": "Anthropic 原生 computer-use 工具调用。",
         "mcpDescription": "来自已连接 MCP 服务器的工具调用。",
@@ -5642,7 +5769,13 @@
         "off": "关闭",
         "perCall": "每次询问",
         "whitelist": "白名单"
-      }
+      },
+      "tierExplain": {
+        "off": "拒绝所有调用。",
+        "perCall": "读取屏幕直接执行；每一次点击和按键都会先征求你的同意。",
+        "whitelist": "对「访问规则」准入的应用和窗口直接执行，不再询问。没有任何规则时，所有应用都被准入。"
+      },
+      "whitelistEmptyWarning": "有来源处于「白名单」等级，但访问规则还没有准入任何应用，因此所有应用都会被直接放行。"
     },
     "pictureInPicture": {
       "actions": {
@@ -5839,24 +5972,26 @@
       "activeMonitor": {
         "label": "虚拟显示器"
       },
-      "description": "在显示器关闭或休眠（会话需保持解锁）时让 Computer Use 持续可用。通过捆绑的虚拟显示器保证截图不会黑屏。",
+      "beta": "Beta",
+      "description": "物理显示器休眠时继续使用 Computer Use；用户会话必须保持未锁定。",
       "driverVersion": {
-        "label": "驱动"
+        "label": "后端版本"
       },
       "enabledHint": "在角色的 Computer Use 设置中按角色开启（熄屏模式）。",
-      "howItWorks": "当启用熄屏模式的角色驱动电脑时，会创建一块虚拟显示器并置为主显示；空闲 5 分钟、触发 kill switch 或会话关闭时自动释放。",
+      "howItWorks": "熄屏模式创建一个虚拟显示器供截图和输入使用。闲置 5 分钟、触发紧急停止、会话关闭或应用退出时释放。",
       "ipcError": {
         "label": "错误"
       },
       "lastError": {
         "label": "最近错误"
       },
-      "probeBlack": "截图返回黑帧 —— 请检查驱动。",
+      "macosBetaNote": "macOS Beta 使用 Apple 私有 API，仅适用于 Developer ID 构建（不支持 Mac App Store）。必须保持开盖，并授予屏幕录制和辅助功能权限。仅创建一个 1920×1080、1× 缩放的显示器。",
+      "probeBlack": "画面数据较少。请通过真机测试确认内容持续更新且显示器身份正确。",
       "probeButton": "测试熄屏截图",
-      "probeOk": "已通过 {monitor} 截取 {width}×{height} —— 非黑屏。",
+      "probeOk": "已从虚拟显示器 {monitor} 截取 {width}×{height} 画面。",
       "probeRunning": "测试中…",
       "setupButton": "安装驱动",
-      "setupNote": "驱动未安装前，熄屏动作会直接报错，而不会拍出黑屏。",
+      "setupNote": "请先安装 Windows 驱动，再尝试熄屏模式。",
       "setupRunning": "安装中…",
       "status": {
         "down": "不可用",
@@ -5864,15 +5999,24 @@
         "setup": "需要安装"
       },
       "title": "熄屏模式",
-      "windowsOnlyNote": "熄屏模式仅支持 Windows。在当前平台上 Computer Use 使用物理显示器。"
+      "unsupportedNote": "此平台没有熄屏后端，Computer Use 使用物理显示器。"
     },
-    "tabs": {
-      "accessRules": "访问规则",
-      "audit": "审计",
-      "inspector": "检查器",
-      "overview": "概览",
-      "permissions": "权限",
-      "sandboxes": "沙箱"
+    "status": {
+      "engine": {
+        "off": "自动化已关闭",
+        "running": "自动化已开启",
+        "stopped": "已紧急停止"
+      },
+      "engineHint": {
+        "off": "开启前，所有自动化调用都会被拒绝。",
+        "running": "每次调用都会按你配置的权限检查。",
+        "stopped": "所有调用都会被拒绝。重新开启引擎即可恢复。"
+      },
+      "engineToggle": "引擎",
+      "killSwitch": "紧急停止",
+      "killSwitchHint": "立即拒绝所有正在进行和之后的自动化调用，直到你重新开启引擎。",
+      "permissionsMissing": "缺少 {count} 项系统权限",
+      "permissionsReady": "系统权限已就绪"
     },
     "unavailable": {
       "description": "控制屏幕、键盘和鼠标是被操作那台机器本身的能力，因此引擎只在那台机器上的 Cognia 桌面端里运行。请到那台机器的「设置 → 自动化」查看或修改这些设置。",

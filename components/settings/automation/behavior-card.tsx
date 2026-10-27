@@ -1,26 +1,30 @@
-// Model-behavior settings (Settings → Automation → Overview card).
+// Model-behavior settings (Settings → UI Automation → Behavior).
 //
-// Surfaces the three "model view" knobs the Rust side honors:
+// Surfaces the "model view" knobs the Rust side honors:
+//   - picture-in-picture visibility
 //   - screenshot down-scaling (on by default; 1280×800 WXGA)
 //   - screenshot dedup ("screen unchanged" text instead of duplicate frames)
 //   - clipboard-paste threshold for long `type` actions (0 disables)
+//   - how long a per-call consent prompt waits
 //
-// Reads/writes the full `AutomationSettings` blob via the existing
-// `desktop.settingsGet` / `settingsSet` commands — same persistence pattern
-// as the Permissions tab. Mirrors `ScreenOffCard`'s inline-error style.
+// Reads and writes through the section's `AutomationSettingsProvider`, whose
+// queue serializes every save and re-reads the host first, so a toggle here
+// can never write back a stale `enabled` flag from before the status strip
+// resumed the engine.
 
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect } from "react"
 
-import { Images, MonitorPlay, Sparkles } from "lucide-react"
+import { KeyboardIcon, Sparkles } from "lucide-react"
 import { useTranslations } from "next-intl"
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { SettingsBlock, SettingsField } from "@/components/settings/common/settings-block"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
-import { desktop, type AutomationSettings } from "@/lib/automation/client"
+import type { AutomationSettings } from "@/lib/automation/client"
 import {
   MAX_CONSENT_TIMEOUT_MS,
   MIN_CONSENT_TIMEOUT_MS,
@@ -28,123 +32,87 @@ import {
 } from "@/lib/automation/consent-durations"
 import { setComputerUsePipAlwaysHidden } from "@/lib/automation/computer-use-pip"
 
+import { useAutomationSettings } from "./automation-settings-context"
+
 export function BehaviorCard() {
   const t = useTranslations("automation.behavior")
-  const [settings, setSettings] = useState<AutomationSettings | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
-  const saveRevisionRef = useRef(0)
-  const persistedSettingsRef = useRef<AutomationSettings | null>(null)
+  const { settings, loadError, update } = useAutomationSettings()
+  const pipHidden = settings?.alwaysHidePictureInPicture
 
+  // The PiP host reads a module flag, not these settings. Following what the
+  // provider holds (optimistic value, then the host's after a failed save)
+  // keeps the two from disagreeing.
   useEffect(() => {
-    let cancelled = false
-    desktop
-      .settingsGet()
-      .then((s) => {
-        if (!cancelled) {
-          persistedSettingsRef.current = s
-          setSettings(s)
-          setComputerUsePipAlwaysHidden(s.alwaysHidePictureInPicture)
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  async function save(next: AutomationSettings) {
-    if (!settings) return
-    setSettings(next)
-    setComputerUsePipAlwaysHidden(next.alwaysHidePictureInPicture)
-    setError(null)
-    const revision = ++saveRevisionRef.current
-    const operation = saveQueueRef.current.then(() => desktop.settingsSet(next))
-    saveQueueRef.current = operation.catch(() => {})
-    try {
-      await operation
-      persistedSettingsRef.current = next
-    } catch (e) {
-      if (revision === saveRevisionRef.current) {
-        const persisted = persistedSettingsRef.current
-        if (persisted) {
-          setSettings(persisted)
-          setComputerUsePipAlwaysHidden(persisted.alwaysHidePictureInPicture)
-        }
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    }
-  }
+    if (pipHidden !== undefined) setComputerUsePipAlwaysHidden(pipHidden)
+  }, [pipHidden])
 
   if (!settings) {
-    return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Sparkles className="size-4" aria-hidden="true" />
-            <span>{t("title")}</span>
-          </CardTitle>
-          <CardDescription>{t("description")}</CardDescription>
-        </CardHeader>
-        {error && (
-          <CardContent>
-            <p className="font-mono text-xs text-rose-500">{error}</p>
-          </CardContent>
-        )}
-      </Card>
+    return loadError ? (
+      <p className="font-mono text-xs text-destructive" role="alert">
+        {loadError}
+      </p>
+    ) : (
+      <Skeleton className="h-48 w-full" />
     )
   }
 
+  const save = (patch: (current: AutomationSettings) => Partial<AutomationSettings>) =>
+    void update((current) => ({ ...current, ...patch(current) }))
+
   const scaling = settings.screenshotScaling
 
+  // A fragment, not a stack: the Behavior panel puts these blocks in the same
+  // `SettingsStack` as the screen-off block so the hairlines line up.
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Sparkles className="size-4" aria-hidden="true" />
-          <span>{t("title")}</span>
-        </CardTitle>
-        <CardDescription>{t("description")}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4 text-sm">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="behavior-hide-pip" className="flex items-center gap-2">
-              <MonitorPlay className="size-4" aria-hidden="true" />
-              {t("pictureInPicture.label")}
-            </Label>
-            <p className="text-xs text-muted-foreground">{t("pictureInPicture.help")}</p>
-          </div>
+    <>
+      <SettingsBlock
+        icon={<Sparkles />}
+        title={t("title")}
+        description={t("description")}
+        headingLevel={4}
+        settingId="automation-behavior"
+      >
+        <SettingsField
+          htmlFor="behavior-hide-pip"
+          label={t("pictureInPicture.label")}
+          description={t("pictureInPicture.help")}
+        >
           <Switch
             id="behavior-hide-pip"
             checked={settings.alwaysHidePictureInPicture}
-            onCheckedChange={(v) =>
-              void save({ ...settings, alwaysHidePictureInPicture: Boolean(v) })
-            }
+            onCheckedChange={(v) => save(() => ({ alwaysHidePictureInPicture: Boolean(v) }))}
           />
-        </div>
+        </SettingsField>
 
-        {/* Screenshot down-scaling */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="behavior-scaling" className="flex items-center gap-2">
-              <Images className="size-4" aria-hidden="true" />
-              {t("scaling.label")}
-            </Label>
-            <p className="text-xs text-muted-foreground">{t("scaling.help")}</p>
-          </div>
+        <SettingsField
+          htmlFor="behavior-dedup"
+          label={t("dedup.label")}
+          description={t("dedup.help")}
+        >
+          <Switch
+            id="behavior-dedup"
+            checked={settings.screenshotDedup}
+            onCheckedChange={(v) => save(() => ({ screenshotDedup: Boolean(v) }))}
+          />
+        </SettingsField>
+
+        <SettingsField
+          htmlFor="behavior-scaling"
+          label={t("scaling.label")}
+          description={t("scaling.help")}
+        >
           <Switch
             id="behavior-scaling"
             checked={scaling.enabled}
             onCheckedChange={(v) =>
-              void save({ ...settings, screenshotScaling: { ...scaling, enabled: Boolean(v) } })
+              save((current) => ({
+                screenshotScaling: { ...current.screenshotScaling, enabled: Boolean(v) },
+              }))
             }
           />
-        </div>
+        </SettingsField>
         {scaling.enabled && (
-          <div className="grid grid-cols-2 gap-2 sm:max-w-xs">
+          <div className="-mt-2 grid grid-cols-2 gap-2 @md/settings-stack:max-w-xs">
             <div className="space-y-1">
               <Label htmlFor="behavior-scaling-w" className="text-xs">
                 {t("scaling.maxWidth")}
@@ -155,15 +123,12 @@ export function BehaviorCard() {
                 min={320}
                 max={3840}
                 value={scaling.maxWidth}
-                onChange={(e) =>
-                  void save({
-                    ...settings,
-                    screenshotScaling: {
-                      ...scaling,
-                      maxWidth: Math.min(3840, Math.max(320, Number(e.target.value) || 1280)),
-                    },
-                  })
-                }
+                onChange={(e) => {
+                  const maxWidth = Math.min(3840, Math.max(320, Number(e.target.value) || 1280))
+                  save((current) => ({
+                    screenshotScaling: { ...current.screenshotScaling, maxWidth },
+                  }))
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -176,81 +141,66 @@ export function BehaviorCard() {
                 min={240}
                 max={2400}
                 value={scaling.maxHeight}
-                onChange={(e) =>
-                  void save({
-                    ...settings,
-                    screenshotScaling: {
-                      ...scaling,
-                      maxHeight: Math.min(2400, Math.max(240, Number(e.target.value) || 800)),
-                    },
-                  })
-                }
+                onChange={(e) => {
+                  const maxHeight = Math.min(2400, Math.max(240, Number(e.target.value) || 800))
+                  save((current) => ({
+                    screenshotScaling: { ...current.screenshotScaling, maxHeight },
+                  }))
+                }}
               />
             </div>
           </div>
         )}
+      </SettingsBlock>
 
-        {/* Screenshot dedup */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="behavior-dedup">{t("dedup.label")}</Label>
-            <p className="text-xs text-muted-foreground">{t("dedup.help")}</p>
-          </div>
-          <Switch
-            id="behavior-dedup"
-            checked={settings.screenshotDedup}
-            onCheckedChange={(v) => void save({ ...settings, screenshotDedup: Boolean(v) })}
-          />
-        </div>
-
-        {/* Paste threshold */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="behavior-paste-threshold">{t("pasteThreshold.label")}</Label>
-            <p className="text-xs text-muted-foreground">{t("pasteThreshold.help")}</p>
-          </div>
+      <SettingsBlock
+        icon={<KeyboardIcon />}
+        title={t("inputTitle")}
+        description={t("inputDescription")}
+        headingLevel={4}
+        settingId="automation-input"
+      >
+        <SettingsField
+          htmlFor="behavior-paste-threshold"
+          label={t("pasteThreshold.label")}
+          description={t("pasteThreshold.help")}
+        >
           <Input
             id="behavior-paste-threshold"
             type="number"
             min={0}
             max={100000}
-            className="sm:w-28"
+            className="w-28"
             value={settings.pasteThresholdChars}
-            onChange={(e) =>
-              void save({
-                ...settings,
-                pasteThresholdChars: Math.max(0, Number(e.target.value) || 0),
-              })
-            }
+            onChange={(e) => {
+              const pasteThresholdChars = Math.max(0, Number(e.target.value) || 0)
+              save(() => ({ pasteThresholdChars }))
+            }}
           />
-        </div>
+        </SettingsField>
 
         {/* Consent wait. Seconds in the UI, ms on the wire. The ceiling keeps
             the window inside the sidecar's plugin-tool budget so an answer
             never lands on a call that already timed out. */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-0.5">
-            <Label htmlFor="behavior-consent-timeout">{t("consentTimeout.label")}</Label>
-            <p className="text-xs text-muted-foreground">{t("consentTimeout.help")}</p>
-          </div>
+        <SettingsField
+          htmlFor="behavior-consent-timeout"
+          label={t("consentTimeout.label")}
+          description={t("consentTimeout.help")}
+        >
           <Input
             id="behavior-consent-timeout"
             type="number"
             min={Math.ceil(MIN_CONSENT_TIMEOUT_MS / 1000)}
             max={Math.floor(MAX_CONSENT_TIMEOUT_MS / 1000)}
-            className="sm:w-28"
+            className="w-28"
             value={Math.round(clampConsentTimeoutMs(settings.consentTimeoutMs) / 1000)}
-            onChange={(e) =>
-              void save({
-                ...settings,
-                consentTimeoutMs: clampConsentTimeoutMs(Number(e.target.value) * 1000),
-              })
-            }
+            onChange={(e) => {
+              const consentTimeoutMs = clampConsentTimeoutMs(Number(e.target.value) * 1000)
+              save(() => ({ consentTimeoutMs }))
+            }}
           />
-        </div>
-
-        {error && <p className="font-mono text-xs text-rose-500">{error}</p>}
-      </CardContent>
-    </Card>
+        </SettingsField>
+      </SettingsBlock>
+    </>
   )
 }

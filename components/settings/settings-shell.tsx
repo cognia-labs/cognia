@@ -362,6 +362,8 @@ const FILL_HEIGHT_SECTIONS = new Set<SettingsSectionId>([
   "gateway",
   "external-bridge",
   "connectivity",
+  // A status strip over the same rail + detail pane as Connectivity.
+  "automation",
   // Same conversion, same reason. Left out of this set they still *rendered* —
   // `h-full` collapsed to content height inside the ScrollArea, so the rail and
   // the pane grew unbounded and the whole page scrolled instead of the pane.

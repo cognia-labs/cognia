@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 
@@ -17,12 +17,33 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(search),
 }))
 
-// The engine only runs under Tauri. Off it the Overview tab renders its
-// unavailable notice, which keeps this suite about the shell: the tab strip
-// and where selecting a tab navigates.
+const stop = jest.fn()
 jest.mock("@/lib/tauri", () => ({
   isTauri: jest.fn(() => false),
-  transport: { call: jest.fn().mockResolvedValue(null), subscribe: jest.fn(() => () => {}) },
+  transport: { call: jest.fn().mockResolvedValue(null), subscribe: jest.fn(() => stop) },
+}))
+
+jest.mock("@/lib/automation/client", () => {
+  const actual =
+    jest.requireActual<typeof import("@/lib/automation/client")>("@/lib/automation/client")
+  return {
+    ...actual,
+    desktop: {
+      settingsGet: jest.fn(() => Promise.resolve(actual.defaultAutomationSettings())),
+      killSwitchEngaged: jest.fn(() => Promise.resolve(false)),
+      capabilities: jest.fn(() => Promise.resolve({ platform: "macos" })),
+    },
+  }
+})
+
+jest.mock("@/lib/skills/recording/recorder-client", () => ({
+  recordPreflight: jest.fn(() =>
+    Promise.resolve({
+      accessibility: "ok",
+      screenRecording: "ok",
+      uiAutomation: "notApplicable",
+    })
+  ),
 }))
 
 jest.mock("@/lib/automation/audit", () => ({ listAuditRows: jest.fn().mockResolvedValue([]) }))
@@ -40,93 +61,95 @@ function renderSection() {
 
 beforeEach(() => {
   replace.mockClear()
-  ;(isTauri as jest.Mock).mockReturnValue(false)
+  stop.mockClear()
+  ;(isTauri as jest.Mock).mockReturnValue(true)
   pathname = "/settings"
   search = "section=automation"
 })
 
 describe("AutomationSection", () => {
-  it("renders every tab through the shared strip", () => {
+  it("off the desktop shell, explains the missing engine instead of a build command", () => {
+    ;(isTauri as jest.Mock).mockReturnValue(false)
     renderSection()
+    const notice = screen.getByTestId("automation-unavailable")
+    expect(notice).toHaveTextContent(en.automation.unavailable.title)
+    expect(notice.textContent ?? "").not.toMatch(/pnpm|tauri dev|tauri build/i)
+    expect(screen.queryByTestId("automation-status-strip")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("automation-panel-body")).not.toBeInTheDocument()
+  })
+
+  it("puts the status strip above a rail of every panel", async () => {
+    renderSection()
+    expect(await screen.findByTestId("automation-status-strip")).toBeInTheDocument()
     for (const id of [
       "overview",
       "permissions",
       "accessRules",
+      "behavior",
       "audit",
       "inspector",
-      "sandboxes",
-    ]) {
-      expect(screen.getByTestId(`panel-tab-${id}`)).toBeInTheDocument()
+      "diagnostics",
+    ] as const) {
+      expect(screen.getByTestId(`automation-nav-item-${id}`)).toHaveTextContent(
+        en.automation.nav.items[id].label
+      )
     }
+    // The sandbox registry is no longer a panel here, only an entry point.
+    expect(screen.queryByTestId("automation-nav-item-sandboxes")).not.toBeInTheDocument()
+    expect(screen.getByTestId("automation-sandbox-entry")).toBeInTheDocument()
+    expect(screen.getByTestId("automation-panel-body")).toHaveAttribute("data-panel", "overview")
   })
 
-  /**
-   * Six triggers at their natural width overflow a phone viewport. The strip
-   * has to let each one shrink instead, because this section also mounts
-   * outside the settings shell where nothing else contains them.
-   */
-  it("lets every trigger shrink rather than overflow a narrow viewport", () => {
+  it("keeps the panel selection on the settings route", async () => {
     renderSection()
-    expect(screen.getByRole("tablist").className).toContain("max-w-full")
-    for (const tab of screen.getAllByRole("tab")) {
-      expect(tab.className).toContain("min-w-0")
-      expect(tab.className).toContain("flex-initial")
-      expect(tab.querySelector("span")?.className).toContain("truncate")
-    }
-  })
-
-  it("keeps the tab selection on the settings route", async () => {
-    renderSection()
-    await userEvent.click(screen.getByTestId("panel-tab-audit"))
+    await screen.findByTestId("automation-status-strip")
+    await userEvent.click(screen.getByTestId("automation-nav-item-audit"))
     expect(replace).toHaveBeenCalledWith("/settings?section=automation&autoTab=audit", {
       scroll: false,
     })
   })
 
   /**
-   * `?autoTab=whitelist` is what links and bookmarks carry from before the
-   * whitelist and the sandbox automation policy merged into Access rules.
+   * `?autoTab=whitelist` and `?autoTab=sandboxes` are what links and bookmarks
+   * carry from the tab strip.
    */
-  it("still resolves the pre-merge whitelist tab id", () => {
+  it("still resolves the retired tab ids", () => {
     search = "section=automation&autoTab=whitelist"
+    const { unmount } = renderSection()
+    expect(screen.getByTestId("automation-panel-body")).toHaveAttribute("data-panel", "accessRules")
+    unmount()
+    search = "section=automation&autoTab=sandboxes"
     renderSection()
-    expect(screen.getByTestId("panel-tab-accessRules")).toHaveAttribute("data-state", "active")
-  })
-
-  it("explains the missing engine through the shared notice, not a build command", () => {
-    renderSection()
-    const notice = screen.getByTestId("automation-unavailable")
-    expect(notice).toHaveTextContent(en.automation.unavailable.title)
-    expect(notice.textContent ?? "").not.toMatch(/pnpm|tauri dev|tauri build/i)
+    expect(screen.getByTestId("automation-panel-body")).toHaveAttribute("data-panel", "overview")
   })
 
   /**
-   * The regression this guards: `setTab` used to write `/settings` verbatim, so
-   * the first tap on the mobile Computer Use page navigated the user off it and
-   * into desktop settings.
+   * The regression this guards: selection used to write `/settings` verbatim,
+   * navigating any other route that mounted the section away on first click.
    */
-  it("keeps the tab selection on whatever other route mounted it", async () => {
+  it("keeps the panel selection on whatever other route mounted it", async () => {
     pathname = "/me/computer-use"
     search = ""
     renderSection()
-    await userEvent.click(screen.getByTestId("panel-tab-accessRules"))
+    await screen.findByTestId("automation-status-strip")
+    await userEvent.click(screen.getByTestId("automation-nav-item-accessRules"))
     expect(replace).toHaveBeenCalledWith("/me/computer-use?autoTab=accessRules", { scroll: false })
     expect(replace).not.toHaveBeenCalledWith(
       expect.stringContaining("/settings"),
       expect.anything()
     )
   })
-})
 
-it("uses the shared event transport so native teardown races are contained", () => {
-  ;(isTauri as jest.Mock).mockReturnValue(true)
-  const stop = jest.fn()
-  ;(transport.subscribe as jest.Mock).mockReturnValueOnce(stop)
-  const { unmount } = renderSection()
-  expect(transport.subscribe).toHaveBeenCalledWith(
-    "automation:backend-init-failed",
-    expect.any(Function)
-  )
-  unmount()
-  expect(stop).toHaveBeenCalledTimes(1)
+  it("uses the shared event transport so native teardown races are contained", async () => {
+    const { unmount } = renderSection()
+    await waitFor(() =>
+      expect(transport.subscribe).toHaveBeenCalledWith(
+        "automation:backend-init-failed",
+        expect.any(Function)
+      )
+    )
+    expect(transport.subscribe).toHaveBeenCalledWith("automation:kill-switch", expect.any(Function))
+    unmount()
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
 })

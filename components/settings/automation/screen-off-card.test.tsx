@@ -55,9 +55,9 @@ beforeEach(() => {
 })
 
 describe("ScreenOffCard", () => {
-  it("shows a Windows-only note off Windows and hides the action buttons", () => {
-    render(<ScreenOffCard platform="macos" />)
-    expect(screen.getByTestId("screen-off-windows-only")).toBeInTheDocument()
+  it("shows an unsupported note off supported platforms and hides the action buttons", () => {
+    render(<ScreenOffCard platform="linux" />)
+    expect(screen.getByTestId("screen-off-unsupported")).toBeInTheDocument()
     expect(screen.queryByTestId("screen-off-setup-button")).not.toBeInTheDocument()
     expect(screen.queryByTestId("screen-off-probe-button")).not.toBeInTheDocument()
   })
@@ -146,4 +146,30 @@ describe("ScreenOffCard", () => {
     fireEvent.click(screen.getByTestId("screen-off-probe-button"))
     await waitFor(() => expect(screen.getByText("driver gone")).toBeInTheDocument())
   })
+})
+
+it("shows the macOS beta and permission failure without a Windows installer", () => {
+  mockHealthRef.current = {
+    available: false,
+    installed: true,
+    backend: "macos-cgvirtualdisplay",
+    driverVersion: "",
+    activeMonitor: "",
+    lastError: "permission_missing: Screen Recording",
+  }
+  render(<ScreenOffCard platform="macos" />)
+  expect(screen.getByText("beta")).toBeInTheDocument()
+  expect(screen.getByText("macosBetaNote")).toBeInTheDocument()
+  expect(screen.getByText("permission_missing: Screen Recording")).toBeInTheDocument()
+  expect(screen.getByTestId("screen-off-status-badge")).toHaveTextContent("status.down")
+  expect(screen.queryByTestId("screen-off-setup-button")).not.toBeInTheDocument()
+  expect(screen.getByTestId("screen-off-probe-button")).toBeDisabled()
+})
+
+it("does not offer an installer when the private macOS class is missing", () => {
+  mockHealthRef.current.backend = "macos-cgvirtualdisplay"
+  mockHealthRef.current.lastError = "unsupported: CGVirtualDisplay"
+  render(<ScreenOffCard platform="macos" />)
+  expect(screen.queryByTestId("screen-off-setup-button")).not.toBeInTheDocument()
+  expect(screen.getByText("unsupported: CGVirtualDisplay")).toBeInTheDocument()
 })

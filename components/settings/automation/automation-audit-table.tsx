@@ -14,7 +14,6 @@ import { toast } from "sonner"
 
 import { useConfirmDialog } from "@/components/shared/confirm-dialog"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -38,6 +37,16 @@ import type { AutomationAuditLogRow } from "@/lib/db/schema"
 type SurfaceFilter = "all" | AutomationAuditLogRow["surface"]
 type DecisionFilter = "all" | AutomationAuditLogRow["decision"]
 
+/** Rows carry the wire id; the filter strings already name each surface. */
+const SURFACE_FILTER_KEY: Partial<Record<AutomationAuditLogRow["surface"], string>> = {
+  workflow: "surfaceWorkflow",
+  computerUse: "surfaceComputerUse",
+  mcp: "surfaceMcp",
+  plugin: "surfacePlugin",
+  chatCopilot: "surfaceChatCopilot",
+  sandbox: "surfaceSandbox",
+}
+
 export function AutomationAuditTable() {
   const t = useTranslations("automation.audit")
   const tFilters = useTranslations("automation.audit.filters")
@@ -47,6 +56,8 @@ export function AutomationAuditTable() {
   const [surfaceFilter, setSurfaceFilter] = useState<SurfaceFilter>("all")
   const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>("all")
   const { confirm, dialog: confirmDialog } = useConfirmDialog()
+  const surfaceLabel = (surface: AutomationAuditLogRow["surface"]): string =>
+    SURFACE_FILTER_KEY[surface] ? tFilters(SURFACE_FILTER_KEY[surface]) : surface
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -114,22 +125,22 @@ export function AutomationAuditTable() {
   }
 
   return (
-    <Card>
-      <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <CardTitle>{t("title")}</CardTitle>
-          <CardDescription>
-            {t("description")} {counts.total} —{" "}
+    <div className="space-y-4" data-testid="automation-audit">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+        <div className="min-w-0 space-y-1.5">
+          <p className="text-xs text-pretty text-muted-foreground">{t("description")}</p>
+          <div className="flex flex-wrap items-center gap-1.5" data-testid="audit-counts">
+            <Badge variant="outline">{t("countTotal", { count: counts.total })}</Badge>
             <Badge variant="outline">
               {counts.allow} {tFilters("decisionAllow")}
-            </Badge>{" "}
+            </Badge>
             <Badge variant="outline">
               {counts.deny} {tFilters("decisionDeny")}
-            </Badge>{" "}
+            </Badge>
             <Badge variant="outline">
               {counts.consent} {tFilters("decisionConsent")}
             </Badge>
-          </CardDescription>
+          </div>
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={handleExport} disabled={rows.length === 0}>
@@ -139,8 +150,8 @@ export function AutomationAuditTable() {
             <Trash2Icon className="size-4" /> {t("clear")}
           </Button>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
+      </div>
+      <div className="space-y-3">
         <div className="flex flex-col gap-2 text-sm sm:flex-row sm:items-center">
           <FilterIcon className="hidden size-4 text-muted-foreground sm:block" />
           <Select value={surfaceFilter} onValueChange={(v) => setSurfaceFilter(v as SurfaceFilter)}>
@@ -201,7 +212,7 @@ export function AutomationAuditTable() {
                   </div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
                     <span className="font-mono">{new Date(row.ts).toLocaleString()}</span>
-                    <span>{row.surface}</span>
+                    <span>{surfaceLabel(row.surface)}</span>
                     {(row.processName ?? row.windowTitle) && (
                       <span className="min-w-0 truncate">{row.processName ?? row.windowTitle}</span>
                     )}
@@ -230,7 +241,7 @@ export function AutomationAuditTable() {
                       <TableCell className="font-mono text-xs">
                         {new Date(row.ts).toLocaleString()}
                       </TableCell>
-                      <TableCell>{row.surface}</TableCell>
+                      <TableCell>{surfaceLabel(row.surface)}</TableCell>
                       <TableCell
                         className="max-w-[140px] truncate font-mono text-xs"
                         title={row.command}
@@ -256,19 +267,26 @@ export function AutomationAuditTable() {
             </div>
           </>
         )}
-      </CardContent>
+      </div>
       {confirmDialog}
-    </Card>
+    </div>
   )
 }
 
+const DECISION_FILTER_KEY = {
+  allow: "decisionAllow",
+  deny: "decisionDeny",
+  consent: "decisionConsent",
+} as const
+
 function DecisionBadge({ decision }: { decision: AutomationAuditLogRow["decision"] }) {
+  const tFilters = useTranslations("automation.audit.filters")
   return (
     <Badge
       variant={decision === "allow" ? "secondary" : decision === "deny" ? "destructive" : "outline"}
       className="shrink-0"
     >
-      {decision}
+      {tFilters(DECISION_FILTER_KEY[decision])}
     </Badge>
   )
 }

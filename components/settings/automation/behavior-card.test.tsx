@@ -1,10 +1,14 @@
 /**
- * Tests for the Behavior card (Settings → Automation → Overview).
- * `desktop.settingsGet/settingsSet` are mocked; the next-intl jest mock
- * resolves real English strings so queries use accessible names.
+ * @jest-environment jsdom
+ *
+ * Tests for the Behavior blocks (Settings → UI Automation → Behavior), mounted
+ * inside the real `AutomationSettingsProvider` with `desktop.*` mocked. The
+ * next-intl jest mock resolves real English strings so queries use accessible
+ * names.
  */
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { toast } from "sonner"
 
 const settingsGet = jest.fn()
 const settingsSet = jest.fn()
@@ -16,16 +20,45 @@ jest.mock("@/lib/automation/client", () => {
     desktop: {
       settingsGet: (...a: unknown[]) => settingsGet(...a),
       settingsSet: (...a: unknown[]) => settingsSet(...a),
+      killSwitchEngaged: () => Promise.resolve(false),
     },
   }
 })
 
-import { defaultAutomationSettings } from "@/lib/automation/client"
-import { BehaviorCard } from "./behavior-card"
+jest.mock("@/lib/tauri", () => ({
+  isTauri: () => true,
+  transport: { subscribe: () => () => {} },
+}))
+
+jest.mock("sonner", () => ({
+  toast: { success: jest.fn(), error: jest.fn(), warning: jest.fn() },
+}))
+
+import { defaultAutomationSettings, type AutomationSettings } from "@/lib/automation/client"
+import { AutomationSettingsProvider } from "./automation-settings-context"
+import { BehaviorCard as BehaviorBlocks } from "./behavior-card"
+
+function BehaviorCard() {
+  return (
+    <AutomationSettingsProvider>
+      <BehaviorBlocks />
+    </AutomationSettingsProvider>
+  )
+}
+
+/**
+ * The provider re-reads the host before every write, so a host that "keeps"
+ * what was written is what makes consecutive edits build on each other.
+ */
+let stored: AutomationSettings
 
 beforeEach(() => {
-  settingsGet.mockReset().mockResolvedValue(defaultAutomationSettings())
-  settingsSet.mockReset().mockResolvedValue(undefined)
+  stored = defaultAutomationSettings()
+  settingsGet.mockReset().mockImplementation(async () => stored)
+  settingsSet.mockReset().mockImplementation(async (next: AutomationSettings) => {
+    stored = next
+  })
+  jest.mocked(toast.error).mockReset()
 })
 
 describe("BehaviorCard", () => {
@@ -55,10 +88,10 @@ describe("BehaviorCard", () => {
   })
 
   it("dimension inputs clamp to their ranges and persist", async () => {
-    settingsGet.mockResolvedValue({
+    stored = {
       ...defaultAutomationSettings(),
       screenshotScaling: { enabled: true, maxWidth: 1280, maxHeight: 800 },
-    })
+    }
     render(<BehaviorCard />)
     const width = await screen.findByLabelText(/max width/i)
     fireEvent.change(width, { target: { value: "9999" } })
@@ -141,22 +174,22 @@ describe("BehaviorCard", () => {
   })
 
   it("shows the load error inline when settingsGet rejects", async () => {
-    settingsGet.mockRejectedValueOnce(new Error("UNSUPPORTED_PLATFORM"))
+    settingsGet.mockRejectedValue(new Error("UNSUPPORTED_PLATFORM"))
     render(<BehaviorCard />)
     expect(await screen.findByText(/UNSUPPORTED_PLATFORM/)).toBeInTheDocument()
   })
 
   it("stringifies non-Error load failures", async () => {
-    settingsGet.mockRejectedValueOnce("raw-failure")
+    settingsGet.mockRejectedValue("raw-failure")
     render(<BehaviorCard />)
     expect(await screen.findByText(/raw-failure/)).toBeInTheDocument()
   })
 
   it("clearing a dimension input falls back to its default", async () => {
-    settingsGet.mockResolvedValue({
+    stored = {
       ...defaultAutomationSettings(),
       screenshotScaling: { enabled: true, maxWidth: 1280, maxHeight: 800 },
-    })
+    }
     render(<BehaviorCard />)
     const width = await screen.findByLabelText(/max width/i)
     fireEvent.change(width, { target: { value: "" } })
@@ -174,37 +207,42 @@ describe("BehaviorCard", () => {
     )
   })
 
-  it("shows a save error inline when settingsSet rejects", async () => {
-    settingsSet.mockRejectedValueOnce(new Error("KILL_SWITCH_ACTIVE"))
+  it("reports a failed save and shows what the host still holds", async () => {
     render(<BehaviorCard />)
     const dedup = await screen.findByRole("switch", { name: /skip unchanged screenshots/i })
+    settingsSet.mockRejectedValueOnce(new Error("KILL_SWITCH_ACTIVE"))
     fireEvent.click(dedup)
-    expect(await screen.findByText(/KILL_SWITCH_ACTIVE/)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ description: "KILL_SWITCH_ACTIVE" })
+      )
+    )
+    await waitFor(() => expect(dedup).toBeChecked())
   })
 
   it("rolls back the PiP preference when persistence fails", async () => {
-    settingsSet.mockRejectedValueOnce(new Error("WRITE_FAILED"))
     render(<BehaviorCard />)
     const toggle = await screen.findByRole("switch", {
       name: /always hide picture in picture/i,
     })
-
+    settingsSet.mockRejectedValueOnce(new Error("WRITE_FAILED"))
     fireEvent.click(toggle)
-    expect(await screen.findByText(/WRITE_FAILED/)).toBeInTheDocument()
+    await waitFor(() => expect(toast.error).toHaveBeenCalled())
     await waitFor(() => expect(toggle).not.toBeChecked())
   })
 
-  it("serializes rapid saves and rolls consecutive failures back to the last persisted state", async () => {
+  it("serializes rapid saves so the second builds on the first", async () => {
     const first = Promise.withResolvers<void>()
-    const second = Promise.withResolvers<void>()
-    settingsSet
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise)
     render(<BehaviorCard />)
     const pip = await screen.findByRole("switch", {
       name: /always hide picture in picture/i,
     })
     const dedup = screen.getByRole("switch", { name: /skip unchanged screenshots/i })
+    settingsSet.mockImplementationOnce(async (next: AutomationSettings) => {
+      await first.promise
+      stored = next
+    })
 
     fireEvent.click(pip)
     fireEvent.click(dedup)
@@ -212,16 +250,10 @@ describe("BehaviorCard", () => {
     expect(dedup).not.toBeChecked()
     await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1))
 
-    await act(async () => first.reject(new Error("FIRST_FAILED")))
+    await act(async () => first.resolve())
     await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(2))
-    expect(pip).toBeChecked()
-    expect(dedup).not.toBeChecked()
-
-    await act(async () => second.reject(new Error("SECOND_FAILED")))
-    expect(await screen.findByText(/SECOND_FAILED/)).toBeInTheDocument()
-    await waitFor(() => {
-      expect(pip).not.toBeChecked()
-      expect(dedup).toBeChecked()
-    })
+    expect(settingsSet).toHaveBeenLastCalledWith(
+      expect.objectContaining({ alwaysHidePictureInPicture: true, screenshotDedup: false })
+    )
   })
 })
