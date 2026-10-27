@@ -43,11 +43,13 @@ jest.mock("@/components/squads/squad-overview", () => ({
     tasks,
     reviews,
     onOpenBoard,
+    onEditRoster,
   }: {
     members: unknown[]
     tasks: unknown[]
     reviews: unknown[]
     onOpenBoard: () => void
+    onEditRoster: () => void
   }) => (
     <div
       data-testid="overview-stub"
@@ -57,6 +59,9 @@ jest.mock("@/components/squads/squad-overview", () => ({
     >
       <button type="button" onClick={onOpenBoard}>
         open board
+      </button>
+      <button type="button" onClick={onEditRoster}>
+        edit roster
       </button>
     </div>
   ),
@@ -104,9 +109,11 @@ function route(over: Partial<SquadRouteState> = {}): SquadRouteState {
     tab: undefined,
     query: "",
     filter: "all",
+    editing: undefined,
     narrowed: false,
     runHref: (runId) => `/squads?id=a&tab=runs&run=${runId}`,
     setSelectedId: jest.fn(),
+    setEditing: jest.fn(),
     setRunId: jest.fn(),
     setRunStatus: jest.fn(),
     setTab,
@@ -142,6 +149,8 @@ function seed() {
   })
 }
 
+const onEdit = jest.fn()
+
 beforeEach(() => {
   jest.clearAllMocks()
   mockReviews = []
@@ -149,13 +158,13 @@ beforeEach(() => {
 })
 
 it("heads the view with the Squad's masthead", () => {
-  render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+  render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
   expect(screen.getByTestId("squad-fleet-inspector")).toHaveTextContent("Review Crew")
   expect(screen.getByTestId("squad-fleet-inspector")).toHaveTextContent("2 members")
 })
 
 it("keys the masthead's run estimate on this Squad's members' runtimes", () => {
-  render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+  render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
   // m1 runs Codex, m2 the built-in lane: a mixed roster.
   expect(hintMock.mock.lastCall?.[0].queries[0]).toMatchObject({
     surface: "team",
@@ -164,7 +173,7 @@ it("keys the masthead's run estimate on this Squad's members' runtimes", () => {
 })
 
 it("renders nothing for a Squad that no longer exists", () => {
-  render(<SquadDetailView squadId="gone" route={route()} tab="overview" />)
+  render(<SquadDetailView squadId="gone" route={route()} tab="overview" onEdit={onEdit} />)
   expect(screen.queryByTestId("squad-detail-view")).not.toBeInTheDocument()
 })
 
@@ -173,7 +182,7 @@ it("scopes the overview to this Squad's members, tasks and reviews", () => {
     { teamId: "a", interruptId: "i1" } as PendingSquadReview,
     { teamId: "b", interruptId: "i2" } as PendingSquadReview,
   ]
-  render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+  render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
   const overview = screen.getByTestId("overview-stub")
   expect(overview).toHaveAttribute("data-members", "2")
   expect(overview).toHaveAttribute("data-tasks", "2")
@@ -181,14 +190,16 @@ it("scopes the overview to this Squad's members, tasks and reviews", () => {
 })
 
 it("offers Overview, Runs and Board, and reports a switch to the URL", async () => {
-  render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+  render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
   expect(screen.getByTestId("squad-detail-tab-overview")).toHaveAttribute("data-state", "active")
   await userEvent.click(screen.getByTestId("squad-detail-tab-runs"))
   expect(setTab).toHaveBeenCalledWith("runs")
 })
 
 it("pins the run cockpit to this Squad and its open run", () => {
-  render(<SquadDetailView squadId="a" route={route({ runId: "exec_1" })} tab="runs" />)
+  render(
+    <SquadDetailView squadId="a" route={route({ runId: "exec_1" })} tab="runs" onEdit={onEdit} />
+  )
   const panel = screen.getByTestId("agent-runs-panel")
   expect(panel).toHaveAttribute("data-team", "a")
   expect(panel).toHaveAttribute("data-run", "exec_1")
@@ -196,13 +207,28 @@ it("pins the run cockpit to this Squad and its open run", () => {
 })
 
 it("gives the board this Squad's tasks", () => {
-  render(<SquadDetailView squadId="a" route={route()} tab="board" />)
+  render(<SquadDetailView squadId="a" route={route()} tab="board" onEdit={onEdit} />)
   expect(screen.getByTestId("task-board")).toHaveAttribute("data-team", "a")
   expect(screen.getByTestId("task-board")).toHaveAttribute("data-tasks", "2")
 })
 
+/**
+ * The tabs are this Squad's own, ruled under its masthead as one header, and
+ * Configure and Edit roster both open the edit drawer (`?edit=`).
+ */
+it("heads the tabs with the masthead and opens the drawer from both edit entries", async () => {
+  render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
+  const list = screen.getByRole("tablist")
+  expect(list).toHaveAttribute("data-variant", "line")
+  expect(screen.getByTestId("squad-fleet-inspector").parentElement).toContainElement(list)
+  await userEvent.click(screen.getByTestId("squad-fleet-configure"))
+  expect(onEdit).toHaveBeenCalledWith("general")
+  await userEvent.click(screen.getByRole("button", { name: "edit roster" }))
+  expect(onEdit).toHaveBeenLastCalledWith("roster")
+})
+
 it("opens the board from the overview", async () => {
-  render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+  render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
   await userEvent.click(screen.getByRole("button", { name: "open board" }))
   expect(setTab).toHaveBeenCalledWith("board")
 })
@@ -210,19 +236,28 @@ it("opens the board from the overview", async () => {
 describe("tab counts", () => {
   it("counts open reviews on Runs, where they are answered", () => {
     mockReviews = [{ teamId: "a", interruptId: "i1" } as PendingSquadReview]
-    render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+    render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
     expect(screen.getByLabelText("1 needs you")).toBeInTheDocument()
   })
 
   it("counts unfinished tasks on Board", () => {
-    render(<SquadDetailView squadId="a" route={route()} tab="overview" />)
+    render(<SquadDetailView squadId="a" route={route()} tab="overview" onEdit={onEdit} />)
     expect(screen.getByLabelText("1 open task")).toBeInTheDocument()
   })
 })
 
 it("hands the compact cockpit to a phone, with a way back", async () => {
   const onBack = jest.fn()
-  render(<SquadDetailView squadId="a" route={route()} tab="runs" onBack={onBack} compact />)
+  render(
+    <SquadDetailView
+      squadId="a"
+      route={route()}
+      tab="runs"
+      onEdit={onEdit}
+      onBack={onBack}
+      compact
+    />
+  )
   expect(screen.getByTestId("agent-runs-panel")).toHaveAttribute("data-compact", "true")
   await userEvent.click(screen.getByTestId("squad-detail-back"))
   expect(onBack).toHaveBeenCalled()

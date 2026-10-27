@@ -77,6 +77,12 @@ export interface ConsoleSectionProps {
   icon?: LucideIcon
   /** Right-aligned counter or status, kept to a few characters. */
   meta?: React.ReactNode
+  /**
+   * One verb that leaves the card for more of what it summarises ("Open
+   * board", "Edit roster"), right-aligned after `meta`. A link or a ghost
+   * button, never a primary action: the card is a summary, not a form.
+   */
+  action?: React.ReactNode
   /** One line under the title, for a section whose scope is not obvious. */
   description?: string
   /** Spans the full grid width, for matrices and lists, not fact pairs. */
@@ -98,9 +104,12 @@ function SectionHeading({
   title,
   icon: Icon,
   meta,
+  action,
   description,
   className,
-}: Pick<ConsoleSectionProps, "title" | "icon" | "meta" | "description"> & { className: string }) {
+}: Pick<ConsoleSectionProps, "title" | "icon" | "meta" | "action" | "description"> & {
+  className: string
+}) {
   return (
     <header className={cn("flex items-baseline gap-2", className)}>
       {Icon ? (
@@ -115,6 +124,9 @@ function SectionHeading({
       {meta ? (
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{meta}</span>
       ) : null}
+      {/* Negative margin so a button-height action neither grows the heading
+          nor drops below its baseline. */}
+      {action ? <div className="-my-1.5 shrink-0 self-center">{action}</div> : null}
     </header>
   )
 }
@@ -124,6 +136,7 @@ export function ConsoleSection({
   title,
   icon: Icon,
   meta,
+  action,
   description,
   wide,
   pane = "console-pane",
@@ -147,6 +160,7 @@ export function ConsoleSection({
           title={title}
           icon={Icon}
           meta={meta}
+          action={action}
           description={description}
           className="border-b pb-2"
         />
@@ -167,6 +181,7 @@ export function ConsoleSection({
           title={title}
           icon={Icon}
           meta={meta}
+          action={action}
           description={description}
           className="border-b px-3.5 py-2.5"
         />

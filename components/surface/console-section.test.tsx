@@ -144,4 +144,24 @@ describe("ConsoleSection", () => {
     )
     expect(screen.getByTestId("console-section-roots")).toHaveAttribute("data-variant", "card")
   })
+
+  /** The card's one way onward sits in its heading, on both variants. */
+  it("renders a heading action beside the meta", () => {
+    const { rerender } = render(
+      <ConsoleSection id="tasks" title="Tasks" meta="3" action={<a href="/board">Open board</a>}>
+        <p>body</p>
+      </ConsoleSection>
+    )
+    const heading = screen.getByRole("heading", { name: "Tasks" }).closest("header")
+    expect(heading).toContainElement(screen.getByRole("link", { name: "Open board" }))
+
+    rerender(
+      <ConsoleSection id="tasks" title="Tasks" variant="sheet" action={<button>Edit</button>}>
+        <p>body</p>
+      </ConsoleSection>
+    )
+    expect(screen.getByRole("heading", { name: "Tasks" }).closest("header")).toContainElement(
+      screen.getByRole("button", { name: "Edit" })
+    )
+  })
 })

@@ -6,15 +6,6 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
-import type { Team } from "@cognia/agent-config-types"
-
-// The built-in rows open a chat scope; the shell nav is not under test here.
-const switchToTeamMock = jest.fn()
-jest.mock("@/components/shell/use-shell-nav", () => ({
-  useShellNav: () => ({ switchToTeam: (id: string) => switchToTeamMock(id) }),
-}))
-jest.mock("@/lib/db/teams", () => ({ duplicateTeam: jest.fn() }))
-
 import { SquadListPane } from "./squad-list-pane"
 import type { SquadFleetRow, SquadFleetSnapshot } from "@/hooks/squads/use-squad-fleet"
 import type { SquadRouteState } from "@/hooks/squads/use-squad-route-state"
@@ -32,9 +23,11 @@ function route(over: Partial<SquadRouteState> = {}): SquadRouteState {
     tab: undefined,
     query: "",
     filter: "all",
+    editing: undefined,
     narrowed: false,
     runHref: (runId) => `/squads?tab=runs&run=${runId}`,
     setSelectedId,
+    setEditing: jest.fn(),
     setRunId: jest.fn(),
     setRunStatus: jest.fn(),
     setTab: jest.fn(),
@@ -73,8 +66,7 @@ beforeEach(() => jest.clearAllMocks())
 
 describe("layout", () => {
   // Radix sizes the viewport's child as a table that grows to its widest
-  // `truncate` line; on a phone that pushed the empty state off-centre and
-  // the built-in cards past the right edge.
+  // `truncate` line; on a phone that pushed the empty state off-centre.
   it("keeps the scroll content to the pane width", () => {
     render(<SquadListPane fleet={fleet()} route={route()} />)
     expect(screen.getByTestId("squad-fleet-scroll").className).toContain(
@@ -222,7 +214,7 @@ describe("narrowing", () => {
         route={route({ query: "zzz", narrowed: true })}
       />
     )
-    expect(screen.getByTestId("empty-state")).toHaveTextContent("No Squads match")
+    expect(screen.getByTestId("squad-fleet-empty")).toHaveTextContent("No Squads match")
     await userEvent.click(screen.getByRole("button", { name: "Clear filters" }))
     expect(clearFilters).toHaveBeenCalled()
   })
@@ -236,7 +228,7 @@ describe("loading and empty", () => {
   it("shows a skeleton rather than claiming the workspace is empty", () => {
     render(<SquadListPane fleet={fleet({ squads: [], total: 0, loading: true })} route={route()} />)
     expect(screen.getByTestId("squad-fleet-loading")).toBeInTheDocument()
-    expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("squad-fleet-empty")).not.toBeInTheDocument()
   })
 
   it("offers a way out of an empty workspace", async () => {
@@ -251,10 +243,7 @@ describe("loading and empty", () => {
   it("omits the CTA when the host has nowhere to create from", () => {
     render(<SquadListPane fleet={fleet({ squads: [], total: 0 })} route={route()} />)
     expect(screen.queryByTestId("squad-fleet-create")).not.toBeInTheDocument()
-    expect(screen.getByTestId("mobile-spot-icon-agent-teams")).toHaveAttribute(
-      "src",
-      "/icons/cognia-mobile-spots/png/agent-teams.png"
-    )
+    expect(screen.getByTestId("squad-fleet-empty")).toHaveTextContent("No Squads yet")
   })
 
   /** "New Squad" lives in each host's header, which is always on screen. */
@@ -277,7 +266,7 @@ describe("loading and empty", () => {
       />
     )
     expect(screen.getByTestId("squad-fleet-empty-quiet")).toHaveTextContent("No Squads yet")
-    expect(screen.queryByTestId("empty-state")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("squad-fleet-empty")).not.toBeInTheDocument()
     expect(screen.queryByTestId("squad-fleet-create")).not.toBeInTheDocument()
   })
 
@@ -294,93 +283,15 @@ describe("loading and empty", () => {
   })
 })
 
-describe("built-in Teams", () => {
-  const builtIns = [
-    { id: "team_builtin_brainstorm", name: "Brainstorm Squad", members: [], isBuiltIn: true },
-    { id: "team_builtin_research_squad", name: "Research", members: [], isBuiltIn: true },
-  ] as unknown as Team[]
-
-  /**
-   * The sidebar offers these as scopes while the page said "No Squads yet"
-   * with nothing explaining them.
-   */
-  it("lists them in their own section while the Squad count stays at zero", () => {
-    render(
-      <SquadListPane
-        fleet={fleet({ squads: [], total: 0 })}
-        route={route()}
-        builtInTeams={builtIns}
-      />
-    )
-    expect(screen.getByText("No Squads yet")).toBeInTheDocument()
-    expect(screen.getByTestId("squad-builtin-teams")).toBeInTheDocument()
-    expect(screen.getAllByTestId(/^squad-builtin-row-/)).toHaveLength(2)
-    // Not Squad rows: nothing selects them into the Squad inspector.
-    expect(screen.queryAllByTestId("squad-fleet-row")).toHaveLength(0)
-  })
-
-  it("points the empty state at the built-ins", () => {
-    render(
-      <SquadListPane
-        fleet={fleet({ squads: [], total: 0 })}
-        route={route()}
-        builtInTeams={builtIns}
-      />
-    )
-    expect(
-      screen.getByText(/The 2 built-in teams below are ready to use right now\./)
-    ).toBeInTheDocument()
-  })
-
-  it("keeps the plain empty copy when there are none", () => {
-    render(<SquadListPane fleet={fleet({ squads: [], total: 0 })} route={route()} />)
-    expect(screen.queryByTestId("squad-builtin-teams")).not.toBeInTheDocument()
-    expect(screen.queryByText(/built-in teams below/)).not.toBeInTheDocument()
-  })
-
-  /** With no Squads of their own, the built-ins are the only thing here to use. */
-  it("unfolds while the workspace has no Squads, and folds once it has some", () => {
-    const { unmount } = render(
-      <SquadListPane
-        fleet={fleet({ squads: [], total: 0 })}
-        route={route()}
-        builtInTeams={builtIns}
-      />
-    )
-    expect(screen.getByTestId("squad-builtin-teams")).toHaveAttribute("data-open", "true")
-    unmount()
-    render(<SquadListPane fleet={fleet()} route={route()} builtInTeams={builtIns} />)
-    expect(screen.getByTestId("squad-builtin-teams")).toHaveAttribute("data-open", "false")
-    expect(screen.queryAllByTestId(/^squad-builtin-row-/)).toHaveLength(0)
-  })
-
-  it("sits below the user's Squads", () => {
-    render(<SquadListPane fleet={fleet()} route={route()} builtInTeams={builtIns} />)
-    const list = screen.getByTestId("squad-fleet-list")
-    const section = screen.getByTestId("squad-builtin-teams")
-    expect(list.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  })
-
-  it("drops out under a run-state filter, which a Team cannot match", () => {
-    render(
-      <SquadListPane
-        fleet={fleet()}
-        route={route({ filter: "live", narrowed: true })}
-        builtInTeams={builtIns}
-      />
-    )
-    expect(screen.queryByTestId("squad-builtin-teams")).not.toBeInTheDocument()
-  })
-
-  it("narrows with the search box", () => {
-    render(
-      <SquadListPane
-        fleet={fleet()}
-        route={route({ query: "research", narrowed: true })}
-        builtInTeams={builtIns}
-      />
-    )
-    expect(screen.getAllByTestId(/^squad-builtin-row-/)).toHaveLength(1)
-    expect(screen.getByTestId("squad-builtin-row-team_builtin_research_squad")).toBeInTheDocument()
+/**
+ * The chat sidebar's built-in Teams are a different kind of thing (a chat
+ * scope, whose copy is another chat Team), so the Squad list never shows them.
+ * They used to sit under the Squads, which made "New Squad" ambiguous.
+ */
+describe("only Squads", () => {
+  it("lists nothing but the Squads it is given", () => {
+    render(<SquadListPane fleet={fleet()} route={route()} />)
+    expect(screen.getAllByTestId("squad-fleet-row")).toHaveLength(1)
+    expect(screen.queryByText(/built-in/i)).not.toBeInTheDocument()
   })
 })

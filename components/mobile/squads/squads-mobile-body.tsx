@@ -10,45 +10,45 @@
  *
  * Two levels, like every phone list: the Squads, then one Squad.
  *
- *  - Nothing selected: the list, and every Squad's runs as a second tab.
+ *  - Nothing selected: the list, and the fleet overview (what needs you, what
+ *    is working, the latest runs) as a second tab. The top bar has one verb,
+ *    New Squad, and a menu for Settings and the host's live activity.
  *  - A Squad selected: its own full-screen view (`SquadDetailView`), the same
  *    component the wide pane centres, with a back button in its masthead.
  *
- * This replaces a bottom drawer over the list. The drawer held the controls
- * and readiness, while the page's Runs and Board tabs behind it went on being
- * scoped to whichever Squad was last tapped, with nothing on screen naming it.
- * The runs cockpit opens its own run detail as a sheet, so a drawer around it
- * was a sheet inside a sheet. A Board tab with no Squad selected rendered the
- * list a second time.
- *
- * Nothing about a Squad is re-modelled here. `SquadListPane`, `SquadDetailView`
- * and `AgentRunsPanel` are the components the wide pane renders, and
- * everything reads the same `useSquadFleet` projection, so a row can never say
- * one thing here and another on a desktop.
+ * Nothing about a Squad is re-modelled here. `SquadListPane`, `SquadDetailView`,
+ * `SquadFleetOverview`, `CreateSquadDialog` and `SquadEditSheet` are the
+ * components the wide pane renders, and everything reads the same
+ * `useSquadFleet` projection, so a row can never say one thing here and
+ * another on a desktop.
  */
 
-import { MobileSpotIcon } from "@/components/mobile/mobile-spot-icon"
 import { useCallback, useState } from "react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
-import { PlusIcon, SettingsIcon, SparklesIcon } from "lucide-react"
+import { ActivityIcon, MoreHorizontalIcon, PlusIcon, SettingsIcon } from "lucide-react"
 
-import { AgentRunsPanel } from "@/components/agent-runs/agent-runs-panel"
-import { AutoComposeDialog } from "@/components/agent/workspace/auto-compose-dialog"
-import { useBuiltInTeams } from "@/components/squads/built-in-teams"
+import { CreateSquadDialog } from "@/components/squads/create-squad-dialog"
 import { SquadDetailView } from "@/components/squads/squad-detail-view"
+import { SquadEditSheet } from "@/components/squads/squad-edit-sheet"
+import { SquadFleetOverview } from "@/components/squads/squad-fleet-overview"
 import { SquadListPane } from "@/components/squads/squad-list-pane"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
-  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useCreateSquad } from "@/hooks/squads/use-create-squad"
+import { useFleetSnapshot } from "@/hooks/fleet/use-fleet-snapshot"
 import { useSquadFleet } from "@/hooks/squads/use-squad-fleet"
 import { useSelectedSquad } from "@/hooks/squads/use-selected-squad"
 import {
@@ -66,26 +66,29 @@ export interface SquadsMobileBodyProps {
 export function SquadsMobileBody({ route }: SquadsMobileBodyProps) {
   const t = useTranslations("squads.fleet")
   const fleet = useSquadFleet({ query: route.query, filter: route.filter })
-  const builtIns = useBuiltInTeams()
   const selected = useSelectedSquad(route.selectedId)
-  const createSquad = useCreateSquad()
-  const [composeOpen, setComposeOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  // Only where `/fleet` exists; see `SquadFleetConsole`.
+  const { source: fleetSource } = useFleetSnapshot()
 
-  const onCreate = useCallback(() => {
-    void createSquad({ name: t("newSquadName"), leadName: t("defaultLeadName") }).then((squad) =>
-      route.setSelectedId(squad.id)
-    )
-  }, [createSquad, route, t])
+  const onCreated = useCallback(
+    (squadId: string) => route.setSelectedId(squadId, { edit: "general" }),
+    [route]
+  )
 
-  const compose = (
-    <AutoComposeDialog
-      open={composeOpen}
-      onOpenChange={setComposeOpen}
-      onComposed={(teamId) => {
-        setComposeOpen(false)
-        route.setSelectedId(teamId)
-      }}
-    />
+  const dialogs = (
+    <>
+      <CreateSquadDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
+      {route.selectedId && selected.status === "found" ? (
+        <SquadEditSheet
+          squadId={route.selectedId}
+          focus={route.editing}
+          onFocusChange={route.setEditing}
+          onDeleted={() => route.setSelectedId(undefined)}
+          onOpenSquad={(id) => route.setSelectedId(id, { edit: "general" })}
+        />
+      ) : null}
+    </>
   )
 
   if (route.selectedId && selected.status === "found") {
@@ -103,9 +106,10 @@ export function SquadsMobileBody({ route }: SquadsMobileBodyProps) {
           route={route}
           tab={resolveSquadTab(route.tab, { selected: true, compact: true }) as SquadDetailTab}
           onBack={() => route.setSelectedId(undefined)}
+          onEdit={route.setEditing}
           compact
         />
-        {compose}
+        {dialogs}
       </div>
     )
   }
@@ -118,7 +122,7 @@ export function SquadsMobileBody({ route }: SquadsMobileBodyProps) {
   if (selected.status === "loading") {
     return (
       <div className="h-full" data-bg-target="chat" data-testid="squads-mobile-body">
-        {compose}
+        {dialogs}
       </div>
     )
   }
@@ -132,9 +136,6 @@ export function SquadsMobileBody({ route }: SquadsMobileBodyProps) {
       >
         <Empty className="flex-1" data-testid="squads-mobile-missing">
           <EmptyHeader>
-            <EmptyMedia>
-              <MobileSpotIcon name="agent-teams" size={96} />
-            </EmptyMedia>
             <EmptyTitle className="text-sm">{t("detail.missingTitle")}</EmptyTitle>
             <EmptyDescription className="text-xs">
               {t("detail.missingDescription")}
@@ -170,35 +171,44 @@ export function SquadsMobileBody({ route }: SquadsMobileBodyProps) {
         <div className="flex shrink-0 items-center gap-0.5">
           <Button
             type="button"
-            variant="ghost"
             size="icon"
             className="size-9"
-            onClick={() => setComposeOpen(true)}
-            aria-label={t("composeCta")}
-            data-testid="squads-mobile-compose"
-          >
-            <SparklesIcon aria-hidden className="size-4" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="size-9"
-            onClick={onCreate}
+            onClick={() => setCreateOpen(true)}
             aria-label={t("createCta")}
             data-testid="squads-mobile-create"
           >
             <PlusIcon aria-hidden className="size-4" />
           </Button>
-          <Button asChild variant="ghost" size="icon" className="size-9 text-muted-foreground">
-            <Link
-              href={settingsHref("squads")}
-              aria-label={t("manageAction")}
-              data-testid="squads-mobile-manage"
-            >
-              <SettingsIcon aria-hidden className="size-4" />
-            </Link>
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-9 text-muted-foreground"
+                aria-label={t("moreActions")}
+                data-testid="squads-mobile-more"
+              >
+                <MoreHorizontalIcon aria-hidden className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-48">
+              <DropdownMenuItem asChild>
+                <Link href={settingsHref("squads")} data-testid="squads-mobile-manage">
+                  <SettingsIcon aria-hidden className="size-4" />
+                  {t("manageAction")}
+                </Link>
+              </DropdownMenuItem>
+              {fleetSource === "none" ? null : (
+                <DropdownMenuItem asChild>
+                  <Link href="/fleet" data-testid="squads-mobile-host-activity">
+                    <ActivityIcon aria-hidden className="size-4" />
+                    {t("openFleet")}
+                  </Link>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -208,38 +218,29 @@ export function SquadsMobileBody({ route }: SquadsMobileBodyProps) {
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
         <TabsList className="mx-4 grid w-auto shrink-0 grid-cols-2">
+          <TabsTrigger value="overview" data-testid="squads-mobile-tab-overview">
+            {t("tabs.fleet")}
+          </TabsTrigger>
           <TabsTrigger value="squads" data-testid="squads-mobile-tab-squads">
             {t("tabs.squads")}
           </TabsTrigger>
-          <TabsTrigger value="runs" data-testid="squads-mobile-tab-runs">
-            {t("tabs.allRuns")}
-          </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="overview" className="mt-2 min-h-0 flex-1">
+          <SquadFleetOverview route={route} className="px-3" />
+        </TabsContent>
 
         <TabsContent value="squads" className="mt-2 min-h-0 flex-1">
           <SquadListPane
             fleet={fleet}
             route={route}
-            onCreate={onCreate}
-            builtInTeams={builtIns.teams}
+            onCreate={() => setCreateOpen(true)}
             variant="page"
             emptyStyle="full"
           />
         </TabsContent>
-
-        <TabsContent value="runs" className="mt-2 min-h-0 flex-1 overflow-hidden border-t">
-          <AgentRunsPanel
-            embedded
-            compact
-            filterKind="team"
-            selectedId={route.runId}
-            onSelect={(id) => route.setRunId(id ?? undefined)}
-            statusGroup={route.runStatus}
-            onStatusGroup={route.setRunStatus}
-          />
-        </TabsContent>
       </Tabs>
-      {compose}
+      {dialogs}
     </div>
   )
 }

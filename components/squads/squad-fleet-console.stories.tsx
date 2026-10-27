@@ -71,9 +71,11 @@ function route(over: Partial<SquadRouteState> = {}): SquadRouteState {
     tab: undefined,
     query: "",
     filter: "all",
+    editing: undefined,
     narrowed: false,
     runHref: (runId) => `/squads?tab=runs&run=${encodeURIComponent(runId)}`,
     setSelectedId: () => undefined,
+    setEditing: () => undefined,
     setRunId: () => undefined,
     setRunStatus: () => undefined,
     setTab: () => undefined,
@@ -93,7 +95,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The `/squads` fleet: every Squad in the rail, and in the centre either one Squad's own view (masthead with its controls, then Overview / Runs / Board) or every Squad's runs. Runtime only — configuring a Squad is Settings' job, and the masthead links there rather than growing a second editor. Runs and readiness read Dexie, so they render empty here.",
+          "The `/squads` fleet, laid out like `/bots`: one New Squad button (the dialog names the three ways to start), every Squad in a fixed rail, and in the centre either the fleet overview (what needs you, what is working, recent runs) or one Squad's own view (masthead with its controls, then Overview / Runs / Board). Configure and Edit roster open the Squad's edit drawer over the page. Runs and readiness read Dexie, so they render empty here.",
       },
     },
   },
@@ -146,10 +148,11 @@ export const TaskBoard: Story = {
 }
 
 /**
- * Nothing selected: the centre is every Squad's runs. A `?tab=board` link with
- * no Squad lands here too, rather than on a board asking for one.
+ * Nothing selected: the centre is the fleet overview, what needs you, what is
+ * working and the latest runs. A `?tab=board` link with no Squad lands here
+ * too, rather than on a board asking for one.
  */
-export const AllRuns: Story = {
+export const FleetOverview: Story = {
   args: { route: route({ tab: "board" }) },
   decorators: [
     (Story) => {
@@ -170,7 +173,7 @@ export const SquadSelected: Story = {
   ],
 }
 
-/** Nothing to fly yet — the centre offers both ways to make one. */
+/** Nothing to fly yet — the centre offers New Squad, which names every way to start. */
 export const EmptyFleet: Story = {
   decorators: [
     (Story) => {

@@ -3,10 +3,11 @@
 // The wide-pane console. Triage, workspace scope and narrowing moved into
 // `useSquadFleet` and are tested there, against the store rather than through
 // two layers of rendering. One Squad's view is `SquadDetailView` with its own
-// suite. What is left here is the frame: which panes exist, what the centre
-// shows for each state of the URL, and where the header sends you.
+// suite, and so are the overview, the New Squad dialog and the edit drawer.
+// What is left here is the frame: which panes exist, what the centre shows for
+// each state of the URL, and where the header and the drawer send you.
 
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -77,29 +78,71 @@ jest.mock("@/hooks/ui", () => ({
   ...jest.requireActual("@/hooks/ui"),
   useBreakpoint: () => mockBreakpoint,
 }))
-// The dialog plans with a model. Here it only has to open and hand back an id.
-jest.mock("@/components/agent/workspace/auto-compose-dialog", () => ({
-  AutoComposeDialog: ({
+// Radix menus do not open under jsdom's pointer model. Rendered flat, the
+// content says what the overflow holds, and the trigger what opens it.
+jest.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="overflow-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}))
+
+const mockRouterReplace = jest.fn()
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: mockRouterReplace, push: jest.fn() }),
+  usePathname: () => "/squads",
+  useSearchParams: () => new URLSearchParams(),
+}))
+
+// The overview's run list is the cockpit's projection, with its own suite.
+let mockRuns: Array<Record<string, unknown>> = []
+jest.mock("@/hooks/agent-runs/use-agent-runs", () => ({
+  useExecutionCockpit: () => ({ rows: mockRuns }),
+}))
+// `useClientLiveQuery` asks Dexie whether the mirror holds anything, to tell
+// "not loaded yet" from "none". Answering 0 keeps every case here on the
+// loaded path. The loading path is the hook's own case.
+jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => 0 }))
+
+// The dialog and the drawer are surfaces with their own suites. Here they only
+// have to show they were opened, and hand back what they made.
+jest.mock("@/components/squads/create-squad-dialog", () => ({
+  CreateSquadDialog: ({
     open,
-    onComposed,
+    onCreated,
   }: {
     open: boolean
-    onComposed: (teamId: string) => void
+    onCreated: (squadId: string) => void
   }) =>
     open ? (
-      <button type="button" data-testid="compose-stub" onClick={() => onComposed("composed")}>
-        compose
+      <button type="button" data-testid="create-dialog-stub" onClick={() => onCreated("new")}>
+        create
       </button>
     ) : null,
 }))
-// `useSquadFleet` asks Dexie whether the mirror holds anything, to tell "not
-// loaded yet" from "none". Answering 0 keeps every case here on the loaded
-// path. The loading path is the hook's own case.
-jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => 0 }))
-
-const createSquadMock = jest.fn(async () => ({ id: "new" }))
-jest.mock("@/hooks/squads/use-create-squad", () => ({
-  useCreateSquad: () => createSquadMock,
+jest.mock("@/components/squads/squad-edit-sheet", () => ({
+  SquadEditSheet: ({
+    squadId,
+    focus,
+    onDeleted,
+    onOpenSquad,
+  }: {
+    squadId: string
+    focus?: string
+    onDeleted: (id: string) => void
+    onOpenSquad: (id: string) => void
+  }) => (
+    <div data-testid="edit-sheet-stub" data-squad={squadId} data-focus={focus ?? ""}>
+      <button type="button" onClick={() => onDeleted(squadId)}>
+        delete
+      </button>
+      <button type="button" onClick={() => onOpenSquad("copy")}>
+        duplicate
+      </button>
+    </div>
+  ),
 }))
 
 let fleetSource: "tauri" | "companion" | "none" = "none"
@@ -137,6 +180,7 @@ function seed(teams: AgentTeam[], members: AgentTeammate[] = []) {
 }
 
 const setSelectedId = jest.fn()
+const setEditing = jest.fn()
 const setRunId = jest.fn()
 const setRunStatus = jest.fn()
 const setTab = jest.fn()
@@ -153,9 +197,11 @@ function route(over: Partial<SquadRouteState> = {}): SquadRouteState {
     tab: undefined,
     query: "",
     filter: "all",
+    editing: undefined,
     narrowed: false,
     runHref: (runId) => `/squads?tab=runs&run=${encodeURIComponent(runId)}`,
     setSelectedId,
+    setEditing,
     setRunId,
     setRunStatus,
     setTab,
@@ -178,6 +224,7 @@ function renderConsole(state: SquadRouteState) {
 beforeEach(() => {
   jest.clearAllMocks()
   mockBreakpoint = "desktop"
+  mockRuns = []
   usePendingGatesStore.setState({ gates: [] } as never)
   fleetSource = "none"
   useProjectStore.setState({ activeProjectId: null } as never)
@@ -195,7 +242,25 @@ describe("SquadFleetConsole", () => {
     seed([])
     renderConsole(route())
     expect(screen.queryByText(/0 Squads/)).not.toBeInTheDocument()
-    expect(screen.getAllByTestId("mobile-spot-icon-agent-teams")).toHaveLength(2)
+    expect(screen.getByTestId("squad-fleet-onboarding")).toBeInTheDocument()
+  })
+
+  /**
+   * One verb in the header. Creating used to be two sibling buttons, beside
+   * two links of the same weight, and none of them said which came first.
+   */
+  it("offers New Squad as the header's only button, the rest in a menu", () => {
+    fleetSource = "companion"
+    renderConsole(route())
+    const actions = screen.getByTestId("feature-header-actions")
+    expect(within(actions).getByTestId("squad-fleet-new")).toHaveTextContent("New Squad")
+    expect(within(actions).getByRole("button", { name: "More actions" })).toBeInTheDocument()
+    const menu = screen.getByTestId("overflow-menu")
+    expect(within(menu).getByTestId("squad-fleet-manage")).toHaveAttribute(
+      "href",
+      expect.stringContaining("section=squads")
+    )
+    expect(within(menu).getByTestId("squad-fleet-host-activity")).toHaveAttribute("href", "/fleet")
   })
 
   it("renders the rail as a real pane, never behind a Sheet glyph", () => {
@@ -203,10 +268,10 @@ describe("SquadFleetConsole", () => {
     expect(screen.getAllByTestId("squad-fleet-row")).toHaveLength(2)
   })
 
-  /** The rail scales with the window rather than keeping its first pixel width. */
-  it("offers no collapse toggle that would pin the rail's width", () => {
+  /** Only Squads in the rail; the chat sidebar's built-in Teams are not Squads. */
+  it("lists only Squads in the rail", () => {
     renderConsole(route())
-    expect(screen.queryByRole("button", { name: /Hide Squad list/ })).not.toBeInTheDocument()
+    expect(screen.queryByText("Built-in teams")).not.toBeInTheDocument()
   })
 
   /**
@@ -222,16 +287,19 @@ describe("SquadFleetConsole", () => {
 
 describe("SquadFleetConsole centre, nothing selected", () => {
   /**
-   * ADR-0169: every Squad's runs are the canonical run cockpit, embedded and
-   * pinned to Squad runs. The rail already lists the Squads themselves.
+   * The centre answers "what should I do next" across the fleet: what needs
+   * an answer, what is working, the latest runs. It used to be a second list
+   * (every Squad's runs) beside the rail's list.
    */
-  it("shows every Squad's runs in the unified cockpit", () => {
+  it("shows the fleet overview", () => {
+    seed([squad("a", "Alpha", "executing"), squad("b", "Bravo")])
     renderConsole(route())
-    expect(screen.getByTestId("squad-fleet-all-runs")).toHaveTextContent("Runs across every Squad")
-    const panel = screen.getByTestId("agent-runs-panel")
-    expect(panel).toHaveAttribute("data-embedded", "true")
-    expect(panel).toHaveAttribute("data-kind", "team")
-    expect(panel).toHaveAttribute("data-team", "")
+    expect(screen.getByTestId("squad-fleet-overview")).toBeInTheDocument()
+    expect(screen.getByTestId("squad-fleet-overview-working-row")).toHaveTextContent("Alpha")
+    expect(screen.getByTestId("squad-fleet-overview-all-runs")).toHaveAttribute(
+      "href",
+      "/agent-runs?kind=team"
+    )
     expect(screen.queryByTestId("squad-fleet-inspector")).not.toBeInTheDocument()
   })
 
@@ -239,28 +307,30 @@ describe("SquadFleetConsole centre, nothing selected", () => {
   it("offers no Squad tabs, whatever tab the link named", () => {
     renderConsole(route({ tab: "board" }))
     expect(screen.queryByRole("tab")).not.toBeInTheDocument()
-    expect(screen.getByTestId("agent-runs-panel")).toBeInTheDocument()
     expect(screen.queryByTestId("task-board")).not.toBeInTheDocument()
   })
 
   /**
-   * The chips carried a count and no setter: clickable, and inert. The status
-   * bucket lives in `?status=` now, so the chip both reads and writes.
+   * `?run=` with no Squad named the all-runs cockpit this centre used to be.
+   * That cockpit is `/agent-runs`, so the old link goes on to the same run.
    */
-  it("gives the run chips a URL to write to", async () => {
-    renderConsole(route({ runStatus: "finished" }))
-    expect(screen.getByTestId("agent-runs-panel")).toHaveAttribute("data-status", "finished")
-
-    await userEvent.click(screen.getByTestId("agent-runs-status-chip"))
-    expect(setRunStatus).toHaveBeenCalledWith("failed")
+  it("sends an old all-runs link on to the run in /agent-runs", () => {
+    renderConsole(route({ runId: "execution:team:run_9" }))
+    expect(mockRouterReplace).toHaveBeenCalledWith(
+      "/agent-runs?kind=team&run=execution%3Ateam%3Arun_9"
+    )
   })
 
-  it("keeps an open run from a deep link", () => {
-    renderConsole(route({ runId: "execution:team:run_9" }))
-    expect(screen.getByTestId("agent-runs-panel")).toHaveAttribute(
-      "data-run",
-      "execution:team:run_9"
-    )
+  it("leaves a run open inside a selected Squad alone", () => {
+    renderConsole(route({ selectedId: "b", tab: "runs", runId: "execution:team:run_9" }))
+    expect(mockRouterReplace).not.toHaveBeenCalled()
+  })
+
+  it("opens a working Squad from the overview", async () => {
+    seed([squad("a", "Alpha", "executing")])
+    renderConsole(route())
+    await userEvent.click(screen.getByTestId("squad-fleet-overview-working-row"))
+    expect(setSelectedId).toHaveBeenCalledWith("a")
   })
 })
 
@@ -272,12 +342,14 @@ describe("SquadFleetConsole centre, a Squad selected", () => {
     expect(screen.getByTestId("squad-overview")).toBeInTheDocument()
   })
 
-  it("pins the cockpit to the selected Squad's runs", () => {
+  it("pins the cockpit to the selected Squad's runs", async () => {
     renderConsole(route({ selectedId: "b", tab: "runs", runId: "execution:team:run_9" }))
     const panel = screen.getByTestId("agent-runs-panel")
     expect(panel).toHaveAttribute("data-team", "b")
     // `?run=` shares the `/agent-runs` id space, so a card's deep link lands here too.
     expect(panel).toHaveAttribute("data-run", "execution:team:run_9")
+    await userEvent.click(screen.getByTestId("agent-runs-status-chip"))
+    expect(setRunStatus).toHaveBeenCalledWith("failed")
   })
 
   it("shows the chosen Squad's board", () => {
@@ -291,12 +363,36 @@ describe("SquadFleetConsole centre, a Squad selected", () => {
     expect(screen.getByTestId("squad-detail-tab-overview")).toHaveAttribute("data-state", "active")
   })
 
-  it("sends configuration to Settings rather than growing a second editor", () => {
-    // One place per question: this page answers "what is it doing".
+  /**
+   * Configure, Edit roster and Add a teammate edit the Squad beside the run
+   * being watched, instead of leaving for Settings.
+   */
+  it("opens the edit drawer from Configure and Edit roster", async () => {
     renderConsole(route({ selectedId: "b" }))
-    const link = screen.getByTestId("squad-fleet-configure")
-    expect(link).toHaveAttribute("href", expect.stringContaining("section=squads"))
-    expect(link).toHaveAttribute("href", expect.stringContaining("squadTab=squad%3Ab"))
+    await userEvent.click(screen.getByTestId("squad-fleet-configure"))
+    expect(setEditing).toHaveBeenCalledWith("general")
+    await userEvent.click(screen.getByTestId("squad-overview-edit-roster"))
+    expect(setEditing).toHaveBeenLastCalledWith("roster")
+  })
+
+  it("mounts the drawer on the selected Squad with what the URL opened", () => {
+    renderConsole(route({ selectedId: "b", editing: "roster" }))
+    const sheet = screen.getByTestId("edit-sheet-stub")
+    expect(sheet).toHaveAttribute("data-squad", "b")
+    expect(sheet).toHaveAttribute("data-focus", "roster")
+  })
+
+  it("leaves a deleted Squad, and opens a duplicate with its drawer", async () => {
+    renderConsole(route({ selectedId: "b", editing: "general" }))
+    await userEvent.click(screen.getByRole("button", { name: "delete" }))
+    expect(setSelectedId).toHaveBeenCalledWith(undefined)
+    await userEvent.click(screen.getByRole("button", { name: "duplicate" }))
+    expect(setSelectedId).toHaveBeenLastCalledWith("copy", { edit: "general" })
+  })
+
+  it("has no drawer while nothing is selected", () => {
+    renderConsole(route())
+    expect(screen.queryByTestId("edit-sheet-stub")).not.toBeInTheDocument()
   })
 
   it("selects a Squad, and deselects when the same row is clicked again", async () => {
@@ -351,57 +447,38 @@ describe("SquadFleetConsole host activity link", () => {
    * `/fleet` declares `standalone: "hidden"`, so on an unpaired browser the
    * route does not exist and the link would be a dead end.
    */
-  it("offers the host fleet once a host is reachable", () => {
-    fleetSource = "companion"
-    renderConsole(route())
-    expect(screen.getByTestId("squad-fleet-host-activity")).toBeInTheDocument()
-  })
-
   it("hides it in an unpaired browser", () => {
     fleetSource = "none"
     renderConsole(route())
+    expect(screen.getByTestId("squad-fleet-manage")).toBeInTheDocument()
     expect(screen.queryByTestId("squad-fleet-host-activity")).not.toBeInTheDocument()
-  })
-
-  it("links Settings for the library", () => {
-    renderConsole(route())
-    expect(screen.getByTestId("squad-fleet-manage")).toHaveAttribute(
-      "href",
-      expect.stringContaining("section=squads")
-    )
   })
 })
 
 describe("SquadFleetConsole creation", () => {
-  /** "New Squad" is in the header, always on screen, and follows what it made. */
-  it("creates from the header and opens the new Squad", async () => {
+  /**
+   * "New Squad" opens the dialog that names every way to start, and the Squad
+   * it made opens with its drawer, because naming and staffing it is next.
+   */
+  it("creates from the header and opens the new Squad with its drawer", async () => {
     renderConsole(route())
+    expect(screen.queryByTestId("create-dialog-stub")).not.toBeInTheDocument()
     await userEvent.click(screen.getByTestId("squad-fleet-new"))
-    expect(createSquadMock).toHaveBeenCalled()
-    await waitFor(() => expect(setSelectedId).toHaveBeenCalledWith("new"))
+    await userEvent.click(screen.getByTestId("create-dialog-stub"))
+    expect(setSelectedId).toHaveBeenCalledWith("new", { edit: "general" })
   })
 
   /**
-   * An empty workspace gets one full empty state, in the centre, with both
-   * ways to make a Squad. The rail beside it only says the list is empty.
+   * An empty workspace gets one full empty state, in the centre, with the way
+   * to make a Squad. The rail beside it only says the list is empty.
    */
-  it("offers both ways to make the first Squad in the centre", async () => {
+  it("offers the first Squad from the centre", async () => {
     seed([])
     renderConsole(route())
     expect(screen.getByTestId("squad-fleet-onboarding")).toBeInTheDocument()
     expect(screen.getByTestId("squad-fleet-empty-quiet")).toBeInTheDocument()
-    expect(screen.queryByTestId("agent-runs-panel")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("squad-fleet-overview")).not.toBeInTheDocument()
     await userEvent.click(screen.getByTestId("squad-fleet-create"))
-    expect(createSquadMock).toHaveBeenCalled()
-    await waitFor(() => expect(setSelectedId).toHaveBeenCalledWith("new"))
-  })
-
-  /** The auto-compose dialog was only reachable from Settings. */
-  it("composes a Squad from an objective and opens it", async () => {
-    renderConsole(route())
-    await userEvent.click(screen.getByTestId("squad-fleet-compose"))
-    await userEvent.click(screen.getByTestId("compose-stub"))
-    expect(setSelectedId).toHaveBeenCalledWith("composed")
-    expect(screen.queryByTestId("compose-stub")).not.toBeInTheDocument()
+    expect(screen.getByTestId("create-dialog-stub")).toBeInTheDocument()
   })
 })

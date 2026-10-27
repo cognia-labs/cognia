@@ -47,9 +47,15 @@ describe("reading", () => {
   })
 
   it("refuses a value outside the union rather than passing it through", () => {
-    const { result } = at("tab=graph&filter=purple")
+    const { result } = at("tab=graph&filter=purple&edit=everything")
     expect(result.current.tab).toBeUndefined()
     expect(result.current.filter).toBe("all")
+    expect(result.current.editing).toBeUndefined()
+  })
+
+  it("reads which part of the edit drawer is open", () => {
+    expect(at("id=team_1&edit=roster").result.current.editing).toBe("roster")
+    expect(at("id=team_1").result.current.editing).toBeUndefined()
   })
 
   it("is not narrowed by whitespace alone", () => {
@@ -86,9 +92,9 @@ describe("writing", () => {
   })
 
   /**
-   * Always named: a selected Squad lands on Overview and a wide pane with no
-   * selection on Runs, so eliding any one value would mean different things
-   * in different contexts.
+   * Always named: a selected Squad lands on Overview and a phone with no
+   * selection on the list, so eliding any one value would mean different
+   * things in different contexts.
    */
   it("names every tab it is asked for", () => {
     const { result } = at("id=team_1")
@@ -151,6 +157,36 @@ describe("writing", () => {
     expect(replace).not.toHaveBeenCalled()
   })
 
+  /**
+   * Selecting and opening the drawer is one navigation. Two `replace` calls in
+   * a row would each start from the URL as it was, and the second would put
+   * the first one's selection back.
+   */
+  it("selects a Squad and opens its drawer in one write", () => {
+    const { result } = at("")
+    act(() => result.current.setSelectedId("team_1", { edit: "general" }))
+    expect(replace).toHaveBeenCalledTimes(1)
+    expect(replace).toHaveBeenLastCalledWith("/squads?id=team_1&edit=general", { scroll: false })
+  })
+
+  /** The drawer edits the Squad it was opened on, never the next one. */
+  it("closes the drawer whenever the Squad changes", () => {
+    const { result } = at("id=team_1&edit=roster")
+    act(() => result.current.setSelectedId("team_2"))
+    expect(replace).toHaveBeenLastCalledWith("/squads?id=team_2", { scroll: false })
+  })
+
+  it("opens and closes the drawer on the selected Squad", () => {
+    const { result } = at("id=team_1&tab=board")
+    act(() => result.current.setEditing("roster"))
+    expect(replace).toHaveBeenLastCalledWith("/squads?id=team_1&tab=board&edit=roster", {
+      scroll: false,
+    })
+    const open = at("id=team_1&edit=general")
+    act(() => open.result.current.setEditing(undefined))
+    expect(replace).toHaveBeenLastCalledWith("/squads?id=team_1", { scroll: false })
+  })
+
   it("drops the selection to the bare path when nothing else is set", () => {
     const { result } = at("id=team_1")
     act(() => result.current.setSelectedId(undefined))
@@ -174,17 +210,25 @@ describe("resolveSquadTab", () => {
     expect(resolveSquadTab("squads", { selected: true, compact: true })).toBe("overview")
   })
 
-  /** The rail is the list on a wide pane, so the only view left is every Squad's runs. */
-  it("shows every Squad's runs on a wide pane with nothing selected", () => {
+  /**
+   * The rail is the list on a wide pane, so the centre is the fleet overview:
+   * what needs an answer, what is working, the latest runs.
+   */
+  it("shows the fleet overview on a wide pane with nothing selected", () => {
     for (const tab of [undefined, "overview", "squads", "runs", "board"] as const) {
-      expect(resolveSquadTab(tab, { selected: false, compact: false })).toBe("runs")
+      expect(resolveSquadTab(tab, { selected: false, compact: false })).toBe("overview")
     }
   })
 
-  it("offers the list and every Squad's runs on a phone with nothing selected", () => {
+  /**
+   * The phone lands on the list, with the overview one tab away. `runs` is the
+   * retired all-runs tab; an old link carrying it opens the overview, the
+   * nearest thing to what it pointed at, rather than snapping to the list.
+   */
+  it("offers the list and the fleet overview on a phone with nothing selected", () => {
     expect(resolveSquadTab(undefined, { selected: false, compact: true })).toBe("squads")
-    expect(resolveSquadTab("runs", { selected: false, compact: true })).toBe("runs")
+    expect(resolveSquadTab("overview", { selected: false, compact: true })).toBe("overview")
+    expect(resolveSquadTab("runs", { selected: false, compact: true })).toBe("overview")
     expect(resolveSquadTab("board", { selected: false, compact: true })).toBe("squads")
-    expect(resolveSquadTab("overview", { selected: false, compact: true })).toBe("squads")
   })
 })

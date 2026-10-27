@@ -1,17 +1,4 @@
 {
-  "builtIn": {
-    "badge": "内置",
-    "description": "随 Cognia 提供的现成角色团队。它们会作为聊天侧栏中的范围出现，且为只读；复制一份即可得到可编辑的副本。",
-    "duplicate": "复制",
-    "duplicateAria": "将 {name} 复制为可编辑的团队",
-    "duplicateFailed": "无法复制 {name}",
-    "duplicated": "已创建 {name}",
-    "editCopy": "编辑",
-    "manage": "管理团队",
-    "open": "打开",
-    "openAria": "打开 {name} 的会话",
-    "title": "内置团队"
-  },
   "fleet": {
     "clearFilters": "清除筛选",
     "configure": "配置这个小队",
@@ -56,7 +43,6 @@
     "defaultLeadName": "队长",
     "description": "每个小队此刻在做什么。",
     "emptyDescription": "在这里新建一个，然后在输入框把会话交给它。",
-    "emptyDescriptionWithBuiltIns": "在这里新建一个，然后在输入框把会话交给它。{count, plural, other {下方的 # 个内置团队}}现在就能用。",
     "emptyTitle": "还没有小队",
     "filters": {
       "label": "收窄列表",
@@ -85,18 +71,13 @@
       "runs": "运行",
       "squads": "小队",
       "overview": "概览",
-      "allRuns": "全部运行"
+      "fleet": "总览"
     },
     "title": "小队",
     "waiting": "等你答复",
     "composeCta": "按目标编排",
     "onboarding": {
-      "description": "小队由一名队长和若干成员组成，在一个仓库里把一个目标做完。可以先建一个空小队再配人，也可以描述目标，让 Cognia 提议成员组成。",
-      "descriptionWithBuiltIns": "小队由一名队长和若干成员组成，在一个仓库里把一个目标做完。可以先建一个空小队再配人，也可以描述目标，让 Cognia 提议成员组成。{count, plural, other {列表里的 # 个内置团队}}现在就能在聊天里用。"
-    },
-    "allRuns": {
-      "title": "所有小队的运行",
-      "description": "在列表里选一个小队，查看它的概览、控制和看板。"
+      "description": "小队由一名队长和若干成员组成，在一个仓库里把一个目标做完。可以先建一个空小队再配人，也可以描述目标，让 Cognia 提议成员组成。"
     },
     "detail": {
       "back": "返回小队列表",
@@ -106,7 +87,8 @@
       "missingTitle": "小队不可用",
       "missingDescription": "它可能已在其他窗口被删除，或者这个链接已过期。",
       "backToAll": "查看全部小队"
-    }
+    },
+    "moreActions": "更多操作"
   },
   "readiness": {
     "title": "就绪状态",
@@ -172,6 +154,57 @@
       "title": "成员",
       "edit": "编辑成员",
       "none": "还没有成员。"
+    }
+  },
+  "create": {
+    "title": "新建小队",
+    "description": "选择一种开始方式。之后随时可以调整成员和设置。",
+    "recommended": "推荐",
+    "options": {
+      "compose": {
+        "title": "按目标编排",
+        "description": "描述要完成的事，Cognia 会提议成员和分工。"
+      },
+      "template": {
+        "title": "从模板开始",
+        "description": "使用现成的成员组合，例如并行评审、深度调研。"
+      },
+      "blank": {
+        "title": "空白小队",
+        "description": "只有一位队长，成员由你自己添加。"
+      }
+    },
+    "templates": {
+      "title": "选择模板",
+      "description": "小队会带着模板里的成员和初始任务创建。",
+      "back": "返回",
+      "empty": "还没有可用的模板。",
+      "use": "使用",
+      "useAria": "使用模板「{name}」",
+      "builtIn": "内置",
+      "plugin": "插件"
+    },
+    "failed": "无法创建小队"
+  },
+  "edit": {
+    "title": "编辑「{name}」",
+    "description": "名称、成员、运行条件和高级设置。修改会自动保存。"
+  },
+  "fleetOverview": {
+    "needsYou": {
+      "title": "等你答复",
+      "description": "等待你批准或回答的小队。",
+      "none": "没有需要你处理的事。"
+    },
+    "working": {
+      "title": "运行中",
+      "description": "正在规划或执行的小队。",
+      "none": "当前没有小队在运行。在列表里选一个小队启动，或在输入框把会话交给它。"
+    },
+    "recentRuns": {
+      "title": "最近运行",
+      "none": "还没有小队运行过。",
+      "viewAll": "查看全部运行"
     }
   }
 }

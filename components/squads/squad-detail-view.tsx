@@ -11,6 +11,10 @@
  * you are in that Squad, its name and controls are at the top, and every tab
  * below belongs to it.
  *
+ * The masthead and the tab strip are one header: underline tabs directly under
+ * the Squad's name, ruled off from the content, so the tabs read as this
+ * Squad's own and stay put while a tab scrolls beneath them.
+ *
  * Runs is the canonical cockpit pinned to this Squad (ADR-0169), with its own
  * list/detail split, which now gets the whole centre instead of sharing it with
  * an inspector. Reviews are answered there, in the run detail, so every "Needs
@@ -29,6 +33,7 @@ import { usePendingSquadReviews } from "@/hooks/squads/use-pending-squad-reviews
 import {
   SQUAD_DETAIL_TABS,
   type SquadDetailTab,
+  type SquadEditFocus,
   type SquadRouteState,
 } from "@/hooks/squads/use-squad-route-state"
 import { useSquadRunControl } from "@/hooks/squads/use-squad-run-control"
@@ -42,6 +47,8 @@ export interface SquadDetailViewProps {
   tab: SquadDetailTab
   /** Where the view replaces the list (a phone): the way back to it. */
   onBack?: () => void
+  /** Opens the edit drawer, on the members for `roster`. */
+  onEdit: (focus: SquadEditFocus) => void
   /** Phone layout: full-width tabs, and the runs cockpit in its compact form. */
   compact?: boolean
   className?: string
@@ -60,6 +67,7 @@ function SquadDetailViewContent({
   route,
   tab,
   onBack,
+  onEdit,
   compact = false,
   className,
 }: SquadDetailViewProps) {
@@ -88,14 +96,6 @@ function SquadDetailViewContent({
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)} data-testid="squad-detail-view">
-      <SquadMasthead
-        squad={squad}
-        memberCount={members.length}
-        waitingCount={reviews.length}
-        control={control}
-        teammateRuntimes={members.map((member) => member.config?.runtime)}
-        {...(onBack ? { onBack } : {})}
-      />
       {/* Controlled, not `defaultValue`. This view re-renders on every live
           status change, and an uncontrolled Radix tab loses its selection
           whenever its subtree is remounted, snapping the reader back mid-read.
@@ -105,38 +105,50 @@ function SquadDetailViewContent({
         onValueChange={(next) => route.setTab(next as SquadDetailTab)}
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
-        <TabsList
-          className={cn("mx-4 mt-3 shrink-0", compact ? "grid w-auto grid-cols-3" : "w-fit")}
-        >
-          {SQUAD_DETAIL_TABS.map((value) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className="gap-1.5"
-              data-testid={`squad-detail-tab-${value}`}
-            >
-              {t(`tabs.${value}`)}
-              {value === "runs" && reviews.length > 0 ? (
-                <span
-                  className="rounded-pill bg-destructive px-1.5 text-[10px] font-semibold tabular-nums text-destructive-foreground"
-                  aria-label={t("detail.waitingCount", { count: reviews.length })}
-                >
-                  {reviews.length}
-                </span>
-              ) : null}
-              {value === "board" && openTasks > 0 ? (
-                <span
-                  className="text-[11px] tabular-nums text-muted-foreground"
-                  aria-label={t("detail.openTasks", { count: openTasks })}
-                >
-                  {openTasks}
-                </span>
-              ) : null}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="shrink-0 border-b">
+          <SquadMasthead
+            squad={squad}
+            memberCount={members.length}
+            waitingCount={reviews.length}
+            control={control}
+            teammateRuntimes={members.map((member) => member.config?.runtime)}
+            onConfigure={() => onEdit("general")}
+            {...(onBack ? { onBack } : {})}
+          />
+          <TabsList
+            variant="line"
+            className={cn("mt-2 h-9 px-4", compact ? "grid w-full grid-cols-3" : "w-fit")}
+          >
+            {SQUAD_DETAIL_TABS.map((value) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                className="gap-1.5 px-2.5"
+                data-testid={`squad-detail-tab-${value}`}
+              >
+                {t(`tabs.${value}`)}
+                {value === "runs" && reviews.length > 0 ? (
+                  <span
+                    className="rounded-pill bg-destructive px-1.5 text-[10px] font-semibold tabular-nums text-destructive-foreground"
+                    aria-label={t("detail.waitingCount", { count: reviews.length })}
+                  >
+                    {reviews.length}
+                  </span>
+                ) : null}
+                {value === "board" && openTasks > 0 ? (
+                  <span
+                    className="text-[11px] tabular-nums text-muted-foreground"
+                    aria-label={t("detail.openTasks", { count: openTasks })}
+                  >
+                    {openTasks}
+                  </span>
+                ) : null}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
-        <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto p-4">
+        <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto px-4 py-3.5">
           <SquadOverview
             squad={squad}
             members={members}
@@ -145,10 +157,11 @@ function SquadDetailViewContent({
             control={control}
             runHref={route.runHref}
             onOpenBoard={() => route.setTab("board")}
+            onEditRoster={() => onEdit("roster")}
             className={cn(!compact && "max-w-5xl")}
           />
         </TabsContent>
-        <TabsContent value="runs" className="mt-3 min-h-0 flex-1 overflow-hidden border-t">
+        <TabsContent value="runs" className="min-h-0 flex-1 overflow-hidden">
           {/* The canonical run cockpit, pinned to Squad runs and to this Squad
               (ADR-0169). Same rows, same detail pane, same `allowedActions` as
               `/agent-runs`; `?run=` deep-links share the id space. */}

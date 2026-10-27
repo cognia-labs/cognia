@@ -56,6 +56,8 @@ function state(over: Partial<SquadRunControl> = {}): SquadRunControl {
   }
 }
 
+const onConfigure = jest.fn()
+
 function mount(
   over: Partial<SquadRunControl> = {},
   extra: { onBack?: () => void; teammateRuntimes?: (string | undefined)[] } = {}
@@ -66,6 +68,7 @@ function mount(
       memberCount={3}
       waitingCount={0}
       control={state(over)}
+      onConfigure={onConfigure}
       {...extra}
     />
   )
@@ -82,16 +85,25 @@ describe("identity", () => {
     expect(screen.getByTestId(`agent-team-avatar-${squad.id}`)).toBeInTheDocument()
   })
 
-  it("links configuration to this Squad's panel in Settings", () => {
+  /** Configure opens the edit drawer over the page instead of leaving for Settings. */
+  it("opens the edit drawer from Configure", async () => {
     mount()
-    expect(screen.getByTestId("squad-fleet-configure")).toHaveAttribute(
-      "href",
-      expect.stringContaining("squadTab=squad%3Aa")
-    )
+    const configure = screen.getByTestId("squad-fleet-configure")
+    expect(configure.tagName).toBe("BUTTON")
+    await userEvent.click(configure)
+    expect(onConfigure).toHaveBeenCalled()
   })
 
   it("wears a badge counting the reviews that need you", () => {
-    render(<SquadMasthead squad={squad} memberCount={3} waitingCount={2} control={state()} />)
+    render(
+      <SquadMasthead
+        squad={squad}
+        memberCount={3}
+        waitingCount={2}
+        control={state()}
+        onConfigure={onConfigure}
+      />
+    )
     expect(screen.getByTestId("squad-masthead-waiting")).toHaveTextContent("2 need you")
   })
 

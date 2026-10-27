@@ -1,17 +1,4 @@
 {
-  "builtIn": {
-    "badge": "Built-in",
-    "description": "Ready-made teams of characters that ship with Cognia. They appear as scopes in the chat sidebar and are read-only; duplicate one to get an editable copy.",
-    "duplicate": "Duplicate",
-    "duplicateAria": "Duplicate {name} into an editable team",
-    "duplicateFailed": "Couldn't duplicate {name}",
-    "duplicated": "Created {name}",
-    "editCopy": "Edit",
-    "manage": "Manage teams",
-    "open": "Open",
-    "openAria": "Open {name} conversations",
-    "title": "Built-in teams"
-  },
   "fleet": {
     "clearFilters": "Clear filters",
     "configure": "Configure this Squad",
@@ -56,7 +43,6 @@
     "defaultLeadName": "Team Lead",
     "description": "What every Squad is doing right now.",
     "emptyDescription": "Make one here, then hand a conversation to it from the composer.",
-    "emptyDescriptionWithBuiltIns": "Make one here, then hand a conversation to it from the composer. {count, plural, =1 {The built-in team below is} other {The # built-in teams below are}} ready to use right now.",
     "emptyTitle": "No Squads yet",
     "filters": {
       "label": "Narrow the list",
@@ -85,18 +71,13 @@
       "runs": "Runs",
       "squads": "Squads",
       "overview": "Overview",
-      "allRuns": "All runs"
+      "fleet": "Overview"
     },
     "title": "Squads",
     "waiting": "Needs you",
     "composeCta": "Compose from an objective",
     "onboarding": {
-      "description": "A Squad is a lead and its teammates taking one objective to done inside a repository. Start an empty one and staff it, or describe the objective and let Cognia propose the roster.",
-      "descriptionWithBuiltIns": "A Squad is a lead and its teammates taking one objective to done inside a repository. Start an empty one and staff it, or describe the objective and let Cognia propose the roster. {count, plural, =1 {The built-in team in the list is} other {The # built-in teams in the list are}} ready to use in chat right now."
-    },
-    "allRuns": {
-      "title": "Runs across every Squad",
-      "description": "Pick a Squad in the list for its overview, controls and board."
+      "description": "A Squad is a lead and its teammates taking one objective to done inside a repository. Start an empty one and staff it, or describe the objective and let Cognia propose the roster."
     },
     "detail": {
       "back": "Back to Squads",
@@ -106,7 +87,8 @@
       "missingTitle": "Squad unavailable",
       "missingDescription": "It was deleted, perhaps in another window, or this link is out of date.",
       "backToAll": "Show all Squads"
-    }
+    },
+    "moreActions": "More actions"
   },
   "readiness": {
     "title": "Readiness",
@@ -172,6 +154,57 @@
       "title": "Roster",
       "edit": "Edit roster",
       "none": "No members yet."
+    }
+  },
+  "create": {
+    "title": "New Squad",
+    "description": "Pick how to start. You can change the roster and settings any time after.",
+    "recommended": "Recommended",
+    "options": {
+      "compose": {
+        "title": "Compose from an objective",
+        "description": "Describe what needs doing and Cognia proposes the roster and who does what."
+      },
+      "template": {
+        "title": "Start from a template",
+        "description": "A ready-made roster, such as parallel review or deep research."
+      },
+      "blank": {
+        "title": "Blank Squad",
+        "description": "Just a lead. Add the teammates yourself."
+      }
+    },
+    "templates": {
+      "title": "Choose a template",
+      "description": "The Squad is created with the template's roster and starting tasks.",
+      "back": "Back",
+      "empty": "No templates available yet.",
+      "use": "Use",
+      "useAria": "Use the {name} template",
+      "builtIn": "Built-in",
+      "plugin": "Plugin"
+    },
+    "failed": "Couldn't create the Squad"
+  },
+  "edit": {
+    "title": "Edit {name}",
+    "description": "Name, roster, readiness and advanced settings. Changes save as you go."
+  },
+  "fleetOverview": {
+    "needsYou": {
+      "title": "Needs you",
+      "description": "Squads waiting on your approval or answer.",
+      "none": "Nothing is waiting on you."
+    },
+    "working": {
+      "title": "Working now",
+      "description": "Squads planning or executing right now.",
+      "none": "No Squad is working. Pick one in the list to start it, or hand it a conversation from the composer."
+    },
+    "recentRuns": {
+      "title": "Recent runs",
+      "none": "No Squad has run yet.",
+      "viewAll": "View all runs"
     }
   }
 }

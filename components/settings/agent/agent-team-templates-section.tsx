@@ -83,14 +83,8 @@ import {
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import type { AgentTeamTemplate } from "@/types/agent/agent-team"
 import { createLogger } from "@cognia/logging"
-import {
-  getTemplateWarnings,
-  listAgentTeamTemplateEntries,
-  type PluginAgentTeamTemplateWarning,
-} from "@/lib/plugin/registries/agent-team-template-registry"
-import { projectPluginTemplate } from "@/lib/agent-team/project-plugin-template"
+import type { PluginAgentTeamTemplateWarning } from "@/lib/plugin/registries/agent-team-template-registry"
 import { publishSquadTemplateToPlatform } from "@/lib/agent-team/publish-template-to-platform"
-import { applySquadTemplate } from "@/lib/agent-team/apply-squad-template"
 import {
   squadTemplateShareDefinition,
   type SquadTemplatePlatformStatus,
@@ -100,8 +94,8 @@ import {
   useSquadTemplatePlatformStatuses,
   type SquadTemplateStatusRow,
 } from "@/hooks/squads/use-squad-template-platform-statuses"
-import { usePlatform } from "@/hooks/use-platform"
-import type { TemplateDefinitionEnvelope, TemplatePlatform } from "@/lib/templates/contracts"
+import { useApplySquadTemplate, useSquadTemplates } from "@/hooks/squads/use-squad-templates"
+import type { TemplateDefinitionEnvelope } from "@/lib/templates/contracts"
 import { makeTemplateDraftId } from "@/lib/templates/draft-id"
 import { downloadTemplatePackage, templatePackageFilename } from "@/lib/templates/download-package"
 import type { InspectedTemplatePackage } from "@/lib/templates/package"
@@ -140,15 +134,9 @@ export function AgentTeamTemplatesSection({ runtime }: AgentTeamTemplatesSection
   // its refusals read the same here as in Discover and the Studio.
   const tShare = useTranslations("share")
   const router = useRouter()
-  const platform = usePlatform()
-  const templatePlatform: TemplatePlatform =
-    platform === "mobile" ? "mobile" : platform === "web" ? "web" : "desktop"
   const resolvedRuntime = useMemo(() => runtime ?? getTemplateRuntime(), [runtime])
+  const applyTemplate = useApplySquadTemplate(resolvedRuntime)
 
-  const templates = useAgentTeamStore((s) => s.templates)
-  const createTeam = useAgentTeamStore((s) => s.createTeam)
-  const addTeammate = useAgentTeamStore((s) => s.addTeammate)
-  const createTask = useAgentTeamStore((s) => s.createTask)
   const addTemplate = useAgentTeamStore((s) => s.addTemplate)
   const updateTemplate = useAgentTeamStore((s) => s.updateTemplate)
   const deleteTemplate = useAgentTeamStore((s) => s.deleteTemplate)
@@ -164,46 +152,11 @@ export function AgentTeamTemplatesSection({ runtime }: AgentTeamTemplatesSection
   >(undefined)
   const importRef = useRef<HTMLInputElement>(null)
 
-  /**
-   * Project a plugin-contributed `PluginAgentTeamTemplateDef` into the
-   * `AgentTeamTemplate` shape the row component consumes. The runtime id
-   * is `<pluginId>:<defId>` so plugin templates can never collide with
-   * store-resident ids.
-   */
-  // Built-ins first, then user templates by name, then plugin overlay
-  // entries last. Within built-ins, group by category so related
-  // templates sit together. Plugin entries carry source metadata in
-  // `pluginIndex` so the row can render badges + dep warnings.
-  const sortedTemplates = useMemo(() => {
-    const local = Object.values(templates)
-    const pluginEntries = listAgentTeamTemplateEntries()
-    const pluginIndex = new Map<
-      string,
-      { pluginId?: string; warnings: readonly PluginAgentTeamTemplateWarning[] }
-    >()
-    const pluginProjected: AgentTeamTemplate[] = pluginEntries.map((entry) => {
-      const projected = projectPluginTemplate(entry)
-      pluginIndex.set(projected.id, {
-        pluginId: entry.pluginId,
-        warnings: getTemplateWarnings(entry.id),
-      })
-      return projected
-    })
-    const merged = [...local, ...pluginProjected]
-    merged.sort((a, b) => {
-      const aPlugin = pluginIndex.has(a.id)
-      const bPlugin = pluginIndex.has(b.id)
-      if (aPlugin !== bPlugin) return aPlugin ? 1 : -1
-      const aBuiltIn = a.isBuiltIn ?? false
-      const bBuiltIn = b.isBuiltIn ?? false
-      if (aBuiltIn !== bBuiltIn) return aBuiltIn ? -1 : 1
-      if (aBuiltIn && bBuiltIn && a.category !== b.category) {
-        return a.category.localeCompare(b.category)
-      }
-      return a.name.localeCompare(b.name)
-    })
-    return { merged, pluginIndex }
-  }, [templates])
+  // Built-ins first (grouped by category), then user templates by name, then
+  // plugin overlay entries, whose source metadata in `pluginIndex` lets the
+  // row render badges and dependency warnings. Shared with the `/squads`
+  // "New Squad" dialog so both list the same templates in the same order.
+  const sortedTemplates = useSquadTemplates()
 
   /**
    * The rows whose lifecycle belongs to this user.
@@ -236,13 +189,7 @@ export function AgentTeamTemplatesSection({ runtime }: AgentTeamTemplatesSection
    */
   const handleUse = useCallback(
     async (template: AgentTeamTemplate, pluginSource?: string) => {
-      const result = await applySquadTemplate({
-        template,
-        ...(pluginSource ? { origin: { pluginSource } } : {}),
-        platform: templatePlatform,
-        actions: { createTeam, addTeammate, createTask },
-        runtime: resolvedRuntime,
-      })
+      const result = await applyTemplate(template, pluginSource)
       log.info("template_used", {
         templateId: template.id,
         teamId: result.teamId,
@@ -250,7 +197,7 @@ export function AgentTeamTemplatesSection({ runtime }: AgentTeamTemplatesSection
       })
       router.push(`/squads?id=${encodeURIComponent(result.teamId)}`)
     },
-    [addTeammate, createTask, createTeam, resolvedRuntime, router, templatePlatform]
+    [applyTemplate, router]
   )
 
   /**

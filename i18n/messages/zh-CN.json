@@ -60815,24 +60815,41 @@
     }
   },
   "squads": {
-    "builtIn": {
-      "badge": "内置",
-      "description": "随 Cognia 提供的现成角色团队。它们会作为聊天侧栏中的范围出现，且为只读；复制一份即可得到可编辑的副本。",
-      "duplicate": "复制",
-      "duplicateAria": "将 {name} 复制为可编辑的团队",
-      "duplicateFailed": "无法复制 {name}",
-      "duplicated": "已创建 {name}",
-      "editCopy": "编辑",
-      "manage": "管理团队",
-      "open": "打开",
-      "openAria": "打开 {name} 的会话",
-      "title": "内置团队"
+    "create": {
+      "description": "选择一种开始方式。之后随时可以调整成员和设置。",
+      "failed": "无法创建小队",
+      "options": {
+        "blank": {
+          "description": "只有一位队长，成员由你自己添加。",
+          "title": "空白小队"
+        },
+        "compose": {
+          "description": "描述要完成的事，Cognia 会提议成员和分工。",
+          "title": "按目标编排"
+        },
+        "template": {
+          "description": "使用现成的成员组合，例如并行评审、深度调研。",
+          "title": "从模板开始"
+        }
+      },
+      "recommended": "推荐",
+      "templates": {
+        "back": "返回",
+        "builtIn": "内置",
+        "description": "小队会带着模板里的成员和初始任务创建。",
+        "empty": "还没有可用的模板。",
+        "plugin": "插件",
+        "title": "选择模板",
+        "use": "使用",
+        "useAria": "使用模板「{name}」"
+      },
+      "title": "新建小队"
+    },
+    "edit": {
+      "description": "名称、成员、运行条件和高级设置。修改会自动保存。",
+      "title": "编辑「{name}」"
     },
     "fleet": {
-      "allRuns": {
-        "description": "在列表里选一个小队，查看它的概览、控制和看板。",
-        "title": "所有小队的运行"
-      },
       "clearFilters": "清除筛选",
       "composeCta": "按目标编排",
       "configure": "配置这个小队",
@@ -60886,7 +60903,6 @@
         "waitingCount": "{count, plural, other {# 项等你答复}}"
       },
       "emptyDescription": "在这里新建一个，然后在输入框把会话交给它。",
-      "emptyDescriptionWithBuiltIns": "在这里新建一个，然后在输入框把会话交给它。{count, plural, other {下方的 # 个内置团队}}现在就能用。",
       "emptyTitle": "还没有小队",
       "filters": {
         "all": "全部",
@@ -60897,12 +60913,12 @@
       },
       "manageAction": "管理小队",
       "memberCount": "{count, plural, =0 {暂无成员} other {# 名成员}}",
+      "moreActions": "更多操作",
       "newSquadName": "新小队",
       "noMatchesDescription": "放宽筛选，或清空搜索，看剩下的。",
       "noMatchesTitle": "没有匹配的小队",
       "onboarding": {
-        "description": "小队由一名队长和若干成员组成，在一个仓库里把一个目标做完。可以先建一个空小队再配人，也可以描述目标，让 Cognia 提议成员组成。",
-        "descriptionWithBuiltIns": "小队由一名队长和若干成员组成，在一个仓库里把一个目标做完。可以先建一个空小队再配人，也可以描述目标，让 Cognia 提议成员组成。{count, plural, other {列表里的 # 个内置团队}}现在就能在聊天里用。"
+        "description": "小队由一名队长和若干成员组成，在一个仓库里把一个目标做完。可以先建一个空小队再配人，也可以描述目标，让 Cognia 提议成员组成。"
       },
       "openFleet": "宿主实时活动",
       "palette": {
@@ -60915,14 +60931,31 @@
       "search": "搜索小队",
       "summary": "共 {total} 个小队，{live, plural, =0 {当前空闲} other {# 个在跑}}",
       "tabs": {
-        "allRuns": "全部运行",
         "board": "看板",
+        "fleet": "总览",
         "overview": "概览",
         "runs": "运行",
         "squads": "小队"
       },
       "title": "小队",
       "waiting": "等你答复"
+    },
+    "fleetOverview": {
+      "needsYou": {
+        "description": "等待你批准或回答的小队。",
+        "none": "没有需要你处理的事。",
+        "title": "等你答复"
+      },
+      "recentRuns": {
+        "none": "还没有小队运行过。",
+        "title": "最近运行",
+        "viewAll": "查看全部运行"
+      },
+      "working": {
+        "description": "正在规划或执行的小队。",
+        "none": "当前没有小队在运行。在列表里选一个小队启动，或在输入框把会话交给它。",
+        "title": "运行中"
+      }
     },
     "overview": {
       "latestRun": {

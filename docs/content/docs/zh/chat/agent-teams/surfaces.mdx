@@ -9,7 +9,7 @@ ADR-0140 移除了 `/agent-teams/workspace` 工作区。小队作为对话的执
 
 <TLDR>
 - **配置面**在设置的 Squads 小节：库导航条、带花名册与溯源与派生动作的详情面板，以及模板画廊。
-- **运行面**在 `/squads`：一个带 runs 与 board 两个标签页的舰队控制台，外加启动、暂停、恢复与停止。
+- **运行面**在 `/squads`：一个舰队控制台，选中的小队有自己的视图（带启动、暂停、恢复与停止的页眉，然后是 Overview、Runs、Board 标签页）。编辑小队会在页面上的抽屉里打开同一个设置面板。
 - **单次运行的详情**在 `/agent-runs`，当该行是一次小队运行时会多出三个仅限小队的标签页（Coordination、Report、Operations）。
 - **组合器芯片**把一段对话绑定到某支小队，存在 `sessions.squadId` 上。
 - `/agent-teams` 和 `/agent-teams/workspace` 是指向 `/squads` 的客户端跳转，自身什么都不渲染。
@@ -17,7 +17,7 @@ ADR-0140 移除了 `/agent-teams/workspace` 工作区。小队作为对话的执
 
 <StatGrid>
   <Stat label="运行详情标签页" value="6 + 3" hint="overview · activity · changes · tests · artifacts · approvals，小队运行行上再加 coordination · report · operations" />
-  <Stat label="舰队控制台标签页" value="2" hint="桌面端是 runs 与 board，手机上再多一个 squads" />
+  <Stat label="选中小队的标签页" value="3" hint="overview、runs 与 board；未选中时手机端提供 overview 与 squads" />
   <Stat label="模板行动作" value="7" hint="Use · Edit · Duplicate · Publish · Export package · Fork · Delete" />
   <Stat label="墓碑路由" value="3" hint="/agent-teams、/agent-teams/workspace 与 /me/agent-teams-settings，全部跳到 /squads" />
 </StatGrid>
@@ -30,7 +30,7 @@ ADR-0140 移除了 `/agent-teams/workspace` 工作区。小队作为对话的执
 | Tasks（看板） | `/squads`，选中小队的 Board 标签页 |
 | Chat | 对话本身，通过组合器上的执行器芯片 |
 | Activity、operations、consensus | `/agent-runs` 运行详情里的小队标签页 |
-| Members，以及九个治理小节 | 设置里 Squads 的详情面板 |
+| Members，以及九个治理小节 | 设置里 Squads 的详情面板，以及 `/squads` 编辑抽屉里的同一个面板 |
 | 模板画廊 | 设置里 Squads 的 Templates 面板 |
 | 活跃 worktree、回收的分支 | `/workspace` |
 
@@ -130,23 +130,23 @@ flowchart TD
 
 ## `/squads`
 
-`app/squads/page.tsx` 在宽布局下渲染 `SquadFleetConsole`，在紧凑布局下渲染 `SquadsMobileBody`。它刻意只管运行面，因为一切关于*配置*小队的事情都住在设置里。
+`app/squads/page.tsx` 在宽布局下渲染 `SquadFleetConsole`，在紧凑布局下渲染 `SquadsMobileBody`。布局与 `/bots`、`/devices` 一致：一个只有一个主操作的管理页头、一条固定宽度的列表栏，以及中栏的 `ConsoleSection` 卡片。配置小队不用离开页面：编辑器就是设置库里的 `SquadDetailPanel`，在抽屉里打开。
 
-深链接以 `?id=` 到达，从来不是 `[id]`。本应用以静态导出发布，由 Tauri 和 Capacitor 消费，那里运行期根本不存在动态段。`use-squad-route-state.ts` 拥有六个参数：`?id=`、`?run=`（运行页签里打开的执行运行，与 `/agent-runs?run=` 同一个 id 空间）、`?status=`（运行页签的状态分组）、`?tab=`（`overview`、`squads`、`runs`、`board` 之一）、`?q=` 和 `?filter=`（`all`、`waiting`、`live` 之一）。每一次写入都是带 `scroll: false` 的 `router.replace`。实际显示哪个标签页由 `resolveSquadTab` 决定：选中小队时提供 Overview、Runs、Board，默认落在 Overview；未选中时宽屏显示所有小队的运行，手机显示列表或所有小队的运行。切换小队会清掉 `?run=`，`runHref` 生成指向运行页签中某次运行的真实链接。
+深链接以 `?id=` 到达，从来不是 `[id]`。本应用以静态导出发布，由 Tauri 和 Capacitor 消费，那里运行期根本不存在动态段。`use-squad-route-state.ts` 拥有七个参数：`?id=`、`?edit=`（编辑抽屉，`general` 或 `roster`）、`?run=`（运行页签里打开的执行运行，与 `/agent-runs?run=` 同一个 id 空间）、`?status=`（运行页签的状态分组）、`?tab=`（`overview`、`squads`、`runs`、`board` 之一）、`?q=` 和 `?filter=`（`all`、`waiting`、`live` 之一）。每一次写入都是带 `scroll: false` 的 `router.replace`。实际显示哪个标签页由 `resolveSquadTab` 决定：选中小队时提供 Overview、Runs、Board，默认落在 Overview；未选中时宽屏显示舰队总览，手机显示列表或该总览（已退役的全部运行 `runs` 标签页会解析为总览）。切换小队会清掉 `?run=` 并关闭抽屉，`runHref` 生成指向运行页签中某次运行的真实链接。来自旧的全部运行中栏、没有小队的 `?run=` 会被转到 `/agent-runs?kind=team&run=`。
 
-桌面控制台只有两栏：一个列表栏，加一个中栏，中栏要么是某个小队自己的视图，要么是所有小队的运行。右侧不再有检视面板。它曾经在运行驾驶舱自带的列表和详情旁边再加第四栏，结果每一栏都放不下自己的内容。
+桌面控制台只有两栏：一个列表栏，加一个中栏，中栏要么是某个小队自己的视图，要么是舰队总览。右侧不再有检视面板。它曾经在运行驾驶舱自带的列表和详情旁边再加第四栏，结果每一栏都放不下自己的内容。
 
-- **列表栏**（`SquadListPane`，`variant="rail"`）是直接铺在列表栏底色上的扁平行，筛选切换自带计数，内置团队折叠在下方的分组里。在 `md` 与 `lg` 之间，外壳会把它移进一个 sheet，选中一项即自动关闭。
-- 选中小队时，中栏是 `SquadDetailView`。它的**页眉**（`SquadMasthead`，仍为 `data-testid="squad-fleet-inspector"`）显示名称、状态、成员数和描述，然后是 `TeamRunControls`（启动、以 Ultracode 启动、暂停、恢复、停止）和 **配置这个小队**。启动按钮被禁用时，原因会直接写在下面，因为按钮的 `title` 在触屏上看不到。启动被拒绝时显示原因、授权码、Host 返回的阻塞项，以及会重放同一次启动的重试按钮。这些控制由 `useSquadRunControl` 驱动，底层是 `useSquadLatestRun`。
-- **Overview**（`SquadOverview`）是按分诊顺序、以发丝线分隔的若干段：**等你答复**（未处理的审阅，每条都是带着运行打开的 Runs 链接）、小队受阻时排在最前的**就绪状态**、**最近一次运行**（目标、状态、开始时间、耗时、token 与费用；在宿主上取自持久记录，在配对设备上取自 `latestSnapshot.usage`——持久派发每次汇总运行用量时，`reportTeamRunUsage` 会写入一条 summary 可见性的 `usage.reported` 日志事件）、**任务**（看板折算为待开始、进行中、受阻、已完成、失败）和**成员**。宽屏下，已就绪的就绪状态与成员会移到侧栏。
+- **列表栏**（`SquadListPane`，`variant="rail"`，与 `/bots` 一样固定 19rem）是直接铺在列表栏底色上的扁平行，筛选切换自带计数。它只列小队：聊天侧栏的内置团队是另一种东西，留在侧栏和「设置 > 团队」里。在 `md` 与 `lg` 之间，外壳会把它移进一个 sheet，选中一项即自动关闭。
+- 选中小队时，中栏是 `SquadDetailView`。它的**页眉**（`SquadMasthead`，仍为 `data-testid="squad-fleet-inspector"`）显示名称、状态、成员数和描述，然后是 `TeamRunControls`（启动、以 Ultracode 启动、暂停、恢复、停止）和打开编辑抽屉的 **配置这个小队**。Overview、Runs、Board 以下划线标签的形式紧贴页眉下方，与页眉合成一个整体。启动按钮被禁用时，原因会直接写在下面，因为按钮的 `title` 在触屏上看不到。启动被拒绝时显示原因、授权码、Host 返回的阻塞项，以及会重放同一次启动的重试按钮。这些控制由 `useSquadRunControl` 驱动，底层是 `useSquadLatestRun`。
+- **Overview**（`SquadOverview`）是按分诊顺序排列的 `ConsoleSection` 卡片：**等你答复**（未处理的审阅，每条都是带着运行打开的 Runs 链接）、小队受阻时排在最前的**就绪状态**、**最近一次运行**（目标、状态、开始时间、耗时、token 与费用；在宿主上取自持久记录，在配对设备上取自 `latestSnapshot.usage`——持久派发每次汇总运行用量时，`reportTeamRunUsage` 会写入一条 summary 可见性的 `usage.reported` 日志事件）、**任务**（看板折算为待开始、进行中、受阻、已完成、失败）和**成员**，已就绪时就绪状态排在成员旁边。**编辑成员**和就绪卡片里的**添加成员**都会把抽屉打开到成员部分。
 - **Runs** 内嵌渲染规范的 `AgentRunsPanel`，钉住 `kind = team` 与选中的小队（ADR-0169）。与 `/agent-runs` 同样的行、同样的详情窗格、同样的 `allowedActions` 和同样的审批表单。它的标签上带有未处理审阅的数量。
 - **Board** 为选中的小队渲染 `AgentTeamTasks`。
 - 链接指向的小队已不存在时，会明确说明（「小队不可用」）并提供返回入口；仍在从 Dexie 加载的小队则在到达前不显示任何内容（`useSelectedSquad`）。
-- 未选中时中栏是所有小队的运行；一个小队都没有时，中栏是唯一的空状态，提供 **新建小队** 和 **按目标编排**，列表栏只用一行说明列表为空。中止已删除：可见的破坏性动作只有停止，而且是终态。
+- 未选中时中栏是舰队总览（`SquadFleetOverview`）：**等你答复**（任一小队的未处理审阅，链接到对应运行）、**运行中**，以及**最近运行**（最近五条，**查看全部运行**通往 `/agent-runs?kind=team`）。一个小队都没有时，中栏是唯一的空状态，提供 **新建小队**，列表栏只用一行说明列表为空。中止已删除：可见的破坏性动作只有停止，而且是终态。
 
-头部提供 **新建小队**、**按目标编排**（`AutoComposeDialog`）、**管理小队**（设置深链接），以及在存在舰队快照时通向 `/fleet` 的 **宿主实时活动**。
+页头只有一个按钮 **新建小队**，打开 `CreateSquadDialog`：**按目标编排**（推荐，交给 `AutoComposeDialog`）、**从模板开始**（通过 `useSquadTemplates`，与设置里的模板画廊同一份列表、同样经由模板平台实例化）或 **空白小队**。新建的小队会带着编辑抽屉打开。**管理小队**（设置深链接）与 **宿主实时活动**（存在舰队快照时通向 `/fleet`）收在页头的更多菜单里。
 
-手机端（`SquadsMobileBody`）有两层。未选中时是列表（`variant="page"`：铺在壁纸上的一整块分组表面）和所有小队的运行。选中小队后，同一个 `SquadDetailView` 全屏替换列表，页眉带返回按钮。过去它在列表上弹出一个抽屉，而页面上的 Runs 和 Board 标签页仍然绑定在一个屏幕上无处可见的小队上。
+手机端（`SquadsMobileBody`）有两层。未选中时是列表（`variant="page"`：铺在壁纸上的一整块分组表面）和舰队总览，顶栏只有 **新建小队** 和一个菜单。对话框和抽屉与桌面端相同，抽屉以底部弹层呈现。选中小队后，同一个 `SquadDetailView` 全屏替换列表，页眉带返回按钮。过去它在列表上弹出一个抽屉，而页面上的 Runs 和 Board 标签页仍然绑定在一个屏幕上无处可见的小队上。
 
 ## `/agent-runs`
 

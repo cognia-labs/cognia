@@ -15,6 +15,10 @@
  * reason used to be the button's `title`, which no touch screen shows, so on a
  * phone a disabled Start simply looked broken.
  *
+ * "Configure" opens the Squad's edit drawer over this page (`SquadEditSheet`)
+ * rather than sending the reader to Settings, away from the run they are
+ * watching.
+ *
  * There is no "Open run" link here. The Overview's Latest run carries it beside
  * the run it opens, and the Runs tab is one click from any tab; a second copy
  * up here pointed at the same address and made two identical links on one
@@ -26,19 +30,16 @@
  * it, and this is that surface.
  */
 
-import Link from "next/link"
 import { useTranslations } from "next-intl"
 import { ArrowLeftIcon, InfoIcon, SettingsIcon } from "lucide-react"
 
 import { TeamRunControls } from "@/components/agent/workspace/team-run-controls"
 import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
-import { squadPanelId } from "@/components/settings/squads/nav-config"
 import { StatusBadge } from "@/components/status-badge"
 import { RunEstimateHint } from "@/components/usage/run-estimate-hint"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { SquadRunControl } from "@/hooks/squads/use-squad-run-control"
-import { settingsHref } from "@/lib/settings/deep-link"
 import { combineHarness, harnessFromTeammateRuntime } from "@/lib/usage/run-estimate/harness"
 import { cn } from "@/lib/utils"
 import type { AgentTeam } from "@/types/agent/agent-team"
@@ -54,6 +55,8 @@ export interface SquadMastheadProps {
   control: SquadRunControl
   /** Present where the Squad view replaces the list (a phone): a way back to it. */
   onBack?: () => void
+  /** Opens this Squad's edit drawer. */
+  onConfigure: () => void
   /**
    * Each member's configured `runtime`, for the run estimate's harness
    * (ADR-0232). Omitted: the harness is unknown and the estimate ignores it.
@@ -68,6 +71,7 @@ export function SquadMasthead({
   waitingCount,
   control,
   onBack,
+  onConfigure,
   teammateRuntimes,
   className,
 }: SquadMastheadProps) {
@@ -82,7 +86,7 @@ export function SquadMasthead({
 
   return (
     <header
-      className={cn("@container/squad-masthead shrink-0 border-b px-4 py-3", className)}
+      className={cn("@container/squad-masthead shrink-0 px-4 pt-3", className)}
       data-testid="squad-fleet-inspector"
     >
       <div className="flex flex-col gap-3 @2xl/squad-masthead:flex-row @2xl/squad-masthead:items-start @2xl/squad-masthead:justify-between">
@@ -142,16 +146,16 @@ export function SquadMasthead({
               ? { startDisabledReason: control.startDisabledReason }
               : {})}
           />
-          {/* Configuration is not on this page on purpose: one place per
-              question, and this page answers "what is it doing". */}
-          <Button asChild variant="ghost" size="sm" className="gap-1.5 text-muted-foreground">
-            <Link
-              href={settingsHref("squads", { params: { squadTab: squadPanelId(squad.id) } })}
-              data-testid="squad-fleet-configure"
-            >
-              <SettingsIcon aria-hidden className="size-3.5" />
-              {t("configure")}
-            </Link>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={onConfigure}
+            data-testid="squad-fleet-configure"
+          >
+            <SettingsIcon aria-hidden className="size-3.5" />
+            {t("configure")}
           </Button>
         </div>
       </div>

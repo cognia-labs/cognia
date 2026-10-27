@@ -60815,24 +60815,41 @@
     }
   },
   "squads": {
-    "builtIn": {
-      "badge": "Built-in",
-      "description": "Ready-made teams of characters that ship with Cognia. They appear as scopes in the chat sidebar and are read-only; duplicate one to get an editable copy.",
-      "duplicate": "Duplicate",
-      "duplicateAria": "Duplicate {name} into an editable team",
-      "duplicateFailed": "Couldn't duplicate {name}",
-      "duplicated": "Created {name}",
-      "editCopy": "Edit",
-      "manage": "Manage teams",
-      "open": "Open",
-      "openAria": "Open {name} conversations",
-      "title": "Built-in teams"
+    "create": {
+      "description": "Pick how to start. You can change the roster and settings any time after.",
+      "failed": "Couldn't create the Squad",
+      "options": {
+        "blank": {
+          "description": "Just a lead. Add the teammates yourself.",
+          "title": "Blank Squad"
+        },
+        "compose": {
+          "description": "Describe what needs doing and Cognia proposes the roster and who does what.",
+          "title": "Compose from an objective"
+        },
+        "template": {
+          "description": "A ready-made roster, such as parallel review or deep research.",
+          "title": "Start from a template"
+        }
+      },
+      "recommended": "Recommended",
+      "templates": {
+        "back": "Back",
+        "builtIn": "Built-in",
+        "description": "The Squad is created with the template's roster and starting tasks.",
+        "empty": "No templates available yet.",
+        "plugin": "Plugin",
+        "title": "Choose a template",
+        "use": "Use",
+        "useAria": "Use the {name} template"
+      },
+      "title": "New Squad"
+    },
+    "edit": {
+      "description": "Name, roster, readiness and advanced settings. Changes save as you go.",
+      "title": "Edit {name}"
     },
     "fleet": {
-      "allRuns": {
-        "description": "Pick a Squad in the list for its overview, controls and board.",
-        "title": "Runs across every Squad"
-      },
       "clearFilters": "Clear filters",
       "composeCta": "Compose from an objective",
       "configure": "Configure this Squad",
@@ -60886,7 +60903,6 @@
         "waitingCount": "{count, plural, =1 {1 needs you} other {# need you}}"
       },
       "emptyDescription": "Make one here, then hand a conversation to it from the composer.",
-      "emptyDescriptionWithBuiltIns": "Make one here, then hand a conversation to it from the composer. {count, plural, =1 {The built-in team below is} other {The # built-in teams below are}} ready to use right now.",
       "emptyTitle": "No Squads yet",
       "filters": {
         "all": "All",
@@ -60897,12 +60913,12 @@
       },
       "manageAction": "Manage Squads",
       "memberCount": "{count, plural, =0 {no members} =1 {1 member} other {# members}}",
+      "moreActions": "More actions",
       "newSquadName": "New Squad",
       "noMatchesDescription": "Widen the filter or clear the search to see the rest.",
       "noMatchesTitle": "No Squads match",
       "onboarding": {
-        "description": "A Squad is a lead and its teammates taking one objective to done inside a repository. Start an empty one and staff it, or describe the objective and let Cognia propose the roster.",
-        "descriptionWithBuiltIns": "A Squad is a lead and its teammates taking one objective to done inside a repository. Start an empty one and staff it, or describe the objective and let Cognia propose the roster. {count, plural, =1 {The built-in team in the list is} other {The # built-in teams in the list are}} ready to use in chat right now."
+        "description": "A Squad is a lead and its teammates taking one objective to done inside a repository. Start an empty one and staff it, or describe the objective and let Cognia propose the roster."
       },
       "openFleet": "Live host activity",
       "palette": {
@@ -60915,14 +60931,31 @@
       "search": "Search Squads",
       "summary": "{total, plural, =1 {1 Squad} other {# Squads}} · {live, plural, =0 {idle} other {# working}}",
       "tabs": {
-        "allRuns": "All runs",
         "board": "Board",
+        "fleet": "Overview",
         "overview": "Overview",
         "runs": "Runs",
         "squads": "Squads"
       },
       "title": "Squads",
       "waiting": "Needs you"
+    },
+    "fleetOverview": {
+      "needsYou": {
+        "description": "Squads waiting on your approval or answer.",
+        "none": "Nothing is waiting on you.",
+        "title": "Needs you"
+      },
+      "recentRuns": {
+        "none": "No Squad has run yet.",
+        "title": "Recent runs",
+        "viewAll": "View all runs"
+      },
+      "working": {
+        "description": "Squads planning or executing right now.",
+        "none": "No Squad is working. Pick one in the list to start it, or hand it a conversation from the composer.",
+        "title": "Working now"
+      }
     },
     "overview": {
       "latestRun": {

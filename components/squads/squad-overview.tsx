@@ -10,29 +10,39 @@
  * "Needs you" badge with nowhere to answer it. Every one of those answers
  * already existed in the data; nothing put them in front of the reader.
  *
- * The sections are chapters of ONE subject, so they are separated by hairlines
- * on the pane's own ground rather than framed as cards. Framing each one made
- * five loose objects out of one Squad, and spent a border and a card's padding
- * on every heading.
+ * Laid out as `ConsoleSection` cards in the console-pane grid, the composition
+ * `/bots`, `/devices` and the fleet overview use, so a Squad's page reads like
+ * every other console's detail rather than as its own idiom.
  *
  * The order is triage, not a fixed template. Open reviews come first because
  * they are the only thing that will not move until answered, and a Squad that
- * cannot start leads with what to fix. On a wide pane the reference material
- * (readiness once it is settled, the roster) moves into a side column; the
- * column split sizes off this pane's own width, not the window, because the
- * pane is narrower than the window by however wide the rail was dragged.
+ * cannot start leads with what to fix. Then the latest run and the tasks side
+ * by side, then the roster, paired with readiness once readiness is settled.
+ * The grid splits off this pane's own width, not the window's, because the
+ * pane is narrower than the window by however wide the rail is.
+ *
+ * Editing the roster opens the Squad's edit drawer (`onEditRoster`) instead of
+ * leaving for Settings.
  */
 
 import Link from "next/link"
 import { useFormatter, useNow, useTranslations } from "next-intl"
-import { AlertCircleIcon, ChevronRightIcon } from "lucide-react"
+import {
+  AlertCircleIcon,
+  ChevronRightIcon,
+  ListChecksIcon,
+  PlayCircleIcon,
+  ShieldCheckIcon,
+  UsersIcon,
+  type LucideIcon,
+} from "lucide-react"
 
 import { ExecutionStatusPill } from "@/components/agent-runs/agent-run-status-pill"
 import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
 import { RuntimeBadge } from "@/components/agent/workspace/runtime-badge"
-import { SQUAD_ROSTER_SETTING_ID, squadPanelId } from "@/components/settings/squads/nav-config"
 import { SquadReadinessCard } from "@/components/squads/squad-readiness-card"
 import { StatusBadge } from "@/components/status-badge"
+import { ConsoleSection } from "@/components/surface/console-section"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import type { PendingSquadReview } from "@/hooks/squads/use-pending-squad-reviews"
@@ -40,7 +50,6 @@ import type { SquadRunControl } from "@/hooks/squads/use-squad-run-control"
 import { useSquadReadiness, type SquadReadinessState } from "@/hooks/squads/use-squad-readiness"
 import { mapExecutionStatus } from "@/lib/execution/monitor-model"
 import { formatTokens, formatUsd } from "@/lib/observability/format-utils"
-import { settingsHref } from "@/lib/settings/deep-link"
 import { cn, formatDurationShort } from "@/lib/utils"
 import {
   DEFAULT_TEAMMATE_RUNTIME,
@@ -107,6 +116,8 @@ export interface SquadOverviewProps {
   runHref: (runId: string) => string
   /** Switches the Squad view to its board. */
   onOpenBoard: () => void
+  /** Opens the edit drawer on the members. */
+  onEditRoster: () => void
   className?: string
 }
 
@@ -118,45 +129,40 @@ export function SquadOverview({
   control,
   runHref,
   onOpenBoard,
+  onEditRoster,
   className,
 }: SquadOverviewProps) {
   const readiness = useSquadReadiness(squad.id)
   // On a companion the Host judges readiness at start time, so there is
-  // nothing local to be blocked on and the section stays in the side column.
+  // nothing local to be blocked on and the section stays beside the roster.
   const blocked = !control.remote && !readiness.loading && !readiness.ready
 
   const readinessSection = (
-    <ReadinessSection key="readiness" squad={squad} control={control} readiness={readiness} />
+    <ReadinessSection
+      key="readiness"
+      squad={squad}
+      control={control}
+      readiness={readiness}
+      wide={blocked}
+      onAddTeammate={onEditRoster}
+    />
   )
-  const main = [
-    reviews.length > 0 ? <NeedsYouSection key="needs" reviews={reviews} runHref={runHref} /> : null,
-    blocked ? readinessSection : null,
-    <LatestRunSection key="latest" control={control} runHref={runHref} />,
-    <TasksSection key="tasks" tasks={tasks} onOpenBoard={onOpenBoard} />,
-  ]
-  const side = [
-    blocked ? null : readinessSection,
-    <RosterSection key="roster" squad={squad} members={members} />,
-  ]
 
   return (
     <div
-      className={cn("@container/squad-overview", className)}
+      className={cn("@container/console-pane", className)}
       data-testid="squad-overview"
       data-blocked={blocked}
     >
-      {/* `grid-cols-1` is `minmax(0, 1fr)`: without a template the implicit
-          column sized itself to its content and ran past a phone's edge. */}
-      <div className="grid grid-cols-1 gap-x-10 @3xl/squad-overview:grid-cols-[minmax(0,1fr)_minmax(16rem,22rem)]">
-        <div className="divide-y divide-border/60" data-testid="squad-overview-main">
-          {main}
-        </div>
-        <div
-          className="divide-y divide-border/60 border-t border-border/60 @3xl/squad-overview:border-t-0"
-          data-testid="squad-overview-side"
-        >
-          {side}
-        </div>
+      {/* `items-start` so a short card keeps its own height instead of being
+          stretched to match the tall one beside it. */}
+      <div className="grid items-start gap-3.5 @3xl/console-pane:grid-cols-2">
+        {reviews.length > 0 ? <NeedsYouSection reviews={reviews} runHref={runHref} /> : null}
+        {blocked ? readinessSection : null}
+        <LatestRunSection control={control} runHref={runHref} />
+        <TasksSection tasks={tasks} onOpenBoard={onOpenBoard} />
+        <RosterSection squad={squad} members={members} wide={blocked} onEditRoster={onEditRoster} />
+        {blocked ? null : readinessSection}
       </div>
     </div>
   )
@@ -167,32 +173,32 @@ export function SquadOverview({
 function OverviewSection({
   id,
   title,
+  icon,
   meta,
   action,
+  wide,
   children,
 }: {
   id: string
   title: string
+  icon: LucideIcon
   meta?: React.ReactNode
   action?: React.ReactNode
+  wide?: boolean
   children: React.ReactNode
 }) {
-  const headingId = `squad-overview-${id}-heading`
   return (
-    <section
-      aria-labelledby={headingId}
-      className="py-4 first:pt-0"
-      data-testid={`squad-overview-${id}`}
+    <ConsoleSection
+      id={id}
+      idPrefix="squad-overview"
+      title={title}
+      icon={icon}
+      meta={meta}
+      action={action}
+      wide={wide}
     >
-      <header className="mb-2.5 flex items-center gap-2">
-        <h3 id={headingId} className="text-[13px] font-semibold leading-tight">
-          {title}
-        </h3>
-        {meta}
-        {action ? <div className="ml-auto shrink-0">{action}</div> : null}
-      </header>
       {children}
-    </section>
+    </ConsoleSection>
   )
 }
 
@@ -213,6 +219,8 @@ function NeedsYouSection({
     <OverviewSection
       id="needs-you"
       title={t("needsYou.title")}
+      icon={AlertCircleIcon}
+      wide
       meta={
         <Badge variant="destructive" className="text-[10px] tabular-nums">
           {reviews.length}
@@ -224,7 +232,7 @@ function NeedsYouSection({
           <li key={review.interruptId}>
             <Link
               href={runHref(review.executionRunId)}
-              className="group flex items-start gap-2.5 rounded-md px-2 py-2 -mx-2 hover:bg-accent/60"
+              className="group -mx-1.5 flex items-start gap-2.5 rounded-md px-1.5 py-2 hover:bg-accent/60"
               data-testid="squad-overview-review"
             >
               <AlertCircleIcon aria-hidden className="mt-0.5 size-4 shrink-0 text-destructive" />
@@ -268,7 +276,7 @@ function LatestRunSection({
 
   if (!run) {
     return (
-      <OverviewSection id="latest-run" title={t("latestRun.title")}>
+      <OverviewSection id="latest-run" title={t("latestRun.title")} icon={PlayCircleIcon}>
         <p className="text-xs text-muted-foreground" data-testid="squad-overview-no-run">
           {t("latestRun.none")}
         </p>
@@ -288,6 +296,7 @@ function LatestRunSection({
     <OverviewSection
       id="latest-run"
       title={t("latestRun.title")}
+      icon={PlayCircleIcon}
       action={
         <Link
           href={runHref(run.id)}
@@ -305,7 +314,7 @@ function LatestRunSection({
         </p>
         <ExecutionStatusPill status={mapExecutionStatus(run.status)} className="shrink-0" />
       </div>
-      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 @lg/squad-overview:grid-cols-4">
+      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 @lg/console-card:grid-cols-4">
         <Fact label={t("latestRun.started")}>{format.relativeTime(run.startedAt, now)}</Fact>
         <Fact label={t("latestRun.duration")}>{formatDurationShort(duration)}</Fact>
         <Fact label={t("latestRun.tokens")}>
@@ -343,6 +352,7 @@ function TasksSection({
     <OverviewSection
       id="tasks"
       title={t("tasks.title")}
+      icon={ListChecksIcon}
       meta={<span className="text-xs tabular-nums text-muted-foreground">{tasks.length}</span>}
       action={
         <Button
@@ -363,7 +373,7 @@ function TasksSection({
           {t("tasks.none")}
         </p>
       ) : (
-        <dl className="grid grid-cols-3 gap-x-6 gap-y-2 @lg/squad-overview:grid-cols-5">
+        <dl className="grid grid-cols-3 gap-x-6 gap-y-2 @lg/console-card:grid-cols-5">
           {TASK_GLANCE_GROUPS.map((group) => (
             <div key={group} className="min-w-0" data-testid={`squad-overview-tasks-${group}`}>
               <dt className="text-[11px] leading-tight text-muted-foreground">
@@ -393,20 +403,28 @@ function ReadinessSection({
   squad,
   control,
   readiness,
+  wide,
+  onAddTeammate,
 }: {
   squad: AgentTeam
   control: SquadRunControl
   readiness: SquadReadinessState
+  wide: boolean
+  onAddTeammate: () => void
 }) {
   const t = useTranslations("squads")
   return (
-    <OverviewSection id="readiness" title={t("readiness.title")}>
+    <OverviewSection id="readiness" title={t("readiness.title")} icon={ShieldCheckIcon} wide={wide}>
       {control.remote ? (
         <p className="text-xs text-muted-foreground" data-testid="squad-overview-remote-readiness">
           {t("fleet.control.remoteReadiness")}
         </p>
       ) : (
-        <SquadReadinessCard squadId={squad.id} readiness={readiness} />
+        <SquadReadinessCard
+          squadId={squad.id}
+          readiness={readiness}
+          onAddTeammate={onAddTeammate}
+        />
       )}
     </OverviewSection>
   )
@@ -417,9 +435,13 @@ function ReadinessSection({
 function RosterSection({
   squad,
   members,
+  wide,
+  onEditRoster,
 }: {
   squad: AgentTeam
   members: readonly AgentTeammate[]
+  wide: boolean
+  onEditRoster: () => void
 }) {
   const t = useTranslations("squads.overview")
   const tMembers = useTranslations("agentTeamsWorkspace.members")
@@ -428,18 +450,20 @@ function RosterSection({
     <OverviewSection
       id="roster"
       title={t("roster.title")}
+      icon={UsersIcon}
+      wide={wide}
       meta={<span className="text-xs tabular-nums text-muted-foreground">{roster.length}</span>}
       action={
-        <Link
-          href={settingsHref("squads", {
-            focus: SQUAD_ROSTER_SETTING_ID,
-            params: { squadTab: squadPanelId(squad.id) },
-          })}
-          className="text-xs text-muted-foreground hover:text-foreground"
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2 text-xs text-muted-foreground"
+          onClick={onEditRoster}
           data-testid="squad-overview-edit-roster"
         >
           {t("roster.edit")}
-        </Link>
+        </Button>
       }
     >
       {roster.length === 0 ? (

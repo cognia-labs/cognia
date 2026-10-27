@@ -28,23 +28,29 @@
  * them repeated the same two numbers ("Needs you 1", "Working 2") one row
  * higher, and the toggle below was where the reader actually acted on them.
  *
- * The built-in Teams the chat sidebar offers as scopes are listed below the
- * Squads (`BuiltInTeamsSection`), so "No Squads yet" no longer sits next to a
- * sidebar full of squad-looking scopes with nothing explaining them. They are
- * not counted as Squads; the empty state points at them instead.
+ * Only Squads are listed. The built-in Teams the chat sidebar offers as scopes
+ * used to sit below them, but a Team is a different thing (a chat scope, whose
+ * copy is another chat Team, never a Squad), and one list holding both made it
+ * unclear which kind "New Squad" would make. Teams stay where they are used:
+ * the chat sidebar and Settings → Teams.
  */
 
 import { useTranslations } from "next-intl"
 import { SearchIcon } from "lucide-react"
 import { AgentTeamAvatar } from "@/components/agent/workspace/agent-team-avatar"
 
-import type { Team } from "@cognia/agent-config-types"
-import { BuiltInTeamsSection } from "@/components/squads/built-in-teams"
-import { EmptyState } from "@/components/mobile/empty-state"
 import { ListSkeleton } from "@/components/mobile/discover/list-skeleton"
 import { StatusBadge } from "@/components/status-badge"
 import { Surface } from "@/components/surface/surface"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -68,11 +74,6 @@ export interface SquadListPaneProps {
    * from, and on a host whose own header already carries "New Squad".
    */
   onCreate?: () => void
-  /**
-   * The built-in Teams (`useBuiltInTeams`). Listed in their own section and
-   * never counted as Squads. Omit on a host that has no chat scopes to open.
-   */
-  builtInTeams?: readonly Team[]
   variant?: SquadListVariant
   /**
    * How an empty workspace is said. `full` is the illustrated empty state with
@@ -84,13 +85,10 @@ export interface SquadListPaneProps {
   className?: string
 }
 
-const NO_TEAMS: readonly Team[] = []
-
 export function SquadListPane({
   fleet,
   route,
   onCreate,
-  builtInTeams = NO_TEAMS,
   variant = "rail",
   emptyStyle = "full",
   className,
@@ -101,15 +99,7 @@ export function SquadListPane({
   // Its own draft, not the URL: see the hook for why a URL-bound box broke
   // IME input and dropped characters.
   const search = useUrlSearchDraft(route.query, route.setQuery)
-  // A Team has no run state, so "Needs you" / "Working" cannot match one.
-  const showBuiltIns = builtInTeams.length > 0 && route.filter === "all"
   const counts: Record<SquadFilter, number> = { all: total, waiting, live }
-
-  const emptyDescription = route.narrowed
-    ? t("noMatchesDescription")
-    : builtInTeams.length > 0
-      ? t("emptyDescriptionWithBuiltIns", { count: builtInTeams.length })
-      : t("emptyDescription")
 
   const rows = squads.map((squad) => (
     <li key={squad.id}>
@@ -190,9 +180,8 @@ export function SquadListPane({
 
       {/* `!block` on the viewport's child: Radix wraps it in a `display:table`
           div that grows to its widest `truncate` line, so on a phone the empty
-          state centred itself in a column wider than the screen and the
-          built-in team rows ran off the right edge. Same override as
-          `provider-sidebar.tsx` and `channel-list.tsx`. */}
+          state centred itself in a column wider than the screen. Same override
+          as `provider-sidebar.tsx` and `channel-list.tsx`. */}
       <ScrollArea
         className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:!block"
         data-testid="squad-fleet-scroll"
@@ -209,23 +198,29 @@ export function SquadListPane({
                 {t("emptyTitle")}
               </p>
             ) : (
-              <EmptyState
-                spotIcon="agent-teams"
-                title={route.narrowed ? t("noMatchesTitle") : t("emptyTitle")}
-                description={emptyDescription}
-                {...(route.narrowed
-                  ? { cta: { label: t("clearFilters"), onSelect: route.clearFilters } }
-                  : onCreate
-                    ? {
-                        cta: {
-                          label: t("createCta"),
-                          onSelect: onCreate,
-                          testId: "squad-fleet-create",
-                        },
-                      }
-                    : {})}
-                className="border-0 bg-transparent"
-              />
+              <Empty className="border-none px-2 py-8" data-testid="squad-fleet-empty">
+                <EmptyHeader>
+                  <EmptyTitle className="text-sm">
+                    {route.narrowed ? t("noMatchesTitle") : t("emptyTitle")}
+                  </EmptyTitle>
+                  <EmptyDescription className="text-xs">
+                    {route.narrowed ? t("noMatchesDescription") : t("emptyDescription")}
+                  </EmptyDescription>
+                </EmptyHeader>
+                {route.narrowed || onCreate ? (
+                  <EmptyContent>
+                    {route.narrowed ? (
+                      <Button size="sm" variant="outline" onClick={route.clearFilters}>
+                        {t("clearFilters")}
+                      </Button>
+                    ) : (
+                      <Button size="sm" onClick={onCreate} data-testid="squad-fleet-create">
+                        {t("createCta")}
+                      </Button>
+                    )}
+                  </EmptyContent>
+                ) : null}
+              </Empty>
             )
           ) : variant === "page" ? (
             <Surface asChild layer="raised" radius="panel">
@@ -241,17 +236,6 @@ export function SquadListPane({
               {rows}
             </ul>
           )}
-          {showBuiltIns ? (
-            <BuiltInTeamsSection
-              teams={builtInTeams}
-              query={route.query}
-              variant={variant}
-              // Open while the workspace has no Squads of its own: then they
-              // are the only thing here to use. Once there are Squads they
-              // are a reference, folded under their heading.
-              defaultOpen={total === 0}
-            />
-          ) : null}
         </div>
       </ScrollArea>
     </div>

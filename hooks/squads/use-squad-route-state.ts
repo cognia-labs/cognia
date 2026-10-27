@@ -1,7 +1,7 @@
 "use client"
 
 /**
- * URL-driven state for `/squads` (`?id=&tab=&q=&filter=`).
+ * URL-driven state for `/squads` (`?id=&tab=&q=&filter=&edit=`).
  *
  * The console read `?id=` and `?tab=` through thirty lines of `replaceParam`
  * inlined in the page, and had no notion of narrowing at all. A phone body was
@@ -43,13 +43,17 @@ export type SquadDetailTab = (typeof SQUAD_DETAIL_TABS)[number]
  *  - A selected Squad has its own view with Overview / Runs / Board, and lands
  *    on Overview: that is the Squad's home, the one place its controls,
  *    readiness, roster and latest result sit together.
- *  - With nothing selected, a wide pane has one thing to show, every Squad's
- *    runs, because the list is already on screen in the rail. A Board with no
- *    Squad would be a tab whose only content is "pick one".
- *  - With nothing selected, a phone has the list itself and every Squad's runs.
+ *  - With nothing selected, a wide pane shows the fleet overview: what needs
+ *    an answer across every Squad, which ones are working, the latest runs.
+ *    The list is already on screen in the rail, so the centre answers "what
+ *    should I do next" rather than repeating it.
+ *  - With nothing selected, a phone has the list itself and that same
+ *    overview as a second tab, landing on the list.
  *
  * A tab the current context does not offer resolves to that context's landing
- * tab instead of selecting a tab with no trigger and no content.
+ * tab instead of selecting a tab with no trigger and no content. `runs` with
+ * nothing selected is the old all-runs tab; it now means the overview, the
+ * nearest thing to it, so a link made before keeps landing somewhere useful.
  */
 export function resolveSquadTab(
   tab: SquadFleetTab | undefined,
@@ -58,9 +62,20 @@ export function resolveSquadTab(
   if (context.selected) {
     return tab && (SQUAD_DETAIL_TABS as readonly string[]).includes(tab) ? tab : "overview"
   }
-  if (!context.compact) return "runs"
-  return tab === "runs" ? "runs" : "squads"
+  if (!context.compact) return "overview"
+  return tab === "overview" || tab === "runs" ? "overview" : "squads"
 }
+
+/**
+ * Where the edit drawer opens to (`?edit=`).
+ *
+ * In the URL for the reason `tab` is: the shell remounts its subtree across
+ * the breakpoint, and a drawer held in `useState` would close itself the
+ * first time the window crossed it. `roster` scrolls the drawer to the
+ * members, which is what "Edit roster" and "Add a teammate" were asking for.
+ */
+export const SQUAD_EDIT_FOCUS = ["general", "roster"] as const
+export type SquadEditFocus = (typeof SQUAD_EDIT_FOCUS)[number]
 
 /**
  * The one facet a Squad list actually holds.
@@ -95,6 +110,8 @@ export interface SquadRouteState {
   tab: SquadFleetTab | undefined
   query: string
   filter: SquadFilter
+  /** `?edit=`: the open edit drawer and what it opens to. `undefined` is closed. */
+  editing: SquadEditFocus | undefined
   /** Whether the list is narrowed at all, for a badge and for the empty copy. */
   narrowed: boolean
   /**
@@ -103,7 +120,14 @@ export interface SquadRouteState {
    * "Review" can be opened in a new window or copied like any other link.
    */
   runHref: (runId: string) => string
-  setSelectedId: (id: string | undefined) => void
+  /**
+   * Selects a Squad. `edit` opens its drawer in the same navigation: two
+   * writes in a row would each start from the URL as it was, and the second
+   * would put the first one's `id` back.
+   */
+  setSelectedId: (id: string | undefined, options?: { edit?: SquadEditFocus }) => void
+  /** Opens (or, with `undefined`, closes) the selected Squad's edit drawer. */
+  setEditing: (focus: SquadEditFocus | undefined) => void
   setRunId: (runId: string | undefined) => void
   setRunStatus: (group: CockpitStatusGroup | "all") => void
   setTab: (tab: SquadFleetTab) => void
@@ -155,6 +179,7 @@ export function useSquadRouteState(): SquadRouteState {
   const selectedId = searchParams?.get("id") ?? undefined
   const tab = oneOf(searchParams?.get("tab") ?? null, SQUAD_TABS)
   const runId = searchParams?.get("run") ?? undefined
+  const editing = oneOf(searchParams?.get("edit") ?? null, SQUAD_EDIT_FOCUS)
 
   return useMemo(
     () => ({
@@ -164,15 +189,23 @@ export function useSquadRouteState(): SquadRouteState {
       tab,
       query,
       filter,
+      editing,
       narrowed: filter !== "all" || query.trim().length > 0,
       runHref,
       // An open run belongs to the Squad it was opened under, so it never
       // survives a change of Squad. The tab does survive a move from one Squad
       // to another (reading two Squads' boards in turn is a real workflow), but
       // arriving from the list, or going back to it, starts from the landing
-      // tab rather than from wherever the previous view was left.
-      setSelectedId: (id) =>
-        setParams({ id, run: undefined, tab: id && selectedId ? tab : undefined }),
+      // tab rather than from wherever the previous view was left. The drawer
+      // edits the Squad it was opened on, so it closes unless asked to open.
+      setSelectedId: (id, options) =>
+        setParams({
+          id,
+          run: undefined,
+          tab: id && selectedId ? tab : undefined,
+          edit: id ? options?.edit : undefined,
+        }),
+      setEditing: (focus) => setParams({ edit: focus }),
       setRunId: (runId) => setParams({ run: runId }),
       setRunStatus: (group) => setParams({ status: group === "all" ? undefined : group }),
       // Always named. Which tab is the default depends on the surface and on
@@ -184,6 +217,6 @@ export function useSquadRouteState(): SquadRouteState {
       setFilter: (value) => setParams({ filter: value === "all" ? undefined : value }),
       clearFilters: () => setParams({ q: undefined, filter: undefined }),
     }),
-    [setParams, runHref, selectedId, runId, tab, query, filter, runStatus]
+    [setParams, runHref, selectedId, runId, tab, query, filter, runStatus, editing]
   )
 }

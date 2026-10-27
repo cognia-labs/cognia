@@ -3,7 +3,7 @@
 // The Squad overview: which sections appear, in what order, and what each one
 // says. Readiness is its own surface with its own suite, so it is stubbed.
 
-import { render, screen, within } from "@testing-library/react"
+import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 let mockReadiness = { ready: true, loading: false, blockers: [] as { code: string }[] }
@@ -14,14 +14,17 @@ jest.mock("@/components/squads/squad-readiness-card", () => ({
   SquadReadinessCard: ({
     squadId,
     readiness,
+    onAddTeammate,
   }: {
     squadId: string
     readiness?: { ready: boolean }
+    onAddTeammate?: () => void
   }) => (
     <div
       data-testid="squad-readiness"
       data-squad={squadId}
       data-provided={readiness ? String(readiness.ready) : "none"}
+      data-add-teammate={String(Boolean(onAddTeammate))}
     />
   ),
 }))
@@ -111,6 +114,13 @@ const review: PendingSquadReview = {
 
 const runHref = (id: string) => `/squads?id=a&tab=runs&run=${encodeURIComponent(id)}`
 const onOpenBoard = jest.fn()
+const onEditRoster = jest.fn()
+
+/** The cards in reading order: the grid fills row by row. */
+function sectionOrder(): string[] {
+  const grid = screen.getByTestId("squad-overview").firstElementChild!
+  return Array.from(grid.children).map((card) => card.getAttribute("data-testid") ?? "")
+}
 
 function mount(
   over: {
@@ -129,6 +139,7 @@ function mount(
       control={over.control ?? control()}
       runHref={runHref}
       onOpenBoard={onOpenBoard}
+      onEditRoster={onEditRoster}
     />
   )
 }
@@ -141,8 +152,7 @@ beforeEach(() => {
 describe("triage order", () => {
   it("leads with the reviews that need you, linked into the run that asks", () => {
     mount({ reviews: [review] })
-    const main = screen.getByTestId("squad-overview-main")
-    expect(main.firstElementChild).toHaveAttribute("data-testid", "squad-overview-needs-you")
+    expect(sectionOrder()[0]).toBe("squad-overview-needs-you")
     const link = screen.getByTestId("squad-overview-review")
     expect(link).toHaveTextContent("Plan approval")
     expect(link).toHaveAttribute("href", "/squads?id=a&tab=runs&run=execution%3Ateam%3Ar1")
@@ -153,20 +163,38 @@ describe("triage order", () => {
     expect(screen.queryByTestId("squad-overview-needs-you")).not.toBeInTheDocument()
   })
 
-  /** A Squad that cannot start leads with what to fix. */
+  /** A Squad that cannot start leads with what to fix, across the full width. */
   it("moves readiness to the front when the Squad is blocked", () => {
     mockReadiness = { ready: false, loading: false, blockers: [{ code: "no_teammates" }] }
     mount()
-    const main = screen.getByTestId("squad-overview-main")
-    expect(main.firstElementChild).toHaveAttribute("data-testid", "squad-overview-readiness")
+    expect(sectionOrder()).toEqual([
+      "squad-overview-readiness",
+      "squad-overview-latest-run",
+      "squad-overview-tasks",
+      "squad-overview-roster",
+    ])
+    expect(screen.getByTestId("squad-overview-readiness").className).toContain("col-span-2")
     expect(screen.getByTestId("squad-overview")).toHaveAttribute("data-blocked", "true")
   })
 
-  it("keeps settled readiness in the side column beside the roster", () => {
+  /** Settled, readiness is reference material and pairs with the roster. */
+  it("puts settled readiness last, beside the roster", () => {
     mount()
-    const side = screen.getByTestId("squad-overview-side")
-    expect(within(side).getByTestId("squad-overview-readiness")).toBeInTheDocument()
-    expect(within(side).getByTestId("squad-overview-roster")).toBeInTheDocument()
+    expect(sectionOrder()).toEqual([
+      "squad-overview-latest-run",
+      "squad-overview-tasks",
+      "squad-overview-roster",
+      "squad-overview-readiness",
+    ])
+    expect(screen.getByTestId("squad-overview-roster").className).not.toContain("col-span-2")
+  })
+
+  /** Every section is a console card, the frame `/bots` and `/devices` use. */
+  it("frames each section as a console card", () => {
+    mount({ reviews: [review] })
+    for (const id of sectionOrder()) {
+      expect(screen.getByTestId(id)).toHaveAttribute("data-variant", "card")
+    }
   })
 
   /** On a companion the Host judges readiness, so nothing local can block. */
@@ -326,11 +354,17 @@ describe("roster", () => {
     expect(rows[0]).toHaveTextContent("Lead")
   })
 
-  it("edits the roster in Settings, landing on the roster itself", () => {
+  /** Editing happens in the drawer over this page, not in Settings. */
+  it("opens the edit drawer on the roster", async () => {
     mount()
-    const href = screen.getByTestId("squad-overview-edit-roster").getAttribute("href") ?? ""
-    expect(href).toContain("squadTab=squad%3Aa")
-    expect(href).toContain("focus=squad-roster")
+    await userEvent.click(screen.getByTestId("squad-overview-edit-roster"))
+    expect(onEditRoster).toHaveBeenCalled()
+  })
+
+  /** The readiness card's "Add a teammate" goes to the same drawer. */
+  it("hands the drawer to the readiness card for adding a teammate", () => {
+    mount()
+    expect(screen.getByTestId("squad-readiness")).toHaveAttribute("data-add-teammate", "true")
   })
 })
 

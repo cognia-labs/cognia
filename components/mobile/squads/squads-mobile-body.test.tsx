@@ -4,7 +4,7 @@
 // Squad view itself (`SquadDetailView`) has its own suite; these cases are
 // about which level is showing and how the phone moves between them.
 
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { SquadsMobileBody } from "./squads-mobile-body"
@@ -65,24 +65,45 @@ jest.mock("@/components/agent/workspace/team-run-controls", () => ({
   ),
 }))
 jest.mock("@/hooks/data", () => ({ useClientLiveQuery: () => 0 }))
-jest.mock("@/components/agent/workspace/auto-compose-dialog", () => ({
-  AutoComposeDialog: ({
+// The overview's run list is the cockpit's projection, with its own suite.
+let mockRuns: Array<Record<string, unknown>> = []
+jest.mock("@/hooks/agent-runs/use-agent-runs", () => ({
+  useExecutionCockpit: () => ({ rows: mockRuns }),
+}))
+let fleetSource: "tauri" | "companion" | "none" = "none"
+jest.mock("@/hooks/fleet/use-fleet-snapshot", () => ({
+  useFleetSnapshot: () => ({ source: fleetSource, snapshot: { sessions: [] } }),
+}))
+// Radix menus do not open under jsdom's pointer model; rendered flat, the
+// content says what the menu holds.
+jest.mock("@/components/ui/dropdown-menu", () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="more-menu">{children}</div>
+  ),
+  DropdownMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}))
+// The dialog and the drawer have suites of their own; here they only have to
+// show they were opened and hand back what they made.
+jest.mock("@/components/squads/create-squad-dialog", () => ({
+  CreateSquadDialog: ({
     open,
-    onComposed,
+    onCreated,
   }: {
     open: boolean
-    onComposed: (teamId: string) => void
+    onCreated: (squadId: string) => void
   }) =>
     open ? (
-      <button type="button" data-testid="compose-stub" onClick={() => onComposed("composed")}>
-        compose
+      <button type="button" data-testid="create-dialog-stub" onClick={() => onCreated("new")}>
+        create
       </button>
     ) : null,
 }))
-
-const createSquadMock = jest.fn(async () => ({ id: "new" }))
-jest.mock("@/hooks/squads/use-create-squad", () => ({
-  useCreateSquad: () => createSquadMock,
+jest.mock("@/components/squads/squad-edit-sheet", () => ({
+  SquadEditSheet: ({ squadId, focus }: { squadId: string; focus?: string }) => (
+    <div data-testid="edit-sheet-stub" data-squad={squadId} data-focus={focus ?? ""} />
+  ),
 }))
 
 function squad(id: string, name: string, status: TeamStatus = "idle"): AgentTeam {
@@ -107,6 +128,7 @@ function seed(teams: AgentTeam[]) {
 }
 
 const setSelectedId = jest.fn()
+const setEditing = jest.fn()
 const setRunId = jest.fn()
 const setRunStatus = jest.fn()
 const setTab = jest.fn()
@@ -119,9 +141,11 @@ function route(over: Partial<SquadRouteState> = {}): SquadRouteState {
     tab: undefined,
     query: "",
     filter: "all",
+    editing: undefined,
     narrowed: false,
     runHref: (runId) => `/squads?tab=runs&run=${encodeURIComponent(runId)}`,
     setSelectedId,
+    setEditing,
     setRunId,
     setRunStatus,
     setTab,
@@ -134,6 +158,8 @@ function route(over: Partial<SquadRouteState> = {}): SquadRouteState {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockRuns = []
+  fleetSource = "none"
   usePendingGatesStore.setState({ gates: [] } as never)
   useProjectStore.setState({ activeProjectId: null } as never)
   seed([squad("a", "Alpha"), squad("b", "Bravo")])
@@ -166,12 +192,15 @@ describe("SquadsMobileBody, the list", () => {
     expect(screen.getByTestId("squad-fleet-rail")).toHaveAttribute("data-variant", "page")
   })
 
-  /** A Board with no Squad selected rendered the list a second time. */
-  it("offers the list and every Squad's runs, and no Squad-less board", () => {
+  /**
+   * The list and the fleet overview, the same component the wide pane centres.
+   * A Board with no Squad selected rendered the list a second time.
+   */
+  it("offers the fleet overview and the list, and no Squad-less board", () => {
     render(<SquadsMobileBody route={route()} />)
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Overview",
       "Squads",
-      "All runs",
     ])
   })
 
@@ -181,30 +210,28 @@ describe("SquadsMobileBody, the list", () => {
     expect(screen.queryByTestId("task-board")).not.toBeInTheDocument()
   })
 
-  it("shows every Squad's runs in the compact cockpit", () => {
-    render(<SquadsMobileBody route={route({ tab: "runs" })} />)
-    // The canonical run cockpit, pinned to Squad runs (ADR-0169).
-    const panel = screen.getByTestId("agent-runs-panel")
-    expect(panel).toHaveAttribute("data-embedded", "true")
-    expect(panel).toHaveAttribute("data-kind", "team")
-    expect(panel).toHaveAttribute("data-team", "")
+  it("shows the fleet overview on its tab", () => {
+    seed([squad("a", "Alpha", "executing"), squad("b", "Bravo")])
+    render(<SquadsMobileBody route={route({ tab: "overview" })} />)
+    expect(screen.getByTestId("squad-fleet-overview")).toBeInTheDocument()
+    expect(screen.getByTestId("squad-fleet-overview-working-row")).toHaveTextContent("Alpha")
   })
 
-  /** Same inert-chip fix as the wide pane: the phone writes `?status=` too. */
-  it("gives the run chips a URL to write to", async () => {
-    render(<SquadsMobileBody route={route({ tab: "runs", runStatus: "finished" })} />)
-    expect(screen.getByTestId("agent-runs-panel")).toHaveAttribute("data-status", "finished")
-
-    await userEvent.click(screen.getByTestId("agent-runs-status-chip"))
-    expect(setRunStatus).toHaveBeenCalledWith("failed")
+  /** The retired all-runs tab: an old link lands on the overview. */
+  it("opens an old all-runs link on the overview", () => {
+    render(<SquadsMobileBody route={route({ tab: "runs" })} />)
+    expect(screen.getByTestId("squads-mobile-tab-overview")).toHaveAttribute(
+      "data-state",
+      "active"
+    )
   })
 
   it("reports a tab change instead of owning it", async () => {
     const user = userEvent.setup()
     render(<SquadsMobileBody route={route()} />)
     screen.getByRole("tab", { name: "Squads" }).focus()
-    await user.keyboard("{ArrowRight}")
-    expect(setTab).toHaveBeenCalledWith("runs")
+    await user.keyboard("{ArrowLeft}")
+    expect(setTab).toHaveBeenCalledWith("overview")
   })
 
   it("opens a Squad from its row", async () => {
@@ -253,19 +280,23 @@ describe("SquadsMobileBody, one Squad", () => {
     expect(screen.getByTestId("task-board")).toHaveTextContent("a")
   })
 
-  it("links configuration to the Squad's panel in Settings", () => {
+  /** Configuring opens the drawer over the Squad instead of leaving for Settings. */
+  it("opens the edit drawer from Configure", async () => {
     render(<SquadsMobileBody route={route({ selectedId: "b" })} />)
-    expect(screen.getByTestId("squad-fleet-configure")).toHaveAttribute(
-      "href",
-      expect.stringContaining("squadTab=squad%3Ab")
-    )
+    await userEvent.click(screen.getByTestId("squad-fleet-configure"))
+    expect(setEditing).toHaveBeenCalledWith("general")
+  })
+
+  it("mounts the drawer on the Squad the URL opened it on", () => {
+    render(<SquadsMobileBody route={route({ selectedId: "b", editing: "roster" })} />)
+    expect(screen.getByTestId("edit-sheet-stub")).toHaveAttribute("data-squad", "b")
+    expect(screen.getByTestId("edit-sheet-stub")).toHaveAttribute("data-focus", "roster")
   })
 
   /** A stale link says so, and the way back clears the dead `?id=`. */
   it("says a Squad is gone and offers the way back to all of them", async () => {
     render(<SquadsMobileBody route={route({ selectedId: "gone" })} />)
     expect(screen.getByTestId("squads-mobile-missing")).toHaveTextContent("Squad unavailable")
-    expect(screen.getByTestId("mobile-spot-icon-agent-teams")).toBeInTheDocument()
     expect(screen.queryByTestId("squad-fleet-row")).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole("button", { name: "Show all Squads" }))
     expect(setSelectedId).toHaveBeenCalledWith(undefined)
@@ -273,35 +304,41 @@ describe("SquadsMobileBody, one Squad", () => {
 })
 
 describe("creation", () => {
+  /** The first Squad, and every one after, starts in the New Squad dialog. */
   it("offers a way to make the first Squad without leaving for Settings", async () => {
     seed([])
     render(<SquadsMobileBody route={route()} />)
     await userEvent.click(screen.getByTestId("squad-fleet-create"))
-    expect(createSquadMock).toHaveBeenCalled()
-    // And lands on it, rather than leaving a new row to go looking for.
-    await waitFor(() => expect(setSelectedId).toHaveBeenCalledWith("new"))
+    await userEvent.click(screen.getByTestId("create-dialog-stub"))
+    // And lands on it with its drawer, since naming and staffing it is next.
+    expect(setSelectedId).toHaveBeenCalledWith("new", { edit: "general" })
   })
 
-  /** Once there are rows, "New Squad" lives in the header, always in reach. */
-  it("creates from the header", async () => {
+  /** One verb in the top bar; the rest live in its menu. */
+  it("creates from the top bar", async () => {
     render(<SquadsMobileBody route={route()} />)
-    await userEvent.click(screen.getByRole("button", { name: "New Squad" }))
-    expect(createSquadMock).toHaveBeenCalled()
-    await waitFor(() => expect(setSelectedId).toHaveBeenCalledWith("new"))
+    await userEvent.click(screen.getByTestId("squads-mobile-create"))
+    expect(screen.getByTestId("create-dialog-stub")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Compose from an objective" })).toBeNull()
   })
 
-  it("composes a Squad from an objective and opens it", async () => {
+  it("keeps Settings and the host's activity in the menu", () => {
+    fleetSource = "companion"
     render(<SquadsMobileBody route={route()} />)
-    await userEvent.click(screen.getByRole("button", { name: "Compose from an objective" }))
-    await userEvent.click(screen.getByTestId("compose-stub"))
-    expect(setSelectedId).toHaveBeenCalledWith("composed")
-  })
-
-  it("still points at Settings for everything a phone cannot author", () => {
-    render(<SquadsMobileBody route={route()} />)
-    expect(screen.getByTestId("squads-mobile-manage")).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "More actions" })).toBeInTheDocument()
+    const menu = screen.getByTestId("more-menu")
+    expect(within(menu).getByTestId("squads-mobile-manage")).toHaveAttribute(
       "href",
       expect.stringContaining("section=squads")
     )
+    expect(within(menu).getByTestId("squads-mobile-host-activity")).toHaveAttribute(
+      "href",
+      "/fleet"
+    )
+  })
+
+  it("leaves the host's activity out in an unpaired browser", () => {
+    render(<SquadsMobileBody route={route()} />)
+    expect(screen.queryByTestId("squads-mobile-host-activity")).not.toBeInTheDocument()
   })
 })
