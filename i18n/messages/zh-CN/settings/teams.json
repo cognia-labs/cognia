@@ -41,7 +41,7 @@
     "moveDown": "把 {name} 下移",
     "moveUp": "把 {name} 上移",
     "name": "名称",
-    "namePlaceholder": "Brainstorm Squad",
+    "namePlaceholder": "Brainstorm Group",
     "orchestration": "编排方式",
     "overrideHelp": "每个覆盖项仅替换该角色在本团队中的默认值。留空表示继承。技能始终在最上层叠加。",
     "pickColor": "选择颜色 {color}",
@@ -64,7 +64,7 @@
     "talkativeness": "主动发言（%）",
     "talkativenessHelp": "在没人点名时，该成员在自动轮次中插话的频率。0 表示只在被交接或被 @ 时发言。需要自动轮次大于 0。"
   },
-  "emptyHint": "暂无团队。内置的「Brainstorm Squad」应该会自动出现。",
+  "emptyHint": "暂无团队。内置的「Brainstorm Group」应该会自动出现。",
   "memberCount": "{count} 位成员：{names}",
   "memberDeleted": "（已删除）",
   "newTeam": "新建团队",

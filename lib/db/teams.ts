@@ -277,7 +277,7 @@ export async function seedBuiltInTeams(): Promise<void> {
   const builtIns: Team[] = [
     {
       id: "team_builtin_brainstorm",
-      name: "Brainstorm Squad",
+      name: "Brainstorm Group",
       description: "A diverging-converging group: ideas, evidence, polish.",
       avatarColor: "oklch(0.74 0.16 90)",
       avatarEmoji: "🧠",
@@ -293,7 +293,7 @@ export async function seedBuiltInTeams(): Promise<void> {
     },
     {
       id: "team_builtin_research_squad",
-      name: "Research Squad",
+      name: "Research Group",
       description:
         "Research-led inquiry: a senior researcher coordinates an idea-generator and a documenter.",
       avatarColor: "oklch(0.7 0.16 200)",

@@ -2327,7 +2327,7 @@ function ChannelListBodyImpl({
             unreadTeams: scopeUnread.teams,
             mutedTeamIds,
             teamOrderIds: teamIds,
-            squadCount: teamById.size,
+            teamCount: teamById.size,
             previewExpanded: expandedGroupPreviews,
             onTogglePreview: toggleGroupPreview,
             onNewConversation: handleGuildNewConversation,
@@ -3769,8 +3769,8 @@ interface ScopeTreeConfig {
   mutedTeamIds: ReadonlySet<string>
   /** Squad ids in the user's drag order — the headers' sortable items. */
   teamOrderIds: readonly string[]
-  /** How many squads the label counts. */
-  squadCount: number
+  /** How many teams the label counts. */
+  teamCount: number
   /** Section keys whose "Show more" cap is lifted this session. */
   previewExpanded: ReadonlySet<string>
   onTogglePreview: (sectionKey: string) => void
@@ -4044,11 +4044,11 @@ function ConversationSectionsImpl({
   const folderIds = sections.flatMap((section) =>
     section.kind === "folder" ? [section.folder.id] : []
   )
-  // The scope tree's squad run starts at the first named team group (the
-  // ungrouped "Chats" bucket leads). The SQUADS label is drawn before it — or
-  // after the sections entirely when there are no squads, where it still
+  // The scope tree's team run starts at the first named team group (the
+  // ungrouped "Chats" bucket leads). The TEAMS label is drawn before it — or
+  // after the sections entirely when there are no teams, where it still
   // heads the "Create team" row.
-  const squadsStartIndex = sections.findIndex(
+  const teamsStartIndex = sections.findIndex(
     (section) => section.kind === "group" && section.axis === "team" && !isChatsScopeGroup(section)
   )
   const searching = searchQuery.length > 0
@@ -4100,10 +4100,10 @@ function ConversationSectionsImpl({
         if (section.kind === "group") {
           const key = conversationSectionKey(section)
           // The SQUADS label precedes the first named team group — the seam
-          // between the Chats bucket and the squad run.
-          const squadsLabel =
-            scopeTree && !scopeTree.archived && !searching && index === squadsStartIndex ? (
-              <SquadsGroupLabel key="squads-label" count={scopeTree.squadCount} />
+          // between the Chats bucket and the team run.
+          const teamsLabel =
+            scopeTree && !scopeTree.archived && !searching && index === teamsStartIndex ? (
+              <TeamsGroupLabel key="teams-label" count={scopeTree.teamCount} />
             ) : null
           if (scopeTree && section.axis === "team") {
             const chatsGroup = isChatsScopeGroup(section)
@@ -4150,9 +4150,9 @@ function ConversationSectionsImpl({
                 rowsProps={rowsProps}
               />
             )
-            return squadsLabel ? (
+            return teamsLabel ? (
               <Fragment key={key}>
-                {squadsLabel}
+                {teamsLabel}
                 {group}
               </Fragment>
             ) : (
@@ -4177,9 +4177,9 @@ function ConversationSectionsImpl({
               rowsProps={rowsProps}
             />
           )
-          return squadsLabel ? (
+          return teamsLabel ? (
             <Fragment key={key}>
-              {squadsLabel}
+              {teamsLabel}
               {groupSection}
             </Fragment>
           ) : (
@@ -4219,7 +4219,7 @@ function ConversationSectionsImpl({
       {scopeTree && !scopeTree.archived && !searching ? (
         <>
           {/* No named team groups → the label still heads "Create team". */}
-          {squadsStartIndex === -1 ? <SquadsGroupLabel count={scopeTree.squadCount} /> : null}
+          {teamsStartIndex === -1 ? <TeamsGroupLabel count={scopeTree.teamCount} /> : null}
           <SidebarCreateTeamRow />
         </>
       ) : null}
@@ -4558,20 +4558,25 @@ function GroupSection({
 }
 
 /**
- * The micro-label that heads the squad run of the scope tree — the seam
+ * The micro-label that heads the team run of the scope tree — the seam
  * between the Chats group and the teams. A label only, deliberately not
  * sticky: the group headers themselves already stick, and a second pinned
  * strip would just sit underneath them.
+ *
+ * It reads "Teams", never "Squads": these are chat Teams (character groups a
+ * conversation is scoped to), and a Squad is the different, runnable thing on
+ * `/squads`. One word for both made the sidebar list "Squads" that the Squads
+ * page then did not have.
  */
-function SquadsGroupLabel({ count }: { count: number }) {
+function TeamsGroupLabel({ count }: { count: number }) {
   const railT = useTranslations("desktop.guildRail")
   const router = useRouter()
   return (
     <div
-      className="group/squads-label flex h-6 items-center gap-1.5 px-2.5 pt-1 text-muted-foreground"
-      data-testid="sidebar-squads-label"
+      className="group/teams-label flex h-6 items-center gap-1.5 px-2.5 pt-1 text-muted-foreground"
+      data-testid="sidebar-teams-label"
     >
-      <span className={SECTION_LABEL_CLASS}>{railT("squads")}</span>
+      <span className={SECTION_LABEL_CLASS}>{railT("teamsGroup")}</span>
       {count > 0 ? <span className={SECTION_COUNT_CLASS}>{count}</span> : null}
       {/* Same destination the trailing "Create team" row has — the hover "+"
           on the label is the shortcut, the row is the discoverable one. */}
@@ -4580,11 +4585,11 @@ function SquadsGroupLabel({ count }: { count: number }) {
         onClick={() => router.push(TEAM_SETTINGS_ROUTE)}
         aria-label={railT("createTeam")}
         title={railT("createTeam")}
-        data-testid="sidebar-squads-create-team"
+        data-testid="sidebar-teams-create-team"
         className={cn(
           "ml-auto grid size-5 place-items-center rounded-sm hover:bg-accent hover:text-foreground",
           HOVER_REVEAL_CONTROL_BASE_CLASS,
-          "group-hover/squads-label:opacity-100"
+          "group-hover/teams-label:opacity-100"
         )}
       >
         <PlusIcon className="size-3.5" />

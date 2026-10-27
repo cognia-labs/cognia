@@ -3633,10 +3633,14 @@ describe("title-bar projection", () => {
     for (const scope of [alpha, beta, gamma]) {
       expect(within(scope).getByTestId(/^sidebar-scope-empty-/)).toBeInTheDocument()
     }
-    // The Squads micro-label separates Chats from the named groups.
+    // The Teams micro-label separates Chats from the named groups. It says
+    // "Teams", not "Squads": a Squad is the runnable thing on `/squads`.
+    const teamsLabel = screen.getByTestId("sidebar-teams-label")
+    // This suite renders translation keys, so the label shows its key.
+    expect(teamsLabel).toHaveTextContent(/^teamsGroup/)
+    expect(teamsLabel).not.toHaveTextContent(/squad/i)
     expect(
-      chats.compareDocumentPosition(screen.getByTestId("sidebar-squads-label")) &
-        Node.DOCUMENT_POSITION_FOLLOWING
+      chats.compareDocumentPosition(teamsLabel) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
     // "Scrolls together" is literal: everything from the nav rows to the
     // last squad lives inside the one viewport — the search row included,
@@ -4176,7 +4180,7 @@ describe("title-bar projection", () => {
     expect(plus).toHaveAccessibleName('newConversationIn:{"name":"Alpha"}')
     // Reachable without a hover: the scope header's hover stays the mouse
     // path, and focus / touch reveal it through the shared policy.
-    const squadsPlus = screen.getByTestId("sidebar-squads-create-team")
+    const squadsPlus = screen.getByTestId("sidebar-teams-create-team")
     for (const control of [plus, squadsPlus]) {
       for (const variant of HOVER_REVEAL_REQUIRED_VARIANTS.controlBase) {
         expect(control).toHaveClass(variant)
@@ -4186,7 +4190,7 @@ describe("title-bar projection", () => {
       expect(control).toHaveFocus()
     }
     expect(plus).toHaveClass("group-hover/scope-head:opacity-100")
-    expect(squadsPlus).toHaveClass("group-hover/squads-label:opacity-100")
+    expect(squadsPlus).toHaveClass("group-hover/teams-label:opacity-100")
     await user.click(plus)
     expect(onNewTeamConversation).toHaveBeenCalledWith("t-1")
   })
@@ -4704,7 +4708,7 @@ describe("scope tree (merged rail)", () => {
       baseSession("s-old", { title: "Old chat", archivedAt: 1 }),
       baseSession("s-old-team", { kind: "team", teamId: "t-1", title: "Old team", archivedAt: 1 }),
     ])
-    expect(screen.queryByTestId("sidebar-squads-label")).toBeNull()
+    expect(screen.queryByTestId("sidebar-teams-label")).toBeNull()
     expect(screen.queryByTestId("sidebar-guild-create-team")).toBeNull()
     expect(screen.getByTestId("sidebar-scope-chats")).toBeInTheDocument()
     expect(screen.getByTestId("sidebar-scope-t-1")).toBeInTheDocument()

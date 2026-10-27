@@ -78,7 +78,7 @@ describe("TeamsSection — listing", () => {
   it("renders rows with built-in badge and disabled edit/delete", async () => {
     await seedBuiltInTeams()
     render(<TeamsSection />)
-    await screen.findByText("Brainstorm Squad")
+    await screen.findByText("Brainstorm Group")
     // Multiple built-ins are seeded — every row should show the built-in badge.
     expect(screen.getAllByText("settings.teams.builtIn").length).toBeGreaterThan(0)
 
@@ -103,7 +103,7 @@ describe("TeamsSection — listing", () => {
     })
     render(<TeamsSection />)
     await screen.findByText("My Team")
-    expect(screen.getByText("Brainstorm Squad")).toBeInTheDocument()
+    expect(screen.getByText("Brainstorm Group")).toBeInTheDocument()
   })
 })
 
@@ -314,7 +314,7 @@ describe("TeamsSection — duplicate / delete", () => {
     const user = userEvent.setup()
     await seedBuiltInTeams()
     render(<TeamsSection />)
-    await screen.findByText("Brainstorm Squad")
+    await screen.findByText("Brainstorm Group")
     const dupBtn = screen.getAllByRole("button", {
       name: /settings\.teams\.duplicateAria/,
     })[0]!
@@ -322,7 +322,7 @@ describe("TeamsSection — duplicate / delete", () => {
 
     await waitFor(async () => {
       const rows = await listTeams()
-      const copy = rows.find((t) => t.name.includes("Brainstorm Squad") && t.isBuiltIn !== true)
+      const copy = rows.find((t) => t.name.includes("Brainstorm Group") && t.isBuiltIn !== true)
       expect(copy).toBeDefined()
     })
   })

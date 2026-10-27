@@ -329,6 +329,21 @@ describe("seedBuiltInTeams", () => {
     expect(built.every((t) => t.isBuiltIn === true)).toBe(true)
   })
 
+  /**
+   * Chat Teams are not Squads (the runnable thing on `/squads`), so no
+   * built-in is named like one. The seed is a `bulkPut`, which is what carries
+   * the new names over a database that stored the old ones.
+   */
+  it("names no built-in like a Squad, renaming copies stored under the old names", async () => {
+    await seedBuiltInTeams()
+    await getDb().teams.update("team_builtin_research_squad", { name: "Research Squad" })
+    await seedBuiltInTeams()
+    const built = (await listTeams()).filter((t) => t.isBuiltIn)
+    expect(built.filter((t) => /squad/i.test(t.name))).toEqual([])
+    expect(built.find((t) => t.id === "team_builtin_research_squad")?.name).toBe("Research Group")
+    expect(built.find((t) => t.id === "team_builtin_brainstorm")?.name).toBe("Brainstorm Group")
+  })
+
   it("re-seeding doesn't introduce duplicates", async () => {
     await seedBuiltInTeams()
     await seedBuiltInTeams()
