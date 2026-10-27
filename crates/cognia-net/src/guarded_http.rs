@@ -19,6 +19,8 @@ const PRIVATE_ADDRESS_PREFIX: &str = "refusing to fetch a private/loopback addre
 const MAX_REDIRECTS: usize = 10;
 
 pub const MAX_DOWNLOAD_BYTES: usize = 20 * 1024 * 1024;
+/// Separate from the 64KiB profile bridge; never configurable by bridge JSON.
+pub const MAX_PUBLIC_UPLOAD_BYTES: usize = 200_000_000;
 
 /// Opt-in policy for public binary downloads. Callers own the origin grant;
 /// every destination still passes DNS pinning and private-address rejection.
@@ -139,12 +141,76 @@ where
     .map_err(|_| "public_request_failed".to_string())
 }
 
+/// A credential-free presigned PUT. Keeps checked DNS/proxy tunneling while
+/// permitting bounded media chunks; redirects and API credentials are denied.
+pub async fn send_pinned_public_upload<F>(
+    request: RequestBuilder,
+    make_builder: F,
+    timeout: Duration,
+) -> Result<Response, String>
+where
+    F: Fn(&str) -> Result<ClientBuilder, String>,
+{
+    let request = request.build().map_err(|_| "public_upload_invalid")?;
+    validate_public_upload(&request)?;
+    tokio::time::timeout(
+        timeout,
+        send_pinned_with_body_limit(
+            request,
+            PublicRedirects::None,
+            make_builder,
+            |url| resolve_public_host(url, timeout),
+            || crate::proxy_config::current().map_err(|_| "public_proxy_policy_failed".into()),
+            MAX_PUBLIC_UPLOAD_BYTES,
+        ),
+    )
+    .await
+    .map_err(|_| "public_upload_timed_out".to_string())?
+    .map_err(|_| "public_upload_failed".to_string())
+}
+
+fn validate_public_upload(request: &Request) -> Result<(), String> {
+    if request.method() != Method::PUT
+        || request.url().scheme() != "https"
+        || !request.url().username().is_empty()
+        || request.url().password().is_some()
+        || request.url().fragment().is_some()
+        || [AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, REFERER]
+            .iter()
+            .any(|name| request.headers().contains_key(name))
+        || request.body().is_none_or(|body| {
+            body.as_bytes()
+                .is_none_or(|bytes| bytes.is_empty() || bytes.len() > MAX_PUBLIC_UPLOAD_BYTES)
+        })
+    {
+        return Err("public_upload_invalid".into());
+    }
+    Ok(())
+}
+
 async fn send_pinned_with_policy<F, R, Fut, P>(
+    request: Request,
+    redirects: PublicRedirects,
+    make_builder: F,
+    resolve: R,
+    proxy: P,
+) -> Result<Response, String>
+where
+    F: Fn(&str) -> Result<ClientBuilder, String>,
+    R: Fn(Url) -> Fut,
+    Fut: Future<Output = Result<CheckedHost, String>>,
+    P: Fn() -> Result<crate::proxy_config::ProxyConfig, String>,
+{
+    send_pinned_with_body_limit(request, redirects, make_builder, resolve, proxy, 64 * 1024).await
+}
+
+async fn send_pinned_with_body_limit<F, R, Fut, P>(
     mut request: Request,
     redirects: PublicRedirects,
     make_builder: F,
     resolve: R,
     proxy: P,
+    max_body_bytes: usize,
 ) -> Result<Response, String>
 where
     F: Fn(&str) -> Result<ClientBuilder, String>,
@@ -166,7 +232,17 @@ where
         let mut next = request.try_clone().ok_or("public_request_not_replayable")?;
         let response = match route {
             crate::proxy_config::ProxyRouteSummary::Proxy { .. } => {
-                crate::pinned_http::execute(request, &policy, &checked).await?
+                if max_body_bytes == 64 * 1024 {
+                    crate::pinned_http::execute(request, &policy, &checked).await?
+                } else {
+                    crate::pinned_http::execute_with_body_limit(
+                        request,
+                        &policy,
+                        &checked,
+                        max_body_bytes,
+                    )
+                    .await?
+                }
             }
             crate::proxy_config::ProxyRouteSummary::Direct { .. } => {
                 // Preserve this hop's policy snapshot even if another window
@@ -539,6 +615,68 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
 
+    #[tokio::test]
+    async fn upload_bridge_is_separate_bounded_put_and_never_accepts_credentials() {
+        crate::proxy_config::ensure_crypto_provider();
+        let client = reqwest::Client::new();
+        let bytes = vec![0x80; 128 * 1024];
+        let req = client
+            .put("https://public.example/upload?sign=SECRET")
+            .body(bytes.clone())
+            .build()
+            .unwrap();
+        assert!(validate_public_upload(&req).is_ok());
+        let error = send_pinned_public(
+            client
+                .put("https://public.example/upload")
+                .body(bytes.clone()),
+            PublicRedirects::None,
+            |_| Ok(reqwest::Client::builder()),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "public_request_invalid");
+        for header in ["Authorization", "Cookie", "Proxy-Authorization", "Referer"] {
+            let req = client
+                .put("https://public.example/upload")
+                .header(header, "SECRET")
+                .body(bytes.clone())
+                .build()
+                .unwrap();
+            let error = validate_public_upload(&req).unwrap_err();
+            assert!(!error.contains("SECRET"));
+        }
+        for url in [
+            "http://public.example/upload",
+            "https://user:SECRET@public.example/upload",
+            "https://public.example/upload#fragment",
+        ] {
+            assert!(
+                validate_public_upload(&client.put(url).body(bytes.clone()).build().unwrap())
+                    .is_err()
+            );
+        }
+        assert!(validate_public_upload(
+            &client
+                .post("https://public.example/upload")
+                .body(bytes.clone())
+                .build()
+                .unwrap()
+        )
+        .is_err());
+        let error = send_pinned_public_upload(
+            client
+                .put("https://127.0.0.1/upload?sign=SECRET")
+                .body(bytes),
+            |_| Ok(reqwest::Client::builder()),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.contains("SECRET"));
+    }
+
     #[test]
     fn public_redirects_are_https_only_and_scope_token_paths() {
         let initial = Url::parse("https://api.telegram.org/file/botSECRET/photo")
@@ -583,7 +721,10 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nDATA".to_vec(),
         )
         .await;
-        let redirect = format!("HTTP/1.1 307 Temporary Redirect\r\nLocation: https://public.test:{}/image\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", second.port());
+        let redirect = format!(
+            "HTTP/1.1 307 Temporary Redirect\r\nLocation: https://public.test:{}/image\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            second.port()
+        );
         let (first, first_cert, first_task) = tls_response(redirect.into_bytes()).await;
         let builder = |_: &str| {
             Ok(reqwest::Client::builder()
@@ -849,7 +990,10 @@ mod tests {
         .into_bytes();
         wire.extend_from_slice(&body);
         let (second, second_cert, second_task) = tls_response(wire).await;
-        let redirect = format!("HTTP/1.1 302 Found\r\nLocation: https://public.test:{}/end\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", second.port());
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://public.test:{}/end\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            second.port()
+        );
         let (first, first_cert, first_task) = tls_response(redirect.into_bytes()).await;
         let first_origin = format!("https://public.test:{}", first.port());
         let policy = DownloadPolicy {
@@ -917,7 +1061,9 @@ mod tests {
             "https://user:secret@public.test/end",
             "https://127.0.0.1/end",
         ] {
-            let response = format!("HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let response = format!(
+                "HTTP/1.1 302 Found\r\nLocation: {target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
             let (addr, certificate, task) = tls_response(response.into_bytes()).await;
             let origin = format!("https://public.test:{}", addr.port());
             let policy = DownloadPolicy {

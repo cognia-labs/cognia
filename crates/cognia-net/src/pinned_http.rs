@@ -81,11 +81,37 @@ pub(crate) async fn execute(
     execute_with_tls(request, proxy, checked.addresses(), native_tls_config()?).await
 }
 
+pub(crate) async fn execute_with_body_limit(
+    request: Request,
+    proxy: &ProxyConfig,
+    checked: &crate::guarded_http::CheckedHost,
+    max_body_bytes: usize,
+) -> Result<Response, String> {
+    execute_with_tls_body_limit(
+        request,
+        proxy,
+        checked.addresses(),
+        native_tls_config()?,
+        max_body_bytes,
+    )
+    .await
+}
+
 async fn execute_with_tls(
     request: Request,
     proxy: &ProxyConfig,
     checked_addresses: &[SocketAddr],
     tls_config: Arc<rustls::ClientConfig>,
+) -> Result<Response, String> {
+    execute_with_tls_body_limit(request, proxy, checked_addresses, tls_config, 64 * 1024).await
+}
+
+async fn execute_with_tls_body_limit(
+    request: Request,
+    proxy: &ProxyConfig,
+    checked_addresses: &[SocketAddr],
+    tls_config: Arc<rustls::ClientConfig>,
+    max_body_bytes: usize,
 ) -> Result<Response, String> {
     let url = request.url().clone();
     if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
@@ -99,13 +125,15 @@ async fn execute_with_tls(
     )
     .map_err(|_| "pinned_destination_invalid")?;
     let body = match request.body() {
-        Some(body) => body.as_bytes().ok_or("pinned_body_not_buffered")?.to_vec(),
-        None => Vec::new(),
+        Some(body) => body.as_bytes().ok_or("pinned_body_not_buffered")?,
+        None => &[],
     };
-    // Avatar/profile requests are small. Never replay an unbounded request body.
-    if body.len() > 64 * 1024 {
+    // Profile callers retain 64KiB; upload callers have a distinct hard cap.
+    if max_body_bytes > crate::guarded_http::MAX_PUBLIC_UPLOAD_BYTES || body.len() > max_body_bytes
+    {
         return Err("pinned_body_too_large".into());
     }
+    let body = Bytes::copy_from_slice(body);
     let mut tunnel = None;
     for address in checked_addresses.iter().take(8) {
         if let Ok(stream) = wsproxy::connect_via_proxy_resolved(proxy, *address).await {
@@ -129,7 +157,7 @@ async fn execute_with_tls(
     let mut outbound = hyper::Request::builder()
         .method(request.method().clone())
         .uri(target)
-        .body(Full::new(Bytes::from(body)))
+        .body(Full::new(body))
         .map_err(|_| "pinned_request_invalid")?;
     *outbound.headers_mut() = request.headers().clone();
     for name in [
@@ -166,9 +194,56 @@ async fn execute_with_tls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     use crate::proxy_config::{ProxyMode, ProxyProtocol};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn proxy_upload_carries_binary_beyond_profile_limit_without_changing_the_default() {
+        crate::proxy_config::ensure_crypto_provider();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let bytes = vec![0x80; 128 * 1024];
+            let (addr, tls, origin_task) = origin(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                false,
+            )
+            .await;
+            let (proxy, proxy_task) = http_proxy(addr, false).await;
+            let client = reqwest::Client::new();
+            let url = format!("https://public.test:{}/upload?sign=SECRET", addr.port());
+            let too_large = execute_with_tls(
+                client.put(&url).body(bytes.clone()).build().unwrap(),
+                &proxy,
+                &[addr],
+                tls.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(too_large, "pinned_body_too_large");
+            let response = execute_with_tls_body_limit(
+                client.put(&url).body(bytes.clone()).build().unwrap(),
+                &proxy,
+                &[addr],
+                tls,
+                bytes.len(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), 200);
+            let _ = response.bytes().await.unwrap();
+            let received = origin_task.await.unwrap();
+            assert!(received.ends_with(&bytes));
+            assert!(
+                !String::from_utf8_lossy(&received[..received.len() - bytes.len()])
+                    .to_lowercase()
+                    .contains("authorization:")
+            );
+            assert!(proxy_task.await.unwrap().starts_with("CONNECT 127.0.0.1:"));
+        })
+        .await
+        .unwrap();
+    }
 
     async fn origin(
         response: Vec<u8>,
@@ -217,7 +292,7 @@ mod tests {
                 .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
                 .map(|(_, value)| value.trim().parse::<usize>().unwrap())
                 .unwrap_or(0);
-            assert!(body_len <= 64 * 1024);
+            assert!(body_len <= crate::guarded_http::MAX_PUBLIC_UPLOAD_BYTES);
             let mut body = vec![0; body_len];
             stream.read_exact(&mut body).await.unwrap();
             request.extend(body);

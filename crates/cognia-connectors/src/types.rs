@@ -61,6 +61,7 @@ pub struct OneBotLiveClient {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectorMediaUploadRequest {
+    pub qq: Option<QQMediaUploadOptions>,
     pub upload_url: String,
     pub headers: Option<HashMap<String, String>>,
     pub source_url: Option<String>,
@@ -68,6 +69,13 @@ pub struct ConnectorMediaUploadRequest {
     pub content_type: Option<String>,
     pub multipart: Option<ConnectorMediaMultipart>,
     pub response_mode: Option<MediaUploadResponseMode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QQMediaUploadOptions {
+    pub file_type: u8,
+    pub file_name: String,
 }
 
 /// One binary file plus platform-defined text fields, sent as multipart/form-data.
@@ -107,6 +115,7 @@ impl From<MatrixEncryptedMediaUploadRequest> for ConnectorMediaUploadRequest {
             content_type: value.content_type,
             multipart: None,
             response_mode: None,
+            qq: None,
         }
     }
 }

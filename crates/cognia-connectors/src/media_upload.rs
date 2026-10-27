@@ -60,7 +60,7 @@ pub(crate) fn inline_source_bytes(
     })())
 }
 
-async fn read_source_bytes(
+pub(crate) async fn read_source_bytes(
     req: &ConnectorMediaUploadRequest,
     max_bytes: usize,
 ) -> Result<bytes::Bytes, String> {
@@ -70,11 +70,21 @@ async fn read_source_bytes(
                 return bytes;
             }
             let client = build_client(source_url)?;
-            let mut resp = client
-                .get(source_url)
-                .send()
-                .await
-                .map_err(|e| format!("fetch source failed: {e}"))?;
+            let request = client.get(source_url);
+            let mut resp = if req.qq.is_some() {
+                cognia_net::guarded_http::send_pinned_public(
+                    request,
+                    cognia_net::guarded_http::PublicRedirects::Delegated,
+                    |_| Ok(reqwest::Client::builder().timeout(Duration::from_secs(120))),
+                    Duration::from_secs(120),
+                )
+                .await?
+            } else {
+                request
+                    .send()
+                    .await
+                    .map_err(|e| format!("fetch source failed: {e}"))?
+            };
             let status = resp.status().as_u16();
             if status >= 400 {
                 return Err(format!("fetch source returned HTTP {status}"));
@@ -265,6 +275,9 @@ async fn upload_bytes(
 }
 
 pub async fn upload_media(req: ConnectorMediaUploadRequest) -> Result<String, String> {
+    if req.qq.is_some() {
+        return crate::qq_upload::upload(&req).await;
+    }
     let bytes = read_source_bytes(&req, MAX_UPLOAD_BYTES).await?;
     upload_bytes(&req, bytes).await
 }
@@ -291,6 +304,28 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_bytes, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn qq_binary_mode_preserves_arbitrary_bytes_as_json_base64() {
+        proxy_config::apply_current(proxy_config::ProxyConfig::default()).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v2/users/user/files"))
+            .and(wiremock::matchers::body_partial_json(serde_json::json!({
+                "file_type":4, "file_name":"sample.bin", "file_data":"AP+AQQ==", "srv_send_msg":false
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"file_info":"uploaded"})))
+            .mount(&server).await;
+        let req = serde_json::from_value(serde_json::json!({
+            "uploadUrl":format!("{}/v2/users/user/files",server.uri()),
+            "sourceUrl":"data:application/octet-stream;base64,AP+AQQ==",
+            "qq":{"fileType":4,"fileName":"sample.bin"}, "responseMode":"http"
+        }))
+        .unwrap();
+        let response: serde_json::Value =
+            serde_json::from_str(&upload_media(req).await.unwrap()).unwrap();
+        assert_eq!(response["status"], 200);
+    }
 
     #[tokio::test]
     async fn multipart_upload_preserves_file_fields_and_http_error_envelope() {
@@ -466,6 +501,7 @@ mod tests {
         headers.insert("Authorization".to_string(), "Bearer tok".to_string());
 
         let content_uri = upload_media(ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: format!(
                 "{}/_matrix/media/v3/upload?filename=pic.png",
                 mock_server.uri()
@@ -527,6 +563,7 @@ mod tests {
             .mount(&server)
             .await;
         let result = upload_media(ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: format!("{}/upload", server.uri()),
             headers: None,
             source_url: Some("data:image/png;base64,AQID".into()),
@@ -563,6 +600,7 @@ mod tests {
             .await;
 
         let content_uri = upload_media(ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: format!("{}/upload", mock_server.uri()),
             headers: None,
             source_url: Some(format!("{}/source.bin", mock_server.uri())),
@@ -616,6 +654,7 @@ mod tests {
     #[tokio::test]
     async fn upload_media_requires_exactly_one_source() {
         let err = upload_media(ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: "https://matrix.example/upload".to_string(),
             headers: None,
             source_url: None,
@@ -644,6 +683,7 @@ mod tests {
         let path = dir.path().join("big.bin");
         std::fs::write(&path, [0u8; 16]).unwrap();
         let req = ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: "https://x/upload".into(),
             headers: None,
             source_url: None,
@@ -666,6 +706,7 @@ mod tests {
             .mount(&mock_server)
             .await;
         let req = ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: "https://x/upload".into(),
             headers: None,
             source_url: Some(format!("{}/big.bin", mock_server.uri())),
@@ -684,6 +725,7 @@ mod tests {
         let path = dir.path().join("ok.bin");
         std::fs::write(&path, [1u8, 2, 3]).unwrap();
         let req = ConnectorMediaUploadRequest {
+            qq: None,
             upload_url: "https://x/upload".into(),
             headers: None,
             source_url: None,

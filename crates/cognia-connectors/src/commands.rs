@@ -773,6 +773,7 @@ mod tests {
 
         let content_uri =
             connectors_media_upload(super::super::types::ConnectorMediaUploadRequest {
+                qq: None,
                 upload_url: format!("{}/_matrix/media/v3/upload", mock_server.uri()),
                 headers: Some(headers),
                 source_url: None,
