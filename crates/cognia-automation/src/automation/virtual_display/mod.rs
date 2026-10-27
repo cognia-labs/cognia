@@ -30,7 +30,12 @@
 //! `cfg(windows)` Win32 FFI with non-Windows stubs so everything compiles and
 //! the controller logic is exercised everywhere.
 
+//! macOS uses the Developer ID CGVirtualDisplay beta in `driver_macos`:
+//! explicitly targeted ScreenCaptureKit streams and reversible target-window
+//! migration, with a checked system-only assertion. See ADR-0242.
+
 pub mod controller;
+pub mod driver_macos;
 pub mod parsec_vdd;
 pub mod topology;
 
@@ -44,7 +49,12 @@ use serde::{Deserialize, Serialize};
 pub use controller::VirtualDisplayController;
 
 /// Stable backend id surfaced to the renderer's health badge.
+#[cfg(target_os = "windows")]
 pub const BACKEND_ID: &str = "windows-parsec-vdd";
+#[cfg(target_os = "macos")]
+pub const BACKEND_ID: &str = "macos-cgvirtualdisplay";
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub const BACKEND_ID: &str = "unsupported";
 
 /// Diagnostic snapshot reported by `virtual_display_health_probe`. Mirrors the
 /// sandbox `SandboxHealth` shape so the Settings card can reuse the same badge
@@ -53,7 +63,7 @@ pub const BACKEND_ID: &str = "windows-parsec-vdd";
 #[serde(rename_all = "camelCase")]
 pub struct VirtualDisplayHealth {
     /// True when the bundled driver is installed and the platform supports the
-    /// screen-off path (Windows only). When false the renderer shows
+    /// screen-off path. When false the renderer shows
     /// "Setup required" and the screen-off path denies strictly.
     pub available: bool,
     /// Whether the driver package is installed (marker present). Distinct from
@@ -114,6 +124,11 @@ pub enum VddError {
     /// The driver is installed but a device/IOCTL operation failed.
     #[error("virtual display driver error: {0}")]
     Driver(String),
+    #[error("{class}: {message}")]
+    Backend {
+        class: &'static str,
+        message: String,
+    },
     /// Display-topology snapshot / set-primary / restore failed.
     #[error("display topology error: {0}")]
     Topology(String),
@@ -155,9 +170,13 @@ pub trait VddDriver {
     fn release(&mut self, reason: ReleaseReason);
     /// Whether a virtual display is currently acquired.
     fn is_acquired(&self) -> bool;
+    /// Observable cleanup failure, retained even after the resource is gone.
+    fn release_error(&self) -> Option<String> {
+        None
+    }
 }
 
-/// Driver used off-Windows or when the bundled driver is not installed. Every
+/// Driver used on unsupported platforms or when the driver is not installed. Every
 /// `acquire` fails with [`VddError::Unavailable`] so strict mode engages.
 pub struct NoopDriver {
     reason: String,
@@ -214,7 +233,11 @@ pub fn probe_health() -> VirtualDisplayHealth {
             },
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    {
+        driver_macos::probe_health()
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         VirtualDisplayHealth {
             available: false,
@@ -222,7 +245,7 @@ pub fn probe_health() -> VirtualDisplayHealth {
             backend: BACKEND_ID.into(),
             driver_version: String::new(),
             active_monitor: String::new(),
-            last_error: "Screen-off mode is Windows-only.".into(),
+            last_error: "unsupported: no screen-off backend for this platform".into(),
         }
     }
 }
@@ -241,9 +264,15 @@ pub fn build_driver() -> Box<dyn VddDriver> {
             ))
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Box::new(NoopDriver::new("Screen-off mode is Windows-only."))
+        Box::new(driver_macos::MacosVddDriver::default())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Box::new(NoopDriver::new(
+            "unsupported: no screen-off backend for this platform",
+        ))
     }
 }
 
@@ -286,7 +315,7 @@ mod tests {
         assert_eq!(v["driverVersion"], "0.1.0");
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     #[test]
     fn probe_health_is_unavailable_off_windows() {
         let h = probe_health();
@@ -294,7 +323,7 @@ mod tests {
         assert!(!h.installed);
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     #[test]
     fn build_driver_off_windows_is_noop() {
         let mut d = build_driver();

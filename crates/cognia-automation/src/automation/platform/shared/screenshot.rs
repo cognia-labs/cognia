@@ -24,27 +24,23 @@ pub fn capture_primary(opts: &ScreenshotOpts) -> Result<Screenshot> {
             message: "no monitors detected".into(),
         });
     }
-    // Explicit monitor pick first (`opts.monitor_id` from
-    // `Capabilities.monitors`); unknown / absent ids fall back to the
-    // primary. `xcap` returns monitors in OS order; the primary is the one
-    // with `is_primary() == true`. Fall back to the first monitor if no
-    // primary flag is set (rare; happens on some virtual displays).
-    let mon = opts
-        .monitor_id
-        .as_deref()
-        .and_then(|want| {
-            monitors
-                .iter()
-                .find(|m| m.id().is_ok_and(|id| id.to_string() == want))
-        })
-        .cloned()
-        .unwrap_or_else(|| {
-            monitors
-                .iter()
-                .find(|m| m.is_primary().unwrap_or(false))
-                .cloned()
-                .unwrap_or_else(|| monitors[0].clone())
-        });
+    // Explicit identities must never silently select another physical screen.
+    // Windows controller labels are GDI device names; renderer choices are IDs.
+    let mon = if let Some(want) = opts.monitor_id.as_deref() {
+        monitors
+            .iter()
+            .find(|m| monitor_matches(m.id().ok(), m.name().ok().as_deref(), want))
+            .cloned()
+            .ok_or_else(|| AutomationError::BackendError {
+                message: format!("capture_failure: requested monitor {want} is unavailable"),
+            })?
+    } else {
+        monitors
+            .iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .cloned()
+            .unwrap_or_else(|| monitors[0].clone())
+    };
 
     let image = mon
         .capture_image()
@@ -77,6 +73,10 @@ pub fn capture_primary(opts: &ScreenshotOpts) -> Result<Screenshot> {
         source_width: None,
         source_height: None,
     })
+}
+
+fn monitor_matches(id: Option<u32>, name: Option<&str>, wanted: &str) -> bool {
+    id.is_some_and(|id| id.to_string() == wanted) || name == Some(wanted)
 }
 
 /// Capture the selected window only; callers pin ownership and geometry.
@@ -395,6 +395,13 @@ pub fn redact_screenshot(original: Screenshot) -> Result<Screenshot> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn virtual_display_monitor_identity_is_explicit() {
+        assert!(super::monitor_matches(Some(42), Some("owned"), "42"));
+        assert!(super::monitor_matches(Some(42), Some("owned"), "owned"));
+        assert!(!super::monitor_matches(Some(42), Some("physical"), "owned"));
+        assert!(!super::monitor_matches(None, None, "42"));
+    }
     use super::*;
 
     fn shot(w: u32, h: u32) -> Screenshot {

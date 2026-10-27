@@ -105,6 +105,7 @@ impl AxBackend {
         process_name: Option<&str>,
         budget: TreeBudget,
     ) -> Result<Vec<ElementInfo>> {
+        screen_off_prepare(pid)?;
         let app = AxElement::application(pid);
         raw::set_messaging_timeout(&app, 0.25);
         raw::activate_web_a11y(&app);
@@ -170,10 +171,15 @@ impl AxBackend {
             .get(&element_ref.0)
             .cloned()
         {
+            screen_off_element(&cached)?;
             return Ok(cached);
         }
         match element_locator::ElementLocator::decode(&element_ref.0) {
-            Some(loc) => locator::resolve_locator(&loc),
+            Some(loc) => {
+                let element = locator::resolve_locator(&loc)?;
+                screen_off_element(&element)?;
+                Ok(element)
+            }
             None => Err(AutomationError::StaleElement),
         }
     }
@@ -384,6 +390,8 @@ impl AutomationBackend for AxBackend {
                 )
             }
             ClickTarget::Point { x, y } => {
+                let Point { x, y } = screen_off_point(Point { x, y })?;
+                let generation = screen_off_input_generation()?;
                 let mut e = enigo_new()?;
                 e.move_mouse(x, y, enigo::Coordinate::Abs)
                     .map_err(input_err("mouse move"))?;
@@ -392,6 +400,7 @@ impl AutomationBackend for AxBackend {
                     .count
                     .unwrap_or(if opts.double.unwrap_or(false) { 2 } else { 1 });
                 for i in 0..count.max(1) {
+                    screen_off_input_continues(generation)?;
                     e.button(button, Direction::Click)
                         .map_err(input_err("click"))?;
                     if i + 1 < count {
@@ -408,8 +417,23 @@ impl AutomationBackend for AxBackend {
             let element = self.resolve_element(&target)?;
             raw::perform_action(&element, "AXRaise").ok();
         }
+        let generation = screen_off_input_generation()?;
         let mut e = enigo_new()?;
-        e.text(text).map_err(input_err("type_text"))
+        if crate::automation::virtual_display::driver_macos::target()
+            .map_err(|e| AutomationError::BackendError {
+                message: e.to_string(),
+            })?
+            .is_some()
+        {
+            for character in text.chars() {
+                screen_off_input_continues(generation)?;
+                e.text(&character.to_string())
+                    .map_err(input_err("type_text"))?;
+            }
+            Ok(())
+        } else {
+            e.text(text).map_err(input_err("type_text"))
+        }
     }
 
     fn send_keys(&self, chord: &KeyChord) -> Result<()> {
@@ -508,12 +532,16 @@ impl AutomationBackend for AxBackend {
     }
 
     fn mouse_move(&self, point: Point) -> Result<()> {
+        let point = screen_off_point(point)?;
         let mut e = enigo_new()?;
         e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
             .map_err(input_err("mouse_move"))
     }
 
     fn drag(&self, from: Point, to: Point, opts: DragOpts) -> Result<()> {
+        let from = screen_off_point(from)?;
+        let to = screen_off_point(to)?;
+        let generation = screen_off_input_generation()?;
         let mut e = enigo_new()?;
         crate::automation::platform::shared::pointer::drag(
             &mut e,
@@ -521,10 +549,14 @@ impl AutomationBackend for AxBackend {
             to,
             opts,
             |e, point| {
+                screen_off_input_continues(generation)?;
                 e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
                     .map_err(input_err("drag.move"))
             },
             |e, button, transition| {
+                if transition == ButtonTransition::Down {
+                    screen_off_input_continues(generation)?;
+                }
                 e.button(
                     to_enigo_button(Some(button)),
                     match transition {
@@ -547,6 +579,7 @@ impl AutomationBackend for AxBackend {
                 self.foreground_element_center(&element)?
             }
         };
+        let point = screen_off_point(point)?;
         e.move_mouse(point.x, point.y, enigo::Coordinate::Abs)
             .map_err(input_err("scroll.move"))?;
         // enigo's `scroll(amount, axis)` uses notch-sized increments (positive
@@ -577,7 +610,11 @@ impl AutomationBackend for AxBackend {
     }
 
     fn mouse_button(&self, button: MouseButton, transition: ButtonTransition) -> Result<()> {
-        let mut e = enigo_new()?;
+        let mut e = if transition_is_gated(transition) {
+            enigo_new()?
+        } else {
+            enigo_ungated()?
+        };
         let b = to_enigo_button(Some(button));
         let dir = match transition {
             ButtonTransition::Down => Direction::Press,
@@ -587,7 +624,8 @@ impl AutomationBackend for AxBackend {
     }
 
     fn cursor_position(&self) -> Result<Point> {
-        let e = enigo_new()?;
+        // A read posts nothing, so the screen-off input gate does not apply.
+        let e = enigo_ungated()?;
         let (x, y) = e.location().map_err(input_err("cursor_position"))?;
         Ok(Point { x, y })
     }
@@ -719,10 +757,86 @@ impl AutomationBackend for AxBackend {
 /// a fraction of a frame rather than the AX default of 6 seconds.
 const PREFLIGHT_TIMEOUT_SECONDS: f32 = 0.25;
 
+fn screen_off_point(point: Point) -> Result<Point> {
+    crate::automation::virtual_display::driver_macos::validate_point(point).map_err(|e| {
+        AutomationError::BackendError {
+            message: e.to_string(),
+        }
+    })
+}
+
+fn screen_off_prepare(pid: u32) -> Result<()> {
+    crate::automation::virtual_display::driver_macos::prepare_application(pid).map_err(|e| {
+        AutomationError::BackendError {
+            message: e.to_string(),
+        }
+    })
+}
+
+fn screen_off_element(element: &AxElement) -> Result<()> {
+    if let Some(pid) = raw::element_pid(element) {
+        screen_off_prepare(pid)?;
+    }
+    if crate::automation::virtual_display::driver_macos::target()
+        .map_err(|e| AutomationError::BackendError {
+            message: e.to_string(),
+        })?
+        .is_some()
+    {
+        let rect = raw::read_rect(element).ok_or(AutomationError::StaleElement)?;
+        screen_off_point(Point {
+            x: rect.x,
+            y: rect.y,
+        })?;
+        screen_off_point(Point {
+            x: rect.x.saturating_add(rect.width.saturating_sub(1)),
+            y: rect.y.saturating_add(rect.height.saturating_sub(1)),
+        })?;
+    }
+    Ok(())
+}
+
+fn screen_off_input_generation() -> Result<Option<u64>> {
+    crate::automation::virtual_display::driver_macos::input_generation().map_err(|e| {
+        AutomationError::BackendError {
+            message: e.to_string(),
+        }
+    })
+}
+
+fn screen_off_input_continues(generation: Option<u64>) -> Result<()> {
+    crate::automation::virtual_display::driver_macos::validate_input_generation(generation).map_err(
+        |e| AutomationError::BackendError {
+            message: e.to_string(),
+        },
+    )
+}
+
+fn screen_off_input_ready() -> Result<()> {
+    crate::automation::virtual_display::driver_macos::validate_input().map_err(|e| {
+        AutomationError::BackendError {
+            message: e.to_string(),
+        }
+    })
+}
+
 fn enigo_new() -> Result<Enigo> {
+    screen_off_input_ready()?;
+    enigo_ungated()
+}
+
+/// Only for events that must reach the OS whatever the screen-off state:
+/// reads, and releasing a button pressed earlier. A refused mouse-up would
+/// leave the button held on the physical display after a kill switch or
+/// idle release (`drag` and `send_chord` already release unconditionally).
+fn enigo_ungated() -> Result<Enigo> {
     Enigo::new(&Settings::default()).map_err(|e| AutomationError::BackendError {
         message: format!("enigo init failed: {e}"),
     })
+}
+
+fn transition_is_gated(transition: ButtonTransition) -> bool {
+    transition == ButtonTransition::Down
 }
 
 fn to_enigo_button(b: Option<MouseButton>) -> enigo::Button {
@@ -745,6 +859,7 @@ fn input_err(label: &'static str) -> impl Fn(enigo::InputError) -> AutomationErr
 /// (W2 `hold_key`). All errors propagate through the same
 /// `BackendError` channel.
 fn send_chord(e: &mut Enigo, tokens: &[KeyToken], hold: Duration) -> Result<()> {
+    let generation = screen_off_input_generation()?;
     let mut modifiers: Vec<enigo::Key> = Vec::new();
     let mut main: Option<enigo::Key> = None;
     for tok in tokens {
@@ -759,25 +874,49 @@ fn send_chord(e: &mut Enigo, tokens: &[KeyToken], hold: Duration) -> Result<()> 
             message: "chord has no main key".into(),
         });
     };
-    for m in &modifiers {
-        e.key(*m, Direction::Press)
-            .map_err(input_err("chord.mod_press"))?;
+    let mut pressed = Vec::new();
+    let result = (|| {
+        for m in &modifiers {
+            screen_off_input_continues(generation)?;
+            e.key(*m, Direction::Press)
+                .map_err(input_err("chord.mod_press"))?;
+            pressed.push(*m);
+        }
+        screen_off_input_continues(generation)?;
+        if hold.is_zero() {
+            e.key(main_key, Direction::Click)
+                .map_err(input_err("chord.main_click"))
+        } else {
+            e.key(main_key, Direction::Press)
+                .map_err(input_err("chord.main_press"))?;
+            let deadline = Instant::now() + hold;
+            let mut result = Ok(());
+            while Instant::now() < deadline {
+                std::thread::sleep(
+                    Duration::from_millis(25)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+                if let Err(error) = screen_off_input_continues(generation) {
+                    result = Err(error);
+                    break;
+                }
+            }
+            let released = e
+                .key(main_key, Direction::Release)
+                .map_err(input_err("chord.main_release"));
+            result.and(released)
+        }
+    })();
+    let mut cleanup = Ok(());
+    for m in pressed.iter().rev() {
+        if let Err(error) = e
+            .key(*m, Direction::Release)
+            .map_err(input_err("chord.mod_release"))
+        {
+            cleanup = Err(error);
+        }
     }
-    if hold.is_zero() {
-        e.key(main_key, Direction::Click)
-            .map_err(input_err("chord.main_click"))?;
-    } else {
-        e.key(main_key, Direction::Press)
-            .map_err(input_err("chord.main_press"))?;
-        std::thread::sleep(hold);
-        e.key(main_key, Direction::Release)
-            .map_err(input_err("chord.main_release"))?;
-    }
-    for m in modifiers.iter().rev() {
-        e.key(*m, Direction::Release)
-            .map_err(input_err("chord.mod_release"))?;
-    }
-    Ok(())
+    result.and(cleanup)
 }
 
 fn modifier_to_enigo(m: Modifier) -> enigo::Key {
@@ -1129,6 +1268,18 @@ fn focused_to_element_info(snap: &FocusedSnapshot) -> ElementInfo {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn virtual_display_releasing_a_button_is_never_gated() {
+        assert!(super::transition_is_gated(ButtonTransition::Down));
+        assert!(!super::transition_is_gated(ButtonTransition::Up));
+    }
+    #[test]
+    fn virtual_display_global_coordinate_contract() {
+        let _target = crate::automation::virtual_display::driver_macos::TARGET_TEST_LOCK.lock();
+        let point = crate::automation::types::Point { x: 500, y: 300 };
+        let mapped = super::screen_off_point(point).unwrap();
+        assert_eq!((mapped.x, mapped.y), (500, 300));
+    }
     use super::*;
 
     #[test]

@@ -95,3 +95,19 @@ describe("useVirtualDisplayHealth", () => {
     expect(mockCall).not.toHaveBeenCalled()
   })
 })
+
+it("preserves the macOS backend identity and permission error class", async () => {
+  mockCall.mockResolvedValue({
+    available: false,
+    installed: true,
+    backend: "macos-cgvirtualdisplay",
+    last_error: "permission_missing: Screen Recording",
+    active_monitor: "42",
+  })
+  const { result } = renderHook(() => useVirtualDisplayHealth())
+  await waitFor(() => expect(result.current.health.backend).toBe("macos-cgvirtualdisplay"))
+  expect(result.current.health.installed).toBe(true)
+  expect(result.current.health.available).toBe(false)
+  expect(result.current.health.lastError).toBe("permission_missing: Screen Recording")
+  expect(result.current.health.activeMonitor).toBe("42")
+})

@@ -1,6 +1,7 @@
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::Mutex;
 
+use crate::automation::virtual_display::driver_macos;
 use base64::Engine;
 
 use crate::automation::backend::ApplicationScreenshot;
@@ -61,6 +62,7 @@ unsafe extern "C" {
     fn cognia_sc_stream_stop(stream: *mut c_void);
     fn cognia_sc_capture_display(
         requested_display_id: u32,
+        require_fresh_stream: bool,
         has_region: bool,
         region_x: f64,
         region_y: f64,
@@ -86,12 +88,16 @@ struct WindowCaptureKey {
     process_id: u32,
     title: Option<String>,
     bounds: Option<Rect>,
+    display_id: Option<u32>,
+    generation: u64,
 }
 
 impl WindowCaptureKey {
     fn from_hint(process_id: u32, window_hint: Option<&ElementInfo>) -> Self {
         Self {
             process_id,
+            display_id: None,
+            generation: 0,
             title: window_hint
                 .and_then(|hint| hint.window_title.as_deref().or(hint.name.as_deref()))
                 .map(str::to_owned),
@@ -134,7 +140,16 @@ pub(super) fn capture_application_window(
         });
     }
 
-    let key = WindowCaptureKey::from_hint(process_id, window_hint);
+    driver_macos::prepare_application(process_id).map_err(screen_off_error)?;
+    let mut key = WindowCaptureKey::from_hint(process_id, window_hint);
+    key.generation = driver_macos::generation();
+    key.display_id = driver_macos::target()
+        .map_err(screen_off_error)?
+        .map(|g| g.display_id);
+    if key.display_id.is_some() {
+        key.bounds = None;
+    } // the AX hint predates moving the window
+
     let mut slot = active.lock().map_err(|_| AutomationError::Internal {
         message: "ScreenCaptureKit stream cache lock poisoned".into(),
     })?;
@@ -145,6 +160,8 @@ pub(super) fn capture_application_window(
         let mut native = NativeResultGuard(NativeCaptureResult::default());
         let success = unsafe { cognia_sc_stream_capture_latest(stream.native, &mut native.0) };
         if success {
+            verify_owned_capture(key.display_id, key.generation, &native.0)?;
+            driver_macos::validate_session().map_err(screen_off_error)?;
             return finish_capture(&native.0, true);
         }
         slot.take();
@@ -175,7 +192,9 @@ pub(super) fn capture_application_window(
     if stream.is_null() {
         return Err(native_error(&native.0));
     }
-    let capture = match finish_capture(&native.0, true) {
+    let capture = match verify_owned_capture(key.display_id, key.generation, &native.0)
+        .and_then(|_| finish_capture(&native.0, true))
+    {
         Ok(capture) => capture,
         Err(error) => {
             unsafe {
@@ -197,6 +216,11 @@ pub fn capture_display(opts: &ScreenshotOpts) -> Result<Screenshot> {
             message: "macOS ScreenCaptureKit screenshots use lossless PNG evidence".into(),
         });
     }
+    // A display capture moves no window: "the frontmost app" is usually
+    // Cognia itself, and an app the agent drives is moved when it is targeted
+    // (tree reads, element resolves, window captures).
+    let owned = driver_macos::target().map_err(screen_off_error)?;
+    let generation = driver_macos::generation();
     let display_id = opts
         .monitor_id
         .as_deref()
@@ -206,11 +230,13 @@ pub fn capture_display(opts: &ScreenshotOpts) -> Result<Screenshot> {
             message: "macOS monitor id is not a Core Graphics display id".into(),
         })?
         .unwrap_or_default();
+    let display_id = select_display(owned.map(|g| g.display_id), display_id)?;
     let region = opts.region;
     let mut native = NativeResultGuard(NativeCaptureResult::default());
     let success = unsafe {
         cognia_sc_capture_display(
             display_id,
+            owned.is_some(),
             region.is_some(),
             region.map_or(0.0, |rect| f64::from(rect.x)),
             region.map_or(0.0, |rect| f64::from(rect.y)),
@@ -220,9 +246,74 @@ pub fn capture_display(opts: &ScreenshotOpts) -> Result<Screenshot> {
         )
     };
     if !success {
-        return Err(native_error(&native.0));
+        let error = native_error(&native.0);
+        if owned.is_some() {
+            driver_macos::invalidate(format!("capture_failure: {error}"));
+        }
+        return Err(error);
     }
+    verify_display((display_id != 0).then_some(display_id), native.0.display_id)?;
+    verify_owned_capture(owned.map(|g| g.display_id), generation, &native.0)?;
+    if owned.is_some()
+        && (driver_macos::target().map_err(screen_off_error)? != owned
+            || driver_macos::generation() != generation)
+    {
+        return Err(screen_off_error(
+            "capture_failure: owned display changed during capture",
+        ));
+    }
+    driver_macos::validate_session().map_err(screen_off_error)?;
     Ok(finish_capture(&native.0, false)?.screenshot)
+}
+
+fn screen_off_error(error: impl std::fmt::Display) -> AutomationError {
+    AutomationError::BackendError {
+        message: error.to_string(),
+    }
+}
+
+fn select_display(owned: Option<u32>, requested: u32) -> Result<u32> {
+    match owned {
+        Some(id) if requested == 0 || requested == id => Ok(id),
+        Some(_) => Err(screen_off_error(
+            "capture_failure: screen-off rejects another display target",
+        )),
+        None => Ok(requested),
+    }
+}
+
+fn verify_display(expected: Option<u32>, actual: u32) -> Result<()> {
+    if expected.is_some_and(|id| id != actual) {
+        return Err(screen_off_error(
+            "capture_failure: ScreenCaptureKit returned a different display",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_owned_capture(
+    expected: Option<u32>,
+    generation: u64,
+    native: &NativeCaptureResult,
+) -> Result<()> {
+    verify_display(expected, native.display_id)?;
+    if let Some(id) = expected {
+        let current = driver_macos::target().map_err(screen_off_error)?;
+        if current.map(|g| g.display_id) != Some(id) || driver_macos::generation() != generation {
+            return Err(screen_off_error(
+                "capture_failure: owned display generation changed",
+            ));
+        }
+        if native.point_pixel_scale != 1.0
+            || f64::from(native.width) != native.logical_width
+            || f64::from(native.height) != native.logical_height
+        {
+            return Err(screen_off_error(
+                "capture_failure: expected 1x virtual-display geometry",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn finish_capture(
@@ -297,6 +388,15 @@ fn unix_time_millis() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn virtual_display_capture_never_falls_back_to_another_screen() {
+        assert_eq!(select_display(Some(42), 0).unwrap(), 42);
+        assert_eq!(select_display(Some(42), 42).unwrap(), 42);
+        assert!(select_display(Some(42), 99).is_err());
+        assert!(verify_display(Some(42), 99).is_err());
+        assert!(verify_display(Some(42), 42).is_ok());
+    }
 
     #[test]
     fn rejects_non_finite_native_coordinates() {

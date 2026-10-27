@@ -13,6 +13,7 @@
 //! cross-platform against a mock; the real Windows driver is built by
 //! [`super::build_driver`] on this thread.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -36,8 +37,16 @@ pub const PING_INTERVAL: Duration = Duration::from_millis(100);
 const ARM_TIMEOUT: Duration = Duration::from_secs(10);
 
 enum Msg {
-    Arm { reply: mpsc::Sender<ArmOutcome> },
-    Release { reason: ReleaseReason },
+    Arm {
+        reply: mpsc::Sender<ArmOutcome>,
+        probe_owner: Option<u64>,
+    },
+    ReleaseLease {
+        owner: u64,
+    },
+    Release {
+        reason: ReleaseReason,
+    },
 }
 
 /// Cheap, lock-protected view of the controller used by health/status reads
@@ -47,6 +56,7 @@ pub struct Status {
     pub active: bool,
     pub active_monitor: Option<String>,
     pub last_error: Option<String>,
+    probe_owner: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -54,6 +64,31 @@ pub struct VirtualDisplayController {
     tx: mpsc::Sender<Msg>,
     status: Arc<Mutex<Status>>,
     _thread: Arc<ThreadJoiner>,
+}
+
+static NEXT_LEASE: AtomicU64 = AtomicU64::new(1);
+
+/// A settings probe owns an exclusive lease. Dropping it releases only the
+/// generation it acquired, never a display that another action has since armed.
+pub struct ProbeLease {
+    controller: VirtualDisplayController,
+    owner: u64,
+    pub monitor: String,
+}
+impl ProbeLease {
+    pub fn is_current(&self) -> bool {
+        let status = self.controller.status.lock();
+        status.active && status.probe_owner == Some(self.owner)
+    }
+}
+
+impl Drop for ProbeLease {
+    fn drop(&mut self) {
+        let _ = self
+            .controller
+            .tx
+            .send(Msg::ReleaseLease { owner: self.owner });
+    }
 }
 
 struct ThreadJoiner(Option<JoinHandle<()>>);
@@ -122,8 +157,34 @@ impl VirtualDisplayController {
     /// Blocks briefly on the controller thread's reply — call from a blocking
     /// context (Tauri commands use `spawn_blocking`).
     pub fn arm(&self) -> ArmOutcome {
+        self.arm_owned(None)
+    }
+
+    pub fn acquire_probe(&self) -> Result<ProbeLease, String> {
+        let owner = NEXT_LEASE.fetch_add(1, Ordering::Relaxed);
+        match self.arm_owned(Some(owner)) {
+            ArmOutcome::Acquired { monitor } => Ok(ProbeLease {
+                controller: self.clone(),
+                owner,
+                monitor,
+            }),
+            ArmOutcome::AlreadyActive => {
+                Err("busy: another session owns the virtual display".into())
+            }
+            ArmOutcome::Unavailable(error) => Err(error),
+        }
+    }
+
+    fn arm_owned(&self, probe_owner: Option<u64>) -> ArmOutcome {
         let (reply_tx, reply_rx) = mpsc::channel();
-        if self.tx.send(Msg::Arm { reply: reply_tx }).is_err() {
+        if self
+            .tx
+            .send(Msg::Arm {
+                reply: reply_tx,
+                probe_owner,
+            })
+            .is_err()
+        {
             return ArmOutcome::Unavailable("virtual display controller stopped".into());
         }
         match reply_rx.recv_timeout(ARM_TIMEOUT) {
@@ -149,10 +210,11 @@ impl VirtualDisplayController {
     }
 }
 
-fn set_active(status: &Arc<Mutex<Status>>, monitor: Option<String>) {
+fn set_active(status: &Arc<Mutex<Status>>, monitor: Option<String>, probe_owner: Option<u64>) {
     let mut g = status.lock();
     g.active = true;
     g.active_monitor = monitor;
+    g.probe_owner = probe_owner;
     g.last_error = None;
 }
 
@@ -160,6 +222,7 @@ fn set_inactive(status: &Arc<Mutex<Status>>, error: Option<String>) {
     let mut g = status.lock();
     g.active = false;
     g.active_monitor = None;
+    g.probe_owner = None;
     if error.is_some() {
         g.last_error = error;
     }
@@ -176,6 +239,7 @@ fn run(
     app: Option<AppHandle>,
 ) {
     let mut idle_deadline: Option<Instant> = None;
+    let mut probe_lease: Option<u64> = None;
     loop {
         // Block indefinitely when idle; ping-cadence poll while a display is up.
         let wait = if driver.is_acquired() {
@@ -184,7 +248,21 @@ fn run(
             Duration::from_secs(3600)
         };
         match rx.recv_timeout(wait) {
-            Ok(Msg::Arm { reply }) => {
+            Ok(Msg::ReleaseLease { owner }) => {
+                if probe_lease == Some(owner) {
+                    driver.release(ReleaseReason::Manual);
+                    probe_lease = None;
+                    idle_deadline = None;
+                    set_inactive(&status, driver.release_error());
+                }
+            }
+            Ok(Msg::Arm { reply, probe_owner }) => {
+                if probe_lease.is_some() || (driver.is_acquired() && probe_owner.is_some()) {
+                    let _ = reply.send(ArmOutcome::Unavailable(
+                        "busy: another session owns the virtual display".into(),
+                    ));
+                    continue;
+                }
                 if driver.is_acquired() {
                     idle_deadline = Some(Instant::now() + idle_after);
                     let _ = reply.send(ArmOutcome::AlreadyActive);
@@ -194,7 +272,7 @@ fn run(
                 match driver.acquire() {
                     Ok(acq) => {
                         idle_deadline = Some(Instant::now() + idle_after);
-                        set_active(&status, Some(acq.label.clone()));
+                        set_active(&status, Some(acq.label.clone()), probe_owner);
                         emit(
                             &audit,
                             &app,
@@ -204,7 +282,17 @@ fn run(
                             None,
                             started.elapsed(),
                         );
-                        let _ = reply.send(ArmOutcome::Acquired { monitor: acq.label });
+                        probe_lease = probe_owner;
+                        if reply
+                            .send(ArmOutcome::Acquired { monitor: acq.label })
+                            .is_err()
+                        {
+                            // A timed-out/cancelled arm must not create a late orphan.
+                            driver.release(ReleaseReason::Manual);
+                            probe_lease = None;
+                            idle_deadline = None;
+                            set_inactive(&status, driver.release_error());
+                        }
                     }
                     Err(err) => {
                         let msg = err.to_string();
@@ -226,7 +314,8 @@ fn run(
                 if driver.is_acquired() {
                     driver.release(reason);
                     idle_deadline = None;
-                    set_inactive(&status, None);
+                    set_inactive(&status, driver.release_error());
+                    probe_lease = None;
                     emit(
                         &audit,
                         &app,
@@ -248,7 +337,12 @@ fn run(
                     let msg = err.to_string();
                     driver.release(ReleaseReason::DriverLost);
                     idle_deadline = None;
+                    let msg = match driver.release_error() {
+                        Some(restore) => format!("{msg}; {restore}"),
+                        None => msg,
+                    };
                     set_inactive(&status, Some(msg.clone()));
+                    probe_lease = None;
                     emit(
                         &audit,
                         &app,
@@ -264,7 +358,8 @@ fn run(
                     if Instant::now() >= dl {
                         driver.release(ReleaseReason::Idle);
                         idle_deadline = None;
-                        set_inactive(&status, None);
+                        set_inactive(&status, driver.release_error());
+                        probe_lease = None;
                         emit(
                             &audit,
                             &app,
@@ -324,21 +419,22 @@ mod tests {
     use crate::automation::virtual_display::{AcquiredDisplay, VddError};
 
     #[derive(Default)]
-    struct MockState {
+    pub(super) struct MockState {
         acquire_calls: u32,
         ping_calls: u32,
-        release_calls: u32,
+        pub(super) release_calls: u32,
         acquired: bool,
         fail_acquire: bool,
+        fail_release: bool,
         fail_ping_after: Option<u32>,
-        last_release_reason: Option<ReleaseReason>,
+        pub(super) last_release_reason: Option<ReleaseReason>,
     }
 
     #[derive(Clone)]
-    struct MockHandle(Arc<Mutex<MockState>>);
+    pub(super) struct MockHandle(pub(super) Arc<Mutex<MockState>>);
 
     impl MockHandle {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             Self(Arc::new(Mutex::new(MockState::default())))
         }
         fn with_fail_acquire() -> Self {
@@ -346,7 +442,7 @@ mod tests {
             h.0.lock().fail_acquire = true;
             h
         }
-        fn driver(&self) -> Box<dyn VddDriver> {
+        pub(super) fn driver(&self) -> Box<dyn VddDriver> {
             Box::new(MockDriver(self.0.clone()))
         }
     }
@@ -387,9 +483,56 @@ mod tests {
         fn is_acquired(&self) -> bool {
             self.0.lock().acquired
         }
+        fn release_error(&self) -> Option<String> {
+            self.0
+                .lock()
+                .fail_release
+                .then(|| "restore_failure: original display is missing".into())
+        }
     }
 
-    fn wait_until(mut pred: impl FnMut() -> bool, timeout: Duration) -> bool {
+    #[test]
+    fn virtual_display_cleanup_failure_is_visible_after_manual_release() {
+        let mock = MockHandle::new();
+        let builder = mock.clone();
+        let ctrl = VirtualDisplayController::spawn(move || builder.driver(), None, None);
+        ctrl.arm();
+        mock.0.lock().fail_release = true;
+        ctrl.force_release(ReleaseReason::Manual);
+        assert!(wait_until(|| !ctrl.is_active(), Duration::from_secs(1)));
+        assert!(ctrl
+            .status()
+            .last_error
+            .unwrap()
+            .starts_with("restore_failure:"));
+    }
+
+    #[test]
+    fn virtual_display_abandoned_arm_rolls_back_instead_of_leaking() {
+        let mock = MockHandle::new();
+        let (tx, rx) = mpsc::channel();
+        let (reply, abandoned) = mpsc::channel();
+        drop(abandoned);
+        tx.send(Msg::Arm {
+            reply,
+            probe_owner: Some(42),
+        })
+        .unwrap();
+        drop(tx);
+        run(
+            rx,
+            Arc::new(Mutex::new(Status::default())),
+            mock.driver(),
+            DEFAULT_IDLE,
+            PING_INTERVAL,
+            None,
+            None,
+        );
+        assert_eq!(mock.0.lock().acquire_calls, 1);
+        assert_eq!(mock.0.lock().release_calls, 1);
+    }
+
+    pub(super) fn wait_until(mut pred: impl FnMut() -> bool, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if pred() {
@@ -545,5 +688,61 @@ mod tests {
             },
             Duration::from_secs(1)
         ));
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::tests::{wait_until, MockHandle};
+    use super::*;
+    #[test]
+    fn virtual_display_probe_does_not_release_an_action_display() {
+        let mock = MockHandle::new();
+        let builder = mock.clone();
+        let ctrl = VirtualDisplayController::spawn(move || builder.driver(), None, None);
+        ctrl.arm();
+        assert!(ctrl.acquire_probe().is_err());
+        assert!(ctrl.is_active());
+        assert_eq!(mock.0.lock().release_calls, 0);
+        ctrl.force_release(ReleaseReason::Manual);
+    }
+    #[test]
+    fn virtual_display_probe_lease_is_exclusive_and_generation_bound() {
+        let mock = MockHandle::new();
+        let builder = mock.clone();
+        let ctrl = VirtualDisplayController::spawn(move || builder.driver(), None, None);
+        let lease = ctrl.acquire_probe().unwrap();
+        assert!(lease.is_current());
+        assert!(matches!(ctrl.arm(), ArmOutcome::Unavailable(_)));
+        ctrl.force_release(ReleaseReason::KillSwitch);
+        assert!(wait_until(|| !ctrl.is_active(), Duration::from_secs(1)));
+        assert!(matches!(ctrl.arm(), ArmOutcome::Acquired { .. }));
+        assert!(!lease.is_current());
+        drop(lease);
+        // FIFO barrier: the stale lease release is processed before this arm.
+        assert_eq!(ctrl.arm(), ArmOutcome::AlreadyActive);
+        assert!(ctrl.is_active());
+        ctrl.force_release(ReleaseReason::Manual);
+    }
+    #[test]
+    fn virtual_display_probe_releases_on_drop() {
+        let mock = MockHandle::new();
+        let builder = mock.clone();
+        let ctrl = VirtualDisplayController::spawn(move || builder.driver(), None, None);
+        drop(ctrl.acquire_probe().unwrap());
+        assert!(wait_until(|| !ctrl.is_active(), Duration::from_secs(1)));
+        assert_eq!(mock.0.lock().release_calls, 1);
+    }
+    #[test]
+    fn virtual_display_shutdown_releases_and_joins() {
+        let mock = MockHandle::new();
+        let builder = mock.clone();
+        let ctrl = VirtualDisplayController::spawn(move || builder.driver(), None, None);
+        ctrl.arm();
+        drop(ctrl);
+        assert_eq!(
+            mock.0.lock().last_release_reason,
+            Some(ReleaseReason::Shutdown)
+        );
     }
 }

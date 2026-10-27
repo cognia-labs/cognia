@@ -16,9 +16,12 @@
 fn main() {
     println!("cargo:rerun-if-changed=native/macos/screen_capture.m");
 
+    println!("cargo:rerun-if-changed=native/macos/virtual_display.m");
+
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("native/macos/screen_capture.m")
+            .file("native/macos/virtual_display.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .flag("-Werror")
@@ -31,6 +34,9 @@ fn main() {
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=ImageIO");
         println!("cargo:rustc-link-lib=framework=Foundation");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+        println!("cargo:rustc-link-lib=framework=ApplicationServices");
+        println!("cargo:rustc-link-lib=framework=IOKit");
     }
 
     #[cfg(windows)]

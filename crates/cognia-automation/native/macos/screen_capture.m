@@ -118,6 +118,11 @@ typedef struct CogniaSCStreamHandle {
         !CMSampleBufferIsValid(sample_buffer)) {
         return;
     }
+    CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sample_buffer, false);
+    if (attachments == NULL || CFArrayGetCount(attachments) == 0) return;
+    NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
+    NSNumber *status = info[SCStreamFrameInfoStatus];
+    if (status == nil || status.integerValue != SCFrameStatusComplete) return;
     CVImageBufferRef pixel_buffer = CMSampleBufferGetImageBuffer(sample_buffer);
     if (pixel_buffer == NULL) {
         return;
@@ -268,6 +273,7 @@ static bool cognia_capture_filter(SCContentFilter *filter,
                                   CGRect source_rect,
                                   uint32_t window_id,
                                   uint32_t display_id,
+                                  bool require_fresh_stream,
                                   CogniaSCCaptureResult *result) {
     const double scale = MAX((double)filter.pointPixelScale, 1.0);
     SCStreamConfiguration *configuration = cognia_sc_configuration(
@@ -275,6 +281,27 @@ static bool cognia_capture_filter(SCContentFilter *filter,
         logical_frame,
         has_source_rect,
         source_rect);
+
+    if (require_fresh_stream) {
+        CogniaSCFrameCollector *collector = [[CogniaSCFrameCollector alloc] init];
+        SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:collector];
+        NSError *outputError = nil;
+        if (![stream addStreamOutput:collector type:SCStreamOutputTypeScreen sampleHandlerQueue:collector.queue error:&outputError]) {
+            cognia_sc_set_error(result, outputError.localizedDescription ?: @"capture_failure: stream output rejected");
+            return false;
+        }
+        __block NSError *startError = nil;
+        dispatch_semaphore_t started = dispatch_semaphore_create(0);
+        [stream startCaptureWithCompletionHandler:^(NSError *error) { startError = error; dispatch_semaphore_signal(started); }];
+        BOOL ready = dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0;
+        NSError *frameError = nil;
+        CGImageRef image = ready && startError == nil ? [collector copyImageAfterGeneration:0 timeout:dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC) error:&frameError] : NULL;
+        bool stored = image != NULL && cognia_sc_store_image(image, window_id, display_id, logical_frame, scale, result);
+        if (image != NULL) CGImageRelease(image);
+        [stream stopCaptureWithCompletionHandler:nil];
+        if (!stored && result->error == NULL) cognia_sc_set_error(result, startError.localizedDescription ?: frameError.localizedDescription ?: @"capture_failure: no fresh complete virtual-display frame");
+        return stored;
+    }
 
     __block CGImageRef captured_image = NULL;
     __block NSError *capture_error = nil;
@@ -587,6 +614,7 @@ void cognia_sc_stream_stop(void *opaque_stream) {
 }
 
 bool cognia_sc_capture_display(uint32_t requested_display_id,
+                               bool require_fresh_stream,
                                bool has_region,
                                double region_x,
                                double region_y,
@@ -681,6 +709,7 @@ bool cognia_sc_capture_display(uint32_t requested_display_id,
             local_source_rect,
             0,
             selected.displayID,
+            require_fresh_stream,
             result);
     }
 }

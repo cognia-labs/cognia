@@ -1481,15 +1481,25 @@ pub async fn automation_kill_switch(
 // Screen-off Computer Use — virtual display commands (ADR-0020 follow-up).
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// `probe_health` is not cheap everywhere: on macOS it runs TCC preflights, an
+/// IOKit read and takes the native lock, which an arm or release holds for up
+/// to ~3 s. Keep it off the async runtime.
+#[cfg(any(feature = "tauri-host", target_os = "macos", test))]
+async fn probe_health_blocking() -> std::result::Result<VirtualDisplayHealth, String> {
+    tokio::task::spawn_blocking(virtual_display::probe_health)
+        .await
+        .map_err(|e| format!("health probe task join failed: {e}"))
+}
+
 /// Read-only health snapshot for the Settings → Automation → Screen-off card.
 /// Overlays the live controller status (active monitor / last error) onto the
-/// platform + driver-install probe. Cheap; safe to poll.
+/// platform + driver-install probe. Safe to poll.
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
 pub async fn virtual_display_health_probe(
     state: State<'_, AutomationState>,
 ) -> std::result::Result<VirtualDisplayHealth, String> {
-    let mut health = virtual_display::probe_health();
+    let mut health = probe_health_blocking().await?;
     let status = state.virtual_display.status();
     if let Some(monitor) = status.active_monitor {
         health.active_monitor = monitor;
@@ -1537,9 +1547,19 @@ pub async fn virtual_display_setup() -> std::result::Result<(), String> {
         }
         Ok(())
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("Screen-off mode is Windows-only.".into())
+        // Built in: never launch the Windows elevated installer on macOS.
+        let health = probe_health_blocking().await?;
+        if health.available {
+            Ok(())
+        } else {
+            Err(health.last_error)
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Err("unsupported: no screen-off backend for this platform".into())
     }
 }
 
@@ -1564,26 +1584,24 @@ pub async fn virtual_display_probe(
     // `arm()` blocks on the controller thread (it acquires + sets primary);
     // keep it off the async runtime.
     let controller = state.virtual_display.clone();
-    let outcome = tokio::task::spawn_blocking(move || controller.arm())
+    let lease = tokio::task::spawn_blocking(move || controller.acquire_probe())
         .await
-        .map_err(|e| format!("arm task join failed: {e}"))?;
-    let monitor = match outcome {
-        ArmOutcome::Acquired { monitor } => monitor,
-        ArmOutcome::AlreadyActive => state
-            .virtual_display
-            .status()
-            .active_monitor
-            .unwrap_or_default(),
-        ArmOutcome::Unavailable(reason) => return Err(reason),
+        .map_err(|e| format!("probe lease task join failed: {e}"))??;
+    let monitor = lease.monitor.clone();
+    // The lease drops on success, error or cancellation, and cannot release
+    // an action-owned display or a later controller generation.
+    let opts = super::types::ScreenshotOpts {
+        monitor_id: Some(monitor.clone()),
+        ..Default::default()
     };
     let shot = state
         .handle
-        .screenshot(super::types::ScreenshotOpts::default())
+        .screenshot(opts)
         .await
-        .map_err(|e| format!("screenshot failed: {e}"));
-    // Always release after the probe regardless of the capture result.
-    state.virtual_display.force_release(ReleaseReason::Manual);
-    let shot = shot?;
+        .map_err(|e| format!("capture_failure: {e}"))?;
+    if !lease.is_current() {
+        return Err("capture_failure: virtual-display lease was invalidated during capture".into());
+    }
     // Lightweight non-black heuristic: a uniformly black PNG compresses to a
     // few hundred bytes; a real desktop frame is far larger. We avoid decoding
     // (the `image` crate is feature-gated off by default) — the rigorous black
@@ -2137,6 +2155,25 @@ pub async fn automation_drain_init_failure(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn virtual_display_health_probe_runs_off_the_async_runtime() {
+        // Read-only on every platform: no display is created.
+        let health = super::probe_health_blocking().await.unwrap();
+        assert_eq!(health.backend, super::virtual_display::BACKEND_ID);
+    }
+    #[test]
+    fn virtual_display_probe_preserves_verified_monitor_and_legacy_non_black_field() {
+        let probe = super::VirtualDisplayProbeResult {
+            width: 1920,
+            height: 1080,
+            non_black: false,
+            monitor: "42".into(),
+        };
+        let json = serde_json::to_value(probe).unwrap();
+        assert_eq!(json["monitor"], "42");
+        assert_eq!(json["nonBlack"], false);
+        assert!(json.get("non_black").is_none());
+    }
     use super::*;
 
     #[tokio::test]
