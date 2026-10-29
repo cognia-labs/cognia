@@ -17,6 +17,7 @@ const resumePlan = jest.fn().mockResolvedValue(null)
 const cancelPlan = jest.fn().mockResolvedValue(null)
 const continueInSessionPlan = jest.fn()
 const failInSessionStep = jest.fn().mockResolvedValue(null)
+const completeChatHandoff = jest.fn().mockResolvedValue(null)
 jest.mock("@/lib/agent/plan/runtime", () => ({
   getPlanRuntime: () => ({
     pausePlan,
@@ -24,6 +25,7 @@ jest.mock("@/lib/agent/plan/runtime", () => ({
     cancelPlan,
     continueInSessionPlan,
     failInSessionStep,
+    completeChatHandoff,
   }),
 }))
 
@@ -190,5 +192,21 @@ describe("PlanRunSection", () => {
       })
     )
     expect(screen.getByTestId("plan-tracker-resume")).toBeDisabled()
+  })
+
+  it("shows a handed-off plan's status line with Mark done and Cancel", async () => {
+    renderSection(
+      plan({
+        status: "executing",
+        metadata: {
+          chatHandoff: { prompt: "go", mode: "acceptEdits", startedAt: 1, bootId: "b" },
+        },
+      })
+    )
+    expect(screen.getByTestId("plan-handoff-summary")).toHaveTextContent("tracker.handoffRunning")
+    expect(screen.queryByTestId("plan-tracker-panel")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("plan-tracker-pause")).not.toBeInTheDocument()
+    await userEvent.click(screen.getByTestId("plan-tracker-mark-done"))
+    await waitFor(() => expect(completeChatHandoff).toHaveBeenCalledWith("p1"))
   })
 })

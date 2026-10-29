@@ -30,6 +30,56 @@ export function linearAgentTurnSteps(titles: readonly string[]): CreatePlanStepI
 }
 
 /**
+ * Re-derive creation inputs after a refinement rewrote a plan's step titles.
+ *
+ * The planner only returns titles. A plan that was a plain `agent_turn` chain
+ * stays one ({@link linearAgentTurnSteps}). Any other plan keeps its shape
+ * where it can: a refined title equal to an existing step's keeps that step's
+ * kind, params, description, issue and the dependencies that still exist; a new
+ * title becomes an `agent_turn` after the step before it. Flattening every
+ * refined plan to a chain silently turned teammate / tool / gate steps into
+ * prose turns.
+ */
+export function refinedStepInputs(
+  previous: readonly PlanStep[],
+  titles: readonly string[]
+): CreatePlanStepInput[] {
+  const ordered = [...previous].sort((a, b) => a.order - b.order)
+  const chain = ordered.every(
+    (step, i) =>
+      step.kind === "agent_turn" &&
+      (step.dependencies.length === 0 ||
+        (i > 0 && step.dependencies.length === 1 && step.dependencies[0] === ordered[i - 1]!.id))
+  )
+  if (chain) return linearAgentTurnSteps(titles)
+
+  const byTitle = new Map<string, PlanStep[]>()
+  for (const step of ordered) byTitle.set(step.title, [...(byTitle.get(step.title) ?? []), step])
+  const matched = titles.map((title) => byTitle.get(title)?.shift())
+  const indexOf = new Map<string, number>()
+  matched.forEach((step, i) => {
+    if (step) indexOf.set(step.id, i)
+  })
+  return titles.map((rawTitle, i) => {
+    const title = rawTitle.slice(0, MAX_PLAN_STEP_TITLE_LEN)
+    const step = matched[i]
+    if (!step)
+      return { title, kind: "agent_turn" as const, ...(i > 0 ? { dependsOn: [i - 1] } : {}) }
+    const dependsOn = step.dependencies
+      .map((id) => indexOf.get(id))
+      .filter((index): index is number => index !== undefined)
+    return {
+      title,
+      kind: step.kind,
+      ...(step.description ? { description: step.description } : {}),
+      ...(step.params ? { params: step.params } : {}),
+      ...(step.issueId ? { issueId: step.issueId } : {}),
+      ...(dependsOn.length > 0 ? { dependsOn } : {}),
+    }
+  })
+}
+
+/**
  * Materialise creation inputs into full steps: assign stable ids, resolve
  * `dependsOn` index references into dependency ids (dropping self-refs and
  * out-of-range indices), and stamp the initial `pending` status + 0-based

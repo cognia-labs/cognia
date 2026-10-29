@@ -12,8 +12,7 @@
  * `planInputFromExitPlanMode` accepts both and yields a `CreatePlanInput`
  * whose steps are linear `agent_turn`s (each depends on the previous, so an
  * approved plan executes in order). It is pure; `captureExitPlanMode` does the
- * Dexie write via the plan runtime and is the hook-facing entry, mirroring
- * `applyPlanModeBridge`.
+ * Dexie write via the plan runtime and is the hook-facing entry.
  */
 
 import type { SDKAssistantMessage, SDKMessage, BetaToolUseBlock } from "@cognia/agent-config-types"
@@ -132,21 +131,39 @@ function isExitPlanToolName(name: string | undefined): boolean {
   return EXIT_PLAN_TOOL_NAMES.has(bare)
 }
 
-/** Find the first exit-plan tool_use block's input in an assistant event. */
-export function findExitPlanModeInput(evt: SDKMessage): unknown | null {
+/** The first exit-plan tool_use block in an assistant event: its id and input. */
+export function findExitPlanModeCall(evt: SDKMessage): { id?: string; input: unknown } | null {
   if (!evt || evt.type !== "assistant") return null
   const message = (evt as SDKAssistantMessage).message
   if (!message?.content || !Array.isArray(message.content)) return null
   for (const block of message.content) {
     if ((block as { type?: string }).type !== "tool_use") continue
     const tu = block as BetaToolUseBlock
-    if (isExitPlanToolName(tu.name)) return tu.input
+    if (isExitPlanToolName(tu.name)) {
+      return { ...(typeof tu.id === "string" && tu.id ? { id: tu.id } : {}), input: tu.input }
+    }
   }
   return null
 }
 
 /**
- * Hook-facing entry (mirrors `applyPlanModeBridge`). Scans an SDK event for an
+ * The plan a tool call already produced, if any. Capture runs on every
+ * non-stream event of a turn, and an event can reach it more than once (a
+ * replay, a reconnect, a second listener); without this a repeat re-created
+ * the plan — and creating one cancels the open plan, approved or running.
+ */
+export async function findPlanCapturedFrom(
+  sessionId: string,
+  toolUseId: string | undefined
+): Promise<AgentPlan | null> {
+  if (!toolUseId) return null
+  const { listPlansBySession } = await import("@/lib/db/plans")
+  const plans = await listPlansBySession(sessionId)
+  return plans.find((plan) => plan.metadata?.toolUseId === toolUseId) ?? null
+}
+
+/**
+ * Hook-facing entry. Scans an SDK event for an
  * `ExitPlanMode` tool call and, when present, creates a draft `AgentPlan` for
  * the session via the plan runtime. Returns the created plan or `null` when
  * there was no ExitPlanMode block or no usable steps. The plan runtime's
@@ -158,8 +175,11 @@ export async function captureExitPlanMode(
   sessionId: string,
   characterId?: string
 ): Promise<AgentPlan | null> {
-  const input = findExitPlanModeInput(evt)
-  if (input == null) return null
+  const call = findExitPlanModeCall(evt)
+  if (call == null || call.input == null) return null
+  const already = await findPlanCapturedFrom(sessionId, call.id)
+  if (already) return already
+  const input = call.input
   // User-level plan defaults (Settings → Agent runtime → Plan mode), shared
   // with every other plan producer. Best effort: capture must not fail because
   // settings are unreadable.
@@ -172,5 +192,7 @@ export async function captureExitPlanMode(
   })
   if (!planInput) return null
   const { getPlanRuntime } = await import("./runtime")
-  return getPlanRuntime().createPlan(planInput)
+  return getPlanRuntime().createPlan(
+    call.id ? { ...planInput, metadata: { ...planInput.metadata, toolUseId: call.id } } : planInput
+  )
 }

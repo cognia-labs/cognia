@@ -33,7 +33,6 @@
 import type { SlashContext } from "../builtin"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { useProjectStore } from "@/stores/project/project-store"
-import { soloTeamId } from "@/lib/agent/plan-mode-bridge"
 import type { AgentTeam, AgentTeamTask, TeamStatus } from "@/types/agent/agent-team"
 
 /** Result handed back to the composer. `system` is pushed as a system message. */
@@ -106,10 +105,8 @@ export async function dispatchSquadSubcommand(ctx: SlashContext): Promise<SquadC
  * Which Squad a subcommand acts on.
  *
  * An explicit `<id|name>` argument wins. Otherwise the session's own binding,
- * with the same three-source precedence `/plan` uses. `squadId` is the ADR-0140
- * binding, `teamId` is a character-team room (a different concept with the same
- * word), and the synthetic `solo:<id>` team is the plan-mode bridge's, which is
- * never a real Squad and so is excluded here.
+ * with the same precedence `/plan` uses: `squadId` is the ADR-0140 binding,
+ * `teamId` a character-team room (a different concept with the same word).
  */
 async function resolveSquad(
   ctx: SlashContext,
@@ -135,9 +132,7 @@ async function resolveSquad(
 
   const session = await loadSession(ctx.activeSessionId!)
   const bound = session?.squadId ?? session?.teamId
-  // The solo team is TodoWrite scaffolding, not a Squad. Naming it here would
-  // make `/squad status` answer for a thing the user never created.
-  if (bound && bound !== soloTeamId(ctx.activeSessionId!)) {
+  if (bound) {
     const squad = state.teams[bound]
     if (squad) return { squad }
   }

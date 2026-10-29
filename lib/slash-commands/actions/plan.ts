@@ -35,7 +35,6 @@ import { decomposeIntoPlan } from "@/lib/agent/plan/planner"
 import { linearAgentTurnSteps } from "@/lib/agent/plan/steps"
 import { buildAgentRoleLlmClient } from "@/lib/ai/generation/agent-role-client"
 import { redactText } from "@cognia/redact"
-import { ensureSoloTeam, soloTeamId } from "@/lib/agent/plan-mode-bridge"
 import { getGoalRuntime } from "@/lib/goal/runtime"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import type { AgentPlan, CreatePlanInput, CreatePlanStepInput } from "@/types/agent/plan"
@@ -203,22 +202,21 @@ async function commandFromGoal(ctx: SlashContext): Promise<PlanCommandResult> {
 async function commandFromTeam(ctx: SlashContext): Promise<PlanCommandResult> {
   const sessionId = ctx.activeSessionId!
   const session = await loadSession(sessionId)
-  // Three sources, most specific first.
+  // Two sources, most specific first.
   //
   //  - `squadId` is the ADR-0140 binding: a conversation handed to a Squad,
-  //    which is where its task DAG actually lives. Reading only `teamId` sent
-  //    every Squad-bound conversation to the synthetic solo team, so
-  //    `/plan from-team` reported "no team tasks" for a Squad that had them.
+  //    which is where its task DAG actually lives.
   //  - `teamId` is a character-team room, a different concept with the same word.
-  //  - the synthetic `solo:<id>` team the plan-mode bridge fills from
-  //    TodoWrite / TaskCreate tool calls.
-  const teamId = session?.squadId ?? session?.teamId ?? soloTeamId(sessionId)
+  //
+  // A plain chat has no team: the agent's own task list is the Tasks panel's,
+  // not a team's (`/plan <objective>` turns a goal into a plan).
+  const teamId = session?.squadId ?? session?.teamId
   const state = useAgentTeamStore.getState()
-  const team = state.teams[teamId]
-  if (!team) {
+  const team = teamId ? state.teams[teamId] : undefined
+  if (!teamId || !team) {
     return {
       system:
-        "No team tasks in this session yet. Run a plan-mode turn (so the agent emits its todo list) or open a team chat, then retry `/plan from-team`.",
+        "No team tasks in this session. Hand the conversation to a Squad or open a team chat, then retry `/plan from-team`.",
     }
   }
   const tasks = Object.values(state.tasks)
@@ -247,12 +245,10 @@ async function commandToTeam(ctx: SlashContext): Promise<PlanCommandResult> {
   if (plan.steps.length === 0) return { system: `Plan "${plan.title}" has no steps to project.` }
 
   const session = await loadSession(sessionId)
-  // Same precedence as `from-team`, so the round trip lands back where it came
-  // from rather than mirroring a Squad's plan into the solo team beside it.
-  const teamId = session?.squadId ?? session?.teamId ?? soloTeamId(sessionId)
-  ensureSoloTeam(teamId)
+  // Same precedence as `from-team`, so the round trip lands back where it came from.
+  const teamId = session?.squadId ?? session?.teamId
   const store = useAgentTeamStore.getState()
-  if (!store.teams[teamId]) {
+  if (!teamId || !store.teams[teamId]) {
     return { system: "Could not resolve a team for this session." }
   }
   const rows = teamTaskInputsFromPlan(plan)

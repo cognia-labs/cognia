@@ -157,26 +157,36 @@ export async function deletePlan(id: string): Promise<void> {
   })
 }
 
+/**
+ * Delete every plan of `sessionIds` with its events, recording sync
+ * tombstones, inside the CALLER's transaction — which must include
+ * `agentPlans`, `agentPlanEvents` and `syncTombstones`. The session delete
+ * cascades through this, so a conversation's plans never outlive it in the
+ * `@` picker, `plan_list` or boot recovery.
+ */
+export async function deletePlansForSessionsInTransaction(
+  db: ReturnType<typeof getDb>,
+  sessionIds: readonly string[],
+  at?: number
+): Promise<string[]> {
+  if (sessionIds.length === 0) return []
+  const ids = (await db.agentPlans
+    .where("sessionId")
+    .anyOf([...sessionIds])
+    .primaryKeys()) as string[]
+  if (ids.length === 0) return []
+  await db.agentPlanEvents.where("planId").anyOf(ids).delete()
+  await db.agentPlans.bulkDelete(ids)
+  await recordTombstones("plans", ids, at)
+  return ids
+}
+
 /** Cascade-delete every plan (and its events) for a given session. */
 export async function deletePlansForSession(sessionId: string): Promise<void> {
   await withDbReopenRetry(() => {
     const db = getDb()
     return db.transaction("rw", db.agentPlans, db.agentPlanEvents, db.syncTombstones, () =>
-      db.agentPlans
-        .where("sessionId")
-        .equals(sessionId)
-        .primaryKeys()
-        .then((ids) => {
-          if (ids.length === 0) return
-          return Promise.all([
-            db.agentPlanEvents
-              .where("planId")
-              .anyOf(ids as string[])
-              .delete(),
-            db.agentPlans.bulkDelete(ids as string[]),
-            recordTombstones("plans", ids as string[]),
-          ]).then(() => undefined)
-        })
+      deletePlansForSessionsInTransaction(db, [sessionId]).then(() => undefined)
     )
   })
 }

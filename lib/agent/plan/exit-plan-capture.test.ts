@@ -3,7 +3,7 @@ import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { __resetPlanRuntimeForTesting, getPlanRuntime } from "./runtime"
 import {
   captureExitPlanMode,
-  findExitPlanModeInput,
+  findExitPlanModeCall,
   parsePlanText,
   planInputFromExitPlanMode,
 } from "./exit-plan-capture"
@@ -119,9 +119,14 @@ function assistantEvt(toolName: string, input: unknown): SDKMessage {
   } as unknown as SDKMessage
 }
 
-describe("findExitPlanModeInput", () => {
-  it("returns the ExitPlanMode tool input", () => {
-    expect(findExitPlanModeInput(assistantEvt("ExitPlanMode", { plan: "- x" }))).toEqual({
+describe("findExitPlanModeCall", () => {
+  it("returns the ExitPlanMode tool input and id", () => {
+    const evt = {
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "t9", name: "ExitPlanMode", input: {} }] },
+    } as unknown as SDKMessage
+    expect(findExitPlanModeCall(evt)?.id).toBe("t9")
+    expect(findExitPlanModeCall(assistantEvt("ExitPlanMode", { plan: "- x" }))?.input).toEqual({
       plan: "- x",
     })
   })
@@ -129,20 +134,21 @@ describe("findExitPlanModeInput", () => {
   it("matches the ai-sdk exit_plan_mode and the namespaced cognia form", () => {
     // Non-Anthropic providers emit the cognia builtin name (flat or namespaced),
     // never the native PascalCase one — capture must recognise all three.
-    expect(findExitPlanModeInput(assistantEvt("exit_plan_mode", { plan: "- y" }))).toEqual({
+    expect(findExitPlanModeCall(assistantEvt("exit_plan_mode", { plan: "- y" }))?.input).toEqual({
       plan: "- y",
     })
     expect(
-      findExitPlanModeInput(assistantEvt("mcp__cognia-tools__exit_plan_mode", { plan: "- z" }))
+      findExitPlanModeCall(assistantEvt("mcp__cognia-tools__exit_plan_mode", { plan: "- z" }))
+        ?.input
     ).toEqual({ plan: "- z" })
   })
 
   it("returns null for other tools / non-assistant events / nameless blocks", () => {
-    expect(findExitPlanModeInput(assistantEvt("TodoWrite", {}))).toBeNull()
-    expect(findExitPlanModeInput({ type: "result" } as unknown as SDKMessage)).toBeNull()
+    expect(findExitPlanModeCall(assistantEvt("TodoWrite", {}))).toBeNull()
+    expect(findExitPlanModeCall({ type: "result" } as unknown as SDKMessage)).toBeNull()
     // A malformed tool_use block with no name must not throw.
     expect(
-      findExitPlanModeInput(assistantEvt(undefined as unknown as string, { plan: "- x" }))
+      findExitPlanModeCall(assistantEvt(undefined as unknown as string, { plan: "- x" }))
     ).toBeNull()
   })
 
@@ -156,9 +162,9 @@ describe("findExitPlanModeInput", () => {
         ],
       },
     } as unknown as SDKMessage
-    expect(findExitPlanModeInput(mixed)).toEqual({ plan: "- x" })
+    expect(findExitPlanModeCall(mixed)?.input).toEqual({ plan: "- x" })
     const noContent = { type: "assistant", message: {} } as unknown as SDKMessage
-    expect(findExitPlanModeInput(noContent)).toBeNull()
+    expect(findExitPlanModeCall(noContent)).toBeNull()
   })
 })
 
@@ -191,6 +197,25 @@ describe("captureExitPlanMode", () => {
     // And the dock becomes reachable — it's the session's open plan.
     const open = await getPlanRuntime().getOpenPlanForSession("ses_a")
     expect(open?.id).toBe(plan!.id)
+  })
+
+  it("captures one tool call once, however often its event arrives", async () => {
+    const evt = {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", id: "toolu_1", name: "ExitPlanMode", input: { plan: "- a" } },
+        ],
+      },
+    } as unknown as SDKMessage
+    const first = await captureExitPlanMode(evt, "ses_a")
+    expect(first?.metadata?.toolUseId).toBe("toolu_1")
+    await getPlanRuntime().approvePlan(first!.id)
+    const again = await captureExitPlanMode(evt, "ses_a")
+    expect(again?.id).toBe(first!.id)
+    // The repeat did not cancel the approved plan by "replacing" it.
+    expect((await getPlanRuntime().getPlan(first!.id))?.status).toBe("approved")
+    expect(await getPlanRuntime().listPlansBySession("ses_a")).toHaveLength(1)
   })
 
   it("returns null when there is no ExitPlanMode block", async () => {

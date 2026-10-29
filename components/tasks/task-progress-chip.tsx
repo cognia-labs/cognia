@@ -16,6 +16,7 @@ import { useTranslations } from "next-intl"
 
 import { useSessionPlan } from "@/hooks/agent/use-session-plan"
 import { useSessionTasks } from "@/hooks/chat/use-session-tasks"
+import { readChatHandoff } from "@/lib/agent/plan/chat-handoff"
 import { revealSessionPanel } from "@/lib/artifacts/reveal"
 import { SESSION_TASKS_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
 import { taskItemLabel } from "@/lib/tasks/task-view"
@@ -32,6 +33,16 @@ export function useSessionTaskChip(sessionId: string | null | undefined): TaskCh
   const plan = useSessionPlan(sessionId ?? undefined)
   const tasks = useSessionTasks(sessionId)
 
+  // A plan handed to one chat turn moves no steps; the agent's own list is its
+  // progress, so the chip speaks for that list under the plan's name.
+  if (plan && readChatHandoff(plan) && (plan.status === "executing" || plan.status === "paused")) {
+    if (plan.status === "paused") return { text: t("planHandoffPaused"), tone: "warning" }
+    if (tasks && !tasks.finished && tasks.progress.current) {
+      const { done, total, current } = tasks.progress
+      return { text: t("tasks", { done, total, step: taskItemLabel(current) }), tone: "default" }
+    }
+    return { text: t("planHandoff"), tone: "default" }
+  }
   if (plan && (plan.status === "executing" || plan.status === "paused")) {
     const done = plan.completedSteps
     const total = plan.totalSteps

@@ -12,6 +12,7 @@ import { preserveGeneratedVideoRecords } from "./files-library-items"
 import { clearTemporarySessionAssets } from "./session-assets"
 import { clearDraft } from "./chat-drafts"
 import { recordTombstones } from "@/lib/sync/tombstones"
+import { deletePlansForSessionsInTransaction } from "./plans"
 import { resolveScopeProjectId } from "./project-scope"
 import { getSettings } from "./settings"
 import { thinkingLevelPatch } from "@/lib/ai/thinking-level"
@@ -1222,6 +1223,8 @@ export async function bulkDeleteSessions(
         db.sessionPeerMessages,
         db.chatGoals,
         db.chatGoalEvents,
+        db.agentPlans,
+        db.agentPlanEvents,
         db.loops,
         db.loopEvents,
         db.syncTombstones,
@@ -1261,6 +1264,7 @@ export async function bulkDeleteSessions(
           await db.chatGoalEvents.where("goalId").anyOf(goalIds).delete()
           await db.chatGoals.bulkDelete(goalIds)
         }
+        await deletePlansForSessionsInTransaction(db, deletedIds, at)
 
         const loopRows = await db.loops.where("sessionId").anyOf(deletedIds).toArray()
         const loopIds = loopRows.map((row) => row.id)

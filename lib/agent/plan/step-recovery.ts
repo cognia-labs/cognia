@@ -15,6 +15,10 @@
  * `PlanRuntime.failInSessionStep`, so the tracker card offers retry / skip /
  * mark done / cancel.
  *
+ * A plan handed to a chat turn (`chat-handoff.ts`) is the same story with no
+ * step: its implementing turn died with the previous load, so it pauses with
+ * Resume / Mark done instead of reading "executing" forever.
+ *
  * Orchestrated plans are out of scope here: their steps belong to a workflow
  * run, which the workflow resume controller replays at boot.
  */
@@ -26,6 +30,7 @@ import {
   isOrphanedTurnDispatch,
   liveRendererBootIds,
 } from "./step-halt"
+import { readChatHandoff } from "./chat-handoff"
 import { currentInProgressStep } from "./steps"
 import { resolvePlanStrategy } from "./strategy"
 
@@ -54,6 +59,18 @@ export async function recoverOrphanedInSessionSteps(
   const live = await (options.liveBootIds ?? liveRendererBootIds)()
   let recovered = 0
   for (const plan of executing) {
+    const handoff = readChatHandoff(plan)
+    if (handoff) {
+      if (handoff.bootId === bootId || live?.has(handoff.bootId)) continue
+      if (plan.updatedAt >= bootedAt) continue
+      const paused = await runtime.settleChatHandoff(
+        plan.id,
+        "failed",
+        "the app restarted while the implementing turn was running"
+      )
+      if (paused?.status === "paused") recovered += 1
+      continue
+    }
     if (resolvePlanStrategy(plan) !== "in_session") continue
     // This load dispatched it (the watchdog owns it), or this load touched the
     // row after booting (a dispatch may be between its status write and its

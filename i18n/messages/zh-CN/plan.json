@@ -13,6 +13,7 @@
     "expand": "展开计划",
     "feedbackLabel": "对计划的反馈",
     "feedbackPlaceholder": "可选备注 —— 随“继续规划”发送，或用于 AI 优化…",
+    "handoffStopped": "执行计划的这一轮在完成前停止了。点击继续重新发送，或将计划标记为完成。",
     "interactive": {
       "addStep": "添加步骤",
       "deleteStep": "删除步骤",
@@ -126,6 +127,8 @@
     "cancel": "取消计划",
     "empty": "当前没有运行中的计划。",
     "haltedHint": "停在了某个步骤——请在输入框上方选择如何继续。",
+    "handoffPaused": "执行此计划的这一轮已停止。可在输入框上方的卡片中继续，或将计划标记为完成。",
+    "handoffRunning": "智能体正在按此计划执行，进度见上方的当前任务。",
     "pause": "暂停",
     "progress": "{total} 步中已完成 {completed} 步",
     "resume": "继续",

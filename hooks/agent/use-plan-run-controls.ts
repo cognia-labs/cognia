@@ -21,6 +21,7 @@ import { toast } from "sonner"
 
 import { useOptionalClaudeChat } from "@/hooks/chat/use-claude-chat"
 import { getPlanRuntime, type PlanContinueOutcome } from "@/lib/agent/plan/runtime"
+import { readChatHandoff } from "@/lib/agent/plan/chat-handoff"
 import { resolvePlanStrategy } from "@/lib/agent/plan/strategy"
 import { chatPlanStepHooks } from "@/lib/agent/plan/turn-driver"
 import { useChatStore } from "@/stores/chat"
@@ -32,12 +33,16 @@ export interface PlanRunControls {
   inSession: boolean
   /** The step an in-session plan is halted on, when paused on one. */
   halt: PlanStepHalt | undefined
+  /** Handed to one implementing chat turn (`chat-handoff.ts`), not stepped. */
+  handoff: boolean
   /** A chat surface is mounted that can send the plan's next turn. */
   canDispatch: boolean
   pause: () => void
   resume: () => void
   cancel: () => void
   continueWith: (action: PlanStepContinueAction) => void
+  /** A handed-off plan: the user says it is done. */
+  markDone: () => void
 }
 
 export function usePlanRunControls(
@@ -50,6 +55,7 @@ export function usePlanRunControls(
 
   const inSession = plan ? resolvePlanStrategy(plan) === "in_session" : false
   const halt = plan && plan.status === "paused" && inSession ? plan.stepHalt : undefined
+  const handoff = plan ? readChatHandoff(plan) !== null : false
 
   const run = async (action: () => Promise<unknown>) => {
     if (busy || !plan) return
@@ -103,6 +109,7 @@ export function usePlanRunControls(
     busy,
     inSession,
     halt,
+    handoff,
     canDispatch: Boolean(chat),
     pause: () => void run(() => getPlanRuntime().pausePlan(plan!.id)),
     resume: () =>
@@ -111,7 +118,10 @@ export function usePlanRunControls(
       void run(async () => {
         if (halt) await stopStalledTurn()
         await getPlanRuntime().cancelPlan(plan!.id)
+        // A handed-off plan IS the running turn: cancelling it stops the turn.
+        if (handoff) await stopStalledTurn()
       }),
     continueWith,
+    markDone: () => void run(() => getPlanRuntime().completeChatHandoff(plan!.id)),
   }
 }

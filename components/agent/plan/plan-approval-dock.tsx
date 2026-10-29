@@ -62,6 +62,7 @@ import { useSessionPanelShowing } from "@/hooks/artifacts/use-session-panel-show
 import { usePlanDecisionStore, type PlanDecisionHandlers } from "@/stores/agent/plan-decision-store"
 import { mobileTransition } from "@/lib/ui/motion"
 import { resolvePlanHtmlStyle } from "@/lib/agent/plan/plan-html"
+import { readChatHandoff } from "@/lib/agent/plan/chat-handoff"
 import { resolvePlanStrategy } from "@/lib/agent/plan/strategy"
 import { chatPlanStepHooks } from "@/lib/agent/plan/turn-driver"
 import { buildUtilityLlmClient } from "@/lib/ai/generation/utility-client"
@@ -157,16 +158,28 @@ export function PlanApprovalDock({
     void (async () => {
       // Resolution never throws: a broken override falls back to the shipped text.
       const prompt = await resolvePlanApprovedPrompt(promptContext)
+      let handedOff = false
       try {
         await getPlanRuntime().updatePlanDraft(planId, {
           metadata: { ...metadata, autoResumedAt: Date.now() },
         })
+        // The plan now runs as this turn (`chat-handoff.ts`): executing until
+        // the turn ends, then completed — or paused for a resume.
+        handedOff = Boolean(
+          await getPlanRuntime().startChatHandoff(planId, { prompt, mode: "acceptEdits" })
+        )
         await onResume(prompt, "acceptEdits")
       } catch {
         setLocalFailure({ planId, prompt, mode: "acceptEdits" })
-        await getPlanRuntime()
-          .setChatResumeFailure(planId, { prompt, mode: "acceptEdits" })
-          .catch(() => undefined)
+        if (handedOff) {
+          await getPlanRuntime()
+            .settleChatHandoff(planId, "failed")
+            .catch(() => undefined)
+        } else {
+          await getPlanRuntime()
+            .setChatResumeFailure(planId, { prompt, mode: "acceptEdits" })
+            .catch(() => undefined)
+        }
       }
     })()
   }, [plan, onResume, promptContext])
@@ -192,14 +205,39 @@ export function PlanApprovalDock({
   const handleRetryResume = async (snapshot: AgentPlan, failure: PlanChatResumeFailure) => {
     if (busy) return
     setPending({ planId: snapshot.id, kind: "decide" })
+    const handoff = readChatHandoff(snapshot)
     try {
       // Clear before sending; a failed metadata write cannot leave a stale
       // retry record behind after the model already accepted the continuation.
-      await getPlanRuntime().setChatResumeFailure(snapshot.id, null)
+      // A handed-off plan goes back to executing with it (only the new turn
+      // settles it).
+      if (handoff) await getPlanRuntime().resumeChatHandoff(snapshot.id)
+      else await getPlanRuntime().setChatResumeFailure(snapshot.id, null)
       await onResume(failure.prompt, failure.mode)
       setLocalFailure(null)
     } catch {
-      await rememberResumeFailure(snapshot.id, failure)
+      if (handoff) {
+        setLocalFailure({ ...failure, planId: snapshot.id })
+        await getPlanRuntime()
+          .settleChatHandoff(snapshot.id, "failed")
+          .catch(() => undefined)
+      } else {
+        await rememberResumeFailure(snapshot.id, failure)
+      }
+      setPending(null)
+    }
+  }
+
+  /** "Mark done" on a handed-off plan whose turn stopped: the user's verdict. */
+  const handleMarkDone = async (snapshot: AgentPlan) => {
+    if (busy) return
+    setPending({ planId: snapshot.id, kind: "decide" })
+    try {
+      await getPlanRuntime().completeChatHandoff(snapshot.id)
+      setLocalFailure(null)
+    } catch {
+      toast.error(t("stepFailure.actionFailed"))
+    } finally {
       setPending(null)
     }
   }
@@ -209,6 +247,7 @@ export function PlanApprovalDock({
     setPending({ planId: snapshot.id, kind: "decide" })
     let continuation: PlanChatResumeFailure | null = null
     let inSessionStep: { stepId: string; generationId: string } | null = null
+    let handedOff = false
     try {
       const current = await settledPlan(snapshot)
       // Which executor owns this plan is decided BEFORE approving, from the
@@ -236,8 +275,11 @@ export function PlanApprovalDock({
         }
       }
       // Orchestrated / exit-plan-mode parity: one implementing turn that asks
-      // the model to work the approved plan through itself.
+      // the model to work the approved plan through itself. The plan runs as
+      // that turn (`chat-handoff.ts`): executing now, completed when the turn
+      // ends cleanly, paused (Resume / Mark done) when it fails or is stopped.
       continuation = { prompt: await buildPlanApprovedPrompt(current, promptContext), mode }
+      handedOff = Boolean(await getPlanRuntime().startChatHandoff(current.id, continuation))
       await onResume(continuation.prompt, mode)
       // Leave `pending` set — approvePlan flips the status so this dock unmounts.
     } catch (error) {
@@ -251,6 +293,11 @@ export function PlanApprovalDock({
             detail: error instanceof Error ? error.message : String(error),
             capturedGenerationId: inSessionStep.generationId,
           })
+          .catch(() => undefined)
+      } else if (continuation && handedOff) {
+        setLocalFailure({ ...continuation, planId: snapshot.id })
+        await getPlanRuntime()
+          .settleChatHandoff(snapshot.id, "failed")
           .catch(() => undefined)
       } else if (continuation) {
         await rememberResumeFailure(snapshot.id, continuation)
@@ -385,10 +432,25 @@ export function PlanApprovalDock({
         role="alert"
         className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2"
       >
-        <p className="text-sm text-muted-foreground">{t("approval.resumeFailed")}</p>
-        <Button size="sm" disabled={busy} onClick={() => void handleRetryResume(plan, failure)}>
-          {t("tracker.resume")}
-        </Button>
+        <p className="text-sm text-muted-foreground">
+          {readChatHandoff(plan) ? t("approval.handoffStopped") : t("approval.resumeFailed")}
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          {readChatHandoff(plan) ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => void handleMarkDone(plan)}
+              data-testid="plan-handoff-mark-done"
+            >
+              {t("stepFailure.markDone")}
+            </Button>
+          ) : null}
+          <Button size="sm" disabled={busy} onClick={() => void handleRetryResume(plan, failure)}>
+            {t("tracker.resume")}
+          </Button>
+        </div>
       </Surface>
     )
   } else if (visible && plan && panelShowing) {

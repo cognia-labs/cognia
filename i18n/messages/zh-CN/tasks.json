@@ -1,11 +1,13 @@
 {
   "chip": {
     "open": "打开任务",
-    "planStep": "步骤 {done}/{total} · {step}",
+    "planHandoff": "正在执行计划",
+    "planHandoffPaused": "计划已暂停",
     "planPaused": "计划已暂停 · {done}/{total}",
     "planRunning": "计划执行中 · {done}/{total}",
-    "tasks": "{done}/{total} · {step}",
-    "stopped": "已停止 · {done}/{total}"
+    "planStep": "步骤 {done}/{total} · {step}",
+    "stopped": "已停止 · {done}/{total}",
+    "tasks": "{done}/{total} · {step}"
   },
   "completedFold": "已完成 {count} 项",
   "panel": {

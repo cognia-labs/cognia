@@ -32,14 +32,18 @@ describe("planStepsFromTeamTasks", () => {
     ])
     expect(steps[0].kind).toBe("teammate_dispatch")
     expect(steps[1].dependsOn).toEqual([0])
-    expect(steps[1].params).toEqual({ kind: "teammate_dispatch", teammateId: "mate1" })
+    expect(steps[1].params).toEqual({
+      kind: "teammate_dispatch",
+      teamId: "team1",
+      teammateId: "mate1",
+    })
   })
 
   it("drops 'any' assignment and unknown dep ids", () => {
     const steps = planStepsFromTeamTasks([
       task({ id: "a", assignedTo: "any", dependencies: ["ghost"] }),
     ])
-    expect(steps[0].params).toEqual({ kind: "teammate_dispatch" })
+    expect(steps[0].params).toEqual({ kind: "teammate_dispatch", teamId: "team1" })
     expect(steps[0].dependsOn).toBeUndefined()
   })
 

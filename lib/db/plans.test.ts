@@ -9,6 +9,7 @@ import {
   createPlan,
   deletePlan,
   deletePlansForSession,
+  deletePlansForSessionsInTransaction,
   getExecutingPlanForSession,
   getOpenPlanForSession,
   getPlan,
@@ -170,6 +171,34 @@ describe("cascade delete", () => {
     expect(await getPlan("p2")).toBeUndefined()
     expect(await getPlan("p3")).toBeDefined()
     expect(await countPlanEvents("p1")).toBe(0)
+  })
+
+  it("deletePlansForSessionsInTransaction cascades several sessions inside the caller's transaction", async () => {
+    await createPlan(buildPlan({ id: "p1", sessionId: "ses_a" }))
+    await createPlan(buildPlan({ id: "p2", sessionId: "ses_b" }))
+    await createPlan(buildPlan({ id: "p3", sessionId: "ses_c" }))
+    await appendPlanEvent({ planId: "p2", kind: "approved", payload: { kind: "approved" } })
+    const db = getDb()
+    const deleted = await db.transaction(
+      "rw",
+      db.agentPlans,
+      db.agentPlanEvents,
+      db.syncTombstones,
+      () => deletePlansForSessionsInTransaction(db, ["ses_a", "ses_b"], 42)
+    )
+    expect(deleted.sort()).toEqual(["p1", "p2"])
+    expect(await getPlan("p3")).toBeDefined()
+    expect(await countPlanEvents("p2")).toBe(0)
+    const tombstones = await db.syncTombstones.where("table").equals("plans").toArray()
+    expect(tombstones.map((row) => [row.id, row.deletedAt]).sort()).toEqual([
+      ["p1", 42],
+      ["p2", 42],
+    ])
+    await expect(
+      db.transaction("rw", db.agentPlans, db.agentPlanEvents, db.syncTombstones, () =>
+        deletePlansForSessionsInTransaction(db, [])
+      )
+    ).resolves.toEqual([])
   })
 
   it("deletePlansForSession is a no-op for an empty session", async () => {

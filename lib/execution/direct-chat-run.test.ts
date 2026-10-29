@@ -13,10 +13,34 @@ import {
   startDirectChatExecutionRun,
 } from "./direct-chat-run"
 
+const settlePlanChatHandoffAfterTurn = jest.fn(async (..._args: unknown[]) => undefined)
+jest.mock("@/lib/agent/plan/chat-handoff", () => ({
+  settlePlanChatHandoffAfterTurn: (...args: unknown[]) => settlePlanChatHandoffAfterTurn(...args),
+}))
+
 describe("direct chat execution run", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("settles a plan handed to the turn when the turn ends, once", async () => {
+    settlePlanChatHandoffAfterTurn.mockClear()
+    await startDirectChatExecutionRun({
+      sessionId: "session-plan",
+      runId: "run:session-plan:1",
+      startedAt: 5_000,
+    })
+    await finishDirectChatExecutionRun("session-plan", "cancelled", 6_000, "stopped")
+    await finishDirectChatExecutionRun("session-plan", "cancelled", 6_000, "stopped")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(settlePlanChatHandoffAfterTurn).toHaveBeenCalledTimes(1)
+    expect(settlePlanChatHandoffAfterTurn).toHaveBeenCalledWith(
+      "session-plan",
+      "cancelled",
+      5_000,
+      "stopped"
+    )
   })
 
   it("reports a turn as active only between start and finish", async () => {

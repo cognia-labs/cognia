@@ -38,7 +38,6 @@ import {
 } from "@/lib/router-fusion/gate/chat-events"
 import { routerFusionRefusalDiagnostic } from "@/lib/router-fusion/gate/refusal-diagnostic"
 import { ProviderResolutionError } from "@/lib/ai/provider-resolution-error"
-import { applyPlanModeBridge } from "@/lib/agent/plan-mode-bridge"
 import {
   isHeldInBackgroundOnly,
   isSessionOpen,
@@ -1296,7 +1295,6 @@ export async function handleEvent(
       if (env.event.type !== "stream_event") {
         try {
           const session = await getSession(sessionId)
-          applyPlanModeBridge(env.event, sessionId, session?.teamId)
           // Bridge SDK-native subagents (the `opts.agents` / Task-tool path used by
           // workflow-editor and direct chat) into the runtime store so they render
           // in the chat subagent tree alongside `dispatch_agent` runs.
@@ -1318,7 +1316,7 @@ export async function handleEvent(
           const { applyPlanToolCalls } = await import("@/lib/agent/plan/agent-tool-capture")
           await applyPlanToolCalls(env.event, sessionId, session?.characterId)
         } catch (err) {
-          console.warn("planModeBridge failed", err)
+          console.warn("plan capture failed", err)
         }
       }
 

@@ -1,11 +1,13 @@
 {
   "chip": {
     "open": "Open tasks",
-    "planStep": "Step {done}/{total} · {step}",
+    "planHandoff": "Working through the plan",
+    "planHandoffPaused": "Plan paused",
     "planPaused": "Plan paused · {done}/{total}",
     "planRunning": "Plan running · {done}/{total}",
-    "tasks": "{done}/{total} · {step}",
-    "stopped": "Stopped · {done}/{total}"
+    "planStep": "Step {done}/{total} · {step}",
+    "stopped": "Stopped · {done}/{total}",
+    "tasks": "{done}/{total} · {step}"
   },
   "completedFold": "{count} completed",
   "panel": {

@@ -36,6 +36,10 @@ const updatePlanDraft = jest.fn().mockResolvedValue(null)
 const startPlan = jest.fn().mockResolvedValue(null)
 const setChatResumeFailure = jest.fn().mockResolvedValue(null)
 const failInSessionStep = jest.fn().mockResolvedValue(null)
+const startChatHandoff = jest.fn().mockResolvedValue(null)
+const settleChatHandoff = jest.fn().mockResolvedValue(null)
+const resumeChatHandoff = jest.fn().mockResolvedValue(null)
+const completeChatHandoff = jest.fn().mockResolvedValue(null)
 // Decisions and edits re-read the row; by default it is whatever the live
 // query currently returns (see beforeEach).
 const getPlan = jest.fn()
@@ -51,6 +55,10 @@ jest.mock("@/lib/agent/plan/runtime", () => ({
     startPlan,
     setChatResumeFailure,
     failInSessionStep,
+    startChatHandoff,
+    settleChatHandoff,
+    resumeChatHandoff,
+    completeChatHandoff,
   }),
 }))
 
@@ -799,6 +807,73 @@ describe("PlanApprovalDock Prompt Center wording", () => {
       render(<PlanApprovalDock sessionId="ses" onResume={jest.fn()} />)
       act(() => usePlanDecisionStore.getState().owners.ses!.handlers.openEditor())
       expect(await screen.findByTestId("plan-editor-stub")).toHaveAttribute("data-edit", "p1")
+    })
+  })
+
+  describe("an approved plan handed to the implementing turn", () => {
+    const handoff = { prompt: "Implement it", mode: "acceptEdits", startedAt: 1, bootId: "b" }
+
+    it("records the handoff before it sends the turn", async () => {
+      mockPlan.mockReturnValue(plan())
+      const order: string[] = []
+      startChatHandoff.mockImplementationOnce(async () => {
+        order.push("handoff")
+        return plan({ status: "executing" })
+      })
+      const onResume = jest.fn(async () => {
+        order.push("resume")
+      })
+      render(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+      await userEvent.click(screen.getByTestId("plan-approval-approve-auto"))
+      await waitFor(() => expect(order).toEqual(["handoff", "resume"]))
+      expect(startChatHandoff).toHaveBeenCalledWith("p1", {
+        prompt: PLAN_APPROVED_PROMPT,
+        mode: "acceptEdits",
+      })
+    })
+
+    it("pauses the handed-off plan when the turn cannot be sent", async () => {
+      mockPlan.mockReturnValue(plan())
+      startChatHandoff.mockResolvedValueOnce(plan({ status: "executing" }))
+      const onResume = jest.fn().mockRejectedValue(new Error("host unavailable"))
+      render(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+      await userEvent.click(screen.getByTestId("plan-approval-approve-auto"))
+      await waitFor(() => expect(settleChatHandoff).toHaveBeenCalledWith("p1", "failed"))
+      expect(setChatResumeFailure).not.toHaveBeenCalled()
+    })
+
+    it("offers Resume and Mark done on a handoff whose turn stopped", async () => {
+      mockPlan.mockReturnValue(
+        plan({
+          status: "paused",
+          metadata: {
+            chatHandoff: handoff,
+            chatResumeFailure: { prompt: "Implement it", mode: "acceptEdits" },
+          },
+        })
+      )
+      const onResume = jest.fn()
+      render(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+      expect(screen.getByText("approval.handoffStopped")).toBeInTheDocument()
+      await userEvent.click(screen.getByRole("button", { name: "tracker.resume" }))
+      await waitFor(() => expect(onResume).toHaveBeenCalledWith("Implement it", "acceptEdits"))
+      expect(resumeChatHandoff).toHaveBeenCalledWith("p1")
+      expect(setChatResumeFailure).not.toHaveBeenCalled()
+    })
+
+    it("marks a stopped handoff done", async () => {
+      mockPlan.mockReturnValue(
+        plan({
+          status: "paused",
+          metadata: {
+            chatHandoff: handoff,
+            chatResumeFailure: { prompt: "Implement it", mode: "acceptEdits" },
+          },
+        })
+      )
+      render(<PlanApprovalDock sessionId="ses" onResume={jest.fn()} />)
+      await userEvent.click(screen.getByTestId("plan-handoff-mark-done"))
+      await waitFor(() => expect(completeChatHandoff).toHaveBeenCalledWith("p1"))
     })
   })
 })

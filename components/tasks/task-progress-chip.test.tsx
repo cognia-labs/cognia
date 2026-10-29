@@ -85,6 +85,37 @@ describe("useSessionTaskChip", () => {
   })
 })
 
+describe("useSessionTaskChip — a plan handed to the chat turn", () => {
+  const handoff = { prompt: "go", mode: "acceptEdits", startedAt: 1, bootId: "b" }
+
+  it("speaks for the agent's list while the turn works the plan", () => {
+    mockPlan = {
+      status: "executing",
+      completedSteps: 0,
+      totalSteps: 4,
+      steps: [],
+      metadata: { chatHandoff: handoff },
+    }
+    expect(chip()?.text).toBe("planHandoff")
+    mockTasks = tasks([
+      { id: "1", title: "a", status: "completed" },
+      { id: "2", title: "b", status: "in_progress" },
+    ])
+    expect(chip()?.text).toBe('tasks:{"done":1,"total":2,"step":"b"}')
+  })
+
+  it("warns when the turn stopped", () => {
+    mockPlan = {
+      status: "paused",
+      completedSteps: 0,
+      totalSteps: 4,
+      steps: [],
+      metadata: { chatHandoff: handoff },
+    }
+    expect(chip()).toEqual({ text: "planHandoffPaused", tone: "warning" })
+  })
+})
+
 describe("TaskProgressChip", () => {
   it("opens the Tasks panel", () => {
     render(<TaskProgressChip sessionId="s1" model={{ text: "1/2 · b", tone: "default" }} />)

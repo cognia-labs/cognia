@@ -30,6 +30,11 @@ jest.mock("./plan-settings", () => ({
   loadPlanConfigDefaults: () => loadPlanConfigDefaults(),
 }))
 
+const listPlansBySession = jest.fn(async (_sessionId: string) => [] as AgentPlan[])
+jest.mock("@/lib/db/plans", () => ({
+  listPlansBySession: (sessionId: string) => listPlansBySession(sessionId),
+}))
+
 function toolEvent(name: string, input: unknown): SDKMessage {
   return {
     type: "assistant",
@@ -207,6 +212,22 @@ describe("applyPlanToolCalls", () => {
       characterId: "char_1",
     })
     expect(res?.created).toBeTruthy()
+  })
+
+  it("stamps the tool call id and never creates the same call's plan twice", async () => {
+    await applyPlanToolCalls(toolEvent("create_plan", { title: "Ship", steps: ["a"] }), "ses")
+    expect(createPlan.mock.calls[0][0]).toMatchObject({ metadata: { toolUseId: "tu_1" } })
+
+    createPlan.mockClear()
+    listPlansBySession.mockResolvedValueOnce([
+      plan({ id: "p-seen", metadata: { toolUseId: "tu_1" } }),
+    ])
+    const res = await applyPlanToolCalls(
+      toolEvent("create_plan", { title: "Ship", steps: ["a"] }),
+      "ses"
+    )
+    expect(createPlan).not.toHaveBeenCalled()
+    expect(res?.created?.id).toBe("p-seen")
   })
 
   it("routes an update without planId to the session's open plan", async () => {

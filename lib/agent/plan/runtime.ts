@@ -70,8 +70,8 @@ import { loggers } from "@cognia/logging"
 import {
   applyStepStatus,
   currentInProgressStep,
-  linearAgentTurnSteps,
   materializeSteps,
+  refinedStepInputs,
   skipStepInDag,
 } from "./steps"
 import { findPlanPiiLeak } from "./pii-gate"
@@ -89,7 +89,8 @@ import {
   notifyPlanStepHalted,
   notifyPlanTerminal,
 } from "./notify"
-import { haltTrailReason } from "./step-halt"
+import { readChatHandoff, type PlanChatHandoff } from "./chat-handoff"
+import { haltTrailReason, holdPlanRendererLock, PLAN_RENDERER_BOOT_ID } from "./step-halt"
 import { disarmPlanStepWatch } from "./step-watchdog"
 import type { PlanTurnHookDeps } from "./turn-driver"
 import { usePendingGatesStore } from "@/stores/agent/pending-gates-store"
@@ -153,6 +154,21 @@ export type PlanContinueOutcome =
 /** Merge a partial config over the defaults. */
 export function resolvePlanConfig(overrides: Partial<PlanConfig> = {}): PlanConfig {
   return { ...DEFAULT_PLAN_CONFIG, ...overrides }
+}
+
+/** Statuses a refinement may rewrite (see {@link PlanRuntime.refinePlan}). */
+const REFINABLE_PLAN_STATUSES: ReadonlySet<PlanStatus> = new Set<PlanStatus>([
+  "draft",
+  "awaiting_approval",
+  "approved",
+  "paused",
+  "failed",
+])
+
+/** Metadata that describes a run, not the plan; dropped when the plan is re-planned. */
+function withoutRunMetadata(metadata: AgentPlan["metadata"]): Record<string, unknown> {
+  const { chatHandoff: _handoff, chatResumeFailure: _failure, ...rest } = metadata ?? {}
+  return rest
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -307,6 +323,118 @@ class PlanRuntime {
   }
 
   /**
+   * Hand an approved plan to the chat's implementing turn (`chat-handoff.ts`):
+   * `approved` → `executing`, stamped with the turn's prompt and mode so the
+   * turn's end can settle it and a failure can be resumed. No-op unless the
+   * plan is `approved`.
+   */
+  async startChatHandoff(
+    planId: string,
+    turn: Pick<PlanChatHandoff, "prompt" | "mode">
+  ): Promise<AgentPlan | null> {
+    const current = await getPlan(planId)
+    if (!current) return null
+    if (current.status !== "approved") return current
+    // Stamped with this load's boot id: hold its liveness lock so another
+    // window's boot recovery reads the turn as alive.
+    holdPlanRendererLock()
+    const handoff: PlanChatHandoff = {
+      prompt: turn.prompt,
+      mode: turn.mode,
+      startedAt: Date.now(),
+      bootId: PLAN_RENDERER_BOOT_ID,
+    }
+    const { chatResumeFailure: _failure, ...metadata } = current.metadata ?? {}
+    await updatePlan(planId, {
+      status: "executing",
+      generationId: crypto.randomUUID(),
+      metadata: { ...metadata, chatHandoff: handoff },
+    })
+    await appendPlanEvent({ planId, kind: "resumed", payload: { kind: "resumed" } })
+    const updated = (await getPlan(planId)) ?? null
+    void emitPlanStatus(updated)
+    return updated
+  }
+
+  /**
+   * The implementing turn of a handed-off plan ended. Clean end → `completed`.
+   * Failed or stopped → `paused`, keeping the turn as `chatResumeFailure` so
+   * the approval dock offers Resume (send it again) or Mark done.
+   */
+  async settleChatHandoff(
+    planId: string,
+    outcome: "completed" | "failed" | "cancelled",
+    detail?: string
+  ): Promise<AgentPlan | null> {
+    const current = await getPlan(planId)
+    if (!current) return null
+    const handoff = readChatHandoff(current)
+    if (!handoff || current.status !== "executing") return current
+    if (outcome === "completed") {
+      await this.finishPlanRun(planId, "completed", "the implementing turn finished")
+      return (await getPlan(planId)) ?? null
+    }
+    await updatePlan(planId, {
+      status: "paused",
+      generationId: crypto.randomUUID(),
+      metadata: {
+        ...current.metadata,
+        chatResumeFailure: { prompt: handoff.prompt, mode: handoff.mode },
+      },
+    })
+    await appendPlanEvent({ planId, kind: "paused", payload: { kind: "paused" } })
+    if (detail) loggers.agent.info(`Plan ${planId} paused: implementing turn ${outcome}: ${detail}`)
+    const updated = (await getPlan(planId)) ?? null
+    void emitPlanStatus(updated)
+    return updated
+  }
+
+  /**
+   * Re-run a paused handed-off plan's implementing turn: `paused` → `executing`
+   * with a fresh start time (so only the new turn settles it) and the failure
+   * record cleared. The caller sends the turn.
+   */
+  async resumeChatHandoff(planId: string): Promise<AgentPlan | null> {
+    const current = await getPlan(planId)
+    if (!current) return null
+    const handoff = readChatHandoff(current)
+    if (!handoff || current.status !== "paused") return current
+    holdPlanRendererLock()
+    const { chatResumeFailure: _failure, ...metadata } = current.metadata ?? {}
+    await updatePlan(planId, {
+      status: "executing",
+      generationId: crypto.randomUUID(),
+      metadata: {
+        ...metadata,
+        chatHandoff: { ...handoff, startedAt: Date.now(), bootId: PLAN_RENDERER_BOOT_ID },
+      },
+    })
+    await appendPlanEvent({ planId, kind: "resumed", payload: { kind: "resumed" } })
+    const updated = (await getPlan(planId)) ?? null
+    void emitPlanStatus(updated)
+    return updated
+  }
+
+  /**
+   * The user says a handed-off plan is done (whatever the last turn did):
+   * executing or paused → `completed`.
+   */
+  async completeChatHandoff(planId: string): Promise<AgentPlan | null> {
+    const current = await getPlan(planId)
+    if (!current) return null
+    if (!readChatHandoff(current)) return current
+    if (current.status !== "executing" && current.status !== "paused") return current
+    if (current.status === "paused") {
+      // `finishPlanRun` leaves a paused plan alone (a pause is the user's);
+      // marking it done is the user's too, so lift the pause first.
+      const { chatResumeFailure: _failure, ...metadata } = current.metadata ?? {}
+      await updatePlan(planId, { status: "executing", metadata })
+    }
+    await this.finishPlanRun(planId, "completed", "marked done")
+    return (await getPlan(planId)) ?? null
+  }
+
+  /**
    * Approve a plan for execution (draft / awaiting_approval / approved →
    * `approved`). The actual run is kicked off by `runPlan` (P2). No-op when the
    * plan is already executing or terminal.
@@ -415,6 +543,10 @@ class PlanRuntime {
     const current = await getPlan(planId)
     if (!current) return null
     if (current.status !== "paused") return current
+    // A handed-off plan resumes by sending its turn again, which only a chat
+    // surface can do (`resumeChatHandoff` + the approval dock). Flipping it to
+    // `executing` here would leave a plan nothing drives.
+    if (readChatHandoff(current)) return current
     if (resolvePlanStrategy(current) === "in_session") {
       await this.continueInSessionPlan(planId, "resume")
       return (await getPlan(planId)) ?? null
@@ -911,7 +1043,13 @@ class PlanRuntime {
   ): Promise<AgentPlan | null> {
     const current = await getPlan(request.planId)
     if (!current) return null
-    if (current.status === "cancelled" || current.status === "completed") return current
+    // A refinement sends the plan back through approval, so it applies to a
+    // plan that is not running and can still be decided on: a draft, one
+    // awaiting / given approval, a paused one, or a failed run being repaired
+    // (the `step_failure` auto-repair runs after `finishPlanRun(failed)`).
+    // Never to a running plan — the orchestrator or the chat turn owns its
+    // steps — nor to a verdict (`rejected`) or a closed run.
+    if (!REFINABLE_PLAN_STATUSES.has(current.status)) return current
 
     // Auto triggers respect the refinement budget; manual is always allowed.
     if (
@@ -949,13 +1087,13 @@ class PlanRuntime {
 
     const nextText = planText ? rebuildPlanText(planText, result.titles) : null
     const steps = materializeSteps(
-      linearAgentTurnSteps(nextText ? projectStepTitles(nextText) : result.titles)
+      refinedStepInputs(current.steps, nextText ? projectStepTitles(nextText) : result.titles)
     )
     const counts = computePlanCounts(steps)
     await updatePlan(request.planId, {
       steps,
       metadata: {
-        ...current.metadata,
+        ...withoutRunMetadata(current.metadata),
         userEdited: true,
         ...(nextText ? { planText: nextText } : {}),
       },

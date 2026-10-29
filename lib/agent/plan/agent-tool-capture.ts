@@ -7,8 +7,8 @@
  * The sidecar tools (`sidecar/src/tools/builtin/plan/plan-tools.ts`) deliberately do
  * no work: the sidecar cannot import `lib/`, so it cannot touch Dexie or the
  * plan runtime. This module is the renderer half — it reads the tool_use
- * blocks out of the SDK event stream exactly as `captureExitPlanMode` and
- * `applyPlanModeBridge` do, and performs the write through `PlanRuntime`. That
+ * blocks out of the SDK event stream exactly as `captureExitPlanMode` does, and
+ * performs the write through `PlanRuntime`. That
  * keeps the one-open-plan-per-session invariant, the event log, the approval
  * dock, the tracker and the unified runs list identical for an agent-authored
  * plan and a human-authored one.
@@ -21,6 +21,7 @@
 import type { SDKAssistantMessage, SDKMessage, BetaToolUseBlock } from "@cognia/agent-config-types"
 import { linearAgentTurnSteps, materializeSteps } from "./steps"
 import { validatePlanStepParams } from "./step-params"
+import { findPlanCapturedFrom } from "./exit-plan-capture"
 import type {
   AgentPlan,
   CreatePlanInput,
@@ -58,6 +59,8 @@ const EXECUTION_MODES: readonly PlanExecutionMode[] = ["in_session", "orchestrat
 export interface PlanToolCall {
   tool: "create" | "update"
   input: Record<string, unknown>
+  /** The tool_use id — a repeated event must not create the plan twice. */
+  id?: string
 }
 
 function bare(name: string | undefined): string {
@@ -81,7 +84,7 @@ export function findPlanToolCalls(evt: SDKMessage): PlanToolCall[] {
       tu.input && typeof tu.input === "object" && !Array.isArray(tu.input)
         ? (tu.input as Record<string, unknown>)
         : {}
-    out.push({ tool, input })
+    out.push({ tool, input, ...(typeof tu.id === "string" && tu.id ? { id: tu.id } : {}) })
   }
   return out
 }
@@ -213,7 +216,16 @@ export async function applyPlanToolCalls(
         ...(config ? { config } : {}),
       })
       if (!planInput) continue
-      result.created = await runtime.createPlan(planInput)
+      const already = await findPlanCapturedFrom(sessionId, call.id)
+      if (already) {
+        result.created = already
+        continue
+      }
+      result.created = await runtime.createPlan(
+        call.id
+          ? { ...planInput, metadata: { ...planInput.metadata, toolUseId: call.id } }
+          : planInput
+      )
       continue
     }
 

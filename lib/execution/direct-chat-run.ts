@@ -33,6 +33,8 @@ export interface StartDirectChatExecutionRunInput {
 
 interface ActiveDirectChatRun {
   runId: string
+  /** When the turn started; a plan handed off after it is not its to settle. */
+  startedAt: number
   producer: AgentRunEventProducer
   toolCalls: Map<string, { name: string; input: Record<string, unknown> }>
   seenToolCalls: Set<string>
@@ -85,6 +87,7 @@ export async function startDirectChatExecutionRun(
   })
   activeRuns.set(input.sessionId, {
     runId: input.runId,
+    startedAt,
     producer,
     toolCalls: new Map(),
     seenToolCalls: new Set(),
@@ -225,6 +228,11 @@ export async function finishDirectChatExecutionRun(
   const active = activeRuns.get(sessionId)
   if (!active) return
   activeRuns.delete(sessionId)
+  // A plan approved in chat was handed to this turn (ADR-0045): its end is the
+  // plan's end too — done, or paused for a resume. Every lane's turn ends here.
+  void import("@/lib/agent/plan/chat-handoff").then(({ settlePlanChatHandoffAfterTurn }) =>
+    settlePlanChatHandoffAfterTurn(sessionId, status, active.startedAt, summary)
+  )
   // Recorded here rather than at each of the four call sites in the chat hook:
   // every terminal path already funnels through this function, so this is the
   // one place a failed turn cannot be sealed without saying it failed.

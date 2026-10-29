@@ -10,6 +10,7 @@ import {
   readPlanChatResumeFailure,
 } from "./runtime"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
+import { readChatHandoff } from "./chat-handoff"
 
 // Partial mock of the platform leaf so `isTauri` is controllable while every
 // other export keeps its real implementation (the db layer may use them). The
@@ -551,6 +552,73 @@ describe("refinePlan", () => {
     expect(kinds).toEqual(expect.arrayContaining(["refined", "replanned"]))
   })
 
+  it("refuses a running plan, a rejected one and a closed run", async () => {
+    const rt = getPlanRuntime()
+    const client = fakeClient('{"steps":["x"],"reasoning":"r"}')
+    const running = await rt.createPlan(createInput({ sessionId: "ses_run" }))
+    await rt.approvePlan(running.id)
+    await rt.startPlan(running.id)
+    const rejected = await rt.createPlan(createInput({ sessionId: "ses_rej" }))
+    await rt.rejectPlan(rejected.id)
+    for (const plan of [running, rejected]) {
+      const before = await rt.getPlan(plan.id)
+      const after = await rt.refinePlan(
+        { planId: plan.id, refinementType: "optimize", trigger: "manual" },
+        client as never
+      )
+      expect(after?.status).toBe(before?.status)
+      expect(after?.refinementCount).toBe(0)
+    }
+    expect(client.complete).not.toHaveBeenCalled()
+  })
+
+  it("keeps step kinds and params a refinement did not retitle", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(
+      createInput({
+        steps: [
+          {
+            title: "Ask the reviewer",
+            kind: "teammate_dispatch",
+            params: { kind: "teammate_dispatch", teamId: "t1" },
+          },
+          {
+            title: "Gate",
+            kind: "approval_gate",
+            params: { kind: "approval_gate", prompt: "ok?" },
+            dependsOn: [0],
+          },
+        ],
+      })
+    )
+    const refined = await rt.refinePlan(
+      { planId: plan.id, refinementType: "expand", trigger: "manual" },
+      fakeClient('{"steps":["Ask the reviewer","Write notes","Gate"],"reasoning":"r"}') as never
+    )
+    expect(refined?.steps.map((s) => s.kind)).toEqual([
+      "teammate_dispatch",
+      "agent_turn",
+      "approval_gate",
+    ])
+    expect(refined?.steps[0]?.params).toEqual({ kind: "teammate_dispatch", teamId: "t1" })
+    expect(refined?.steps[2]?.dependencies).toEqual([refined!.steps[0]!.id])
+  })
+
+  it("clears a handoff's run state when it sends the plan back for approval", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput({ source: "exit_plan_mode" }))
+    await rt.approvePlan(plan.id)
+    await rt.startChatHandoff(plan.id, { prompt: "go", mode: "default" })
+    await rt.settleChatHandoff(plan.id, "failed")
+    const refined = await rt.refinePlan(
+      { planId: plan.id, refinementType: "repair", trigger: "manual" },
+      fakeClient('{"steps":["fixed"],"reasoning":"r"}') as never
+    )
+    expect(refined?.status).toBe("awaiting_approval")
+    expect(refined?.metadata?.chatHandoff).toBeUndefined()
+    expect(refined?.metadata?.chatResumeFailure).toBeUndefined()
+  })
+
   it("stamps userEdited so the approval prompt embeds the refined plan", async () => {
     const rt = getPlanRuntime()
     const plan = await rt.createPlan(createInput())
@@ -818,6 +886,88 @@ describe("chat resume failure recovery", () => {
       })
     ).toBeNull()
     await expect(runtime.setChatResumeFailure("missing", null)).resolves.toBeUndefined()
+  })
+})
+
+describe("chat handoff (approved plan worked through by one chat turn)", () => {
+  const turn = { prompt: "Implement the approved plan.", mode: "acceptEdits" as const }
+
+  async function approved() {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput({ source: "exit_plan_mode" }))
+    await rt.approvePlan(plan.id)
+    return plan.id
+  }
+
+  it("moves an approved plan to executing with the turn recorded", async () => {
+    const rt = getPlanRuntime()
+    const id = await approved()
+    const started = await rt.startChatHandoff(id, turn)
+    expect(started?.status).toBe("executing")
+    expect(readChatHandoff(started!)).toMatchObject({ ...turn, startedAt: expect.any(Number) })
+    // Only from `approved`: a second call is a no-op.
+    const again = await rt.startChatHandoff(id, turn)
+    expect(again?.metadata?.chatHandoff).toEqual(started?.metadata?.chatHandoff)
+  })
+
+  it("completes when the turn ends cleanly", async () => {
+    const rt = getPlanRuntime()
+    const id = await approved()
+    await rt.startChatHandoff(id, turn)
+    const done = await rt.settleChatHandoff(id, "completed")
+    expect(done?.status).toBe("completed")
+    expect((await listPlanEvents(id)).map((e) => e.kind)).toContain("exit")
+  })
+
+  it("pauses with a resumable continuation when the turn fails or is stopped", async () => {
+    const rt = getPlanRuntime()
+    for (const outcome of ["failed", "cancelled"] as const) {
+      const id = await approved()
+      await rt.startChatHandoff(id, turn)
+      const paused = await rt.settleChatHandoff(id, outcome, "boom")
+      expect(paused?.status).toBe("paused")
+      expect(readPlanChatResumeFailure(paused!)).toEqual(turn)
+    }
+  })
+
+  it("resumes with a fresh start and the failure cleared, and only the chat may resume it", async () => {
+    const rt = getPlanRuntime()
+    const id = await approved()
+    const started = await rt.startChatHandoff(id, turn)
+    await rt.settleChatHandoff(id, "failed")
+    // `resumePlan` cannot send the turn: it leaves a handed-off plan paused.
+    expect((await rt.resumePlan(id))?.status).toBe("paused")
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    const resumed = await rt.resumeChatHandoff(id)
+    expect(resumed?.status).toBe("executing")
+    expect(readPlanChatResumeFailure(resumed!)).toBeNull()
+    expect(readChatHandoff(resumed!)!.startedAt).toBeGreaterThan(
+      readChatHandoff(started!)!.startedAt
+    )
+  })
+
+  it("marks a running or paused handoff done", async () => {
+    const rt = getPlanRuntime()
+    const running = await approved()
+    await rt.startChatHandoff(running, turn)
+    expect((await rt.completeChatHandoff(running))?.status).toBe("completed")
+
+    const paused = await approved()
+    await rt.startChatHandoff(paused, turn)
+    await rt.settleChatHandoff(paused, "failed")
+    const done = await rt.completeChatHandoff(paused)
+    expect(done?.status).toBe("completed")
+    expect(readPlanChatResumeFailure(done!)).toBeNull()
+  })
+
+  it("leaves plans that were not handed off alone", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput())
+    await rt.approvePlan(plan.id)
+    await rt.startPlan(plan.id)
+    expect((await rt.settleChatHandoff(plan.id, "completed"))?.status).toBe("executing")
+    expect((await rt.completeChatHandoff(plan.id))?.status).toBe("executing")
+    expect(await rt.startChatHandoff("missing", turn)).toBeNull()
   })
 })
 

@@ -29,7 +29,6 @@ import { getSession } from "@/lib/db/sessions"
 import { useSettingsStore } from "@/stores/settings"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { createWorkflow, getWorkflow, listWorkflows } from "@/lib/db/workflows"
-import { soloTeamId } from "@/lib/agent/plan-mode-bridge"
 import { dispatchPlanSubcommand } from "./plan"
 import type { SlashContext } from "../builtin"
 import type { AgentPlan, CreatePlanInput } from "@/types/agent/plan"
@@ -348,9 +347,10 @@ describe("/plan from-goal — goal_projection", () => {
 })
 
 describe("/plan from-team — team_projection", () => {
-  const team = { id: soloTeamId("ses_a"), name: "Solo tasks", description: "bridge tasks" }
+  const team = { id: "team_a", name: "Team tasks", description: "team tasks" }
 
-  it("projects the solo bridge team's tasks into teammate_dispatch steps", async () => {
+  it("projects the session team's tasks into runnable teammate_dispatch steps", async () => {
+    getSessionMock.mockResolvedValue({ id: "ses_a", teamId: team.id })
     teamStateMock.mockReturnValue({
       teams: { [team.id]: team },
       tasks: {
@@ -380,9 +380,14 @@ describe("/plan from-team — team_projection", () => {
     expect(input.source).toBe("team_projection")
     expect(input.executionMode).toBe("orchestrated")
     expect(input.steps.map((s) => s.title)).toEqual(["first", "second"])
-    // `assignedTo: "any"` is not a teammate id and must not be pinned.
-    expect(input.steps[0].params).toEqual({ kind: "teammate_dispatch" })
-    expect(input.steps[1].params).toEqual({ kind: "teammate_dispatch", teammateId: "mate_a" })
+    // `assignedTo: "any"` is not a teammate id and must not be pinned; every
+    // step names its team, which the dispatcher requires to run it.
+    expect(input.steps[0].params).toEqual({ kind: "teammate_dispatch", teamId: team.id })
+    expect(input.steps[1].params).toEqual({
+      kind: "teammate_dispatch",
+      teamId: team.id,
+      teammateId: "mate_a",
+    })
     // Dependencies survive as index refs into the ordered list.
     expect(input.steps[1].dependsOn).toEqual([0])
     expect(res.system).toContain("projected from the team task list")
@@ -391,7 +396,7 @@ describe("/plan from-team — team_projection", () => {
   /**
    * ADR-0140 binds a conversation to a Squad with `ChatSession.squadId`, which
    * is where its task DAG actually lives. Reading only `teamId` sent every
-   * Squad-bound conversation to the synthetic solo team, so `/plan from-team`
+   * Squad-bound conversation to a team it was not handed to, so `/plan from-team`
    * reported "no team tasks" for a Squad that had them.
    */
   it("prefers the Squad the conversation is handed to", async () => {
@@ -406,7 +411,7 @@ describe("/plan from-team — team_projection", () => {
     })
   })
 
-  it("prefers the session's own team over the solo bridge team", async () => {
+  it("uses the session's own team when it is not handed to a Squad", async () => {
     getSessionMock.mockResolvedValue({ id: "ses_a", teamId: "team_real" })
     teamStateMock.mockReturnValue({
       teams: { team_real: { id: "team_real", name: "Real team" } },
@@ -418,13 +423,14 @@ describe("/plan from-team — team_projection", () => {
     })
   })
 
-  it("explains how to populate the team when it does not exist", async () => {
+  it("explains that a plain chat has no team to project", async () => {
     const res = await dispatchPlanSubcommand(ctx({ args: "from-team" }))
     expect(res.system).toMatch(/No team tasks/)
     expect(createPlan).not.toHaveBeenCalled()
   })
 
   it("reports an empty team instead of creating a zero-step plan", async () => {
+    getSessionMock.mockResolvedValue({ id: "ses_a", teamId: team.id })
     teamStateMock.mockReturnValue({ teams: { [team.id]: team }, tasks: {} })
     const res = await dispatchPlanSubcommand(ctx({ args: "from-team" }))
     expect(res.system).toMatch(/no tasks to project/)
@@ -434,12 +440,13 @@ describe("/plan from-team — team_projection", () => {
 
 describe("/plan to-team — reverse projection", () => {
   const upsertTask = jest.fn()
-  const teamId = soloTeamId("ses_a")
+  const teamId = "team_a"
 
   beforeEach(() => {
     upsertTask.mockReset()
+    getSessionMock.mockResolvedValue({ id: "ses_a", teamId })
     teamStateMock.mockReturnValue({
-      teams: { [teamId]: { id: teamId, name: "Solo tasks" } },
+      teams: { [teamId]: { id: teamId, name: "Team tasks" } },
       tasks: {},
       upsertTask,
     })
@@ -477,8 +484,7 @@ describe("/plan to-team — reverse projection", () => {
   })
 
   it("reports a team it could not resolve rather than dropping the steps", async () => {
-    // The session points at a real (non-solo) team that is no longer in the
-    // store, so `ensureSoloTeam` correctly declines to fabricate one. Writing
+    // The session points at a team that is no longer in the store. Writing
     // tasks against a missing team would silently lose them.
     getSessionMock.mockResolvedValue({ id: "ses_a", teamId: "team_deleted" })
     teamStateMock.mockReturnValue({ teams: {}, tasks: {}, upsertTask })

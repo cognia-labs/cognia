@@ -61,6 +61,8 @@ async function seed(over: Partial<AgentPlan> = {}): Promise<AgentPlan> {
     refinementCount: 0,
     generationId: over.generationId ?? "gen-old",
     ...(over.turnDispatch ? { turnDispatch: over.turnDispatch } : {}),
+    ...(over.metadata ? { metadata: over.metadata } : {}),
+    ...(over.source ? { source: over.source } : {}),
   })
 }
 
@@ -139,6 +141,43 @@ describe("recoverOrphanedInSessionSteps", () => {
     expect(await recoverOrphanedInSessionSteps(later())).toBe(0)
     expect((await getPlan(orchestrated.id))?.status).toBe("executing")
     expect((await getPlan(paused.id))?.stepHalt).toBeUndefined()
+  })
+})
+
+describe("recoverOrphanedInSessionSteps — plans handed to a chat turn", () => {
+  const handoff = (bootId: string) => ({
+    chatHandoff: { prompt: "Implement it", mode: "acceptEdits", startedAt: 1, bootId },
+  })
+
+  it("pauses a handoff whose turn died with a previous load, resumable", async () => {
+    const plan = await seed({
+      executionMode: "orchestrated",
+      source: "exit_plan_mode",
+      metadata: handoff("gone"),
+    })
+    expect(await recoverOrphanedInSessionSteps(later())).toBe(1)
+    const row = await getPlan(plan.id)
+    expect(row?.status).toBe("paused")
+    expect(row?.metadata?.chatResumeFailure).toEqual({
+      prompt: "Implement it",
+      mode: "acceptEdits",
+    })
+  })
+
+  it("leaves a handoff this load or a live window is running", async () => {
+    const mine = await seed({
+      executionMode: "orchestrated",
+      metadata: handoff(PLAN_RENDERER_BOOT_ID),
+    })
+    const other = await seed({
+      sessionId: "ses_b",
+      executionMode: "orchestrated",
+      metadata: handoff("other-tab"),
+    })
+    const liveBootIds = async () => new Set(["other-tab"])
+    expect(await recoverOrphanedInSessionSteps({ ...later(), liveBootIds })).toBe(0)
+    expect((await getPlan(mine.id))?.status).toBe("executing")
+    expect((await getPlan(other.id))?.status).toBe("executing")
   })
 })
 

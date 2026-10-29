@@ -24,7 +24,11 @@ import { linearAgentTurnSteps } from "./steps"
 // Team → Plan
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Map an ordered team task list into `teammate_dispatch` plan steps. */
+/**
+ * Map an ordered team task list into `teammate_dispatch` plan steps. Each step
+ * names its task's team: the dispatcher refuses a `teammate_dispatch` without
+ * `params.teamId`, so a projected plan without it could never run.
+ */
 export function planStepsFromTeamTasks(tasks: AgentTeamTask[]): CreatePlanStepInput[] {
   const idToIndex = new Map(tasks.map((t, i) => [t.id, i]))
   return tasks.map((t) => {
@@ -35,7 +39,11 @@ export function planStepsFromTeamTasks(tasks: AgentTeamTask[]): CreatePlanStepIn
     const step: CreatePlanStepInput = {
       title: t.title,
       kind: "teammate_dispatch",
-      params: { kind: "teammate_dispatch", ...(teammateId ? { teammateId } : {}) },
+      params: {
+        kind: "teammate_dispatch",
+        ...(t.teamId ? { teamId: t.teamId } : {}),
+        ...(teammateId ? { teammateId } : {}),
+      },
       ...(t.description ? { description: t.description } : {}),
       ...(dependsOn.length > 0 ? { dependsOn } : {}),
       ...(t.estimatedDuration ? { estimatedDurationMs: t.estimatedDuration } : {}),

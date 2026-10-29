@@ -13,6 +13,7 @@ import {
   allStepsTerminal,
   applyStepStatus,
   linearAgentTurnSteps,
+  refinedStepInputs,
   materializeSteps,
   nextRunnableStep,
   skipStepInDag,
@@ -46,6 +47,57 @@ describe("linearAgentTurnSteps", () => {
     const steps = materializeSteps(linearAgentTurnSteps(["a", "b"]))
     expect(steps[0].dependencies).toEqual([])
     expect(steps[1].dependencies).toEqual([steps[0].id])
+  })
+})
+
+describe("refinedStepInputs", () => {
+  const plain = (id: string, order: number, deps: string[] = []): PlanStep =>
+    ({
+      id,
+      title: id,
+      kind: "agent_turn",
+      status: "pending",
+      order,
+      dependencies: deps,
+    }) as PlanStep
+
+  it("keeps a plain agent_turn chain a chain", () => {
+    const previous = [plain("a", 0), plain("b", 1, ["a"])]
+    expect(refinedStepInputs(previous, ["x", "y"])).toEqual(linearAgentTurnSteps(["x", "y"]))
+  })
+
+  it("keeps matched steps' kind, params and surviving edges; new titles chain on", () => {
+    const previous = [
+      {
+        ...plain("Ask", 0),
+        kind: "teammate_dispatch",
+        params: { kind: "teammate_dispatch", teamId: "t1" },
+        description: "who",
+      },
+      { ...plain("Drop", 1, ["Ask"]), kind: "tool_call" },
+      { ...plain("Gate", 2, ["Ask", "Drop"]), kind: "approval_gate" },
+    ] as PlanStep[]
+    expect(refinedStepInputs(previous, ["Ask", "Notes", "Gate"])).toEqual([
+      {
+        title: "Ask",
+        kind: "teammate_dispatch",
+        description: "who",
+        params: { kind: "teammate_dispatch", teamId: "t1" },
+      },
+      { title: "Notes", kind: "agent_turn", dependsOn: [0] },
+      { title: "Gate", kind: "approval_gate", dependsOn: [0] },
+    ])
+  })
+
+  it("matches repeated titles one step each, in order", () => {
+    const previous = [
+      { ...plain("Same", 0), kind: "tool_call" },
+      { ...plain("Same", 1), id: "same-2", kind: "approval_gate" },
+    ] as PlanStep[]
+    expect(refinedStepInputs(previous, ["Same", "Same"]).map((s) => s.kind)).toEqual([
+      "tool_call",
+      "approval_gate",
+    ])
   })
 })
 

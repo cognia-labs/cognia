@@ -30,7 +30,6 @@ jest.mock("@/lib/ai/agent/team/agent-team", () => ({
 import { getSession } from "@/lib/db/sessions"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import { useProjectStore } from "@/stores/project/project-store"
-import { soloTeamId } from "@/lib/agent/plan-mode-bridge"
 import { dispatchSquadSubcommand } from "./squad"
 import type { SlashContext } from "../builtin"
 import type { AgentTeam, AgentTeamTask, AgentTeammate } from "@/types/agent/agent-team"
@@ -120,18 +119,6 @@ describe("resolution", () => {
     getSessionMock.mockResolvedValue({ id: SESSION, teamId: "team_1" })
     const result = await dispatchSquadSubcommand(ctx("status"))
     expect(result.system).toContain("Review Crew")
-  })
-
-  /**
-   * The plan-mode bridge fills `solo:<sessionId>` from TodoWrite tool calls.
-   * Answering for it would report on a Squad the user never created.
-   */
-  it("never resolves the synthetic solo team as a Squad", async () => {
-    const solo = soloTeamId(SESSION)
-    getSessionMock.mockResolvedValue({ id: SESSION, teamId: solo })
-    seed([squad({ id: solo, name: "Solo" })])
-    const result = await dispatchSquadSubcommand(ctx("status"))
-    expect(result.system).toMatch(/not handed to a Squad/)
   })
 
   it("resolves an explicit name, and reports an ambiguous one instead of guessing", async () => {

@@ -33616,6 +33616,7 @@
       "expand": "Expand plan",
       "feedbackLabel": "Feedback for the plan",
       "feedbackPlaceholder": "Optional note — sent with “Keep planning”, or used to refine…",
+      "handoffStopped": "The plan's turn stopped before it finished. Resume to send it again, or mark the plan done.",
       "interactive": {
         "addStep": "Add step",
         "deleteStep": "Delete step",
@@ -33797,6 +33798,8 @@
       "cancel": "Cancel plan",
       "empty": "No plan is running.",
       "haltedHint": "Stopped on a step — choose what to do above the message box.",
+      "handoffPaused": "The turn working on this plan stopped. Resume it from the card above the message box, or mark the plan done.",
+      "handoffRunning": "The agent is working through this plan; its task list above shows the progress.",
       "pause": "Pause",
       "progress": "{completed} of {total} steps",
       "resume": "Resume",
@@ -62282,6 +62285,8 @@
   "tasks": {
     "chip": {
       "open": "Open tasks",
+      "planHandoff": "Working through the plan",
+      "planHandoffPaused": "Plan paused",
       "planPaused": "Plan paused · {done}/{total}",
       "planRunning": "Plan running · {done}/{total}",
       "planStep": "Step {done}/{total} · {step}",

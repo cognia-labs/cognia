@@ -15,6 +15,7 @@ const resumePlan = jest.fn().mockResolvedValue(null)
 const cancelPlan = jest.fn().mockResolvedValue(null)
 const continueInSessionPlan = jest.fn()
 const failInSessionStep = jest.fn().mockResolvedValue(null)
+const completeChatHandoff = jest.fn().mockResolvedValue(null)
 jest.mock("@/lib/agent/plan/runtime", () => ({
   getPlanRuntime: () => ({
     pausePlan,
@@ -22,6 +23,7 @@ jest.mock("@/lib/agent/plan/runtime", () => ({
     cancelPlan,
     continueInSessionPlan,
     failInSessionStep,
+    completeChatHandoff,
   }),
 }))
 jest.mock("@/lib/agent/plan/turn-driver", () => ({
@@ -128,5 +130,21 @@ describe("usePlanRunControls", () => {
     const { result } = renderHook(() => usePlanRunControls("ses", plan()))
     act(() => result.current.pause())
     await waitFor(() => expect(toastError).toHaveBeenCalledWith("stepFailure.actionFailed"))
+  })
+
+  it("cancelling a handed-off plan stops the turn working on it", async () => {
+    sessions.ses = { status: "streaming" }
+    const handedOff = plan({
+      executionMode: "orchestrated",
+      metadata: { chatHandoff: { prompt: "go", mode: "default", startedAt: 1, bootId: "b" } },
+    })
+    const { result } = renderHook(() => usePlanRunControls("ses", handedOff))
+    expect(result.current.handoff).toBe(true)
+    act(() => result.current.cancel())
+    await waitFor(() => expect(stop).toHaveBeenCalledWith("ses"))
+    expect(cancelPlan).toHaveBeenCalledWith("p1")
+    await waitFor(() => expect(result.current.busy).toBe(false))
+    act(() => result.current.markDone())
+    await waitFor(() => expect(completeChatHandoff).toHaveBeenCalledWith("p1"))
   })
 })
