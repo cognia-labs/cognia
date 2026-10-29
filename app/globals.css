@@ -4674,11 +4674,13 @@ html[data-reduce-motion="true"] .boot-preview__block {
   }
 }
 
-/* In-app browser: indeterminate top progress bar. A short segment sweeps left
- * to right while the previewed page loads (the native webview can't paint its
- * own chrome, so this lives in the React toolbar seam). Timed through the speed
- * preference like every other motion here. */
-.browser-progress-bar {
+/* Indeterminate top progress bar. A short segment sweeps left to right: the
+ * in-app browser while the previewed page loads (the native webview can't paint
+ * its own chrome, so this lives in the React toolbar seam), and a chat pane
+ * while it opens a conversation (`pending-history-feedback.tsx`). Timed through
+ * the speed preference like every other motion here. */
+.browser-progress-bar,
+.pending-progress-bar {
   animation: browser-progress calc(1.1s * var(--motion-duration-scale, 1)) ease-in-out infinite;
 }
 
@@ -4696,7 +4698,9 @@ html[data-reduce-motion="true"] .boot-preview__block {
  * parked at the left edge. The sweep goes; a full-width fade keeps saying
  * "loading". Repeated for all three guard paths, as that policy requires. */
 html.reduce-motion .browser-progress-bar,
-html[data-reduce-motion="true"] .browser-progress-bar {
+html[data-reduce-motion="true"] .browser-progress-bar,
+html.reduce-motion .pending-progress-bar,
+html[data-reduce-motion="true"] .pending-progress-bar {
   width: 100% !important;
   animation-name: motion-safe-fade-pulse !important;
   animation-duration: calc(1.4s * var(--motion-duration-scale, 1)) !important;
@@ -4705,7 +4709,8 @@ html[data-reduce-motion="true"] .browser-progress-bar {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html:not([data-motion-respect="off"]) .browser-progress-bar {
+  html:not([data-motion-respect="off"]) .browser-progress-bar,
+  html:not([data-motion-respect="off"]) .pending-progress-bar {
     width: 100% !important;
     animation-name: motion-safe-fade-pulse !important;
     animation-duration: calc(1.4s * var(--motion-duration-scale, 1)) !important;

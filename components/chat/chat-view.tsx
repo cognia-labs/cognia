@@ -7,6 +7,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
   type Ref,
@@ -56,7 +57,8 @@ import { PlanHaltDock } from "@/components/agent/plan/plan-halt-dock"
 import { useRunRecordPersistence } from "@/hooks/chat/use-run-record-persistence"
 import { useHeldPaneSession } from "@/hooks/chat/use-held-pane-session"
 import { useHistoryPreview } from "@/hooks/chat/use-history-preview"
-import { whenFullHistory } from "@/lib/chat/history-preview"
+import { getHistoryPreview, whenFullHistory } from "@/lib/chat/history-preview"
+import { HistoryWaitStrip, PaneSwitchingIndicator } from "./pending-history-feedback"
 import { selectVisibleMessages } from "@/stores/chat/chat-store"
 import { useDeferredLoading } from "@/hooks/ui/use-deferred-loading"
 import { useStableCallback } from "@/hooks/ui/use-stable-callback"
@@ -82,6 +84,7 @@ import { ChatScopeProvider } from "@/components/chat/chat-scope-provider"
 import { SessionSummaryStageHost } from "@/components/context-workbench/session-summary-card/session-summary-trigger"
 import { useTitleBarProjectionScope } from "@/components/shell/title-bar-outlets"
 import { toast } from "sonner"
+import { cn } from "@/lib/utils"
 import { isHarnessFailure } from "@/lib/harness/failure-offer"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { AnimatePresence, motion } from "motion/react"
@@ -404,7 +407,24 @@ export function ChatPane(props: ChatPaneProps) {
     props.sessionId,
     props.sessionPending === true
   )
-  return <ChatPaneContent {...props} activeSession={held.session} sessionId={held.sessionId} />
+  // Said once the hold outlasts a glance (`useDeferredLoading`): a sweeping bar
+  // across the top, and the held transcript dimmed so it does not read as the
+  // conversation just picked. The dim is `!important` because the switch
+  // settle leaves its final opacity inline on the same elements.
+  const showSwitching = useDeferredLoading(held.held, { key: props.sessionId ?? null })
+  return (
+    <div
+      className={cn(
+        "relative flex min-h-0 min-w-0 flex-1 flex-col",
+        "data-[pane-switching]:[&_[data-chat-settle-target]]:opacity-55!",
+        "[&_[data-chat-settle-target]]:transition-opacity [&_[data-chat-settle-target]]:duration-150"
+      )}
+      data-pane-switching={held.held && showSwitching ? "" : undefined}
+    >
+      <ChatPaneContent {...props} activeSession={held.session} sessionId={held.sessionId} />
+      {showSwitching ? <PaneSwitchingIndicator /> : null}
+    </div>
+  )
 }
 
 function ChatPaneContent({
@@ -601,27 +621,40 @@ function ChatPaneContent({
   // tail preview, the store holds no history at all, and a write built on it
   // would persist a transcript missing every older message — so each waits for
   // the full history first. Normally that is already over by the time a click
-  // lands (`lib/chat/history-preview.ts`).
+  // lands (`lib/chat/history-preview.ts`); when it is not, the composer says so
+  // (`HistoryWaitStrip`) instead of sitting on the message without a word.
+  const [historyWaits, setHistoryWaits] = useState(0)
+  const afterFullHistory = useCallback(
+    <T,>(action: () => T): T | Promise<Awaited<T>> => {
+      if (!getHistoryPreview(boundId)) return whenFullHistory(boundId, action)
+      setHistoryWaits((count) => count + 1)
+      return Promise.resolve(whenFullHistory(boundId, action)).finally(() =>
+        setHistoryWaits((count) => count - 1)
+      )
+    },
+    [boundId]
+  )
+  const showHistoryWait = useDeferredLoading(historyWaits > 0, { key: boundId })
   const handleRegenerate = useStableCallback(() => {
     restoreIfArchived()
-    void whenFullHistory(boundId, () => onRegenerate())
+    void afterFullHistory(() => onRegenerate())
   })
 
   const handleEditResend = useStableCallback((id: string, newText: string) => {
     restoreIfArchived()
-    void whenFullHistory(boundId, () => onEditResend(id, newText))
+    void afterFullHistory(() => onEditResend(id, newText))
   })
 
   const handleResumeAfterPlanApproval = useStableCallback(
     (...args: Parameters<typeof resumeAfterPlanApproval>) => {
       restoreIfArchived()
-      return whenFullHistory(boundId, () => resumeAfterPlanApproval(...args))
+      return afterFullHistory(() => resumeAfterPlanApproval(...args))
     }
   )
 
   const handleSendPlanFeedback = useStableCallback((feedback: string) => {
     restoreIfArchived()
-    return whenFullHistory(boundId, () => (onSendPlanFeedback ?? onSend)(feedback))
+    return afterFullHistory(() => (onSendPlanFeedback ?? onSend)(feedback))
   })
 
   const handleSend = useCallback(
@@ -644,7 +677,7 @@ function ChatPaneContent({
       // restore, whose failure the archive hook toasts on its own.
       restoreIfArchived()
       try {
-        await whenFullHistory(boundId, () => onSend(content, manifest, templateRun, turnMetadata))
+        await afterFullHistory(() => onSend(content, manifest, templateRun, turnMetadata))
       } catch (error) {
         if (boundId) {
           settleOnboardingProgress(
@@ -657,7 +690,7 @@ function ChatPaneContent({
         throw error
       }
     },
-    [boundId, onSend, restoreIfArchived]
+    [afterFullHistory, boundId, onSend, restoreIfArchived]
   )
 
   const pendingDispatchRef = useRef<string | null>(null)
@@ -727,8 +760,8 @@ function ChatPaneContent({
   const handleRetry = useCallback(async () => {
     if (boundId) useChatStore.getState().setSessionError(boundId, null)
     restoreIfArchived()
-    await whenFullHistory(boundId, () => onRegenerate())
-  }, [onRegenerate, boundId, restoreIfArchived])
+    await afterFullHistory(() => onRegenerate())
+  }, [afterFullHistory, onRegenerate, boundId, restoreIfArchived])
 
   // Re-trigger the Dexie history load after a load failure.
   const handleRetryLoad = useCallback(() => {
@@ -946,9 +979,10 @@ function ChatPaneContent({
         disabledPlaceholder={composerDisabled ? composerDisabledPlaceholder : undefined}
         workflowMention={workflowMention}
         runStatus={
-          runtimeStrip ? (
+          runtimeStrip || showHistoryWait ? (
             <>
               {runtimeStrip}
+              {showHistoryWait ? <HistoryWaitStrip /> : null}
               {runStatusBar}
             </>
           ) : (
@@ -1275,13 +1309,13 @@ function ChatPaneContent({
                     // Compacting and resetting rewrite the transcript, so they
                     // wait for the full history like a send does.
                     compact={async () => {
-                      await whenFullHistory(boundId, () =>
+                      await afterFullHistory(() =>
                         onCompact ? onCompact() : runtime.compact(boundId)
                       )
                     }}
                     setModel={onSetModel ?? ((model) => runtime.setModel(boundId, model))}
                     resetRuntime={async () => {
-                      await whenFullHistory(boundId, () =>
+                      await afterFullHistory(() =>
                         onResetRuntime ? onResetRuntime() : runtime.resetRuntime(boundId)
                       )
                     }}

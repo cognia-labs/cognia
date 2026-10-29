@@ -626,11 +626,17 @@ export function MessageList({
   // conversation starts at its latest message, and carrying the previous
   // session's `atBottom=false` over would disarm stick-to-bottom for the
   // whole new thread (short lists never emit a scroll event to correct it).
+  //
+  // Keyed on THIS list's conversation, not the focused one. A list bound to
+  // its own pane — a split pane, or the conversation a pane keeps on screen
+  // while the next one's row is read — did not switch when focus moved, and
+  // throwing its measurements away shoved it up from the foot mid-read.
+  const listSessionId = paneSessionId ?? sessionId
   const hasMessages = messages.length > 0
   useIsomorphicLayoutEffect(() => {
     rowVirtualizer.measure()
     resetToBottom()
-  }, [sessionId, hasMessages, rowVirtualizer, resetToBottom])
+  }, [listSessionId, hasMessages, rowVirtualizer, resetToBottom])
 
   // A new user message at the tail is a send (from the composer, a queued
   // follow-up, a resend): snap to the foot and re-arm following, in the layout

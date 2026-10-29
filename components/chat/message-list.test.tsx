@@ -929,6 +929,25 @@ describe("MessageList", () => {
       })
       expect(measureSpy).toHaveBeenCalled()
     })
+
+    it("leaves a pane-bound list alone when focus moves to another conversation", () => {
+      // A split pane, or the conversation a pane keeps on screen while the
+      // next one's row is read: its own conversation did not change.
+      const Wrapper = withAdapter(makeAdapter())
+      render(
+        <Wrapper>
+          <MessageList messages={[userMsg("u1", "hi")]} status="idle" paneSessionId="ses_1" />
+        </Wrapper>
+      )
+      measureSpy.mockClear()
+      act(() => {
+        useChatStore.getState().setActiveSession("ses_2")
+      })
+      expect(measureSpy).not.toHaveBeenCalled()
+      act(() => {
+        useChatStore.getState().setActiveSession("ses_1")
+      })
+    })
   })
 
   it("re-pins to the bottom when switching sessions after scrolling up", async () => {

@@ -9470,7 +9470,9 @@
       "loadError": "无法加载此对话。",
       "loading": "正在加载对话…",
       "loadingEarlier": "正在加载更早的消息…",
-      "retry": "重试"
+      "opening": "正在打开对话…",
+      "retry": "重试",
+      "sendWaiting": "正在载入完整对话，载入后立即发送你的消息…"
     },
     "hookNotice": {
       "outcome": {

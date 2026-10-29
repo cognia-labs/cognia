@@ -305,6 +305,12 @@ jest.mock("@/lib/db/messages", () => ({
 
 import { act, render, screen, waitFor, fireEvent } from "@testing-library/react"
 import { SparklesIcon } from "lucide-react"
+import {
+  clearAllHistoryPreviews,
+  clearHistoryPreview,
+  setHistoryPreview,
+} from "@/lib/chat/history-preview"
+import { LOADING_DELAY_MS } from "@/hooks/ui/use-deferred-loading"
 import { ChatPane } from "./chat-view"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { MessageList } from "./message-list"
@@ -1988,5 +1994,72 @@ describe("ChatPane — a user turn restores an archived conversation (ADR-0213 D
       <ChatPane {...makeProps()} activeSession={{ ...archived, kind: "subagent" } as ChatSession} />
     )
     expect(screen.queryByTestId("archived-banner-stub")).not.toBeInTheDocument()
+  })
+})
+
+describe("ChatPane — feedback while history is on its way", () => {
+  afterEach(() => {
+    clearAllHistoryPreviews()
+    jest.useRealTimers()
+  })
+
+  it("dims the held conversation and sweeps a bar while a first-opened one loads", () => {
+    jest.useFakeTimers()
+    const props = makeProps()
+    const { container, rerender } = render(<ChatPane {...props} sessionId="s1" />)
+    const pane = container.firstElementChild as HTMLElement
+    expect(screen.queryByTestId("pane-switching-indicator")).toBeNull()
+
+    // The next conversation's row is still being read: the pane holds s1.
+    rerender(<ChatPane {...props} activeSession={null} sessionId="s2" sessionPending />)
+    // A glance-length wait shows nothing at all.
+    expect(screen.queryByTestId("pane-switching-indicator")).toBeNull()
+    expect(pane).not.toHaveAttribute("data-pane-switching")
+    act(() => {
+      jest.advanceTimersByTime(LOADING_DELAY_MS + 10)
+    })
+    expect(screen.getByTestId("pane-switching-indicator")).toBeInTheDocument()
+    expect(pane).toHaveAttribute("data-pane-switching")
+
+    // The row lands: the dim lifts at once.
+    rerender(<ChatPane {...props} activeSession={{ ...mockSession, id: "s2" }} sessionId="s2" />)
+    expect(pane).not.toHaveAttribute("data-pane-switching")
+  })
+
+  it("says why a send waits while the conversation still shows its newest messages", async () => {
+    jest.useFakeTimers()
+    const props = makeProps()
+    setHistoryPreview("s1", { messages: [], total: 120, activeBranchByGroup: {} })
+    render(<ChatPane {...props} sessionId="s1" />)
+    const onSend = mockComposerProps.at(-1)?.onSend as (content: SendContent) => Promise<void>
+
+    let sent: Promise<void> | undefined
+    act(() => {
+      sent = onSend("hello")
+    })
+    act(() => {
+      jest.advanceTimersByTime(LOADING_DELAY_MS + 10)
+    })
+    render(<>{mockComposerProps.at(-1)?.runStatus as React.ReactNode}</>)
+    expect(screen.getByTestId("history-wait-strip")).toBeInTheDocument()
+    expect(props.onSend).not.toHaveBeenCalled()
+
+    await act(async () => {
+      clearHistoryPreview("s1")
+      await sent
+    })
+    expect(props.onSend).toHaveBeenCalledWith("hello", undefined, undefined, undefined)
+  })
+
+  it("sends at once, with no strip, when the full history is already here", async () => {
+    const props = makeProps()
+    render(<ChatPane {...props} sessionId="s1" />)
+    const onSend = mockComposerProps.at(-1)?.onSend as (content: SendContent) => Promise<void>
+    await act(async () => {
+      await onSend("hello")
+    })
+    expect(props.onSend).toHaveBeenCalledTimes(1)
+    render(<>{mockComposerProps.at(-1)?.runStatus as React.ReactNode}</>)
+    expect(screen.queryByTestId("history-wait-strip")).toBeNull()
   })
 })

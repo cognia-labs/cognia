@@ -1599,8 +1599,10 @@
   "history": {
     "loadError": "Couldn't load this conversation.",
     "loadingEarlier": "Loading earlier messages…",
+    "opening": "Opening conversation…",
     "loading": "Loading conversation…",
-    "retry": "Retry"
+    "retry": "Retry",
+    "sendWaiting": "Loading the full conversation — your message sends as soon as it's ready…"
   },
   "hookNotice": {
     "outcome": {

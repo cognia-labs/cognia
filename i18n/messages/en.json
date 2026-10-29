@@ -9470,7 +9470,9 @@
       "loadError": "Couldn't load this conversation.",
       "loading": "Loading conversation…",
       "loadingEarlier": "Loading earlier messages…",
-      "retry": "Retry"
+      "opening": "Opening conversation…",
+      "retry": "Retry",
+      "sendWaiting": "Loading the full conversation — your message sends as soon as it's ready…"
     },
     "hookNotice": {
       "outcome": {
