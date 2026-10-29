@@ -574,10 +574,13 @@ describe("plan_list / plan_run", () => {
   const getPlan = jest.fn()
   const approvePlan = jest.fn()
   const runPlan = jest.fn()
+  const buildPlanRepairClient = jest.fn()
 
   beforeEach(() => {
     jest.resetModules()
     jest.clearAllMocks()
+    buildPlanRepairClient.mockResolvedValue(undefined)
+    jest.doMock("@/lib/agent/plan/repair-client", () => ({ buildPlanRepairClient }))
     jest.doMock("@/lib/db/plans", () => ({ listAllPlans }))
     jest.doMock("@/lib/agent/plan/runtime", () => ({
       getPlanRuntime: () => ({ getPlan, approvePlan, runPlan }),
@@ -628,6 +631,18 @@ describe("plan_list / plan_run", () => {
       status: "completed",
     })
     expect(approvePlan).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])("passes the optional repair client: %s", async (configured) => {
+    const client = { complete: jest.fn() }
+    const current = plan()
+    getPlan.mockResolvedValue(current)
+    runPlan.mockResolvedValue({ status: "completed" })
+    buildPlanRepairClient.mockResolvedValue(configured ? client : undefined)
+    const { planRunCore } = await import("./orchestration")
+    expect((await planRunCore({ planId: "p1" })).ok).toBe(true)
+    expect(buildPlanRepairClient).toHaveBeenCalledWith(current, "bridge-plan-repair")
+    expect(runPlan).toHaveBeenCalledWith("p1", configured ? { client } : {})
   })
 
   it("routes plan operations from the generic host bridge envelope", async () => {

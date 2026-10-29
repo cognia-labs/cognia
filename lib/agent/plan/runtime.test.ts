@@ -277,6 +277,46 @@ describe("updatePlanDraft", () => {
 })
 
 describe("setStepStatus", () => {
+  it.each(["pending", "completed", "skipped"] as const)(
+    "blocks transitive dependents and releases them after %s",
+    async (status) => {
+      const rt = getPlanRuntime()
+      const plan = await rt.createPlan(
+        createInput({
+          steps: [
+            { title: "a", kind: "agent_turn" },
+            { title: "b", kind: "agent_turn", dependsOn: [0] },
+            { title: "c", kind: "agent_turn", dependsOn: [1] },
+            { title: "other", kind: "agent_turn" },
+          ],
+        })
+      )
+      const failed = await rt.setStepStatus(plan.id, plan.steps[0].id, "failed")
+      expect(failed?.steps.map((s) => s.status)).toEqual([
+        "failed",
+        "blocked",
+        "blocked",
+        "pending",
+      ])
+      expect(failed?.completedSteps).toBe(0)
+      expect(failed?.currentStepId).toBe(plan.steps[3].id)
+      const recovered = await rt.setStepStatus(plan.id, plan.steps[0].id, status)
+      expect(recovered?.steps.map((s) => s.status)).toEqual([
+        status,
+        "pending",
+        "pending",
+        "pending",
+      ])
+    }
+  )
+
+  it("leaves dependents pending when errorPolicy is continue", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput({ config: { errorPolicy: "continue" } }))
+    const failed = await rt.setStepStatus(plan.id, plan.steps[0].id, "failed")
+    expect(failed?.steps[1].status).toBe("pending")
+  })
+
   it("tells a bound tracker issue how a step ended, and only on terminal statuses", async () => {
     const rt = getPlanRuntime()
     const plan = await rt.createPlan(
@@ -537,6 +577,20 @@ function fakeClient(reply: string): { complete: jest.Mock } {
 }
 
 describe("refinePlan", () => {
+  it("replaces blocked steps with pending steps after a failure", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput())
+    await rt.setStepStatus(plan.id, plan.steps[0].id, "failed")
+    expect((await rt.getPlan(plan.id))?.steps[1].status).toBe("blocked")
+    const refined = await rt.refinePlan(
+      { planId: plan.id, refinementType: "repair", trigger: "manual" },
+      fakeClient('{"steps":["fixed","verify"]}') as never
+    )
+    expect(refined?.steps.map((s) => s.status)).toEqual(["pending", "pending"])
+    expect(refined?.completedSteps).toBe(0)
+    expect(refined?.currentStepId).toBeUndefined()
+  })
+
   it("manual refine replaces steps, returns to awaiting_approval, logs events", async () => {
     const rt = getPlanRuntime()
     const plan = await rt.createPlan(createInput())
@@ -744,6 +798,24 @@ describe("refinePlan", () => {
       fakeClient('{"steps":["z"]}') as never
     )
     expect(res?.status).toBe("cancelled")
+  })
+
+  it("does not send a leaking failed-step error through automatic repair", async () => {
+    const rt = getPlanRuntime()
+    const plan = await rt.createPlan(createInput({ config: { requireApproval: false } }))
+    runWorkflowMock.mockImplementationOnce(async ({ runId }: { runId: string }) => {
+      const { getPlanRunContext } = await import("./plan-run-context")
+      await getPlanRunContext(runId)!.writer.setStepStatus(plan.steps[0].id, "failed", {
+        error: "request failed for leak@example.com",
+      })
+      return { status: "failed", error: { nodeId: plan.steps[0].id, message: "request failed" } }
+    })
+    const client = fakeClient('{"steps":["repaired"]}')
+    await rt.runPlan(plan.id, { client })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(client.complete).not.toHaveBeenCalled()
+    expect((await rt.getPlan(plan.id))?.status).toBe("failed")
+    expect((await rt.getPlan(plan.id))?.steps[1].status).toBe("blocked")
   })
 
   it("runPlan auto-replans on failure when a client is supplied", async () => {
@@ -1091,6 +1163,41 @@ describe("continueInSessionPlan (retry / skip / complete / resume)", () => {
     })
     return { rt, plan, failedStepId: started!.stepId! }
   }
+
+  it.each(["retry", "skip", "complete"] as const)(
+    "unblocks transitive dependents on %s",
+    async (action) => {
+      const rt = getPlanRuntime()
+      const plan = await rt.createPlan(
+        createInput({
+          config: { requireApproval: false },
+          steps: [
+            { title: "a", kind: "agent_turn" },
+            { title: "b", kind: "agent_turn", dependsOn: [0] },
+            { title: "c", kind: "agent_turn", dependsOn: [1] },
+          ],
+        })
+      )
+      const started = await rt.startPlan(plan.id)
+      await rt.failInSessionStep(plan.id, {
+        stepId: started!.stepId,
+        cause: "turn_failed",
+        detail: "boom",
+      })
+      expect((await rt.getPlan(plan.id))?.steps.map((s) => s.status)).toEqual([
+        "failed",
+        "blocked",
+        "blocked",
+      ])
+      await rt.continueInSessionPlan(plan.id, action)
+      const after = await rt.getPlan(plan.id)
+      expect(after?.steps.map((s) => s.status)).toEqual(
+        action === "retry"
+          ? ["in_progress", "pending", "pending"]
+          : [action === "skip" ? "skipped" : "completed", "in_progress", "pending"]
+      )
+    }
+  )
 
   it("retry re-runs the failed step as attempt 2 and hands back its turn", async () => {
     const { rt, plan, failedStepId } = await halted()

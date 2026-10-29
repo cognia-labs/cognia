@@ -41,7 +41,7 @@ jest.mock("@/lib/ai/renderer-llm-client", () => ({
 }))
 
 jest.mock("@/stores/settings/settings-store", () => ({
-  useSettingsStore: { getState: () => ({ settings: null }) },
+  useSettingsStore: { getState: () => ({ settings: {} }) },
 }))
 
 // Identity guard: permission enforcement has its own suite; here we assert the
@@ -114,8 +114,16 @@ describe("createPlanAPI", () => {
     expect(runtime.pausePlan).toHaveBeenCalledWith("p1")
     expect(runtime.resumePlan).toHaveBeenCalledWith("p1")
     expect(runtime.cancelPlan).toHaveBeenCalledWith("p1")
-    expect(runtime.runPlan).toHaveBeenCalledWith("p1")
+    expect(runtime.runPlan).toHaveBeenCalledWith("p1", {})
     expect(runtime.deletePlan).toHaveBeenCalledWith("p1")
+  })
+
+  it.each([true, false])("passes the repair client when configured: %s", async (configured) => {
+    getPlan.mockResolvedValue({ id: "p1", sessionId: "ses" })
+    const client = { complete: jest.fn() }
+    buildRendererLlmClient.mockReturnValue(configured ? client : null)
+    await createPlanAPI("p").run("p1")
+    expect(runtime.runPlan).toHaveBeenCalledWith("p1", configured ? { client } : {})
   })
 
   it("passes a step result through as a patch and omits it when absent", async () => {

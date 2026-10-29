@@ -361,7 +361,11 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
       // here. An in-session plan is driven by the chat surface that owns the
       // visible turns; leaving it `approved` is what hands it over.
       const started = await runtime.startPlan(run.sourceId)
-      if (started?.strategy === "orchestrated") void runtime.runPlan(run.sourceId)
+      if (started?.strategy === "orchestrated") {
+        const { buildPlanRepairClient } = await import("@/lib/agent/plan/repair-client")
+        const client = await buildPlanRepairClient(approved, "run-control-plan-repair")
+        void runtime.runPlan(run.sourceId, { ...(client ? { client } : {}) })
+      }
       return
     }
     if (command.action === "deny") {

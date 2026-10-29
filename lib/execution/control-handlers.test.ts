@@ -1,4 +1,8 @@
 /** @jest-environment jsdom */
+
+jest.mock("@/lib/agent/plan/repair-client", () => ({ buildPlanRepairClient: jest.fn() }))
+import { buildPlanRepairClient } from "@/lib/agent/plan/repair-client"
+
 import "fake-indexeddb/auto"
 
 import {
@@ -457,7 +461,22 @@ describe("plan approval over run control", () => {
     const installed = installExecutionRunControlHandlers()
     const runId = await seedPlanRun()
     await installed.plan(command(runId, "approve"))
-    expect(mockRunPlan).toHaveBeenCalledWith("plan-source")
+    expect(mockRunPlan).toHaveBeenCalledWith("plan-source", {})
+    installed.dispose()
+  })
+
+  it("passes a repair client to the orchestrated approval run", async () => {
+    const client = { complete: jest.fn() }
+    jest.mocked(buildPlanRepairClient).mockResolvedValueOnce(client)
+    mockStartPlan.mockResolvedValueOnce({ strategy: "orchestrated", status: "approved" })
+    const installed = installExecutionRunControlHandlers()
+    const runId = await seedPlanRun()
+    await installed.plan(command(runId, "approve"))
+    expect(buildPlanRepairClient).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "plan-source" }),
+      "run-control-plan-repair"
+    )
+    expect(mockRunPlan).toHaveBeenCalledWith("plan-source", { client })
     installed.dispose()
   })
 

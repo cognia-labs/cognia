@@ -13,6 +13,7 @@ function step(over: Partial<PlanStep> = {}): PlanStep {
     dependencies: [],
     params: over.params,
     result: over.result,
+    error: over.error,
   }
 }
 
@@ -59,6 +60,12 @@ describe("findPlanPiiLeak", () => {
   it("flags a step result text", () => {
     const leak = findPlanPiiLeak(plan({ steps: [step({ id: "x", result: `sent to ${EMAIL}` })] }))
     expect(leak).toBe("step:x:text")
+  })
+
+  it("flags failed-step error text before auto-repair sends it to the planner", () => {
+    expect(
+      findPlanPiiLeak(plan({ steps: [step({ id: "x", error: `request failed for ${EMAIL}` })] }))
+    ).toBe("step:x:text")
   })
 
   it("deep-scans step params for smuggled PII", () => {

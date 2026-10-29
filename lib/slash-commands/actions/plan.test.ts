@@ -11,6 +11,7 @@ jest.mock("@/lib/ai/generation/agent-role-client", () => ({
   buildAgentRoleLlmClient: jest.fn(),
 }))
 jest.mock("@/lib/goal/runtime", () => ({ getGoalRuntime: jest.fn() }))
+jest.mock("@/lib/db/plans", () => ({ listPlanEvents: jest.fn() }))
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn() }))
 jest.mock("@/stores/settings", () => ({ useSettingsStore: { getState: jest.fn() } }))
 jest.mock("@/stores/agent/agent-team-store", () => ({ useAgentTeamStore: { getState: jest.fn() } }))
@@ -25,6 +26,7 @@ import { loadPlanConfigDefaults } from "@/lib/agent/plan/plan-settings"
 import { decomposeIntoPlan } from "@/lib/agent/plan/planner"
 import { buildAgentRoleLlmClient } from "@/lib/ai/generation/agent-role-client"
 import { getGoalRuntime } from "@/lib/goal/runtime"
+import { listPlanEvents } from "@/lib/db/plans"
 import { getSession } from "@/lib/db/sessions"
 import { useSettingsStore } from "@/stores/settings"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
@@ -47,6 +49,8 @@ const createWorkflowMock = createWorkflow as jest.Mock
 
 const createPlan = jest.fn()
 const getOpenPlanForSession = jest.fn()
+const listPlansBySession = jest.fn()
+const getPlan = jest.fn()
 const cancelPlan = jest.fn()
 const rejectPlan = jest.fn()
 const getOpenGoalForSession = jest.fn()
@@ -98,10 +102,20 @@ beforeEach(() => {
   jest.clearAllMocks()
   createPlan.mockImplementation(async (input: CreatePlanInput) => planFrom(input))
   getOpenPlanForSession.mockResolvedValue(undefined)
+  listPlansBySession.mockResolvedValue([])
+  getPlan.mockResolvedValue(undefined)
+  jest.mocked(listPlanEvents).mockResolvedValue([])
   cancelPlan.mockResolvedValue(null)
   getOpenGoalForSession.mockResolvedValue(undefined)
   rejectPlan.mockImplementation(async (id: string) => ({ id, status: "rejected" }))
-  getPlanRuntimeMock.mockReturnValue({ createPlan, getOpenPlanForSession, cancelPlan, rejectPlan })
+  getPlanRuntimeMock.mockReturnValue({
+    createPlan,
+    getOpenPlanForSession,
+    listPlansBySession,
+    getPlan,
+    cancelPlan,
+    rejectPlan,
+  })
   getGoalRuntimeMock.mockReturnValue({ getOpenGoalForSession })
   loadPlanConfigDefaultsMock.mockResolvedValue(undefined)
   getSessionMock.mockResolvedValue({ id: "ses_a", characterId: "char_1" })
@@ -693,5 +707,103 @@ describe("plan ⇄ workflow conversion", () => {
   it("explains the usage when no workflow is named", async () => {
     const res = await dispatchPlanSubcommand(ctx({ args: "from-workflow" }))
     expect(res.system).toContain("Usage:")
+  })
+})
+
+describe("/plan history cards", () => {
+  const historical = (
+    id: string,
+    createdAt: number,
+    status: AgentPlan["status"] = "completed"
+  ) => ({
+    ...planFrom({ sessionId: "ses_a", title: id, source: "manual", steps: [] }),
+    id,
+    title: `Plan ${id}`,
+    createdAt,
+    status,
+    completedSteps: 1,
+    totalSteps: 2,
+  })
+
+  it("lists session plans newest first and marks the open one without calling the planner", async () => {
+    const older = historical("old", 1)
+    const open = historical("open", 2, "paused")
+    listPlansBySession.mockResolvedValue([older, open])
+    getOpenPlanForSession.mockResolvedValue(open)
+    const { system } = await dispatchPlanSubcommand(ctx({ args: "list" }))
+    expect(listPlansBySession).toHaveBeenCalledWith("ses_a")
+    expect(system.indexOf("Plan open")).toBeLessThan(system.indexOf("Plan old"))
+    expect(system).toContain("paused")
+    expect(system).toContain("1/2")
+    expect(system).toContain("(open)")
+    expect(decomposeIntoPlanMock).not.toHaveBeenCalled()
+  })
+
+  it.each(["list", "show"])("reports an empty history for %s", async (args) => {
+    expect((await dispatchPlanSubcommand(ctx({ args }))).system).toMatch(/no plans yet/i)
+    expect(decomposeIntoPlanMock).not.toHaveBeenCalled()
+  })
+
+  it("shows the open plan by default, ordered step glyphs and recent events", async () => {
+    const open = historical("open", 2, "paused")
+    open.steps = [
+      {
+        id: "b",
+        title: "Second",
+        kind: "agent_turn",
+        status: "blocked",
+        order: 1,
+        dependencies: ["a"],
+      },
+      { id: "a", title: "First", kind: "agent_turn", status: "failed", order: 0, dependencies: [] },
+    ]
+    getOpenPlanForSession.mockResolvedValue(open)
+    jest.mocked(listPlanEvents).mockResolvedValue([
+      {
+        id: "e2",
+        planId: "open",
+        ts: 2000,
+        kind: "paused",
+        payload: { kind: "paused" },
+      },
+      {
+        id: "e1",
+        planId: "open",
+        ts: 1000,
+        kind: "step_failed",
+        payload: { kind: "step_failed", stepId: "a", title: "First", error: "boom", attempt: 1 },
+      },
+    ])
+    const { system } = await dispatchPlanSubcommand(ctx({ args: "show" }))
+    expect(system).toContain("Plan open")
+    expect(system).toContain("PAUSED")
+    expect(system).toContain("- [!] First")
+    expect(system.indexOf("First")).toBeLessThan(system.indexOf("Second"))
+    expect(system.indexOf("paused")).toBeLessThan(system.indexOf("step failed"))
+    // A readable line per event, never the raw payload.
+    expect(system).toContain("step failed · First — boom")
+    expect(system).not.toContain("{")
+    expect(listPlanEvents).toHaveBeenCalledWith("open", 5)
+    expect(listPlansBySession).not.toHaveBeenCalled()
+  })
+
+  it("defaults to the newest plan when none is open", async () => {
+    listPlansBySession.mockResolvedValue([historical("old", 1), historical("new", 2)])
+    expect((await dispatchPlanSubcommand(ctx({ args: "show" }))).system).toContain("Plan new")
+  })
+
+  it("shows a requested plan and rejects unknown or other-session ids", async () => {
+    getPlan.mockResolvedValue(historical("old", 1))
+    expect((await dispatchPlanSubcommand(ctx({ args: "show old" }))).system).toContain("Plan old")
+    expect(getPlan).toHaveBeenCalledWith("old")
+    getPlan.mockResolvedValue(undefined)
+    expect((await dispatchPlanSubcommand(ctx({ args: "show missing" }))).system).toMatch(
+      /not found/i
+    )
+    getPlan.mockResolvedValue({ ...historical("foreign", 3), sessionId: "ses_other" })
+    expect((await dispatchPlanSubcommand(ctx({ args: "show foreign" }))).system).toMatch(
+      /not found/i
+    )
+    expect(decomposeIntoPlanMock).not.toHaveBeenCalled()
   })
 })

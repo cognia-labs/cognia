@@ -25,6 +25,7 @@ function stepStrings(step: PlanStep): string[] {
   const out = [step.title]
   if (step.description) out.push(step.description)
   if (step.result) out.push(step.result)
+  if (step.error) out.push(step.error)
   return out
 }
 

@@ -3,9 +3,14 @@
  */
 import "fake-indexeddb/auto"
 import "."
+import { getPlanRuntime } from "@/lib/agent/plan/runtime"
+import { buildPlanRepairClient } from "@/lib/agent/plan/repair-client"
+import type { AgentPlan } from "@/types/agent/plan"
 import { getExecutor } from "../registry"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { getPlanRunContext, unregisterPlanRunContext } from "@/lib/agent/plan/plan-run-context"
+
+jest.mock("@/lib/agent/plan/repair-client", () => ({ buildPlanRepairClient: jest.fn() }))
 
 const dispatchPlanStepNode = jest.fn()
 jest.mock("@/lib/agent/plan/step-dispatch", () => ({
@@ -244,5 +249,34 @@ describe("action.plan.refine ledger attribution", () => {
     expect(mockBuildRendererLlmClient).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: "ws-workflow" })
     )
+  })
+})
+
+describe("action.plan.run repair client", () => {
+  it.each([true, false])("forwards the signal and optional client: %s", async (configured) => {
+    const runtime = getPlanRuntime()
+    const plan = { id: "plan_repair", sessionId: "ses" } as AgentPlan
+    const get = jest.spyOn(runtime, "getPlan").mockResolvedValue(plan)
+    const run = jest.spyOn(runtime, "runPlan").mockResolvedValue({ status: "completed" })
+    const client = { complete: jest.fn() }
+    jest.mocked(buildPlanRepairClient).mockResolvedValue(configured ? client : undefined)
+    const signal = new AbortController().signal
+    try {
+      await getExecutor("action.plan.run" as never, 1)!.execute({
+        runId: "wf_run",
+        projectId: "wf_workspace",
+        params: { planId: plan.id },
+        signal,
+      } as never)
+      expect(buildPlanRepairClient).toHaveBeenCalledWith(
+        plan,
+        "workflow-plan-repair",
+        "wf_workspace"
+      )
+      expect(run).toHaveBeenCalledWith(plan.id, { signal, ...(configured ? { client } : {}) })
+    } finally {
+      get.mockRestore()
+      run.mockRestore()
+    }
   })
 })

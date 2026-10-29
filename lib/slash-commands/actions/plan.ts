@@ -5,17 +5,22 @@
 // LLM (`decomposeIntoPlan`) and both projections (`planInputFromTeam` /
 // `planInputFromGoal`) were fully built, tested — and called by nothing.
 //
-// Surface (7 subcommands + aliases):
+// Surface (subcommands + aliases):
 //   /plan                             — status card for the session's open plan
+//   /plan status                      — explicit status card
+//   /plan list                        — session plan history, newest first
+//   /plan show [planId]                — plan steps and recent trail
 //   /plan <objective>                 — planner LLM decomposition  (planner_llm)
 //   /plan new <title> | <s1> | <s2>   — hand-authored plan         (manual)
-//   /plan from-goal                   — project the open goal      (goal_projection)
-//   /plan from-team                   — project the team task DAG  (team_projection)
+//   /plan from-goal (alias: goal)     — project the open goal      (goal_projection)
+//   /plan from-team (alias: team)     — project the team task DAG  (team_projection)
 //   /plan to-team                     — mirror the plan back into team tasks
+//   /plan to-workflow                 — save the open plan as a workflow
+//   /plan from-workflow <id|name>      — wrap a workflow (alias: workflow)
 //   /plan reject [reason]             — reject a plan awaiting approval (terminal `rejected`)
 //   /plan cancel                      — cancel the open plan (alias: stop, clear)
 //
-// Every branch funnels into `PlanRuntime.createPlan`, so the one-open-plan-per-
+// Every creation branch funnels into `PlanRuntime.createPlan`, so the one-open-plan-per-
 // session invariant, the `plan_created` audit event and the approval dock all
 // behave identically no matter which source produced the plan.
 //
@@ -39,6 +44,7 @@ import { getGoalRuntime } from "@/lib/goal/runtime"
 import { useAgentTeamStore } from "@/stores/agent/agent-team-store"
 import type { AgentPlan, CreatePlanInput, CreatePlanStepInput } from "@/types/agent/plan"
 import { isRejectablePlanStatus } from "@/types/agent/plan"
+import { listPlanEvents } from "@/lib/db/plans"
 
 /** Max characters kept from a hand-authored plan title (steps clamp in `linearAgentTurnSteps`). */
 const MAX_PLAN_TITLE_LEN = 120
@@ -73,6 +79,10 @@ export async function dispatchPlanSubcommand(ctx: SlashContext): Promise<PlanCom
   switch (head) {
     case "status":
       return await commandStatus(ctx)
+    case "list":
+      return await commandList(ctx)
+    case "show":
+      return await commandShow(ctx, rest)
     case "new":
       return await commandNew(ctx, rest)
     case "from-goal":
@@ -118,6 +128,78 @@ async function commandStatus(ctx: SlashContext): Promise<PlanCommandResult> {
     }
   }
   return { system: renderStatusCard(plan) }
+}
+
+async function commandList(ctx: SlashContext): Promise<PlanCommandResult> {
+  const runtime = getPlanRuntime()
+  const plans = await runtime.listPlansBySession(ctx.activeSessionId!)
+  if (plans.length === 0) return { system: "No plans yet in this session." }
+  const open = await runtime.getOpenPlanForSession(ctx.activeSessionId!)
+  return {
+    system: [
+      "📋 **Session plans**",
+      "",
+      ...[...plans]
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(
+          (plan) =>
+            `- **${plan.title}** · ${statusEmoji(plan.status)} ${plan.status} · ${plan.completedSteps}/${plan.totalSteps} steps · \`${plan.id}\`${plan.id === open?.id ? " (open)" : ""}`
+        ),
+    ].join("\n"),
+  }
+}
+
+async function commandShow(ctx: SlashContext, planId: string): Promise<PlanCommandResult> {
+  const runtime = getPlanRuntime()
+  const sessionId = ctx.activeSessionId!
+  const plan = planId
+    ? await runtime.getPlan(planId)
+    : ((await runtime.getOpenPlanForSession(sessionId)) ??
+      [...(await runtime.listPlansBySession(sessionId))].sort(
+        (a, b) => b.createdAt - a.createdAt
+      )[0])
+  if (!plan || plan.sessionId !== sessionId) {
+    return {
+      system: planId
+        ? `Plan \`${planId}\` not found in this session.`
+        : "No plans yet in this session.",
+    }
+  }
+  const events = await listPlanEvents(plan.id, 5)
+  return {
+    system: [
+      `📋 **${plan.title}** · ${statusEmoji(plan.status)} ${plan.status.toUpperCase()} · ${plan.completedSteps}/${plan.totalSteps} steps`,
+      "",
+      ...[...plan.steps]
+        .sort((a, b) => a.order - b.order)
+        .map((step) => `${stepGlyph(step.status)} ${step.title}`),
+      "",
+      "**Recent trail** (newest first)",
+      ...(events.length
+        ? events.map(
+            (event) =>
+              `- ${new Date(event.ts).toISOString().slice(0, 19).replace("T", " ")} · ${event.kind.replace(/_/g, " ")}${trailDetail(event.payload)}`
+          )
+        : ["No events yet."]),
+    ].join("\n"),
+  }
+}
+
+/**
+ * The one human-readable detail a trail event carries (the step, the reason,
+ * the outcome), instead of its raw payload.
+ */
+function trailDetail(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return ""
+  const p = payload as Record<string, unknown>
+  const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : "")
+  const parts = [
+    text(p.title),
+    text(p.error) || text(p.reason) || text(p.feedback),
+    text(p.status),
+    typeof p.attempt === "number" && p.attempt > 1 ? `attempt ${p.attempt}` : "",
+  ].filter(Boolean)
+  return parts.length > 0 ? ` · ${parts.join(" — ")}` : ""
 }
 
 /** `/plan <objective>` — planner LLM decomposition (`source: "planner_llm"`). */
@@ -282,7 +364,11 @@ async function commandToTeam(ctx: SlashContext): Promise<PlanCommandResult> {
  */
 async function commandToWorkflow(ctx: SlashContext): Promise<PlanCommandResult> {
   const plan = await getPlanRuntime().getOpenPlanForSession(ctx.activeSessionId!)
-  if (!plan) return { system: "No open plan to export — create one with `/plan <objective>`." }
+  if (!plan)
+    return {
+      system:
+        "No open plan to export with `/plan to-workflow` — create one with `/plan <objective>`.",
+    }
   if (plan.steps.length === 0) return { system: `Plan "${plan.title}" has no steps to export.` }
 
   const { planWorkflowDraft } = await import("@/lib/agent/plan/workflow-conversion")
@@ -299,7 +385,7 @@ async function commandToWorkflow(ctx: SlashContext): Promise<PlanCommandResult> 
     system: [
       `🧩 Saved "${plan.title}" as a workflow (${plan.steps.length} step(s) + a manual trigger).`,
       "",
-      `Open it from **Workflows** — id \`${workflow.id}\`. The plan is untouched; the workflow is now yours to edit and re-run.`,
+      `Open it from **Workflows** — id \`${workflow.id}\`, or wrap it in a plan with \`/plan from-workflow ${workflow.id}\`. The workflow is now yours to edit and re-run.`,
     ].join("\n"),
   }
 }

@@ -10,6 +10,7 @@ import type {
 } from "@/types/agent/plan"
 import { registerNodeExecutor } from "../registry"
 import { getPlanRuntime } from "@/lib/agent/plan/runtime"
+import { buildPlanRepairClient } from "@/lib/agent/plan/repair-client"
 import type { PlanRunContext } from "@/lib/agent/plan/plan-run-context"
 import { listAllPlans, listPlanEvents } from "@/lib/db/plans"
 import { notePlanCreatedByWorkflow } from "@/lib/workflow/runtime/plan-event-trigger"
@@ -295,7 +296,13 @@ registerNodeExecutor({
   typeVersion: 1,
   execute: async (ctx) => {
     const planId = requirePlanId(ctx, "action.plan.run")
-    const result = await getPlanRuntime().runPlan(planId, { signal: ctx.signal })
+    const runtime = getPlanRuntime()
+    const plan = await runtime.getPlan(planId)
+    const client = await buildPlanRepairClient(plan, "workflow-plan-repair", ctx.projectId)
+    const result = await runtime.runPlan(planId, {
+      signal: ctx.signal,
+      ...(client ? { client } : {}),
+    })
     if (!result) throw nonRetryable(`action.plan.run: plan ${planId} not found`)
     return { output: { planId, status: result.status, result: result.output } }
   },

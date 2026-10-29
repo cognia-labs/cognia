@@ -18,6 +18,7 @@
  */
 
 import { getPlanRuntime } from "@/lib/agent/plan/runtime"
+import { buildPlanRepairClient } from "@/lib/agent/plan/repair-client"
 import { getPlan, listAllPlans, listPlanEvents, listPlansBySession } from "@/lib/db/plans"
 import { getSession } from "@/lib/db/sessions"
 import { buildRendererLlmClient } from "@/lib/ai/renderer-llm-client"
@@ -61,7 +62,10 @@ export function createPlanAPI(pluginId: string): PluginPlanAPI {
       const started = await runtime.startPlan(planId)
       return started ? { strategy: started.strategy, status: started.status } : null
     },
-    run: (planId) => runtime.runPlan(planId),
+    run: async (planId) => {
+      const client = await buildPlanRepairClient(await getPlan(planId), "plugin-plan-repair")
+      return runtime.runPlan(planId, { ...(client ? { client } : {}) })
+    },
     pause: (planId) => runtime.pausePlan(planId),
     resume: (planId) => runtime.resumePlan(planId),
     cancel: (planId) => runtime.cancelPlan(planId),

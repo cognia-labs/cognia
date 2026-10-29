@@ -102,11 +102,15 @@ describe("notification center fan-out", () => {
   const rejectPlan = jest.fn()
   const startPlan = jest.fn()
   const runPlan = jest.fn()
+  const buildPlanRepairClient = jest.fn()
 
   beforeEach(() => {
     jest.resetModules()
     jest.clearAllMocks()
     notify.mockResolvedValue("n1")
+    approvePlan.mockResolvedValue(plan())
+    buildPlanRepairClient.mockResolvedValue({ complete: jest.fn() })
+    jest.doMock("./repair-client", () => ({ buildPlanRepairClient }))
     startPlan.mockResolvedValue({ strategy: "in_session", status: "executing" })
     jest.doMock("@/lib/notifications/runtime", () => ({ notify }))
     jest.doMock("./runtime", () => ({
@@ -227,7 +231,15 @@ describe("notification center fan-out", () => {
 
     startPlan.mockResolvedValueOnce({ strategy: "orchestrated", status: "approved" })
     await registered[PLAN_RESPOND_COMMAND]({ args: { planId: "p1", decision: "approve" } })
-    expect(runPlan).toHaveBeenCalledWith("p1")
+    expect(buildPlanRepairClient).toHaveBeenCalledWith(plan(), "notification-plan-repair")
+    expect(runPlan).toHaveBeenCalledWith("p1", {
+      client: await buildPlanRepairClient.mock.results[0].value,
+    })
+
+    buildPlanRepairClient.mockResolvedValueOnce(undefined)
+    startPlan.mockResolvedValueOnce({ strategy: "orchestrated", status: "approved" })
+    await registered[PLAN_RESPOND_COMMAND]({ args: { planId: "p1", decision: "approve" } })
+    expect(runPlan).toHaveBeenLastCalledWith("p1", {})
 
     await registered[PLAN_RESPOND_COMMAND]({ args: { planId: "p1", decision: "reject" } })
     expect(rejectPlan).toHaveBeenCalledWith("p1")
@@ -235,7 +247,7 @@ describe("notification center fan-out", () => {
     // Malformed args must not reach the runtime.
     await registered[PLAN_RESPOND_COMMAND]({ args: { planId: 7, decision: "approve" } })
     await registered[PLAN_RESPOND_COMMAND]({ args: { planId: "p1", decision: "maybe" } })
-    expect(approvePlan).toHaveBeenCalledTimes(2)
+    expect(approvePlan).toHaveBeenCalledTimes(3)
     dispose()
   })
 })

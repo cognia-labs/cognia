@@ -72,6 +72,7 @@ import {
   currentInProgressStep,
   materializeSteps,
   refinedStepInputs,
+  reconcileBlockedSteps,
   skipStepInDag,
 } from "./steps"
 import { findPlanPiiLeak } from "./pii-gate"
@@ -596,7 +597,13 @@ class PlanRuntime {
     const current = await getPlan(planId)
     if (!current) return null
     if (isTerminalPlanStatus(current.status)) return current
-    const applied = applyStepStatus(current.steps, stepId, status, patch)
+    const applied = applyStepStatus(
+      current.steps,
+      stepId,
+      status,
+      patch,
+      current.config.errorPolicy ?? "stop"
+    )
     await updatePlan(planId, {
       steps: applied.steps,
       totalSteps: applied.totalSteps,
@@ -813,6 +820,7 @@ class PlanRuntime {
       }
     }
 
+    steps = reconcileBlockedSteps(steps, current.config.errorPolicy ?? "stop")
     const counts = computePlanCounts(steps)
     const generationId = crypto.randomUUID()
     await updatePlan(planId, {

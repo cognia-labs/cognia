@@ -434,7 +434,9 @@ export async function planRunCore(input: PlanRunInput): Promise<PlanRunOutput> {
       }
       await runtime.approvePlan(plan.id)
     }
-    const result = await runtime.runPlan(plan.id)
+    const { buildPlanRepairClient } = await import("@/lib/agent/plan/repair-client")
+    const client = await buildPlanRepairClient(plan, "bridge-plan-repair")
+    const result = await runtime.runPlan(plan.id, { ...(client ? { client } : {}) })
     return { ok: true, planId: plan.id, status: result?.status ?? "unknown" }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

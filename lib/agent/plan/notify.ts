@@ -214,13 +214,17 @@ export function installPlanNotificationActions(): () => void {
       await runtime.rejectPlan(planId)
       return
     }
-    await runtime.approvePlan(planId)
+    const approved = await runtime.approvePlan(planId)
     // Orchestrated plans can start headlessly from here; an in-session plan is
     // handed to the chat surface that owns its visible turns (same split as
     // the run-control `approve` command). Its first step is armed on the step
     // watchdog, so if no surface sends it the plan halts `not_started` with a
     // retry on the tracker card instead of sitting `executing` forever.
     const started = await runtime.startPlan(planId)
-    if (started?.strategy === "orchestrated") void runtime.runPlan(planId)
+    if (started?.strategy === "orchestrated") {
+      const { buildPlanRepairClient } = await import("./repair-client")
+      const client = await buildPlanRepairClient(approved, "notification-plan-repair")
+      void runtime.runPlan(planId, { ...(client ? { client } : {}) })
+    }
   })
 }

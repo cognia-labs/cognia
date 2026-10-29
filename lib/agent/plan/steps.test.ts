@@ -13,6 +13,7 @@ import {
   applyStepStatus,
   linearAgentTurnSteps,
   refinedStepInputs,
+  reconcileBlockedSteps,
   materializeSteps,
   nextRunnableStep,
   skipStepInDag,
@@ -337,5 +338,99 @@ describe("skipStepInDag", () => {
     const steps = [s("a", 0)]
     const out = skipStepInDag(steps, "missing")
     expect(out.steps).toEqual(steps)
+  })
+})
+
+describe("dependency failure blocking", () => {
+  const dag = () =>
+    materializeSteps([
+      input({ title: "root" }),
+      input({ title: "left", dependsOn: [0] }),
+      input({ title: "right", dependsOn: [0] }),
+      input({ title: "join", dependsOn: [1, 2] }),
+      input({ title: "independent" }),
+    ])
+
+  it("blocks pending transitive dependents, preserves other states and does not mutate inputs", () => {
+    const steps = dag()
+    steps[0].status = "failed"
+    steps[2].status = "in_progress"
+    const next = reconcileBlockedSteps(steps, "stop")
+    expect(next.map((s) => s.status)).toEqual([
+      "failed",
+      "blocked",
+      "in_progress",
+      "blocked",
+      "pending",
+    ])
+    expect(steps[1].status).toBe("pending")
+    expect(applyStepStatus(next, steps[0].id, "failed")).toMatchObject({
+      completedSteps: 0,
+      totalSteps: 5,
+      currentStepId: steps[2].id,
+    })
+    steps[2].status = "completed"
+    const settled = reconcileBlockedSteps(steps, "stop")
+    expect(settled[2].status).toBe("completed")
+    expect(applyStepStatus(settled, steps[0].id, "failed")).toMatchObject({
+      completedSteps: 1,
+      currentStepId: steps[4].id,
+    })
+  })
+
+  it.each(["pending", "skipped", "completed"] as const)(
+    "unblocks after a failed root becomes %s",
+    (status) => {
+      const steps = dag()
+      steps[0].status = "failed"
+      const blocked = reconcileBlockedSteps(steps, "stop")
+      blocked[0] = { ...blocked[0], status }
+      expect(reconcileBlockedSteps(blocked, "stop").map((s) => s.status)).toEqual([
+        status,
+        "pending",
+        "pending",
+        "pending",
+        "pending",
+      ])
+    }
+  )
+
+  it("keeps a shared descendant blocked until every failed ancestor is resolved", () => {
+    const steps = dag()
+    steps[0].status = "failed"
+    steps[2].status = "failed"
+    const blocked = reconcileBlockedSteps(steps, "stop")
+    blocked[0].status = "pending"
+    expect(reconcileBlockedSteps(blocked, "stop").map((s) => s.status)).toEqual([
+      "pending",
+      "pending",
+      "failed",
+      "blocked",
+      "pending",
+    ])
+  })
+
+  it.each(["continue"] as const)("does not block under the %s policy", (policy) => {
+    const steps = dag()
+    steps[0].status = "failed"
+    expect(reconcileBlockedSteps(steps, policy).map((s) => s.status)).toEqual([
+      "failed",
+      "pending",
+      "pending",
+      "pending",
+      "pending",
+    ])
+  })
+
+  it("never selects blocked steps, even with satisfied dependencies", () => {
+    const steps = materializeSteps([input(), input({ dependsOn: [0] })])
+    steps[0].status = "completed"
+    steps[1].status = "blocked"
+    expect(nextRunnableStep(steps)).toBeUndefined()
+    expect(applyStepStatus(steps, steps[0].id, "completed")).toMatchObject({
+      completedSteps: 1,
+      totalSteps: 2,
+      currentStepId: undefined,
+    })
   })
 })

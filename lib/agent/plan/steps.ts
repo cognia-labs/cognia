@@ -5,7 +5,7 @@
  * so they're unit-testable without Dexie. (ADR-0045)
  */
 
-import type { CreatePlanStepInput, PlanStep, PlanStepStatus } from "@/types/agent/plan"
+import type { CreatePlanStepInput, PlanConfig, PlanStep, PlanStepStatus } from "@/types/agent/plan"
 import { computePlanCounts } from "@/types/agent/plan"
 
 /** Max characters kept from a step title (Dexie row hygiene + card layout). */
@@ -112,28 +112,66 @@ export function materializeSteps(inputs: CreatePlanStepInput[]): PlanStep[] {
 /**
  * Apply a status (and optional field patch) to one step, returning a new step
  * array plus the recomputed plan counts and current-step cursor. The cursor
- * points at the first `in_progress` step, else the first non-terminal step in
- * `order`, else undefined when everything is terminal.
+ * points at the first `in_progress` step, else the next runnable step, else
+ * undefined. Blocked steps remain unfinished but cannot become the cursor.
  */
 export function applyStepStatus(
   steps: PlanStep[],
   stepId: string,
   status: PlanStepStatus,
-  patch: Partial<Omit<PlanStep, "id" | "status">> = {}
+  patch: Partial<Omit<PlanStep, "id" | "status">> = {},
+  errorPolicy?: PlanConfig["errorPolicy"]
 ): { steps: PlanStep[]; totalSteps: number; completedSteps: number; currentStepId?: string } {
-  const next = steps.map((s) => (s.id === stepId ? { ...s, ...patch, status } : s))
+  const updated = steps.map((s) => (s.id === stepId ? { ...s, ...patch, status } : s))
+  const next = errorPolicy === undefined ? updated : reconcileBlockedSteps(updated, errorPolicy)
   const counts = computePlanCounts(next)
   const ordered = [...next].sort((a, b) => a.order - b.order)
   const inProgress = ordered.find((s) => s.status === "in_progress")
-  const nextOpen = ordered.find(
-    (s) => s.status !== "completed" && s.status !== "failed" && s.status !== "skipped"
-  )
+  const nextOpen = nextRunnableStep(next)
   return {
     steps: next,
     totalSteps: counts.totalSteps,
     completedSteps: counts.completedSteps,
     currentStepId: (inProgress ?? nextOpen)?.id,
   }
+}
+
+/**
+ * Under stop-on-error, pending descendants of any failed step are blocked.
+ * Recompute from all failed roots so a retry releases only descendants with
+ * no remaining failed ancestor. Traversal crosses every status, but never
+ * rewrites running or settled work. A visited set also bounds malformed cycles.
+ */
+export function reconcileBlockedSteps(
+  steps: PlanStep[],
+  errorPolicy: PlanConfig["errorPolicy"] = "stop"
+): PlanStep[] {
+  const descendants = new Map<string, string[]>()
+  for (const step of steps) {
+    for (const dependency of step.dependencies) {
+      const children = descendants.get(dependency) ?? []
+      children.push(step.id)
+      descendants.set(dependency, children)
+    }
+  }
+  const queue =
+    errorPolicy === "stop" ? steps.filter((s) => s.status === "failed").map((s) => s.id) : []
+  const visited = new Set(queue)
+  const blocked = new Set<string>()
+  for (let i = 0; i < queue.length; i++) {
+    for (const id of descendants.get(queue[i]) ?? []) {
+      blocked.add(id)
+      if (!visited.has(id)) {
+        visited.add(id)
+        queue.push(id)
+      }
+    }
+  }
+  return steps.map((step) => {
+    if (step.status === "pending" && blocked.has(step.id)) return { ...step, status: "blocked" }
+    if (step.status === "blocked" && !blocked.has(step.id)) return { ...step, status: "pending" }
+    return step
+  })
 }
 
 /**
@@ -177,7 +215,7 @@ export function skipStepInDag(
  * Lives here rather than in the driver so `PlanRuntime.startPlan` and
  * `handlePlanTurnComplete` share one definition of "next" — and so it stays
  * testable without Dexie. A step whose dependency failed or was skipped is NOT
- * runnable (it stays pending and the plan runs out of work), which is how an
+ * runnable (it stays unfinished and the plan runs out of work), which is how an
  * in-session plan stops instead of silently jumping the broken link.
  */
 export function nextRunnableStep(steps: PlanStep[]): PlanStep | undefined {
@@ -185,7 +223,7 @@ export function nextRunnableStep(steps: PlanStep[]): PlanStep | undefined {
   return [...steps]
     .sort((a, b) => a.order - b.order)
     .find((step) => {
-      if (step.status === "completed" || step.status === "failed" || step.status === "skipped") {
+      if (step.status !== "pending" && step.status !== "ready" && step.status !== "in_progress") {
         return false
       }
       return step.dependencies.every((depId) => byId.get(depId)?.status === "completed")
