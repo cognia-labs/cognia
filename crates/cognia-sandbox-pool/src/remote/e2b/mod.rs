@@ -71,7 +71,7 @@ const STDIN_QUEUE: usize = 16;
 const MAX_ERROR_OUTPUT: usize = 4096;
 
 fn default_api_url() -> String {
-    "https://api.e2b.app".to_string()
+    cognia_e2b::DEFAULT_E2B_API_URL.to_string()
 }
 
 fn default_domain() -> String {

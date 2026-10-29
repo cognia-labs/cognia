@@ -1,4 +1,4 @@
-//! Strict primitives for the managed-desktop caller (ADR-0233).
+//! Shared template-build transport and strict managed-desktop primitives (ADR-0233).
 //!
 //! Wire evidence: E2B's `template/tags` documentation and JS SDK
 //! `src/api/schema.gen.ts` (NewSandboxV2, TemplateBuildStartV2), checked
@@ -6,11 +6,12 @@
 //! and durable build receipts belong to the Host domain, not this HTTP client.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{ApiClient, ApiError, BuildInfo, CreatedSandbox, RequestedBuild};
+use crate::{decode, ApiClient, ApiError, BuildInfo, CreatedSandbox, RequestedBuild};
 
 /// An immutable provider build, never a mutable alias/tag.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -236,7 +237,157 @@ impl ExactSandboxRequest {
     }
 }
 
+/// Consecutive failed status polls tolerated before a build is given up on.
+const MAX_POLL_FAILURES: u32 = 5;
+/// Status calls made to drain the logs of a finished build.
+const MAX_LOG_DRAIN_CALLS: usize = 50;
+
+/// The line a failed build is reported with: its last error-level log line,
+/// else the status reason, else its last log line.
+fn failure_line(info: &BuildInfo, last_error: Option<&str>, last_line: Option<&str>) -> String {
+    let reason = info
+        .reason
+        .as_ref()
+        .map(|reason| reason.message.trim())
+        .filter(|message| !message.is_empty());
+    let reason_error = info.reason.as_ref().and_then(|reason| {
+        reason
+            .log_entries
+            .iter()
+            .rev()
+            .find(|entry| entry.level == "error" && !entry.message.trim().is_empty())
+            .map(|entry| entry.message.trim())
+    });
+    reason_error
+        .or(last_error)
+        .or(reason)
+        .or(last_line)
+        .unwrap_or("the template build failed")
+        .to_string()
+}
+
+/// How waiting for one build ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BuildEnd {
+    Ready,
+    Failed(String),
+}
+
 impl ApiClient {
+    /// `POST /v3/templates`: a new build of the template named `name`
+    /// (creating the template when the team has none by that name).
+    pub async fn request_build(
+        &self,
+        name: &str,
+        cpu_count: u32,
+        memory_mb: u32,
+    ) -> Result<RequestedBuild, ApiError> {
+        let url = self.endpoint(&["v3", "templates"])?;
+        let body = json!({ "name": name, "cpuCount": cpu_count, "memoryMB": memory_mb });
+        let response = self
+            .call_ok(reqwest::Method::POST, url, Some(&body))
+            .await?;
+        decode(&response.body, "the requested build")
+    }
+
+    /// `POST /v2/templates/{id}/builds/{build}`.
+    pub async fn start_build(
+        &self,
+        template_id: &str,
+        build_id: &str,
+        body: &Value,
+    ) -> Result<(), ApiError> {
+        let url = self.endpoint(&["v2", "templates", template_id, "builds", build_id])?;
+        self.call_ok(reqwest::Method::POST, url, Some(body)).await?;
+        Ok(())
+    }
+
+    /// `GET /templates/{id}/builds/{build}/status`, logs from `logs_offset`.
+    pub async fn build_status(
+        &self,
+        template_id: &str,
+        build_id: &str,
+        logs_offset: usize,
+    ) -> Result<BuildInfo, ApiError> {
+        let mut url = self.endpoint(&["templates", template_id, "builds", build_id, "status"])?;
+        url.query_pairs_mut()
+            .append_pair("logsOffset", &logs_offset.to_string());
+        let response = self.call_ok(reqwest::Method::GET, url, None).await?;
+        decode(&response.body, "the build status")
+    }
+
+    /// Polls a build until it is ready or failed, reading its logs along the
+    /// way. Transient poll failures are retried a few times in a row.
+    pub async fn wait_build(
+        &self,
+        template_id: &str,
+        build_id: &str,
+        poll: Duration,
+    ) -> Result<BuildEnd, ApiError> {
+        let mut offset = 0usize;
+        let mut last_error: Option<String> = None;
+        let mut last_line: Option<String> = None;
+        let mut failures = 0u32;
+        let mut absorb = |info: &BuildInfo, offset: &mut usize| {
+            *offset += info.log_entries.len();
+            for entry in &info.log_entries {
+                let message = entry.message.trim();
+                if message.is_empty() {
+                    continue;
+                }
+                if entry.level == "error" {
+                    last_error = Some(message.to_string());
+                }
+                last_line = Some(message.to_string());
+            }
+        };
+        loop {
+            let info = match self.build_status(template_id, build_id, offset).await {
+                Ok(info) => {
+                    failures = 0;
+                    info
+                }
+                Err(error) if error.is_transient() && failures + 1 < MAX_POLL_FAILURES => {
+                    failures += 1;
+                    tokio::time::sleep(poll).await;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            absorb(&info, &mut offset);
+            match info.status.as_str() {
+                "ready" => return Ok(BuildEnd::Ready),
+                "error" => {
+                    // The status call returns at most 100 log lines; drain the
+                    // rest for the line that says what failed.
+                    let mut drained = info.log_entries.len();
+                    let mut calls = 0;
+                    while drained > 0 && calls < MAX_LOG_DRAIN_CALLS {
+                        calls += 1;
+                        match self.build_status(template_id, build_id, offset).await {
+                            Ok(more) => {
+                                drained = more.log_entries.len();
+                                absorb(&more, &mut offset);
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    return Ok(BuildEnd::Failed(failure_line(
+                        &info,
+                        last_error.as_deref(),
+                        last_line.as_deref(),
+                    )));
+                }
+                "building" | "waiting" => tokio::time::sleep(poll).await,
+                other => {
+                    return Err(ApiError::Invalid(format!(
+                        "build {build_id} is in an unknown state {other:?}"
+                    )))
+                }
+            }
+        }
+    }
+
     /// Register only. Persist the returned IDs before starting or polling.
     /// An unknown registration outcome must be reconciled, not blindly retried.
     pub async fn request_image_build(
@@ -306,6 +457,48 @@ impl ApiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_build_reports_its_last_error_line() {
+        let info = |reason: Option<&str>, reason_logs: &[(&str, &str)]| BuildInfo {
+            status: "error".into(),
+            log_entries: Vec::new(),
+            reason: reason.map(|message| crate::BuildStatusReason {
+                message: message.into(),
+                log_entries: reason_logs
+                    .iter()
+                    .map(|(level, message)| crate::BuildLogEntry {
+                        level: (*level).into(),
+                        message: (*message).into(),
+                    })
+                    .collect(),
+            }),
+        };
+        assert_eq!(
+            failure_line(
+                &info(
+                    Some("step 2 failed"),
+                    &[("info", "x"), ("error", "glibc too old")]
+                ),
+                Some("earlier"),
+                None
+            ),
+            "glibc too old"
+        );
+        assert_eq!(
+            failure_line(&info(Some("step 2 failed"), &[]), Some("exit 1"), Some("x")),
+            "exit 1"
+        );
+        assert_eq!(
+            failure_line(&info(Some("step 2 failed"), &[]), None, Some("x")),
+            "step 2 failed"
+        );
+        assert_eq!(failure_line(&info(None, &[]), None, Some("last")), "last");
+        assert_eq!(
+            failure_line(&info(None, &[]), None, None),
+            "the template build failed"
+        );
+    }
 
     fn build() -> ExactBuild {
         ExactBuild {

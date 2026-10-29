@@ -6,6 +6,7 @@ use super::{
 use async_trait::async_trait;
 use cognia_e2b::{
     ApiClient, ApiError, ExactBuild, ExactSandboxRequest, ImageBuildRequest, SandboxEgress,
+    DEFAULT_E2B_API_URL,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -215,7 +216,7 @@ pub struct E2bDesktopProvider {
 impl E2bDesktopProvider {
     pub fn new(verifier: Arc<dyn ManagedDesktopImageVerifier>) -> Self {
         Self {
-            base: Url::parse("https://api.e2b.app").expect("constant URL"),
+            base: Url::parse(DEFAULT_E2B_API_URL).expect("constant URL"),
             verifier,
             verified_releases: tokio::sync::Mutex::new(std::collections::BTreeSet::new()),
         }
@@ -800,6 +801,11 @@ fn validate_frame(data: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn provider_uses_the_shared_control_plane_origin() {
+        let provider = E2bDesktopProvider::new(Arc::new(TestImageVerifier));
+        assert_eq!(provider.base, Url::parse(DEFAULT_E2B_API_URL).unwrap());
+    }
     #[test]
     fn readiness_requires_auth_denial_and_never_accepts_upstream_unavailability() {
         for status in [401, 403] {

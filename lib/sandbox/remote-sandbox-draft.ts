@@ -38,6 +38,7 @@ const LABEL_KEY =
   /^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/
 const LABEL_VALUE = /^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$/
 
+/** Pinned to `cognia_e2b::DEFAULT_E2B_API_URL` by the co-located contract test. */
 export const DEFAULT_E2B_API_URL = "https://api.e2b.app"
 export const DEFAULT_E2B_DOMAIN = "e2b.app"
 export const DEFAULT_E2B_TEMPLATE_PREFIX = "cognia"

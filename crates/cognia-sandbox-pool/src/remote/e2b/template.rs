@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use super::api::{AliasLookup, ApiClient, ApiError, BuildInfo, SpawnErrorExt};
+use super::api::{AliasLookup, ApiClient, BuildEnd, SpawnErrorExt};
 use super::bundle::{prepare_rootfs, BundleSource, BUNDLE_TREE};
 use crate::remote::START_MARKER;
 
@@ -36,10 +36,6 @@ use crate::remote::START_MARKER;
 const SIZE_PART_MAX: usize = 40;
 /// E2B's smallest sandbox memory.
 const MIN_MEMORY_MB: u32 = 128;
-/// Consecutive failed status polls tolerated before a build is given up on.
-const MAX_POLL_FAILURES: u32 = 5;
-/// Status calls made to drain the logs of a finished build.
-const MAX_LOG_DRAIN_CALLS: usize = 50;
 /// Hashed with the bundle digest into the COPY step's files hash. Bump it
 /// whenever the archive's shape changes, so no cache serves the old shape.
 const ARCHIVE_FORMAT: &str = "cognia-bundle-rootfs:v1:";
@@ -204,108 +200,6 @@ fn timeout_error(plan: &TemplatePlan, timeout: Duration) -> SandboxSpawnError {
     )
 }
 
-/// The line a failed build is reported with: its last error-level log line,
-/// else the status reason, else its last log line.
-fn failure_line(info: &BuildInfo, last_error: Option<&str>, last_line: Option<&str>) -> String {
-    let reason = info
-        .reason
-        .as_ref()
-        .map(|reason| reason.message.trim())
-        .filter(|message| !message.is_empty());
-    let reason_error = info.reason.as_ref().and_then(|reason| {
-        reason
-            .log_entries
-            .iter()
-            .rev()
-            .find(|entry| entry.level == "error" && !entry.message.trim().is_empty())
-            .map(|entry| entry.message.trim())
-    });
-    reason_error
-        .or(last_error)
-        .or(reason)
-        .or(last_line)
-        .unwrap_or("the template build failed")
-        .to_string()
-}
-
-/// How waiting for one build ended.
-enum BuildEnd {
-    Ready,
-    Failed(String),
-}
-
-/// Polls a build until it is ready or failed, reading its logs along the
-/// way. Transient poll failures are retried a few times in a row.
-async fn wait_build(
-    api: &ApiClient,
-    template_id: &str,
-    build_id: &str,
-    poll: Duration,
-) -> Result<BuildEnd, ApiError> {
-    let mut offset = 0usize;
-    let mut last_error: Option<String> = None;
-    let mut last_line: Option<String> = None;
-    let mut failures = 0u32;
-    let mut absorb = |info: &BuildInfo, offset: &mut usize| {
-        *offset += info.log_entries.len();
-        for entry in &info.log_entries {
-            let message = entry.message.trim();
-            if message.is_empty() {
-                continue;
-            }
-            if entry.level == "error" {
-                last_error = Some(message.to_string());
-            }
-            last_line = Some(message.to_string());
-        }
-    };
-    loop {
-        let info = match api.build_status(template_id, build_id, offset).await {
-            Ok(info) => {
-                failures = 0;
-                info
-            }
-            Err(error) if error.is_transient() && failures + 1 < MAX_POLL_FAILURES => {
-                failures += 1;
-                tokio::time::sleep(poll).await;
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        absorb(&info, &mut offset);
-        match info.status.as_str() {
-            "ready" => return Ok(BuildEnd::Ready),
-            "error" => {
-                // The status call returns at most 100 log lines; drain the
-                // rest for the line that says what failed.
-                let mut drained = info.log_entries.len();
-                let mut calls = 0;
-                while drained > 0 && calls < MAX_LOG_DRAIN_CALLS {
-                    calls += 1;
-                    match api.build_status(template_id, build_id, offset).await {
-                        Ok(more) => {
-                            drained = more.log_entries.len();
-                            absorb(&more, &mut offset);
-                        }
-                        Err(_) => break,
-                    }
-                }
-                return Ok(BuildEnd::Failed(failure_line(
-                    &info,
-                    last_error.as_deref(),
-                    last_line.as_deref(),
-                )));
-            }
-            "building" | "waiting" => tokio::time::sleep(poll).await,
-            other => {
-                return Err(ApiError::Invalid(format!(
-                    "build {build_id} is in an unknown state {other:?}"
-                )))
-            }
-        }
-    }
-}
-
 /// Returns the id of a ready template for `plan`, building it when no Host
 /// has. Callers serialize concurrent calls for one plan name.
 pub(super) async fn ensure_template(
@@ -334,7 +228,7 @@ pub(super) async fn ensure_template(
         {
             let waited = tokio::time::timeout_at(
                 deadline,
-                wait_build(api, &template_id, &running.build_id, poll),
+                api.wait_build(&template_id, &running.build_id, poll),
             )
             .await
             .map_err(|_| timeout_error(plan, timeout))?
@@ -410,7 +304,8 @@ async fn build(
         ),
         _ => error.to_spawn_error("starting the E2B template build"),
     })?;
-    match wait_build(api, &requested.template_id, &requested.build_id, poll)
+    match api
+        .wait_build(&requested.template_id, &requested.build_id, poll)
         .await
         .map_err(|error| error.to_spawn_error("waiting for the E2B template build"))?
     {
@@ -541,48 +436,6 @@ mod tests {
                 "/opt/cognia/bin/cognia-sandboxd install --stage libc --libc musl --from /opt/cognia --to /cognia",
                 "rm -rf /workspace && mkdir -p /workspace /tmp/cognia-sandboxd && chmod 0777 /workspace",
             ]
-        );
-    }
-
-    #[test]
-    fn a_failed_build_reports_its_last_error_line() {
-        let info = |reason: Option<&str>, reason_logs: &[(&str, &str)]| BuildInfo {
-            status: "error".into(),
-            log_entries: Vec::new(),
-            reason: reason.map(|message| super::super::api::BuildStatusReason {
-                message: message.into(),
-                log_entries: reason_logs
-                    .iter()
-                    .map(|(level, message)| super::super::api::BuildLogEntry {
-                        level: (*level).into(),
-                        message: (*message).into(),
-                    })
-                    .collect(),
-            }),
-        };
-        assert_eq!(
-            failure_line(
-                &info(
-                    Some("step 2 failed"),
-                    &[("info", "x"), ("error", "glibc too old")]
-                ),
-                Some("earlier"),
-                None
-            ),
-            "glibc too old"
-        );
-        assert_eq!(
-            failure_line(&info(Some("step 2 failed"), &[]), Some("exit 1"), Some("x")),
-            "exit 1"
-        );
-        assert_eq!(
-            failure_line(&info(Some("step 2 failed"), &[]), None, Some("x")),
-            "step 2 failed"
-        );
-        assert_eq!(failure_line(&info(None, &[]), None, Some("last")), "last");
-        assert_eq!(
-            failure_line(&info(None, &[]), None, None),
-            "the template build failed"
         );
     }
 

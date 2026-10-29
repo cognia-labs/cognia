@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs"
+import { resolve } from "node:path"
 import {
+  DEFAULT_E2B_API_URL,
   draftFromProvider,
   draftNeedsCredential,
   emptyProviderDraft,
@@ -13,6 +16,14 @@ import {
 import type { SandboxProviderConfig } from "@/types/sandbox/remote-sandboxes"
 
 const adding: ProviderDraftContext = { existingIds: [], storedSecretIds: [] }
+
+it("pins the E2B draft default to the shared Rust transport URL", () => {
+  const rust = readFileSync(resolve(process.cwd(), "crates/cognia-e2b/src/lib.rs"), "utf8")
+  const constant = rust.match(/pub const DEFAULT_E2B_API_URL: &str = "([^"]+)";/)
+  expect(constant).not.toBeNull()
+  expect(DEFAULT_E2B_API_URL).toBe(constant?.[1])
+  expect(emptyProviderDraft("e2b").e2b.apiUrl).toBe(DEFAULT_E2B_API_URL)
+})
 
 function e2b(overrides: Partial<ProviderDraft> = {}): ProviderDraft {
   return { ...emptyProviderDraft("e2b"), id: "e2b", credential: "e2b_key", ...overrides }

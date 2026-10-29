@@ -19,10 +19,14 @@ pub mod connect;
 pub mod envd;
 mod exact;
 pub use exact::{
-    ExactBuild, ExactSandboxRequest, ImageBuildRequest, SandboxEgress, PRIVATE_EGRESS_DENY,
+    BuildEnd, ExactBuild, ExactSandboxRequest, ImageBuildRequest, SandboxEgress,
+    PRIVATE_EGRESS_DENY,
 };
 use serde_json::{json, Value};
 use url::{Host, Url};
+
+/// Default E2B control-plane origin, shared by both Host providers.
+pub const DEFAULT_E2B_API_URL: &str = "https://api.e2b.app";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Whole-exchange ceiling for one control-plane call. Sandbox creation is
@@ -619,22 +623,6 @@ impl ApiClient {
         )))
     }
 
-    /// `POST /v3/templates`: a new build of the template named `name`
-    /// (creating the template when the team has none by that name).
-    pub async fn request_build(
-        &self,
-        name: &str,
-        cpu_count: u32,
-        memory_mb: u32,
-    ) -> Result<RequestedBuild, ApiError> {
-        let url = self.endpoint(&["v3", "templates"])?;
-        let body = json!({ "name": name, "cpuCount": cpu_count, "memoryMB": memory_mb });
-        let response = self
-            .call_ok(reqwest::Method::POST, url, Some(&body))
-            .await?;
-        decode(&response.body, "the requested build")
-    }
-
     /// `GET /templates/{id}/files/{hash}`.
     pub async fn file_upload(
         &self,
@@ -644,32 +632,6 @@ impl ApiClient {
         let url = self.endpoint(&["templates", template_id, "files", files_hash])?;
         let response = self.call_ok(reqwest::Method::GET, url, None).await?;
         decode(&response.body, "the file upload link")
-    }
-
-    /// `POST /v2/templates/{id}/builds/{build}`.
-    pub async fn start_build(
-        &self,
-        template_id: &str,
-        build_id: &str,
-        body: &Value,
-    ) -> Result<(), ApiError> {
-        let url = self.endpoint(&["v2", "templates", template_id, "builds", build_id])?;
-        self.call_ok(reqwest::Method::POST, url, Some(body)).await?;
-        Ok(())
-    }
-
-    /// `GET /templates/{id}/builds/{build}/status`, logs from `logs_offset`.
-    pub async fn build_status(
-        &self,
-        template_id: &str,
-        build_id: &str,
-        logs_offset: usize,
-    ) -> Result<BuildInfo, ApiError> {
-        let mut url = self.endpoint(&["templates", template_id, "builds", build_id, "status"])?;
-        url.query_pairs_mut()
-            .append_pair("logsOffset", &logs_offset.to_string());
-        let response = self.call_ok(reqwest::Method::GET, url, None).await?;
-        decode(&response.body, "the build status")
     }
 
     /// PUTs the file at `path` (`size` bytes) to a presigned upload URL with
@@ -852,6 +814,147 @@ mod tests {
             calls,
             task,
         }
+    }
+
+    async fn build_status_fixture(
+        replies: Vec<(StatusCode, Value)>,
+    ) -> (Fixture, Arc<Mutex<Vec<usize>>>) {
+        init_test_network();
+        let replies = Arc::new(Mutex::new(std::collections::VecDeque::from(replies)));
+        let offsets = Arc::new(Mutex::new(Vec::new()));
+        let seen = offsets.clone();
+        let router = Router::new().fallback(move |request: Request| {
+            let replies = replies.clone();
+            let seen = seen.clone();
+            async move {
+                assert_eq!(
+                    request.uri().path(),
+                    "/templates/template/builds/build/status"
+                );
+                assert_eq!(request.headers()["x-api-key"], "test-api-secret");
+                let query = Url::parse(&format!("http://localhost{}", request.uri())).unwrap();
+                let offset = query
+                    .query_pairs()
+                    .find(|(key, _)| key == "logsOffset")
+                    .unwrap()
+                    .1
+                    .parse()
+                    .unwrap();
+                seen.lock().unwrap().push(offset);
+                let (status, reply) = replies
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("unexpected status poll");
+                Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(Body::from(reply.to_string()))
+                    .unwrap()
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        (
+            Fixture {
+                api: ApiClient::new(base, "test-api-secret".into()),
+                calls: Calls::default(),
+                task,
+            },
+            offsets,
+        )
+    }
+
+    #[tokio::test]
+    async fn shared_build_polling_retries_transient_errors_and_advances_logs() {
+        let failures = || vec![(StatusCode::SERVICE_UNAVAILABLE, json!({})); 4];
+        let mut replies = failures();
+        replies.push((
+            StatusCode::OK,
+            json!({"status":"waiting", "logEntries":[{"level":"info", "message":"queued"}]}),
+        ));
+        replies.extend(failures());
+        replies.push((
+            StatusCode::OK,
+            json!({"status":"building", "logEntries":[{"level":"info", "message":"started"}]}),
+        ));
+        replies.push((StatusCode::OK, json!({"status":"ready"})));
+        let (f, offsets) = build_status_fixture(replies).await;
+        assert_eq!(
+            f.api
+                .wait_build("template", "build", Duration::ZERO)
+                .await
+                .unwrap(),
+            BuildEnd::Ready
+        );
+        assert_eq!(*offsets.lock().unwrap(), [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn shared_build_polling_drains_failure_logs_for_the_last_error() {
+        let (f, offsets) = build_status_fixture(vec![
+            (StatusCode::OK, json!({"status":"error", "reason":{"message":"step failed"}, "logEntries":[{"level":"info", "message":"starting"}]})),
+            (StatusCode::OK, json!({"status":"error", "logEntries":[{"level":"error", "message":"  final compiler error  "}]})),
+            (StatusCode::OK, json!({"status":"error"})),
+        ]).await;
+        assert_eq!(
+            f.api
+                .wait_build("template", "build", Duration::ZERO)
+                .await
+                .unwrap(),
+            BuildEnd::Failed("final compiler error".into())
+        );
+        assert_eq!(*offsets.lock().unwrap(), [0, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn shared_build_polling_bounds_retries_and_log_draining() {
+        for (status, count) in [
+            (StatusCode::TOO_MANY_REQUESTS, 5),
+            (StatusCode::FORBIDDEN, 1),
+        ] {
+            let (f, offsets) = build_status_fixture(vec![(status, json!({})); count]).await;
+            let error = f
+                .api
+                .wait_build("template", "build", Duration::ZERO)
+                .await
+                .unwrap_err();
+            assert_eq!(error.status(), Some(status.as_u16()));
+            assert_eq!(offsets.lock().unwrap().len(), count);
+        }
+        let (f, offsets) = build_status_fixture(vec![
+            (
+                StatusCode::OK,
+                json!({"status":"error", "logEntries":[{"level":"error", "message":"failure"}]})
+            );
+            51
+        ])
+        .await;
+        assert_eq!(
+            f.api
+                .wait_build("template", "build", Duration::ZERO)
+                .await
+                .unwrap(),
+            BuildEnd::Failed("failure".into())
+        );
+        assert_eq!(*offsets.lock().unwrap(), (0..=50).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn shared_build_polling_refuses_unknown_states() {
+        let (f, offsets) =
+            build_status_fixture(vec![(StatusCode::OK, json!({"status":"new-state"}))]).await;
+        let error = f
+            .api
+            .wait_build("template", "build", Duration::ZERO)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            ApiError::Invalid("build build is in an unknown state \"new-state\"".into())
+        );
+        assert_eq!(*offsets.lock().unwrap(), [0]);
     }
 
     #[tokio::test]
