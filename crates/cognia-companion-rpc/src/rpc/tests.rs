@@ -1553,6 +1553,9 @@ fn connector_keyring_arms_are_step_up_not_service_only() {
 fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
     for name in crate::managed_desktops::COMMANDS {
         let mutation = matches!(*name,
+            "managed_desktop_config_save" | "managed_desktop_config_delete" |
+            "managed_desktop_config_set_credential" | "managed_desktop_config_rotate_credential" |
+            "managed_desktop_template_delete" |
             "managed_desktop_authorize" | "managed_desktop_prepare_template" |
             "managed_desktop_create" | "managed_desktop_connect" | "managed_desktop_delete" |
             "managed_desktop_control_acquire" | "managed_desktop_control_renew" |
@@ -1560,7 +1563,26 @@ fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
         assert_eq!(STEP_UP_COMMANDS.contains(name), mutation, "{name}");
         assert!(KNOWN_COMMANDS.contains(name), "{name}");
         let descriptor = cognia_companion::command_manifest::descriptor(name).unwrap();
-        assert_eq!(descriptor.capability, if mutation { "host.admin" } else { "host.observe" });
+        // ADR-0233 §4: acceptance results and source revocation are execution
+        // authority; everything else that does not change the Host observes.
+        let execute = matches!(
+            *name,
+            "managed_desktop_results_capture"
+                | "managed_desktop_results_approve"
+                | "managed_desktop_results_complete"
+                | "managed_desktop_results_prepare_delete"
+                | "managed_desktop_results_commit_delete"
+                | "managed_desktop_results_abort_delete"
+                | "managed_desktop_handoff_revoke_source"
+        );
+        let expected = if mutation {
+            "host.admin"
+        } else if execute {
+            "host.execute"
+        } else {
+            "host.observe"
+        };
+        assert_eq!(descriptor.capability, expected, "{name}");
     }
 }
 

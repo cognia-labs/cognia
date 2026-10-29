@@ -17,6 +17,7 @@ import { RemoteHostLivenessInitializer } from "./remote-host-liveness-initialize
 import { RemoteHostKeysInitializer } from "./remote-host-keys-initializer"
 import { ConnectorHostWritesInitializer } from "./connector-host-writes-initializer"
 import { UpdateCenterInitializer } from "./update-center-initializer"
+import { ManagedDesktopAlertsInitializer } from "./managed-desktop-alerts-initializer"
 import { GatewayProvider } from "@/components/providers/gateway-provider"
 import { markBootCapabilityReady } from "@/lib/boot/capabilities"
 import { ensurePlanStepRecovery } from "@/lib/agent/plan/step-recovery"
@@ -100,6 +101,11 @@ export function DeferredBootInitializersImpl() {
         drives, where the connector runtime is (ADR-0224). Order-independent.
       */}
       <ConnectorHostWritesInitializer />
+      {/*
+        Raises managed desktop billing and cleanup alerts (ADR-0233 §5, A7)
+        from the Host this client drives. Order-independent; every shell.
+      */}
+      <ManagedDesktopAlertsInitializer />
       {/*
         Records each workspace's repository from its checkout, so an
         always-on host without the folder can clone it (ADR-0224 A11).

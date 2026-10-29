@@ -43,6 +43,23 @@ import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-cont
 jest.mock("./managed-desktop-cleanup", () => ({
   ManagedDesktopCleanup: () => <div data-testid="managed-desktop-cleanup" />,
 }))
+const confirmDialog = jest.fn()
+jest.mock("@/components/shared/confirm-dialog", () => ({
+  useConfirmDialog: () => ({ confirm: confirmDialog, dialog: null }),
+}))
+jest.mock("./managed-desktop-monitor", () => ({
+  ManagedDesktopMonitorPanel: () => <div data-testid="managed-desktop-monitor" />,
+}))
+jest.mock("./managed-desktop-templates", () => ({
+  ManagedDesktopTemplates: ({ revision }: { revision: number }) => (
+    <div data-testid="managed-desktop-templates" data-revision={revision} />
+  ),
+}))
+jest.mock("./managed-desktop-config-form", () => ({
+  ManagedDesktopConfigForm: ({ config }: { config?: { id: string } }) => (
+    <div data-testid="managed-desktop-config-form">{config ? `edit:${config.id}` : "create"}</div>
+  ),
+}))
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en/settings/managedDesktops.json"
@@ -75,6 +92,7 @@ jest.mock("@/lib/automation/managed-desktop-client", () => ({
   managedDesktopClient: {
     list: jest.fn(),
     listConfigs: jest.fn(),
+    releaseStatus: jest.fn(),
     quote: jest.fn(),
     authorize: jest.fn(),
     prepareTemplate: jest.fn(),
@@ -131,6 +149,14 @@ beforeEach(() => {
   )
   api.listConfigs.mockResolvedValue([config])
   api.list.mockResolvedValue([])
+  api.releaseStatus.mockResolvedValue({
+    state: "installed",
+    source: "bundled",
+    imageDigest: `sha256:${"c".repeat(64)}`,
+    recipeRevision: "7",
+    protocol: "computer-server-0.3.46",
+    error: null,
+  })
   api.quote.mockResolvedValue({
     id: "quote",
     providerConfigId: "byo",
@@ -147,9 +173,47 @@ beforeEach(() => {
   api.authorize.mockResolvedValue({ id: "auth", expiresAt: Date.now() + 60000 })
 })
 
+test("mounts the billing monitor and refreshes templates on every reload", async () => {
+  renderSettings()
+  await screen.findByText(messages.unqualified)
+  expect(screen.getByTestId("managed-desktop-monitor")).toBeInTheDocument()
+  const before = Number(screen.getByTestId("managed-desktop-templates").dataset.revision)
+  fireEvent.click(screen.getByRole("button", { name: messages.load }))
+  await waitFor(() =>
+    expect(Number(screen.getByTestId("managed-desktop-templates").dataset.revision)).toBe(
+      before + 1
+    )
+  )
+})
+
+test("opens the configuration form for a new or an existing configuration", async () => {
+  renderSettings()
+  await screen.findByText(messages.unqualified)
+  fireEvent.click(screen.getByRole("button", { name: messages.configForm.newConfig }))
+  expect(screen.getByTestId("managed-desktop-config-form")).toHaveTextContent("create")
+  fireEvent.click(screen.getByRole("button", { name: messages.configForm.edit }))
+  expect(screen.getByText(`edit:${config.id}`)).toBeInTheDocument()
+})
+
+test("offers no new configuration while the Host has no trusted release", async () => {
+  api.releaseStatus.mockResolvedValue({
+    state: "absent",
+    source: null,
+    imageDigest: null,
+    recipeRevision: null,
+    protocol: null,
+    error: null,
+  })
+  renderSettings()
+  expect(await screen.findByText(messages.release.absent)).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: messages.configForm.newConfig })).toBeDisabled()
+})
+
 test("labels dormancy on the real settings surface and makes no billed call on mount", async () => {
   renderSettings()
   expect(await screen.findByText(messages.unqualified)).toBeInTheDocument()
+  expect(api.releaseStatus).toHaveBeenCalledWith({ kind: "remote", hostId: "chosen-host" })
+  expect(screen.getByText(messages.release.sourceBundled)).toBeInTheDocument()
   expect(screen.getByText(messages.dormant)).toBeInTheDocument()
   expect(screen.getByRole("button", { name: messages.create })).toBeDisabled()
   expect(api.listConfigs).toHaveBeenCalledWith({ kind: "remote", hostId: "chosen-host" })
@@ -262,6 +326,16 @@ test("cleanup remains available when provider is unqualified or disabled", async
   renderSettings()
   await screen.findByText("Destroy retry pending", { exact: false })
   expect(screen.getByText(messages.smokeResource)).toBeInTheDocument()
+  // A declined confirmation destroys nothing.
+  confirmDialog.mockResolvedValueOnce(false)
+  fireEvent.click(screen.getByRole("button", { name: messages.delete }))
+  await waitFor(() =>
+    expect(confirmDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ destructive: true, title: "Delete desktop desktop?" })
+    )
+  )
+  expect(runSandboxConnectionOperation).not.toHaveBeenCalled()
+  confirmDialog.mockResolvedValueOnce(true)
   fireEvent.click(screen.getByRole("button", { name: messages.delete }))
   await waitFor(() =>
     expect(runSandboxConnectionOperation).toHaveBeenCalledWith(

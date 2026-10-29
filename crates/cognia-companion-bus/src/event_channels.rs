@@ -247,6 +247,16 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
         note: "host computer-use HITL prompt; carries a screen thumbnail and window title",
     },
     EventChannelSpec {
+        pattern: "managed-desktop://monitor-changed",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "ADR-0233 A7: a managed desktop's billing or cleanup picture changed \
+               (alerts, billed count, pending create/delete). Empty payload; \
+               clients refetch the caller-scoped `managed_desktop_monitor`, so \
+               no account's billing state rides the broadcast.",
+    },
+    EventChannelSpec {
         pattern: "ocr://download-progress",
         audience: ChannelAudience::Any,
         default_on: true,

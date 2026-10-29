@@ -421,6 +421,14 @@ impl ManagedDesktopProvider for FailOneDelete {
     ) -> Result<TemplateState> {
         self.inner.template_status(c, k, i).await
     }
+    async fn delete_template(
+        &self,
+        c: &ManagedDesktopConfig,
+        k: &ProviderSecret,
+        template_id: &str,
+    ) -> Result<bool> {
+        self.inner.delete_template(c, k, template_id).await
+    }
     async fn create(
         &self,
         r: &DesktopRecord,

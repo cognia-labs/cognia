@@ -15,6 +15,7 @@ import {
   managedDesktopErrorKey,
   type ManagedDesktopConfigSummary,
   type ManagedDesktopQuote,
+  type ManagedDesktopReleaseStatus,
   type ManagedDesktopResource,
   type ManagedDesktopTarget,
 } from "@/lib/automation/managed-desktop-client"
@@ -27,6 +28,11 @@ import { managedDesktopLifecycleState } from "@/lib/sandbox/e2b-adapter"
 import { SandboxDesktopViewer } from "./sandbox-desktop-viewer"
 import { ManagedDesktopHandoff } from "./managed-desktop-handoff"
 import { ManagedDesktopCleanup } from "./managed-desktop-cleanup"
+import { ManagedDesktopReleaseStatusLine } from "./managed-desktop-release-status"
+import { ManagedDesktopConfigForm } from "./managed-desktop-config-form"
+import { ManagedDesktopMonitorPanel } from "./managed-desktop-monitor"
+import { ManagedDesktopTemplates } from "./managed-desktop-templates"
+import { useConfirmDialog } from "@/components/shared/confirm-dialog"
 import type { SandboxConnectionRow } from "@/types/sandbox"
 
 const LOCAL: ManagedDesktopTarget = { kind: "local" }
@@ -53,6 +59,10 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
   const t = useTranslations("settings.managedDesktops")
   const [configs, setConfigs] = useState<ManagedDesktopConfigSummary[]>([])
   const [resources, setResources] = useState<ManagedDesktopResource[]>([])
+  const [release, setRelease] = useState<ManagedDesktopReleaseStatus | null>(null)
+  const [creating, setCreating] = useState(false)
+  // Bumped by every reload so the template list follows prepare and delete.
+  const [templatesRevision, setTemplatesRevision] = useState(0)
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const alive = useRef(true)
@@ -63,13 +73,16 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
     pending.current = true
     setBusy(true)
     try {
-      const [nextConfigs, nextResources] = await Promise.all([
+      const [nextConfigs, nextResources, nextRelease] = await Promise.all([
         managedDesktopClient.listConfigs(target),
         managedDesktopClient.list(target),
+        managedDesktopClient.releaseStatus(target),
       ])
       if (!alive.current) return
       setConfigs(nextConfigs)
       setResources(nextResources)
+      setRelease(nextRelease)
+      setTemplatesRevision((revision) => revision + 1)
       setError(undefined)
     } catch (cause) {
       if (alive.current) setError(managedDesktopErrorKey(cause))
@@ -95,6 +108,7 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
       <h3 className="text-sm font-medium">{t("title")}</h3>
       <p className="text-xs text-muted-foreground">{t("description")}</p>
       <p className="text-xs text-muted-foreground">{t("hostConfig")}</p>
+      <ManagedDesktopReleaseStatusLine status={release} />
       <p
         className="text-xs text-muted-foreground"
         data-dormant="managed-desktop-handoff-and-automation"
@@ -108,10 +122,36 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
         </p>
       ) : null}
       {!busy && !error && configs.length === 0 ? <p className="text-xs">{t("empty")}</p> : null}
-      <Button variant="outline" size="sm" disabled={busy} onClick={() => void reload()}>
-        {busy ? t("refreshing") : t("load")}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => void reload()}>
+          {busy ? t("refreshing") : t("load")}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={creating || release?.state !== "installed"}
+          onClick={() => setCreating(true)}
+        >
+          {t("configForm.newConfig")}
+        </Button>
+      </div>
+      {creating ? (
+        <ManagedDesktopConfigForm
+          target={target}
+          onSaved={() => {
+            setCreating(false)
+            void reload()
+          }}
+          onCancel={() => setCreating(false)}
+        />
+      ) : null}
+      <ManagedDesktopMonitorPanel target={target} />
       <ManagedDesktopCleanup />
+      <ManagedDesktopTemplates
+        target={target}
+        revision={templatesRevision}
+        onChanged={() => void reload()}
+      />
       {configs.map((config) => (
         <ProviderSettings
           key={config.id}
@@ -173,6 +213,8 @@ function ProviderSettings({
   const [authorizing, setAuthorizing] = useState(false)
   const [error, setError] = useState<string>()
   const [prepared, setPrepared] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const { confirm, dialog } = useConfirmDialog()
   const pending = useRef(false)
   const alive = useRef(true)
   useEffect(() => {
@@ -243,10 +285,33 @@ function ProviderSettings({
   }
   return (
     <div className="space-y-3 border-l-2 pl-3">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium">{config.id}</span>
         <Badge variant="outline">{qualified ? t("qualified") : t("unqualified")}</Badge>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-expanded={editing}
+          onClick={() => setEditing((open) => !open)}
+        >
+          {t("configForm.edit")}
+        </Button>
       </div>
+      {editing ? (
+        <ManagedDesktopConfigForm
+          target={target}
+          config={config}
+          onSaved={() => {
+            setEditing(false)
+            onChanged()
+          }}
+          onDeleted={() => {
+            setEditing(false)
+            onChanged()
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      ) : null}
       <p className="text-xs">{t("spec", { cpu: config.cpuCount, memory: config.memoryMb })}</p>
       <p className="text-xs text-muted-foreground">
         {t("attestation", {
@@ -347,6 +412,7 @@ function ProviderSettings({
         </p>
       ) : null}
       <ManagedDesktopHandoff target={target} config={config} />
+      {dialog}
       {resources.map((resource) => (
         <div
           key={`${resource.id}:${resource.generation}`}
@@ -387,13 +453,24 @@ function ProviderSettings({
               variant="destructive"
               disabled={busy}
               onClick={() =>
-                void action(async () => {
-                  await runSandboxConnectionOperation(
-                    connectionRow(config, target, resource),
-                    "delete"
+                void (async () => {
+                  if (
+                    !(await confirm({
+                      title: t("deleteConfirm.title", { id: resource.id }),
+                      description: t("deleteConfirm.description"),
+                      confirmLabel: t("delete"),
+                      destructive: true,
+                    }))
                   )
-                  if (alive.current) onChanged()
-                })
+                    return
+                  await action(async () => {
+                    await runSandboxConnectionOperation(
+                      connectionRow(config, target, resource),
+                      "delete"
+                    )
+                    if (alive.current) onChanged()
+                  })
+                })()
               }
             >
               {t("delete")}

@@ -1,11 +1,85 @@
 {
+  "alerts": {
+    "pastDeadline": {
+      "title": "A cloud desktop outlived its deadline",
+      "body": "Desktop {subject} ({config}) still exists {minutes} min after its hard deadline and may still be billed. The Host keeps trying to delete it; check its state in settings."
+    },
+    "cleanupStalled": {
+      "title": "Cloud desktop cleanup is stuck",
+      "body": "Deleting desktop {subject} ({config}) has not been confirmed for {minutes} min. It may still be billed until E2B confirms it is gone."
+    },
+    "templateCleanupStalled": {
+      "title": "Cloud desktop template cleanup is stuck",
+      "body": "Deleting template {subject} ({config}) has not been confirmed for {minutes} min. The Host keeps retrying."
+    }
+  },
   "attestation": "Isolation: {isolation} · Network: {egress} · Enforcement: {enforcement}",
   "authorizing": "Waiting for Host consent…",
   "closeDesktop": "Close desktop",
+  "configForm": {
+    "cancel": "Cancel",
+    "confirmationHint": "Saving confirms the account plan and the rate as of now. Each confirmation is valid for at most 30 days; after that, desktops cannot be created until you confirm again.",
+    "copyKey": "Copy key",
+    "copyNone": "Choose a code sandbox provider",
+    "create": "Create configuration",
+    "createTitle": "New E2B desktop configuration",
+    "credentialHint": "The key is stored only on this Host and is never shown again. Replacing a stored key keeps the old one until every desktop and template created with it is gone.",
+    "credentialMissing": "No key stored",
+    "credentialStored": "Key stored (generation {generation})",
+    "credentialTitle": "E2B API key",
+    "delete": "Delete configuration",
+    "deleteDescription": "The configuration and every stored key generation are removed. This is refused while it still owns a desktop or template.",
+    "deleteTitle": "Delete configuration {id}?",
+    "edit": "Edit configuration",
+    "editTitle": "Configuration {id}",
+    "egressOffOnly": "Network off. Desktops cannot reach the internet; open-network and allowlist egress are not qualified yet.",
+    "fields": {
+      "copyFrom": "Copy the key of a code sandbox provider",
+      "cpuCount": "vCPUs",
+      "egress": "Network",
+      "enabled": "Enabled",
+      "id": "Configuration ID",
+      "idleTimeoutSeconds": "Idle timeout (seconds)",
+      "isolationMinimum": "Minimum isolation",
+      "key": "New API key",
+      "maxConcurrent": "Concurrent desktops",
+      "maxLifetimeSeconds": "Hard lifetime (seconds)",
+      "memoryMb": "Memory (MiB)",
+      "planMaxLifetimeSeconds": "Plan's longest sandbox (seconds)",
+      "planNamespace": "E2B team or namespace",
+      "planSource": "Where the plan was confirmed",
+      "planValidDays": "Plan confirmation valid for (days)",
+      "priceCurrency": "Currency",
+      "priceHourly": "Rate per hour",
+      "priceSource": "Where the rate comes from",
+      "priceValidDays": "Rate valid for (days)"
+    },
+    "invalid": "Check \"{field}\".",
+    "isolation": {
+      "container": "Container",
+      "gvisor": "gVisor",
+      "vm": "Virtual machine"
+    },
+    "limitsHint": "At most {concurrent} desktops, {lifetime} s lifetime and {idle} s idle. A configuration can only lower these limits.",
+    "limitsTitle": "Limits",
+    "newConfig": "New configuration",
+    "planTitle": "Account plan",
+    "priceTitle": "Price",
+    "rotate": "Replace key",
+    "rotateDescription": "New desktops use the new key at once. The current key is kept until every desktop and template created with it is gone, then deleted.",
+    "rotateTitle": "Replace the stored E2B key?",
+    "save": "Save configuration",
+    "shapeTitle": "Desktop size",
+    "storeKey": "Store key"
+  },
   "costs": "Subscription, template setup, taxes and other provider charges are additional. This estimate is not a total invoice cap.",
   "create": "Create temporary desktop",
   "deadline": "Hard deadline: {deadline}",
   "delete": "Destroy desktop",
+  "deleteConfirm": {
+    "title": "Delete desktop {id}?",
+    "description": "The desktop and everything on it are destroyed. Billing stops once E2B confirms it is gone."
+  },
   "description": "Temporary Linux desktops managed by the selected Host with your E2B account.",
   "dormant": "Task and agent control, workspace access, live preview, automatic acceptance, persistence and suspend/resume remain dormant. Agents may suggest acceptance but cannot authorize billed creation.",
   "egress": {
@@ -13,12 +87,23 @@
     "off": "Off",
     "on": "Open"
   },
-  "empty": "No managed desktop provider is configured on this Host.",
+  "empty": "No E2B desktop configuration exists on this Host yet.",
   "enforcement": {
     "unverified": "Unverified",
     "provider-and-guest-kernel": "Provider policy and guest-kernel isolation"
   },
   "errors": {
+    "adminRequired": "Only an owner device of this Host can change desktop configuration or keys.",
+    "configExists": "A configuration with this ID already exists. Choose another ID or edit the existing one.",
+    "configInUse": "This configuration still owns a desktop or template. Delete those first.",
+    "configInvalid": "The Host rejected this configuration. Check the size and limits.",
+    "configNotFound": "This configuration no longer exists on the Host. Refresh the list.",
+    "configRevisionConflict": "Someone else changed this configuration. Refresh it and apply your change again.",
+    "credentialRotateRequired": "A key is already stored. Replace it instead, so desktops created with the old key can still be cleaned up.",
+    "credentialSourceEmpty": "That code sandbox provider has no stored key.",
+    "credentialSourceNotFound": "That E2B code sandbox provider no longer exists on this Host.",
+    "credentialSourceUnavailable": "The code sandbox settings on this Host could not be read.",
+    "credentialSourceUnsupported": "That provider reads its key from an environment variable or a file, which is not copied. Paste the key instead.",
     "egressSmokeUnsupported": "Only network-off desktops can currently be qualified. Open-network and allowlist configurations remain dormant until their own egress smoke checks are implemented and pass.",
     "entitlementLimit": "The requested lifetime exceeds this E2B account plan. Hobby permits at most 1 hour and Pro at most 24 hours; Phase 1 still permits at most 60 minutes. The request was refused without shortening it.",
     "entitlementUnknown": "The account lifetime limit is unknown or stale. Update the dated account plan binding on the Host before creating a desktop.",
@@ -26,6 +111,12 @@
     "policyLimit": "The requested limit exceeds Phase 1 policy: at most 60 minutes, 10 idle minutes and 2 concurrent desktops. The request was refused without shortening it.",
     "priceUnknown": "The cost estimate is missing or stale. Update the selected specification price on the Host and request a fresh estimate.",
     "quoteExpired": "The estimate or approval expired. Refresh the estimate and approve the action again.",
+    "releaseUnavailable": "This Host has no trusted desktop release, so configurations cannot be saved or used yet.",
+    "secretInvalid": "The key must be a single token without spaces.",
+    "secretUnavailable": "The Host's secret store is unavailable. Try again.",
+    "templateInUse": "A desktop created from this template still exists. Delete the desktop first.",
+    "templateNotFound": "This template no longer exists on the Host. Refresh the list.",
+    "templateOutcomeUnknown": "The template's registration outcome is still being reconciled. Try again shortly.",
     "unknown": "The Host could not complete this request. Refresh the configuration and quote, then try again.",
     "unqualified": "Real-provider smoke has not qualified this configuration. Desktop creation remains disabled."
   },
@@ -59,7 +150,7 @@
     "unsupported": "Live preview, transfer between Hosts and automatic project acceptance remain unavailable."
   },
   "health": "Check status",
-  "hostConfig": "Configure managed-desktops.json on this Host and store its credential there. Provider credentials are never entered or returned here.",
+  "hostConfig": "Configure E2B desktops on this Host below. The API key is stored on the Host and never shown again.",
   "hourly": "Estimated selected-spec price: {cost}/hour",
   "invalidLifetime": "Lifetime must be between 1 and 60 minutes and within the Host limit; it is never shortened automatically.",
   "isolation": {
@@ -72,6 +163,19 @@
   "load": "Refresh providers and desktops",
   "manual": "Each billed action requires your explicit approval on the owning Host. Nothing is provisioned by opening this panel.",
   "maximum": "Maximum desktop compute within this deadline: {cost}",
+  "monitor": {
+    "title": "Billing and cleanup",
+    "billed": "{count, plural, =0 {No desktop is billed right now.} one {# desktop may still be billed.} other {# desktops may still be billed.}}",
+    "exposure": "At most {amount} of remaining compute",
+    "pendingCreate": "Oldest pending create: {time}",
+    "pendingDelete": "Oldest pending cleanup: {time}",
+    "alertsTitle": "Needs attention",
+    "alert": {
+      "pastDeadline": "Desktop {subject} is past its hard deadline.",
+      "cleanupStalled": "Cleanup of desktop {subject} is not confirmed.",
+      "templateCleanupStalled": "Cleanup of template {subject} is not confirmed."
+    }
+  },
   "openDesktop": "Open desktop",
   "prepare": "Prepare pinned template",
   "prepared": "Pinned template prepared. Real-provider smoke authorization and qualification are still required before creation.",
@@ -79,6 +183,13 @@
   "quote": "Refresh cost estimate",
   "quoteNeeded": "Refresh the estimate before preparing a template or creating a desktop. An expired estimate must be confirmed again.",
   "refreshing": "Working…",
+  "release": {
+    "absent": "No trusted desktop release is installed on this Host, so new desktops cannot be provisioned. Status, deletion and cleanup still work.",
+    "installed": "Desktop release recipe {recipe}, protocol {protocol}",
+    "invalid": "The Host's desktop release manifest is invalid. New desktops are refused until it is replaced; status, deletion and cleanup still work.",
+    "sourceBundled": "Bundled with this build",
+    "sourceDataDirectory": "Installed by the Host operator"
+  },
   "resource": "Desktop {id}",
   "results": {
     "acceptance": "Acceptance run: {id}",
@@ -155,11 +266,24 @@
   "template": "Template: {state}",
   "templateState": {
     "building": "Building",
+    "deleting": "Deleting",
     "failed": "Failed",
     "ready": "Ready",
     "registered": "Registered",
     "registering": "Registering",
     "unknown": "Reconciliation required"
+  },
+  "templates": {
+    "title": "Templates",
+    "empty": "No template has been prepared on this Host.",
+    "delete": "Delete template",
+    "deleting": "Deleting",
+    "deleteTitle": "Delete template {id}?",
+    "deleteDescription": "The template and all of its builds are removed from your E2B account. Preparing it again later is billed again.",
+    "inUse": "{count, plural, one {Used by # desktop} other {Used by # desktops}}",
+    "retry": "Attempt {attempts}; next retry {time}",
+    "state": "State: {state}",
+    "deleted": "Template {id} was deleted."
   },
   "title": "Managed cloud desktops",
   "unqualified": "Dormant — real-provider qualification required"

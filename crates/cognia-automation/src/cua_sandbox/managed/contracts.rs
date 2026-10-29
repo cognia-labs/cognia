@@ -209,6 +209,143 @@ pub enum DesktopEgress {
     Allowlist(Vec<String>),
 }
 
+/// One provider template as settings shows it (amendment A7). No secret, URL
+/// or provider error body.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDesktopTemplateSummary {
+    pub id: String,
+    pub provider_config_id: String,
+    pub state: TemplateState,
+    pub identity: Option<TemplateIdentity>,
+    /// Live desktops created from this template; deletion waits for zero.
+    pub desktops_in_use: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub error_code: Option<String>,
+    pub cleanup_attempts: u32,
+    pub next_retry_at: Option<i64>,
+}
+
+/// ADR-0233 §5 thresholds, raised as alerts.
+pub const ALERT_PAST_DEADLINE_MS: i64 = 60_000;
+pub const ALERT_CLEANUP_STALLED_MS: i64 = 10 * 60_000;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub enum ManagedDesktopAlertKind {
+    /// A billed desktop still exists more than 60 s after its hard deadline.
+    PastDeadline,
+    /// Cleanup has not been confirmed for more than 10 minutes.
+    CleanupStalled,
+    /// Template deletion has not been confirmed for more than 10 minutes.
+    TemplateCleanupStalled,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDesktopAlert {
+    pub kind: ManagedDesktopAlertKind,
+    /// The desktop or template ID; never a provider resource ID or URL.
+    pub subject_id: String,
+    pub provider_config_id: String,
+    pub since: i64,
+}
+/// The Host's billing and cleanup picture for one owner (amendment A7).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDesktopMonitor {
+    pub observed_at: i64,
+    /// Desktops that may still be billed: everything not confirmed destroyed.
+    pub billed_desktops: u32,
+    /// Upper bound of remaining compute cost of those desktops, by currency.
+    pub maximum_exposure_micros: BTreeMap<String, u64>,
+    pub oldest_pending_create_at: Option<i64>,
+    pub oldest_pending_delete_at: Option<i64>,
+    pub alerts: Vec<ManagedDesktopAlert>,
+}
+
+/// The editable part of a configuration (ADR-0233 amendment A1). Owner, Host,
+/// revision, credential generation and release are never caller input: the
+/// Host derives them, so a browser cannot claim another account or invent the
+/// digest it is about to qualify. Region stays unsupported (A10).
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedDesktopConfigDraft {
+    pub id: String,
+    /// `None` creates a configuration; `Some(revision)` replaces exactly that
+    /// revision and fails if another save landed first.
+    pub expected_revision: Option<u64>,
+    pub enabled: bool,
+    pub shape: DesktopShape,
+    pub limits: DesktopLimits,
+    pub plan: AccountPlanDraft,
+    pub price: DesktopPriceDraft,
+    pub egress: DesktopEgress,
+    pub isolation_minimum: IsolationTier,
+}
+/// The administrator confirms the account plan as of the save. The Host stamps
+/// `observed_at` with its own clock, so a client clock ahead of the Host's can
+/// neither be refused nor post-date a confirmation.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountPlanDraft {
+    pub max_lifetime_seconds: u64,
+    pub source: String,
+    pub namespace: String,
+    /// At most `BINDING_MAX_AGE_MS`; the binding then needs reconfirmation.
+    pub valid_for_ms: i64,
+}
+impl AccountPlanDraft {
+    pub fn confirm(self, now: i64) -> AccountPlanBinding {
+        AccountPlanBinding {
+            max_lifetime_seconds: self.max_lifetime_seconds,
+            observed_at: now,
+            expires_at: now.saturating_add(self.valid_for_ms),
+            source: self.source,
+            namespace: self.namespace,
+        }
+    }
+}
+/// The administrator confirms the provider rate as of the save (§3).
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopPriceDraft {
+    pub currency: String,
+    pub hourly_rate_micros: u64,
+    pub source: String,
+    /// At most `BINDING_MAX_AGE_MS`.
+    pub valid_for_ms: i64,
+}
+impl DesktopPriceDraft {
+    pub fn confirm(self, now: i64) -> DesktopPrice {
+        DesktopPrice {
+            currency: self.currency,
+            hourly_rate_micros: self.hourly_rate_micros,
+            observed_at: now,
+            expires_at: now.saturating_add(self.valid_for_ms),
+            source: self.source,
+        }
+    }
+}
+
+/// A provider key generation replaced by rotation. It keeps cleanup authority
+/// for resources created under it and is removed once none remain (§1).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetiredCredential {
+    pub owner_principal_id: String,
+    pub config_id: String,
+    pub generation: u64,
+}
+impl RetiredCredential {
+    pub fn secret_ref(&self) -> String {
+        format!(
+            "managed-desktop:{}:{}:{}",
+            self.owner_principal_id, self.config_id, self.generation
+        )
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagedDesktopConfig {
@@ -281,10 +418,15 @@ impl ManagedDesktopConfig {
         ))
     }
     pub fn secret_ref(&self) -> String {
-        format!(
-            "managed-desktop:{}:{}:{}",
-            self.owner_principal_id, self.id, self.credential_generation
-        )
+        self.credential().secret_ref()
+    }
+    /// The credential generation this configuration currently names.
+    pub fn credential(&self) -> RetiredCredential {
+        RetiredCredential {
+            owner_principal_id: self.owner_principal_id.clone(),
+            config_id: self.id.clone(),
+            generation: self.credential_generation,
+        }
     }
     pub fn authorize(&self, principal: &ManagedDesktopPrincipal) -> Result<()> {
         if self.owner_principal_id != principal.owner_principal_id
@@ -327,6 +469,9 @@ pub enum TemplateState {
     Ready,
     Unknown,
     Failed,
+    /// Explicit deletion requested (amendment A7). The record stays, with its
+    /// cleanup authority, until the provider confirms the template is absent.
+    Deleting,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -341,6 +486,13 @@ pub struct TemplateRecord {
     pub created_at: i64,
     pub updated_at: i64,
     pub error_code: Option<String>,
+    /// When explicit deletion was requested (amendment A7).
+    #[serde(default)]
+    pub deletion_requested_at: Option<i64>,
+    #[serde(default)]
+    pub cleanup_attempts: u32,
+    #[serde(default)]
+    pub next_retry_at: i64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -553,6 +705,10 @@ pub struct DesktopRecord {
     pub smoke: bool,
     #[serde(default)]
     pub bootstrap_started: bool,
+    /// When cleanup was first requested; the §5 "cleanup older than 10
+    /// minutes" alert measures from here. Set by the journal transaction.
+    #[serde(default)]
+    pub cleanup_requested_at: Option<i64>,
     #[serde(default)]
     pub bootstrap_completed: bool,
 }
@@ -599,6 +755,14 @@ pub struct ManagedDesktopConfigSummary {
     pub id: String,
     pub owner_principal_id: String,
     pub host_id: String,
+    /// Optimistic-concurrency token for `save_config`/`delete_config`.
+    pub revision: u64,
+    pub credential_generation: u64,
+    /// Whether the current generation's provider key is stored. Never the key.
+    pub credential_present: bool,
+    pub plan: AccountPlanBinding,
+    pub price: DesktopPrice,
+    pub isolation_minimum: IsolationTier,
     pub enabled: bool,
     pub qualification: String,
     pub reason: Option<String>,

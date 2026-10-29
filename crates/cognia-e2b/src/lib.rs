@@ -524,6 +524,21 @@ impl ApiClient {
         }
     }
 
+    /// `DELETE /templates/{id}`: the template and every build of it;
+    /// `false` when it was already gone.
+    pub async fn delete_template(&self, template_id: &str) -> Result<bool, ApiError> {
+        let url = self.endpoint(&["templates", template_id])?;
+        let response = self.call(reqwest::Method::DELETE, url, None).await?;
+        match response.status {
+            200..=299 => Ok(true),
+            404 => Ok(false),
+            status => Err(ApiError::Status {
+                status,
+                message: self.error_message(&response.body),
+            }),
+        }
+    }
+
     /// `POST /sandboxes/{id}/pause` with a full memory snapshot, so the
     /// processes inside (the supervisor) survive a resume.
     pub async fn pause_sandbox(&self, id: &str) -> Result<PauseOutcome, ApiError> {
@@ -814,6 +829,63 @@ mod tests {
             calls,
             task,
         }
+    }
+
+    async fn status_fixture(status: StatusCode) -> Fixture {
+        init_test_network();
+        let calls = Calls::default();
+        let seen = calls.clone();
+        let router = Router::new().fallback(move |request: Request| {
+            let seen = seen.clone();
+            async move {
+                seen.lock().unwrap().push((
+                    format!("{} {}", request.method(), request.uri().path()),
+                    request.headers()["x-api-key"].to_str().unwrap().to_string(),
+                    Value::Null,
+                ));
+                Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({"message": "no such template"}).to_string()))
+                    .unwrap()
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        Fixture {
+            api: ApiClient::new(base, "test-api-secret".into()),
+            calls,
+            task,
+        }
+    }
+
+    #[tokio::test]
+    async fn template_deletion_reports_absence_and_refuses_other_failures() {
+        let deleted = status_fixture(StatusCode::NO_CONTENT).await;
+        assert!(deleted.api.delete_template("tmpl-1").await.unwrap());
+        assert_eq!(
+            deleted.calls.lock().unwrap()[0],
+            (
+                "DELETE /templates/tmpl-1".into(),
+                "test-api-secret".into(),
+                Value::Null
+            )
+        );
+        let gone = status_fixture(StatusCode::NOT_FOUND).await;
+        assert!(!gone.api.delete_template("tmpl-1").await.unwrap());
+        let forbidden = status_fixture(StatusCode::FORBIDDEN).await;
+        assert!(matches!(
+            forbidden.api.delete_template("tmpl-1").await,
+            Err(ApiError::Status { status: 403, .. })
+        ));
+        // Path segments are encoded, never spliced into another route.
+        let odd = status_fixture(StatusCode::NOT_FOUND).await;
+        let _ = odd.api.delete_template("a/../sandboxes").await;
+        assert_eq!(
+            odd.calls.lock().unwrap()[0].0,
+            "DELETE /templates/a%2F..%2Fsandboxes"
+        );
     }
 
     async fn build_status_fixture(

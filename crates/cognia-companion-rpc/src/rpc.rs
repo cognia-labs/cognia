@@ -196,6 +196,14 @@ const KNOWN_COMMANDS: &[&str] = &[
     "managed_desktop_handoff_deliveries",
     "managed_desktop_handoff_prepare",
     "managed_desktop_handoff_revoke_source",
+    "managed_desktop_release_status",
+    "managed_desktop_config_save",
+    "managed_desktop_config_delete",
+    "managed_desktop_config_set_credential",
+    "managed_desktop_config_rotate_credential",
+    "managed_desktop_template_list",
+    "managed_desktop_template_delete",
+    "managed_desktop_monitor",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -2241,6 +2249,12 @@ static CONTROL_COMMANDS_SET: once_cell::sync::Lazy<HashSet<&'static str>> =
 const STEP_UP_COMMANDS: &[&str] = &[
     // ADR-0233: paid desktop operations retain ADR-0153's time-bounded
     // device lease in addition to the owner-bound spending authorization.
+    // Configuration and provider keys (amendment A1) take the same lease.
+    "managed_desktop_config_save",
+    "managed_desktop_config_delete",
+    "managed_desktop_config_set_credential",
+    "managed_desktop_config_rotate_credential",
+    "managed_desktop_template_delete",
     "managed_desktop_authorize",
     "managed_desktop_prepare_template",
     "managed_desktop_create",

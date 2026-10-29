@@ -109,6 +109,10 @@ async fn cleanup(app_handle: &tauri::AppHandle) {
         .inner()
         .clone();
     cua.disconnect_all().await;
+    // ADR-0233 A7 — stop the managed desktop worker between journal
+    // transactions. Provider TTLs and the next start's reconcile own any
+    // desktop still alive; nothing is destroyed or extended here.
+    cognia_companion_rpc::managed_desktops::shutdown();
     // ADR-0106 — a quit mid-recording must leave a recoverable
     // bundle rather than a half-written one. `interrupt_blocking`
     // detaches the input hook and stamps the journal `Interrupted`

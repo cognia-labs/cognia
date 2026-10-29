@@ -366,13 +366,37 @@ mod tests {
     }
 }
 
+/// Bundle directory of the managed desktop release manifest (`tauri.conf.json` resources).
+const MANAGED_DESKTOP_RELEASE_RESOURCE: &str = "resources/managed-desktop";
+
 /// Assemble the crate-owned managed desktop lifecycle, including cleanup when dormant.
 pub(crate) fn managed_desktops(app: &App) {
     let Ok(app_data_dir) = app.path().app_data_dir() else { return; };
     let dir = cognia_data_dir(&app_data_dir);
+    // ADR-0233 A2: the signed bundle carries the trusted release manifest.
+    let bundled_release = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|resources| resources.join(MANAGED_DESKTOP_RELEASE_RESOURCE));
+    // `emit` reaches this window; the event-channel forwarder relays it to
+    // paired devices that subscribed (`managed-desktop://monitor-changed`).
+    let handle = app.handle().clone();
+    let events: cognia_companion_rpc::managed_desktops::HostEventSink =
+        std::sync::Arc::new(move |topic, payload| {
+            use tauri::Emitter as _;
+            let _ = handle.emit(topic, payload);
+        });
     tauri::async_runtime::spawn(async move {
         let result = match crate::headless::deployment_id::resolve(&dir) {
-            Ok(id) => cognia_companion_rpc::managed_desktops::install(&dir, &id).await.map_err(|e| e.to_string()),
+            Ok(id) => cognia_companion_rpc::managed_desktops::install(
+                &dir,
+                bundled_release.as_deref(),
+                &id,
+                Some(events),
+            )
+                .await
+                .map_err(|e| e.to_string()),
             Err(error) => Err(error.to_string()),
         };
         if let Err(error) = result { log::warn!("managed desktops unavailable: {error}"); }

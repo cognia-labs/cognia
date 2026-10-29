@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use cognia_automation::cua_sandbox::managed::{journal::JournalStore, *};
+use cognia_automation::cua_sandbox::managed::{journal::JournalStore, provider::ProviderSecret, *};
 
 use crate::{
     managed_desktop_release::{load, OciDesktopImageVerifier},
@@ -197,11 +197,8 @@ pub async fn run(args: Vec<String>) -> Result<()> {
         if io::stdin().is_terminal() {
             return Err(refused("managed_desktop_key_requires_private_stdin"));
         }
-        let key = bounded_line(io::stdin().lock(), 4096)?;
-        if key.is_empty() || key.chars().any(char::is_whitespace) {
-            return Err(refused("managed_desktop_missing_credentials"));
-        }
-        cognia_secrets::secret_store::set(SECRET_SERVICE, &config.secret_ref(), &key)
+        let key = ProviderSecret::parse(&bounded_line(io::stdin().lock(), 4096)?)?;
+        cognia_secrets::secret_store::set(SECRET_SERVICE, &config.secret_ref(), &key.0)
             .map_err(|_| refused("managed_desktop_secret_unavailable"))?;
         println!("Provider key stored in the Host secret store.");
         return Ok(());

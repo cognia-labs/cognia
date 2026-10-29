@@ -17,7 +17,7 @@ jest.mock("@/stores/remote-host/remote-host-store", () => ({
 import { useAccountStore } from "@/stores/account/account-store"
 import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 jest.mock("@/lib/tauri/transport-instance", () => ({
-  localTransport: { call: jest.fn() },
+  localTransport: { call: jest.fn(), subscribe: jest.fn() },
   onTransportChange: jest.fn(() => jest.fn()),
 }))
 jest.mock("@/lib/remote-host/management-channel", () => ({
@@ -39,6 +39,8 @@ import {
   managedDesktopClient,
   managedDesktopErrorKey,
   openManagedDesktop,
+  watchManagedDesktopMonitor,
+  MANAGED_DESKTOP_MONITOR_CHANGED,
 } from "./managed-desktop-client"
 
 beforeEach(() => {
@@ -66,6 +68,98 @@ test("routes explicitly local without following the active Host", async () => {
     args: {},
   })
   expect(withManagementChannel).not.toHaveBeenCalled()
+})
+
+test("reads the installed release status without arguments through the same Host seam", async () => {
+  const status = {
+    state: "installed",
+    source: "bundled",
+    imageDigest: `sha256:${"d".repeat(64)}`,
+    recipeRevision: "7",
+    protocol: "computer-server-0.3.46",
+    error: null,
+  }
+  ;(localTransport.call as jest.Mock).mockResolvedValue(status)
+  await expect(managedDesktopClient.releaseStatus({ kind: "local" })).resolves.toEqual(status)
+  expect(localTransport.call).toHaveBeenCalledWith("managed_desktop_local_call", {
+    name: "managed_desktop_release_status",
+    args: {},
+  })
+})
+
+test("template and monitor reads go through the same Host seam", async () => {
+  ;(localTransport.call as jest.Mock).mockResolvedValue([])
+  await managedDesktopClient.templateList({ kind: "local" })
+  await managedDesktopClient.templateDelete({ kind: "local" }, "tmpl")
+  await managedDesktopClient.monitor({ kind: "local" })
+  expect((localTransport.call as jest.Mock).mock.calls.map(([, payload]) => payload)).toEqual([
+    { name: "managed_desktop_template_list", args: {} },
+    { name: "managed_desktop_template_delete", args: { templateId: "tmpl" } },
+    { name: "managed_desktop_monitor", args: {} },
+  ])
+})
+
+describe("watchManagedDesktopMonitor", () => {
+  const monitor = (billedDesktops: number) => ({
+    observedAt: 1,
+    billedDesktops,
+    maximumExposureMicros: {},
+    oldestPendingCreateAt: null,
+    oldestPendingDeleteAt: null,
+    alerts: [],
+  })
+
+  test("reads once, then on every change event, and drops stale answers", async () => {
+    const unsubscribe = jest.fn()
+    ;(localTransport.subscribe as jest.Mock).mockReturnValue(unsubscribe)
+    let resolveFirst: (value: unknown) => void = () => undefined
+    ;(localTransport.call as jest.Mock)
+      .mockReturnValueOnce(new Promise((resolve) => (resolveFirst = resolve)))
+      .mockResolvedValueOnce(monitor(2))
+    const seen: number[] = []
+    const stop = watchManagedDesktopMonitor({ kind: "local" }, (m) => seen.push(m.billedDesktops))
+    expect(localTransport.subscribe).toHaveBeenCalledWith(
+      MANAGED_DESKTOP_MONITOR_CHANGED,
+      expect.any(Function)
+    )
+    const changed = (localTransport.subscribe as jest.Mock).mock.calls[0][1]
+    changed({})
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    resolveFirst(monitor(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The older read finished last and is ignored.
+    expect(seen).toEqual([2])
+    stop()
+    expect(unsubscribe).toHaveBeenCalled()
+    ;(localTransport.call as jest.Mock).mockResolvedValueOnce(monitor(3))
+    changed({})
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(seen).toEqual([2])
+  })
+
+  test("holds the remote Host's management channel while watching", async () => {
+    const unsubscribe = jest.fn()
+    const release = jest.fn()
+    const transport = { subscribe: jest.fn(() => unsubscribe), call: jest.fn() }
+    ;(acquireManagementChannel as jest.Mock).mockResolvedValue({
+      host: { config: {} },
+      transport,
+      release,
+    })
+    ;(withManagementChannel as jest.Mock).mockImplementation(async (_host, work) =>
+      work({ host: { config: {} }, transport: { call: jest.fn().mockResolvedValue(monitor(1)) } })
+    )
+    const stop = watchManagedDesktopMonitor({ kind: "remote", hostId: "host" }, jest.fn())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(acquireManagementChannel).toHaveBeenCalledWith("host")
+    expect(transport.subscribe).toHaveBeenCalledWith(
+      MANAGED_DESKTOP_MONITOR_CHANGED,
+      expect.any(Function)
+    )
+    stop()
+    expect(unsubscribe).toHaveBeenCalled()
+    expect(release).toHaveBeenCalled()
+  })
 })
 
 test("local viewer operations use the registered wrapper and preserve their fenced payloads", async () => {

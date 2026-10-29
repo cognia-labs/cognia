@@ -46565,6 +46565,1146 @@
       "outputTyped": true
     },
     {
+      "name": "managed_desktop_config_delete",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_config_delete (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "providerConfigId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "providerConfigId",
+          "expectedRevision"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "null"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_config_rotate_credential",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_config_rotate_credential (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "providerConfigId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "key"
+                  },
+                  "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "kind",
+                  "key"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "remoteSandbox"
+                  },
+                  "providerId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "kind",
+                  "providerId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "providerConfigId",
+          "expectedRevision",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerPrincipalId": {
+            "type": "string"
+          },
+          "hostId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialGeneration": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialPresent": {
+            "type": "boolean"
+          },
+          "plan": {
+            "type": "object",
+            "properties": {
+              "maxLifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "maxLifetimeSeconds",
+              "observedAt",
+              "expiresAt",
+              "source",
+              "namespace"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "hourlyRateMicros": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "currency",
+              "hourlyRateMicros",
+              "observedAt",
+              "expiresAt",
+              "source"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "isolationMinimum": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxConcurrent": {
+            "type": "integer"
+          },
+          "maxLifetimeSeconds": {
+            "type": "integer"
+          },
+          "idleTimeoutSeconds": {
+            "type": "integer"
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cpuCount": {
+            "type": "integer"
+          },
+          "memoryMb": {
+            "type": "integer"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "templateId": {
+                    "type": "string"
+                  },
+                  "buildId": {
+                    "type": "string"
+                  },
+                  "imageDigest": {
+                    "type": "string"
+                  },
+                  "recipeRevision": {
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "templateId",
+                  "buildId",
+                  "imageDigest",
+                  "recipeRevision",
+                  "protocol"
+                ],
+                "additionalProperties": false,
+                "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "templateState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "registering",
+              "registered",
+              "building",
+              "ready",
+              "unknown",
+              "failed",
+              "deleting",
+              null
+            ]
+          },
+          "canPrepareTemplate": {
+            "type": "boolean"
+          },
+          "canCreate": {
+            "type": "boolean"
+          },
+          "isolationTier": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "egressTier": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on",
+              "allowlist"
+            ]
+          },
+          "egressEnforcement": {
+            "type": "string"
+          },
+          "guiQualified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ownerPrincipalId",
+          "hostId",
+          "revision",
+          "credentialGeneration",
+          "credentialPresent",
+          "plan",
+          "price",
+          "isolationMinimum",
+          "enabled",
+          "qualification",
+          "reason",
+          "maxConcurrent",
+          "maxLifetimeSeconds",
+          "idleTimeoutSeconds",
+          "region",
+          "cpuCount",
+          "memoryMb",
+          "template",
+          "templateState",
+          "canPrepareTemplate",
+          "canCreate",
+          "isolationTier",
+          "egressTier",
+          "egressEnforcement",
+          "guiQualified"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_config_save",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_config_save (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expectedRevision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "shape": {
+            "type": "object",
+            "properties": {
+              "cpuCount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 64
+              },
+              "memoryMb": {
+                "type": "integer",
+                "minimum": 128,
+                "maximum": 262144
+              }
+            },
+            "required": [
+              "cpuCount",
+              "memoryMb"
+            ],
+            "additionalProperties": false
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "maxConcurrent": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2
+              },
+              "maxLifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600
+              },
+              "idleTimeoutSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 600
+              }
+            },
+            "required": [
+              "maxConcurrent",
+              "maxLifetimeSeconds",
+              "idleTimeoutSeconds"
+            ],
+            "additionalProperties": false
+          },
+          "plan": {
+            "type": "object",
+            "properties": {
+              "maxLifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "validForMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2592000000
+              }
+            },
+            "required": [
+              "maxLifetimeSeconds",
+              "source",
+              "namespace",
+              "validForMs"
+            ],
+            "additionalProperties": false
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "hourlyRateMicros": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "validForMs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2592000000
+              }
+            },
+            "required": [
+              "currency",
+              "hourlyRateMicros",
+              "source",
+              "validForMs"
+            ],
+            "additionalProperties": false
+          },
+          "egress": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "on",
+                  "allowlist"
+                ]
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "isolationMinimum": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "id",
+          "expectedRevision",
+          "enabled",
+          "shape",
+          "limits",
+          "plan",
+          "price",
+          "egress",
+          "isolationMinimum"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerPrincipalId": {
+            "type": "string"
+          },
+          "hostId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialGeneration": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialPresent": {
+            "type": "boolean"
+          },
+          "plan": {
+            "type": "object",
+            "properties": {
+              "maxLifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "maxLifetimeSeconds",
+              "observedAt",
+              "expiresAt",
+              "source",
+              "namespace"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "hourlyRateMicros": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "currency",
+              "hourlyRateMicros",
+              "observedAt",
+              "expiresAt",
+              "source"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "isolationMinimum": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxConcurrent": {
+            "type": "integer"
+          },
+          "maxLifetimeSeconds": {
+            "type": "integer"
+          },
+          "idleTimeoutSeconds": {
+            "type": "integer"
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cpuCount": {
+            "type": "integer"
+          },
+          "memoryMb": {
+            "type": "integer"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "templateId": {
+                    "type": "string"
+                  },
+                  "buildId": {
+                    "type": "string"
+                  },
+                  "imageDigest": {
+                    "type": "string"
+                  },
+                  "recipeRevision": {
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "templateId",
+                  "buildId",
+                  "imageDigest",
+                  "recipeRevision",
+                  "protocol"
+                ],
+                "additionalProperties": false,
+                "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "templateState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "registering",
+              "registered",
+              "building",
+              "ready",
+              "unknown",
+              "failed",
+              "deleting",
+              null
+            ]
+          },
+          "canPrepareTemplate": {
+            "type": "boolean"
+          },
+          "canCreate": {
+            "type": "boolean"
+          },
+          "isolationTier": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "egressTier": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on",
+              "allowlist"
+            ]
+          },
+          "egressEnforcement": {
+            "type": "string"
+          },
+          "guiQualified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ownerPrincipalId",
+          "hostId",
+          "revision",
+          "credentialGeneration",
+          "credentialPresent",
+          "plan",
+          "price",
+          "isolationMinimum",
+          "enabled",
+          "qualification",
+          "reason",
+          "maxConcurrent",
+          "maxLifetimeSeconds",
+          "idleTimeoutSeconds",
+          "region",
+          "cpuCount",
+          "memoryMb",
+          "template",
+          "templateState",
+          "canPrepareTemplate",
+          "canCreate",
+          "isolationTier",
+          "egressTier",
+          "egressEnforcement",
+          "guiQualified"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_config_set_credential",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_config_set_credential (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "providerConfigId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "key"
+                  },
+                  "key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "kind",
+                  "key"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "remoteSandbox"
+                  },
+                  "providerId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  }
+                },
+                "required": [
+                  "kind",
+                  "providerId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "providerConfigId",
+          "expectedRevision",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "ownerPrincipalId": {
+            "type": "string"
+          },
+          "hostId": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialGeneration": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialPresent": {
+            "type": "boolean"
+          },
+          "plan": {
+            "type": "object",
+            "properties": {
+              "maxLifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "maxLifetimeSeconds",
+              "observedAt",
+              "expiresAt",
+              "source",
+              "namespace"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "hourlyRateMicros": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "currency",
+              "hourlyRateMicros",
+              "observedAt",
+              "expiresAt",
+              "source"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "isolationMinimum": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "qualification": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "maxConcurrent": {
+            "type": "integer"
+          },
+          "maxLifetimeSeconds": {
+            "type": "integer"
+          },
+          "idleTimeoutSeconds": {
+            "type": "integer"
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cpuCount": {
+            "type": "integer"
+          },
+          "memoryMb": {
+            "type": "integer"
+          },
+          "template": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "templateId": {
+                    "type": "string"
+                  },
+                  "buildId": {
+                    "type": "string"
+                  },
+                  "imageDigest": {
+                    "type": "string"
+                  },
+                  "recipeRevision": {
+                    "type": "string"
+                  },
+                  "protocol": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "templateId",
+                  "buildId",
+                  "imageDigest",
+                  "recipeRevision",
+                  "protocol"
+                ],
+                "additionalProperties": false,
+                "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "templateState": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "registering",
+              "registered",
+              "building",
+              "ready",
+              "unknown",
+              "failed",
+              "deleting",
+              null
+            ]
+          },
+          "canPrepareTemplate": {
+            "type": "boolean"
+          },
+          "canCreate": {
+            "type": "boolean"
+          },
+          "isolationTier": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
+          },
+          "egressTier": {
+            "type": "string",
+            "enum": [
+              "off",
+              "on",
+              "allowlist"
+            ]
+          },
+          "egressEnforcement": {
+            "type": "string"
+          },
+          "guiQualified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "ownerPrincipalId",
+          "hostId",
+          "revision",
+          "credentialGeneration",
+          "credentialPresent",
+          "plan",
+          "price",
+          "isolationMinimum",
+          "enabled",
+          "qualification",
+          "reason",
+          "maxConcurrent",
+          "maxLifetimeSeconds",
+          "idleTimeoutSeconds",
+          "region",
+          "cpuCount",
+          "memoryMb",
+          "template",
+          "templateState",
+          "canPrepareTemplate",
+          "canCreate",
+          "isolationTier",
+          "egressTier",
+          "egressEnforcement",
+          "guiQualified"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+      },
+      "outputTyped": true
+    },
+    {
       "name": "managed_desktop_connect",
       "category": "automation",
       "resource": "managed",
@@ -48175,6 +49315,90 @@
             "hostId": {
               "type": "string"
             },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "credentialGeneration": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "credentialPresent": {
+              "type": "boolean"
+            },
+            "plan": {
+              "type": "object",
+              "properties": {
+                "maxLifetimeSeconds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 86400
+                },
+                "observedAt": {
+                  "type": "integer"
+                },
+                "expiresAt": {
+                  "type": "integer"
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "namespace": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "maxLifetimeSeconds",
+                "observedAt",
+                "expiresAt",
+                "source",
+                "namespace"
+              ],
+              "additionalProperties": false,
+              "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+            },
+            "price": {
+              "type": "object",
+              "properties": {
+                "currency": {
+                  "type": "string",
+                  "pattern": "^[A-Z]{3}$"
+                },
+                "hourlyRateMicros": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "observedAt": {
+                  "type": "integer"
+                },
+                "expiresAt": {
+                  "type": "integer"
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "currency",
+                "hourlyRateMicros",
+                "observedAt",
+                "expiresAt",
+                "source"
+              ],
+              "additionalProperties": false,
+              "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+            },
+            "isolationMinimum": {
+              "type": "string",
+              "enum": [
+                "container",
+                "gvisor",
+                "vm"
+              ]
+            },
             "enabled": {
               "type": "boolean"
             },
@@ -48256,6 +49480,7 @@
                 "ready",
                 "unknown",
                 "failed",
+                "deleting",
                 null
               ]
             },
@@ -48292,6 +49517,12 @@
             "id",
             "ownerPrincipalId",
             "hostId",
+            "revision",
+            "credentialGeneration",
+            "credentialPresent",
+            "plan",
+            "price",
+            "isolationMinimum",
             "enabled",
             "qualification",
             "reason",
@@ -48313,6 +49544,102 @@
           "additionalProperties": false,
           "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
         }
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_monitor",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "managed_desktop_monitor (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "observedAt": {
+            "type": "integer"
+          },
+          "billedDesktops": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "maximumExposureMicros": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "oldestPendingCreateAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "oldestPendingDeleteAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "alerts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "pastDeadline",
+                    "cleanupStalled",
+                    "templateCleanupStalled"
+                  ]
+                },
+                "subjectId": {
+                  "type": "string"
+                },
+                "providerConfigId": {
+                  "type": "string"
+                },
+                "since": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "subjectId",
+                "providerConfigId",
+                "since"
+              ],
+              "additionalProperties": false,
+              "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+            }
+          }
+        },
+        "required": [
+          "observedAt",
+          "billedDesktops",
+          "maximumExposureMicros",
+          "oldestPendingCreateAt",
+          "oldestPendingDeleteAt",
+          "alerts"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
       },
       "outputTyped": true
     },
@@ -48383,6 +49710,90 @@
           },
           "hostId": {
             "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialGeneration": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "credentialPresent": {
+            "type": "boolean"
+          },
+          "plan": {
+            "type": "object",
+            "properties": {
+              "maxLifetimeSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              },
+              "namespace": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "maxLifetimeSeconds",
+              "observedAt",
+              "expiresAt",
+              "source",
+              "namespace"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "price": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "hourlyRateMicros": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "observedAt": {
+                "type": "integer"
+              },
+              "expiresAt": {
+                "type": "integer"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "currency",
+              "hourlyRateMicros",
+              "observedAt",
+              "expiresAt",
+              "source"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          "isolationMinimum": {
+            "type": "string",
+            "enum": [
+              "container",
+              "gvisor",
+              "vm"
+            ]
           },
           "enabled": {
             "type": "boolean"
@@ -48465,6 +49876,7 @@
               "ready",
               "unknown",
               "failed",
+              "deleting",
               null
             ]
           },
@@ -48501,6 +49913,12 @@
           "id",
           "ownerPrincipalId",
           "hostId",
+          "revision",
+          "credentialGeneration",
+          "credentialPresent",
+          "plan",
+          "price",
+          "isolationMinimum",
           "enabled",
           "qualification",
           "reason",
@@ -48624,6 +50042,86 @@
         ],
         "additionalProperties": false,
         "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_release_status",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "managed_desktop_release_status (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "installed",
+              "absent",
+              "invalid"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "data-directory",
+              "bundled",
+              null
+            ]
+          },
+          "imageDigest": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recipeRevision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "source",
+          "imageDigest",
+          "recipeRevision",
+          "protocol",
+          "error"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-companion-rpc/src/managed_desktop_release.rs"
       },
       "outputTyped": true
     },
@@ -50625,6 +52123,276 @@
           "cacheControl"
         ],
         "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_template_delete",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_template_delete (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "templateId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "providerConfigId": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "registering",
+                  "registered",
+                  "building",
+                  "ready",
+                  "unknown",
+                  "failed",
+                  "deleting"
+                ]
+              },
+              "identity": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "templateId": {
+                        "type": "string"
+                      },
+                      "buildId": {
+                        "type": "string"
+                      },
+                      "imageDigest": {
+                        "type": "string"
+                      },
+                      "recipeRevision": {
+                        "type": "string"
+                      },
+                      "protocol": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "templateId",
+                      "buildId",
+                      "imageDigest",
+                      "recipeRevision",
+                      "protocol"
+                    ],
+                    "additionalProperties": false,
+                    "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "desktopsInUse": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "createdAt": {
+                "type": "integer"
+              },
+              "updatedAt": {
+                "type": "integer"
+              },
+              "errorCode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cleanupAttempts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "nextRetryAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "providerConfigId",
+              "state",
+              "identity",
+              "desktopsInUse",
+              "createdAt",
+              "updatedAt",
+              "errorCode",
+              "cleanupAttempts",
+              "nextRetryAt"
+            ],
+            "additionalProperties": false,
+            "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_template_list",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "managed_desktop_template_list (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "providerConfigId": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "registering",
+                "registered",
+                "building",
+                "ready",
+                "unknown",
+                "failed",
+                "deleting"
+              ]
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "templateId": {
+                      "type": "string"
+                    },
+                    "buildId": {
+                      "type": "string"
+                    },
+                    "imageDigest": {
+                      "type": "string"
+                    },
+                    "recipeRevision": {
+                      "type": "string"
+                    },
+                    "protocol": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "templateId",
+                    "buildId",
+                    "imageDigest",
+                    "recipeRevision",
+                    "protocol"
+                  ],
+                  "additionalProperties": false,
+                  "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "desktopsInUse": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "createdAt": {
+              "type": "integer"
+            },
+            "updatedAt": {
+              "type": "integer"
+            },
+            "errorCode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cleanupAttempts": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nextRetryAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "providerConfigId",
+            "state",
+            "identity",
+            "desktopsInUse",
+            "createdAt",
+            "updatedAt",
+            "errorCode",
+            "cleanupAttempts",
+            "nextRetryAt"
+          ],
+          "additionalProperties": false,
+          "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+        }
       },
       "outputTyped": true
     },
@@ -102936,5 +104704,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "02b564ba6c2cf68e848a87e2464b1a04dd113a3499e64d92f47e642007b6167f"
+  "catalogHash": "863ccda98935f9ec9eed77596c725a93dcd37d5d08dceda803d27545206f88db"
 }

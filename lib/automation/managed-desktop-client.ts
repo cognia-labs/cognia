@@ -34,10 +34,75 @@ import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import type { E2bSandboxConfig, ManagedDesktopQualificationProjection } from "@/types/sandbox"
 
 export type ManagedDesktopTarget = E2bSandboxConfig["target"]
+export type ManagedDesktopTemplateState =
+  "registering" | "registered" | "building" | "ready" | "unknown" | "failed" | "deleting"
+/** One provider template; deletion is explicit and waits for confirmed absence (A7). */
+export interface ManagedDesktopTemplateSummary {
+  id: string
+  providerConfigId: string
+  state: ManagedDesktopTemplateState
+  identity: {
+    templateId: string
+    buildId: string
+    imageDigest: string
+    recipeRevision: string
+    protocol: string
+  } | null
+  desktopsInUse: number
+  createdAt: number
+  updatedAt: number
+  errorCode: string | null
+  cleanupAttempts: number
+  nextRetryAt: number | null
+}
+export type ManagedDesktopAlertKind = "pastDeadline" | "cleanupStalled" | "templateCleanupStalled"
+export interface ManagedDesktopAlert {
+  kind: ManagedDesktopAlertKind
+  /** Desktop or template ID; never a provider resource ID. */
+  subjectId: string
+  providerConfigId: string
+  since: number
+}
+/** The caller's billing and cleanup picture on one Host (ADR-0233 §5, A7). */
+export interface ManagedDesktopMonitor {
+  observedAt: number
+  billedDesktops: number
+  maximumExposureMicros: Record<string, number>
+  oldestPendingCreateAt: number | null
+  oldestPendingDeleteAt: number | null
+  alerts: ManagedDesktopAlert[]
+}
+/** Host event raised when any account's monitor changed; it carries no data. */
+export const MANAGED_DESKTOP_MONITOR_CHANGED = "managed-desktop://monitor-changed"
+
+/** The account plan the Host administrator confirmed (ADR-0233 §3). */
+export interface ManagedDesktopPlanBinding {
+  maxLifetimeSeconds: number
+  observedAt: number
+  expiresAt: number
+  source: string
+  namespace: string
+}
+/** The provider rate the Host administrator confirmed (ADR-0233 §3). */
+export interface ManagedDesktopPrice {
+  currency: string
+  hourlyRateMicros: number
+  observedAt: number
+  expiresAt: number
+  source: string
+}
 export interface ManagedDesktopConfigSummary extends ManagedDesktopQualificationProjection {
   id: string
   ownerPrincipalId: string
   hostId: string
+  /** Optimistic-concurrency token for saves and deletes. */
+  revision: number
+  credentialGeneration: number
+  /** Whether a provider key is stored for the current generation. Never the key. */
+  credentialPresent: boolean
+  plan: ManagedDesktopPlanBinding
+  price: ManagedDesktopPrice
+  isolationMinimum: IsolationTier
   enabled: boolean
   canPrepareTemplate: boolean
   canCreate: boolean
@@ -46,7 +111,7 @@ export interface ManagedDesktopConfigSummary extends ManagedDesktopQualification
   isolationTier: IsolationTier
   egressTier: EgressTier
   egressEnforcement: "provider-and-guest-kernel" | "unverified"
-  templateState?: "registering" | "registered" | "building" | "ready" | "unknown" | "failed" | null
+  templateState?: ManagedDesktopTemplateState | null
   reason?: string | null
   maxConcurrent: number
   maxLifetimeSeconds: number
@@ -61,6 +126,37 @@ export interface ManagedDesktopConfigSummary extends ManagedDesktopQualification
     recipeRevision: string
     protocol: string
   } | null
+}
+/**
+ * The editable part of a configuration (ADR-0233 amendment A1). The Host
+ * derives owner, Host, release, revision and credential generation, and dates
+ * the plan and price confirmation with its own clock when it saves.
+ */
+export interface ManagedDesktopConfigDraft {
+  id: string
+  /** `null` creates; a revision replaces exactly that revision. */
+  expectedRevision: number | null
+  enabled: boolean
+  shape: { cpuCount: number; memoryMb: number }
+  limits: { maxConcurrent: number; maxLifetimeSeconds: number; idleTimeoutSeconds: number }
+  plan: { maxLifetimeSeconds: number; source: string; namespace: string; validForMs: number }
+  price: { currency: string; hourlyRateMicros: number; source: string; validForMs: number }
+  /** Only egress Off is qualified (amendment A10). */
+  egress: { mode: "off" }
+  isolationMinimum: IsolationTier
+}
+/** Where a new provider key comes from. A copied key never reaches the renderer. */
+export type ManagedDesktopCredentialSource =
+  { kind: "key"; key: string } | { kind: "remoteSandbox"; providerId: string }
+
+/** Which trusted release manifest the Host loaded (ADR-0233 A2). Never a path. */
+export interface ManagedDesktopReleaseStatus {
+  state: "installed" | "absent" | "invalid"
+  source: "data-directory" | "bundled" | null
+  imageDigest: string | null
+  recipeRevision: string | null
+  protocol: string | null
+  error: string | null
 }
 export interface ManagedDesktopQuote {
   id: string
@@ -121,6 +217,11 @@ const adminLeases = new WeakMap<
   }
 >()
 const ADMIN_OPERATIONS = [
+  "managed_desktop_config_save",
+  "managed_desktop_config_delete",
+  "managed_desktop_config_set_credential",
+  "managed_desktop_config_rotate_credential",
+  "managed_desktop_template_delete",
   "managed_desktop_authorize",
   "managed_desktop_prepare_template",
   "managed_desktop_create",
@@ -287,6 +388,46 @@ async function call<T>(
 export const managedDesktopClient = {
   list: (target: ManagedDesktopTarget) =>
     call<ManagedDesktopResource[]>(target, "managed_desktop_list", {}),
+  releaseStatus: (target: ManagedDesktopTarget) =>
+    call<ManagedDesktopReleaseStatus>(target, "managed_desktop_release_status", {}),
+  saveConfig: (target: ManagedDesktopTarget, draft: ManagedDesktopConfigDraft) =>
+    call<ManagedDesktopConfigSummary>(target, "managed_desktop_config_save", { ...draft }),
+  deleteConfig: (
+    target: ManagedDesktopTarget,
+    providerConfigId: string,
+    expectedRevision: number
+  ) => call<null>(target, "managed_desktop_config_delete", { providerConfigId, expectedRevision }),
+  setCredential: (
+    target: ManagedDesktopTarget,
+    providerConfigId: string,
+    expectedRevision: number,
+    source: ManagedDesktopCredentialSource
+  ) =>
+    call<ManagedDesktopConfigSummary>(target, "managed_desktop_config_set_credential", {
+      providerConfigId,
+      expectedRevision,
+      source,
+    }),
+  rotateCredential: (
+    target: ManagedDesktopTarget,
+    providerConfigId: string,
+    expectedRevision: number,
+    source: ManagedDesktopCredentialSource
+  ) =>
+    call<ManagedDesktopConfigSummary>(target, "managed_desktop_config_rotate_credential", {
+      providerConfigId,
+      expectedRevision,
+      source,
+    }),
+  templateList: (target: ManagedDesktopTarget) =>
+    call<ManagedDesktopTemplateSummary[]>(target, "managed_desktop_template_list", {}),
+  /** `null` once the provider confirmed the template is gone. */
+  templateDelete: (target: ManagedDesktopTarget, templateId: string) =>
+    call<ManagedDesktopTemplateSummary | null>(target, "managed_desktop_template_delete", {
+      templateId,
+    }),
+  monitor: (target: ManagedDesktopTarget) =>
+    call<ManagedDesktopMonitor>(target, "managed_desktop_monitor", {}),
   listConfigs: (target: ManagedDesktopTarget) =>
     call<ManagedDesktopConfigSummary[]>(target, "managed_desktop_list_configs", {}),
   quote: (target: ManagedDesktopTarget, providerConfigId: string, lifetimeSeconds: number) =>
@@ -316,6 +457,67 @@ export const managedDesktopClient = {
   delete: (target: ManagedDesktopTarget, ref: ManagedDesktopRef) =>
     call<ManagedDesktopResource>(target, "managed_desktop_delete", { ...ref }),
 }
+/**
+ * Keep `onMonitor` current with the caller's monitor on one Host: one read
+ * now, then one per `managed-desktop://monitor-changed` event. A remote Host
+ * holds its management channel for as long as the watch lives. Responses
+ * that arrive after a newer read, after `stop`, or across an account or Host
+ * change are dropped.
+ */
+export function watchManagedDesktopMonitor(
+  target: ManagedDesktopTarget,
+  onMonitor: (monitor: ManagedDesktopMonitor) => void,
+  onError: (error: unknown) => void = () => {}
+): () => void {
+  const identity = managedDesktopIdentityScope(target)
+  let stopped = false
+  let latest = 0
+  let unsubscribe: (() => void) | undefined
+  let release: (() => void) | undefined
+  const refresh = () => {
+    const sequence = ++latest
+    managedDesktopClient.monitor(target).then(
+      (monitor) => {
+        if (stopped || sequence !== latest) return
+        try {
+          identity.assertActive()
+        } catch {
+          return
+        }
+        onMonitor(monitor)
+      },
+      (error) => {
+        if (!stopped && sequence === latest) onError(error)
+      }
+    )
+  }
+  if (target.kind === "local") {
+    unsubscribe = localTransport.subscribe(MANAGED_DESKTOP_MONITOR_CHANGED, refresh)
+    refresh()
+  } else {
+    acquireManagementChannel(target.hostId).then(
+      (lease) => {
+        if (stopped) {
+          lease.release()
+          return
+        }
+        release = () => lease.release()
+        unsubscribe = lease.transport.subscribe(MANAGED_DESKTOP_MONITOR_CHANGED, refresh)
+        refresh()
+      },
+      (error) => {
+        if (!stopped) onError(error)
+      }
+    )
+  }
+  return () => {
+    stopped = true
+    unsubscribe?.()
+    release?.()
+    identity.dispose()
+  }
+}
+
 /** Open once per viewer. Authentication replacement invalidates, never silently rebinds control. */
 export async function openManagedDesktop(
   target: ManagedDesktopTarget,
@@ -494,6 +696,23 @@ export function managedDesktopErrorKey(error: unknown): string {
     managed_desktop_human_authorization_required: "humanRequired",
     managed_desktop_host_consent_required: "humanRequired",
     managed_desktop_authorization_expired: "quoteExpired",
+    managed_desktop_admin_required: "adminRequired",
+    managed_desktop_release_unavailable: "releaseUnavailable",
+    managed_desktop_config_exists: "configExists",
+    managed_desktop_config_not_found: "configNotFound",
+    managed_desktop_config_revision_conflict: "configRevisionConflict",
+    managed_desktop_config_in_use: "configInUse",
+    managed_desktop_config_invalid: "configInvalid",
+    managed_desktop_secret_invalid: "secretInvalid",
+    managed_desktop_secret_unavailable: "secretUnavailable",
+    managed_desktop_credential_rotate_required: "credentialRotateRequired",
+    managed_desktop_credential_source_not_found: "credentialSourceNotFound",
+    managed_desktop_credential_source_unsupported: "credentialSourceUnsupported",
+    managed_desktop_credential_source_empty: "credentialSourceEmpty",
+    managed_desktop_credential_source_unavailable: "credentialSourceUnavailable",
+    managed_desktop_template_in_use: "templateInUse",
+    managed_desktop_template_not_found: "templateNotFound",
+    managed_desktop_template_outcome_unknown: "templateOutcomeUnknown",
     quote_expired: "quoteExpired",
     authorization_expired: "quoteExpired",
   }

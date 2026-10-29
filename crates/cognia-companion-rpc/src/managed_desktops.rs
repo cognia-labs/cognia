@@ -34,6 +34,14 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_handoff_deliveries",
     "managed_desktop_handoff_prepare",
     "managed_desktop_handoff_revoke_source",
+    "managed_desktop_release_status",
+    "managed_desktop_config_save",
+    "managed_desktop_config_delete",
+    "managed_desktop_config_set_credential",
+    "managed_desktop_config_rotate_credential",
+    "managed_desktop_template_list",
+    "managed_desktop_template_delete",
+    "managed_desktop_monitor",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -137,6 +145,7 @@ struct Installed {
     directory: PathBuf,
     service: Arc<ManagedDesktopService>,
     host_id: String,
+    release: crate::managed_desktop_release::ReleaseStatus,
     worker: tokio::task::JoinHandle<()>,
 }
 impl Drop for Installed {
@@ -164,6 +173,36 @@ impl ManagedDesktopSecrets for HostSecrets {
                 .filter(|key| !key.is_empty())
                 .ok_or_else(|| refused("managed_desktop_missing_credentials"))?;
             Ok(ProviderSecret(key))
+        })
+        .await
+    }
+    async fn has_provider_key(&self, config: &ManagedDesktopConfig) -> Result<bool> {
+        let reference = config.secret_ref();
+        secret_io(move || {
+            Ok(cognia_secrets::secret_store::get(SECRET_SERVICE, &reference)
+                .map_err(|_| refused("managed_desktop_secret_unavailable"))?
+                .is_some_and(|key| !key.is_empty()))
+        })
+        .await
+    }
+    async fn put_provider_key(
+        &self,
+        config: &ManagedDesktopConfig,
+        key: &ProviderSecret,
+    ) -> Result<()> {
+        let reference = config.secret_ref();
+        let key = key.0.clone();
+        secret_io(move || {
+            cognia_secrets::secret_store::set(SECRET_SERVICE, &reference, &key)
+                .map_err(|_| refused("managed_desktop_secret_unavailable"))
+        })
+        .await
+    }
+    async fn remove_provider_key(&self, credential: &RetiredCredential) -> Result<()> {
+        let reference = credential.secret_ref();
+        secret_io(move || {
+            cognia_secrets::secret_store::delete(SECRET_SERVICE, &reference)
+                .map_err(|_| retryable("managed_desktop_secret_cleanup_failed"))
         })
         .await
     }
@@ -199,13 +238,32 @@ impl ManagedDesktopSecrets for HostSecrets {
 
 /// Installs even without a release: reads and old-resource cleanup must work
 /// while new provisioning is disabled. Startup never builds a template.
-pub async fn install(directory: &Path, host_id: &str) -> Result<()> {
+/// `bundled_release` is the directory holding the manifest shipped inside the
+/// signed app or server image; the data directory's copy takes precedence.
+/// The Host-event topic the worker raises when any owner's billing or
+/// cleanup picture changes. It carries no data: clients refetch
+/// `managed_desktop_monitor`, which is scoped to the caller's account, so one
+/// member never receives another's billing state through the event.
+pub const MONITOR_CHANGED_TOPIC: &str = "managed-desktop://monitor-changed";
+
+pub async fn install(
+    directory: &Path,
+    bundled_release: Option<&Path>,
+    host_id: &str,
+    events: Option<HostEventSink>,
+) -> Result<()> {
     let directory = directory.to_owned();
+    let bundled_release = bundled_release.map(Path::to_owned);
     let installed_directory = directory.clone();
     let identity = host_id.to_owned();
-    let service = tokio::task::spawn_blocking(move || {
-        let release = match crate::managed_desktop_release::load(&directory) {
-            Ok(release) => release,
+    let (service, release_status) = tokio::task::spawn_blocking(move || {
+        let loaded = crate::managed_desktop_release::load_installed(
+            &directory,
+            bundled_release.as_deref(),
+        );
+        let release_status = crate::managed_desktop_release::ReleaseStatus::of(&loaded);
+        let release = match loaded {
+            Ok(release) => release.map(|(release, _)| release),
             Err(error) => {
                 log::warn!("managed desktop release: {}", error.code);
                 None
@@ -221,7 +279,7 @@ pub async fn install(directory: &Path, host_id: &str) -> Result<()> {
             Arc::new(HostSecrets),
             release,
         )
-        .map(Arc::new)
+        .map(|service| (Arc::new(service), release_status))
     })
     .await
     .map_err(|_| refused("managed_desktop_storage_unavailable"))??;
@@ -229,6 +287,7 @@ pub async fn install(directory: &Path, host_id: &str) -> Result<()> {
     let evidence_directory = installed_directory.clone();
     let evidence_host = host_id.to_owned();
     let worker = tokio::spawn(async move {
+        let mut last_monitor = Vec::new();
         let mut interval = tokio::time::interval(Duration::from_secs(5));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -240,15 +299,43 @@ pub async fn install(directory: &Path, host_id: &str) -> Result<()> {
             if let Err(error) = service.reconcile().await {
                 log::warn!("managed desktop reconciliation: {}", error.code);
             }
+            if let Some(events) = &events {
+                let next = monitor_signature(&service.monitors().await);
+                if next != last_monitor {
+                    last_monitor = next;
+                    events(MONITOR_CHANGED_TOPIC, serde_json::json!({}));
+                }
+            }
         }
     });
     *INSTALLED.write() = Some(Installed {
         directory: installed_directory,
         service,
         host_id: host_id.into(),
+        release: release_status,
         worker,
     });
     Ok(())
+}
+
+/// What makes a monitor change worth an event. Exposure shrinks every tick as
+/// deadlines approach and `observed_at` always moves; neither is a change a
+/// person needs to be told about.
+fn monitor_signature(
+    monitors: &std::collections::BTreeMap<String, ManagedDesktopMonitor>,
+) -> Vec<(String, u32, Option<i64>, Option<i64>, Vec<ManagedDesktopAlert>)> {
+    monitors
+        .iter()
+        .map(|(owner, m)| {
+            (
+                owner.clone(),
+                m.billed_desktops,
+                m.oldest_pending_create_at,
+                m.oldest_pending_delete_at,
+                m.alerts.clone(),
+            )
+        })
+        .collect()
 }
 
 pub fn shutdown() {
@@ -409,6 +496,68 @@ fn principal(caller: &Caller<'_>, host_id: &str) -> Result<ManagedDesktopPrincip
         host_id: host_id.into(),
         authority: authority(caller.local, caller.scope, worker, owner),
     })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConfigRevisionArgs {
+    provider_config_id: String,
+    expected_revision: u64,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialArgs {
+    provider_config_id: String,
+    expected_revision: u64,
+    source: CredentialSourceArgs,
+}
+/// Where a new provider key comes from (ADR-0233 amendment A1).
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum CredentialSourceArgs {
+    /// Typed once by the administrator; never read back.
+    Key { key: String },
+    /// Copied inside the Host from an ADR-0221 E2B code-sandbox provider's
+    /// secret-store credential. The value never crosses the RPC boundary.
+    RemoteSandbox {
+        #[serde(rename = "providerId")]
+        provider_id: String,
+    },
+}
+
+/// Resolves a credential source to a key without exposing it to the caller.
+/// A copied key must name the Host's own E2B code-sandbox provider whose
+/// credential is a secret-store entry; env and file sources are operator
+/// configuration and are not copied (ADR-0233 §1).
+async fn credential_value(directory: &Path, source: CredentialSourceArgs) -> Result<ProviderSecret> {
+    match source {
+        CredentialSourceArgs::Key { key } => ProviderSecret::parse(&key),
+        CredentialSourceArgs::RemoteSandbox { provider_id } => {
+            let directory = directory.to_owned();
+            secret_io(move || {
+                use cognia_sandbox_pool::providers::{CredentialSource, ProviderKind};
+                let settings = cognia_sandbox_pool::desktop::DesktopRemoteSandboxes::load(&directory)
+                    .map_err(|_| refused("managed_desktop_credential_source_unavailable"))?;
+                let provider = settings
+                    .providers
+                    .providers
+                    .iter()
+                    .find(|p| p.id == provider_id && p.kind == ProviderKind::E2b)
+                    .ok_or_else(|| refused("managed_desktop_credential_source_not_found"))?;
+                let Some(CredentialSource::SecretId(secret_id)) = &provider.credential else {
+                    return Err(refused("managed_desktop_credential_source_unsupported"));
+                };
+                let key = cognia_secrets::secret_store::get(
+                    cognia_companion::remote_sandboxes::SECRET_SERVICE,
+                    secret_id,
+                )
+                .map_err(|_| refused("managed_desktop_secret_unavailable"))?
+                .ok_or_else(|| refused("managed_desktop_credential_source_empty"))?;
+                ProviderSecret::parse(key.trim())
+            })
+            .await
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -858,10 +1007,17 @@ pub async fn dispatch(
     if !COMMANDS.contains(&name) {
         return Err(refused("managed_desktop_unknown_command"));
     }
-    let (service, host_id, directory) = INSTALLED
+    let (service, host_id, directory, release) = INSTALLED
         .read()
         .as_ref()
-        .map(|i| (i.service.clone(), i.host_id.clone(), i.directory.clone()))
+        .map(|i| {
+            (
+                i.service.clone(),
+                i.host_id.clone(),
+                i.directory.clone(),
+                i.release.clone(),
+            )
+        })
         .ok_or_else(|| refused("managed_desktop_host_unavailable"))?;
     let principal = match principal(&caller, &host_id) {
         Ok(principal) => principal,
@@ -872,7 +1028,12 @@ pub async fn dispatch(
     };
     if matches!(
         name,
-        "managed_desktop_authorize"
+        "managed_desktop_config_save"
+            | "managed_desktop_config_delete"
+            | "managed_desktop_config_set_credential"
+            | "managed_desktop_config_rotate_credential"
+            | "managed_desktop_template_delete"
+            | "managed_desktop_authorize"
             | "managed_desktop_prepare_template"
             | "managed_desktop_create"
             | "managed_desktop_delete"
@@ -923,6 +1084,65 @@ pub async fn dispatch(
             authority.revalidate(&principal).await?;
             crate::managed_desktop_handoff::revoke(&directory, &principal, request.conversation_ids).await?;
             Ok(Value::Null)
+        }
+        "managed_desktop_release_status" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Empty {}
+            let _: Empty = decode(args)?;
+            encode(release)
+        }
+        "managed_desktop_config_save" => {
+            let draft: ManagedDesktopConfigDraft = decode(args)?;
+            authority.revalidate(&principal).await?;
+            encode(service.save_config(&principal, draft).await?)
+        }
+        "managed_desktop_config_delete" => {
+            let a: ConfigRevisionArgs = decode(args)?;
+            authority.revalidate(&principal).await?;
+            service
+                .delete_config(&principal, &a.provider_config_id, a.expected_revision)
+                .await?;
+            Ok(Value::Null)
+        }
+        "managed_desktop_config_set_credential" | "managed_desktop_config_rotate_credential" => {
+            let a: CredentialArgs = decode(args)?;
+            authority.revalidate(&principal).await?;
+            let key = credential_value(&directory, a.source).await?;
+            let summary = if name == "managed_desktop_config_set_credential" {
+                service
+                    .set_credential(&principal, &a.provider_config_id, a.expected_revision, key)
+                    .await?
+            } else {
+                service
+                    .rotate_credential(&principal, &a.provider_config_id, a.expected_revision, key)
+                    .await?
+            };
+            encode(summary)
+        }
+        "managed_desktop_template_list" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Empty {}
+            let _: Empty = decode(args)?;
+            encode(service.list_templates(&principal).await?)
+        }
+        "managed_desktop_template_delete" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase", deny_unknown_fields)]
+            struct TemplateArgs {
+                template_id: String,
+            }
+            let a: TemplateArgs = decode(args)?;
+            authority.revalidate(&principal).await?;
+            encode(service.delete_template(&principal, &a.template_id).await?)
+        }
+        "managed_desktop_monitor" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Empty {}
+            let _: Empty = decode(args)?;
+            encode(service.monitor(&principal).await?)
         }
         "managed_desktop_list_configs" => encode(service.list_configs(&principal).await?),
         "managed_desktop_list" => encode(service.list(&principal).await?),
@@ -1255,7 +1475,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         tokio::time::timeout(
             Duration::from_secs(5),
-            install(directory.path(), "test-host"),
+            install(directory.path(), None, "test-host", None),
         )
         .await
         .unwrap()
@@ -1380,7 +1600,7 @@ mod tests {
         install_security_store(Some(SecurityStore::in_memory().unwrap()));
         let binding = host_identity::bind_local_account("acct-control", "digest-control").unwrap();
         let directory = tempfile::tempdir().unwrap();
-        install(directory.path(), "host").await.unwrap();
+        install(directory.path(), None, "host", None).await.unwrap();
         let result = dispatch(
             "managed_desktop_control_input",
             serde_json::json!({
@@ -1411,7 +1631,7 @@ mod tests {
         let binding = host_identity::bind_local_account("acct-lifecycle", "digest-lifecycle").unwrap();
         register_device(&store, &binding.remote_tenant_id, "controller", "owner");
         let directory = tempfile::tempdir().unwrap();
-        install(directory.path(), "host").await.unwrap();
+        install(directory.path(), None, "host", None).await.unwrap();
         for command in ["managed_desktop_authorize", "managed_desktop_prepare_template", "managed_desktop_create", "managed_desktop_delete"] {
             let result = dispatch(command, serde_json::json!({}), Caller {
                 device_id: "controller", tenant_id: Some(&binding.remote_tenant_id), scope: None, local: false,
@@ -1712,7 +1932,7 @@ mod tests {
         install_security_store(Some(SecurityStore::in_memory().unwrap()));
         host_identity::bind_local_account("acct-consent", "digest-consent").unwrap();
         let directory = tempfile::tempdir().unwrap();
-        install(directory.path(), "host").await.unwrap();
+        install(directory.path(), None, "host", None).await.unwrap();
         let service = INSTALLED.read().as_ref().unwrap().service.clone();
         let caller = Caller {
             device_id: "local-desktop",
@@ -1816,6 +2036,124 @@ mod tests {
                 .len(),
             COMMANDS.len()
         );
+    }
+
+    #[tokio::test]
+    async fn configuration_and_template_writes_need_the_admin_lease_remotely() {
+        let _scope = TestScope::new();
+        let store = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(store.clone()));
+        let binding = host_identity::bind_local_account("acct-config", "digest-config").unwrap();
+        register_device(&store, &binding.remote_tenant_id, "controller", "owner");
+        let directory = tempfile::tempdir().unwrap();
+        install(directory.path(), None, "host", None).await.unwrap();
+        for command in [
+            "managed_desktop_config_save",
+            "managed_desktop_config_delete",
+            "managed_desktop_config_set_credential",
+            "managed_desktop_config_rotate_credential",
+            "managed_desktop_template_delete",
+        ] {
+            let result = dispatch(command, serde_json::json!({}), Caller {
+                device_id: "controller", tenant_id: Some(&binding.remote_tenant_id), scope: None, local: false,
+            }, None, None).await;
+            assert_eq!(result.unwrap_err().code, "managed_desktop_control_admin_lease_expired", "{command}");
+        }
+        // Reads stay observe-only and never need the lease.
+        for command in ["managed_desktop_release_status", "managed_desktop_template_list", "managed_desktop_monitor"] {
+            let result = dispatch(command, serde_json::json!({}), Caller {
+                device_id: "controller", tenant_id: Some(&binding.remote_tenant_id), scope: None, local: false,
+            }, None, None).await;
+            assert!(result.is_ok(), "{command}: {result:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_copied_key_comes_only_from_a_stored_e2b_code_sandbox_credential() {
+        use cognia_sandbox_pool::{
+            desktop::DesktopRemoteSandboxes,
+            providers::{CredentialSource, ProviderConfig, ProviderKind, ProviderLimitsConfig, SandboxProvidersFile},
+        };
+        let _scope = TestScope::new();
+        let directory = tempfile::tempdir().unwrap();
+        let provider = |id: &str, credential: CredentialSource| ProviderConfig {
+            id: id.into(),
+            kind: ProviderKind::E2b,
+            label: None,
+            credential: Some(credential),
+            limits: ProviderLimitsConfig::default(),
+            settings: serde_json::json!({}),
+        };
+        DesktopRemoteSandboxes {
+            version: 1,
+            providers: SandboxProvidersFile {
+                version: 1,
+                providers: vec![
+                    provider("main", CredentialSource::SecretId("remote-sandbox:main".into())),
+                    provider("envkey", CredentialSource::Env("E2B_API_KEY".into())),
+                    provider("empty", CredentialSource::SecretId("remote-sandbox:empty".into())),
+                ],
+                default_provider_id: None,
+            },
+            registry_allowlist: Vec::new(),
+        }
+        .save(directory.path())
+        .unwrap();
+        cognia_secrets::secret_store::set(
+            cognia_companion::remote_sandboxes::SECRET_SERVICE,
+            "remote-sandbox:main",
+            " e2b_copied ",
+        )
+        .unwrap();
+        let copy = |id: &str| CredentialSourceArgs::RemoteSandbox { provider_id: id.into() };
+        assert_eq!(credential_value(directory.path(), copy("main")).await.unwrap().0, "e2b_copied");
+        for (id, code) in [
+            ("envkey", "managed_desktop_credential_source_unsupported"),
+            ("empty", "managed_desktop_credential_source_empty"),
+            ("missing", "managed_desktop_credential_source_not_found"),
+        ] {
+            assert_eq!(credential_value(directory.path(), copy(id)).await.unwrap_err().code, code, "{id}");
+        }
+        assert_eq!(
+            credential_value(directory.path(), CredentialSourceArgs::Key { key: "two words".into() })
+                .await
+                .unwrap_err()
+                .code,
+            "managed_desktop_secret_invalid"
+        );
+        // The copy never left a trace under the desktop secret service.
+        assert!(cognia_secrets::secret_store::get(SECRET_SERVICE, "remote-sandbox:main").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn release_status_reports_the_bundled_manifest_without_a_path() {
+        let _scope = TestScope::new();
+        install_security_store(Some(SecurityStore::in_memory().unwrap()));
+        host_identity::bind_local_account("acct-release", "digest-release").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        install(directory.path(), Some(&directory.path().join("absent-bundle")), "host", None)
+            .await
+            .unwrap();
+        let status = dispatch(
+            "managed_desktop_release_status",
+            serde_json::json!({}),
+            Caller { device_id: "local", tenant_id: None, scope: None, local: true },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(status["state"], "absent");
+        assert_eq!(status["source"], serde_json::Value::Null);
+        assert!(dispatch(
+            "managed_desktop_release_status",
+            serde_json::json!({"path": "/etc"}),
+            Caller { device_id: "local", tenant_id: None, scope: None, local: true },
+            None,
+            None,
+        )
+        .await
+        .is_err());
     }
 }
 

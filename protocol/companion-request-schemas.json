@@ -12900,6 +12900,356 @@
       ],
       "additionalProperties": false
     },
+    "managed_desktop_config_delete": {
+      "type": "object",
+      "properties": {
+        "providerConfigId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "providerConfigId",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_config_rotate_credential": {
+      "type": "object",
+      "properties": {
+        "providerConfigId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "key"
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              },
+              "required": [
+                "kind",
+                "key"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "remoteSandbox"
+                },
+                "providerId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                }
+              },
+              "required": [
+                "kind",
+                "providerId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "providerConfigId",
+        "expectedRevision",
+        "source"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_config_save": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "shape": {
+          "type": "object",
+          "properties": {
+            "cpuCount": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "memoryMb": {
+              "type": "integer",
+              "minimum": 128,
+              "maximum": 262144
+            }
+          },
+          "required": [
+            "cpuCount",
+            "memoryMb"
+          ],
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2
+            },
+            "maxLifetimeSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3600
+            },
+            "idleTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 600
+            }
+          },
+          "required": [
+            "maxConcurrent",
+            "maxLifetimeSeconds",
+            "idleTimeoutSeconds"
+          ],
+          "additionalProperties": false
+        },
+        "plan": {
+          "type": "object",
+          "properties": {
+            "maxLifetimeSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 86400
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "namespace": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "validForMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2592000000
+            }
+          },
+          "required": [
+            "maxLifetimeSeconds",
+            "source",
+            "namespace",
+            "validForMs"
+          ],
+          "additionalProperties": false
+        },
+        "price": {
+          "type": "object",
+          "properties": {
+            "currency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            },
+            "hourlyRateMicros": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "validForMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2592000000
+            }
+          },
+          "required": [
+            "currency",
+            "hourlyRateMicros",
+            "source",
+            "validForMs"
+          ],
+          "additionalProperties": false
+        },
+        "egress": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "off",
+                "on",
+                "allowlist"
+              ]
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
+        },
+        "isolationMinimum": {
+          "type": "string",
+          "enum": [
+            "container",
+            "gvisor",
+            "vm"
+          ]
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "id",
+        "expectedRevision",
+        "enabled",
+        "shape",
+        "limits",
+        "plan",
+        "price",
+        "egress",
+        "isolationMinimum"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_config_set_credential": {
+      "type": "object",
+      "properties": {
+        "providerConfigId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "key"
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              },
+              "required": [
+                "kind",
+                "key"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "remoteSandbox"
+                },
+                "providerId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 32
+                }
+              },
+              "required": [
+                "kind",
+                "providerId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "providerConfigId",
+        "expectedRevision",
+        "source"
+      ],
+      "additionalProperties": false
+    },
     "managed_desktop_connect": {
       "type": "object",
       "properties": {
@@ -13535,6 +13885,12 @@
       "required": [],
       "additionalProperties": false
     },
+    "managed_desktop_monitor": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
     "managed_desktop_prepare_template": {
       "type": "object",
       "properties": {
@@ -13594,6 +13950,12 @@
         "providerConfigId",
         "lifetimeSeconds"
       ],
+      "additionalProperties": false
+    },
+    "managed_desktop_release_status": {
+      "type": "object",
+      "properties": {},
+      "required": [],
       "additionalProperties": false
     },
     "managed_desktop_results_abort_delete": {
@@ -13847,6 +14209,36 @@
         "acceptanceId",
         "artifactId"
       ],
+      "additionalProperties": false
+    },
+    "managed_desktop_template_delete": {
+      "type": "object",
+      "properties": {
+        "templateId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "templateId"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_template_list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
       "additionalProperties": false
     },
     "mcp_oauth_authenticate": {

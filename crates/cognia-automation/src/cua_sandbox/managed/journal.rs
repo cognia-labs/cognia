@@ -39,6 +39,9 @@ pub struct ManagedDesktopJournal {
     #[serde(default)]
     pub control_qualifications:
         BTreeMap<String, super::service::control::ControlQualificationReceipt>,
+    /// Rotated provider key generations awaiting removal (ADR-0233 A1).
+    #[serde(default)]
+    pub retired_credentials: std::collections::BTreeSet<RetiredCredential>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

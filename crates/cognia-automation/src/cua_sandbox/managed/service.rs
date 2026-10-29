@@ -8,6 +8,10 @@ pub mod control;
 mod smoke;
 #[path = "qualification.rs"]
 pub mod qualification;
+#[path = "config_admin.rs"]
+mod config_admin;
+#[path = "template_admin.rs"]
+mod template_admin;
 use super::{
     contracts::*,
     journal::{JournalStore, ManagedDesktopJournal},
@@ -26,6 +30,9 @@ pub struct ManagedDesktopService {
     // creation remain independent; no synchronous lock crosses an await.
     operations: Mutex<()>,
     template_operations: Mutex<()>,
+    // Serializes registry and provider-key writes (amendment A1). Lifecycle
+    // admission still rereads the registry, so it never trusts this lock.
+    config_operations: Mutex<()>,
     provider: Arc<dyn ManagedDesktopProvider>,
     secrets: Arc<dyn ManagedDesktopSecrets>,
     trusted_release: Option<DesktopRelease>,
@@ -57,6 +64,7 @@ impl ManagedDesktopService {
             state: Arc::new(Mutex::new(state)),
             operations: Mutex::new(()),
             template_operations: Mutex::new(()),
+            config_operations: Mutex::new(()),
             provider,
             secrets,
             trusted_release,
@@ -83,6 +91,13 @@ impl ManagedDesktopService {
         // A wall-clock rollback must not revive an expired lease.
         let now = (self.clock)().max(next.last_observed_at);
         let result = f(&mut next, now)?;
+        // Every path that requests cleanup goes through here, so the §5
+        // "cleanup older than 10 minutes" clock starts in exactly one place.
+        for row in next.desktops.values_mut() {
+            if row.delete_requested && row.cleanup_requested_at.is_none() {
+                row.cleanup_requested_at = Some(now);
+            }
+        }
         next.last_observed_at = now;
         next.revision = next.revision.saturating_add(1);
         let store = self.store.clone();
@@ -180,13 +195,20 @@ impl ManagedDesktopService {
         p: &ManagedDesktopPrincipal,
     ) -> Result<Vec<ManagedDesktopConfigSummary>> {
         self.scope(p)?;
-        let configs = self.registry().await?.providers;
+        let mut configs = Vec::new();
+        for config in self.registry().await?.providers {
+            if config.owner_principal_id != p.owner_principal_id || config.host_id != self.host_id {
+                continue;
+            }
+            // A secret-store outage reads as "no key", never as a listing failure.
+            let present = self.secrets.has_provider_key(&config).await.unwrap_or(false);
+            configs.push((config, present));
+        }
         let now = self.now().await;
         let state = self.state.lock().await;
         Ok(configs
             .into_iter()
-            .filter(|c| c.owner_principal_id == p.owner_principal_id && c.host_id == self.host_id)
-            .map(|c| {
+            .map(|(c, credential_present)| {
                 let digest = c.binding_digest();
                 let template = latest_template(&state, &digest);
                 let qualified = c.egress == DesktopEgress::Off
@@ -199,6 +221,12 @@ impl ManagedDesktopService {
                     id: c.id.clone(),
                     owner_principal_id: c.owner_principal_id.clone(),
                     host_id: c.host_id.clone(),
+                    revision: c.revision,
+                    credential_generation: c.credential_generation,
+                    credential_present,
+                    plan: c.plan.clone(),
+                    price: c.price.clone(),
+                    isolation_minimum: c.isolation_minimum,
                     enabled: c.enabled,
                     qualification: if qualified {
                         "qualified"
@@ -466,6 +494,9 @@ impl ManagedDesktopService {
                     created_at: now,
                     updated_at: now,
                     error_code: None,
+                    deletion_requested_at: None,
+                    cleanup_attempts: 0,
+                    next_retry_at: 0,
                 };
                 s.templates.insert(operation.clone(), row.clone());
                 Ok(row)
@@ -674,6 +705,7 @@ impl ManagedDesktopService {
                     smoke,
                     bootstrap_started: false,
                     bootstrap_completed: false,
+                    cleanup_requested_at: None,
                 };
                 s.desktops.insert(row.desktop.id.clone(), row.clone());
                 Ok(row)
@@ -1261,6 +1293,18 @@ impl ManagedDesktopService {
                 }
             }
         }
+        if let Ok(_template) = self.template_operations.try_lock() {
+            if let Err(e) = self.reconcile_template_deletions().await {
+                first.get_or_insert(e);
+            }
+        }
+        // After desktop and template cleanup, so a key retires once nothing
+        // created with it remains.
+        if let Ok(_registry) = self.config_operations.try_lock() {
+            if let Err(e) = self.reconcile_retired_credentials().await {
+                first.get_or_insert(e);
+            }
+        }
         self.transaction(|_, _| Ok(())).await?;
         match first {
             Some(e) => Err(e),
@@ -1271,7 +1315,7 @@ impl ManagedDesktopService {
 fn latest_template<'a>(s: &'a ManagedDesktopJournal, digest: &str) -> Option<&'a TemplateRecord> {
     s.templates
         .values()
-        .filter(|t| t.binding_digest == digest)
+        .filter(|t| t.binding_digest == digest && t.state != TemplateState::Deleting)
         .max_by_key(|t| t.created_at)
 }
 fn lifecycle_receipt_valid(
@@ -1413,13 +1457,13 @@ pub(super) mod tests {
         collections::BTreeMap,
         sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     };
-    struct FakeProvider {
+    pub(super) struct FakeProvider {
         resources: Mutex<BTreeMap<String, ProviderDesktop>>,
         creates: AtomicUsize,
         deletes: AtomicUsize,
         bootstraps: AtomicUsize,
         lose_create: AtomicBool,
-        fail_delete: AtomicBool,
+        pub(super) fail_delete: AtomicBool,
         bad_policy: AtomicBool,
         lose_bootstrap: AtomicBool,
         boundary_fault: AtomicUsize,
@@ -1428,6 +1472,8 @@ pub(super) mod tests {
         now: AtomicI64,
         verify_gate: Mutex<Option<Arc<TestGate>>>,
         create_gate: Mutex<Option<Arc<TestGate>>>,
+        pub(super) deleted_templates: std::sync::Mutex<std::collections::BTreeSet<String>>,
+        pub(super) fail_template_delete: AtomicBool,
     }
     struct TestGate {
         entered: tokio::sync::Notify,
@@ -1459,6 +1505,8 @@ pub(super) mod tests {
                 now: AtomicI64::new(1000),
                 verify_gate: Mutex::new(None),
                 create_gate: Mutex::new(None),
+                deleted_templates: Default::default(),
+                fail_template_delete: AtomicBool::new(false),
             }
         }
     }
@@ -1528,6 +1576,17 @@ pub(super) mod tests {
             _: &TemplateIdentity,
         ) -> Result<TemplateState> {
             Ok(TemplateState::Ready)
+        }
+        async fn delete_template(
+            &self,
+            _: &ManagedDesktopConfig,
+            _: &ProviderSecret,
+            template_id: &str,
+        ) -> Result<bool> {
+            if self.fail_template_delete.load(Ordering::SeqCst) {
+                return Err(retryable("managed_desktop_template_delete_failed"));
+            }
+            Ok(self.deleted_templates.lock().unwrap().insert(template_id.into()))
         }
         async fn create(
             &self,
@@ -1632,9 +1691,9 @@ pub(super) mod tests {
     }
     pub(crate) struct Fixture {
         directory: tempfile::TempDir,
-        provider: Arc<FakeProvider>,
+        pub(super) provider: Arc<FakeProvider>,
         secrets: Arc<FileManagedDesktopSecrets>,
-        clock: Arc<AtomicI64>,
+        pub(super) clock: Arc<AtomicI64>,
         pub(super) service: ManagedDesktopService,
         pub(super) p: ManagedDesktopPrincipal,
         pub(crate) config: ManagedDesktopConfig,
@@ -1780,6 +1839,9 @@ pub(super) mod tests {
             self.gate.pause().await;
             Ok(key)
         }
+        async fn has_provider_key(&self, c: &ManagedDesktopConfig) -> Result<bool> { self.inner.has_provider_key(c).await }
+        async fn put_provider_key(&self, c: &ManagedDesktopConfig, key: &ProviderSecret) -> Result<()> { self.inner.put_provider_key(c, key).await }
+        async fn remove_provider_key(&self, c: &RetiredCredential) -> Result<()> { self.inner.remove_provider_key(c).await }
         async fn desktop(&self, id: &str) -> Result<DesktopSecrets> { self.inner.desktop(id).await }
         async fn put_desktop(&self, id: &str, value: &DesktopSecrets) -> Result<()> { self.inner.put_desktop(id, value).await }
         async fn remove_desktop(&self, id: &str) -> Result<()> { self.inner.remove_desktop(id).await }

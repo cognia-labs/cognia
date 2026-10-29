@@ -79,6 +79,19 @@ use clap::{Parser, Subcommand};
 /// local account *namespace*, not a tenant — the tenant now comes from the host
 /// binding this id is bound to at startup.
 const HEADLESS_LOCAL_ACCOUNT_ID: &str = "local_acct_a";
+/// ADR-0233 A2: the server image ships the trusted managed desktop release
+/// manifest here (`deploy/docker/Dockerfile.cognia-server`). A manifest in the
+/// data directory takes precedence; neither present leaves provisioning dormant.
+const MANAGED_DESKTOP_RELEASE_DIR: &str = "/usr/share/cognia/managed-desktop";
+
+/// Managed desktop monitor changes go to `/ws/events` subscribers.
+fn managed_desktop_events(
+    bus: Arc<EventBus>,
+) -> cognia_companion_rpc::managed_desktops::HostEventSink {
+    Arc::new(move |topic, payload| {
+        bus.publish(topic.to_string(), payload);
+    })
+}
 
 /// cognia-server — headless cognia companion API.
 ///
@@ -2903,7 +2916,13 @@ async fn run_serve(
         .map_err(|e| format!("deployment id: {e}"))?;
     log::info!("deployment id: {deployment_id}");
     if let Err(error) =
-        cognia_companion_rpc::managed_desktops::install(&data_dir, &deployment_id).await
+        cognia_companion_rpc::managed_desktops::install(
+            &data_dir,
+            Some(Path::new(MANAGED_DESKTOP_RELEASE_DIR)),
+            &deployment_id,
+            Some(managed_desktop_events(Arc::clone(&shared.event_bus))),
+        )
+        .await
     {
         log::warn!("managed desktops unavailable: {}", error.code);
     }
@@ -3292,6 +3311,8 @@ async fn run_serve(
         std::process::exit(cognia_core::shutdown_signal::SIGNAL_EXIT_CODE);
     });
     cognia_companion::server::begin_draining();
+    // ADR-0233 A7: stop the managed desktop worker between transactions.
+    cognia_companion_rpc::managed_desktops::shutdown();
     if let Some(fleet) = person_fleet {
         fleet.shutdown().await;
         cognia_companion::person_partition::install(None);

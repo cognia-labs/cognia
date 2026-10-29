@@ -110441,6 +110441,1435 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_config_delete:
+    post:
+      operationId: internalRpcManagedDesktopConfigDelete
+      tags:
+        - headless-rpc
+      summary: managed_desktop_config_delete (host.admin)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                providerConfigId:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                expectedRevision:
+                  type: integer
+                  minimum: 1
+                adminLease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                admin_lease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+              required:
+                - providerConfigId
+                - expectedRevision
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: "null"
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_config_rotate_credential:
+    post:
+      operationId: internalRpcManagedDesktopConfigRotateCredential
+      tags:
+        - headless-rpc
+      summary: managed_desktop_config_rotate_credential (host.admin)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                providerConfigId:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                expectedRevision:
+                  type: integer
+                  minimum: 1
+                source:
+                  oneOf:
+                    - type: object
+                      properties:
+                        kind:
+                          const: key
+                        key:
+                          type: string
+                          minLength: 1
+                          maxLength: 4096
+                      required:
+                        - kind
+                        - key
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          const: remoteSandbox
+                        providerId:
+                          type: string
+                          minLength: 1
+                          maxLength: 32
+                      required:
+                        - kind
+                        - providerId
+                      additionalProperties: false
+                adminLease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                admin_lease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+              required:
+                - providerConfigId
+                - expectedRevision
+                - source
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  ownerPrincipalId:
+                    type: string
+                  hostId:
+                    type: string
+                  revision:
+                    type: integer
+                    minimum: 1
+                  credentialGeneration:
+                    type: integer
+                    minimum: 1
+                  credentialPresent:
+                    type: boolean
+                  plan:
+                    type: object
+                    properties:
+                      maxLifetimeSeconds:
+                        type: integer
+                        minimum: 1
+                        maximum: 86400
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                    required:
+                      - maxLifetimeSeconds
+                      - observedAt
+                      - expiresAt
+                      - source
+                      - namespace
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  price:
+                    type: object
+                    properties:
+                      currency:
+                        type: string
+                        pattern: ^[A-Z]{3}$
+                      hourlyRateMicros:
+                        type: integer
+                        minimum: 1
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                    required:
+                      - currency
+                      - hourlyRateMicros
+                      - observedAt
+                      - expiresAt
+                      - source
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  isolationMinimum:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
+                  enabled:
+                    type: boolean
+                  qualification:
+                    type: string
+                  reason:
+                    type:
+                      - string
+                      - "null"
+                  maxConcurrent:
+                    type: integer
+                  maxLifetimeSeconds:
+                    type: integer
+                  idleTimeoutSeconds:
+                    type: integer
+                  region:
+                    type:
+                      - string
+                      - "null"
+                  cpuCount:
+                    type: integer
+                  memoryMb:
+                    type: integer
+                  template:
+                    anyOf:
+                      - type: object
+                        properties:
+                          templateId:
+                            type: string
+                          buildId:
+                            type: string
+                          imageDigest:
+                            type: string
+                          recipeRevision:
+                            type: string
+                          protocol:
+                            type: string
+                        required:
+                          - templateId
+                          - buildId
+                          - imageDigest
+                          - recipeRevision
+                          - protocol
+                        additionalProperties: false
+                        x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                      - type: "null"
+                  templateState:
+                    type:
+                      - string
+                      - "null"
+                    enum:
+                      - registering
+                      - registered
+                      - building
+                      - ready
+                      - unknown
+                      - failed
+                      - deleting
+                      - null
+                  canPrepareTemplate:
+                    type: boolean
+                  canCreate:
+                    type: boolean
+                  isolationTier:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
+                  egressTier:
+                    type: string
+                    enum:
+                      - off
+                      - on
+                      - allowlist
+                  egressEnforcement:
+                    type: string
+                  guiQualified:
+                    type: boolean
+                required:
+                  - id
+                  - ownerPrincipalId
+                  - hostId
+                  - revision
+                  - credentialGeneration
+                  - credentialPresent
+                  - plan
+                  - price
+                  - isolationMinimum
+                  - enabled
+                  - qualification
+                  - reason
+                  - maxConcurrent
+                  - maxLifetimeSeconds
+                  - idleTimeoutSeconds
+                  - region
+                  - cpuCount
+                  - memoryMb
+                  - template
+                  - templateState
+                  - canPrepareTemplate
+                  - canCreate
+                  - isolationTier
+                  - egressTier
+                  - egressEnforcement
+                  - guiQualified
+                additionalProperties: false
+                x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_config_save:
+    post:
+      operationId: internalRpcManagedDesktopConfigSave
+      tags:
+        - headless-rpc
+      summary: managed_desktop_config_save (host.admin)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                expectedRevision:
+                  type:
+                    - integer
+                    - "null"
+                  minimum: 1
+                enabled:
+                  type: boolean
+                shape:
+                  type: object
+                  properties:
+                    cpuCount:
+                      type: integer
+                      minimum: 1
+                      maximum: 64
+                    memoryMb:
+                      type: integer
+                      minimum: 128
+                      maximum: 262144
+                  required:
+                    - cpuCount
+                    - memoryMb
+                  additionalProperties: false
+                limits:
+                  type: object
+                  properties:
+                    maxConcurrent:
+                      type: integer
+                      minimum: 1
+                      maximum: 2
+                    maxLifetimeSeconds:
+                      type: integer
+                      minimum: 1
+                      maximum: 3600
+                    idleTimeoutSeconds:
+                      type: integer
+                      minimum: 1
+                      maximum: 600
+                  required:
+                    - maxConcurrent
+                    - maxLifetimeSeconds
+                    - idleTimeoutSeconds
+                  additionalProperties: false
+                plan:
+                  type: object
+                  properties:
+                    maxLifetimeSeconds:
+                      type: integer
+                      minimum: 1
+                      maximum: 86400
+                    source:
+                      type: string
+                      minLength: 1
+                      maxLength: 256
+                    namespace:
+                      type: string
+                      minLength: 1
+                      maxLength: 256
+                    validForMs:
+                      type: integer
+                      minimum: 1
+                      maximum: 2592000000
+                  required:
+                    - maxLifetimeSeconds
+                    - source
+                    - namespace
+                    - validForMs
+                  additionalProperties: false
+                price:
+                  type: object
+                  properties:
+                    currency:
+                      type: string
+                      pattern: ^[A-Z]{3}$
+                    hourlyRateMicros:
+                      type: integer
+                      minimum: 1
+                    source:
+                      type: string
+                      minLength: 1
+                      maxLength: 256
+                    validForMs:
+                      type: integer
+                      minimum: 1
+                      maximum: 2592000000
+                  required:
+                    - currency
+                    - hourlyRateMicros
+                    - source
+                    - validForMs
+                  additionalProperties: false
+                egress:
+                  type: object
+                  properties:
+                    mode:
+                      type: string
+                      enum:
+                        - off
+                        - on
+                        - allowlist
+                    rules:
+                      type: array
+                      items:
+                        type: string
+                  required:
+                    - mode
+                  additionalProperties: false
+                isolationMinimum:
+                  type: string
+                  enum:
+                    - container
+                    - gvisor
+                    - vm
+                adminLease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                admin_lease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+              required:
+                - id
+                - expectedRevision
+                - enabled
+                - shape
+                - limits
+                - plan
+                - price
+                - egress
+                - isolationMinimum
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  ownerPrincipalId:
+                    type: string
+                  hostId:
+                    type: string
+                  revision:
+                    type: integer
+                    minimum: 1
+                  credentialGeneration:
+                    type: integer
+                    minimum: 1
+                  credentialPresent:
+                    type: boolean
+                  plan:
+                    type: object
+                    properties:
+                      maxLifetimeSeconds:
+                        type: integer
+                        minimum: 1
+                        maximum: 86400
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                    required:
+                      - maxLifetimeSeconds
+                      - observedAt
+                      - expiresAt
+                      - source
+                      - namespace
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  price:
+                    type: object
+                    properties:
+                      currency:
+                        type: string
+                        pattern: ^[A-Z]{3}$
+                      hourlyRateMicros:
+                        type: integer
+                        minimum: 1
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                    required:
+                      - currency
+                      - hourlyRateMicros
+                      - observedAt
+                      - expiresAt
+                      - source
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  isolationMinimum:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
+                  enabled:
+                    type: boolean
+                  qualification:
+                    type: string
+                  reason:
+                    type:
+                      - string
+                      - "null"
+                  maxConcurrent:
+                    type: integer
+                  maxLifetimeSeconds:
+                    type: integer
+                  idleTimeoutSeconds:
+                    type: integer
+                  region:
+                    type:
+                      - string
+                      - "null"
+                  cpuCount:
+                    type: integer
+                  memoryMb:
+                    type: integer
+                  template:
+                    anyOf:
+                      - type: object
+                        properties:
+                          templateId:
+                            type: string
+                          buildId:
+                            type: string
+                          imageDigest:
+                            type: string
+                          recipeRevision:
+                            type: string
+                          protocol:
+                            type: string
+                        required:
+                          - templateId
+                          - buildId
+                          - imageDigest
+                          - recipeRevision
+                          - protocol
+                        additionalProperties: false
+                        x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                      - type: "null"
+                  templateState:
+                    type:
+                      - string
+                      - "null"
+                    enum:
+                      - registering
+                      - registered
+                      - building
+                      - ready
+                      - unknown
+                      - failed
+                      - deleting
+                      - null
+                  canPrepareTemplate:
+                    type: boolean
+                  canCreate:
+                    type: boolean
+                  isolationTier:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
+                  egressTier:
+                    type: string
+                    enum:
+                      - off
+                      - on
+                      - allowlist
+                  egressEnforcement:
+                    type: string
+                  guiQualified:
+                    type: boolean
+                required:
+                  - id
+                  - ownerPrincipalId
+                  - hostId
+                  - revision
+                  - credentialGeneration
+                  - credentialPresent
+                  - plan
+                  - price
+                  - isolationMinimum
+                  - enabled
+                  - qualification
+                  - reason
+                  - maxConcurrent
+                  - maxLifetimeSeconds
+                  - idleTimeoutSeconds
+                  - region
+                  - cpuCount
+                  - memoryMb
+                  - template
+                  - templateState
+                  - canPrepareTemplate
+                  - canCreate
+                  - isolationTier
+                  - egressTier
+                  - egressEnforcement
+                  - guiQualified
+                additionalProperties: false
+                x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_config_set_credential:
+    post:
+      operationId: internalRpcManagedDesktopConfigSetCredential
+      tags:
+        - headless-rpc
+      summary: managed_desktop_config_set_credential (host.admin)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                providerConfigId:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                expectedRevision:
+                  type: integer
+                  minimum: 1
+                source:
+                  oneOf:
+                    - type: object
+                      properties:
+                        kind:
+                          const: key
+                        key:
+                          type: string
+                          minLength: 1
+                          maxLength: 4096
+                      required:
+                        - kind
+                        - key
+                      additionalProperties: false
+                    - type: object
+                      properties:
+                        kind:
+                          const: remoteSandbox
+                        providerId:
+                          type: string
+                          minLength: 1
+                          maxLength: 32
+                      required:
+                        - kind
+                        - providerId
+                      additionalProperties: false
+                adminLease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                admin_lease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+              required:
+                - providerConfigId
+                - expectedRevision
+                - source
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  ownerPrincipalId:
+                    type: string
+                  hostId:
+                    type: string
+                  revision:
+                    type: integer
+                    minimum: 1
+                  credentialGeneration:
+                    type: integer
+                    minimum: 1
+                  credentialPresent:
+                    type: boolean
+                  plan:
+                    type: object
+                    properties:
+                      maxLifetimeSeconds:
+                        type: integer
+                        minimum: 1
+                        maximum: 86400
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                    required:
+                      - maxLifetimeSeconds
+                      - observedAt
+                      - expiresAt
+                      - source
+                      - namespace
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  price:
+                    type: object
+                    properties:
+                      currency:
+                        type: string
+                        pattern: ^[A-Z]{3}$
+                      hourlyRateMicros:
+                        type: integer
+                        minimum: 1
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                    required:
+                      - currency
+                      - hourlyRateMicros
+                      - observedAt
+                      - expiresAt
+                      - source
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  isolationMinimum:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
+                  enabled:
+                    type: boolean
+                  qualification:
+                    type: string
+                  reason:
+                    type:
+                      - string
+                      - "null"
+                  maxConcurrent:
+                    type: integer
+                  maxLifetimeSeconds:
+                    type: integer
+                  idleTimeoutSeconds:
+                    type: integer
+                  region:
+                    type:
+                      - string
+                      - "null"
+                  cpuCount:
+                    type: integer
+                  memoryMb:
+                    type: integer
+                  template:
+                    anyOf:
+                      - type: object
+                        properties:
+                          templateId:
+                            type: string
+                          buildId:
+                            type: string
+                          imageDigest:
+                            type: string
+                          recipeRevision:
+                            type: string
+                          protocol:
+                            type: string
+                        required:
+                          - templateId
+                          - buildId
+                          - imageDigest
+                          - recipeRevision
+                          - protocol
+                        additionalProperties: false
+                        x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                      - type: "null"
+                  templateState:
+                    type:
+                      - string
+                      - "null"
+                    enum:
+                      - registering
+                      - registered
+                      - building
+                      - ready
+                      - unknown
+                      - failed
+                      - deleting
+                      - null
+                  canPrepareTemplate:
+                    type: boolean
+                  canCreate:
+                    type: boolean
+                  isolationTier:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
+                  egressTier:
+                    type: string
+                    enum:
+                      - off
+                      - on
+                      - allowlist
+                  egressEnforcement:
+                    type: string
+                  guiQualified:
+                    type: boolean
+                required:
+                  - id
+                  - ownerPrincipalId
+                  - hostId
+                  - revision
+                  - credentialGeneration
+                  - credentialPresent
+                  - plan
+                  - price
+                  - isolationMinimum
+                  - enabled
+                  - qualification
+                  - reason
+                  - maxConcurrent
+                  - maxLifetimeSeconds
+                  - idleTimeoutSeconds
+                  - region
+                  - cpuCount
+                  - memoryMb
+                  - template
+                  - templateState
+                  - canPrepareTemplate
+                  - canCreate
+                  - isolationTier
+                  - egressTier
+                  - egressEnforcement
+                  - guiQualified
+                additionalProperties: false
+                x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/managed_desktop_connect:
     post:
       operationId: internalRpcManagedDesktopConnect
@@ -113814,6 +115243,69 @@ paths:
                       type: string
                     hostId:
                       type: string
+                    revision:
+                      type: integer
+                      minimum: 1
+                    credentialGeneration:
+                      type: integer
+                      minimum: 1
+                    credentialPresent:
+                      type: boolean
+                    plan:
+                      type: object
+                      properties:
+                        maxLifetimeSeconds:
+                          type: integer
+                          minimum: 1
+                          maximum: 86400
+                        observedAt:
+                          type: integer
+                        expiresAt:
+                          type: integer
+                        source:
+                          type: string
+                          minLength: 1
+                        namespace:
+                          type: string
+                          minLength: 1
+                      required:
+                        - maxLifetimeSeconds
+                        - observedAt
+                        - expiresAt
+                        - source
+                        - namespace
+                      additionalProperties: false
+                      x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                    price:
+                      type: object
+                      properties:
+                        currency:
+                          type: string
+                          pattern: ^[A-Z]{3}$
+                        hourlyRateMicros:
+                          type: integer
+                          minimum: 1
+                        observedAt:
+                          type: integer
+                        expiresAt:
+                          type: integer
+                        source:
+                          type: string
+                          minLength: 1
+                      required:
+                        - currency
+                        - hourlyRateMicros
+                        - observedAt
+                        - expiresAt
+                        - source
+                      additionalProperties: false
+                      x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                    isolationMinimum:
+                      type: string
+                      enum:
+                        - container
+                        - gvisor
+                        - vm
                     enabled:
                       type: boolean
                     qualification:
@@ -113870,6 +115362,7 @@ paths:
                         - ready
                         - unknown
                         - failed
+                        - deleting
                         - null
                     canPrepareTemplate:
                       type: boolean
@@ -113895,6 +115388,12 @@ paths:
                     - id
                     - ownerPrincipalId
                     - hostId
+                    - revision
+                    - credentialGeneration
+                    - credentialPresent
+                    - plan
+                    - price
+                    - isolationMinimum
                     - enabled
                     - qualification
                     - reason
@@ -113914,6 +115413,221 @@ paths:
                     - guiQualified
                   additionalProperties: false
                   x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_monitor:
+    post:
+      operationId: internalRpcManagedDesktopMonitor
+      tags:
+        - headless-rpc
+      summary: managed_desktop_monitor (host.observe)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+              required: []
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  observedAt:
+                    type: integer
+                  billedDesktops:
+                    type: integer
+                    minimum: 0
+                  maximumExposureMicros:
+                    type: object
+                    additionalProperties:
+                      type: integer
+                      minimum: 0
+                  oldestPendingCreateAt:
+                    type:
+                      - integer
+                      - "null"
+                  oldestPendingDeleteAt:
+                    type:
+                      - integer
+                      - "null"
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind:
+                          type: string
+                          enum:
+                            - pastDeadline
+                            - cleanupStalled
+                            - templateCleanupStalled
+                        subjectId:
+                          type: string
+                        providerConfigId:
+                          type: string
+                        since:
+                          type: integer
+                      required:
+                        - kind
+                        - subjectId
+                        - providerConfigId
+                        - since
+                      additionalProperties: false
+                      x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                required:
+                  - observedAt
+                  - billedDesktops
+                  - maximumExposureMicros
+                  - oldestPendingCreateAt
+                  - oldestPendingDeleteAt
+                  - alerts
+                additionalProperties: false
+                x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:
@@ -114114,6 +115828,69 @@ paths:
                     type: string
                   hostId:
                     type: string
+                  revision:
+                    type: integer
+                    minimum: 1
+                  credentialGeneration:
+                    type: integer
+                    minimum: 1
+                  credentialPresent:
+                    type: boolean
+                  plan:
+                    type: object
+                    properties:
+                      maxLifetimeSeconds:
+                        type: integer
+                        minimum: 1
+                        maximum: 86400
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                      namespace:
+                        type: string
+                        minLength: 1
+                    required:
+                      - maxLifetimeSeconds
+                      - observedAt
+                      - expiresAt
+                      - source
+                      - namespace
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  price:
+                    type: object
+                    properties:
+                      currency:
+                        type: string
+                        pattern: ^[A-Z]{3}$
+                      hourlyRateMicros:
+                        type: integer
+                        minimum: 1
+                      observedAt:
+                        type: integer
+                      expiresAt:
+                        type: integer
+                      source:
+                        type: string
+                        minLength: 1
+                    required:
+                      - currency
+                      - hourlyRateMicros
+                      - observedAt
+                      - expiresAt
+                      - source
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  isolationMinimum:
+                    type: string
+                    enum:
+                      - container
+                      - gvisor
+                      - vm
                   enabled:
                     type: boolean
                   qualification:
@@ -114170,6 +115947,7 @@ paths:
                       - ready
                       - unknown
                       - failed
+                      - deleting
                       - null
                   canPrepareTemplate:
                     type: boolean
@@ -114195,6 +115973,12 @@ paths:
                   - id
                   - ownerPrincipalId
                   - hostId
+                  - revision
+                  - credentialGeneration
+                  - credentialPresent
+                  - plan
+                  - price
+                  - isolationMinimum
                   - enabled
                   - qualification
                   - reason
@@ -114434,6 +116218,209 @@ paths:
                   - ownerPrincipalId
                 additionalProperties: false
                 x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_release_status:
+    post:
+      operationId: internalRpcManagedDesktopReleaseStatus
+      tags:
+        - headless-rpc
+      summary: managed_desktop_release_status (host.observe)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+              required: []
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  state:
+                    type: string
+                    enum:
+                      - installed
+                      - absent
+                      - invalid
+                  source:
+                    type:
+                      - string
+                      - "null"
+                    enum:
+                      - data-directory
+                      - bundled
+                      - null
+                  imageDigest:
+                    type:
+                      - string
+                      - "null"
+                  recipeRevision:
+                    type:
+                      - string
+                      - "null"
+                  protocol:
+                    type:
+                      - string
+                      - "null"
+                  error:
+                    type:
+                      - string
+                      - "null"
+                required:
+                  - state
+                  - source
+                  - imageDigest
+                  - recipeRevision
+                  - protocol
+                  - error
+                additionalProperties: false
+                x-cognia-wire-source: crates/cognia-companion-rpc/src/managed_desktop_release.rs
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:
@@ -117157,6 +119144,489 @@ paths:
                   - base64
                   - cacheControl
                 additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_template_delete:
+    post:
+      operationId: internalRpcManagedDesktopTemplateDelete
+      tags:
+        - headless-rpc
+      summary: managed_desktop_template_delete (host.admin)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                templateId:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                adminLease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                admin_lease:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+              required:
+                - templateId
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - type: object
+                    properties:
+                      id:
+                        type: string
+                      providerConfigId:
+                        type: string
+                      state:
+                        type: string
+                        enum:
+                          - registering
+                          - registered
+                          - building
+                          - ready
+                          - unknown
+                          - failed
+                          - deleting
+                      identity:
+                        anyOf:
+                          - type: object
+                            properties:
+                              templateId:
+                                type: string
+                              buildId:
+                                type: string
+                              imageDigest:
+                                type: string
+                              recipeRevision:
+                                type: string
+                              protocol:
+                                type: string
+                            required:
+                              - templateId
+                              - buildId
+                              - imageDigest
+                              - recipeRevision
+                              - protocol
+                            additionalProperties: false
+                            x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                          - type: "null"
+                      desktopsInUse:
+                        type: integer
+                        minimum: 0
+                      createdAt:
+                        type: integer
+                      updatedAt:
+                        type: integer
+                      errorCode:
+                        type:
+                          - string
+                          - "null"
+                      cleanupAttempts:
+                        type: integer
+                        minimum: 0
+                      nextRetryAt:
+                        type:
+                          - integer
+                          - "null"
+                    required:
+                      - id
+                      - providerConfigId
+                      - state
+                      - identity
+                      - desktopsInUse
+                      - createdAt
+                      - updatedAt
+                      - errorCode
+                      - cleanupAttempts
+                      - nextRetryAt
+                    additionalProperties: false
+                    x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                  - type: "null"
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/managed_desktop_template_list:
+    post:
+      operationId: internalRpcManagedDesktopTemplateList
+      tags:
+        - headless-rpc
+      summary: managed_desktop_template_list (host.observe)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+              required: []
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    providerConfigId:
+                      type: string
+                    state:
+                      type: string
+                      enum:
+                        - registering
+                        - registered
+                        - building
+                        - ready
+                        - unknown
+                        - failed
+                        - deleting
+                    identity:
+                      anyOf:
+                        - type: object
+                          properties:
+                            templateId:
+                              type: string
+                            buildId:
+                              type: string
+                            imageDigest:
+                              type: string
+                            recipeRevision:
+                              type: string
+                            protocol:
+                              type: string
+                          required:
+                            - templateId
+                            - buildId
+                            - imageDigest
+                            - recipeRevision
+                            - protocol
+                          additionalProperties: false
+                          x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
+                        - type: "null"
+                    desktopsInUse:
+                      type: integer
+                      minimum: 0
+                    createdAt:
+                      type: integer
+                    updatedAt:
+                      type: integer
+                    errorCode:
+                      type:
+                        - string
+                        - "null"
+                    cleanupAttempts:
+                      type: integer
+                      minimum: 0
+                    nextRetryAt:
+                      type:
+                        - integer
+                        - "null"
+                  required:
+                    - id
+                    - providerConfigId
+                    - state
+                    - identity
+                    - desktopsInUse
+                    - createdAt
+                    - updatedAt
+                    - errorCode
+                    - cleanupAttempts
+                    - nextRetryAt
+                  additionalProperties: false
+                  x-cognia-wire-source: crates/cognia-automation/src/cua_sandbox/managed/contracts.rs
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:
@@ -215681,6 +218151,10 @@ components:
           - lsp_host_ensure
           - lsp_host_request
           - managed_desktop_authorize
+          - managed_desktop_config_delete
+          - managed_desktop_config_rotate_credential
+          - managed_desktop_config_save
+          - managed_desktop_config_set_credential
           - managed_desktop_connect
           - managed_desktop_control_acquire
           - managed_desktop_control_frame
@@ -215697,8 +218171,10 @@ components:
           - managed_desktop_health
           - managed_desktop_list
           - managed_desktop_list_configs
+          - managed_desktop_monitor
           - managed_desktop_prepare_template
           - managed_desktop_quote
+          - managed_desktop_release_status
           - managed_desktop_results_abort_delete
           - managed_desktop_results_approve
           - managed_desktop_results_capture
@@ -215708,6 +218184,8 @@ components:
           - managed_desktop_results_get_results
           - managed_desktop_results_prepare_delete
           - managed_desktop_results_read_evidence
+          - managed_desktop_template_delete
+          - managed_desktop_template_list
           - mcp_oauth_authenticate
           - mcp_oauth_clear
           - mcp_oauth_load_entry
@@ -216382,10 +218860,10 @@ x-cognia-generated:
     - protocol/headless-command-dispositions.json
     - protocol/companion-command-renames.json
     - scripts/build/companion-request-schema-contracts.mjs
-  internalCommandCount: 962
-  generatedRequestSchemaCount: 962
+  internalCommandCount: 970
+  generatedRequestSchemaCount: 970
   runtimeInferredRequestSchemaCount: 0
-  contractRequestSchemaCount: 962
+  contractRequestSchemaCount: 970
   genericRequestSchemaCount: 0
-  generatedResponseSchemaCount: 962
+  generatedResponseSchemaCount: 970
   loopbackOnly: true

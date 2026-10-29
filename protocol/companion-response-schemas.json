@@ -13910,6 +13910,34 @@
       ],
       "additionalProperties": false
     },
+    "ManagedDesktopReleaseStatus": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["installed", "absent", "invalid"]
+        },
+        "source": {
+          "type": ["string", "null"],
+          "enum": ["data-directory", "bundled", null]
+        },
+        "imageDigest": {
+          "type": ["string", "null"]
+        },
+        "recipeRevision": {
+          "type": ["string", "null"]
+        },
+        "protocol": {
+          "type": ["string", "null"]
+        },
+        "error": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["state", "source", "imageDigest", "recipeRevision", "protocol", "error"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-companion-rpc/src/managed_desktop_release.rs"
+    },
     "ManagedDesktopHealth": {
       "type": "object",
       "properties": {
@@ -13931,6 +13959,59 @@
       "additionalProperties": false,
       "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
     },
+    "ManagedDesktopPlanBinding": {
+      "type": "object",
+      "properties": {
+        "maxLifetimeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "observedAt": {
+          "type": "integer"
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["maxLifetimeSeconds", "observedAt", "expiresAt", "source", "namespace"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+    },
+    "ManagedDesktopPrice": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "hourlyRateMicros": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "observedAt": {
+          "type": "integer"
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["currency", "hourlyRateMicros", "observedAt", "expiresAt", "source"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+    },
     "ManagedDesktopConfigSummary": {
       "type": "object",
       "properties": {
@@ -13942,6 +14023,27 @@
         },
         "hostId": {
           "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credentialGeneration": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "credentialPresent": {
+          "type": "boolean"
+        },
+        "plan": {
+          "$ref": "#/$defs/ManagedDesktopPlanBinding"
+        },
+        "price": {
+          "$ref": "#/$defs/ManagedDesktopPrice"
+        },
+        "isolationMinimum": {
+          "type": "string",
+          "enum": ["container", "gvisor", "vm"]
         },
         "enabled": {
           "type": "boolean"
@@ -13982,7 +14084,16 @@
         },
         "templateState": {
           "type": ["string", "null"],
-          "enum": ["registering", "registered", "building", "ready", "unknown", "failed", null]
+          "enum": [
+            "registering",
+            "registered",
+            "building",
+            "ready",
+            "unknown",
+            "failed",
+            "deleting",
+            null
+          ]
         },
         "canPrepareTemplate": {
           "type": "boolean"
@@ -14009,6 +14120,12 @@
         "id",
         "ownerPrincipalId",
         "hostId",
+        "revision",
+        "credentialGeneration",
+        "credentialPresent",
+        "plan",
+        "price",
+        "isolationMinimum",
         "enabled",
         "qualification",
         "reason",
@@ -14159,6 +14276,85 @@
         "lastErrorCode",
         "cleanupAttempts",
         "qualification"
+      ],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+    },
+    "ManagedDesktopTemplateSummary": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "providerConfigId": { "type": "string" },
+        "state": {
+          "type": "string",
+          "enum": [
+            "registering",
+            "registered",
+            "building",
+            "ready",
+            "unknown",
+            "failed",
+            "deleting"
+          ]
+        },
+        "identity": { "anyOf": [{ "$ref": "#/$defs/ManagedDesktopTemplate" }, { "type": "null" }] },
+        "desktopsInUse": { "type": "integer", "minimum": 0 },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "errorCode": { "type": ["string", "null"] },
+        "cleanupAttempts": { "type": "integer", "minimum": 0 },
+        "nextRetryAt": { "type": ["integer", "null"] }
+      },
+      "required": [
+        "id",
+        "providerConfigId",
+        "state",
+        "identity",
+        "desktopsInUse",
+        "createdAt",
+        "updatedAt",
+        "errorCode",
+        "cleanupAttempts",
+        "nextRetryAt"
+      ],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+    },
+    "ManagedDesktopAlert": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["pastDeadline", "cleanupStalled", "templateCleanupStalled"]
+        },
+        "subjectId": { "type": "string" },
+        "providerConfigId": { "type": "string" },
+        "since": { "type": "integer" }
+      },
+      "required": ["kind", "subjectId", "providerConfigId", "since"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+    },
+    "ManagedDesktopMonitor": {
+      "type": "object",
+      "properties": {
+        "observedAt": { "type": "integer" },
+        "billedDesktops": { "type": "integer", "minimum": 0 },
+        "maximumExposureMicros": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "oldestPendingCreateAt": { "type": ["integer", "null"] },
+        "oldestPendingDeleteAt": { "type": ["integer", "null"] },
+        "alerts": { "type": "array", "items": { "$ref": "#/$defs/ManagedDesktopAlert" } }
+      },
+      "required": [
+        "observedAt",
+        "billedDesktops",
+        "maximumExposureMicros",
+        "oldestPendingCreateAt",
+        "oldestPendingDeleteAt",
+        "alerts"
       ],
       "additionalProperties": false,
       "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
@@ -17070,6 +17266,33 @@
     },
     "managed_desktop_prepare_template": {
       "$ref": "#/$defs/ManagedDesktopConfigSummary"
+    },
+    "managed_desktop_release_status": {
+      "$ref": "#/$defs/ManagedDesktopReleaseStatus"
+    },
+    "managed_desktop_config_save": {
+      "$ref": "#/$defs/ManagedDesktopConfigSummary"
+    },
+    "managed_desktop_config_delete": {
+      "type": "null"
+    },
+    "managed_desktop_config_set_credential": {
+      "$ref": "#/$defs/ManagedDesktopConfigSummary"
+    },
+    "managed_desktop_config_rotate_credential": {
+      "$ref": "#/$defs/ManagedDesktopConfigSummary"
+    },
+    "managed_desktop_template_list": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ManagedDesktopTemplateSummary"
+      }
+    },
+    "managed_desktop_template_delete": {
+      "anyOf": [{ "$ref": "#/$defs/ManagedDesktopTemplateSummary" }, { "type": "null" }]
+    },
+    "managed_desktop_monitor": {
+      "$ref": "#/$defs/ManagedDesktopMonitor"
     },
     "managed_desktop_list_configs": {
       "type": "array",

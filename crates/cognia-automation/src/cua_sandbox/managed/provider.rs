@@ -27,6 +27,16 @@ impl fmt::Debug for ProviderSecret {
         f.write_str("ProviderSecret(<redacted>)")
     }
 }
+impl ProviderSecret {
+    /// The one shape check every key source passes (settings RPC, credential
+    /// copy, operator stdin, file vault): one non-empty token, no whitespace.
+    pub fn parse(key: &str) -> Result<Self> {
+        if key.is_empty() || key.len() > 4096 || key.chars().any(char::is_whitespace) {
+            return Err(refused("managed_desktop_secret_invalid"));
+        }
+        Ok(Self(key.to_owned()))
+    }
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DesktopSecrets {
     pub guest_token: String,
@@ -44,13 +54,25 @@ impl fmt::Debug for DesktopSecrets {
 #[async_trait]
 pub trait ManagedDesktopSecrets: Send + Sync {
     async fn provider_key(&self, config: &ManagedDesktopConfig) -> Result<ProviderSecret>;
+    /// Whether the configuration's current-generation key is stored.
+    async fn has_provider_key(&self, config: &ManagedDesktopConfig) -> Result<bool>;
+    /// Stores a key under the configuration's current generation. Write-only:
+    /// nothing returns a stored key to a caller (ADR-0233 §1, amendment A1).
+    async fn put_provider_key(
+        &self,
+        config: &ManagedDesktopConfig,
+        key: &ProviderSecret,
+    ) -> Result<()>;
+    /// Removes one generation's key. Absence is success.
+    async fn remove_provider_key(&self, credential: &RetiredCredential) -> Result<()>;
     async fn desktop(&self, id: &str) -> Result<DesktopSecrets>;
     async fn put_desktop(&self, id: &str, secrets: &DesktopSecrets) -> Result<()>;
     async fn remove_desktop(&self, id: &str) -> Result<()>;
 }
 /// Native private-file vault for Hosts without a keyring. Provider keys are
-/// provisioned by a Host administrator, never accepted via desktop RPC. Secret
-/// generations retain cleanup authority after configuration/key rotation.
+/// written only by the Host administrator's settings or operator paths and are
+/// never read back to a caller. Secret generations retain cleanup authority
+/// after configuration/key rotation.
 pub struct FileManagedDesktopSecrets {
     root: PathBuf,
 }
@@ -66,10 +88,17 @@ impl FileManagedDesktopSecrets {
         ))
     }
     pub fn set_provider_key(&self, config: &ManagedDesktopConfig, key: &str) -> Result<()> {
-        if key.trim().is_empty() || key.len() > 8192 || key.contains(['\r', '\n']) {
-            return Err(refused("managed_desktop_secret_invalid"));
+        let key = ProviderSecret::parse(key)?;
+        write_json(&self.path(&config.secret_ref()), &key.0)
+    }
+    fn remove(&self, key: &str) -> Result<()> {
+        match std::fs::remove_file(self.path(key)) {
+            Ok(()) => std::fs::File::open(&self.root)
+                .and_then(|dir| dir.sync_all())
+                .map_err(|_| retryable("managed_desktop_secret_cleanup_failed")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(retryable("managed_desktop_secret_cleanup_failed")),
         }
-        write_json(&self.path(&config.secret_ref()), &key)
     }
 }
 async fn secret_io<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
@@ -88,6 +117,27 @@ impl ManagedDesktopSecrets for FileManagedDesktopSecrets {
         })
         .await
     }
+    async fn has_provider_key(&self, config: &ManagedDesktopConfig) -> Result<bool> {
+        let path = self.path(&config.secret_ref());
+        secret_io(move || Ok(read_json::<String>(&path)?.is_some_and(|key| !key.is_empty())))
+            .await
+    }
+    async fn put_provider_key(
+        &self,
+        config: &ManagedDesktopConfig,
+        key: &ProviderSecret,
+    ) -> Result<()> {
+        let path = self.path(&config.secret_ref());
+        let key = key.0.clone();
+        secret_io(move || write_json(&path, &key)).await
+    }
+    async fn remove_provider_key(&self, credential: &RetiredCredential) -> Result<()> {
+        let vault = Self {
+            root: self.root.clone(),
+        };
+        let reference = credential.secret_ref();
+        secret_io(move || vault.remove(&reference)).await
+    }
     async fn desktop(&self, id: &str) -> Result<DesktopSecrets> {
         let path = self.path(&format!("desktop:{id}"));
         secret_io(move || {
@@ -101,16 +151,11 @@ impl ManagedDesktopSecrets for FileManagedDesktopSecrets {
         secret_io(move || write_json(&path, &secrets)).await
     }
     async fn remove_desktop(&self, id: &str) -> Result<()> {
-        let path = self.path(&format!("desktop:{id}"));
-        let root = self.root.clone();
-        secret_io(move || match std::fs::remove_file(path) {
-            Ok(()) => std::fs::File::open(root)
-                .and_then(|dir| dir.sync_all())
-                .map_err(|_| retryable("managed_desktop_secret_cleanup_failed")),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_) => Err(retryable("managed_desktop_secret_cleanup_failed")),
-        })
-        .await
+        let vault = Self {
+            root: self.root.clone(),
+        };
+        let reference = format!("desktop:{id}");
+        secret_io(move || vault.remove(&reference)).await
     }
 }
 #[async_trait]
@@ -178,6 +223,14 @@ pub trait ManagedDesktopProvider: Send + Sync {
         key: &ProviderSecret,
         identity: &TemplateIdentity,
     ) -> Result<TemplateState>;
+    /// Deletes the provider template and all of its builds. `Ok(false)` means
+    /// it was already absent, which is the only proof that frees the record.
+    async fn delete_template(
+        &self,
+        config: &ManagedDesktopConfig,
+        key: &ProviderSecret,
+        template_id: &str,
+    ) -> Result<bool>;
     async fn create(
         &self,
         record: &DesktopRecord,
@@ -531,6 +584,17 @@ impl ManagedDesktopProvider for E2bDesktopProvider {
             .map(|_| ())
             .map_err(api_error)
     }
+    async fn delete_template(
+        &self,
+        _config: &ManagedDesktopConfig,
+        key: &ProviderSecret,
+        template_id: &str,
+    ) -> Result<bool> {
+        self.client(key)
+            .delete_template(template_id)
+            .await
+            .map_err(api_error)
+    }
     async fn bootstrap(&self, record: &DesktopRecord, secrets: &DesktopSecrets) -> Result<()> {
         cognia_e2b::envd::start_desktop(&bootstrap_request(record, secrets)?)
             .await
@@ -857,7 +921,7 @@ mod tests {
             authorization_id: "authorization".into(), quote_id: "quote".into(),
             principal_id: "human".into(), source_id: None, resource_id: None,
             last_activity_at: now, next_retry_at: now, delete_requested: false, smoke: true,
-            bootstrap_started: false, bootstrap_completed: false,
+            bootstrap_started: false, bootstrap_completed: false, cleanup_requested_at: None,
         };
         let live = Arc::new(AtomicBool::new(true));
         let check = live.clone();

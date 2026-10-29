@@ -18,10 +18,76 @@ use cognia_environment::{
         RegistryError,
     },
 };
+use serde::Serialize;
 
 pub const RELEASE_FILE: &str = "managed-desktop-release.json";
 pub const PROTOCOL: &str = "computer-server-0.3.46";
 pub const RECIPE: &str = "7";
+
+/// Where the Host's trusted release came from (ADR-0233 amendment A2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReleaseSource {
+    /// An operator placed the manifest in the Host data directory.
+    DataDirectory,
+    /// The manifest shipped inside the signed application or server image.
+    Bundled,
+}
+
+/// The data-directory manifest wins; the bundled one is read only when the
+/// data directory has none. A present but unusable data-directory manifest is
+/// an error, never a silent fallback to the bundled release.
+pub fn load_installed(
+    data_directory: &Path,
+    bundled_directory: Option<&Path>,
+) -> Result<Option<(DesktopRelease, ReleaseSource)>> {
+    if let Some(release) = load(data_directory)? {
+        return Ok(Some((release, ReleaseSource::DataDirectory)));
+    }
+    match bundled_directory {
+        Some(directory) => Ok(load(directory)?.map(|release| (release, ReleaseSource::Bundled))),
+        None => Ok(None),
+    }
+}
+
+/// What settings shows about the installed release. Never a path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseStatus {
+    /// `installed`, `absent` or `invalid`.
+    pub state: &'static str,
+    pub source: Option<ReleaseSource>,
+    pub image_digest: Option<String>,
+    pub recipe_revision: Option<String>,
+    pub protocol: Option<String>,
+    /// The refusal code when `state` is `invalid`.
+    pub error: Option<String>,
+}
+
+impl ReleaseStatus {
+    pub fn of(loaded: &Result<Option<(DesktopRelease, ReleaseSource)>>) -> Self {
+        let empty = |state, error| Self {
+            state,
+            source: None,
+            image_digest: None,
+            recipe_revision: None,
+            protocol: None,
+            error,
+        };
+        match loaded {
+            Ok(Some((release, source))) => Self {
+                state: "installed",
+                source: Some(*source),
+                image_digest: Some(release.image_digest.clone()),
+                recipe_revision: Some(release.recipe_revision.clone()),
+                protocol: Some(release.protocol.clone()),
+                error: None,
+            },
+            Ok(None) => empty("absent", None),
+            Err(error) => empty("invalid", Some(error.code.clone())),
+        }
+    }
+}
 
 /// No embedded digest is guessed before the image has actually been published.
 /// An absent release leaves provisioning dormant and cleanup operational.
@@ -271,6 +337,91 @@ mod tests {
         .unwrap();
         assert_eq!(
             load(dir.path()).unwrap_err().code,
+            "managed_desktop_release_mismatch"
+        );
+    }
+
+    fn write(directory: &Path, release: &DesktopRelease) {
+        std::fs::write(
+            directory.join(RELEASE_FILE),
+            serde_json::to_vec(release).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn data_directory_release_takes_precedence_over_the_bundled_one() {
+        let data = tempfile::tempdir().unwrap();
+        let bundled = tempfile::tempdir().unwrap();
+        let mut bundled_release = release();
+        bundled_release.image = format!("ghcr.io/cognia/desktop@sha256:{}", "b".repeat(64));
+        bundled_release.image_digest = format!("sha256:{}", "b".repeat(64));
+        write(bundled.path(), &bundled_release);
+        assert_eq!(
+            load_installed(data.path(), Some(bundled.path())).unwrap(),
+            Some((bundled_release, ReleaseSource::Bundled))
+        );
+        write(data.path(), &release());
+        assert_eq!(
+            load_installed(data.path(), Some(bundled.path())).unwrap(),
+            Some((release(), ReleaseSource::DataDirectory))
+        );
+    }
+
+    #[test]
+    fn an_invalid_data_directory_release_never_falls_back_to_the_bundled_one() {
+        let data = tempfile::tempdir().unwrap();
+        let bundled = tempfile::tempdir().unwrap();
+        write(bundled.path(), &release());
+        std::fs::write(data.path().join(RELEASE_FILE), b"{not json").unwrap();
+        assert_eq!(
+            load_installed(data.path(), Some(bundled.path()))
+                .unwrap_err()
+                .code,
+            "managed_desktop_release_invalid"
+        );
+        let mut mismatched = release();
+        mismatched.recipe_revision = "6".into();
+        write(data.path(), &mismatched);
+        assert_eq!(
+            load_installed(data.path(), Some(bundled.path()))
+                .unwrap_err()
+                .code,
+            "managed_desktop_release_mismatch"
+        );
+    }
+
+    #[test]
+    fn release_status_names_the_source_and_never_a_path() {
+        let data = tempfile::tempdir().unwrap();
+        let bundled = tempfile::tempdir().unwrap();
+        write(bundled.path(), &release());
+        let status = ReleaseStatus::of(&load_installed(data.path(), Some(bundled.path())));
+        assert_eq!(status.state, "installed");
+        assert_eq!(status.source, Some(ReleaseSource::Bundled));
+        assert_eq!(status.recipe_revision.as_deref(), Some(RECIPE));
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"source\":\"bundled\""));
+        assert!(!json.contains(&*bundled.path().to_string_lossy()));
+        assert_eq!(ReleaseStatus::of(&Ok(None)).state, "absent");
+        let invalid = ReleaseStatus::of(&Err(refused("managed_desktop_release_invalid")));
+        assert_eq!(invalid.state, "invalid");
+        assert_eq!(invalid.error.as_deref(), Some("managed_desktop_release_invalid"));
+    }
+
+    #[test]
+    fn missing_or_mismatched_bundled_release_stays_dormant_or_refuses() {
+        let data = tempfile::tempdir().unwrap();
+        let bundled = tempfile::tempdir().unwrap();
+        assert_eq!(load_installed(data.path(), None).unwrap(), None);
+        assert_eq!(load_installed(data.path(), Some(bundled.path())).unwrap(), None);
+        let mut mismatched = release();
+        mismatched.protocol = "computer-server-0.3.45".into();
+        write(bundled.path(), &mismatched);
+        assert_eq!(
+            load_installed(data.path(), Some(bundled.path()))
+                .unwrap_err()
+                .code,
             "managed_desktop_release_mismatch"
         );
     }

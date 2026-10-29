@@ -253,6 +253,14 @@ Test the dormant paths on all three axes (type, UI, test).
 
 4. Enabling a configuration's switches for normal use is the user's call after step 3.
 
+## Progress
+
+- **WP1** committed `aaf3808e26` (implemented by Codex `gpt-6.1-sol`, reviewed; `cognia-e2b` 34, sandbox-pool `remote::e2b` 51, TS 20).
+- **WP2** Host side done: `load_installed` (data directory first, bundled second, an invalid data-directory manifest never falls back), `managed_desktop_release_status`, settings line. The bundle/CI/server-image wiring waits on one open decision: commit a pinned manifest plus a source-digest drift gate, or pair the image and bundle inside one release run.
+- **WP3** done: `managed/config_admin.rs` (save, delete, set, rotate, retired-key cleanup), copy from an ADR-0221 E2B secret-store credential inside the Host, the settings form. The Host dates plan and price confirmations with its own clock, so a client ahead of the Host's clock is never refused.
+- **WP5** done: `managed/template_admin.rs` (template list/delete with retry, monitor), `cognia-e2b::delete_template`, `managed-desktop://monitor-changed` (empty payload; clients refetch the caller-scoped monitor), notification-centre alerts on every shell, desktop delete confirmation, worker shutdown on exit.
+- **WP6** split: the Host frame pump, adapter and TS decoder are with Codex; registering the frame sources and the viewer/hook wiring stay here.
+
 ## Rollback
 
 Every switch defaults off. Turning a switch off, or removing the release manifest, disables new work and keeps status, delete, reconciliation, template cleanup and evidence deletion working. Removing recipe 8 from the manifest returns exec, files and clipboard to dormant without affecting recipe-7 GUI use. The frame stream falls back to single-frame RPC when a stream cannot open.

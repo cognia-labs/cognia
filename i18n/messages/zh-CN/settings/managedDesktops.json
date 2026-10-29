@@ -1,11 +1,85 @@
 {
+  "alerts": {
+    "pastDeadline": {
+      "title": "云桌面已超过截止时间",
+      "body": "桌面 {subject}（{config}）在硬性截止时间过后 {minutes} 分钟仍然存在，可能仍在计费。Host 会继续尝试删除，请在设置中查看其状态。"
+    },
+    "cleanupStalled": {
+      "title": "云桌面清理卡住了",
+      "body": "删除桌面 {subject}（{config}）已 {minutes} 分钟仍未确认。在 E2B 确认其已删除前可能仍在计费。"
+    },
+    "templateCleanupStalled": {
+      "title": "云桌面模板清理卡住了",
+      "body": "删除模板 {subject}（{config}）已 {minutes} 分钟仍未确认。Host 会继续重试。"
+    }
+  },
   "attestation": "隔离：{isolation} · 网络：{egress} · 执行保证：{enforcement}",
   "authorizing": "等待 Host 授权…",
   "closeDesktop": "关闭桌面",
+  "configForm": {
+    "cancel": "取消",
+    "confirmationHint": "保存即表示以当前时间确认账户计划和费率。每次确认最多有效 30 天，过期后需重新确认才能创建桌面。",
+    "copyKey": "复制密钥",
+    "copyNone": "选择一个代码沙箱 provider",
+    "create": "创建配置",
+    "createTitle": "新建 E2B 桌面配置",
+    "credentialHint": "密钥只保存在此 Host 上，保存后不会再显示。替换已保存的密钥时，旧密钥会保留到用它创建的所有桌面和模板都清理完毕。",
+    "credentialMissing": "未保存密钥",
+    "credentialStored": "已保存密钥（第 {generation} 代）",
+    "credentialTitle": "E2B API 密钥",
+    "delete": "删除配置",
+    "deleteDescription": "将删除该配置及所有代的已保存密钥。只要它仍拥有桌面或模板，删除就会被拒绝。",
+    "deleteTitle": "删除配置 {id}？",
+    "edit": "编辑配置",
+    "editTitle": "配置 {id}",
+    "egressOffOnly": "网络关闭。桌面无法访问互联网；开放网络和白名单出站尚未通过资格验证。",
+    "fields": {
+      "copyFrom": "复制某个代码沙箱 provider 的密钥",
+      "cpuCount": "vCPU 数",
+      "egress": "网络",
+      "enabled": "启用",
+      "id": "配置 ID",
+      "idleTimeoutSeconds": "空闲超时（秒）",
+      "isolationMinimum": "最低隔离级别",
+      "key": "新 API 密钥",
+      "maxConcurrent": "并发桌面数",
+      "maxLifetimeSeconds": "硬性生存期（秒）",
+      "memoryMb": "内存（MiB）",
+      "planMaxLifetimeSeconds": "计划允许的最长沙箱时长（秒）",
+      "planNamespace": "E2B 团队或命名空间",
+      "planSource": "计划的确认来源",
+      "planValidDays": "计划确认有效期（天）",
+      "priceCurrency": "币种",
+      "priceHourly": "每小时费率",
+      "priceSource": "费率来源",
+      "priceValidDays": "费率有效期（天）"
+    },
+    "invalid": "请检查「{field}」。",
+    "isolation": {
+      "container": "容器",
+      "gvisor": "gVisor",
+      "vm": "虚拟机"
+    },
+    "limitsHint": "最多 {concurrent} 台桌面、生存期 {lifetime} 秒、空闲 {idle} 秒。配置只能调低这些上限。",
+    "limitsTitle": "限额",
+    "newConfig": "新建配置",
+    "planTitle": "账户计划",
+    "priceTitle": "价格",
+    "rotate": "替换密钥",
+    "rotateDescription": "新桌面会立即使用新密钥。当前密钥会保留到用它创建的所有桌面和模板都清理完毕，然后删除。",
+    "rotateTitle": "替换已保存的 E2B 密钥？",
+    "save": "保存配置",
+    "shapeTitle": "桌面规格",
+    "storeKey": "保存密钥"
+  },
   "costs": "订阅、模板准备、税费和其他 provider 费用另计。此估算不是总账单上限。",
   "create": "创建临时桌面",
   "deadline": "硬期限：{deadline}",
   "delete": "销毁桌面",
+  "deleteConfirm": {
+    "title": "删除桌面 {id}？",
+    "description": "该桌面及其上的所有内容都会被销毁。E2B 确认删除后停止计费。"
+  },
   "description": "由所选 Host 使用你的 E2B 账户管理的临时 Linux 桌面。",
   "dormant": "任务与 agent 控制、工作区访问、实时预览、自动验收、持久化和挂起/恢复保持 dormant。Agent 可以建议验收，但不能授权产生费用的创建操作。",
   "egress": {
@@ -13,12 +87,23 @@
     "off": "关闭",
     "on": "开放"
   },
-  "empty": "此 Host 尚未配置托管桌面 provider。",
+  "empty": "此 Host 上还没有 E2B 桌面配置。",
   "enforcement": {
     "unverified": "尚未验证",
     "provider-and-guest-kernel": "Provider 策略与 guest 内核隔离"
   },
   "errors": {
+    "adminRequired": "只有此 Host 的所有者设备可以修改桌面配置或密钥。",
+    "configExists": "已存在相同 ID 的配置。请换一个 ID，或编辑现有配置。",
+    "configInUse": "该配置仍拥有桌面或模板，请先删除它们。",
+    "configInvalid": "Host 拒绝了此配置。请检查规格和限额。",
+    "configNotFound": "Host 上已不存在此配置。请刷新列表。",
+    "configRevisionConflict": "此配置已被其他人修改。请刷新后重新应用你的修改。",
+    "credentialRotateRequired": "已经保存了密钥。请使用「替换密钥」，这样用旧密钥创建的桌面仍可被清理。",
+    "credentialSourceEmpty": "该代码沙箱 provider 没有已保存的密钥。",
+    "credentialSourceNotFound": "此 Host 上已不存在该 E2B 代码沙箱 provider。",
+    "credentialSourceUnavailable": "无法读取此 Host 上的代码沙箱设置。",
+    "credentialSourceUnsupported": "该 provider 从环境变量或文件读取密钥，不会被复制。请直接粘贴密钥。",
     "egressSmokeUnsupported": "目前仅支持验证关闭外网的桌面。开放外网和 allowlist 配置保持未启用，直到各自的网络出口 smoke 检查实现并通过。",
     "entitlementLimit": "请求期限超过此 E2B 账户的套餐上限。Hobby 最长 1 小时，Pro 最长 24 小时；第一阶段仍限制为最多 60 分钟。已明确拒绝，未缩短期限。",
     "entitlementUnknown": "账户期限上限未知或已过期。创建桌面前，请在 Host 更新带日期的账户套餐绑定。",
@@ -26,6 +111,12 @@
     "policyLimit": "请求超过第一阶段上限：期限最多 60 分钟、空闲最多 10 分钟、并发最多 2 个。已明确拒绝，未缩短请求。",
     "priceUnknown": "费用估算缺失或已过期。请在 Host 更新所选规格单价，并重新获取估算。",
     "quoteExpired": "费用估算或授权已过期，请刷新估算并重新批准操作。",
+    "releaseUnavailable": "此 Host 没有可信的桌面发布版本，暂时无法保存或使用配置。",
+    "secretInvalid": "密钥必须是不含空格的单个字符串。",
+    "secretUnavailable": "Host 的密钥存储不可用，请重试。",
+    "templateInUse": "仍有用此模板创建的桌面，请先删除该桌面。",
+    "templateNotFound": "Host 上已不存在此模板。请刷新列表。",
+    "templateOutcomeUnknown": "模板的注册结果仍在核对中，请稍后再试。",
     "unknown": "Host 无法完成请求。请刷新配置和报价后重试。",
     "unqualified": "此配置尚未通过真实 provider smoke 验证，桌面创建保持禁用。"
   },
@@ -59,7 +150,7 @@
     "unsupported": "实时预览、跨 Host 传输和按项目自动发起验收仍不可用。"
   },
   "health": "检查状态",
-  "hostConfig": "请在此 Host 配置 managed-desktops.json，并在 Host 保存凭据。此处不会输入或返回 provider 凭据。",
+  "hostConfig": "在下方为此 Host 配置 E2B 桌面。API 密钥保存在 Host 上，保存后不会再显示。",
   "hourly": "所选规格预估单价：{cost}/小时",
   "invalidLifetime": "期限必须为 1 至 60 分钟，并且不能超过 Host 配置的上限；不会自动缩短。",
   "isolation": {
@@ -72,6 +163,19 @@
   "load": "刷新 provider 和桌面",
   "manual": "每项计费操作都需你在所属 Host 明确批准。打开面板不会创建任何资源。",
   "maximum": "期限内桌面计算费用上限：{cost}",
+  "monitor": {
+    "title": "计费与清理",
+    "billed": "{count, plural, =0 {当前没有可能计费的桌面。} other {# 台桌面可能仍在计费。}}",
+    "exposure": "剩余计算费用最多 {amount}",
+    "pendingCreate": "最早的待定创建：{time}",
+    "pendingDelete": "最早的待定清理：{time}",
+    "alertsTitle": "需要处理",
+    "alert": {
+      "pastDeadline": "桌面 {subject} 已超过硬性截止时间。",
+      "cleanupStalled": "桌面 {subject} 的清理尚未确认。",
+      "templateCleanupStalled": "模板 {subject} 的清理尚未确认。"
+    }
+  },
   "openDesktop": "打开桌面",
   "prepare": "准备固定版本模板",
   "prepared": "固定版本模板已准备。创建桌面前仍须授权真实 provider smoke 并通过验证。",
@@ -79,6 +183,13 @@
   "quote": "刷新费用估算",
   "quoteNeeded": "准备模板或创建桌面前请刷新费用估算。估算过期后必须重新确认。",
   "refreshing": "处理中…",
+  "release": {
+    "absent": "此 Host 未安装可信的桌面发布版本，因此无法创建新桌面。状态查看、删除和清理仍可使用。",
+    "installed": "桌面发布版本：recipe {recipe}，协议 {protocol}",
+    "invalid": "Host 上的桌面发布清单无效。替换前会拒绝创建新桌面；状态查看、删除和清理仍可使用。",
+    "sourceBundled": "随本构建打包",
+    "sourceDataDirectory": "由 Host 运维人员安装"
+  },
   "resource": "桌面 {id}",
   "results": {
     "acceptance": "验收运行：{id}",
@@ -155,11 +266,24 @@
   "template": "模板：{state}",
   "templateState": {
     "building": "构建中",
+    "deleting": "删除中",
     "failed": "失败",
     "ready": "就绪",
     "registered": "已注册",
     "registering": "注册中",
     "unknown": "需要核对状态"
+  },
+  "templates": {
+    "title": "模板",
+    "empty": "此 Host 上还没有准备过模板。",
+    "delete": "删除模板",
+    "deleting": "删除中",
+    "deleteTitle": "删除模板 {id}？",
+    "deleteDescription": "将从你的 E2B 账户中删除该模板及其所有构建。以后再次准备会重新计费。",
+    "inUse": "{count, plural, other {被 # 台桌面使用}}",
+    "retry": "第 {attempts} 次尝试；下次重试 {time}",
+    "state": "状态：{state}",
+    "deleted": "模板 {id} 已删除。"
   },
   "title": "托管云桌面",
   "unqualified": "未启用 — 需要真实 provider 验证"
