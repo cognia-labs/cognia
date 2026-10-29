@@ -331,6 +331,9 @@ RUN groupadd --system --gid 10001 cognia \
 COPY --from=builder /work/target/release/cognia-server /usr/local/bin/cognia-server
 COPY --from=builder /work/target/release/cognia /usr/local/bin/cognia
 COPY --from=builder /work/target/release/cognia-bootstrap /usr/local/bin/cognia-bootstrap
+# ADR-0233 A2: the pinned managed desktop release (README in that directory).
+# Without a pin the directory holds only the README and managed desktops stay dormant.
+COPY src-tauri/resources/managed-desktop/ /usr/share/cognia/managed-desktop/
 # The layout's sidecar/node_modules already carries webclone's runtime closure
 # (its Babel analyzer loads the parser through createRequire), so the image and
 # the macOS host archive ship the same tree (ADR-0224 A1).

@@ -245,6 +245,7 @@
     "audit:agent-capabilities": "node scripts/build/gen-agent-capabilities.mjs --check && node scripts/gates/check-agent-capabilities.mjs",
     "audit:agent-control-methods": "node scripts/gates/check-agent-control-methods.mjs",
     "audit:agent-host-image": "node scripts/gates/check-agent-host-image.mjs",
+    "audit:managed-desktop-release": "node scripts/build/managed-desktop-release.mjs --check-pin",
     "audit:agent-host-image:test": "node --test scripts/gates/check-agent-host-image.test.mjs",
     "cognia-services:check": "node scripts/ci/check-cognia-services.mjs",
     "cognia-services:fetch": "node scripts/ci/check-cognia-services.mjs --fetch",

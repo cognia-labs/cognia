@@ -361,7 +361,11 @@ jobs:
         if: needs.vars.outputs.should_push == 'true'
         with:
           name: managed-desktop-release
-          path: ${{ runner.temp }}/managed-desktop-release/managed-desktop-release.json
+          # The manifest and the guest sources it was built from (pin with
+          # `managed-desktop-release.mjs --pin`, src-tauri/resources/managed-desktop/README.md).
+          path: |
+            ${{ runner.temp }}/managed-desktop-release/managed-desktop-release.json
+            ${{ runner.temp }}/managed-desktop-release/managed-desktop-release.source.json
           if-no-files-found: error
           retention-days: 90
 

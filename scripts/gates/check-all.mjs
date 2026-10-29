@@ -175,6 +175,9 @@ const REGISTRY = [
   // remaining unpinned launches so the hole shrinks instead of going quiet.
   { script: "audit:external-agent-runtimes", group: "audit" },
   { script: "audit:agent-host-image", group: "audit" },
+  // ADR-0233 A2: a pinned managed desktop release must still match the guest
+  // sources its image was built from; no pin is valid (managed desktops dormant).
+  { script: "audit:managed-desktop-release", group: "audit" },
   // The deploy suite's own drift detector: Dockerfile bases vs the Rust /
   // Node / pnpm pins, compose default images vs what images.yml publishes,
   // and the multi-instance invariants (parametrized host ports, project +
