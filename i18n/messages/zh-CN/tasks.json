@@ -1,0 +1,15 @@
+{
+  "completedFold": "已完成 {count} 项",
+  "progress": "{done}/{total}",
+  "progressLabel": "已完成 {done}/{total}",
+  "status": {
+    "blocked": "受阻",
+    "cancelled": "已取消",
+    "completed": "已完成",
+    "failed": "失败",
+    "in_progress": "进行中",
+    "pending": "待处理",
+    "skipped": "已跳过",
+    "stopped": "已停止"
+  }
+}

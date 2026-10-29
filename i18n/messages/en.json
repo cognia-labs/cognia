@@ -13473,6 +13473,7 @@
       "pinCard": "Keep open beside the chat",
       "progressCurrent": "Step {done} of {total}: {step}",
       "progressDone": "All {total} steps done",
+      "progressStopped": "Stopped at step {done} of {total}: {step}",
       "resetRows": "Restore defaults",
       "rows": {
         "artifacts": "Artifacts",
@@ -62278,6 +62279,21 @@
       "host-lacks-capability": "Open Cognia on a host that supports it, or switch hosts.",
       "needs-desktop-shell": "Open Cognia on your desktop to use it.",
       "no-host": "Pair this browser with a host, or open Cognia on your desktop."
+    }
+  },
+  "tasks": {
+    "completedFold": "{count} completed",
+    "progress": "{done}/{total}",
+    "progressLabel": "{done} of {total} done",
+    "status": {
+      "blocked": "Blocked",
+      "cancelled": "Cancelled",
+      "completed": "Completed",
+      "failed": "Failed",
+      "in_progress": "In progress",
+      "pending": "Pending",
+      "skipped": "Skipped",
+      "stopped": "Stopped"
     }
   },
   "tauriDemo": {

@@ -467,6 +467,7 @@
     "branch": "分支 {branch}",
     "progressCurrent": "第 {done}/{total} 步：{step}",
     "progressDone": "{total} 个步骤已全部完成",
+    "progressStopped": "已停止于第 {done}/{total} 步：{step}",
     "needsYou": "{count} 项等你处理",
     "changesNone": "无",
     "changesFiles": "{count} 个文件",

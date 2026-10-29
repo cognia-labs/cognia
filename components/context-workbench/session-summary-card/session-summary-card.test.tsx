@@ -9,7 +9,8 @@ import {
   summarizeResourceChanges,
   useSessionResourceChanges,
 } from "@/hooks/chat/use-session-resource-changes"
-import { summarizeRunProgress, useSessionRunProgress } from "@/hooks/chat/use-session-run-progress"
+import { useSessionTasks, type SessionTasksView } from "@/hooks/chat/use-session-tasks"
+import { summarizeTasks, type TaskViewItem } from "@/lib/tasks/task-view"
 import { revealArtifactInWorkspace, revealSessionPanel } from "@/lib/artifacts/reveal"
 import { jumpToSessionMessage } from "@/lib/chat/cross-session-jump"
 import type { ResourceChange } from "@/lib/task-workspace/types"
@@ -31,10 +32,7 @@ jest.mock("@/hooks/chat/use-session-resource-changes", () => ({
   ...jest.requireActual("@/hooks/chat/use-session-resource-changes"),
   useSessionResourceChanges: jest.fn(),
 }))
-jest.mock("@/hooks/chat/use-session-run-progress", () => ({
-  ...jest.requireActual("@/hooks/chat/use-session-run-progress"),
-  useSessionRunProgress: jest.fn(),
-}))
+jest.mock("@/hooks/chat/use-session-tasks", () => ({ useSessionTasks: jest.fn() }))
 jest.mock("@/lib/artifacts/reveal", () => ({
   revealArtifactInWorkspace: jest.fn(),
   revealSessionPanel: jest.fn(),
@@ -113,7 +111,7 @@ beforeEach(() => {
     setRow: jest.fn(),
     reset: jest.fn(),
   })
-  jest.mocked(useSessionRunProgress).mockReturnValue(summarizeRunProgress([]))
+  jest.mocked(useSessionTasks).mockReturnValue(null)
   jest.mocked(useSessionNeedsYou).mockReturnValue({ items: [], jumpMessageId: null })
   jest.mocked(useSessionResourceChanges).mockReturnValue(changes([]))
   jest.mocked(useSessionMessages).mockReturnValue([])
@@ -190,22 +188,60 @@ it("prefers the managed worktree's branch, and says when there is no workspace",
   expect(screen.getByText("cognia/wt-1")).toBeInTheDocument()
 })
 
-it("shows the step in progress and opens the run context", () => {
+function tasksView(items: TaskViewItem[], extra: Partial<SessionTasksView> = {}): SessionTasksView {
+  const progress = summarizeTasks(items)
+  return {
+    family: "todo",
+    items,
+    progress,
+    running: false,
+    finished: false,
+    stopped: false,
+    lastToolCallId: "c1",
+    lastMessageId: "m1",
+    ...extra,
+  }
+}
+
+it("shows the step in progress and opens the Tasks panel", () => {
   jest.mocked(useSessionStatus).mockReturnValue("streaming")
-  jest.mocked(useSessionRunProgress).mockReturnValue(
-    summarizeRunProgress([
-      { content: "Design", status: "completed" },
-      { content: "Remove legacy", activeForm: "Removing legacy", status: "in_progress" },
-      { content: "Test", status: "pending" },
-    ])
+  jest.mocked(useSessionTasks).mockReturnValue(
+    tasksView(
+      [
+        { id: "1", title: "Design", status: "completed" },
+        { id: "2", title: "Remove legacy", activeForm: "Removing legacy", status: "in_progress" },
+        { id: "3", title: "Test", status: "pending" },
+      ],
+      { running: true }
+    )
   )
   renderCard()
   const row = screen.getByTestId("summary-row-progress")
   expect(row).toHaveTextContent('progressCurrent{"done":1,"total":3,"step":"Removing legacy"}')
   expect(row).toHaveTextContent("1/3")
   fireEvent.click(row)
-  expect(revealSessionPanel).toHaveBeenCalledWith("s1", "run-context")
+  expect(revealSessionPanel).toHaveBeenCalledWith("s1", "plan")
   expect(onNavigated).toHaveBeenCalled()
+})
+
+it("says where a stopped list stopped", () => {
+  jest
+    .mocked(useSessionTasks)
+    .mockReturnValue(tasksView([{ id: "1", title: "Build", status: "stopped" }], { stopped: true }))
+  renderCard()
+  expect(screen.getByTestId("summary-row-progress")).toHaveTextContent(
+    'progressStopped{"done":0,"total":1,"step":"Build"}'
+  )
+})
+
+it("hides the row once the list is finished", () => {
+  jest
+    .mocked(useSessionTasks)
+    .mockReturnValue(
+      tasksView([{ id: "1", title: "Build", status: "completed" }], { finished: true })
+    )
+  renderCard()
+  expect(screen.queryByTestId("summary-row-progress")).not.toBeInTheDocument()
 })
 
 it("jumps to the waiting turn when something needs the user", () => {

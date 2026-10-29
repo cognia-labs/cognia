@@ -1,0 +1,15 @@
+{
+  "completedFold": "{count} completed",
+  "progress": "{done}/{total}",
+  "progressLabel": "{done} of {total} done",
+  "status": {
+    "blocked": "Blocked",
+    "cancelled": "Cancelled",
+    "completed": "Completed",
+    "failed": "Failed",
+    "in_progress": "In progress",
+    "pending": "Pending",
+    "skipped": "Skipped",
+    "stopped": "Stopped"
+  }
+}

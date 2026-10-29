@@ -7,17 +7,12 @@
 
 import { useState } from "react"
 import { useTranslations } from "next-intl"
-import {
-  AlertTriangleIcon,
-  CheckCircle2Icon,
-  CircleIcon,
-  PencilIcon,
-  SkipForwardIcon,
-  XCircleIcon,
-} from "lucide-react"
+import { AlertTriangleIcon, PencilIcon, SkipForwardIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import type { TaskViewStatus } from "@/lib/tasks/task-view"
 import type { ExecutionPlan, ErrorAdvisory, StepStatus } from "@/lib/terminal/ai-shell"
 
 export interface AiShellPlanViewProps {
@@ -35,21 +30,14 @@ export interface AiShellPlanViewProps {
   onApplyFix: () => void
 }
 
-function StepStatusIcon({ status }: { status: StepStatus }) {
-  switch (status) {
-    case "pending":
-      return <CircleIcon className="h-3 w-3 text-muted-foreground" />
-    case "running":
-      return <Spinner className="h-3 w-3 text-primary" />
-    case "succeeded":
-      return <CheckCircle2Icon className="h-3 w-3 text-emerald-500" />
-    case "failed":
-      return <XCircleIcon className="h-3 w-3 text-destructive" />
-    case "skipped":
-      return <SkipForwardIcon className="h-3 w-3 text-muted-foreground" />
-    case "cancelled":
-      return <XCircleIcon className="h-3 w-3 text-muted-foreground" />
-  }
+/** AI-shell step vocabulary → the shared task status glyph. */
+const STEP_TASK_STATUS: Record<StepStatus, TaskViewStatus> = {
+  pending: "pending",
+  running: "in_progress",
+  succeeded: "completed",
+  failed: "failed",
+  skipped: "skipped",
+  cancelled: "cancelled",
 }
 
 export function AiShellPlanView({
@@ -124,7 +112,7 @@ export function AiShellPlanView({
               className="flex items-start gap-1.5 rounded px-1.5 py-1 text-[10px] hover:bg-muted/50"
               data-testid={`ai-shell-step-${step.index}`}
             >
-              <StepStatusIcon status={step.status} />
+              <TaskStatusIcon status={STEP_TASK_STATUS[step.status]} labelled />
               <div className="flex-1 min-w-0">
                 {editingIdx === step.index ? (
                   <input

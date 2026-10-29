@@ -2,7 +2,6 @@
 
 /** Displays item-based or document-based execution plans from ACP agents. */
 
-import { CheckCircle2, Circle, Loader2, SkipForward } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import {
@@ -15,8 +14,10 @@ import {
   PlanTrigger,
 } from "@/components/ai-elements/plan"
 import { Badge } from "@/components/ui/badge"
-import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { TaskProgressBar } from "@/components/tasks/task-progress-bar"
+import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import { acpStatusToTask } from "@/lib/tasks/task-view"
 import { cn } from "@/lib/utils"
 import type { AcpPlanEntry, ExternalAgentPlanDocument } from "@/types/agent/external-agent"
 
@@ -26,20 +27,6 @@ export interface ExternalAgentPlanProps {
   document?: ExternalAgentPlanDocument | null
   compact?: boolean
   className?: string
-}
-
-function StatusIcon({ status }: { status: AcpPlanEntry["status"] }) {
-  switch (status) {
-    case "completed":
-      return <CheckCircle2 className="size-4 text-green-500" />
-    case "in_progress":
-      return <Loader2 className="size-4 animate-spin text-blue-500" />
-    case "skipped":
-      return <SkipForward className="size-4 text-muted-foreground" />
-    case "pending":
-    default:
-      return <Circle className="size-4 text-muted-foreground" />
-  }
 }
 
 function PriorityBadge({ priority }: { priority: AcpPlanEntry["priority"] }) {
@@ -78,7 +65,7 @@ function PlanEntry({
     >
       <div className="flex items-center gap-2 pt-0.5">
         <span className="w-4 text-xs text-muted-foreground">{index + 1}</span>
-        <StatusIcon status={entry.status} />
+        <TaskStatusIcon status={acpStatusToTask(entry.status)} labelled />
       </div>
       <div className="min-w-0 flex-1">
         <p
@@ -136,7 +123,6 @@ export function ExternalAgentPlan({
   }
 
   const completedCount = entries.filter((entry) => entry.status === "completed").length
-  const progress = (completedCount / entries.length) * 100
 
   return (
     <Plan
@@ -150,7 +136,7 @@ export function ExternalAgentPlan({
           <PlanDescription className="mt-1">
             {`${completedCount}/${entries.length} ${t("stepsCompleted")}`}
           </PlanDescription>
-          <Progress value={progress} className="mt-2 h-1" />
+          <TaskProgressBar done={completedCount} total={entries.length} className="mt-2 h-1" />
         </div>
         <PlanAction>
           <PlanTrigger label={t("togglePlan")} />

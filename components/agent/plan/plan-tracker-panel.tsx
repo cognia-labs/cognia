@@ -28,7 +28,9 @@ import { cn } from "@/lib/utils"
 import { resolvePlanHtmlStyle, type PlanHtmlStyle } from "@/lib/agent/plan/plan-html"
 import { useSettingsStore } from "@/stores/settings"
 import type { AgentPlan, PlanStepStatus } from "@/types/agent/plan"
-import { stepStatusIcon } from "./step-status-icon"
+import { TaskProgressBar } from "@/components/tasks/task-progress-bar"
+import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import { planStepStatusToTask } from "@/lib/tasks/task-view"
 
 const STEP_STATUS_LABEL_KEY: Record<PlanStepStatus, string> = {
   pending: "tracker.statusPending",
@@ -72,7 +74,6 @@ export function PlanTrackerPanel({ plan, styleVariant }: PlanTrackerPanelProps) 
   const variant = resolvePlanHtmlStyle(styleVariant ?? persisted)
   const styles = STYLE_CLASSES[variant]
   const steps = [...plan.steps].sort((a, b) => a.order - b.order)
-  const pct = plan.totalSteps > 0 ? Math.round((plan.completedSteps / plan.totalSteps) * 100) : 0
 
   return (
     <Card className="space-y-3 p-3" data-testid="plan-tracker-panel">
@@ -108,15 +109,11 @@ export function PlanTrackerPanel({ plan, styleVariant }: PlanTrackerPanelProps) 
         <div className="text-xs text-muted-foreground">
           {t("tracker.progress", { completed: plan.completedSteps, total: plan.totalSteps })}
         </div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary transition-all"
-            style={{ width: `${pct}%` }}
-            data-testid="plan-tracker-progress"
-            aria-valuenow={pct}
-            role="progressbar"
-          />
-        </div>
+        <TaskProgressBar
+          done={plan.completedSteps}
+          total={plan.totalSteps}
+          tone={plan.status === "paused" || plan.status === "failed" ? "warning" : "default"}
+        />
       </div>
 
       {steps.length > 0 ? (
@@ -131,7 +128,7 @@ export function PlanTrackerPanel({ plan, styleVariant }: PlanTrackerPanelProps) 
                 data-status={s.status}
                 data-current={plan.currentStepId === s.id ? "true" : undefined}
               >
-                {stepStatusIcon(s.status)}
+                <TaskStatusIcon status={planStepStatusToTask(s.status)} />
                 <span
                   className={cn(
                     "min-w-0 flex-1 break-words",

@@ -54,7 +54,8 @@ import {
   stepsSectionWindow,
   withoutRestatedTitle,
 } from "@/lib/agent/plan/plan-doc"
-import { stepStatusIcon } from "./step-status-icon"
+import { TaskStatusIcon } from "@/components/tasks/task-status-icon"
+import { planStepStatusToTask } from "@/lib/tasks/task-view"
 import type { AgentPlan, PlanEditPatch, PlanEvent } from "@/types/agent/plan"
 
 const AUTOSAVE_MS = 700
@@ -418,7 +419,11 @@ export function PlanDocument({
             data-status={canEdit ? undefined : step?.status}
           >
             <span className="flex w-5 shrink-0 select-none justify-end font-mono text-[11px] text-muted-foreground tabular-nums">
-              {!canEdit && started && step ? stepStatusIcon(step.status) : `${vi + 1}.`}
+              {!canEdit && started && step ? (
+                <TaskStatusIcon status={planStepStatusToTask(step.status)} labelled />
+              ) : (
+                `${vi + 1}.`
+              )}
             </span>
             {canEdit ? (
               <input

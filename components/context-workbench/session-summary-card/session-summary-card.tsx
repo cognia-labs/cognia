@@ -24,7 +24,8 @@ import { SharedSessionPanel } from "@/components/chat/shared-session-panel"
 import { Button } from "@/components/ui/button"
 import { useSessionNeedsYou } from "@/hooks/chat/use-session-needs-you"
 import { useSessionResourceChanges } from "@/hooks/chat/use-session-resource-changes"
-import { useSessionRunProgress } from "@/hooks/chat/use-session-run-progress"
+import { useSessionTasks } from "@/hooks/chat/use-session-tasks"
+import { taskItemLabel } from "@/lib/tasks/task-view"
 import { useSharedChatEnabled } from "@/hooks/collab/use-shared-chat-enabled"
 import { revealArtifactInWorkspace, revealSessionPanel } from "@/lib/artifacts/reveal"
 import { SESSION_ARTIFACT_LIST_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
@@ -87,7 +88,7 @@ export function SessionSummaryCard({
   const tSources = useTranslations("contextWorkbench.sessionSources")
   const { rows } = useSessionSummaryCardPrefs()
   const status = useSessionStatus(session.id)
-  const progress = useSessionRunProgress(session.id)
+  const tasks = useSessionTasks(session.id)
   const needsYou = useSessionNeedsYou(session.id)
   const changes = useSessionResourceChanges(session.id)
   const sharedChatEnabled = useSharedChatEnabled()
@@ -127,10 +128,10 @@ export function SessionSummaryCard({
   }
 
   const running = status === "streaming"
-  const showProgress = isSummaryCardRowShown(
-    rows.progress,
-    progress.total > 0 && progress.current !== null
-  )
+  // A finished list folds away everywhere (the Tasks panel keeps it as "last
+  // tasks"); the card shows the row only while there is open work.
+  const progress = tasks && !tasks.finished ? tasks.progress : null
+  const showProgress = isSummaryCardRowShown(rows.progress, progress !== null)
   const showNeedsYou = isSummaryCardRowShown(rows.needsYou, needsYou.items.length > 0)
   const showChanges = isSummaryCardRowShown(rows.changes, changes.totals.files > 0)
   const showArtifacts = isSummaryCardRowShown(rows.artifacts, artifacts.length > 0)
@@ -157,9 +158,9 @@ export function SessionSummaryCard({
       />
 
       <div className="min-h-0 overflow-y-auto">
-        {showProgress && progress.total > 0 ? (
+        {showProgress && tasks && progress ? (
           <Row
-            onClick={() => navigate("run-context")}
+            onClick={() => navigate("plan")}
             className="h-auto flex-col items-stretch gap-1.5 py-2"
             testId="summary-row-progress"
           >
@@ -167,7 +168,7 @@ export function SessionSummaryCard({
               <span
                 className={cn(
                   "relative size-2 shrink-0 rounded-full",
-                  running ? "bg-info" : "bg-muted-foreground/60"
+                  running ? "bg-info" : tasks.stopped ? "bg-amber-500" : "bg-muted-foreground/60"
                 )}
                 aria-hidden
               >
@@ -177,10 +178,10 @@ export function SessionSummaryCard({
               </span>
               <span className="min-w-0 flex-1 truncate text-left">
                 {progress.current
-                  ? t("progressCurrent", {
+                  ? t(tasks.stopped ? "progressStopped" : "progressCurrent", {
                       done: progress.done,
                       total: progress.total,
-                      step: progress.current.activeForm ?? progress.current.content,
+                      step: taskItemLabel(progress.current),
                     })
                   : t("progressDone", { total: progress.total })}
               </span>
@@ -189,16 +190,18 @@ export function SessionSummaryCard({
               </span>
             </span>
             <span className="flex gap-0.5" aria-hidden>
-              {progress.todos.map((todo, index) => (
+              {tasks.items.map((item) => (
                 <span
-                  key={index}
+                  key={item.id}
                   className={cn(
                     "h-[3px] flex-1 rounded-full",
-                    todo.status === "completed"
+                    item.status === "completed"
                       ? "bg-foreground/80"
-                      : todo.status === "in_progress"
+                      : item.status === "in_progress"
                         ? "bg-info motion-safe:animate-pulse"
-                        : "bg-border"
+                        : item.status === "stopped"
+                          ? "bg-amber-500"
+                          : "bg-border"
                   )}
                 />
               ))}

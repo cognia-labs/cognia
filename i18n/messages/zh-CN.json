@@ -13473,6 +13473,7 @@
       "pinCard": "固定在聊天旁",
       "progressCurrent": "第 {done}/{total} 步：{step}",
       "progressDone": "{total} 个步骤已全部完成",
+      "progressStopped": "已停止于第 {done}/{total} 步：{step}",
       "resetRows": "恢复默认",
       "rows": {
         "artifacts": "产物",
@@ -62278,6 +62279,21 @@
       "host-lacks-capability": "在支持该能力的主机上打开 Cognia，或切换主机。",
       "needs-desktop-shell": "在桌面上打开 Cognia 即可使用。",
       "no-host": "把此浏览器与一台主机配对，或在桌面上打开 Cognia。"
+    }
+  },
+  "tasks": {
+    "completedFold": "已完成 {count} 项",
+    "progress": "{done}/{total}",
+    "progressLabel": "已完成 {done}/{total}",
+    "status": {
+      "blocked": "受阻",
+      "cancelled": "已取消",
+      "completed": "已完成",
+      "failed": "失败",
+      "in_progress": "进行中",
+      "pending": "待处理",
+      "skipped": "已跳过",
+      "stopped": "已停止"
     }
   },
   "tauriDemo": {

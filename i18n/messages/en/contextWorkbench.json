@@ -467,6 +467,7 @@
     "branch": "Branch {branch}",
     "progressCurrent": "Step {done} of {total}: {step}",
     "progressDone": "All {total} steps done",
+    "progressStopped": "Stopped at step {done} of {total}: {step}",
     "needsYou": "{count, plural, one {# request waiting for you} other {# requests waiting for you}}",
     "changesNone": "None",
     "changesFiles": "{count, plural, one {# file} other {# files}}",

@@ -24,12 +24,32 @@ describe("parseTodoInput", () => {
     ["missing todos", {}],
     ["non-array todos", { todos: "x" }],
     ["empty todos", { todos: [] }],
-    ["a non-object item", { todos: [1] }],
-    ["a missing content", { todos: [{ status: "pending" }] }],
-    ["a non-string content", { todos: [{ content: 1, status: "pending" }] }],
-    ["an invalid status", { todos: [{ content: "a", status: "blocked" }] }],
+    ["only unusable entries", { todos: [1, { status: "pending" }, { content: "  " }] }],
   ])("returns null for %s", (_label, input) => {
     expect(parseTodoInput(input)).toBeNull()
+  })
+
+  it("skips malformed entries instead of rejecting the whole snapshot", () => {
+    expect(
+      parseTodoInput({
+        todos: [
+          { content: "a", status: "completed" },
+          1,
+          { content: 2, status: "pending" },
+          { status: "pending" },
+          { content: "b" },
+        ],
+      })
+    ).toEqual([
+      { content: "a", status: "completed", activeForm: undefined },
+      { content: "b", status: "pending", activeForm: undefined },
+    ])
+  })
+
+  it("reads an unknown status as pending", () => {
+    expect(parseTodoInput({ todos: [{ content: "a", status: "blocked" }] })).toEqual([
+      { content: "a", status: "pending", activeForm: undefined },
+    ])
   })
 
   it("drops a non-string activeForm to undefined", () => {

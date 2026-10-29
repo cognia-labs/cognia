@@ -95,9 +95,7 @@ describe("PlanTrackerPanel", () => {
 
   it("computes the progress bar width from completed/total", () => {
     render(<PlanTrackerPanel plan={plan()} />)
-    const bar = screen.getByTestId("plan-tracker-progress")
-    expect(bar).toHaveStyle({ width: "50%" })
-    expect(bar).toHaveAttribute("aria-valuenow", "50")
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50")
   })
 
   it("marks the current step", () => {
@@ -108,7 +106,7 @@ describe("PlanTrackerPanel", () => {
 
   it("renders 0% with no steps and the empty state", () => {
     render(<PlanTrackerPanel plan={plan({ steps: [], completedSteps: 0 })} />)
-    expect(screen.getByTestId("plan-tracker-progress")).toHaveStyle({ width: "0%" })
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0")
     expect(screen.getByText("tracker.empty")).toBeInTheDocument()
   })
 
