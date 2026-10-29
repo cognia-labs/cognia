@@ -231,6 +231,12 @@ Test the dormant paths on all three axes (type, UI, test).
 
 **Verify:** Rust tests for limits, containment errors, lease and delegation refusals, audit fields; TS tests for capability gating and UI.
 
+## WP13 — Remote-Host agent binding (Q26, separate package)
+
+**Depends on:** WP8.
+
+Q26 (decided 2026-10-29, option a) kept WP8 to managed desktops of the Host the session runs on: routing is Host-local and the renderer projects rows only from that Host's delegations. This package lets a session bind a managed desktop on a paired remote Host. It needs its own design round (forward agent operations across Hosts under the remote Host's delegation and agent guard, or run the session on that Host), an ADR amendment, and the same refusal-without-fallback rule. Not started.
+
 ## WP12 — Close-out verification
 
 1. Run the `preflight` skill over each package's diff. `pnpm audit:colocated-tests`, `pnpm audit:rust-architecture`, `pnpm lint:i18n`, `pnpm i18n:build:check`, `pnpm docs:build` (for the ADR amendments).
@@ -263,7 +269,7 @@ Test the dormant paths on all three axes (type, UI, test).
 - **WP6** Host side committed `27f63a473c` (frame header and hub, the `cognia-frames` adapter, Docker and managed native frame providers registered in the desktop app and the server, TS decoder; independent review found nine issues, all fixed with regression tests). The viewer and `use-sandbox-desktop` move onto the stream after the Docker-sandbox lag-diagnosis work is committed.
 - **Q24** committed `4aca00c714`: the pin directory, source digest and `pnpm audit:managed-desktop-release`.
 - **WP4** committed `c1cb51b15a` (backend by Codex `gpt-6.1-sol` in two rounds, reviewed by me and an independent Rust review; automation `cua_sandbox::managed` 120, RPC `managed` 66, UI 190). In-Host runs share the installed service and journal; per-quote approval; one active run per Host; bounded cancel and shutdown; temporary owner device journaled and swept on startup; switches cached per enablement epoch; paid create needs an effective switch; agent control stays reported dormant until WP8. Step 4 (`gui` on the E2B row from `agentControl`) moved to WP8 step 5. Also fixed: the closed config-summary response schema lacked `qualificationEvidenceVersion`/`workloadIsolationRevision`, so off-desktop `list_configs` was refused.
-- **WP8** done (Host side by Codex in three rounds, renderer by Codex, reviewed by me and an independent Rust review): journal-backed delegations (session, character, acceptance grantees) ended by revoke, expiry, destroy, generation change and account switch (account-binding epoch + process nonce in `host_identity`); `managed:<desktopId>:<generation>` routing through the shared agent guard with a published admission snapshot per send; held keys and buttons released when a grant ends; coalesced activity writes; `managed:` ids refused by every Docker/Lume registry path; local delegation without a lease like other local writes; delegate/revoke/list RPCs and `managed-desktop://delegation-changed`; renderer rows projected only from live delegations, GUI capability from the agent-control switch (step 5), character and per-session pickers. Only managed desktops of the Host the session runs on are bindable; remote-Host binding is open as Q26.
+- **WP8** done (Host side by Codex in three rounds, renderer by Codex, reviewed by me and an independent Rust review): journal-backed delegations (session, character, acceptance grantees) ended by revoke, expiry, destroy, generation change and account switch (account-binding epoch + process nonce in `host_identity`); `managed:<desktopId>:<generation>` routing through the shared agent guard with a published admission snapshot per send; held keys and buttons released when a grant ends; coalesced activity writes; `managed:` ids refused by every Docker/Lume registry path; local delegation without a lease like other local writes; delegate/revoke/list RPCs and `managed-desktop://delegation-changed`; renderer rows projected only from live delegations, GUI capability from the agent-control switch (step 5), character and per-session pickers. Only managed desktops of the Host the session runs on are bindable; remote-Host binding moved to WP13 (Q26 option a).
 
 ## Rollback
 

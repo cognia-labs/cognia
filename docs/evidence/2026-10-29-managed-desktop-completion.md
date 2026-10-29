@@ -104,6 +104,7 @@ The managed desktop (ADR-0233) is built and natively qualified, but a user canno
 | D6  | 2026-10-29 | Merge E2B build request/polling/base URL into cognia-e2b; code provider semantics unchanged (Q13)                                                                      | implement | O10            | V8 fails                                               |
 | D7  | 2026-10-29 | Pin the release manifest in the repo with a source-digest drift gate; the first pin waits for an authorized image republish (Q24)                                      | implement | O2             | release pipeline gains signed remote manifests         |
 | D8  | 2026-10-29 | Qualify inside the running Host; handoff uses a user-picked delivery; GUI and agent switches need only the four GUI receipts (Q25)                                     | implement | O3, O4         | review shows in-Host authority test weakens the store  |
+| D9  | 2026-10-29 | Agents bind only managed desktops of the Host the session runs on; remote-Host binding becomes WP13 (Q26 option a)                                                     | implement | WP8 routing    | user asks for remote binding in this round             |
 
 ## Residual risks
 
@@ -112,7 +113,7 @@ The managed desktop (ADR-0233) is built and natively qualified, but a user canno
 | X1  | Real frame rate and CPU on E2B unknown                                 | A1          | not measured           | measure in WP12 smoke | open   |
 | X2  | Host-local concurrency limit is not account-wide across Hosts          | ADR-0233 §3 | accepted v1 limitation | label in UI           | open   |
 | X3  | Egress Off makes the desktop offline for internet-dependent acceptance | D5          | deferred by decision   | separate amendment    | open   |
-| X4  | Agents can bind only managed desktops of the Host the session runs on  | WP8         | awaiting Q26           | ask the user (Q26)    | open   |
+| X4  | Agents can bind only managed desktops of the Host the session runs on  | WP8         | decided Q26 (a), WP13  | WP13                  | open   |
 
 ## Outcome
 
