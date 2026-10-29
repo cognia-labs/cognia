@@ -82,6 +82,7 @@ fn entry(
             | "remote_desktop.credential.set"
             | "remote_desktop.credential.clear"
             | "remote_desktop.endpoint.confirm"
+            | "remote_desktop.session.viewers"
             | "remote_desktop.session.open"
             | "remote_desktop.session.close"
             | "remote_desktop.session.failed"
@@ -134,6 +135,7 @@ fn entry(
                 "expired",
                 "preempted",
                 "viewer_closed",
+                "revoked",
                 "failed",
                 "binding_changed",
                 "target_deleted",
@@ -442,5 +444,52 @@ mod tests {
         )
         .await;
         assert!(own_rows(&path, "audit-sink-uninstalled").is_empty());
+    }
+    #[test]
+    fn frames_audit_rows_record_lifecycle_and_viewer_count_never_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let audit = RemoteDesktopAudit::new(dir.path());
+        for kind in [
+            "remote_desktop.session.open",
+            "remote_desktop.session.close",
+            "remote_desktop.session.failed",
+            "remote_desktop.session.viewers"
+        ] {
+            let row = entry(
+                kind,
+                "managed-desktop",
+                "managed-desktop:one",
+                "device:observer",
+                "allow",
+                3,
+                json!({
+                    "binding_id": "native",
+                    "mode": "view",
+                    "count": 2,
+                    "reason": "revoked",
+                    "jpeg": "private-pixels",
+                    "frame_id": "private-pixels",
+                    "bytes": [1, 2, 3]
+                })
+            )
+            .unwrap();
+            audit.append(&row).unwrap();
+        }
+        let rows = own_rows(
+            &dir.path().join("remote-desktop-audit.jsonl"),
+            "managed-desktop:one"
+        );
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[3]["count"], 2);
+        assert_eq!(rows[1]["reason"], "revoked");
+        assert!(rows.iter().all(|r| r["target_kind"] == "managed-desktop"
+            && r.get("bytes").is_none()
+            && r.get("jpeg").is_none()
+            && r.get("frame_id").is_none()));
+        assert!(
+            !std::fs::read_to_string(dir.path().join("remote-desktop-audit.jsonl"))
+                .unwrap()
+                .contains("private-pixels")
+        );
     }
 }

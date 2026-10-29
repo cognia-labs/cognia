@@ -47,6 +47,22 @@ pub(crate) fn automation_state(app: &App) {
     // consumes.
     crate::automation::events::wire_uia_event_sink(app.handle().clone());
     let cua_registry = crate::cua_sandbox::CuaSandboxRegistry::default();
+    // ADR-0234 N2: local Docker desktops stream as native `cognia-frames`
+    // targets. `remote_desktop_audit` installed the Host one step earlier.
+    let frames = cognia_remote_desktop::commands::installed().and_then(|state| {
+        state.host()?.register_native_frames(
+            "sandbox",
+            std::sync::Arc::new(
+                cognia_automation::cua_sandbox::frame_source::CuaNativeFrameProvider::new(
+                    cua_registry.clone(),
+                    cognia_companion_rpc::remote_desktops::sandbox_frame_admission(),
+                ),
+            ),
+        )
+    });
+    if let Err(error) = frames {
+        log::warn!("sandbox desktop frames unavailable: {}", error.code);
+    }
     app.state::<crate::account_auth::AccountSecuritySession>()
         .attach_lume(cua_registry.clone());
     app.manage(cua_registry.clone());

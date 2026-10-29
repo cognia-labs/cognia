@@ -290,7 +290,7 @@ impl Broker {
         let fields = json!({"binding_id": admission.binding_id, "mode": admission.mode.as_str()});
         audit::record_background(
             "remote_desktop.session.open",
-            TARGET_KIND,
+            crate::frames::native_kind(&admission.target_id).unwrap_or(TARGET_KIND),
             &admission.target_id,
             &principal,
             "allow",
@@ -400,6 +400,16 @@ impl Broker {
         attach.attach(stream)
     }
 
+    pub fn native_frame_session(&self, principal: &Principal, session_id: &str) -> Result<bool> {
+        let state = self.state.lock();
+        let entry = state
+            .sessions
+            .get(session_id)
+            .filter(|entry| entry.principal == principal.id() && entry.stop.borrow().is_none())
+            .ok_or_else(|| RemoteDesktopError::new("remote_desktop_session_not_found"))?;
+        Ok(crate::frames::native_kind(&entry.target_id).is_some())
+    }
+
     /// End every session on `target_id` whose binding is in `binding_ids`
     /// (all of the target's sessions when `None`), and invalidate opens that
     /// are still in flight.
@@ -465,7 +475,15 @@ impl Broker {
             _ => ("remote_desktop.session.close", "allow"),
         };
         let fence = entry.lease.as_ref().map_or(0, |lease| lease.fence);
-        audit::record_background(kind, TARGET_KIND, &entry.target_id, &entry.principal, decision, fence, fields);
+        audit::record_background(
+            kind,
+            crate::frames::native_kind(&entry.target_id).unwrap_or(TARGET_KIND),
+            &entry.target_id,
+            &entry.principal,
+            decision,
+            fence,
+            fields,
+        );
         if let Some(fence) = released {
             audit::record_background(
                 if reason == EndReason::Expired {

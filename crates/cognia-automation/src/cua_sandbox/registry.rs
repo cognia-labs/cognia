@@ -125,6 +125,15 @@ impl CuaSandboxRegistry {
         self.desktop_slot(connection_id).await.0.lock_owned().await
     }
 
+    /// The desktop lock only if it is free right now; stream captures yield
+    /// to control input instead of queueing in front of it.
+    pub(crate) async fn try_desktop_guard(
+        &self,
+        connection_id: &str,
+    ) -> Option<OwnedMutexGuard<RemoteDesktop>> {
+        self.desktop_slot(connection_id).await.0.try_lock_owned().ok()
+    }
+
     pub(crate) async fn agent_guard(
         &self,
         connection_id: &str,

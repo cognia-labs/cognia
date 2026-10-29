@@ -8,6 +8,7 @@ pub mod credentials;
 pub mod endpoint;
 pub mod error;
 pub mod host;
+pub mod frames;
 pub mod launch;
 pub mod rfb;
 pub mod session;

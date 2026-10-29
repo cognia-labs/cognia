@@ -340,7 +340,153 @@ fn monitor_signature(
 
 pub fn shutdown() {
     INSTALLED.write().take();
+    // The frame provider holds the service; release it with the service.
+    if let Ok(state) = cognia_remote_desktop::commands::installed() {
+        if let Ok(host) = state.host() {
+            host.unregister_native_frames("managed-desktop");
+        }
+    }
 }
+
+/// ADR-0234 N1/N2: serve managed desktops as native `cognia-frames` targets.
+/// Call once both this service and the remote desktop Host are installed.
+pub fn register_native_frames() -> Result<()> {
+    use cognia_automation::cua_sandbox::managed::frame_source::ManagedNativeFrameProvider;
+    let service = INSTALLED
+        .read()
+        .as_ref()
+        .map(|installed| installed.service.clone())
+        .ok_or_else(|| refused("managed_desktop_host_unavailable"))?;
+    let state = cognia_remote_desktop::commands::installed()
+        .map_err(|_| refused("managed_desktop_frames_unavailable"))?;
+    state
+        .host()
+        .and_then(|host| {
+            host.register_native_frames(
+                "managed-desktop",
+                Arc::new(ManagedNativeFrameProvider::new(service, Arc::new(native_frame_context))),
+            )
+        })
+        .map_err(|_| refused("managed_desktop_frames_unavailable"))
+}
+
+/// Maps a remote desktop viewer onto the same principal and live authority the
+/// `managed_desktop_control_frame` RPC uses. A device's tenant is read from the
+/// pairing store, never from the viewer. Store queries run off the runtime.
+fn native_frame_context(
+    viewer: cognia_remote_desktop::session::Principal,
+) -> cognia_remote_desktop::frames::FrameFuture<
+    cognia_automation::cua_sandbox::managed::frame_source::ManagedFrameContext,
+> {
+    use cognia_automation::cua_sandbox::managed::frame_source::ManagedFrameContext;
+    use cognia_remote_desktop::error::RemoteDesktopError;
+    Box::pin(cognia_remote_desktop::frames::blocking(move || {
+        let forbidden = || RemoteDesktopError::new("remote_desktop_forbidden");
+        let host_id = INSTALLED
+            .read()
+            .as_ref()
+            .map(|installed| installed.host_id.clone())
+            .ok_or_else(|| RemoteDesktopError::new("remote_desktop_native_unavailable"))?;
+        let caller = if viewer.is_local() {
+            OwnedCaller {
+                device_id: LOCAL_DEVICE_ID.into(),
+                tenant_id: None,
+                local: true,
+                host_id,
+            }
+        } else {
+            let device = viewer.id().strip_prefix("device:").ok_or_else(forbidden)?;
+            let tenant = security_store()
+                .and_then(|store| store.active_device_tenant(device).ok().flatten())
+                .ok_or_else(forbidden)?;
+            OwnedCaller {
+                device_id: device.into(),
+                tenant_id: Some(tenant),
+                local: false,
+                host_id,
+            }
+        };
+        let managed = principal(&caller.caller(), &caller.host_id).map_err(|_| forbidden())?;
+        Ok(ManagedFrameContext {
+            principal: managed,
+            authority: Arc::new(NativeFrameAuthority {
+                caller: Arc::new(caller),
+                checked: Default::default(),
+            }),
+        })
+    }))
+}
+
+/// A caller identity owned so it outlives one request.
+struct OwnedCaller {
+    device_id: String,
+    tenant_id: Option<String>,
+    local: bool,
+    host_id: String,
+}
+impl OwnedCaller {
+    fn caller(&self) -> Caller<'_> {
+        Caller {
+            device_id: &self.device_id,
+            tenant_id: self.tenant_id.as_deref(),
+            scope: None,
+            local: self.local,
+        }
+    }
+}
+
+/// The frame stream's live authority: the same identity re-derivation as
+/// [`HostAuthority`], run off the runtime and reused for one remote desktop
+/// admission interval so a 7 Hz stream repeats no store work. It carries no
+/// admin lease or input policy because observing grants no input.
+struct NativeFrameAuthority {
+    caller: Arc<OwnedCaller>,
+    checked: parking_lot::Mutex<Option<std::time::Instant>>,
+}
+#[async_trait]
+impl ManagedControlAuthority for NativeFrameAuthority {
+    fn input_admission(
+        &self,
+        _: &ManagedDesktopPrincipal,
+    ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        // Input always goes through the lease-fenced control RPC.
+        Arc::new(|| false)
+    }
+    async fn revalidate(&self, expected: &ManagedDesktopPrincipal) -> Result<()> {
+        if self.checked.lock().is_some_and(|at| {
+            at.elapsed() < cognia_remote_desktop::session::ADMISSION_INTERVAL
+        }) {
+            return Ok(());
+        }
+        let caller = self.caller.clone();
+        let expected_principal = expected.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            same_principal(
+                &principal(&caller.caller(), &caller.host_id)?,
+                &expected_principal,
+            )
+        })
+        .await
+        .map_err(|_| refused("managed_desktop_forbidden"))?;
+        *self.checked.lock() = outcome.is_ok().then(std::time::Instant::now);
+        outcome
+    }
+}
+
+/// Whether a freshly derived principal is still the one an operation began as.
+fn same_principal(current: &ManagedDesktopPrincipal, expected: &ManagedDesktopPrincipal) -> Result<()> {
+    if current.owner_principal_id != expected.owner_principal_id
+        || current.principal_id != expected.principal_id
+        || current.host_id != expected.host_id
+        || current.authority != expected.authority
+    {
+        return Err(refused("managed_desktop_forbidden"));
+    }
+    Ok(())
+}
+
+/// The device id the desktop's own IPC and its native frame viewer act as.
+const LOCAL_DEVICE_ID: &str = "local-desktop";
 
 /// Created solely by native IPC or the already-authenticated RPC dispatcher.
 #[derive(Clone, Copy)]
@@ -408,15 +554,7 @@ impl ManagedControlAuthority for HostAuthority<'_> {
         if let Some(check) = &self.admin_check {
             check()?;
         }
-        let current = principal(&self.caller, self.host_id)?;
-        if current.owner_principal_id != expected.owner_principal_id
-            || current.principal_id != expected.principal_id
-            || current.host_id != expected.host_id
-            || current.authority != expected.authority
-        {
-            return Err(refused("managed_desktop_forbidden"));
-        }
-        Ok(())
+        same_principal(&principal(&self.caller, self.host_id)?, expected)
     }
 }
 
@@ -1320,7 +1458,7 @@ pub async fn managed_desktop_local_call(
         &name,
         args.unwrap_or_else(|| serde_json::json!({})),
         Caller {
-            device_id: "local-desktop",
+            device_id: LOCAL_DEVICE_ID,
             tenant_id: None,
             scope: None,
             local: true,
@@ -2035,6 +2173,50 @@ mod tests {
                 .collect::<std::collections::HashSet<_>>()
                 .len(),
             COMMANDS.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn native_frame_viewers_map_through_the_pairing_store_and_never_input() {
+        use cognia_remote_desktop::session::{Principal, SessionMode};
+        let _scope = TestScope::new();
+        let store = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(store.clone()));
+        let binding = host_identity::bind_local_account("acct-frames", "digest-frames").unwrap();
+        register_device(&store, &binding.remote_tenant_id, "owner-phone", "owner");
+        register_device(&store, &binding.remote_tenant_id, "member-phone", "member");
+        let directory = tempfile::tempdir().unwrap();
+        install(directory.path(), None, "host", None).await.unwrap();
+        let view = |device: &str| Principal::device(device, Arc::new(|mode| mode == SessionMode::View));
+
+        let local = native_frame_context(Principal::local()).await.unwrap();
+        assert_eq!(local.principal.authority, ManagedDesktopAuthority::Administrator);
+        assert_eq!(local.principal.principal_id, LOCAL_DEVICE_ID);
+        let owner = native_frame_context(view("owner-phone")).await.unwrap();
+        assert_eq!(owner.principal.principal_id, "owner-phone");
+        assert_eq!(owner.principal.authority, ManagedDesktopAuthority::Administrator);
+        let member = native_frame_context(view("member-phone")).await.unwrap();
+        assert_eq!(member.principal.authority, ManagedDesktopAuthority::Human);
+        // The owner's identity, never the viewer's claim, names the account.
+        assert_eq!(member.principal.owner_principal_id, owner.principal.owner_principal_id);
+        // Unknown devices and malformed principals are refused.
+        assert_eq!(
+            native_frame_context(view("stranger")).await.err().unwrap().code,
+            "remote_desktop_forbidden"
+        );
+        // Observation never admits input. A revoked device keeps its cached
+        // authority for at most one admission interval, then is refused.
+        assert!(!(owner.authority.input_admission(&owner.principal))());
+        owner.authority.revalidate(&owner.principal).await.unwrap();
+        store.revoke_device(&binding.remote_tenant_id, "test-actor", "owner-phone", true, NOW).unwrap();
+        owner.authority.revalidate(&owner.principal).await.unwrap();
+        tokio::time::sleep(
+            cognia_remote_desktop::session::ADMISSION_INTERVAL + std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert_eq!(
+            owner.authority.revalidate(&owner.principal).await.unwrap_err().code,
+            "managed_desktop_forbidden"
         );
     }
 

@@ -19,11 +19,12 @@ use std::{
     },
     time::Instant,
 };
+use tokio::sync::OwnedMutexGuard;
 
 const LOCAL_PRINCIPAL: &str = "local-owner";
 /// Every client-local viewer (Settings, the chat dock, a second window) is the
-/// same principal, so the cap covers three concurrent 1 Hz viewers.
-const LOCAL_FRAMES_PER_PRINCIPAL: usize = 16;
+/// same principal. The bounded window covers a 7 Hz stream plus RPC viewers.
+const LOCAL_FRAMES_PER_PRINCIPAL: usize = cognia_remote_desktop::frames::FRAME_PROOFS_PER_PRINCIPAL;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -403,7 +404,22 @@ impl CuaSandboxRegistry {
         Ok(())
     }
     pub async fn desktop_frame(&self, id: &str) -> Result<ControlFrame> {
-        let mut desktop = self.desktop_guard(id).await;
+        let desktop = self.desktop_guard(id).await;
+        self.frame_with(id, desktop).await.map(|(frame, _)| frame)
+    }
+    /// The stream's capture: skipped (busy) while input holds the desktop.
+    pub(crate) async fn desktop_stream_frame(&self, id: &str) -> Result<(ControlFrame, bool)> {
+        let desktop = self
+            .try_desktop_guard(id)
+            .await
+            .ok_or_else(|| backend("sandbox desktop busy"))?;
+        self.frame_with(id, desktop).await
+    }
+    async fn frame_with(
+        &self,
+        id: &str,
+        mut desktop: OwnedMutexGuard<RemoteDesktop>,
+    ) -> Result<(ControlFrame, bool)> {
         desktop.expire();
         let screenshot = capture(self.client(id).await?.as_ref()).await?;
         desktop.expire();
@@ -417,12 +433,16 @@ impl CuaSandboxRegistry {
                 screenshot.height,
             )
             .map_err(|_| denied("sandbox desktop frame limit reached"))?;
-        Ok(ControlFrame {
-            frame_id: proof.frame_id,
-            fence: proof.fence,
-            expires_at: proof.expires_at,
-            screenshot,
-        })
+        let human = desktop.control.status().lease.is_some();
+        Ok((
+            ControlFrame {
+                frame_id: proof.frame_id,
+                fence: proof.fence,
+                expires_at: proof.expires_at,
+                screenshot,
+            },
+            human
+        ))
     }
     pub async fn control_input(
         &self,
@@ -1535,6 +1555,87 @@ mod tests {
         assert_eq!(tables.len(), before + 1);
         assert!(tables.last().unwrap().as_object().unwrap().is_empty());
         registry.disconnect_all().await;
+        server.abort();
+    }
+    #[tokio::test]
+    async fn a_docker_stream_capture_yields_to_input_holding_the_desktop() {
+        let (registry, server, _calls) = fixture().await;
+        let held = registry.desktop_guard("a").await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            registry.desktop_stream_frame("a"),
+        )
+        .await
+        .expect("a stream capture must not wait behind input");
+        assert!(result.is_err());
+        drop(held);
+        registry.desktop_stream_frame("a").await.unwrap();
+        // The RPC frame path still waits its turn instead of skipping.
+        registry.desktop_frame("a").await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn native_stream_frame_keeps_the_existing_input_proof_and_human_lease() {
+        use cognia_remote_desktop::frames::NativeFrameProvider;
+        let (registry, server, calls) = fixture().await;
+        let lease = registry.acquire_control("a", true).await.unwrap();
+        let before = calls
+            .lock()
+            .await
+            .iter()
+            .filter(|call| call.as_str() == "screenshot")
+            .count();
+        let provider = super::super::frame_source::CuaNativeFrameProvider::new(
+            registry.clone(),
+            Arc::new(|p, _| p.is_local())
+        );
+        let source = provider
+            .resolve(
+                "a".into(),
+                cognia_remote_desktop::session::Principal::local()
+            )
+            .await
+            .unwrap();
+        let frame = source.capture().await.unwrap();
+        assert!(frame.human_controlled);
+        assert_eq!(frame.fence, lease.fence);
+        assert_eq!(
+            calls
+                .lock()
+                .await
+                .iter()
+                .filter(|call| call.as_str() == "screenshot")
+                .count(),
+            before + 1
+        );
+        let desktop = registry.desktop_guard("a").await;
+        assert_eq!(
+            desktop.control.status().lease.unwrap().dto.expires_at,
+            lease.expires_at
+        );
+        assert_eq!(
+            desktop.control.status().lease.unwrap().dto.token,
+            lease.token
+        );
+        assert!(desktop
+            .control
+            .frame(LOCAL_PRINCIPAL, &frame.frame_id, frame.fence)
+            .is_ok());
+        drop(desktop);
+        registry
+            .control_input(
+                "a",
+                &lease.token,
+                lease.fence,
+                &frame.frame_id,
+                Some(Point { x: 1, y: 1 }),
+                UiAction::Scroll {
+                    opts: ScrollOpts { dx: 0, dy: 0 }
+                }
+            )
+            .await
+            .unwrap();
         server.abort();
     }
 }

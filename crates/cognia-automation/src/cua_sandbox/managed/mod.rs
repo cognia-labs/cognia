@@ -1,6 +1,7 @@
 //! Host-owned managed desktops (ADR-0233 P1/P2). GUI control stays dormant
 //! until separately qualified; agent input and acceptance handoff remain dormant.
 pub mod contracts;
+pub mod frame_source;
 pub mod evidence;
 pub mod handoff;
 pub mod journal;

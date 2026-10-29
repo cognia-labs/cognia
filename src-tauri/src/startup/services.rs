@@ -396,6 +396,15 @@ pub(crate) fn managed_desktops(app: &App) {
                 Some(events),
             )
                 .await
+                .map(|()| {
+                    // ADR-0234 N2: the remote desktop Host was installed
+                    // earlier; a failure here leaves the RPC frames working.
+                    if let Err(error) =
+                        cognia_companion_rpc::managed_desktops::register_native_frames()
+                    {
+                        log::warn!("managed desktop frames unavailable: {}", error.code);
+                    }
+                })
                 .map_err(|e| e.to_string()),
             Err(error) => Err(error.to_string()),
         };

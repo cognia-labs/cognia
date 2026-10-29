@@ -4,7 +4,10 @@
 
 use crate::{
     audit,
-    bridge::{Attachment, Bridge, BridgeTarget, ViewerStream, CONNECT_TIMEOUT, HANDSHAKE_TIMEOUT, TICKET_TTL},
+    bridge::{
+        Attachment, Bridge, BridgeTarget, FramesTarget, ViewerStream, CONNECT_TIMEOUT,
+        HANDSHAKE_TIMEOUT, TICKET_TTL
+    },
     console::{self, ConsoleProfile},
     credentials::{self, CredentialKind, CredentialStore, KeyringCredentials, MAX_CREDENTIAL_BYTES},
     endpoint::{self, Pinned},
@@ -101,6 +104,10 @@ pub struct RemoteDesktopHost {
     credentials: Arc<dyn CredentialStore>,
     resolver: Arc<dyn Resolve>,
     broker: Arc<Broker>,
+    native_frames: parking_lot::RwLock<
+        std::collections::BTreeMap<String, Arc<dyn crate::frames::NativeFrameProvider>>,
+    >,
+    frames: Arc<crate::frames::FrameHub>,
 }
 
 fn internal() -> RemoteDesktopError {
@@ -178,7 +185,35 @@ impl RemoteDesktopHost {
             credentials,
             resolver,
             broker: Arc::new(Broker::default()),
+            native_frames: Default::default(),
+            frames: Arc::new(crate::frames::FrameHub::default()),
         }
+    }
+
+    /// Install an owner-backed projection resolver. No native target is persisted.
+    /// Register once at startup, beside the existing owning service installation.
+    pub fn register_native_frames(
+        &self,
+        kind: &str,
+        provider: Arc<dyn crate::frames::NativeFrameProvider>,
+    ) -> Result<()> {
+        if !matches!(kind, "sandbox" | "managed-desktop") {
+            return Err(crate::frames::invalid());
+        }
+        let mut providers = self.native_frames.write();
+        if providers.contains_key(kind) {
+            return Err(RemoteDesktopError::new(
+                "remote_desktop_provider_registered",
+            ));
+        }
+        providers.insert(kind.into(), provider);
+        Ok(())
+    }
+
+    /// Withdraw a projection resolver when its owning service shuts down, so
+    /// no provider keeps that service alive. Absence is success.
+    pub fn unregister_native_frames(&self, kind: &str) {
+        self.native_frames.write().remove(kind);
     }
 
     async fn blocking<T: Send + 'static>(
@@ -264,6 +299,7 @@ impl RemoteDesktopHost {
 
     /// Repeating a delete is a no-op (ADR-0175 `delete`).
     pub async fn delete_target(&self, actor: &Principal, target_id: &str) -> Result<()> {
+        crate::frames::refuse_native_mutation(target_id)?;
         let id = target_id.to_owned();
         let removed = self
             .blocking(move |store, credentials| {
@@ -312,6 +348,7 @@ impl RemoteDesktopHost {
         kind: CredentialKind,
         value: Option<String>,
     ) -> Result<RemoteTarget> {
+        crate::frames::refuse_native_mutation(target_id)?;
         if let Some(value) = &value {
             if value.is_empty() || value.len() > MAX_CREDENTIAL_BYTES || value.contains('\0') {
                 return Err(RemoteDesktopError::new("remote_desktop_credential_invalid"));
@@ -358,6 +395,15 @@ impl RemoteDesktopHost {
     }
 
     pub async fn probe(&self, request: ProbeRequest) -> Result<ProbeOutcome> {
+        if matches!(
+            &request,
+            ProbeRequest::Draft {
+                adapter: Adapter::CogniaFrames,
+                ..
+            }
+        ) {
+            return Err(RemoteDesktopError::new("remote_desktop_native_read_only"));
+        }
         let (pinned, port, adapter, connect) = match request {
             ProbeRequest::Draft {
                 host,
@@ -511,7 +557,7 @@ impl RemoteDesktopHost {
         if let Err(error) = &result {
             audit::record_async(
                 "remote_desktop.session.failed",
-                TARGET_KIND,
+                crate::frames::native_kind(target_id).unwrap_or(TARGET_KIND),
                 target_id,
                 principal.id(),
                 "deny",
@@ -536,6 +582,57 @@ impl RemoteDesktopHost {
             return Err(RemoteDesktopError::new("remote_desktop_forbidden"));
         }
         let revision = self.broker.revision();
+        if let Some(kind) = crate::frames::native_kind(target_id) {
+            // Control is exclusively owned by the existing native lease RPC.
+            if binding_id != "native" || mode != SessionMode::View || takeover {
+                return Err(RemoteDesktopError::new(
+                    "remote_desktop_native_observation_only",
+                ));
+            }
+            let id = target_id
+                .split_once(':')
+                .map(|(_, id)| id)
+                .unwrap_or_default();
+            if id.is_empty() || id.len() > 256 {
+                return Err(crate::frames::invalid());
+            }
+            self.broker.precheck(target_id, mode, false)?;
+            let provider = self
+                .native_frames
+                .read()
+                .get(kind)
+                .cloned()
+                .ok_or_else(|| RemoteDesktopError::new("remote_desktop_native_unavailable"))?;
+            let source = provider.resolve(id.into(), principal.clone()).await?;
+            if !principal.admitted(mode) {
+                return Err(RemoteDesktopError::new("remote_desktop_forbidden"));
+            }
+            let bridge = Bridge::start_frames(
+                FramesTarget {
+                    hub: self.frames.clone(),
+                    target_id: target_id.into(),
+                    source,
+                },
+                if principal.is_local() {
+                    Attachment::Loopback
+                } else {
+                    Attachment::Remote
+                },
+                TICKET_TTL,
+            )
+            .await?;
+            return self.broker.commit(
+                Admission {
+                    principal: principal.clone(),
+                    target_id: target_id.into(),
+                    binding_id: binding_id.into(),
+                    mode,
+                    takeover: false,
+                    revision,
+                },
+                bridge,
+            );
+        }
         let binding = self.binding(target_id, binding_id).await?;
         if !binding.enabled {
             return Err(RemoteDesktopError::new("remote_desktop_binding_disabled"));
@@ -593,6 +690,10 @@ impl RemoteDesktopHost {
             },
             bridge,
         )
+    }
+
+    pub fn native_frame_session(&self, principal: &Principal, session_id: &str) -> Result<bool> {
+        self.broker.native_frame_session(principal, session_id)
     }
 
     pub fn renew_session(&self, principal: &Principal, session_id: &str) -> Result<SessionRenewed> {
@@ -1460,5 +1561,170 @@ mod tests {
                 .code,
             "remote_desktop_binding_has_no_endpoint"
         );
+    }
+    pub(crate) struct NativeProvider(pub Arc<dyn crate::frames::FrameSource>);
+    impl crate::frames::NativeFrameProvider for NativeProvider {
+        fn resolve(
+            &self,
+            _: String,
+            _: Principal
+        ) -> crate::frames::FrameFuture<Arc<dyn crate::frames::FrameSource>> {
+            let source = self.0.clone();
+            Box::pin(async move {
+                source.authorize().await?;
+                Ok(source)
+            })
+        }
+    }
+    #[tokio::test]
+    async fn frames_projected_commands_are_read_only_and_observation_has_no_lease() {
+        let f = fixture();
+        let source = crate::frames::tests::gate_source(
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            false
+        );
+        for kind in ["sandbox", "managed-desktop"] {
+            f.host
+                .register_native_frames(kind, Arc::new(NativeProvider(source.clone())))
+                .unwrap();
+            let target = format!("{kind}:a");
+            assert_eq!(
+                f.host.delete_target(&me(), &target).await.unwrap_err().code,
+                "remote_desktop_native_read_only"
+            );
+            assert_eq!(
+                f.host
+                    .set_credential(
+                        &me(),
+                        &target,
+                        "native",
+                        CredentialKind::Control,
+                        Some("secret".into())
+                    )
+                    .await
+                    .unwrap_err()
+                    .code,
+                "remote_desktop_native_read_only"
+            );
+            let mut draft = draft(vec![binding_draft("127.0.0.1", 9, Adapter::None, false)]);
+            draft.id = Some(target.clone());
+            assert_eq!(
+                f.host.save_target(&me(), draft).await.unwrap_err().code,
+                "remote_desktop_native_read_only"
+            );
+            let p = Principal::device("observer", Arc::new(|mode| mode == SessionMode::View));
+            assert!(f
+                .host
+                .open_session(&p, &target, "other", SessionMode::View, false)
+                .await
+                .is_err());
+            assert!(f
+                .host
+                .open_session(&me(), &target, "native", SessionMode::Control, false)
+                .await
+                .is_err());
+            let opened = f
+                .host
+                .open_session(&p, &target, "native", SessionMode::View, false)
+                .await
+                .unwrap();
+            assert!(opened.lease.is_none());
+            assert_eq!(
+                f.host.frames.viewer_count(&target),
+                0,
+                "opening alone must not start capture"
+            );
+            f.host.close_session(&p, &opened.session_id);
+        }
+        assert!(f
+            .host
+            .list_targets(None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        assert!(source.calls.load(Ordering::SeqCst) == 0);
+        assert!(!f._dir.path().join(crate::target::STORE_FILE).exists());
+    }
+    #[tokio::test]
+    async fn frames_providers_unregister_and_register_again() {
+        let f = fixture();
+        let source = crate::frames::tests::gate_source(
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            false,
+        );
+        let provider = Arc::new(NativeProvider(source));
+        f.host
+            .register_native_frames("managed-desktop", provider.clone())
+            .unwrap();
+        assert_eq!(
+            f.host
+                .register_native_frames("managed-desktop", provider.clone())
+                .unwrap_err()
+                .code,
+            "remote_desktop_provider_registered"
+        );
+        f.host.unregister_native_frames("managed-desktop");
+        let p = Principal::device("observer", Arc::new(|mode| mode == SessionMode::View));
+        assert_eq!(
+            f.host
+                .open_session(&p, "managed-desktop:a", "native", SessionMode::View, false)
+                .await
+                .unwrap_err()
+                .code,
+            "remote_desktop_native_unavailable"
+        );
+        f.host.unregister_native_frames("managed-desktop");
+        f.host
+            .register_native_frames("managed-desktop", provider)
+            .unwrap();
+    }
+    #[tokio::test]
+    async fn frames_revocation_closes_the_attached_native_bridge() {
+        use std::sync::atomic::AtomicBool;
+        let f = fixture();
+        let source = crate::frames::tests::gate_source(Arc::new(AtomicBool::new(true)), false);
+        f.host
+            .register_native_frames("sandbox", Arc::new(NativeProvider(source)))
+            .unwrap();
+        let active = Arc::new(AtomicBool::new(true));
+        let admitted = active.clone();
+        let principal = Principal::device(
+            "observer",
+            Arc::new(move |_| admitted.load(Ordering::SeqCst))
+        );
+        let session = f
+            .host
+            .open_session(&principal, "sandbox:a", "native", SessionMode::View, false)
+            .await
+            .unwrap();
+        let (mut viewer, stream) = tokio::io::duplex(crate::bridge::MAX_FRAME_BYTES);
+        let (wrong, wrong_stream) = tokio::io::duplex(1024);
+        let other = Principal::device("other", Arc::new(|_| true));
+        assert!(f
+            .host
+            .attach_viewer(&other, &session.session_id, Box::new(wrong_stream))
+            .is_err());
+        drop(wrong);
+        f.host
+            .attach_viewer(&principal, &session.session_id, Box::new(stream))
+            .unwrap();
+        let (second, second_stream) = tokio::io::duplex(1024);
+        assert!(f
+            .host
+            .attach_viewer(&principal, &session.session_id, Box::new(second_stream))
+            .is_err());
+        drop(second);
+        crate::frames::read_frame(&mut viewer).await.unwrap();
+        assert_eq!(f.host.frames.viewer_count("sandbox:a"), 1);
+        active.store(false, Ordering::SeqCst);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            viewer.read_to_end(&mut Vec::new())
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(f.host.frames.viewer_count("sandbox:a"), 0);
     }
 }

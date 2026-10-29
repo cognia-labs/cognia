@@ -3022,6 +3022,11 @@ async fn run_serve(
     cognia_remote_desktop::commands::install(
         cognia_remote_desktop::commands::RemoteDesktopState::open(&data_dir),
     );
+    // ADR-0234 N2: managed desktops (installed above) stream as native
+    // `cognia-frames` targets now that the remote desktop Host exists.
+    if let Err(error) = cognia_companion_rpc::managed_desktops::register_native_frames() {
+        log::warn!("managed desktop frames unavailable: {}", error.code);
+    }
 
     // ADR-0090 Phase 2 — headless LLM Gateway. The SAME crate/state the
     // desktop manages; snapshots are the Provider Profile Store projection

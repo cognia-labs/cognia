@@ -22,6 +22,7 @@ use desktop_session::{ControlFrame, ControlLease};
 use serde::{Deserialize, Serialize};
 
 pub mod desktop_session;
+pub mod frame_source;
 pub mod file_transfer;
 pub mod lifecycle;
 pub mod lume;

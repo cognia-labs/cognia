@@ -181,6 +181,9 @@ pub async fn ws_remote_desktop_handler(
         }
     };
     let principal = device_principal(Some(binding.tenant_id), &binding.device_id);
+    let native_frames = installed()
+        .and_then(|state| state.host()?.native_frame_session(&principal, &session_id))
+        .unwrap_or(false);
     let (viewer, host_end) = tokio::io::duplex(PIPE_BYTES);
     if let Err(error) = attach_to_host(&principal, &session_id, Box::new(host_end)) {
         return crate::api::public_error_response(
@@ -194,12 +197,12 @@ pub async fn ws_remote_desktop_handler(
     ws.protocols(["binary"])
         .max_message_size(MAX_FRAME_BYTES)
         .max_frame_size(MAX_FRAME_BYTES)
-        .on_upgrade(move |socket| pump_socket(socket, viewer))
+        .on_upgrade(move |socket| pump_socket(socket, viewer, native_frames))
 }
 
 /// Binary WebSocket frames ⇄ the bridge's pipe. A text frame is a protocol
 /// violation for an RFB viewer and ends the stream.
-async fn pump_socket(socket: WebSocket, io: DuplexStream) {
+async fn pump_socket(socket: WebSocket, io: DuplexStream, native_frames: bool) {
     let (mut sink, mut stream) = socket.split();
     let (mut reader, mut writer) = tokio::io::split(io);
     let inbound = async {
@@ -218,6 +221,19 @@ async fn pump_socket(socket: WebSocket, io: DuplexStream) {
     let outbound = async {
         let mut buffer = vec![0; PIPE_BYTES];
         loop {
+            if native_frames {
+                match cognia_remote_desktop::frames::read_frame(&mut reader).await {
+                    Ok(frame) =>
+                        if sink.send(Message::Binary(frame.into())).await.is_err() {
+                            break;
+                        },
+                    Err(_) => {
+                        let _ = sink.send(Message::Close(None)).await;
+                        break;
+                    }
+                }
+                continue;
+            }
             match reader.read(&mut buffer).await {
                 Ok(0) | Err(_) => {
                     let _ = sink.send(Message::Close(None)).await;
@@ -536,6 +552,46 @@ mod tests {
         let query: RemoteDesktopSocketQuery = serde_urlencoded::from_str("ticket=one").unwrap();
         assert_eq!(query.ticket, "one");
         assert!(serde_urlencoded::from_str::<RemoteDesktopSocketQuery>("").is_err());
+    }
+
+    #[test]
+    fn native_ticket_for_another_target_session_is_refused_and_original_remains_single_use() {
+        let store = crate::security_store::SecurityStore::in_memory().unwrap();
+        let challenge = store.issue_challenge("tenant", 100, 60).unwrap();
+        let invitation = store
+            .create_owner_invitation("tenant", "local-trust-root", 100, 60)
+            .unwrap();
+        store
+            .register_owner_device(
+                "tenant",
+                &invitation,
+                &challenge.id,
+                &challenge.nonce,
+                "observer",
+                "Observer",
+                "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+                "thumb-observer",
+                100
+            )
+            .unwrap();
+        let first = socket_path("0123456789abcdef");
+        let other_target = socket_path("fedcba9876543210");
+        let ticket = store
+            .issue_socket_ticket("tenant", "observer", &first, SOCKET_AUDIENCE, 101, 30)
+            .unwrap();
+        assert!(store
+            .redeem_socket_ticket(&ticket, &other_target, SOCKET_AUDIENCE, 102)
+            .is_err());
+        assert_eq!(
+            store
+                .redeem_socket_ticket(&ticket, &first, SOCKET_AUDIENCE, 102)
+                .unwrap()
+                .device_id,
+            "observer"
+        );
+        assert!(store
+            .redeem_socket_ticket(&ticket, &first, SOCKET_AUDIENCE, 102)
+            .is_err());
     }
 
     #[test]

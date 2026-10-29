@@ -30,6 +30,8 @@ const STORE_VERSION: u32 = 1;
 pub enum Adapter {
     Vnc,
     None,
+    #[serde(rename = "cognia-frames")]
+    CogniaFrames,
 }
 
 /// How a client reaches the machine (ADR-0234 Phase 5).
@@ -179,6 +181,9 @@ struct StoreFile {
 }
 
 pub fn validate_draft(draft: &TargetDraft) -> Result<()> {
+    if let Some(id) = &draft.id {
+        crate::frames::refuse_native_mutation(id)?;
+    }
     let name = draft.name.trim();
     if name.is_empty() || name.chars().count() > 80 {
         return Err(RemoteDesktopError::new("remote_desktop_target_name_invalid"));
@@ -188,6 +193,9 @@ pub fn validate_draft(draft: &TargetDraft) -> Result<()> {
     }
     let mut ids = std::collections::HashSet::new();
     for binding in &draft.bindings {
+        if binding.adapter == Adapter::CogniaFrames {
+            return Err(RemoteDesktopError::new("remote_desktop_native_read_only"));
+        }
         if let Some(id) = &binding.id {
             if !valid_id(id) || !ids.insert(id.as_str()) {
                 return Err(RemoteDesktopError::new("remote_desktop_binding_id_invalid"));
@@ -308,6 +316,14 @@ impl TargetStore {
 
     /// Replace or insert `target` and persist. Returns the previous version.
     pub fn put(&mut self, target: RemoteTarget) -> Result<Option<RemoteTarget>> {
+        crate::frames::refuse_native_mutation(&target.id)?;
+        if target
+            .bindings
+            .iter()
+            .any(|b| b.adapter == Adapter::CogniaFrames)
+        {
+            return Err(RemoteDesktopError::new("remote_desktop_native_read_only"));
+        }
         let mut next = self.targets.clone();
         let previous = match next.iter_mut().find(|t| t.id == target.id) {
             Some(slot) => Some(std::mem::replace(slot, target)),
@@ -324,6 +340,7 @@ impl TargetStore {
     }
 
     pub fn remove(&mut self, id: &str) -> Result<Option<RemoteTarget>> {
+        crate::frames::refuse_native_mutation(id)?;
         let mut next = self.targets.clone();
         let Some(index) = next.iter().position(|t| t.id == id) else {
             return Ok(None);
@@ -340,6 +357,7 @@ impl TargetStore {
         view: bool,
         present: bool,
     ) -> Result<()> {
+        crate::frames::refuse_native_mutation(target_id)?;
         let mut next = self.targets.clone();
         let binding = next
             .iter_mut()
@@ -479,6 +497,20 @@ mod tests {
                 confirm: true,
             }],
         }
+    }
+
+    #[test]
+    fn projected_native_ids_refuse_persistence_and_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = TargetStore::open(dir.path()).unwrap();
+        for id in ["sandbox:a", "managed-desktop:a"] {
+            assert!(store.remove(id).is_err());
+            assert!(store.put(target(id)).is_err());
+            assert!(store
+                .set_credential_flag(id, "native", false, true)
+                .is_err());
+        }
+        assert!(store.list().is_empty());
     }
 
     #[test]

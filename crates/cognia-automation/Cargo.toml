@@ -77,6 +77,9 @@ tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots", "
 # Cross-platform screenshot for non-macOS backends. macOS app-session capture
 # is implemented with ScreenCaptureKit in `native/macos/screen_capture.m`.
 xcap = "0.9.8"
+# ADR-0234 N2: native desktop frames are re-encoded as JPEG for the
+# cognia-frames stream (xcap's own `image` only enables PNG).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 tempfile.workspace = true
 

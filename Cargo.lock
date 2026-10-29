@@ -1788,6 +1788,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hex",
+ "image",
  "libc",
  "log",
  "objc2",

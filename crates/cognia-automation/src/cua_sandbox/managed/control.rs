@@ -166,7 +166,9 @@ impl ManagedControl {
         Self {
             desktop: Default::default(),
             client: None,
-            core: ControlLeaseCore::default(),
+            core: ControlLeaseCore::with_frame_limit(
+                cognia_remote_desktop::frames::FRAME_PROOFS_PER_PRINCIPAL
+            ),
             generation,
             target_id: target_id.into(),
         }
@@ -1208,9 +1210,80 @@ impl ManagedDesktopService {
         authority: &dyn ManagedControlAuthority,
         smoke: bool,
     ) -> Result<ManagedControlFrame> {
+        self.capture_frame_inner(p, id, generation, authority, smoke, false)
+            .await
+    }
+    /// Read through the owner's live record. Never adds a remote target record.
+    pub(crate) async fn native_frame_generation(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        authority: &dyn ManagedControlAuthority
+    ) -> Result<u64> {
+        let generation = self
+            .state
+            .lock()
+            .await
+            .desktops
+            .get(id)
+            .map(|row| row.desktop.generation)
+            .ok_or_else(|| refused("managed_desktop_not_found"))?;
+        self.control_check(p, id, generation, authority, false)
+            .await?;
+        Ok(generation)
+    }
+    /// Per-viewer admission performs no screenshot or provider request.
+    pub(crate) async fn native_frame_admission(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        authority: &dyn ManagedControlAuthority
+    ) -> Result<()> {
+        self.control_check_local(p, id, generation, authority, false)
+            .await
+            .map(|_| ())
+    }
+    pub(crate) async fn native_stream_frame(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        authority: &dyn ManagedControlAuthority
+    ) -> Result<(ManagedControlFrame, bool)> {
+        let frame = self
+            .capture_frame_inner(p, id, generation, authority, false, true)
+            .await?;
+        let human = self
+            .control_slot(id, generation)
+            .await
+            .lock()
+            .await
+            .core
+            .status()
+            .lease
+            .is_some();
+        Ok((frame, human))
+    }
+    async fn capture_frame_inner(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        authority: &dyn ManagedControlAuthority,
+        smoke: bool,
+        stream: bool,
+    ) -> Result<ManagedControlFrame> {
         self.scoped(p, id, generation).await?;
         let slot = self.control_slot(id, generation).await;
-        let mut c = slot.lock().await;
+        // Input has priority over the stream: a stream capture never queues
+        // control input behind a network screenshot, it skips the tick.
+        let mut c = if stream {
+            slot.try_lock()
+                .map_err(|_| retryable("managed_desktop_frame_busy"))?
+        } else {
+            slot.lock().await
+        };
         let row = self
             .control_check(p, id, generation, authority, smoke)
             .await?;
@@ -1223,7 +1296,12 @@ impl ManagedDesktopService {
             .control_check(p, id, generation, authority, smoke)
             .await
         {
-            c.invalidate();
+            // A stream capture runs on one viewer's authority while another
+            // principal may hold the lease: that viewer losing access drops
+            // the pixels and never cancels the controller's lease or proofs.
+            if !stream {
+                c.invalidate();
+            }
             return Err(e);
         }
         c.expire();
@@ -1232,10 +1310,19 @@ impl ManagedDesktopService {
         // viewer. The core retains prior unexpired proofs so the visible frame
         // remains usable throughout its five-second validity window, and
         // refuses excess polling instead of evicting a still-visible proof.
+        let proof_principal = if stream {
+            c.core
+                .status()
+                .lease
+                .map(|lease| lease.principal.clone())
+                .unwrap_or_else(|| p.principal_id.clone())
+        } else {
+            p.principal_id.clone()
+        };
         let proof = c
             .core
             .register_frame(
-                &p.principal_id,
+                &proof_principal,
                 now,
                 row.desktop.deadline_at,
                 screenshot.width,
@@ -2808,5 +2895,174 @@ mod tests {
         c.invalidate();
         assert!(c.frames.is_empty());
         assert!(c.lease.is_none());
+    }
+    /// Passes the first `allow` revalidations, then refuses.
+    struct FailAfter {
+        calls: std::sync::atomic::AtomicUsize,
+        allow: usize,
+    }
+    #[async_trait]
+    impl ManagedControlAuthority for FailAfter {
+        fn input_admission(
+            &self,
+            _: &ManagedDesktopPrincipal,
+        ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+            Arc::new(|| true)
+        }
+        async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) < self.allow {
+                Ok(())
+            } else {
+                Err(refused("managed_desktop_forbidden"))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_observer_losing_access_mid_stream_never_cancels_the_controllers_lease() {
+        let f = wire_fixture().await;
+        let (service, p, row) = (&f.domain.service, &f.domain.p, &f.row);
+        let authority = Authority(Arc::new(AtomicBool::new(true)));
+        let lease = service
+            .control_acquire_inner(p, &row.id, row.generation, true, &authority, true)
+            .await
+            .unwrap();
+        let controller_frame = service
+            .capture_frame_inner(p, &row.id, row.generation, &authority, true, false)
+            .await
+            .unwrap();
+        // How many revalidations the pre-capture check performs.
+        let counting = FailAfter {
+            calls: Default::default(),
+            allow: usize::MAX,
+        };
+        service
+            .control_check(p, &row.id, row.generation, &counting, true)
+            .await
+            .unwrap();
+        let before_capture = counting.calls.load(Ordering::SeqCst);
+        let mut observer = p.clone();
+        observer.principal_id = "observer".into();
+        let failing = FailAfter {
+            calls: Default::default(),
+            allow: before_capture,
+        };
+        assert_eq!(
+            service
+                .capture_frame_inner(&observer, &row.id, row.generation, &failing, true, true)
+                .await
+                .unwrap_err()
+                .code,
+            "managed_desktop_forbidden"
+        );
+        // The controller's lease and its earlier proof survive.
+        service
+            .control_input_inner(
+                p,
+                &row.id,
+                row.generation,
+                ManagedControlInput {
+                    token: &lease.token,
+                    fence: controller_frame.fence,
+                    frame_id: &controller_frame.frame_id,
+                    point: Some(Point { x: 1, y: 1 }),
+                    action: UiAction::Scroll {
+                        opts: crate::automation::types::ScrollOpts { dx: 0, dy: 0 },
+                    },
+                },
+                &authority,
+                true,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_stream_capture_yields_to_input_holding_the_desktop() {
+        let f = wire_fixture().await;
+        let (service, p, row) = (&f.domain.service, &f.domain.p, &f.row);
+        let authority = Authority(Arc::new(AtomicBool::new(true)));
+        let slot = service.control_slot(&row.id, row.generation).await;
+        let held = slot.lock().await;
+        // The fixture's desktop is a smoke desktop (no production control
+        // qualification), so drive the shared capture path directly.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            service.capture_frame_inner(p, &row.id, row.generation, &authority, true, true),
+        )
+        .await
+        .expect("a stream capture must not wait behind input");
+        assert_eq!(result.unwrap_err().code, "managed_desktop_frame_busy");
+        drop(held);
+        service
+            .capture_frame_inner(p, &row.id, row.generation, &authority, true, true)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_frames_capture_preserves_idle_and_lease_and_registers_controller_proof() {
+        let f = wire_fixture().await;
+        let (service, p, row) = (&f.domain.service, &f.domain.p, &f.row);
+        let authority = Authority(Arc::new(AtomicBool::new(true)));
+        let lease = service
+            .control_acquire_inner(p, &row.id, row.generation, true, &authority, true)
+            .await
+            .unwrap();
+        let before = service
+            .scoped(p, &row.id, row.generation)
+            .await
+            .unwrap()
+            .last_activity_at;
+        let mut observer = p.clone();
+        observer.principal_id = "another-observer".into();
+        let frame = service
+            .capture_frame_inner(&observer, &row.id, row.generation, &authority, true, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .scoped(p, &row.id, row.generation)
+                .await
+                .unwrap()
+                .last_activity_at,
+            before
+        );
+        let slot = service.control_slot(&row.id, row.generation).await;
+        let control = slot.lock().await;
+        assert_eq!(control.core.status().lease.unwrap().dto.token, lease.token);
+        assert_eq!(
+            control.core.status().lease.unwrap().dto.expires_at,
+            lease.expires_at
+        );
+        assert!(control
+            .core
+            .frame(&p.principal_id, &frame.frame_id, frame.fence)
+            .is_ok());
+        assert!(control
+            .core
+            .frame(&observer.principal_id, &frame.frame_id, frame.fence)
+            .is_err());
+        drop(control);
+        // The production input RPC owner accepts the streamed proof unchanged.
+        service
+            .control_input_inner(
+                p,
+                &row.id,
+                row.generation,
+                ManagedControlInput {
+                    token: &lease.token,
+                    fence: frame.fence,
+                    frame_id: &frame.frame_id,
+                    point: Some(Point { x: 1, y: 1 }),
+                    action: UiAction::Scroll {
+                        opts: crate::automation::types::ScrollOpts { dx: 0, dy: 0 },
+                    },
+                },
+                &authority,
+                true
+            )
+            .await
+            .unwrap();
     }
 }

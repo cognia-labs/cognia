@@ -25,6 +25,39 @@ use serde_json::Value;
 
 pub use cognia_remote_desktop::commands::COMMANDS;
 
+/// ADR-0234 N1/N2: who may watch this desktop's local Docker sandboxes over
+/// the `cognia-frames` stream. The local shell, or an OWNER device of the
+/// account this Host is bound to: these sandboxes were local-only before, and
+/// a member device of the same account does not see the owner's machines.
+/// `Principal::admitted` separately requires that device to be active, not a
+/// worker, and granted the view capability. This is a blocking store query;
+/// callers run it off the async runtime.
+pub fn sandbox_frame_admission() -> cognia_automation::cua_sandbox::frame_source::SandboxFrameAdmission
+{
+    std::sync::Arc::new(|principal, _connection_id| {
+        if principal.is_local() {
+            return true;
+        }
+        let Some(device) = principal.id().strip_prefix("device:") else {
+            return false;
+        };
+        let (Ok(host), Some(store)) = (
+            cognia_companion::host_identity::current(),
+            cognia_companion::security_store::security_store(),
+        ) else {
+            return false;
+        };
+        store
+            .active_device_tenant(device)
+            .ok()
+            .flatten()
+            .is_some_and(|tenant| {
+                tenant == host.remote_tenant_id
+                    && store.is_owner_device(&tenant, device).unwrap_or(false)
+            })
+    })
+}
+
 #[derive(Clone, Copy)]
 pub struct Caller<'a> {
     pub device_id: &'a str,
@@ -97,6 +130,50 @@ mod tests {
     use cognia_remote_desktop::{commands::RemoteDesktopState, session::Principal};
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn sandbox_frames_admit_the_local_shell_and_owner_devices_of_the_bound_account() {
+        use cognia_companion::security_store::{install_security_store, test_guard, SecurityStore};
+        let _guard = test_guard();
+        let store = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(store.clone()));
+        let binding =
+            cognia_companion::host_identity::bind_local_account("acct-sandbox", "digest-sandbox").unwrap();
+        let now = 1_700_000_000;
+        let register = |tenant: &str, device: &str, role: &str| {
+            let challenge = store.issue_challenge(tenant, now, 600).unwrap();
+            store
+                .register_oidc_device(
+                    tenant,
+                    "test-actor",
+                    &cognia_companion::security_store::VerifiedDevicePerson {
+                        user_id: "usr_sandbox_test".to_string().try_into().unwrap(),
+                        org_id: "org_sandbox_test".to_string().try_into().unwrap(),
+                    },
+                    &challenge.id,
+                    &challenge.nonce,
+                    device,
+                    "Test device",
+                    "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+                    &format!("thumb-{device}"),
+                    role,
+                    now,
+                )
+                .unwrap();
+        };
+        register(&binding.remote_tenant_id, "own-phone", "owner");
+        register(&binding.remote_tenant_id, "member-phone", "member");
+        register("other-tenant", "foreign-phone", "owner");
+        let admit = sandbox_frame_admission();
+        let device = |id: &str| Principal::device(id, Arc::new(|_| true));
+        assert!(admit(&Principal::local(), "conn"));
+        assert!(admit(&device("own-phone"), "conn"));
+        assert!(!admit(&device("member-phone"), "conn"));
+        assert!(!admit(&device("foreign-phone"), "conn"));
+        assert!(!admit(&device("unpaired"), "conn"));
+        cognia_companion::host_identity::unbind_local_account();
+        install_security_store(None);
+    }
 
     fn device() -> Caller<'static> {
         Caller {

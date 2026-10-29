@@ -66,6 +66,17 @@ impl BridgeState {
     }
 }
 
+pub struct FramesTarget {
+    pub hub: Arc<crate::frames::FrameHub>,
+    pub target_id: String,
+    pub source: Arc<dyn crate::frames::FrameSource>,
+}
+
+enum Upstream {
+    Tcp(BridgeTarget),
+    Frames(FramesTarget),
+}
+
 pub struct BridgeTarget {
     pub addr: SocketAddr,
     pub adapter: Adapter,
@@ -124,6 +135,25 @@ enum ViewerSource {
 
 impl Bridge {
     pub async fn start(target: BridgeTarget, attachment: Attachment, ticket_ttl: Duration) -> Result<Bridge> {
+        if target.adapter == Adapter::CogniaFrames {
+            return Err(crate::frames::invalid());
+        }
+        Self::start_upstream(Upstream::Tcp(target), attachment, ticket_ttl).await
+    }
+
+    pub async fn start_frames(
+        target: FramesTarget,
+        attachment: Attachment,
+        ticket_ttl: Duration,
+    ) -> Result<Bridge> {
+        Self::start_upstream(Upstream::Frames(target), attachment, ticket_ttl).await
+    }
+
+    async fn start_upstream(
+        target: Upstream,
+        attachment: Attachment,
+        ticket_ttl: Duration,
+    ) -> Result<Bridge> {
         let (url, source, attach) = match attachment {
             Attachment::Loopback => {
                 let listener = TcpListener::bind("127.0.0.1:0")
@@ -232,11 +262,12 @@ fn refuse(status: StatusCode) -> ErrorResponse {
 
 async fn run(
     source: ViewerSource,
-    target: BridgeTarget,
+    target: Upstream,
     ticket_ttl: Duration,
     state: watch::Sender<BridgeState>,
     mut close: watch::Receiver<bool>,
 ) {
+    let native_frames = matches!(&target, Upstream::Frames(_));
     let outcome = async {
         match source {
             ViewerSource::Listener { listener, ticket } => {
@@ -248,8 +279,8 @@ async fn run(
                 let _ = state.send(BridgeState::Connecting);
                 let (local, pump_end) = tokio::io::duplex(PIPE_BYTES);
                 tokio::select! {
-                    result = relay(Box::new(local), target, &state) => result,
-                    result = pump(viewer, pump_end) => result,
+                    result = relay_upstream(Box::new(local), target, &state) => result,
+                    result = pump(viewer, pump_end, native_frames) => result,
                     _ = close.changed() => Ok(()),
                 }
             }
@@ -265,7 +296,7 @@ async fn run(
                 };
                 let _ = state.send(BridgeState::Connecting);
                 tokio::select! {
-                    result = relay(viewer, target, &state) => result,
+                    result = relay_upstream(viewer, target, &state) => result,
                     _ = close.changed() => Ok(()),
                 }
             }
@@ -340,6 +371,38 @@ async fn accept_viewer(
 }
 
 /// Dial, authenticate and forward between the viewer stream and the server.
+async fn relay_upstream(
+    viewer: ViewerStream,
+    target: Upstream,
+    state: &watch::Sender<BridgeState>,
+) -> Result<()> {
+    match target {
+        Upstream::Tcp(target) => relay(viewer, target, state).await,
+        Upstream::Frames(target) => {
+            let mut frames = target.hub.subscribe(&target.target_id, target.source);
+            let _ = state.send(BridgeState::Connected);
+            let (mut reader, mut writer) = tokio::io::split(viewer);
+            let inbound = async {
+                let mut byte = [0];
+                match reader.read(&mut byte).await {
+                    Ok(0) | Err(_) => Ok(()),
+                    // This stream grants no input authority.
+                    Ok(_) => Err(RemoteDesktopError::new("remote_desktop_protocol_invalid")),
+                }
+            };
+            let outbound = async {
+                loop {
+                    let frame = frames.next().await?;
+                    if writer.write_all(&frame).await.is_err() {
+                        return Ok(());
+                    }
+                }
+            };
+            tokio::select! { result = inbound => result, result = outbound => result }
+        }
+    }
+}
+
 async fn relay(
     mut viewer: ViewerStream,
     target: BridgeTarget,
@@ -408,7 +471,11 @@ async fn relay(
 
 /// Binary WebSocket frames ⇄ an in-memory byte stream. Ends when either side
 /// closes; text frames are a protocol violation for an RFB viewer.
-async fn pump(viewer: WebSocketStream<TcpStream>, io: DuplexStream) -> Result<()> {
+async fn pump(
+    viewer: WebSocketStream<TcpStream>,
+    io: DuplexStream,
+    native_frames: bool
+) -> Result<()> {
     let lost = |_| RemoteDesktopError::new("remote_desktop_connection_lost");
     let (mut sink, mut stream) = viewer.split();
     let (mut reader, mut writer) = tokio::io::split(io);
@@ -428,6 +495,19 @@ async fn pump(viewer: WebSocketStream<TcpStream>, io: DuplexStream) -> Result<()
     let outbound = async {
         let mut buffer = vec![0; PIPE_BYTES];
         loop {
+            if native_frames {
+                match crate::frames::read_frame(&mut reader).await {
+                    Ok(frame) => sink
+                        .send(Message::Binary(frame.into()))
+                        .await
+                        .map_err(|_| RemoteDesktopError::new("remote_desktop_connection_lost"))?,
+                    Err(_) => {
+                        let _ = sink.send(Message::Close(None)).await;
+                        return Ok(());
+                    }
+                }
+                continue;
+            }
             let read = reader.read(&mut buffer).await.map_err(lost)?;
             if read == 0 {
                 let _ = sink.send(Message::Close(None)).await;
@@ -791,5 +871,63 @@ mod tests {
         viewer.read_to_end(&mut received).await.unwrap();
         assert_eq!(received, b"bye");
         assert_eq!(bridge.finished().await, BridgeState::Closed);
+    }
+    #[tokio::test]
+    async fn frames_adapter_cannot_start_a_tcp_upstream() {
+        assert!(Bridge::start(
+            BridgeTarget {
+                addr: "127.0.0.1:9".parse().unwrap(),
+                adapter: Adapter::CogniaFrames,
+                password: None
+            },
+            Attachment::Remote,
+            TICKET_TTL
+        )
+        .await
+        .is_err());
+    }
+    /// Requires a real loopback socket; run outside a sandbox that refuses bind.
+    #[tokio::test]
+    async fn native_loopback_ticket_cannot_attach_to_another_target() {
+        let hub = Arc::new(crate::frames::FrameHub::default());
+        let source = crate::frames::tests::gate_source(
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            false
+        );
+        let first = Bridge::start_frames(
+            FramesTarget {
+                hub: hub.clone(),
+                target_id: "sandbox:a".into(),
+                source: source.clone()
+            },
+            Attachment::Loopback,
+            TICKET_TTL
+        )
+        .await
+        .unwrap();
+        let mut second = Bridge::start_frames(
+            FramesTarget {
+                hub,
+                target_id: "managed-desktop:b".into(),
+                source
+            },
+            Attachment::Loopback,
+            TICKET_TTL
+        )
+        .await
+        .unwrap();
+        let mut wrong = url::Url::parse(second.url.as_ref().unwrap()).unwrap();
+        wrong.set_path(url::Url::parse(first.url.as_ref().unwrap()).unwrap().path());
+        assert!(tokio_tungstenite::connect_async(wrong.as_str())
+            .await
+            .is_err());
+        let (mut viewer, _) = tokio_tungstenite::connect_async(second.url.as_ref().unwrap())
+            .await
+            .unwrap();
+        let message = viewer.next().await.unwrap().unwrap();
+        assert!(matches!(message, Message::Binary(_)));
+        second.close();
+        assert_eq!(second.finished().await, BridgeState::Closed);
+        first.close();
     }
 }
