@@ -130,6 +130,10 @@ export interface E2bSandboxConfig extends ManagedDesktopQualificationProjection 
   providerConfigId: string
   desktopId?: string
   generation?: number
+  /** Live Host delegation for this desktop generation (ADR-0233 A5); never minted by an agent. */
+  delegationId?: string
+  /** Effective Host agent-control switch. Absent on legacy/manual rows means off; never authority. */
+  agentControl?: boolean
   /** GUI remains dormant until separate phase-2 Host qualification; never authority by itself. */
   guiQualified?: boolean
 }

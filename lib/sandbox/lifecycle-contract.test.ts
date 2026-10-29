@@ -38,6 +38,40 @@ function ctx(overrides: Partial<SandboxOperationContext> = {}): SandboxOperation
 }
 
 describe("assertSandboxOperationAllowed", () => {
+  it("allows delegated E2B GUI only with a managed routing identity and the capability", () => {
+    const config = {
+      provider: "e2b" as const,
+      target: { kind: "local" as const },
+      providerConfigId: "config",
+      desktopId: "desktop",
+      generation: 1,
+      delegationId: "delegation",
+      agentControl: true,
+      qualification: "qualified" as const,
+      qualificationEvidenceVersion: 2,
+      workloadIsolationRevision: 1,
+      egressEnforcement: "provider-and-guest-kernel" as const,
+    }
+    const managed = ctx({
+      provider: "e2b",
+      driver: "computer-server",
+      connectionId: "managed:desktop:1",
+      config,
+    })
+    expect(() => assertSandboxOperationAllowed(managed, "gui")).not.toThrow()
+    for (const patch of [
+      { capabilities: caps({ gui: false }) },
+      { config: { ...config, desktopId: undefined } },
+      { config: { ...config, delegationId: undefined } },
+      { config: { ...config, agentControl: false } },
+      { config: { ...config, qualificationEvidenceVersion: 1 } },
+      { config: undefined },
+      { connectionId: "ordinary-e2b" },
+    ])
+      expect(() => assertSandboxOperationAllowed({ ...managed, ...patch }, "gui")).toThrow(
+        SandboxCapabilityError
+      )
+  })
   it("allows a supported operation in a valid state", () => {
     expect(() => assertSandboxOperationAllowed(ctx(), "stop")).not.toThrow()
   })

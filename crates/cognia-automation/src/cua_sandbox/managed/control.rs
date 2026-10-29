@@ -1,10 +1,9 @@
-//! Host-owned manual control. Live frames and leases are never persisted.
-//! Reuses the computer-server driver and uncertainty quarantine. Agent input
-//! remains dormant until acceptance-bound delegation ships in P3.
+//! Host-owned human and delegated agent control. Live frames and leases are
+//! never persisted. Both paths share preemption and uncertainty quarantine.
 use super::*;
 use crate::automation::{
     session::UiAction,
-    types::{Point, Screenshot},
+    types::{Action, ActionOutput, AutomationError, Point, Result as AutomationResult, Screenshot},
 };
 use crate::cua_sandbox::{
     desktop_session::{self, RemoteDesktop},
@@ -139,14 +138,38 @@ impl ControlQualificationReceipt {
             && a.agent_delegation_refused
     }
 }
+/// Last published slot state; readers never wait behind agent input.
+#[derive(Clone, Default)]
+pub(super) struct ControlProjection {
+    generation: u64,
+    principal: Option<String>,
+    expires_at: Option<i64>,
+    fence: u64,
+    uncertain: bool,
+    agent_active: Arc<AtomicBool>,
+}
+struct AgentOperationStatus(Arc<AtomicBool>);
+impl AgentOperationStatus {
+    fn begin(active: Arc<AtomicBool>) -> Self {
+        active.store(true, Ordering::SeqCst);
+        Self(active)
+    }
+}
+impl Drop for AgentOperationStatus {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 /// The lease, fence, revocation epoch and frame proofs are the shared
 /// ADR-0234 core; this wrapper adds the computer-server desktop and client.
 /// Field access (`lease`, `frames`, `fence`, `revoked`) derefs to the core,
 /// while the inherent methods below keep the managed refusal codes.
 pub(super) struct ManagedControl {
-    desktop: RemoteDesktop,
-    client: Option<Arc<CuaRemoteClient>>,
-    core: ControlLeaseCore,
+    agent_active: Arc<AtomicBool>,
+    projections: Arc<parking_lot::RwLock<std::collections::BTreeMap<String, ControlProjection>>>,
+    pub(super) desktop: RemoteDesktop,
+    pub(super) client: Option<Arc<CuaRemoteClient>>,
+    pub(super) core: ControlLeaseCore,
     generation: u64,
     target_id: String,
 }
@@ -164,7 +187,9 @@ impl std::ops::DerefMut for ManagedControl {
 impl ManagedControl {
     fn new(target_id: &str, generation: u64) -> Self {
         Self {
-            desktop: Default::default(),
+            agent_active: Default::default(),
+            projections: Default::default(),
+            desktop: RemoteDesktop::for_target(target_id.into(), Default::default()),
             client: None,
             core: ControlLeaseCore::with_frame_limit(
                 cognia_remote_desktop::frames::FRAME_PROOFS_PER_PRINCIPAL
@@ -174,6 +199,7 @@ impl ManagedControl {
         }
     }
     fn audit(&self, kind: &str, principal: &str, decision: &str, fields: serde_json::Value) {
+        self.publish();
         audit::record_background(
             kind,
             "managed-desktop",
@@ -184,9 +210,20 @@ impl ManagedControl {
             fields,
         );
     }
+    fn publish(&self) {
+        self.projections.write().insert(self.target_id.clone(), ControlProjection {
+            generation: self.generation,
+            principal: self.lease.as_ref().map(|lease| lease.principal.clone()),
+            expires_at: self.lease.as_ref().map(|lease| lease.dto.expires_at),
+            fence: self.fence,
+            uncertain: self.desktop.require_quiescent().is_err(),
+            agent_active: self.agent_active.clone(),
+        });
+    }
     fn invalidate(&mut self) {
         self.core.invalidate();
         self.desktop.invalidate();
+        self.publish();
     }
     fn expire(&mut self) {
         if let Some(lease) = self.core.expire() {
@@ -201,6 +238,7 @@ impl ManagedControl {
                 serde_json::json!({}),
             );
         }
+        self.publish();
     }
     fn require_lease(
         &mut self,
@@ -929,7 +967,449 @@ impl ManagedControlAuthority for NativeSmokeAuthority {
     }
 }
 
+fn validate_agent_action(action: &Action) -> AutomationResult<()> {
+    use crate::automation::types::*;
+    match action {
+        Action::Screenshot { .. }
+        | Action::CursorPosition
+        | Action::ReadTree { root: None, .. }
+        | Action::MouseMove { .. }
+        | Action::MouseButton { .. } => Ok(()),
+        Action::Click {
+            target: ClickTarget::Point { x, y },
+            opts,
+        } => desktop_session::validate_action(
+            Some(Point { x: *x, y: *y }),
+            &UiAction::Click {
+                button: opts.button,
+                count: Some(opts.count.unwrap_or(if opts.double == Some(true) { 2 } else { 1 })),
+            },
+        ),
+        Action::Drag { from, to, opts } => desktop_session::validate_action(
+            Some(*from),
+            &UiAction::Drag {
+                to: *to,
+                opts: opts.clone(),
+            },
+        ),
+        Action::Scroll {
+            target: ScrollTarget::Point { x, y },
+            opts,
+        } => desktop_session::validate_action(
+            Some(Point { x: *x, y: *y }),
+            &UiAction::Scroll { opts: opts.clone() },
+        ),
+        Action::Type { text, opts }
+            if opts.target.is_none() && !opts.delay_ms.is_some_and(|delay| delay > 0) =>
+        {
+            desktop_session::validate_action(None, &UiAction::TypeText { text: text.clone() })
+        }
+        Action::Keys { chord } | Action::HoldKey { chord, .. } => {
+            desktop_session::validate_action(None, &UiAction::PressKey { chord: chord.clone() })
+        }
+        _ => Err(AutomationError::UnsupportedPlatform),
+    }
+}
+
+async fn agent_deliver(
+    desktop: &mut RemoteDesktop,
+    client: &CuaRemoteClient,
+    action: Action,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
+) -> AutomationResult<ActionOutput> {
+    use crate::automation::types::*;
+    use crate::cua_sandbox::protocol;
+    use serde_json::json;
+    match action {
+        Action::Screenshot { .. } => {
+            return Ok(ActionOutput::Screenshot(desktop_session::capture(client).await?));
+        }
+        Action::CursorPosition => {
+            let value = client.call_simple(protocol::CURSOR_POSITION, json!({})).await?;
+            let value = value.get("position").unwrap_or(&value);
+            return Ok(ActionOutput::Cursor(Point {
+                x: value.get("x").and_then(|v| v.as_i64()).unwrap_or(0)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+                y: value.get("y").and_then(|v| v.as_i64()).unwrap_or(0)
+                    .clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+            }));
+        }
+        Action::ReadTree { root: None, .. } => {
+            let value = client.call_simple(protocol::ACCESSIBILITY_TREE, json!({})).await?;
+            let root = value.get("tree").or_else(|| value.get("nodes")).unwrap_or(&value);
+            return Ok(ActionOutput::Tree(crate::automation::cua_route::flatten_a11y(root, 0)));
+        }
+        Action::Click {
+            target: ClickTarget::Point { x, y },
+            opts,
+        } => {
+            let action = UiAction::Click {
+                button: opts.button,
+                count: Some(opts.count.unwrap_or(if opts.double == Some(true) { 2 } else { 1 })),
+            };
+            desktop_session::deliver(client, Some(Point { x, y }), &action).await?;
+        }
+        Action::MouseMove { point } => {
+            client.call(protocol::move_request(point)).await?;
+        }
+        Action::Drag { from, to, opts } => {
+            client.call(protocol::drag_request(
+                from,
+                to,
+                opts.button.unwrap_or(MouseButton::Left),
+                opts.duration_ms.unwrap_or(150) as f64 / 1000.0,
+            )).await?;
+        }
+        Action::Scroll {
+            target: ScrollTarget::Point { x, y },
+            opts,
+        } => {
+            client.call(protocol::move_request(Point { x, y })).await?;
+            client.call(protocol::scroll_request(&opts)).await?;
+        }
+        Action::Type { text, opts }
+            if opts.target.is_none() && !opts.delay_ms.is_some_and(|delay| delay > 0) =>
+        {
+            client.call(protocol::type_text_request(&text)).await?;
+        }
+        Action::Keys { chord } => {
+            client.call(protocol::keys_request(&chord)).await?;
+        }
+        Action::HoldKey { chord, duration_ms } => {
+            crate::automation::cua_route::hold_remote_keys(
+                desktop, client, chord, duration_ms, Some(live),
+            )
+            .await?;
+        }
+        Action::MouseButton { button, transition } => {
+            // Record before sending: cancellation must retain cleanup duty.
+            let added = transition == ButtonTransition::Down && !desktop.held_mouse_buttons.contains(&button);
+            if added {
+                desktop.held_mouse_buttons.push(button);
+            }
+            let command = if transition == ButtonTransition::Down { "mouse_down" } else { "mouse_up" };
+            let result = client.call_simple(
+                command,
+                json!({"button":desktop_session::button_name(button)}),
+            ).await;
+            if (result.is_ok() && transition == ButtonTransition::Up)
+                || (added && matches!(result, Err(AutomationError::PreemptedBeforeSend)))
+            {
+                desktop.held_mouse_buttons.retain(|held| *held != button);
+            }
+            result?;
+        }
+        _ => return Err(AutomationError::UnsupportedPlatform),
+    }
+    Ok(ActionOutput::Void)
+}
+
+fn update_agent_activity(
+    state: &mut ManagedDesktopJournal,
+    id: &str,
+    generation: u64,
+    now: i64,
+) -> Option<i64> {
+    let row = state.desktops.get_mut(id)?;
+    if row.desktop.generation != generation || row.delete_requested || row.expired(now) {
+        return None;
+    }
+    row.last_activity_at = now;
+    Some(
+        row.desktop
+            .deadline_at
+            .min(now.saturating_add(row.desktop.idle_timeout_seconds as i64 * 1_000)),
+    )
+}
+
 impl ManagedDesktopService {
+    /// A committed end fences the pump immediately. Busy operations perform
+    /// their own key cleanup and this queue is retried after their slot drops.
+    pub(super) async fn release_ended_agent_inputs(&self) {
+        let pending: Vec<_> = self.pending_agent_cleanup.lock().iter().cloned().collect();
+        for id in pending {
+            let slot = self.controls.lock().await.get(&id).cloned();
+            let Some(slot) = slot else {
+                self.pending_agent_cleanup.lock().remove(&id);
+                continue;
+            };
+            let Ok(mut control) = slot.try_lock() else {
+                continue;
+            };
+            self.pending_agent_cleanup.lock().remove(&id);
+            let keys = control.desktop.held_keys.clone();
+            let buttons = control.desktop.held_mouse_buttons.clone();
+            if keys.is_empty() && buttons.is_empty() {
+                continue;
+            }
+            if let Err(error) = self
+                .transaction(|state, _| {
+                    state.control_quarantines.insert(id.clone());
+                    Ok(())
+                })
+                .await
+            {
+                control.desktop.begin_mutation();
+                control.publish();
+                log::warn!(
+                    "managed desktop ended-grant cleanup checkpoint: {}",
+                    error.code
+                );
+                continue;
+            }
+            control.desktop.begin_mutation();
+            let result = if let Some(client) = control.client.as_ref().map(|c| c.unfenced()) {
+                async {
+                    for key in keys.iter().rev() {
+                        client
+                            .call_simple("key_up", serde_json::json!({"key":key}))
+                            .await?;
+                    }
+                    for button in buttons {
+                        client
+                            .call_simple(
+                                "mouse_up",
+                                serde_json::json!({
+                                    "button": desktop_session::button_name(button),
+                                }),
+                            )
+                            .await?;
+                    }
+                    Ok(())
+                }
+                .await
+            } else {
+                Err(AutomationError::PreemptedBeforeSend)
+            };
+            // Missing transport cannot confirm release, even though no send
+            // happened in this attempt. Retain durable and resident quarantine.
+            if result.is_ok() {
+                control.desktop.finish_mutation(&result);
+                control.desktop.held_keys.clear();
+                control.desktop.held_mouse_buttons.clear();
+                if let Err(error) = self
+                    .transaction(|state, _| {
+                        state.agent_held_inputs.remove(&id);
+                        state.control_quarantines.remove(&id);
+                        Ok(())
+                    })
+                    .await
+                {
+                    control.desktop.begin_mutation();
+                    log::warn!(
+                        "managed desktop cleanup acknowledgement checkpoint: {}",
+                        error.code
+                    );
+                }
+            } else {
+                log::warn!("managed desktop ended-grant input release is uncertain");
+            }
+            control.publish();
+        }
+    }
+
+    pub(super) async fn control_agent_preemption(
+        &self,
+        id: &str,
+    ) -> Arc<desktop_session::DesktopPreemption> {
+        self.agent_preemptions.lock().await.entry(id.into()).or_default().clone()
+    }
+
+    /// No lease is minted for an agent. The journal grant, owner binding,
+    /// running generation and effective switch are checked on every call/send.
+    pub(crate) async fn agent_operation(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        action: Action,
+    ) -> AutomationResult<ActionOutput> {
+        {
+            let state = self.state.lock().await;
+            let error = match state.desktops.get(id) {
+                None => Some("managed_desktop_not_found"),
+                Some(row) if row.desktop.generation != generation => {
+                    Some("managed_desktop_stale_generation")
+                }
+                _ => None,
+            };
+            if let Some(code) = error {
+                return Err(AutomationError::PermissionDenied {
+                    reason: code.into(),
+                });
+            }
+        }
+        let outcome = self
+            .agent_operation_inner(id, generation, session, character, action)
+            .await;
+        // A send fence is synchronous; settle its observed account change before
+        // returning even when the driver refused or an operation was preempted.
+        if let Err(error) = self.reconcile_delegations().await {
+            log::warn!("managed desktop post-operation reconciliation: {}", error.code);
+        }
+        self.release_ended_agent_inputs().await;
+        outcome
+    }
+    async fn agent_operation_inner(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        action: Action,
+    ) -> AutomationResult<ActionOutput> {
+        validate_agent_action(&action)?;
+        let deny = |error: ManagedDesktopError| AutomationError::PermissionDenied { reason: error.code };
+        self.reconcile_delegations().await.map_err(deny)?;
+        self.refresh_agent_admission().await.map_err(deny)?;
+        let row = self
+            .state
+            .lock()
+            .await
+            .desktops
+            .get(id)
+            .cloned()
+            .ok_or_else(|| deny(refused("managed_desktop_not_found")))?;
+        let service = self.clone();
+        let target = id.to_owned();
+        let live = Arc::new(move || {
+            service.agent_live(&target, generation, session.as_deref(), character.as_deref())
+        });
+        if !live() {
+            return Err(deny(refused("managed_desktop_delegation_required")));
+        }
+        let admission =
+            self.runtime_admission_for_record(&row, ManagedDesktopRuntimeGate::AgentControl, live);
+        if !admission() {
+            return Err(deny(refused("managed_desktop_agent_control_unqualified")));
+        }
+        let slot = self.control_slot(id, generation).await;
+        let preempt = self.control_agent_preemption(id).await;
+        let mut c = slot.lock().await;
+        c.expire();
+        c.desktop.preempt = preempt.clone();
+        c.desktop.agent_epoch = preempt.epoch.load(Ordering::SeqCst);
+        c.desktop.require_agent()?;
+        if c.lease.is_some() {
+            return Err(deny(refused("managed_desktop_control_busy")));
+        }
+        if self.state.lock().await.control_quarantines.contains(id) {
+            return Err(deny(refused("managed_desktop_control_quarantined")));
+        }
+        if !admission() {
+            return Err(AutomationError::PreemptedBeforeSend);
+        }
+        let principal = ManagedDesktopPrincipal {
+            owner_principal_id: row.config.owner_principal_id.clone(),
+            host_id: self.host_id.clone(),
+            principal_id: "delegated-agent".into(),
+            authority: ManagedDesktopAuthority::Agent,
+        };
+        self.validate_live_boundary(&principal, &row.desktop)
+            .await
+            .map_err(deny)?;
+        let raw = self.control_client(&row, &mut c).await.map_err(deny)?;
+        let epoch = c.desktop.agent_epoch;
+        let send = admission.clone();
+        let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            !preempt.pending.load(Ordering::SeqCst)
+                && preempt.epoch.load(Ordering::SeqCst) == epoch
+                && send()
+        });
+        let client = raw.fenced_preemptible(live.clone());
+        let mutation = !matches!(
+            action,
+            Action::Screenshot { .. } | Action::CursorPosition | Action::ReadTree { .. }
+        );
+        let _active = AgentOperationStatus::begin(c.agent_active.clone());
+        if mutation {
+            self.transaction(|s, _| {
+                s.control_quarantines.insert(id.into());
+                Ok(())
+            })
+            .await
+            .map_err(deny)?;
+            c.desktop.begin_mutation();
+        }
+        c.publish();
+        // Refresh durable registry changes away from the send pump. This future
+        // is scoped to the operation and is cancelled with it (no detached task).
+        let refresh = async {
+            loop {
+                tokio::time::sleep(cognia_remote_desktop::session::ADMISSION_INTERVAL).await;
+                if let Err(error) = self.refresh_agent_admission().await {
+                    *self.agent_admission.write() = Default::default();
+                    log::warn!("managed desktop admission refresh: {}", error.code);
+                }
+            }
+        };
+        let result = tokio::select! {
+            result = agent_deliver(&mut c.desktop, &client, action, live) => result,
+            _ = refresh => unreachable!("admission refresh runs until delivery completes"),
+        };
+        let mut activity_failed = false;
+        if mutation {
+            c.desktop.finish_mutation(&result);
+            if result.is_ok() || matches!(result, Err(AutomationError::PreemptedBeforeSend)) {
+                let held = !c.desktop.held_keys.is_empty() || !c.desktop.held_mouse_buttons.is_empty();
+                let delivered = result.is_ok();
+                let checkpoint = self
+                    .transaction(|s, now| {
+                        if held {
+                            s.agent_held_inputs.insert(id.into(), generation);
+                        } else {
+                            s.agent_held_inputs.remove(id);
+                        }
+                        s.control_quarantines.remove(id);
+                        if delivered {
+                            update_agent_activity(s, id, generation, now);
+                        }
+                        Ok(())
+                    })
+                    .await;
+                if let Err(error) = checkpoint {
+                    activity_failed = delivered;
+                    // The input may already be delivered. Keep quarantine and
+                    // report the durable cleanup failure without inviting retry.
+                    c.desktop.begin_mutation();
+                    log::warn!("managed desktop delivered-input checkpoint: {}", error.code);
+                }
+            }
+        }
+        if result.is_ok() {
+            if !mutation {
+                let activity = self
+                    .transaction(|s, now| {
+                        update_agent_activity(s, id, generation, now);
+                        Ok(())
+                    })
+                    .await;
+                if let Err(error) = activity {
+                    activity_failed = true;
+                    log::warn!("managed desktop delivered-input activity: {}", error.code);
+                }
+            }
+            if activity_failed {
+                // Activity remains current in memory if its checkpoint fails.
+                // Other journal changes are still uncommitted and quarantined.
+                let mut state = self.state.lock().await;
+                let now = (self.clock)().max(state.last_observed_at);
+                if let Some(deadline) = update_agent_activity(&mut state, id, generation, now) {
+                    if let Some(current) = self.agent_admission.write().desktops.get_mut(id) {
+                        if current.generation == generation {
+                            current.deadline = deadline;
+                        }
+                    }
+                }
+            }
+            if !admission() {
+                log::debug!("managed desktop delegation ended after acknowledged delivery");
+            }
+        }
+        c.publish();
+        result
+    }
     /// Fast fencing does not wait for a screenshot/input mutex. An in-flight
     /// operation remains quarantined until its acknowledgement is observed.
     pub async fn revoke_control_principal(&self, principal_id: &str) {
@@ -942,12 +1422,17 @@ impl ManagedDesktopService {
             epoch.fetch_add(1, Ordering::SeqCst);
         }
     }
-    async fn control_slot(&self, id: &str, generation: u64) -> Arc<Mutex<ManagedControl>> {
+    pub(super) async fn control_slot(&self, id: &str, generation: u64) -> Arc<Mutex<ManagedControl>> {
         self.controls
             .lock()
             .await
             .entry(id.into())
-            .or_insert_with(|| Arc::new(Mutex::new(ManagedControl::new(id, generation))))
+            .or_insert_with(|| {
+                let mut control = ManagedControl::new(id, generation);
+                control.projections = self.control_projections.clone();
+                control.publish();
+                Arc::new(Mutex::new(control))
+            })
             .clone()
     }
     pub(super) async fn control_qualified(&self, row: &DesktopRecord) -> bool {
@@ -997,7 +1482,10 @@ impl ManagedDesktopService {
         {
             return Err(refused("managed_desktop_control_unqualified"));
         }
-        if self.state.lock().await.control_quarantines.contains(id) {
+        let agent_active = self.control_projections.read().get(id).is_some_and(|status| {
+            status.generation == generation && status.agent_active.load(Ordering::SeqCst)
+        });
+        if !agent_active && self.state.lock().await.control_quarantines.contains(id) {
             return Err(refused("managed_desktop_control_quarantined"));
         }
         // Recheck authentication after asynchronous configuration/storage work.
@@ -1059,23 +1547,39 @@ impl ManagedDesktopService {
             });
         self.scoped(p, id, generation).await?;
         let slot = self.control_slot(id, generation).await;
-        let mut c = slot.lock().await;
-        c.expire();
+        let mut locked = slot.try_lock().ok();
+        if let Some(c) = &mut locked {
+            c.expire();
+        }
         let unavailable = row.delete_requested
             || row.desktop.state != ManagedDesktopState::Running
             || row.expired(self.now().await);
-        let quarantined = self.state.lock().await.control_quarantines.contains(id)
-            || c.desktop.require_quiescent().is_err();
+        let projection = self.control_projections.read().get(id).cloned().unwrap_or_default();
+        // The durable marker also covers a healthy in-flight agent mutation.
+        // A human can take it over; cancellation drops the active flag and
+        // exposes the same marker as uncertain cleanup immediately.
+        let active = projection.generation == generation
+            && projection.agent_active.load(Ordering::SeqCst);
+        let quarantined = !active
+            && (self.state.lock().await.control_quarantines.contains(id)
+                || (projection.generation == generation && projection.uncertain));
         if unavailable || !qualified || quarantined {
-            c.invalidate();
+            if let Some(c) = &mut locked {
+                c.invalidate();
+            }
         }
+        let projection = self.control_projections.read().get(id).cloned().unwrap_or_default();
+        let principal = projection.principal.as_ref().filter(|_| {
+            projection.generation == generation
+                && projection.expires_at.is_some_and(|at| at > (self.clock)())
+        });
         let state = if unavailable {
             "unavailable"
         } else if !qualified {
             "dormant"
         } else if quarantined {
             "quarantined"
-        } else if c.lease.is_some() {
+        } else if principal.is_some() {
             "controlled"
         } else {
             "observer"
@@ -1083,17 +1587,13 @@ impl ManagedDesktopService {
         Ok(ManagedControlStatus {
             qualified,
             state: state.into(),
-            controller_kind: c.lease.as_ref().map(|_| "human".into()),
-            controller_is_self: c
-                .lease
-                .as_ref()
-                .is_some_and(|l| l.principal == p.principal_id),
-            lease_expires_at: c.lease.as_ref().map(|l| l.dto.expires_at),
-            fence: c.fence,
+            controller_kind: principal.map(|_| "human".into()),
+            controller_is_self: principal.is_some_and(|id| id == &p.principal_id),
+            lease_expires_at: principal.and(projection.expires_at),
+            fence: projection.fence,
             can_acquire: state == "observer" && p.require_human().is_ok(),
-            // WP8's delegation path is the consumer. Saving consent alone
-            // cannot activate an agent path that is not installed yet.
-            agent_control_dormant: true,
+            // Delegated agent admission consumes the effective WP4 switch.
+            agent_control_dormant: !enablement.agent_control,
         })
     }
     /// Explicit native handoff diagnostic only. The same source/generation and
@@ -1245,15 +1745,10 @@ impl ManagedDesktopService {
         let frame = self
             .capture_frame_inner(p, id, generation, authority, false, true)
             .await?;
-        let human = self
-            .control_slot(id, generation)
-            .await
-            .lock()
-            .await
-            .core
-            .status()
-            .lease
-            .is_some();
+        let human = self.control_projections.read().get(id).is_some_and(|status| {
+            status.generation == generation && status.principal.is_some()
+                && status.expires_at.is_some_and(|at| at > (self.clock)())
+        });
         Ok((frame, human))
     }
     async fn capture_frame_inner(
@@ -1353,6 +1848,8 @@ impl ManagedDesktopService {
         }
         self.scoped(p, id, generation).await?;
         let slot = self.control_slot(id, generation).await;
+        let preempt = self.control_agent_preemption(id).await;
+        let _pending = desktop_session::PendingTakeover::begin(preempt).map_err(control_error)?;
         let mut c = slot.lock().await;
         let row = self
             .control_check(p, id, generation, authority, smoke)
@@ -1364,7 +1861,8 @@ impl ManagedDesktopService {
         c.desktop.require_quiescent().map_err(control_error)?;
         let client = self.control_client(&row, &mut c).await?;
         let held = c.desktop.held_mouse_buttons.clone();
-        if !held.is_empty() {
+        let keys = c.desktop.held_keys.clone();
+        if !held.is_empty() || !keys.is_empty() {
             self.transaction(|s, _| {
                 s.control_quarantines.insert(id.into());
                 Ok(())
@@ -1372,6 +1870,9 @@ impl ManagedDesktopService {
             .await?;
             c.desktop
                 .run_mutation(async {
+                    for key in keys.iter().rev() {
+                        client.call_simple("key_up", serde_json::json!({"key":key})).await?;
+                    }
                     for button in held {
                         client
                             .call_simple(
@@ -1385,7 +1886,9 @@ impl ManagedDesktopService {
                 .await
                 .map_err(control_error)?;
             c.desktop.held_mouse_buttons.clear();
+            c.desktop.held_keys.clear();
             self.transaction(|s, _| {
+                s.agent_held_inputs.remove(id);
                 s.control_quarantines.remove(id);
                 Ok(())
             })
@@ -3064,4 +3567,19 @@ mod tests {
             .await
             .unwrap();
     }
+    #[tokio::test]
+    async fn unsent_mouse_down_does_not_create_a_held_button() {
+        let raw = CuaRemoteClient::from_handler(Arc::new(|_, _| Box::pin(async {
+            panic!("a refused send must never reach the driver")
+        })));
+        let client = raw.fenced_preemptible(Arc::new(|| false));
+        let mut desktop = RemoteDesktop::for_target("managed-test".into(), Default::default());
+        let result = agent_deliver(&mut desktop, &client, Action::MouseButton {
+            button: crate::automation::types::MouseButton::Left,
+            transition: crate::automation::types::ButtonTransition::Down,
+        }, Arc::new(|| false)).await;
+        assert!(matches!(result, Err(AutomationError::PreemptedBeforeSend)));
+        assert!(desktop.held_mouse_buttons.is_empty());
+    }
+
 }

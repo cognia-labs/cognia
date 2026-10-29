@@ -11,5 +11,9 @@
  * keeps a future ADR-0028 `cua-desktop` tier a pure addition.
  */
 
-/** Stored shape on Character / ChatSession. `undefined` = inherit. */
+/**
+ * Stored shape on Character / ChatSession. `undefined` = inherit.
+ * Managed desktop ids are `managed:<desktopId>:<generation>` and are written
+ * only after a human obtains a live Host delegation (ADR-0233 A5).
+ */
 export type ComputerUseTargetSetting = "local" | { connectionId: string } | undefined

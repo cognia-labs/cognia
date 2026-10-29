@@ -3,10 +3,58 @@ import {
   projectSandboxRuntimeAvailability,
   projectSandboxConnectionCapabilities,
 } from "./runtime-availability"
-import { defaultSandboxCapabilities } from "./connection-capabilities"
+import { defaultSandboxCapabilities, managedDesktopCapabilities } from "./connection-capabilities"
 import type { SandboxConnectionRow } from "@/types/sandbox"
 
 afterEach(__resetSandboxRuntimeAvailabilityForTesting)
+
+it("only narrows managed GUI according to the current Host projection", () => {
+  const config = {
+    provider: "e2b" as const,
+    target: { kind: "local" as const },
+    providerConfigId: "config",
+    desktopId: "desktop",
+    generation: 2,
+    delegationId: "delegation",
+    agentControl: true,
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+  }
+  const row = connection({
+    id: "managed:desktop:2",
+    provider: "e2b",
+    config,
+    capabilities: managedDesktopCapabilities(config),
+  })
+  expect(projectSandboxConnectionCapabilities(row, true).gui).toBe(true)
+  expect(projectSandboxConnectionCapabilities(row, false).gui).toBe(false)
+  expect(
+    projectSandboxConnectionCapabilities(
+      { ...row, capabilities: { ...row.capabilities, gui: false } },
+      true
+    ).gui
+  ).toBe(false)
+  expect(
+    projectSandboxConnectionCapabilities(
+      { ...row, config: { ...config, agentControl: false } },
+      true
+    ).gui
+  ).toBe(false)
+  expect(
+    projectSandboxConnectionCapabilities(
+      { ...row, config: { ...config, qualificationEvidenceVersion: 1 } },
+      true
+    ).gui
+  ).toBe(false)
+  expect(
+    projectSandboxConnectionCapabilities(
+      { ...row, config: { ...config, delegationId: undefined } },
+      true
+    ).gui
+  ).toBe(false)
+})
 
 it("keeps Lume recovery available while feature, helper and GUI gates stay independent", () => {
   const row = connection({

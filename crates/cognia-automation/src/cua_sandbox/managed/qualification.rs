@@ -601,7 +601,7 @@ impl ManagedDesktopService {
         Ok(effective_enablement(&state, &config, now))
     }
     /// Cache the durable verdict for the same re-admission interval as native
-    /// frames. Every service write bumps the epoch, fencing an existing pump
+    /// frames. Changes to qualification inputs bump the epoch, fencing a pump
     /// immediately; the time bound also detects out-of-process file changes.
     pub async fn runtime_admission(
         &self,
@@ -620,6 +620,11 @@ impl ManagedDesktopService {
         gate: ManagedDesktopRuntimeGate,
         live: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        if matches!(gate, ManagedDesktopRuntimeGate::AgentControl) {
+            let service = self.clone();
+            let row = row.clone();
+            return Arc::new(move || live() && service.agent_enabled(&row));
+        }
         let row = row.clone();
         let store = self.store.clone();
         let clock = self.clock.clone();
@@ -689,7 +694,7 @@ impl ManagedDesktopService {
 }
 
 #[cfg(test)]
-mod enablement_tests {
+pub(super) mod enablement_tests {
     use super::*;
     use cognia_desktop_guest::{
         observation::{DescriptorObservation, ObservationPhase, NAMESPACES},
@@ -805,9 +810,9 @@ mod enablement_tests {
         report.validate().unwrap();
         report
     }
-    #[tokio::test]
-    async fn gui_switches_need_four_categories_acceptance_needs_handoff_and_edits_invalidate_both() {
-        let f = super::super::tests::Fixture::new();
+    pub(in crate::cua_sandbox::managed::service) async fn install_gui_evidence(
+        f: &super::super::tests::Fixture,
+    ) -> Vec<ManagedDesktop> {
         f.prepare().await;
         let mut rows = Vec::new();
         for index in 0..5 {
@@ -879,6 +884,12 @@ mod enablement_tests {
             });
             Ok(())
         }).await.unwrap();
+        rows
+    }
+    #[tokio::test]
+    async fn gui_switches_need_four_categories_acceptance_needs_handoff_and_edits_invalidate_both() {
+        let f = super::super::tests::Fixture::new();
+        let rows = install_gui_evidence(&f).await;
         let draft = |enablement: ManagedDesktopEnablement| ManagedDesktopConfigDraft {
             id: f.config.id.clone(),
             expected_revision: Some(1),
@@ -924,8 +935,10 @@ mod enablement_tests {
         }
         assert_eq!(f.service.admission_registry_reads.load(std::sync::atomic::Ordering::SeqCst), reads);
         assert_eq!(reads, 1);
-        assert!(f.service.control_status(&f.p, &rows[2].id, 1).await.unwrap().agent_control_dormant,
-            "WP8 has no agent delegation consumer yet even with stored consent");
+        assert!(
+            !f.service.control_status(&f.p, &rows[2].id, 1).await.unwrap().agent_control_dormant,
+            "WP8 consumes the effective agent-control switch"
+        );
         let quoted = f.service.quote(&f.p, "e2b", 120).await.unwrap();
         assert!(f.service.quote_enablement(&f.p, &quoted).await.unwrap().manual_gui);
         f.service.save_config(&f.p, draft(ManagedDesktopEnablement::default())).await.unwrap();

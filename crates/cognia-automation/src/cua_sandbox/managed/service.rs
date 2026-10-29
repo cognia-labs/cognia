@@ -1,7 +1,11 @@
 //! Host authority and crash-safe paid-operation state machine (ADR-0233).
+#[path = "admission.rs"]
+mod admission;
 #[path = "handoff_service.rs"]
 mod handoff_service;
 pub use handoff_service::HandoffTransfer;
+#[path = "delegation.rs"]
+pub mod delegation;
 #[path = "control.rs"]
 pub mod control;
 #[path = "smoke.rs"]
@@ -26,7 +30,13 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct ManagedDesktopService {
+    delegation_runtime: Arc<parking_lot::RwLock<Option<delegation::DelegationRuntime>>>,
     enablement_epoch: Arc<std::sync::atomic::AtomicU64>,
+    agent_admission: Arc<parking_lot::RwLock<admission::AgentAdmissionSnapshot>>,
+    agent_registry: Arc<parking_lot::Mutex<Option<(u64, super::journal::ManagedDesktopRegistry)>>>,
+    persisted_activity: Arc<parking_lot::Mutex<std::collections::BTreeMap<String, i64>>>,
+    pending_agent_cleanup: Arc<parking_lot::Mutex<std::collections::BTreeSet<String>>>,
+    control_projections: Arc<parking_lot::RwLock<std::collections::BTreeMap<String, control::ControlProjection>>>,
     #[cfg(test)]
     admission_registry_reads: Arc<std::sync::atomic::AtomicU64>,
     qualification_changes: Arc<
@@ -56,6 +66,14 @@ pub struct ManagedDesktopService {
         Arc<Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>>,
     control_principal_epochs:
         Arc<Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>>,
+    agent_preemptions: Arc<
+        Mutex<
+            std::collections::BTreeMap<
+                String,
+                Arc<crate::cua_sandbox::desktop_session::DesktopPreemption>,
+            >,
+        >,
+    >,
     controls: Arc<Mutex<std::collections::BTreeMap<String, Arc<Mutex<control::ManagedControl>>>>>,
 }
 impl ManagedDesktopService {
@@ -84,9 +102,11 @@ impl ManagedDesktopService {
         let state = self.state.clone().lock_owned().await;
         let store = self.store.clone();
         let host = self.host_id.clone();
+        let activity = self.persisted_activity.clone();
         tokio::task::spawn_blocking(move || {
             let restored = store.load_checkpoint(&host)?;
-            if serde_json::to_value(&restored).ok() != serde_json::to_value(&*state).ok() {
+            let expected = admission::persisted_view(&state, &activity.lock(), false);
+            if admission::semantic_value(&restored) != admission::semantic_value(&expected) {
                 return Err(refused("managed_desktop_journal_invalid"));
             }
             Ok(())
@@ -109,6 +129,13 @@ impl ManagedDesktopService {
         let state = store.load(&host_id)?;
         store.save(&state)?;
         Ok(Self {
+            delegation_runtime: Default::default(),
+            agent_admission: Default::default(),
+            agent_registry: Default::default(),
+            persisted_activity: Arc::new(parking_lot::Mutex::new(state.desktops.iter()
+                .map(|(id, row)| (id.clone(), row.last_activity_at)).collect())),
+            pending_agent_cleanup: Default::default(),
+            control_projections: Default::default(),
             enablement_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             #[cfg(test)]
             admission_registry_reads: Default::default(),
@@ -127,6 +154,7 @@ impl ManagedDesktopService {
             secrets,
             trusted_release,
             clock: Arc::new(|| chrono::Utc::now().timestamp_millis()),
+            agent_preemptions: Default::default(),
             controls: Arc::new(Mutex::new(Default::default())),
             control_principal_epochs: Arc::new(Mutex::new(Default::default())),
             control_desktop_epochs: Arc::new(Mutex::new(Default::default())),
@@ -144,7 +172,9 @@ impl ManagedDesktopService {
         f: impl FnOnce(&mut ManagedDesktopJournal, i64) -> Result<T>,
     ) -> Result<T> {
         let mut guard = self.state.clone().lock_owned().await;
-        admission()?;
+        let initial = admission.clone();
+        tokio::task::spawn_blocking(move || initial()).await
+            .map_err(|_| retryable("managed_desktop_storage_unavailable"))??;
         let mut next = guard.clone();
         // A wall-clock rollback must not revive an expired lease.
         let now = (self.clock)().max(next.last_observed_at);
@@ -156,22 +186,77 @@ impl ManagedDesktopService {
                 row.cleanup_requested_at = Some(now);
             }
         }
-        next.last_observed_at = now;
-        next.revision = next.revision.saturating_add(1);
-        let store = self.store.clone();
-        let enablement_epoch = self.enablement_epoch.clone();
-        // The owned guard travels into the blocking job. If the caller is
-        // cancelled after dispatch, disk and memory still commit together;
-        // another transaction cannot overwrite an unseen durable revision.
-        tokio::task::spawn_blocking(move || {
+        next.agent_held_inputs.retain(|id, generation| {
+            next.desktops.get(id).is_some_and(|row| {
+                row.desktop.generation == *generation
+                    && row.desktop.state != ManagedDesktopState::Destroyed
+            })
+        });
+        let runtime = self.delegation_runtime.read().clone();
+        let service = self.clone();
+        // The owned guard travels into the blocking job. Cancellation cannot
+        // split the durable commit from memory or snapshot publication.
+        let result = tokio::task::spawn_blocking(move || {
             admission()?;
-            store.save(&next)?;
+            if let Some(runtime) = &runtime {
+                runtime.prepare(next.desktops.values().map(|r| r.config.owner_principal_id.as_str())
+                    .chain(next.delegations.values()
+                        .filter(|g| g.state == delegation::ManagedDesktopDelegationState::Live)
+                        .map(|g| g.owner_principal_id.as_str())));
+            }
+            delegation::settle(&mut next, now, runtime.as_ref());
+            let delegation_changed = next.delegations != guard.delegations;
+            let ended = Self::newly_ended(&guard, &next);
+            let activity = service.persisted_activity.lock();
+            let old = admission::persisted_view(&guard, &activity, false);
+            let mut persisted = admission::persisted_view(&next, &activity, true);
+            let changed = admission::semantic_value(&old) != admission::semantic_value(&persisted);
+            let enablement_changed = admission::enablement_inputs(&guard) != admission::enablement_inputs(&next);
+            drop(activity);
+            next.last_observed_at = now;
+            if changed {
+                next.revision = next.revision.saturating_add(1);
+                persisted.revision = next.revision;
+                persisted.last_observed_at = now;
+                service.store.save(&persisted)?;
+                *service.persisted_activity.lock() = persisted.desktops.iter()
+                    .map(|(id, row)| (id.clone(), row.last_activity_at)).collect();
+            }
+            if enablement_changed {
+                service.enablement_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            let mut preemptions = service.agent_preemptions.blocking_lock();
+            for id in &ended {
+                if let Some(preempt) = preemptions.get(id) {
+                    preempt.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    preempt.notify.notify_waiters();
+                }
+            }
+            preemptions.retain(|id, _| next.desktops.get(id).is_some_and(|row| {
+                row.desktop.state != ManagedDesktopState::Destroyed
+                    && guard.desktops.get(id).is_some_and(|old| old.desktop.generation == row.desktop.generation)
+            }));
+            drop(preemptions);
+            service.pending_agent_cleanup.lock().extend(ended);
             *guard = next;
-            enablement_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Err(error) = service.publish_agent_admission(&guard, false) {
+                *service.agent_admission.write() = Default::default();
+                log::warn!("managed desktop admission publication refused: {}", error.code);
+            }
+            drop(guard);
+            if delegation_changed {
+                if let Some(runtime) = runtime {
+                    (runtime.events)();
+                }
+            }
             Ok(result)
         })
         .await
-        .map_err(|_| retryable("managed_desktop_storage_unavailable"))?
+        .map_err(|_| retryable("managed_desktop_storage_unavailable"))??;
+        // Box the cleanup edge: its quarantine checkpoint is itself a normal
+        // transaction, without holding either the journal or controls map lock.
+        Box::pin(self.release_ended_agent_inputs()).await;
+        Ok(result)
     }
 
     async fn now(&self) -> i64 {
@@ -934,7 +1019,9 @@ impl ManagedDesktopService {
     ) -> Result<HostBoundaryBinding> {
         self.release(&row.config)?;
         let admission = self.lifecycle_admission(&row.config, Arc::new(|| true), self.now().await);
-        admission()?;
+        let initial = admission.clone();
+        tokio::task::spawn_blocking(move || initial()).await
+            .map_err(|_| retryable("managed_desktop_storage_unavailable"))??;
         let observation = self.provider.observe_boundary(row, secrets).await?;
         observation.validate(1000)
             .map_err(|_| refused("managed_desktop_boundary_invalid"))?;
@@ -960,7 +1047,11 @@ impl ManagedDesktopService {
                 return Err(refused("managed_desktop_boundary_identity_mismatch"));
             }
             match state.workload_boundaries.get(&row.desktop.id) {
-                Some(pinned) if pinned.matches_record(current) && pinned.same_generation(&binding) => {},
+                Some(pinned) if pinned.matches_record(current) && pinned.same_generation(&binding) => {
+                    // A successful re-observation confirms the pinned identity;
+                    // its timestamp does not require a new durable checkpoint.
+                    return Ok(binding.clone());
+                },
                 None if allow_initial_binding => {},
                 _ => return Err(refused("managed_desktop_boundary_generation_mismatch")),
             }
@@ -1346,6 +1437,7 @@ impl ManagedDesktopService {
     /// Called once at startup and by the Host's cancellation-bound timer.
     /// Existing config snapshots keep cleanup valid after disable/rotation.
     pub async fn reconcile(&self) -> Result<()> {
+        self.reconcile_delegations().await?;
         let (templates, desktops) = {
             let s = self.state.lock().await;
             (

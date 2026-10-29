@@ -267,6 +267,15 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
                `managed_desktop_qualify_list`.",
     },
     EventChannelSpec {
+        pattern: "managed-desktop://delegation-changed",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "ADR-0233 A5: a managed desktop delegation was created, revoked or \
+               ended. Empty payload; clients refetch the caller-scoped \
+               `managed_desktop_delegation_list`.",
+    },
+    EventChannelSpec {
         pattern: "ocr://download-progress",
         audience: ChannelAudience::Any,
         default_on: true,

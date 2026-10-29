@@ -21,7 +21,12 @@ import type {
   SandboxLifecycleState,
   SandboxProviderConfig,
 } from "@/types/sandbox"
-import { defaultSandboxCapabilities, SANDBOX_CAPABILITY_REVISION } from "./connection-capabilities"
+import {
+  defaultSandboxCapabilities,
+  isDelegatedManagedDesktop,
+  managedDesktopCapabilities,
+  SANDBOX_CAPABILITY_REVISION,
+} from "./connection-capabilities"
 
 /** Driver every pre-Epic-5 row implicitly used. */
 export const LEGACY_SANDBOX_DRIVER: SandboxConnectionDriver = "computer-server"
@@ -140,13 +145,19 @@ export function migrateSandboxConnectionRow(
  * (only narrow) silently swallows every future widening.
  */
 function normalizeStoredCapabilities(row: SandboxConnectionRow): SandboxConnectionRow {
-  const supported = defaultSandboxCapabilities(row.provider, row.driver)
+  const managed = isDelegatedManagedDesktop(row)
+  const supported = isDelegatedManagedDesktop(row)
+    ? managedDesktopCapabilities(row.config)
+    : defaultSandboxCapabilities(row.provider, row.driver)
   const storedRevision = row.capabilitiesRevision ?? 1
 
   if (storedRevision < SANDBOX_CAPABILITY_REVISION) {
     return {
       ...row,
-      capabilities: supported,
+      // A revision migration must not re-enable a narrowed managed GUI claim.
+      capabilities: managed
+        ? { ...supported, gui: supported.gui && row.capabilities.gui }
+        : supported,
       capabilitiesRevision: SANDBOX_CAPABILITY_REVISION,
     }
   }

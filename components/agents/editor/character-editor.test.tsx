@@ -9,7 +9,32 @@
  */
 
 jest.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: (namespace: string) => (key: string) =>
+    namespace === "computerUseTarget"
+      ? jest.requireActual("@/i18n/messages/en/computerUseTarget.json")[key]
+      : key,
+}))
+
+jest.mock("@/components/ui/native-select", () => ({
+  NativeSelect: (props: React.ComponentProps<"select">) => <select {...props} />,
+  NativeSelectOption: (props: React.ComponentProps<"option">) => <option {...props} />,
+  NativeSelectOptGroup: (props: React.ComponentProps<"optgroup">) => <optgroup {...props} />,
+}))
+jest.mock("@/hooks/sandbox/use-computer-use-targets", () => ({
+  useComputerUseTargets: () => ({
+    connections: [],
+    managed: [{ desktop: { id: "desktop", generation: 1 }, enabled: true }],
+    failed: false,
+  }),
+}))
+jest.mock("@/lib/sandbox/managed-desktop-binding", () => ({
+  ...jest.requireActual("@/lib/sandbox/managed-desktop-binding"),
+  bindManagedDesktop: jest.fn(async () => "managed:desktop:1"),
+  unbindManagedDesktop: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/db/characters", () => ({
+  ...jest.requireActual("@/lib/db/characters"),
+  getCharacter: jest.fn(async () => undefined),
 }))
 
 jest.mock("@/components/settings/character/twin-binding-section", () => ({
@@ -125,6 +150,9 @@ import {
   pickAgentOverrides,
 } from "@/lib/agents/agent-overrides"
 import { characterToEditorState, emptyEditorState } from "@/lib/agents/editor-state"
+import { bindManagedDesktop, unbindManagedDesktop } from "@/lib/sandbox/managed-desktop-binding"
+import { getCharacter } from "@/lib/db/characters"
+import targetMessages from "@/i18n/messages/en/computerUseTarget.json"
 
 afterEach(() => {
   __resetSkillsForTesting()
@@ -212,12 +240,14 @@ function renderEditor(
     description?: string
     createdAt: number
     updatedAt: number
-  }> = []
+  }> = [],
+  editingId?: string
 ) {
   const onSave = jest.fn(async (_data: SavePayload) => undefined)
   render(
     <CharacterEditor
       initial={initial}
+      editingId={editingId}
       skillsCatalog={[]}
       mcpCatalog={[]}
       knowledgeBaseCatalog={knowledgeBaseCatalog}
@@ -230,6 +260,209 @@ function renderEditor(
 }
 
 describe("CharacterEditor — v2 fields", () => {
+  it("delegates to the saved character before changing the target", async () => {
+    renderEditor(baseInitial({ enableComputerUse: true }), [], "character")
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    await waitFor(() =>
+      expect(bindManagedDesktop).toHaveBeenCalledWith({
+        desktopId: "desktop",
+        generation: 1,
+        grantee: { kind: "character", characterId: "character" },
+      })
+    )
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue(
+        "managed:desktop:1"
+      )
+    )
+  })
+
+  it("preserves the saved delegation when a Local draft is cancelled", async () => {
+    jest.mocked(getCharacter).mockResolvedValueOnce({
+      computerUseTarget: { connectionId: "managed:desktop:1" },
+    } as Character)
+    const before = jest.mocked(unbindManagedDesktop).mock.calls.length
+    renderEditor(
+      baseInitial({ enableComputerUse: true, computerUseTarget: "managed:desktop:1" }),
+      [],
+      "character"
+    )
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "local" },
+    })
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue("local")
+    )
+    fireEvent.click(screen.getByRole("button", { name: "cancel" }))
+    await waitFor(() => expect(getCharacter).toHaveBeenCalledWith("character"))
+    expect(jest.mocked(unbindManagedDesktop).mock.calls.length).toBe(before)
+  })
+
+  it("revokes a staged managed selection on Cancel", async () => {
+    jest.mocked(getCharacter).mockResolvedValue(undefined)
+    renderEditor(baseInitial({ enableComputerUse: true }), [], "character")
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue(
+        "managed:desktop:1"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "cancel" }))
+    await waitFor(() =>
+      expect(unbindManagedDesktop).toHaveBeenCalledWith("managed:desktop:1", {
+        kind: "character",
+        characterId: "character",
+      })
+    )
+  })
+
+  it("does not trust a swallowed save failure and restores the persisted target", async () => {
+    jest.mocked(getCharacter).mockResolvedValue(undefined)
+    const { onSave } = renderEditor(baseInitial({ enableComputerUse: true }), [], "character")
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue(
+        "managed:desktop:1"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue("local")
+    )
+    expect(mockToastError).toHaveBeenCalledWith(targetMessages.changeFailed)
+  })
+
+  it("keeps a successfully saved managed target when its owner unmounts the editor", async () => {
+    jest
+      .mocked(getCharacter)
+      .mockResolvedValue({ computerUseTarget: { connectionId: "managed:desktop:1" } } as Character)
+    const onSave = jest.fn(async () => {
+      unmount()
+    })
+    const { unmount } = render(
+      <CharacterEditor
+        initial={baseInitial({ enableComputerUse: true })}
+        editingId="character"
+        skillsCatalog={[]}
+        mcpCatalog={[]}
+        knowledgeBaseCatalog={[]}
+        submitLabel="Save"
+        onCancel={jest.fn()}
+        onSave={onSave}
+      />
+    )
+    const before = jest.mocked(unbindManagedDesktop).mock.calls.length
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue(
+        "managed:desktop:1"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    expect(jest.mocked(unbindManagedDesktop).mock.calls.length).toBe(before)
+  })
+
+  it("disables Save and Cancel while a managed binding is pending", async () => {
+    let finish!: (id: string) => void
+    jest.mocked(bindManagedDesktop).mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done
+        })
+    )
+    renderEditor(baseInitial({ enableComputerUse: true }), [], "character")
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "cancel" })).toBeDisabled()
+    await act(async () => finish("managed:desktop:1"))
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled()
+  })
+
+  it("preserves edits made while the Host delegation is pending", async () => {
+    let finish!: (id: string) => void
+    jest.mocked(bindManagedDesktop).mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          finish = done
+        })
+    )
+    renderEditor(baseInitial({ enableComputerUse: true }), [], "character")
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    fireEvent.change(screen.getByPlaceholderText("namePlaceholder"), {
+      target: { value: "Edited while waiting" },
+    })
+    await act(async () => finish("managed:desktop:1"))
+    expect(screen.getByPlaceholderText("namePlaceholder")).toHaveValue("Edited while waiting")
+  })
+
+  it("waits for an in-flight save before settling an externally unmounted draft", async () => {
+    let finish!: () => void
+    const onSave = jest.fn(
+      () =>
+        new Promise<void>((done) => {
+          finish = done
+        })
+    )
+    jest
+      .mocked(getCharacter)
+      .mockResolvedValue({ computerUseTarget: { connectionId: "managed:old:1" } } as Character)
+    const { unmount } = render(
+      <CharacterEditor
+        initial={baseInitial({ enableComputerUse: true, computerUseTarget: "managed:old:1" })}
+        editingId="character"
+        skillsCatalog={[]}
+        mcpCatalog={[]}
+        knowledgeBaseCatalog={[]}
+        submitLabel="Save"
+        onCancel={jest.fn()}
+        onSave={onSave}
+      />
+    )
+    fireEvent.change(screen.getByRole("combobox", { name: targetMessages.label }), {
+      target: { value: "managed:desktop:1" },
+    })
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: targetMessages.label })).toHaveValue(
+        "managed:desktop:1"
+      )
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() => expect(onSave).toHaveBeenCalled())
+    unmount()
+    const before = jest.mocked(unbindManagedDesktop).mock.calls.length
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(jest.mocked(unbindManagedDesktop).mock.calls.length).toBe(before)
+    jest
+      .mocked(getCharacter)
+      .mockResolvedValue({ computerUseTarget: { connectionId: "managed:desktop:1" } } as Character)
+    await act(async () => finish())
+    expect(unbindManagedDesktop).toHaveBeenCalledWith("managed:old:1", {
+      kind: "character",
+      characterId: "character",
+    })
+    expect(
+      jest
+        .mocked(unbindManagedDesktop)
+        .mock.calls.slice(before)
+        .some(([id]) => id === "managed:desktop:1")
+    ).toBe(false)
+  })
   it("keeps the cua-desktop tier visible but disabled while nothing is bound", async () => {
     // The tier runs shell and file work inside the bound desktop, so without
     // one it can only ever be refused at send time. Disabled and explained

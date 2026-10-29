@@ -1,5 +1,9 @@
 import type { LegacySandboxConnectionRow, SandboxConnectionRow } from "@/types/sandbox"
-import { defaultSandboxCapabilities, SANDBOX_CAPABILITY_REVISION } from "./connection-capabilities"
+import {
+  defaultSandboxCapabilities,
+  managedDesktopCapabilities,
+  SANDBOX_CAPABILITY_REVISION,
+} from "./connection-capabilities"
 import {
   LEGACY_SANDBOX_DRIVER,
   LEGACY_SANDBOX_IMAGE,
@@ -27,6 +31,48 @@ function legacyRow(
     ...overrides,
   }
 }
+
+it("preserves delegated GUI through reads and revision migration without restoring narrowed GUI", () => {
+  const config = {
+    provider: "e2b" as const,
+    target: { kind: "local" as const },
+    providerConfigId: "config",
+    desktopId: "desktop",
+    generation: 2,
+    delegationId: "delegation",
+    agentControl: true,
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+  }
+  const row: SandboxConnectionRow = {
+    ...migrateSandboxConnectionRow(legacyRow()),
+    id: "managed:desktop:2",
+    provider: "e2b",
+    config,
+    capabilities: managedDesktopCapabilities(config),
+  }
+  expect(migrateSandboxConnectionRow(row).capabilities.gui).toBe(true)
+  expect(migrateSandboxConnectionRow({ ...row, capabilitiesRevision: 1 }).capabilities.gui).toBe(
+    true
+  )
+  expect(
+    migrateSandboxConnectionRow({
+      ...row,
+      capabilities: { ...row.capabilities, gui: false },
+      capabilitiesRevision: 1,
+    }).capabilities.gui
+  ).toBe(false)
+  expect(
+    migrateSandboxConnectionRow({ ...row, config: { ...config, agentControl: false } }).capabilities
+      .gui
+  ).toBe(false)
+  expect(
+    migrateSandboxConnectionRow({ ...row, config: { ...config, delegationId: undefined } })
+      .capabilities.gui
+  ).toBe(false)
+})
 
 describe("inferLegacyLifecycleState", () => {
   it("is uninitialized without a container id, whatever the health said", () => {

@@ -7,6 +7,11 @@ import { NextIntlClientProvider } from "next-intl"
 import { resolveShieldState, SandboxShield } from "./sandbox-shield"
 import type { ChatSession } from "@cognia/agent-config-types"
 
+jest.mock("./computer-use-target-picker", () => ({
+  SessionComputerUseTargetPicker: jest.fn(() => <span aria-label="session-target-picker" />),
+}))
+import { SessionComputerUseTargetPicker } from "./computer-use-target-picker"
+
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: jest.fn(),
 }))
@@ -94,6 +99,12 @@ const session: ChatSession = {
   createdAt: 0,
   updatedAt: 0,
 }
+
+it("mounts the session target picker alongside the sandbox control", () => {
+  withIntl(<SandboxShield session={session} />)
+  expect(screen.getByLabelText("session-target-picker")).toBeInTheDocument()
+  expect(SessionComputerUseTargetPicker).toHaveBeenCalledWith({ session }, undefined)
+})
 
 beforeEach(() => {
   mockUseSettings.mockReset()

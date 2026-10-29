@@ -1,0 +1,14 @@
+{
+  "label": "Computer Use 目标",
+  "local": "这台电脑",
+  "inherit": "跟随智能体的目标",
+  "description": "选择智能体控制的桌面。托管云桌面需要有效的 Host 委托。",
+  "managedGroup": "托管云桌面",
+  "managedDesktop": "桌面 {desktop}",
+  "disabledDesktop": "桌面 {desktop} — {reason}",
+  "agentControlDisabled": "智能体控制已关闭或资格验证已过期",
+  "unsavedCharacter": "请先保存智能体，再绑定托管桌面",
+  "unavailable": "所选目标不可用",
+  "loadFailed": "无法从此 Host 加载托管桌面。",
+  "changeFailed": "无法更改目标。请检查委托后重试。"
+}

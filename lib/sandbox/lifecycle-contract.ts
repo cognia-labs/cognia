@@ -22,8 +22,13 @@ import type {
   SandboxConnectionProvider,
   SandboxLifecycleOperation,
   SandboxLifecycleState,
+  SandboxProviderConfig,
 } from "@/types/sandbox"
-import { defaultSandboxCapabilities, supportsSandboxOperation } from "./connection-capabilities"
+import {
+  defaultSandboxCapabilities,
+  delegatedManagedDesktopGui,
+  supportsSandboxOperation,
+} from "./connection-capabilities"
 
 /** Machine-readable refusal reasons. */
 export type SandboxCapabilityErrorCode =
@@ -72,6 +77,8 @@ export interface SandboxOperationContext {
   driver: SandboxConnectionDriver
   capabilities: SandboxCapabilities
   state: SandboxLifecycleState
+  /** Required for delegated E2B GUI; ordinary provider defaults never grant GUI. */
+  config?: SandboxProviderConfig
   signal?: AbortSignal
 }
 
@@ -175,7 +182,16 @@ export function assertSandboxOperationAllowed(
   if (
     !supportsSandboxOperation(ctx.capabilities, operation) ||
     (ctx.provider === "e2b" &&
-      !supportsSandboxOperation(defaultSandboxCapabilities(ctx.provider, ctx.driver), operation))
+      (operation === "gui"
+        ? !delegatedManagedDesktopGui({
+            id: ctx.connectionId,
+            driver: ctx.driver,
+            config: ctx.config,
+          })
+        : !supportsSandboxOperation(
+            defaultSandboxCapabilities(ctx.provider, ctx.driver),
+            operation
+          )))
   ) {
     throw new SandboxCapabilityError({
       code: "unsupported-operation",

@@ -266,6 +266,10 @@ pub struct CallContext {
     /// time-boxed consent grant is scoped to one conversation.
     #[serde(default)]
     pub session_key: Option<String>,
+    /// Renderer-supplied character tag, with the same trust level as
+    /// session_key. A matching Host delegation is still required per operation.
+    #[serde(default)]
+    pub character_id: Option<String>,
     /// Authenticated model message / workflow-step identifier. Canonical
     /// app-session tokens are bound to this value in addition to the chat
     /// session and AX revision.
@@ -274,6 +278,14 @@ pub struct CallContext {
 }
 
 impl CallContext {
+    #[cfg(any(feature = "tauri-host", test))]
+    fn require_local_target(&self) -> Result<()> {
+        if self.remote_connection_id().is_some() {
+            Err(AutomationError::UnsupportedPlatform)
+        } else {
+            Ok(())
+        }
+    }
     fn surface(&self) -> Surface {
         self.surface.unwrap_or(Surface::Workflow)
     }
@@ -354,6 +366,30 @@ pub(crate) fn reserve_local_invocation<'a>(
         .map_err(|error| err_to_string(&error))
 }
 
+/// Shared by the desktop command macro and typed action entry point, keeping
+/// renderer identity scoped across the same asynchronous permission pipeline.
+async fn run_context_gated<T, F, Fut>(
+    app: Option<&AppHandle>,
+    state: &AutomationState,
+    ctx: &CallContext,
+    gctx: dispatcher::GateContext,
+    command: &str,
+    do_call: F,
+) -> Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    dispatcher::run_gated(app, state, gctx, command, || {
+        super::cua_route::with_agent_identity(
+            ctx.session_key.clone(),
+            ctx.character_id.clone(),
+            async { do_call().await },
+        )
+    })
+    .await
+}
+
 /// Thin shim over the shared `dispatcher::run_gated` pipeline. Kept as a macro
 /// so each `desktop_*` command can pass its `state.handle.METHOD(..).await`
 /// expression inline (the args are `.clone()`d, so the wrapping closure borrows
@@ -377,9 +413,10 @@ macro_rules! command_body {
             command_detail: None,
             session_key: $ctx.session_key.clone(),
         };
-        $crate::automation::dispatcher::run_gated(
+        $crate::automation::commands::run_context_gated(
             Some(&$app),
             $state.inner(),
+            &$ctx,
             gctx,
             $cmd_name,
             || async { $do_call },
@@ -1258,6 +1295,7 @@ pub async fn desktop_launch_app(
         ctx,
         "launch_app",
         async {
+            ctx.require_local_target()?;
             match action {
                 LaunchAction::Launch => spawn_app(&target_app),
                 LaunchAction::Focus => {
@@ -1392,9 +1430,10 @@ pub async fn automation_execute(
         command_detail: action.consent_detail(),
         session_key: ctx.session_key.clone(),
     };
-    dispatcher::run_gated(
+    run_context_gated(
         Some(&app),
         state.inner(),
+        &ctx,
         gctx,
         command,
         move || async move {
@@ -2162,6 +2201,99 @@ mod tests {
         assert_eq!(health.backend, super::virtual_display::BACKEND_ID);
     }
     #[test]
+    fn managed_context_preserves_renderer_identity_and_never_launches_on_local_host() {
+        let ctx: CallContext = serde_json::from_value(serde_json::json!({
+            "sessionKey":"session", "characterId":"character", "sandboxConnectionId":"managed:unknown:1",
+        }))
+        .unwrap();
+        assert_eq!(ctx.session_key.as_deref(), Some("session"));
+        assert_eq!(ctx.character_id.as_deref(), Some("character"));
+        assert_eq!(ctx.remote_connection_id(), Some("managed:unknown:1"));
+        assert!(ctx.require_local_target().is_err());
+        assert!(CallContext::default().require_local_target().is_ok());
+    }
+
+    #[tokio::test]
+    async fn managed_identity_survives_the_command_permission_pipeline_and_typed_dispatch() {
+        use crate::cua_sandbox::managed::service::delegation::tests::identity_fixture;
+        let (_directory, service, row, calls) = identity_fixture().await;
+        crate::cua_sandbox::registry::install_managed_agent_service(Some(&service));
+        let handle = super::super::worker::Worker::spawn(|| {
+            Box::new(super::super::backend::StubBackend {
+                platform: Platform::Unsupported,
+            })
+        });
+        let gate = PermissionGate::new(super::super::permission::AutomationSettings::default());
+        gate.set_enabled(true);
+        gate.update(|settings| settings.per_surface.computer_use.tier = Tier::Whitelist);
+        let state = AutomationState::new(
+            handle.clone(),
+            gate,
+            AuditRing::new(),
+            ConsentBroker::new(),
+            PolicyState::default(),
+            VirtualDisplayController::spawn(
+                || Box::new(virtual_display::NoopDriver::new("test")),
+                None,
+                None,
+            ),
+            Default::default(),
+        );
+        for (session, character, allowed) in [
+            (None, None, false),
+            (Some("other"), None, false),
+            (Some("chat"), None, true),
+            (None, Some("character"), true),
+        ] {
+            let ctx = CallContext {
+                session_key: session.map(str::to_owned),
+                character_id: character.map(str::to_owned),
+                sandbox_connection_id: Some(format!("managed:{}:{}", row.id, row.generation)),
+                ..Default::default()
+            };
+            let gctx = dispatcher::GateContext {
+                surface: Surface::ComputerUse,
+                plugin_id: None,
+                process_name: None,
+                window_title: None,
+                target_url: None,
+                click_x: None,
+                click_y: None,
+                force_tier: None,
+                command_detail: None,
+                session_key: ctx.session_key.clone(),
+            };
+            let result = run_context_gated(None, &state, &ctx, gctx, "cursor_position", || {
+                dispatcher::execute_action(
+                    &state.handle,
+                    &state.cua,
+                    ctx.remote_connection_id(),
+                    None,
+                    Action::CursorPosition,
+                )
+            })
+            .await;
+            assert_eq!(result.is_ok(), allowed, "{session:?}/{character:?}: {result:?}");
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        let ctx = CallContext {
+            sandbox_connection_id: Some("managed:unknown:1".into()),
+            ..Default::default()
+        };
+        assert!(dispatcher::execute_action(
+            &state.handle,
+            &state.cua,
+            ctx.remote_connection_id(),
+            None,
+            Action::CursorPosition,
+        )
+        .await
+        .is_err());
+        handle.shutdown().await;
+        crate::cua_sandbox::registry::install_managed_agent_service(None);
+    }
+
+    #[test]
     fn virtual_display_probe_preserves_verified_monitor_and_legacy_non_black_field() {
         let probe = super::VirtualDisplayProbeResult {
             width: 1920,
@@ -2311,6 +2443,7 @@ mod tests {
             sandbox_connection_id: None,
             sandbox_confine: None,
             session_key: None,
+            character_id: None,
             turn_key: None,
         };
         let facts = ctx.facts();

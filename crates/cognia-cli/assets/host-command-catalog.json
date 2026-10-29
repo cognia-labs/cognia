@@ -48842,6 +48842,564 @@
       "outputTyped": true
     },
     {
+      "name": "managed_desktop_delegate",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_delegate (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desktopId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "grantee": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "session"
+                  },
+                  "sessionKey": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "kind",
+                  "sessionKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "character"
+                  },
+                  "characterId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "kind",
+                  "characterId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "expiresAt": {
+            "type": "integer"
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "desktopId",
+          "generation",
+          "grantee"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "desktopId": {
+            "type": "string"
+          },
+          "desktopGeneration": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "grantee": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "session"
+                  },
+                  "sessionKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "sessionKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "character"
+                  },
+                  "characterId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "characterId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "acceptance"
+                  },
+                  "acceptanceId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "acceptanceId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "computerUse",
+              "acceptance"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "live",
+              "ended"
+            ]
+          },
+          "endReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "revoked",
+              "expired",
+              "destroyed",
+              "generationChanged",
+              "accountChanged",
+              null
+            ]
+          },
+          "expiresAt": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "endedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "desktopId",
+          "desktopGeneration",
+          "providerConfigId",
+          "grantee",
+          "mode",
+          "state",
+          "endReason",
+          "expiresAt",
+          "revision",
+          "createdAt",
+          "endedAt"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/delegation.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_delegation_list",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "managed_desktop_delegation_list (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "delegations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "desktopId": {
+                  "type": "string"
+                },
+                "desktopGeneration": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "providerConfigId": {
+                  "type": "string"
+                },
+                "grantee": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "session"
+                        },
+                        "sessionKey": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "sessionKey"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "character"
+                        },
+                        "characterId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "characterId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "acceptance"
+                        },
+                        "acceptanceId": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "acceptanceId"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "computerUse",
+                    "acceptance"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "live",
+                    "ended"
+                  ]
+                },
+                "endReason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "revoked",
+                    "expired",
+                    "destroyed",
+                    "generationChanged",
+                    "accountChanged",
+                    null
+                  ]
+                },
+                "expiresAt": {
+                  "type": "integer"
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "createdAt": {
+                  "type": "integer"
+                },
+                "endedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "desktopId",
+                "desktopGeneration",
+                "providerConfigId",
+                "grantee",
+                "mode",
+                "state",
+                "endReason",
+                "expiresAt",
+                "revision",
+                "createdAt",
+                "endedAt"
+              ],
+              "additionalProperties": false,
+              "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/delegation.rs"
+            }
+          }
+        },
+        "required": [
+          "delegations"
+        ],
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_delegation_revoke",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_delegation_revoke (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "delegationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "expectedRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "delegationId",
+          "expectedRevision"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "desktopId": {
+            "type": "string"
+          },
+          "desktopGeneration": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "grantee": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "session"
+                  },
+                  "sessionKey": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "sessionKey"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "character"
+                  },
+                  "characterId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "characterId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "acceptance"
+                  },
+                  "acceptanceId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "acceptanceId"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "computerUse",
+              "acceptance"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "live",
+              "ended"
+            ]
+          },
+          "endReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "revoked",
+              "expired",
+              "destroyed",
+              "generationChanged",
+              "accountChanged",
+              null
+            ]
+          },
+          "expiresAt": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "createdAt": {
+            "type": "integer"
+          },
+          "endedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "desktopId",
+          "desktopGeneration",
+          "providerConfigId",
+          "grantee",
+          "mode",
+          "state",
+          "endReason",
+          "expiresAt",
+          "revision",
+          "createdAt",
+          "endedAt"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/delegation.rs"
+      },
+      "outputTyped": true
+    },
+    {
       "name": "managed_desktop_delete",
       "category": "automation",
       "resource": "managed",
@@ -106506,5 +107064,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "6b9c2d535f16b103e3b0aba3866fa09f4045c4cb5446162eb7e24a4f7f64eea6"
+  "catalogHash": "b8fab884aee1964a1b681dbb9912776940371fff4d1413ac76e60cff8454ce78"
 }

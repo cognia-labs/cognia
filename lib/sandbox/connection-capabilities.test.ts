@@ -1,7 +1,10 @@
 import type { SandboxConnectionDriver, SandboxConnectionProvider } from "@/types/sandbox"
 import {
   SANDBOX_LIFECYCLE_OPERATIONS,
+  delegatedManagedDesktopGui,
   hasCurrentManagedDesktopQualification,
+  isDelegatedManagedDesktop,
+  managedDesktopCapabilities,
   defaultSandboxCapabilities,
   narrowSandboxCapabilities,
   supportsSandboxOperation,
@@ -9,6 +12,71 @@ import {
 
 const PROVIDERS: SandboxConnectionProvider[] = ["docker", "e2b", "cua-cloud", "lume"]
 const DRIVERS: SandboxConnectionDriver[] = ["computer-server", "cua-driver"]
+
+describe("managedDesktopCapabilities", () => {
+  const projection = {
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+    agentControl: true,
+  }
+  it("adds only GUI to the E2B defaults under current Host enablement", () => {
+    expect(managedDesktopCapabilities(projection)).toEqual({
+      ...defaultSandboxCapabilities("e2b", "computer-server"),
+      gui: true,
+    })
+  })
+  it.each([
+    { agentControl: false },
+    { qualificationEvidenceVersion: 1 },
+    { workloadIsolationRevision: 0 },
+    { qualification: "unqualified" as const },
+    { egressEnforcement: "unverified" as const },
+  ])("refuses GUI for %j", (patch) => {
+    expect(managedDesktopCapabilities({ ...projection, ...patch }).gui).toBe(false)
+  })
+})
+
+describe("delegated managed desktop rows", () => {
+  const config = {
+    provider: "e2b" as const,
+    target: { kind: "local" as const },
+    providerConfigId: "byo",
+    desktopId: "desktop",
+    generation: 2,
+    delegationId: "delegation",
+    agentControl: true,
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+  }
+  const row = { id: "managed:desktop:2", driver: "computer-server" as const, config }
+
+  it("recognises only a local, delegated row under its exact routing id", () => {
+    expect(isDelegatedManagedDesktop(row)).toBe(true)
+    expect(delegatedManagedDesktopGui(row)).toBe(true)
+    for (const other of [
+      { ...row, id: "managed:desktop:3" },
+      { ...row, id: "a-uuid" },
+      { ...row, driver: "cua-driver" as const },
+      { ...row, config: { ...config, delegationId: undefined } },
+      { ...row, config: { ...config, target: { kind: "remote" as const, hostId: "h" } } },
+      { ...row, config: undefined },
+    ])
+      expect(isDelegatedManagedDesktop(other)).toBe(false)
+  })
+
+  it("claims GUI only while the Host reports agent control and current evidence", () => {
+    expect(delegatedManagedDesktopGui({ ...row, config: { ...config, agentControl: false } })).toBe(
+      false
+    )
+    expect(
+      delegatedManagedDesktopGui({ ...row, config: { ...config, qualification: "unqualified" } })
+    ).toBe(false)
+  })
+})
 
 describe("defaultSandboxCapabilities", () => {
   it("returns an entry for every operation, for every pair", () => {

@@ -41,6 +41,8 @@ import {
   openManagedDesktop,
   watchManagedDesktopMonitor,
   watchManagedDesktopQualification,
+  watchManagedDesktopDelegations,
+  MANAGED_DESKTOP_DELEGATION_CHANGED,
   MANAGED_DESKTOP_MONITOR_CHANGED,
   MANAGED_DESKTOP_QUALIFICATION_CHANGED,
 } from "./managed-desktop-client"
@@ -247,6 +249,69 @@ describe("qualification runs", () => {
     expect(seen).toEqual([["a"], ["b", "a"]])
     stop()
     expect(unsubscribe).toHaveBeenCalled()
+  })
+})
+
+describe("delegations", () => {
+  test("delegate and revoke carry an admin lease; listing does not", async () => {
+    const call = jest.fn().mockResolvedValue({ delegations: [] })
+    const transport = { call }
+    ;(withManagementChannel as jest.Mock).mockImplementation((_host, work) =>
+      work({ transport, host: { config: { deviceId: "paired", accountId: "owner" } } })
+    )
+    ;(issueHostAdminLease as jest.Mock).mockResolvedValue({
+      token: "lease",
+      expiresAt: Date.now() + 60000,
+      operations: ["managed_desktop_delegate", "managed_desktop_delegation_revoke"],
+    })
+    const target = { kind: "remote" as const, hostId: "host" }
+    await managedDesktopClient.listDelegations(target)
+    expect(call).toHaveBeenLastCalledWith("managed_desktop_delegation_list", {})
+    expect(issueHostAdminLease).not.toHaveBeenCalled()
+    await managedDesktopClient.delegate(target, {
+      desktopId: "desktop",
+      generation: 2,
+      grantee: { kind: "session", sessionKey: "chat-1" },
+    })
+    expect(call).toHaveBeenLastCalledWith("managed_desktop_delegate", {
+      desktopId: "desktop",
+      generation: 2,
+      grantee: { kind: "session", sessionKey: "chat-1" },
+      adminLease: "lease",
+    })
+    await managedDesktopClient.revokeDelegation(target, "delegation", 3)
+    expect(call).toHaveBeenLastCalledWith("managed_desktop_delegation_revoke", {
+      delegationId: "delegation",
+      expectedRevision: 3,
+      adminLease: "lease",
+    })
+    expect(issueHostAdminLease).toHaveBeenCalledTimes(1)
+  })
+
+  test("the watcher lists delegations on its own change event", async () => {
+    ;(localTransport.subscribe as jest.Mock).mockReturnValue(jest.fn())
+    ;(localTransport.call as jest.Mock).mockResolvedValue({ delegations: [{ id: "d" }] })
+    const seen: string[][] = []
+    const stop = watchManagedDesktopDelegations({ kind: "local" }, (list) =>
+      seen.push(list.map((delegation) => delegation.id))
+    )
+    expect(localTransport.subscribe).toHaveBeenCalledWith(
+      MANAGED_DESKTOP_DELEGATION_CHANGED,
+      expect.any(Function)
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(seen).toEqual([["d"]])
+    expect(localTransport.call).toHaveBeenCalledWith("managed_desktop_local_call", {
+      name: "managed_desktop_delegation_list",
+      args: {},
+    })
+    stop()
+  })
+
+  test("an unqualified agent-control refusal has its own message key", () => {
+    expect(managedDesktopErrorKey(new Error("managed_desktop_agent_control_unqualified"))).toBe(
+      "agentControlUnqualified"
+    )
   })
 })
 

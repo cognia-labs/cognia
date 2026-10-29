@@ -12882,6 +12882,20 @@
     "saving": "Saving…",
     "yes": "Yes"
   },
+  "computerUseTarget": {
+    "agentControlDisabled": "Agent control is off or qualification is no longer current",
+    "changeFailed": "The target could not be changed. Check its delegation and try again.",
+    "description": "Choose where the agent controls the desktop. Managed cloud desktops require a live Host delegation.",
+    "disabledDesktop": "Desktop {desktop} — {reason}",
+    "inherit": "Follow the agent's target",
+    "label": "Computer Use target",
+    "loadFailed": "Managed desktops could not be loaded from this Host.",
+    "local": "This computer",
+    "managedDesktop": "Desktop {desktop}",
+    "managedGroup": "Managed cloud desktops",
+    "unavailable": "Selected target is unavailable",
+    "unsavedCharacter": "Save this agent before binding a managed desktop"
+  },
   "connectors": {
     "audit": {
       "kind": {
@@ -53087,6 +53101,7 @@
       },
       "errors": {
         "adminRequired": "Only an owner device of this Host can change desktop configuration or keys.",
+        "agentControlUnqualified": "Agent control is not in effect for this configuration. Turn it on after the configuration qualifies.",
         "configExists": "A configuration with this ID already exists. Choose another ID or edit the existing one.",
         "configInUse": "This configuration still owns a desktop or template. Delete those first.",
         "configInvalid": "The Host rejected this configuration. Check the size and limits.",

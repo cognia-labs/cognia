@@ -26,6 +26,7 @@ import { clampPolicyRequest, clampReadableRequest, isPathUnderRoot } from "./pol
 import { lumeClient, type LumeBinding, type LumeClient } from "@/lib/automation/lume-client"
 import { lumeReference } from "./lume-adapter"
 import { projectLumeResource } from "./lume-projection"
+import { requireManagedDesktopDelegation } from "./managed-desktop-binding"
 import type {
   SandboxFileRequest,
   SandboxFileResult,
@@ -47,6 +48,8 @@ export type { MicrovmExecAdapter } from "./microvm-bridge"
 
 export interface BindSandboxSessionInput {
   sessionId: string
+  /** Character identity frozen with this binding, for managed Host delegation checks. */
+  characterId?: string
   binding: SandboxSessionBinding
   policy: SandboxResourcePolicy | null
   confine: SandboxConfine | null
@@ -131,6 +134,7 @@ function fingerprint(input: BindSandboxSessionInput): string {
     sandboxEnabled: input.sandboxEnabled,
     computerUseEnabled: input.computerUseEnabled,
     workspaceRoot: input.workspaceRoot,
+    characterId: input.characterId,
   })
 }
 
@@ -145,6 +149,7 @@ function operationContext(row: SandboxConnectionRow) {
     provider: row.provider,
     driver: row.driver,
     capabilities: row.capabilities,
+    config: row.config,
     state: row.state,
   }
 }
@@ -259,6 +264,10 @@ export class SandboxSessionRuntime {
     const activeRef = this.activeBySession.get(input.sessionId)
     const active = activeRef ? this.records.get(activeRef) : undefined
     if (active?.fingerprint === nextFingerprint) {
+      if (input.binding.connectionId?.startsWith("managed:")) {
+        await this.preflightMutableTarget(input)
+        assertBindingCurrent(attempt)
+      }
       if (!active.lume) return active.ref
       const diagnostic = await (this.deps.getLumeClient?.() ?? lumeClient).diagnose()
       const current = diagnostic.resources.find(
@@ -391,6 +400,7 @@ export class SandboxSessionRuntime {
     if (!record || record.workspaceRoot === workspaceRoot) return ref
     const input: BindSandboxSessionInput = {
       sessionId: record.sessionId,
+      characterId: record.characterId,
       binding: record.binding,
       policy: record.policy,
       confine: record.confine,
@@ -506,8 +516,19 @@ export class SandboxSessionRuntime {
       return { ...result, sandboxConnectionId: `lume-binding:${record.lume.binding.bindingId}` }
 
     const row = await this.requireConnection(record.binding.connectionId)
+    if (row.config.provider === "e2b")
+      await requireManagedDesktopDelegation(row, record.sessionId, record.characterId)
     assertSandboxOperationAllowed(operationContext(row), "gui")
-    return { ...result, sandboxConnectionId: row.id }
+    return {
+      ...result,
+      sandboxConnectionId: row.id,
+      ...(row.config.provider === "e2b"
+        ? {
+            sessionKey: record.sessionId,
+            characterId: record.characterId,
+          }
+        : {}),
+    }
   }
 
   async executeSandbox(
@@ -1079,6 +1100,8 @@ export class SandboxSessionRuntime {
     const needsExec = input.sandboxEnabled && input.binding.shellTier === "cua-desktop"
     if (!needsGui && !needsExec) return
     let row = await this.requireConnection(input.binding.connectionId)
+    if (row.config.provider === "e2b")
+      await requireManagedDesktopDelegation(row, input.sessionId, input.characterId)
     if (row.config.provider === "lume") {
       const diagnostic = await (this.deps.getLumeClient?.() ?? lumeClient).diagnose()
       const current = diagnostic.resources.find((resource) => resource.connectionId === row.id)

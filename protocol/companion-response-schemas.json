@@ -14474,6 +14474,69 @@
       "additionalProperties": false,
       "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
     },
+    "ManagedDesktopDelegation": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "desktopId": { "type": "string" },
+        "desktopGeneration": { "type": "integer", "minimum": 1 },
+        "providerConfigId": { "type": "string" },
+        "grantee": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": { "kind": { "const": "session" }, "sessionKey": { "type": "string" } },
+              "required": ["kind", "sessionKey"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "character" },
+                "characterId": { "type": "string" }
+              },
+              "required": ["kind", "characterId"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "const": "acceptance" },
+                "acceptanceId": { "type": "string" }
+              },
+              "required": ["kind", "acceptanceId"],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "mode": { "type": "string", "enum": ["computerUse", "acceptance"] },
+        "state": { "type": "string", "enum": ["live", "ended"] },
+        "endReason": {
+          "type": ["string", "null"],
+          "enum": ["revoked", "expired", "destroyed", "generationChanged", "accountChanged", null]
+        },
+        "expiresAt": { "type": "integer" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "createdAt": { "type": "integer" },
+        "endedAt": { "type": ["integer", "null"] }
+      },
+      "required": [
+        "id",
+        "desktopId",
+        "desktopGeneration",
+        "providerConfigId",
+        "grantee",
+        "mode",
+        "state",
+        "endReason",
+        "expiresAt",
+        "revision",
+        "createdAt",
+        "endedAt"
+      ],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/delegation.rs"
+    },
     "ManagedDesktopTemplate": {
       "type": "object",
       "properties": {
@@ -17421,6 +17484,16 @@
     },
     "managed_desktop_qualify_approve": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
     "managed_desktop_qualify_cancel": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
+    "managed_desktop_delegate": { "$ref": "#/$defs/ManagedDesktopDelegation" },
+    "managed_desktop_delegation_revoke": { "$ref": "#/$defs/ManagedDesktopDelegation" },
+    "managed_desktop_delegation_list": {
+      "type": "object",
+      "properties": {
+        "delegations": { "type": "array", "items": { "$ref": "#/$defs/ManagedDesktopDelegation" } }
+      },
+      "required": ["delegations"],
+      "additionalProperties": false
+    },
     "managed_desktop_list_configs": {
       "type": "array",
       "items": {

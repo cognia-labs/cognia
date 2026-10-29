@@ -127,6 +127,40 @@ export interface ManagedDesktopQualificationRun {
   updatedAt: number
   finishedAt: number | null
 }
+/** Host event raised when any delegation was created, revoked or ended; it carries no data. */
+export const MANAGED_DESKTOP_DELEGATION_CHANGED = "managed-desktop://delegation-changed"
+
+/** Who may drive the desktop (ADR-0233 A5): one chat session, every session of a character, or one acceptance run. */
+export type ManagedDesktopDelegationGrantee =
+  | { kind: "session"; sessionKey: string }
+  | { kind: "character"; characterId: string }
+  | { kind: "acceptance"; acceptanceId: string }
+export type ManagedDesktopDelegationEndReason =
+  "revoked" | "expired" | "destroyed" | "generationChanged" | "accountChanged"
+/** A Host record that lets an agent drive one desktop generation, never longer than its deadline. */
+export interface ManagedDesktopDelegation {
+  id: string
+  desktopId: string
+  desktopGeneration: number
+  providerConfigId: string
+  grantee: ManagedDesktopDelegationGrantee
+  mode: "computerUse" | "acceptance"
+  state: "live" | "ended"
+  endReason: ManagedDesktopDelegationEndReason | null
+  expiresAt: number
+  revision: number
+  createdAt: number
+  endedAt: number | null
+}
+export interface ManagedDesktopDelegationRequest {
+  desktopId: string
+  generation: number
+  /** Only computer-use grantees are created here; acceptance delegations come from the runner. */
+  grantee: Exclude<ManagedDesktopDelegationGrantee, { kind: "acceptance" }>
+  /** Clamped by the Host to the desktop's hard deadline; omitted means the deadline. */
+  expiresAt?: number
+}
+
 export interface ManagedDesktopQualificationStart {
   providerConfigId: string
   scope: ManagedDesktopQualificationScope
@@ -294,6 +328,8 @@ const ADMIN_OPERATIONS = [
   "managed_desktop_qualify_start",
   "managed_desktop_qualify_approve",
   "managed_desktop_qualify_cancel",
+  "managed_desktop_delegate",
+  "managed_desktop_delegation_revoke",
 ]
 
 /** Public pairing projection shared by lifecycle and the settings identity boundary. */
@@ -539,6 +575,25 @@ export const managedDesktopClient = {
   /** Ends the run and destroys any desktop it created. */
   qualifyCancel: (target: ManagedDesktopTarget, runId: string) =>
     call<ManagedDesktopQualificationRun>(target, "managed_desktop_qualify_cancel", { runId }),
+  /** Idempotent per grantee and desktop generation; refused unless agent control is in effect. */
+  delegate: (target: ManagedDesktopTarget, request: ManagedDesktopDelegationRequest) =>
+    call<ManagedDesktopDelegation>(target, "managed_desktop_delegate", { ...request }),
+  revokeDelegation: (
+    target: ManagedDesktopTarget,
+    delegationId: string,
+    expectedRevision: number
+  ) =>
+    call<ManagedDesktopDelegation>(target, "managed_desktop_delegation_revoke", {
+      delegationId,
+      expectedRevision,
+    }),
+  /** Live delegations first, then recently ended ones. */
+  listDelegations: (target: ManagedDesktopTarget) =>
+    call<{ delegations: ManagedDesktopDelegation[] }>(
+      target,
+      "managed_desktop_delegation_list",
+      {}
+    ),
 }
 /**
  * Keep `onValue` current with one Host read: one read now, then one per
@@ -613,6 +668,21 @@ export function watchManagedDesktopMonitor(
     MANAGED_DESKTOP_MONITOR_CHANGED,
     () => managedDesktopClient.monitor(target),
     onMonitor,
+    onError
+  )
+}
+
+/** The caller's delegations on one Host, refreshed on every create, revoke or end. */
+export function watchManagedDesktopDelegations(
+  target: ManagedDesktopTarget,
+  onDelegations: (delegations: ManagedDesktopDelegation[]) => void,
+  onError: (error: unknown) => void = () => {}
+): () => void {
+  return watchHostTopic(
+    target,
+    MANAGED_DESKTOP_DELEGATION_CHANGED,
+    async () => (await managedDesktopClient.listDelegations(target)).delegations,
+    onDelegations,
     onError
   )
 }
@@ -834,6 +904,7 @@ export function managedDesktopErrorKey(error: unknown): string {
     managed_desktop_qualification_not_awaiting: "qualificationNotAwaiting",
     managed_desktop_handoff_delivery_unknown: "handoffDeliveryUnknown",
     managed_desktop_handoff_script_invalid: "handoffScriptInvalid",
+    managed_desktop_agent_control_unqualified: "agentControlUnqualified",
     quote_expired: "quoteExpired",
     authorization_expired: "quoteExpired",
   }

@@ -12882,6 +12882,20 @@
     "saving": "保存中…",
     "yes": "是"
   },
+  "computerUseTarget": {
+    "agentControlDisabled": "智能体控制已关闭或资格验证已过期",
+    "changeFailed": "无法更改目标。请检查委托后重试。",
+    "description": "选择智能体控制的桌面。托管云桌面需要有效的 Host 委托。",
+    "disabledDesktop": "桌面 {desktop} — {reason}",
+    "inherit": "跟随智能体的目标",
+    "label": "Computer Use 目标",
+    "loadFailed": "无法从此 Host 加载托管桌面。",
+    "local": "这台电脑",
+    "managedDesktop": "桌面 {desktop}",
+    "managedGroup": "托管云桌面",
+    "unavailable": "所选目标不可用",
+    "unsavedCharacter": "请先保存智能体，再绑定托管桌面"
+  },
   "connectors": {
     "audit": {
       "kind": {
@@ -53087,6 +53101,7 @@
       },
       "errors": {
         "adminRequired": "只有此 Host 的所有者设备可以修改桌面配置或密钥。",
+        "agentControlUnqualified": "此配置的 Agent 控制未生效。请在配置通过验证后开启。",
         "configExists": "已存在相同 ID 的配置。请换一个 ID，或编辑现有配置。",
         "configInUse": "该配置仍拥有桌面或模板，请先删除它们。",
         "configInvalid": "Host 拒绝了此配置。请检查规格和限额。",

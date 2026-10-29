@@ -30,6 +30,7 @@
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use cognia_tenant_auth::{OrgId, UserId};
 
@@ -65,6 +66,23 @@ pub struct HostTenantContext {
 
 /// The local account this host is currently serving, set by a verified unlock.
 static BOUND_ACCOUNT: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
+/// Process-wide revocation fence for account-bound authority. Every binding
+/// write, including rebinding the same account or unbinding an already locked
+/// host, advances it. Returning to an earlier namespace never restores grants.
+static ACCOUNT_BINDING_EPOCH: AtomicU64 = AtomicU64::new(0);
+/// The epoch is process-local. Journaled grants also bind this nonce so a new
+/// process cannot accidentally reuse an earlier process's counter value.
+static ACCOUNT_BINDING_INSTANCE_ID: Lazy<String> = Lazy::new(|| uuid::Uuid::new_v4().to_string());
+
+/// Current revocation epoch for authority bound to the local account.
+pub fn account_binding_epoch() -> u64 {
+    ACCOUNT_BINDING_EPOCH.load(Ordering::SeqCst)
+}
+
+/// Restart-unique companion to the process-local account binding epoch.
+pub fn account_binding_instance_id() -> &'static str {
+    ACCOUNT_BINDING_INSTANCE_ID.as_str()
+}
 
 /// Stable digest of a password verifier, used as the binding pin.
 ///
@@ -118,7 +136,11 @@ fn bind_internal(
             }
             other => HostIdentityError::Store(other.to_string()),
         })?;
-    *BOUND_ACCOUNT.write() = Some(binding.local_account_namespace.clone());
+    {
+        let mut bound = BOUND_ACCOUNT.write();
+        *bound = Some(binding.local_account_namespace.clone());
+        ACCOUNT_BINDING_EPOCH.fetch_add(1, Ordering::SeqCst);
+    }
     Ok(HostTenantContext {
         local_account_namespace: binding.local_account_namespace,
         remote_tenant_id: binding.tenant_id,
@@ -139,7 +161,9 @@ pub fn rebind_verifier(
 /// Drop the in-process binding. The `host_bindings` row is left alone — locking
 /// an account does not un-own its tenant.
 pub fn unbind_local_account() {
-    *BOUND_ACCOUNT.write() = None;
+    let mut bound = BOUND_ACCOUNT.write();
+    *bound = None;
+    ACCOUNT_BINDING_EPOCH.fetch_add(1, Ordering::SeqCst);
 }
 
 /// Resolve the identity this host serves right now.
@@ -389,6 +413,36 @@ mod tests {
         install_security_store(Some(store.clone()));
         unbind_local_account();
         store
+    }
+
+    #[test]
+    fn account_binding_epoch_never_restores_authority_after_switching_back() {
+        let _scope = store_scope();
+        install();
+        let before = account_binding_epoch();
+        bind_local_account("epoch-account-a", "digest-a").unwrap();
+        let first = account_binding_epoch();
+        assert!(first > before);
+        bind_local_account("epoch-account-b", "digest-b").unwrap();
+        let second = account_binding_epoch();
+        assert!(second > first);
+        bind_local_account("epoch-account-a", "digest-a").unwrap();
+        let third = account_binding_epoch();
+        assert!(third > second);
+        bind_local_account("epoch-account-a", "digest-a").unwrap();
+        let rebound = account_binding_epoch();
+        assert!(
+            rebound > third,
+            "same-account binds also revoke prior authority"
+        );
+        bind_local_account_from_operator("epoch-account-operator").unwrap();
+        let operator = account_binding_epoch();
+        assert!(operator > rebound);
+        unbind_local_account();
+        let unbound = account_binding_epoch();
+        assert!(unbound > operator);
+        unbind_local_account();
+        assert!(account_binding_epoch() > unbound);
     }
 
     #[test]

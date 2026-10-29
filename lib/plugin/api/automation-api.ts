@@ -118,6 +118,8 @@ async function buildComputerUseCallContext(
     origin?.sandboxRuntimeRef ??
     runtime.sandbox.activeRefForSession(origin?.sessionId) ??
     runtime.sandbox.hostFallbackRuntimeRef
+  // Preserve the bound record's characterId as well as its routing id. The
+  // focused session scopes consent only and cannot supply delegation identity.
   return runtime.sandbox.decorateComputerUseContext(runtimeRef, context)
 }
 

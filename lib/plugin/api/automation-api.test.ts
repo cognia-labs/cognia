@@ -153,6 +153,7 @@ describe("createAutomationAPI", () => {
       const decorateComputerUseContext = jest.fn(async (_ref, context) => ({
         ...context,
         sandboxConnectionId: "remote-1",
+        characterId: "bound-character",
       }))
       const runtime = {
         desktop,
@@ -179,6 +180,7 @@ describe("createAutomationAPI", () => {
         turnKey: "message-1",
         forceTier: "perCall",
         sandboxConnectionId: "remote-1",
+        characterId: "bound-character",
       }
       expect(desktop.listApps).toHaveBeenCalledWith(expectedContext)
       expect(decorateComputerUseContext).toHaveBeenCalledWith(

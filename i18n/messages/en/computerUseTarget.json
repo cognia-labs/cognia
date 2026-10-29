@@ -1,0 +1,14 @@
+{
+  "label": "Computer Use target",
+  "local": "This computer",
+  "inherit": "Follow the agent's target",
+  "description": "Choose where the agent controls the desktop. Managed cloud desktops require a live Host delegation.",
+  "managedGroup": "Managed cloud desktops",
+  "managedDesktop": "Desktop {desktop}",
+  "disabledDesktop": "Desktop {desktop} — {reason}",
+  "agentControlDisabled": "Agent control is off or qualification is no longer current",
+  "unsavedCharacter": "Save this agent before binding a managed desktop",
+  "unavailable": "Selected target is unavailable",
+  "loadFailed": "Managed desktops could not be loaded from this Host.",
+  "changeFailed": "The target could not be changed. Check its delegation and try again."
+}

@@ -132,7 +132,8 @@
     "qualificationQuoteMismatch": "The run is waiting on a different estimate. Review the current one.",
     "qualificationNotAwaiting": "The run is not waiting for an approval.",
     "handoffDeliveryUnknown": "The selected delivery no longer exists on this Host.",
-    "handoffScriptInvalid": "Use an npm script name: start with a letter, digit, : or _, then letters, digits, : _ . or -."
+    "handoffScriptInvalid": "Use an npm script name: start with a letter, digit, : or _, then letters, digits, : _ . or -.",
+    "agentControlUnqualified": "Agent control is not in effect for this configuration. Turn it on after the configuration qualifies."
   },
   "guiDormant": "Desktop viewing and control stay off until manual GUI is turned on for this configuration.",
   "handoff": {

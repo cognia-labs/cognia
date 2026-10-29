@@ -12,8 +12,11 @@
  * builder's tools so a draft is validated by the rules this form applies.
  */
 
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
+import { ComputerUseTargetPicker as TargetPicker } from "@/components/chat/composer/computer-use-target-picker"
+import { getCharacter } from "@/lib/db/characters"
+import { unbindManagedDesktop } from "@/lib/sandbox/managed-desktop-binding"
 import { toast } from "sonner"
 import { PlusIcon, Trash2Icon } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -53,7 +56,6 @@ import {
 // returns the same shape `applyComputerUseTools` filters against.
 import { listNativeAnthropicToolEntries } from "@/lib/plugin/registries/native-anthropic-tool-registry"
 import { usePluginSkills } from "@/hooks/skills/use-plugin-skills"
-import { useSandboxConnections } from "@/hooks/automation/use-sandbox-connections"
 import { useSubscriptionAccounts } from "@/lib/subscription/core/hooks"
 import { AvatarBadge } from "@/components/desktop/avatar-badge"
 import { TestTtsButton } from "@/components/settings/speech/test-tts-button"
@@ -268,6 +270,8 @@ export function CharacterEditor({
   const tGeneral = useTranslations("settings.general")
   const tSandbox = useTranslations("settings.characters.editor.sandbox")
   const tAccount = useTranslations("settings.characters.editor.account")
+  const tTarget = useTranslations("computerUseTarget")
+  const targetFailureMessage = tTarget("changeFailed")
   const [s, setS] = useState<EditorState>(value ?? initial)
   // Adopt a new value from outside (an `initial` swap when uncontrolled, a
   // `value` the host wrote when controlled) during render, the documented way
@@ -299,6 +303,21 @@ export function CharacterEditor({
   }
   const [envSecretValues, setEnvSecretValues] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const [targetBusy, setTargetBusy] = useState(false)
+  const managedDraft = useRef(new Set<string>())
+  const pendingSave = useRef<Promise<void> | undefined>(undefined)
+  useEffect(() => {
+    const targets = new Set<string>()
+    if (initial.computerUseTarget.startsWith("managed:")) targets.add(initial.computerUseTarget)
+    managedDraft.current = targets
+    return () => {
+      if (editingId && targets.size)
+        void (pendingSave.current ?? Promise.resolve())
+          .catch(() => undefined)
+          .then(() => settleManagedCharacterTargets(editingId, targets))
+          .catch(() => toast.error(targetFailureMessage))
+    }
+  }, [editingId, initial.computerUseTarget, targetFailureMessage])
   const { byProvider: subscriptionAccounts, providers: subscriptionProviders } =
     useSubscriptionAccounts()
   const accountOptions = useMemo(
@@ -390,7 +409,24 @@ export function CharacterEditor({
           return
         }
       }
-      await onSave(editorStateToOutput(s))
+      // Owners may unmount immediately, or navigation may leave while the DB
+      // write is pending. Cleanup waits for the save before reading its target.
+      const save = Promise.resolve().then(() => onSave(editorStateToOutput(s)))
+      pendingSave.current = save
+      try {
+        await save
+      } finally {
+        if (pendingSave.current === save) pendingSave.current = undefined
+      }
+      if (editingId && managedDraft.current.size) {
+        // Some form owners catch persistence errors themselves. Read the saved
+        // character before revoking anything; a resolved callback is not proof.
+        const savedTarget = await settleManagedCharacterTargets(editingId, managedDraft.current)
+        if (savedTarget !== s.computerUseTarget) {
+          setS((current) => ({ ...current, computerUseTarget: savedTarget }))
+          toast.error(tTarget("changeFailed"))
+        }
+      }
     } finally {
       setSaving(false)
     }
@@ -887,21 +923,26 @@ export function CharacterEditor({
               onChange={(next) => setS({ ...s, computerUseSettings: next })}
             />
             <ComputerUseTargetPicker
+              characterId={editingId}
+              disabled={saving}
+              onBusyChange={setTargetBusy}
+              preserveBindingOnCancel={initial.computerUseTarget}
               value={s.computerUseTarget}
-              onChange={(target) =>
-                setS({
-                  ...s,
+              onChange={(target) => {
+                if (target.startsWith("managed:")) managedDraft.current.add(target)
+                setS((current) => ({
+                  ...current,
                   computerUseTarget: target,
                   // Dropping back to the local desktop leaves `cua-desktop`
                   // with nothing to bind to, which would save a combination
                   // that can only ever be refused at send time. Fall back to
                   // inheriting rather than persisting an unusable tier.
                   sandboxTier:
-                    target === "local" && s.sandboxTier === "cua-desktop"
+                    target === "local" && current.sandboxTier === "cua-desktop"
                       ? "inherit"
-                      : s.sandboxTier,
-                })
-              }
+                      : current.sandboxTier,
+                }))
+              }}
             />
           </>
         )}
@@ -1198,15 +1239,46 @@ export function CharacterEditor({
 
       <div className="flex items-center justify-end gap-2 pt-1">
         {footerStart ? <div className="mr-auto min-w-0">{footerStart}</div> : null}
-        <Button variant="ghost" size="sm" onClick={onCancel}>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={saving || targetBusy}
+          onClick={() => {
+            if (!editingId || !managedDraft.current.size) {
+              onCancel()
+              return
+            }
+            setSaving(true)
+            void settleManagedCharacterTargets(editingId, managedDraft.current)
+              .then(onCancel, () => toast.error(tTarget("changeFailed")))
+              .finally(() => setSaving(false))
+          }}
+        >
           {cancelLabel ?? t("cancel")}
         </Button>
-        <Button size="sm" onClick={() => void submit()} disabled={saving}>
+        <Button size="sm" onClick={() => void submit()} disabled={saving || targetBusy}>
           {saving ? t("saving") : submitLabel}
         </Button>
       </div>
     </Frame>
   )
+}
+
+/** Settle a draft against persisted truth, including owners that unmount during onSave. */
+async function settleManagedCharacterTargets(
+  characterId: string,
+  targets: Set<string>
+): Promise<string> {
+  const character = await getCharacter(characterId)
+  const setting = character?.computerUseTarget
+  const saved = typeof setting === "object" ? setting.connectionId : "local"
+  for (const id of targets) {
+    if (id !== saved) {
+      await unbindManagedDesktop(id, { kind: "character", characterId })
+      targets.delete(id)
+    }
+  }
+  return saved
 }
 
 // ADR-0020 W2 — per-character Computer Use sub-settings.
@@ -1346,29 +1418,30 @@ function ComputerUseSubSettings({ value, onChange }: ComputerUseSubSettingsProps
 interface ComputerUseTargetPickerProps {
   value: "local" | string
   onChange: (next: "local" | string) => void
+  characterId?: string
+  disabled?: boolean
+  onBusyChange?: (busy: boolean) => void
+  preserveBindingOnCancel?: string
 }
 
-function ComputerUseTargetPicker({ value, onChange }: ComputerUseTargetPickerProps) {
-  const t = useTranslations("settings.characters.editor.computerUseTarget")
-  const { connections } = useSandboxConnections()
+function ComputerUseTargetPicker({
+  value,
+  onChange,
+  characterId,
+  disabled,
+  onBusyChange,
+  preserveBindingOnCancel,
+}: ComputerUseTargetPickerProps) {
   return (
-    <div className="space-y-1">
-      <Label className="text-xs">{t("label")}</Label>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger aria-label={t("label")}>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="local">{t("local")}</SelectItem>
-          {connections.map((conn) => (
-            <SelectItem key={conn.id} value={conn.id}>
-              {conn.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <p className="text-[10px] text-muted-foreground">{t("description")}</p>
-    </div>
+    <TargetPicker
+      value={value === "local" ? "local" : { connectionId: value }}
+      grantee={characterId ? { kind: "character", characterId } : undefined}
+      revokePrevious={false}
+      disabled={disabled}
+      onBusyChange={onBusyChange}
+      preserveBindingOnCancel={preserveBindingOnCancel}
+      onChange={(next) => onChange(typeof next === "object" ? next.connectionId : "local")}
+    />
   )
 }
 

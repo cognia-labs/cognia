@@ -112,6 +112,7 @@ The managed desktop (ADR-0233) is built and natively qualified, but a user canno
 | X1  | Real frame rate and CPU on E2B unknown                                 | A1          | not measured           | measure in WP12 smoke | open   |
 | X2  | Host-local concurrency limit is not account-wide across Hosts          | ADR-0233 §3 | accepted v1 limitation | label in UI           | open   |
 | X3  | Egress Off makes the desktop offline for internet-dependent acceptance | D5          | deferred by decision   | separate amendment    | open   |
+| X4  | Agents can bind only managed desktops of the Host the session runs on  | WP8         | awaiting Q26           | ask the user (Q26)    | open   |
 
 ## Outcome
 

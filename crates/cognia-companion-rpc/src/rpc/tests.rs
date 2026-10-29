@@ -1558,6 +1558,7 @@ fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
             "managed_desktop_template_delete" |
             "managed_desktop_qualify_start" | "managed_desktop_qualify_approve" |
             "managed_desktop_qualify_cancel" |
+            "managed_desktop_delegate" | "managed_desktop_delegation_revoke" |
             "managed_desktop_authorize" | "managed_desktop_prepare_template" |
             "managed_desktop_create" | "managed_desktop_connect" | "managed_desktop_delete" |
             "managed_desktop_control_acquire" | "managed_desktop_control_renew" |

@@ -13741,6 +13741,114 @@
       ],
       "additionalProperties": false
     },
+    "managed_desktop_delegate": {
+      "type": "object",
+      "properties": {
+        "desktopId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "grantee": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "session"
+                },
+                "sessionKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "kind",
+                "sessionKey"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "character"
+                },
+                "characterId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "kind",
+                "characterId"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "desktopId",
+        "generation",
+        "grantee"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_delegation_list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "managed_desktop_delegation_revoke": {
+      "type": "object",
+      "properties": {
+        "delegationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "delegationId",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
     "managed_desktop_delete": {
       "type": "object",
       "properties": {

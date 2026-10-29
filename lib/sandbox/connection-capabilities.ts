@@ -19,7 +19,10 @@ import type {
   SandboxConnectionDriver,
   SandboxConnectionProvider,
   SandboxLifecycleOperation,
+  SandboxProviderConfig,
 } from "@/types/sandbox"
+
+type E2bProviderConfig = Extract<SandboxProviderConfig, { provider: "e2b" }>
 
 /**
  * Bumped whenever {@link PROVIDER_CAPABILITIES} or {@link DRIVER_RESTRICTIONS}
@@ -87,9 +90,7 @@ const PROVIDER_CAPABILITIES: Record<SandboxConnectionProvider, SandboxCapabiliti
     workspaceExec: true,
   }),
   // Lifecycle exists; creation additionally requires a Host qualification receipt.
-  // Automated GUI, source transfer and persistence remain dormant (ADR-0233).
-  // Phase 2 manual viewing uses a bound control session and Host GUI qualification;
-  // this agent-operation matrix must not advertise delegation before Phase 3.
+  // Agent GUI is projected separately for delegated managed rows (ADR-0233 A5).
   e2b: caps({ create: true, connect: true, delete: true, health: true }),
   "cua-cloud": caps({}),
   lume: caps({}),
@@ -189,4 +190,45 @@ export function hasCurrentManagedDesktopQualification(
     projection.workloadIsolationRevision === 1 &&
     projection.egressEnforcement === "provider-and-guest-kernel"
   )
+}
+
+/**
+ * A delegated managed desktop row (ADR-0233 A5): a local Host desktop whose
+ * routing id is exactly `managed:<desktopId>:<generation>` and that carries the
+ * Host delegation it was projected from. Only such rows may ever claim GUI.
+ */
+export function isDelegatedManagedDesktop(row: {
+  id: string
+  driver: SandboxConnectionDriver
+  config?: SandboxProviderConfig
+}): row is { id: string; driver: SandboxConnectionDriver; config: E2bProviderConfig } {
+  const config = row.config
+  return (
+    row.driver === "computer-server" &&
+    config?.provider === "e2b" &&
+    config.target.kind === "local" &&
+    !!config.desktopId &&
+    !!config.delegationId &&
+    config.generation !== undefined &&
+    row.id === `managed:${config.desktopId}:${config.generation}`
+  )
+}
+
+/** Host-reported enablement and current qualification are both required for agent GUI. */
+export function managedDesktopCapabilities(
+  projection: ManagedDesktopQualificationProjection & { agentControl?: boolean }
+): SandboxCapabilities {
+  return Object.freeze({
+    ...defaultSandboxCapabilities("e2b", "computer-server"),
+    gui: projection.agentControl === true && hasCurrentManagedDesktopQualification(projection),
+  })
+}
+
+/** Whether a row may drive the GUI as a delegated managed desktop right now. */
+export function delegatedManagedDesktopGui(row: {
+  id: string
+  driver: SandboxConnectionDriver
+  config?: SandboxProviderConfig
+}): boolean {
+  return isDelegatedManagedDesktop(row) && managedDesktopCapabilities(row.config).gui
 }

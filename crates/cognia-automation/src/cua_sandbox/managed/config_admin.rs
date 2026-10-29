@@ -303,7 +303,8 @@ impl ManagedDesktopService {
             Ok(())
         })
             .await
-            .map_err(|_| retryable("managed_desktop_storage_unavailable"))?
+            .map_err(|_| retryable("managed_desktop_storage_unavailable"))??;
+        self.refresh_agent_admission().await
     }
 
     async fn config_summary(

@@ -2,6 +2,7 @@ import type { SandboxResourcePolicy } from "@cognia/agent-config-types"
 import type { LumeClient } from "@/lib/automation/lume-client"
 
 jest.mock("@/lib/tauri", () => ({ transport: { call: jest.fn() } }))
+jest.mock("./managed-desktop-binding", () => ({ requireManagedDesktopDelegation: jest.fn() }))
 
 import { transport } from "@/lib/tauri"
 import {
@@ -18,6 +19,121 @@ import type { SandboxConnectionRow } from "@/types/sandbox"
 import type { MicrovmExecPayload } from "./microvm-bridge"
 import { __resetMicrovmBridgeForTesting, setMicrovmExec } from "./microvm-bridge"
 import { __resetOsSandboxBridgeForTesting, setOsSandboxExec } from "./os-exec-bridge"
+import { requireManagedDesktopDelegation } from "./managed-desktop-binding"
+import { SandboxRuntimeError } from "@cognia/plugin-sdk/api/sandbox"
+
+describe("managed desktop placement", () => {
+  const input = {
+    sessionId: "managed-session",
+    characterId: "agent",
+    binding: {
+      shellTier: "os" as const,
+      computerTarget: "bound" as const,
+      connectionId: "managed:desktop:2",
+    },
+    policy: null,
+    confine: null,
+    sandboxEnabled: false,
+    computerUseEnabled: true,
+  }
+  function managedRow(): SandboxConnectionRow {
+    return {
+      ...runningConnection(),
+      id: "managed:desktop:2",
+      provider: "e2b",
+      config: {
+        provider: "e2b",
+        target: { kind: "local" },
+        providerConfigId: "config",
+        desktopId: "desktop",
+        generation: 2,
+        delegationId: "delegation",
+        agentControl: true,
+        qualification: "qualified",
+        qualificationEvidenceVersion: 2,
+        workloadIsolationRevision: 1,
+        egressEnforcement: "provider-and-guest-kernel",
+      },
+      capabilities: { ...defaultSandboxCapabilities("e2b", "computer-server"), gui: true },
+    }
+  }
+  afterEach(() => {
+    jest.mocked(requireManagedDesktopDelegation).mockReset()
+  })
+
+  it("marks missing delegation unplaced and never routes GUI to this machine", async () => {
+    const deps = createDeps()
+    deps.getConnection.mockResolvedValue(managedRow())
+    const runtime = new SandboxSessionRuntime(deps)
+    jest
+      .mocked(requireManagedDesktopDelegation)
+      .mockRejectedValue(
+        new SandboxRuntimeError("placement-unavailable", "managed_delegation_missing")
+      )
+    let cause: unknown
+    try {
+      await runtime.bindSession(input)
+    } catch (error) {
+      cause = error
+    }
+    expect(cause).toMatchObject({
+      code: "placement-unavailable",
+      message: "managed_delegation_missing",
+    })
+    const unplaced = runtime.bindUnplacedSession(input, cause)
+    await expect(
+      runtime.decorateComputerUseContext(unplaced, { surface: "computerUse" })
+    ).rejects.toThrow("managed_delegation_missing")
+    expect(deps.executeOsSandbox).not.toHaveBeenCalled()
+  })
+
+  it("stamps the immutable character and routing id and rechecks the Host on every call and unchanged bind", async () => {
+    const deps = createDeps()
+    deps.getConnection.mockResolvedValue(managedRow())
+    const runtime = new SandboxSessionRuntime(deps)
+    const ref = await runtime.bindSession(input)
+    expect(
+      await runtime.decorateComputerUseContext(ref, {
+        surface: "computerUse",
+        sessionKey: "focused-other",
+      })
+    ).toMatchObject({
+      sandboxConnectionId: "managed:desktop:2",
+      sessionKey: "managed-session",
+      characterId: "agent",
+    })
+    expect(requireManagedDesktopDelegation).toHaveBeenCalledWith(
+      expect.anything(),
+      "managed-session",
+      "agent"
+    )
+    jest
+      .mocked(requireManagedDesktopDelegation)
+      .mockRejectedValue(
+        new SandboxRuntimeError("placement-unavailable", "managed_delegation_missing")
+      )
+    await expect(runtime.bindSession(input)).rejects.toThrow("managed_delegation_missing")
+    await expect(
+      runtime.decorateComputerUseContext(ref, { surface: "computerUse" })
+    ).rejects.toThrow("managed_delegation_missing")
+    deps.getConnection.mockResolvedValue(undefined)
+    await expect(
+      runtime.decorateComputerUseContext(ref, { surface: "computerUse" })
+    ).rejects.toMatchObject({ code: "target-not-found" })
+  })
+
+  it("refuses an E2B row whose GUI capability is absent despite a delegation", async () => {
+    const deps = createDeps()
+    const row = managedRow()
+    deps.getConnection.mockResolvedValue({
+      ...row,
+      capabilities: { ...row.capabilities, gui: false },
+    })
+    await expect(new SandboxSessionRuntime(deps).bindSession(input)).rejects.toMatchObject({
+      code: "unsupported-operation",
+    })
+  })
+})
 
 const payload = {
   tool: "sandbox_bash",

@@ -15,6 +15,8 @@ const MAX_STATE_BYTES: u64 = 32 * 1024 * 1024;
 pub struct ManagedDesktopJournal {
     #[serde(default)]
     pub qualification_runs: BTreeMap<String, super::service::qualification_runs::QualificationRunRecord>,
+    #[serde(default)]
+    pub delegations: BTreeMap<String, super::service::delegation::ManagedDesktopDelegation>,
     pub version: u32,
     pub host_id: String,
     pub revision: u64,
@@ -38,6 +40,10 @@ pub struct ManagedDesktopJournal {
     pub desktops: BTreeMap<String, DesktopRecord>,
     #[serde(default)]
     pub control_quarantines: std::collections::BTreeSet<String>,
+    /// Acknowledged agent-held input. A restarted Host cannot reconstruct the
+    /// resident key/button list, so recovery treats it as uncertain cleanup.
+    #[serde(default)]
+    pub agent_held_inputs: BTreeMap<String, u64>,
     #[serde(default)]
     pub control_qualifications:
         BTreeMap<String, super::service::control::ControlQualificationReceipt>,
@@ -61,6 +67,8 @@ impl Default for ManagedDesktopRegistry {
 }
 
 pub struct JournalStore {
+    #[cfg(test)]
+    pub(crate) saves: std::sync::atomic::AtomicU64,
     directory: PathBuf,
     // A process-level file lock also excludes a second service in the same
     // process. An OS-released lock, unlike a sentinel, survives crash recovery.
@@ -74,6 +82,8 @@ impl JournalStore {
         lock.try_lock_exclusive()
             .map_err(|_| refused("managed_desktop_journal_in_use"))?;
         Ok(Self {
+            #[cfg(test)]
+            saves: Default::default(),
             directory: directory.to_owned(),
             _lock: lock,
         })
@@ -111,6 +121,14 @@ impl JournalStore {
         }
         if !recover {
             return Ok(journal);
+        }
+        for (id, generation) in &journal.agent_held_inputs {
+            if journal.desktops.get(id).is_some_and(|row| {
+                row.desktop.generation == *generation
+                    && row.desktop.state != ManagedDesktopState::Destroyed
+            }) {
+                journal.control_quarantines.insert(id.clone());
+            }
         }
         let now = chrono::Utc::now().timestamp_millis().max(journal.last_observed_at);
         for record in journal.qualification_runs.values_mut() {
@@ -165,6 +183,8 @@ impl JournalStore {
         write_json(&self.directory.join("managed-desktops.json"), registry)
     }
     pub fn save(&self, journal: &ManagedDesktopJournal) -> Result<()> {
+        #[cfg(test)]
+        self.saves.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         write_json(
             &self.directory.join("managed-desktops-journal.json"),
             journal,

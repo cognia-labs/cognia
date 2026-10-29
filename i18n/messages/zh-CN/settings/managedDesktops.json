@@ -132,7 +132,8 @@
     "qualificationQuoteMismatch": "该运行正在等待另一份费用估算，请查看当前估算。",
     "qualificationNotAwaiting": "该运行当前不需要批准。",
     "handoffDeliveryUnknown": "所选交付已不在此 Host 上。",
-    "handoffScriptInvalid": "请输入 npm 脚本名：以字母、数字、: 或 _ 开头，其后可用字母、数字、: _ . 或 -。"
+    "handoffScriptInvalid": "请输入 npm 脚本名：以字母、数字、: 或 _ 开头，其后可用字母、数字、: _ . 或 -。",
+    "agentControlUnqualified": "此配置的 Agent 控制未生效。请在配置通过验证后开启。"
   },
   "guiDormant": "为此配置开启手动 GUI 之前，桌面查看和控制保持关闭。",
   "handoff": {

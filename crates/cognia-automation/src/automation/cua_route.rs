@@ -23,6 +23,41 @@ use crate::cua_sandbox::protocol;
 use crate::cua_sandbox::remote_client::CuaRemoteClient;
 use crate::cua_sandbox::CuaSandboxRegistry;
 
+tokio::task_local! {
+    static AGENT_IDENTITY: (Option<String>, Option<String>);
+}
+
+/// Request-scoped renderer tags; never an admin or lifecycle credential.
+pub async fn with_agent_identity<T>(
+    session: Option<String>,
+    character: Option<String>,
+    operation: impl std::future::Future<Output = T>,
+) -> T {
+    AGENT_IDENTITY.scope((session, character), operation).await
+}
+
+pub(crate) fn agent_identity() -> (Option<String>, Option<String>) {
+    AGENT_IDENTITY.try_with(Clone::clone).unwrap_or_default()
+}
+
+macro_rules! managed {
+    ($cua:ident, $remote:ident, $action:expr, $output:ident) => {
+        if let Some(id) = $remote.filter(|id| id.starts_with("managed:")) {
+            return match $cua.managed_operation(id, $action).await? {
+                ActionOutput::$output(value) => Ok(value),
+                _ => Err(AutomationError::Internal {
+                    message: "managed desktop result mismatch".into(),
+                }),
+            };
+        }
+    };
+    ($cua:ident, $remote:ident, $action:expr) => {
+        if let Some(id) = $remote.filter(|id| id.starts_with("managed:")) {
+            return $cua.managed_operation(id, $action).await.map(|_| ());
+        }
+    };
+}
+
 async fn client(cua: &CuaSandboxRegistry, id: &str) -> Result<Arc<CuaRemoteClient>> {
     cua.client(id).await
 }
@@ -43,6 +78,12 @@ pub async fn screenshot(
     remote: Option<&str>,
     opts: ScreenshotOpts,
 ) -> Result<Screenshot> {
+    managed!(
+        cua,
+        remote,
+        Action::Screenshot { opts: opts.clone() },
+        Screenshot
+    );
     match remote {
         None => handle.screenshot(opts).await,
         Some(id) => {
@@ -59,6 +100,14 @@ pub async fn click(
     target: ClickTarget,
     opts: ClickOpts,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::Click {
+            target: target.clone(),
+            opts: opts.clone()
+        }
+    );
     match remote {
         None => handle.click(target, opts).await,
         Some(id) => {
@@ -98,6 +147,14 @@ pub async fn type_text(
     text: String,
     opts: TypeOpts,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::Type {
+            text: text.clone(),
+            opts: opts.clone()
+        }
+    );
     match remote {
         None => handle.type_text(text, opts).await,
         Some(id) => {
@@ -121,6 +178,13 @@ pub async fn send_keys(
     remote: Option<&str>,
     chord: KeyChord,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::Keys {
+            chord: chord.clone()
+        }
+    );
     match remote {
         None => handle.send_keys(chord).await,
         Some(id) => {
@@ -147,6 +211,7 @@ pub async fn mouse_move(
     remote: Option<&str>,
     point: Point,
 ) -> Result<()> {
+    managed!(cua, remote, Action::MouseMove { point });
     match remote {
         None => handle.mouse_move(point).await,
         Some(id) => {
@@ -169,6 +234,15 @@ pub async fn drag(
     to: Point,
     opts: DragOpts,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::Drag {
+            from,
+            to,
+            opts: opts.clone()
+        }
+    );
     match remote {
         None => handle.drag(from, to, opts).await,
         Some(id) => {
@@ -192,6 +266,14 @@ pub async fn scroll(
     target: ScrollTarget,
     opts: ScrollOpts,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::Scroll {
+            target: target.clone(),
+            opts: opts.clone()
+        }
+    );
     match remote {
         None => handle.scroll(target, opts).await,
         Some(id) => {
@@ -219,24 +301,33 @@ pub async fn hold_key(
     chord: KeyChord,
     duration_ms: u32,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::HoldKey {
+            chord: chord.clone(),
+            duration_ms
+        }
+    );
     match remote {
         None => handle.hold_key(chord, duration_ms).await,
         Some(id) => {
             let mut desktop = cua.agent_guard(id).await?;
             desktop.sessions = super::session::UiSessionManager::default();
             let c = client(cua, id).await?;
-            hold_remote_keys(&mut desktop, &c, chord, duration_ms).await
+            hold_remote_keys(&mut desktop, &c, chord, duration_ms, None).await
         }
     }
 }
 
 /// Keep held state resident in the desktop before each send, so cancellation
 /// cannot lose the cleanup obligation. Cleanup deliberately bypasses fencing.
-async fn hold_remote_keys(
+pub(crate) async fn hold_remote_keys(
     desktop: &mut crate::cua_sandbox::desktop_session::RemoteDesktop,
     client: &CuaRemoteClient,
     chord: KeyChord,
     duration_ms: u32,
+    live: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 ) -> Result<()> {
     use std::sync::atomic::Ordering;
 
@@ -271,16 +362,26 @@ async fn hold_remote_keys(
         // Enable before inspecting the epoch: notify_waiters does not retain a
         // permit for a waiter that has not registered yet.
         notified.as_mut().enable();
-        if preempt.epoch.load(Ordering::SeqCst) != epoch {
-            return Err(AutomationError::PreemptedBeforeSend);
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(u64::from(duration_ms))) => Ok(()),
-            _ = notified => Err(AutomationError::PreemptedBeforeSend),
+        let deadline = tokio::time::Instant::now()
+            + std::time::Duration::from_millis(u64::from(duration_ms));
+        loop {
+            if preempt.epoch.load(Ordering::SeqCst) != epoch
+                || live.as_ref().is_some_and(|check| !check())
+            {
+                return Err(AutomationError::PreemptedBeforeSend);
+            }
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => return Ok(()),
+                _ = &mut notified => return Err(AutomationError::PreemptedBeforeSend),
+                // Held input must not outlive a managed grant just because no
+                // further driver command is sent during the requested wait.
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)), if live.is_some() => {}
+            }
         }
     }.await;
     while let Some(key) = desktop.held_keys.last().cloned() {
         if let Err(error) = client
+            .unfenced()
             .call(protocol::key_transition_request(&key, false))
             .await
         {
@@ -315,6 +416,11 @@ pub async fn mouse_button(
     button: MouseButton,
     transition: ButtonTransition,
 ) -> Result<()> {
+    managed!(
+        cua,
+        remote,
+        Action::MouseButton { button, transition }
+    );
     match remote {
         None => handle.mouse_button(button, transition).await,
         Some(id) => {
@@ -346,6 +452,7 @@ pub async fn cursor_position(
     cua: &CuaSandboxRegistry,
     remote: Option<&str>,
 ) -> Result<Point> {
+    managed!(cua, remote, Action::CursorPosition, Cursor);
     match remote {
         None => handle.cursor_position().await,
         Some(id) => {
@@ -369,6 +476,15 @@ pub async fn read_tree(
     root: Option<ElementRef>,
     opts: TreeOpts,
 ) -> Result<Vec<ElementInfo>> {
+    managed!(
+        cua,
+        remote,
+        Action::ReadTree {
+            root: root.clone(),
+            opts: opts.clone()
+        },
+        Tree
+    );
     match remote {
         None => handle.read_tree(root, opts).await,
         Some(id) => {
@@ -576,7 +692,7 @@ mod tests {
         let preempt = desktop.preempt.clone();
         let task = tokio::spawn(async move {
             let result =
-                hold_remote_keys(&mut desktop, &client, KeyChord("CTRL+A".into()), 60_000).await;
+                hold_remote_keys(&mut desktop, &client, KeyChord("CTRL+A".into()), 60_000, None).await;
             (desktop, result)
         });
         ready.await.unwrap();
@@ -609,7 +725,7 @@ mod tests {
         let preempt = desktop.preempt.clone();
         let task = tokio::spawn(async move {
             let result =
-                hold_remote_keys(&mut desktop, &client, KeyChord("CTRL+A".into()), 60_000).await;
+                hold_remote_keys(&mut desktop, &client, KeyChord("CTRL+A".into()), 60_000, None).await;
             (desktop, result)
         });
         ready.await.unwrap();

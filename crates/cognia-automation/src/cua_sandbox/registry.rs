@@ -32,6 +32,32 @@ const CONTAINER_NAME_PREFIX: &str = "cua-";
 
 type DesktopConnections = HashMap<String, (Arc<Mutex<RemoteDesktop>>, Arc<DesktopPreemption>)>;
 
+static MANAGED_SERVICE: once_cell::sync::Lazy<
+    parking_lot::RwLock<Option<std::sync::Weak<super::managed::ManagedDesktopService>>>,
+> = once_cell::sync::Lazy::new(|| parking_lot::RwLock::new(None));
+
+/// The installed Host service owns managed clients and control, across all
+/// renderer registry instances. A weak reference cannot keep shutdown alive.
+pub fn install_managed_agent_service(service: Option<&Arc<super::managed::ManagedDesktopService>>) {
+    *MANAGED_SERVICE.write() = service.map(Arc::downgrade);
+}
+
+fn managed_target(id: &str) -> Result<(&str, u64)> {
+    let (desktop, generation) = id
+        .strip_prefix("managed:")
+        .and_then(|s| s.rsplit_once(':'))
+        .ok_or_else(|| backend_err("managed_desktop_invalid_target"))?;
+    if desktop.is_empty() || desktop.contains(':') {
+        return Err(backend_err("managed_desktop_invalid_target"));
+    }
+    let generation = generation
+        .parse::<u64>()
+        .ok()
+        .filter(|g| *g > 0)
+        .ok_or_else(|| backend_err("managed_desktop_invalid_target"))?;
+    Ok((desktop, generation))
+}
+
 /// What a lifecycle call did, so the renderer can record the resulting state
 /// without a second round-trip.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,6 +114,22 @@ async fn connect_desktop_ready(
 }
 
 impl CuaSandboxRegistry {
+    pub(crate) async fn managed_operation(
+        &self,
+        connection_id: &str,
+        action: crate::automation::types::Action,
+    ) -> Result<crate::automation::types::ActionOutput> {
+        let (id, generation) = managed_target(connection_id)?;
+        let service = MANAGED_SERVICE
+            .read()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| backend_err("managed_desktop_host_unavailable"))?;
+        let (session, character) = crate::automation::cua_route::agent_identity();
+        service
+            .agent_operation(id, generation, session, character, action)
+            .await
+    }
     #[cfg(test)]
     pub(crate) async fn insert_test_client(&self, id: &str, client: Arc<CuaRemoteClient>) {
         self.clients.lock().await.insert(id.into(), client);
@@ -97,6 +139,15 @@ impl CuaSandboxRegistry {
         &self,
         connection_id: &str,
     ) -> (Arc<Mutex<RemoteDesktop>>, Arc<DesktopPreemption>) {
+        if connection_id.starts_with("managed:") {
+            // Managed ids are never registered as local/Docker/Lume slots.
+            // Legacy slot callers receive a sealed, non-operational projection.
+            let preempt = Arc::new(DesktopPreemption::default());
+            preempt.pending.store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut desktop = RemoteDesktop::for_target(connection_id.into(), preempt.clone());
+            desktop.begin_mutation();
+            return (Arc::new(Mutex::new(desktop)), preempt);
+        }
         let resolved_id = if let Some(lume) = self.existing_lume_service().await {
             lume.resolve_target(connection_id)
                 .await
@@ -138,6 +189,9 @@ impl CuaSandboxRegistry {
         &self,
         connection_id: &str,
     ) -> Result<OwnedMutexGuard<RemoteDesktop>> {
+        if connection_id.starts_with("managed:") {
+            return Err(backend_err("managed_desktop_delegation_required"));
+        }
         let mut guard = self.desktop_guard(connection_id).await;
         guard.agent_epoch = guard
             .preempt
@@ -159,11 +213,12 @@ impl CuaSandboxRegistry {
         image: &str,
         policy: ContainerPolicy,
     ) -> Result<SandboxPlacement> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.desktop_guard(connection_id).await;
         desktop.invalidate();
         self.clients.lock().await.remove(connection_id);
         self.stream_forget(connection_id).await;
-        let name = container_name_for_connection(connection_id);
+        let name = container_name_for_connection(connection_id)?;
         if let Some(state) = docker_inspect(&name).await? {
             if state.running {
                 desktop.require_quiescent()?;
@@ -208,11 +263,12 @@ impl CuaSandboxRegistry {
         image: &str,
         policy: ContainerPolicy,
     ) -> Result<SandboxPlacement> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.desktop_guard(connection_id).await;
         desktop.invalidate();
         self.clients.lock().await.remove(connection_id);
         self.stream_forget(connection_id).await;
-        let name = container_name_for_connection(connection_id);
+        let name = container_name_for_connection(connection_id)?;
         let container_id = match docker_inspect(&name).await? {
             Some(state) => {
                 if state.running {
@@ -259,6 +315,7 @@ impl CuaSandboxRegistry {
     /// desktop session survives. `docker stop` is not a suspend and is not used
     /// here. The driver client is dropped because its peer is frozen.
     pub async fn suspend(&self, connection_id: &str) -> Result<()> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.desktop_guard(connection_id).await;
         desktop.invalidate();
         self.clients.lock().await.remove(connection_id);
@@ -268,6 +325,7 @@ impl CuaSandboxRegistry {
     }
 
     pub async fn resume(&self, connection_id: &str) -> Result<SandboxPlacement> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.desktop_guard(connection_id).await;
         desktop.invalidate();
         self.clients.lock().await.remove(connection_id);
@@ -309,11 +367,12 @@ impl CuaSandboxRegistry {
     /// Stop the container. It keeps existing, along with everything written
     /// inside it. Use `delete` to destroy it.
     pub async fn stop(&self, connection_id: &str) -> Result<()> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.desktop_guard(connection_id).await;
         desktop.invalidate();
         self.clients.lock().await.remove(connection_id);
         self.stream_forget(connection_id).await;
-        let name = container_name_for_connection(connection_id);
+        let name = container_name_for_connection(connection_id)?;
         // A container that is already gone is already stopped. Reporting that
         // as a failure would leave the user unable to settle the row.
         match docker_inspect(&name).await? {
@@ -335,11 +394,12 @@ impl CuaSandboxRegistry {
 
     /// Destroy the container and everything in it that is not on a bind mount.
     pub async fn delete(&self, connection_id: &str) -> Result<()> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.desktop_guard(connection_id).await;
         desktop.invalidate();
         self.clients.lock().await.remove(connection_id);
         self.stream_forget(connection_id).await;
-        let name = container_name_for_connection(connection_id);
+        let name = container_name_for_connection(connection_id)?;
         if docker_inspect(&name).await?.is_none() {
             desktop.confirm_quiescence();
             return Ok(());
@@ -351,17 +411,22 @@ impl CuaSandboxRegistry {
 
     /// Docker's own view of the container, or `None` when it does not exist.
     pub async fn inspect(&self, connection_id: &str) -> Result<Option<ContainerState>> {
-        docker_inspect(&container_name_for_connection(connection_id)).await
+        require_unmanaged(connection_id)?;
+        docker_inspect(&container_name_for_connection(connection_id)?).await
     }
 
     /// Both workspace execution and GUI capture must answer. Cold driver
     /// reconnect also validates the execution supervisor and image contract.
     pub async fn health(&self, connection_id: &str) -> bool {
+        if require_unmanaged(connection_id).is_err() {
+            return false;
+        }
         let desktop = self.desktop_guard(connection_id).await;
         if desktop.require_quiescent().is_err() {
             return false;
         }
-        if !docker_health(&container_name_for_connection(connection_id)).await {
+        let Ok(name) = container_name_for_connection(connection_id) else { return false; };
+        if !docker_health(&name).await {
             return false;
         }
         match self.client(connection_id).await {
@@ -383,6 +448,7 @@ impl CuaSandboxRegistry {
         stdin: Option<&str>,
         timeout: Duration,
     ) -> Result<ExecOutcome> {
+        require_unmanaged(connection_id)?;
         let mut desktop = self.agent_guard(connection_id).await?;
         desktop.sessions = crate::automation::session::UiSessionManager::default();
         let (name, state) = self.require_running(connection_id).await?;
@@ -407,6 +473,7 @@ impl CuaSandboxRegistry {
         path: &str,
         max_bytes: usize,
     ) -> Result<String> {
+        require_unmanaged(connection_id)?;
         let desktop = self.desktop_guard(connection_id).await;
         desktop.require_quiescent()?;
         let (_, state) = self.require_running(connection_id).await?;
@@ -421,6 +488,7 @@ impl CuaSandboxRegistry {
         path: &str,
         data_base64: &str,
     ) -> Result<super::file_transfer::SandboxFileInfo> {
+        require_unmanaged(connection_id)?;
         use super::file_transfer;
         file_transfer::validate_path(path)?;
         if expected_container_id.starts_with("lume:") {
@@ -503,6 +571,7 @@ impl CuaSandboxRegistry {
         expected_container_id: &str,
         path: &str,
     ) -> Result<super::file_transfer::SandboxFileDownload> {
+        require_unmanaged(connection_id)?;
         use super::file_transfer;
         file_transfer::validate_path(path)?;
         if expected_container_id.starts_with("lume:") {
@@ -570,6 +639,10 @@ impl CuaSandboxRegistry {
     /// it belongs to may well still be running. Refusing on a cache miss would
     /// make a perfectly healthy machine look dead.
     pub async fn client(&self, connection_id: &str) -> Result<Arc<CuaRemoteClient>> {
+        require_unmanaged(connection_id)?;
+        if connection_id.starts_with("managed:") {
+            return Err(backend_err("managed_desktop_delegation_required"));
+        }
         let principal = self.lume_principal.read().clone();
         if let Some(lume) = self.existing_lume_service().await {
             if let Some((reference, binding, _)) = lume
@@ -653,7 +726,8 @@ impl CuaSandboxRegistry {
 
     /// The container name for a connection that must already exist.
     async fn require_container(&self, connection_id: &str) -> Result<String> {
-        let name = container_name_for_connection(connection_id);
+        require_unmanaged(connection_id)?;
+        let name = container_name_for_connection(connection_id)?;
         if docker_inspect(&name).await?.is_none() {
             return Err(backend_err(format!(
                 "sandbox '{connection_id}' has no container yet"
@@ -669,7 +743,8 @@ impl CuaSandboxRegistry {
         &self,
         connection_id: &str,
     ) -> Result<(String, ContainerState)> {
-        let name = container_name_for_connection(connection_id);
+        require_unmanaged(connection_id)?;
+        let name = container_name_for_connection(connection_id)?;
         match docker_inspect(&name).await? {
             Some(state) if state.paused => Err(backend_err(format!(
                 "sandbox '{connection_id}' is suspended. Resume it first."
@@ -701,7 +776,15 @@ fn verify_transfer_identity(expected: &str, actual: &str) -> Result<()> {
 /// Derive the stable Docker container name for a connection id. Determinism is
 /// what makes adoption possible: the same connection always maps to the same
 /// container, across restarts and across app versions.
-pub fn container_name_for_connection(connection_id: &str) -> String {
+fn require_unmanaged(connection_id: &str) -> Result<()> {
+    if connection_id.starts_with("managed:") {
+        return Err(backend_err("managed_desktop_delegation_required"));
+    }
+    Ok(())
+}
+
+pub fn container_name_for_connection(connection_id: &str) -> Result<String> {
+    require_unmanaged(connection_id)?;
     let mut suffix = String::new();
     let mut last_separator = false;
     for ch in connection_id.trim().chars() {
@@ -728,7 +811,7 @@ pub fn container_name_for_connection(connection_id: &str) -> String {
         suffix.push_str(&hash);
     }
 
-    format!("{CONTAINER_NAME_PREFIX}{suffix}")
+    Ok(format!("{CONTAINER_NAME_PREFIX}{suffix}"))
 }
 
 fn stable_hash_suffix(value: &str) -> String {
@@ -748,6 +831,37 @@ mod tests {
     fn transfers_reject_a_replaced_container_identity() {
         assert!(verify_transfer_identity(&"a".repeat(64), &"b".repeat(64)).is_err());
         assert!(verify_transfer_identity(&"a".repeat(64), &"a".repeat(64)).is_ok());
+    }
+
+    #[tokio::test]
+    async fn managed_prefix_never_resolves_a_docker_or_lume_client() {
+        let registry = CuaSandboxRegistry::default();
+        for id in ["managed:unknown:1", "managed:", "managed:unknown:0", "managed:unknown:bad"] {
+            assert!(container_name_for_connection(id).is_err());
+            assert!(registry.create(id, "image", ContainerPolicy::default()).await.is_err());
+            assert!(registry.start(id, "image", ContainerPolicy::default()).await.is_err());
+            assert!(registry.suspend(id).await.is_err());
+            assert!(registry.resume(id).await.is_err());
+            assert!(registry.stop(id).await.is_err());
+            assert!(registry.delete(id).await.is_err());
+            assert!(registry.inspect(id).await.is_err());
+            assert!(!registry.health(id).await);
+            assert!(registry.exec(id, &["true".into()], None, &BTreeMap::new(), None, Duration::from_secs(1)).await.is_err());
+            assert!(registry.read_file(id, "/home/cua/file", 1).await.is_err());
+            for expected in ["lume:test:1".to_owned(), "a".repeat(64)] {
+                assert!(registry.upload_file(id, &expected, "token", "/home/cua/file", "AP8=").await.is_err());
+                assert!(registry.download_file(id, &expected, "/home/cua/file").await.is_err());
+            }
+            assert!(registry.desktop_guard(id).await.require_agent().is_err());
+            assert!(registry.require_container(id).await.is_err());
+            assert!(registry.require_running(id).await.is_err());
+            assert!(registry.client(id).await.is_err());
+            assert!(registry.agent_guard(id).await.is_err());
+            assert!(registry.managed_operation(id, crate::automation::types::Action::CursorPosition).await.is_err());
+        }
+        assert!(registry.clients.lock().await.is_empty());
+        assert!(registry.desktops.lock().await.is_empty());
+        assert!(managed_target("managed:desktop:1").is_ok());
     }
 
     #[tokio::test]
@@ -807,14 +921,14 @@ mod tests {
     #[test]
     fn container_name_sanitizes_connection_id_for_docker() {
         assert_eq!(
-            container_name_for_connection(" Team/Alpha\r\n../demo "),
+            container_name_for_connection(" Team/Alpha\r\n../demo ").unwrap(),
             "cua-team-alpha-demo"
         );
     }
 
     #[test]
     fn container_name_uses_fallback_for_empty_sanitized_id() {
-        assert_eq!(container_name_for_connection(" \r\n\t "), "cua-sandbox");
+        assert_eq!(container_name_for_connection(" \r\n\t ").unwrap(), "cua-sandbox");
     }
 
     #[test]
@@ -822,8 +936,8 @@ mod tests {
         let first = format!("{}A", "a".repeat(100));
         let second = format!("{}B", "a".repeat(100));
 
-        let first_name = container_name_for_connection(&first);
-        let second_name = container_name_for_connection(&second);
+        let first_name = container_name_for_connection(&first).unwrap();
+        let second_name = container_name_for_connection(&second).unwrap();
 
         assert!(first_name.len() <= 63);
         assert!(second_name.len() <= 63);
@@ -838,8 +952,8 @@ mod tests {
         // orphan the previous container and create a second machine.
         let id = "3f2a1b0c-1111-2222-3333-444455556666";
         assert_eq!(
-            container_name_for_connection(id),
-            container_name_for_connection(id)
+            container_name_for_connection(id).unwrap(),
+            container_name_for_connection(id).unwrap()
         );
     }
     #[tokio::test]

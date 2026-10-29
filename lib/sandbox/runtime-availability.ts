@@ -8,7 +8,10 @@ import { getMicrovmExec, subscribeMicrovmAvailability } from "@/lib/sandbox/micr
 import type { SandboxCapabilities, SandboxConnectionRow } from "@/types/sandbox"
 import { hasSandboxConnectionLifecycleAdapter } from "./connection-lifecycle"
 
-import { hasCurrentManagedDesktopQualification } from "./connection-capabilities"
+import {
+  delegatedManagedDesktopGui,
+  hasCurrentManagedDesktopQualification,
+} from "./connection-capabilities"
 
 export type SandboxAvailabilityReason =
   | "available"
@@ -91,6 +94,11 @@ export function projectSandboxConnectionCapabilities(
         adapterAvailable &&
           enabled &&
           !(row.config.provider === "lume" && !lumeOperationReady(row, operation)) &&
+          !(
+            row.config.provider === "e2b" &&
+            operation === "gui" &&
+            !delegatedManagedDesktopGui(row)
+          ) &&
           !(
             row.config.provider === "e2b" &&
             operation === "create" &&

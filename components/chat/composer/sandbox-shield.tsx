@@ -36,6 +36,7 @@ import type { ChatSession } from "@cognia/agent-config-types"
 import type { SandboxShellTier } from "@/types/sandbox"
 import { useSandboxRuntimeAvailability } from "@/hooks/sandbox/use-sandbox-runtime-availability"
 import { useRuntimeRefForSession } from "@/stores/agent/agent-runtime-store"
+import { SessionComputerUseTargetPicker } from "./computer-use-target-picker"
 
 export type ShieldState = "os" | "container" | "microvm" | "cua-desktop" | "off" | "external"
 
@@ -200,6 +201,7 @@ export function SandboxShield({ session, forceState, className }: SandboxShieldP
         <TooltipContent side="top">{tooltip}</TooltipContent>
       </Tooltip>
       <PopoverContent align="start" sideOffset={4} className="w-72 space-y-2 p-3">
+        {session && !externalRuntime && <SessionComputerUseTargetPicker session={session} />}
         <p className="text-sm font-medium">{ariaLabel}</p>
         <p className="text-xs text-muted-foreground">{tooltip}</p>
         {state === "external" && (

@@ -495,6 +495,9 @@ pub async fn execute_action(
     action: Action,
 ) -> Result<ActionOutput> {
     let _perf = cognia_instrument::guard("automation.action");
+    if let Some(id) = remote.filter(|id| id.starts_with("managed:")) {
+        return cua.managed_operation(id, action).await;
+    }
     Ok(match action {
         Action::Screenshot { opts } => {
             ActionOutput::Screenshot(cua_route::screenshot(handle, cua, remote, opts).await?)

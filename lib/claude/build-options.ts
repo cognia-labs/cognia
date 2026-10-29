@@ -4597,6 +4597,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   if (session?.id && (sandboxEnabled || computerUseAllowedForChat)) {
     const bindInput = {
       sessionId: session.id,
+      // A character-scoped managed desktop delegation (ADR-0233 A5) names the
+      // character, so the Host can match calls from any of its sessions.
+      characterId: character?.id,
       binding: sandboxBinding,
       policy: sandboxEnabled ? resolvedSandboxPolicy : null,
       confine:

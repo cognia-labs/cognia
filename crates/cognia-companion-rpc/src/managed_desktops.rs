@@ -47,6 +47,9 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_qualify_list",
     "managed_desktop_qualify_approve",
     "managed_desktop_qualify_cancel",
+    "managed_desktop_delegate",
+    "managed_desktop_delegation_revoke",
+    "managed_desktop_delegation_list",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -242,10 +245,8 @@ impl ManagedDesktopSecrets for HostSecrets {
     }
 }
 
-/// Installs even without a release: reads and old-resource cleanup must work
-/// while new provisioning is disabled. Startup never builds a template.
-/// `bundled_release` is the directory holding the manifest shipped inside the
-/// signed app or server image; the data directory's copy takes precedence.
+/// Data-free invalidation; clients refetch their owner-scoped delegation list.
+pub const DELEGATION_CHANGED_TOPIC: &str = "managed-desktop://delegation-changed";
 /// The Host-event topic the worker raises when any owner's billing or
 /// cleanup picture changes. It carries no data: clients refetch
 /// `managed_desktop_monitor`, which is scoped to the caller's account, so one
@@ -253,6 +254,54 @@ impl ManagedDesktopSecrets for HostSecrets {
 pub const MONITOR_CHANGED_TOPIC: &str = "managed-desktop://monitor-changed";
 pub const QUALIFICATION_CHANGED_TOPIC: &str = "managed-desktop://qualification-changed";
 
+fn install_delegation_runtime(service: &ManagedDesktopService, events: Option<HostEventSink>) {
+    service.set_delegation_runtime(
+        Arc::new(|owner| {
+            host_identity::current()
+                .ok()
+                .and_then(|binding| {
+                    host_identity::namespace_for_tenant(&binding.remote_tenant_id)
+                })
+                .is_some_and(|current| current == owner)
+        }),
+        Arc::new(host_identity::account_binding_epoch),
+        host_identity::account_binding_instance_id().into(),
+        Arc::new(move || {
+            if let Some(events) = &events {
+                events(DELEGATION_CHANGED_TOPIC, serde_json::json!({}));
+            }
+        }),
+    );
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DelegateArgs {
+    desktop_id: String,
+    generation: u64,
+    grantee: ManagedDesktopGrantee,
+    expires_at: Option<i64>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DelegationRevokeArgs {
+    delegation_id: String,
+    expected_revision: u64,
+}
+fn delegation_json(grant: &ManagedDesktopDelegation) -> Value {
+    serde_json::json!({
+        "id":grant.id, "desktopId":grant.desktop_id,
+        "desktopGeneration":grant.desktop_generation, "providerConfigId":grant.provider_config_id,
+        "grantee":grant.grantee, "mode":grant.mode, "state":grant.state,
+        "endReason":grant.end_reason, "expiresAt":grant.expires_at, "revision":grant.revision,
+        "createdAt":grant.created_at, "endedAt":grant.ended_at,
+    })
+}
+
+/// Installs even without a release: reads and old-resource cleanup must work
+/// while new provisioning is disabled. Startup never builds a template.
+/// `bundled_release` is the directory holding the manifest shipped inside the
+/// signed app or server image; the data directory's copy takes precedence.
 pub async fn install(
     directory: &Path,
     bundled_release: Option<&Path>,
@@ -290,6 +339,8 @@ pub async fn install(
     })
     .await
     .map_err(|_| refused("managed_desktop_storage_unavailable"))??;
+    install_delegation_runtime(&service, events.clone());
+    cognia_automation::cua_sandbox::registry::install_managed_agent_service(Some(&service));
     let qualification = Arc::new(qualification::QualificationRuntime::new(service.clone(), events.clone()));
     let weak = Arc::downgrade(&service);
     let evidence_directory = installed_directory.clone();
@@ -354,6 +405,7 @@ fn monitor_signature(
 }
 
 pub fn shutdown() {
+    cognia_automation::cua_sandbox::registry::install_managed_agent_service(None);
     let installed = INSTALLED.write().take();
     // The frame provider holds the service; release it with the service.
     if let Ok(state) = cognia_remote_desktop::commands::installed() {
@@ -1165,6 +1217,13 @@ async fn execute_input_inner(
     result.map_err(policy_error)
 }
 
+fn delegation_deployment(mode: cognia_companion::deployment::DeploymentMode) -> Result<()> {
+    if mode == cognia_companion::deployment::DeploymentMode::MultiTenant {
+        return Err(refused("managed_desktop_delegation_unsupported_deployment"));
+    }
+    Ok(())
+}
+
 pub async fn dispatch(
     name: &str,
     args: Value,
@@ -1172,6 +1231,9 @@ pub async fn dispatch(
     runtime: Option<ManagedControlRuntime>,
     admin_check: Option<AdminAuthorityCheck>,
 ) -> Result<Value> {
+    if matches!(name, "managed_desktop_delegate" | "managed_desktop_delegation_revoke" | "managed_desktop_delegation_list") {
+        delegation_deployment(cognia_companion::deployment::deployment_mode())?;
+    }
     if !COMMANDS.contains(&name) {
         return Err(refused("managed_desktop_unknown_command"));
     }
@@ -1207,7 +1269,9 @@ pub async fn dispatch(
     };
     if matches!(
         name,
-        "managed_desktop_config_save"
+        "managed_desktop_delegate"
+            | "managed_desktop_delegation_revoke"
+            | "managed_desktop_config_save"
             | "managed_desktop_config_delete"
             | "managed_desktop_config_set_credential"
             | "managed_desktop_config_rotate_credential"
@@ -1240,6 +1304,36 @@ pub async fn dispatch(
         return crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await;
     }
     let result = match name {
+        "managed_desktop_delegate" => {
+            let a: DelegateArgs = decode(args)?;
+            principal.require_admin()?;
+            authority.revalidate(&principal).await?;
+            let grant = service
+                .delegate(
+                    &principal,
+                    &a.desktop_id,
+                    a.generation,
+                    a.grantee,
+                    a.expires_at,
+                    &authority,
+                )
+                .await?;
+            Ok(delegation_json(&grant))
+        }
+        "managed_desktop_delegation_revoke" => {
+            let a: DelegationRevokeArgs = decode(args)?;
+            principal.require_admin()?;
+            authority.revalidate(&principal).await?;
+            let grant = service
+                .delegation_revoke(&principal, &a.delegation_id, a.expected_revision, &authority)
+                .await?;
+            Ok(delegation_json(&grant))
+        }
+        "managed_desktop_delegation_list" => {
+            let _: QualifyEmptyArgs = decode(args)?;
+            let grants = service.delegation_list(&principal).await?;
+            Ok(serde_json::json!({"delegations":grants.iter().map(delegation_json).collect::<Vec<_>>()}))
+        }
         "managed_desktop_qualify_start" => {
             let a: QualifyStartArgs = decode(args)?;
             require_qualification_admin(&principal)?;
@@ -1526,9 +1620,10 @@ pub async fn managed_desktop_local_call(
         }),
         refresh_persisted: false,
     };
+    let args = args.unwrap_or_else(|| serde_json::json!({}));
     dispatch(
         &name,
-        args.unwrap_or_else(|| serde_json::json!({})),
+        args,
         Caller {
             device_id: LOCAL_DEVICE_ID,
             tenant_id: None,
@@ -2461,6 +2556,7 @@ mod tests {
             "egress":{"mode":"off"},"isolationMinimum":"vm"
         })).unwrap();
         service.save_config(&p, draft).await.unwrap();
+        install_delegation_runtime(&service, events.clone());
         let qualification = Arc::new(qualification::QualificationRuntime::new(service.clone(), events));
         *INSTALLED.write() = Some(Installed {
             directory: directory.path().to_owned(),
@@ -2624,6 +2720,470 @@ mod tests {
         agent.authority = ManagedDesktopAuthority::Agent;
         assert!(require_qualification_admin(&agent).is_err());
         assert!(decode::<QualifyStartArgs>(serde_json::json!({"providerConfigId":"e2b","scope":"gui","confirmed":true})).is_err());
+    }
+
+    #[test]
+    fn delegation_wire_contract_omits_host_owner_and_caller_identity() {
+        let grant = ManagedDesktopDelegation {
+            id: "grant".into(),
+            account_binding_epoch: Some(host_identity::account_binding_epoch()),
+            account_binding_instance_id: Some(host_identity::account_binding_instance_id().into()),
+            owner_principal_id: "private-owner".into(),
+            host_id: "private-host".into(),
+            desktop_id: "desktop".into(),
+            desktop_generation: 2,
+            provider_config_id: "e2b".into(),
+            grantee: ManagedDesktopGrantee::Character { character_id: "character".into() },
+            mode: ManagedDesktopDelegationMode::ComputerUse,
+            state: ManagedDesktopDelegationState::Live,
+            end_reason: None,
+            expires_at: 2000,
+            revision: 1,
+            created_at: 1000,
+            created_by_principal_id: "private-creator".into(),
+            ended_at: None,
+        };
+        assert_eq!(
+            delegation_json(&grant),
+            serde_json::json!({
+                "id":"grant","desktopId":"desktop","desktopGeneration":2,"providerConfigId":"e2b",
+                "grantee":{"kind":"character","characterId":"character"},"mode":"computerUse",
+                "state":"live","endReason":null,"expiresAt":2000,"revision":1,"createdAt":1000,"endedAt":null,
+            })
+        );
+        for extra in [
+            "ownerPrincipalId", "hostId", "createdByPrincipalId", "mode",
+            "accountBindingEpoch", "accountBindingInstanceId",
+        ] {
+            let mut args = serde_json::json!({
+                "desktopId":"desktop","generation":2,
+                "grantee":{"kind":"session","sessionKey":"session"},
+            });
+            args[extra] = serde_json::json!("spoofed");
+            assert!(decode::<DelegateArgs>(args).is_err());
+        }
+        assert!(decode::<DelegateArgs>(serde_json::json!({
+            "desktopId":"desktop","generation":2,
+            "grantee":{"kind":"session","sessionKey":"s","characterId":"c"},
+        })).is_err());
+        assert!(decode::<DelegationRevokeArgs>(serde_json::json!({"delegationId":"grant"})).is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delegation_rpc_requires_human_admin_and_remote_lease_but_local_needs_no_lease() {
+        let _scope = TestScope::new();
+        let (_directory, _service, _p) = qualification_fixture(None).await;
+        let tenant = host_identity::current().unwrap().remote_tenant_id;
+        let store = security_store().unwrap();
+        let challenge = store.issue_challenge(&tenant, NOW, 600).unwrap();
+        let enrollment = store.create_worker_enrollment(&tenant, "owner-device", NOW, 600).unwrap();
+        store.register_worker_device(
+            &tenant,
+            &enrollment,
+            &challenge.id,
+            &challenge.nonce,
+            "worker-device",
+            "Worker",
+            "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+            "worker-thumb",
+            NOW,
+        ).unwrap();
+        for command in ["managed_desktop_delegate", "managed_desktop_delegation_revoke"] {
+            assert_eq!(
+                dispatch(command, serde_json::json!({}), local_qualification_caller(), None, None)
+                    .await.unwrap_err().code,
+                "managed_desktop_invalid_request"
+            );
+            for (device, scope, error) in [
+                ("worker-device", None, "managed_desktop_human_authorization_required"),
+                ("service", Some("service"), "managed_desktop_human_authorization_required"),
+                ("member-device", Some("device"), "managed_desktop_admin_required"),
+            ] {
+                let args = if command == "managed_desktop_delegate" {
+                    serde_json::json!({
+                        "desktopId":"desktop","generation":1,
+                        "grantee":{"kind":"session","sessionKey":"s"},
+                    })
+                } else {
+                    serde_json::json!({"delegationId":"grant","expectedRevision":1})
+                };
+                let caller = Caller {
+                    device_id: device,
+                    tenant_id: Some(&tenant),
+                    scope,
+                    local: false,
+                };
+                assert_eq!(
+                    dispatch(command, args, caller, None, Some(Arc::new(|| Ok(()))))
+                        .await.unwrap_err().code,
+                    error
+                );
+            }
+        }
+        let expired: AdminAuthorityCheck = Arc::new(|| {
+            Err(refused("managed_desktop_control_admin_lease_expired"))
+        });
+        assert_eq!(
+            dispatch(
+                "managed_desktop_delegate",
+                serde_json::json!({
+                    "desktopId":"unknown","generation":1,
+                    "grantee":{"kind":"session","sessionKey":"s"},
+                }),
+                local_qualification_caller(), None, Some(expired),
+            ).await.unwrap_err().code,
+            "managed_desktop_control_admin_lease_expired"
+        );
+        let member = Caller {
+            device_id: "member-device",
+            tenant_id: Some(&tenant),
+            scope: Some("device"),
+            local: false,
+        };
+        assert_eq!(
+            dispatch("managed_desktop_delegation_list", serde_json::json!({}), member, None, None)
+                .await.unwrap_err().code,
+            "managed_desktop_admin_required"
+        );
+        for (device, scope) in [("worker-device", None), ("service", Some("service"))] {
+            assert_eq!(dispatch("managed_desktop_delegation_list", serde_json::json!({}), Caller {
+                device_id: device, tenant_id: Some(&tenant), scope, local: false,
+            }, None, None).await.unwrap_err().code, "managed_desktop_admin_required");
+        }
+        let remote = Caller { device_id: "owner-device", tenant_id: Some(&tenant), scope: Some("device"), local: false };
+        for command in ["managed_desktop_delegate", "managed_desktop_delegation_revoke"] {
+            assert_eq!(dispatch(command, serde_json::json!({}), remote, None, None).await.unwrap_err().code,
+                "managed_desktop_control_admin_lease_expired");
+        }
+    }
+
+    #[test]
+    fn delegation_refuses_multi_tenant_with_a_dedicated_deployment_code() {
+        assert_eq!(delegation_deployment(cognia_companion::deployment::DeploymentMode::MultiTenant).unwrap_err().code,
+            "managed_desktop_delegation_unsupported_deployment");
+        delegation_deployment(cognia_companion::deployment::DeploymentMode::SingleUser).unwrap();
+    }
+
+    type DelegationTestEvents = Arc<parking_lot::Mutex<Vec<(String, Value)>>>;
+    fn delegation_test_workload(desktop: Value) -> Value {
+        use serde_json::json;
+        let process = |boundary: &Value, pid, executable| json!({
+            "pid":pid,"startTime":1,"executable":executable,"status":boundary["status"],
+            "namespaces":boundary["namespaces"],"descriptors":desktop["descriptors"],
+        });
+        let probe = |boundary: &Value, pid| json!({
+            "process":process(boundary, pid, "/usr/local/bin/cognia-desktop-guest"),
+            "sockets":(["1.1.1.1","10.0.0.1","172.16.0.1","192.168.0.1","100.64.0.1","169.254.0.1",
+                "169.254.169.254","2606:4700:4700::1111","fd00:ec2::254","169.254.170.2","100.100.100.200",
+                "::ffff:169.254.169.254","fd00::1","fe80::1","::ffff:10.0.0.1"].into_iter().flat_map(|target| {
+                    [("tcp",80),("tcp",443),("udp",443)].into_iter().map(move |(transport,port)|
+                        json!({"target":target,"transport":transport,"port":port,"result":-1,"errno":101}))
+                }).collect::<Vec<_>>()),
+            "escapes":[{"operation":"unshareUser","result":-1,"errno":1},{"operation":"setuidRoot","result":-1,"errno":22}],
+            "paths":(["/run/cognia-desktop/control.sock","/run/cognia-desktop/state.json","/run/cognia-desktop/relay.sock",
+                "/run/envd.sock","/root/.e2b","/var/lib/cognia-desktop"].into_iter().map(|operation|
+                    json!({"operation":operation,"result":-1,"errno":2})).collect::<Vec<_>>()),
+            "hostnames":(["example.com","metadata.google.internal"].into_iter().map(|operation|
+                json!({"operation":operation,"result":-3,"errno":-3})).collect::<Vec<_>>()),
+            "localHelpers":(["127.0.0.1:49983","127.0.0.1:8000"].into_iter().map(|operation|
+                json!({"operation":operation,"result":-1,"errno":111})).collect::<Vec<_>>()),
+        });
+        let mut acceptance = desktop.clone();
+        acceptance["phase"] = json!("acceptanceAdmission");
+        for fd in [3,4] {
+            acceptance["descriptors"][fd.to_string()] = json!({"target":format!("pipe:[{fd}]"),"flags":0o2000000,"socketScope":null});
+        }
+        let mut importer = desktop.clone();
+        importer["phase"] = json!("importerAdmission");
+        importer["status"] = json!(desktop["status"].as_str().unwrap().replace("1000", "1001"));
+        for ns in ["user","mnt","net","pid","ipc","uts"] {
+            importer["namespaces"][ns] = json!(format!("{ns}:[3]"));
+        }
+        importer["descriptors"]["0"]["target"] = json!("pipe:[42]");
+        let mut weak = importer.clone();
+        weak["status"] = json!(importer["status"].as_str().unwrap().replace("Seccomp:2", "Seccomp:0"));
+        let mut negative = process(&desktop, 30, "/usr/local/bin/cognia-desktop-guest");
+        negative["namespaces"] = desktop["providerNamespaces"].clone();
+        negative["status"] = json!("Uid:0 0 0 0");
+        json!({
+            "reportVersion":2,"boundaryGeneration":desktop["boundaryGeneration"],"negativeControl":negative,
+            "weakenedLaunch":{"profile":"importer-without-seccomp-v1","executable":"/usr/local/bin/cognia-desktop-guest",
+                "terminatedProcesses":{"20":1,"21":2},"survivingProcesses":{},"admission":weak},
+            "acceptanceAdmission":acceptance,"importerAdmission":importer,
+            "desktopProbe":{"acceptance":probe(&desktop,40),"terminal":probe(&desktop,41),"detachedPid":50,
+                "browser":{"process":process(&desktop,42,"/usr/lib/chromium/chromium"),"exitCode":0,
+                    "localPreview":"cognia-qualified-loopback","metadataNavigationNetErrors":[-109],
+                    "redirectNetErrors":[-109],"hostnameNetErrors":[-105]}},
+            "importerProbe":{"importer":probe(&importer,43),"git":process(&importer,44,"/usr/bin/git"),"gitExitCode":0},
+            "terminatedProcesses":{"20":1,"50":1,"60":1},"survivingProcesses":{},"detachedOuterPid":50,
+            "supervisorPid":60,"supervisorStartTime":1,"ingressErrno":111,"desktop":desktop,
+        })
+    }
+    fn qualify_delegation_test_journal(state: &mut journal::ManagedDesktopJournal, config: &ManagedDesktopConfig, now: i64) {
+        use serde_json::json;
+        let base = state.desktops["desktop"].clone();
+        let template = base.template.clone();
+        let digest = config.binding_digest();
+        state.templates.insert("template-record".into(), TemplateRecord {
+            id:"template-record".into(), authorization_id:"authorization".into(), quote_id:"quote".into(),
+            config:config.clone(), binding_digest:digest.clone(), state:TemplateState::Ready, identity:Some(template.clone()),
+            created_at:now, updated_at:now, error_code:None, deletion_requested_at:None, cleanup_attempts:0, next_retry_at:now,
+        });
+        let namespaces = |suffix| ["user","mnt","net","pid","ipc","uts"].into_iter()
+            .map(|ns| (ns.to_owned(), json!(format!("{ns}:[{suffix}]")))).collect::<serde_json::Map<_,_>>();
+        let observation = json!({
+            "reportVersion":1,"workloadIsolationRevision":1,"phase":"desktopLive",
+            "boundaryGeneration":"6a370d8e-2d69-40fb-9586-786b7424365a",
+            "namespaceInitPid":20,"namespaceInitStartTime":1,"workloadPid":21,"workloadStartTime":2,
+            "namespaces":namespaces(2),"providerNamespaces":namespaces(1),
+            "status":"Uid:1000 1000 1000 1000\nGid:1000 1000 1000 1000\nGroups:\nCapInh:0\nCapPrm:0\nCapEff:0\nCapBnd:0\nCapAmb:0\nNoNewPrivs:1\nSeccomp:2\n",
+            "networkDevices":"header\nheader\n lo: 0\n","ipv4Routes":"header\n","ipv6Routes":"",
+            "descriptors":{"0":{"target":"/dev/null","flags":0,"socketScope":null},"1":{"target":"/dev/null","flags":0,"socketScope":null},"2":{"target":"/dev/null","flags":0,"socketScope":null}}
+        });
+        let ids: Vec<_> = (0..5).map(|index| format!("evidence-{index}")).collect();
+        for id in &ids {
+            let mut row = base.clone();
+            row.desktop.id = id.clone();
+            row.desktop.state = ManagedDesktopState::Destroyed;
+            row.smoke = true;
+            row.resource_id = Some(format!("resource-{id}"));
+            let binding = HostBoundaryBinding {
+                binding_digest:digest.clone(), owner_principal_id:config.owner_principal_id.clone(), host_id:config.host_id.clone(),
+                desktop_id:id.clone(), desktop_generation:1, resource_id:row.resource_id.clone().unwrap(),
+                template:template.clone(), observed_at:now, observation:serde_json::from_value(observation.clone()).unwrap(),
+            };
+            assert!(binding.matches_record(&row));
+            state.workload_boundaries.insert(id.clone(), binding);
+            state.desktops.insert(id.clone(), row);
+        }
+        state.lifecycle_diagnostics.insert(digest.clone(), QualificationReceipt {
+            evidence_version:2, workload_evidence:None, provider_root_observation:None, binding_digest:digest.clone(),
+            template:template.clone(), observed_at:now, smoke_desktop_ids:ids[..2].to_vec(), native_expiry_killed:true,
+            no_auto_resume:true, ingress_denied:true, guest_auth_denied:true, decoded_frame_verified:true, protocol_verified:true,
+            restart_deadline_verified:true, delete_retry_verified:true, private_egress_probe_no_response:false, egress_policy_verified:true,
+        });
+        let mut assertions = serde_json::to_value(
+            cognia_automation::cua_sandbox::managed::service::control::ControlQualificationAssertions::default(),
+        ).unwrap();
+        for value in assertions.as_object_mut().unwrap().values_mut() { *value = json!(true); }
+        state.control_qualifications.insert(digest.clone(), ControlQualificationReceipt {
+            binding_digest:digest.clone(), template:template.clone(), smoke_desktop_id:ids[2].clone(), smoke_desktop_generation:1,
+            observed_at:now, protocol_revision:1, evidence_version:2, assertions:serde_json::from_value(assertions).unwrap(),
+        });
+        let mut evidence = serde_json::to_value(HostAuthoritySmokeEvidence::default()).unwrap();
+        for value in evidence.as_object_mut().unwrap().values_mut() {
+            if value.is_boolean() { *value = json!(true); }
+        }
+        evidence["evidenceVersion"] = json!(1);
+        evidence["smokeDesktopId"] = json!(ids[3]);
+        evidence["smokeDesktopGeneration"] = json!(1);
+        evidence["observedAt"] = json!(now);
+        evidence["consentTimeoutMs"] = json!(5000);
+        evidence["positiveAdmittedCommands"] = json!(1);
+        evidence["compoundAdmittedCommands"] = json!(1);
+        evidence["compoundDeniedCommands"] = json!(1);
+        state.authority_diagnostics.insert(digest.clone(), NativeAuthorityDiagnostic {
+            boundary:state.workload_boundaries[&ids[3]].clone(), evidence:serde_json::from_value(evidence).unwrap(), recorded_at:now,
+        });
+        let diagnostic: NativeWorkloadDiagnostic = serde_json::from_value(json!({
+            "boundary":state.workload_boundaries[&ids[4]],"report":delegation_test_workload(observation),"recordedAt":now,
+        })).unwrap();
+        diagnostic.report.validate().unwrap();
+        state.workload_diagnostics.insert(digest, diagnostic);
+    }
+    async fn delegation_rpc_fixture() -> (
+        tempfile::TempDir, Arc<ManagedDesktopService>, DelegationTestEvents,
+    ) {
+        delegation_rpc_fixture_qualified(false).await
+    }
+    async fn delegation_rpc_fixture_qualified(qualified: bool) -> (
+
+        tempfile::TempDir,
+        Arc<ManagedDesktopService>,
+        DelegationTestEvents,
+    ) {
+        let events_seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let observed = events_seen.clone();
+        let events: HostEventSink = Arc::new(move |topic, data| {
+            observed.lock().push((topic.to_owned(), data));
+        });
+        let (directory, service, p) = qualification_fixture(None).await;
+        let provider = service.diagnostic_provider();
+        shutdown();
+        drop(service);
+        let store = journal::JournalStore::open(directory.path()).unwrap();
+        let mut registry = store.registry().unwrap();
+        registry.providers[0].enablement.agent_control = qualified;
+        store.save_registry(&registry).unwrap();
+        let config = registry.providers.remove(0);
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut state = store.load("test-host").unwrap();
+        state.desktops.insert("desktop".into(), DesktopRecord {
+            desktop: ManagedDesktop {
+                id: "desktop".into(),
+                provider_config_id: config.id.clone(),
+                generation: 1,
+                state: ManagedDesktopState::Running,
+                deadline_at: now + 60_000,
+                idle_timeout_seconds: 600,
+                created_at: now,
+                updated_at: now,
+                last_error_code: None,
+                cleanup_attempts: 0,
+                qualification: "dormant".into(),
+            },
+            config: config.clone(),
+            template: TemplateIdentity {
+                template_id: "template".into(),
+                build_id: "build".into(),
+                image_digest: config.release.image_digest.clone(),
+                recipe_revision: config.release.recipe_revision.clone(),
+                protocol: config.release.protocol.clone(),
+            },
+            operation_id: "operation".into(),
+            authorization_id: "authorization".into(),
+            quote_id: "quote".into(),
+            principal_id: p.principal_id.clone(),
+            source_id: None,
+            resource_id: None,
+            last_activity_at: now,
+            next_retry_at: now,
+            delete_requested: false,
+            smoke: false,
+            bootstrap_started: true,
+            bootstrap_completed: true,
+            cleanup_requested_at: None,
+        });
+        if qualified {
+            qualify_delegation_test_journal(&mut state, &config, now);
+        }
+        state.delegations.insert("grant".into(), ManagedDesktopDelegation {
+            id: "grant".into(),
+            account_binding_epoch: Some(host_identity::account_binding_epoch()),
+            account_binding_instance_id: Some(host_identity::account_binding_instance_id().into()),
+            owner_principal_id: p.owner_principal_id.clone(),
+            host_id: p.host_id.clone(),
+            desktop_id: "desktop".into(),
+            desktop_generation: 1,
+            provider_config_id: config.id.clone(),
+            grantee: ManagedDesktopGrantee::Session { session_key: "session".into() },
+            mode: ManagedDesktopDelegationMode::ComputerUse,
+            state: ManagedDesktopDelegationState::Live,
+            end_reason: None,
+            expires_at: now + 60_000,
+            revision: 1,
+            created_at: now,
+            created_by_principal_id: p.principal_id.clone(),
+            ended_at: None,
+        });
+        store.save(&state).unwrap();
+        drop(store);
+        let service = Arc::new(ManagedDesktopService::open(
+            directory.path(),
+            "test-host".into(),
+            provider,
+            Arc::new(FileManagedDesktopSecrets::open(&directory.path().join("vault")).unwrap()),
+            Some(config.release),
+        ).unwrap());
+        install_delegation_runtime(&service, Some(events.clone()));
+        *INSTALLED.write() = Some(Installed {
+            directory: directory.path().to_owned(),
+            service: service.clone(),
+            host_id: "test-host".into(),
+            release: crate::managed_desktop_release::ReleaseStatus::of(&Ok(None)),
+            worker: tokio::spawn(std::future::pending()),
+            qualification: Arc::new(qualification::QualificationRuntime::new(service.clone(), Some(events))),
+        });
+        (directory, service, events_seen)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn local_delegation_and_revoke_succeed_without_an_admin_lease() {
+        let _scope = TestScope::new();
+        let (_directory, _service, events) = delegation_rpc_fixture_qualified(true).await;
+        let expiry = chrono::Utc::now().timestamp_millis() + 10_000;
+        let args = serde_json::json!({"desktopId":"desktop","generation":1,
+            "grantee":{"kind":"character","characterId":"local-character"},"expiresAt":expiry});
+        let grant = dispatch("managed_desktop_delegate", args, local_qualification_caller(), None, None).await.unwrap();
+        assert_eq!(grant["expiresAt"], expiry);
+        assert_eq!(grant["state"], "live");
+        let repeated = dispatch("managed_desktop_delegate", serde_json::json!({
+            "desktopId":"desktop","generation":1,"grantee":{"kind":"character","characterId":"local-character"},
+        }), local_qualification_caller(), None, None).await.unwrap();
+        assert_eq!(grant, repeated);
+        let revoked = dispatch("managed_desktop_delegation_revoke", serde_json::json!({
+            "delegationId":grant["id"],"expectedRevision":grant["revision"],
+        }), local_qualification_caller(), None, None).await.unwrap();
+        assert_eq!(revoked["endReason"], "revoked");
+        assert_eq!(events.lock().iter().filter(|(topic, _)| topic == DELEGATION_CHANGED_TOPIC).count(), 2);
+        assert!(events.lock().iter().all(|(_, data)| *data == serde_json::json!({})));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delegation_rpc_lists_revokes_emits_data_free_events_and_refuses_unqualified_creation() {
+        let _scope = TestScope::new();
+        let (_directory, _service, events_seen) = delegation_rpc_fixture().await;
+        let listed = dispatch(
+            "managed_desktop_delegation_list", serde_json::json!({}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(listed["delegations"][0]["state"], "live");
+        assert!(listed["delegations"][0].get("ownerPrincipalId").is_none());
+        assert!(events_seen.lock().is_empty());
+        let args = serde_json::json!({
+            "desktopId":"desktop","generation":1,
+            "grantee":{"kind":"session","sessionKey":"session"},
+        });
+        assert_eq!(
+            dispatch("managed_desktop_delegate", args, local_qualification_caller(), None, None)
+                .await.unwrap_err().code,
+            "managed_desktop_agent_control_unqualified"
+        );
+        let revoked = dispatch(
+            "managed_desktop_delegation_revoke",
+            serde_json::json!({"delegationId":"grant","expectedRevision":1}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(revoked["state"], "ended");
+        assert_eq!(revoked["endReason"], "revoked");
+        assert_eq!(revoked["revision"], 2);
+        assert!(revoked["endedAt"].as_i64().unwrap() >= revoked["createdAt"].as_i64().unwrap());
+        assert_eq!(
+            *events_seen.lock(),
+            vec![(DELEGATION_CHANGED_TOPIC.to_owned(), serde_json::json!({}))]
+        );
+        let listed = dispatch(
+            "managed_desktop_delegation_list", serde_json::json!({}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(listed["delegations"][0], revoked);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn delegation_rpc_observes_account_epoch_even_after_an_unobserved_switch_back() {
+        let _scope = TestScope::new();
+        let (_directory, service, events) = delegation_rpc_fixture().await;
+        let caller = principal(&local_qualification_caller(), "test-host").unwrap();
+        let before = service.delegation_list(&caller).await.unwrap();
+        let epoch = before[0].account_binding_epoch.unwrap();
+        host_identity::bind_local_account("another-account", "another-digest").unwrap();
+        host_identity::bind_local_account("qualification-account", "digest").unwrap();
+        assert!(host_identity::account_binding_epoch() > epoch);
+        let listed = dispatch(
+            "managed_desktop_delegation_list", serde_json::json!({}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(listed["delegations"][0]["state"], "ended");
+        assert_eq!(listed["delegations"][0]["endReason"], "accountChanged");
+        assert_eq!(
+            *events.lock(),
+            vec![(DELEGATION_CHANGED_TOPIC.to_owned(), serde_json::json!({}))]
+        );
+        let listed_again = dispatch(
+            "managed_desktop_delegation_list", serde_json::json!({}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(listed, listed_again);
     }
 
 }

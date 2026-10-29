@@ -83,6 +83,8 @@ export interface CallContext {
    * grant is scoped to one conversation instead of the whole app session.
    */
   sessionKey?: string
+  /** Bound character identity for Host-managed desktop delegation checks (ADR-0233 A5). */
+  characterId?: string
   /** Authenticated model message or workflow-step id for revision tokens. */
   turnKey?: string
 }
