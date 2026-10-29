@@ -33,7 +33,10 @@ import {
   toolGlyph,
   toolHeaderLabel,
   toolKind,
+  TODO_MARK,
+  todoLabel,
 } from "../format/tools"
+import { createCliTranslator, type CliLocale } from "../i18n"
 import {
   describeToolResult,
   formatResultDescriptor,
@@ -330,6 +333,7 @@ export const VERBATIM_RENDER_PREFS: ResolvedRenderConfig = {
 export interface CellRenderOptions {
   width: number
   verbose: boolean
+  locale?: CliLocale
   prefs?: ResolvedRenderConfig
   /** Palette for theme-aware syntax colours, matching the Ink card path. */
   palette?: ThemePalette
@@ -675,7 +679,8 @@ function cellSpans(
   verbose: boolean,
   prefs: ResolvedRenderConfig,
   palette: ThemePalette | undefined,
-  maxWidth: number
+  maxWidth: number,
+  locale?: CliLocale
 ): { spans: TerminalSpan[]; target?: string } {
   switch (cell.kind) {
     case "user":
@@ -715,18 +720,18 @@ function cellSpans(
     case "todo":
       return {
         spans: [
-          seg("Todos", "accent", { bold: true }),
+          seg(createCliTranslator(locale, "cliUiCommon")("todos"), "accent", { bold: true }),
           ...cell.todos.flatMap((todo) => [
             BREAK,
             seg(
-              `${todo.status === "completed" ? "☑" : todo.status === "in_progress" ? "▣" : "☐"} `,
+              `${TODO_MARK[todo.status]} `,
               todo.status === "completed"
                 ? "success"
                 : todo.status === "in_progress"
                   ? "warning"
                   : "muted"
             ),
-            seg(todo.content, todo.status === "completed" ? "muted" : "plain"),
+            seg(todoLabel(todo), todo.status === "completed" ? "muted" : "plain"),
           ]),
         ],
       }
@@ -804,7 +809,8 @@ export function cellToTerminalBlock(cell: Cell, options: CellRenderOptions): Ter
     options.verbose,
     options.prefs ?? RENDER_DEFAULTS,
     options.palette,
-    options.width
+    options.width,
+    options.locale
   )
   return buildTerminalBlock({
     id: cell.id,
@@ -822,22 +828,41 @@ export interface TerminalBlockCacheKey {
   revision: string
 }
 
+/** Hidden task replay data cannot affect pixels or become part of cache keys. */
+export function cellRenderRevision(cell: Cell): string {
+  try {
+    return JSON.stringify(
+      cell.kind === "todo" ? cell.todos.map((todo) => [todo.status, todoLabel(todo)]) : cell
+    )
+  } catch {
+    return `${cell.id}:${cell.kind}`
+  }
+}
+
 export class TerminalBlockCache {
-  private readonly entries = new Map<string, TerminalBlock>()
+  private readonly entries = new Map<string, { key: string; block: TerminalBlock }>()
   private hits = 0
   private misses = 0
 
   get(key: TerminalBlockCacheKey, build: () => TerminalBlock): TerminalBlock {
     const serialized = `${key.id}\u0000${key.width}\u0000${key.theme}\u0000${key.preferences}\u0000${key.revision}`
-    const cached = this.entries.get(serialized)
-    if (cached) {
+    const cached = this.entries.get(key.id)
+    if (cached?.key === serialized) {
       this.hits += 1
-      return cached
+      return cached.block
     }
     this.misses += 1
     const block = build()
-    this.entries.set(serialized, block)
+    this.entries.set(key.id, { key: serialized, block })
     return block
+  }
+
+  /** Drop cells from previous sessions and superseded context groups. */
+  retain(ids: Iterable<string>): void {
+    const active = new Set(ids)
+    for (const id of this.entries.keys()) {
+      if (!active.has(id)) this.entries.delete(id)
+    }
   }
 
   stats(): { hits: number; misses: number; size: number; hitRate: number } {

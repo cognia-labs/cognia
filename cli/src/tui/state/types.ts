@@ -102,11 +102,15 @@ export interface ToolCell {
   result?: unknown
   isError?: boolean
   collapsed: boolean
+  /** Internal replay seed; never a provider call eligible for correlation. */
+  taskCheckpoint?: true
 }
 
 export interface Todo {
+  /** Stable Task* id, or a provisional call id until TaskCreate returns. */
+  id?: string
   content: string
-  status: "pending" | "in_progress" | "completed"
+  status: "pending" | "in_progress" | "completed" | "skipped"
   activeForm?: string
 }
 
@@ -114,6 +118,8 @@ export interface TodoCell {
   id: string
   kind: "todo"
   todos: Todo[]
+  /** Ordered current-turn calls plus compact checkpoints for prior turns. */
+  toolCalls?: ToolCell[]
 }
 
 export interface ErrorCell {

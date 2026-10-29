@@ -7,8 +7,21 @@
  * typed and submitted a message.
  */
 import React from "react"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { act, render } from "@testing-library/react"
 import { __fireInput, __resetInk } from "ink"
+import { disposeOpenCliDb } from "../../db/bootstrap"
+import { __disposeCliBackgroundJournalForTesting } from "../../agent/subagent-background-tasks"
+
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-backend-test-"))
+
+afterAll(async () => {
+  await __disposeCliBackgroundJournalForTesting()
+  await disposeOpenCliDb()
+  fs.rmSync(testHome, { recursive: true, force: true })
+})
 
 import { App } from "./App"
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
@@ -119,7 +132,7 @@ function renderApp(
       config={config}
       sessionId="s1"
       trusted={false}
-      home="/home/u/.cognia"
+      home={testHome}
       trustFolderFn={() => undefined}
       connectBackendFn={connectBackendFn}
       createExternalSession={

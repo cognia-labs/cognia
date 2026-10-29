@@ -4,6 +4,7 @@
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../../config/schema"
 import type { UsageInfo } from "../state/types"
 import { stringWidth } from "../markdown/width"
+import { ANTHROPIC_DEFAULT_MODEL } from "@/lib/ai/provider-default-model"
 
 import {
   buildStatusBar,
@@ -183,7 +184,7 @@ describe("buildStatusBar", () => {
     }
     const byId = Object.fromEntries(buildStatusBar({ config: cfg }).map((s) => [s.id, s]))
     expect(byId.model.text).not.toBe("deepseek-chat")
-    expect(byId.model.text).toBe("claude-sonnet-5")
+    expect(byId.model.text).toBe(ANTHROPIC_DEFAULT_MODEL)
   })
 
   it("sizes the ctx segment against the per-model window override", () => {

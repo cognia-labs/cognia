@@ -2,8 +2,13 @@ import React from "react"
 import { render } from "@testing-library/react"
 
 import { CellView } from "./CellView"
+import { CliI18nProvider } from "../i18n"
+import { VirtualizedTranscript, terminalBlockCacheStats } from "./VirtualizedTranscript"
+import { Transcript } from "./Transcript"
 import { RenderPrefsProvider } from "../render/context"
-import { RENDER_DEFAULTS } from "../../config/schema"
+import { DEFAULT_RESOLVED_CONFIG, RENDER_DEFAULTS } from "../../config/schema"
+import { createInitialState } from "../state/initial"
+import { tuiReducer } from "../state/reducer"
 import { hasSpinnerFrame } from "./Spinner"
 import type { Cell } from "../state/types"
 
@@ -12,6 +17,187 @@ function renderCell(cell: Cell) {
 }
 
 describe("CellView", () => {
+  it.each([0, 1, 2])("uses at most one summary row with a %i-row todo budget", (maxRows) => {
+    const { container } = render(
+      <CellView
+        todoMaxRows={maxRows}
+        columns={24}
+        cell={{
+          id: "tiny",
+          kind: "todo",
+          todos: [
+            { content: "Done", status: "completed" },
+            { content: "Next", status: "pending" },
+            { content: "Work", activeForm: "Working\nnow", status: "in_progress" },
+          ],
+        }}
+      />
+    )
+    expect(container.textContent).toBe(maxRows === 0 ? "" : "▣ Working now · 1/3")
+    expect(container.textContent).not.toContain("Todos")
+    expect(container.textContent).not.toContain("Next")
+  })
+  it("preserves the progress count when the current task needs truncation", () => {
+    const { container } = render(
+      <CellView
+        todoMaxRows={1}
+        columns={10}
+        cell={{
+          id: "tiny-long",
+          kind: "todo",
+          todos: [{ content: "A long current task", status: "in_progress" }],
+        }}
+      />
+    )
+    expect(container.textContent).toMatch(/ · 0\/1$/)
+    expect(container.textContent!.length).toBeLessThanOrEqual(10)
+  })
+  it.each([
+    ["en", "Todos · 1/1"],
+    ["zh-CN", "任务列表 · 1/1"],
+  ] as const)("summarizes a settled list without inventing a current item (%s)", (locale, text) => {
+    const { container } = render(
+      <CliI18nProvider locale={locale}>
+        <CellView
+          todoMaxRows={1}
+          cell={{ id: "done", kind: "todo", todos: [{ content: "Done", status: "completed" }] }}
+        />
+      </CliI18nProvider>
+    )
+    expect(container.textContent).toBe(text)
+  })
+  it.each([
+    ["en", "+2 more · 1/3 done"],
+    ["zh-CN", "+2 项 · 已完成 1/3"],
+  ] as const)("bounds live tasks with a localized summary (%s)", (locale, summary) => {
+    const { container } = render(
+      <CliI18nProvider locale={locale}>
+        <CellView
+          todoMaxRows={3}
+          columns={30}
+          cell={{
+            id: "bounded",
+            kind: "todo",
+            todos: [
+              { content: "Done", status: "completed" },
+              { content: "Wait", status: "pending" },
+              { content: "Work", activeForm: "Working\nnow", status: "in_progress" },
+            ],
+          }}
+        />
+      </CliI18nProvider>
+    )
+    expect(container.textContent).toContain("▣ Working now")
+    expect(container.textContent).toContain(summary)
+    expect(container.textContent).not.toContain("☑ Done")
+    expect(container.textContent).not.toContain("☐ Wait")
+  })
+  it("keeps fullscreen task caching independent of replay history and prior sessions", () => {
+    const task: Cell = {
+      id: "history-independent",
+      kind: "todo",
+      todos: [{ content: "Build", status: "pending" }],
+    }
+    const view = (cell: Cell) => (
+      <VirtualizedTranscript cells={[cell]} width={80} top={0} viewportRows={20} verbose={false} />
+    )
+    const { container, rerender } = render(view(task))
+    const before = terminalBlockCacheStats()
+    rerender(
+      view({
+        ...task,
+        toolCalls: [
+          {
+            id: "hidden",
+            kind: "tool",
+            callKey: "hidden",
+            toolName: "TaskList",
+            input: {},
+            result: "unused history".repeat(1000),
+            status: "done",
+            collapsed: true,
+          },
+        ],
+      })
+    )
+    expect(terminalBlockCacheStats().hits).toBe(before.hits + 1)
+    expect(container.textContent).toContain("☐ Build")
+    rerender(view({ id: "another-session", kind: "assistant", raw: "Next" }))
+    expect(terminalBlockCacheStats().size).toBe(1)
+  })
+  it.each([
+    ["en", "Todos"],
+    ["zh-CN", "任务列表"],
+  ] as const)(
+    "renders localized task labels and a distinct skipped row (%s)",
+    (locale, heading) => {
+      const { container, getByText } = render(
+        <CliI18nProvider locale={locale}>
+          <CellView
+            cell={{
+              id: "tasks",
+              kind: "todo",
+              todos: [
+                { content: "Build", activeForm: "Building", status: "in_progress" },
+                { content: "Ship", status: "skipped" },
+                { content: "Done", status: "completed" },
+              ],
+            }}
+          />
+        </CliI18nProvider>
+      )
+      expect(container.textContent).toContain(heading)
+      expect(container.textContent).toContain("▣ Building")
+      expect(getByText("⊘ Ship")).toBeTruthy()
+      expect(container.textContent).toContain("☑ Done")
+    }
+  )
+
+  it.each(["fullscreen", "scrollback"])("updates task rows and headings live in %s", (layout) => {
+    let state = tuiReducer(
+      createInitialState({ ...DEFAULT_RESOLVED_CONFIG, cwd: "/work" }, "live-tasks"),
+      {
+        type: "TOOL_CALL",
+        callKey: "create",
+        toolName: "TaskCreate",
+        input: { subject: "Build", activeForm: "Building" },
+      }
+    )
+    const view = (locale: "en" | "zh-CN", task: Cell) => (
+      <CliI18nProvider locale={locale}>
+        {layout === "fullscreen" ? (
+          <VirtualizedTranscript
+            cells={[task]}
+            width={80}
+            top={0}
+            viewportRows={20}
+            verbose={false}
+          />
+        ) : (
+          <Transcript cells={[task]} />
+        )}
+      </CliI18nProvider>
+    )
+    const { container, rerender } = render(view("en", state.cells[0]))
+    expect(container.textContent).toContain("Todos")
+    expect(container.textContent).toContain("☐ Build")
+    state = tuiReducer(state, {
+      type: "TOOL_RESULT",
+      callKey: "create",
+      toolName: "TaskCreate",
+      result: "Task #3 created successfully: Build",
+    })
+    state = tuiReducer(state, {
+      type: "TOOL_CALL",
+      callKey: "update",
+      toolName: "TaskUpdate",
+      input: { taskId: "3", status: "in_progress" },
+    })
+    rerender(view("zh-CN", state.cells[0]))
+    expect(container.textContent).toContain("任务列表")
+    expect(container.textContent).toContain("▣ Building")
+    expect(container.textContent).not.toContain("Todos")
+  })
   it("shows compact image labels in scrollback", () => {
     const text = renderCell({
       id: "image-user",

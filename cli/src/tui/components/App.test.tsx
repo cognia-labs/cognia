@@ -52,14 +52,6 @@ jest.mock("../render/cell-terminal-block", () => ({
       lines: [{ plain: plainText, spans: [{ text: plainText, style: "plain" }] }],
     }
   },
-  TerminalBlockCache: class {
-    get(_key: unknown, build: () => unknown) {
-      return build()
-    }
-    stats() {
-      return { hits: 0, misses: 0, size: 0, hitRate: 0 }
-    }
-  },
 }))
 jest.mock("./Markdown", () => ({
   Markdown: ({ raw }: { raw: string }) => raw,
@@ -81,11 +73,14 @@ jest.mock("../../handoff/host-state-client", () => ({
 }))
 
 import { App } from "./App"
-import { flushOpenCliDb } from "../../db/bootstrap"
+import { disposeOpenCliDb, flushOpenCliDb } from "../../db/bootstrap"
 jest.mock("../../db/bootstrap", () => ({
   ...jest.requireActual("../../db/bootstrap"),
   flushOpenCliDb: jest.fn().mockResolvedValue(undefined),
 }))
+afterAll(async () => {
+  await disposeOpenCliDb()
+})
 import { BUILTIN_HOOKS } from "@/lib/claude/hooks/builtin-hooks"
 import * as limitsData from "../runtime/limits-data"
 jest.mock("../runtime/limits-data", () => ({
@@ -202,7 +197,8 @@ describe("App", () => {
     isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-app-test-"))
     process.env.COGNIA_HOME = isolatedHome
   })
-  afterAll(() => {
+  afterAll(async () => {
+    await disposeOpenCliDb()
     if (previousHome === undefined) delete process.env.COGNIA_HOME
     else process.env.COGNIA_HOME = previousHome
     fs.rmSync(isolatedHome, { recursive: true, force: true })

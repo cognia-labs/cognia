@@ -26,6 +26,8 @@
   "diffFailed": "无法读取变更：{error}",
   "working": "正在执行",
   "thinking": "正在思考",
+  "todos": "任务列表",
+  "todosMore": "+{count} 项 · 已完成 {done}/{total}",
   "editingMessage": "编辑消息 #{position}/{total} — ↑/↓ 选择 · Enter 编辑 · Esc 取消",
   "editingDiscard": "编辑消息 #{position}/{total} · 发送后将移除后续 {later} 轮对话 · Esc 取消",
   "copied": "已将完整文档复制到剪贴板。",

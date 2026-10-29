@@ -423,8 +423,7 @@ function planActions(event: ExternalAgentPlanUpdateEvent): TuiAction[] {
 }
 
 function planEntryToTodo(entry: AcpPlanEntry): Record<string, string> {
-  const status = entry.status === "skipped" ? "completed" : entry.status
-  return { content: entry.content, activeForm: entry.content, status }
+  return { content: entry.content, activeForm: entry.content, status: entry.status }
 }
 
 /**

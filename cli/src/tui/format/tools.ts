@@ -6,6 +6,8 @@
 import { formatEditDiff, bareToolName } from "../markdown/diff"
 import { truncateToWidth } from "../markdown/width"
 import type { Todo, ToolCell } from "../state/types"
+import { deriveSessionTasks } from "@/lib/chat/session-tasks"
+import { parseTodoInput } from "@/lib/chat/todos"
 
 /** Tools whose input describes a file edit we render as a diff. */
 const DIFF_TOOLS = new Set(["edit", "write", "multi_edit", "multiedit", "str_replace", "create"])
@@ -150,9 +152,30 @@ export function toolHeaderLabel(toolName: string): string {
   return m ? `${m[1]}:${humanizeToolName(m[2])}` : humanizeToolName(toolName)
 }
 
-/** The TodoWrite tool name (case-insensitive match). */
+/** Only the host's namespaces own the agent's task list. */
+function taskToolName(toolName: string): string | undefined {
+  const name = toolName.replace(/^mcp__(?:cognia-tools|cognia-plugin-tools)__/, "").toLowerCase()
+  switch (name) {
+    case "todowrite":
+      return "TodoWrite"
+    case "taskcreate":
+      return "TaskCreate"
+    case "taskupdate":
+      return "TaskUpdate"
+    case "tasklist":
+      return "TaskList"
+    default:
+      return undefined
+  }
+}
+
+/** Both task tool families, including namespaced host tools. */
 export function isTodoTool(toolName: string): boolean {
-  return toolName.toLowerCase() === "todowrite"
+  return taskToolName(toolName) !== undefined
+}
+
+export function isTodoWriteTool(toolName: string): boolean {
+  return taskToolName(toolName) === "TodoWrite"
 }
 
 /**
@@ -165,19 +188,150 @@ export function parseTodos(input: unknown): Todo[] {
   if (!Array.isArray(raw)) return []
   const out: Todo[] = []
   for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue
-    const content = (entry as { content?: unknown }).content
-    if (typeof content !== "string" || content.length === 0) continue
-    const statusRaw = (entry as { status?: unknown }).status
-    const status = statusRaw === "in_progress" || statusRaw === "completed" ? statusRaw : "pending"
-    const activeForm = (entry as { activeForm?: unknown }).activeForm
+    const todo = parseTodoInput({ todos: [entry] })?.[0]
+    if (!todo) continue
     out.push({
-      content,
-      status,
-      ...(typeof activeForm === "string" ? { activeForm } : {}),
+      content: todo.content,
+      // ACP plans use the snapshot transport but retain their own status.
+      status: (entry as { status?: unknown }).status === "skipped" ? "skipped" : todo.status,
+      ...(todo.activeForm ? { activeForm: todo.activeForm } : {}),
     })
   }
   return out
+}
+
+/** Replay in original call order, even when results arrive out of order.
+ * Reuse the GUI fold, including its SDK/MCP/sidecar result parsers, family
+ * isolation, provisional ids and patches for tasks outside loaded history. */
+function deriveTodoCalls(calls: readonly ToolCell[]) {
+  const timeline = deriveSessionTasks(
+    calls.map((call) => ({
+      id: call.callKey,
+      role: "assistant",
+      parts:
+        call.isError || call.status === "error" || call.status === "cancelled"
+          ? []
+          : [
+              {
+                type: "dynamic-tool",
+                toolName: taskToolName(call.toolName) ?? call.toolName,
+                toolCallId: call.callKey,
+                state: "output-available",
+                input: call.input,
+                output: call.result,
+              },
+            ],
+    }))
+  )
+  const effectiveCalls = calls.filter(
+    (call) =>
+      !call.isError &&
+      call.status !== "error" &&
+      call.status !== "cancelled" &&
+      (timeline.byToolCallId.has(call.callKey) ||
+        // Preserve the TUI's explicit empty-snapshot clearing contract.
+        (taskToolName(call.toolName) === "TodoWrite" &&
+          Array.isArray(call.input.todos) &&
+          call.input.todos.length === 0))
+  )
+  return { timeline, effectiveCalls }
+}
+
+export function foldTodoCalls(calls: readonly ToolCell[]): Todo[] {
+  const { timeline, effectiveCalls } = deriveTodoCalls(calls)
+  const last = effectiveCalls.at(-1)
+  if (!last) return []
+  // The GUI parser normalizes unknown states. Restore ACP's skipped state at
+  // this adapter boundary, without changing the shared TodoWrite vocabulary.
+  if (taskToolName(last.toolName) === "TodoWrite") return parseTodos(last.input)
+  return (timeline.byToolCallId.get(last.callKey)?.after ?? []).map((item) => ({
+    id: item.id,
+    content: item.title,
+    status: item.status === "completed" || item.status === "in_progress" ? item.status : "pending",
+    ...(item.activeForm ? { activeForm: item.activeForm } : {}),
+  }))
+}
+
+/** Compact at turn boundaries, after all results/refinements of that turn.
+ * Keep both independent families so switching back does not lose their state.
+ * TaskCreate seeds retain activeForm, which the shared TaskList parser carries
+ * forward from prior tasks rather than reading from the list result. */
+export function compactTodoCalls(calls: ToolCell[]): ToolCell[] {
+  if (calls.some((call) => call.status === "running")) return calls
+  const { timeline, effectiveCalls } = deriveTodoCalls(calls)
+  const todo = effectiveCalls.findLast((call) => taskToolName(call.toolName) === "TodoWrite")
+  const tasks = effectiveCalls.findLast((call) => taskToolName(call.toolName) !== "TodoWrite")
+  const checkpoint = (
+    toolName: string,
+    callKey: string,
+    input: Record<string, unknown>,
+    result?: unknown
+  ): ToolCell => ({
+    id: callKey,
+    kind: "tool",
+    toolName,
+    callKey,
+    input,
+    result,
+    status: "done",
+    collapsed: true,
+    taskCheckpoint: true,
+  })
+  const taskItems = tasks ? timeline.byToolCallId.get(tasks.callKey)!.after : []
+  return effectiveCalls.flatMap((call) => {
+    if (call === todo)
+      return [checkpoint(call.toolName, "tui:todo-checkpoint", { todos: parseTodos(call.input) })]
+    if (call !== tasks) return []
+    return [
+      ...taskItems
+        .filter((item) => item.activeForm)
+        .map((item) =>
+          checkpoint(
+            "TaskCreate",
+            `tui:task-checkpoint:${item.id}`,
+            { subject: item.title || `#${item.id}`, activeForm: item.activeForm },
+            { task: { id: item.id } }
+          )
+        ),
+      checkpoint(
+        "TaskList",
+        "tui:task-list-checkpoint",
+        {},
+        {
+          tasks: taskItems.map((item) => ({
+            id: item.id,
+            subject: item.title,
+            status: item.status,
+          })),
+        }
+      ),
+    ]
+  })
+}
+
+export const TODO_MARK: Record<Todo["status"], string> = {
+  pending: "☐",
+  in_progress: "▣",
+  completed: "☑",
+  skipped: "⊘",
+}
+
+/** Same current-action label in both renderers, search and clipboard export. */
+export function todoLabel(todo: Todo): string {
+  return todo.status === "in_progress" && todo.activeForm ? todo.activeForm : todo.content
+}
+
+/** A bounded live list prioritizes current work and summarizes settled rows. */
+export function selectVisibleTodos(todos: readonly Todo[], maxRows: number) {
+  const rows = Math.max(0, Math.floor(maxRows))
+  const done = todos.filter((todo) => todo.status === "completed").length
+  if (todos.length + 1 <= rows) return { items: todos, hidden: 0, done }
+  const open = [
+    ...todos.filter((todo) => todo.status === "in_progress"),
+    ...todos.filter((todo) => todo.status === "pending"),
+  ]
+  const items = open.slice(0, Math.max(0, rows - 2))
+  return { items, hidden: todos.length - items.length, done }
 }
 
 /** A `:offset-end` / `:offset+` / `:0-limit` suffix for a `read` line range. */

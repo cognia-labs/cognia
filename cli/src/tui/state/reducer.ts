@@ -31,7 +31,7 @@ import {
   filterSelectItems,
   filterSessionItems,
 } from "./overlay-search"
-import { isTodoTool, parseTodos } from "../format/tools"
+import { compactTodoCalls, foldTodoCalls, isTodoTool, isTodoWriteTool } from "../format/tools"
 import { formatCompactBoundary } from "../format/compaction"
 import {
   accumulateModelTotals,
@@ -354,6 +354,46 @@ function appendTranscriptCell(state: TuiState, make: (id: string) => Cell): TuiS
     : { ...state, cells: [...state.cells, cell], seq: state.seq + 1 }
 }
 
+function sessionTodoCell(state: TuiState): TodoCell | undefined {
+  return [...state.cells, ...state.pendingCells].find((cell) => cell.kind === "todo")
+}
+
+/** Keep one visible list and its ordered source calls together across turns. */
+function replaceTodoCalls(state: TuiState, toolCalls: ToolCell[]): TuiState {
+  const todos = foldTodoCalls(toolCalls)
+  for (const key of ["cells", "pendingCells"] as const) {
+    const index = state[key].findIndex((cell) => cell.kind === "todo")
+    if (index < 0) continue
+    const cells = [...state[key]]
+    cells[index] = { ...(cells[index] as TodoCell), todos, toolCalls }
+    return { ...state, [key]: cells }
+  }
+  return appendTranscriptCell(state, (id) => ({ id, kind: "todo", todos, toolCalls }))
+}
+
+/** End result correlation at every turn boundary, including a new turn that
+ * follows a missing terminal event. Late id-less results must not claim an old
+ * call. Compact only here so same-turn streamed refinements retain order. */
+function settleTodoCalls(state: TuiState, status: "done" | "cancelled"): TuiState {
+  const calls = sessionTodoCell(state)?.toolCalls
+  if (!calls?.length) return state
+  return replaceTodoCalls(
+    state,
+    compactTodoCalls(
+      calls.map((call) =>
+        call.status === "running"
+          ? {
+              ...call,
+              // TodoWrite's input already IS the authoritative snapshot. Only an
+              // explicit failed result invalidates it; cancelling the turn does not.
+              status: isTodoWriteTool(call.toolName) ? "done" : status,
+            }
+          : call
+      )
+    )
+  )
+}
+
 /**
  * Move queued cells onto the end of a freshly committed cell list.
  *
@@ -594,6 +634,37 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
         // Malformed input (no usable plan body): fall through to render it as a
         // normal tool cell rather than swallowing the call.
       }
+      if (isTodoTool(action.toolName)) {
+        const toolCalls = [...(sessionTodoCell(state)?.toolCalls ?? [])]
+        const index = toolCalls.findIndex(
+          (call) => !call.taskCheckpoint && call.callKey === action.callKey
+        )
+        // ACP reuses a correlation key for independent authoritative snapshots;
+        // those are new events, unlike refinements of an ordinary tool call.
+        const planSnapshot = action.callKey === "external-plan" && action.toolName === "TodoWrite"
+        if (index >= 0 && !planSnapshot) {
+          const prior = toolCalls[index]
+          toolCalls[index] = {
+            ...prior,
+            toolName: action.toolName,
+            input: { ...prior.input, ...action.input },
+          }
+        } else {
+          if (index >= 0) toolCalls.splice(index, 1)
+          state = advanceTranscript(state)
+          toolCalls.push({
+            id: action.callKey,
+            kind: "tool",
+            callKey: action.callKey,
+            toolName: action.toolName,
+            input: action.input,
+            status: planSnapshot ? "done" : "running",
+            collapsed: true,
+          })
+          state = { ...state, toolStats: bumpToolStat(state.toolStats, action.toolName, "calls") }
+        }
+        return replaceTodoCalls(state, toolCalls)
+      }
       // Canonical snapshots repeat tool_use blocks as streamed input becomes
       // available. Treat every repeat of the same stable callKey as an in-place
       // refinement — running OR already settled — so it cannot create another
@@ -651,22 +722,7 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
       let seq = state.seq
       const cells = [...state.cells]
       const remainingTools = [...state.inflight.tools]
-      // ── todo tool still merges into a single cell (not a per-call cell) ─
       const toolStats = bumpToolStat(state.toolStats, action.toolName, "calls")
-      if (isTodoTool(action.toolName)) {
-        const todos = parseTodos(action.input)
-        for (const key of ["cells", "pendingCells"] as const) {
-          const existingIdx = state[key].findIndex((cell) => cell.kind === "todo")
-          if (existingIdx < 0) continue
-          const updated = [...state[key]]
-          updated[existingIdx] = { ...(updated[existingIdx] as TodoCell), todos }
-          return { ...state, [key]: updated, toolStats }
-        }
-        return {
-          ...appendTranscriptCell(state, (id) => ({ id, kind: "todo", todos })),
-          toolStats,
-        }
-      }
       // ── add the new tool to the live inflight area ───────────────────────
       const tool: ToolCell = {
         id: makeId(seq++),
@@ -692,6 +748,17 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
       }
     }
     case "TOOL_UPDATE": {
+      const taskCall = sessionTodoCell(state)?.toolCalls?.find(
+        (call) => !call.taskCheckpoint && call.callKey === action.callKey
+      )
+      if (taskCall || (action.toolName && isTodoTool(action.toolName))) {
+        return reduceInner(state, {
+          type: "TOOL_CALL",
+          callKey: action.callKey,
+          toolName: action.toolName ?? taskCall!.toolName,
+          input: action.input ?? {},
+        })
+      }
       const patch = (cell: ToolCell): ToolCell => ({
         ...cell,
         ...(action.toolName ? { toolName: action.toolName } : {}),
@@ -732,6 +799,37 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
       })
     }
     case "TOOL_RESULT": {
+      const toolCalls = [...(sessionTodoCell(state)?.toolCalls ?? [])]
+      const taskIndex = toolCalls.findIndex(
+        (call) =>
+          call.status === "running" &&
+          (action.callKey
+            ? call.callKey === action.callKey
+            : !!action.toolName && call.toolName === action.toolName)
+      )
+      if (taskIndex >= 0) {
+        const prior = toolCalls[taskIndex]
+        toolCalls[taskIndex] = {
+          ...prior,
+          status: action.isError ? "error" : "done",
+          result: action.result,
+          isError: action.isError,
+        }
+        state = replaceTodoCalls(
+          {
+            ...state,
+            toolStats: action.isError
+              ? bumpToolStat(state.toolStats, prior.toolName, "errors")
+              : state.toolStats,
+          },
+          toolCalls
+        )
+        // Failed task mutations must roll back the list AND retain the same
+        // visible/searchable/exportable error record as any other failed tool.
+        return action.isError
+          ? appendTranscriptCell(state, (id) => ({ ...toolCalls[taskIndex], id }))
+          : state
+      }
       // Search the entire live sequence before restored cells. Correlation must
       // not depend on which side of a notice a tool happens to occupy.
       const locations = [
@@ -939,6 +1037,7 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
         seq: state.seq + 1,
       }
     case "TURN_START": {
+      state = settleTodoCalls(state, "cancelled")
       // A queue can survive a turn that never reached a commit boundary. Flush
       // it ahead of the new prompt rather than losing it or letting it drift
       // into the next turn's output.
@@ -971,6 +1070,7 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
         ? { ...state, overlay: { kind: "none" } }
         : state
     case "TURN_COMMIT": {
+      state = settleTodoCalls(state, "done")
       // Guarded fallback to the text heuristic: only when the structured
       // ExitPlanMode signal did NOT already capture a plan this turn, we're in
       // plan mode, the reply reads like a plan, AND it is not a clarifying
@@ -1081,6 +1181,7 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
       }
     }
     case "TURN_ERROR": {
+      state = settleTodoCalls(state, "cancelled")
       // Flush tools before the trailing text (see TURN_COMMIT) so an interrupted
       // turn's finished tool cards stay above the partial answer, not below it.
       const terminalTools = settleRunningTools(
@@ -1121,6 +1222,7 @@ function reduceInner(state: TuiState, action: TuiAction): TuiState {
       }
     }
     case "TURN_ABORTED": {
+      state = settleTodoCalls(state, "cancelled")
       // Flush tools before the trailing text (see TURN_COMMIT) so an aborted
       // turn's finished tool cards stay above the partial answer, not below it.
       const terminalTools = settleRunningTools(

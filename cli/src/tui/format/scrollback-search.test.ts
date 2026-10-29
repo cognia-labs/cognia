@@ -188,6 +188,12 @@ describe("cellToText", () => {
       ],
     }
     expect(cellToText(todo)).toBe("Write the matcher\nWire the overlay")
+    expect(
+      cellToText({
+        ...todo,
+        todos: [{ content: "Build", activeForm: "Building", status: "in_progress" }],
+      })
+    ).toBe("Building")
     expect(searchCells([todo], "overlay")).toEqual([
       { cellId: "todo1", kind: "todo", excerpt: "Wire the overlay", lineIndex: 1 },
     ])

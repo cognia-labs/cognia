@@ -1,14 +1,14 @@
 /**
- * The committed transcript: every cell, in order. Uses Ink's `<Static>` so the
- * scrollback is written once and never re-rendered as new cells arrive (the
- * recommended Ink pattern for append-only logs).
+ * Committed history in order, followed by the current session task list. Uses
+ * Ink's `<Static>` so append-only scrollback is written once; the mutable task
+ * list stays live and repaints as tool results arrive.
  *
  * An optional `header` (the welcome banner) is emitted as the very first static
  * row so it stays pinned to the top of the scrollback for the whole session —
  * Ink prints `<Static>` content above the live frame, in insertion order.
  */
 import React from "react"
-import { Box, Static, Text, measureElement, type DOMElement } from "ink"
+import { Box, Static, Text, measureElement, useStdout, type DOMElement } from "ink"
 
 import { CellView } from "./CellView"
 import { useTheme } from "../theme/context"
@@ -17,6 +17,7 @@ import { groupContextRuns, contextGroupLines } from "../format/context-group"
 import type { Cell, ToolCell } from "../state/types"
 import type { ResolvedRenderConfig } from "../../config/schema"
 import { cellToTerminalBlock } from "../render/cell-terminal-block"
+import { readSize } from "../hooks/useTerminalSize"
 
 /** Reports its measured row-height for the find cursor's row map. Wraps a cell
  * only while find is active (measurement is gated), so the static-history path
@@ -137,6 +138,71 @@ function TranscriptImpl({
 }) {
   const theme = useTheme()
   const prefs = useRenderPrefs()
+  const { stdout } = useStdout()
+  const taskCells = cells.filter((cell) => cell.kind === "todo")
+  const taskRef = React.useRef<DOMElement | null>(null)
+  const summaryRef = React.useRef<DOMElement | null>(null)
+  const expandedRef = React.useRef<DOMElement | null>(null)
+  const [taskRows, setTaskRows] = React.useState(0)
+  const hasTasks = taskCells.length > 0
+  React.useLayoutEffect(() => {
+    if (mode === "live" || !hasTasks) return
+    const node = taskRef.current
+    if (!node?.yogaNode) {
+      // DOM-only tests have no Yoga tree. Production always measures below.
+      setTaskRows(Math.max(3, Math.floor(readSize(stdout).rows / 3)))
+      return
+    }
+    let root = node
+    while (root.parentNode) root = root.parentNode
+    const hidden = node.yogaNode.getDisplay()
+    const visible = root.yogaNode!.getDisplay()
+    const fit = () => {
+      if (taskRef.current !== node) return
+      // Static is absolute and does not contribute to this measured height.
+      // Every other live sibling does: Input/palettes, status, overlays,
+      // workflow, and the actual wrapped inflight/pending output at this width.
+      const occupied = Math.ceil(measureElement(root).height - measureElement(node).height)
+      const terminalRows = readSize(stdout).rows
+      const remaining = Math.max(
+        0,
+        Math.min(Math.max(3, Math.floor(terminalRows / 3)), terminalRows - occupied - 1)
+      )
+      const nextRows = remaining <= 2 ? Math.min(1, remaining) : remaining
+      let changed = false
+      for (const [target, show] of [
+        [node, nextRows > 0],
+        [summaryRef.current, nextRows === 1],
+        [expandedRef.current, nextRows > 1],
+      ] as const) {
+        const display = show ? "flex" : "none"
+        if (!target?.yogaNode || target.style.display === display) continue
+        target.style.display = display
+        target.yogaNode.setDisplay(show ? visible : hidden)
+        changed = true
+      }
+      if (node.style.maxHeight !== nextRows) {
+        node.style.maxHeight = nextRows
+        node.yogaNode!.setMaxHeight(nextRows)
+        changed = true
+      }
+      if (changed) root.onComputeLayout?.()
+      setTaskRows(nextRows)
+    }
+    // Ink emits these notifications AFTER Yoga layout but BEFORE writing the
+    // frame, also on resize and child-only Input updates. An effect/state-only
+    // measurement would allow one overflowing frame to clear/replay Static.
+    root.internal_layoutListeners ??= new Set()
+    root.internal_layoutListeners.add(fit)
+    fit()
+    return () => {
+      root.internal_layoutListeners?.delete(fit)
+      if (node.parentNode) {
+        node.style.display = "none"
+        node.yogaNode?.setDisplay(hidden)
+      }
+    }
+  }, [hasTasks, mode, stdout])
   const renderCell = (cell: Cell) => {
     const focused = cell.id === focusedCellId
     const body = <CellView cell={applyVerbose(cell, verbose)} columns={columns} />
@@ -187,23 +253,57 @@ function TranscriptImpl({
     )
   }
 
+  // Session task lists change in place after every tool result. Ink's Static
+  // never repaints a printed row, so keep this one current list in the live
+  // region below append-only history (as the GUI does).
+  const historyCells = cells.filter((cell) => cell.kind !== "todo")
   const replayCells =
-    epoch > 0 ? limitReplayCells(cells, replayMaxRows, columns, verbose, prefs) : cells
+    epoch > 0
+      ? limitReplayCells(historyCells, replayMaxRows, columns, verbose, prefs)
+      : historyCells
   const rows: Row[] = header
     ? [{ id: HEADER_ID }, ...replayCells.map((cell) => ({ id: cell.id, cell }))]
     : replayCells.map((cell) => ({ id: cell.id, cell }))
   return (
-    <Static key={epoch} items={rows}>
-      {(row: Row) =>
-        row.cell ? (
-          renderCell(row.cell)
-        ) : (
-          <Box key={row.id} marginBottom={1}>
-            {header}
+    <>
+      <Static key={epoch} items={rows}>
+        {(row: Row) =>
+          row.cell ? (
+            renderCell(row.cell)
+          ) : (
+            <Box key={row.id} marginBottom={1}>
+              {header}
+            </Box>
+          )
+        }
+      </Static>
+      {taskCells.length > 0 && (
+        <Box
+          ref={taskRef}
+          flexDirection="column"
+          display="none"
+          maxHeight={taskRows}
+          flexShrink={0}
+          overflow="hidden"
+        >
+          <Box ref={summaryRef} flexDirection="column" display="none">
+            {taskCells.map((cell) => (
+              <CellView key={cell.id} cell={cell} columns={columns} todoMaxRows={1} />
+            ))}
           </Box>
-        )
-      }
-    </Static>
+          <Box ref={expandedRef} flexDirection="column">
+            {taskCells.map((cell) => (
+              <CellView
+                key={cell.id}
+                cell={cell}
+                columns={columns}
+                todoMaxRows={Math.floor(taskRows / taskCells.length)}
+              />
+            ))}
+          </Box>
+        </Box>
+      )}
+    </>
   )
 }
 

@@ -13,11 +13,12 @@ import {
 import type { CommandDescriptor } from "./types"
 import { externalCapabilities } from "../runtime/backend-capabilities"
 import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
+import { cellToTerminalBlock } from "../render/cell-terminal-block"
 
 jest.mock("../render/cell-terminal-block", () => ({
-  cellToTerminalBlock: (cell: { text?: string; raw?: string; result?: string }) => ({
+  cellToTerminalBlock: jest.fn((cell: { text?: string; raw?: string; result?: string }) => ({
     plainText: cell.text ?? cell.raw ?? cell.result ?? "",
-  }),
+  })),
 }))
 
 const stub = (name: string, over: Partial<CommandDescriptor> = {}): CommandDescriptor => ({
@@ -223,7 +224,7 @@ describe("command registry", () => {
           },
         ],
       },
-      config: {},
+      config: { locale: "zh-CN" },
       version: "0",
       args: "",
     } as never) as { kind: string; overlay: { kind: string; body: string } }
@@ -231,6 +232,10 @@ describe("command registry", () => {
     expect(effect.overlay.body).toContain("question")
     expect(effect.overlay.body).toContain("answer")
     expect(effect.overlay.body).toContain("full tool output")
+    expect(cellToTerminalBlock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ locale: "zh-CN" })
+    )
   })
 
   it("bare /help opens the category overlay; /help <command> opens a focused detail document", () => {

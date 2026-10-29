@@ -15,7 +15,7 @@ import { useElapsedSeconds } from "../render/use-elapsed-seconds"
 import { sanitizeCell } from "../render/sanitize-cell"
 import { commandIsAutoApprovable } from "../../agent/command-approval"
 import { diffFilePath, formatEditDiff, tailDiffPreview } from "../markdown/diff"
-import { truncateToWidth } from "../markdown/width"
+import { stringWidth, truncateToWidth } from "../markdown/width"
 import { langFromPath } from "../markdown/highlight"
 import { renderResultLines, toolResultLang } from "../format/result-render"
 import {
@@ -35,6 +35,9 @@ import {
   toolGlyph,
   toolHeaderLabel,
   toolKind,
+  TODO_MARK,
+  todoLabel,
+  selectVisibleTodos,
 } from "../format/tools"
 import {
   describeToolResult,
@@ -51,6 +54,7 @@ import {
 } from "../format/subagent"
 import { isContextTool } from "../format/context-group"
 import { planStats, planTitle } from "../runtime/plan"
+import { useCliTranslations } from "../i18n"
 import { fileUri } from "../runtime/editor"
 import { osc8Link, supportsHyperlinks } from "../markdown/hyperlink"
 import path from "node:path"
@@ -67,7 +71,6 @@ import type {
   NoticeCell,
   PlanCell,
   ThinkingCell,
-  Todo,
   TodoCell,
   ToolCell,
   UserCell,
@@ -539,22 +542,48 @@ function SubagentView({ cell, columns }: { cell: ToolCell; columns: number }) {
   )
 }
 
-const TODO_MARK: Record<Todo["status"], string> = {
-  pending: "☐",
-  in_progress: "▣",
-  completed: "☑",
-}
-
-function TodoView({ cell }: { cell: TodoCell }) {
+function TodoView({
+  cell,
+  columns,
+  maxRows,
+}: {
+  cell: TodoCell
+  columns: number
+  maxRows?: number
+}) {
   const theme = useTheme()
-  return (
-    <Box flexDirection="column">
-      <Text bold color={theme.accent}>
-        Todos
+  const t = useCliTranslations("cliUiCommon")
+  const bounded = maxRows !== undefined
+  const { items, hidden, done } = bounded
+    ? selectVisibleTodos(cell.todos, maxRows)
+    : { items: cell.todos, hidden: 0, done: 0 }
+  if (bounded && maxRows < 1) return null
+  if (bounded && maxRows <= 2) {
+    const current =
+      cell.todos.find((todo) => todo.status === "in_progress") ??
+      cell.todos.find((todo) => todo.status === "pending")
+    const count = `${done}/${cell.todos.length}`
+    const label = current ? `${TODO_MARK[current.status]} ${todoLabel(current)}` : t("todos")
+    const prefix = truncateToWidth(
+      label.replace(/[\r\n]+/g, " "),
+      Math.max(0, columns - stringWidth(count) - 3)
+    )
+    return (
+      <Text color={theme.accent} wrap="truncate-end">
+        {prefix ? `${prefix} · ${count}` : truncateToWidth(count, columns)}
       </Text>
-      {cell.todos.map((todo, i) => (
+    )
+  }
+  return (
+    <Box flexDirection="column" flexShrink={0}>
+      {(!bounded || maxRows > 1 || hidden === 0) && (
+        <Text bold color={theme.accent} wrap="truncate-end">
+          {t("todos")}
+        </Text>
+      )}
+      {items.map((todo, i) => (
         <Text
-          key={i}
+          key={todo.id ?? i}
           color={
             todo.status === "completed"
               ? theme.statusDone
@@ -563,10 +592,21 @@ function TodoView({ cell }: { cell: TodoCell }) {
                 : undefined
           }
           strikethrough={todo.status === "completed"}
+          wrap={bounded ? "truncate-end" : "wrap"}
         >
-          {TODO_MARK[todo.status]} {todo.content}
+          {bounded
+            ? truncateToWidth(
+                `${TODO_MARK[todo.status]} ${todoLabel(todo).replace(/[\r\n]+/g, " ")}`,
+                columns
+              )
+            : `${TODO_MARK[todo.status]} ${todoLabel(todo)}`}
         </Text>
       ))}
+      {hidden > 0 && (
+        <Text color={theme.muted} wrap="truncate-end">
+          {t("todosMore", { count: hidden, done, total: cell.todos.length })}
+        </Text>
+      )}
     </Box>
   )
 }
@@ -765,7 +805,15 @@ function BashView({ cell }: { cell: BashCell }) {
   )
 }
 
-export function CellView({ cell, columns = 80 }: { cell: Cell; columns?: number }) {
+export function CellView({
+  cell,
+  columns = 80,
+  todoMaxRows,
+}: {
+  cell: Cell
+  columns?: number
+  todoMaxRows?: number
+}) {
   cell = sanitizeCell(cell)
   switch (cell.kind) {
     case "user":
@@ -781,7 +829,7 @@ export function CellView({ cell, columns = 80 }: { cell: Cell; columns?: number 
         <ToolView cell={cell} columns={columns} />
       )
     case "todo":
-      return <TodoView cell={cell} />
+      return <TodoView cell={cell} columns={columns} maxRows={todoMaxRows} />
     case "plan":
       return <PlanView cell={cell} />
     case "error":

@@ -7,7 +7,7 @@ import * as elementPosition from "../input/element-position"
 import { RenderPrefsProvider } from "../render/context"
 import { RENDER_DEFAULTS } from "../../config/schema"
 import React, { useReducer } from "react"
-import { act, render } from "@testing-library/react"
+import { act, render, waitFor } from "@testing-library/react"
 import { __fireInput, __resetInk } from "ink"
 
 jest.mock("../../mcp/open-browser", () => ({ openBrowser: jest.fn(async () => true) }))
@@ -724,7 +724,6 @@ describe("Input ghost-text autosuggest", () => {
     const agentComplete = jest
       .fn()
       .mockRejectedValueOnce(new Error("network failed"))
-      .mockRejectedValueOnce(new Error("network failed"))
       .mockResolvedValueOnce("the release notes")
     const { container } = render(
       <GhostHarness history={[]} agentComplete={agentComplete} onSubmit={onSubmit} />
@@ -732,10 +731,12 @@ describe("Input ghost-text autosuggest", () => {
     type("write ")
     await settleGhost()
     key("\\", { meta: true })
-    await settleGhost(750)
-    expect(container.textContent).toContain("prediction failed")
+    await waitFor(() => expect(container.textContent).toContain("prediction failed"))
+    // Agent turns require an explicit retry rather than a second billed attempt.
+    expect(agentComplete).toHaveBeenCalledTimes(1)
     key("\\", { meta: true })
-    await settleGhost()
+    await waitFor(() => expect(container.textContent).toContain("the release notes"))
+    expect(agentComplete).toHaveBeenCalledTimes(2)
     key("", { tab: true })
     expect(onSubmit).not.toHaveBeenCalled()
     type(" today")

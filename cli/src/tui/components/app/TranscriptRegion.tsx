@@ -169,7 +169,7 @@ export function TranscriptRegion({
     <>
       <ScrollbackTranscript
         key={`${state.sessionId}:${state.renderEpoch}`}
-        cells={state.cells}
+        cells={[...state.cells, ...state.pendingCells.filter((cell) => cell.kind === "todo")]}
         header={hasUserMessage ? undefined : banner}
         verbose={state.verbose}
         epoch={state.renderEpoch}
@@ -179,7 +179,7 @@ export function TranscriptRegion({
       />
       <Inflight
         inflight={state.inflight}
-        pending={state.pendingCells}
+        pending={state.pendingCells.filter((cell) => cell.kind !== "todo")}
         awaitingApproval={state.overlay.kind === "permission"}
         verbose={state.verbose}
         epoch={state.streamEpoch}

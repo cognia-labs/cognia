@@ -6,11 +6,43 @@ import {
 } from "./export"
 import type { TranscriptEntry } from "../../agent/transcript"
 import type { Cell } from "../state/types"
+import { getCommand } from "../commands/registry"
+import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
+import { createInitialState } from "../state/initial"
 
 const entries: TranscriptEntry[] = [
   { ts: 1, role: "user", content: "  hello  " },
   { ts: 2, role: "assistant", content: "hi there" },
 ]
+
+it("localizes the live transcript pager while preserving stable English export headings", () => {
+  const config = { ...DEFAULT_RESOLVED_CONFIG, cwd: "/work", locale: "zh-CN" as const }
+  const cells: Cell[] = [
+    {
+      id: "tasks",
+      kind: "todo",
+      todos: [
+        { content: "Build", activeForm: "Building", status: "in_progress" },
+        { content: "Ship", status: "skipped" },
+      ],
+    },
+  ]
+  const effect = getCommand("transcript")?.handler?.({
+    config,
+    state: { ...createInitialState(config, "tasks"), cells },
+    args: "",
+    version: "test",
+  })
+  expect(effect).toMatchObject({
+    kind: "openOverlay",
+    overlay: { body: expect.stringContaining("任务列表") },
+  })
+  expect(effect).toMatchObject({
+    kind: "openOverlay",
+    overlay: { body: expect.stringContaining("▣ Building\n⊘ Ship") },
+  })
+  expect(formatCellsAsMarkdown(cells)).toContain("### Todos\n\nBuilding\nShip")
+})
 
 describe("normalizeExportFormat", () => {
   it.each([
@@ -97,6 +129,15 @@ describe("formatCellsAsMarkdown", () => {
     expect(out).toContain("### Tool")
     expect(out).toContain("file body")
     expect(out).toContain("### Todos\n\nstep one")
+    expect(
+      formatCellsAsMarkdown([
+        {
+          id: "tasks",
+          kind: "todo",
+          todos: [{ content: "Build", activeForm: "Building", status: "in_progress" }],
+        },
+      ])
+    ).toContain("### Todos\n\nBuilding")
     expect(out).toContain("### Plan\n\nthe plan")
     expect(out).toContain("### Error\n\nit broke")
   })

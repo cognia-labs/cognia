@@ -8,7 +8,10 @@ import type { RunAndCaptureResult } from "@/lib/claude/run-and-capture"
 
 import { createInitialState } from "./initial"
 import { tuiReducer } from "./reducer"
+import { captureEventToActions } from "./event-mapper"
 import { externalCapabilities } from "../runtime/backend-capabilities"
+import { searchCells } from "../format/scrollback-search"
+import { formatCellsAsMarkdown } from "../format/export"
 import type { Cell, InputEditOp, ToolCell, TuiAction, TuiState } from "./types"
 
 const config: ResolvedConfig = { ...DEFAULT_RESOLVED_CONFIG, cwd: "/work" }
@@ -20,6 +23,294 @@ function base(): TuiState {
 function reduce(state: TuiState, ...actions: TuiAction[]): TuiState {
   return actions.reduce(tuiReducer, state)
 }
+
+describe("tuiReducer — incremental tasks", () => {
+  const call = (callKey: string, toolName: string, input: Record<string, unknown>): TuiAction => ({
+    type: "TOOL_CALL",
+    callKey,
+    toolName,
+    input,
+  })
+  const todos = (state: TuiState) =>
+    [...state.cells, ...state.pendingCells].filter((cell) => cell.kind === "todo")
+
+  it("treats a repeated id-less TodoWrite after compaction as a new call and matches its failure", () => {
+    const input = { todos: [{ content: "A", status: "pending" }] }
+    const snapshot = () =>
+      captureEventToActions({ type: "tool-call", toolName: "TodoWrite", input })
+    let state = reduce(
+      base(),
+      ...snapshot(),
+      call("create", "TaskCreate", { subject: "B" }),
+      {
+        type: "TOOL_RESULT",
+        toolName: "TaskCreate",
+        callKey: "create",
+        result: { task: { id: "1" } },
+      },
+      { type: "TURN_COMMIT", result: result() }
+    )
+    expect(todos(state)[0].todos).toEqual([{ id: "1", content: "B", status: "pending" }])
+    state = reduce(state, { type: "TURN_START", prompt: "next" }, ...snapshot())
+    expect(todos(state)[0].todos).toEqual(input.todos)
+    state = reduce(
+      state,
+      ...captureEventToActions({
+        type: "tool-result",
+        toolName: "TodoWrite",
+        input,
+        result: "failed",
+        isError: true,
+      })
+    )
+    expect(todos(state)[0].todos).toEqual([{ id: "1", content: "B", status: "pending" }])
+    expect(state.toolStats.TodoWrite.errors).toBe(1)
+  })
+
+  it.each(["TURN_ABORTED", "TURN_ERROR", "TURN_COMMIT"] as const)(
+    "%s prevents an old task call from claiming the next turn's id-less result",
+    (type) => {
+      const terminal: TuiAction =
+        type === "TURN_ERROR"
+          ? { type, message: "failed" }
+          : type === "TURN_COMMIT"
+            ? { type, result: result() }
+            : { type }
+      let state = reduce(base(), call("old", "TaskCreate", { subject: "Old" }), terminal)
+      expect(todos(state)[0].toolCalls?.some((task) => task.status === "running")).toBe(false)
+      state = reduce(
+        state,
+        { type: "TURN_START", prompt: "next" },
+        call("new", "TaskCreate", { subject: "New" }),
+        { type: "TOOL_RESULT", toolName: "TaskCreate", result: "Task #7 created successfully: New" }
+      )
+      expect(todos(state)[0].todos).toContainEqual({ id: "7", content: "New", status: "pending" })
+      expect(todos(state)[0].todos).not.toContainEqual(
+        expect.objectContaining({ id: "7", content: "Old" })
+      )
+      expect(todos(state)[0].toolCalls?.find((task) => task.callKey === "new")?.status).toBe("done")
+    }
+  )
+
+  it.each(["TURN_ABORTED", "TURN_ERROR"] as const)(
+    "%s re-folds a queued list after cancelling an optimistic update",
+    (type) => {
+      const terminal: TuiAction = type === "TURN_ERROR" ? { type, message: "failed" } : { type }
+      const state = reduce(
+        base(),
+        call("bash", "Bash", {}),
+        call("create", "TaskCreate", { subject: "Build" }),
+        {
+          type: "TOOL_RESULT",
+          callKey: "create",
+          toolName: "TaskCreate",
+          result: { task: { id: "1" } },
+        },
+        call("update", "TaskUpdate", { taskId: "1", status: "completed" }),
+        terminal
+      )
+      expect(todos(state)[0].todos).toEqual([{ id: "1", content: "Build", status: "pending" }])
+      expect(todos(state)[0].toolCalls?.every((task) => task.status !== "running")).toBe(true)
+    }
+  )
+
+  it.each([{ entries: [{ content: "Final", status: "skipped" }] }, { entries: [] }])(
+    "treats each independent ACP plan snapshot as the latest family (%j)",
+    ({ entries }) => {
+      let state = reduce(
+        base(),
+        call("external-plan", "TodoWrite", { todos: [{ content: "Initial", status: "pending" }] }),
+        call("create", "TaskCreate", { subject: "Incremental" }),
+        call("external-plan", "TodoWrite", { todos: entries })
+      )
+      expect(todos(state)[0].todos).toEqual(entries)
+      state = reduce(state, {
+        type: "TOOL_RESULT",
+        callKey: "create",
+        toolName: "TaskCreate",
+        result: { task: { id: "1" } },
+      })
+      expect(todos(state)[0].todos).toEqual(entries)
+    }
+  )
+
+  it("keeps ordinary streamed refinements in their original position", () => {
+    const state = reduce(
+      base(),
+      call("snapshot", "TodoWrite", { todos: [{ content: "Before", status: "pending" }] }),
+      call("create", "TaskCreate", { subject: "Current" }),
+      call("snapshot", "TodoWrite", { todos: [{ content: "Refined", status: "completed" }] })
+    )
+    expect(todos(state)[0].todos).toEqual([
+      { id: "pending:create", content: "Current", status: "pending" },
+    ])
+  })
+
+  it("bounds retained settled history across many turns without losing either family or activeForm", () => {
+    let state = reduce(
+      base(),
+      call("create", "TaskCreate", { subject: "Build", activeForm: "Building" }),
+      {
+        type: "TOOL_RESULT",
+        callKey: "create",
+        toolName: "TaskCreate",
+        result: { task: { id: "1" } },
+      },
+      { type: "TURN_COMMIT", result: result() }
+    )
+    for (let index = 0; index < 100; index++) {
+      state = reduce(
+        state,
+        { type: "TURN_START", prompt: "next", echo: false },
+        call(`update-${index}`, "TaskUpdate", {
+          taskId: "1",
+          status: "in_progress",
+          metadata: "discard".repeat(1000),
+        }),
+        {
+          type: "TOOL_RESULT",
+          callKey: `update-${index}`,
+          toolName: "TaskUpdate",
+          result: "unused output".repeat(1000),
+        },
+        call(`todo-${index}`, "TodoWrite", { todos: [{ content: "Snapshot", status: "skipped" }] }),
+        { type: "TURN_COMMIT", result: result() }
+      )
+      expect(todos(state)[0].toolCalls!.length).toBeLessThanOrEqual(3)
+      expect(JSON.stringify(todos(state)[0].toolCalls).length).toBeLessThan(1500)
+    }
+    expect(todos(state)[0].todos).toEqual([{ content: "Snapshot", status: "skipped" }])
+    state = reduce(state, call("resume", "TaskUpdate", { taskId: "1", status: "in_progress" }))
+    expect(todos(state)[0].todos).toEqual([
+      { id: "1", content: "Build", status: "in_progress", activeForm: "Building" },
+    ])
+  })
+
+  it("replays result ids and streamed refinements in a single live todo cell across turns", () => {
+    let state = reduce(base(), call("a", "TaskCreate", {}), {
+      type: "TOOL_UPDATE",
+      callKey: "a",
+      input: { subject: "Build", activeForm: "Building" },
+    })
+    expect(todos(state)[0].todos).toEqual([
+      { id: "pending:a", content: "Build", status: "pending", activeForm: "Building" },
+    ])
+    state = reduce(
+      state,
+      call("u", "TaskUpdate", { taskId: "3", status: "in_progress" }),
+      {
+        type: "TOOL_RESULT",
+        callKey: "a",
+        toolName: "TaskCreate",
+        result: "Task #3 created successfully: Build",
+        isError: false,
+      },
+      { type: "TURN_COMMIT", result: result() },
+      call("list", "mcp__cognia-tools__TaskList", {}),
+      {
+        type: "TOOL_RESULT",
+        callKey: "list",
+        toolName: "mcp__cognia-tools__TaskList",
+        result: '{"tasks":[{"id":"3","subject":"Build","status":"completed"}]}',
+        isError: false,
+      }
+    )
+    expect(todos(state)).toHaveLength(1)
+    expect(todos(state)[0].todos).toEqual([
+      { id: "3", content: "Build", status: "completed", activeForm: "Building" },
+    ])
+    expect(
+      [...state.cells, ...state.pendingCells, ...state.inflight.tools].some(
+        (cell) => cell.kind === "tool"
+      )
+    ).toBe(false)
+    state = reduce(state, call("delete", "TaskUpdate", { taskId: "3", status: "deleted" }))
+    expect(todos(state)[0].todos).toEqual([])
+  })
+
+  it("does not let a late result change the most recently called family", () => {
+    const state = reduce(
+      base(),
+      call("a", "TaskCreate", { subject: "Old" }),
+      call("b", "TodoWrite", { todos: [{ content: "Current", status: "pending" }] }),
+      {
+        type: "TOOL_RESULT",
+        toolName: "TaskCreate",
+        callKey: "a",
+        result: { task: { id: "1" } },
+        isError: false,
+      }
+    )
+    expect(todos(state)[0].todos).toEqual([{ content: "Current", status: "pending" }])
+  })
+
+  it.each(["TaskCreate", "TaskUpdate", "TaskList", "TodoWrite"])(
+    "keeps failed %s calls visible, searchable and exportable across commit",
+    (toolName) => {
+      let state = reduce(
+        base(),
+        call("snapshot", "TodoWrite", { todos: [{ content: "Keep", status: "pending" }] }),
+        call("running", "Bash", { command: "sleep 10" }),
+        { type: "INFLIGHT_TEXT", delta: "Before the failure" },
+        call("bad", toolName, { taskId: "404", subject: "Bad", todos: [] })
+      )
+      const failure: TuiAction = {
+        type: "TOOL_RESULT",
+        callKey: "bad",
+        toolName,
+        result: "task 404 not found",
+        isError: true,
+      }
+      state = reduce(state, failure)
+      for (const committed of [false, true]) {
+        if (committed) state = reduce(state, { type: "TURN_COMMIT", result: result() })
+        const cells = [...state.cells, ...state.inflight.tools, ...state.pendingCells]
+        const errors = cells.filter((cell) => cell.kind === "tool" && cell.callKey === "bad")
+        expect(cells.findIndex((cell) => cell.id === errors[0]?.id)).toBeGreaterThan(
+          cells.findIndex((cell) => cell.kind === "assistant" && cell.raw === "Before the failure")
+        )
+        expect(errors).toEqual([
+          expect.objectContaining({
+            toolName,
+            input: { taskId: "404", subject: "Bad", todos: [] },
+            status: "error",
+            isError: true,
+            result: "task 404 not found",
+          }),
+        ])
+        expect(todos(state)[0].todos).toEqual([{ content: "Keep", status: "pending" }])
+        expect(searchCells(cells, "task 404 not found")).toEqual([
+          expect.objectContaining({ cellId: errors[0].id, kind: "tool" }),
+        ])
+        expect(formatCellsAsMarkdown(cells)).toContain("task 404 not found")
+        expect(state.toolStats[toolName].errors).toBe(1)
+        expect(reduce(state, failure)).toBe(state)
+      }
+    }
+  )
+
+  it("refines snapshots and rolls back failed task calls while preserving the error card", () => {
+    let state = reduce(
+      base(),
+      call("plan", "TodoWrite", { todos: [{ content: "First", status: "pending" }] }),
+      call("plan", "TodoWrite", { todos: [{ content: "Skipped", status: "skipped" }] }),
+      call("bad", "TaskCreate", { subject: "Failure" }),
+      {
+        type: "TOOL_RESULT",
+        toolName: "TaskCreate",
+        callKey: "bad",
+        result: "failed",
+        isError: true,
+      }
+    )
+    expect(todos(state)[0].todos).toEqual([{ content: "Skipped", status: "skipped" }])
+    expect(todos(state)[0].toolCalls).toHaveLength(2)
+    state = reduce(state, call("alien", "mcp__other__TodoWrite", { todos: [] }))
+    expect(state.inflight.tools).toEqual([
+      expect.objectContaining({ toolName: "mcp__other__TodoWrite" }),
+    ])
+  })
+})
 
 const result = (usage?: RunAndCaptureResult["usage"]): RunAndCaptureResult => ({
   text: "x",

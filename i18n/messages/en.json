@@ -12101,6 +12101,8 @@
     "settingsHint": "Tab section · ↑/↓ row · ←/→ change · Space toggle · Enter open · r reset · Esc close",
     "stopping": "stopping",
     "thinking": "Thinking",
+    "todos": "Todos",
+    "todosMore": "+{count} more · {done}/{total} done",
     "tokenRate": "{rate} tok/s avg",
     "tokenUsage": "{count} tok",
     "toolsBrowser": {

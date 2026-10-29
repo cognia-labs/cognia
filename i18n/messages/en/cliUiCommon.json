@@ -26,6 +26,8 @@
   "diffFailed": "Could not load changes: {error}",
   "working": "Working",
   "thinking": "Thinking",
+  "todos": "Todos",
+  "todosMore": "+{count} more · {done}/{total} done",
   "editingMessage": "Editing message #{position}/{total} — ↑/↓ choose · Enter to edit · Esc to cancel",
   "editingDiscard": "Editing message #{position}/{total} · {later} later turn(s) will be discarded on send · Esc to cancel",
   "copied": "Copied the complete document to the clipboard.",

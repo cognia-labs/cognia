@@ -59,6 +59,8 @@ export function formatTranscriptExport(entries: TranscriptEntry[], format: Expor
  * the cell. Notices are ephemeral UI chatter ("Copied…", "Mouse: scroll…") — they
  * are not part of the conversation and would only pollute a paste.
  */
+// Export headings are a locale-independent artifact, like ROLE_HEADING above;
+// keep the established English format even when the live TUI is translated.
 const CELL_HEADING: Record<Cell["kind"], string | null> = {
   user: "## User",
   assistant: "## Assistant",

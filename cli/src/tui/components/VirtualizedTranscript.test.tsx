@@ -1,6 +1,6 @@
 import React from "react"
 import { act, render, waitFor } from "@testing-library/react"
-import { __fireInput, __resetInk } from "ink"
+import { __fireInput, __resetInk } from "@/__mocks__/ink"
 import { absoluteTopLeft } from "../input/element-position"
 import { openBrowser } from "../../mcp/open-browser"
 jest.mock("../input/element-position", () => ({ absoluteTopLeft: jest.fn(() => null) }))
@@ -12,8 +12,60 @@ import { RENDER_DEFAULTS } from "../../config/schema"
 import { contextGroupLines } from "../format/context-group"
 import { stringWidth } from "../markdown/width"
 import type { Cell, ToolCell } from "../state/types"
+import { CliI18nProvider } from "../i18n"
 
 describe("VirtualizedTranscript", () => {
+  it("reuses visible todo revisions and releases blocks from previous sessions", () => {
+    const cell: Cell = {
+      id: "cache-todo",
+      kind: "todo",
+      todos: [{ content: "Build", status: "pending" }],
+    }
+    const view = (cells: Cell[]) => (
+      <VirtualizedTranscript cells={cells} width={80} top={0} viewportRows={20} verbose={false} />
+    )
+    const { rerender } = render(view([cell]))
+    const before = terminalBlockCacheStats()
+    rerender(
+      view([
+        {
+          ...cell,
+          toolCalls: [
+            {
+              id: "unused",
+              kind: "tool",
+              callKey: "unused",
+              toolName: "TaskList",
+              input: {},
+              status: "done",
+              collapsed: true,
+              result: "large hidden output".repeat(1000),
+            },
+          ],
+        },
+      ])
+    )
+    expect(terminalBlockCacheStats().hits).toBe(before.hits + 1)
+    expect(terminalBlockCacheStats().size).toBe(1)
+    rerender(view([{ id: "next-session", kind: "assistant", raw: "New session" }]))
+    expect(terminalBlockCacheStats().size).toBe(1)
+  })
+  it("invalidates cached todo headings when the locale changes", () => {
+    const cells: Cell[] = [
+      { id: "localized-task", kind: "todo", todos: [{ content: "Ship", status: "skipped" }] },
+    ]
+    const view = (locale: "en" | "zh-CN") => (
+      <CliI18nProvider locale={locale}>
+        <VirtualizedTranscript cells={cells} width={80} top={0} viewportRows={20} verbose={false} />
+      </CliI18nProvider>
+    )
+    const { container, rerender } = render(view("en"))
+    expect(container.textContent).toContain("Todos")
+    rerender(view("zh-CN"))
+    expect(container.textContent).toContain("任务列表")
+    expect(container.textContent).not.toContain("Todos")
+    expect(container.textContent).toContain("⊘ Ship")
+  })
   it("opens the correct wrapped image at its measured row and ignores clipped/nonimage positions", () => {
     __resetInk()
     jest.mocked(openBrowser).mockClear()

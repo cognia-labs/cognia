@@ -172,7 +172,7 @@ describe("externalAgentEventToActions", () => {
         input: {
           todos: [
             { content: "Inspect", activeForm: "Inspect", status: "in_progress" },
-            { content: "Ship", activeForm: "Ship", status: "completed" },
+            { content: "Ship", activeForm: "Ship", status: "skipped" },
           ],
         },
       },

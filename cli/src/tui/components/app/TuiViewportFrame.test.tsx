@@ -8,6 +8,21 @@ import { Text } from "ink"
 import { TuiViewportFrame } from "./TuiViewportFrame"
 
 describe("TuiViewportFrame", () => {
+  it("leaves scrollback transcript, overlays and composer uncapped", () => {
+    const { container } = render(
+      <TuiViewportFrame
+        columns={80}
+        rows={12}
+        fullscreen={false}
+        overlayOpen
+        transcript={<Text>tasks</Text>}
+        overlays={<Text>approval</Text>}
+        bottom={<Text>composer</Text>}
+      />
+    )
+    expect(container.textContent).toBe("tasksapprovalcomposer")
+    expect(container.firstElementChild).not.toHaveAttribute("data-overflow", "hidden")
+  })
   it("clips a fullscreen overlay above the fixed bottom region", () => {
     const { container } = render(
       <TuiViewportFrame

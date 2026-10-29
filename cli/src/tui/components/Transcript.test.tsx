@@ -24,8 +24,73 @@ import { limitReplayCells, Transcript } from "./Transcript"
 import type { Cell } from "../state/types"
 
 describe("Transcript", () => {
+  it("collapses long live lists instead of expanding the scrollback region indefinitely", () => {
+    const cells: Cell[] = [
+      {
+        id: "tasks",
+        kind: "todo",
+        todos: Array.from({ length: 40 }, (_, index) => ({
+          content: `Task ${index}`,
+          status: index === 39 ? "in_progress" : "completed",
+        })),
+      },
+    ]
+    const { container } = render(<Transcript cells={cells} />)
+    expect(container.textContent).toContain("Task 39")
+    expect(container.textContent).toContain("+39 more · 39/40 done")
+    expect(container.textContent).not.toContain("☑ Task 0")
+  })
+  it("keeps next open tasks after current work and before the folded remainder", () => {
+    const { container } = render(
+      <Transcript
+        cells={[
+          {
+            id: "tasks",
+            kind: "todo",
+            todos: Array.from({ length: 40 }, (_, index) => ({
+              content: `Task ${index}`,
+              status: index === 39 ? "in_progress" : index === 0 ? "completed" : "pending",
+            })),
+          },
+        ]}
+      />
+    )
+    const text = container.textContent ?? ""
+    expect(text.indexOf("▣ Task 39")).toBeLessThan(text.indexOf("☐ Task 1"))
+    expect(text).toContain("☐ Task 2")
+    expect(text.indexOf("☐ Task 1")).toBeLessThan(text.indexOf("more"))
+    expect(text).not.toContain("☑ Task 0")
+  })
   beforeEach(() => {
     mockStaticRenders.length = 0
+  })
+
+  it("keeps mutable session tasks outside Static so results repaint the current list", () => {
+    const cells: Cell[] = [
+      { id: "u", kind: "user", text: "question" },
+      { id: "tasks", kind: "todo", todos: [{ content: "Build", status: "pending" }] },
+      { id: "a", kind: "assistant", raw: "answer" },
+    ]
+    const { container, rerender } = render(<Transcript cells={cells} />)
+    expect(mockStaticRenders.at(-1)).toBe(2)
+    expect(container.textContent!.indexOf("answer")).toBeLessThan(
+      container.textContent!.indexOf("Build")
+    )
+    rerender(
+      <Transcript
+        cells={[
+          cells[0],
+          {
+            id: "tasks",
+            kind: "todo",
+            todos: [{ content: "Build", status: "in_progress", activeForm: "Building" }],
+          },
+          cells[2],
+        ]}
+      />
+    )
+    expect(mockStaticRenders.at(-1)).toBe(2)
+    expect(container.textContent).toContain("▣ Building")
   })
 
   it("renders every cell in order", () => {

@@ -10,24 +10,21 @@ import { TUI_INPUT_PRIORITY, useTuiInput } from "../input/input-router"
 import type { Cell } from "../state/types"
 import { anchorAtRow, buildVirtualBlockIndex, virtualWindow } from "../state/virtual-block-index"
 import type { VirtualBlockMetric } from "../state/virtual-block-index"
-import { cellToTerminalBlock, TerminalBlockCache } from "../render/cell-terminal-block"
+import {
+  cellToTerminalBlock,
+  cellRenderRevision,
+  TerminalBlockCache,
+} from "../render/cell-terminal-block"
 import { buildTerminalBlock, terminalStringWidth } from "../render/terminal-block"
 import type { TerminalBlock, TerminalStyle } from "../render/terminal-block"
 import { groupContextRuns, contextGroupLines } from "../format/context-group"
 import { needsBlankAfter } from "../render/transcript-spacing"
 import { useTheme } from "../theme/context"
 import { useRenderPrefs } from "../render/context"
+import { useCliLocale } from "../i18n"
 import { recordBlockCacheStats, recordRenderDuration } from "../runtime/render-diagnostics"
 
 const blockCache = new TerminalBlockCache()
-
-function revisionOf(cell: Cell): string {
-  try {
-    return JSON.stringify(cell)
-  } catch {
-    return `${cell.id}:${cell.kind}`
-  }
-}
 
 function BlockView({ block }: { block: TerminalBlock }) {
   const theme = useTheme()
@@ -87,6 +84,7 @@ function VirtualizedTranscriptBody({
 }) {
   const theme = useTheme()
   const prefs = useRenderPrefs()
+  const locale = useCliLocale()
   const containerRef = React.useRef<DOMElement | null>(null)
   // Never paint a transcript line into the terminal's final column. A line
   // whose last grapheme lands there arms the terminal's deferred auto-wrap;
@@ -102,7 +100,7 @@ function VirtualizedTranscriptBody({
       // `leadCell` is what the spacing rule sees for a run.
       const leadCell = (run: (typeof runs)[number]) =>
         run.kind === "group" ? run.tools[0] : run.cell
-      return runs.map((run, index) => {
+      const rendered = runs.map((run, index) => {
         const blank = needsBlankAfter(leadCell(run), runs[index + 1] && leadCell(runs[index + 1]))
         if (run.kind === "group") {
           const lines = contextGroupLines(run.tools, safeWidth)
@@ -132,8 +130,8 @@ function VirtualizedTranscriptBody({
             id: run.cell.id,
             width: safeWidth,
             theme: JSON.stringify(theme),
-            preferences: `${verbose ? "verbose" : "compact"}:${blank}:${JSON.stringify(prefs)}`,
-            revision: revisionOf(run.cell),
+            preferences: `${locale}:${verbose ? "verbose" : "compact"}:${blank}:${JSON.stringify(prefs)}`,
+            revision: cellRenderRevision(run.cell),
           },
           () =>
             cellToTerminalBlock(run.cell, {
@@ -141,12 +139,15 @@ function VirtualizedTranscriptBody({
               verbose,
               prefs,
               palette: theme,
+              locale,
               trailingBlank: blank,
             })
         )
       })
+      blockCache.retain(rendered.map((block) => block.id))
+      return rendered
     },
-    [cells, safeWidth, theme, verbose, prefs]
+    [cells, safeWidth, theme, verbose, prefs, locale]
   )
   const index = React.useMemo(
     () => buildVirtualBlockIndex(blocks.map((block) => ({ id: block.id, rows: block.rowCount }))),

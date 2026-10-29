@@ -10,7 +10,7 @@
  * line the user actually sees. The overlay/App wiring lives elsewhere.
  */
 import type { Cell, ToolCell } from "../state/types"
-import { summarizeToolCall, toolDisplayName } from "./tools"
+import { summarizeToolCall, toolDisplayName, todoLabel } from "./tools"
 
 /** A single matching line within a committed cell. */
 export interface SearchHit {
@@ -68,7 +68,7 @@ export function cellToText(cell: Cell): string {
     case "tool":
       return toolToText(cell)
     case "todo":
-      return cell.todos.map((t) => t.content).join("\n")
+      return cell.todos.map(todoLabel).join("\n")
     case "error":
       return cell.message
     case "notice":

@@ -12101,6 +12101,8 @@
     "settingsHint": "Tab 切换分组 · ↑/↓ 选择 · ←/→ 修改 · 空格切换 · Enter 打开 · r 重置 · Esc 关闭",
     "stopping": "正在停止",
     "thinking": "正在思考",
+    "todos": "任务列表",
+    "todosMore": "+{count} 项 · 已完成 {done}/{total}",
     "tokenRate": "平均 {rate} 词元/秒",
     "tokenUsage": "{count} 词元",
     "toolsBrowser": {

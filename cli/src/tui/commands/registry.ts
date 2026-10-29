@@ -235,6 +235,7 @@ export const CORE_COMMANDS: CommandDescriptor[] = [
               cellToTerminalBlock(cell, {
                 width: 160,
                 verbose: true,
+                locale: ctx.config.locale,
                 // Verbatim: the pager is read and copied as source, so it must
                 // not inherit the transcript's line cap or its number gutter.
                 prefs: VERBATIM_RENDER_PREFS,

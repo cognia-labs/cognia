@@ -30,6 +30,39 @@ function makeState(): TuiState {
   }
 }
 
+it("keeps pending scrollback tasks in the bounded live list rather than inflight cards", () => {
+  const state = {
+    ...makeState(),
+    inflight: { text: "Latest live answer", thinking: "", tools: [] },
+    pendingCells: [
+      {
+        id: "pending-tasks",
+        kind: "todo" as const,
+        todos: Array.from({ length: 40 }, (_, index) => ({
+          content: `Task ${index}`,
+          status: "completed" as const,
+        })),
+      },
+    ],
+  }
+  const { container } = render(
+    <TranscriptRegion
+      state={state}
+      fullscreen={false}
+      banner={null}
+      identity={{} as BackendIdentity}
+      activeModel={undefined}
+      scroll={scroll()}
+      scrollContentRef={{ current: null }}
+      cursor={cursor()}
+      mutedColor="gray"
+    />
+  )
+  expect(container.textContent).toContain("+40 more · 40/40 done")
+  expect(container.textContent).toContain("Latest live answer")
+  expect(container.textContent).not.toContain("☑ Task 39")
+})
+
 const scroll = (over: Partial<ScrollController> = {}): ScrollController =>
   ({
     offset: 0,

@@ -1,6 +1,8 @@
 /** @jest-environment node */
+import { execFileSync } from "node:child_process"
 import {
   cellToTerminalBlock,
+  cellRenderRevision,
   markdownSpans,
   TerminalBlockCache,
   VERBATIM_RENDER_PREFS,
@@ -9,7 +11,268 @@ import { RENDER_DEFAULTS } from "../../config/schema"
 import { stringWidth } from "../markdown/width"
 import type { Cell, ToolCell } from "../state/types"
 
+function renderRealInkFixture(fixture: string): string {
+  const script = `
+    import {build} from 'esbuild';
+    import {spawnSync} from 'node:child_process';
+    import {cliEsbuildOptions} from './scripts/build/esbuild-shared.mjs';
+    const options=cliEsbuildOptions({root:process.cwd(),entry:'unused',outdir:process.cwd()+'/cli/src/tui/render',entryNames:'unused',banner:false});
+    const built=await build({...options,entryPoints:undefined,stdin:{contents:${JSON.stringify(fixture)},resolveDir:process.cwd(),sourcefile:'real-ink-task-check.tsx',loader:'tsx'},write:false,splitting:false,logLevel:'silent'});
+    const child=spawnSync(process.execPath,['--input-type=module'],{cwd:process.cwd()+'/cli',input:built.outputFiles[0].text,encoding:'utf8',timeout:20000,maxBuffer:8*1024*1024,env:{...process.env,CI:'',TERM:'xterm-256color',NO_COLOR:'1'}});
+    if(child.status!==0) throw new Error('Real Ink fixture failed: '+child.stderr+'\\n'+child.stdout);
+    process.stdout.write(child.stdout);
+  `
+  return execFileSync(process.execPath, ["--input-type=module"], {
+    input: script,
+    encoding: "utf8",
+    timeout: 30000,
+    maxBuffer: 8 * 1024 * 1024,
+  })
+}
+
+it("keeps long live tasks within an 80x12 scrollback frame with real Ink, without clearing or replaying Static", () => {
+  const fixture = `
+    import React from 'react';
+    import {render, Box, Text} from 'ink';
+    import {Writable, PassThrough} from 'node:stream';
+    import assert from 'node:assert/strict';
+    import {TuiViewportFrame} from './cli/src/tui/components/app/TuiViewportFrame';
+    import {TranscriptRegion} from './cli/src/tui/components/app/TranscriptRegion';
+    import {createInitialState} from './cli/src/tui/state/initial';
+    import {DEFAULT_RESOLVED_CONFIG} from './cli/src/config/schema';
+    const base = createInitialState({...DEFAULT_RESOLVED_CONFIG, cwd: '/work'}, 'real-ink');
+    const history = {id:'history',kind:'assistant',raw:'STATIC_HISTORY_SENTINEL'};
+    for (const columns of [80,40]) for (const bottomRows of [3,5]) {
+      let output='';
+      const stdout = new Writable({write(chunk,encoding,done){output+=chunk.toString();done();}});
+      Object.assign(stdout,{isTTY:true,columns,rows:12});
+      const stdin = new PassThrough();
+      const view = step => {
+        const task = {id:'tasks',kind:'todo',todos:Array.from({length:14},(_,index)=>({content:'Task '+index,status:index===0?'in_progress':index<=10?'completed':'pending',activeForm:index===0?'Working '+step+' '+ 'long label '.repeat(20)+'\\nSECOND_LINE':undefined}))};
+        const state = {...base,cells:step%2?[history]:[history,task],pendingCells:step%2?[task]:[],inflight:{text:'',thinking:'',tools:[{id:'live-tool',kind:'tool',callKey:'live-tool',toolName:'Bash',input:{command:'INFLIGHT_OUTPUT'},status:'done',collapsed:true}]}};
+        return <TuiViewportFrame columns={stdout.columns} rows={stdout.rows} fullscreen={false} overlayOpen={false}
+          transcript={<TranscriptRegion state={state} fullscreen={false} banner={null} identity={{}} scroll={{}} scrollContentRef={{current:null}} cursor={{state:{}}} mutedColor='gray' columns={stdout.columns} />}
+          overlays={null} bottom={<Box height={bottomRows+(step>=2?1:0)} flexShrink={0}><Text>COMPOSER</Text></Box>} />;
+      };
+      const app = render(view(0),{stdout,stdin,stderr:new PassThrough(),interactive:true,exitOnCtrlC:false,patchConsole:false,maxFps:1000});
+      try {
+        for(let step=0;step<4;step++) {
+          app.rerender(view(step));
+          await app.waitUntilRenderFlush();
+          await new Promise(resolve=>setTimeout(resolve,25));
+        }
+      } finally { app.unmount(); await app.waitUntilExit(); app.cleanup(); }
+      assert.equal((output.match(/STATIC_HISTORY_SENTINEL/g)||[]).length,1,'Static replayed after a task update');
+      assert.ok(!output.includes('\\u001b[2J')&&!output.includes('\\u001b[3J')&&!output.includes('\\u001bc'),'Ink cleared the terminal');
+      assert.ok(output.includes('more')&&output.includes('10/14 done'),'missing collapsed task summary');
+      assert.ok(output.includes('COMPOSER')&&output.includes('INFLIGHT_OUTPUT'),'live siblings were lost');
+      assert.ok(!output.includes('SECOND_LINE'),'bounded task labels wrapped');
+    }
+    console.log('real Ink: 80x12 and 40x12, 14 tasks, committed/pending, composer 3/5 rows: no clears or Static replay');
+  `
+  expect(renderRealInkFixture(fixture)).toContain("no clears or Static replay")
+}, 35000)
+
+it("bounds only the live todo list by terminal rows and prioritizes current and next work in real Ink", () => {
+  const fixture = `
+    import React from 'react';
+    import {render, Box, measureElement} from 'ink';
+    import {Writable, PassThrough} from 'node:stream';
+    import assert from 'node:assert/strict';
+    import {Transcript} from './cli/src/tui/components/Transcript';
+    for(const rows of [8,12,18,24,60]) {
+      let output='';
+      const stdout=new Writable({write(chunk,encoding,done){output+=chunk.toString();done();}});
+      Object.assign(stdout,{isTTY:true,columns:40,rows});
+      const ref=React.createRef();
+      const task={id:'tasks',kind:'todo',todos:Array.from({length:100},(_,i)=>({id:String(i),content:'Task '+i,status:i===99?'in_progress':i<10?'completed':'pending',activeForm:i===99?'CURRENT_WORK':undefined}))};
+      const app=render(<Box ref={ref} flexDirection='column'><Transcript cells={[task]} columns={40} /></Box>,{stdout,stdin:new PassThrough(),stderr:new PassThrough(),interactive:true,patchConsole:false,exitOnCtrlC:false});
+      try {
+        await app.waitUntilRenderFlush();
+        const height=measureElement(ref.current).height;
+        assert.ok(height>=3&&height<=Math.max(3,Math.floor(rows/3)),'todo budget at '+rows+' rows: '+height);
+        assert.ok(output.includes('CURRENT_WORK')&&output.includes('more')&&output.includes('10/100 done'),output);
+        assert.ok(!output.includes('☑ Task 0'),output);
+        if(height>3) {
+          assert.ok(output.indexOf('CURRENT_WORK')<output.indexOf('☐ Task 10'),output);
+        }
+        if(height>4) {
+          assert.ok(output.indexOf('☐ Task 10')<output.indexOf('☐ Task 11'),output);
+        }
+      } finally {app.unmount();await app.waitUntilExit();app.cleanup();}
+    }
+    console.log('real Ink todo row budgets passed');
+  `
+  expect(renderRealInkFixture(fixture)).toContain("real Ink todo row budgets passed")
+}, 35000)
+
+it("fits live todos around the real composer, output and overlays on tiny terminals and resize without clearing or replaying Static", () => {
+  const fixture = `
+    import React from 'react';
+    import {render, Box, Text, measureElement} from 'ink';
+    import {Writable, PassThrough} from 'node:stream';
+    import assert from 'node:assert/strict';
+    import {TuiViewportFrame} from './cli/src/tui/components/app/TuiViewportFrame';
+    import {TranscriptRegion} from './cli/src/tui/components/app/TranscriptRegion';
+    import {Input} from './cli/src/tui/components/Input';
+    import {createFrameBuffer} from './cli/src/tui/selection/frame-buffer';
+    import {createInitialState} from './cli/src/tui/state/initial';
+    import {DEFAULT_RESOLVED_CONFIG} from './cli/src/config/schema';
+    const initial=createInitialState({...DEFAULT_RESOLVED_CONFIG,cwd:'/work'},'tiny-live-todos');
+    const history={id:'history',kind:'assistant',raw:'STATIC_TINY_TODO_SENTINEL'};
+    for(const size of [5,6,7,8,9,10,24]) for(const extras of [false,true]) {
+      let output='';
+      const stdout=new Writable({write(chunk,encoding,done){output+=chunk.toString();done();}});
+      Object.assign(stdout,{isTTY:true,columns:40,rows:size});
+      const captured=createFrameBuffer(stdout);
+      const stdin=Object.assign(new PassThrough(),{isTTY:true,setRawMode:()=>{},ref:()=>{},unref:()=>{}});
+      const frameRef=React.createRef();
+      const bottomRef=React.createRef();
+      const overlayRef=React.createRef();
+      const view=(step,lines=0,showTasks=true)=>{
+        const task={id:'todos',kind:'todo',todos:Array.from({length:40},(_,i)=>({id:String(i),content:'Task '+i,status:i===39?'in_progress':i<10?'completed':'pending',activeForm:i===39?'CURRENT '+step:undefined}))};
+        const state={...initial,cells:showTasks?[history,task]:[history],inflight:{text:Array.from({length:lines},(_,i)=>'Live line '+(i+1)).join('\\n'),thinking:'',tools:[]}};
+        return <Box ref={frameRef} flexDirection='column'><TuiViewportFrame columns={40} rows={stdout.rows} fullscreen={false} overlayOpen={extras}
+          transcript={<TranscriptRegion state={state} fullscreen={false} columns={40} banner={null} identity={{}} scroll={{}} scrollContentRef={{current:null}} cursor={{state:{}}} mutedColor='gray' />}
+          overlays={<Box ref={overlayRef} flexDirection='column'>{extras&&size>5?<Text>APPROVAL</Text>:null}</Box>}
+          bottom={<Box ref={bottomRef} flexDirection='column'>{extras?<Text>STATUS</Text>:null}<Input input={initial.input} dispatch={()=>{}} onSubmit={()=>{}} cwd='/work' width={40} composerRows={2} placeholder='' /></Box>}
+        /></Box>;
+      };
+      const app=render(view(0),{stdout:captured.stdout,stdin,stderr:new PassThrough(),interactive:true,patchConsole:false,exitOnCtrlC:false,maxFps:1000});
+      const flush=async()=>{await app.waitUntilRenderFlush();await new Promise(resolve=>setTimeout(resolve,15));};
+      try {
+        await flush();
+        for(let step=1;step<=4;step++) {
+          const lines=size>=8&&size!==24&&!extras?step:0;
+          if(size===24&&step===2) {stdout.rows=6;stdout.emit('resize');}
+          app.rerender(view(step,lines));await flush();
+          const withTasks=measureElement(frameRef.current).height;
+          const painted=captured.plain().join('\\n');
+          app.rerender(view(step,lines,false));await flush();
+          const baseline=measureElement(frameRef.current).height;
+          const remaining=stdout.rows-1-baseline;
+          assert.ok(withTasks<=baseline+Math.max(0,remaining),'todos overflow at '+stdout.rows+' rows: '+withTasks+' vs baseline '+baseline);
+          if(remaining<1) assert.equal(withTasks,baseline,'todos must hide when no row remains');
+          else if(remaining<=2) {
+            assert.equal(withTasks,baseline+1,'tiny todo summary must occupy one row');
+            assert.ok(painted.includes('CURRENT '+step)&&painted.includes('10/40'),painted);
+          }
+          app.rerender(view(step,lines));await flush();
+        }
+      } finally {app.unmount();await app.waitUntilExit();app.cleanup();}
+      const esc=String.fromCharCode(27);
+      assert.ok(!output.includes(esc+'[2J')&&!output.includes(esc+'[3J')&&!output.includes(esc+'c'),'clear at '+size+' rows, extras='+extras+' '+JSON.stringify(output));
+      assert.equal((output.match(/STATIC_TINY_TODO_SENTINEL/g)||[]).length,1,'Static replay at '+size+' rows, extras='+extras);
+    }
+    console.log('real Ink tiny terminal, growing output and resize budgets passed');
+  `
+  expect(renderRealInkFixture(fixture)).toContain(
+    "real Ink tiny terminal, growing output and resize budgets passed"
+  )
+}, 35000)
+
+it.each(["stream", "tool", "workflow", "slash", "approval", "task-error"])(
+  "preserves scrollback %s content with real Ink on a short terminal",
+  (scenario) => {
+    const fixture = `
+      import React from 'react';
+      import {render, renderToString, Box, Text} from 'ink';
+      import {Writable, PassThrough} from 'node:stream';
+      import assert from 'node:assert/strict';
+      import {TuiViewportFrame} from './cli/src/tui/components/app/TuiViewportFrame';
+      import {TranscriptRegion} from './cli/src/tui/components/app/TranscriptRegion';
+      import {Input} from './cli/src/tui/components/Input';
+      import {bufferFromText} from './cli/src/tui/input/buffer';
+      import {tuiReducer} from './cli/src/tui/state/reducer';
+      import {createInitialState} from './cli/src/tui/state/initial';
+      import {DEFAULT_RESOLVED_CONFIG} from './cli/src/config/schema';
+      const scenario=${JSON.stringify(scenario)};
+      const rows=scenario==='slash'?9:scenario==='workflow'||scenario==='approval'?8:12;
+      const initial=createInitialState({...DEFAULT_RESOLVED_CONFIG,cwd:'/work'},'real-layout');
+      const base={...initial,cells:[{id:'user',kind:'user',text:'QUESTION'}]};
+      const text=value=><Text>{value}</Text>;
+      const region=state=><TranscriptRegion state={state} fullscreen={false} banner={null} identity={{}} scroll={{}} scrollContentRef={{current:null}} cursor={{state:{}}} mutedColor='gray' columns={40} />;
+      const frame=(state,bottom=text('COMPOSER'),overlays=null)=><TuiViewportFrame columns={40} rows={rows} fullscreen={false} overlayOpen={!!overlays} transcript={region(state)} overlays={overlays} bottom={bottom} />;
+      if(scenario==='stream') {
+        let output='';
+        const stdout=new Writable({write(chunk,encoding,done){output+=chunk.toString();done();}});
+        Object.assign(stdout,{isTTY:true,columns:40,rows});
+        const view=count=>frame({...base,inflight:{text:Array.from({length:count},(_,i)=>'Paragraph '+(i+1)).join('\\n\\n'),thinking:'',tools:[]}});
+        const app=render(view(5),{stdout,stdin:new PassThrough(),stderr:new PassThrough(),interactive:true,patchConsole:false,exitOnCtrlC:false,maxFps:1000});
+        try {
+          await app.waitUntilRenderFlush();
+          output='';
+          app.rerender(view(20)); await app.waitUntilRenderFlush();
+          await new Promise(resolve=>setTimeout(resolve,25));
+          assert.ok(output.includes('Paragraph 20'),'newest streaming paragraph was clipped: '+output);
+          assert.ok(output.includes('COMPOSER'),'composer was clipped');
+        } finally {app.unmount();await app.waitUntilExit();app.cleanup();}
+      } else if(scenario==='tool') {
+        const state={...base,inflight:{text:'',thinking:'',tools:[{id:'run',kind:'tool',callKey:'run',toolName:'Bash',input:{command:'example'},status:'running',collapsed:false,result:Array.from({length:25},(_,i)=>'Output line '+(i+1)).join('\\n')}]}};
+        const output=renderToString(frame(state),{columns:40});
+        assert.ok(output.includes('Output line 25'),output);
+        assert.ok(output.includes('COMPOSER'),output);
+      } else if(scenario==='workflow') {
+        const state={...base,workflowRun:{completed:5,currentId:'5',steps:Array.from({length:8},(_,i)=>({id:String(i),label:'Step '+i,status:i<5?'succeeded':i===5?'running':'pending',lastStreamDelta:i===5?'RUNNING_STEP':undefined}))}};
+        const output=renderToString(frame(state),{columns:40});
+        assert.ok(output.includes('RUNNING_STEP'),output);
+        assert.ok(output.includes('COMPOSER'),output);
+      } else if(scenario==='slash') {
+        const input={...base.input,buffer:bufferFromText('/')};
+        const bottom=<Input input={input} dispatch={()=>{}} onSubmit={()=>{}} cwd='/work' width={40} popupRows={3} composerRows={2} />;
+        const output=renderToString(frame(base,bottom),{columns:40});
+        assert.ok(output.includes('Search: all commands'),'slash palette was not open: '+output);
+        assert.ok(output.includes('› /█'),'composer text or cursor was clipped: '+output);
+      } else if(scenario==='approval') {
+        for(const height of [8,9]) {
+          const overlays=<Box flexDirection='column'>{Array.from({length:8},(_,i)=><Text key={i}>APPROVAL {i}</Text>)}</Box>;
+          const output=renderToString(<TuiViewportFrame columns={40} rows={height} fullscreen={false} overlayOpen transcript={region(base)} overlays={overlays} bottom={text('Waiting for approval')} />,{columns:40});
+          assert.ok(output.includes('Waiting for approval'),output);
+        }
+      } else {
+        let state=tuiReducer(base,{type:'TOOL_CALL',callKey:'bad',toolName:'TaskUpdate',input:{taskId:'404',status:'completed'}});
+        state=tuiReducer(state,{type:'TOOL_RESULT',callKey:'bad',toolName:'TaskUpdate',result:'task 404 not found',isError:true});
+        for(const committed of [false,true]) {
+          if(committed) state=tuiReducer(state,{type:'TURN_COMMIT',result:{text:'',messageId:'m',a2uiSurfaces:{},a2uiSurfaceOrder:[]}});
+          const output=renderToString(frame(state),{columns:40});
+          assert.ok(output.includes('task 404 not found'),output);
+        }
+      }
+      console.log('real Ink '+scenario+' passed');
+    `
+    expect(renderRealInkFixture(fixture)).toContain(`real Ink ${scenario} passed`)
+  },
+  35000
+)
+
 describe("cellToTerminalBlock", () => {
+  it.each([
+    ["en", "Todos"],
+    ["zh-CN", "任务列表"],
+  ] as const)(
+    "renders localized tasks, activeForm, and distinct skipped marks (%s)",
+    (locale, heading) => {
+      const block = cellToTerminalBlock(
+        {
+          id: "tasks",
+          kind: "todo",
+          todos: [
+            { content: "Build", activeForm: "Building", status: "in_progress" },
+            { content: "Ship", status: "skipped" },
+            { content: "Done", status: "completed" },
+            { content: "Wait", status: "pending" },
+          ],
+        },
+        { width: 80, verbose: false, locale }
+      )
+      expect(block.plainText).toContain(heading)
+      expect(block.plainText).toContain("▣ Building")
+      expect(block.plainText).not.toContain("▣ Build\n")
+      expect(block.plainText).toContain("⊘ Ship")
+      expect(block.plainText).toContain("☑ Done")
+      expect(block.plainText).toContain("☐ Wait")
+    }
+  )
   it("renders image attachments inline with separate targets and retains original export text", () => {
     const cell: Cell = { id: "images", kind: "user", text: '中文 @"/Screen Shot.png" then @/b.png' }
     const block = cellToTerminalBlock(cell, { width: 12, verbose: false })
@@ -369,6 +632,65 @@ describe("cellToTerminalBlock", () => {
 })
 
 describe("TerminalBlockCache", () => {
+  it("does not serialize hidden task history in a render revision", () => {
+    const cell: Cell = {
+      id: "tasks",
+      kind: "todo",
+      todos: [{ content: "Build", activeForm: "Building", status: "in_progress" }],
+    }
+    const history: ToolCell = {
+      id: "hidden",
+      kind: "tool",
+      callKey: "hidden",
+      toolName: "TaskList",
+      status: "done",
+      collapsed: true,
+      input: {},
+      result: {
+        toJSON() {
+          throw new Error("History must not be serialized")
+        },
+      },
+    }
+    expect(cellRenderRevision({ ...cell, toolCalls: [history] })).toBe(cellRenderRevision(cell))
+    expect(
+      cellRenderRevision({
+        ...cell,
+        todos: [{ content: "Build", activeForm: "Testing", status: "in_progress" }],
+      })
+    ).not.toBe(cellRenderRevision(cell))
+  })
+
+  it("retains only the newest revision and render options for each cell id", () => {
+    const cache = new TerminalBlockCache()
+    const build = jest.fn(() =>
+      cellToTerminalBlock({ id: "tasks", kind: "todo", todos: [] }, { width: 80, verbose: false })
+    )
+    for (let index = 0; index < 500; index++) {
+      cache.get(
+        {
+          id: "tasks",
+          width: 40 + index,
+          theme: `theme-${index}`,
+          preferences: "compact",
+          revision: `revision-${index}`,
+        },
+        build
+      )
+    }
+    expect(cache.stats().size).toBe(1)
+    cache.get(
+      { id: "assistant", width: 80, theme: "dark", preferences: "compact", revision: "first" },
+      build
+    )
+    cache.get(
+      { id: "assistant", width: 80, theme: "dark", preferences: "compact", revision: "second" },
+      build
+    )
+    expect(cache.stats().size).toBe(2)
+    cache.retain(["assistant"])
+    expect(cache.stats().size).toBe(1)
+  })
   it("keys entries by id, width, theme, preferences, and revision", () => {
     const cache = new TerminalBlockCache()
     const build = jest.fn(() =>

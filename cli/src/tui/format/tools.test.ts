@@ -6,7 +6,13 @@ import {
   diffStat,
   isDiffTool,
   isTodoTool,
+  isTodoWriteTool,
   parseTodos,
+  foldTodoCalls,
+  compactTodoCalls,
+  todoLabel,
+  TODO_MARK,
+  selectVisibleTodos,
   resultPreview,
   runningToolLines,
   summarizeResult,
@@ -23,6 +29,21 @@ import {
 } from "./tools"
 import { stringWidth } from "../markdown/width"
 import type { ToolCell } from "../state/types"
+
+describe("selectVisibleTodos", () => {
+  const todos = [
+    { content: "Done", status: "completed" as const },
+    { content: "Wait", status: "pending" as const },
+    { content: "Work", status: "in_progress" as const },
+    { content: "Skip", status: "skipped" as const },
+  ]
+  it("prioritizes running work and reserves rows for the heading and summary", () => {
+    expect(selectVisibleTodos(todos, 3)).toEqual({ items: [todos[2]], hidden: 3, done: 1 })
+    expect(selectVisibleTodos(todos, 1)).toEqual({ items: [], hidden: 4, done: 1 })
+    expect(selectVisibleTodos(todos, 0)).toEqual({ items: [], hidden: 4, done: 1 })
+    expect(selectVisibleTodos(todos, 5)).toEqual({ items: todos, hidden: 0, done: 1 })
+  })
+})
 
 const toolCell = (over: Partial<ToolCell> = {}): ToolCell => ({
   id: "t1",
@@ -50,6 +71,21 @@ describe("isDiffTool", () => {
 })
 
 describe("isTodoTool", () => {
+  it("distinguishes input-only snapshots from incremental task calls", () => {
+    expect(isTodoWriteTool("mcp__cognia-tools__TodoWrite")).toBe(true)
+    expect(isTodoWriteTool("todowrite")).toBe(true)
+    expect(isTodoWriteTool("TaskCreate")).toBe(false)
+    expect(isTodoWriteTool("mcp__other__TodoWrite")).toBe(false)
+  })
+  it.each(["TodoWrite", "TaskCreate", "TaskUpdate", "TaskList"])(
+    "accepts host namespaces for %s without claiming other MCP servers",
+    (name) => {
+      for (const prefix of ["", "mcp__cognia-tools__", "mcp__cognia-plugin-tools__"]) {
+        expect(isTodoTool(prefix + name)).toBe(true)
+      }
+      expect(isTodoTool(`mcp__other__${name}`)).toBe(false)
+    }
+  )
   it("matches TodoWrite case-insensitively", () => {
     expect(isTodoTool("TodoWrite")).toBe(true)
     expect(isTodoTool("todowrite")).toBe(true)
@@ -58,6 +94,22 @@ describe("isTodoTool", () => {
 })
 
 describe("parseTodos", () => {
+  it("skips partial entries, preserves ACP skipped, and shares GUI tolerance", () => {
+    expect(
+      parseTodos({
+        todos: [
+          null,
+          {},
+          { content: "  " },
+          { content: "wait", status: "unknown" },
+          { content: "skip", status: "skipped" },
+        ],
+      })
+    ).toEqual([
+      { content: "wait", status: "pending" },
+      { content: "skip", status: "skipped" },
+    ])
+  })
   it("parses well-formed todos and defaults invalid status to pending", () => {
     const todos = parseTodos({
       todos: [
@@ -79,6 +131,157 @@ describe("parseTodos", () => {
     expect(parseTodos(null)).toEqual([])
     expect(parseTodos({})).toEqual([])
     expect(parseTodos({ todos: "nope" })).toEqual([])
+  })
+})
+
+describe("foldTodoCalls", () => {
+  const call = (
+    callKey: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    result?: unknown,
+    isError = false
+  ): ToolCell => toolCell({ callKey, toolName, input, result, isError })
+
+  it.each([false, true])(
+    "compacts both families losslessly, including empty current snapshots (%s)",
+    (empty) => {
+      const calls = [
+        call(
+          "create",
+          "TaskCreate",
+          { subject: "Build", activeForm: "Building" },
+          { task: { id: "1" } }
+        ),
+        call("update", "TaskUpdate", { taskId: "1", status: "in_progress" }),
+        call("snapshot", "TodoWrite", {
+          todos: empty ? [] : [{ content: "Skip", status: "skipped" }],
+        }),
+      ].map((task) => ({ ...task, status: "done" as const }))
+      const compact = compactTodoCalls(calls)
+      expect(foldTodoCalls(compact)).toEqual(foldTodoCalls(calls))
+      const resume = call("resume", "TaskUpdate", { taskId: "1", subject: "Renamed" })
+      expect(foldTodoCalls([...compact, resume])).toEqual(foldTodoCalls([...calls, resume]))
+      expect(compactTodoCalls(compact)).toEqual(compact)
+    }
+  )
+
+  it("does not compact in-flight calls or lose the latest empty TaskList", () => {
+    const pending = [call("create", "TaskCreate", { subject: "Build" })]
+    expect(compactTodoCalls(pending)).toBe(pending)
+    const settled = [
+      call("todo", "TodoWrite", { todos: [{ content: "Prior", status: "pending" }] }),
+      call("list", "TaskList", {}, { tasks: [] }),
+    ].map((task) => ({ ...task, status: "done" as const }))
+    const compact = compactTodoCalls(settled)
+    expect(foldTodoCalls(compact)).toEqual([])
+    expect(
+      foldTodoCalls([
+        ...compact,
+        call("new-todo", "TodoWrite", { todos: [{ content: "Next", status: "completed" }] }),
+      ])
+    ).toEqual([{ content: "Next", status: "completed" }])
+  })
+
+  it("replays SDK and sidecar creates, patches, deletes, and unknown ids", () => {
+    expect(
+      foldTodoCalls([
+        call(
+          "a",
+          "TaskCreate",
+          { subject: "First", activeForm: "Doing first" },
+          "Task #3 created successfully: First"
+        ),
+        call(
+          "b",
+          "mcp__cognia-tools__TaskCreate",
+          { subject: "Second" },
+          { task: { id: "4", subject: "Second" } }
+        ),
+        call("c", "TaskUpdate", { taskId: "3", subject: "Renamed", status: "in_progress" }),
+        call("d", "TaskUpdate", { taskId: "4", status: "deleted" }),
+        call("e", "TaskUpdate", { taskId: 9, status: "completed" }),
+      ])
+    ).toEqual([
+      { id: "3", content: "Renamed", status: "in_progress", activeForm: "Doing first" },
+      { id: "9", content: "#9", status: "completed" },
+    ])
+  })
+
+  it("replaces a provisional create on result and ignores failed calls", () => {
+    const pending = call("a", "TaskCreate", { subject: "First" })
+    expect(foldTodoCalls([pending])).toEqual([
+      { id: "pending:a", content: "First", status: "pending" },
+    ])
+    expect(
+      foldTodoCalls([
+        { ...pending, result: [{ type: "text", text: '{"task":{"id":"3"}}' }] },
+        call("b", "TaskUpdate", { taskId: "3", status: "completed" }, "failed", true),
+      ])
+    ).toEqual([{ id: "3", content: "First", status: "pending" }])
+  })
+
+  it.each([
+    "#3 [in_progress] First\n#5 [completed] Fifth",
+    '{"tasks":[{"id":"3","subject":"First","status":"in_progress"},{"id":"5","subject":"Fifth","status":"completed"}]}',
+  ])("replaces the list using a TaskList result: %s", (output) => {
+    expect(
+      foldTodoCalls([
+        call("a", "TaskCreate", { subject: "First", activeForm: "Doing first" }, "Task #3 created"),
+        call("b", "TaskCreate", { subject: "Removed" }, "Task #4 created"),
+        call("c", "mcp__cognia-plugin-tools__TaskList", {}, output),
+        call("d", "TaskUpdate", { taskId: "3", activeForm: null }),
+      ])
+    ).toEqual([
+      { id: "3", content: "First", status: "in_progress" },
+      { id: "5", content: "Fifth", status: "completed" },
+    ])
+  })
+
+  it("keeps families separate and uses call order even after a late result", () => {
+    const calls = [
+      call("a", "TaskCreate", { subject: "Incremental" }, "Task #1 created"),
+      call("b", "TodoWrite", { todos: [{ content: "Snapshot", status: "skipped" }] }),
+    ]
+    expect(foldTodoCalls(calls)).toEqual([{ content: "Snapshot", status: "skipped" }])
+    expect(
+      foldTodoCalls([
+        ...calls,
+        call("c", "TaskUpdate", { taskId: "1", status: "in_progress", activeForm: "Working" }),
+      ])
+    ).toEqual([{ id: "1", content: "Incremental", status: "in_progress", activeForm: "Working" }])
+  })
+
+  it.each(["No tasks found", { tasks: [] }])("clears on an empty TaskList: %j", (output) => {
+    expect(
+      foldTodoCalls([call("a", "TaskCreate", { subject: "A" }), call("b", "TaskList", {}, output)])
+    ).toEqual([])
+  })
+
+  it("clears on an empty snapshot, tolerates malformed calls, and clears on deletion", () => {
+    const calls = [call("a", "TaskCreate", { subject: "A" }, "Task #1 created")]
+    expect(foldTodoCalls([...calls, call("b", "TodoWrite", { todos: [] })])).toEqual([])
+    expect(
+      foldTodoCalls([
+        ...calls,
+        call("b", "TodoWrite", { todos: [null, {}] }),
+        call("c", "TaskList", {}, "invalid"),
+      ])
+    ).toEqual([{ id: "1", content: "A", status: "pending" }])
+    expect(
+      foldTodoCalls([...calls, call("b", "TaskUpdate", { taskId: "1", status: "deleted" })])
+    ).toEqual([])
+  })
+
+  it("uses activeForm only while in progress and gives skipped a distinct mark", () => {
+    expect(todoLabel({ content: "Build", status: "in_progress", activeForm: "Building" })).toBe(
+      "Building"
+    )
+    expect(todoLabel({ content: "Build", status: "completed", activeForm: "Building" })).toBe(
+      "Build"
+    )
+    expect(todoLabel({ content: "Build", status: "in_progress", activeForm: "" })).toBe("Build")
+    expect(new Set(Object.values(TODO_MARK)).size).toBe(4)
   })
 })
 

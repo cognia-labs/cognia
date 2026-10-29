@@ -2,6 +2,13 @@ import path from "node:path"
 import React from "react"
 import { act, render, waitFor } from "@testing-library/react"
 import { __fireInput, __resetInk } from "ink"
+import { disposeOpenCliDb } from "../../db/bootstrap"
+import { __disposeCliBackgroundJournalForTesting } from "../../agent/subagent-background-tasks"
+
+afterAll(async () => {
+  await __disposeCliBackgroundJournalForTesting()
+  await disposeOpenCliDb()
+})
 
 jest.mock("../input/history-store", () => ({
   appendHistory: jest.fn(),
