@@ -5,11 +5,15 @@
 import * as ReactForMock from "react"
 import { fireEvent, render } from "@testing-library/react"
 
+import { resetDisclosureMemory } from "@/lib/chat/disclosure-memory"
+
 import {
+  FLAT_GROUP_MAX,
   ToolActivityGroup,
   type ToolActivityChildOptions,
   type ToolActivityGroupEntry,
 } from "./tool-activity-group"
+import { TurnProcessFold } from "./turn-process-fold"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, params?: Record<string, unknown>) =>
@@ -30,6 +34,7 @@ jest.mock("@/components/chat/motion/motion-reveal", () => ({
 
 afterEach(() => {
   mockMotion.reduce = true
+  resetDisclosureMemory()
 })
 
 let keySeq = 0
@@ -248,8 +253,99 @@ describe("ToolActivityGroup", () => {
       <ToolActivityGroup entries={[replacement, c]} mode="standard" renderChild={renderRow} />
     )
     expect(getByTestId("row-tool-Read").getAttribute("data-expanded")).toBe("false")
+    // The original call coming back keeps the choice made for IT: choices are
+    // remembered by identity, not dropped when a row leaves the window.
     rerender(<ToolActivityGroup entries={[a, c]} mode="standard" renderChild={renderRow} />)
-    expect(getByTestId("row-tool-Read").getAttribute("data-expanded")).toBe("false")
+    expect(getByTestId("row-tool-Read").getAttribute("data-expanded")).toBe("true")
+  })
+
+  it("remembers row and group choices across a remount when given memory keys", () => {
+    const rows = [
+      { ...entry("tool-Read"), memoryKey: "m1:tool:r" },
+      { ...entry("tool-Grep"), memoryKey: "m1:tool:g" },
+    ]
+    const first = render(
+      <ToolActivityGroup
+        entries={rows}
+        mode="standard"
+        memoryKey="m1:group:r"
+        renderChild={renderRow}
+      />
+    )
+    fireEvent.click(first.getByTestId("row-tool-Read"))
+    first.unmount()
+    const second = render(
+      <ToolActivityGroup
+        entries={rows}
+        mode="standard"
+        memoryKey="m1:group:r"
+        renderChild={renderRow}
+      />
+    )
+    expect(second.getByTestId("row-tool-Read").getAttribute("data-expanded")).toBe("true")
+    fireEvent.click(second.getByTestId("tool-activity-group-toggle"))
+    second.unmount()
+    const third = render(
+      <ToolActivityGroup
+        entries={rows}
+        mode="standard"
+        memoryKey="m1:group:r"
+        renderChild={renderRow}
+      />
+    )
+    expect(third.getByTestId("tool-activity-group-toggle").getAttribute("aria-expanded")).toBe(
+      "false"
+    )
+  })
+
+  it("closes a settled group under the collapsed preference but keeps a running one open", () => {
+    const settled = render(
+      <ToolActivityGroup
+        entries={[entry("tool-Read"), entry("tool-Grep")]}
+        mode="standard"
+        defaultOpen={false}
+        renderChild={renderRow}
+      />
+    )
+    expect(settled.getByTestId("tool-activity-group-toggle").getAttribute("aria-expanded")).toBe(
+      "false"
+    )
+    settled.unmount()
+    const running = render(
+      <ToolActivityGroup
+        entries={[entry("tool-Read", "input-available"), entry("tool-Grep")]}
+        mode="standard"
+        defaultOpen={false}
+        renderChild={renderRow}
+      />
+    )
+    expect(running.getByTestId("tool-activity-group-toggle").getAttribute("aria-expanded")).toBe(
+      "true"
+    )
+  })
+
+  it("renders a small group flat inside an open turn fold and keeps the header for a large one", () => {
+    const small = Array.from({ length: FLAT_GROUP_MAX }, () => entry("tool-Read"))
+    const view = render(
+      <TurnProcessFold fold={{ toolCount: small.length, failedCount: 0, reasoningCount: 0 }}>
+        <ToolActivityGroup entries={small} mode="simplified" renderChild={renderRow} />
+      </TurnProcessFold>
+    )
+    fireEvent.click(view.getByTestId("turn-process-fold-toggle"))
+    expect(view.getByTestId("tool-activity-group")).toHaveAttribute("data-flat")
+    expect(view.queryByTestId("tool-activity-group-toggle")).toBeNull()
+    expect(view.getAllByTestId("row-tool-Read")).toHaveLength(FLAT_GROUP_MAX)
+    view.unmount()
+
+    const large = Array.from({ length: FLAT_GROUP_MAX + 1 }, () => entry("tool-Read"))
+    const big = render(
+      <TurnProcessFold fold={{ toolCount: large.length, failedCount: 0, reasoningCount: 0 }}>
+        <ToolActivityGroup entries={large} mode="simplified" renderChild={renderRow} />
+      </TurnProcessFold>
+    )
+    fireEvent.click(big.getByTestId("turn-process-fold-toggle"))
+    // Still a group, and open: the reader opened the fold to see the steps.
+    expect(big.getByTestId("tool-activity-group-toggle").getAttribute("aria-expanded")).toBe("true")
   })
 
   it("preserves manual row choices across group collapse and mode changes", () => {

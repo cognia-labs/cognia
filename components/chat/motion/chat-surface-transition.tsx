@@ -26,19 +26,27 @@
  * the pane's inner welcome ⇄ transcript swap uses. A conversation-to-
  * conversation switch is not a surface change — the conversation surface is
  * kept, so the transcript, composer and their state are not torn down — and
- * gets a short settle on the stage instead (a brief dip and rise), enough to
- * mark the change without replaying an entrance.
+ * gets a short settle instead: the new transcript fades up from a few pixels
+ * below while the header and composer stay exactly where they are. Only the
+ * content changed, so only the content moves. The settle starts in the layout
+ * phase, before the new conversation's first paint; started from an effect,
+ * that first frame painted at full opacity and the fade then snapped it back
+ * down, which read as a flicker rather than an arrival.
  *
  * Everything is `opacity` + `transform` only: the transcript inside is watched
- * by `ResizeObserver`s (ADR-0138), and a transform never re-lays it out.
+ * by `ResizeObserver`s (ADR-0138), and a transform never re-lays it out. The
+ * settle animates the whole `transform` property rather than motion's `y`
+ * shorthand so it runs as a compositor animation, and keeps running smoothly
+ * while the main thread is busy mounting the new conversation's rows.
  * Durations ride the shared motion tokens and the user's speed preference;
  * with reduced motion the swap is instant and the settle is skipped.
  */
 
 import { animate, AnimatePresence, motion, type Variants } from "motion/react"
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useRef, useState, type ReactNode } from "react"
 
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
+import { useIsomorphicLayoutEffect } from "@/hooks/use-isomorphic-layout-effect"
 import { MOBILE_DURATION, MOBILE_EASE } from "@/lib/ui/motion"
 
 export type ChatSurface = "home" | "notice" | "conversation"
@@ -107,11 +115,19 @@ export function chatSurfaceVariants(
   }
 }
 
-/** The conversation-to-conversation settle: a quick dip and rise on the stage. */
+/**
+ * The conversation-to-conversation settle: the new transcript fades up from a
+ * few pixels below. Played on every `[data-chat-settle-target]` inside the
+ * surface (the transcript, the loader or the empty state — never the header
+ * or the composer), or on the whole stage when a host marks nothing.
+ */
 export const CHAT_SESSION_SETTLE = {
-  keyframes: { opacity: [0.4, 1], y: [6, 0] },
-  duration: 0.24,
+  keyframes: { opacity: [0, 1], transform: ["translateY(4px)", "translateY(0px)"] },
+  duration: 0.18,
 } as const
+
+/** Marks what the settle moves. Hosts put it on content, never on chrome. */
+export const CHAT_SETTLE_TARGET_ATTRIBUTE = "data-chat-settle-target"
 
 export interface ChatSurfaceTransitionProps {
   surface: ChatSurface
@@ -145,7 +161,7 @@ export function ChatSurfaceTransition({
   // up — a surface change already has its own entrance — and never for the
   // first conversation the stage shows.
   const shown = useRef<{ surface: ChatSurface; sessionId: string | null }>({ surface, sessionId })
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const previous = shown.current
     shown.current = { surface, sessionId }
     const stage = stageRef.current
@@ -158,11 +174,17 @@ export function ChatSurfaceTransition({
     ) {
       return
     }
-    const controls = animate(stage, CHAT_SESSION_SETTLE.keyframes, {
-      duration: CHAT_SESSION_SETTLE.duration * durationScale,
-      ease: MOBILE_EASE,
-    })
-    return () => controls.stop()
+    const marked = Array.from(
+      stage.querySelectorAll<HTMLElement>(`[${CHAT_SETTLE_TARGET_ATTRIBUTE}]`)
+    )
+    const targets = marked.length > 0 ? marked : [stage]
+    const controls = targets.map((target) =>
+      animate(target, CHAT_SESSION_SETTLE.keyframes, {
+        duration: CHAT_SESSION_SETTLE.duration * durationScale,
+        ease: MOBILE_EASE,
+      })
+    )
+    return () => controls.forEach((control) => control.stop())
   }, [surface, sessionId, reduce, durationScale])
 
   const exit: ChatSurfaceExit = { direction: trail.direction, durationScale }

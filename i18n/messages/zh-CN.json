@@ -9469,6 +9469,7 @@
     "history": {
       "loadError": "无法加载此对话。",
       "loading": "正在加载对话…",
+      "loadingEarlier": "正在加载更早的消息…",
       "retry": "重试"
     },
     "hookNotice": {
@@ -10884,8 +10885,8 @@
     "transcript": {
       "collapseTurn": "收起轮次",
       "expandTurn": "展开完整轮次",
-      "loadOlder": "加载更早轮次",
       "loading": "正在加载聊天记录…",
+      "loadingOlder": "正在加载更早的轮次…",
       "nextDetails": "后续消息",
       "previousDetails": "之前的消息",
       "retry": "重试加载聊天记录"
@@ -29817,7 +29818,7 @@
         "endedBadge": "已结束",
         "expandTurn": "展开回合详情",
         "interruptAria": "打断当前回合",
-        "loadOlder": "加载更早回合",
+        "loadingOlder": "正在加载更早回合…",
         "loadingTranscript": "正在加载会话记录…",
         "notFound": "会话不存在或已不可用。",
         "observeOnly": "仅观察",

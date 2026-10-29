@@ -19,7 +19,8 @@
  * expanded area, so `message-renderer` routes every state here.
  */
 
-import { memo, useMemo, useState } from "react"
+import { useRememberedDisclosure } from "@/hooks/chat/use-remembered-disclosure"
+import { memo, useMemo } from "react"
 import type { ToolUIPart } from "ai"
 import type { SharedDiffStats } from "@/lib/collab/shared-assistant-projection"
 import { useTranslations } from "next-intl"
@@ -396,12 +397,18 @@ export interface FileToolPartProps {
   part: ToolUIPart
   sessionId?: string
   /**
-   * Seeds the row's open state at mount (read once, like a Collapsible's
-   * `defaultOpen`). Used for standalone rows; when absent a running or failed call starts open.
+   * The open state of an untouched standalone row. Followed live, so a call
+   * that opened because it was running closes once it settles; when absent a
+   * running or failed call is open. A reader's own toggle always wins.
    */
   defaultOpen?: boolean
   expanded?: boolean
   onToggle?: () => void
+  /**
+   * Where a standalone row remembers the reader's toggle
+   * (`lib/chat/disclosure-memory`), so it survives the row being remounted.
+   */
+  memoryKey?: string
 }
 
 export const FileToolPart = memo(function FileToolPart({
@@ -410,14 +417,13 @@ export const FileToolPart = memo(function FileToolPart({
   defaultOpen,
   expanded,
   onToggle,
+  memoryKey,
 }: FileToolPartProps) {
   const t = useTranslations("chat.toolRow")
   const tFlow = useTranslations("chat.agentFlow")
   const running = part.state === "input-available"
-  const [internalOpen, setInternalOpen] = useState(
-    defaultOpen ?? (running || part.state === "output-error")
-  )
-  const open = expanded ?? internalOpen
+  const [remembered, setRemembered] = useRememberedDisclosure(memoryKey ?? null)
+  const open = expanded ?? remembered ?? defaultOpen ?? (running || part.state === "output-error")
 
   const kind = fileToolKind(part)
   const info = useMemo(() => (kind ? describeFileToolTarget(part, kind) : {}), [part, kind])
@@ -466,7 +472,7 @@ export const FileToolPart = memo(function FileToolPart({
     <ToolRowShell
       status={part.state}
       open={open}
-      onToggle={() => (expanded !== undefined ? onToggle?.() : setInternalOpen((v) => !v))}
+      onToggle={() => (expanded !== undefined ? onToggle?.() : setRemembered(!open))}
       ariaLabel={t("rowAria", {
         verb: verbLabel,
         target: info.target ?? "",

@@ -1,5 +1,6 @@
 "use client"
 
+import { useRememberedDisclosure } from "@/hooks/chat/use-remembered-disclosure"
 import { toolResultMetadata } from "@/lib/claude/parts-extensions"
 
 /**
@@ -20,7 +21,7 @@ import { toolResultMetadata } from "@/lib/claude/parts-extensions"
  * `describeToolResult`, body = whatever `ToolDetailBody` resolves.
  */
 
-import { memo, useMemo, useState } from "react"
+import { memo, useMemo } from "react"
 import type { ToolUIPart } from "ai"
 import { useTranslations } from "next-intl"
 import {
@@ -286,12 +287,18 @@ export interface StructuredToolPartProps {
   part: ToolUIPart
   sessionId?: string
   /**
-   * Seeds the row's open state at mount (read once, like a Collapsible's
-   * `defaultOpen`). Used for standalone rows; when absent a running or failed call starts open.
+   * The open state of an untouched standalone row. Followed live, so a call
+   * that opened because it was running closes once it settles; when absent a
+   * running or failed call is open. A reader's own toggle always wins.
    */
   defaultOpen?: boolean
   expanded?: boolean
   onToggle?: () => void
+  /**
+   * Where a standalone row remembers the reader's toggle
+   * (`lib/chat/disclosure-memory`), so it survives the row being remounted.
+   */
+  memoryKey?: string
 }
 
 export const StructuredToolPart = memo(function StructuredToolPart({
@@ -300,16 +307,15 @@ export const StructuredToolPart = memo(function StructuredToolPart({
   defaultOpen,
   expanded,
   onToggle,
+  memoryKey,
 }: StructuredToolPartProps) {
   const t = useTranslations()
   const tRow = useTranslations("chat.toolRow")
   const tFlow = useTranslations("chat.agentFlow")
   const backgrounded = toolResultMetadata(part)?.backgrounded === true
   const running = part.state === "input-available"
-  const [internalOpen, setInternalOpen] = useState(
-    defaultOpen ?? (running || part.state === "output-error")
-  )
-  const open = expanded ?? internalOpen
+  const [remembered, setRemembered] = useRememberedDisclosure(memoryKey ?? null)
+  const open = expanded ?? remembered ?? defaultOpen ?? (running || part.state === "output-error")
 
   const name = resolveToolPartName(part) ?? "tool"
   const spec = SPEC[name.toLowerCase()]
@@ -373,7 +379,7 @@ export const StructuredToolPart = memo(function StructuredToolPart({
     <ToolRowShell
       status={backgrounded ? "info" : part.state}
       open={open}
-      onToggle={() => (expanded !== undefined ? onToggle?.() : setInternalOpen((v) => !v))}
+      onToggle={() => (expanded !== undefined ? onToggle?.() : setRemembered(!open))}
       ariaLabel={tRow("rowAria", {
         verb: verbLabel,
         target: target ?? "",

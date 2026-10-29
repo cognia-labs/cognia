@@ -24,6 +24,11 @@ export interface ChatPaneGroupProps {
   sessions: readonly ChatSession[]
   /** Full active/split rows when the navigation list contains projections. */
   paneSessions?: readonly ChatSession[]
+  /**
+   * `paneSessions` is still being read for the current selection: a pane whose
+   * row is missing from it is pending, not gone (see `ChatPane.sessionPending`).
+   */
+  paneSessionsPending?: boolean
   /** Per-session send — the workspace wraps trust-prompting around it. */
   send: (
     content: SendContent,
@@ -92,6 +97,7 @@ export interface ChatPaneGroupProps {
 export function ChatPaneGroup({
   sessions,
   paneSessions,
+  paneSessionsPending = false,
   send,
   stop,
   steerNow,
@@ -163,6 +169,7 @@ export function ChatPaneGroup({
       <ChatPane
         sessionId={sessionId ?? undefined}
         activeSession={session}
+        sessionPending={paneSessionsPending && session === null && sessionId !== null}
         onSend={(content, manifest, templateRun, turnMetadata) =>
           Promise.resolve(
             sessionId ? send(content, sessionId, manifest, templateRun, turnMetadata) : undefined

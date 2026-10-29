@@ -68,7 +68,7 @@ jest.mock("@tanstack/react-virtual", () => ({
 const labels = {
   expand: "Expand details",
   collapse: "Collapse details",
-  loadOlder: "Load older",
+  loadingOlder: "Loading older",
   loading: "Loading",
   retry: "Retry",
 }
@@ -183,9 +183,9 @@ describe("<TranscriptTimelineSurface />", () => {
       "Result",
       "A",
     ])
-    fireEvent.click(screen.getByRole("button", { name: labels.loadOlder }))
     fireEvent.click(screen.getByRole("button", { name: labels.retry }))
-    expect(props.onLoadOlder).toHaveBeenCalledTimes(1)
+    // A failed page stops automatic loading; the retry button is the way on.
+    expect(props.onLoadOlder).not.toHaveBeenCalled()
     expect(props.onRetry).toHaveBeenCalledTimes(1)
     rerender(
       <TranscriptTimelineSurface
@@ -227,7 +227,8 @@ describe("<TranscriptTimelineSurface />", () => {
     )
     expect(screen.getByTestId("message-a1")).toHaveTextContent("Full answer")
     expect(screen.getByTestId("message-a1")).toHaveAttribute("data-editable", "true")
-    expect(screen.getByRole("button", { name: labels.loading })).toBeDisabled()
+    // An older page in flight floats a status over the top edge.
+    expect(screen.getByTestId("transcript-loading-older")).toHaveTextContent(labels.loadingOlder)
     fireEvent.click(screen.getByRole("button", { name: labels.collapse }))
     expect(props.onCollapse).toHaveBeenCalledWith(item.turnKey)
     const expandedProps = {
@@ -374,5 +375,77 @@ describe("<TranscriptTimelineSurface />", () => {
     )
 
     expect(screen.getByTestId("message-u1")).toHaveAttribute("data-editable", "false")
+  })
+
+  describe("loading earlier turns", () => {
+    const notice = (key: string, text: string) => ({
+      kind: "system" as const,
+      itemKey: key,
+      revision: 1,
+      startedAt: 1,
+      status: "completed" as const,
+      message: { id: key, role: "system" as const, text, createdAt: 1 },
+    })
+    const base = (): TranscriptTimelineSurfaceProps => ({
+      sessionId: "s1",
+      items: [notice("n1", "First")],
+      expandedTurnKeys: new Set(),
+      getDetail: () => undefined,
+      onExpand: jest.fn(),
+      onCollapse: jest.fn(),
+      onLoadOlder: jest.fn(),
+      onRetry: jest.fn(),
+      hasMore: true,
+      loading: false,
+      loadingOlder: false,
+      error: null,
+      liveMessages: [],
+      liveStatus: "idle",
+      labels,
+    })
+    const tallScroller = (top: number) => {
+      const log = screen.getByRole("log")
+      Object.defineProperty(log, "clientHeight", { configurable: true, value: 600 })
+      Object.defineProperty(log, "scrollHeight", { configurable: true, value: 5000 })
+      Object.defineProperty(log, "scrollTop", { configurable: true, writable: true, value: top })
+      return log
+    }
+
+    it("loads a page by itself while the history is too short to scroll", () => {
+      const props = base()
+      render(<TranscriptTimelineSurface {...props} />)
+      // jsdom lays nothing out: the scroller reports no overflow.
+      expect(props.onLoadOlder).toHaveBeenCalled()
+      expect(screen.queryByRole("button", { name: /older/i })).toBeNull()
+    })
+
+    it("does not load before any turn is here, after the last page, or mid-load", () => {
+      for (const override of [
+        { items: [] },
+        { hasMore: false },
+        { loadingOlder: true },
+        { loading: true },
+      ] as Partial<TranscriptTimelineSurfaceProps>[]) {
+        const props = { ...base(), ...override }
+        const view = render(<TranscriptTimelineSurface {...props} />)
+        expect(props.onLoadOlder).not.toHaveBeenCalled()
+        view.unmount()
+      }
+    })
+
+    it("loads when the reader scrolls up near the top, not while reading lower down", () => {
+      const props = { ...base(), hasMore: false }
+      const { rerender } = render(<TranscriptTimelineSurface {...props} />)
+      const withMore = { ...props, hasMore: true }
+      const log = tallScroller(3000)
+      rerender(<TranscriptTimelineSurface {...withMore} />)
+      // The fill check sees a scroller that overflows: nothing to do yet.
+      expect(withMore.onLoadOlder).not.toHaveBeenCalled()
+      fireEvent.scroll(log)
+      expect(withMore.onLoadOlder).not.toHaveBeenCalled()
+      log.scrollTop = 200
+      fireEvent.scroll(log)
+      expect(withMore.onLoadOlder).toHaveBeenCalledTimes(1)
+    })
   })
 })

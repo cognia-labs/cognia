@@ -20,6 +20,7 @@
  * Phase 8 of the ClaudeCode 完整化 plan.
  */
 
+import { useTranscriptSessionId } from "@/components/chat/transcript-session-context"
 import { memo, useEffect, useMemo, useState, type MouseEvent } from "react"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
@@ -135,12 +136,24 @@ const SubagentLogBody = memo(function SubagentLogBody({
   const t = useTranslations("chat.subagentPart")
   const tailLogs = useMemo(() => logs.slice(-50), [logs])
   const entries = useMemo(() => toToolActivityEntries(toolCalls), [toolCalls])
+  // The conversation this transcript shows. A sub-agent works in its parent's
+  // workspace, so its Edit / Write cards offer the same "review" and "open"
+  // actions as the parent's own calls — they read the session to do that.
+  const sessionId = useTranscriptSessionId() ?? undefined
   // Shared group controls each compact row in every mode.
   const renderToolRow = (
     part: (typeof entries)[number]["part"],
     key: string,
     opts: ToolActivityChildOptions
-  ) => <ToolCallRow key={key} part={part} expanded={opts.expanded} onToggle={opts.onToggle} />
+  ) => (
+    <ToolCallRow
+      key={key}
+      part={part}
+      sessionId={sessionId}
+      expanded={opts.expanded}
+      onToggle={opts.onToggle}
+    />
+  )
   return (
     <>
       {summary ? <p className="rounded bg-muted/30 p-2 text-xs">{summary}</p> : null}
@@ -155,6 +168,7 @@ const SubagentLogBody = memo(function SubagentLogBody({
           <ToolCallRow
             key={entries[0].key}
             part={entries[0].part}
+            sessionId={sessionId}
             defaultOpen={mode === "detailed"}
           />
         </div>

@@ -5,6 +5,14 @@ import "fake-indexeddb/auto"
 import Dexie from "dexie"
 import { act, renderHook, waitFor } from "@testing-library/react"
 import type { ChatStatus } from "@/stores/chat/chat-store"
+import {
+  HISTORY_PREVIEW_MIN_TOTAL,
+  HISTORY_PREVIEW_TAIL,
+  clearAllHistoryPreviews,
+  getHistoryPreview,
+  waitForFullHistory,
+} from "@/lib/chat/history-preview"
+import { clearPaneRowCache } from "@/lib/chat/pane-row-cache"
 
 const liveQueryMock = jest.fn()
 let mockRealLiveQuery = false
@@ -27,10 +35,14 @@ jest.mock("dexie-react-hooks", () => ({
 }))
 
 const listMessagesMock = jest.fn()
+const countMessagesMock = jest.fn()
+const listRecentMessagesMock = jest.fn()
 const persistMessagesMock = jest.fn()
 const commitMessageDeltaMock = jest.fn().mockResolvedValue(undefined)
 jest.mock("@/lib/db/messages", () => ({
   listMessages: (id: string) => listMessagesMock(id),
+  countMessages: (id: string) => countMessagesMock(id),
+  listRecentMessages: (id: string, limit: number) => listRecentMessagesMock(id, limit),
   persistMessages: (id: string, msgs: unknown) => persistMessagesMock(id, msgs),
   commitMessageDelta: (id: string, delta: unknown) => commitMessageDeltaMock(id, delta),
 }))
@@ -221,6 +233,10 @@ beforeEach(() => {
   chatStoreState.openSessionIds = []
   liveQueryMock.mockReset().mockReturnValue([])
   listMessagesMock.mockReset().mockResolvedValue([])
+  countMessagesMock.mockReset().mockResolvedValue(0)
+  listRecentMessagesMock.mockReset().mockResolvedValue([])
+  clearAllHistoryPreviews()
+  clearPaneRowCache()
   persistMessagesMock.mockReset().mockResolvedValue(undefined)
   createSessionMock.mockReset()
   deleteSessionMock.mockReset().mockResolvedValue(undefined)
@@ -529,6 +545,78 @@ describe("useSessions", () => {
     renderHook(() => useSessions())
     await waitFor(() => expect(chatStoreState.setMessages).toHaveBeenCalledWith([{ id: "m1" }]))
     expect(chatStoreState.hydrateSessionActiveBranches).toHaveBeenCalledWith("s1", {})
+  })
+
+  it("shows the newest messages of a long conversation until its full history lands", async () => {
+    chatStoreState.activeSessionId = "s1"
+    chatStoreState.sessions.s1 = { messages: [] }
+    chatStoreState.setMessages.mockClear()
+    countMessagesMock.mockResolvedValue(HISTORY_PREVIEW_MIN_TOTAL + 60)
+    const tail = [
+      { id: "t1", role: "user", parts: [{ type: "text", text: "late question" }] },
+      { id: "t2", role: "assistant", parts: [{ type: "text", text: "late answer" }] },
+    ]
+    listRecentMessagesMock.mockResolvedValue(tail)
+    getSessionMock.mockResolvedValue({ id: "s1", activeBranchByGroup: { g: "t2" } })
+    let releaseFull!: (rows: unknown[]) => void
+    listMessagesMock.mockReturnValueOnce(new Promise((resolve) => (releaseFull = resolve)))
+    renderHook(() => useSessions())
+
+    await waitFor(() => expect(getHistoryPreview("s1")).not.toBeNull())
+    expect(listRecentMessagesMock).toHaveBeenCalledWith("s1", HISTORY_PREVIEW_TAIL)
+    expect(getHistoryPreview("s1")).toMatchObject({
+      total: HISTORY_PREVIEW_MIN_TOTAL + 60,
+      activeBranchByGroup: { g: "t2" },
+    })
+    expect(chatStoreState.setMessages).not.toHaveBeenCalled()
+    // A write waits for the full history while the preview is up.
+    let written = false
+    const write = waitForFullHistory("s1").then(() => (written = true))
+    await Promise.resolve()
+    expect(written).toBe(false)
+
+    const full = [
+      { id: "o1", role: "user", parts: [{ type: "text", text: "early" }] },
+      { id: "t1", role: "user", parts: [{ type: "text", text: "late question" }] },
+      { id: "t2", role: "assistant", parts: [{ type: "text", text: "late answer" }] },
+    ]
+    releaseFull(full)
+    await waitFor(() => expect(chatStoreState.setMessages).toHaveBeenCalled())
+    await write
+    expect(getHistoryPreview("s1")).toBeNull()
+    // The rows the preview drew keep their identity in the full history.
+    const published = chatStoreState.setMessages.mock.calls.at(-1)![0] as unknown[]
+    expect(published.map((m) => (m as { id: string }).id)).toEqual(["o1", "t1", "t2"])
+    expect(getHistoryPreview("s1")).toBeNull()
+  })
+
+  it("does not preview a conversation short enough to load in one read", async () => {
+    chatStoreState.activeSessionId = "s1"
+    chatStoreState.sessions.s1 = { messages: [] }
+    countMessagesMock.mockResolvedValue(HISTORY_PREVIEW_MIN_TOTAL)
+    listRecentMessagesMock.mockResolvedValue([{ id: "t1" }])
+    let releaseFull!: (rows: unknown[]) => void
+    listMessagesMock.mockReturnValueOnce(new Promise((resolve) => (releaseFull = resolve)))
+    renderHook(() => useSessions())
+    await waitFor(() => expect(countMessagesMock).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(getHistoryPreview("s1")).toBeNull()
+    releaseFull([{ id: "t1" }])
+  })
+
+  it("keeps the store's own message objects when a re-read changed nothing", async () => {
+    const kept = [{ id: "m1", role: "user", parts: [{ type: "text", text: "same" }] }]
+    chatStoreState.activeSessionId = "s1"
+    chatStoreState.sessions.s1 = { messages: kept }
+    chatStoreState.setMessages.mockClear()
+    listMessagesMock.mockResolvedValueOnce([
+      { id: "m1", role: "user", parts: [{ type: "text", text: "same" }] },
+    ])
+    renderHook(() => useSessions())
+    await waitFor(() => expect(chatStoreState.setMessages).toHaveBeenCalled())
+    expect(chatStoreState.setMessages.mock.calls.at(-1)![0]).toBe(kept)
+    // A cached conversation never takes the preview path.
+    expect(countMessagesMock).not.toHaveBeenCalled()
   })
 
   it("reloads the open transcript when account sync applies another device's messages", async () => {

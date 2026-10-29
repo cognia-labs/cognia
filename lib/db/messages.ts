@@ -4,6 +4,7 @@ import { mergeChatTurnMetadata } from "@/lib/chat/continuation"
 import Dexie from "dexie"
 import { loggers } from "@cognia/logging"
 import { refusedHostMessageOf } from "@/lib/chat/refused-host-message"
+import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 import {
   applyReactionChange,
   type MessageReaction,
@@ -428,6 +429,17 @@ async function listRecentMessagesNow(sessionId: string, limit: number): Promise<
 }
 
 /**
+ * How many messages a session has. Counted on the `[sessionId+createdAt]`
+ * index alone, so no row (and no `parts` payload) is read.
+ */
+export function countMessages(sessionId: string): Promise<number> {
+  return getDb()
+    .messages.where("[sessionId+createdAt]")
+    .between([sessionId, 0], [sessionId, Number.MAX_SAFE_INTEGER])
+    .count()
+}
+
+/**
  * Persist the current message list for a session.
  *
  * Streaming sends one event per token-batch, so this gets called many times
@@ -761,6 +773,7 @@ async function commitMessageDeltaNow(
   assertDatabaseScope(db.name)
   let newUserMessageIds: string[] = []
   const orphanCandidates = new Set<string>()
+  let deletedMessageIds: string[] = []
   let publishedRevision: number | null = null
 
   await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
@@ -816,6 +829,7 @@ async function commitMessageDeltaNow(
     const effectiveDeleteIds = existingDeletes
       .filter((row): row is StoredMessage => row?.sessionId === sessionId)
       .map((row) => row.id)
+    deletedMessageIds = effectiveDeleteIds
     const changedIds = [...effectiveDeleteIds, ...upsertIds]
     if (changedIds.length === 0) return
 
@@ -850,6 +864,8 @@ async function commitMessageDeltaNow(
 
   const finalize = async () => {
     assertDatabaseScope(db.name)
+    for (const messageId of deletedMessageIds)
+      publishChatLifecycleEvent({ type: "message-deleted", sessionId, messageId })
     invalidatePersistSnapshot(sessionId)
     if (orphanCandidates.size > 0) {
       await collectUnreferencedMessageMedia(orphanCandidates)
@@ -1115,6 +1131,7 @@ async function clearMessagesNow(sessionId: string): Promise<void> {
       .delete()
     if (deleted > 0) revision = await bumpTranscriptRevision(db, sessionId)
   })
+  publishChatLifecycleEvent({ type: "session-cleared", sessionId }, Dexie.currentTransaction)
   invalidatePersistSnapshot(sessionId)
   markSessionDirty(sessionId)
   // Every citation captured in this session now points at nothing. Session-level
@@ -1155,11 +1172,13 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
     .filter(isMessageOwnedMediaRef)
     .toArray()
   let revision: number | null = null
+  let deleted = false
   await db.transaction("rw", db.messages, db.messageMediaRefs, db.sessions, async () => {
     assertSessionWritable(await db.sessions.get(sessionId), "send-message")
     const row = await db.messages.get(messageId)
     if (!row || row.sessionId !== sessionId) return
     await db.messages.delete(messageId)
+    deleted = true
     await db.messageMediaRefs
       .where("messageId")
       .equals(messageId)
@@ -1167,6 +1186,11 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
       .delete()
     revision = await bumpTranscriptRevision(db, row.sessionId)
   })
+  if (deleted)
+    publishChatLifecycleEvent(
+      { type: "message-deleted", sessionId, messageId },
+      Dexie.currentTransaction
+    )
   invalidatePersistSnapshot(sessionId)
   markMessagesRemoved([messageId])
   void revokeClaimsForDeletedMessages([messageId])

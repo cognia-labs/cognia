@@ -119,6 +119,21 @@ export interface StickToBottom {
    * streamed pin.
    */
   release: () => void
+  /**
+   * Remember where the reader is, right before a state change that inserts
+   * rows ABOVE them (revealing earlier history). Pair with
+   * {@link StickToBottom.restorePlaceAfterPrepend} in the layout phase of the
+   * commit that inserted them.
+   */
+  holdPlaceForPrepend: () => void
+  /**
+   * Put the reader back on the content they were looking at after rows were
+   * inserted above it: the inserted height is added to `scrollTop`, so nothing
+   * on screen moves. A reader following the foot is pinned instead. A no-op
+   * without a preceding {@link StickToBottom.holdPlaceForPrepend}. Call from a
+   * layout effect, so the correction lands before the insertion is painted.
+   */
+  restorePlaceAfterPrepend: () => void
 }
 
 /**
@@ -261,6 +276,35 @@ export function useStickToBottom({
   )
 
   const release = useCallback(() => setFollowing(false), [setFollowing])
+
+  // Prepend anchoring. Rows inserted above the viewport grow `scrollHeight`
+  // by exactly their own height, so restoring the reader's place is adding
+  // that growth to `scrollTop` — in the layout phase, before the browser
+  // paints the content shoved down. Browsers' native scroll anchoring would do
+  // this for us, but WebKit (the macOS and iOS shells) has none.
+  const prependAnchorRef = useRef<{ top: number; height: number } | null>(null)
+  const holdPlaceForPrepend = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    prependAnchorRef.current = { top: el.scrollTop, height: el.scrollHeight }
+  }, [scrollRef])
+  const restorePlaceAfterPrepend = useCallback(() => {
+    const anchor = prependAnchorRef.current
+    prependAnchorRef.current = null
+    const el = scrollRef.current
+    if (!anchor || !el) return
+    if (gateRef.current.enabled && followingRef.current) {
+      pin()
+      return
+    }
+    const grown = el.scrollHeight - anchor.height
+    if (grown === 0) return
+    el.scrollTop = anchor.top + grown
+    // The scroll event this causes moved DOWN, so it can never read as the
+    // reader leaving the foot; record it as observed all the same.
+    lastTopRef.current = el.scrollHeight > el.clientHeight ? el.scrollTop : null
+    setNear(measureNear(el))
+  }, [measureNear, pin, scrollRef, setNear])
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current
@@ -406,5 +450,7 @@ export function useStickToBottom({
     resetToBottom,
     scrollToBottom,
     release,
+    holdPlaceForPrepend,
+    restorePlaceAfterPrepend,
   }
 }

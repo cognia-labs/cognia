@@ -15,6 +15,7 @@ import {
   listMessages,
   rowToUIMessage,
   listRecentMessages,
+  countMessages,
   persistMessages,
   persistStreamingMessages,
   replaceSessionTranscript,
@@ -1523,6 +1524,22 @@ describe("thread handoff write guard", () => {
   })
 })
 
+describe("countMessages", () => {
+  it("counts one session's messages without counting another's", async () => {
+    await putSession("s-count-a")
+    await putSession("s-count-b")
+    await replaceSessionTranscript("s-count-a", [
+      msg("s-count-a-1", "user", "a"),
+      msg("s-count-a-2", "assistant", "b"),
+      msg("s-count-a-3", "user", "c"),
+    ])
+    await replaceSessionTranscript("s-count-b", [msg("s-count-b-1", "user", "x")])
+    expect(await countMessages("s-count-a")).toBe(3)
+    expect(await countMessages("s-count-b")).toBe(1)
+    expect(await countMessages("s-count-none")).toBe(0)
+  })
+})
+
 describe("listRecentMessages", () => {
   // `@chat:` used to call `listMessages` and throw away all but the last 40 —
   // a read of every row of the session WITH its `parts`, where one tool result
@@ -2024,4 +2041,32 @@ describe("stampSessionLastMessage", () => {
       stampSessionLastMessage("s-stamp", { parts: [{ type: "text", text: "x" }], createdAt: 1 })
     ).resolves.toBeUndefined()
   })
+})
+
+it("publishes only actual committed message deletions and explicit session clears", async () => {
+  const { subscribeChatLifecycleEvents } = await import("@/lib/chat/lifecycle-events")
+  const receive = jest.fn()
+  const stop = subscribeChatLifecycleEvents(receive)
+  try {
+    await persistMessages("s1", [msg("hook-a", "user", "1"), msg("hook-b", "assistant", "2")])
+    await deleteStoredMessage("missing")
+    expect(receive).not.toHaveBeenCalled()
+    await commitMessageDelta("s1", { deleteIds: ["hook-a", "missing"] })
+    expect(receive).toHaveBeenCalledWith({
+      type: "message-deleted",
+      sessionId: "s1",
+      messageId: "hook-a",
+    })
+    await deleteStoredMessage("hook-b")
+    expect(receive).toHaveBeenCalledWith({
+      type: "message-deleted",
+      sessionId: "s1",
+      messageId: "hook-b",
+    })
+    await clearMessages("s1")
+    expect(receive).toHaveBeenCalledWith({ type: "session-cleared", sessionId: "s1" })
+    expect(receive).toHaveBeenCalledTimes(3)
+  } finally {
+    stop()
+  }
 })

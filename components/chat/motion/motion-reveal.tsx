@@ -18,7 +18,7 @@
  */
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { createContext, useContext, type CSSProperties, type ReactNode } from "react"
+import { createContext, useContext, useState, type CSSProperties, type ReactNode } from "react"
 
 import { useSettingsStore } from "@/stores/settings"
 import { speedToDurationScale } from "@/lib/appearance/motion-applier"
@@ -36,6 +36,32 @@ export function MessageMotionProvider({
 }) {
   return (
     <MessageMotionContext.Provider value={messageMotion}>{children}</MessageMotionContext.Provider>
+  )
+}
+
+/**
+ * Whether content mounting under this point is *arriving* (true) or being
+ * *redrawn* (false).
+ *
+ * `MotionReveal` exists so a tool call streaming into a live reply slides in
+ * instead of popping. A row of history is not arriving: opening a conversation
+ * mounts dozens of them at once, and the virtual list remounts one every time
+ * it scrolls back into view. Played there, the entrance was a burst of
+ * simultaneous fades on every switch and a replay on every scroll — motion
+ * that said "this is new" about things that were not. The message renderer
+ * marks its subtree with whether the message is still being written.
+ */
+const EntranceMotionContext = createContext(true)
+
+export function EntranceMotionProvider({
+  arriving,
+  children,
+}: {
+  arriving: boolean
+  children: ReactNode
+}) {
+  return (
+    <EntranceMotionContext.Provider value={arriving}>{children}</EntranceMotionContext.Provider>
   )
 }
 
@@ -82,6 +108,10 @@ export function MotionReveal({
   intensity = "restrained",
 }: MotionRevealProps) {
   const { reduce, durationScale } = useFlowMotion()
+  const arriving = useContext(EntranceMotionContext)
+  // Read once: `initial` only matters on mount, and an element that mounted
+  // as history must not start animating because its message changed state.
+  const [playEntrance] = useState(arriving)
 
   if (disabled || reduce) {
     return className ? <div className={className}>{children}</div> : <>{children}</>
@@ -112,7 +142,8 @@ export function MotionReveal({
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, y: intensity === "expressive" ? 6 : 3 }}
+      // Same element either way, so a reply that seals never remounts it.
+      initial={playEntrance ? { opacity: 0, y: intensity === "expressive" ? 6 : 3 } : false}
       animate={{ opacity: 1, y: 0 }}
       transition={transition}
     >
@@ -195,6 +226,12 @@ export function MotionCollapse({ open, children, className }: MotionCollapseProp
  */
 export function ReadingCollapse({ open, children, className }: MotionCollapseProps) {
   const { reduce, durationScale } = useFlowMotion()
+  // A disclosure that is already open when it mounts is being redrawn — a
+  // remembered choice coming back with a remounted row — not being opened.
+  // Only a body that opens after mount plays the fade. Cleared on the first
+  // closed render, so every later open does.
+  const [openAtMount, setOpenAtMount] = useState(open)
+  if (!open && openAtMount) setOpenAtMount(false)
 
   if (!open) return null
   if (reduce) return <div className={className}>{children}</div>
@@ -202,7 +239,7 @@ export function ReadingCollapse({ open, children, className }: MotionCollapsePro
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, y: -2 }}
+      initial={openAtMount ? false : { opacity: 0, y: -2 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: MOBILE_DURATION.fast * durationScale, ease: "easeOut" }}
     >

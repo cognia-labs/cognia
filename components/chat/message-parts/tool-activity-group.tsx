@@ -1,14 +1,34 @@
 "use client"
 
-/** Collapsible tool run with lazy bodies and per-call controlled disclosure state. */
+/**
+ * Collapsible tool run with lazy bodies and per-call controlled disclosure state.
+ *
+ * Disclosure state is remembered by identity (`lib/chat/disclosure-memory`):
+ * the group's own open/closed by `memoryKey`, each row by its entry's
+ * `memoryKey`. A row the reader opened therefore stays open when the virtual
+ * list remounts the message, when the turn seals and moves the group under its
+ * fold, and when a lone call grows into a group as a second one streams in.
+ * Without keys (a sub-agent's rolling tool window) the choices are scoped to
+ * this mount.
+ *
+ * Inside an open turn fold a group of up to {@link FLAT_GROUP_MAX} calls drops
+ * its header and renders its rows directly — the fold already says "these are
+ * the turn's steps", so the header was a second disclosure to click through.
+ */
 
-import { useCallback, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useId, useMemo, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { ChevronRightIcon } from "lucide-react"
 import type { ToolUIPart } from "ai"
 
 import { ReadingCollapse } from "@/components/chat/motion/motion-reveal"
 import { ToolStatusDot } from "@/components/chat/message-parts/tool-row"
+import { useInsideTurnFold } from "@/components/chat/message-parts/turn-process-fold"
+import {
+  useRememberedDisclosure,
+  useRememberedDisclosures,
+} from "@/hooks/chat/use-remembered-disclosure"
+import { readDisclosure } from "@/lib/chat/disclosure-memory"
 import {
   aggregateToolStatus,
   countErroredTools,
@@ -18,11 +38,19 @@ import type { AgentFlowMode } from "@/types/appearance"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
+/** Inside a turn fold, groups this size or smaller render as plain rows. */
+export const FLAT_GROUP_MAX = 8
+
 export interface ToolActivityGroupEntry {
   part: ToolUIPart
   key: string
   /** Caller-specific default; otherwise only detailed rows start expanded. */
   defaultOpen?: boolean
+  /**
+   * Where the reader's choice for this row is remembered — the same key the
+   * call uses when it renders on its own, so the choice follows the call.
+   */
+  memoryKey?: string
 }
 
 /** Controlled disclosure options, shared by every row shape. */
@@ -34,8 +62,14 @@ export interface ToolActivityChildOptions {
 export interface ToolActivityGroupProps {
   entries: ToolActivityGroupEntry[]
   mode: AgentFlowMode
-  /** Explicit display preference also opens the enclosing group. */
+  /**
+   * Explicit display preference: `true` opens the group, `false` closes it
+   * unless a call still needs the reader (running, awaiting approval, denied,
+   * failed).
+   */
   defaultOpen?: boolean
+  /** Where the group's own open/closed choice is remembered. */
+  memoryKey?: string
   /** Renders one child (a compact row or a full tool card — the caller decides). */
   renderChild: (part: ToolUIPart, key: string, opts: ToolActivityChildOptions) => ReactNode
 }
@@ -44,11 +78,14 @@ export function ToolActivityGroup({
   entries,
   mode,
   defaultOpen,
+  memoryKey,
   renderChild,
 }: ToolActivityGroupProps) {
   const t = useTranslations("chat.agentFlow")
 
-  const [expandedRows, setExpandedRows] = useState<Map<string, boolean>>(() => new Map())
+  const instanceScope = useId()
+  const insideFold = useInsideTurnFold()
+  const flat = insideFold && entries.length <= FLAT_GROUP_MAX
 
   const status = useMemo(() => aggregateToolStatus(entries.map((e) => e.part.state)), [entries])
   const attentionState = useMemo(
@@ -66,40 +103,62 @@ export function ToolActivityGroup({
   const counts = useMemo(() => summarizeContextCounts(entries.map((e) => e.part)), [entries])
 
   // A manual group toggle wins over later stream/default changes. Pending,
-  // approval and denied calls must remain visible until explicitly collapsed.
-  const autoOpen = defaultOpen ?? (mode !== "simplified" || status !== "complete")
-  const [override, setOverride] = useState<boolean | null>(null)
-  const groupOpen = override ?? autoOpen
+  // approval, denied and failed calls stay visible until explicitly collapsed,
+  // even under the "collapsed" display preference. Inside an open fold the
+  // reader has already asked to see the process, so the group starts open.
+  const autoOpen =
+    defaultOpen === false
+      ? status !== "complete"
+      : (defaultOpen ?? (insideFold || mode !== "simplified" || status !== "complete"))
+  const [override, setOverride] = useRememberedDisclosure(memoryKey ?? `${instanceScope}:group`)
+  const groupOpen = flat || (override ?? autoOpen)
+
+  // Each row's memory key, in entry order. Rows without a caller key are
+  // scoped to this mount so two groups never share a choice by accident.
+  // Derived from a signature so a fresh entries array with the same calls
+  // (every streamed delta builds one) keeps every derived identity below.
+  const identitySignature = entries
+    .map((entry) => `${entry.key}\u0001${entry.memoryKey ?? ""}`)
+    .join("\u0000")
+  const memoryKeyByEntry = useMemo(
+    () =>
+      new Map(
+        (identitySignature ? identitySignature.split("\u0000") : []).map((pair) => {
+          const [entryKey = "", memory = ""] = pair.split("\u0001")
+          return [entryKey, memory || `${instanceScope}:row:${entryKey}`] as const
+        })
+      ),
+    [identitySignature, instanceScope]
+  )
+  const rowKeys = useMemo(() => [...memoryKeyByEntry.values()], [memoryKeyByEntry])
+  const [rowChoices, setRowChoices] = useRememberedDisclosures(rowKeys)
   const rowDefaults = useMemo(
     () =>
       JSON.stringify(entries.map((entry) => [entry.key, entry.defaultOpen ?? mode === "detailed"])),
     [entries, mode]
   )
   const defaults = useMemo(() => new Map<string, boolean>(JSON.parse(rowDefaults)), [rowDefaults])
+  const rowOpen = (entryKey: string) =>
+    rowChoices.get(memoryKeyByEntry.get(entryKey) ?? "") ?? defaults.get(entryKey) ?? false
 
-  // Drop clipped/replaced identities, bounding state for a subagent's rolling
-  // tool window. Retained identities keep their manual state across reorders.
-  if ([...expandedRows.keys()].some((key) => !defaults.has(key))) {
-    setExpandedRows(new Map([...expandedRows].filter(([key]) => defaults.has(key))))
-  }
-
-  const expandAllActive =
-    entries.length > 0 &&
-    entries.every((entry) => expandedRows.get(entry.key) ?? defaults.get(entry.key))
+  const expandAllActive = entries.length > 0 && entries.every((entry) => rowOpen(entry.key))
   const toggleExpandAll = () => {
     setOverride(true)
-    setExpandedRows(new Map(entries.map((entry) => [entry.key, !expandAllActive])))
+    setRowChoices(rowKeys, !expandAllActive)
   }
-  const toggleRow = useCallback((key: string, fallback: boolean) => {
-    setOverride(true)
-    setExpandedRows((prev) => {
-      const next = new Map(prev)
-      next.set(key, !(prev.get(key) ?? fallback))
-      return next
-    })
-  }, [])
-  // The serialized identity/default list stays stable on streaming deltas and
-  // fresh entries arrays, keeping unaffected memoized rows' callbacks stable.
+  // A row toggle also pins the group open, so a live group the reader has
+  // started reading does not fold itself away when its calls complete. The
+  // current choice is read at click time, keeping every handler's identity
+  // stable across streamed deltas and other rows' toggles.
+  const toggleRow = useCallback(
+    (entryKey: string, fallback: boolean) => {
+      const key = memoryKeyByEntry.get(entryKey)
+      if (!key) return
+      setOverride(true)
+      setRowChoices([key], !(readDisclosure(key) ?? fallback))
+    },
+    [memoryKeyByEntry, setOverride, setRowChoices]
+  )
   const rowToggles = useMemo(
     () => new Map([...defaults].map(([key, fallback]) => [key, () => toggleRow(key, fallback)])),
     [defaults, toggleRow]
@@ -109,12 +168,26 @@ export function ToolActivityGroup({
     <div className="space-y-0.5">
       {entries.map((entry) =>
         renderChild(entry.part, entry.key, {
-          expanded: expandedRows.get(entry.key) ?? defaults.get(entry.key),
+          expanded: rowOpen(entry.key),
           onToggle: rowToggles.get(entry.key),
         })
       )}
     </div>
   )
+
+  if (flat) {
+    return (
+      <div
+        className="not-prose mb-2 w-full"
+        data-testid="tool-activity-group"
+        data-mode={mode}
+        data-status={status}
+        data-flat=""
+      >
+        {body}
+      </div>
+    )
+  }
 
   return (
     <div

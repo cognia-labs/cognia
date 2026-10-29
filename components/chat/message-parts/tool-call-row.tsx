@@ -1,5 +1,6 @@
 "use client"
 
+import { useRememberedDisclosure } from "@/hooks/chat/use-remembered-disclosure"
 import { toolResultMetadata } from "@/lib/claude/parts-extensions"
 
 /**
@@ -18,7 +19,7 @@ import { toolResultMetadata } from "@/lib/claude/parts-extensions"
  * remounting their content.
  */
 
-import { memo, useMemo, useState } from "react"
+import { memo, useMemo } from "react"
 import { useTranslations } from "next-intl"
 import {
   FileIcon,
@@ -87,6 +88,11 @@ export interface ToolCallRowProps {
   defaultOpen?: boolean
   /** Owning chat session — threaded to the detail body's structured cards. */
   sessionId?: string
+  /**
+   * Where an uncontrolled row remembers the reader's toggle
+   * (`lib/chat/disclosure-memory`), so it survives the row being remounted.
+   */
+  memoryKey?: string
 }
 
 export const ToolCallRow = memo(function ToolCallRow({
@@ -95,11 +101,12 @@ export const ToolCallRow = memo(function ToolCallRow({
   onToggle,
   defaultOpen,
   sessionId,
+  memoryKey,
 }: ToolCallRowProps) {
   const t = useTranslations("chat.agentFlow")
-  const [internalOpen, setInternalOpen] = useState<boolean | null>(null)
+  const [remembered, setRemembered] = useRememberedDisclosure(memoryKey ?? null)
   const controlled = expanded !== undefined
-  const open = controlled ? expanded : (internalOpen ?? defaultOpen ?? false)
+  const open = controlled ? expanded : (remembered ?? defaultOpen ?? false)
 
   // Both summarizers scan the tool input/output (describeToolResult splits the
   // full output into lines); memoize on the part identity — which the chat
@@ -120,7 +127,7 @@ export const ToolCallRow = memo(function ToolCallRow({
 
   const handleToggle = () => {
     if (controlled) onToggle?.()
-    else setInternalOpen(!open)
+    else setRemembered(!open)
   }
 
   return (

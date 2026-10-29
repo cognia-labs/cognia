@@ -189,7 +189,7 @@ export function RemoteSessionDetail({ sessionId }: RemoteSessionDetailProps) {
                 labels={{
                   expand: t("expandTurn"),
                   collapse: t("collapseTurn"),
-                  loadOlder: t("loadOlder"),
+                  loadingOlder: t("loadingOlder"),
                   loading: t("loadingTranscript"),
                   retry: t("retryTranscript"),
                 }}

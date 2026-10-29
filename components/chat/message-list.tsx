@@ -27,6 +27,7 @@ import type { MessageSearchHit } from "@/lib/chat/message-search"
 import { findMessageAnchor } from "@/lib/chat/message-anchor"
 import { FALLBACK_ROW_PX, estimateMessageHeight } from "@/lib/chat/row-height-estimate"
 import { VIRTUALIZE_THRESHOLD, shouldVirtualizeMessages } from "@/lib/chat/virtualization-threshold"
+import { revealedWindowStart, windowStartFor } from "@/lib/chat/render-window"
 import { useJumpFlash } from "@/hooks/chat/use-jump-flash"
 import { useJumpHistory } from "@/hooks/chat/use-jump-history"
 import { JumpFlash } from "./jump-flash"
@@ -47,7 +48,7 @@ import { useAppShortcut } from "@/hooks/shortcuts/use-app-shortcut"
 import { usePlatform } from "@/hooks/use-platform"
 import { useElementWidth } from "@/hooks/use-element-width"
 import { useTranslations } from "next-intl"
-import { InfoIcon } from "lucide-react"
+import { InfoIcon, Loader2Icon } from "lucide-react"
 import { toast } from "sonner"
 import { useCharacters } from "@/lib/data-hooks/context"
 import { useStableCharacterById } from "@/hooks/data/use-stable-character-by-id"
@@ -96,6 +97,15 @@ export const TIMELINE_THRESHOLD = 8
 // what make a jump emit scroll events for several frames after the call.
 const PROGRAMMATIC_SCROLL_MS = 700
 
+// The first idle reveal of a short list's earlier rows waits for the opening
+// to settle (the switch's settle animation is ~180ms), so it never competes
+// with it. Later reveals go at the next idle period.
+const REVEAL_SETTLE_MS = 260
+// Upper bound on waiting for an idle period, so a busy stream cannot starve it.
+const REVEAL_IDLE_TIMEOUT_MS = 600
+// A short list's first window must measure at least this many viewports tall.
+const MIN_FILLED_SCREENS = 1.5
+
 interface Props {
   messages: UIMessage[]
   status: "idle" | "streaming" | "awaiting_approval" | "error"
@@ -119,6 +129,14 @@ interface Props {
   projectRoot?: string | null
   /** Per-session presentation preference; omitted sessions inherit global settings. */
   messageDisplayOverride?: MessageDisplayPreferences
+  /**
+   * Set while `messages` is only the newest slice of a longer history
+   * (`lib/chat/history-preview.ts`): how many messages the full history has.
+   * The list sizes itself for the full history (it virtualizes from the
+   * start, so the hand-over is a prepend, not a layout change) and says it is
+   * still loading when the reader reaches the top.
+   */
+  historyTotal?: number
 }
 
 export function MessageList({
@@ -132,6 +150,7 @@ export function MessageList({
   onRewindFiles,
   projectRoot,
   messageDisplayOverride,
+  historyTotal,
 }: Props) {
   const messages = useMemo(() => withoutRefusedHostPlaceholders(inputMessages), [inputMessages])
   const lastIndex = messages.length - 1
@@ -163,6 +182,7 @@ export function MessageList({
   const tJump = useTranslations("chat.jump")
   const tSelect = useTranslations("chat.transcriptSelection")
   const tTimeline = useTranslations("chat.timeline")
+  const tHistory = useTranslations("chat.history")
   const scrollTargetId = useId()
   // Long-press opens the action sheet on mobile, but there's no hover hint to
   // advertise it. Surface a one-line nudge early in the conversation; it
@@ -213,6 +233,8 @@ export function MessageList({
     resetToBottom,
     scrollToBottom,
     release: releaseFollow,
+    holdPlaceForPrepend,
+    restorePlaceAfterPrepend,
   } = useStickToBottom({
     scrollRef: scrollParentRef,
     contentRef,
@@ -312,9 +334,93 @@ export function MessageList({
   // up there. The count check short-circuits long histories; short histories
   // stop counting text as soon as the weight threshold is reached.
   const virtualize = useMemo(
-    () => shouldVirtualizeMessages(messages, showThinking ? 1 : 0),
-    [messages, showThinking]
+    () =>
+      shouldVirtualizeMessages(messages, showThinking ? 1 : 0) ||
+      (historyTotal ?? 0) > VIRTUALIZE_THRESHOLD,
+    [messages, showThinking, historyTotal]
   )
+  // The tail preview of a long history is not the whole conversation yet.
+  const historyPartial = historyTotal !== undefined && historyTotal > messages.length
+
+  // ── The render window (document-flow lists only) ───────────────────────
+  // A short conversation used to mount every row in the commit that opened
+  // it, on the frames the switch animation needed. It now opens with about
+  // two screens of rows from the foot and reveals the rest above them in idle
+  // time, as the reader scrolls up, or at once for a jump (`render-window.ts`).
+  // Keyed by message id, so the window survives messages arriving or leaving.
+  // The virtualized branch already mounts only what is on screen.
+  const [windowStartId, setWindowStartId] = useState<string | null>(() => {
+    if (virtualize) return null
+    const start = windowStartFor(messages, typeof window === "undefined" ? 0 : window.innerHeight)
+    return start > 0 ? (messages[start]?.id ?? null) : null
+  })
+  const windowIndex =
+    windowStartId === null ? 0 : messages.findIndex((message) => message.id === windowStartId)
+  // An unknown id (the row was deleted, compacted away) falls back to the
+  // whole list, which in flow mode is short by definition.
+  const floor = virtualize ? 0 : Math.max(0, windowIndex)
+  const revealEarlier = useCallback(
+    (toIndex?: number) => {
+      if (floor <= 0) return
+      const next =
+        toIndex ?? revealedWindowStart(messages, floor, scrollParentRef.current?.clientHeight ?? 0)
+      holdPlaceForPrepend()
+      setWindowStartId(next <= 0 ? null : (messages[next]?.id ?? null))
+    },
+    [floor, messages, holdPlaceForPrepend]
+  )
+  // Rows were inserted above: keep the reader on what they were reading,
+  // before the insertion is painted. Then land a jump that had to reveal its
+  // target first (see `jumpToMessage`).
+  const pendingJumpRef = useRef<{ messageId: string; align: ScrollLogicalPosition } | null>(null)
+  useIsomorphicLayoutEffect(() => {
+    restorePlaceAfterPrepend()
+    const jump = pendingJumpRef.current
+    if (!jump) return
+    pendingJumpRef.current = null
+    findMessageAnchor(scrollParentRef.current, jump.messageId)?.scrollIntoView({
+      behavior: "smooth",
+      block: jump.align,
+    })
+  }, [floor, restorePlaceAfterPrepend])
+  // The window is sized from estimates, which over-count short messages. If
+  // what mounted does not reach well past the viewport, reveal more now —
+  // before paint — so a short window never shows its rows sliding down as
+  // earlier ones arrive above a list that cannot scroll yet.
+  useIsomorphicLayoutEffect(() => {
+    if (floor <= 0) return
+    const el = scrollParentRef.current
+    const content = contentRef.current
+    if (!el || !content || el.clientHeight <= 0) return
+    if (content.offsetHeight < el.clientHeight * MIN_FILLED_SCREENS) revealEarlier()
+  }, [floor, revealEarlier])
+  // Reveal the rest in idle time once the opening has settled, a screenful
+  // per idle period, so no single frame mounts the whole history.
+  const revealedOnceRef = useRef(false)
+  useEffect(() => {
+    if (floor <= 0) return
+    const delay = revealedOnceRef.current ? 0 : REVEAL_SETTLE_MS
+    let idleHandle: number | null = null
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null
+    const reveal = () => {
+      revealedOnceRef.current = true
+      revealEarlier()
+    }
+    const settleTimer = setTimeout(() => {
+      if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+        idleHandle = window.requestIdleCallback(reveal, { timeout: REVEAL_IDLE_TIMEOUT_MS })
+      } else {
+        fallbackTimer = setTimeout(reveal, 0)
+      }
+    }, delay)
+    return () => {
+      clearTimeout(settleTimer)
+      if (fallbackTimer !== null) clearTimeout(fallbackTimer)
+      if (idleHandle !== null && typeof window.cancelIdleCallback === "function") {
+        window.cancelIdleCallback(idleHandle)
+      }
+    }
+  }, [floor, revealEarlier])
 
   // ── The live tail (ADR-0138) ────────────────────────────────────────────
   // The row currently being streamed into. It is the one row whose height
@@ -466,6 +572,15 @@ export function MessageList({
     getScrollElement: () => scrollParentRef.current,
     estimateSize: (index) => estimateRowSize(index, messages),
     overscan: 5,
+    // A conversation opens at its latest message, so the very first render
+    // already draws the rows at the foot instead of the top ones (the list is
+    // keyed per conversation, so this is every open).
+    initialOffset: () => Number.MAX_SAFE_INTEGER,
+    // Rows inserted above the viewport — the full history arriving under a
+    // tail preview, a message removed above — keep the reader's place: the
+    // virtualizer corrects the offset in the same render that computes the
+    // new range, so the visible rows never blank for a frame.
+    anchorTo: "end",
     // Round to whole pixels. Feeding fractional getBoundingClientRect heights
     // back into the virtualizer (which positions rows via transform) lets
     // sub-pixel deltas retrigger the ResizeObserver → re-measure → re-publish
@@ -545,8 +660,18 @@ export function MessageList({
   // flow/virtual transitions, so disclosure state and keyboard focus survive.
   const rows = virtualize
     ? virtualItems.map((item) => ({ index: item.index, start: item.start as number | undefined }))
-    : messages.map((_, index) => ({ index, start: undefined as number | undefined }))
+    : messages
+        .slice(floor)
+        .map((_, offset) => ({ index: floor + offset, start: undefined as number | undefined }))
   if (virtualize && hasLiveTail) rows.push({ index: liveTailIndex, start: undefined })
+
+  // The minimap and the active-turn publisher locate turns among the rendered
+  // rows (DOM anchors in flow mode), so they see the rendered window; earlier
+  // turns join them as they are revealed.
+  const windowedTimelineMessages = useMemo(
+    () => (floor > 0 ? timelineMessages.slice(floor) : timelineMessages),
+    [floor, timelineMessages]
+  )
 
   // ── The one floating offer at the foot of the pane ──────────────────────
   const {
@@ -561,14 +686,25 @@ export function MessageList({
   // is the safe direction (the offer disappears, nothing goes wrong).
   const programmaticScrollUntilRef = useRef(0)
 
+  // Within a screen of the top: where earlier history is revealed (flow) or
+  // announced as still loading (a tail preview).
+  const [nearTop, setNearTop] = useState(false)
   const handleScroll = useCallback(() => {
     trackScrollPosition()
+    const el = scrollParentRef.current
+    if (el) {
+      const top = el.scrollTop < el.clientHeight
+      setNearTop((previous) => (previous === top ? previous : top))
+      // Reading up into the unrevealed part of a short history: reveal the
+      // next screenful now rather than at the next idle period.
+      if (top && floor > 0) revealEarlier()
+    }
     // Scrolling by hand IS choosing a new place to be, which retires the offer
     // to go back to the old one. Guarded inside the hook so this costs no
     // re-render on the frames where nothing is on offer.
     if (Date.now() < programmaticScrollUntilRef.current) return
     forgetReturn()
-  }, [forgetReturn, trackScrollPosition])
+  }, [floor, forgetReturn, revealEarlier, trackScrollPosition])
 
   // New replies that landed while the user was reading further up. Reset the
   // moment they return to the bottom — they have seen them.
@@ -633,6 +769,14 @@ export function MessageList({
         flash(messageId)
       }
 
+      // A target above the render window is not in the DOM yet: reveal down
+      // to it, and land once it has mounted (the window's layout effect).
+      if (!virtualize && resolvedIndex >= 0 && resolvedIndex < floor) {
+        arriveFrom()
+        pendingJumpRef.current = { messageId, align }
+        revealEarlier(resolvedIndex)
+        return true
+      }
       // `resolvedIndex < virtualCount` matters: the live tail is a real DOM row
       // BELOW the virtual container, not row `virtualCount` inside it, so
       // asking the virtualizer to scroll to it would land on empty space. It
@@ -652,7 +796,17 @@ export function MessageList({
       node.scrollIntoView({ behavior: "smooth", block: align })
       return true
     },
-    [messages, virtualize, virtualCount, rowVirtualizer, flash, rememberReturn, releaseFollow]
+    [
+      messages,
+      virtualize,
+      virtualCount,
+      rowVirtualizer,
+      flash,
+      rememberReturn,
+      releaseFollow,
+      floor,
+      revealEarlier,
+    ]
   )
 
   // Only the primary list publishes: the dock hosts its own per-resource chat
@@ -916,6 +1070,23 @@ export function MessageList({
                 />
               ) : null}
             </AnimatePresence>
+            {/* The full history is still loading under a tail preview and the
+                reader has reached the top of what is here. Floating, so its
+                arrival and departure move nothing in the transcript. */}
+            {historyPartial && nearTop ? (
+              <div
+                className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
+                data-testid="history-loading-earlier"
+              >
+                <span
+                  role="status"
+                  className="flex items-center gap-1.5 rounded-full border border-border/70 bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+                >
+                  <Loader2Icon className="size-3 animate-spin" aria-hidden />
+                  {tHistory("loadingEarlier")}
+                </span>
+              </div>
+            ) : null}
             {/* Outside the scroller on purpose — see ConversationJumpPill. */}
             <ConversationJumpPill
               mode={
@@ -938,7 +1109,7 @@ export function MessageList({
               or long-conversation-only feature. */}
           {ownsShortcuts && (
             <ActiveTurnPublisher
-              messages={timelineMessages}
+              messages={windowedTimelineMessages}
               scrollRef={scrollParentRef}
               virtualizer={rowVirtualizer}
               virtualize={virtualize}
@@ -953,7 +1124,7 @@ export function MessageList({
             threshold: TIMELINE_THRESHOLD,
           }) && (
             <ConversationTimeline
-              messages={timelineMessages}
+              messages={windowedTimelineMessages}
               scrollRef={scrollParentRef}
               scrollTargetId={scrollTargetId}
               virtualizer={rowVirtualizer}

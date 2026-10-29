@@ -54,6 +54,10 @@ import { RouterFusionProgressCard } from "@/components/router-fusion/router-fusi
 import { PlanApprovalDock } from "@/components/agent/plan/plan-approval-dock"
 import { PlanHaltDock } from "@/components/agent/plan/plan-halt-dock"
 import { useRunRecordPersistence } from "@/hooks/chat/use-run-record-persistence"
+import { useHeldPaneSession } from "@/hooks/chat/use-held-pane-session"
+import { useHistoryPreview } from "@/hooks/chat/use-history-preview"
+import { whenFullHistory } from "@/lib/chat/history-preview"
+import { selectVisibleMessages } from "@/stores/chat/chat-store"
 import { useDeferredLoading } from "@/hooks/ui/use-deferred-loading"
 import { useStableCallback } from "@/hooks/ui/use-stable-callback"
 import { useStarterSuggestions } from "@/hooks/chat/use-starter-suggestions"
@@ -80,8 +84,8 @@ import { useTitleBarProjectionScope } from "@/components/shell/title-bar-outlets
 import { toast } from "sonner"
 import { isHarnessFailure } from "@/lib/harness/failure-offer"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
-import { AnimatePresence, motion, useReducedMotion } from "motion/react"
-import { mobileTransition } from "@/lib/ui/motion"
+import { AnimatePresence, motion } from "motion/react"
+import { MOBILE_DURATION, MOBILE_EASE, mobileTransition } from "@/lib/ui/motion"
 import { useIsMobile } from "@/hooks/ui/use-mobile"
 import { useEffectiveCwd } from "@/hooks/chat/use-effective-cwd"
 import { useCapability } from "@/hooks/use-host-profile"
@@ -99,7 +103,10 @@ import {
 import { listMessages } from "@/lib/db/messages"
 import type { ChatTemplateRun } from "@/lib/chat/template/run"
 import { hasNoLeakingPii } from "@cognia/redact"
-import { ChatSurfaceTransition } from "./motion/chat-surface-transition"
+import {
+  CHAT_SETTLE_TARGET_ATTRIBUTE,
+  ChatSurfaceTransition,
+} from "./motion/chat-surface-transition"
 import { useFlowMotion } from "./motion/motion-reveal"
 import { isSupportAgentId } from "@/lib/support-agent/context"
 import { SupportAgentPanel } from "@/components/support/support-agent-panel"
@@ -344,6 +351,13 @@ interface ChatPaneProps {
    * (session stays in plan mode). Optional — keep-planning works without it.
    */
   onSendPlanFeedback?: (feedback: string) => void | Promise<void>
+  /**
+   * The bound session's row is still being read (`useSessions().paneSessionsPending`).
+   * While it is, `activeSession` being null means "not here yet", not "no
+   * conversation": the pane keeps the conversation it was showing instead of
+   * flashing the home surface (`useHeldPaneSession`).
+   */
+  sessionPending?: boolean
   /** Compact split-view entry action rendered in the focused pane header. */
   onSplitView?: () => void
   /** Compact split-view exit action rendered in the secondary pane header. */
@@ -382,9 +396,21 @@ interface ChatPaneProps {
  * provides its layout. Blocking decisions and session-bound runtime actions
  * belong here so an embedded host cannot accidentally omit them.
  */
-export function ChatPane({
+export function ChatPane(props: ChatPaneProps) {
+  // Between a switch and the new row's read, render the conversation the pane
+  // was already showing rather than nothing (see `useHeldPaneSession`).
+  const held = useHeldPaneSession(
+    props.activeSession,
+    props.sessionId,
+    props.sessionPending === true
+  )
+  return <ChatPaneContent {...props} activeSession={held.session} sessionId={held.sessionId} />
+}
+
+function ChatPaneContent({
   activeSession,
   sessionId,
+  sessionPending,
   onSend,
   onStop,
   onSteerNow,
@@ -451,7 +477,10 @@ export function ChatPane({
   const historyMode = useSyncExternalStore(subscribeHistoryMode, getHistoryMode, () => null)
   const isWebCompanionPane = !isTauri() && !isCapacitor() && hasWebCompanionTarget()
   const usesCompanionTranscript = historyMode === "timeline" && isWebCompanionPane
-  const hasHistory = hasMessages || usesCompanionTranscript
+  // A long conversation shows its newest messages while the rest loads
+  // (`lib/chat/history-preview.ts`); that already counts as history to show.
+  const historyPreview = useHistoryPreview(boundId)
+  const hasHistory = hasMessages || usesCompanionTranscript || historyPreview !== null
   // Snapshot each turn into the durable run-records table (Run Panel "second
   // clock") — runs regardless of whether the panel is expanded or rendered.
   useRunRecordPersistence(boundId)
@@ -464,7 +493,12 @@ export function ChatPane({
   const showHistoryLoader = useDeferredLoading(coldHistoryLoading, { key: boundId })
   const showHistorySurface = coldHistoryLoading || showHistoryLoader
   const atCapacity = useIsAtStreamCap(boundId)
-  const reduce = useReducedMotion()
+  // The in-app preference as well as the OS hint: the swap below used to read
+  // only the OS one, so turning motion off in Settings left it playing.
+  const { reduce, durationScale } = useFlowMotion()
+  // The loader / welcome ⇄ transcript swap: opacity with a short rise, on the
+  // shared clock and the user's speed preference.
+  const swapTransition = { duration: MOBILE_DURATION.fast * durationScale, ease: MOBILE_EASE }
   const isMobile = useIsMobile()
   // Inside the workspace's projection scope the summary opener leaves the
   // title bar and floats on the pane surface (`chat-surface-stage` below);
@@ -563,26 +597,31 @@ export function ChatPane({
     activeSession && activeSession.id === boundId ? activeSession : null
   )
 
+  // Every action below writes the transcript. While the pane still shows a
+  // tail preview, the store holds no history at all, and a write built on it
+  // would persist a transcript missing every older message — so each waits for
+  // the full history first. Normally that is already over by the time a click
+  // lands (`lib/chat/history-preview.ts`).
   const handleRegenerate = useStableCallback(() => {
     restoreIfArchived()
-    void onRegenerate()
+    void whenFullHistory(boundId, () => onRegenerate())
   })
 
   const handleEditResend = useStableCallback((id: string, newText: string) => {
     restoreIfArchived()
-    void onEditResend(id, newText)
+    void whenFullHistory(boundId, () => onEditResend(id, newText))
   })
 
   const handleResumeAfterPlanApproval = useStableCallback(
     (...args: Parameters<typeof resumeAfterPlanApproval>) => {
       restoreIfArchived()
-      return resumeAfterPlanApproval(...args)
+      return whenFullHistory(boundId, () => resumeAfterPlanApproval(...args))
     }
   )
 
   const handleSendPlanFeedback = useStableCallback((feedback: string) => {
     restoreIfArchived()
-    return (onSendPlanFeedback ?? onSend)(feedback)
+    return whenFullHistory(boundId, () => (onSendPlanFeedback ?? onSend)(feedback))
   })
 
   const handleSend = useCallback(
@@ -605,7 +644,7 @@ export function ChatPane({
       // restore, whose failure the archive hook toasts on its own.
       restoreIfArchived()
       try {
-        await onSend(content, manifest, templateRun, turnMetadata)
+        await whenFullHistory(boundId, () => onSend(content, manifest, templateRun, turnMetadata))
       } catch (error) {
         if (boundId) {
           settleOnboardingProgress(
@@ -688,7 +727,7 @@ export function ChatPane({
   const handleRetry = useCallback(async () => {
     if (boundId) useChatStore.getState().setSessionError(boundId, null)
     restoreIfArchived()
-    await onRegenerate()
+    await whenFullHistory(boundId, () => onRegenerate())
   }, [onRegenerate, boundId, restoreIfArchived])
 
   // Re-trigger the Dexie history load after a load failure.
@@ -780,6 +819,22 @@ export function ChatPane({
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <div className="w-full max-w-md">{runtimeNotice}</div>
         </div>
+      </ChatSurfaceTransition>
+    )
+  }
+
+  if (!activeSession && sessionPending && boundId) {
+    // A conversation is on its way but there is none to hold (a cold start on
+    // a restored session). Stay on the conversation surface, empty, so its
+    // content simply appears when the row lands instead of the home surface
+    // flashing first and animating away.
+    return (
+      <ChatSurfaceTransition
+        surface="conversation"
+        sessionId={boundId}
+        onExitComplete={restoreComposerFocus}
+      >
+        <div className="min-h-0 flex-1" aria-busy="true" data-testid="chat-pane-session-pending" />
       </ChatSurfaceTransition>
     )
   }
@@ -1102,51 +1157,58 @@ export function ChatPane({
                 // `initial` only fires when this branch REPLACES the transcript
                 // (new session / cleared history); the presence root's
                 // `initial={false}` keeps the first mount static.
-                initial={reduce ? false : { opacity: 0, y: 8 }}
+                initial={reduce ? false : { opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={reduce ? undefined : { opacity: 0, y: -6 }}
-                transition={mobileTransition("fast")}
+                exit={reduce ? undefined : { opacity: 0, y: -4 }}
+                transition={swapTransition}
               >
-                {messagesLoadError && !hasHistory ? (
-                  // History load failed — surface it with a retry instead of the
-                  // welcome layout, which would read as silently lost history.
-                  <div
-                    role="alert"
-                    className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
-                  >
-                    <AlertTriangle className="size-8 text-destructive" aria-hidden />
-                    <p className="text-sm text-muted-foreground">{tHistory("loadError")}</p>
-                    <Button variant="outline" size="sm" onClick={handleRetryLoad}>
-                      {tHistory("retry")}
-                    </Button>
-                  </div>
-                ) : showHistoryLoader ? (
-                  <HistoryLoadingIndicator label={tHistory("loading")} />
-                ) : coldHistoryLoading ? (
-                  // Keep fast Dexie reads visually quiet. If the wait crosses the
-                  // anti-flicker threshold, the animated indicator replaces this.
-                  <div className="min-h-0 flex-1" aria-busy="true" />
-                ) : (
-                  <EmptyChatState
-                    onCreate={onCreate}
-                    onUseSample={(text) => onUseSample(text)}
-                    variant="inline"
-                    recentSessions={recentSessions}
-                    onResumeSession={onResumeSession}
-                    characterSamples={characterSamples}
-                    aiSamples={aiStarters}
-                    override={emptyState}
-                    workspaceAvailable={workspaceAvailable}
-                    statsSlot={statsSlot}
-                    hiddenSections={welcomeHidden}
-                    onDismissSection={handleDismissSection}
-                    // Same density and name as the no-session welcome: without
-                    // them an empty conversation on a phone fell back to the rich
-                    // desktop hero and ignored the name set in Personalization.
-                    welcomeStyle={welcomeStyle}
-                    userName={userName}
-                  />
-                )}
+                {/* What a conversation switch settles (see ChatSurfaceTransition):
+                    the content, never the composer docked below it. */}
+                <div
+                  className="flex min-h-0 flex-1 flex-col"
+                  {...{ [CHAT_SETTLE_TARGET_ATTRIBUTE]: "" }}
+                >
+                  {messagesLoadError && !hasHistory ? (
+                    // History load failed — surface it with a retry instead of the
+                    // welcome layout, which would read as silently lost history.
+                    <div
+                      role="alert"
+                      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+                    >
+                      <AlertTriangle className="size-8 text-destructive" aria-hidden />
+                      <p className="text-sm text-muted-foreground">{tHistory("loadError")}</p>
+                      <Button variant="outline" size="sm" onClick={handleRetryLoad}>
+                        {tHistory("retry")}
+                      </Button>
+                    </div>
+                  ) : showHistoryLoader ? (
+                    <HistoryLoadingIndicator label={tHistory("loading")} />
+                  ) : coldHistoryLoading ? (
+                    // Keep fast Dexie reads visually quiet. If the wait crosses the
+                    // anti-flicker threshold, the animated indicator replaces this.
+                    <div className="min-h-0 flex-1" aria-busy="true" />
+                  ) : (
+                    <EmptyChatState
+                      onCreate={onCreate}
+                      onUseSample={(text) => onUseSample(text)}
+                      variant="inline"
+                      recentSessions={recentSessions}
+                      onResumeSession={onResumeSession}
+                      characterSamples={characterSamples}
+                      aiSamples={aiStarters}
+                      override={emptyState}
+                      workspaceAvailable={workspaceAvailable}
+                      statsSlot={statsSlot}
+                      hiddenSections={welcomeHidden}
+                      onDismissSection={handleDismissSection}
+                      // Same density and name as the no-session welcome: without
+                      // them an empty conversation on a phone fell back to the rich
+                      // desktop hero and ignored the name set in Personalization.
+                      welcomeStyle={welcomeStyle}
+                      userName={userName}
+                    />
+                  )}
+                </div>
                 {errorAndFooter}
                 {supportPanel}
                 {/* Composer is hidden while history is loading / failed — same as
@@ -1157,11 +1219,15 @@ export function ChatPane({
               <motion.div
                 key="chat"
                 className="flex min-h-0 flex-1 flex-col"
-                initial={reduce ? false : { opacity: 0, y: 8 }}
+                initial={reduce ? false : { opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={mobileTransition("fast")}
+                transition={swapTransition}
               >
-                <div className="relative flex min-h-0 flex-1 flex-col" data-computer-use-pip-host>
+                <div
+                  className="relative flex min-h-0 flex-1 flex-col"
+                  data-computer-use-pip-host
+                  {...{ [CHAT_SETTLE_TARGET_ATTRIBUTE]: "" }}
+                >
                   <ChatMessages
                     sessionId={boundId}
                     messageDisplayOverride={activeSession?.messageDisplayOverride}
@@ -1206,9 +1272,19 @@ export function ChatPane({
                 {boundId ? (
                   <ChatScopeProvider
                     sessionId={boundId}
-                    compact={onCompact ?? (() => runtime.compact(boundId))}
+                    // Compacting and resetting rewrite the transcript, so they
+                    // wait for the full history like a send does.
+                    compact={async () => {
+                      await whenFullHistory(boundId, () =>
+                        onCompact ? onCompact() : runtime.compact(boundId)
+                      )
+                    }}
                     setModel={onSetModel ?? ((model) => runtime.setModel(boundId, model))}
-                    resetRuntime={onResetRuntime ?? (() => runtime.resetRuntime(boundId))}
+                    resetRuntime={async () => {
+                      await whenFullHistory(boundId, () =>
+                        onResetRuntime ? onResetRuntime() : runtime.resetRuntime(boundId)
+                      )
+                    }}
                   >
                     {composerEl}
                   </ChatScopeProvider>
@@ -1257,12 +1333,22 @@ function ChatMessages({
 }) {
   const storedMessages = useSessionVisibleMessages(sessionId)
   const storedStatus = useSessionStatus(sessionId)
+  // Until the full history lands, a long conversation renders its newest
+  // messages, projected through its branch selection like the real thing.
+  const historyPreview = useHistoryPreview(sessionId)
+  const previewMessages = useMemo(
+    () =>
+      historyPreview && storedMessages.length === 0
+        ? selectVisibleMessages(historyPreview.messages, historyPreview.activeBranchByGroup)
+        : null,
+    [historyPreview, storedMessages.length]
+  )
   // A shared run another member executes arrives live (ADR-0241): draw its
   // reply over the stored copy, which lags it by up to 10s.
   const sharedLive = useSharedLiveReply(useCompanionTranscript ? null : sessionId)
   const messages = useMemo(
-    () => withLiveReply(storedMessages, sharedLive),
-    [storedMessages, sharedLive]
+    () => withLiveReply(previewMessages ?? storedMessages, sharedLive),
+    [previewMessages, storedMessages, sharedLive]
   )
   const status =
     sharedLive?.state === "streaming" && storedStatus === "idle" ? "streaming" : storedStatus
@@ -1306,7 +1392,13 @@ function ChatMessages({
   }
   return (
     <MessageList
+      // One list per conversation. Its scroll position, measurements, find
+      // bar and render window all belong to the conversation on screen, and a
+      // fresh list opens at the foot on its very first render instead of
+      // first drawing the rows at the previous conversation's scroll offset.
+      key={sessionId ?? "none"}
       messages={messages}
+      historyTotal={previewMessages ? historyPreview?.total : undefined}
       status={status}
       messageDisplayOverride={messageDisplayOverride}
       paneSessionId={sessionId}

@@ -4,6 +4,7 @@
 import React from "react"
 import { render, screen, fireEvent } from "@testing-library/react"
 import type { ToolUIPart } from "ai"
+import { resetDisclosureMemory } from "@/lib/chat/disclosure-memory"
 import { TerminalToolPart } from "./terminal-tool-part"
 
 jest.mock("ansi-to-react", () => ({
@@ -116,6 +117,7 @@ const bashPart = (state: ToolUIPart["state"], extra: Partial<ToolUIPart> = {}): 
   }) as unknown as ToolUIPart
 
 afterEach(() => {
+  resetDisclosureMemory()
   pickerChoice.current = { kind: "new" }
   mockProjects.current = []
   mockProjects.activeId = null
@@ -145,8 +147,56 @@ describe("TerminalToolPart", () => {
     expect(out).toHaveAttribute("data-streaming", "true")
     expect(out).toHaveTextContent("hello")
     expect(out).toHaveTextContent("warn")
-    // The output block echoes the full command like a terminal transcript.
-    expect(out).toHaveTextContent("$ ls -la")
+    // A short one-liner is already whole on the row; the block does not repeat it.
+    expect(out).not.toHaveTextContent("$ ls -la")
+  })
+
+  it("echoes a one-line command too long to fit the row", () => {
+    const command = `grep -rn "some fairly long pattern" components lib hooks --include=*.tsx | head -50`
+    render(
+      <TerminalToolPart
+        part={bashPart("output-available", {
+          input: { command },
+          output: "done",
+        } as Partial<ToolUIPart>)}
+        defaultOpen
+      />
+    )
+    expect(screen.getByTestId("terminal-tool-output")).toHaveTextContent(`$ ${command}`)
+  })
+
+  it("says a backgrounded command is in the background instead of running", () => {
+    render(
+      <TerminalToolPart
+        part={bashPart("input-available", {
+          toolResultMetadata: { backgrounded: true },
+        } as unknown as Partial<ToolUIPart>)}
+      />
+    )
+    expect(screen.getByTestId("terminal-tool-part")).toHaveAttribute("data-status", "info")
+    expect(screen.queryByText("Running")).toBeNull()
+    expect(screen.queryByTestId("shimmer")).toBeNull()
+  })
+
+  it("follows its live default until the reader toggles: open while running, closed once settled", () => {
+    const { rerender } = render(<TerminalToolPart part={bashPart("input-available")} />)
+    const toggle = () => screen.getByRole("button", { name: /ls -la/ })
+    expect(toggle()).toHaveAttribute("aria-expanded", "true")
+    rerender(
+      <TerminalToolPart
+        part={bashPart("output-available", { output: "done" } as Partial<ToolUIPart>)}
+      />
+    )
+    expect(toggle()).toHaveAttribute("aria-expanded", "false")
+  })
+
+  it("remembers a reader's toggle across a remount when given a memory key", () => {
+    const part = bashPart("output-available", { output: "done" } as Partial<ToolUIPart>)
+    const first = render(<TerminalToolPart part={part} memoryKey="m1:tool:call-1" />)
+    fireEvent.click(screen.getByRole("button", { name: /ls -la/ }))
+    first.unmount()
+    render(<TerminalToolPart part={part} memoryKey="m1:tool:call-1" />)
+    expect(screen.getByRole("button", { name: /ls -la/ })).toHaveAttribute("aria-expanded", "true")
   })
 
   it("stays collapsed once settled and toggles open on click", () => {

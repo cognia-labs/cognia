@@ -413,4 +413,44 @@ describe("useStickToBottom", () => {
     // Not following and now 500px short of the foot: the pill may offer it.
     expect(result.current.atBottom).toBe(false)
   })
+
+  it("keeps a reader who scrolled up on the same content when rows are revealed above", () => {
+    const box = makeScrollBox()
+    const content = document.createElement("div")
+    const { result } = setup(box, content, { active: false })
+    act(() => result.current.release())
+    box.el.scrollTop = 300
+    act(() => result.current.handleScroll())
+    box.writes.length = 0
+
+    act(() => result.current.holdPlaceForPrepend())
+    box.setHeight(1600)
+    act(() => result.current.restorePlaceAfterPrepend())
+    // 600px were inserted above: the same content is 600px further down.
+    expect(box.writes).toEqual([900])
+    expect(result.current.following).toBe(false)
+  })
+
+  it("pins a reader who follows the foot instead of anchoring", () => {
+    const box = makeScrollBox()
+    const content = document.createElement("div")
+    const { result } = setup(box, content, { active: false })
+    box.writes.length = 0
+    act(() => result.current.holdPlaceForPrepend())
+    box.setHeight(1600)
+    act(() => result.current.restorePlaceAfterPrepend())
+    expect(box.writes).toEqual([1600])
+  })
+
+  it("does nothing without a held place, or when nothing was inserted", () => {
+    const box = makeScrollBox()
+    const content = document.createElement("div")
+    const { result } = setup(box, content, { active: false })
+    act(() => result.current.release())
+    box.writes.length = 0
+    act(() => result.current.restorePlaceAfterPrepend())
+    act(() => result.current.holdPlaceForPrepend())
+    act(() => result.current.restorePlaceAfterPrepend())
+    expect(box.writes).toEqual([])
+  })
 })

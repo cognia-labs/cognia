@@ -48,6 +48,12 @@ const READING_AREA_FILES = [
   "components/chat/message-parts/tool-activity-group.tsx",
   "components/chat/message-parts/subagent-part.tsx",
   "components/chat/message-parts/subagent-tree.tsx",
+  "components/chat/message-parts/turn-process-fold.tsx",
+  "components/chat/message-parts/tool-row.tsx",
+  "components/chat/message-parts/terminal-tool-part.tsx",
+  "components/chat/message-parts/structured-tool-part.tsx",
+  "components/chat/message-parts/file-tool-part.tsx",
+  "components/chat/transcript-timeline-surface.tsx",
 ]
 
 /** Files that own the transcript's scroll position. */

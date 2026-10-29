@@ -191,6 +191,7 @@ export function AppShellMobile() {
     isLoadingSessions,
     activeSessionId,
     activeSession,
+    activeSessionState,
     select,
     create,
     remove,
@@ -1043,6 +1044,10 @@ export function AppShellMobile() {
             <ArtifactWorkspaceDock>
               <ChatPane
                 activeSession={activeSession}
+                // Between a switch and the new row's read, hold the current
+                // conversation instead of flashing the home surface.
+                sessionPending={activeSessionState === "pending"}
+                sessionId={activeSessionId ?? undefined}
                 // The mobile shell renders its own top bar (CharacterHeader) +
                 // relocates the inner ChatHeader's affordances into the session
                 // settings sheet, so suppress the duplicate inner header.

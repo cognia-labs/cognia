@@ -109,6 +109,7 @@ export function DesktopChatWorkspace() {
   const {
     sessions,
     paneSessions,
+    paneSessionsPending,
     isLoadingSessions,
     activeSessionId,
     activeSession,
@@ -742,6 +743,7 @@ export function DesktopChatWorkspace() {
                   <ChatPaneGroup
                     sessions={sessions}
                     paneSessions={paneSessions}
+                    paneSessionsPending={paneSessionsPending}
                     send={paneSend}
                     stop={paneStop}
                     steerNow={paneSteer}

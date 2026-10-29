@@ -1598,6 +1598,7 @@
   },
   "history": {
     "loadError": "Couldn't load this conversation.",
+    "loadingEarlier": "Loading earlier messages…",
     "loading": "Loading conversation…",
     "retry": "Retry"
   },
@@ -2920,8 +2921,8 @@
   "transcript": {
     "collapseTurn": "Collapse turn",
     "expandTurn": "Expand full turn",
-    "loadOlder": "Load older turns",
     "loading": "Loading transcript…",
+    "loadingOlder": "Loading earlier turns…",
     "nextDetails": "Next messages",
     "previousDetails": "Previous messages",
     "retry": "Retry transcript"

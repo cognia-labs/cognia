@@ -2,7 +2,22 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
-import { commitMessageDelta, listMessages, persistMessages } from "@/lib/db/messages"
+import {
+  commitMessageDelta,
+  countMessages,
+  listMessages,
+  listRecentMessages,
+  persistMessages,
+} from "@/lib/db/messages"
+import {
+  HISTORY_PREVIEW_MIN_TOTAL,
+  HISTORY_PREVIEW_TAIL,
+  clearAllHistoryPreviews,
+  clearHistoryPreview,
+  getHistoryPreview,
+  setHistoryPreview,
+} from "@/lib/chat/history-preview"
+import { shareUnchangedMessages } from "@/lib/chat/share-unchanged-messages"
 import { closeEndedTurnToolParts } from "@/lib/chat/phantom-run"
 import {
   assignSessionToFolder,
@@ -39,6 +54,7 @@ import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message
 import { filterExposedSessions } from "@/lib/chat/session-exposure"
 import { subscribeRemoteChanges } from "@/lib/account-sync/data/remote-changes"
 import { dedupeSessionsById, shareUnchangedSessions } from "@/lib/chat/conversation-list-model"
+import { readCachedPaneRows, rememberPaneRows } from "@/lib/chat/pane-row-cache"
 import { isCapacitor } from "@/lib/platform/detect"
 import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
 import {
@@ -137,6 +153,7 @@ export function useSessions({
     if (previousScopeRef.current === scopeKey) return
     previousScopeRef.current = scopeKey
     // Pane IDs can be shared across Hosts; their optimistic/runtime state cannot.
+    clearAllHistoryPreviews()
     const chat = useChatStore.getState()
     for (const id of new Set([...chat.openSessionIds, chat.activeSessionId, chat.splitSessionId])) {
       if (!id) continue
@@ -224,11 +241,15 @@ export function useSessions({
   const sharedPanesRef = useRef<{ key: string; rows: readonly ChatSession[] } | undefined>(
     undefined
   )
+  // The pane-row cache's scope: one Host, one database, one workspace.
+  const paneCacheScope = JSON.stringify([scopeKey, activeProjectId])
+  const paneIds = useMemo(
+    () => [...new Set([activeSessionId, visibleSplitId].filter((id): id is string => Boolean(id)))],
+    [activeSessionId, visibleSplitId]
+  )
   const paneRead = useLiveQuery(async () => {
     if (!listOnly || !enabled || !projectStoreLoaded || !activeProjectId) return undefined
-    const ids = [
-      ...new Set([activeSessionId, visibleSplitId].filter((id): id is string => Boolean(id))),
-    ]
+    const ids = paneIds
     try {
       const rows = (await Promise.all(ids.map((id) => getSession(id)))).filter(
         (row): row is ChatSession =>
@@ -236,6 +257,7 @@ export function useSessions({
       )
       if (!isCurrentScope()) return undefined
       const exposed = filterExposedSessions(rows, "main-list")
+      rememberPaneRows(paneCacheScope, ids, exposed)
       const previous = sharedPanesRef.current
       const shared = shareUnchangedSessions(
         previous?.key === paneQueryKey ? previous.rows : undefined,
@@ -253,8 +275,21 @@ export function useSessions({
       console.warn("resolve active session failed", error)
       return sharedPanesRef.current?.key === paneQueryKey ? sharedPanesRef.current : undefined
     }
-  }, [listOnly, paneQueryKey])
-  const paneRows = paneRead?.key === paneQueryKey ? paneRead.rows : undefined
+  }, [listOnly, paneQueryKey, paneCacheScope, paneIds])
+  const livePaneRows = paneRead?.key === paneQueryKey ? paneRead.rows : undefined
+  // While the read for a new selection is in flight, a conversation opened
+  // before is served from the rows that read returned last time
+  // (`lib/chat/pane-row-cache.ts`) instead of resolving to nothing for a render.
+  const cachedPaneRows = useMemo(
+    () =>
+      listOnly && enabled && projectStoreLoaded && activeProjectId
+        ? readCachedPaneRows(paneCacheScope, paneIds)
+        : undefined,
+    // `paneQueryKey` re-reads the cache for every new selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [listOnly, enabled, projectStoreLoaded, activeProjectId, paneCacheScope, paneIds, paneQueryKey]
+  )
+  const paneRows = livePaneRows ?? cachedPaneRows
 
   // Resolve the active session's ROW, rather than leaving every consumer to
   // search `sessions` for it.
@@ -426,16 +461,62 @@ export function useSessions({
     const stale = () => cancelled || !isCurrentScope() || transport !== activeTransport
     for (const sessionId of ids) {
       if (pendingRemote.current.has(sessionId)) continue
+      const hydrationBase = useChatStore.getState().sessions[sessionId]?.messages
       const publishMessages = (messages: Awaited<ReturnType<typeof listMessages>>) => {
         if (stale()) return
-        if (useChatStore.getState().activeSessionId === sessionId) setMessages(messages)
-        else useChatStore.getState().setSessionMessages(sessionId, messages)
+        // Rows that did not change keep their identity — the store's own copy
+        // on a revisit, the tail preview's on a cold open — so the memoized
+        // rows on screen do not all re-render for a read that changed nothing
+        // (`lib/chat/share-unchanged-messages.ts`).
+        const shared = shareUnchangedMessages(
+          hydrationBase && hydrationBase.length > 0
+            ? hydrationBase
+            : getHistoryPreview(sessionId)?.messages,
+          messages
+        )
+        if (useChatStore.getState().activeSessionId === sessionId) setMessages(shared)
+        else useChatStore.getState().setSessionMessages(sessionId, shared)
+        clearHistoryPreview(sessionId)
       }
-      const hydrationBase = useChatStore.getState().sessions[sessionId]?.messages
       const liveMessagesChanged = () =>
         useChatStore.getState().sessions[sessionId]?.messages !== hydrationBase
       const finishSupersededHydration = () => {
         setSessionMessagesLoading(sessionId, false)
+        clearHistoryPreview(sessionId)
+      }
+      // A long conversation opened cold draws its newest messages first
+      // (`lib/chat/history-preview.ts`); the full read below replaces them.
+      // Local history only: a paired browser on a transcript-capable host
+      // renders folded timeline pages instead.
+      const localHistory = isTauri() || isCapacitor() || !hasWebCompanionTarget()
+      let fullSettled = false
+      if (localHistory && (!hydrationBase || hydrationBase.length === 0)) {
+        // Counted first, on the index alone: a conversation short enough to
+        // load in one read takes no preview and costs no extra row reads.
+        void countMessages(sessionId)
+          .then(async (total) => {
+            if (fullSettled || stale() || total <= HISTORY_PREVIEW_MIN_TOTAL) return
+            const [tail, session] = await Promise.all([
+              listRecentMessages(sessionId, HISTORY_PREVIEW_TAIL),
+              getSession(sessionId),
+            ])
+            if (fullSettled || stale() || liveMessagesChanged() || tail.length === 0) return
+            const busy = (() => {
+              const status = useChatStore.getState().sessions[sessionId]?.status
+              return status === "streaming" || status === "awaiting_approval"
+            })()
+            setHistoryPreview(sessionId, {
+              // Display-only repair, the same one the full read applies and
+              // writes back: a preview must not show settled calls as running.
+              messages: closeEndedTurnToolParts(tail, { trailingMayBeLive: busy }).messages,
+              total,
+              activeBranchByGroup: session?.activeBranchByGroup ?? {},
+            })
+          })
+          .catch((error: unknown) => {
+            // The preview is an optimisation; the full read still decides.
+            console.warn("history preview read failed", error)
+          })
       }
       const loadMessages = async () => {
         const local = await listMessages(sessionId)
@@ -462,6 +543,7 @@ export function useSessions({
       }
       loadMessages()
         .then(async (msgs) => {
+          fullSettled = true
           if (stale()) return
           const session = await getSession(sessionId)
           if (stale()) return
@@ -520,7 +602,11 @@ export function useSessions({
           // silently blank (it reads as "history lost"). Surface it so the chat
           // pane can show an error + retry; don't overwrite the store with [].
           console.error("listMessages failed", err)
+          fullSettled = true
           if (!stale()) {
+            // A tail is not the conversation: with the full read failed, show
+            // the error and retry rather than a partial history.
+            clearHistoryPreview(sessionId)
             const message = err instanceof Error ? err.message : String(err)
             if (useChatStore.getState().activeSessionId === sessionId) setMessagesLoadError(message)
             else useChatStore.getState().setSessionMessagesLoadError(sessionId, message)
@@ -776,6 +862,12 @@ export function useSessions({
     sessions: exposedSessions,
     /** Full rows for chat panes; projections must never supply execution settings. */
     paneSessions: listOnly ? (paneRows ?? EMPTY_SESSIONS) : exposedSessions,
+    /**
+     * The pane rows for the current selection are still being read and none
+     * were cached: a pane whose session is missing from `paneSessions` is
+     * pending, not gone. Always false for a full (non-`listOnly`) list.
+     */
+    paneSessionsPending: listOnly && paneRows === undefined && paneIds.length > 0,
     // `useLiveQuery` returns `undefined` until the first Dexie read resolves;
     // distinguishing that from a genuinely empty list lets the session list
     // show a skeleton instead of flashing the empty state on cold start. The

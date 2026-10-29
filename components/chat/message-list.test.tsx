@@ -820,19 +820,23 @@ describe("MessageList", () => {
           <MessageList messages={messages} status="idle" />
         </Wrapper>
       )
-      const row = container.querySelector("[data-msg-id]")!
+      // The newest row: a flow list mounts from the foot (its render window),
+      // so it is the one row present on both sides of the threshold.
+      const selector = `[data-msg-id="vm-${VIRTUALIZE_THRESHOLD - 1}"]`
+      const row = container.querySelector(selector)!
+      expect(row).not.toBeNull()
       rerender(
         <Wrapper>
           <MessageList messages={[...messages, userMsg("new", "next")]} status="idle" />
         </Wrapper>
       )
-      expect(container.querySelector("[data-msg-id]")).toBe(row)
+      expect(container.querySelector(selector)).toBe(row)
       rerender(
         <Wrapper>
           <MessageList messages={messages} status="idle" />
         </Wrapper>
       )
-      expect(container.querySelector("[data-msg-id]")).toBe(row)
+      expect(container.querySelector(selector)).toBe(row)
     })
 
     it("does not blanket-remeasure every row when the turn seals", () => {
@@ -1712,8 +1716,9 @@ describe("MessageList — timeline signature pinning", () => {
       </Wrapper>
     )
     expect(timelineMock).toHaveBeenCalled()
-    const firstRef = (timelineMock.mock.calls.at(-1)![0] as { messages: unknown }).messages
-    expect(firstRef).toBe(initial)
+    const firstRef = (timelineMock.mock.calls.at(-1)![0] as { messages: UIMessage[] }).messages
+    // The timeline sees the rendered window, which ends at the newest message.
+    expect(firstRef.at(-1)).toBe(initial.at(-1))
 
     // Simulate a streamed text-delta commit: fresh array + fresh trailing
     // message object, same length, unchanged user metadata → the timeline's
@@ -1733,7 +1738,9 @@ describe("MessageList — timeline signature pinning", () => {
         <MessageList messages={grown} status="streaming" />
       </Wrapper>
     )
-    expect((timelineMock.mock.calls.at(-1)![0] as { messages: unknown }).messages).toBe(grown)
+    const grownRef = (timelineMock.mock.calls.at(-1)![0] as { messages: UIMessage[] }).messages
+    expect(grownRef).not.toBe(firstRef)
+    expect(grownRef.at(-1)?.id).toBe("vm-new")
   })
 })
 
@@ -2746,5 +2753,117 @@ describe("MessageList — selection mode", () => {
       </Wrapper>
     )
     expect(bar()).toBeNull()
+  })
+})
+
+describe("MessageList — the render window of a short (flow) list", () => {
+  // A row of `n` lines, so the estimate is well past the 200px floor and a
+  // flow list (≤ VIRTUALIZE_THRESHOLD messages) needs a window.
+  const tallMsgs = (n: number): UIMessage[] =>
+    Array.from({ length: n }, (_, i) => userMsg(`fw-${i}`, Array(30).fill(`line ${i}`).join("\n")))
+
+  const renderList = (messages: UIMessage[]) => {
+    const Wrapper = withAdapter(makeAdapter())
+    return render(
+      <Wrapper>
+        <MessageList messages={messages} status="idle" />
+      </Wrapper>
+    )
+  }
+
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  it("opens with only the newest rows mounted, in document flow", () => {
+    const messages = tallMsgs(30)
+    const { container } = renderList(messages)
+    expect(container.querySelector('[data-msg-id="fw-29"]')).not.toBeNull()
+    expect(container.querySelector('[data-msg-id="fw-0"]')).toBeNull()
+    const mounted = container.querySelectorAll("[data-msg-id]").length
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThan(30)
+    expect(container.querySelectorAll('[data-index]:not([data-index="-1"])')).toHaveLength(0)
+  })
+
+  it("reveals the rest in idle time after the opening settles", () => {
+    jest.useFakeTimers()
+    const { container } = renderList(tallMsgs(30))
+    expect(container.querySelector('[data-msg-id="fw-0"]')).toBeNull()
+    // jsdom has no requestIdleCallback: the list falls back to a timer.
+    for (let step = 0; step < 30; step++) {
+      act(() => {
+        jest.runOnlyPendingTimers()
+      })
+    }
+    expect(container.querySelectorAll("[data-msg-id]")).toHaveLength(30)
+  })
+
+  it("reveals at once when the reader scrolls near the top", () => {
+    const { container, getByRole } = renderList(tallMsgs(30))
+    const before = container.querySelectorAll("[data-msg-id]").length
+    const scroller = getByRole("log")
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 })
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, writable: true, value: 10 })
+    fireEvent.scroll(scroller)
+    expect(container.querySelectorAll("[data-msg-id]").length).toBeGreaterThan(before)
+  })
+
+  it("lands a jump on a message above the window by revealing down to it first", () => {
+    const { container } = renderList(tallMsgs(30))
+    expect(container.querySelector('[data-msg-id="fw-2"]')).toBeNull()
+    const scrollIntoView = jest.fn()
+    const original = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = scrollIntoView
+    try {
+      let landed = false
+      act(() => {
+        landed = useChatViewportStore.getState().jumpToMessage!("fw-2", 2, { align: "start" })
+      })
+      expect(landed).toBe(true)
+      expect(container.querySelector('[data-msg-id="fw-2"]')).not.toBeNull()
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" })
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original
+    }
+  })
+})
+
+describe("MessageList — a tail preview of a longer history", () => {
+  it("virtualizes from the start and says the rest is loading at the top", () => {
+    const Wrapper = withAdapter(makeAdapter())
+    const tail = manyMsgs(5)
+    const { getByRole, queryByTestId } = render(
+      <Wrapper>
+        <MessageList messages={tail} historyTotal={500} status="idle" />
+      </Wrapper>
+    )
+    // Sized for the full history, so the hand-over is a prepend.
+    expect(useVirtualizerCalls.at(-1)!.count).toBe(tail.length)
+    expect(queryByTestId("history-loading-earlier")).toBeNull()
+    const scroller = getByRole("log")
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 })
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, writable: true, value: 0 })
+    fireEvent.scroll(scroller)
+    expect(queryByTestId("history-loading-earlier")).toHaveTextContent("Loading earlier messages")
+  })
+
+  it("drops the notice once the full history is here", () => {
+    const Wrapper = withAdapter(makeAdapter())
+    const { getByRole, queryByTestId, rerender } = render(
+      <Wrapper>
+        <MessageList messages={manyMsgs(5)} historyTotal={500} status="idle" />
+      </Wrapper>
+    )
+    const scroller = getByRole("log")
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 })
+    Object.defineProperty(scroller, "scrollTop", { configurable: true, writable: true, value: 0 })
+    fireEvent.scroll(scroller)
+    rerender(
+      <Wrapper>
+        <MessageList messages={manyMsgs(60)} status="idle" />
+      </Wrapper>
+    )
+    expect(queryByTestId("history-loading-earlier")).toBeNull()
   })
 })

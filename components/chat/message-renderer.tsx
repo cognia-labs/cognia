@@ -92,7 +92,8 @@ import {
 import { TurnProcessFold } from "@/components/chat/message-parts/turn-process-fold"
 import { TurnChangesCard } from "@/components/chat/turn-changes-card"
 import { RestorePointDialog } from "@/components/chat/restore-point-dialog"
-import { MotionReveal } from "@/components/chat/motion/motion-reveal"
+import { EntranceMotionProvider, MotionReveal } from "@/components/chat/motion/motion-reveal"
+import { disclosureKey as rememberedDisclosureKey } from "@/lib/chat/disclosure-memory"
 import { useMessageDisplay } from "@/hooks/chat/use-message-display"
 import {
   groupAgentParts,
@@ -916,19 +917,27 @@ function MessageRendererInner({
       )
     }
     if (segment.kind === "group") {
-      const entries: ToolActivityGroupEntry[] = segment.entries.map((e) => ({
-        part: e.part as ToolUIPart,
-        key: `${message.id}-${(e.part as ToolUIPart).toolCallId ?? e.index}`,
-        defaultOpen:
-          display.tools === "expanded"
-            ? true
-            : display.tools === "collapsed"
-              ? false
-              : agentFlowMode === "detailed" ||
-                (agentFlowMode === "standard" &&
-                  ((e.part as ToolUIPart).state === "input-available" ||
-                    (e.part as ToolUIPart).state === "output-error")),
-      }))
+      const entries: ToolActivityGroupEntry[] = segment.entries.map((e) => {
+        const key = `${message.id}-${(e.part as ToolUIPart).toolCallId ?? e.index}`
+        return {
+          part: e.part as ToolUIPart,
+          key,
+          // The same key the call uses when it renders on its own (`partKey`
+          // there is this same `${message.id}-${index}` when the call has no
+          // id), so a row the reader opened stays open as a lone call grows into
+          // a group.
+          memoryKey: toolDisclosureKey(message.id, e.part as ToolUIPart, key),
+          defaultOpen:
+            display.tools === "expanded"
+              ? true
+              : display.tools === "collapsed"
+                ? false
+                : agentFlowMode === "detailed" ||
+                  (agentFlowMode === "standard" &&
+                    ((e.part as ToolUIPart).state === "input-available" ||
+                      (e.part as ToolUIPart).state === "output-error")),
+        }
+      })
       return (
         <MotionReveal
           key={`${message.id}-group-${si}`}
@@ -939,7 +948,22 @@ function MessageRendererInner({
           <ToolActivityGroup
             entries={entries}
             mode={agentFlowMode}
-            defaultOpen={display.tools === "expanded" ? true : undefined}
+            defaultOpen={
+              display.tools === "expanded"
+                ? true
+                : display.tools === "collapsed"
+                  ? false
+                  : undefined
+            }
+            // Keyed by the run's first call: segment indexes shift as parts
+            // stream in, the first call of a run does not.
+            memoryKey={rememberedDisclosureKey(
+              message.id,
+              "group",
+              (segment.entries[0]?.part as ToolUIPart | undefined)?.toolCallId ??
+                segment.entries[0]?.index ??
+                si
+            )}
             renderChild={(part, key, opts) =>
               renderToolPart(
                 part,
@@ -1170,6 +1194,7 @@ function MessageRendererInner({
                       <TurnProcessFold
                         fold={turnFold}
                         durationMs={runMetadataOf(message)?.durationMs}
+                        memoryKey={rememberedDisclosureKey(message.id, "fold")}
                       >
                         {segments.map((segment, si) =>
                           isSegmentFolded(segment, turnFold) ? renderSegment(segment, si) : null
@@ -1930,7 +1955,13 @@ function MessageRendererWithAgentCatalog(props: Props) {
     <A2UIAgentCatalogProvider
       catalogId={messageAgentCatalogId(props.message, props.characterById, props.directCharacter)}
     >
-      <MessageRendererInner {...props} />
+      {/* A reply still being written is the only content that ARRIVES; every
+          other row is history being drawn (on open, or as the virtual list
+          remounts it), and replaying entrances there was a burst of fades on
+          every switch and a replay on every scroll. */}
+      <EntranceMotionProvider arriving={Boolean(props.isStreaming)}>
+        <MessageRendererInner {...props} />
+      </EntranceMotionProvider>
     </A2UIAgentCatalogProvider>
   )
 }
@@ -2087,6 +2118,19 @@ const MessagePart = memo(function MessagePart({
 MessagePart.displayName = "MessagePart"
 
 /**
+ * The disclosure-memory key for one tool call: the message plus the call's own
+ * id (a part index for the rare call without one). Shared by the grouped and
+ * the standalone paths so a call keeps the reader's choice in either.
+ */
+function toolDisclosureKey(
+  messageId: string | undefined,
+  part: ToolUIPart,
+  fallback: string | number
+): string {
+  return rememberedDisclosureKey(messageId, "tool", part.toolCallId ?? fallback)
+}
+
+/**
  * Build a single tool-call element for standard/detailed modes (or a compact
  * row for simplified), plus the per-call plugin action slot. Shared by the
  * inline single-tool path and the activity group's `renderChild`, so a grouped
@@ -2122,6 +2166,9 @@ function renderToolPart(
   )
   const preferenceOpen =
     visibility === "expanded" ? true : visibility === "collapsed" ? false : undefined
+  // A standalone row remembers the reader's toggle by call identity; a grouped
+  // one is controlled by its group, which remembers it under the same key.
+  const memoryKey = toolDisclosureKey(messageId, tp, key)
 
   // Simplified mode: every tool collapses to a one-line, expandable row.
   if (mode === "simplified") {
@@ -2133,6 +2180,7 @@ function renderToolPart(
           expanded={opts.expanded}
           onToggle={opts.onToggle}
           defaultOpen={preferenceOpen}
+          memoryKey={memoryKey}
         />
         {slot}
       </React.Fragment>
@@ -2162,6 +2210,7 @@ function renderToolPart(
       defaultOpen={defaultOpen}
       expanded={opts.expanded}
       onToggle={opts.onToggle}
+      memoryKey={memoryKey}
     />
   ) : isFileToolPart(tp) ? (
     <FileToolPart
@@ -2170,6 +2219,7 @@ function renderToolPart(
       defaultOpen={defaultOpen}
       expanded={opts.expanded}
       onToggle={opts.onToggle}
+      memoryKey={memoryKey}
     />
   ) : (
     <StructuredToolPart
@@ -2178,6 +2228,7 @@ function renderToolPart(
       defaultOpen={defaultOpen}
       expanded={opts.expanded}
       onToggle={opts.onToggle}
+      memoryKey={memoryKey}
     />
   )
 

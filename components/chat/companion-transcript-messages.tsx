@@ -162,7 +162,7 @@ export function CompanionTranscriptMessages({
         labels={{
           expand: t("expandTurn"),
           collapse: t("collapseTurn"),
-          loadOlder: t("loadOlder"),
+          loadingOlder: t("loadingOlder"),
           loading: t("loading"),
           retry: t("retry"),
         }}

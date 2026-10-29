@@ -9469,6 +9469,7 @@
     "history": {
       "loadError": "Couldn't load this conversation.",
       "loading": "Loading conversation…",
+      "loadingEarlier": "Loading earlier messages…",
       "retry": "Retry"
     },
     "hookNotice": {
@@ -10884,8 +10885,8 @@
     "transcript": {
       "collapseTurn": "Collapse turn",
       "expandTurn": "Expand full turn",
-      "loadOlder": "Load older turns",
       "loading": "Loading transcript…",
+      "loadingOlder": "Loading earlier turns…",
       "nextDetails": "Next messages",
       "previousDetails": "Previous messages",
       "retry": "Retry transcript"
@@ -29817,7 +29818,7 @@
         "endedBadge": "Ended",
         "expandTurn": "Expand turn details",
         "interruptAria": "Interrupt the current turn",
-        "loadOlder": "Load older turns",
+        "loadingOlder": "Loading earlier turns…",
         "loadingTranscript": "Loading transcript…",
         "notFound": "Session not found or no longer available.",
         "observeOnly": "Observe only",

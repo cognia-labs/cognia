@@ -20,6 +20,8 @@
  * echo + output + run-in-dock affordance with no second collapse.
  */
 
+import { toolResultMetadata } from "@/lib/claude/parts-extensions"
+import { useRememberedDisclosure } from "@/hooks/chat/use-remembered-disclosure"
 import { Surface } from "@/components/surface/surface"
 import { memo, useCallback, useMemo, useState } from "react"
 import type { ToolUIPart } from "ai"
@@ -49,15 +51,27 @@ import { useSettingsStore } from "@/stores/settings"
 import { useChatStore } from "@/stores/chat/chat-store"
 import { cn } from "@/lib/utils"
 
+/**
+ * Past this many characters a one-line command no longer fits the row beside
+ * its meta, so the expanded block repeats it in full.
+ */
+const ROW_COMMAND_CHARS = 72
+
 interface TerminalToolPartProps {
   part: ToolUIPart
   /**
-   * Seeds the row's open state at mount (read once, like a Collapsible's
-   * `defaultOpen`). Used for standalone rows; when absent a running or failed call starts open.
+   * The open state of an untouched standalone row. Followed live, so a call
+   * that opened because it was running closes once it settles; when absent a
+   * running or failed call is open. A reader's own toggle always wins.
    */
   defaultOpen?: boolean
   expanded?: boolean
   onToggle?: () => void
+  /**
+   * Where a standalone row remembers the reader's toggle
+   * (`lib/chat/disclosure-memory`), so it survives the row being remounted.
+   */
+  memoryKey?: string
 }
 
 interface TerminalToolBodyProps {
@@ -103,12 +117,20 @@ function extractBashIO(output: unknown): BashIO {
 const BashOutputView = memo(function BashOutputView({
   part,
   io,
-  command,
+  command: fullCommand,
+  echoCommand = true,
 }: {
   part: ToolUIPart
   io: BashIO
   command?: string
+  /**
+   * Whether the block repeats the command above the output. The inline row
+   * already shows a short single-line command in full, so it turns this off
+   * there; a body rendered without that row keeps it.
+   */
+  echoCommand?: boolean
 }) {
+  const command = echoCommand ? fullCommand : undefined
   const t = useTranslations("chat.toolRow")
   const streaming = part.state === "input-available"
   const isError = part.state === "output-error"
@@ -258,15 +280,14 @@ export const TerminalToolPart = memo(function TerminalToolPart({
   defaultOpen,
   expanded,
   onToggle,
+  memoryKey,
 }: TerminalToolPartProps) {
   const t = useTranslations("chat.toolRow")
   const tDock = useTranslations("chat.terminalTool")
   const tFlow = useTranslations("chat.agentFlow")
   const running = part.state === "input-available"
-  const [internalOpen, setInternalOpen] = useState(
-    defaultOpen ?? (running || part.state === "output-error")
-  )
-  const open = expanded ?? internalOpen
+  const [remembered, setRemembered] = useRememberedDisclosure(memoryKey ?? null)
+  const open = expanded ?? remembered ?? defaultOpen ?? (running || part.state === "output-error")
   const command = useMemo(() => extractCommand(part.input), [part.input])
   const io = useMemo(() => extractBashIO(part.output), [part.output])
   const { canRun, busy, pickerOpen, setPickerOpen, handlePick } = useRunInDock(command)
@@ -274,14 +295,20 @@ export const TerminalToolPart = memo(function TerminalToolPart({
   const readOnlyHint = (part as ToolUIPart & { toolMetadata?: { readOnlyHint?: boolean | null } })
     .toolMetadata?.readOnlyHint
   const displayTitle = resolveToolDisplayTitle(part)
+  // A command moved to the background keeps running after the call returns;
+  // the row says so instead of pulsing "Running" forever.
+  const backgrounded = toolResultMetadata(part)?.backgrounded === true
 
   // Long commands: the row shows only the first line; the expanded block
-  // echoes the whole command, and a `+N lines` hint flags the truncation.
+  // echoes the whole command, and a `+N lines` hint flags the truncation. A
+  // short one-liner is already whole on the row, so the block skips the echo.
   const commandLines = useMemo(() => (command ? command.split("\n") : []), [command])
   const firstLine = commandLines[0] ?? ""
   const extraLines = commandLines.length - 1
+  const echoCommand = extraLines > 0 || firstLine.length > ROW_COMMAND_CHARS
 
   const meta = useMemo((): { text: string; isError?: boolean } | null => {
+    if (backgrounded) return { text: tFlow("status.backgrounded") }
     switch (part.state) {
       case "input-available":
         return { text: tFlow("status.running") }
@@ -302,13 +329,13 @@ export const TerminalToolPart = memo(function TerminalToolPart({
       default:
         return null
     }
-  }, [part, io, t, tFlow])
+  }, [part, io, t, tFlow, backgrounded])
 
-  const toggle = () => (expanded !== undefined ? onToggle?.() : setInternalOpen((v) => !v))
+  const toggle = () => (expanded !== undefined ? onToggle?.() : setRemembered(!open))
 
   return (
     <ToolRowShell
-      status={part.state}
+      status={backgrounded ? "info" : part.state}
       open={open}
       onToggle={toggle}
       ariaLabel={t("bashRowAria", { command: firstLine || displayTitle })}
@@ -320,7 +347,7 @@ export const TerminalToolPart = memo(function TerminalToolPart({
         </span>
       }
       target={
-        running && firstLine ? (
+        running && !backgrounded && firstLine ? (
           <Shimmer
             as="span"
             className={cn(TOOL_ROW_SCROLL_TEXT_CLASS, "flex-1 font-mono text-xs")}
@@ -386,7 +413,7 @@ export const TerminalToolPart = memo(function TerminalToolPart({
         ) : undefined
       }
     >
-      <BashOutputView part={part} io={io} command={command} />
+      <BashOutputView part={part} io={io} command={command} echoCommand={echoCommand} />
     </ToolRowShell>
   )
 })

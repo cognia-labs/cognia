@@ -4,11 +4,13 @@
 
 import { act, render, screen } from "@testing-library/react"
 import { animate } from "motion/react"
+import { useLayoutEffect } from "react"
 
 import { useSettingsStore } from "@/stores/settings/settings-store"
 
 import {
   CHAT_SESSION_SETTLE,
+  CHAT_SETTLE_TARGET_ATTRIBUTE,
   ChatSurfaceTransition,
   chatSurfaceDirection,
   chatSurfaceVariants,
@@ -175,10 +177,54 @@ describe("<ChatSurfaceTransition />", () => {
     expect(before).toHaveTextContent("conversation:b")
     expect(animateMock).toHaveBeenCalledTimes(1)
     const [target, keyframes, options] = animateMock.mock.calls[0]
+    // Nothing marked: the whole stage settles.
     expect(target).toBe(document.querySelector('[data-slot="chat-surface"]'))
     expect(keyframes).toEqual(CHAT_SESSION_SETTLE.keyframes)
     // Speed 2× halves the duration.
     expect(options.duration).toBeCloseTo(CHAT_SESSION_SETTLE.duration * 0.5)
+  })
+
+  it("settles only the marked content, leaving header and composer still", () => {
+    setMotion(false)
+    function Marked({ sessionId }: { sessionId: string }) {
+      return (
+        <ChatSurfaceTransition surface="conversation" sessionId={sessionId}>
+          <header data-testid="header">{sessionId}</header>
+          <div data-testid="transcript" {...{ [CHAT_SETTLE_TARGET_ATTRIBUTE]: "" }} />
+          <footer data-testid="composer" />
+        </ChatSurfaceTransition>
+      )
+    }
+    const view = render(<Marked sessionId="a" />)
+    view.rerender(<Marked sessionId="b" />)
+    expect(animateMock).toHaveBeenCalledTimes(1)
+    expect(animateMock.mock.calls[0][0]).toBe(screen.getByTestId("transcript"))
+  })
+
+  it("starts the settle before the new conversation's first paint", () => {
+    setMotion(false)
+    let animatedDuringLayout = false
+    function Probe({ sessionId }: { sessionId: string }) {
+      // A sibling layout effect declared after the transition runs after its
+      // own; an effect-phase settle would not have run yet at this point.
+      useLayoutEffect(() => {
+        animatedDuringLayout = animateMock.mock.calls.length > 0
+      }, [sessionId])
+      return null
+    }
+    const view = render(
+      <>
+        <Pane surface="conversation" sessionId="a" />
+        <Probe sessionId="a" />
+      </>
+    )
+    view.rerender(
+      <>
+        <Pane surface="conversation" sessionId="b" />
+        <Probe sessionId="b" />
+      </>
+    )
+    expect(animatedDuringLayout).toBe(true)
   })
 
   it("does not settle when the surface itself changes, or under reduced motion", () => {

@@ -465,6 +465,7 @@ jest.mock("@/hooks/chat/use-message-display", () => ({
 }))
 jest.mock("@/components/chat/motion/motion-reveal", () => ({
   MessageMotionProvider: ({ children }: { children: ReactForMocks.ReactNode }) => children,
+  EntranceMotionProvider: ({ children }: { children: ReactForMocks.ReactNode }) => children,
   MotionReveal: ({ children }: { children: ReactForMocks.ReactNode }) => children,
   MotionCollapse: ({ children }: { children: ReactForMocks.ReactNode }) => children,
   MotionStatusSwap: ({ children }: { children: ReactForMocks.ReactNode }) => children,

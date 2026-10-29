@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef } from "react"
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
@@ -12,7 +12,11 @@ import type {
   TranscriptTimelineItem,
 } from "@cognia/agent-config-types"
 
+import { Loader2Icon } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useStickToBottom } from "@/hooks/chat/use-stick-to-bottom"
+import { useIsomorphicLayoutEffect } from "@/hooks/use-isomorphic-layout-effect"
+import { useSettingsStore } from "@/stores/settings"
 import { PerfBoundary } from "@/lib/perf"
 import type { TranscriptRenderStatus } from "./transcript-message-list"
 import { MessageRenderer } from "./message-renderer"
@@ -24,7 +28,8 @@ import { TranscriptAgentsProvider } from "@/components/chat/transcript-agents-co
 export interface TranscriptTimelineLabels {
   expand: string
   collapse: string
-  loadOlder: string
+  /** Shown while an older page loads; pages load as the reader scrolls up. */
+  loadingOlder: string
   loading: string
   retry: string
 }
@@ -144,23 +149,53 @@ function collapsedMessages(item: Extract<TranscriptTimelineItem, { kind: "comple
 export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps) {
   const tTimeline = useTranslations("chat.timeline")
   const scrollRef = useRef<HTMLDivElement>(null)
-  const rowCount = props.items.length + (props.liveMessages.length > 0 ? 1 : 0)
-  const getItemKey = useCallback(
-    (index: number) => `${props.sessionId}:${props.items[index]?.itemKey ?? "active-live-turn"}`,
-    [props.items, props.sessionId]
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  // The same scroll ownership as the local transcript (ADR-0138): open at the
+  // latest turn, follow a live turn while the reader stays at the foot, and
+  // let them read up without being dragged back down.
+  const autoScrollOnStream = useSettingsStore(
+    (state) => state.settings?.composerBehavior?.autoScrollOnStream
   )
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual exposes imperative measurement methods
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getItemKey,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 280,
-    overscan: 4,
-    measureElement: (element) => Math.round(element?.getBoundingClientRect().height ?? 0),
+  const live = props.liveStatus === "streaming" || props.liveStatus === "awaiting_approval"
+  const {
+    handleScroll: trackScrollPosition,
+    handleContentClick,
+    resetToBottom,
+  } = useStickToBottom({
+    scrollRef,
+    contentRef,
+    enabled: autoScrollOnStream !== false,
+    active: live,
+    pinKey: props.liveMessages,
   })
+  // Rows exist to position. The rows component is keyed on this, so its
+  // virtualizer is created when the first page lands and draws the newest
+  // turns on its very first render (see `TimelineRows`).
+  const ready = props.items.length > 0 || props.liveMessages.length > 0
+  useIsomorphicLayoutEffect(() => {
+    if (ready) resetToBottom()
+  }, [ready, props.sessionId, resetToBottom])
+
+  // Earlier turns load as the reader scrolls up to them — there is no button
+  // to find. A page also loads while the history is too short to scroll at
+  // all, since then there is no scrolling up to ask for it. A failed page
+  // stops the loop and leaves the retry button below.
+  const { hasMore, loadingOlder, loading, error, onLoadOlder } = props
+  const requestOlder = useCallback(() => {
+    if (!ready || !hasMore || loadingOlder || loading || error) return
+    onLoadOlder()
+  }, [error, hasMore, loading, loadingOlder, onLoadOlder, ready])
+  const handleScroll = useCallback(() => {
+    trackScrollPosition()
+    const el = scrollRef.current
+    if (el && el.scrollTop < el.clientHeight) requestOlder()
+  }, [requestOlder, trackScrollPosition])
   useEffect(() => {
-    if (typeof virtualizer.measure === "function") virtualizer.measure()
-  }, [props.renderAdapters?.messageDisplay, virtualizer])
+    const el = scrollRef.current
+    if (el && el.scrollHeight <= el.clientHeight + 1) requestOlder()
+  }, [props.items, requestOlder])
+
   const newestCompletedItemKey = [...props.items]
     .reverse()
     .find((item) => item.kind === "completed-turn")?.itemKey
@@ -184,89 +219,147 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
   return (
     <TranscriptAgentsProvider multiAgent={multiAgent}>
       <PerfBoundary id="chat:transcript-timeline">
-        <div
-          ref={scrollRef}
-          role="log"
-          aria-label={tTimeline("scrollConversation")}
-          tabIndex={0}
-          aria-busy={props.loading || props.liveStatus === "streaming"}
-          data-session-id={props.sessionId}
-          className="conversation-scroll relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
-        >
-          <div className="mx-auto w-full max-w-[52rem] py-5 sm:py-7">
-            {props.error ? (
-              <div className="px-3 pb-3 sm:px-5">
-                <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
-                  {props.labels.retry}
-                </Button>
-              </div>
-            ) : null}
-            {props.hasMore ? (
-              <div className="px-3 pb-3 sm:px-5">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={props.loadingOlder}
-                  onClick={props.onLoadOlder}
-                >
-                  {props.loadingOlder ? props.labels.loading : props.labels.loadOlder}
-                </Button>
-              </div>
-            ) : null}
-            <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
-              {virtualizer.getVirtualItems().map((virtualItem) => {
-                const item = props.items[virtualItem.index]
-                const isLive = virtualItem.index === props.items.length
-                return (
-                  <div
-                    key={virtualItem.key}
-                    ref={virtualizer.measureElement}
-                    data-index={virtualItem.index}
-                    className="absolute left-0 top-0 w-full"
-                    style={{ transform: `translateY(${virtualItem.start}px)` }}
-                  >
-                    {isLive ? (
-                      renderMessages(
-                        props.liveMessages,
-                        props.liveStatus === "streaming",
-                        props.renderAdapters,
-                        true
-                      )
-                    ) : item ? (
-                      <TranscriptTimelineRow
-                        item={item}
-                        sessionId={props.sessionId}
-                        expanded={
-                          item.kind === "completed-turn" && props.expandedTurnKeys.has(item.turnKey)
-                        }
-                        detail={
-                          item.kind === "completed-turn" && props.expandedTurnKeys.has(item.turnKey)
-                            ? props.getDetail(item.turnKey)
-                            : undefined
-                        }
-                        adapters={props.renderAdapters}
-                        allowRegenerate={
-                          item.itemKey === newestCompletedItemKey && props.liveMessages.length === 0
-                        }
-                        labels={props.labels}
-                        onExpand={props.onExpand}
-                        onCollapse={props.onCollapse}
-                        onPageTurn={props.onPageTurn}
-                        loadingDetail={
-                          item.kind === "completed-turn" &&
-                          Boolean(props.loadingTurnKeys?.has(item.turnKey))
-                        }
-                      />
-                    ) : null}
-                  </div>
-                )
-              })}
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={scrollRef}
+            role="log"
+            aria-label={tTimeline("scrollConversation")}
+            tabIndex={0}
+            aria-busy={props.loading || props.liveStatus === "streaming"}
+            data-session-id={props.sessionId}
+            className="conversation-scroll relative min-h-0 flex-1 overflow-y-auto overscroll-contain"
+            onScroll={handleScroll}
+          >
+            <div
+              ref={contentRef}
+              onClickCapture={handleContentClick}
+              className="mx-auto w-full max-w-[52rem] py-5 sm:py-7"
+            >
+              {props.error ? (
+                <div className="px-3 pb-3 sm:px-5">
+                  <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
+                    {props.labels.retry}
+                  </Button>
+                </div>
+              ) : null}
+              <TimelineRows
+                key={`${props.sessionId}:${ready ? "ready" : "empty"}`}
+                props={props}
+                scrollRef={scrollRef}
+                newestCompletedItemKey={newestCompletedItemKey}
+              />
             </div>
           </div>
+          {/* Floating over the top edge, so a page arriving or failing moves
+              nothing in the transcript; the virtualizer keeps the reader's
+              place as the page is inserted above them. */}
+          {props.loadingOlder ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 top-2 z-10 flex justify-center"
+              data-testid="transcript-loading-older"
+            >
+              <span
+                role="status"
+                className="flex items-center gap-1.5 rounded-full border border-border/70 bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow-sm backdrop-blur-sm"
+              >
+                <Loader2Icon className="size-3 animate-spin" aria-hidden />
+                {props.labels.loadingOlder}
+              </span>
+            </div>
+          ) : null}
         </div>
       </PerfBoundary>
     </TranscriptAgentsProvider>
+  )
+}
+
+/**
+ * The virtualized rows. Keyed by the parent on whether any row exists yet, so
+ * the virtualizer is created with the first page in hand: `initialOffset` at
+ * the foot then makes its first render draw the newest turns, where the
+ * transcript opens, instead of drawing the oldest and correcting a frame later.
+ */
+function TimelineRows({
+  props,
+  scrollRef,
+  newestCompletedItemKey,
+}: {
+  props: TranscriptTimelineSurfaceProps
+  scrollRef: RefObject<HTMLDivElement | null>
+  newestCompletedItemKey: string | undefined
+}) {
+  const rowCount = props.items.length + (props.liveMessages.length > 0 ? 1 : 0)
+  const getItemKey = useCallback(
+    (index: number) => `${props.sessionId}:${props.items[index]?.itemKey ?? "active-live-turn"}`,
+    [props.items, props.sessionId]
+  )
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual exposes imperative measurement methods
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getItemKey,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 280,
+    overscan: 4,
+    measureElement: (element) => Math.round(element?.getBoundingClientRect().height ?? 0),
+    initialOffset: () => Number.MAX_SAFE_INTEGER,
+    // An older page lands ABOVE the reader: keep them on the turn they were
+    // reading, corrected in the same render that adds the rows.
+    anchorTo: "end",
+  })
+  useEffect(() => {
+    if (typeof virtualizer.measure === "function") virtualizer.measure()
+  }, [props.renderAdapters?.messageDisplay, virtualizer])
+
+  return (
+    <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+      {virtualizer.getVirtualItems().map((virtualItem) => {
+        const item = props.items[virtualItem.index]
+        const isLive = virtualItem.index === props.items.length
+        return (
+          <div
+            key={virtualItem.key}
+            ref={virtualizer.measureElement}
+            data-index={virtualItem.index}
+            className="absolute left-0 top-0 w-full"
+            style={{ transform: `translateY(${virtualItem.start}px)` }}
+          >
+            {isLive ? (
+              renderMessages(
+                props.liveMessages,
+                props.liveStatus === "streaming",
+                props.renderAdapters,
+                true
+              )
+            ) : item ? (
+              <TranscriptTimelineRow
+                item={item}
+                sessionId={props.sessionId}
+                expanded={
+                  item.kind === "completed-turn" && props.expandedTurnKeys.has(item.turnKey)
+                }
+                detail={
+                  item.kind === "completed-turn" && props.expandedTurnKeys.has(item.turnKey)
+                    ? props.getDetail(item.turnKey)
+                    : undefined
+                }
+                adapters={props.renderAdapters}
+                allowRegenerate={
+                  item.itemKey === newestCompletedItemKey && props.liveMessages.length === 0
+                }
+                labels={props.labels}
+                onExpand={props.onExpand}
+                onCollapse={props.onCollapse}
+                onPageTurn={props.onPageTurn}
+                loadingDetail={
+                  item.kind === "completed-turn" &&
+                  Boolean(props.loadingTurnKeys?.has(item.turnKey))
+                }
+              />
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
