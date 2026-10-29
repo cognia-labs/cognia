@@ -1,5 +1,23 @@
 {
+  "chip": {
+    "open": "打开任务",
+    "planStep": "步骤 {done}/{total} · {step}",
+    "planPaused": "计划已暂停 · {done}/{total}",
+    "planRunning": "计划执行中 · {done}/{total}",
+    "tasks": "{done}/{total} · {step}",
+    "stopped": "已停止 · {done}/{total}"
+  },
   "completedFold": "已完成 {count} 项",
+  "panel": {
+    "currentTitle": "当前任务",
+    "lastTitle": "上次任务 · 已完成 {count} 项",
+    "locate": "在对话中定位",
+    "planTitle": "计划",
+    "showDocument": "计划文档",
+    "historyTitle": "历史计划",
+    "empty": "暂无任务。智能体的任务清单和本对话的计划会显示在这里。",
+    "decisionsElsewhere": "此计划需在拥有该对话的聊天窗格中审批。"
+  },
   "progress": "{done}/{total}",
   "progressLabel": "已完成 {done}/{total}",
   "status": {

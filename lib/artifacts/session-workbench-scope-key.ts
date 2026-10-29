@@ -26,6 +26,13 @@ export const SESSION_ARTIFACT_LIST_PANEL_ID = "artifacts"
  */
 export const NEW_TAB_PANEL_ID = "new-tab"
 
+/**
+ * The session surface's Tasks panel: the agent's current task list and the
+ * conversation's plans. Its id predates the merge of the two and stays `plan`
+ * so stored tab orders and panel layouts keep finding it.
+ */
+export const SESSION_TASKS_PANEL_ID = "plan"
+
 export function sessionWorkbenchScopeKey(
   workbenchInstanceId: string,
   activeSessionId: string | null

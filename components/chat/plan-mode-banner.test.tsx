@@ -16,6 +16,16 @@ jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
 
+let mockOpenPlan: { id: string } | undefined
+jest.mock("@/hooks/agent/use-session-plan", () => ({
+  useSessionPlan: () => mockOpenPlan,
+}))
+jest.mock("@/components/agent/plan/write-plan-button", () => ({
+  WritePlanButton: ({ sessionId }: { sessionId: string }) => (
+    <button data-testid="write-plan">{sessionId}</button>
+  ),
+}))
+
 const setMode = (
   mode: Parameters<ReturnType<typeof useChatStore.getState>["setPermissionMode"]>[0]
 ) => act(() => useChatStore.getState().setPermissionMode(mode))
@@ -23,6 +33,7 @@ const setMode = (
 describe("PlanModeBanner", () => {
   afterEach(() => {
     setMode(null)
+    mockOpenPlan = undefined
   })
 
   it("renders nothing outside plan mode", () => {
@@ -87,5 +98,23 @@ describe("PlanModeBanner", () => {
       </ComposerSessionProvider>
     )
     expect(screen.getByTestId("plan-mode-banner")).toBeInTheDocument()
+  })
+
+  it("offers Write a plan for its own pane while no plan is open", () => {
+    act(() => useChatStore.getState().setPermissionMode("plan", "ses_pane"))
+    const { rerender } = render(
+      <ComposerSessionProvider value="ses_pane">
+        <PlanModeBanner />
+      </ComposerSessionProvider>
+    )
+    expect(screen.getByTestId("write-plan")).toHaveTextContent("ses_pane")
+
+    mockOpenPlan = { id: "p1" }
+    rerender(
+      <ComposerSessionProvider value="ses_pane">
+        <PlanModeBanner />
+      </ComposerSessionProvider>
+    )
+    expect(screen.queryByTestId("write-plan")).not.toBeInTheDocument()
   })
 })

@@ -258,6 +258,12 @@ export interface ArtifactDockLayoutState {
    */
   notifyNewArtifact: () => void
   /**
+   * Something landed inside the dock that is worth knowing about but not worth
+   * raising it for (the agent's first task list): flag the toggle unread while
+   * the dock is shut. A no-op while it is open.
+   */
+  flagDockUnread: () => void
+  /**
    * Record whether the active panel is the Workspace surface. Leaving it drops
    * any pending workspace reveal — the user navigated away from the surface
    * that reveal was routing to — unless a reveal into the Workspace is still
@@ -490,6 +496,10 @@ export const useArtifactDockLayoutStore = create<ArtifactDockLayoutState>()(
                 // immediately after the user closed it.
                 mobileSheetOpen: true,
               }
+        ),
+      flagDockUnread: () =>
+        set((state) =>
+          state.dockCollapsed && !state.unreadArtifact ? { unreadArtifact: true } : state
         ),
       setWorkspaceSurfaceActive: (active) =>
         set((state) => {

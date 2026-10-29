@@ -1,5 +1,23 @@
 {
+  "chip": {
+    "open": "Open tasks",
+    "planStep": "Step {done}/{total} · {step}",
+    "planPaused": "Plan paused · {done}/{total}",
+    "planRunning": "Plan running · {done}/{total}",
+    "tasks": "{done}/{total} · {step}",
+    "stopped": "Stopped · {done}/{total}"
+  },
   "completedFold": "{count} completed",
+  "panel": {
+    "currentTitle": "Current tasks",
+    "lastTitle": "Last tasks · {count} done",
+    "locate": "Show in conversation",
+    "planTitle": "Plan",
+    "showDocument": "Plan document",
+    "historyTitle": "Earlier plans",
+    "empty": "No tasks yet. The agent's task list and this conversation's plans appear here.",
+    "decisionsElsewhere": "This plan is approved from the chat pane that owns this conversation."
+  },
   "progress": "{done}/{total}",
   "progressLabel": "{done} of {total} done",
   "status": {

@@ -52,8 +52,7 @@ import { CompanionTranscriptMessages } from "./companion-transcript-messages"
 import { RunStatusBar } from "./run-status-bar"
 import { RouterFusionProgressCard } from "@/components/router-fusion/router-fusion-progress-card"
 import { PlanApprovalDock } from "@/components/agent/plan/plan-approval-dock"
-import { PlanTrackerDock } from "@/components/agent/plan/plan-tracker-dock"
-import { PlanComposerDock } from "@/components/agent/plan/plan-composer-dock"
+import { PlanHaltDock } from "@/components/agent/plan/plan-halt-dock"
 import { useRunRecordPersistence } from "@/hooks/chat/use-run-record-persistence"
 import { useDeferredLoading } from "@/hooks/ui/use-deferred-loading"
 import { useStableCallback } from "@/hooks/ui/use-stable-callback"
@@ -1179,11 +1178,12 @@ export function ChatPane({
                   {boundId && <ComputerUsePictureInPicture sessionId={boundId} />}
                 </div>
                 {errorAndFooter}
-                {/* The plan slot above the composer — three docks, mutually
-                exclusive by plan status. A plan awaiting a decision is reviewed
-                here, beside the composer its decisions resume, so the document
-                never pushes the transcript down from the top of the pane. Only
-                the pane that owns this session's decisions renders it. */}
+                {/* The plan slot above the composer holds only what needs a
+                decision here. A plan awaiting approval is reviewed beside the
+                composer its decisions resume (folded to one line while the dock's
+                Tasks panel shows it); only the pane that owns this session's
+                decisions renders it. A running plan's progress lives in the
+                Tasks panel and the run panel's chip. */}
                 {boundId && ownsDecisions && directSession && (
                   <ChatColumn>
                     <PlanApprovalDock
@@ -1194,21 +1194,11 @@ export function ChatPane({
                     />
                   </ChatColumn>
                 )}
-                {/* Executing/paused plans surface the live tracker in the same slot
-                (statuses are mutually exclusive with awaiting_approval). */}
+                {/* An in-session plan halted on a step waits on retry / skip /
+                mark done / cancel (statuses exclusive with awaiting_approval). */}
                 {boundId && (
                   <ChatColumn>
-                    <PlanTrackerDock sessionId={boundId} />
-                  </ChatColumn>
-                )}
-                {/* Third mutually-exclusive state for this slot: planning, with no
-                plan yet — offer to hand-author one (PlanSource "manual"). */}
-                {boundId && (
-                  <ChatColumn>
-                    <PlanComposerDock
-                      sessionId={boundId}
-                      characterId={activeSession?.characterId}
-                    />
+                    <PlanHaltDock sessionId={boundId} />
                   </ChatColumn>
                 )}
                 {supportPanel}

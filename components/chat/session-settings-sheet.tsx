@@ -93,7 +93,6 @@ import { resolveAppDefaultModel } from "@/lib/ai/app-default-model"
 import { isExternalAgentProviderId } from "@/lib/ai/agent/external/session/session-models"
 import { HeaderAccountSwitcher } from "./header-account-switcher"
 import { SessionCostBadgeLive } from "@/components/chat/session-cost-badge-live"
-import { PlanModeTasksSheet } from "@/components/chat/plan-mode-tasks-sheet"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { TwinHeaderBadge } from "@/components/chat/twin-header-badge"
 import { SkillsBadge } from "@/components/chat/skills-badge"
@@ -779,7 +778,6 @@ export function SessionSettingsSheet({
                     sessionId={session.id}
                     tokensLabel={(input, output) => t("tokensLabel", { input, output })}
                   />
-                  <PlanModeTasksSheet sessionId={session.id} />
                   <PluginExtensionSlot
                     point="chat.header"
                     className="flex items-center gap-1 empty:hidden"

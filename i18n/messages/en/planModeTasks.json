@@ -1,6 +1,0 @@
-{
-  "headerDescription": "Tasks the agent emitted while running in plan mode. They live for this session only.",
-  "headerTitle": "Plan-mode tasks",
-  "triggerLabel": "Open plan-mode tasks ({count})",
-  "triggerText": "Plan / tasks ({count})"
-}

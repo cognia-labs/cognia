@@ -10402,7 +10402,6 @@
       "queueAttachmentsOnly": "{count} 个附件，无文字",
       "queueMergeHint": "本回合结束后，按从上到下的顺序合并成一条发送。",
       "runFailedQueued": "运行失败 · {count} 条排队中",
-      "sectionPlan": "计划",
       "sectionQueue": "待发送",
       "sectionSubagents": "子智能体",
       "sectionSummary": "概要",
@@ -13218,7 +13217,7 @@
     "panelError": "面板暂不可用",
     "panelErrorDescription": "此面板意外停止，其他工作内容未受影响。",
     "planPanel": {
-      "title": "计划"
+      "title": "任务"
     },
     "pluginPanel": {
       "buildFailed": "无法生成此面板。",
@@ -33658,6 +33657,7 @@
       "rejectReasonLabel": "拒绝原因（可选）",
       "rejectReasonPlaceholder": "这个计划哪里不合适？（可选）",
       "resumeFailed": "已批准的计划未能开始执行。点击继续以重试同一步骤。",
+      "reviewInPanel": "计划“{title}”待审批——在右侧任务面板中查看。",
       "source": {
         "agent_tool": "由智能体创建",
         "exit_plan_mode": "计划模式提出",
@@ -33793,6 +33793,7 @@
     "tracker": {
       "cancel": "取消计划",
       "empty": "当前没有运行中的计划。",
+      "haltedHint": "停在了某个步骤——请在输入框上方选择如何继续。",
       "pause": "暂停",
       "progress": "{total} 步中已完成 {completed} 步",
       "resume": "继续",
@@ -33806,12 +33807,6 @@
       "statusReady": "就绪",
       "statusSkipped": "已跳过"
     }
-  },
-  "planModeTasks": {
-    "headerDescription": "代理在计划模式下提交的任务，仅在当前会话有效。",
-    "headerTitle": "计划模式任务",
-    "triggerLabel": "打开计划任务面板（{count}）",
-    "triggerText": "计划任务（{count}）"
   },
   "plugins": {
     "activation": {
@@ -62282,7 +62277,25 @@
     }
   },
   "tasks": {
+    "chip": {
+      "open": "打开任务",
+      "planPaused": "计划已暂停 · {done}/{total}",
+      "planRunning": "计划执行中 · {done}/{total}",
+      "planStep": "步骤 {done}/{total} · {step}",
+      "stopped": "已停止 · {done}/{total}",
+      "tasks": "{done}/{total} · {step}"
+    },
     "completedFold": "已完成 {count} 项",
+    "panel": {
+      "currentTitle": "当前任务",
+      "decisionsElsewhere": "此计划需在拥有该对话的聊天窗格中审批。",
+      "empty": "暂无任务。智能体的任务清单和本对话的计划会显示在这里。",
+      "historyTitle": "历史计划",
+      "lastTitle": "上次任务 · 已完成 {count} 项",
+      "locate": "在对话中定位",
+      "planTitle": "计划",
+      "showDocument": "计划文档"
+    },
     "progress": "{done}/{total}",
     "progressLabel": "已完成 {done}/{total}",
     "status": {

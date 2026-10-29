@@ -19,12 +19,13 @@ import {
   type TaskFamily,
 } from "@/lib/chat/session-tasks"
 import {
+  isSettledTaskStatus,
   summarizeTasks,
   withStoppedItems,
   type TaskProgress,
   type TaskViewItem,
 } from "@/lib/tasks/task-view"
-import { useSessionMessages, useSessionStatus } from "@/stores/chat"
+import { useChatStore, useSessionMessages, useSessionStatus } from "@/stores/chat"
 
 const timelines = new WeakMap<readonly UIMessage[], SessionTaskTimeline>()
 
@@ -79,4 +80,20 @@ export function useSessionTasks(sessionId: string | null | undefined): SessionTa
       lastMessageId: current.lastMessageId,
     }
   }, [timeline, running])
+}
+
+/**
+ * How many of the session's tasks are still open: `null` when the agent keeps
+ * no task list here. A primitive selector, so a host that only needs to know
+ * whether to show the Tasks panel (and its badge) re-renders when that number
+ * moves, not on every streamed frame.
+ */
+export function useSessionOpenTaskCount(sessionId: string | null | undefined): number | null {
+  return useChatStore((state) => {
+    const messages = sessionId ? state.sessions[sessionId]?.messages : undefined
+    if (!messages) return null
+    const current = sessionTaskTimeline(messages).current
+    if (!current) return null
+    return current.items.filter((item) => !isSettledTaskStatus(item.status)).length
+  })
 }

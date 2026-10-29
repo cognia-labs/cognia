@@ -53,6 +53,7 @@ import {
 import { useBreakpoint } from "@/hooks/ui"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useActiveArtifactId, useArtifactSessionId } from "@/hooks/artifacts/use-session-artifacts"
+import { useSessionOpenTaskCount } from "@/hooks/chat/use-session-tasks"
 import {
   ARTIFACT_DOCK_BOUNDS,
   CHAT_MIN_PERCENT,
@@ -268,6 +269,26 @@ function useDockAttentionSignal({
 }
 
 /**
+ * Flag the dock toggle when the conversation on screen gets its first task
+ * list. The list is worth a glance, not an interruption: unlike a fresh
+ * artifact it never raises the dock or the phone Sheet, and a conversation
+ * coming on screen with a list it already had is not news.
+ */
+function useTaskAttentionSignal(): void {
+  const flagDockUnread = useArtifactDockLayoutStore((s) => s.flagDockUnread)
+  const sessionId = useArtifactSessionId()
+  const hasTasks = useSessionOpenTaskCount(sessionId) !== null
+  const previousRef = useRef({ sessionId, hasTasks })
+
+  useEffect(() => {
+    const previous = previousRef.current
+    previousRef.current = { sessionId, hasTasks }
+    if (sessionId !== previous.sessionId) return
+    if (hasTasks && !previous.hasTasks) flagDockUnread()
+  }, [flagDockUnread, hasTasks, sessionId])
+}
+
+/**
  * How long a collapsed dock's body stays mounted (concealed) before it is
  * unmounted for real. Re-opening within it is a reveal, not a rebuild: the
  * project editor keeps its tabs, tree, documents, git state and watcher, the
@@ -412,6 +433,7 @@ export function ArtifactWorkspaceDock({ children }: { children: ReactNode }) {
   const breakpoint = useBreakpoint()
   useArtifactDockShortcuts()
   useDockAttentionSignal({ raiseOnConversationChange: breakpoint === "desktop" })
+  useTaskAttentionSignal()
   useSideBrowserReveal({ pageTabs: breakpoint === "desktop" })
 
   // Tablet takes the Sheet, not a side-by-side dock, and that is deliberate

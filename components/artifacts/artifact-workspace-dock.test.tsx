@@ -1448,6 +1448,30 @@ describe("ArtifactWorkspaceDock", () => {
     expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(false)
   })
 
+  it("flags a shut dock when the conversation gets its first task list, without raising it", () => {
+    const todoMessage = {
+      id: "m-tasks",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-TodoWrite",
+          toolCallId: "td",
+          state: "output-available",
+          input: { todos: [{ content: "Plan the work", status: "in_progress" }] },
+        },
+      ],
+    }
+    render(
+      <ArtifactWorkspaceDock>
+        <div data-testid="chat" />
+      </ArtifactWorkspaceDock>
+    )
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    act(() => useChatStore.getState().setSessionMessages(SESSION, [todoMessage as never]))
+    expect(useArtifactDockLayoutStore.getState().dockCollapsed).toBe(true)
+    expect(useArtifactDockLayoutStore.getState().unreadArtifact).toBe(true)
+  })
+
   it("raises the dock for an AI revision proposal, on desktop too", () => {
     render(
       <ArtifactWorkspaceDock>

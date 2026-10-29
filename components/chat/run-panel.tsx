@@ -6,7 +6,7 @@
  * bar into a collapsible strip:
  *
  *   collapsed: ▸ ⟳ Working · 47s · 2 tools · Bash: npm test
- *   expanded:  Queue / Plan / Tools / Sub-agents / Summary — the whole turn
+ *   expanded:  Queue / Tools / Sub-agents / Summary — the whole turn
  *
  * It only REPORTS. Interrupting is the composer's job: while a turn runs its
  * send button is a Stop button (and Esc in the textarea interrupts), so the
@@ -17,7 +17,9 @@
  *
  * Mounts while the bound session is busy OR has a queued steer, and ALSO when
  * idle if the last turn left a replayable record (a one-line "Last run" bar
- * that expands to the same sections). The elapsed timer ticks once a second and
+ * that expands to the same sections), or while the conversation has open task
+ * work: the task chip ("Step 3/7 · Run the tests") rides the strip and opens
+ * the dock's Tasks panel, which holds the full list on every form factor. The elapsed timer ticks once a second and
  * only while busy, reading the active-work clock so it freezes during approval.
  *
  * Queued follow-ups ("steers") get a section of their own in the expanded body.
@@ -117,7 +119,7 @@ import {
   formatTokensPerSec,
   tokensPerSecond,
 } from "@/types/system/usage"
-import { TodoList } from "./todo-list"
+import { TaskProgressChip, useSessionTaskChip } from "@/components/tasks/task-progress-chip"
 import { useConversationActivity } from "@/hooks/connectors/use-conversation-activity"
 import { useConversationAssignmentEvents } from "@/hooks/connectors/use-conversation-assignment-events"
 import { ConversationActivityNotice } from "@/components/inbox/conversation-activity-log"
@@ -547,6 +549,7 @@ function RunPanelImpl({
   const saveSettings = useSettingsStore((s) => s.save)
   const [confirmSteerNow, setConfirmSteerNow] = useState(false)
   const panelTransition = useReducedMotionTransition(mobileTransition("fast"))
+  const taskChip = useSessionTaskChip(sessionId)
 
   const busy = status === "streaming" || status === "awaiting_approval"
 
@@ -624,8 +627,8 @@ function RunPanelImpl({
   const expandable = hasWork || queueDepth > 0 || activityCount > 0
   const replay = !busy && steerQueue.length === 0 && hasWork
 
-  // Nothing live, nothing queued, and no replayable record → render nothing.
-  if (!busy && steerQueue.length === 0 && !replay && activityCount === 0) return null
+  // Nothing live, nothing queued, no replayable record, no open tasks → nothing.
+  if (!busy && steerQueue.length === 0 && !replay && activityCount === 0 && !taskChip) return null
 
   const elapsedMs = activeElapsedMs(timing, toRunStatus(status), now) ?? (busy ? null : lastTurnMs)
   const elapsed = elapsedMs != null ? formatRunElapsed(elapsedMs) : null
@@ -805,6 +808,8 @@ function RunPanelImpl({
         </div>
       )}
 
+      {sessionId && taskChip && <TaskProgressChip sessionId={sessionId} model={taskChip} />}
+
       <RunBarMetrics totals={usageTotals} cfg={resolvedBar} />
 
       {(queueDepth > 0 || subagentChip) && (
@@ -850,13 +855,6 @@ function RunPanelImpl({
               queue={steerQueue}
               onLocate={locateSteerEntry}
             />
-          )}
-
-          {record.todos.length > 0 && (
-            <section>
-              <SectionHeading>{tp("sectionPlan")}</SectionHeading>
-              <TodoList todos={record.todos} defaultOpen />
-            </section>
           )}
 
           {record.tools.length > 0 && (

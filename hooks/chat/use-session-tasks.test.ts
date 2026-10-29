@@ -4,7 +4,7 @@ import type { UIMessage } from "ai"
 
 import { useChatStore } from "@/stores/chat"
 
-import { sessionTaskTimeline, useSessionTasks } from "./use-session-tasks"
+import { sessionTaskTimeline, useSessionOpenTaskCount, useSessionTasks } from "./use-session-tasks"
 
 const SID = "session-tasks-hook"
 
@@ -80,5 +80,26 @@ describe("sessionTaskTimeline", () => {
   it("memoizes per messages array", () => {
     const messages = [todoMessage("x", [["one", "pending"]])]
     expect(sessionTaskTimeline(messages)).toBe(sessionTaskTimeline(messages))
+  })
+})
+
+describe("useSessionOpenTaskCount", () => {
+  afterEach(() => setMessages([]))
+
+  it("is null without a list and counts open items otherwise", () => {
+    const { result } = renderHook(() => useSessionOpenTaskCount(SID))
+    expect(result.current).toBeNull()
+    setMessages([
+      todoMessage("b", [
+        ["one", "completed"],
+        ["two", "pending"],
+        ["three", "in_progress"],
+      ]),
+    ])
+    expect(result.current).toBe(2)
+  })
+
+  it("is null for an unknown session", () => {
+    expect(renderHook(() => useSessionOpenTaskCount("nope")).result.current).toBeNull()
   })
 })

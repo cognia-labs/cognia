@@ -17,7 +17,6 @@ import { Spinner } from "@/components/ui/spinner"
 import { ArtifactDockToggle } from "@/components/artifacts/artifact-dock-toggle"
 import { useCharacter } from "@/lib/data-hooks/context"
 import { avatarColor, avatarGlyph } from "@/lib/ui/avatar"
-import { PlanModeTasksSheet } from "@/components/chat/plan-mode-tasks-sheet"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { SessionSummaryButton } from "@/components/context-workbench/session-summary-card/session-summary-trigger"
 import { SingleExportTrigger } from "@/components/chat/dialogs/single-export-trigger"
@@ -240,11 +239,6 @@ export function ChatHeader({ session, onSplitView, onExitSplit }: Props) {
           className="flex items-center gap-1 empty:hidden"
         />
       ) : null}
-
-      {/* Plan-mode tasks for a non-team chat. Self-hides (returns null) when the
-          synthetic `solo:<sessionId>` team has no tasks, so it only appears once
-          the plan-mode bridge has emitted a plan for this session. */}
-      <PlanModeTasksSheet sessionId={session.id} />
 
       <PluginExtensionSlot point="chat.header" className="flex items-center gap-1 empty:hidden" />
 

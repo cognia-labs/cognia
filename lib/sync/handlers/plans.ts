@@ -11,7 +11,7 @@ import { runSyncHandler } from "./base"
  *
  * Read-mostly mirror, exactly like `goals`: a plan is authored and executed on
  * the host, and the phone displays it. Without this handler the mobile /
- * companion shells mount `PlanApprovalDock` and `PlanTrackerDock` against an
+ * companion shells mount `PlanApprovalDock` and the Tasks panel against an
  * empty local table — the UI exists, the row never arrives, and a plan-mode
  * turn taken through the companion dead-ends with nothing to approve.
  *

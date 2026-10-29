@@ -1,8 +1,4 @@
 {
-  "components/agent/plan/plan-composer-dock.tsx": {
-    "projection": 1,
-    "cwd": 0
-  },
   "components/app-shell-mobile.tsx": {
     "projection": 3,
     "cwd": 0

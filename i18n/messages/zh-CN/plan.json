@@ -53,6 +53,7 @@
     "rejectReasonLabel": "拒绝原因（可选）",
     "rejectReasonPlaceholder": "这个计划哪里不合适？（可选）",
     "resumeFailed": "已批准的计划未能开始执行。点击继续以重试同一步骤。",
+    "reviewInPanel": "计划“{title}”待审批——在右侧任务面板中查看。",
     "source": {
       "exit_plan_mode": "计划模式提出",
       "agent_tool": "由智能体创建",
@@ -120,6 +121,7 @@
   "tracker": {
     "cancel": "取消计划",
     "empty": "当前没有运行中的计划。",
+    "haltedHint": "停在了某个步骤——请在输入框上方选择如何继续。",
     "pause": "暂停",
     "progress": "{total} 步中已完成 {completed} 步",
     "resume": "继续",

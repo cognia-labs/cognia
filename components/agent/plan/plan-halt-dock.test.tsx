@@ -4,7 +4,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { PlanTrackerDock } from "./plan-tracker-dock"
+import { PlanHaltDock } from "./plan-halt-dock"
 import type { AgentPlan } from "@/types/agent/plan"
 import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
 
@@ -107,95 +107,28 @@ function haltedPlan(over: Partial<AgentPlan> = {}): AgentPlan {
   })
 }
 
-describe("PlanTrackerDock", () => {
-  it("renders only for executing / paused plans", () => {
+describe("PlanHaltDock", () => {
+  it("renders only for an in-session plan halted on a step", () => {
     mockPlan.mockReturnValue(undefined)
-    const { rerender, container } = render(<PlanTrackerDock sessionId="ses" />)
+    const { rerender, container } = render(<PlanHaltDock sessionId="ses" />)
     expect(container).toBeEmptyDOMElement()
-
-    for (const status of ["awaiting_approval", "approved", "completed", "cancelled"] as const) {
-      mockPlan.mockReturnValue(plan({ status }))
-      rerender(<PlanTrackerDock sessionId="ses" />)
-      expect(screen.queryByTestId("plan-tracker-dock")).not.toBeInTheDocument()
+    for (const p of [plan({ status: "executing" }), plan({ status: "paused" })]) {
+      mockPlan.mockReturnValue(p)
+      rerender(<PlanHaltDock sessionId="ses" />)
+      expect(screen.queryByTestId("plan-halt-dock")).not.toBeInTheDocument()
     }
-
-    mockPlan.mockReturnValue(plan({ status: "executing" }))
-    rerender(<PlanTrackerDock sessionId="ses" />)
-    expect(screen.getByTestId("plan-tracker-dock")).toBeInTheDocument()
-    expect(screen.getByTestId("plan-tracker-panel")).toBeInTheDocument()
-  })
-
-  it("pauses an executing plan", async () => {
-    mockPlan.mockReturnValue(plan({ status: "executing" }))
-    render(<PlanTrackerDock sessionId="ses" />)
-    expect(screen.queryByTestId("plan-tracker-resume")).not.toBeInTheDocument()
-    await userEvent.click(screen.getByTestId("plan-tracker-pause"))
-    await waitFor(() => expect(pausePlan).toHaveBeenCalledWith("p1"))
-  })
-
-  it("resumes a paused orchestrated plan through resumePlan", async () => {
-    mockPlan.mockReturnValue(plan({ status: "paused", executionMode: "orchestrated" }))
-    render(<PlanTrackerDock sessionId="ses" />)
-    expect(screen.queryByTestId("plan-tracker-pause")).not.toBeInTheDocument()
-    await userEvent.click(screen.getByTestId("plan-tracker-resume"))
-    await waitFor(() => expect(resumePlan).toHaveBeenCalledWith("p1"))
-    expect(continueInSessionPlan).not.toHaveBeenCalled()
-  })
-
-  it("resumes a paused in-session plan by sending the interrupted step's turn", async () => {
-    continueInSessionPlan.mockResolvedValue({
-      kind: "continue",
-      stepId: "s0",
-      stepTitle: "a",
-      userMessage: "Step 1 of 1",
-      generationId: "gen-2",
-    })
-    mockPlan.mockReturnValue(
-      plan({
-        status: "paused",
-        source: "manual",
-        steps: [
-          {
-            id: "s0",
-            title: "a",
-            kind: "agent_turn",
-            status: "in_progress",
-            order: 0,
-            dependencies: [],
-          },
-        ],
-      })
-    )
-    render(<PlanTrackerDock sessionId="ses" />)
-    await userEvent.click(screen.getByTestId("plan-tracker-resume"))
-    await waitFor(() =>
-      expect(send).toHaveBeenCalledWith("Step 1 of 1", undefined, {
-        sessionId: "ses",
-        skipUserAppend: true,
-        throwOnError: true,
-      })
-    )
-    expect(continueInSessionPlan).toHaveBeenCalledWith("p1", "resume", {
-      hooks: { hookContext: { agentRef: "p1", sessionId: "ses" } },
-    })
-    expect(resumePlan).not.toHaveBeenCalled()
+    mockPlan.mockReturnValue(haltedPlan())
+    rerender(<PlanHaltDock sessionId="ses" />)
+    expect(screen.getByTestId("plan-step-failure")).toBeInTheDocument()
   })
 
   it("runs the once-per-load orphan recovery on mount", () => {
     mockPlan.mockReturnValue(undefined)
-    render(<PlanTrackerDock sessionId="ses" />)
+    render(<PlanHaltDock sessionId="ses" />)
     expect(ensurePlanStepRecovery).toHaveBeenCalledTimes(1)
   })
 
   describe("halted in-session plan", () => {
-    it("shows the failure card instead of pause / resume", () => {
-      mockPlan.mockReturnValue(haltedPlan())
-      render(<PlanTrackerDock sessionId="ses" />)
-      expect(screen.getByTestId("plan-step-failure")).toBeInTheDocument()
-      expect(screen.queryByTestId("plan-tracker-resume")).not.toBeInTheDocument()
-      expect(screen.getByTestId("plan-tracker-step-error")).toHaveTextContent("boom")
-    })
-
     it.each([
       ["plan-step-retry", "retry"],
       ["plan-step-skip", "skip"],
@@ -209,7 +142,7 @@ describe("PlanTrackerDock", () => {
         generationId: "gen-3",
       })
       mockPlan.mockReturnValue(haltedPlan())
-      render(<PlanTrackerDock sessionId="ses" />)
+      render(<PlanHaltDock sessionId="ses" />)
       await userEvent.click(screen.getByTestId(testId))
       await waitFor(() => expect(send).toHaveBeenCalled())
       expect(continueInSessionPlan).toHaveBeenCalledWith("p1", action, expect.any(Object))
@@ -228,7 +161,7 @@ describe("PlanTrackerDock", () => {
       mockPlan.mockReturnValue(
         haltedPlan({ stepHalt: { stepId: "s1", cause: "silent", detail: "", at: 1 } })
       )
-      render(<PlanTrackerDock sessionId="ses" />)
+      render(<PlanHaltDock sessionId="ses" />)
       await userEvent.click(screen.getByTestId("plan-step-retry"))
       await waitFor(() => expect(order).toEqual(["stop", "continue"]))
       expect(stop).toHaveBeenCalledWith("ses")
@@ -245,7 +178,7 @@ describe("PlanTrackerDock", () => {
       })
       send.mockRejectedValue(new Error("concurrent_stream_cap_reached"))
       mockPlan.mockReturnValue(haltedPlan())
-      render(<PlanTrackerDock sessionId="ses" />)
+      render(<PlanHaltDock sessionId="ses" />)
       await userEvent.click(screen.getByTestId("plan-step-retry"))
       await waitFor(() =>
         expect(failInSessionStep).toHaveBeenCalledWith("p1", {
@@ -259,7 +192,7 @@ describe("PlanTrackerDock", () => {
 
     it("cancels from the card", async () => {
       mockPlan.mockReturnValue(haltedPlan())
-      render(<PlanTrackerDock sessionId="ses" />)
+      render(<PlanHaltDock sessionId="ses" />)
       await userEvent.click(screen.getByTestId("plan-step-cancel"))
       await waitFor(() => expect(cancelPlan).toHaveBeenCalledWith("p1"))
     })
@@ -267,7 +200,7 @@ describe("PlanTrackerDock", () => {
     it("toasts when the runtime cannot continue", async () => {
       continueInSessionPlan.mockRejectedValue(new Error("db down"))
       mockPlan.mockReturnValue(haltedPlan())
-      render(<PlanTrackerDock sessionId="ses" />)
+      render(<PlanHaltDock sessionId="ses" />)
       await userEvent.click(screen.getByTestId("plan-step-retry"))
       await waitFor(() => expect(toastError).toHaveBeenCalledWith("stepFailure.actionFailed"))
     })
@@ -275,16 +208,9 @@ describe("PlanTrackerDock", () => {
     it("cannot dispatch without a chat runtime, but can still cancel", () => {
       chatRuntime = null
       mockPlan.mockReturnValue(haltedPlan())
-      render(<PlanTrackerDock sessionId="ses" />)
+      render(<PlanHaltDock sessionId="ses" />)
       expect(screen.getByTestId("plan-step-retry")).toBeDisabled()
       expect(screen.getByTestId("plan-step-cancel")).toBeEnabled()
     })
-  })
-
-  it("cancels from either live state", async () => {
-    mockPlan.mockReturnValue(plan({ status: "executing" }))
-    render(<PlanTrackerDock sessionId="ses" />)
-    await userEvent.click(screen.getByTestId("plan-tracker-cancel"))
-    await waitFor(() => expect(cancelPlan).toHaveBeenCalledWith("p1"))
   })
 })

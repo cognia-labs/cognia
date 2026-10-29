@@ -53,6 +53,7 @@
     "rejectReasonLabel": "Reason for rejecting (optional)",
     "rejectReasonPlaceholder": "Why doesn't this plan work? (optional)",
     "resumeFailed": "The approved plan could not start. Resume to retry the same step.",
+    "reviewInPanel": "Plan “{title}” is waiting for approval — review it in the Tasks panel.",
     "source": {
       "exit_plan_mode": "Proposed in plan mode",
       "agent_tool": "Created by the agent",
@@ -120,6 +121,7 @@
   "tracker": {
     "cancel": "Cancel plan",
     "empty": "No plan is running.",
+    "haltedHint": "Stopped on a step — choose what to do above the message box.",
     "pause": "Pause",
     "progress": "{completed} of {total} steps",
     "resume": "Resume",

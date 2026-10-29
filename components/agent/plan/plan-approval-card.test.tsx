@@ -157,6 +157,11 @@ describe("PlanApprovalCard", () => {
     expect(screen.queryByTestId("plan-approval-editor")).not.toBeInTheDocument()
   })
 
+  it("leaves the body uncapped in a host that scrolls as a whole (fill)", () => {
+    render(<PlanApprovalCard plan={plan()} {...noop} fill />)
+    expect(screen.getByTestId("plan-document").className).not.toMatch(/max-h-/)
+  })
+
   it("caps the document body, not the card, and scrolls it natively (selection-safe)", () => {
     const { container } = render(<PlanApprovalCard plan={plan()} {...noop} />)
     // The cap sits on the body so the header and decisions can never squeeze

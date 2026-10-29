@@ -10402,7 +10402,6 @@
       "queueAttachmentsOnly": "{count, plural, one {# attachment} other {# attachments}}, no text",
       "queueMergeHint": "Sent as one message, top to bottom, when this turn ends.",
       "runFailedQueued": "Run failed · {count} queued",
-      "sectionPlan": "Plan",
       "sectionQueue": "Queued",
       "sectionSubagents": "Sub-agents",
       "sectionSummary": "Summary",
@@ -13218,7 +13217,7 @@
     "panelError": "Panel unavailable",
     "panelErrorDescription": "This panel stopped unexpectedly. The rest of your work is unchanged.",
     "planPanel": {
-      "title": "Plan"
+      "title": "Tasks"
     },
     "pluginPanel": {
       "buildFailed": "This panel couldn't be built.",
@@ -33658,6 +33657,7 @@
       "rejectReasonLabel": "Reason for rejecting (optional)",
       "rejectReasonPlaceholder": "Why doesn't this plan work? (optional)",
       "resumeFailed": "The approved plan could not start. Resume to retry the same step.",
+      "reviewInPanel": "Plan “{title}” is waiting for approval — review it in the Tasks panel.",
       "source": {
         "agent_tool": "Created by the agent",
         "exit_plan_mode": "Proposed in plan mode",
@@ -33793,6 +33793,7 @@
     "tracker": {
       "cancel": "Cancel plan",
       "empty": "No plan is running.",
+      "haltedHint": "Stopped on a step — choose what to do above the message box.",
       "pause": "Pause",
       "progress": "{completed} of {total} steps",
       "resume": "Resume",
@@ -33806,12 +33807,6 @@
       "statusReady": "Ready",
       "statusSkipped": "Skipped"
     }
-  },
-  "planModeTasks": {
-    "headerDescription": "Tasks the agent emitted while running in plan mode. They live for this session only.",
-    "headerTitle": "Plan-mode tasks",
-    "triggerLabel": "Open plan-mode tasks ({count})",
-    "triggerText": "Plan / tasks ({count})"
   },
   "plugins": {
     "activation": {
@@ -62282,7 +62277,25 @@
     }
   },
   "tasks": {
+    "chip": {
+      "open": "Open tasks",
+      "planPaused": "Plan paused · {done}/{total}",
+      "planRunning": "Plan running · {done}/{total}",
+      "planStep": "Step {done}/{total} · {step}",
+      "stopped": "Stopped · {done}/{total}",
+      "tasks": "{done}/{total} · {step}"
+    },
     "completedFold": "{count} completed",
+    "panel": {
+      "currentTitle": "Current tasks",
+      "decisionsElsewhere": "This plan is approved from the chat pane that owns this conversation.",
+      "empty": "No tasks yet. The agent's task list and this conversation's plans appear here.",
+      "historyTitle": "Earlier plans",
+      "lastTitle": "Last tasks · {count} done",
+      "locate": "Show in conversation",
+      "planTitle": "Plan",
+      "showDocument": "Plan document"
+    },
     "progress": "{done}/{total}",
     "progressLabel": "{done} of {total} done",
     "status": {

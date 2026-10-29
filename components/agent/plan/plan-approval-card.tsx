@@ -144,6 +144,12 @@ export interface PlanApprovalCardProps {
   disabled?: boolean
   /** A refinement is being generated: the header says so and the body dims. */
   refining?: boolean
+  /**
+   * Hosted by a surface that scrolls as a whole (the dock's Tasks panel): the
+   * body is not capped to a share of the viewport, since no composer below it
+   * has to stay on screen.
+   */
+  fill?: boolean
 }
 
 export function PlanApprovalCard({
@@ -159,9 +165,11 @@ export function PlanApprovalCard({
   refining,
   interactiveView,
   interactiveStyle,
+  fill = false,
 }: PlanApprovalCardProps) {
   const t = useTranslations("plan")
   const bodyId = useId()
+  const bodyMaxH = fill ? undefined : BODY_MAX_H
   const [feedback, setFeedback] = useState("")
   const [collapsed, setCollapsed] = useState(false)
   // Enhanced view opt-out is per-card, not persisted: the setting turns the
@@ -421,7 +429,7 @@ export function PlanApprovalCard({
               // Enhanced plan mode: the interactive HTML editor (sandboxed
               // iframe) replaces the document; edits flow through the same
               // onEdit channel.
-              <div className={cn("overflow-y-auto overscroll-contain p-2", BODY_MAX_H)}>
+              <div className={cn("overflow-y-auto overscroll-contain p-2", bodyMaxH)}>
                 <PlanHtmlView
                   plan={plan}
                   onSave={(patch) => void persist(patch)}
@@ -438,7 +446,7 @@ export function PlanApprovalCard({
                 plan={plan}
                 editable={canEdit}
                 onEdit={onEdit}
-                className={cn("flex-none", BODY_MAX_H)}
+                className={cn("flex-none", bodyMaxH)}
               />
             )}
           </div>

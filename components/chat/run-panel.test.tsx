@@ -10,6 +10,7 @@ import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useConversationActivity } from "@/hooks/connectors/use-conversation-activity"
 
+jest.mock("@/hooks/agent/use-session-plan", () => ({ useSessionPlan: () => undefined }))
 jest.mock("@/hooks/connectors/use-conversation-activity", () => ({
   useConversationActivity: jest.fn(() => []),
 }))
@@ -121,14 +122,26 @@ describe("RunPanel — expansion", () => {
     expect(screen.getByText("3s")).toBeInTheDocument()
   })
 
-  it("renders the Plan section from a TodoWrite snapshot", () => {
+  it("leaves the task list to the Tasks panel and shows the progress chip instead", () => {
     seed({
       status: "streaming",
       messages: [assistant([todoPart([{ content: "do the thing", status: "pending" }])])],
     })
     render(<RunPanel sessionId={SID} />)
+    expect(screen.getByTestId("task-progress-chip")).toHaveTextContent(
+      'tasks:{"done":0,"total":1,"step":"do the thing"}'
+    )
     fireEvent.click(screen.getByTestId("run-panel-toggle"))
-    expect(screen.getByText("do the thing")).toBeInTheDocument()
+    expect(screen.queryByText("sectionPlan")).not.toBeInTheDocument()
+  })
+
+  it("stays mounted while idle for an unfinished task list", () => {
+    seed({
+      status: "idle",
+      messages: [assistant([todoPart([{ content: "half done", status: "in_progress" }])])],
+    })
+    render(<RunPanel sessionId={SID} />)
+    expect(screen.getByTestId("task-progress-chip")).toHaveAttribute("data-tone", "warning")
   })
 
   it("renders the Sub-agents section from subagent parts", () => {

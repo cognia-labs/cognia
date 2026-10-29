@@ -219,6 +219,18 @@ describe("useArtifactDockLayoutStore", () => {
       expect(result.current.userDismissed).toBe(false)
     })
 
+    it("flagDockUnread flags a shut dock without raising it, and ignores an open one", () => {
+      const { result } = renderHook(() => useArtifactDockLayoutStore())
+      act(() => result.current.setDockCollapsed(false))
+      act(() => result.current.flagDockUnread())
+      expect(result.current.unreadArtifact).toBe(false)
+      act(() => result.current.setDockCollapsed(true))
+      act(() => result.current.flagDockUnread())
+      expect(result.current.dockCollapsed).toBe(true)
+      expect(result.current.mobileSheetOpen).toBe(false)
+      expect(result.current.unreadArtifact).toBe(true)
+    })
+
     it("manual collapse marks dismissed so a new artifact only flags unread", () => {
       const { result } = renderHook(() => useArtifactDockLayoutStore())
       act(() => result.current.setDockCollapsed(false))

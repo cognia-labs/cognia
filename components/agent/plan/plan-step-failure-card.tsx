@@ -3,7 +3,7 @@
 /**
  * In-card error for an in-session plan halted on a step (ADR-0045 §2).
  *
- * Rendered by {@link PlanTrackerDock} above the live step list when
+ * Rendered by `PlanHaltDock` above the composer when
  * `PlanRuntime.failInSessionStep` paused the plan: the step's turn failed,
  * was never sent, went silent, ended unrecorded, or died with the app. It
  * says which step, why (localized from `stepHalt.cause`, with the raw detail

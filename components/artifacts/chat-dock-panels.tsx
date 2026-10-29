@@ -83,7 +83,10 @@ import { SessionSourcesPanel } from "@/components/context-workbench/session-sour
 import { BrowserPreviewPane } from "@/components/browser/browser-preview-pane"
 import { ArtifactPanelContent, type ArtifactPanelMode } from "./artifact-panel-content"
 import { ArtifactList } from "./artifact-list"
-import { SESSION_ARTIFACT_LIST_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
+import {
+  SESSION_ARTIFACT_LIST_PANEL_ID,
+  SESSION_TASKS_PANEL_ID,
+} from "@/lib/artifacts/session-workbench-scope-key"
 import { ArtifactReviewView } from "./artifact-review-view"
 import { DockNewTabPage } from "./dock-new-tab-page"
 import { drawnDockTabs } from "./dock-tab-strip"
@@ -114,7 +117,8 @@ import {
   TeamMembersPanel,
 } from "@/components/context-workbench/panels/team-members-panel"
 import { RunContextPanel } from "@/components/context-workbench/panels/run-context-panel"
-import { PlanPanel } from "@/components/agent/plan/plan-panel"
+import { SessionTasksPanel } from "@/components/tasks/session-tasks-panel"
+import { useSessionOpenTaskCount } from "@/hooks/chat/use-session-tasks"
 import { ConversationFilesPanel } from "@/components/filespace/conversation-files-panel"
 import { CONVERSATION_FILES_PANEL_ID } from "@/stores/filespace/filespace-panel-store"
 import { listPlansBySession } from "@/lib/db/plans"
@@ -786,7 +790,7 @@ function SessionNewTabRenderer({ inputs }: Inputs<SessionPanelInputs>) {
 
 function SessionPlanRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   const activeSessionId = usePanelInput(inputs, (input) => input.activeSessionId)
-  return activeSessionId ? <PlanPanel sessionId={activeSessionId} /> : null
+  return activeSessionId ? <SessionTasksPanel sessionId={activeSessionId} /> : null
 }
 
 function SessionUsageRenderer({ inputs }: Inputs<SessionPanelInputs>) {
@@ -839,14 +843,17 @@ export function useSessionSurfacePanels({
   const { requestedUrl, requestId, revealBrowserPanel } = useSideBrowserRequest(scopeKey)
   const sandboxDesktop = useSessionSandboxDesktop(activeSessionId)
   const hasSandboxDesktop = Boolean(sandboxDesktop)
-  // The plan panel claims its rail slot only when the session actually has a
-  // plan — the badge counts plans awaiting a decision.
+  // The Tasks panel claims its rail slot only when the session has a task list
+  // or a plan. Its badge counts plans awaiting a decision first, else the
+  // agent's open tasks.
   const sessionPlans = useLiveQuery(
     () => (activeSessionId ? listPlansBySession(activeSessionId) : Promise.resolve([])),
     [activeSessionId]
   )
-  const planCount = sessionPlans?.length ?? 0
+  const openTaskCount = useSessionOpenTaskCount(activeSessionId)
+  const hasTasks = (sessionPlans?.length ?? 0) > 0 || openTaskCount !== null
   const pendingPlanCount = sessionPlans?.filter((p) => p.status === "awaiting_approval").length ?? 0
+  const tasksBadge = pendingPlanCount > 0 ? pendingPlanCount : (openTaskCount ?? 0)
   const inputs = usePanelInputs<SessionPanelInputs>({
     activeSessionId,
     session,
@@ -924,17 +931,18 @@ export function useSessionSurfacePanels({
         renderer: renderers.artifactList,
       },
       {
-        // The session's plans — current draft plus terminal history (the GUI
-        // counterpart of the CLI's `/plan list`). Sits beside the artifact
-        // list: both are the session's reviewable outputs.
-        id: "plan",
+        // Tasks: the agent's current task list, the open plan (approval or
+        // live tracker) and earlier plans (the GUI counterpart of the CLI's
+        // `/plan list`). Sits beside the artifact list: both are the
+        // session's reviewable outputs. The id stays `plan` for stored layouts.
+        id: SESSION_TASKS_PANEL_ID,
         activity: "review",
         labelKey: "contextWorkbench.planPanel.title",
         icon: ListTodoIcon,
         order: 12,
-        appliesTo: (resource) => resource.kind === "session" && planCount > 0,
+        appliesTo: (resource) => resource.kind === "session" && hasTasks,
         retention: "stateful",
-        getBadge: () => pendingPlanCount,
+        getBadge: () => tasksBadge,
         renderer: renderers.plan,
       },
       {
@@ -1177,9 +1185,9 @@ export function useSessionSurfacePanels({
       hasProjectRoots,
       isTeamSession,
       newTab,
-      pendingPlanCount,
+      hasTasks,
       pendingRunLearningCount,
-      planCount,
+      tasksBadge,
       renderers,
       sourceCount,
       uncommittedChangeCount,

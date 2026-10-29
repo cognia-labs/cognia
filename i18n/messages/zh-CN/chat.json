@@ -2516,7 +2516,6 @@
     "queueAttachmentsOnly": "{count} 个附件，无文字",
     "queueMergeHint": "本回合结束后，按从上到下的顺序合并成一条发送。",
     "runFailedQueued": "运行失败 · {count} 条排队中",
-    "sectionPlan": "计划",
     "sectionQueue": "待发送",
     "sectionSubagents": "子智能体",
     "sectionSummary": "概要",

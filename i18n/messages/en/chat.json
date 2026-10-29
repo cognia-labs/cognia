@@ -2516,7 +2516,6 @@
     "queueAttachmentsOnly": "{count, plural, one {# attachment} other {# attachments}}, no text",
     "queueMergeHint": "Sent as one message, top to bottom, when this turn ends.",
     "runFailedQueued": "Run failed · {count} queued",
-    "sectionPlan": "Plan",
     "sectionQueue": "Queued",
     "sectionSubagents": "Sub-agents",
     "sectionSummary": "Summary",

@@ -96,9 +96,6 @@ jest.mock("@/components/chat/session-cost-badge-live", () => ({
     <div data-testid="cost-badge">{sessionId}</div>
   ),
 }))
-jest.mock("@/components/chat/plan-mode-tasks-sheet", () => ({
-  PlanModeTasksSheet: () => <div data-testid="plan-tasks" />,
-}))
 jest.mock("@/components/plugins/plugin-extension-slot", () => ({
   PluginExtensionSlot: () => <div data-testid="plugin-slot" />,
 }))
@@ -298,7 +295,7 @@ describe("SessionSettingsSheet", () => {
     expect(screen.queryByTestId("session-ambient-status")).not.toBeInTheDocument()
   })
 
-  it("renders the ambient status cluster (cost / plan-tasks / plugin slot) when showAmbientStatus is set (mobile)", () => {
+  it("renders the ambient status cluster (cost / plugin slot) when showAmbientStatus is set (mobile)", () => {
     const Wrapper = withAdapter(makeAdapter())
     render(
       <Wrapper>
@@ -312,7 +309,6 @@ describe("SessionSettingsSheet", () => {
     )
     expect(screen.getByTestId("session-ambient-status")).toBeInTheDocument()
     expect(screen.getByTestId("cost-badge")).toHaveTextContent("ses_1")
-    expect(screen.getByTestId("plan-tasks")).toBeInTheDocument()
     expect(screen.getByTestId("plugin-slot")).toBeInTheDocument()
   })
 

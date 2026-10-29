@@ -488,7 +488,7 @@
     "closePanel": "关闭{name}"
   },
   "planPanel": {
-    "title": "计划"
+    "title": "任务"
   },
   "pluginPanel": {
     "buildFailed": "无法生成此面板。",

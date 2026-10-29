@@ -488,7 +488,7 @@
     "closePanel": "Close {name}"
   },
   "planPanel": {
-    "title": "Plan"
+    "title": "Tasks"
   },
   "pluginPanel": {
     "buildFailed": "This panel couldn't be built.",

@@ -17,7 +17,13 @@
  *   - Edit                     → the "Write a plan" editor, pre-filled, amends
  *                                the plan in place after re-validating it
  *   - Refine / inline edit     → re-plan in place / updatePlanDraft
- *   - Open in side panel       → the dock's Plan panel, full height
+ *   - Open in side panel       → the dock's Tasks panel, full height
+ *
+ * The dock owns this conversation's decisions, and registers them in
+ * `plan-decision-store` so the Tasks panel can offer the same ones on the same
+ * handlers. While that panel is on screen beside the conversation (desktop),
+ * the card here folds to one line — "plan awaiting approval · review it on the
+ * right" with the primary approve — so the document is shown once.
  *
  * Inline edits autosave while the user reads, so they are serialized on one
  * chain and applied to the row as it is *now* (never to the live-query
@@ -51,6 +57,9 @@ import {
 import { Button } from "@/components/ui/button"
 import { applyPlanEditPatch, planEditsSettled } from "@/lib/agent/plan/draft-edit"
 import { revealSessionPanel } from "@/lib/artifacts/reveal"
+import { SESSION_TASKS_PANEL_ID } from "@/lib/artifacts/session-workbench-scope-key"
+import { useSessionPanelShowing } from "@/hooks/artifacts/use-session-panel-showing"
+import { usePlanDecisionStore, type PlanDecisionHandlers } from "@/stores/agent/plan-decision-store"
 import { mobileTransition } from "@/lib/ui/motion"
 import { resolvePlanHtmlStyle } from "@/lib/agent/plan/plan-html"
 import { resolvePlanStrategy } from "@/lib/agent/plan/strategy"
@@ -333,6 +342,41 @@ export function PlanApprovalDock({
     }
   }
 
+  // Offer these decisions to the Tasks panel (one owner per session). The
+  // registered object is stable per plan; each call reads the latest closures.
+  const latestDecisions = useRef<Omit<PlanDecisionHandlers, "planId"> | null>(null)
+  useEffect(() => {
+    latestDecisions.current = plan
+      ? {
+          approve: (mode) => void handleApprove(plan, mode),
+          keepPlanning: (feedback) => void handleKeepPlanning(plan, feedback),
+          reject: (reason) => void handleReject(plan, reason),
+          refine: (type, feedback) => void handleRefine(plan, type, feedback),
+          edit: (patch) => handleEdit(plan.id, patch),
+          openEditor: () => setEditorSession(Date.now()),
+        }
+      : null
+  })
+  const awaitingPlanId = plan?.status === "awaiting_approval" ? plan.id : null
+  useEffect(() => {
+    if (!awaitingPlanId) return
+    const latest = () => latestDecisions.current
+    return usePlanDecisionStore.getState().register(sessionId, {
+      planId: awaitingPlanId,
+      approve: (mode) => latest()?.approve(mode),
+      keepPlanning: (feedback) => latest()?.keepPlanning(feedback),
+      reject: (reason) => latest()?.reject(reason),
+      refine: (type, feedback) => latest()?.refine(type, feedback),
+      edit: (patch) => latest()?.edit(patch) ?? Promise.reject(new Error("plan dock unmounted")),
+      openEditor: () => latest()?.openEditor(),
+    })
+  }, [sessionId, awaitingPlanId])
+  useEffect(() => {
+    usePlanDecisionStore.getState().setPending(sessionId, { busy, refining })
+  }, [sessionId, busy, refining])
+
+  const panelShowing = useSessionPanelShowing(sessionId, SESSION_TASKS_PANEL_ID)
+
   let content: ReactNode = null
   if (visible && plan && resumeFailure) {
     const failure = resumeFailure
@@ -347,6 +391,28 @@ export function PlanApprovalDock({
         </Button>
       </Surface>
     )
+  } else if (visible && plan && panelShowing) {
+    // The Tasks panel beside the conversation shows the document and every
+    // decision; here only the line that says so, with the primary approve.
+    content = (
+      <Surface
+        role="status"
+        className="flex items-center justify-between gap-3 rounded-lg border border-border/70 px-3 py-2"
+        data-testid="plan-approval-compact"
+      >
+        <p className="min-w-0 truncate text-sm text-muted-foreground">
+          {t("approval.reviewInPanel", { title: plan.title })}
+        </p>
+        <Button
+          size="sm"
+          disabled={busy}
+          onClick={() => void handleApprove(plan, "acceptEdits")}
+          data-testid="plan-approval-compact-approve"
+        >
+          {t("approval.approveAcceptEdits")}
+        </Button>
+      </Surface>
+    )
   } else if (visible && plan) {
     content = (
       <div data-testid="plan-approval-dock">
@@ -358,44 +424,51 @@ export function PlanApprovalDock({
           onKeepPlanning={(feedback) => void handleKeepPlanning(plan, feedback)}
           onReject={(reason) => void handleReject(plan, reason)}
           onOpenEditor={() => setEditorSession(Date.now())}
-          onOpenPanel={() => revealSessionPanel(sessionId, "plan")}
+          onOpenPanel={() => revealSessionPanel(sessionId, SESSION_TASKS_PANEL_ID)}
           onRefine={(type, feedback) => void handleRefine(plan, type, feedback)}
           onEdit={(patch) => handleEdit(plan.id, patch)}
           interactiveView={appSettings?.planSettings?.interactiveHtmlView === true}
           interactiveStyle={resolvePlanHtmlStyle(appSettings?.planSettings?.interactiveHtmlStyle)}
         />
-        {editorSession !== null && (
-          <PlanComposerDialog
-            key={editorSession}
-            sessionId={sessionId}
-            {...(plan.characterId ? { characterId: plan.characterId } : {})}
-            open
-            onOpenChange={(open) => {
-              if (!open) setEditorSession(null)
-            }}
-            editPlan={plan}
-          />
-        )}
       </div>
     )
   }
 
+  // The editor opens from the card or from the Tasks panel (through the
+  // registry), so it lives outside whichever face the dock is showing.
+  const editor =
+    editorSession !== null && plan ? (
+      <PlanComposerDialog
+        key={editorSession}
+        sessionId={sessionId}
+        {...(plan.characterId ? { characterId: plan.characterId } : {})}
+        open
+        onOpenChange={(open) => {
+          if (!open) setEditorSession(null)
+        }}
+        editPlan={plan}
+      />
+    ) : null
+
   // Rises in and folds away (height → 0) so the transcript above slides into
   // the freed space instead of jumping when a decision unmounts the card.
   return (
-    <AnimatePresence initial={false}>
-      {content && plan && (
-        <motion.div
-          key={`${plan.id}:${resumeFailure ? "retry" : "review"}`}
-          className="overflow-hidden pb-2"
-          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0, height: "auto" }}
-          exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, paddingBottom: 0 }}
-          transition={mobileTransition("fast")}
-        >
-          {content}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <>
+      <AnimatePresence initial={false}>
+        {content && plan && (
+          <motion.div
+            key={`${plan.id}:${resumeFailure ? "retry" : panelShowing ? "compact" : "review"}`}
+            className="overflow-hidden pb-2"
+            initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0, height: "auto" }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0, paddingBottom: 0 }}
+            transition={mobileTransition("fast")}
+          >
+            {content}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {editor}
+    </>
   )
 }

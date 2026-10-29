@@ -3,8 +3,8 @@
 /**
  * Read-only plan tracker panel (ADR-0045 P5). Renders an executing /
  * terminal `AgentPlan`'s steps with live status + a progress summary. Pair
- * with `useSessionPlan` / `usePlanById` for a live view; mounted above the
- * composer by `PlanTrackerDock` and inside the unified runs detail pane.
+ * with `useSessionPlan` / `usePlanById` for a live view; mounted in the dock's
+ * Tasks panel (`PlanRunSection`) and inside the unified runs detail pane.
  *
  * Presentation follows the SAME user preset as the approval editor
  * (`planSettings.interactiveHtmlStyle` → {@link PlanHtmlStyle}), so the visual

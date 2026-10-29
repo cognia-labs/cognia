@@ -2,9 +2,10 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, waitFor } from "@testing-library/react"
+import { act, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { PlanApprovalDock } from "./plan-approval-dock"
+import { usePlanDecisionStore } from "@/stores/agent/plan-decision-store"
 import { PLAN_APPROVED_PROMPT as PLAN_APPROVED_DEFINITION } from "@/lib/agent/plan/approval-prompts"
 import {
   __setPromptOverrideSnapshotForTests,
@@ -117,6 +118,11 @@ jest.mock("@/lib/artifacts/reveal", () => ({
   revealSessionPanel: (...a: unknown[]) => revealSessionPanel(...a),
 }))
 
+let mockPanelShowing = false
+jest.mock("@/hooks/artifacts/use-session-panel-showing", () => ({
+  useSessionPanelShowing: () => mockPanelShowing,
+}))
+
 function step(id: string, title: string, order: number): PlanStep {
   return { id, title, kind: "agent_turn", status: "pending", order, dependencies: [] }
 }
@@ -144,6 +150,8 @@ function plan(over: Partial<AgentPlan> = {}): AgentPlan {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockPanelShowing = false
+  usePlanDecisionStore.setState({ owners: {} })
   buildClient.mockReturnValue({})
   __setMockSettings({ foo: 1 })
   getPlan.mockImplementation(async () => mockPlan())
@@ -743,5 +751,54 @@ describe("PlanApprovalDock Prompt Center wording", () => {
         "acceptEdits"
       )
     )
+  })
+
+  describe("decisions shared with the Tasks panel", () => {
+    it("registers this plan's decisions and drops them once it is no longer awaiting", async () => {
+      mockPlan.mockReturnValue(plan())
+      const onResume = jest.fn()
+      const { rerender } = render(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+      const owner = usePlanDecisionStore.getState().owners.ses
+      expect(owner?.handlers.planId).toBe("p1")
+
+      // The panel's approve runs the dock's own handler.
+      act(() => owner!.handlers.approve("acceptEdits"))
+      await waitFor(() => expect(approvePlan).toHaveBeenCalledWith("p1"))
+      await waitFor(() => expect(onResume).toHaveBeenCalled())
+
+      mockPlan.mockReturnValue(plan({ status: "approved" }))
+      rerender(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+      expect(usePlanDecisionStore.getState().owners.ses).toBeUndefined()
+    })
+
+    it("mirrors an in-flight decision for the panel", async () => {
+      mockPlan.mockReturnValue(plan())
+      approvePlan.mockImplementationOnce(() => new Promise(() => {}))
+      render(<PlanApprovalDock sessionId="ses" onResume={jest.fn()} />)
+      await userEvent.click(screen.getByTestId("plan-approval-approve-auto"))
+      await waitFor(() => expect(usePlanDecisionStore.getState().owners.ses?.busy).toBe(true))
+    })
+
+    it("folds to one line with the primary approve while the Tasks panel shows the plan", async () => {
+      mockPanelShowing = true
+      mockPlan.mockReturnValue(plan())
+      const onResume = jest.fn()
+      render(<PlanApprovalDock sessionId="ses" onResume={onResume} />)
+      expect(screen.queryByTestId("plan-approval-dock")).not.toBeInTheDocument()
+      expect(screen.getByTestId("plan-approval-compact")).toHaveTextContent(
+        "approval.reviewInPanel"
+      )
+      await userEvent.click(screen.getByTestId("plan-approval-compact-approve"))
+      await waitFor(() => expect(approvePlan).toHaveBeenCalledWith("p1"))
+      await waitFor(() => expect(onResume).toHaveBeenCalledWith(expect.any(String), "acceptEdits"))
+    })
+
+    it("opens the editor the panel asked for even while folded", async () => {
+      mockPanelShowing = true
+      mockPlan.mockReturnValue(plan())
+      render(<PlanApprovalDock sessionId="ses" onResume={jest.fn()} />)
+      act(() => usePlanDecisionStore.getState().owners.ses!.handlers.openEditor())
+      expect(await screen.findByTestId("plan-editor-stub")).toHaveAttribute("data-edit", "p1")
+    })
   })
 })

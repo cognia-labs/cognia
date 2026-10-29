@@ -66,8 +66,12 @@ jest.mock("@/components/filespace/conversation-files-panel", () => ({
     <div data-testid="conversation-files-panel" data-session={sessionId ?? ""} />
   ),
 }))
-jest.mock("@/components/agent/plan/plan-panel", () => ({
-  PlanPanel: ({ sessionId }: { sessionId: string }) => (
+let mockOpenTaskCount: number | null = null
+jest.mock("@/hooks/chat/use-session-tasks", () => ({
+  useSessionOpenTaskCount: () => mockOpenTaskCount,
+}))
+jest.mock("@/components/tasks/session-tasks-panel", () => ({
+  SessionTasksPanel: ({ sessionId }: { sessionId: string }) => (
     <div data-testid="plan-panel" data-session={sessionId} />
   ),
 }))
@@ -931,7 +935,7 @@ describe("useSessionSurfacePanels", () => {
     expect(screen.getByTestId("team-members-panel")).toHaveAttribute("data-session", "s1")
   })
 
-  it("claims a rail slot for plans only when the session has one, and badges pending approvals", () => {
+  it("claims a rail slot for tasks only when the session has a plan or a task list", () => {
     sessionPlans = []
     const noPlan = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
     expect(noPlan.appliesTo(SESSION_RESOURCE)).toBe(false)
@@ -949,6 +953,22 @@ describe("useSessionSurfacePanels", () => {
     expect(withPlans.getBadge?.(SESSION_RESOURCE)).toBe(1)
     renderPanel(withPlans, SESSION_RESOURCE)
     expect(screen.getByTestId("plan-panel")).toHaveAttribute("data-session", "s1")
+  })
+
+  it("claims the slot for the agent's task list alone and badges its open tasks", () => {
+    sessionPlans = []
+    mockOpenTaskCount = 3
+    try {
+      const tasks = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
+      expect(tasks.appliesTo(SESSION_RESOURCE)).toBe(true)
+      expect(tasks.getBadge?.(SESSION_RESOURCE)).toBe(3)
+      // A plan awaiting a decision outranks the open-task count.
+      sessionPlans = [{ id: "p1", status: "awaiting_approval" }]
+      const pending = panelById(collect(useSessionSurfacePanels, sessionInput()), "plan")
+      expect(pending.getBadge?.(SESSION_RESOURCE)).toBe(1)
+    } finally {
+      mockOpenTaskCount = null
+    }
   })
 
   it("lists the conversation's files beside the workspace editor, for sessions only", () => {
