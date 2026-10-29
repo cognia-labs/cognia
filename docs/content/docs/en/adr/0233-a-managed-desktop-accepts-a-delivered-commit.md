@@ -7,7 +7,7 @@ description: "A Host-owned E2B desktop reuses the computer-server lifecycle and 
 
 Phase 1 implementation note (2026-10-15): the initial operator smoke harness qualifies network `Off` only. `On`/`Allowlist` remain explicitly unqualified in the contract, UI and tests; non-null region selection refuses until placement can enforce it. Real-provider smoke has not been authorized or run. Native compilation was blocked by disk exhaustion and skipped at the user's direction. See `docs/plans/2026-10-15-managed-cloud-desktop-phase1-verification.md` for the evidence and remaining gates.
 
-**Status:** Accepted — user approved ADR-0233, Phases 1–4 and the trusted-source prerequisite on 2026-10-15. Real-provider smoke still requires separate credentials and explicit authorization; production remains dormant until qualification.  
+**Status:** Accepted — user approved ADR-0233, Phases 1–4 and the trusted-source prerequisite on 2026-10-15. Real-provider smoke still requires separate credentials and explicit authorization; production remains dormant until qualification. Completion amendment A1–A10 accepted on 2026-10-29.  
 **Date:** 2026-10-15  
 **Scope:** Linux browser and Linux GUI acceptance, user-owned E2B account, desktop and headless execution Hosts, authenticated clients. No required region in v1.  
 **Related:** [0020](./0020-computer-use-completeness), [0055](./0055-agent-browser-loop), [0072](./0072-browser-action-recording), [0153](./0153-the-host-obtains-the-confirmation), [0182](./0182-a-project-names-the-image-it-runs-in), [0183](./0183-the-agent-is-brought-to-the-image), [0196](./0196-a-library-crate-links-tauri-only-when-asked), [0213](./0213-conversation-history-has-a-manager-and-the-archive-freezes-place), [0221](./0221-a-remote-sandbox-is-a-provider-behind-the-same-seam).
@@ -331,6 +331,85 @@ Git import commands run in a process group that is terminated on success, failur
 
 The integrated review and current `dev` integration conflicts are recorded in `docs/plans/2026-10-16-managed-cloud-desktop-integrated-review.md`. Rust, rendered UI and real-provider qualification remain unverified, and production gates remain dormant.
 
+## Completion amendment (2026-10-29)
+
+The user approved this amendment on 2026-10-29 after a gap audit of the merged implementation (`c20b00cd34` and later). It closes the gaps that kept the feature unusable outside the native operator, and extends agent use beyond acceptance. The phased plan is `docs/plans/2026-10-29-managed-desktop-completion.md`; the evidence ledger is `docs/evidence/2026-10-29-managed-desktop-completion.md`. Real-provider smoke and per-configuration enablement still need the user's separate authorization. Everything decided above stays in force unless a subsection below says otherwise.
+
+### A1. Configuration and credentials are Host RPCs
+
+The audit found no production writer of `managed-desktops.json`: only tests call `save_registry`, and a provider key could be stored only with the operator's `store-key`. The Host gains `managed_desktop_config_save`, `managed_desktop_config_delete`, `managed_desktop_config_set_credential` and `managed_desktop_config_rotate_credential`. Each requires `host.admin` and ADR-0153 Host consent, and derives owner and Host from the authenticated caller.
+
+- **Save** validates the whole config with `ManagedDesktopConfig::validate`, bumps `revision`, and writes atomically. Limits may only tighten the v1 caps. The plan binding and price are dated, operator-confirmed values, as §3 requires. Any saved change alters `binding_digest()` and so invalidates quotes and qualification receipts for that configuration.
+- **Set credential** writes the key into the Host secret store under the current `secret_ref()`. The renderer sends the key once and never reads it back.
+- **Copy credential** is a mode of set credential. It names an ADR-0221 remote sandbox provider owned by the same principal on the same Host. The Host copies that secret inside its own store. The two copies are independent afterwards: rotating one never changes the other.
+- **Rotate** bumps `credential_generation`, refuses new work under the old generation and keeps cleanup authority for live resources until their absence is confirmed (§1).
+- **Delete** is refused while the configuration owns a live, pending-create or cleanup-pending desktop or template.
+
+The settings panel gains a form for these fields. It is the only renderer path. Configuration remains Host state; there is no Dexie table and no account sync.
+
+### A2. The release manifest ships inside signed builds
+
+CI already publishes the image and generates `managed-desktop-release.json`, but nothing installed it. Release builds now bundle that manifest as a Tauri resource and copy it into the `cognia-server` image. At install the Host reads the data-directory copy first and the bundled copy second, then runs the existing `validate_release` and OCI verification. The signed application bundle is the "existing trusted release channel" of §2; no download path is added. Builds without a manifest, including development builds, stay dormant exactly as before.
+
+### A3. A user qualifies a configuration in the app
+
+A receipt binds owner, configuration revision, template and Host, so no receipt can be shared between users. The settings panel gains "Qualify this configuration". It shows the template-build authorization separately (§2), then the estimated maximum compute cost and TTLs of the smoke desktops. After an explicit paid authorization it runs the existing native qualification through a Host RPC with progress events. The RPC uses the same smoke code, journal, cleanup and composition rules as the operator binary; it is not a second qualification implementation. A receipt is written only when every category passes; failures stay recorded as failures. An agent or background task cannot start it.
+
+### A4. Runtime gates replace compile-time constants
+
+`PRODUCTION_ACCEPTANCE_ENABLED`, the hard-coded `agent_control_dormant: true` and the hard-coded `execution_enabled: false` become runtime gates. Each configuration carries three switches: manual GUI, agent control and acceptance. A switch can only be turned on when the configuration holds a complete, current qualification receipt; a stale receipt turns it off. Without a receipt the Host refuses with the same codes as before, and the UI keeps its dormancy labels. Turning a switch off never disables status, delete or cleanup.
+
+### A5. Agents use a desktop through a Host delegation
+
+This extends §4, which allowed agent control only inside acceptance. A **delegation** is a Host record: owner, Host, desktop ID, desktop generation, grantee (a chat session or an acceptance run), mode `computer-use` or `acceptance`, an expiry no later than the desktop's hard deadline, and a revision. Only a human action with `host.admin` creates one: binding a running desktop as a session's or character's computer-use target, or starting an acceptance. Either party can revoke it; destroy, generation change, expiry and account switch revoke it.
+
+- An agent never creates, extends or destroys a desktop, prepares a template or mints a delegation. `AgentCapabilityGrantV1` stays a tool-narrowing mechanism and carries no target.
+- Agent `desktop_*` commands reach the managed desktop through `cua_route` and a managed branch of the connection registry. The agent holds no lease. Each operation passes the shared agent guard: it is refused while a human holds the lease or a takeover is pending, and is fenced-preemptible on the preemption epoch of `ControlLeaseCore`. Takeover therefore works exactly as for local CUA: new agent operations are refused, in-flight ones are revoked, held keys and buttons are released, and uncertain cleanup quarantines.
+- Every agent operation revalidates the delegation, the desktop generation and the configuration's agent-control switch.
+- Agent operations count as activity for the 600-second idle timeout. The 3,600-second hard deadline is unchanged.
+- The E2B capability row gains `gui` only while the agent-control switch is on.
+
+### A6. Acceptance runs as a child session
+
+Phase 3/4 implemented handoff and evidence but no runner. A human starts each acceptance in the handoff panel: they pick a delivery, write criteria (a description and whether a screenshot is required), confirm the quote and press Start. The source conversation's agent may call `propose_acceptance`. It produces a proposal card with the delivery, prefilled criteria and a cost estimate. Opening the card opens the same panel. The tool has no spend authority.
+
+On Start the Host creates the child acceptance run (`parentRunId` = the coding run), the desktop, the handoff, and an `acceptance` delegation. The renderer then opens a child session in the same workspace that defaults to the source session's agent and model. The criteria are included in the handoff manifest digest. That session's computer use and shell are bound to the desktop. Its per-run capability grant adds exactly two built-in tools:
+
+- `acceptance_checkpoint` captures a checkpoint for a criterion through `managed_desktop_results_capture`.
+- `acceptance_complete` records per-criterion results through `managed_desktop_results_complete`.
+
+A human can take over, capture checkpoints by hand and approve the result separately at any time. Completion, cancellation, deadline or revocation ends the delegation and destroys the desktop. Acceptance never merges code or completes the source task (§8 stays in force).
+
+### A7. Management and monitoring
+
+- Templates are listed per configuration with their build identity and in-use count. Explicit deletion is refused while a live desktop uses the template, and removes the record only after provider absence is observed.
+- The §5 thresholds become Host events, and the renderer turns them into notification-center entries. The events cover:
+  - a resource past its deadline plus 60 seconds;
+  - cleanup older than 10 minutes;
+  - the oldest pending create or delete.
+- The settings panel shows `destroyRetrying` desktops and their maximum billing exposure next to the existing evidence-deletion queue.
+- `managed_desktops::shutdown` is called on desktop exit and on `cognia-server` shutdown.
+
+### A8. Guest recipe 8 adds confined exec, files and clipboard
+
+The guest supervisor gains fixed operations, accepted only from the root control socket on a Host request:
+
+- `exec`: argv, cwd, timeout and capped output;
+- `file-read` and `file-write`: chunked, descriptor-relative and no-follow, contained to the workload home;
+- `clipboard-get` and `clipboard-set`: text only, at most 1 MiB.
+
+Every operation runs inside the complete workload boundary of the MMDS amendment, with no unconfined path. File transfer is bounded to 8 MiB per file and 32 MiB per session. Clipboard is never synced automatically. Audit records names, sizes and lengths, never content.
+
+Recipe 8 republishes the image and invalidates every recipe-7 qualification. Workload qualification adds probes proving that the new operations cannot reach metadata or private destinations and cannot escape containment. Until a recipe-8 receipt exists, exec, files and clipboard stay dormant on all three axes. Manual GUI, agent GUI and acceptance can run on a recipe-7 receipt. Shell and files bind to the same delegation as GUI, as §1 requires, so they never split onto a second machine.
+
+### A9. Shared E2B primitives
+
+Template build requests, build-status polling and the API base URL move into `cognia-e2b` and serve both this provider and the ADR-0221 code provider. The code provider keeps its own template naming and lookup semantics. Its contract tests must stay green. Exact-build provenance (§2) remains this provider's rule only.
+
+### A10. Still out of scope
+
+Egress `On` and `Allowlist` need their own amendment: a workload-namespace egress design that still blocks private, link-local and metadata destinations, with its own recipe and qualification. They stay `unqualified`. Persistence, pause/resume, region selection, live preview and cross-Host transfer stay as decided above.
+
 ## Review record
 
 | Date | Scope | State |
@@ -338,6 +417,7 @@ The integrated review and current `dev` integration conflicts are recorded in `d
 | 2026-10-15 | Linux, BYO provider account, no region constraint | User confirmed |
 | 2026-10-15 | E2B/pinned server; commit + bundle; 2/60 min/10 min; user-triggered; private checkpoint/failure evidence | User confirmed, including template, entitlement, cost, dependency and deletion requirements |
 | 2026-10-15 | This ADR's concrete contracts and detailed phase plan | Accepted by the user; Phases 1–4 and trusted-source prerequisite authorized; real-provider smoke not authorized |
+| 2026-10-29 | Completion amendment A1–A10 | User confirmed every decision; real-provider smoke and enablement still need separate authorization |
 
 Remaining external evidence is an enablement gate, not an invented guarantee: supported E2B account identity/entitlement APIs, actual template provenance fields, secure WebSocket behavior, provider-native expiry and region eligibility. Phase-1 owner resolves these with documented APIs and an authorized smoke before enabling. The product owner accepted this ADR and authorized Phases 1–4 and the trusted-source prerequisite on 2026-10-15; no release deadline is agreed.
 

@@ -5,7 +5,7 @@ description: "沙箱与外部机器通过 Host 持有的 Provider 绑定来查�
 
 # ADR 0234 — 远程桌面是由 Host 中转的 Provider 绑定
 
-**状态：** 已接受——用户于 2026-10-18 逐项确认全部决策。全部五个阶段均已实现，规格与"实际实现"记录见 `docs/plans/2026-10-18-remote-desktop-phase{1,2,3,4,5}.md`。  
+**状态：** 已接受——用户于 2026-10-18 逐项确认全部决策。全部五个阶段均已实现，规格与"实际实现"记录见 `docs/plans/2026-10-18-remote-desktop-phase{1,2,3,4,5}.md`。原生目标修订 N1–N5 于 2026-10-29 接受。  
 **日期：** 2026-10-18  
 **范围：** 在 Tauri 桌面、Web 与手机客户端上，查看并人工控制本地 Docker CUA 沙箱、ADR-0233 托管桌面和用户自有的外部机器（VNC、Selkies、Guacamole/MeshCentral Web 控制台、RustDesk 启动）。Agent 对外部机器执行 Computer Use 不在范围内。  
 **相关：** [0005](./0005-remote-control)、[0020](./0020-computer-use-completeness)、[0088](./0088-pro-ide-code-server)、[0153](./0153-the-host-obtains-the-confirmation)、[0175](./0175-the-rpc-face-has-one-grammar-one-error-and-one-version)、[0196](./0196-a-library-crate-links-tauri-only-when-asked)、[0214](./0214-the-chat-dock-is-a-tabbed-browser-that-remembers-each-task)、[0224](./0224-an-always-on-host-is-a-peer-the-user-brings)、[0233](./0233-a-managed-desktop-accepts-a-delivered-commit)。  
@@ -172,6 +172,39 @@ Host 持久化审计，参照 `crates/cognia-companion/src/sandbox_previews.rs` 
 - `cognia-net` 出站策略首次出现经用户确认的私有地址放行；其他调用方保持默认拒绝。
 - 第三方 Provider 插件可以扩展 Viewer 与配置，不能扩展协议。新协议需要 Host 适配器和本 ADR 的修订。
 - 不在范围内：Agent 对外部机器执行 Computer Use、内置 RDP、跨 Host 共享目标、录制、文件传输与剪贴板同步。剪贴板和文件传输以后加入时需要单独授权。
+
+## 原生目标修订（2026-10-29）
+
+用户于 2026-10-29 与 ADR-0233 的完成修订一同批准本修订。审计发现三个问题：§1 列出了 `sandbox` 和 `managed-desktop` 目标，但两者都没有出现在远程桌面列表中；原生目标仍然通过 JSON RPC 每秒轮询一张 base64 截图，连经中继时也是如此；手机只能观看这些目标。计划见 `docs/plans/2026-10-29-managed-desktop-completion.md`。
+
+### N1. 原生目标是投影，不是记录
+
+Host 的目标列表包含 `sandbox` 和 `managed-desktop` 目标，数据直接读自其所属服务，即 CUA 沙箱注册表和 ADR-0233 托管桌面服务。它们不写入目标存储。远程桌面命令不能编辑、删除或重新绑定它们，其生命周期仍归所属服务管理。每个投影只有一个 `native` 绑定；带 Selkies 构建的 Docker 沙箱额外保留 Selkies 作为第二个绑定。设备控制台和远程桌面区域把它们与外部目标并列显示。
+
+### N2. `cognia-frames` 适配器
+
+封闭的 Host 适配器列表新增 `cognia-frames`。与 `vnc` 和 `none` 不同，它没有 TCP 上游，数据源是目标控制面所拥有的进程内帧源。这正是 §5 和"后果"一节要求的"新适配器"路径。
+
+- **数据面。** 会话通过现有 broker（`remote_desktop_session_open`）打开。字节走同一个 LAN 票据 socket `/ws/remote-desktop/{sid}` 和同一个中继 `cognia.rfb` 通道。票据仍绑定会话、目标、绑定和模式，撤销票据会由 Host 关闭流。通道标签只是传输名称，不做修改。
+- **帧格式。** 每条二进制消息承载一帧：固定头部（magic、版本、帧 ID、fence、宽、高、编码、采集时间），后跟质量约 70 的 JPEG。单帧必须小于 1 MiB 的 socket 上限；中继路径与其他 bridge 负载一样按 16 KiB 分块。
+- **每个目标一个轮询器。** Host 为每台桌面运行一个轮询器，通过控制面现有的截图调用采集，再分发给所有已连接的查看者，查看者数量不会放大 guest 负载。人工持有控制时目标约 6–8 fps，仅观看时约 2 fps；连续相同帧（按哈希判定）后退避到 0.5 fps。未变化的帧不发送，没有查看者时停止轮询。这些数值是 Rust 常量，真实冒烟后报告实测帧率。
+- **背压。** 每个查看者的队列长度为 1，较新的帧会替换尚未发送的帧。
+- **输入仍走租约。** 帧流永不接受输入。输入使用现有的租约 fence RPC（托管桌面用 `managed_desktop_control_input`，本地沙箱用 `cua_sandbox_desktop_input`），并携带帧头中的帧 ID 和 fence，因此帧证明语义不变。
+- **计费。** 观看不计入 ADR-0233 空闲超时的活动。
+
+本节取代 §4 中"在 Selkies 阶段前，原生目标保持 RPC 轮询帧"的说法。单帧 RPC 仍保留，供代理感知以及无法打开流的客户端使用。Selkies 仍是本地 Docker CUA 的可选高画质绑定。托管桌面不使用 Selkies，ADR-0233 仍禁止第二个交互端点。
+
+### N3. 手机可以控制原生目标
+
+触控板与直接触控输入、特殊按键栏以及软键盘处理，从 `plugins/remote-desktop-vnc/src/touch-*` 移入 `@cognia/plugin-ui` 的共享模块。文案通过参数注入，宿主查看器和 VNC 插件各自保留自己的 i18n。两者都使用该模块，不复制代码。手机可以通过与其他客户端相同的 `host.admin` 租约控制原生目标。ADR-0233 第二阶段"移动端交互在测试前禁用"的规则，仅对这一经过测试的输入模型解除。
+
+### N4. 托管桌面的剪贴板与文件
+
+"后果"一节把剪贴板和文件传输排除在范围外，直到"它们有自己的授权"。ADR-0233 修订 A8 仅为托管桌面提供了这项授权。外部 VNC、网页控制台和 RustDesk 目标仍然两者都没有。
+
+### N5. 审计
+
+`cognia-frames` 会话与其他绑定一样，写入会话打开、关闭和失败记录，另外记录已连接的查看者数量。帧本身永不记录。
 
 ## 已考虑的替代方案
 

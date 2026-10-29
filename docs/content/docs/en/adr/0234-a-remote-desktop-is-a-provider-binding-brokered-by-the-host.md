@@ -5,7 +5,7 @@ description: "Sandboxes and external machines are viewed and controlled through 
 
 # ADR 0234 — A remote desktop is a provider binding brokered by the Host
 
-**Status:** Accepted — the user confirmed every decision on 2026-10-18. All five phases are implemented; their specs and "As built" notes are `docs/plans/2026-10-18-remote-desktop-phase{1,2,3,4,5}.md`.  
+**Status:** Accepted — the user confirmed every decision on 2026-10-18. All five phases are implemented; their specs and "As built" notes are `docs/plans/2026-10-18-remote-desktop-phase{1,2,3,4,5}.md`. Native-target amendment N1–N5 accepted on 2026-10-29.  
 **Date:** 2026-10-18  
 **Scope:** Viewing and human control of local Docker CUA sandboxes, ADR-0233 managed desktops and user-owned external machines (VNC, Selkies, Guacamole/MeshCentral web consoles, RustDesk launch) from the Tauri desktop, Web and phone clients. Agent computer use on external machines is out of scope.  
 **Related:** [0005](./0005-remote-control), [0020](./0020-computer-use-completeness), [0088](./0088-pro-ide-code-server), [0153](./0153-the-host-obtains-the-confirmation), [0175](./0175-the-rpc-face-has-one-grammar-one-error-and-one-version), [0196](./0196-a-library-crate-links-tauri-only-when-asked), [0214](./0214-the-chat-dock-is-a-tabbed-browser-that-remembers-each-task), [0224](./0224-an-always-on-host-is-a-peer-the-user-brings), [0233](./0233-a-managed-desktop-accepts-a-delivered-commit).  
@@ -137,6 +137,39 @@ Each phase ships with co-located tests, i18n in both locales and a changeset. Th
 - `cognia-net` egress gains its first user-confirmed private-address allowance. Every other caller keeps the deny-by-default rules.
 - Third-party provider plugins can extend viewers and configuration but not protocols. A new protocol needs a Host adapter and an ADR amendment.
 - Out of scope: agent computer use on external machines, built-in RDP, cross-Host target sharing, recording, file transfer and clipboard sync. Clipboard and file transfer will need their own authorization when they are added.
+
+## Native-target amendment (2026-10-29)
+
+The user approved this amendment on 2026-10-29 together with ADR-0233's completion amendment. The audit found three problems. §1 lists `sandbox` and `managed-desktop` targets, yet neither appears in the remote desktop list. Native targets still poll one base64 screenshot per second over JSON RPC, including through the relay. Phones can only observe them. The plan is `docs/plans/2026-10-29-managed-desktop-completion.md`.
+
+### N1. Native targets are projections, not records
+
+The Host target list includes `sandbox` and `managed-desktop` targets, read through from their owning services: the CUA sandbox registry and the ADR-0233 managed desktop service. They are not written to the target store. Remote desktop commands cannot edit, delete or re-bind them. Their lifecycle stays with the owning service. Each projection has exactly one binding, `native`, and Docker sandboxes built with Selkies keep Selkies as a second binding. The Devices console and the remote desktop section list them beside external targets.
+
+### N2. The `cognia-frames` adapter
+
+The closed Host adapter list gains `cognia-frames`. Unlike `vnc` and `none`, it has no TCP upstream. Its source is an in-process frame source owned by the target's control plane. This is the "new adapter" path that §5 and the Consequences section require.
+
+- **Data plane.** Sessions open through the existing broker (`remote_desktop_session_open`). Bytes travel on the same LAN ticket socket `/ws/remote-desktop/{sid}` and the same relay `cognia.rfb` channel. Tickets stay bound to session, target, binding and mode, and revoking one closes the stream from the Host. The channel label is a transport name and does not change.
+- **Frame format.** Each binary message carries one frame: a fixed header (magic, version, frame ID, fence, width, height, encoding, capture time) followed by a JPEG at roughly quality 70. One frame must fit in the 1 MiB socket limit; the relay path chunks it at 16 KiB like any other bridge payload.
+- **One poller per target.** A Host poller per desktop captures through the existing control-plane capture call and fans out to every attached viewer. Viewer count never multiplies guest load. The poller targets about 6–8 fps while a human holds control, about 2 fps when only observing, and backs off to 0.5 fps after repeated identical frames, detected by hash. It sends nothing for an unchanged frame and stops when no viewer is attached. These values are Rust constants and are reported with measured rates after real smoke.
+- **Backpressure.** Each viewer has a queue of one. A newer frame replaces an unsent one.
+- **Input stays on the lease.** Input is never accepted on the frame stream. It uses the existing lease-fenced RPC (`managed_desktop_control_input`, or `cua_sandbox_desktop_input` for local sandboxes) with the frame ID and fence from the frame header, so frame-proof semantics are unchanged.
+- **Billing.** Viewing is not activity for ADR-0233's idle timeout.
+
+This replaces §4's "native targets stay on RPC-polled frames until the Selkies phase". The single-frame RPC remains for agent perception and for clients that cannot open a stream. Selkies stays the opt-in high-quality binding for local Docker CUA. Managed desktops do not get Selkies; ADR-0233 still forbids a second interactive endpoint.
+
+### N3. Phones control native targets
+
+The trackpad and direct-touch input, the special-key bar and the soft-keyboard handling move out of `plugins/remote-desktop-vnc/src/touch-*` into a shared module of `@cognia/plugin-ui`. Labels are injected, so the host viewer and the VNC plugin each keep their own i18n. Both use the module; nothing is copied. Phones can take control of native targets through the same `host.admin` lease as other clients. The ADR-0233 Phase 2 rule "mobile interaction disabled until tested" is lifted for this tested input model only.
+
+### N4. Clipboard and files on managed desktops
+
+The Consequences section left clipboard and file transfer out of scope "until they get their own authorization". ADR-0233 amendment A8 supplies that authorization for managed desktops only. External VNC, web-console and RustDesk targets still have neither.
+
+### N5. Audit
+
+`cognia-frames` sessions write the same session open, close and failure records as other bindings, plus the attached viewer count. Frames are never recorded.
 
 ## Alternatives considered
 

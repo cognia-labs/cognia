@@ -7,7 +7,7 @@ description: "由 Host 持有的 E2B 桌面复用 computer-server 生命周期�
 
 第一阶段实现说明（2026-10-15）：首个 operator smoke harness 仅支持验证网络 `Off`；`On` / `Allowlist` 在类型、UI 和测试中均保持明确的未资格化状态。非空区域选择在 placement 能真正执行前会被拒绝。真实 provider smoke 尚未授权或运行。原生编译因磁盘不足中断，并按用户要求跳过。验证记录及剩余门槛位于 `docs/plans/2026-10-15-managed-cloud-desktop-phase1-verification.md`。
 
-**状态：** 已接受——用户于 2026-10-15 批准 ADR-0233、第一至四阶段及可信来源前置依赖的实施。真实 provider smoke 仍须另行提供凭据并明确授权，通过资格验证前生产能力保持休眠。  
+**状态：** 已接受——用户于 2026-10-15 批准 ADR-0233、第一至四阶段及可信来源前置依赖的实施。真实 provider smoke 仍须另行提供凭据并明确授权，通过资格验证前生产能力保持休眠。完成修订 A1–A10 于 2026-10-29 接受。  
 **日期：** 2026-10-15  
 **范围：** Linux 浏览器与 Linux GUI 验收，使用用户自己的 E2B 账户，支持桌面及 headless 执行 Host 和已认证客户端。v1 不要求特定区域。  
 **相关：** [0020](./0020-computer-use-completeness)、[0055](./0055-agent-browser-loop)、[0072](./0072-browser-action-recording)、[0153](./0153-the-host-obtains-the-confirmation)、[0182](./0182-a-project-names-the-image-it-runs-in)、[0183](./0183-the-agent-is-brought-to-the-image)、[0196](./0196-a-library-crate-links-tauri-only-when-asked)、[0213](./0213-conversation-history-has-a-manager-and-the-archive-freezes-place)、[0221](./0221-a-remote-sandbox-is-a-provider-behind-the-same-seam)。
@@ -307,6 +307,85 @@ ADR-0213 删除使用 v244 账户本地、无内容的 outbox，以及带确认�
 
 实现及定向验证记录见 `docs/plans/2026-10-15-managed-cloud-desktop-phase4-verification.md`。Rust 测试已编写，但按用户要求未运行。不声称浏览器／Tauri／provider 端到端资格已通过；所有计费 smoke 仍须用户提供凭据并明确授权。
 
+## 完成修订（2026-10-29）
+
+用户在对已合并实现（`c20b00cd34` 及之后）做缺口审计后，于 2026-10-29 批准本修订。它补上了此前让该功能只能通过原生 operator 使用的缺口，并把代理使用扩展到验收之外。分阶段计划见 `docs/plans/2026-10-29-managed-desktop-completion.md`，证据台账见 `docs/evidence/2026-10-29-managed-desktop-completion.md`。真实 provider 冒烟和按配置启用仍需用户另行授权。除下列小节明确改变的内容外，上文所有决定继续有效。
+
+### A1. 配置与凭据成为 Host RPC
+
+审计发现生产代码中没有任何地方写入 `managed-desktops.json`：只有测试调用 `save_registry`，provider 密钥也只能通过 operator 的 `store-key` 存入。Host 新增 `managed_desktop_config_save`、`managed_desktop_config_delete`、`managed_desktop_config_set_credential` 和 `managed_desktop_config_rotate_credential`。每个命令都要求 `host.admin` 和 ADR-0153 Host 同意，所有者和 Host 均从已认证调用方推导。
+
+- **保存**：用 `ManagedDesktopConfig::validate` 校验完整配置，递增 `revision`，原子写入。限额只能收紧 v1 上限。账户计划绑定与价格是带日期、由 operator 确认的值，符合 §3。任何已保存的修改都会改变 `binding_digest()`，从而使该配置的报价和资格回执失效。
+- **设置凭据**：把密钥写入 Host 密钥存储中当前的 `secret_ref()`。渲染端只发送一次密钥，之后不能再读回。
+- **复制凭据**：是设置凭据的一种模式。它指定同一主体在同一 Host 上拥有的一个 ADR-0221 远程沙箱 provider，由 Host 在自身存储内部复制该密钥。复制之后两份相互独立，轮换其中一份不会改变另一份。
+- **轮换**：递增 `credential_generation`，拒绝旧代际下的新工作，并在确认缺失前保留对活动资源的清理权限（§1）。
+- **删除**：只要配置仍拥有活动中、创建待定或清理待定的桌面或模板，就拒绝删除。
+
+设置面板新增这些字段的表单，这是渲染端唯一的写入路径。配置仍是 Host 状态，没有 Dexie 表，也不参与账户同步。
+
+### A2. 发布清单随签名构建分发
+
+CI 已发布镜像并生成 `managed-desktop-release.json`，但此前没有任何环节安装它。发布构建现在把该清单作为 Tauri 资源打包，并复制进 `cognia-server` 镜像。安装时 Host 先读数据目录中的副本，再读打包副本，然后执行现有的 `validate_release` 和 OCI 校验。已签名的应用包就是 §2 所说的"现有可信发布渠道"，不新增下载路径。没有清单的构建（包括开发构建）与以前一样保持休眠。
+
+### A3. 用户在应用内为配置做资格验证
+
+回执绑定所有者、配置修订、模板和 Host，因此不同用户之间不能共享回执。设置面板新增"验证此配置"。它先单独展示模板构建授权（§2），再展示冒烟桌面的预计最高计算费用和 TTL。用户明确授权付费后，通过 Host RPC 运行现有的原生资格验证，并发出进度事件。该 RPC 与 operator 二进制使用同一套冒烟代码、journal、清理和组合规则，不是第二套资格实现。只有所有类别都通过才写入回执，失败始终作为失败记录。代理或后台任务不能发起它。
+
+### A4. 运行时 gate 取代编译期常量
+
+`PRODUCTION_ACCEPTANCE_ENABLED`、硬编码的 `agent_control_dormant: true` 和硬编码的 `execution_enabled: false` 改为运行时 gate。每个配置有三个开关：手动 GUI、代理控制和验收。只有当配置持有完整且当前的资格回执时，开关才能打开；回执过期会关闭开关。没有回执时，Host 仍以原来的错误码拒绝，UI 保留休眠标注。关闭开关永远不会禁用状态、删除或清理。
+
+### A5. 代理通过 Host 委托使用桌面
+
+本节扩展 §4（原先只允许在验收中由代理控制）。**委托**是一条 Host 记录：所有者、Host、桌面 ID、桌面代际、受托方（某个聊天会话或某次验收运行）、模式 `computer-use` 或 `acceptance`、不晚于桌面硬截止时间的过期时间，以及修订号。只有具备 `host.admin` 的人工操作才能创建委托：把一台运行中的桌面绑定为会话或角色的 computer-use 目标，或启动一次验收。双方都可以撤销委托；销毁、代际变化、过期和账户切换会自动撤销。
+
+- 代理永远不能创建、延长或销毁桌面，不能准备模板，也不能自行签发委托。`AgentCapabilityGrantV1` 仍只是收窄工具的机制，不携带目标。
+- 代理的 `desktop_*` 命令经 `cua_route` 和连接注册表的托管分支到达托管桌面。代理不持有租约。每次操作都要通过共享的代理守卫：人工持有租约或接管待定时拒绝，并基于 `ControlLeaseCore` 的抢占 epoch 做 fence、可被抢占。因此接管行为与本地 CUA 完全一致：拒绝新的代理操作，撤销进行中的操作，释放按住的按键和鼠标键，清理结果不确定时隔离桌面。
+- 每次代理操作都重新校验委托、桌面代际以及配置的代理控制开关。
+- 代理操作计入 600 秒空闲超时的活动。3,600 秒硬截止时间不变。
+- 只有在代理控制开关打开时，E2B 能力行才获得 `gui`。
+
+### A6. 验收以子会话运行
+
+第三、四阶段实现了交接和证据，但没有执行者。每次验收都由人在交接面板中启动：选择交付、写验收标准（描述以及是否需要截图）、确认报价，然后点击开始。来源会话的代理可以调用 `propose_acceptance`。它生成一张提案卡片，包含交付、预填的标准和费用估算。打开卡片会进入同一个面板。该工具没有花费权限。
+
+点击开始后，Host 创建子验收运行（`parentRunId` 为编码运行）、桌面、交接以及一条 `acceptance` 委托。随后渲染端在同一工作区打开一个子会话，默认使用来源会话的代理和模型。验收标准纳入交接清单摘要。该会话的 computer use 和 shell 都绑定到这台桌面。其每次运行的能力授予只额外添加两个内置工具：
+
+- `acceptance_checkpoint`：通过 `managed_desktop_results_capture` 为某条标准截取检查点。
+- `acceptance_complete`：通过 `managed_desktop_results_complete` 记录每条标准的结果。
+
+人可以随时接管、手动截取检查点，并单独批准结果。完成、取消、截止或撤销都会结束委托并销毁桌面。验收永远不会合并代码，也不会完成来源任务（§8 继续有效）。
+
+### A7. 管理与监控
+
+- 按配置列出模板，包括构建标识和使用计数。显式删除在有活动桌面使用该模板时被拒绝，并且只在观察到 provider 侧已不存在后才移除记录。
+- §5 的阈值变为 Host 事件，由渲染端转成通知中心条目。事件包括：
+  - 资源超过截止时间 60 秒以上；
+  - 清理超过 10 分钟；
+  - 最早的待定创建或删除。
+- 设置面板在现有证据删除队列旁展示 `destroyRetrying` 状态的桌面及其最高计费敞口。
+- 桌面应用退出和 `cognia-server` 关闭时调用 `managed_desktops::shutdown`。
+
+### A8. Guest recipe 8 新增受限的 exec、文件和剪贴板
+
+Guest supervisor 新增固定操作，只接受来自 root 控制 socket 的 Host 请求：
+
+- `exec`：argv、cwd、超时和输出上限；
+- `file-read` 与 `file-write`：分块、基于描述符的相对路径、不跟随链接，限定在工作负载 home 目录内；
+- `clipboard-get` 与 `clipboard-set`：仅文本，最多 1 MiB。
+
+每个操作都在 MMDS 修订规定的完整工作负载边界内运行，没有不受限的路径。文件传输上限为单文件 8 MiB、每会话 32 MiB。剪贴板永不自动同步。审计只记录名称、大小和长度，不记录内容。
+
+Recipe 8 会重新发布镜像，使所有 recipe 7 资格失效。工作负载资格验证新增探针，证明新操作无法访问元数据或私有目标，也无法逃出限定范围。在获得 recipe 8 回执之前，exec、文件和剪贴板在三个维度上都保持休眠。手动 GUI、代理 GUI 和验收可以在 recipe 7 回执下运行。按 §1 的要求，shell 和文件与 GUI 绑定到同一个委托，绝不会分散到第二台机器。
+
+### A9. 共享的 E2B 基础能力
+
+模板构建请求、构建状态轮询和 API 基础 URL 移入 `cognia-e2b`，同时服务本 provider 和 ADR-0221 的代码 provider。代码 provider 保留自己的模板命名和查找语义，其契约测试必须保持通过。精确构建 provenance（§2）仍只是本 provider 的规则。
+
+### A10. 仍不在范围内
+
+出站 `On` 与 `Allowlist` 需要单独修订：需要一套工作负载命名空间的出站设计，仍然阻断私有、链路本地和元数据目标，并有自己的 recipe 和资格验证。它们保持 `unqualified`。持久化、暂停/恢复、区域选择、实时预览和跨 Host 传输维持上文已作的决定。
+
 ## 审议记录
 
 | 日期 | 范围 | 状态 |
@@ -314,6 +393,7 @@ ADR-0213 删除使用 v244 账户本地、无内容的 outbox，以及带确认�
 | 2026-10-15 | Linux、自带 provider 账户、不限制区域 | 用户已确认 |
 | 2026-10-15 | E2B／固定 server；commit + bundle；2／60 分钟／10 分钟；用户触发；私有检查点／失败证据 | 用户已确认，包括模板、entitlement、成本、依赖和删除要求 |
 | 2026-10-15 | 本 ADR 的具体契约和详细阶段计划 | 用户已接受；第一至四阶段及可信来源前置依赖已授权；真实 provider smoke 未授权 |
+| 2026-10-29 | 完成修订 A1–A10 | 用户已确认全部决定；真实 provider 冒烟和启用仍需另行授权 |
 
 剩余外部证据是启用 gate，不是凭空假设的保证：支持的 E2B account identity／entitlement API、实际模板 provenance 字段、安全 WebSocket 行为、provider 原生到期行为与区域资格。阶段 1 负责人在启用前，使用已记录 API 和获授权冒烟解决这些问题。产品所有者已于 2026-10-15 接受本 ADR 并授权第一至四阶段及可信来源前置依赖的实施；尚未约定发布截止日期。
 
