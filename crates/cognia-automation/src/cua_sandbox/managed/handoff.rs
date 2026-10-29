@@ -74,13 +74,19 @@ impl HandoffBudget {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HandoffLaunch { pub script: String }
 pub fn parse_launch(argv: &[String]) -> Result<Option<HandoffLaunch>> {
-    if argv.is_empty() { return Ok(None); }
+    if argv.is_empty() {
+        return Ok(None);
+    }
     if argv.len() != 3 || argv[0] != "npm" || argv[1] != "run"
         || argv[2].is_empty() || argv[2].len() > 100
-        || !argv[2].bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b"_:".contains(&b))
+        || !argv[2].as_bytes().first().is_some_and(|b| b.is_ascii_alphanumeric() || b"_:".contains(b))
         || !argv[2].bytes().all(|b| b.is_ascii_alphanumeric() || b"_:.-".contains(&b))
-    { return Err("managed_handoff_launch_invalid".into()); }
-    Ok(Some(HandoffLaunch { script: argv[2].clone() }))
+    {
+        return Err("managed_handoff_launch_invalid".into());
+    }
+    Ok(Some(HandoffLaunch {
+        script: argv[2].clone(),
+    }))
 }
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,6 +128,15 @@ pub struct PreparedHandoff {
     recovery: bool,
 }
 impl PreparedHandoff {
+    /// A verified, complete bundle of this pinned source tree. Qualification
+    /// reimports it through the same recovery path as a saved delivery.
+    pub fn recovery_source(&self) -> RecoverySource {
+        RecoverySource {
+            path: self.staging.path().join("source.bundle"),
+            trusted_root: self.staging.path().to_owned(),
+            expected_sha256: Some(self.manifest.bundle_sha256.clone()),
+        }
+    }
     pub fn manifest_digest(&self) -> &str { &self.digest }
     pub fn commit(&self) -> &str { &self.manifest.commit }
     pub(crate) fn mode(&self) -> &'static str { if self.recovery { "bundle" } else { "commit" } }
@@ -1177,6 +1192,9 @@ mod tests {
     fn launch_is_explicit_package_script_not_shell_or_install() {
         assert!(parse_launch(&[]).unwrap().is_none());
         assert_eq!(parse_launch(&["npm".into(), "run".into(), "test:gui".into()]).unwrap().unwrap().script, "test:gui");
+        for script in ["-script", "--prefix", ".hidden"] {
+            assert!(parse_launch(&["npm".into(), "run".into(), script.into()]).is_err());
+        }
         for args in [vec!["sh", "-c", "true"], vec!["npm", "install"], vec!["npm", "run", "a;curl"], vec!["npm", "run", "--prefix=/"], vec!["npm", "run", "dev", "--", "extra"]] {
             assert!(parse_launch(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).is_err());
         }

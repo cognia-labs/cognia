@@ -46904,6 +46904,72 @@
           },
           "guiQualified": {
             "type": "boolean"
+          },
+          "qualificationEvidenceVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "workloadIsolationRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enablement": {
+            "type": "object",
+            "properties": {
+              "manualGui": {
+                "type": "boolean"
+              },
+              "agentControl": {
+                "type": "boolean"
+              },
+              "acceptance": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manualGui",
+              "agentControl",
+              "acceptance"
+            ],
+            "additionalProperties": false
+          },
+          "qualificationCategories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "observedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "current",
+                "observedAt"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -46932,7 +46998,11 @@
           "isolationTier",
           "egressTier",
           "egressEnforcement",
-          "guiQualified"
+          "guiQualified",
+          "qualificationEvidenceVersion",
+          "workloadIsolationRevision",
+          "enablement",
+          "qualificationCategories"
         ],
         "additionalProperties": false,
         "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
@@ -46969,6 +47039,21 @@
           },
           "enabled": {
             "type": "boolean"
+          },
+          "enablement": {
+            "type": "object",
+            "properties": {
+              "manualGui": {
+                "type": "boolean"
+              },
+              "agentControl": {
+                "type": "boolean"
+              },
+              "acceptance": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
           },
           "shape": {
             "type": "object",
@@ -47342,6 +47427,72 @@
           },
           "guiQualified": {
             "type": "boolean"
+          },
+          "qualificationEvidenceVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "workloadIsolationRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enablement": {
+            "type": "object",
+            "properties": {
+              "manualGui": {
+                "type": "boolean"
+              },
+              "agentControl": {
+                "type": "boolean"
+              },
+              "acceptance": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manualGui",
+              "agentControl",
+              "acceptance"
+            ],
+            "additionalProperties": false
+          },
+          "qualificationCategories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "observedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "current",
+                "observedAt"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -47370,7 +47521,11 @@
           "isolationTier",
           "egressTier",
           "egressEnforcement",
-          "guiQualified"
+          "guiQualified",
+          "qualificationEvidenceVersion",
+          "workloadIsolationRevision",
+          "enablement",
+          "qualificationCategories"
         ],
         "additionalProperties": false,
         "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
@@ -47669,6 +47824,72 @@
           },
           "guiQualified": {
             "type": "boolean"
+          },
+          "qualificationEvidenceVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "workloadIsolationRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enablement": {
+            "type": "object",
+            "properties": {
+              "manualGui": {
+                "type": "boolean"
+              },
+              "agentControl": {
+                "type": "boolean"
+              },
+              "acceptance": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manualGui",
+              "agentControl",
+              "acceptance"
+            ],
+            "additionalProperties": false
+          },
+          "qualificationCategories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "observedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "current",
+                "observedAt"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -47697,7 +47918,11 @@
           "isolationTier",
           "egressTier",
           "egressEnforcement",
-          "guiQualified"
+          "guiQualified",
+          "qualificationEvidenceVersion",
+          "workloadIsolationRevision",
+          "enablement",
+          "qualificationCategories"
         ],
         "additionalProperties": false,
         "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
@@ -48966,12 +49191,17 @@
             "type": "integer"
           },
           "executionEnabled": {
-            "type": "boolean",
-            "const": false
+            "type": "boolean"
           },
           "dormantReason": {
-            "type": "string",
-            "const": "managed_desktop_handoff_requires_results_qualification"
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "managed_desktop_handoff_requires_results_qualification",
+              null
+            ]
           }
         },
         "required": [
@@ -49511,6 +49741,72 @@
             },
             "guiQualified": {
               "type": "boolean"
+            },
+            "qualificationEvidenceVersion": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "workloadIsolationRevision": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "enablement": {
+              "type": "object",
+              "properties": {
+                "manualGui": {
+                  "type": "boolean"
+                },
+                "agentControl": {
+                  "type": "boolean"
+                },
+                "acceptance": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "manualGui",
+                "agentControl",
+                "acceptance"
+              ],
+              "additionalProperties": false
+            },
+            "qualificationCategories": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "category": {
+                    "type": "string",
+                    "enum": [
+                      "lifecycle",
+                      "control",
+                      "authority",
+                      "workload",
+                      "commit",
+                      "bundle"
+                    ]
+                  },
+                  "current": {
+                    "type": "boolean"
+                  },
+                  "observedAt": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "category",
+                  "current",
+                  "observedAt"
+                ],
+                "additionalProperties": false
+              }
             }
           },
           "required": [
@@ -49539,7 +49835,11 @@
             "isolationTier",
             "egressTier",
             "egressEnforcement",
-            "guiQualified"
+            "guiQualified",
+            "qualificationEvidenceVersion",
+            "workloadIsolationRevision",
+            "enablement",
+            "qualificationCategories"
           ],
           "additionalProperties": false,
           "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
@@ -49907,6 +50207,72 @@
           },
           "guiQualified": {
             "type": "boolean"
+          },
+          "qualificationEvidenceVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "workloadIsolationRevision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "enablement": {
+            "type": "object",
+            "properties": {
+              "manualGui": {
+                "type": "boolean"
+              },
+              "agentControl": {
+                "type": "boolean"
+              },
+              "acceptance": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manualGui",
+              "agentControl",
+              "acceptance"
+            ],
+            "additionalProperties": false
+          },
+          "qualificationCategories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "current": {
+                  "type": "boolean"
+                },
+                "observedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "current",
+                "observedAt"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -49935,10 +50301,1446 @@
           "isolationTier",
           "egressTier",
           "egressEnforcement",
-          "guiQualified"
+          "guiQualified",
+          "qualificationEvidenceVersion",
+          "workloadIsolationRevision",
+          "enablement",
+          "qualificationCategories"
         ],
         "additionalProperties": false,
         "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_qualify_approve",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_qualify_approve (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "quoteId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "runId",
+          "quoteId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "configRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "gui",
+              "acceptance"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "awaitingApproval",
+              "passed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ]
+          },
+          "currentCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "lifecycle",
+              "control",
+              "authority",
+              "workload",
+              "commit",
+              "bundle",
+              null
+            ]
+          },
+          "awaitingApproval": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "providerConfigId": {
+                        "type": "string"
+                      },
+                      "configRevision": {
+                        "type": "integer"
+                      },
+                      "lifetimeSeconds": {
+                        "type": "integer"
+                      },
+                      "expiresAt": {
+                        "type": "integer"
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "hourlyRateMicros": {
+                        "type": "integer"
+                      },
+                      "maximumComputeCostMicros": {
+                        "type": "integer"
+                      },
+                      "priceObservedAt": {
+                        "type": "integer"
+                      },
+                      "region": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "cpuCount": {
+                        "type": "integer"
+                      },
+                      "memoryMb": {
+                        "type": "integer"
+                      },
+                      "bindingDigest": {
+                        "type": "string"
+                      },
+                      "ownerPrincipalId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "providerConfigId",
+                      "configRevision",
+                      "lifetimeSeconds",
+                      "expiresAt",
+                      "currency",
+                      "hourlyRateMicros",
+                      "maximumComputeCostMicros",
+                      "priceObservedAt",
+                      "region",
+                      "cpuCount",
+                      "memoryMb",
+                      "bindingDigest",
+                      "ownerPrincipalId"
+                    ],
+                    "additionalProperties": false,
+                    "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "prepareTemplate",
+                      "smoke"
+                    ]
+                  },
+                  "templateBuildCharges": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "purpose",
+                  "templateBuildCharges"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "passed",
+                    "failed",
+                    "skipped"
+                  ]
+                },
+                "errorCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "state",
+                "errorCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "deliveryId": {
+                    "type": "string"
+                  },
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deliveryId",
+                  "script"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "providerConfigId",
+          "configRevision",
+          "scope",
+          "state",
+          "currentCategory",
+          "awaitingApproval",
+          "categories",
+          "handoff",
+          "errorCode",
+          "startedAt",
+          "updatedAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_qualify_cancel",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_qualify_cancel (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "configRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "gui",
+              "acceptance"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "awaitingApproval",
+              "passed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ]
+          },
+          "currentCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "lifecycle",
+              "control",
+              "authority",
+              "workload",
+              "commit",
+              "bundle",
+              null
+            ]
+          },
+          "awaitingApproval": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "providerConfigId": {
+                        "type": "string"
+                      },
+                      "configRevision": {
+                        "type": "integer"
+                      },
+                      "lifetimeSeconds": {
+                        "type": "integer"
+                      },
+                      "expiresAt": {
+                        "type": "integer"
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "hourlyRateMicros": {
+                        "type": "integer"
+                      },
+                      "maximumComputeCostMicros": {
+                        "type": "integer"
+                      },
+                      "priceObservedAt": {
+                        "type": "integer"
+                      },
+                      "region": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "cpuCount": {
+                        "type": "integer"
+                      },
+                      "memoryMb": {
+                        "type": "integer"
+                      },
+                      "bindingDigest": {
+                        "type": "string"
+                      },
+                      "ownerPrincipalId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "providerConfigId",
+                      "configRevision",
+                      "lifetimeSeconds",
+                      "expiresAt",
+                      "currency",
+                      "hourlyRateMicros",
+                      "maximumComputeCostMicros",
+                      "priceObservedAt",
+                      "region",
+                      "cpuCount",
+                      "memoryMb",
+                      "bindingDigest",
+                      "ownerPrincipalId"
+                    ],
+                    "additionalProperties": false,
+                    "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "prepareTemplate",
+                      "smoke"
+                    ]
+                  },
+                  "templateBuildCharges": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "purpose",
+                  "templateBuildCharges"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "passed",
+                    "failed",
+                    "skipped"
+                  ]
+                },
+                "errorCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "state",
+                "errorCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "deliveryId": {
+                    "type": "string"
+                  },
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deliveryId",
+                  "script"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "providerConfigId",
+          "configRevision",
+          "scope",
+          "state",
+          "currentCategory",
+          "awaitingApproval",
+          "categories",
+          "handoff",
+          "errorCode",
+          "startedAt",
+          "updatedAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_qualify_list",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "managed_desktop_qualify_list (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "runId": {
+                  "type": "string"
+                },
+                "providerConfigId": {
+                  "type": "string"
+                },
+                "configRevision": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "gui",
+                    "acceptance"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "running",
+                    "awaitingApproval",
+                    "passed",
+                    "failed",
+                    "cancelled",
+                    "interrupted"
+                  ]
+                },
+                "currentCategory": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle",
+                    null
+                  ]
+                },
+                "awaitingApproval": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "quote": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "providerConfigId": {
+                              "type": "string"
+                            },
+                            "configRevision": {
+                              "type": "integer"
+                            },
+                            "lifetimeSeconds": {
+                              "type": "integer"
+                            },
+                            "expiresAt": {
+                              "type": "integer"
+                            },
+                            "currency": {
+                              "type": "string"
+                            },
+                            "hourlyRateMicros": {
+                              "type": "integer"
+                            },
+                            "maximumComputeCostMicros": {
+                              "type": "integer"
+                            },
+                            "priceObservedAt": {
+                              "type": "integer"
+                            },
+                            "region": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "cpuCount": {
+                              "type": "integer"
+                            },
+                            "memoryMb": {
+                              "type": "integer"
+                            },
+                            "bindingDigest": {
+                              "type": "string"
+                            },
+                            "ownerPrincipalId": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "id",
+                            "providerConfigId",
+                            "configRevision",
+                            "lifetimeSeconds",
+                            "expiresAt",
+                            "currency",
+                            "hourlyRateMicros",
+                            "maximumComputeCostMicros",
+                            "priceObservedAt",
+                            "region",
+                            "cpuCount",
+                            "memoryMb",
+                            "bindingDigest",
+                            "ownerPrincipalId"
+                          ],
+                          "additionalProperties": false,
+                          "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                        },
+                        "purpose": {
+                          "type": "string",
+                          "enum": [
+                            "prepareTemplate",
+                            "smoke"
+                          ]
+                        },
+                        "templateBuildCharges": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "quote",
+                        "purpose",
+                        "templateBuildCharges"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "categories": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "category": {
+                        "type": "string",
+                        "enum": [
+                          "lifecycle",
+                          "control",
+                          "authority",
+                          "workload",
+                          "commit",
+                          "bundle"
+                        ]
+                      },
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "pending",
+                          "running",
+                          "passed",
+                          "failed",
+                          "skipped"
+                        ]
+                      },
+                      "errorCode": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "category",
+                      "state",
+                      "errorCode"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "handoff": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "deliveryId": {
+                          "type": "string"
+                        },
+                        "script": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "deliveryId",
+                        "script"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "errorCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "startedAt": {
+                  "type": "integer"
+                },
+                "updatedAt": {
+                  "type": "integer"
+                },
+                "finishedAt": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "runId",
+                "providerConfigId",
+                "configRevision",
+                "scope",
+                "state",
+                "currentCategory",
+                "awaitingApproval",
+                "categories",
+                "handoff",
+                "errorCode",
+                "startedAt",
+                "updatedAt",
+                "finishedAt"
+              ],
+              "additionalProperties": false,
+              "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
+            }
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_qualify_start",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_qualify_start (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "providerConfigId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "gui",
+              "acceptance"
+            ]
+          },
+          "handoff": {
+            "type": "object",
+            "properties": {
+              "deliveryId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "script": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_:][A-Za-z0-9_:.-]{0,99}$"
+              }
+            },
+            "required": [
+              "deliveryId",
+              "script"
+            ],
+            "additionalProperties": false
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "providerConfigId",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "configRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "gui",
+              "acceptance"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "awaitingApproval",
+              "passed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ]
+          },
+          "currentCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "lifecycle",
+              "control",
+              "authority",
+              "workload",
+              "commit",
+              "bundle",
+              null
+            ]
+          },
+          "awaitingApproval": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "providerConfigId": {
+                        "type": "string"
+                      },
+                      "configRevision": {
+                        "type": "integer"
+                      },
+                      "lifetimeSeconds": {
+                        "type": "integer"
+                      },
+                      "expiresAt": {
+                        "type": "integer"
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "hourlyRateMicros": {
+                        "type": "integer"
+                      },
+                      "maximumComputeCostMicros": {
+                        "type": "integer"
+                      },
+                      "priceObservedAt": {
+                        "type": "integer"
+                      },
+                      "region": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "cpuCount": {
+                        "type": "integer"
+                      },
+                      "memoryMb": {
+                        "type": "integer"
+                      },
+                      "bindingDigest": {
+                        "type": "string"
+                      },
+                      "ownerPrincipalId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "providerConfigId",
+                      "configRevision",
+                      "lifetimeSeconds",
+                      "expiresAt",
+                      "currency",
+                      "hourlyRateMicros",
+                      "maximumComputeCostMicros",
+                      "priceObservedAt",
+                      "region",
+                      "cpuCount",
+                      "memoryMb",
+                      "bindingDigest",
+                      "ownerPrincipalId"
+                    ],
+                    "additionalProperties": false,
+                    "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "prepareTemplate",
+                      "smoke"
+                    ]
+                  },
+                  "templateBuildCharges": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "purpose",
+                  "templateBuildCharges"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "passed",
+                    "failed",
+                    "skipped"
+                  ]
+                },
+                "errorCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "state",
+                "errorCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "deliveryId": {
+                    "type": "string"
+                  },
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deliveryId",
+                  "script"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "providerConfigId",
+          "configRevision",
+          "scope",
+          "state",
+          "currentCategory",
+          "awaitingApproval",
+          "categories",
+          "handoff",
+          "errorCode",
+          "startedAt",
+          "updatedAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_qualify_status",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "managed_desktop_qualify_status (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "runId"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string"
+          },
+          "providerConfigId": {
+            "type": "string"
+          },
+          "configRevision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "gui",
+              "acceptance"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "awaitingApproval",
+              "passed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ]
+          },
+          "currentCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "lifecycle",
+              "control",
+              "authority",
+              "workload",
+              "commit",
+              "bundle",
+              null
+            ]
+          },
+          "awaitingApproval": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "quote": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "providerConfigId": {
+                        "type": "string"
+                      },
+                      "configRevision": {
+                        "type": "integer"
+                      },
+                      "lifetimeSeconds": {
+                        "type": "integer"
+                      },
+                      "expiresAt": {
+                        "type": "integer"
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "hourlyRateMicros": {
+                        "type": "integer"
+                      },
+                      "maximumComputeCostMicros": {
+                        "type": "integer"
+                      },
+                      "priceObservedAt": {
+                        "type": "integer"
+                      },
+                      "region": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "cpuCount": {
+                        "type": "integer"
+                      },
+                      "memoryMb": {
+                        "type": "integer"
+                      },
+                      "bindingDigest": {
+                        "type": "string"
+                      },
+                      "ownerPrincipalId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "providerConfigId",
+                      "configRevision",
+                      "lifetimeSeconds",
+                      "expiresAt",
+                      "currency",
+                      "hourlyRateMicros",
+                      "maximumComputeCostMicros",
+                      "priceObservedAt",
+                      "region",
+                      "cpuCount",
+                      "memoryMb",
+                      "bindingDigest",
+                      "ownerPrincipalId"
+                    ],
+                    "additionalProperties": false,
+                    "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "prepareTemplate",
+                      "smoke"
+                    ]
+                  },
+                  "templateBuildCharges": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "quote",
+                  "purpose",
+                  "templateBuildCharges"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "lifecycle",
+                    "control",
+                    "authority",
+                    "workload",
+                    "commit",
+                    "bundle"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "passed",
+                    "failed",
+                    "skipped"
+                  ]
+                },
+                "errorCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "category",
+                "state",
+                "errorCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "deliveryId": {
+                    "type": "string"
+                  },
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "deliveryId",
+                  "script"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "errorCode": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "type": "integer"
+          },
+          "updatedAt": {
+            "type": "integer"
+          },
+          "finishedAt": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "runId",
+          "providerConfigId",
+          "configRevision",
+          "scope",
+          "state",
+          "currentCategory",
+          "awaitingApproval",
+          "categories",
+          "handoff",
+          "errorCode",
+          "startedAt",
+          "updatedAt",
+          "finishedAt"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
       },
       "outputTyped": true
     },
@@ -104704,5 +106506,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "863ccda98935f9ec9eed77596c725a93dcd37d5d08dceda803d27545206f88db"
+  "catalogHash": "6b9c2d535f16b103e3b0aba3866fa09f4045c4cb5446162eb7e24a4f7f64eea6"
 }

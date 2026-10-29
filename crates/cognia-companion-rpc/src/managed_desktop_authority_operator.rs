@@ -1,7 +1,6 @@
-//! Native-only P4 diagnostic of the real Host identity, administrator lease,
-//! consent bridge and input pipeline. Never reachable through an RPC command.
-//! The isolated operator installs an in-memory paired-device database, restores
-//! the unbound context on every exit, and always destroys its paid desktop.
+//! Shared diagnostic of the real Host consent/admin-lease/input pipeline.
+//! The stopped-Host operator supplies an isolated identity; the in-app path
+//! enrolls and always revokes/forgets a temporary device in the real store.
 use super::*;
 use cognia_companion::security_store::{install_security_store, SecurityStore};
 use cognia_companion::{admin_lease, host_consent};
@@ -10,16 +9,103 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const OPERATION: &str = "managed_desktop_control_input";
 const FAILED: &str = "managed_desktop_authority_smoke_failed";
 
+// A cancelled spawn_blocking enrollment can finish after its async caller is
+// dropped. Reconciliation must wait for that exact enrollment before clearing
+// the durable device pointer; otherwise it could forget an as-yet absent row.
+static ENROLLMENTS: once_cell::sync::Lazy<
+    parking_lot::Mutex<std::collections::BTreeMap<String, Arc<tokio::sync::Semaphore>>>,
+> = once_cell::sync::Lazy::new(Default::default);
+pub(super) struct EnrollmentScope {
+    device: String,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+impl Drop for EnrollmentScope {
+    fn drop(&mut self) {
+        ENROLLMENTS.lock().remove(&self.device);
+    }
+}
+pub(super) async fn wait_for_enrollment(device: &str) -> Result<()> {
+    let gate = ENROLLMENTS.lock().get(device).cloned();
+    if let Some(gate) = gate {
+        let _permit = gate.acquire_owned().await.map_err(|_| refused(FAILED))?;
+    }
+    Ok(())
+}
 struct IdentityScope {
     device: String,
+    tenant: String,
+    store: Arc<SecurityStore>,
+    isolated: bool,
+    armed: bool,
+}
+pub(super) fn clean_device(store: &SecurityStore, tenant: &str, device: &str) -> Result<()> {
+    admin_lease::revoke_device(device);
+    host_consent::forget_device(device);
+    let now = chrono::Utc::now().timestamp();
+    if store.device_state(tenant, device).map_err(|_| refused(FAILED))?.is_none() {
+        return Ok(());
+    }
+    // Revocation is idempotent here: the diagnostic's final assertion may
+    // already have revoked it. Forget still requires a revoked device.
+    let _ = store.revoke_device(tenant, "local-trust-root", device, true, now);
+    match store.forget_revoked_device(tenant, "local-trust-root", device, now) {
+        Ok(()) => Ok(()),
+        Err(_) if store.device_state(tenant, device).is_ok_and(|state| state.is_none()) => Ok(()),
+        Err(_) => Err(refused(FAILED)),
+    }
+}
+impl IdentityScope {
+    async fn finish(&mut self) -> Result<()> {
+        let store = self.store.clone();
+        let tenant = self.tenant.clone();
+        let device = self.device.clone();
+        tokio::task::spawn_blocking(move || clean_device(&store, &tenant, &device))
+            .await.map_err(|_| refused(FAILED))??;
+        self.armed = false;
+        if self.isolated {
+            host_identity::unbind_local_account();
+            install_security_store(None);
+        }
+        Ok(())
+    }
 }
 impl Drop for IdentityScope {
     fn drop(&mut self) {
-        admin_lease::revoke_device(&self.device);
-        host_consent::forget_device(&self.device);
-        host_identity::unbind_local_account();
-        install_security_store(None);
+        if !self.armed {
+            return;
+        }
+        let store = self.store.clone();
+        let tenant = self.tenant.clone();
+        let device = self.device.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn_blocking(move || {
+                let _ = clean_device(&store, &tenant, &device);
+            });
+        } else {
+            let _ = clean_device(&store, &tenant, &device);
+        }
+        if self.isolated {
+            host_identity::unbind_local_account();
+            install_security_store(None);
+        }
     }
+}
+pub(super) fn enroll(store: &SecurityStore, tenant: &str, device: &str) -> Result<()> {
+    let now = chrono::Utc::now().timestamp();
+    let challenge = store.issue_challenge(tenant, now, 600).map_err(|_| refused(FAILED))?;
+    let invitation = store.create_owner_invitation(tenant, "local-trust-root", now, 600)
+        .map_err(|_| refused(FAILED))?;
+    store.register_owner_device(
+        tenant,
+        &invitation,
+        &challenge.id,
+        &challenge.nonce,
+        device,
+        "Qualification device",
+        "-----BEGIN PUBLIC KEY-----\nnative-smoke\n-----END PUBLIC KEY-----",
+        &format!("native-{device}"),
+        now,
+    ).map_err(|_| refused(FAILED))
 }
 fn check(value: bool) -> Result<()> {
     if value {
@@ -154,33 +240,88 @@ pub async fn run(
     check(security_store().is_none() && host_identity::current().is_err())?;
     let store = SecurityStore::in_memory().map_err(|_| refused(FAILED))?;
     let device = format!("native-authority-{}", uuid::Uuid::new_v4());
-    let _identity = IdentityScope {
-        device: device.clone(),
-    };
     install_security_store(Some(store.clone()));
-    let binding = host_identity::bind_local_account_from_operator(&p.owner_principal_id)
-        .map_err(|_| refused(FAILED))?;
+    let binding = match host_identity::bind_local_account_from_operator(&p.owner_principal_id) {
+        Ok(binding) => binding,
+        Err(_) => {
+            install_security_store(None);
+            return Err(refused(FAILED));
+        }
+    };
     let tenant = binding.remote_tenant_id;
-    let now = chrono::Utc::now().timestamp();
-    let challenge = store
-        .issue_challenge(&tenant, now, 600)
-        .map_err(|_| refused(FAILED))?;
-    let invitation = store
-        .create_owner_invitation(&tenant, "local-trust-root", now, 600)
-        .map_err(|_| refused(FAILED))?;
-    store
-        .register_owner_device(
-            &tenant,
-            &invitation,
-            &challenge.id,
-            &challenge.nonce,
-            &device,
-            "Native smoke device",
-            "-----BEGIN PUBLIC KEY-----\nnative-smoke\n-----END PUBLIC KEY-----",
-            &format!("native-{device}"),
-            now,
-        )
-        .map_err(|_| refused(FAILED))?;
+    let mut identity = IdentityScope {
+        device: device.clone(),
+        tenant: tenant.clone(),
+        store: store.clone(),
+        isolated: true,
+        armed: true,
+    };
+    enroll(&store, &tenant, &device)?;
+    let outcome = run_with_device(host, p, config_id, permit, store, tenant, device).await;
+    identity.finish().await?;
+    outcome
+}
+
+pub(super) async fn enrollment_scope(device: &str) -> Result<EnrollmentScope> {
+    let gate = Arc::new(tokio::sync::Semaphore::new(1));
+    let enrollment = EnrollmentScope {
+        device: device.into(),
+        _permit: gate.clone().acquire_owned().await.map_err(|_| refused(FAILED))?,
+    };
+    ENROLLMENTS.lock().insert(device.into(), gate);
+    Ok(enrollment)
+}
+
+/// The running Host keeps its real security store and local account binding.
+/// The durable device pointer is written before enrollment, so even process
+/// death before the guard can run is repaired by the Host reconciler.
+pub async fn run_installed(
+    host: &dyn ManagedDesktopSmokeHost,
+    service: &ManagedDesktopService,
+    p: &ManagedDesktopPrincipal,
+    config_id: &str,
+    run_id: &str,
+    permit: ExplicitPaidSmokeAuthorization,
+) -> Result<HostAuthoritySmokeEvidence> {
+    p.require_admin()?;
+    let store = security_store().ok_or_else(|| refused(FAILED))?;
+    let tenant = host_identity::current().map_err(|_| refused(FAILED))?.remote_tenant_id;
+    check(host_identity::namespace_for_tenant(&tenant).as_deref() == Some(p.owner_principal_id.as_str()))?;
+    let device = format!("qualification-{}", uuid::Uuid::new_v4());
+    let identity = IdentityScope {
+        device: device.clone(),
+        tenant: tenant.clone(),
+        store: store.clone(),
+        isolated: false,
+        armed: true,
+    };
+    let enrollment_store = store.clone();
+    let enrollment_tenant = tenant.clone();
+    let enrollment_device = device.clone();
+    // Register before publishing the durable pointer. Reconciliation must wait
+    // for this enrollment even if cancellation finishes the run at that await.
+    let enrollment = enrollment_scope(&device).await?;
+    service.qualification_device(p, run_id, Some((tenant.clone(), device.clone()))).await?;
+    let mut identity = tokio::task::spawn_blocking(move || {
+        let _enrollment = enrollment;
+        enroll(&enrollment_store, &enrollment_tenant, &enrollment_device)?;
+        Ok::<_, ManagedDesktopError>(identity)
+    }).await.map_err(|_| refused(FAILED))??;
+    let outcome = run_with_device(host, p, config_id, permit, store, tenant, device).await;
+    identity.finish().await?;
+    service.qualification_device(p, run_id, None).await?;
+    outcome
+}
+
+async fn run_with_device(
+    host: &dyn ManagedDesktopSmokeHost,
+    p: &ManagedDesktopPrincipal,
+    config_id: &str,
+    permit: ExplicitPaidSmokeAuthorization,
+    store: Arc<SecurityStore>,
+    tenant: String,
+    device: String,
+) -> Result<HostAuthoritySmokeEvidence> {
     let caller = Caller {
         device_id: &device,
         tenant_id: Some(&tenant),
@@ -233,26 +374,21 @@ pub async fn run(
     )?;
 
     let service = host.open(host.provider())?;
-    let before = service
-        .list(p)
-        .await?
-        .into_iter()
-        .map(|row| row.id)
-        .collect::<std::collections::BTreeSet<_>>();
+    let operation = uuid::Uuid::new_v4().to_string();
+    let source = format!("authority:{operation}");
     let diagnostic_started = tokio::time::Instant::now();
     let mut stage = "quote_and_authorization";
     let result: Result<()> = async {
         let quote = service.quote(p, config_id, 120).await?;
         host.approve_quote(&quote, AuthorizationPurpose::Smoke)
             .await?;
-        let operation = uuid::Uuid::new_v4().to_string();
         let authorization = service
             .authorize(
                 p,
                 config_id,
                 &quote.id,
                 AuthorizationPurpose::Smoke,
-                Some(format!("authority:{operation}")),
+                Some(source.clone()),
             )
             .await?;
         stage = "invalidate_previous_qualification";
@@ -554,15 +690,7 @@ pub async fn run(
     // The exclusively opened private journal cannot admit another operator.
     // Include a row persisted before create returned an error, not only its ID.
     let cleanup: Result<()> = async {
-        for row in service
-            .list(p)
-            .await?
-            .into_iter()
-            .filter(|row| !before.contains(&row.id))
-        {
-            let deleted = service.delete(p, &row.id, row.generation).await?;
-            check(deleted.state == ManagedDesktopState::Destroyed)?;
-        }
+        service.cleanup_diagnostic_source(p,&source).await?;
         Ok(())
     }
     .await;
@@ -581,6 +709,116 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test(flavor = "current_thread")]
+    async fn installed_authority_guard_revokes_and_forgets_without_replacing_store_or_binding() {
+        let _scope = super::super::tests::TestScope::new();
+        let store = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(store.clone()));
+        let binding = host_identity::bind_local_account("qualification-owner", "digest").unwrap();
+        let tenant = binding.remote_tenant_id.clone();
+        enroll(&store, &tenant, "existing-owner").unwrap();
+        let before = store.list_devices(&tenant).unwrap().into_iter()
+            .map(|d| (d.device_id, d.status)).collect::<Vec<_>>();
+        for exit in ["normal", "cancelled", "panic"] {
+            let device = format!("temporary-{exit}");
+            enroll(&store, &tenant, &device).unwrap();
+            assert!(store.is_owner_device(&tenant, &device).unwrap());
+            let guard = IdentityScope {
+                device: device.clone(),
+                tenant: tenant.clone(),
+                store: store.clone(),
+                isolated: false,
+                armed: true,
+            };
+            if exit == "normal" {
+                let mut guard = guard;
+                guard.finish().await.unwrap();
+            } else {
+                let task = tokio::spawn(async move {
+                    let _guard = guard;
+                    if exit == "panic" {
+                        panic!("diagnostic panic");
+                    }
+                    std::future::pending::<()>().await;
+                });
+                tokio::task::yield_now().await;
+                if exit == "cancelled" {
+                    task.abort();
+                }
+                assert!(task.await.is_err());
+            }
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    let copied = store.clone();
+                    let tenant = tenant.clone();
+                    let device = device.clone();
+                    if tokio::task::spawn_blocking(move || {
+                        copied.device_state(&tenant, &device).unwrap().is_none()
+                    }).await.unwrap() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            }).await.unwrap();
+            assert!(Arc::ptr_eq(&security_store().unwrap(), &store));
+            assert_eq!(host_identity::current().unwrap(), binding);
+            assert_eq!(store.list_devices(&tenant).unwrap().into_iter()
+                .map(|d| (d.device_id, d.status)).collect::<Vec<_>>(), before);
+            assert!(enroll(&store, &tenant, &device).is_err(), "revocation tombstone prevents reenrollment");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelled_blocking_enrollment_finishes_before_orphan_cleanup() {
+        let _scope = super::super::tests::TestScope::new();
+        let store = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(store.clone()));
+        let binding = host_identity::bind_local_account("enrollment-owner", "digest").unwrap();
+        let tenant = binding.remote_tenant_id.clone();
+        let device = "cancelled-enrollment".to_owned();
+        let identity = IdentityScope {
+            device: device.clone(),
+            tenant: tenant.clone(),
+            store: store.clone(),
+            isolated: false,
+            armed: true,
+        };
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let enrollment = EnrollmentScope {
+            device: device.clone(),
+            _permit: gate.clone().acquire_owned().await.unwrap(),
+        };
+        ENROLLMENTS.lock().insert(device.clone(), gate);
+        let (release, wait) = std::sync::mpsc::channel();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let notify = entered.clone();
+        let enrolling = tokio::spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let _enrollment = enrollment;
+                notify.notify_one();
+                wait.recv().unwrap();
+                enroll(&identity.store, &identity.tenant, &identity.device).unwrap();
+                identity
+            }).await.unwrap()
+        });
+        entered.notified().await;
+        enrolling.abort();
+        assert!(enrolling.await.is_err());
+        let copied = store.clone();
+        let t = tenant.clone();
+        let d = device.clone();
+        let cleanup = tokio::spawn(async move {
+            wait_for_enrollment(&d).await.unwrap();
+            tokio::task::spawn_blocking(move || clean_device(&copied, &t, &d)).await.unwrap().unwrap();
+        });
+        tokio::task::yield_now().await;
+        assert!(!cleanup.is_finished());
+        release.send(()).unwrap();
+        cleanup.await.unwrap();
+        assert!(store.device_state(&tenant, &device).unwrap().is_none());
+        assert_eq!(host_identity::current().unwrap(), binding);
+    }
+
     #[test]
     fn native_scroll_and_typing_share_the_real_consent_policy() {
         for (action, point) in [

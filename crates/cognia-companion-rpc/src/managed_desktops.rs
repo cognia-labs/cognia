@@ -42,6 +42,11 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_template_list",
     "managed_desktop_template_delete",
     "managed_desktop_monitor",
+    "managed_desktop_qualify_start",
+    "managed_desktop_qualify_status",
+    "managed_desktop_qualify_list",
+    "managed_desktop_qualify_approve",
+    "managed_desktop_qualify_cancel",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -147,6 +152,7 @@ struct Installed {
     host_id: String,
     release: crate::managed_desktop_release::ReleaseStatus,
     worker: tokio::task::JoinHandle<()>,
+    qualification: Arc<qualification::QualificationRuntime>,
 }
 impl Drop for Installed {
     fn drop(&mut self) {
@@ -245,6 +251,7 @@ impl ManagedDesktopSecrets for HostSecrets {
 /// `managed_desktop_monitor`, which is scoped to the caller's account, so one
 /// member never receives another's billing state through the event.
 pub const MONITOR_CHANGED_TOPIC: &str = "managed-desktop://monitor-changed";
+pub const QUALIFICATION_CHANGED_TOPIC: &str = "managed-desktop://qualification-changed";
 
 pub async fn install(
     directory: &Path,
@@ -283,6 +290,7 @@ pub async fn install(
     })
     .await
     .map_err(|_| refused("managed_desktop_storage_unavailable"))??;
+    let qualification = Arc::new(qualification::QualificationRuntime::new(service.clone(), events.clone()));
     let weak = Arc::downgrade(&service);
     let evidence_directory = installed_directory.clone();
     let evidence_host = host_id.to_owned();
@@ -295,6 +303,12 @@ pub async fn install(
             let Some(service) = weak.upgrade() else { break };
             if let Err(error) = crate::managed_desktop_results::reconcile(&evidence_directory, &service, &evidence_host).await {
                 log::warn!("managed desktop evidence reconciliation: {}", error.code);
+            }
+            if let Err(error) = qualification::reconcile_handoffs(&evidence_directory, &service).await {
+                log::warn!("managed desktop qualification handoff cleanup: {}", error.code);
+            }
+            if let Err(error) = qualification::reconcile_devices(&service).await {
+                log::warn!("managed desktop qualification device cleanup: {}", error.code);
             }
             if let Err(error) = service.reconcile().await {
                 log::warn!("managed desktop reconciliation: {}", error.code);
@@ -314,6 +328,7 @@ pub async fn install(
         host_id: host_id.into(),
         release: release_status,
         worker,
+        qualification,
     });
     Ok(())
 }
@@ -339,11 +354,25 @@ fn monitor_signature(
 }
 
 pub fn shutdown() {
-    INSTALLED.write().take();
+    let installed = INSTALLED.write().take();
     // The frame provider holds the service; release it with the service.
     if let Ok(state) = cognia_remote_desktop::commands::installed() {
         if let Ok(host) = state.host() {
             host.unregister_native_frames("managed-desktop");
+        }
+    }
+    if let Some(installed) = installed {
+        installed.worker.abort();
+        if installed.qualification.has_active_tasks() {
+            // Existing shell callers have a synchronous shutdown hook. Retain
+            // ownership only for the bounded drain; the runtime then aborts
+            // stragglers and releases the exclusive journal within that bound.
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    installed.qualification.shutdown().await;
+                    drop(installed);
+                });
+            }
         }
     }
 }
@@ -554,7 +583,8 @@ impl ManagedControlAuthority for HostAuthority<'_> {
         if let Some(check) = &self.admin_check {
             check()?;
         }
-        same_principal(&principal(&self.caller, self.host_id)?, expected)
+        let current = qualification_principal_check(self.caller,self.host_id,expected);
+        tokio::task::spawn_blocking(move || current()).await.map_err(|_| refused("managed_desktop_forbidden"))?
     }
 }
 
@@ -1157,7 +1187,18 @@ pub async fn dispatch(
             )
         })
         .ok_or_else(|| refused("managed_desktop_host_unavailable"))?;
-    let principal = match principal(&caller, &host_id) {
+    let device = caller.device_id.to_owned();
+    let tenant = caller.tenant_id.map(str::to_owned);
+    let scope = caller.scope.map(str::to_owned);
+    let local = caller.local;
+    let host = host_id.clone();
+    let principal = match tokio::task::spawn_blocking(move || principal(&Caller {
+        device_id: &device,
+        tenant_id: tenant.as_deref(),
+        scope: scope.as_deref(),
+        local,
+    }, &host)).await.map_err(|_| refused("managed_desktop_forbidden"))? {
+
         Ok(principal) => principal,
         Err(error) => {
             service.revoke_control_principal(caller.device_id).await;
@@ -1170,6 +1211,9 @@ pub async fn dispatch(
             | "managed_desktop_config_delete"
             | "managed_desktop_config_set_credential"
             | "managed_desktop_config_rotate_credential"
+            | "managed_desktop_qualify_start"
+            | "managed_desktop_qualify_approve"
+            | "managed_desktop_qualify_cancel"
             | "managed_desktop_template_delete"
             | "managed_desktop_authorize"
             | "managed_desktop_prepare_template"
@@ -1196,6 +1240,34 @@ pub async fn dispatch(
         return crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await;
     }
     let result = match name {
+        "managed_desktop_qualify_start" => {
+            let a: QualifyStartArgs = decode(args)?;
+            require_qualification_admin(&principal)?;
+            authority.revalidate(&principal).await?;
+            let runtime = qualification_runtime()?;
+            let current = qualification_principal_check(caller, &host_id, &principal);
+            encode(runtime.start(directory.clone(), principal.clone(), a.provider_config_id, a.scope, a.handoff, current).await?)
+        }
+        "managed_desktop_qualify_status" => {
+            let a: QualifyRunArgs = decode(args)?;
+            encode(service.qualification_status(&principal, &a.run_id).await?)
+        }
+        "managed_desktop_qualify_list" => {
+            let _: QualifyEmptyArgs = decode(args)?;
+            Ok(serde_json::json!({"runs":service.qualification_list(&principal).await?}))
+        }
+        "managed_desktop_qualify_approve" => {
+            let a: QualifyApproveArgs = decode(args)?;
+            require_qualification_admin(&principal)?;
+            authority.revalidate(&principal).await?;
+            encode(qualification_runtime()?.approve(&principal, &a.run_id, &a.quote_id).await?)
+        }
+        "managed_desktop_qualify_cancel" => {
+            let a: QualifyRunArgs = decode(args)?;
+            require_qualification_admin(&principal)?;
+            authority.revalidate(&principal).await?;
+            encode(qualification_runtime()?.cancel(&principal, &a.run_id).await?)
+        }
         "managed_desktop_handoff_source_host" => {
             if args.as_object().is_none_or(|value| !value.is_empty()) { return Err(refused("managed_desktop_invalid_request")); }
             Ok(serde_json::json!({"hostId": host_id}))
@@ -1475,11 +1547,11 @@ mod tests {
     use cognia_companion::security_store::{install_security_store, test_guard, SecurityStore};
 
     const NOW: i64 = 1_700_000_000;
-    struct TestScope {
+    pub(super) struct TestScope {
         _guard: std::sync::MutexGuard<'static, ()>,
     }
     impl TestScope {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let scope = Self {
                 _guard: test_guard(),
             };
@@ -2337,8 +2409,276 @@ mod tests {
         .await
         .is_err());
     }
+    struct QualificationVerifier;
+    #[async_trait]
+    impl ManagedDesktopImageVerifier for QualificationVerifier {
+        async fn verify(&self, _: &DesktopRelease) -> Result<()> {
+            Ok(())
+        }
+    }
+    pub(super) async fn qualification_fixture(
+        events: Option<HostEventSink>,
+    ) -> (tempfile::TempDir, Arc<ManagedDesktopService>, ManagedDesktopPrincipal) {
+        qualification_fixture_with_provider(
+            events, Arc::new(E2bDesktopProvider::new(Arc::new(QualificationVerifier))),
+        ).await
+    }
+    pub(super) async fn qualification_fixture_with_provider(
+        events: Option<HostEventSink>,
+        provider: Arc<dyn ManagedDesktopProvider>,
+    ) -> (tempfile::TempDir, Arc<ManagedDesktopService>, ManagedDesktopPrincipal) {
+        let directory = tempfile::tempdir().unwrap();
+        let store = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(store.clone()));
+        let binding = host_identity::bind_local_account("qualification-account", "digest").unwrap();
+        register_device(&store, &binding.remote_tenant_id, "owner-device", "owner");
+        register_device(&store, &binding.remote_tenant_id, "member-device", "member");
+        let p = principal(&Caller {
+            device_id: LOCAL_DEVICE_ID,
+            tenant_id: None,
+            scope: None,
+            local: true,
+        }, "test-host").unwrap();
+        let release = DesktopRelease {
+            image: format!("example.test/desktop@sha256:{}", "a".repeat(64)),
+            image_digest: format!("sha256:{}", "a".repeat(64)),
+            architecture: "linux/amd64".into(),
+            recipe_revision: "7".into(),
+            protocol: "computer-server-0.3.46".into(),
+            server_version: "0.3.46".into(),
+            start_command: "sleep infinity".into(),
+            ready_command: "test -x /usr/local/bin/cognia-desktop".into(),
+        };
+        let vault = Arc::new(FileManagedDesktopSecrets::open(&directory.path().join("vault")).unwrap());
+        let service = Arc::new(ManagedDesktopService::open(
+            directory.path(), "test-host".into(), provider, vault, Some(release),
+        ).unwrap());
+        let draft: ManagedDesktopConfigDraft = decode(serde_json::json!({
+            "id":"e2b","expectedRevision":null,"enabled":true,"shape":{"cpuCount":2,"memoryMb":2048},
+            "limits":{"maxConcurrent":2,"maxLifetimeSeconds":3600,"idleTimeoutSeconds":600},
+            "plan":{"maxLifetimeSeconds":3600,"source":"operator-confirmed","namespace":"team","validForMs":600000},
+            "price":{"currency":"USD","hourlyRateMicros":100000,"source":"price-sheet","validForMs":600000},
+            "egress":{"mode":"off"},"isolationMinimum":"vm"
+        })).unwrap();
+        service.save_config(&p, draft).await.unwrap();
+        let qualification = Arc::new(qualification::QualificationRuntime::new(service.clone(), events));
+        *INSTALLED.write() = Some(Installed {
+            directory: directory.path().to_owned(),
+            service: service.clone(),
+            host_id: "test-host".into(),
+            release: crate::managed_desktop_release::ReleaseStatus::of(&Ok(None)),
+            worker: tokio::spawn(std::future::pending()),
+            qualification,
+        });
+        (directory, service, p)
+    }
+    fn local_qualification_caller() -> Caller<'static> {
+        Caller {
+            device_id: LOCAL_DEVICE_ID,
+            tenant_id: None,
+            scope: None,
+            local: true,
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn qualification_rpc_pauses_with_disclosure_binds_quote_and_cancels_without_spend() {
+        let _scope = TestScope::new();
+        let events = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let (directory, service, p) = qualification_fixture(Some(Arc::new(move |topic, value| {
+            captured.lock().push((topic.to_owned(), value));
+        }))).await;
+        let start = dispatch(
+            "managed_desktop_qualify_start", serde_json::json!({"providerConfigId":"e2b","scope":"gui"}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(start["categories"].as_array().unwrap().len(), 4);
+        let id = start["runId"].as_str().unwrap();
+        let awaiting = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let run = dispatch(
+                    "managed_desktop_qualify_status", serde_json::json!({"runId":id}),
+                    local_qualification_caller(), None, None,
+                ).await.unwrap();
+                if run["state"] == "awaitingApproval" {
+                    break run;
+                }
+                assert_eq!(run["state"], "running");
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        assert_eq!(awaiting["awaitingApproval"]["purpose"], "prepareTemplate");
+        assert_eq!(awaiting["awaitingApproval"]["templateBuildCharges"], true);
+        assert_eq!(dispatch(
+            "managed_desktop_qualify_approve", serde_json::json!({"runId":id,"quoteId":"wrong"}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap_err().code, "managed_desktop_qualification_quote_mismatch");
+        assert_eq!(dispatch(
+            "managed_desktop_qualify_start", serde_json::json!({"providerConfigId":"e2b","scope":"gui"}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap_err().code, "managed_desktop_qualification_running");
+        let cancelled = dispatch(
+            "managed_desktop_qualify_cancel", serde_json::json!({"runId":id}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(cancelled["state"], "cancelled");
+        assert!(service.list(&p).await.unwrap().is_empty());
+        assert!(service.list_templates(&p).await.unwrap().is_empty());
+        assert!(journal::JournalStore::open(directory.path()).is_err(), "the installed journal remains exclusively held");
+        let runs = dispatch(
+            "managed_desktop_qualify_list", serde_json::json!({}), local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(runs["runs"].as_array().unwrap().len(), 1);
+        assert!(events.lock().iter().all(|(topic, value)| {
+            topic == QUALIFICATION_CHANGED_TOPIC && *value == serde_json::json!({})
+        }));
+        assert!(!events.lock().is_empty());
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn qualification_rpc_approval_is_separate_and_status_preserves_terminal_results() {
+        let _scope = TestScope::new();
+        let (_directory, service, p) = qualification_fixture(None).await;
+        for terminal in [QualificationRunState::Passed, QualificationRunState::Failed] {
+            let run = service.qualification_start(&p, "e2b", QualificationScope::Gui, None).await.unwrap();
+            let quote = service.quote(&p, "e2b", 120).await.unwrap();
+            service.qualification_await_quote(&p, &run.run_id, quote.clone(), AuthorizationPurpose::Smoke).await.unwrap();
+            let approved = dispatch(
+                "managed_desktop_qualify_approve", serde_json::json!({"runId":run.run_id,"quoteId":quote.id}),
+                local_qualification_caller(), None, None,
+            ).await.unwrap();
+            assert_eq!(approved["state"], "running");
+            assert!(approved["awaitingApproval"].is_null());
+            assert_eq!(dispatch(
+                "managed_desktop_qualify_approve", serde_json::json!({"runId":run.run_id,"quoteId":quote.id}),
+                local_qualification_caller(), None, None,
+            ).await.unwrap_err().code, "managed_desktop_qualification_not_awaiting");
+            for category in &run.categories {
+                service.qualification_category(&p, &run.run_id, category.category, QualificationCategoryState::Running).await.unwrap();
+                if terminal == QualificationRunState::Failed {
+                    break;
+                }
+                service.qualification_category(&p, &run.run_id, category.category, QualificationCategoryState::Passed).await.unwrap();
+            }
+            service.qualification_finish(
+                &p, &run.run_id, terminal,
+                (terminal == QualificationRunState::Failed).then(|| "managed_desktop_control_smoke_failed".into()),
+            ).await.unwrap();
+            let status = dispatch(
+                "managed_desktop_qualify_status", serde_json::json!({"runId":run.run_id}),
+                local_qualification_caller(), None, None,
+            ).await.unwrap();
+            assert_eq!(status["state"], serde_json::to_value(terminal).unwrap());
+            assert!(status["finishedAt"].is_i64());
+        }
+        assert_eq!(dispatch(
+            "managed_desktop_qualify_status", serde_json::json!({"runId":"missing"}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap_err().code, "managed_desktop_qualification_not_found");
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn qualification_rpc_refuses_unknown_delivery_agents_services_members_and_missing_lease() {
+        let _scope = TestScope::new();
+        let (_directory, service, p) = qualification_fixture(None).await;
+        let args = serde_json::json!({"providerConfigId":"e2b","scope":"acceptance","handoff":{"deliveryId":"unknown","script":"dev"}});
+        assert_eq!(dispatch(
+            "managed_desktop_qualify_start", args, local_qualification_caller(), None, None,
+        ).await.unwrap_err().code, "managed_desktop_handoff_delivery_unknown");
+        assert!(service.qualification_list(&p).await.unwrap().is_empty());
+        let tenant = host_identity::current().unwrap().remote_tenant_id;
+        let store = security_store().unwrap();
+        let challenge = store.issue_challenge(&tenant, NOW, 600).unwrap();
+        let enrollment = store.create_worker_enrollment(&tenant, "owner-device", NOW, 600).unwrap();
+        store.register_worker_device(
+            &tenant, &enrollment, &challenge.id, &challenge.nonce, "worker-device", "Worker",
+            "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----", "worker-thumb", NOW,
+        ).unwrap();
+        for (device, scope, error) in [
+            ("worker-device", None, "managed_desktop_human_authorization_required"),
+            ("service", Some("service"), "managed_desktop_human_authorization_required"),
+            ("member-device", Some("device"), "managed_desktop_admin_required"),
+        ] {
+            let caller = Caller {
+                device_id: device,
+                tenant_id: Some(&tenant),
+                scope,
+                local: false,
+            };
+            assert_eq!(dispatch(
+                "managed_desktop_qualify_start", serde_json::json!({"providerConfigId":"e2b","scope":"gui"}),
+                caller, None, Some(Arc::new(|| Ok(()))),
+            ).await.unwrap_err().code, error);
+        }
+        let caller = Caller {
+            device_id: "owner-device",
+            tenant_id: Some(&tenant),
+            scope: Some("device"),
+            local: false,
+        };
+        for command in [
+            "managed_desktop_qualify_start", "managed_desktop_qualify_approve", "managed_desktop_qualify_cancel",
+        ] {
+            assert_eq!(dispatch(command, serde_json::json!({}), caller, None, None).await.unwrap_err().code,
+                "managed_desktop_control_admin_lease_expired");
+        }
+        let mut agent = p.clone();
+        agent.authority = ManagedDesktopAuthority::Agent;
+        assert!(require_qualification_admin(&agent).is_err());
+        assert!(decode::<QualifyStartArgs>(serde_json::json!({"providerConfigId":"e2b","scope":"gui","confirmed":true})).is_err());
+    }
+
 }
 
 // Kept below this module so native smoke reuses private Host authority and consent.
 #[path = "managed_desktop_authority_operator.rs"]
 pub mod authority_operator;
+
+#[path = "managed_desktop_qualification.rs"]
+pub mod qualification;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QualifyStartArgs {
+    provider_config_id: String,
+    scope: QualificationScope,
+    handoff: Option<QualificationHandoff>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QualifyRunArgs {
+    run_id: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QualifyApproveArgs {
+    run_id: String,
+    quote_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QualifyEmptyArgs {}
+fn require_qualification_admin(p: &ManagedDesktopPrincipal) -> Result<()> {
+    p.require_human()?;
+    p.require_admin()
+}
+fn qualification_runtime() -> Result<Arc<qualification::QualificationRuntime>> {
+    INSTALLED.read().as_ref().map(|i| i.qualification.clone())
+        .ok_or_else(|| refused("managed_desktop_host_unavailable"))
+}
+fn qualification_principal_check(
+    caller: Caller<'_>,
+    host: &str,
+    expected: &ManagedDesktopPrincipal,
+) -> Arc<dyn Fn() -> Result<()> + Send + Sync> {
+    let device = caller.device_id.to_owned();
+    let tenant = caller.tenant_id.map(str::to_owned);
+    let scope = caller.scope.map(str::to_owned);
+    let local = caller.local;
+    let host = host.to_owned();
+    let expected = expected.clone();
+    Arc::new(move || same_principal(&principal(&Caller {
+        device_id: &device,
+        tenant_id: tenant.as_deref(),
+        scope: scope.as_deref(),
+        local,
+    }, &host)?, &expected))
+}

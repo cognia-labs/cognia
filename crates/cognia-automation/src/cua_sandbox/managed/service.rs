@@ -8,6 +8,8 @@ pub mod control;
 mod smoke;
 #[path = "qualification.rs"]
 pub mod qualification;
+#[path = "qualification_runs.rs"]
+pub mod qualification_runs;
 #[path = "config_admin.rs"]
 mod config_admin;
 #[path = "template_admin.rs"]
@@ -22,28 +24,76 @@ use std::{path::Path, sync::Arc};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+#[derive(Clone)]
 pub struct ManagedDesktopService {
+    enablement_epoch: Arc<std::sync::atomic::AtomicU64>,
+    #[cfg(test)]
+    admission_registry_reads: Arc<std::sync::atomic::AtomicU64>,
+    qualification_changes: Arc<
+        std::sync::Mutex<std::collections::BTreeMap<String, tokio::sync::watch::Sender<u64>>>,
+    >,
+    qualification_live: Arc<
+        std::sync::Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicBool>>>,
+    >,
+    diagnostic_reconcile: bool,
+    diagnostic_run: Option<String>,
+    diagnostic_holds: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
     host_id: String,
     store: Arc<JournalStore>,
     state: Arc<Mutex<ManagedDesktopJournal>>,
     // Serializes mutations including provider exchanges. Reads and quote
     // creation remain independent; no synchronous lock crosses an await.
-    operations: Mutex<()>,
-    template_operations: Mutex<()>,
+    operations: Arc<Mutex<()>>,
+    template_operations: Arc<Mutex<()>>,
     // Serializes registry and provider-key writes (amendment A1). Lifecycle
     // admission still rereads the registry, so it never trusts this lock.
-    config_operations: Mutex<()>,
+    config_operations: Arc<Mutex<()>>,
     provider: Arc<dyn ManagedDesktopProvider>,
     secrets: Arc<dyn ManagedDesktopSecrets>,
     trusted_release: Option<DesktopRelease>,
     clock: Arc<dyn Fn() -> i64 + Send + Sync>,
     control_desktop_epochs:
-        Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>,
+        Arc<Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>>,
     control_principal_epochs:
-        Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>,
-    controls: Mutex<std::collections::BTreeMap<String, Arc<Mutex<control::ManagedControl>>>>,
+        Arc<Mutex<std::collections::BTreeMap<String, Arc<std::sync::atomic::AtomicU64>>>>,
+    controls: Arc<Mutex<std::collections::BTreeMap<String, Arc<Mutex<control::ManagedControl>>>>>,
 }
 impl ManagedDesktopService {
+    pub fn diagnostic_provider(&self) -> Arc<dyn ManagedDesktopProvider> {
+        self.provider.clone()
+    }
+    /// Share the installed journal and every operation/control lock. The
+    /// lifecycle diagnostic may override only its own provider transport.
+    pub fn diagnostic_handle(&self, provider: Arc<dyn ManagedDesktopProvider>) -> Self {
+        Self {
+            provider,
+            diagnostic_reconcile: true,
+            ..self.clone()
+        }
+    }
+    /// A running diagnostic can reconcile only desktops charged to its run.
+    pub fn qualification_handle(&self, provider: Arc<dyn ManagedDesktopProvider>, run: &str) -> Self {
+        Self {
+            provider,
+            diagnostic_reconcile: true,
+            diagnostic_run: Some(run.into()),
+            ..self.clone()
+        }
+    }
+    pub async fn diagnostic_checkpoint(&self) -> Result<()> {
+        let state = self.state.clone().lock_owned().await;
+        let store = self.store.clone();
+        let host = self.host_id.clone();
+        tokio::task::spawn_blocking(move || {
+            let restored = store.load_checkpoint(&host)?;
+            if serde_json::to_value(&restored).ok() != serde_json::to_value(&*state).ok() {
+                return Err(refused("managed_desktop_journal_invalid"));
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| refused("managed_desktop_storage_unavailable"))?
+    }
     pub fn open(
         data_dir: &Path,
         host_id: String,
@@ -59,19 +109,27 @@ impl ManagedDesktopService {
         let state = store.load(&host_id)?;
         store.save(&state)?;
         Ok(Self {
+            enablement_epoch: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            #[cfg(test)]
+            admission_registry_reads: Default::default(),
+            qualification_changes: Default::default(),
+            qualification_live: Default::default(),
+            diagnostic_reconcile: false,
+            diagnostic_run: None,
+            diagnostic_holds: Default::default(),
             host_id,
             store,
             state: Arc::new(Mutex::new(state)),
-            operations: Mutex::new(()),
-            template_operations: Mutex::new(()),
-            config_operations: Mutex::new(()),
+            operations: Arc::new(Mutex::new(())),
+            template_operations: Arc::new(Mutex::new(())),
+            config_operations: Arc::new(Mutex::new(())),
             provider,
             secrets,
             trusted_release,
             clock: Arc::new(|| chrono::Utc::now().timestamp_millis()),
-            controls: Mutex::new(Default::default()),
-            control_principal_epochs: Mutex::new(Default::default()),
-            control_desktop_epochs: Mutex::new(Default::default()),
+            controls: Arc::new(Mutex::new(Default::default())),
+            control_principal_epochs: Arc::new(Mutex::new(Default::default())),
+            control_desktop_epochs: Arc::new(Mutex::new(Default::default())),
         })
     }
     async fn transaction<T: Send + 'static>(
@@ -101,6 +159,7 @@ impl ManagedDesktopService {
         next.last_observed_at = now;
         next.revision = next.revision.saturating_add(1);
         let store = self.store.clone();
+        let enablement_epoch = self.enablement_epoch.clone();
         // The owned guard travels into the blocking job. If the caller is
         // cancelled after dispatch, disk and memory still commit together;
         // another transaction cannot overwrite an unseen durable revision.
@@ -108,6 +167,7 @@ impl ManagedDesktopService {
             admission()?;
             store.save(&next)?;
             *guard = next;
+            enablement_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(result)
         })
         .await
@@ -190,6 +250,36 @@ impl ManagedDesktopService {
             current.validate(clock().max(observed_at))
         })
     }
+    async fn quoted_admission(
+        &self,
+        c: &ManagedDesktopConfig,
+        quote: &str,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+        observed_at: i64,
+    ) -> Result<LifecycleAdmission> {
+        let state = self.state.lock().await;
+        qualification_runs::quote_admitted(&state, quote)?;
+        let run = state.qualification_runs.values().find(|r| {
+            r.approved_quotes.contains(quote)
+                || r.run.awaiting_approval.as_ref().is_some_and(|a| a.quote.id == quote)
+        }).map(|r| {
+            (r.run.run_id.clone(),
+                r.run.state == qualification_runs::QualificationRunState::Running
+                    && r.approved_quotes.contains(quote))
+        });
+        drop(state);
+        let live = if let Some((id, approved)) = run {
+            let epoch = self.qualification_live.lock().unwrap_or_else(|e| e.into_inner())
+                .get(&id).cloned();
+            Arc::new(move || {
+                approved && live()
+                    && epoch.as_ref().is_some_and(|e| e.load(std::sync::atomic::Ordering::SeqCst))
+            }) as Arc<dyn Fn() -> bool + Send + Sync>
+        } else {
+            live
+        };
+        Ok(self.lifecycle_admission(c, live, observed_at))
+    }
     pub async fn list_configs(
         &self,
         p: &ManagedDesktopPrincipal,
@@ -211,13 +301,18 @@ impl ManagedDesktopService {
             .map(|(c, credential_present)| {
                 let digest = c.binding_digest();
                 let template = latest_template(&state, &digest);
-                let qualified = c.egress == DesktopEgress::Off
-                    && template
-                        .and_then(|t| t.identity.as_ref())
-                        .is_some_and(|t| qualified(&state, &digest, t));
+                let qualified = qualification::gui_current(&state, &c, now);
+                let enablement = qualification::effective_enablement(&state, &c, now);
+                let categories = qualification::category_statuses(&state, &c, now);
                 let error = self.admission(&c, now).err();
                 let valid = error.is_none();
                 ManagedDesktopConfigSummary {
+                    enablement: if valid {
+                        enablement
+                    } else {
+                        ManagedDesktopEnablement::default()
+                    },
+                    qualification_categories: categories,
                     id: c.id.clone(),
                     owner_principal_id: c.owner_principal_id.clone(),
                     host_id: c.host_id.clone(),
@@ -250,21 +345,10 @@ impl ManagedDesktopService {
                     template: template.and_then(|t| t.identity.clone()),
                     template_state: template.map(|t| t.state.clone()),
                     can_prepare_template: valid && p.require_human().is_ok(),
-                    can_create: valid && qualified && p.require_human().is_ok(),
-                    gui_qualified: valid
-                        && qualified
-                        && state.control_qualifications.get(&digest).is_some_and(|q| {
-                            q.binding_digest == digest
-                                && q.has_complete_evidence()
-                                && template.and_then(|t| t.identity.as_ref()) == Some(&q.template)
-                                && state.desktops.get(&q.smoke_desktop_id).is_some_and(|d| {
-                                    d.smoke
-                                        && d.config.binding_digest() == digest
-                                        && d.template == q.template
-                                        && d.desktop.generation == q.smoke_desktop_generation
-                                        && d.desktop.state == ManagedDesktopState::Destroyed
-                                })
-                        }),
+                    can_create: valid
+                        && (enablement.manual_gui || enablement.agent_control || enablement.acceptance)
+                        && p.require_human().is_ok(),
+                    gui_qualified: valid && qualified,
                     qualification_evidence_version: qualified.then_some(2),
                     workload_isolation_revision: qualified.then_some(1),
                     isolation_tier: IsolationTier::Vm,
@@ -388,8 +472,9 @@ impl ManagedDesktopService {
         }
         let c = self.config(p, config_id).await?;
         self.admission(&c, self.now().await)?;
-        let admission = self.lifecycle_admission(&c, live, self.now().await);
+        let admission = self.quoted_admission(&c, quote_id, live, self.now().await).await?;
         self.transaction_admitted(admission, |s, now| {
+            qualification_runs::quote_admitted(s, quote_id)?;
             let quote = valid_quote(s, &c, p, quote_id, now)?;
             let auth = DesktopAuthorization {
                 id: Uuid::new_v4().to_string(),
@@ -439,7 +524,7 @@ impl ManagedDesktopService {
         let _op = self.template_operations.lock().await;
         let c = self.config(p, &input.provider_config_id).await?;
         self.admission(&c, self.now().await)?;
-        let admission = self.lifecycle_admission(&c, live, self.now().await);
+        let admission = self.quoted_admission(&c, &input.quote_id, live, self.now().await).await?;
         admission()?;
         validate_id(&input.idempotency_key)?;
         let operation = operation_id(p, &input, "template");
@@ -638,7 +723,7 @@ impl ManagedDesktopService {
         }
         let c = self.config(p, &input.provider_config_id).await?;
         self.admission(&c, self.now().await)?;
-        let admission = self.lifecycle_admission(&c, live, self.now().await);
+        let admission = self.quoted_admission(&c, &input.quote_id, live, self.now().await).await?;
         let key = self.secrets.provider_key(&c).await?;
         let row = self
             .transaction_admitted(admission.clone(), |s, now| {
@@ -647,7 +732,11 @@ impl ManagedDesktopService {
                     .filter(|t| t.state == TemplateState::Ready)
                     .and_then(|t| t.identity.clone())
                     .ok_or_else(|| refused("managed_desktop_template_not_ready"))?;
-                if !smoke && (c.egress != DesktopEgress::Off || !qualified(s, &digest, &template)) {
+                let enabled = qualification::effective_enablement(s, &c, now);
+                if !smoke
+                    && (c.egress != DesktopEgress::Off
+                        || !(enabled.manual_gui || enabled.agent_control || enabled.acceptance))
+                {
                     return Err(refused("managed_desktop_unqualified"));
                 }
                 let used = s
@@ -707,6 +796,11 @@ impl ManagedDesktopService {
                     bootstrap_completed: false,
                     cleanup_requested_at: None,
                 };
+                for run in s.qualification_runs.values_mut() {
+                    if run.approved_quotes.contains(&input.quote_id) {
+                        run.desktop_ids.insert(row.desktop.id.clone());
+                    }
+                }
                 s.desktops.insert(row.desktop.id.clone(), row.clone());
                 Ok(row)
             })
@@ -1262,18 +1356,32 @@ impl ManagedDesktopService {
                     })
                     .map(|t| t.id.clone())
                     .collect::<Vec<_>>(),
-                s.desktops.keys().cloned().collect::<Vec<_>>(),
+                s.desktops.keys().filter(|id| {
+                    self.diagnostic_run.as_ref().is_none_or(|run| {
+                        s.qualification_runs.get(run).is_some_and(|r| r.desktop_ids.contains(*id))
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>(),
             )
         };
         let mut first = None;
         // Cleanup has priority; template inspection may wait on the provider.
         let _op = self.operations.lock().await;
         for id in desktops {
+            if !self.diagnostic_reconcile
+                && self.diagnostic_holds.lock().unwrap_or_else(|e| e.into_inner()).contains(&id)
+            {
+                continue;
+            }
             if let Err(e) = self.reconcile_one(&id, false).await {
                 first.get_or_insert(e);
             }
         }
         drop(_op);
+        if self.diagnostic_run.is_some() {
+            return first.map_or(Ok(()), Err);
+        }
         // Never wait behind image verification or template setup at startup.
         if let Ok(_template) = self.template_operations.try_lock() {
             for id in templates {
@@ -1408,6 +1516,7 @@ fn consume(
     now: i64,
 ) -> Result<DesktopAuthorization> {
     valid_quote(s, c, p, &input.quote_id, now)?;
+    qualification_runs::quote_admitted(s, &input.quote_id)?;
     let a = s
         .authorizations
         .get_mut(&input.authorization_id)
@@ -1690,9 +1799,9 @@ pub(super) mod tests {
         }
     }
     pub(crate) struct Fixture {
-        directory: tempfile::TempDir,
+        pub(super) directory: tempfile::TempDir,
         pub(super) provider: Arc<FakeProvider>,
-        secrets: Arc<FileManagedDesktopSecrets>,
+        pub(super) secrets: Arc<FileManagedDesktopSecrets>,
         pub(super) clock: Arc<AtomicI64>,
         pub(super) service: ManagedDesktopService,
         pub(super) p: ManagedDesktopPrincipal,
@@ -1716,6 +1825,7 @@ pub(super) mod tests {
                 ready_command: "test -x /usr/local/bin/cognia-desktop".into(),
             };
             let config = ManagedDesktopConfig {
+                enablement: ManagedDesktopEnablement::default(),
                 id: "e2b".into(),
                 owner_principal_id: "owner".into(),
                 host_id: "host".into(),
@@ -2346,6 +2456,125 @@ pub(super) mod tests {
         replay.qualifications.insert(digest.clone(), receipt.clone());
         assert!(!qualified(&replay, &digest, &receipt.template));
     }
+    struct InstalledSmokeHost<'a> {
+        service: &'a ManagedDesktopService,
+        provider: Arc<FakeProvider>,
+    }
+    #[async_trait]
+    impl ManagedDesktopSmokeHost for InstalledSmokeHost<'_> {
+        fn provider(&self) -> Arc<dyn ManagedDesktopProvider> {
+            self.provider.clone()
+        }
+        fn open(&self, provider: Arc<dyn ManagedDesktopProvider>) -> Result<ManagedDesktopService> {
+            Ok(self.service.diagnostic_handle(provider))
+        }
+        async fn checkpoint(
+            &self,
+            service: ManagedDesktopService,
+            _: Arc<dyn ManagedDesktopProvider>,
+            ids: &[String],
+        ) -> Result<ManagedDesktopService> {
+            service.diagnostic_control_checkpoint(ids).await?;
+            Ok(service)
+        }
+        async fn approve_quote(
+            &self,
+            _: &ManagedDesktopQuote,
+            _: AuthorizationPurpose,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn installed_and_operator_smoke_share_orchestration_and_equivalent_native_receipts() {
+        let f = Fixture::new();
+        f.provider.auto_expire.store(true, Ordering::SeqCst);
+        let host = InstalledSmokeHost {
+            service: &f.service,
+            provider: f.provider.clone(),
+        };
+        let wait = TestWait {
+            clock: f.clock.clone(),
+            provider: f.provider.clone(),
+        };
+        let installed = smoke::run_with_wait(&host, &f.p, "e2b", &wait).await.unwrap();
+        assert!(JournalStore::open(f.directory.path()).is_err());
+        let handle = host.open(host.provider()).unwrap();
+        assert!(Arc::ptr_eq(&handle.store, &f.service.store));
+        assert!(Arc::ptr_eq(&handle.state, &f.service.state));
+        assert!(Arc::ptr_eq(&handle.operations, &f.service.operations));
+        let state = f.service.state.lock().await;
+        assert!(lifecycle_receipt_valid(
+            &state, &installed, &installed.binding_digest, &installed.template,
+        ));
+        drop(state);
+        drop(handle);
+        let Fixture {
+            directory, provider, secrets, clock, service, p, config,
+        } = Fixture::new();
+        drop(service);
+        provider.auto_expire.store(true, Ordering::SeqCst);
+        let wait = TestWait {
+            clock: clock.clone(),
+            provider: provider.clone(),
+        };
+        let operator = SmokeHost {
+            directory,
+            provider,
+            secrets,
+            clock,
+            release: config.release,
+            approved: AtomicUsize::new(0),
+            deny: false,
+        };
+        let native = smoke::run_with_wait(&operator, &p, "e2b", &wait).await.unwrap();
+        let normalize = |receipt: QualificationReceipt| {
+            let mut value = serde_json::to_value(receipt).unwrap();
+            value["template"]["buildId"] = serde_json::json!("build");
+            value["smokeDesktopIds"] = serde_json::json!(["first", "second"]);
+            value
+        };
+        assert_eq!(normalize(installed), normalize(native));
+    }
+    #[tokio::test]
+    async fn cancelling_a_run_during_provider_preflight_fences_the_paid_send() {
+        let f = Fixture::new();
+        f.prepare().await;
+        use qualification_runs::*;
+        let run = f.service.qualification_start(&f.p, "e2b", QualificationScope::Gui, None)
+            .await.unwrap();
+        let quote = f.service.quote(&f.p, "e2b", 120).await.unwrap();
+        f.service.qualification_await_quote(
+            &f.p, &run.run_id, quote.clone(), AuthorizationPurpose::Smoke,
+        ).await.unwrap();
+        f.service.qualification_approve(&f.p, &run.run_id, &quote.id).await.unwrap();
+        let auth = f.service.authorize(&f.p, "e2b", &quote.id, AuthorizationPurpose::Smoke, None)
+            .await.unwrap();
+        let gate = TestGate::new();
+        *f.provider.create_gate.lock().await = Some(gate.clone());
+        let service = f.service.clone();
+        let p = f.p.clone();
+        let task = tokio::spawn(async move {
+            service.create_smoke(&p, CreateManagedDesktop {
+                provider_config_id: "e2b".into(),
+                quote_id: quote.id,
+                authorization_id: auth.id,
+                idempotency_key: "cancel-preflight".into(),
+            }).await
+        });
+        gate.entered.notified().await;
+        f.service.qualification_finish(&f.p, &run.run_id, QualificationRunState::Cancelled, None)
+            .await.unwrap();
+        gate.resume.notify_one();
+        assert_eq!(task.await.unwrap().unwrap_err().code, "managed_desktop_forbidden");
+        assert_eq!(f.provider.creates.load(Ordering::SeqCst), 0);
+        // An uncertain create remains journaled until its TTL, even though
+        // this fixture knows no provider request crossed the admission fence.
+        assert!(f.service.qualification_cleanup(&f.p, &run.run_id).await.is_err());
+        f.clock.store(122000, Ordering::SeqCst);
+        f.service.reconcile().await.unwrap();
+        assert_eq!(f.service.list(&f.p).await.unwrap()[0].state, ManagedDesktopState::Destroyed);
+    }
     #[tokio::test]
     async fn native_smoke_rejects_expiry_without_a_successful_delete_retry() {
         let Fixture { directory, provider, secrets, clock, service, p, config } = Fixture::new();
@@ -2424,5 +2653,37 @@ pub(super) mod tests {
         );
         assert_ne!(one.is_ok(), two.is_ok());
         assert_eq!(f.provider.creates.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Prevent only the periodic reconciler from preempting a bounded native
+/// expiry/delete probe. Drop (including cancellation/panic) restores cleanup.
+struct DiagnosticHold {
+    id: String,
+    holds: Arc<std::sync::Mutex<std::collections::BTreeSet<String>>>,
+}
+impl Drop for DiagnosticHold {
+    fn drop(&mut self) {
+        self.holds.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.id);
+    }
+}
+impl ManagedDesktopService {
+    fn hold_diagnostic(&self, id: &str) -> DiagnosticHold {
+        self.diagnostic_holds.lock().unwrap_or_else(|e| e.into_inner()).insert(id.into());
+        DiagnosticHold {
+            id: id.into(),
+            holds: self.diagnostic_holds.clone(),
+        }
+    }
+    pub async fn diagnostic_control_checkpoint(&self, ids: &[String]) -> Result<()> {
+        self.diagnostic_checkpoint().await?;
+        for id in ids {
+            if !self.state.lock().await.desktops.get(id).is_some_and(|r| r.smoke) {
+                return Err(refused("managed_desktop_qualification_invalid"));
+            }
+            self.revoke_control_desktop(id).await;
+            self.controls.lock().await.remove(id);
+        }
+        Ok(())
     }
 }

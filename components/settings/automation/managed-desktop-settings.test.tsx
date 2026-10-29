@@ -97,13 +97,21 @@ jest.mock("@/lib/automation/managed-desktop-client", () => ({
     authorize: jest.fn(),
     prepareTemplate: jest.fn(),
   },
+  watchManagedDesktopQualification: jest.fn(() => jest.fn()),
 }))
+jest.mock("./managed-desktop-qualification", () => ({
+  ManagedDesktopQualification: jest.fn(() => null),
+}))
+import { ManagedDesktopQualification } from "./managed-desktop-qualification"
 jest.mock("./sandbox-desktop-viewer", () => ({ SandboxDesktopViewer: jest.fn(() => null) }))
 import { SandboxDesktopViewer } from "./sandbox-desktop-viewer"
 jest.mock("@/lib/sandbox/connection-lifecycle", () => ({
   runSandboxConnectionOperation: jest.fn(),
 }))
-import { managedDesktopClient } from "@/lib/automation/managed-desktop-client"
+import {
+  managedDesktopClient,
+  watchManagedDesktopQualification,
+} from "@/lib/automation/managed-desktop-client"
 import { runSandboxConnectionOperation } from "@/lib/sandbox/connection-lifecycle"
 import { ManagedDesktopSettings } from "./managed-desktop-settings"
 const api = managedDesktopClient as jest.Mocked<typeof managedDesktopClient>
@@ -123,7 +131,30 @@ const config = {
   idleTimeoutSeconds: 600,
   cpuCount: 2,
   memoryMb: 4096,
+  revision: 3,
+  credentialGeneration: 1,
+  credentialPresent: true,
+  plan: {
+    maxLifetimeSeconds: 3600,
+    observedAt: 1,
+    expiresAt: 2,
+    source: "billing page",
+    namespace: "team",
+  },
+  price: {
+    currency: "USD",
+    hourlyRateMicros: 165_600,
+    observedAt: 1,
+    expiresAt: 2,
+    source: "pricing page",
+  },
+  isolationMinimum: "vm" as const,
+  enablement: { manualGui: false, agentControl: false, acceptance: false },
+  qualificationCategories: (
+    ["lifecycle", "control", "authority", "workload", "commit", "bundle"] as const
+  ).map((category) => ({ category, current: false, observedAt: null })),
 }
+const manualGui = { manualGui: true, agentControl: false, acceptance: false }
 const currentProof = {
   qualificationEvidenceVersion: 2,
   workloadIsolationRevision: 1,
@@ -384,7 +415,14 @@ test("lifecycle qualification alone cannot open the managed desktop", async () =
 
 test("GUI qualification mounts the existing viewer only after an explicit open gesture", async () => {
   api.listConfigs.mockResolvedValue([
-    { ...config, ...currentProof, qualification: "qualified", canCreate: true, guiQualified: true },
+    {
+      ...config,
+      ...currentProof,
+      qualification: "qualified",
+      canCreate: true,
+      guiQualified: true,
+      enablement: manualGui,
+    },
   ])
   api.list.mockResolvedValue([
     {
@@ -515,6 +553,7 @@ test.each([undefined, 0, 1, 3])(
         qualification: "qualified",
         canCreate: true,
         guiQualified: true,
+        enablement: manualGui,
         qualificationEvidenceVersion: version,
       },
     ])
@@ -574,3 +613,55 @@ test.each([
     ).toBeVisible()
   }
 )
+
+test("a GUI receipt alone keeps the viewer off until manual GUI is switched on", async () => {
+  api.listConfigs.mockResolvedValue([
+    { ...config, ...currentProof, qualification: "qualified", canCreate: true, guiQualified: true },
+  ])
+  api.list.mockResolvedValue([
+    {
+      id: "desktop",
+      providerConfigId: "byo",
+      generation: 2,
+      state: "running",
+      deadlineAt: Date.now() + 60000,
+      idleTimeoutSeconds: 600,
+      createdAt: 1,
+      updatedAt: 1,
+      cleanupAttempts: 0,
+      qualification: "qualified",
+    },
+  ])
+  renderSettings()
+  expect(await screen.findByText(messages.guiDormant)).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: messages.openDesktop })).toBeDisabled()
+})
+
+test("each configuration gets its own runs and a finished run reloads receipts", async () => {
+  api.listConfigs.mockResolvedValue([config, { ...config, id: "other" }])
+  renderSettings()
+  await waitFor(() => expect(ManagedDesktopQualification).toHaveBeenCalled())
+  const watch = watchManagedDesktopQualification as jest.Mock
+  expect(watch).toHaveBeenCalledWith(
+    { kind: "remote", hostId: "chosen-host" },
+    expect.any(Function)
+  )
+  const onRuns = watch.mock.calls[0][1]
+  const run = (runId: string, providerConfigId: string, state: string) => ({
+    runId,
+    providerConfigId,
+    state,
+  })
+  onRuns([run("a", "byo", "awaitingApproval"), run("b", "other", "passed")])
+  await waitFor(() => {
+    const props = (ManagedDesktopQualification as jest.Mock).mock.calls.at(-1)[0]
+    expect(props.config.id).toBe("other")
+    expect(props.runs.map((r: { runId: string }) => r.runId)).toEqual(["b"])
+  })
+  const reads = api.listConfigs.mock.calls.length
+  onRuns([run("a", "byo", "awaitingApproval")])
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  expect(api.listConfigs).toHaveBeenCalledTimes(reads)
+  onRuns([run("a", "byo", "passed")])
+  await waitFor(() => expect(api.listConfigs).toHaveBeenCalledTimes(reads + 1))
+})

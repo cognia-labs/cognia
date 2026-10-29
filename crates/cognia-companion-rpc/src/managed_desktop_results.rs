@@ -14,7 +14,6 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_results_prepare_delete", "managed_desktop_results_commit_delete",
     "managed_desktop_results_abort_delete",
 ];
-pub const PRODUCTION_ACCEPTANCE_ENABLED: bool = false;
 // A retry that arrives while a frame is being sampled waits for its durable
 // publication, then reads the same artifact without capturing another frame.
 static CAPTURE_PUBLICATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -62,14 +61,27 @@ struct PrepareDelete { operation_id: String, #[serde(default)] conversation_ids:
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Operation { operation_id: String }
 
-fn require_agent(p: &ManagedDesktopPrincipal, row: &AcceptanceResult) -> Result<()> {
+fn require_agent(p: &ManagedDesktopPrincipal, row: &AcceptanceResult, enabled: bool) -> Result<()> {
     if p.authority != ManagedDesktopAuthority::Agent
         || row.binding.agent_principal_id.as_deref() != Some(p.principal_id.as_str()) {
         return Err(refused("managed_desktop_acceptance_delegation_required"));
     }
     // No configuration/browser flag can enable delegation before provider smoke.
-    if !PRODUCTION_ACCEPTANCE_ENABLED { return Err(refused("managed_desktop_acceptance_unqualified")); }
+    if !enabled {
+        return Err(refused("managed_desktop_acceptance_unqualified"));
+    }
     Ok(())
+}
+async fn require_current_agent(
+    service: &ManagedDesktopService,
+    p: &ManagedDesktopPrincipal,
+    row: &AcceptanceResult,
+) -> Result<()> {
+    // Refuse delegation before revealing a desktop's configuration authority.
+    require_agent(p, row, true)?;
+    let enabled = service.desktop_enablement(p, &row.binding.desktop_id, row.binding.desktop_generation)
+        .await.map(|e| e.acceptance).unwrap_or(false);
+    require_agent(p, row, enabled)
 }
 async fn current_source(directory: &Path, p: &ManagedDesktopPrincipal, row: &AcceptanceResult) -> Result<()> {
     let directory = directory.to_owned(); let principal = p.clone(); let binding = row.binding.clone();
@@ -116,13 +128,25 @@ pub async fn dispatch(directory: &Path, service: &ManagedDesktopService,
             authority.revalidate(p).await?;
             let id = a.acceptance_id.clone(); let read_owner = owner.clone(); let read_host = host.clone();
             let row = disk(directory, move |s| s.get(&read_owner, &read_host, &id)).await?;
-            if p.authority == ManagedDesktopAuthority::Agent { require_agent(p, &row)?; } else { p.require_human()?; }
+            if p.authority == ManagedDesktopAuthority::Agent {
+                require_current_agent(service, p, &row).await?;
+            } else {
+                p.require_human()?;
+            }
             current_source(directory, p, &row).await?;
             let input = CaptureInput { artifact_id:a.artifact_id, criterion_id:a.criterion_id, kind:a.kind,
                 explicitly_requested:p.authority != ManagedDesktopAuthority::Agent, sensitive_human_input:false };
             let retry_owner = owner.clone(); let retry_host = host.clone();
             let retry_id = a.acceptance_id.clone(); let retry_input = input.clone();
-            let previous = guarded_disk(directory, authority.input_admission(p), move |s|
+            let admission = if p.authority == ManagedDesktopAuthority::Agent {
+                service.runtime_admission(
+                    p, &row.binding.desktop_id, row.binding.desktop_generation,
+                    ManagedDesktopRuntimeGate::Acceptance, authority.input_admission(p),
+                ).await?
+            } else {
+                authority.input_admission(p)
+            };
+            let previous = guarded_disk(directory, admission.clone(), move |s|
                 s.captured(&retry_owner, &retry_host, &retry_id, &retry_input)).await?;
             if let Some(previous) = previous {
                 authority.revalidate(p).await?;
@@ -134,17 +158,21 @@ pub async fn dispatch(directory: &Path, service: &ManagedDesktopService,
             current_source(directory, p, &row).await?;
             let bytes = base64::engine::general_purpose::STANDARD.decode(&frame.screenshot.bytes)
                 .map_err(|_| refused("managed_desktop_evidence_invalid_image"))?;
-            encode(guarded_disk(directory, authority.input_admission(p), move |s| s.capture(&owner, &host, &a.acceptance_id, input, &bytes)).await?)?
+            encode(guarded_disk(directory, admission, move |s| s.capture(&owner, &host, &a.acceptance_id, input, &bytes)).await?)?
         }
         "managed_desktop_results_complete" => {
             let a: Complete = decode(args)?;
             let id = a.acceptance_id.clone(); let read_owner = owner.clone(); let read_host = host.clone();
             let row = disk(directory, move |s| s.get(&read_owner, &read_host, &id)).await?;
-            require_agent(p, &row)?;
+            require_current_agent(service, p, &row).await?;
             current_source(directory, p, &row).await?;
             let input = AgentVerdictInput { idempotency_key:a.idempotency_key, principal_id:p.principal_id.clone(),
                 outcome:a.outcome, criteria:a.criteria, summary:a.summary };
-            encode(guarded_disk(directory, authority.input_admission(p), move |s| s.complete(&owner, &host, &a.acceptance_id, input)).await?)?
+            let admission = service.runtime_admission(
+                p, &row.binding.desktop_id, row.binding.desktop_generation,
+                ManagedDesktopRuntimeGate::Acceptance, authority.input_admission(p),
+            ).await?;
+            encode(guarded_disk(directory, admission, move |s| s.complete(&owner, &host, &a.acceptance_id, input)).await?)?
         }
         "managed_desktop_results_prepare_delete" => {
             p.require_human()?;
@@ -372,15 +400,15 @@ mod tests {
         let mut binding = binding(&source); binding.agent_principal_id = Some("agent".into());
         let row = store.register("owner","host",binding).unwrap();
         let mut p = ManagedDesktopPrincipal { owner_principal_id:"owner".into(),host_id:"host".into(),principal_id:"agent".into(),authority:ManagedDesktopAuthority::Human };
-        assert_eq!(require_agent(&p,&row).unwrap_err().code,"managed_desktop_acceptance_delegation_required");
+        assert_eq!(require_agent(&p, &row, false).unwrap_err().code,"managed_desktop_acceptance_delegation_required");
         p.authority = ManagedDesktopAuthority::Agent;
-        assert_eq!(require_agent(&p,&row).unwrap_err().code,"managed_desktop_acceptance_unqualified");
+        assert_eq!(require_agent(&p, &row, false).unwrap_err().code,"managed_desktop_acceptance_unqualified");
+        assert!(require_agent(&p, &row, true).is_ok());
     }
     #[test]
     fn caller_cannot_supply_decision_identity_or_pixels() {
         assert!(decode::<Approval>(serde_json::json!({"acceptanceId":"a","expectedRevision":0,"decision":"approved","idempotencyKey":"k","principalId":"forged"})).is_err());
         assert!(decode::<Capture>(serde_json::json!({"acceptanceId":"a","artifactId":"b","criterionId":"c","kind":"checkpoint","bytes":"forged"})).is_err());
         assert!(decode::<Complete>(serde_json::json!({"acceptanceId":"a","idempotencyKey":"k","outcome":"passed","criteria":[],"summary":"ok","principalId":"forged"})).is_err());
-        assert!(!PRODUCTION_ACCEPTANCE_ENABLED);
     }
 }

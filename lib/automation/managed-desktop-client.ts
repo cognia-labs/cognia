@@ -74,6 +74,65 @@ export interface ManagedDesktopMonitor {
 }
 /** Host event raised when any account's monitor changed; it carries no data. */
 export const MANAGED_DESKTOP_MONITOR_CHANGED = "managed-desktop://monitor-changed"
+/** Host event raised when any qualification run changed; it carries no data. */
+export const MANAGED_DESKTOP_QUALIFICATION_CHANGED = "managed-desktop://qualification-changed"
+
+/** One native qualification category (ADR-0233 A3). Each produces its own receipt. */
+export type ManagedDesktopQualificationCategory =
+  "lifecycle" | "control" | "authority" | "workload" | "commit" | "bundle"
+/** Per-configuration switches (A4). The Host reports the effective value: a stale receipt reads off. */
+export interface ManagedDesktopEnablement {
+  manualGui: boolean
+  agentControl: boolean
+  acceptance: boolean
+}
+export interface ManagedDesktopCategoryReceipt {
+  category: ManagedDesktopQualificationCategory
+  /** Whether a receipt exists for this exact configuration revision and template. */
+  current: boolean
+  observedAt: number | null
+}
+/** `gui` qualifies manual GUI and agent control; `acceptance` adds both handoff modes. */
+export type ManagedDesktopQualificationScope = "gui" | "acceptance"
+export type ManagedDesktopQualificationRunState =
+  | "running"
+  | "awaitingApproval"
+  | "passed"
+  | "failed"
+  | "cancelled"
+  /** A Host restart ended the run; it is never resumed silently. */
+  | "interrupted"
+export interface ManagedDesktopQualificationRun {
+  runId: string
+  providerConfigId: string
+  configRevision: number
+  scope: ManagedDesktopQualificationScope
+  state: ManagedDesktopQualificationRunState
+  currentCategory: ManagedDesktopQualificationCategory | null
+  /** The billed step the run is paused on; nothing is spent until it is approved. */
+  awaitingApproval: {
+    quote: ManagedDesktopQuote
+    purpose: "prepareTemplate" | "smoke"
+    /** Template preparation may incur provider build charges beyond the quote. */
+    templateBuildCharges: boolean
+  } | null
+  categories: {
+    category: ManagedDesktopQualificationCategory
+    state: "pending" | "running" | "passed" | "failed" | "skipped"
+    errorCode: string | null
+  }[]
+  handoff: { deliveryId: string; script: string } | null
+  errorCode: string | null
+  startedAt: number
+  updatedAt: number
+  finishedAt: number | null
+}
+export interface ManagedDesktopQualificationStart {
+  providerConfigId: string
+  scope: ManagedDesktopQualificationScope
+  /** Required for `acceptance`: an existing delivery and the npm script the guest runs. */
+  handoff?: { deliveryId: string; script: string }
+}
 
 /** The account plan the Host administrator confirmed (ADR-0233 §3). */
 export interface ManagedDesktopPlanBinding {
@@ -108,6 +167,9 @@ export interface ManagedDesktopConfigSummary extends ManagedDesktopQualification
   canCreate: boolean
   /** False until the Host records an authorized, measured GUI smoke receipt. */
   guiQualified?: boolean
+  enablement: ManagedDesktopEnablement
+  /** All six categories, in qualification order. */
+  qualificationCategories: ManagedDesktopCategoryReceipt[]
   isolationTier: IsolationTier
   egressTier: EgressTier
   egressEnforcement: "provider-and-guest-kernel" | "unverified"
@@ -144,6 +206,8 @@ export interface ManagedDesktopConfigDraft {
   /** Only egress Off is qualified (amendment A10). */
   egress: { mode: "off" }
   isolationMinimum: IsolationTier
+  /** The Host refuses a switch whose receipts are not current for this revision. */
+  enablement: ManagedDesktopEnablement
 }
 /** Where a new provider key comes from. A copied key never reaches the renderer. */
 export type ManagedDesktopCredentialSource =
@@ -227,6 +291,9 @@ const ADMIN_OPERATIONS = [
   "managed_desktop_create",
   "managed_desktop_connect",
   "managed_desktop_delete",
+  "managed_desktop_qualify_start",
+  "managed_desktop_qualify_approve",
+  "managed_desktop_qualify_cancel",
 ]
 
 /** Public pairing projection shared by lifecycle and the settings identity boundary. */
@@ -456,18 +523,35 @@ export const managedDesktopClient = {
     call<ManagedDesktopHealth>(target, "managed_desktop_health", { ...ref }),
   delete: (target: ManagedDesktopTarget, ref: ManagedDesktopRef) =>
     call<ManagedDesktopResource>(target, "managed_desktop_delete", { ...ref }),
+  qualifyStart: (target: ManagedDesktopTarget, request: ManagedDesktopQualificationStart) =>
+    call<ManagedDesktopQualificationRun>(target, "managed_desktop_qualify_start", { ...request }),
+  qualifyStatus: (target: ManagedDesktopTarget, runId: string) =>
+    call<ManagedDesktopQualificationRun>(target, "managed_desktop_qualify_status", { runId }),
+  /** Newest first; finished runs stay listed for a bounded history. */
+  qualifyList: (target: ManagedDesktopTarget) =>
+    call<{ runs: ManagedDesktopQualificationRun[] }>(target, "managed_desktop_qualify_list", {}),
+  /** Approves exactly the quote the run is paused on. */
+  qualifyApprove: (target: ManagedDesktopTarget, runId: string, quoteId: string) =>
+    call<ManagedDesktopQualificationRun>(target, "managed_desktop_qualify_approve", {
+      runId,
+      quoteId,
+    }),
+  /** Ends the run and destroys any desktop it created. */
+  qualifyCancel: (target: ManagedDesktopTarget, runId: string) =>
+    call<ManagedDesktopQualificationRun>(target, "managed_desktop_qualify_cancel", { runId }),
 }
 /**
- * Keep `onMonitor` current with the caller's monitor on one Host: one read
- * now, then one per `managed-desktop://monitor-changed` event. A remote Host
- * holds its management channel for as long as the watch lives. Responses
- * that arrive after a newer read, after `stop`, or across an account or Host
- * change are dropped.
+ * Keep `onValue` current with one Host read: one read now, then one per
+ * data-free `topic` event. A remote Host holds its management channel for as
+ * long as the watch lives. Responses that arrive after a newer read, after
+ * `stop`, or across an account or Host change are dropped.
  */
-export function watchManagedDesktopMonitor(
+function watchHostTopic<T>(
   target: ManagedDesktopTarget,
-  onMonitor: (monitor: ManagedDesktopMonitor) => void,
-  onError: (error: unknown) => void = () => {}
+  topic: string,
+  read: () => Promise<T>,
+  onValue: (value: T) => void,
+  onError: (error: unknown) => void
 ): () => void {
   const identity = managedDesktopIdentityScope(target)
   let stopped = false
@@ -476,15 +560,15 @@ export function watchManagedDesktopMonitor(
   let release: (() => void) | undefined
   const refresh = () => {
     const sequence = ++latest
-    managedDesktopClient.monitor(target).then(
-      (monitor) => {
+    read().then(
+      (value) => {
         if (stopped || sequence !== latest) return
         try {
           identity.assertActive()
         } catch {
           return
         }
-        onMonitor(monitor)
+        onValue(value)
       },
       (error) => {
         if (!stopped && sequence === latest) onError(error)
@@ -492,7 +576,7 @@ export function watchManagedDesktopMonitor(
     )
   }
   if (target.kind === "local") {
-    unsubscribe = localTransport.subscribe(MANAGED_DESKTOP_MONITOR_CHANGED, refresh)
+    unsubscribe = localTransport.subscribe(topic, refresh)
     refresh()
   } else {
     acquireManagementChannel(target.hostId).then(
@@ -502,7 +586,7 @@ export function watchManagedDesktopMonitor(
           return
         }
         release = () => lease.release()
-        unsubscribe = lease.transport.subscribe(MANAGED_DESKTOP_MONITOR_CHANGED, refresh)
+        unsubscribe = lease.transport.subscribe(topic, refresh)
         refresh()
       },
       (error) => {
@@ -516,6 +600,36 @@ export function watchManagedDesktopMonitor(
     release?.()
     identity.dispose()
   }
+}
+
+/** The caller's monitor on one Host, refreshed on `managed-desktop://monitor-changed`. */
+export function watchManagedDesktopMonitor(
+  target: ManagedDesktopTarget,
+  onMonitor: (monitor: ManagedDesktopMonitor) => void,
+  onError: (error: unknown) => void = () => {}
+): () => void {
+  return watchHostTopic(
+    target,
+    MANAGED_DESKTOP_MONITOR_CHANGED,
+    () => managedDesktopClient.monitor(target),
+    onMonitor,
+    onError
+  )
+}
+
+/** The caller's qualification runs on one Host, refreshed on every run change. */
+export function watchManagedDesktopQualification(
+  target: ManagedDesktopTarget,
+  onRuns: (runs: ManagedDesktopQualificationRun[]) => void,
+  onError: (error: unknown) => void = () => {}
+): () => void {
+  return watchHostTopic(
+    target,
+    MANAGED_DESKTOP_QUALIFICATION_CHANGED,
+    async () => (await managedDesktopClient.qualifyList(target)).runs,
+    onRuns,
+    onError
+  )
 }
 
 /** Open once per viewer. Authentication replacement invalidates, never silently rebinds control. */
@@ -713,6 +827,13 @@ export function managedDesktopErrorKey(error: unknown): string {
     managed_desktop_template_in_use: "templateInUse",
     managed_desktop_template_not_found: "templateNotFound",
     managed_desktop_template_outcome_unknown: "templateOutcomeUnknown",
+    managed_desktop_enablement_unqualified: "enablementUnqualified",
+    managed_desktop_qualification_running: "qualificationRunning",
+    managed_desktop_qualification_not_found: "qualificationNotFound",
+    managed_desktop_qualification_quote_mismatch: "qualificationQuoteMismatch",
+    managed_desktop_qualification_not_awaiting: "qualificationNotAwaiting",
+    managed_desktop_handoff_delivery_unknown: "handoffDeliveryUnknown",
+    managed_desktop_handoff_script_invalid: "handoffScriptInvalid",
     quote_expired: "quoteExpired",
     authorization_expired: "quoteExpired",
   }

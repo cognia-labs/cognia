@@ -9,6 +9,10 @@ pub mod provider;
 pub mod service;
 
 pub use contracts::*;
+// Provider implementors need the boundary/report types used by the public
+// ManagedDesktopProvider interface without a second dependency declaration.
+pub use cognia_desktop_guest::observation::ProcessBoundaryReport;
+pub use cognia_e2b::envd::EgressProbeReport;
 pub use provider::{
     E2bDesktopProvider, FileManagedDesktopSecrets, ManagedDesktopImageVerifier,
     ManagedDesktopProvider, ManagedDesktopSecrets,
@@ -23,3 +27,5 @@ pub use service::control::{
     ManagedControlFrame, ManagedControlLease, ManagedControlStatus,
     ManagedControlInput, ManagedControlLeaseRef,
 };
+
+pub use service::qualification_runs::*;

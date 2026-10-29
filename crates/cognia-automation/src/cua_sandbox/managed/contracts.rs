@@ -271,6 +271,8 @@ pub struct ManagedDesktopMonitor {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagedDesktopConfigDraft {
+    #[serde(default)]
+    pub enablement: ManagedDesktopEnablement,
     pub id: String,
     /// `None` creates a configuration; `Some(revision)` replaces exactly that
     /// revision and fails if another save landed first.
@@ -349,6 +351,8 @@ impl RetiredCredential {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ManagedDesktopConfig {
+    #[serde(default, skip_serializing_if = "ManagedDesktopEnablement::is_disabled")]
+    pub enablement: ManagedDesktopEnablement,
     pub id: String,
     pub owner_principal_id: String,
     pub host_id: String,
@@ -413,9 +417,9 @@ impl ManagedDesktopConfig {
     pub fn binding_digest(&self) -> String {
         // Includes policy, account generation, price, region and release. A
         // config change invalidates existing quotes/qualification receipts.
-        hex::encode(Sha256::digest(
-            serde_json::to_vec(self).expect("config JSON"),
-        ))
+        let mut binding = self.clone();
+        binding.enablement = ManagedDesktopEnablement::default();
+        hex::encode(Sha256::digest(serde_json::to_vec(&binding).expect("config JSON")))
     }
     pub fn secret_ref(&self) -> String {
         self.credential().secret_ref()
@@ -576,7 +580,8 @@ pub struct WorkloadQualificationEvidence {
 
 /// Native-only records collected by fixed smoke producers. No RPC or operator
 /// input accepts caller-authored qualification assertions.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum NativeQualificationKind {
     Lifecycle,
     Control,
@@ -752,6 +757,8 @@ pub struct ManagedDesktopHealth {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedDesktopConfigSummary {
+    pub enablement: ManagedDesktopEnablement,
+    pub qualification_categories: Vec<ManagedDesktopQualificationCategory>,
     pub id: String,
     pub owner_principal_id: String,
     pub host_id: String,
@@ -787,6 +794,23 @@ pub struct ManagedDesktopConfigSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_configuration_defaults_switches_off_and_switches_do_not_change_the_binding() {
+        let f = super::super::service::tests::Fixture::new();
+        let legacy = serde_json::to_value(&f.config).unwrap();
+        assert!(legacy.get("enablement").is_none());
+        let restored: ManagedDesktopConfig = serde_json::from_value(legacy).unwrap();
+        assert_eq!(restored.enablement, ManagedDesktopEnablement::default());
+        let mut enabled = restored.clone();
+        enabled.enablement = ManagedDesktopEnablement {
+            manual_gui: true,
+            agent_control: true,
+            acceptance: true,
+        };
+        assert_eq!(enabled.binding_digest(), restored.binding_digest());
+        enabled.revision += 1;
+        assert_ne!(enabled.binding_digest(), restored.binding_digest());
+    }
     #[test]
     fn policy_only_tightens_and_entitlement_never_clips() {
         assert!(DesktopLimits::default().validate().is_ok());
@@ -899,4 +923,38 @@ impl HostAuthoritySmokeEvidence {
             && self.compound_admitted_commands == 1
             && self.compound_denied_commands == 1
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ManagedDesktopEnablement {
+    #[serde(default)]
+    pub manual_gui: bool,
+    #[serde(default)]
+    pub agent_control: bool,
+    #[serde(default)]
+    pub acceptance: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedDesktopQualificationCategory {
+    pub category: NativeQualificationKind,
+    pub current: bool,
+    pub observed_at: Option<i64>,
+}
+
+impl ManagedDesktopEnablement {
+    fn is_disabled(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Selected by trusted Host call sites, never accepted as an RPC argument.
+#[derive(Clone, Copy)]
+pub enum ManagedDesktopRuntimeGate {
+    ManualGui,
+    /// Stored consent only: WP8's agent delegation path will consume this
+    /// gate. No agent runtime caller exists until that work is installed.
+    AgentControl,
+    Acceptance,
 }

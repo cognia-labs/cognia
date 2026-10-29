@@ -786,8 +786,7 @@ async fn control_smoke_steps(
             smoke_live_lease_deadline(&service, p, &desktop, &old_lease).await?;
         // Closing the service drops its actual WebSocket senders and journal lock.
         // This is a service reopen, not an operating-system/process restart claim.
-        drop(service);
-        let service = host.open(host.provider())?;
+        let service = host.checkpoint(service, host.provider(), &[desktop.id.clone()]).await?;
         require_smoke_error(
             smoke_input(&service, p, &desktop, &old_lease, &old_frame, &authority).await,
             "managed_desktop_control_lease_expired",
@@ -835,8 +834,7 @@ async fn control_smoke_steps(
         assertions.compound_send_revocation = true;
         stage = "quarantine_survives_reopen";
         authority.active.store(true, Ordering::SeqCst);
-        drop(service);
-        let service = host.open(host.provider())?;
+        let service = host.checkpoint(service, host.provider(), &[desktop.id.clone()]).await?;
         require_smoke_error(
             service
                 .control_acquire_inner(p, &desktop.id, desktop.generation, true, &authority, true)
@@ -954,20 +952,9 @@ impl ManagedDesktopService {
     }
     pub(super) async fn control_qualified(&self, row: &DesktopRecord) -> bool {
         let state = self.state.lock().await;
-        let digest = row.config.binding_digest();
-        qualified(&state, &digest, &row.template)
-            && state.control_qualifications.get(&digest).is_some_and(|r| {
-                r.binding_digest == digest
-                    && r.template == row.template
-                    && r.has_complete_evidence()
-                    && state.desktops.get(&r.smoke_desktop_id).is_some_and(|d| {
-                        d.smoke
-                            && d.desktop.generation == r.smoke_desktop_generation
-                            && d.config.binding_digest() == digest
-                            && d.template == row.template
-                            && d.desktop.state == ManagedDesktopState::Destroyed
-                    })
-            })
+        let now = (self.clock)();
+        latest_template(&state, &row.config.binding_digest()).and_then(|t| t.identity.as_ref()) == Some(&row.template)
+            && qualification::gui_current(&state, &row.config, now)
     }
     async fn control_check(
         &self,
@@ -1005,7 +992,8 @@ impl ManagedDesktopService {
             return Err(refused("managed_desktop_control_unavailable"));
         }
         if !(smoke && row.smoke && p.authority == ManagedDesktopAuthority::Administrator)
-            && !self.control_qualified(&row).await
+            && (!self.control_qualified(&row).await
+                || !self.effective_enablement(p, &current.id).await?.manual_gui)
         {
             return Err(refused("managed_desktop_control_unqualified"));
         }
@@ -1063,7 +1051,8 @@ impl ManagedDesktopService {
         generation: u64,
     ) -> Result<ManagedControlStatus> {
         let row = self.scoped(p, id, generation).await?;
-        let qualified = self.control_qualified(&row).await
+        let enablement = self.desktop_enablement(p, id, generation).await.unwrap_or_default();
+        let qualified = enablement.manual_gui && self.control_qualified(&row).await
             && self.config(p, &row.config.id).await.is_ok_and(|current| {
                 current.binding_digest() == row.config.binding_digest()
                     && self.admission(&current, (self.clock)()).is_ok()
@@ -1102,6 +1091,8 @@ impl ManagedDesktopService {
             lease_expires_at: c.lease.as_ref().map(|l| l.dto.expires_at),
             fence: c.fence,
             can_acquire: state == "observer" && p.require_human().is_ok(),
+            // WP8's delegation path is the consumer. Saving consent alone
+            // cannot activate an agent path that is not installed yet.
             agent_control_dormant: true,
         })
     }
@@ -1635,7 +1626,15 @@ impl ManagedDesktopService {
             c.invalidate();
             return Err(refused("managed_desktop_control_unavailable"));
         }
-        let live_authority = authority.input_admission(p);
+        let live_authority = if smoke {
+            authority.input_admission(p)
+        } else {
+            self.runtime_admission_for_record(
+                &row,
+                ManagedDesktopRuntimeGate::ManualGui,
+                authority.input_admission(p),
+            )
+        };
         let send_counts = smoke.then(|| Arc::new((AtomicU64::new(0), AtomicU64::new(0))));
         let observed_sends = send_counts.clone();
         let client = client.fenced(Arc::new(move || {

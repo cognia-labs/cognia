@@ -42,7 +42,10 @@ impl PrepareHandoff {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HandoffDelivery {
-    id: String, revision: u64, commit: String, branch: String,
+    pub(crate) id: String,
+    pub(crate) revision: u64,
+    pub(crate) commit: String,
+    branch: String,
     modes: Vec<TransferMode>, created_at: u64,
 }
 #[derive(Serialize)]
@@ -50,9 +53,9 @@ pub struct HandoffDelivery {
 pub struct HandoffProposal {
     id: String, delivery_id: String, delivery_revision: u64, mode: TransferMode,
     commit: String, quote: ManagedDesktopQuote, expires_at: i64,
-    /// Always false in P3. No renderer flag can lift the P4/qualification gate.
+    /// Effective per-configuration acceptance gate, revalidated by the Host.
     execution_enabled: bool,
-    dormant_reason: &'static str,
+    dormant_reason: Option<&'static str>,
 }
 fn modes(record: &TaskDeliveryRecord) -> Vec<TransferMode> {
     let Some(commit) = &record.commit else { return vec![] };
@@ -68,11 +71,19 @@ fn valid_commit(commit: &str) -> bool {
 }
 pub fn resolve(directory: &Path, p: &ManagedDesktopPrincipal, request: &PrepareHandoff)
     -> Result<(TaskDeliveryRecord, DeliverySource)> {
+    resolve_transfer(directory, p, request, false)
+}
+pub(crate) fn resolve_transfer(
+    directory: &Path,
+    p: &ManagedDesktopPrincipal,
+    request: &PrepareHandoff,
+    qualification: bool,
+) -> Result<(TaskDeliveryRecord, DeliverySource)> {
     request.validate()?;
     let (record, source) = DeliveryStore::new(directory)
         .authorize(&request.delivery_id, request.delivery_revision, &p.owner_principal_id, &p.host_id)
         .map_err(|_| refused("managed_desktop_handoff_source_unavailable"))?;
-    if !modes(&record).contains(&request.mode) {
+    if (qualification && modes(&record).is_empty()) || (!qualification && !modes(&record).contains(&request.mode)) {
         return Err(refused("managed_desktop_handoff_delivery_unavailable"));
     }
     Ok((record, source))
@@ -92,7 +103,13 @@ pub async fn list(directory: &Path, p: &ManagedDesktopPrincipal) -> Result<Vec<H
 }
 pub async fn prepare(directory: &Path, service: &ManagedDesktopService, p: &ManagedDesktopPrincipal, request: PrepareHandoff) -> Result<HandoffProposal> {
     let config = request.provider_config_id.clone(); let lifetime = request.lifetime_seconds;
-    prepare_quoted(directory, p, request, async { service.quote(p, &config, lifetime).await }).await
+    let mut proposal = prepare_quoted(directory, p, request, async { service.quote(p, &config, lifetime).await }).await?;
+    let enablement = service.quote_enablement(p, &proposal.quote).await?;
+    proposal.execution_enabled = enablement.acceptance;
+    if proposal.execution_enabled {
+        proposal.dormant_reason = None;
+    }
+    Ok(proposal)
 }
 
 // Keep the read -> asynchronous quote -> reauthorization boundary explicit so
@@ -113,7 +130,11 @@ async fn prepare_quoted(directory: &Path, p: &ManagedDesktopPrincipal, request: 
         .map_err(|_| refused("managed_desktop_invalid_request"))?;
     Ok(HandoffProposal { id: hex::encode(Sha256::digest(bytes)), delivery_id: record.id,
         delivery_revision: record.revision, mode: request.mode, commit: record.commit.unwrap_or_default(),
-        expires_at: quote.expires_at, quote, execution_enabled: false, dormant_reason: DORMANT_REASON })
+        expires_at: quote.expires_at,
+        quote,
+        execution_enabled: Default::default(),
+        dormant_reason: Some(DORMANT_REASON),
+    })
 }
 pub async fn revoke(directory: &Path, p: &ManagedDesktopPrincipal, ids: Vec<String>) -> Result<()> {
     if ids.is_empty() || ids.len() > 1000 || ids.iter().any(|id| id.is_empty() || id.len() > 256) {
@@ -195,6 +216,18 @@ mod tests {
             Ok(quote())
         }).await;
         assert!(denied.is_err());
+    }
+    #[tokio::test]
+    async fn enabled_handoff_serializes_a_null_dormancy_reason() {
+        let (directory, principal, request) = persisted_source();
+        let mut proposal = prepare_quoted(directory.path(), &principal, request, async { Ok(quote()) })
+            .await.unwrap();
+        assert_eq!(serde_json::to_value(&proposal).unwrap()["dormantReason"], DORMANT_REASON);
+        proposal.execution_enabled = true;
+        proposal.dormant_reason = None;
+        let encoded = serde_json::to_value(proposal).unwrap();
+        assert_eq!(encoded["executionEnabled"], true);
+        assert!(encoded["dormantReason"].is_null());
     }
     #[tokio::test]
     async fn agent_cannot_prepare_or_even_poll_a_quote() {

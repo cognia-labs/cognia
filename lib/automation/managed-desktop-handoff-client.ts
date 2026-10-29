@@ -47,8 +47,14 @@ export interface ManagedDesktopHandoffProposal {
   commit: string
   quote: ManagedDesktopQuote
   expiresAt: number
-  executionEnabled: false
-  dormantReason: "managed_desktop_handoff_requires_results_qualification"
+  /**
+   * The Host's effective acceptance switch for this configuration. No renderer
+   * executor exists yet (WP9), so `MANAGED_DESKTOP_HANDOFF_CAPABILITIES` keeps
+   * production execution off whatever this reports.
+   */
+  executionEnabled: boolean
+  /** Why execution is off; `null` once the acceptance switch is effective. */
+  dormantReason: "managed_desktop_handoff_requires_results_qualification" | null
 }
 
 async function call<T>(

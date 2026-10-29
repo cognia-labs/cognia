@@ -40,7 +40,9 @@ import {
   managedDesktopErrorKey,
   openManagedDesktop,
   watchManagedDesktopMonitor,
+  watchManagedDesktopQualification,
   MANAGED_DESKTOP_MONITOR_CHANGED,
+  MANAGED_DESKTOP_QUALIFICATION_CHANGED,
 } from "./managed-desktop-client"
 
 beforeEach(() => {
@@ -159,6 +161,92 @@ describe("watchManagedDesktopMonitor", () => {
     stop()
     expect(unsubscribe).toHaveBeenCalled()
     expect(release).toHaveBeenCalled()
+  })
+})
+
+describe("qualification runs", () => {
+  test("reads go through the Host seam without an admin lease", async () => {
+    ;(localTransport.call as jest.Mock).mockResolvedValue({ runs: [] })
+    await managedDesktopClient.qualifyList({ kind: "local" })
+    await managedDesktopClient.qualifyStatus({ kind: "local" }, "run-1")
+    expect((localTransport.call as jest.Mock).mock.calls.map(([, payload]) => payload)).toEqual([
+      { name: "managed_desktop_qualify_list", args: {} },
+      { name: "managed_desktop_qualify_status", args: { runId: "run-1" } },
+    ])
+  })
+
+  test("start, approve and cancel carry an admin lease on a remote Host", async () => {
+    const call = jest.fn().mockResolvedValue({ runId: "run-1" })
+    const transport = { call }
+    ;(withManagementChannel as jest.Mock).mockImplementation((_host, work) =>
+      work({ transport, host: { config: { deviceId: "paired", accountId: "owner" } } })
+    )
+    ;(issueHostAdminLease as jest.Mock).mockResolvedValue({
+      token: "lease",
+      expiresAt: Date.now() + 60000,
+      operations: [
+        "managed_desktop_qualify_start",
+        "managed_desktop_qualify_approve",
+        "managed_desktop_qualify_cancel",
+      ],
+    })
+    const target = { kind: "remote" as const, hostId: "host" }
+    await managedDesktopClient.qualifyStatus(target, "run-1")
+    expect(issueHostAdminLease).not.toHaveBeenCalled()
+    await managedDesktopClient.qualifyStart(target, {
+      providerConfigId: "byo",
+      scope: "acceptance",
+      handoff: { deliveryId: "delivery", script: "test:e2e" },
+    })
+    expect(issueHostAdminLease).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        "managed_desktop_qualify_start",
+        "managed_desktop_qualify_approve",
+        "managed_desktop_qualify_cancel",
+      ]),
+      600,
+      transport
+    )
+    expect(call).toHaveBeenLastCalledWith("managed_desktop_qualify_start", {
+      providerConfigId: "byo",
+      scope: "acceptance",
+      handoff: { deliveryId: "delivery", script: "test:e2e" },
+      adminLease: "lease",
+    })
+    await managedDesktopClient.qualifyApprove(target, "run-1", "quote-1")
+    expect(call).toHaveBeenLastCalledWith("managed_desktop_qualify_approve", {
+      runId: "run-1",
+      quoteId: "quote-1",
+      adminLease: "lease",
+    })
+    await managedDesktopClient.qualifyCancel(target, "run-1")
+    expect(call).toHaveBeenLastCalledWith("managed_desktop_qualify_cancel", {
+      runId: "run-1",
+      adminLease: "lease",
+    })
+    expect(issueHostAdminLease).toHaveBeenCalledTimes(1)
+  })
+
+  test("the watcher lists runs on its own change event", async () => {
+    const unsubscribe = jest.fn()
+    ;(localTransport.subscribe as jest.Mock).mockReturnValue(unsubscribe)
+    ;(localTransport.call as jest.Mock)
+      .mockResolvedValueOnce({ runs: [{ runId: "a" }] })
+      .mockResolvedValueOnce({ runs: [{ runId: "b" }, { runId: "a" }] })
+    const seen: string[][] = []
+    const stop = watchManagedDesktopQualification({ kind: "local" }, (runs) =>
+      seen.push(runs.map((run) => run.runId))
+    )
+    expect(localTransport.subscribe).toHaveBeenCalledWith(
+      MANAGED_DESKTOP_QUALIFICATION_CHANGED,
+      expect.any(Function)
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    ;(localTransport.subscribe as jest.Mock).mock.calls[0][1]({})
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(seen).toEqual([["a"], ["b", "a"]])
+    stop()
+    expect(unsubscribe).toHaveBeenCalled()
   })
 })
 

@@ -13,7 +13,9 @@ import {
   subscribeManagedDesktopTargetChanges,
   openManagedDesktop,
   managedDesktopErrorKey,
+  watchManagedDesktopQualification,
   type ManagedDesktopConfigSummary,
+  type ManagedDesktopQualificationRun,
   type ManagedDesktopQuote,
   type ManagedDesktopReleaseStatus,
   type ManagedDesktopResource,
@@ -32,6 +34,11 @@ import { ManagedDesktopReleaseStatusLine } from "./managed-desktop-release-statu
 import { ManagedDesktopConfigForm } from "./managed-desktop-config-form"
 import { ManagedDesktopMonitorPanel } from "./managed-desktop-monitor"
 import { ManagedDesktopTemplates } from "./managed-desktop-templates"
+import { ManagedDesktopQualification } from "./managed-desktop-qualification"
+import {
+  isQualificationRunActive,
+  qualificationRunsFor,
+} from "@/lib/automation/managed-desktop-qualification"
 import { useConfirmDialog } from "@/components/shared/confirm-dialog"
 import type { SandboxConnectionRow } from "@/types/sandbox"
 
@@ -60,6 +67,7 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
   const [configs, setConfigs] = useState<ManagedDesktopConfigSummary[]>([])
   const [resources, setResources] = useState<ManagedDesktopResource[]>([])
   const [release, setRelease] = useState<ManagedDesktopReleaseStatus | null>(null)
+  const [runs, setRuns] = useState<ManagedDesktopQualificationRun[]>([])
   const [creating, setCreating] = useState(false)
   // Bumped by every reload so the template list follows prepare and delete.
   const [templatesRevision, setTemplatesRevision] = useState(0)
@@ -96,8 +104,19 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
     alive.current = true
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial Host read only; never provisions resources
     void reload()
+    // A run that stops being active may have recorded receipts or destroyed
+    // desktops, so the configurations and resources are read again.
+    let active = new Set<string>()
+    const stop = watchManagedDesktopQualification(target, (next) => {
+      const now = new Set(next.filter(isQualificationRunActive).map((run) => run.runId))
+      const finished = [...active].some((runId) => !now.has(runId))
+      active = now
+      setRuns(next)
+      if (finished) void reload()
+    })
     return () => {
       alive.current = false
+      stop()
     }
     // The keyed parent remounts for every target change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -160,6 +179,7 @@ function ManagedDesktopSettingsBody({ target }: { target: ManagedDesktopTarget }
           resources={resources.filter(
             (resource) => resource.providerConfigId === config.id && resource.state !== "destroyed"
           )}
+          runs={qualificationRunsFor(runs, config.id)}
           onChanged={() => void reload()}
         />
       ))}
@@ -199,11 +219,13 @@ function ProviderSettings({
   config,
   target,
   resources,
+  runs,
   onChanged,
 }: {
   config: ManagedDesktopConfigSummary
   target: ManagedDesktopTarget
   resources: ManagedDesktopResource[]
+  runs: ManagedDesktopQualificationRun[]
   onChanged: () => void
 }) {
   const t = useTranslations("settings.managedDesktops")
@@ -411,6 +433,7 @@ function ProviderSettings({
           {t("prepared")}
         </p>
       ) : null}
+      <ManagedDesktopQualification target={target} config={config} runs={runs} />
       <ManagedDesktopHandoff target={target} config={config} />
       {dialog}
       {resources.map((resource) => (
@@ -429,7 +452,7 @@ function ProviderSettings({
             target={target}
             resource={resource}
             row={connectionRow(config, target, resource)}
-            qualified={config.guiQualified === true && qualified}
+            qualified={config.enablement.manualGui && qualified}
           />
           <div className="flex gap-2">
             <Button

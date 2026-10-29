@@ -19,6 +19,7 @@ import type {
   ManagedDesktopConfigSummary,
   ManagedDesktopTarget,
 } from "@/lib/automation/managed-desktop-client"
+import { MANAGED_DESKTOP_HANDOFF_SCRIPT } from "@/lib/automation/managed-desktop-qualification"
 
 interface Props {
   target: ManagedDesktopTarget
@@ -48,7 +49,7 @@ function parseArgv(value: string): string[] | null {
           parsed[0] === "npm" &&
           parsed[1] === "run" &&
           typeof parsed[2] === "string" &&
-          /^[A-Za-z0-9:_-]+$/.test(parsed[2])))
+          MANAGED_DESKTOP_HANDOFF_SCRIPT.test(parsed[2])))
       ? parsed
       : null
   } catch {

@@ -52,7 +52,10 @@
       "priceCurrency": "币种",
       "priceHourly": "每小时费率",
       "priceSource": "费率来源",
-      "priceValidDays": "费率有效期（天）"
+      "priceValidDays": "费率有效期（天）",
+      "manualGui": "手动 GUI 查看与控制",
+      "agentControl": "Agent 控制",
+      "acceptance": "验收运行"
     },
     "invalid": "请检查「{field}」。",
     "isolation": {
@@ -70,7 +73,11 @@
     "rotateTitle": "替换已保存的 E2B 密钥？",
     "save": "保存配置",
     "shapeTitle": "桌面规格",
-    "storeKey": "保存密钥"
+    "storeKey": "保存密钥",
+    "enablementTitle": "此配置允许的用途",
+    "enablementHint": "只有该配置的验证凭据当前有效时，开关才能打开。修改配置或模板会使凭据失效。",
+    "enablementMissing": "缺少：{categories}",
+    "agentControlDormant": "聊天中的 agent 暂时还无法使用托管桌面；此开关目前只记录授权。"
   },
   "costs": "订阅、模板准备、税费和其他 provider 费用另计。此估算不是总账单上限。",
   "create": "创建临时桌面",
@@ -81,7 +88,7 @@
     "description": "该桌面及其上的所有内容都会被销毁。E2B 确认删除后停止计费。"
   },
   "description": "由所选 Host 使用你的 E2B 账户管理的临时 Linux 桌面。",
-  "dormant": "任务与 agent 控制、工作区访问、实时预览、自动验收、持久化和挂起/恢复保持 dormant。Agent 可以建议验收，但不能授权产生费用的创建操作。",
+  "dormant": "工作区访问、实时预览、持久化和挂起/恢复保持 dormant。GUI 控制、agent 控制和验收需在该配置于此 Host 通过验证后按配置开启。Agent 可以建议验收，但不能授权产生费用的创建操作。",
   "egress": {
     "allowlist": "允许列表",
     "off": "关闭",
@@ -118,9 +125,16 @@
     "templateNotFound": "Host 上已不存在此模板。请刷新列表。",
     "templateOutcomeUnknown": "模板的注册结果仍在核对中，请稍后再试。",
     "unknown": "Host 无法完成请求。请刷新配置和报价后重试。",
-    "unqualified": "此配置尚未通过真实 provider smoke 验证，桌面创建保持禁用。"
+    "unqualified": "此配置尚未通过真实 provider smoke 验证，桌面创建保持禁用。",
+    "enablementUnqualified": "此开关需要该配置当前有效的验证凭据。请关闭它或重新验证。",
+    "qualificationRunning": "该配置已有一个验证运行在进行中。",
+    "qualificationNotFound": "Host 上已不存在这个验证运行。",
+    "qualificationQuoteMismatch": "该运行正在等待另一份费用估算，请查看当前估算。",
+    "qualificationNotAwaiting": "该运行当前不需要批准。",
+    "handoffDeliveryUnknown": "所选交付已不在此 Host 上。",
+    "handoffScriptInvalid": "请输入 npm 脚本名：以字母、数字、: 或 _ 开头，其后可用字母、数字、: _ . 或 -。"
   },
-  "guiDormant": "此配置通过已授权的 GUI smoke 前，桌面查看和控制保持 dormant。",
+  "guiDormant": "为此配置开启手动 GUI 之前，桌面查看和控制保持关闭。",
   "handoff": {
     "argv": "启动命令参数（JSON 数组）",
     "argvHelp": "使用 [] 跳过启动，或使用 [\"npm\", \"run\", \"test\"] 在安装依赖后运行指定的 package script。命令在仓库根目录运行；此字段不是 shell 文本。",
@@ -286,5 +300,63 @@
     "deleted": "模板 {id} 已删除。"
   },
   "title": "托管云桌面",
-  "unqualified": "未启用 — 需要真实 provider 验证"
+  "unqualified": "未启用 — 需要真实 provider 验证",
+  "qualification": {
+    "title": "验证",
+    "description": "在此 Host 上用临时桌面运行原生检查。每个计费步骤都会等待你的批准；取消会销毁该运行创建的桌面。",
+    "receiptCurrent": "有效 · {date}",
+    "receiptMissing": "未验证",
+    "scopeLabel": "验证范围",
+    "scope": {
+      "gui": "GUI 与 agent 控制（4 项检查）",
+      "acceptance": "验收（全部 6 项检查，需要一个交付）"
+    },
+    "delivery": "要交接的交付",
+    "chooseDelivery": "选择一个交付",
+    "deliveryOption": "{branch} · {commit}",
+    "loadDeliveries": "加载交付",
+    "noDeliveries": "此 Host 上没有可交接的交付。",
+    "script": "桌面运行的 npm 脚本",
+    "scriptHelp": "在仓库根目录以 npm run 加上此名称运行。",
+    "scriptInvalid": "请输入 npm 脚本名：以字母、数字、: 或 _ 开头，其后可用字母、数字、: _ . 或 -。",
+    "start": "开始验证",
+    "starting": "正在开始…",
+    "category": {
+      "lifecycle": "生命周期",
+      "control": "控制",
+      "authority": "授权",
+      "workload": "工作负载隔离",
+      "commit": "提交交接",
+      "bundle": "恢复包交接"
+    },
+    "categoryState": {
+      "pending": "等待中",
+      "running": "运行中",
+      "passed": "已通过",
+      "failed": "失败",
+      "skipped": "已跳过"
+    },
+    "runState": {
+      "running": "运行中",
+      "awaitingApproval": "等待你的批准",
+      "passed": "已通过",
+      "failed": "失败",
+      "cancelled": "已取消",
+      "interrupted": "因 Host 重启而中断"
+    },
+    "runTitle": "{scope} · 开始于 {date}",
+    "current": "当前：{category}",
+    "awaitingTitle": "批准此计费步骤",
+    "purpose": {
+      "prepareTemplate": "准备固定模板",
+      "smoke": "创建临时验证桌面"
+    },
+    "templateBuildCharges": "准备模板还可能产生此估算未包含的 provider 构建费用。",
+    "approve": "批准并继续",
+    "cancel": "取消运行",
+    "cancelTitle": "取消此验证运行？",
+    "cancelDescription": "Host 会停止运行并销毁它创建的所有桌面。已记录的凭据保留。",
+    "history": "较早的运行",
+    "empty": "此 Host 上还没有验证运行。"
+  }
 }

@@ -1,5 +1,5 @@
-//! Explicit native operator qualification. Never registered as an RPC method.
-//! This owns its service instances and never starts a reconciliation worker.
+//! Shared native qualification. The operator opens an exclusive service;
+//! the in-app Host supplies handles to its already installed service.
 use super::*;
 use async_trait::async_trait;
 use std::{
@@ -10,6 +10,13 @@ use std::{
 
 pub struct ExplicitPaidSmokeAuthorization(());
 impl ExplicitPaidSmokeAuthorization {
+    /// Selects the native evidence producer for an in-app run. Every billed
+    /// step still blocks in `approve_quote` until a human approves exactly
+    /// that run and quote; this permit never approves spending.
+    pub fn for_in_app_run() -> Self {
+        Self(())
+    }
+
     pub fn from_operator_flag(flag: &str) -> Result<Self> {
         if flag == "--authorize-paid-smoke" {
             Ok(Self(()))
@@ -27,7 +34,18 @@ pub trait ManagedDesktopSmokeHost: Send + Sync {
     /// Each call must open the same private data directory and Host identity.
     /// Do not install the normal application's periodic reconciliation task.
     fn open(&self, provider: Arc<dyn ManagedDesktopProvider>) -> Result<ManagedDesktopService>;
-    /// The native operator sees and explicitly accepts the current quote.
+    /// Reopen for a stopped-Host operator, or verify the installed journal and
+    /// reset only these diagnostic control sessions in a running Host.
+    async fn checkpoint(
+        &self,
+        service: ManagedDesktopService,
+        provider: Arc<dyn ManagedDesktopProvider>,
+        _desktops: &[String],
+    ) -> Result<ManagedDesktopService> {
+        drop(service);
+        self.open(provider)
+    }
+    /// The human sees and explicitly accepts the current quote.
     /// For template setup, disclose that provider build charges may be separate.
     async fn approve_quote(
         &self,
@@ -187,6 +205,7 @@ async fn run_steps(
         .await?;
     let first = service.create_smoke(p, request).await?;
     let first = wait_ready(&service, p, first, wait).await?;
+    let first_hold = service.hold_diagnostic(&first.id);
     let first_record = service.scoped(p, &first.id, first.generation).await?;
     let endpoint = service.secrets.desktop(&first.id).await?;
     let provider_root_observation = provider
@@ -211,7 +230,7 @@ async fn run_steps(
         return Err(refused("managed_desktop_provider_policy_mismatch"));
     }
     // Service storage is actually closed and reopened, not merely cloned.
-    service = reopen(host, service, provider.clone())?;
+    service = host.checkpoint(service, provider.clone(), &[first.id.clone()]).await?;
     let recovered = service.scoped(p, &first.id, first.generation).await?;
     if recovered.desktop.deadline_at != first.deadline_at
         || recovered.last_activity_at != first_record.last_activity_at
@@ -250,6 +269,7 @@ async fn run_steps(
     {
         return Err(refused("managed_desktop_native_expiry_unproven"));
     }
+    drop(first_hold);
     service.reconcile().await?;
     if service.scoped(p, &first.id, 1).await?.desktop.state != ManagedDesktopState::Destroyed {
         return Err(refused("managed_desktop_smoke_cleanup_pending"));
@@ -267,6 +287,7 @@ async fn run_steps(
     .await?;
     let second = service.create_smoke(p, request).await?;
     let second = wait_ready(&service, p, second, wait).await?;
+    let _second_hold = service.hold_diagnostic(&second.id);
     let second_record = service.scoped(p, &second.id, second.generation).await?;
     let second_resource = second_record
         .resource_id
@@ -285,7 +306,7 @@ async fn run_steps(
     if pending.state != ManagedDesktopState::DestroyRetrying || pending.cleanup_attempts != 1 {
         return Err(refused("managed_desktop_delete_retry_unproven"));
     }
-    service = reopen(host, service, provider.clone())?;
+    service = host.checkpoint(service, provider.clone(), &[second.id.clone()]).await?;
     let pending = service.scoped(p, &second.id, second.generation).await?;
     if pending.desktop.state != ManagedDesktopState::DestroyRetrying || !pending.delete_requested {
         return Err(refused("managed_desktop_delete_retry_unproven"));
@@ -360,15 +381,6 @@ pub(super) async fn wait_ready(
         desktop = service.connect(p, &desktop.id, desktop.generation).await?;
     }
     Err(refused("managed_desktop_smoke_not_ready"))
-}
-
-fn reopen(
-    host: &dyn ManagedDesktopSmokeHost,
-    service: ManagedDesktopService,
-    provider: Arc<FailOneDelete>,
-) -> Result<ManagedDesktopService> {
-    drop(service);
-    host.open(provider)
 }
 
 struct FailOneDelete {

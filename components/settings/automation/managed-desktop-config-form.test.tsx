@@ -104,6 +104,19 @@ const config: ManagedDesktopConfigSummary = {
   idleTimeoutSeconds: 600,
   cpuCount: 2,
   memoryMb: 4096,
+  enablement: { manualGui: false, agentControl: false, acceptance: false },
+  qualificationCategories: (
+    ["lifecycle", "control", "authority", "workload", "commit", "bundle"] as const
+  ).map((category) => ({ category, current: false, observedAt: null })),
+}
+/** The four GUI receipts current; neither handoff receipt. */
+const guiQualified: ManagedDesktopConfigSummary = {
+  ...config,
+  qualificationCategories: config.qualificationCategories.map((receipt) => ({
+    ...receipt,
+    current: !["commit", "bundle"].includes(receipt.category),
+    observedAt: ["commit", "bundle"].includes(receipt.category) ? null : 1,
+  })),
 }
 
 function renderForm(
@@ -156,7 +169,12 @@ describe("managedDesktopDraft", () => {
     priceCurrency: "usd",
     priceSource: "pricing page",
     priceValidDays: "30",
+    planValidForMs: null,
+    priceValidForMs: null,
     isolationMinimum: "vm" as const,
+    manualGui: true,
+    agentControl: false,
+    acceptance: false,
   }
 
   test("sends durations and micros, never timestamps or owner fields", () => {
@@ -182,6 +200,7 @@ describe("managedDesktopDraft", () => {
         },
         egress: { mode: "off" },
         isolationMinimum: "vm",
+        enablement: { manualGui: true, agentControl: false, acceptance: false },
       },
     })
   })
@@ -334,4 +353,91 @@ test("shows the Host's refusal in the active locale", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent(
     zhMessages.errors.configRevisionConflict
   )
+})
+
+describe("enablement switches", () => {
+  test("a new or unqualified configuration cannot turn any switch on", () => {
+    renderForm({ config })
+    for (const gate of ["manualGui", "agentControl", "acceptance"] as const)
+      expect(screen.getByLabelText(form.fields[gate])).toBeDisabled()
+    expect(document.querySelector("[data-gate-missing='manualGui']")).toHaveTextContent(
+      "Lifecycle, Control, Authority, Workload isolation"
+    )
+    expect(document.querySelector("[data-gate-missing='acceptance']")).toHaveTextContent(
+      "Recovery bundle handoff"
+    )
+  })
+
+  test("GUI receipts allow GUI and agent control without handoff receipts", async () => {
+    api.saveConfig.mockResolvedValue(guiQualified)
+    renderForm({ config: guiQualified })
+    expect(screen.getByLabelText(form.fields.manualGui)).toBeEnabled()
+    expect(screen.getByLabelText(form.fields.agentControl)).toBeEnabled()
+    expect(screen.getByLabelText(form.fields.acceptance)).toBeDisabled()
+    expect(document.querySelector("[data-gate-missing='acceptance']")).toHaveTextContent(
+      `${messages.qualification.category.commit}, ${messages.qualification.category.bundle}`
+    )
+    fireEvent.click(screen.getByLabelText(form.fields.manualGui))
+    fireEvent.click(screen.getByRole("button", { name: form.save }))
+    await waitFor(() => expect(api.saveConfig).toHaveBeenCalled())
+    expect(api.saveConfig.mock.calls[0][1].enablement).toEqual({
+      manualGui: true,
+      agentControl: false,
+      acceptance: false,
+    })
+  })
+
+  test("a switch left on with stale receipts can still be turned off", async () => {
+    api.saveConfig.mockResolvedValue(config)
+    renderForm({
+      config: {
+        ...config,
+        enablement: { manualGui: false, agentControl: true, acceptance: false },
+      },
+    })
+    const agent = screen.getByLabelText(form.fields.agentControl)
+    expect(agent).toBeEnabled()
+    fireEvent.click(agent)
+    expect(agent).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: form.save }))
+    await waitFor(() => expect(api.saveConfig).toHaveBeenCalled())
+    expect(api.saveConfig.mock.calls[0][1].enablement.agentControl).toBe(false)
+  })
+
+  test("labels agent control as not yet reachable by chat agents", () => {
+    renderForm({ config: guiQualified }, zhMessages)
+    expect(
+      document.querySelector("[data-dormant='managed-desktop-agent-delegation']")
+    ).toHaveTextContent(zhMessages.configForm.agentControlDormant)
+  })
+})
+
+describe("confirmation windows", () => {
+  const stored = {
+    ...config,
+    plan: { ...config.plan, observedAt: 1_000, expiresAt: 1_000 + 600_000 },
+    price: { ...config.price, observedAt: 1_000, expiresAt: 1_000 + 7 * DAY },
+  }
+
+  test("a save that keeps the day fields sends the stored windows exactly", async () => {
+    api.saveConfig.mockResolvedValue(stored)
+    renderForm({ config: stored })
+    expect(screen.getByLabelText(form.fields.priceValidDays)).toHaveValue("7")
+    fireEvent.click(screen.getByRole("button", { name: form.save }))
+    await waitFor(() => expect(api.saveConfig).toHaveBeenCalled())
+    const draft = api.saveConfig.mock.calls[0][1]
+    expect(draft.plan.validForMs).toBe(600_000)
+    expect(draft.price.validForMs).toBe(7 * DAY)
+  })
+
+  test("editing a day field confirms a new whole-day window", async () => {
+    api.saveConfig.mockResolvedValue(stored)
+    renderForm({ config: stored })
+    fill(form.fields.planValidDays, "3")
+    fireEvent.click(screen.getByRole("button", { name: form.save }))
+    await waitFor(() => expect(api.saveConfig).toHaveBeenCalled())
+    const draft = api.saveConfig.mock.calls[0][1]
+    expect(draft.plan.validForMs).toBe(3 * DAY)
+    expect(draft.price.validForMs).toBe(7 * DAY)
+  })
 })

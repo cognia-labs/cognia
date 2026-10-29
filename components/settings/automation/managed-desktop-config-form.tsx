@@ -17,6 +17,7 @@ import {
   type ManagedDesktopCredentialSource,
   type ManagedDesktopTarget,
 } from "@/lib/automation/managed-desktop-client"
+import { missingQualification } from "@/lib/automation/managed-desktop-qualification"
 import {
   providerCredentialSecretId,
   remoteSandboxesGet,
@@ -51,10 +52,30 @@ interface FormState {
   priceCurrency: string
   priceSource: string
   priceValidDays: string
+  /**
+   * The stored confirmation windows, kept until the day field is edited, so a
+   * save that only flips switches keeps the Host's binding (and its receipts).
+   */
+  planValidForMs: number | null
+  priceValidForMs: number | null
   isolationMinimum: IsolationTier
+  manualGui: boolean
+  agentControl: boolean
+  acceptance: boolean
+}
+
+const ENABLEMENT = ["manualGui", "agentControl", "acceptance"] as const
+
+/** Whole days shown for a stored window, within the form's accepted range. */
+function windowDays(window: number): string {
+  return String(
+    Math.min(MANAGED_DESKTOP_LIMITS.maxValidDays, Math.max(1, Math.round(window / DAY_MS)))
+  )
 }
 
 function initialState(config?: ManagedDesktopConfigSummary): FormState {
+  const planWindow = config ? config.plan.expiresAt - config.plan.observedAt : null
+  const priceWindow = config ? config.price.expiresAt - config.price.observedAt : null
   return {
     id: config?.id ?? "",
     enabled: config?.enabled ?? true,
@@ -70,12 +91,17 @@ function initialState(config?: ManagedDesktopConfigSummary): FormState {
     planMaxLifetimeSeconds: String(config?.plan.maxLifetimeSeconds ?? 3600),
     planSource: config?.plan.source ?? "",
     planNamespace: config?.plan.namespace ?? "",
-    planValidDays: "30",
+    planValidDays: planWindow === null ? "30" : windowDays(planWindow),
+    planValidForMs: planWindow,
     priceHourly: config ? String(config.price.hourlyRateMicros / 1_000_000) : "",
     priceCurrency: config?.price.currency ?? "USD",
     priceSource: config?.price.source ?? "",
-    priceValidDays: "30",
+    priceValidDays: priceWindow === null ? "30" : windowDays(priceWindow),
+    priceValidForMs: priceWindow,
     isolationMinimum: config?.isolationMinimum ?? "vm",
+    manualGui: config?.enablement.manualGui ?? false,
+    agentControl: config?.enablement.agentControl ?? false,
+    acceptance: config?.enablement.acceptance ?? false,
   }
 }
 
@@ -138,16 +164,21 @@ export function managedDesktopDraft(
         maxLifetimeSeconds: planMaxLifetimeSeconds,
         source: form.planSource.trim(),
         namespace: form.planNamespace.trim(),
-        validForMs: planValidDays * DAY_MS,
+        validForMs: form.planValidForMs ?? planValidDays * DAY_MS,
       },
       price: {
         currency,
         hourlyRateMicros: Math.round(hourly * 1_000_000),
         source: form.priceSource.trim(),
-        validForMs: priceValidDays * DAY_MS,
+        validForMs: form.priceValidForMs ?? priceValidDays * DAY_MS,
       },
       egress: { mode: "off" },
       isolationMinimum: form.isolationMinimum,
+      enablement: {
+        manualGui: form.manualGui,
+        agentControl: form.agentControl,
+        acceptance: form.acceptance,
+      },
     },
   }
 }
@@ -211,7 +242,13 @@ export function ManagedDesktopConfigForm({
   }, [target.kind, config])
 
   const update = <K extends keyof FormState>(field: K, value: FormState[K]) =>
-    setForm((current) => ({ ...current, [field]: value }))
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+      // Editing a day count confirms a new window; the stored one no longer applies.
+      ...(field === "planValidDays" ? { planValidForMs: null } : {}),
+      ...(field === "priceValidDays" ? { priceValidForMs: null } : {}),
+    }))
 
   async function run<T>(operation: () => Promise<T>): Promise<T | undefined> {
     setBusy(true)
@@ -390,6 +427,51 @@ export function ManagedDesktopConfigForm({
           </p>
         </div>
       </div>
+
+      <fieldset className="space-y-2">
+        <legend className="text-xs font-medium">{f("enablementTitle")}</legend>
+        <p className="text-xs text-muted-foreground">{f("enablementHint")}</p>
+        {ENABLEMENT.map((gate) => {
+          const missing = missingQualification(config?.qualificationCategories ?? [], gate)
+          // Turning a switch off is always allowed; turning it on needs current receipts.
+          const locked = !form[gate] && missing.length > 0
+          return (
+            <div key={gate} className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id={`${formId}-${gate}`}
+                  checked={form[gate]}
+                  disabled={busy || locked}
+                  aria-describedby={locked ? `${formId}-${gate}-missing` : undefined}
+                  onCheckedChange={(checked) => update(gate, checked)}
+                />
+                <Label htmlFor={`${formId}-${gate}`}>{f(`fields.${gate}`)}</Label>
+              </div>
+              {locked ? (
+                <p
+                  id={`${formId}-${gate}-missing`}
+                  className="text-xs text-muted-foreground"
+                  data-gate-missing={gate}
+                >
+                  {f("enablementMissing", {
+                    categories: missing
+                      .map((category) => t(`qualification.category.${category}`))
+                      .join(", "),
+                  })}
+                </p>
+              ) : null}
+              {gate === "agentControl" ? (
+                <p
+                  className="text-xs text-muted-foreground"
+                  data-dormant="managed-desktop-agent-delegation"
+                >
+                  {f("agentControlDormant")}
+                </p>
+              ) : null}
+            </div>
+          )
+        })}
+      </fieldset>
 
       {invalid ? (
         <p id={`${formId}-invalid`} role="alert" className="text-xs text-destructive">

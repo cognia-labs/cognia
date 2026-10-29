@@ -46,7 +46,8 @@ impl ManagedDesktopService {
                 }
             };
             let now = self.now().await;
-            let config = ManagedDesktopConfig {
+            let mut config = ManagedDesktopConfig {
+                enablement: draft.enablement,
                 id: draft.id,
                 owner_principal_id: p.owner_principal_id.clone(),
                 host_id: self.host_id.clone(),
@@ -62,7 +63,47 @@ impl ManagedDesktopService {
                 egress: draft.egress,
                 isolation_minimum: draft.isolation_minimum,
             };
+            // A switch-only save retains the qualified revision and price/plan
+            // observation. Reconfirming or changing the configuration gets a
+            // new binding and must qualify again before enabling it.
+            if let Some(index) = existing {
+                let old = &registry.providers[index];
+                let mut same = config.clone();
+                same.revision = old.revision;
+                same.enablement = old.enablement;
+                if same.plan.max_lifetime_seconds == old.plan.max_lifetime_seconds
+                    && old.plan.observed_at <= now
+                    && old.plan.expires_at > now
+                    && same.plan.source == old.plan.source
+                    && same.plan.namespace == old.plan.namespace
+                    && same.plan.expires_at - same.plan.observed_at
+                        == old.plan.expires_at - old.plan.observed_at
+                {
+                    same.plan = old.plan.clone();
+                }
+                if same.price.currency == old.price.currency
+                    && same.price.hourly_rate_micros == old.price.hourly_rate_micros
+                    && old.price.observed_at <= now
+                    && old.price.expires_at > now
+                    && same.price.source == old.price.source
+                    && same.price.expires_at - same.price.observed_at
+                        == old.price.expires_at - old.price.observed_at
+                {
+                    same.price = old.price.clone();
+                }
+                if same == *old && config.enablement != old.enablement {
+                    same.enablement = config.enablement;
+                    config = same;
+                }
+            }
             config.validate(now)?;
+            let effective = qualification::effective_enablement(&*self.state.lock().await, &config, now);
+            if (config.enablement.manual_gui && !effective.manual_gui)
+                || (config.enablement.agent_control && !effective.agent_control)
+                || (config.enablement.acceptance && !effective.acceptance)
+            {
+                return Err(refused("managed_desktop_enablement_unqualified"));
+            }
             match existing {
                 Some(index) => registry.providers[index] = config,
                 None => registry.providers.push(config),
@@ -143,6 +184,7 @@ impl ManagedDesktopService {
                 return Err(refused("managed_desktop_credential_rotate_required"));
             }
             self.secrets.put_provider_key(&config, &key).await?;
+            self.enablement_epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         self.config_summary(p, id).await
     }
@@ -252,9 +294,14 @@ impl ManagedDesktopService {
             || state.templates.values().any(|t| uses(&t.config))
     }
 
-    async fn save_registry(&self, registry: super::super::journal::ManagedDesktopRegistry) -> Result<()> {
+    pub(super) async fn save_registry(&self, registry: super::super::journal::ManagedDesktopRegistry) -> Result<()> {
         let store = self.store.clone();
-        tokio::task::spawn_blocking(move || store.save_registry(&registry))
+        let epoch = self.enablement_epoch.clone();
+        tokio::task::spawn_blocking(move || {
+            store.save_registry(&registry)?;
+            epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
             .await
             .map_err(|_| retryable("managed_desktop_storage_unavailable"))?
     }
@@ -277,8 +324,26 @@ mod tests {
     use super::super::tests::Fixture;
     use super::*;
 
+    #[tokio::test]
+    async fn forged_enablement_is_refused_without_current_native_receipts() {
+        let f = Fixture::new();
+        let input = serde_json::json!({
+            "id":"new-config", "expectedRevision":null, "enabled":true,
+            "enablement":{"manualGui":true,"agentControl":false,"acceptance":false},
+            "shape":{"cpuCount":2,"memoryMb":2048},
+            "limits":{"maxConcurrent":2,"maxLifetimeSeconds":3600,"idleTimeoutSeconds":600},
+            "plan":{"maxLifetimeSeconds":3600,"source":"operator-confirmed","namespace":"team","validForMs":60000},
+            "price":{"currency":"USD","hourlyRateMicros":100000,"source":"price-sheet","validForMs":60000},
+            "egress":{"mode":"off"}, "isolationMinimum":"vm"
+        });
+        let draft: ManagedDesktopConfigDraft = serde_json::from_value(input).unwrap();
+        assert_eq!(f.service.save_config(&f.p, draft).await.unwrap_err().code,
+            "managed_desktop_enablement_unqualified");
+    }
+
     fn draft(f: &Fixture, expected_revision: Option<u64>) -> ManagedDesktopConfigDraft {
         ManagedDesktopConfigDraft {
+            enablement: ManagedDesktopEnablement::default(),
             id: f.config.id.clone(),
             expected_revision,
             enabled: true,
@@ -305,6 +370,54 @@ mod tests {
             },
             egress: DesktopEgress::Off,
             isolation_minimum: IsolationTier::Vm,
+        }
+    }
+
+    #[tokio::test]
+    async fn switch_only_save_preserves_valid_observations_but_reconfirms_expired_ones() {
+        let f = Fixture::new();
+        let input = || ManagedDesktopConfigDraft {
+            id: f.config.id.clone(),
+            expected_revision: Some(1),
+            enabled: true,
+            enablement: ManagedDesktopEnablement::default(),
+            shape: f.config.shape.clone(),
+            limits: f.config.limits.clone(),
+            egress: f.config.egress.clone(),
+            isolation_minimum: f.config.isolation_minimum,
+            plan: AccountPlanDraft {
+                max_lifetime_seconds: f.config.plan.max_lifetime_seconds,
+                source: f.config.plan.source.clone(),
+                namespace: f.config.plan.namespace.clone(),
+                valid_for_ms: f.config.plan.expires_at - f.config.plan.observed_at,
+            },
+            price: DesktopPriceDraft {
+                currency: f.config.price.currency.clone(),
+                hourly_rate_micros: f.config.price.hourly_rate_micros,
+                source: f.config.price.source.clone(),
+                valid_for_ms: f.config.price.expires_at - f.config.price.observed_at,
+            },
+        };
+        for expired in [false, true] {
+            let mut registry = f.service.registry().await.unwrap();
+            registry.providers[0].enablement.manual_gui = true;
+            f.service.save_registry(registry).await.unwrap();
+            if expired {
+                f.clock.store(f.config.plan.expires_at + 1, std::sync::atomic::Ordering::SeqCst);
+            }
+            f.service.save_config(&f.p, input()).await.unwrap();
+            let stored = f.service.config(&f.p, "e2b").await.unwrap();
+            if expired {
+                assert_eq!(stored.revision, 2);
+                assert_eq!(stored.plan.observed_at, f.config.plan.expires_at + 1);
+                assert_eq!(stored.price.observed_at, stored.plan.observed_at);
+                assert_ne!(stored.binding_digest(), f.config.binding_digest());
+            } else {
+                assert_eq!(stored.revision, 1);
+                assert_eq!(stored.plan.observed_at, f.config.plan.observed_at);
+                assert_eq!(stored.price.observed_at, f.config.price.observed_at);
+                assert_eq!(stored.binding_digest(), f.config.binding_digest());
+            }
         }
     }
 
@@ -570,6 +683,7 @@ mod tests {
         assert!(f.service.list_configs(&f.p).await.unwrap().is_empty());
         for generation in [1, 2] {
             let config = ManagedDesktopConfig {
+                enablement: ManagedDesktopEnablement::default(),
                 credential_generation: generation,
                 ..f.config.clone()
             };

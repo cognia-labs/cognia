@@ -102,6 +102,8 @@ The managed desktop (ADR-0233) is built and natively qualified, but a user canno
 | D4  | 2026-10-29 | Host delegation for general computer use and acceptance; agent fenced-preemptible without a lease; acceptance child session with two tools (Q17–Q21)                   | implement | O5, O6         | review finds lease semantics unsound for remote agents |
 | D5  | 2026-10-29 | Recipe 8 for exec/files/clipboard as Stage 2; egress On/Allowlist deferred to its own amendment (Q10, Q11, Q19, Q22)                                                   | implement | O9             | user requires egress in this round                     |
 | D6  | 2026-10-29 | Merge E2B build request/polling/base URL into cognia-e2b; code provider semantics unchanged (Q13)                                                                      | implement | O10            | V8 fails                                               |
+| D7  | 2026-10-29 | Pin the release manifest in the repo with a source-digest drift gate; the first pin waits for an authorized image republish (Q24)                                      | implement | O2             | release pipeline gains signed remote manifests         |
+| D8  | 2026-10-29 | Qualify inside the running Host; handoff uses a user-picked delivery; GUI and agent switches need only the four GUI receipts (Q25)                                     | implement | O3, O4         | review shows in-Host authority test weakens the store  |
 
 ## Residual risks
 

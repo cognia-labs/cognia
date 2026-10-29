@@ -257,6 +257,16 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
                no account's billing state rides the broadcast.",
     },
     EventChannelSpec {
+        pattern: "managed-desktop://qualification-changed",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "ADR-0233 A3: an in-app qualification run changed state (category \
+               progress, a billed step awaiting approval, a terminal outcome). \
+               Empty payload; clients refetch the caller-scoped \
+               `managed_desktop_qualify_list`.",
+    },
+    EventChannelSpec {
         pattern: "ocr://download-progress",
         audience: ChannelAudience::Any,
         default_on: true,

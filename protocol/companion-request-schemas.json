@@ -13017,6 +13017,21 @@
         "enabled": {
           "type": "boolean"
         },
+        "enablement": {
+          "type": "object",
+          "properties": {
+            "manualGui": {
+              "type": "boolean"
+            },
+            "agentControl": {
+              "type": "boolean"
+            },
+            "acceptance": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
         "shape": {
           "type": "object",
           "properties": {
@@ -13930,6 +13945,131 @@
         "quoteId",
         "authorizationId",
         "idempotencyKey"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_qualify_approve": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "quoteId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "runId",
+        "quoteId"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_qualify_cancel": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_qualify_list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "managed_desktop_qualify_start": {
+      "type": "object",
+      "properties": {
+        "providerConfigId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "gui",
+            "acceptance"
+          ]
+        },
+        "handoff": {
+          "type": "object",
+          "properties": {
+            "deliveryId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "script": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_:][A-Za-z0-9_:.-]{0,99}$"
+            }
+          },
+          "required": [
+            "deliveryId",
+            "script"
+          ],
+          "additionalProperties": false
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "providerConfigId",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_qualify_status": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "runId"
       ],
       "additionalProperties": false
     },

@@ -14114,6 +14114,34 @@
         },
         "guiQualified": {
           "type": "boolean"
+        },
+        "qualificationEvidenceVersion": { "type": ["integer", "null"] },
+        "workloadIsolationRevision": { "type": ["integer", "null"] },
+        "enablement": {
+          "type": "object",
+          "properties": {
+            "manualGui": { "type": "boolean" },
+            "agentControl": { "type": "boolean" },
+            "acceptance": { "type": "boolean" }
+          },
+          "required": ["manualGui", "agentControl", "acceptance"],
+          "additionalProperties": false
+        },
+        "qualificationCategories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": ["lifecycle", "control", "authority", "workload", "commit", "bundle"]
+              },
+              "current": { "type": "boolean" },
+              "observedAt": { "type": ["integer", "null"] }
+            },
+            "required": ["category", "current", "observedAt"],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -14142,7 +14170,11 @@
         "isolationTier",
         "egressTier",
         "egressEnforcement",
-        "guiQualified"
+        "guiQualified",
+        "qualificationEvidenceVersion",
+        "workloadIsolationRevision",
+        "enablement",
+        "qualificationCategories"
       ],
       "additionalProperties": false,
       "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
@@ -14358,6 +14390,89 @@
       ],
       "additionalProperties": false,
       "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/contracts.rs"
+    },
+    "ManagedDesktopQualificationRun": {
+      "type": "object",
+      "properties": {
+        "runId": { "type": "string" },
+        "providerConfigId": { "type": "string" },
+        "configRevision": { "type": "integer", "minimum": 1 },
+        "scope": { "type": "string", "enum": ["gui", "acceptance"] },
+        "state": {
+          "type": "string",
+          "enum": ["running", "awaitingApproval", "passed", "failed", "cancelled", "interrupted"]
+        },
+        "currentCategory": {
+          "type": ["string", "null"],
+          "enum": ["lifecycle", "control", "authority", "workload", "commit", "bundle", null]
+        },
+        "awaitingApproval": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "quote": { "$ref": "#/$defs/ManagedDesktopQuote" },
+                "purpose": { "type": "string", "enum": ["prepareTemplate", "smoke"] },
+                "templateBuildCharges": { "type": "boolean" }
+              },
+              "required": ["quote", "purpose", "templateBuildCharges"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": ["lifecycle", "control", "authority", "workload", "commit", "bundle"]
+              },
+              "state": {
+                "type": "string",
+                "enum": ["pending", "running", "passed", "failed", "skipped"]
+              },
+              "errorCode": { "type": ["string", "null"] }
+            },
+            "required": ["category", "state", "errorCode"],
+            "additionalProperties": false
+          }
+        },
+        "handoff": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": { "deliveryId": { "type": "string" }, "script": { "type": "string" } },
+              "required": ["deliveryId", "script"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "errorCode": { "type": ["string", "null"] },
+        "startedAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "finishedAt": { "type": ["integer", "null"] }
+      },
+      "required": [
+        "runId",
+        "providerConfigId",
+        "configRevision",
+        "scope",
+        "state",
+        "currentCategory",
+        "awaitingApproval",
+        "categories",
+        "handoff",
+        "errorCode",
+        "startedAt",
+        "updatedAt",
+        "finishedAt"
+      ],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/qualification_runs.rs"
     },
     "ManagedDesktopTemplate": {
       "type": "object",
@@ -17294,6 +17409,18 @@
     "managed_desktop_monitor": {
       "$ref": "#/$defs/ManagedDesktopMonitor"
     },
+    "managed_desktop_qualify_start": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
+    "managed_desktop_qualify_status": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
+    "managed_desktop_qualify_list": {
+      "type": "object",
+      "properties": {
+        "runs": { "type": "array", "items": { "$ref": "#/$defs/ManagedDesktopQualificationRun" } }
+      },
+      "required": ["runs"],
+      "additionalProperties": false
+    },
+    "managed_desktop_qualify_approve": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
+    "managed_desktop_qualify_cancel": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
     "managed_desktop_list_configs": {
       "type": "array",
       "items": {
@@ -17347,13 +17474,10 @@
         "expiresAt": {
           "type": "integer"
         },
-        "executionEnabled": {
-          "type": "boolean",
-          "const": false
-        },
+        "executionEnabled": { "type": "boolean" },
         "dormantReason": {
-          "type": "string",
-          "const": "managed_desktop_handoff_requires_results_qualification"
+          "type": ["string", "null"],
+          "enum": ["managed_desktop_handoff_requires_results_qualification", null]
         }
       },
       "required": [

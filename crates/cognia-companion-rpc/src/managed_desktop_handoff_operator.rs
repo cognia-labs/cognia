@@ -10,11 +10,28 @@ use cognia_automation::cua_sandbox::managed::{
 use cognia_sandbox_pool::git_proxy::{GitProxy, GitProxyConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use crate::managed_desktop_handoff::{resolve, PrepareHandoff, TransferMode};
+use crate::managed_desktop_handoff::{resolve_transfer, PrepareHandoff, TransferMode};
+
+// Keep the owned guard inside each blocking job. Aborting its async caller
+// cannot let finalization overtake a report or evidence registration write.
+static DIAGNOSTIC_IO: once_cell::sync::Lazy<Arc<tokio::sync::Mutex<()>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(tokio::sync::Mutex::new(())));
+async fn diagnostic_io<T: Send + 'static>(
+    job: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let serial = DIAGNOSTIC_IO.clone().lock_owned().await;
+    tokio::task::spawn_blocking(move || {
+        let _serial = serial;
+        job()
+    }).await.map_err(|_| refused("managed_desktop_storage_unavailable"))?
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DiagnosticRequest { operation_id: String, request: PrepareHandoff }
+pub struct DiagnosticRequest {
+    pub operation_id: String,
+    pub request: PrepareHandoff,
+}
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ChildAcceptanceRun {
@@ -64,12 +81,11 @@ fn persist(path: &Path, row: &ChildAcceptanceRun) -> Result<()> {
 }
 async fn persist_async(path: &Path, row: &ChildAcceptanceRun) -> Result<()> {
     let path = path.to_owned(); let row = row.clone();
-    tokio::task::spawn_blocking(move || persist(&path, &row)).await
-        .map_err(|_| refused("managed_desktop_storage_unavailable"))?
+    diagnostic_io(move || persist(&path, &row)).await
 }
-async fn claim_operation(directory: &Path, operation_id: &str) -> Result<PathBuf> {
+pub(crate) async fn claim_operation(directory: &Path, operation_id: &str) -> Result<PathBuf> {
     let directory = directory.to_owned(); let operation_id = operation_id.to_owned();
-    tokio::task::spawn_blocking(move || {
+    diagnostic_io(move || {
         let reports = directory.join("managed-desktop-handoffs");
         fs::create_dir_all(&reports).map_err(|_| refused("managed_desktop_storage_unavailable"))?;
         #[cfg(unix)] {
@@ -82,7 +98,7 @@ async fn claim_operation(directory: &Path, operation_id: &str) -> Result<PathBuf
         file.sync_all().map_err(|_| refused("managed_desktop_storage_unavailable"))?;
         fs::File::open(&reports).and_then(|f| f.sync_all()).map_err(|_| refused("managed_desktop_storage_unavailable"))?;
         Ok(reports.join(format!("{operation_id}.json")))
-    }).await.map_err(|_| refused("managed_desktop_storage_unavailable"))?
+    }).await
 }
 struct SourceWatcher { task: tokio::task::JoinHandle<()> }
 impl Drop for SourceWatcher { fn drop(&mut self) { self.task.abort(); } }
@@ -95,10 +111,24 @@ pub async fn run(
     p.require_admin()?;
     let input = tokio::task::spawn_blocking(move || load(&request_path)).await
         .map_err(|_| refused("managed_desktop_storage_unavailable"))??;
+    run_request(host, p, directory, config_id, input, false).await
+}
+
+/// Shared operator/in-app transfer, launch, checkpoint and cleanup orchestration.
+pub(crate) async fn run_request(
+    host: &dyn ManagedDesktopSmokeHost,
+    p: &ManagedDesktopPrincipal,
+    directory: &Path,
+    config_id: &str,
+    input: DiagnosticRequest,
+    qualification: bool,
+) -> Result<serde_json::Value> {
+    p.require_admin()?;
+    input.request.validate()?;
     if input.request.provider_config_id != config_id { return Err(refused("managed_desktop_handoff_config_mismatch")); }
     let directory = directory.to_owned();
     let root = directory.clone(); let principal = p.clone(); let request = input.request.clone();
-    let (delivery, source) = tokio::task::spawn_blocking(move || resolve(&root, &principal, &request)).await
+    let (delivery, source) = tokio::task::spawn_blocking(move || resolve_transfer(&root, &principal, &request, qualification)).await
         .map_err(|_| refused("managed_desktop_storage_unavailable"))??;
     let service = host.open(host.provider())?;
     let mut row = ChildAcceptanceRun {
@@ -118,7 +148,7 @@ pub async fn run(
     persist_async(&report, &row).await?;
     let (cancel, cancelled) = tokio::sync::watch::channel(false);
     let check_root = directory.clone(); let check_principal = p.clone(); let check_request = input.request.clone();
-    let check: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || resolve(&check_root, &check_principal, &check_request).is_ok());
+    let check: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || resolve_transfer(&check_root, &check_principal, &check_request, qualification).is_ok());
     let watcher_check = check.clone(); let revoke = cancel.clone();
     let _watcher = SourceWatcher { task:tokio::spawn(async move {
         loop {
@@ -144,13 +174,30 @@ pub async fn run(
         } else { None };
         let proxy = GitProxy::start_read_only(GitProxyConfig { upstream, credential, branch:source.branch.clone() }).await
             .map_err(|_| refused("managed_desktop_handoff_source_unavailable"))?;
-        let recovery = if input.request.mode == TransferMode::Bundle {
+        let delivery_bundle = delivery.publish["recovery"]["bundle"].as_str().is_some();
+        let recovery = if input.request.mode == TransferMode::Bundle && (!qualification || delivery_bundle) {
             Some(RecoverySource { path:PathBuf::from(delivery.publish["recovery"]["bundle"].as_str()
                 .ok_or_else(|| refused("managed_desktop_handoff_delivery_unavailable"))?),
                 trusted_root:directory.join("sandbox-recovery"), expected_sha256:None })
         } else { None };
         let prepared = handoff::prepare_source(&TrustedHandoffSource { commit:row.commit.clone(), readonly_proxy_port:proxy.port(), recovery }, &input.request.acceptance_files, &budget)
             .await.map_err(|_| refused("managed_desktop_handoff_transfer_failed"))?;
+        // Import a complete bundle of the exact selected commit through the
+        // real recovery importer. The commit and bundle get separate desktops,
+        // operation IDs and native receipts; no delivery metadata is rewritten.
+        let prepared = if qualification && input.request.mode == TransferMode::Bundle && !delivery_bundle {
+            handoff::prepare_source(
+                &TrustedHandoffSource {
+                    commit: row.commit.clone(),
+                    readonly_proxy_port: proxy.port(),
+                    recovery: Some(prepared.recovery_source()),
+                },
+                &input.request.acceptance_files,
+                &budget,
+            ).await.map_err(|_| refused("managed_desktop_handoff_transfer_failed"))?
+        } else {
+            prepared
+        };
         row.transfer_manifest_digest = Some(prepared.manifest_digest().into());
         let quote = service.quote(p, config_id, input.request.lifetime_seconds).await?;
         eprintln!("Handoff transfers the pinned repository and its Git history, plus the selected acceptance files. It does not sanitize committed content. This diagnostic records no acceptance verdict and always destroys its desktop.");
@@ -194,8 +241,7 @@ pub async fn run(
         }).await?;
         // Reopen the same exclusive Host journal before reconnecting. This
         // proves persisted generation admission rather than a cloned cache.
-        drop(service);
-        let service = host.open(host.provider())?;
+        let service = host.checkpoint(service, host.provider(), &[desktop.id.clone()]).await?;
         let reconnected = service.connect(p, &desktop.id, desktop.generation).await?;
         if reconnected.state != ManagedDesktopState::Running || reconnected.deadline_at != desktop.deadline_at {
             return Err(refused("managed_desktop_handoff_reconnect_failed"));
@@ -245,8 +291,82 @@ pub async fn run(
 async fn evidence_write(directory: &Path, p: &ManagedDesktopPrincipal,
     write: impl FnOnce(EvidenceStore, &str, &str) -> std::result::Result<(), String> + Send + 'static) -> Result<()> {
     let directory = directory.to_owned(); let owner = p.owner_principal_id.clone(); let host = p.host_id.clone();
-    tokio::task::spawn_blocking(move || write(EvidenceStore::new(&directory), &owner, &host))
-        .await.map_err(|_| refused("managed_desktop_evidence_unavailable"))?.map_err(|e| refused(&e))
+    diagnostic_io(move || write(EvidenceStore::new(&directory), &owner, &host)
+        .map_err(|e| refused(&e))).await
+}
+
+/// Finally path used after a qualification worker has unwound, including an
+/// abort in the middle of a transfer. No source data is copied into the report.
+pub(crate) async fn finish_interrupted(
+    directory: &Path,
+    service: &ManagedDesktopService,
+    p: &ManagedDesktopPrincipal,
+    operation: &str,
+) -> Result<()> {
+    let root = directory.to_owned();
+    let id = operation.to_owned();
+    let claimed = diagnostic_io(move || {
+        Ok(root.join("managed-desktop-handoffs").join(format!("{id}.claim")).try_exists()
+            .map_err(|_| refused("managed_desktop_storage_unavailable"))?)
+    }).await?;
+    if !claimed {
+        return Ok(());
+    }
+    // Publish the terminal outcome before any provider await. If shutdown
+    // aborts a hung delete, the system row is closed and cleanup stays pending.
+    persist_interrupted(directory, p, operation, true).await?;
+    let cleanup = service.cleanup_handoff_smoke(p, operation).await;
+    persist_interrupted(directory, p, operation, cleanup.is_err()).await?;
+    cleanup
+}
+
+async fn persist_interrupted(
+    directory: &Path,
+    p: &ManagedDesktopPrincipal,
+    operation: &str,
+    pending: bool,
+) -> Result<()> {
+    let root = directory.to_owned();
+    let id = operation.to_owned();
+    let owner = p.owner_principal_id.clone();
+    let host = p.host_id.clone();
+    diagnostic_io(move || {
+        let reports = root.join("managed-desktop-handoffs");
+        let report = reports.join(format!("{id}.json"));
+        let previous = match fs::read(&report) {
+            Ok(bytes) => Some(serde_json::from_slice::<serde_json::Value>(&bytes)
+                .map_err(|_| refused("managed_desktop_storage_unavailable"))?),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => return Err(refused("managed_desktop_storage_unavailable")),
+        };
+        let state = if previous.as_ref().is_some_and(|r| r["state"] == "diagnosticCompleted") {
+            "diagnosticCompleted"
+        } else {
+            "failed"
+        };
+        let mut temp = tempfile::NamedTempFile::new_in(&reports)
+            .map_err(|_| refused("managed_desktop_storage_unavailable"))?;
+        let value = serde_json::json!({"version":1,"id":id,"state":state,"cleanupPending":pending});
+        temp.write_all(&serde_json::to_vec(&value).map_err(|_| refused("managed_desktop_storage_unavailable"))?)
+            .and_then(|_| temp.as_file().sync_all())
+            .map_err(|_| refused("managed_desktop_storage_unavailable"))?;
+        temp.persist(&report).map_err(|_| refused("managed_desktop_storage_unavailable"))?;
+        fs::File::open(&reports).and_then(|file| file.sync_all())
+            .map_err(|_| refused("managed_desktop_storage_unavailable"))?;
+        let store = EvidenceStore::new(&root);
+        match store.get(&owner, &host, &id) {
+            Ok(row) => {
+                if row.system_outcome.is_none() && row.agent_verdict.is_none() {
+                    store.finish_system(&owner, &host, &id, AcceptanceOutcome::Inconclusive, "diagnostic_incomplete")
+                        .map_err(|e| refused(&e))?;
+                }
+                store.set_cleanup_pending(&owner, &host, &id, pending).map_err(|e| refused(&e))?;
+            }
+            Err(error) if error == "evidence_not_found" => {}
+            Err(error) => return Err(refused(&error)),
+        }
+        Ok(())
+    }).await
 }
 
 // Failure does not short-circuit cleanup; its durable status is published even

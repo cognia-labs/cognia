@@ -29,3 +29,5 @@ pub mod managed_desktop_results;
 pub mod managed_desktop_handoff_operator;
 
 pub mod remote_desktops;
+
+pub use managed_desktops::qualification as managed_desktop_qualification;

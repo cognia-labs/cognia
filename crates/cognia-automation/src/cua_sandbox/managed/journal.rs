@@ -13,6 +13,8 @@ const MAX_STATE_BYTES: u64 = 32 * 1024 * 1024;
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedDesktopJournal {
+    #[serde(default)]
+    pub qualification_runs: BTreeMap<String, super::service::qualification_runs::QualificationRunRecord>,
     pub version: u32,
     pub host_id: String,
     pub revision: u64,
@@ -76,7 +78,13 @@ impl JournalStore {
             _lock: lock,
         })
     }
+    pub fn load_checkpoint(&self, host: &str) -> Result<ManagedDesktopJournal> {
+        self.load_inner(host, false)
+    }
     pub fn load(&self, host: &str) -> Result<ManagedDesktopJournal> {
+        self.load_inner(host, true)
+    }
+    fn load_inner(&self, host: &str, recover: bool) -> Result<ManagedDesktopJournal> {
         let file = self.directory.join("managed-desktops-journal.json");
         let mut journal: ManagedDesktopJournal = match read_json(&file)? {
             Some(value) => value,
@@ -97,8 +105,42 @@ impl JournalStore {
         // Creating/registering is an unknown outcome after process death,
         // never permission to repeat a billable operation.
         for row in journal.templates.values_mut() {
-            if row.state == TemplateState::Registering {
+            if recover && row.state == TemplateState::Registering {
                 row.state = TemplateState::Unknown;
+            }
+        }
+        if !recover {
+            return Ok(journal);
+        }
+        let now = chrono::Utc::now().timestamp_millis().max(journal.last_observed_at);
+        for record in journal.qualification_runs.values_mut() {
+            if record.run.state.active() {
+                use super::service::qualification_runs::*;
+                record.run.state = QualificationRunState::Interrupted;
+                record.run.awaiting_approval = None;
+                record.run.error_code = Some("managed_desktop_qualification_interrupted".into());
+                record.run.updated_at = now;
+                record.run.finished_at = Some(now);
+                for category in &mut record.run.categories {
+                    if category.state == QualificationCategoryState::Running {
+                        category.state = QualificationCategoryState::Failed;
+                        category.error_code = record.run.error_code.clone();
+                    } else if category.state == QualificationCategoryState::Pending {
+                        category.state = QualificationCategoryState::Skipped;
+                    }
+                }
+            }
+            if !record.run.state.active() {
+                for id in &record.desktop_ids {
+                    if let Some(row) = journal.desktops.get_mut(id) {
+                        if row.desktop.state != ManagedDesktopState::Destroyed {
+                            row.delete_requested = true;
+                            row.desktop.state = ManagedDesktopState::Deleting;
+                            row.cleanup_requested_at.get_or_insert(now);
+                            row.next_retry_at = now;
+                        }
+                    }
+                }
             }
         }
         Ok(journal)

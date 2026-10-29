@@ -204,6 +204,11 @@ const KNOWN_COMMANDS: &[&str] = &[
     "managed_desktop_template_list",
     "managed_desktop_template_delete",
     "managed_desktop_monitor",
+    "managed_desktop_qualify_start",
+    "managed_desktop_qualify_status",
+    "managed_desktop_qualify_list",
+    "managed_desktop_qualify_approve",
+    "managed_desktop_qualify_cancel",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -2255,6 +2260,11 @@ const STEP_UP_COMMANDS: &[&str] = &[
     "managed_desktop_config_set_credential",
     "managed_desktop_config_rotate_credential",
     "managed_desktop_template_delete",
+    // In-app qualification (amendment A3): starting a run and approving each
+    // of its billed steps spend money; cancelling destroys its desktops.
+    "managed_desktop_qualify_start",
+    "managed_desktop_qualify_approve",
+    "managed_desktop_qualify_cancel",
     "managed_desktop_authorize",
     "managed_desktop_prepare_template",
     "managed_desktop_create",

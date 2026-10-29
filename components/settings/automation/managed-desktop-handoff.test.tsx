@@ -36,6 +36,28 @@ const config: ManagedDesktopConfigSummary = {
   idleTimeoutSeconds: 600,
   cpuCount: 2,
   memoryMb: 4096,
+  revision: 3,
+  credentialGeneration: 1,
+  credentialPresent: true,
+  plan: {
+    maxLifetimeSeconds: 3600,
+    observedAt: 1,
+    expiresAt: 2,
+    source: "billing page",
+    namespace: "team",
+  },
+  price: {
+    currency: "USD",
+    hourlyRateMicros: 165_600,
+    observedAt: 1,
+    expiresAt: 2,
+    source: "pricing page",
+  },
+  isolationMinimum: "vm" as const,
+  enablement: { manualGui: false, agentControl: false, acceptance: false },
+  qualificationCategories: (
+    ["lifecycle", "control", "authority", "workload", "commit", "bundle"] as const
+  ).map((category) => ({ category, current: false, observedAt: null })),
 }
 const delivery = {
   id: "delivery",

@@ -52,7 +52,10 @@
       "priceCurrency": "Currency",
       "priceHourly": "Rate per hour",
       "priceSource": "Where the rate comes from",
-      "priceValidDays": "Rate valid for (days)"
+      "priceValidDays": "Rate valid for (days)",
+      "manualGui": "Manual GUI viewing and control",
+      "agentControl": "Agent control",
+      "acceptance": "Acceptance runs"
     },
     "invalid": "Check \"{field}\".",
     "isolation": {
@@ -70,7 +73,11 @@
     "rotateTitle": "Replace the stored E2B key?",
     "save": "Save configuration",
     "shapeTitle": "Desktop size",
-    "storeKey": "Store key"
+    "storeKey": "Store key",
+    "enablementTitle": "What this configuration may do",
+    "enablementHint": "Each switch can turn on only while this configuration's qualification receipts are current. Changing the configuration or its template makes them stale.",
+    "enablementMissing": "Needs: {categories}",
+    "agentControlDormant": "Chat agents cannot reach managed desktops yet; this switch only records consent."
   },
   "costs": "Subscription, template setup, taxes and other provider charges are additional. This estimate is not a total invoice cap.",
   "create": "Create temporary desktop",
@@ -81,7 +88,7 @@
     "description": "The desktop and everything on it are destroyed. Billing stops once E2B confirms it is gone."
   },
   "description": "Temporary Linux desktops managed by the selected Host with your E2B account.",
-  "dormant": "Task and agent control, workspace access, live preview, automatic acceptance, persistence and suspend/resume remain dormant. Agents may suggest acceptance but cannot authorize billed creation.",
+  "dormant": "Workspace access, live preview, persistence and suspend/resume remain dormant. GUI control, agent control and acceptance turn on per configuration after it qualifies on this Host. Agents may suggest acceptance but cannot authorize billed creation.",
   "egress": {
     "allowlist": "Allowlist",
     "off": "Off",
@@ -118,9 +125,16 @@
     "templateNotFound": "This template no longer exists on the Host. Refresh the list.",
     "templateOutcomeUnknown": "The template's registration outcome is still being reconciled. Try again shortly.",
     "unknown": "The Host could not complete this request. Refresh the configuration and quote, then try again.",
-    "unqualified": "Real-provider smoke has not qualified this configuration. Desktop creation remains disabled."
+    "unqualified": "Real-provider smoke has not qualified this configuration. Desktop creation remains disabled.",
+    "enablementUnqualified": "This switch needs current qualification receipts for this configuration. Turn it off or qualify again.",
+    "qualificationRunning": "A qualification run is already in progress for this configuration.",
+    "qualificationNotFound": "This qualification run no longer exists on the Host.",
+    "qualificationQuoteMismatch": "The run is waiting on a different estimate. Review the current one.",
+    "qualificationNotAwaiting": "The run is not waiting for an approval.",
+    "handoffDeliveryUnknown": "The selected delivery no longer exists on this Host.",
+    "handoffScriptInvalid": "Use an npm script name: start with a letter, digit, : or _, then letters, digits, : _ . or -."
   },
-  "guiDormant": "Desktop viewing and control are dormant until this configuration passes authorized GUI smoke.",
+  "guiDormant": "Desktop viewing and control stay off until manual GUI is turned on for this configuration.",
   "handoff": {
     "argv": "Launch command arguments (JSON array)",
     "argvHelp": "Use [] to skip launch, or [\"npm\", \"run\", \"test\"] to run a named package script after dependency installation. The command runs at the repository root; this field is not shell text.",
@@ -286,5 +300,63 @@
     "deleted": "Template {id} was deleted."
   },
   "title": "Managed cloud desktops",
-  "unqualified": "Dormant — real-provider qualification required"
+  "unqualified": "Dormant — real-provider qualification required",
+  "qualification": {
+    "title": "Qualification",
+    "description": "Runs the native checks on this Host with temporary desktops. Every billed step waits for your approval; cancelling destroys what the run created.",
+    "receiptCurrent": "Current · {date}",
+    "receiptMissing": "Not qualified",
+    "scopeLabel": "What to qualify",
+    "scope": {
+      "gui": "GUI and agent control (4 checks)",
+      "acceptance": "Acceptance (all 6 checks, needs a delivery)"
+    },
+    "delivery": "Delivery to hand off",
+    "chooseDelivery": "Choose a delivery",
+    "deliveryOption": "{branch} · {commit}",
+    "loadDeliveries": "Load deliveries",
+    "noDeliveries": "No delivery on this Host can be handed off.",
+    "script": "npm script the desktop runs",
+    "scriptHelp": "Runs as npm run followed by this name, at the repository root.",
+    "scriptInvalid": "Use an npm script name: start with a letter, digit, : or _, then letters, digits, : _ . or -.",
+    "start": "Start qualification",
+    "starting": "Starting…",
+    "category": {
+      "lifecycle": "Lifecycle",
+      "control": "Control",
+      "authority": "Authority",
+      "workload": "Workload isolation",
+      "commit": "Commit handoff",
+      "bundle": "Recovery bundle handoff"
+    },
+    "categoryState": {
+      "pending": "Waiting",
+      "running": "Running",
+      "passed": "Passed",
+      "failed": "Failed",
+      "skipped": "Skipped"
+    },
+    "runState": {
+      "running": "Running",
+      "awaitingApproval": "Waiting for your approval",
+      "passed": "Passed",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "interrupted": "Interrupted by a Host restart"
+    },
+    "runTitle": "{scope} · started {date}",
+    "current": "Now: {category}",
+    "awaitingTitle": "Approve this billed step",
+    "purpose": {
+      "prepareTemplate": "Prepare the pinned template",
+      "smoke": "Create a temporary qualification desktop"
+    },
+    "templateBuildCharges": "Template preparation may also incur provider build charges that this estimate does not include.",
+    "approve": "Approve and continue",
+    "cancel": "Cancel run",
+    "cancelTitle": "Cancel this qualification run?",
+    "cancelDescription": "The Host stops the run and destroys every desktop it created. Receipts already recorded stay.",
+    "history": "Earlier runs",
+    "empty": "No qualification run on this Host yet."
+  }
 }
