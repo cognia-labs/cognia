@@ -12,6 +12,7 @@ import { registerNodeExecutor } from "../registry"
 import { getPlanRuntime } from "@/lib/agent/plan/runtime"
 import type { PlanRunContext } from "@/lib/agent/plan/plan-run-context"
 import { listAllPlans, listPlanEvents } from "@/lib/db/plans"
+import { notePlanCreatedByWorkflow } from "@/lib/workflow/runtime/plan-event-trigger"
 import { getSession } from "@/lib/db/sessions"
 import { buildRendererLlmClient } from "@/lib/ai/renderer-llm-client"
 import { sessionWorkspaceId } from "@/lib/workspace/session-workspace"
@@ -71,6 +72,9 @@ registerNodeExecutor({
       ...(parsePlanMetadata(params) ? { metadata: parsePlanMetadata(params) } : {}),
     }
     const plan = await getPlanRuntime().createPlan(input)
+    // A workflow triggered on plan events must not react to the plan its own
+    // run just created (the `trigger.plan.event` self-rejection).
+    if (ctx.workflowId) notePlanCreatedByWorkflow(ctx.workflowId, plan.id)
     return { output: { planId: plan.id, plan: toWorkflowPlan(plan) } }
   },
 })

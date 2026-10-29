@@ -229,3 +229,23 @@ Plan persistence、approval、projection、execution 以及 plan/goal/team integ
 **编辑不会丢失，也不会被抢先。** dock 把自动保存串行化到同一条链上，每次都作用于当前最新的行。此前，另一次写入进行中时到达的编辑会被丢弃，而文档仍显示「已保存」。焦点离开文档（以及卸载）时会立即写入待保存的编辑，每个决策都会先等待这条链并重新读取计划。因此在点击「批准」前刚输入的修改，正是被批准、并被嵌入恢复提示词的版本。
 
 **优化会改写文档。** `refinePlan` 过去只替换 `steps[]`，不动 `metadata.planText`，卡片仍显示旧列表；又因为没有 `userEdited` 标记，恢复提示词会让模型去实现它最初的提议。现在对 markdown 计划，规划器看到的是读者看到的步骤章节，结果写回该章节，并重新投影 `steps[]`。每次生效的优化都会打上 `userEdited` 标记。
+
+## 任务面板修订（2026-10-29）
+
+智能体自己的任务清单（`TodoWrite`，以及 SDK 和 sidecar 都会发出的增量工具 `TaskCreate` / `TaskUpdate` / `TaskList`）和本 ADR 的计划，过去分散在六个界面上，有五套状态图标、两个解析器和两个进度条。桌面 dock 里根本没有任务清单；之后任何一轮没有调用任务工具，清单就会被清空；已批准的 `exit_plan_mode` 计划永远停在 `approved`。
+
+**一个视图模型，一套组件。** 存储仍然分开 —— 一轮对话的草稿清单和已批准的执行契约含义不同 —— 但所有来源都适配成 `TaskViewItem`（`lib/tasks/task-view.ts`），并通过 `components/tasks/` 绘制（覆盖全部状态的状态图标，包括仅用于显示的 `stopped`，表示运行结束后仍停在进行中的项；进度条；长清单会把已完成项折叠起来的列表）。计划步骤、ACP 计划条目和 AI Shell 步骤共用同一个图标和进度条。
+
+**任务清单是会话级的，从对话记录派生**（`lib/chat/session-tasks.ts`）：取最近一次 `TodoWrite` 快照，或按 id 重放 `Task*` 调用（同时解析 SDK 文本和 sidecar JSON 输出），以最近调用的那一类工具为准。把 `TodoWrite` 镜像到合成 `solo:` 团队的 plan-mode bridge 已删除，`/plan from-team` / `to-team` 的 solo 分支一并删除。
+
+**dock 的 `plan` 面板就是任务面板**（id 仍为 `plan`，以兼容已保存的布局）：当前任务（全部完成后折叠为「上次任务」）、进行中的计划（待审批时显示审批卡，通过 `stores/agent/plan-decision-store.ts` 调用决策拥有者的处理函数；执行中显示带暂停 / 继续 / 取消的进度跟踪），以及历史计划。在手机和平板上它是底部 Sheet 的一个标签页；只有任务清单时也会占据位置；首次出现任务清单时只在收起的 dock 上提示，不强制展开。
+
+**输入框上方只保留需要决策的内容**：审批卡（任务面板正在显示该计划时折叠为一行，只保留主要的批准按钮）、处理停在某一步的 in-session 计划的 `PlanHaltDock`，以及运行面板上一个点击即可打开任务面板的进度 chip。`PlanTrackerDock`、`PlanComposerDock`、`PlanPanel` 和 `PlanModeTasksSheet` 已删除；「编写计划」入口移到计划模式横幅和面板的空状态中。对话记录中，一串连续的任务调用只渲染为一行变化摘要；`exit_plan_mode` 卡片改为紧凑形式（状态、打开面板的链接、折叠起来的提议正文）。
+
+**在聊天中批准的计划以其实施轮次运行**（`lib/agent/plan/chat-handoff.ts`，记录在 `metadata.chatHandoff` 中，不新增状态）：批准 → `executing`；该轮结束时（`finishDirectChatExecutionRun`，所有通道）→ `completed`，失败或被中断则 → `paused` 并保留可继续的内容；如果该轮随上一次加载一起中断，启动恢复时会将其暂停。审批 dock 上提供「继续 / 标记完成」，面板上提供「标记完成 / 取消」。
+
+**生命周期修复**：删除会话时在同一事务中删除其计划和事件（并写入同步墓碑）；`refinePlan` 拒绝运行中、已拒绝和已结束的计划，并保留未改名步骤的类型、参数和依赖；捕获时记录 `tool_use` id，重复事件不会再次创建计划（也就不会取消已有计划）；从团队投影出的步骤会带上团队 id。
+
+**未生效的配置项**（规则 7）：`PlanConfig.maxStepRetries`、`judgeDeviation` 和 `maxTokens` 带有 `@deprecated Inert` 文档说明，工作流表单不再提供 `judge_deviation` 触发器，若有计划执行器开始读取它们，`lib/agent/plan/inert-config.test.ts` 会失败。
+
+**原决策之后迁移的路径**：`sidecar/plan-tools/*` 和 `sidecar/builtin-tools/plan-tools.mjs` → `sidecar/src/tools/builtin/plan/`（工具名为 `create_plan` / `update_plan`，`CreatePlan` / `UpdatePlan` 别名已删除）；`lib/workflow/nodes/built-ins.ts` → `lib/workflow/nodes/built-ins/index.ts`；`docs/plans/2026-06-03-unified-plan-execution-hub.md` → `docs/plans/archive/`；`lib/agent/plan-mode-bridge.ts` 和任务 sheet 已删除；计划上下文注入位于 `lib/claude/build-options.ts` 中目标块旁边。

@@ -5,7 +5,7 @@
  * so they're unit-testable without Dexie. (ADR-0045)
  */
 
-import type { AgentPlan, CreatePlanStepInput, PlanStep, PlanStepStatus } from "@/types/agent/plan"
+import type { CreatePlanStepInput, PlanStep, PlanStepStatus } from "@/types/agent/plan"
 import { computePlanCounts } from "@/types/agent/plan"
 
 /** Max characters kept from a step title (Dexie row hygiene + card layout). */
@@ -168,16 +168,6 @@ export function skipStepInDag(
     return { ...s, dependencies: next }
   })
   return applyStepStatus(rewired, stepId, "skipped", patch)
-}
-
-/**
- * True when every step has reached a terminal status. Used by the driver /
- * orchestrator to decide whether the plan as a whole is done.
- */
-export function allStepsTerminal(plan: Pick<AgentPlan, "steps">): boolean {
-  return plan.steps.every(
-    (s) => s.status === "completed" || s.status === "failed" || s.status === "skipped"
-  )
 }
 
 /**

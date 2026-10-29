@@ -278,11 +278,26 @@ export interface PlanConfig {
   requireApproval: boolean
   /** Cap on automatic (step-failure / judge-deviation) refinements. Default 2. */
   maxAutoRefinements: number
-  /** Per-step retry budget before the step fails. Default 1. */
+  /**
+   * Per-step retry budget before the step fails. Default 1.
+   *
+   * @deprecated Inert: no executor reads it. A failed step halts the plan and
+   * the user retries it; kept so stored configs and plugins that set it still
+   * type-check.
+   */
   maxStepRetries: number
-  /** Run a between-steps judge that triggers a refinement on drift. Default false. */
+  /**
+   * Run a between-steps judge that triggers a refinement on drift. Default false.
+   *
+   * @deprecated Inert: no judge exists, so a `judge_deviation` refinement never
+   * fires.
+   */
   judgeDeviation: boolean
-  /** Hard cap on cumulative tokens billed against the plan. Undefined → no cap. */
+  /**
+   * Hard cap on cumulative tokens billed against the plan. Undefined → no cap.
+   *
+   * @deprecated Inert: plan runs are not metered against it.
+   */
   maxTokens?: number
   /** Error policy forwarded to the synthesized workflow. Default "stop". */
   errorPolicy?: "stop" | "continue"
@@ -402,6 +417,10 @@ export interface UpdatePlanInput {
 
 export type PlanRefinementType = "optimize" | "simplify" | "expand" | "reorder" | "repair"
 
+/**
+ * What asked for a refinement. `judge_deviation` is reserved and inert: nothing
+ * raises it (see `PlanConfig.judgeDeviation`).
+ */
 export type PlanRefinementTrigger = "manual" | "step_failure" | "judge_deviation"
 
 export interface PlanRefinementRequest {

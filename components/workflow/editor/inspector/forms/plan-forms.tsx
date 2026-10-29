@@ -16,6 +16,7 @@ import { StructuredJsonField, parseJsonRows } from "./shared/structured-json-fie
 import { PLAN_STEP_KIND_VALUES } from "@/lib/workflow/nodes/params-schemas"
 import {
   PLAN_EXECUTION_MODES,
+  INERT_PLAN_REFINEMENT_TRIGGER,
   PLAN_REFINEMENT_TRIGGERS,
   PLAN_REFINEMENT_TYPES,
   PLAN_SOURCES,
@@ -536,6 +537,11 @@ export function PlanRefineConfig({ params, onChange }: ConfigProps) {
                   {t(`trigger.options.${option}`)}
                 </SelectItem>
               ))}
+              {trigger === INERT_PLAN_REFINEMENT_TRIGGER && (
+                <SelectItem value={INERT_PLAN_REFINEMENT_TRIGGER} disabled>
+                  {t(`trigger.options.${INERT_PLAN_REFINEMENT_TRIGGER}`)}
+                </SelectItem>
+              )}
             </SelectContent>
           </Select>
         </Field>

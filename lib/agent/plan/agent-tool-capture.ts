@@ -32,8 +32,8 @@ import type {
 } from "@/types/agent/plan"
 
 const CORE_TOOL_PREFIX = "mcp__cognia-tools__"
-const CREATE_NAMES = new Set(["create_plan", "CreatePlan"])
-const UPDATE_NAMES = new Set(["update_plan", "UpdatePlan"])
+const CREATE_NAMES = new Set(["create_plan"])
+const UPDATE_NAMES = new Set(["update_plan"])
 
 const STEP_KINDS: readonly PlanStepKind[] = [
   "agent_turn",

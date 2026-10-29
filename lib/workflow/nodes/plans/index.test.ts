@@ -19,6 +19,35 @@ jest.mock("@/lib/ai/renderer-llm-client", () => ({
   buildRendererLlmClient: (args: unknown) => mockBuildRendererLlmClient(args),
 }))
 
+const notePlanCreatedByWorkflow = jest.fn()
+jest.mock("@/lib/workflow/runtime/plan-event-trigger", () => ({
+  notePlanCreatedByWorkflow: (...args: unknown[]) => notePlanCreatedByWorkflow(...args),
+}))
+
+describe("action.plan.create", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    getDb()
+    await whenSeeded()
+  })
+
+  it("tells the plan-event trigger which workflow created the plan", async () => {
+    const executor = getExecutor("action.plan.create" as never, 1)!
+    const result = (await executor.execute({
+      runId: "r1",
+      workflowId: "wf_self",
+      params: {
+        sessionId: "ses_wf",
+        title: "From a workflow",
+        steps: [{ title: "one", kind: "agent_turn" }],
+      },
+      signal: undefined,
+    } as never)) as { output: { planId: string } }
+    expect(notePlanCreatedByWorkflow).toHaveBeenCalledWith("wf_self", result.output.planId)
+  })
+})
+
 describe("plan-nodes registration", () => {
   it.each([
     ["action.plan.approve", 1],

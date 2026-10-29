@@ -10,7 +10,6 @@ import {
 } from "@/types/agent/plan"
 import {
   MAX_PLAN_STEP_TITLE_LEN,
-  allStepsTerminal,
   applyStepStatus,
   linearAgentTurnSteps,
   refinedStepInputs,
@@ -180,21 +179,6 @@ describe("applyStepStatus", () => {
     for (const s of base) steps = applyStepStatus(steps, s.id, "completed").steps
     const r = applyStepStatus(steps, base[2].id, "completed")
     expect(r.currentStepId).toBeUndefined()
-  })
-})
-
-describe("allStepsTerminal", () => {
-  it("is false while any step is non-terminal", () => {
-    const steps = materializeSteps([input(), input()])
-    expect(allStepsTerminal({ steps })).toBe(false)
-  })
-
-  it("is true when every step is completed / failed / skipped", () => {
-    const steps = materializeSteps([input(), input(), input()])
-    steps[0].status = "completed"
-    steps[1].status = "failed"
-    steps[2].status = "skipped"
-    expect(allStepsTerminal({ steps })).toBe(true)
   })
 })
 

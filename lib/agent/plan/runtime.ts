@@ -1020,9 +1020,10 @@ class PlanRuntime {
   }
 
   /**
-   * Refine (replan) a plan via the planner LLM. Drives all three triggers
-   * (ADR-0045 §4): `manual`, `step_failure` (auto, capped by
-   * `config.maxAutoRefinements`), and `judge_deviation`. The revised steps
+   * Refine (replan) a plan via the planner LLM (ADR-0045 §4): `manual`, and
+   * `step_failure` (auto, capped by `config.maxAutoRefinements`). A
+   * `judge_deviation` request is accepted and budgeted like any automatic one,
+   * but nothing raises it — the judge is reserved and inert. The revised steps
    * replace the plan and it returns to `awaiting_approval` so a human (or the
    * caller) re-confirms before the next run — auto-replan never silently
    * re-executes. Fail-OPEN: any planner failure leaves the plan unchanged.

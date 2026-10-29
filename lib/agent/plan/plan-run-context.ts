@@ -57,11 +57,6 @@ export function unregisterPlanRunContext(runId: string): void {
   registry.delete(runId)
 }
 
-/** Look up a step in a run's plan snapshot by id. */
-export function getRunStep(ctx: PlanRunContext, stepId: string): PlanStep | undefined {
-  return ctx.plan.steps.find((s) => s.id === stepId)
-}
-
 /** Test-only escape hatch. Production code must not call this. */
 export function __resetPlanRunContextForTesting(): void {
   registry.clear()

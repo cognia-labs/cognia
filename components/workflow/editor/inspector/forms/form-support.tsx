@@ -170,7 +170,14 @@ export const PLAN_REFINEMENT_TYPES = [
   "repair",
 ] as const
 
-export const PLAN_REFINEMENT_TRIGGERS = ["manual", "step_failure", "judge_deviation"] as const
+/**
+ * Refinement triggers the plan-refine node offers. `judge_deviation` is left
+ * out: it is reserved and inert (`PlanConfig.judgeDeviation` — nothing raises
+ * it), so offering it would promise a judge that does not exist. A saved node
+ * that already holds it still renders the value, disabled.
+ */
+export const PLAN_REFINEMENT_TRIGGERS = ["manual", "step_failure"] as const
+export const INERT_PLAN_REFINEMENT_TRIGGER = "judge_deviation"
 
 /**
  * Status filter options for the plan list form — the same derived list the

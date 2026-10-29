@@ -3,7 +3,6 @@ import { DEFAULT_PLAN_CONFIG } from "@/types/agent/plan"
 import {
   __resetPlanRunContextForTesting,
   getPlanRunContext,
-  getRunStep,
   registerPlanRunContext,
   unregisterPlanRunContext,
   type PlanRunContext,
@@ -46,12 +45,6 @@ describe("plan-run-context registry", () => {
 
   it("returns undefined for an unknown runId", () => {
     expect(getPlanRunContext("nope")).toBeUndefined()
-  })
-
-  it("getRunStep finds a step in the snapshot or returns undefined", () => {
-    const c = ctx("r1", [step("a"), step("b")])
-    expect(getRunStep(c, "b")?.id).toBe("b")
-    expect(getRunStep(c, "ghost")).toBeUndefined()
   })
 
   it("reset clears all entries", () => {

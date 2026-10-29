@@ -2644,7 +2644,7 @@ it("atomically retains concurrent cleanup Host admissions", async () => {
 })
 
 it("deletes the conversation's plans and their trail with it", async () => {
-  const { createPlan, appendPlanEvent, getPlan, countPlanEvents } = await import("./plans")
+  const { createPlan, appendPlanEvent, getPlan, listPlanEvents } = await import("./plans")
   const { DEFAULT_PLAN_CONFIG } = await import("@/types/agent/plan")
   const doomed = await createSession({ title: "Planned" })
   const kept = await createSession({ title: "Other" })
@@ -2667,6 +2667,6 @@ it("deletes the conversation's plans and their trail with it", async () => {
   await appendPlanEvent({ planId: "plan-doomed", kind: "approved", payload: { kind: "approved" } })
   await deleteSession(doomed.id)
   expect(await getPlan("plan-doomed")).toBeUndefined()
-  expect(await countPlanEvents("plan-doomed")).toBe(0)
+  expect(await listPlanEvents("plan-doomed")).toEqual([])
   expect(await getPlan("plan-kept")).toBeDefined()
 })

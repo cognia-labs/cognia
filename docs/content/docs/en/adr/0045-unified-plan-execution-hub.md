@@ -370,3 +370,71 @@ with no `userEdited` stamp the resume prompt told the model to implement its
 original proposal. For a markdown plan the planner now sees the steps section
 a reader sees. Its result is written back into that section and `steps[]` is
 re-projected. Every applied refinement stamps `userEdited`.
+
+## Tasks-panel amendment (2026-10-29)
+
+The agent's own task list (`TodoWrite`, and the incremental `TaskCreate` /
+`TaskUpdate` / `TaskList` both the SDK and the sidecar emit) and the plans of
+this ADR were shown on six surfaces with five status-glyph maps, two parsers
+and two progress bars. The desktop dock had no task list at all, the list
+blanked after any later turn without task calls, and an approved
+`exit_plan_mode` plan never left `approved`.
+
+**One view model, one set of components.** Storage stays separate — a turn's
+scratch list and an approved execution contract mean different things — but
+every producer adapts into `TaskViewItem` (`lib/tasks/task-view.ts`) and draws
+through `components/tasks/` (status icon over every state, including a
+display-only `stopped` for an item left in progress by a run that ended;
+progress bar; list that folds completed items of long lists). Plan steps, ACP
+plan entries and AI-shell steps use the same icon and bar.
+
+**The task list is session-level and read from the transcript**
+(`lib/chat/session-tasks.ts`): the latest `TodoWrite` snapshot, or the
+`Task*` calls replayed by id (SDK text and sidecar JSON outputs), whichever
+family was called last. The plan-mode bridge that mirrored `TodoWrite` into a
+synthetic `solo:` team is gone, with the solo branches of `/plan from-team` /
+`to-team`.
+
+**The dock's `plan` panel is the Tasks panel** (the id stays `plan` for stored
+layouts): current tasks (folding to "last tasks" when finished), the open plan
+(the approval card on the decision owner's handlers, through
+`stores/agent/plan-decision-store.ts`; or the tracker with pause / resume /
+cancel), and earlier plans. It is the Sheet tab on phones and tablets, claims
+its slot for a task list alone, and a first task list flags a shut dock without
+raising it.
+
+**Above the composer only decisions stay**: the approval card (folded to one
+line with the primary approve while the Tasks panel shows the plan),
+`PlanHaltDock` for a halted in-session step, and a progress chip on the run
+panel that opens the Tasks panel. `PlanTrackerDock`, `PlanComposerDock`,
+`PlanPanel` and `PlanModeTasksSheet` are removed; "Write a plan" lives in the
+plan-mode banner and the panel's empty state. In the transcript a run of task
+calls is one line saying what changed, and the `exit_plan_mode` card is compact
+(status, link to the panel, the proposal behind a disclosure).
+
+**A plan approved in chat runs as its implementing turn**
+(`lib/agent/plan/chat-handoff.ts`, recorded in `metadata.chatHandoff`, no new
+status): approve → `executing`; the turn's end (`finishDirectChatExecutionRun`,
+every lane) → `completed`, or `paused` with a resumable continuation when it
+fails or is stopped; boot recovery pauses one whose turn died with the previous
+load. Resume / Mark done are on the approval dock; the panel offers Mark done /
+Cancel.
+
+**Lifecycle fixes**: deleting a session deletes its plans and events
+(tombstoned) in the same transaction; `refinePlan` refuses running, rejected
+and closed plans and keeps the kind / params / edges of steps it did not
+retitle; capture stamps the `tool_use` id so a repeated event never re-creates
+(and so cancels) a plan; team-projected steps name their team.
+
+**Inert knobs** (rule 7): `PlanConfig.maxStepRetries`, `judgeDeviation` and
+`maxTokens` carry `@deprecated Inert` docs, the workflow form no longer offers
+the `judge_deviation` trigger, and `lib/agent/plan/inert-config.test.ts` fails
+if a plan executor starts reading them.
+
+**Paths that moved since the decision above**: `sidecar/plan-tools/*` and
+`sidecar/builtin-tools/plan-tools.mjs` → `sidecar/src/tools/builtin/plan/`
+(`create_plan` / `update_plan`; the `CreatePlan` / `UpdatePlan` aliases are
+gone); `lib/workflow/nodes/built-ins.ts` → `lib/workflow/nodes/built-ins/index.ts`;
+`docs/plans/2026-06-03-unified-plan-execution-hub.md` → `docs/plans/archive/`;
+`lib/agent/plan-mode-bridge.ts` and the tasks sheet are removed; the plan
+context injection sits in `lib/claude/build-options.ts` beside the goal block.

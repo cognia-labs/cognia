@@ -181,16 +181,6 @@ export async function deletePlansForSessionsInTransaction(
   return ids
 }
 
-/** Cascade-delete every plan (and its events) for a given session. */
-export async function deletePlansForSession(sessionId: string): Promise<void> {
-  await withDbReopenRetry(() => {
-    const db = getDb()
-    return db.transaction("rw", db.agentPlans, db.agentPlanEvents, db.syncTombstones, () =>
-      deletePlansForSessionsInTransaction(db, [sessionId]).then(() => undefined)
-    )
-  })
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Event log
 // ─────────────────────────────────────────────────────────────────────────────
@@ -243,11 +233,6 @@ export async function listPlanEvents(planId: string, limit = 200): Promise<PlanE
     .reverse()
   if (limit > 0) collection.limit(limit)
   return collection.toArray()
-}
-
-/** Number of events on file for a plan. */
-export async function countPlanEvents(planId: string): Promise<number> {
-  return getDb().agentPlanEvents.where("planId").equals(planId).count()
 }
 
 /**

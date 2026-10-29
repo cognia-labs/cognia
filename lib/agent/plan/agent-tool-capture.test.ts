@@ -90,11 +90,12 @@ beforeEach(() => {
 })
 
 describe("findPlanToolCalls", () => {
-  it("matches the snake_case, PascalCase and namespaced spellings", () => {
-    for (const name of ["create_plan", "CreatePlan", "mcp__cognia-tools__create_plan"]) {
+  it("matches the snake_case and namespaced spellings the sidecar registers", () => {
+    expect(findPlanToolCalls(toolEvent("CreatePlan", { title: "x" }))).toEqual([])
+    for (const name of ["create_plan", "mcp__cognia-tools__create_plan"]) {
       expect(findPlanToolCalls(toolEvent(name, { title: "x" }))[0]?.tool).toBe("create")
     }
-    for (const name of ["update_plan", "UpdatePlan", "mcp__cognia-tools__update_plan"]) {
+    for (const name of ["update_plan", "mcp__cognia-tools__update_plan"]) {
       expect(findPlanToolCalls(toolEvent(name, {}))[0]?.tool).toBe("update")
     }
   })

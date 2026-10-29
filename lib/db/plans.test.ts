@@ -5,10 +5,8 @@ import { createDbTestFixture } from "./test-fixture"
 import {
   __TESTING__,
   appendPlanEvent,
-  countPlanEvents,
   createPlan,
   deletePlan,
-  deletePlansForSession,
   deletePlansForSessionsInTransaction,
   getExecutingPlanForSession,
   getOpenPlanForSession,
@@ -21,6 +19,16 @@ import {
 } from "./plans"
 
 const CONFIG: PlanConfig = DEFAULT_PLAN_CONFIG
+
+const countPlanEvents = async (planId: string) => (await listPlanEvents(planId)).length
+
+/** The session cascade, in a transaction of its own (as the session delete runs it). */
+function deletePlansForSession(sessionId: string) {
+  const db = getDb()
+  return db.transaction("rw", db.agentPlans, db.agentPlanEvents, db.syncTombstones, () =>
+    deletePlansForSessionsInTransaction(db, [sessionId])
+  )
+}
 
 function buildPlan(over: Partial<AgentPlan> = {}): Parameters<typeof createPlan>[0] {
   return {
@@ -202,7 +210,7 @@ describe("cascade delete", () => {
   })
 
   it("deletePlansForSession is a no-op for an empty session", async () => {
-    await expect(deletePlansForSession("ghost")).resolves.toBeUndefined()
+    await expect(deletePlansForSession("ghost")).resolves.toEqual([])
     expect(await getDb().syncTombstones.where("table").equals("plans").count()).toBe(0)
   })
 
