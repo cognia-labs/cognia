@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 import React from "react"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import type { ToolUIPart } from "ai"
 import { MCPToolCard, isStructuredMcpToolPart, normalizeToolName } from "./mcp-tool-card"
 import {
@@ -320,6 +320,7 @@ describe("MCPToolCard — exit_plan_mode", () => {
       />
     )
     expect(screen.getByTestId("mcp-plan-card")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("mcp-plan-toggle"))
     expect(screen.getByTestId("mcp-plan-body")).toHaveTextContent("Do the thing")
   })
 
@@ -329,6 +330,7 @@ describe("MCPToolCard — exit_plan_mode", () => {
         part={part("tool-mcp__cognia-tools__exit_plan_mode", undefined, { plan: "do it" })}
       />
     )
+    fireEvent.click(screen.getByTestId("mcp-plan-toggle"))
     expect(screen.getByTestId("mcp-plan-body")).toHaveTextContent("do it")
   })
 

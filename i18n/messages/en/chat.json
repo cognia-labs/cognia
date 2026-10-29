@@ -2087,7 +2087,6 @@
     "showParsed": "Show parsed",
     "showRaw": "Show raw",
     "stopReading": "Stop reading",
-    "todoPlanTitle": "Plan · {done}/{total} done",
     "toolCallFailed": "Tool call failed",
     "truncateFromLabel": "Delete from here",
     "truncateFromTooltip": "Delete this message and everything after it",

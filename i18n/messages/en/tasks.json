@@ -29,5 +29,17 @@
     "pending": "Pending",
     "skipped": "Skipped",
     "stopped": "Stopped"
+  },
+  "update": {
+    "label": "Task list update",
+    "created": "Task list · {total, plural, one {# item} other {# items}}",
+    "completed": "Done: {title}",
+    "completedMany": "Done: {title} and {more} more",
+    "started": "Started: {title}",
+    "added": "{count} added",
+    "removed": "{count} removed",
+    "unchanged": "Updated the task list",
+    "viewed": "Checked the task list",
+    "openPanel": "Open in Tasks panel"
   }
 }

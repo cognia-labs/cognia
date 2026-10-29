@@ -9978,7 +9978,6 @@
       "showParsed": "Show parsed",
       "showRaw": "Show raw",
       "stopReading": "Stop reading",
-      "todoPlanTitle": "Plan · {done}/{total} done",
       "toolCallFailed": "Tool call failed",
       "truncateFromLabel": "Delete from here",
       "truncateFromTooltip": "Delete this message and everything after it",
@@ -33667,6 +33666,10 @@
         "team_projection": "From the team task graph"
       },
       "title": "Review plan"
+    },
+    "card": {
+      "openInPanel": "Open in Tasks panel",
+      "untitled": "Plan"
     },
     "composer": {
       "advancedHint": "By default every step is a conversation turn. Give a step another type to delegate it, call a tool, run a sub-workflow, or pause for approval.",
@@ -62307,6 +62310,18 @@
       "pending": "Pending",
       "skipped": "Skipped",
       "stopped": "Stopped"
+    },
+    "update": {
+      "added": "{count} added",
+      "completed": "Done: {title}",
+      "completedMany": "Done: {title} and {more} more",
+      "created": "Task list · {total, plural, one {# item} other {# items}}",
+      "label": "Task list update",
+      "openPanel": "Open in Tasks panel",
+      "removed": "{count} removed",
+      "started": "Started: {title}",
+      "unchanged": "Updated the task list",
+      "viewed": "Checked the task list"
     }
   },
   "tauriDemo": {

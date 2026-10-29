@@ -64,6 +64,10 @@
     },
     "title": "Review plan"
   },
+  "card": {
+    "openInPanel": "Open in Tasks panel",
+    "untitled": "Plan"
+  },
   "composer": {
     "advancedHint": "By default every step is a conversation turn. Give a step another type to delegate it, call a tool, run a sub-workflow, or pause for approval.",
     "advancedToggle": "Step types",

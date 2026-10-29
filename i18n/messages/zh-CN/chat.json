@@ -2087,7 +2087,6 @@
     "showParsed": "查看解析",
     "showRaw": "查看原文",
     "stopReading": "停止朗读",
-    "todoPlanTitle": "计划 · {done}/{total} 已完成",
     "toolCallFailed": "工具调用失败",
     "truncateFromLabel": "从这里删除",
     "truncateFromTooltip": "删除这条消息以及其后的全部内容",

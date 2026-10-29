@@ -517,7 +517,7 @@ jest.mock("@/components/chat/message-parts/tool-call-row", () => ({
     }),
 }))
 
-import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import type { UIMessage } from "ai"
 import { HOVER_REVEAL_CLASS, MessageRenderer, messageAgentCatalogId } from "./message-renderer"
 import { TranscriptSelectionHostContext } from "@/hooks/chat/use-transcript-selection"
@@ -1518,7 +1518,33 @@ describe("tool parts", () => {
       ],
     }
     render(<MessageRenderer message={msg} />)
-    expect(screen.getByTestId("todo-list")).toBeInTheDocument()
+    expect(screen.getByTestId("task-update-row")).toBeInTheDocument()
+  })
+
+  it("renders consecutive Task* calls as one task row, not tool cards", () => {
+    const msg: UIMessage = {
+      id: "t-tasks",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-TaskCreate",
+          toolCallId: "c1",
+          state: "output-available",
+          input: { subject: "Write it", description: "" },
+          output: "Task #1 created successfully: Write it",
+        },
+        {
+          type: "dynamic-tool",
+          toolName: "TaskUpdate",
+          toolCallId: "c2",
+          state: "output-available",
+          input: { taskId: "1", status: "in_progress" },
+          output: "ok",
+        },
+      ] as unknown as UIMessage["parts"],
+    }
+    render(<MessageRenderer message={msg} />)
+    expect(screen.getAllByTestId("task-update-row")).toHaveLength(1)
   })
 
   it("renders TodoWrite as task list when todos are valid", () => {
@@ -1543,7 +1569,10 @@ describe("tool parts", () => {
       ],
     }
     render(<MessageRenderer message={msg} />)
-    expect(screen.getByTestId("todo-list")).toBeInTheDocument()
+    const row = screen.getByTestId("task-update-row")
+    // One line for the change; the list is one click away.
+    expect(screen.queryByText("Do A")).not.toBeInTheDocument()
+    fireEvent.click(within(row).getByRole("button", { expanded: false }))
     expect(screen.getByText("Do A")).toBeInTheDocument()
   })
 })

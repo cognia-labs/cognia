@@ -64,6 +64,10 @@
     },
     "title": "审阅计划"
   },
+  "card": {
+    "openInPanel": "在任务面板打开",
+    "untitled": "计划"
+  },
   "composer": {
     "advancedHint": "默认每个步骤都是一次对话轮次。可以改为委派给队友、调用工具、运行子工作流，或插入人工审批点。",
     "advancedToggle": "步骤类型",

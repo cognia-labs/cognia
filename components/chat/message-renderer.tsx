@@ -102,7 +102,6 @@ import {
   SILENT_CONTROL_PART_TYPES,
 } from "@/lib/chat/agent-flow-grouping"
 import { foldTurnParts, type TurnFold } from "@/lib/chat/turn-fold"
-import { parseTodoInput } from "@/lib/chat/todos"
 import { userBubbleClass } from "@/lib/chat/message-bubble"
 import { buildReplyTo, readReplyTo } from "@/lib/chat/reply-to"
 import { ReplyToQuote } from "@/components/chat/message-parts/reply-to-quote"
@@ -191,7 +190,7 @@ import { useMemberStatus } from "@/stores/ui"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
 import { ReadAloudButton } from "./read-aloud-button"
-import { TodoList } from "./todo-list"
+import { TaskUpdateRow } from "@/components/tasks/task-update-row"
 import { useCopy } from "@/hooks/ui/use-copy"
 import { useShowKeyboardHints } from "@/hooks/ui/use-pointer"
 import { buildMessageShareContent, writeMessageToClipboard } from "@/lib/chat/message-share"
@@ -316,9 +315,9 @@ function usePluginToolRendererRevision(): number {
 
 /** True when every part a render segment draws sits inside the turn's fold. */
 function isSegmentFolded(segment: AgentFlowSegment<unknown>, fold: TurnFold): boolean {
-  return segment.kind === "group"
-    ? segment.entries.every((entry) => fold.folded.has(entry.index))
-    : fold.folded.has(segment.entry.index)
+  return segment.kind === "single"
+    ? fold.folded.has(segment.entry.index)
+    : segment.entries.every((entry) => fold.folded.has(entry.index))
 }
 
 function MessageRendererInner({
@@ -899,6 +898,23 @@ function MessageRendererInner({
   // One render segment: a tool-activity group or a single part. Shared by the
   // folded process and the visible remainder of a finished turn.
   const renderSegment = (segment: (typeof segments)[number], si: number): ReactNode => {
+    if (segment.kind === "tasks") {
+      // Task bookkeeping (TodoWrite / Task*): one row saying what the run
+      // changed; the full list lives in the dock's Tasks panel.
+      return (
+        <MotionReveal
+          key={`${message.id}-tasks-${si}`}
+          index={si}
+          disabled={display.motion === "off"}
+          intensity={display.motion === "expressive" ? "expressive" : "restrained"}
+        >
+          <TaskUpdateRow
+            sessionId={branchSessionId}
+            parts={segment.entries.map((entry) => entry.part)}
+          />
+        </MotionReveal>
+      )
+    }
     if (segment.kind === "group") {
       const entries: ToolActivityGroupEntry[] = segment.entries.map((e) => ({
         part: e.part as ToolUIPart,
@@ -2496,19 +2512,6 @@ function renderPart(
     // Non-image file: the same file card the composer showed, with an inline
     // preview for text/code/pdf/video under it, or a download card otherwise.
     return <FilePartCard key={key} url={url} mediaType={mediaType} filename={filename} />
-  }
-
-  // Special-case Claude's TodoWrite tool: render as a structured task list.
-  // The sidecar coreFiles suite names its tool exactly "TodoWrite" so the
-  // ai-sdk path lands here too; the namespaced form covers the Anthropic
-  // escape-hatch registration.
-  if (type === "tool-TodoWrite" || type === "tool-mcp__cognia-tools__TodoWrite") {
-    const tp = part as ToolUIPart
-    const todos = parseTodoInput(tp.input)
-    if (todos) {
-      return <TodoList key={key} todos={todos} />
-    }
-    // Falls through to generic Tool rendering below.
   }
 
   // Plugin-contributed part types — checked before the generic tool fallback

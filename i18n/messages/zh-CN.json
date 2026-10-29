@@ -9978,7 +9978,6 @@
       "showParsed": "查看解析",
       "showRaw": "查看原文",
       "stopReading": "停止朗读",
-      "todoPlanTitle": "计划 · {done}/{total} 已完成",
       "toolCallFailed": "工具调用失败",
       "truncateFromLabel": "从这里删除",
       "truncateFromTooltip": "删除这条消息以及其后的全部内容",
@@ -33667,6 +33666,10 @@
         "team_projection": "来自团队任务图"
       },
       "title": "审阅计划"
+    },
+    "card": {
+      "openInPanel": "在任务面板打开",
+      "untitled": "计划"
     },
     "composer": {
       "advancedHint": "默认每个步骤都是一次对话轮次。可以改为委派给队友、调用工具、运行子工作流，或插入人工审批点。",
@@ -62307,6 +62310,18 @@
       "pending": "待处理",
       "skipped": "已跳过",
       "stopped": "已停止"
+    },
+    "update": {
+      "added": "新增 {count} 项",
+      "completed": "完成：{title}",
+      "completedMany": "完成：{title} 等 {total} 项",
+      "created": "任务清单 · {total} 项",
+      "label": "任务清单更新",
+      "openPanel": "在任务面板查看",
+      "removed": "移除 {count} 项",
+      "started": "开始：{title}",
+      "unchanged": "更新了任务清单",
+      "viewed": "查看了任务清单"
     }
   },
   "tauriDemo": {

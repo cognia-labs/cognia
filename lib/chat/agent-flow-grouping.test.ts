@@ -2,6 +2,7 @@ import {
   groupAgentParts,
   isGroupableToolPart,
   isGroupableToolType,
+  isTaskToolPart,
   isToolOnlyFlow,
   isToolPartType,
   isTransparentPart,
@@ -24,18 +25,26 @@ describe("isToolPartType / isGroupableToolType", () => {
     expect(isGroupableToolType("dynamic-tool")).toBe(true)
   })
 
-  it("excludes TodoWrite from grouping", () => {
+  it("excludes task bookkeeping from grouping", () => {
     expect(isGroupableToolType("tool-Read")).toBe(true)
     expect(isGroupableToolType("tool-TodoWrite")).toBe(false)
     expect(isGroupableToolType("tool-mcp__cognia-tools__TodoWrite")).toBe(false)
+    expect(isGroupableToolType("tool-TaskUpdate")).toBe(false)
     expect(isGroupableToolType("text")).toBe(false)
   })
 
-  it("isGroupableToolPart mirrors the type-level predicate", () => {
+  it("isGroupableToolPart also reads a dynamic-tool's name", () => {
     expect(isGroupableToolPart({ type: "tool-Read" })).toBe(true)
     expect(isGroupableToolPart({ type: "tool-TodoWrite" })).toBe(false)
     expect(isGroupableToolPart({ type: "dynamic-tool" })).toBe(true)
+    expect(isGroupableToolPart({ type: "dynamic-tool", toolName: "TaskCreate" })).toBe(false)
     expect(isGroupableToolPart({})).toBe(false)
+  })
+
+  it("isTaskToolPart recognises every task tool spelling", () => {
+    expect(isTaskToolPart({ type: "tool-TaskList" })).toBe(true)
+    expect(isTaskToolPart({ type: "dynamic-tool", toolName: "TodoWrite" })).toBe(true)
+    expect(isTaskToolPart({ type: "tool-Bash" })).toBe(false)
   })
 })
 
@@ -80,10 +89,34 @@ describe("groupAgentParts", () => {
     }
   })
 
-  it("does not group TodoWrite", () => {
+  it("gives task bookkeeping its own segment, never a tool group", () => {
     const parts: P[] = [{ type: "tool-TodoWrite" }, { type: "tool-Read" }]
     const segs = groupAgentParts(parts)
-    expect(segs.map((s) => s.kind)).toEqual(["single", "single"])
+    expect(segs.map((s) => s.kind)).toEqual(["tasks", "single"])
+  })
+
+  it("merges consecutive task calls into one tasks segment across transparent parts", () => {
+    const parts: P[] = [
+      { type: "tool-Read" },
+      { type: "tool-Grep" },
+      { type: "tool-TaskCreate" },
+      { type: "text", text: "" },
+      { type: "dynamic-tool", toolName: "TaskUpdate" },
+      { type: "tool-TaskUpdate" },
+      { type: "tool-Bash" },
+    ]
+    const segs = groupAgentParts(parts)
+    expect(segs.map((s) => s.kind)).toEqual(["group", "tasks", "single"])
+    if (segs[1].kind === "tasks") expect(segs[1].entries.map((e) => e.index)).toEqual([2, 4, 5])
+  })
+
+  it("splits task runs on prose", () => {
+    const parts: P[] = [
+      { type: "tool-TodoWrite" },
+      { type: "text", text: "Starting." },
+      { type: "tool-TodoWrite" },
+    ]
+    expect(groupAgentParts(parts).map((s) => s.kind)).toEqual(["tasks", "single", "tasks"])
   })
 
   it("preserves original indices on singles", () => {

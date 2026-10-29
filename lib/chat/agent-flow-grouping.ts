@@ -10,9 +10,15 @@
  *
  * Sub-agent parts are transparent to grouping — they render once as a dispatch
  * tree at the message level, so they neither join nor break a tool run.
- * `TodoWrite` is excluded because it renders as a structured plan, not a card.
+ *
+ * Task bookkeeping calls (`TodoWrite`, `TaskCreate` / `TaskUpdate` /
+ * `TaskList`, in any spelling the host registers, `dynamic-tool` included)
+ * never fold into an activity group: a run of them becomes one `tasks`
+ * segment, which the renderer draws as a single "what changed in the task
+ * list" row instead of one card per call.
  */
 
+import { taskToolKind } from "./session-tasks"
 import { isContextFoldPart } from "./tool-summary"
 import type { AgentFlowMode } from "@/types/appearance"
 
@@ -25,7 +31,14 @@ export interface PartEntry<P> {
 }
 
 export type AgentFlowSegment<P> =
-  { kind: "single"; entry: PartEntry<P> } | { kind: "group"; entries: PartEntry<P>[] }
+  | { kind: "single"; entry: PartEntry<P> }
+  | { kind: "group"; entries: PartEntry<P>[] }
+  | { kind: "tasks"; entries: PartEntry<P>[] }
+
+/** True for a task-list bookkeeping call (see the module note). */
+export function isTaskToolPart<P extends { type?: string; toolName?: string }>(part: P): boolean {
+  return taskToolKind(part) !== null
+}
 
 /**
  * True for any tool-call part type — `tool-*`, plus the AI SDK's
@@ -40,16 +53,18 @@ export function isToolPartType(type: string | undefined): boolean {
 /** True for tool parts that participate in activity grouping. */
 export function isGroupableToolType(type: string | undefined): boolean {
   if (!isToolPartType(type)) return false
-  // TodoWrite renders as a plan list, not a tool card. Only the two statically
-  // declared spellings are special-cased in the renderer, so only those are
-  // excluded here — a `dynamic-tool` named TodoWrite renders as an ordinary
-  // tool card and must keep folding with its neighbours.
-  return type !== "tool-TodoWrite" && type !== "tool-mcp__cognia-tools__TodoWrite"
+  // Task bookkeeping renders as its own task row, not a tool card.
+  return taskToolKind({ type }) === null
 }
 
-/** Part-level companion to {@link isGroupableToolType}. */
-export function isGroupableToolPart<P extends { type?: string }>(part: P): boolean {
-  return isGroupableToolType(part?.type)
+/**
+ * Part-level companion to {@link isGroupableToolType}; also sees the name a
+ * `dynamic-tool` part carries on `toolName`.
+ */
+export function isGroupableToolPart<P extends { type?: string; toolName?: string }>(
+  part: P
+): boolean {
+  return isToolPartType(part?.type) && !isTaskToolPart(part)
 }
 
 /** AI SDK structural/control part types the renderer draws nothing for. */
@@ -106,6 +121,7 @@ export function groupAgentParts<P extends { type?: string }>(
 
   const segments: AgentFlowSegment<P>[] = []
   let run: PartEntry<P>[] = []
+  let taskRun: PartEntry<P>[] = []
 
   const flush = () => {
     if (run.length >= MIN_GROUP_SIZE) {
@@ -115,9 +131,19 @@ export function groupAgentParts<P extends { type?: string }>(
     }
     run = []
   }
+  const flushTasks = () => {
+    if (taskRun.length > 0) segments.push({ kind: "tasks", entries: taskRun })
+    taskRun = []
+  }
 
   parts.forEach((part, index) => {
     if (isTransparentPart(part)) return
+    if (isTaskToolPart(part as P & { toolName?: string })) {
+      flush()
+      taskRun.push({ part, index })
+      return
+    }
+    flushTasks()
     if (isGroupable(part)) {
       run.push({ part, index })
       return
@@ -126,6 +152,7 @@ export function groupAgentParts<P extends { type?: string }>(
     segments.push({ kind: "single", entry: { part, index } })
   })
   flush()
+  flushTasks()
 
   return segments
 }
