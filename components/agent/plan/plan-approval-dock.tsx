@@ -430,9 +430,9 @@ export function PlanApprovalDock({
     content = (
       <Surface
         role="alert"
-        className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2"
       >
-        <p className="text-sm text-muted-foreground">
+        <p className="min-w-[12rem] flex-1 text-sm text-muted-foreground">
           {readChatHandoff(plan) ? t("approval.handoffStopped") : t("approval.resumeFailed")}
         </p>
         <div className="flex shrink-0 items-center gap-2">
@@ -459,10 +459,10 @@ export function PlanApprovalDock({
     content = (
       <Surface
         role="status"
-        className="flex items-center justify-between gap-3 rounded-lg border border-border/70 px-3 py-2"
+        className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-border/70 px-3 py-2"
         data-testid="plan-approval-compact"
       >
-        <p className="min-w-0 truncate text-sm text-muted-foreground">
+        <p className="min-w-[12rem] flex-1 truncate text-sm text-muted-foreground">
           {t("approval.reviewInPanel", { title: plan.title })}
         </p>
         <Button
