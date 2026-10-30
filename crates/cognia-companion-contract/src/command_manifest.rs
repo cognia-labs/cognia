@@ -433,9 +433,18 @@ mod tests {
                     && c.resource == "sandbox.managed_desktop.result"
             })
             .collect();
-        assert_eq!(semantic.len(), 6);
+        // Six result mutations plus the acceptance runner's checkpoint and
+        // completion (ADR-0233 A6), which write results for their run.
+        assert_eq!(semantic.len(), 8);
         for descriptor in semantic {
-            assert!(descriptor.name.starts_with("managed_desktop_results_"));
+            assert!(
+                descriptor.name.starts_with("managed_desktop_results_")
+                    || matches!(
+                        descriptor.name.as_str(),
+                        "managed_desktop_acceptance_checkpoint"
+                            | "managed_desktop_acceptance_complete"
+                    )
+            );
             assert_eq!(descriptor.idempotency, CommandIdempotency::Required);
             assert_ne!(descriptor.operation, CommandOperation::Read);
         }

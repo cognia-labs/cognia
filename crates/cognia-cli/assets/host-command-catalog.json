@@ -49327,6 +49327,158 @@
       "outputTyped": true
     },
     {
+      "name": "managed_desktop_clipboard_get",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_clipboard_get (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desktopId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "desktopId",
+          "generation",
+          "token",
+          "fence"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "clipboard-get"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "text"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_clipboard_set",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_clipboard_set (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desktopId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 1048576
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "desktopId",
+          "generation",
+          "token",
+          "fence",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "clipboard-set"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "kind",
+          "bytes"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+      },
+      "outputTyped": true
+    },
+    {
       "name": "managed_desktop_config_delete",
       "category": "automation",
       "resource": "managed",
@@ -49732,6 +49884,10 @@
               ],
               "additionalProperties": false
             }
+          },
+          "operationsQualified": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -50255,6 +50411,10 @@
               ],
               "additionalProperties": false
             }
+          },
+          "operationsQualified": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -50652,6 +50812,10 @@
               ],
               "additionalProperties": false
             }
+          },
+          "operationsQualified": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -52274,6 +52438,211 @@
       "outputTyped": true
     },
     {
+      "name": "managed_desktop_files_read",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_files_read (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desktopId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "length": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "desktopId",
+          "generation",
+          "token",
+          "fence",
+          "path",
+          "offset",
+          "length"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "file-read"
+          },
+          "chunk": {
+            "type": "array",
+            "maxItems": 65536,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          },
+          "eof": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "chunk",
+          "eof"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "managed_desktop_files_write",
+      "category": "automation",
+      "resource": "managed",
+      "target": "execution",
+      "operation": "write",
+      "capability": "host.admin",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "managed_desktop_files_write (host.admin)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "desktopId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "fence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 8388608
+          },
+          "chunk": {
+            "type": "array",
+            "maxItems": 65536,
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          },
+          "final": {
+            "type": "boolean"
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "admin_lease": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "desktopId",
+          "generation",
+          "token",
+          "fence",
+          "path",
+          "offset",
+          "chunk",
+          "final"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "file-write"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "final": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "kind",
+          "bytes",
+          "final"
+        ],
+        "additionalProperties": false,
+        "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+      },
+      "outputTyped": true
+    },
+    {
       "name": "managed_desktop_handoff_deliveries",
       "category": "automation",
       "resource": "managed",
@@ -53143,6 +53512,10 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "operationsQualified": {
+              "type": "boolean",
+              "default": false
             }
           },
           "required": [
@@ -53609,6 +53982,10 @@
               ],
               "additionalProperties": false
             }
+          },
+          "operationsQualified": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -70231,7 +70608,8 @@
                   "type": "string",
                   "enum": [
                     "vnc",
-                    "none"
+                    "none",
+                    "cognia-frames"
                   ]
                 },
                 "priority": {
@@ -70369,6 +70747,25 @@
           },
           "updatedAt": {
             "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "external",
+              "native"
+            ],
+            "default": "external"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "docker",
+              "e2b"
+            ]
+          },
+          "readOnly": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -70705,7 +71102,8 @@
                         "type": "string",
                         "enum": [
                           "vnc",
-                          "none"
+                          "none",
+                          "cognia-frames"
                         ]
                       },
                       "priority": {
@@ -70843,6 +71241,25 @@
                 },
                 "updatedAt": {
                   "type": "integer"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "external",
+                    "native"
+                  ],
+                  "default": "external"
+                },
+                "provider": {
+                  "type": "string",
+                  "enum": [
+                    "docker",
+                    "e2b"
+                  ]
+                },
+                "readOnly": {
+                  "type": "boolean",
+                  "default": false
                 }
               },
               "required": [
@@ -71230,7 +71647,8 @@
                   "type": "string",
                   "enum": [
                     "vnc",
-                    "none"
+                    "none",
+                    "cognia-frames"
                   ]
                 },
                 "priority": {
@@ -71368,6 +71786,25 @@
           },
           "updatedAt": {
             "type": "integer"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "external",
+              "native"
+            ],
+            "default": "external"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "docker",
+              "e2b"
+            ]
+          },
+          "readOnly": {
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [
@@ -109924,5 +110361,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "d155b8cb0ed3c7d741fe978a15bea33e56a8a40ab97926cb4fe8203596d19f76"
+  "catalogHash": "5170857e80923606482d2f31feb51a157641ba34cf2a6a7e062cc579dccbe511"
 }
