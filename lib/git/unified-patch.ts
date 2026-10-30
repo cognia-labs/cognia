@@ -39,21 +39,53 @@ export function patchFilePath(file: Pick<PatchFile, "oldPath" | "newPath">): str
  * `--- a/src/x.ts\t2024-01-01` → `src/x.ts`; `/dev/null` → null. Quoted git
  * paths (`"a/with space"`) are unquoted; the `a/` / `b/` prefix is dropped.
  */
-function headerPath(raw: string): string | null {
+function headerPath(raw: string, stripPrefix = true): string | null {
   let value = raw.replace(/\t.*$/, "").trim()
   if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-    value = value.slice(1, -1).replace(/\\(.)/g, "$1")
+    const quoted = value.slice(1, -1)
+    const bytes: number[] = []
+    const encoder = new TextEncoder()
+    const escapes: Record<string, string> = {
+      n: "\n",
+      r: "\r",
+      t: "\t",
+      b: "\b",
+      f: "\f",
+      v: "\v",
+      a: "\x07",
+    }
+    for (let at = 0; at < quoted.length;) {
+      if (quoted[at] === "\\") {
+        const octal = /^[0-7]{1,3}/.exec(quoted.slice(at + 1))
+        if (octal) {
+          bytes.push(Number.parseInt(octal[0], 8))
+          at += octal[0].length + 1
+          continue
+        }
+        at += 1
+        const escaped = quoted[at] ?? "\\"
+        bytes.push(...encoder.encode(escapes[escaped] ?? escaped))
+        at += 1
+      } else {
+        const point = String.fromCodePoint(quoted.codePointAt(at)!)
+        bytes.push(...encoder.encode(point))
+        at += point.length
+      }
+    }
+    value = new TextDecoder().decode(Uint8Array.from(bytes))
   }
   if (value === DEV_NULL || value === "") return null
-  return value.replace(/^[ab]\//, "")
+  return stripPrefix ? value.replace(/^[ab]\//, "") : value
 }
 
 /** `diff --git a/x b/y` → `{ old: "x", new: "y" }` when unambiguous. */
 function gitHeaderPaths(line: string): { old: string; new: string } | null {
   const rest = line.slice("diff --git ".length)
-  const match = /^a\/(.+) b\/(.+)$/.exec(rest)
+  const match = /^("(?:\\.|[^"])*"|a\/.+?) ("(?:\\.|[^"])*"|b\/.+)$/.exec(rest)
   if (!match) return null
-  return { old: match[1], new: match[2] }
+  const old = headerPath(match[1])
+  const next = headerPath(match[2])
+  return old && next ? { old, new: next } : null
 }
 
 interface FileBuild {
@@ -197,7 +229,11 @@ export function parseUnifiedPatch(text: string): PatchFile[] {
     // `--- x` followed by `+++ y` opens a file (or the file `diff --git`
     // already opened). Checked before change lines: `---` would otherwise
     // read as a removal of "-- x".
-    if (line.startsWith("--- ") && lines[i + 1]?.startsWith("+++ ")) {
+    if (
+      (!hunk || (hunk.oldLeft <= 0 && hunk.newLeft <= 0)) &&
+      line.startsWith("--- ") &&
+      lines[i + 1]?.startsWith("+++ ")
+    ) {
       const continuing = file !== null && hunk === null && (file as FileBuild).hunks.length === 0
       if (!continuing) closeFile()
       else closeHunk()
@@ -241,13 +277,13 @@ export function parseUnifiedPatch(text: string): PatchFile[] {
       }
       if (line.startsWith("rename from ")) {
         current.renamed = true
-        current.oldPath = line.slice("rename from ".length)
+        current.oldPath = headerPath(line.slice("rename from ".length), false)
         current.header.push(line)
         continue
       }
       if (line.startsWith("rename to ")) {
         current.renamed = true
-        current.newPath = line.slice("rename to ".length)
+        current.newPath = headerPath(line.slice("rename to ".length), false)
         current.header.push(line)
         continue
       }

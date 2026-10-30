@@ -3,7 +3,7 @@ import { useTaskWorkspaceStore } from "./task-workspace-store"
 describe("task workspace store", () => {
   beforeEach(() => useTaskWorkspaceStore.getState().clear())
 
-  it("tracks provisional events until authoritative reconcile", () => {
+  it("refreshes resources without completing the owned running lease", () => {
     useTaskWorkspaceStore.getState().activate({
       taskId: "task-1",
       runId: "run-1",
@@ -24,7 +24,8 @@ describe("task workspace store", () => {
 
     useTaskWorkspaceStore.getState().reconcile("session-1", [])
     expect(useTaskWorkspaceStore.getState().provisionalByRun["run-1"]).toBeUndefined()
-    expect(useTaskWorkspaceStore.getState().activeBySession["session-1"].state).toBe("ready")
+    expect(useTaskWorkspaceStore.getState().activeBySession["session-1"].state).toBe("running")
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession["session-1"]).toBe("run-1")
   })
 
   it("ignores stale watcher revisions", () => {
@@ -76,13 +77,22 @@ describe("task workspace store", () => {
       workspaceRoot: "/repo",
       executionRoot: "/isolated",
       state: "running",
+      origin: { kind: "remote", hostId: "host-a", accountId: "account-a" },
     })
     state.bindTrace("session-1", "trace-1", "span-1")
     expect(useTaskWorkspaceStore.getState().activeBySession["session-1"]).toEqual(
-      expect.objectContaining({ traceId: "trace-1", traceSpanId: "span-1" })
+      expect.objectContaining({
+        traceId: "trace-1",
+        traceSpanId: "span-1",
+        origin: { kind: "remote", hostId: "host-a", accountId: "account-a" },
+      })
     )
     expect(useTaskWorkspaceStore.getState().activeByRun["run-1"]).toEqual(
-      expect.objectContaining({ traceId: "trace-1", traceSpanId: "span-1" })
+      expect.objectContaining({
+        traceId: "trace-1",
+        traceSpanId: "span-1",
+        origin: { kind: "remote", hostId: "host-a", accountId: "account-a" },
+      })
     )
   })
 
@@ -124,7 +134,7 @@ describe("task workspace store", () => {
 
     useTaskWorkspaceStore.getState().reconcileRun("run-additional", [])
 
-    expect(useTaskWorkspaceStore.getState().activeByRun["run-additional"].state).toBe("ready")
+    expect(useTaskWorkspaceStore.getState().activeByRun["run-additional"].state).toBe("running")
     expect(useTaskWorkspaceStore.getState().activeBySession["session-1"].runId).toBe("run-primary")
     expect(useTaskWorkspaceStore.getState().provisionalByRun["run-additional"]).toBeUndefined()
   })
@@ -150,6 +160,59 @@ describe("task workspace store", () => {
 
     useTaskWorkspaceStore.getState().reconcileRun("run-primary", [])
 
-    expect(useTaskWorkspaceStore.getState().activeBySession["session-primary"].state).toBe("ready")
+    expect(useTaskWorkspaceStore.getState().activeBySession["session-primary"].state).toBe(
+      "running"
+    )
+  })
+
+  it.each(["ready", "failed", "cancelled"] as const)(
+    "ends ownership only after an authoritative %s result",
+    (finalState) => {
+      const store = useTaskWorkspaceStore.getState()
+      store.activate({
+        taskId: "task",
+        runId: "run",
+        sessionId: "session",
+        workspaceRoot: "/repo",
+        executionRoot: "/repo",
+        state: "running",
+      })
+      store.completeRun("run", finalState, [])
+      expect(useTaskWorkspaceStore.getState().activeByRun.run.state).toBe(finalState)
+      expect(useTaskWorkspaceStore.getState().activeBySession.session.state).toBe(finalState)
+      expect(useTaskWorkspaceStore.getState().ownedRunBySession.session).toBeUndefined()
+    }
+  )
+
+  it("completes the captured run without releasing a newer lease or replacing its resource cache", () => {
+    const store = useTaskWorkspaceStore.getState()
+    const base = {
+      taskId: "task",
+      sessionId: "session",
+      workspaceRoot: "/repo",
+      executionRoot: "/repo",
+      state: "running" as const,
+    }
+    store.activate({ ...base, runId: "old" })
+    store.activate({ ...base, runId: "next" })
+    store.reconcileRun("next", [])
+    const currentCache = useTaskWorkspaceStore.getState().resourcesByTask.task
+    store.completeRun("old", "cancelled", [])
+    expect(useTaskWorkspaceStore.getState().activeByRun.old.state).toBe("cancelled")
+    expect(useTaskWorkspaceStore.getState().activeBySession.session.runId).toBe("next")
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession.session).toBe("next")
+    expect(useTaskWorkspaceStore.getState().resourcesByTask.task).toBe(currentCache)
+  })
+
+  it("does not create renderer ownership for retained ready history", () => {
+    useTaskWorkspaceStore.getState().activate({
+      taskId: "task",
+      runId: "old",
+      sessionId: "session",
+      workspaceRoot: "/repo",
+      executionRoot: "/repo",
+      state: "ready",
+    })
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession.session).toBeUndefined()
   })
 })

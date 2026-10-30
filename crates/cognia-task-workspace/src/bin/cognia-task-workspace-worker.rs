@@ -2,6 +2,13 @@ use std::io::{self, Read};
 
 fn main() {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args.first().is_some_and(|command| command == "serve") {
+        if let Err(error) = cognia_task_workspace::run_worker_server(&args, &mut io::stdin().lock(), &mut io::stdout().lock()) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let mut input = String::new();
     if let Err(error) = io::stdin().read_to_string(&mut input) {
         eprintln!("read stdin: {error}");

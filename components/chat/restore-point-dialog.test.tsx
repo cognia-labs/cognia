@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  */
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 jest.mock("next-intl", () => ({
@@ -63,6 +63,7 @@ function turn(messageId: string) {
     taskWorkspaceRunId: `run:${messageId}`,
     assistantMessageId: messageId,
     workspaceRoot: "/repo",
+    origin: { kind: "local" },
     agentKind: "in-app",
     model: null,
     ts: 1,
@@ -86,15 +87,26 @@ beforeEach(() => {
   seed()
   flags.checkpoint = false
   getTurnMock.mockReset().mockImplementation(async (_s: string, id: string) => turn(id))
-  getPatchMock
-    .mockReset()
-    .mockImplementation(async (runId: string) => ({ runId, state: "applied", reversible: true }))
+  getPatchMock.mockReset().mockImplementation(async (runId: string) => ({
+    runId,
+    state: "applied",
+    reversible: true,
+    appliedSelectionKnown: true,
+    files: [{ path: `${runId.slice(4)}.ts` }],
+  }))
   undoMock.mockReset().mockResolvedValue({ state: "reverted", revision: 2, conflicts: [] })
   toastSuccess.mockReset()
   toastError.mockReset()
 })
 
 describe("RestorePointDialog", () => {
+  it("blocks missing history instead of treating it as no changes", async () => {
+    getTurnMock.mockResolvedValue(undefined)
+    render(<RestorePointDialog sessionId="s1" messageId="u1" open onOpenChange={jest.fn()} />)
+    await planSettled()
+    expect(screen.getByTestId("restore-point-files")).toHaveTextContent("files.blocked.untracked")
+    expect(undoMock).not.toHaveBeenCalled()
+  })
   it("routes each conversation choice to the row's own mechanism and closes", async () => {
     const user = userEvent.setup()
     const onOpenChange = jest.fn()
@@ -144,6 +156,64 @@ describe("RestorePointDialog", () => {
     expect(getTurnMock.mock.calls.map(([, id]) => id)).toEqual(["a2"])
   })
 
+  it("restores user-only roots on their own Hosts and excludes an already reverted root", async () => {
+    const user = userEvent.setup()
+    const originA = { kind: "remote", hostId: "host-a", accountId: "account" }
+    const originB = { kind: "remote", hostId: "host-b", accountId: "account" }
+    const runs = [
+      { runId: "already", workspaceRoot: "/retired", origin: originA },
+      { runId: "same-id", workspaceRoot: "/repo", origin: originA },
+      { runId: "same-id", workspaceRoot: "/docs", origin: originB },
+    ]
+    getTurnMock.mockResolvedValue({
+      ...turn("a2"),
+      totalFiles: 0,
+      files: [],
+      taskWorkspaceRuns: runs,
+    })
+    getPatchMock.mockImplementation(async (runId: string, origin: typeof originA) => ({
+      runId,
+      state: runId === "already" ? "reverted" : "applied",
+      reversible: true,
+      appliedSelectionKnown: true,
+      appliedSelection: [{ path: "upload.txt", hunkIds: origin.hostId === "host-a" ? ["h1"] : [] }],
+      files: [
+        { path: "upload.txt", origin: origin.hostId === "host-a" ? "user" : "unknown" },
+        { path: "not-applied.txt", origin: "user" },
+      ],
+    }))
+    render(<RestorePointDialog sessionId="s1" messageId="u2" open onOpenChange={jest.fn()} />)
+    await waitFor(() => expect(screen.getByTestId("restore-point-undo-files")).toBeEnabled())
+    expect(getPatchMock.mock.calls).toEqual(runs.map((run) => [run.runId, run.origin]))
+    expect(screen.getByTestId("restore-point-files")).toHaveTextContent(
+      'files.undoable:{"files":2,"turns":1}'
+    )
+    await user.click(screen.getByTestId("restore-point-undo-files"))
+    const confirmation = await screen.findByRole("alertdialog")
+    expect(within(confirmation).getByText("/repo")).toBeInTheDocument()
+    expect(within(confirmation).getByText("/docs")).toBeInTheDocument()
+    expect(within(confirmation).queryByText("/retired")).not.toBeInTheDocument()
+    expect(within(confirmation).getByText('files.scopeHost:{"host":"host-a"}')).toBeInTheDocument()
+    expect(within(confirmation).getByText('files.scopeHost:{"host":"host-b"}')).toBeInTheDocument()
+    expect(
+      within(confirmation).getAllByText('files.scopeAccount:{"account":"account"}')
+    ).toHaveLength(2)
+    expect(within(confirmation).getAllByText("upload.txt")).toHaveLength(2)
+    expect(within(confirmation).queryByText("not-applied.txt")).not.toBeInTheDocument()
+    expect(within(confirmation).getByText('undoUserContributions:{"count":1}')).toBeInTheDocument()
+    expect(
+      within(confirmation).getByText('undoUnattributedContributions:{"count":1}')
+    ).toBeInTheDocument()
+    expect(within(confirmation).getByText(/undoAppliedHunks/)).toBeInTheDocument()
+    await user.click(await screen.findByTestId("restore-point-undo-confirm"))
+    await waitFor(() => expect(undoMock).toHaveBeenCalledTimes(2))
+    expect(undoMock.mock.calls).toEqual([
+      ["same-id", originB],
+      ["same-id", originA],
+    ])
+    expect(toastSuccess).toHaveBeenCalledWith('files.restored:{"turns":1}')
+  })
+
   it("says why files cannot be restored instead of undoing part of them", async () => {
     getPatchMock.mockImplementation(async (runId: string) => ({
       runId,
@@ -160,7 +230,12 @@ describe("RestorePointDialog", () => {
   })
 
   it("says so when nothing changed after the message", async () => {
-    getTurnMock.mockResolvedValue(undefined)
+    getPatchMock.mockResolvedValue({ files: [], appliedSelectionKnown: true })
+    getTurnMock.mockImplementation(async (_session: string, id: string) => ({
+      ...turn(id),
+      totalFiles: 0,
+      files: [],
+    }))
     render(<RestorePointDialog sessionId="s1" messageId="u1" open onOpenChange={jest.fn()} />)
     await waitFor(() =>
       expect(screen.getByTestId("restore-point-files")).toHaveTextContent("files.none")

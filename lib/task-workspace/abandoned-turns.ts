@@ -43,6 +43,9 @@
  * wedged never pays for any of it.
  */
 
+import { captureTaskWorkspaceOrigin, sameTaskWorkspaceOrigin } from "./origin"
+import type { TaskWorkspaceOrigin } from "./types"
+
 const STORAGE_KEY = "cognia.taskWorkspace.openBundleTurns"
 const CHANNEL_NAME = "cognia.taskWorkspace.bundleTurns"
 
@@ -64,6 +67,7 @@ export interface OpenBundleTurn {
   /** The conversation, so a reclaim only considers the one that was refused. */
   sessionId: string
   openedAt: number
+  origin?: TaskWorkspaceOrigin
 }
 
 interface PollMessage {
@@ -79,7 +83,9 @@ interface ClaimMessage {
 }
 
 /** The turns THIS document is still driving. The answer to any poll. */
-const live = new Set<string>()
+const live = new Map<string, OpenBundleTurn>()
+const turnKey = (id: string, origin: TaskWorkspaceOrigin) => JSON.stringify([id, origin])
+const isLive = (id: string) => [...live.values()].some((turn) => turn.bundleTurnId === id)
 
 /** Minimal shapes, so the deps can be faked without a DOM. */
 export interface AbandonedTurnChannel {
@@ -93,7 +99,7 @@ export interface AbandonedTurnDeps {
   readStorage: () => string | null
   writeStorage: (value: string) => void
   openChannel: () => AbandonedTurnChannel | null
-  abort: (bundleTurnId: string) => Promise<unknown>
+  abort: (bundleTurnId: string, origin: TaskWorkspaceOrigin) => Promise<unknown>
   now: () => number
   /** Injected so a test does not wait out the real reply window. */
   waitForClaims: (ms: number) => Promise<void>
@@ -132,9 +138,9 @@ const defaultDeps: AbandonedTurnDeps = {
   // scope. The approval this abort needs is already open, because the only
   // caller reaches here from inside `openWorkspaceBundleTurnLease`'s scope,
   // which names `task_workspace_bundle_turn_abort`.
-  abort: async (bundleTurnId) => {
+  abort: async (bundleTurnId, origin) => {
     const { abortWorkspaceBundleTurn } = await import("./client")
-    return abortWorkspaceBundleTurn(bundleTurnId)
+    return abortWorkspaceBundleTurn(bundleTurnId, origin)
   },
   now: () => Date.now(),
   waitForClaims: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -190,7 +196,7 @@ function ensureResponder(): void {
   const listener = (event: { data: unknown }) => {
     const message = event.data as PollMessage | undefined
     if (message?.kind !== "cognia.bundle-turn.poll") return
-    const claimed = message.bundleTurnIds.filter((id) => live.has(id))
+    const claimed = message.bundleTurnIds.filter(isLive)
     if (claimed.length === 0) return
     const reply: ClaimMessage = {
       kind: "cognia.bundle-turn.claim",
@@ -211,10 +217,17 @@ function ensureResponder(): void {
 
 /** Record a turn this document has just opened and is now driving. */
 export function rememberOpenBundleTurn(turn: OpenBundleTurn): void {
-  live.add(turn.bundleTurnId)
+  const origin = turn.origin ?? captureTaskWorkspaceOrigin()
+  const ownedTurn = { ...turn, origin }
+  live.set(turnKey(turn.bundleTurnId, origin), ownedTurn)
   ensureResponder()
-  const records = readRecords().filter((entry) => entry.bundleTurnId !== turn.bundleTurnId)
-  records.push(turn)
+  const records = readRecords().filter(
+    (entry) =>
+      entry.bundleTurnId !== turn.bundleTurnId ||
+      !entry.origin ||
+      !sameTaskWorkspaceOrigin(entry.origin, origin)
+  )
+  records.push(ownedTurn)
   writeRecords(records)
 }
 
@@ -226,9 +239,17 @@ export function rememberOpenBundleTurn(turn: OpenBundleTurn): void {
  * host has already settled is a no-op), but it would make every later reclaim
  * do pointless work.
  */
-export function forgetOpenBundleTurn(bundleTurnId: string): void {
-  live.delete(bundleTurnId)
-  const records = readRecords().filter((entry) => entry.bundleTurnId !== bundleTurnId)
+export function forgetOpenBundleTurn(
+  bundleTurnId: string,
+  origin = captureTaskWorkspaceOrigin()
+): void {
+  live.delete(turnKey(bundleTurnId, origin))
+  const records = readRecords().filter(
+    (entry) =>
+      entry.bundleTurnId !== bundleTurnId ||
+      !entry.origin ||
+      !sameTaskWorkspaceOrigin(entry.origin, origin)
+  )
   writeRecords(records)
   if (live.size === 0) responder?.stop()
 }
@@ -253,14 +274,17 @@ export function forgetOpenBundleTurn(bundleTurnId: string): void {
  * Called only once the settle is definitively over. Releasing before then would
  * let a peer tab abort a turn whose settle is still in flight.
  */
-export function releaseOpenBundleTurn(bundleTurnId: string): void {
-  live.delete(bundleTurnId)
+export function releaseOpenBundleTurn(
+  bundleTurnId: string,
+  origin = captureTaskWorkspaceOrigin()
+): void {
+  live.delete(turnKey(bundleTurnId, origin))
   if (live.size === 0) responder?.stop()
 }
 
 /** Which turns this document is still driving. Exported for the poll's tests. */
 export function liveBundleTurnIds(): string[] {
-  return [...live]
+  return [...new Set([...live.values()].map((turn) => turn.bundleTurnId))]
 }
 
 /**
@@ -276,7 +300,7 @@ async function pollForClaims(candidates: string[]): Promise<string[]> {
   const channel = deps.openChannel()
   if (!channel) return []
   const nonce = `${deps.now()}:${Math.random().toString(36).slice(2)}`
-  const claimed = new Set<string>(candidates.filter((id) => live.has(id)))
+  const claimed = new Set<string>(candidates.filter(isLive))
   const listener = (event: { data: unknown }) => {
     const message = event.data as ClaimMessage | undefined
     if (message?.kind !== "cognia.bundle-turn.claim" || message.nonce !== nonce) return
@@ -309,12 +333,15 @@ async function pollForClaims(candidates: string[]): Promise<string[]> {
  *
  * Returns whether the turn was aborted.
  */
-export async function abortBundleTurnIfUndriven(bundleTurnId: string): Promise<boolean> {
-  if (live.has(bundleTurnId)) return false
+export async function abortBundleTurnIfUndriven(
+  bundleTurnId: string,
+  origin = captureTaskWorkspaceOrigin()
+): Promise<boolean> {
+  if (isLive(bundleTurnId)) return false
   const [unclaimed] = await pollForClaims([bundleTurnId])
   if (unclaimed !== bundleTurnId) return false
-  await deps.abort(bundleTurnId)
-  forgetOpenBundleTurn(bundleTurnId)
+  await deps.abort(bundleTurnId, origin)
+  forgetOpenBundleTurn(bundleTurnId, origin)
   return true
 }
 
@@ -325,23 +352,32 @@ export async function abortBundleTurnIfUndriven(bundleTurnId: string): Promise<b
  * it: an empty answer means the blocking turn belongs to something still alive
  * (another tab, another device) and the refusal was correct.
  */
-export async function reclaimAbandonedBundleTurns(sessionId: string): Promise<string[]> {
+export async function reclaimAbandonedBundleTurns(
+  sessionId: string,
+  origin = captureTaskWorkspaceOrigin()
+): Promise<string[]> {
   const candidates = readRecords()
-    .filter((entry) => entry.sessionId === sessionId)
+    .filter(
+      (entry) =>
+        entry.sessionId === sessionId &&
+        entry.origin &&
+        sameTaskWorkspaceOrigin(entry.origin, origin)
+    )
     .map((entry) => entry.bundleTurnId)
   const abandoned = await pollForClaims(candidates)
   const released: string[] = []
   for (const bundleTurnId of abandoned) {
     try {
-      await deps.abort(bundleTurnId)
+      await deps.abort(bundleTurnId, origin)
       released.push(bundleTurnId)
-    } catch {
-      // A turn the host has already settled, or one it will not let this device
-      // touch. Either way it is not this client's to release, and the caller's
-      // retry will be refused again with the host's own reason rather than with
-      // one invented here.
+      forgetOpenBundleTurn(bundleTurnId, origin)
+    } catch (error) {
+      // Keep its owner for a later retry. A route change or lost answer does
+      // not prove the original Host released this working copy.
+      const message = error instanceof Error ? error.message : String(error)
+      if (/^unknown workspace bundle turn:/i.test(message))
+        forgetOpenBundleTurn(bundleTurnId, origin)
     }
-    forgetOpenBundleTurn(bundleTurnId)
   }
   return released
 }

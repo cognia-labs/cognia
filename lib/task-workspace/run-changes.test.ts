@@ -112,14 +112,29 @@ describe("projectPatchSetChanges", () => {
     expect(result.totals).toEqual({ files: 1, additions: 2, deletions: 1, withheld: 0 })
   })
 
-  it("reports a created file as noTextDiff and omits stats rather than claiming +0 -0", () => {
+  it("allows retained created text to be rebuilt without claiming known line counts", () => {
     const result = projectPatchSetChanges(
-      patchSet([file({ path: "src/new.ts", kind: "created", hunks: [] })])
+      patchSet([file({ path: "src/new.ts", kind: "created", beforeHash: null, hunks: [] })])
     )
-    expect(result.files[0].availability).toBe("noTextDiff")
+    expect(result.files[0].availability).toBe("available")
     expect(result.files[0].stats).toBeUndefined()
     expect(result.files[0].hunkCount).toBe(0)
-    expect(result.totals.withheld).toBe(1)
+    expect(result.totals.withheld).toBe(0)
+  })
+
+  it("withholds only metadata-only or missing-blob legacy text", () => {
+    const result = projectPatchSetChanges(
+      patchSet([
+        file({ path: "mode.sh", beforeHash: "same", afterHash: "same", hunks: [] }),
+        file({ path: "missing.txt", beforeHash: null, afterHash: null, hunks: [] }),
+        file({ path: "removed.txt", kind: "deleted", afterHash: null, hunks: [] }),
+      ])
+    )
+    expect(result.files.map((entry) => entry.availability)).toEqual([
+      "noTextDiff",
+      "noTextDiff",
+      "available",
+    ])
   })
 
   it("reports binary and symlink changes without asking for a body", () => {
@@ -171,7 +186,7 @@ describe("projectPatchSetChanges", () => {
     const result = projectPatchSetChanges(
       patchSet([
         file({ path: "z.ts" }),
-        file({ path: "a.ts", kind: "renamed", oldPath: "old/a.ts", hunks: [] }),
+        file({ path: "a.ts", kind: "renamed", oldPath: "old/a.ts", beforeHash: "a", hunks: [] }),
       ])
     )
     expect(result.files.map((entry) => entry.path)).toEqual(["a.ts", "z.ts"])

@@ -5,6 +5,15 @@ export type TaskWorkspaceState = "active" | "ready" | "applied" | "conflict" | "
 export type TaskRunState = "running" | "settling" | "ready" | "failed" | "cancelled"
 export type ChangeKind = "created" | "modified" | "deleted" | "renamed"
 export type ContributionOrigin = "agent" | "user" | "unknown"
+/** Execution authority owning a retained run, independent of current UI routing. */
+export type TaskWorkspaceOrigin =
+  { kind: "local" } | { kind: "remote"; hostId: string; accountId?: string }
+
+export interface TaskWorkspaceRunRef {
+  runId: string
+  workspaceRoot: string
+  origin?: TaskWorkspaceOrigin
+}
 export type ResourceCaptureClass = "source" | "generated"
 export type ResourceEventEvidence = "watcher" | "tool" | "reconcile"
 export type ResourceTimelineCompleteness = "complete" | "resyncRequired" | "reconciled"
@@ -15,6 +24,8 @@ export interface ResourceTrackingPolicy {
 }
 
 export interface BeginTaskWorkspaceTurn {
+  /** Capture an explicitly Local working copy without moving execution. */
+  observeInPlace?: boolean
   taskId: string
   sessionId: string
   runId: string
@@ -51,7 +62,7 @@ export interface ManagedWorkspaceRecord {
   base: WorkspaceBaseSpec
   head: string | null
   branch: string | null
-  isolationKind: "gitWorktree" | "shadow"
+  isolationKind: "gitWorktree" | "shadow" | "observed"
   executionRoot: string
   snapshotTaskId: string | null
   sizeBytes: number | null
@@ -384,13 +395,15 @@ export interface TaskWorkspace {
 }
 
 export interface TaskRun {
+  /** The executor has not been confirmed stopped; no reversible capture is published. */
+  executorStopUnconfirmed?: boolean
   runId: string
   taskId: string
   parentRunId: string | null
   agentId: string
   agentKind: string
   executionRoot: string
-  isolationKind: "gitWorktree" | "shadow"
+  isolationKind: "gitWorktree" | "shadow" | "observed"
   isolationRef: string | null
   workspaceId: string | null
   base: WorkspaceBaseSpec
@@ -593,6 +606,7 @@ export interface PatchSet {
   reversible: boolean
   files: Array<{
     path: string
+    origin?: ContributionOrigin
     oldPath: string | null
     kind: ChangeKind
     resourceKind: "file" | "symlink"

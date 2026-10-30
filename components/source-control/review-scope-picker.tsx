@@ -192,7 +192,15 @@ export function ReviewScopePicker({
             className={item}
             disabled={!latest}
             data-testid="review-scope-last-turn"
-            onSelect={() => latest && pick({ scope: "lastTurn", runId: latest.runId })}
+            onSelect={() =>
+              latest &&
+              pick({
+                scope: "lastTurn",
+                runId: latest.runId,
+                ...(latest.origin ? { origin: latest.origin } : {}),
+                ...(latest.runs ? { runs: latest.runs } : {}),
+              })
+            }
           >
             {t("lastTurn")}
             {latest ? null : (
@@ -211,7 +219,14 @@ export function ReviewScopePicker({
                     value={scopeChoiceKey({ scope: "lastTurn", runId: turn.runId })}
                     className={cn(item, "flex-col items-start gap-0.5")}
                     data-testid={`review-scope-turn-${turn.ordinal}`}
-                    onSelect={() => pick({ scope: "lastTurn", runId: turn.runId })}
+                    onSelect={() =>
+                      pick({
+                        scope: "lastTurn",
+                        runId: turn.runId,
+                        ...(turn.origin ? { origin: turn.origin } : {}),
+                        ...(turn.runs ? { runs: turn.runs } : {}),
+                      })
+                    }
                   >
                     <span className="w-full truncate">{turnLabel(turn)}</span>
                     <span className="text-[11px] text-muted-foreground">

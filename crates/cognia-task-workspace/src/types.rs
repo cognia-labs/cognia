@@ -25,6 +25,7 @@ pub enum RunState {
 pub enum IsolationKind {
     GitWorktree,
     Shadow,
+    Observed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -129,6 +130,9 @@ pub struct BeginTaskRun {
     pub agent_id: String,
     pub agent_kind: String,
     pub workspace_root: String,
+    /// Capture a user-selected Local directory without cloning or owning it.
+    #[serde(default)]
+    pub observe_in_place: bool,
     #[serde(default)]
     pub base: WorkspaceBaseSpec,
     #[serde(default)]
@@ -197,6 +201,10 @@ pub struct TaskRun {
     pub tracking_policy: ResourceTrackingPolicy,
     pub baseline_revision: u64,
     pub state: RunState,
+    /// Capture remains fenced until a caller explicitly confirms the executor
+    /// stopped. This run cannot publish a patch, including during recovery.
+    #[serde(default)]
+    pub executor_stop_unconfirmed: bool,
     pub created_at: i64,
     pub settled_at: Option<i64>,
 }
@@ -315,6 +323,10 @@ pub struct PatchFile {
     pub path: String,
     pub old_path: Option<String>,
     pub kind: ChangeKind,
+    /// The recorded contribution owner, so a review can disclose the complete
+    /// apply/undo scope without mistaking a user upload for an agent edit.
+    #[serde(default = "unknown_contribution_origin")]
+    pub origin: ContributionOrigin,
     pub resource_kind: ResourceKind,
     pub before_hash: Option<String>,
     pub after_hash: Option<String>,
@@ -322,6 +334,10 @@ pub struct PatchFile {
     pub after_mode: Option<u32>,
     pub binary: bool,
     pub hunks: Vec<PatchHunk>,
+}
+
+fn unknown_contribution_origin() -> ContributionOrigin {
+    ContributionOrigin::Unknown
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1262,6 +1278,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn turn_diff_wire_shapes_match_companion_response_catalog() {
+        fn normalize(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(object) => {
+                    object.remove("$schema");
+                    object.remove("title");
+                    object.remove("description");
+                    if let Some(serde_json::Value::Array(required)) = object.get_mut("required") {
+                        required.sort_by_key(|value| value.to_string());
+                    }
+                    for value in object.values_mut() {
+                        normalize(value);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        normalize(value);
+                    }
+                }
+                _ => {},
+            }
+        }
+        let catalog: serde_json::Value = serde_json::from_str(include_str!("../../../protocol/companion-response-schemas.json")).unwrap();
+        for (name, schema) in [
+            ("IsolationKind", schemars::schema_for!(IsolationKind)),
+            ("PatchFile", schemars::schema_for!(PatchFile)),
+        ] {
+            let mut expected = serde_json::to_value(schema).unwrap();
+            let defs = expected.as_object_mut().unwrap().remove("$defs");
+            let mut actual = catalog["$defs"][name].clone();
+            normalize(&mut expected);
+            normalize(&mut actual);
+            assert_eq!(actual, expected, "{name} response schema drift");
+            if let Some(serde_json::Value::Object(defs)) = defs {
+                for (name, mut expected) in defs {
+                    let mut actual = catalog["$defs"][&name].clone();
+                    normalize(&mut expected);
+                    normalize(&mut actual);
+                    assert_eq!(actual, expected, "{name} response schema drift");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scratch_request_accepts_identity_but_refuses_caller_paths() {
         let request: EnsureSessionScratchWorkspace =
             serde_json::from_str(r#"{"sessionId":"session-1"}"#).unwrap();
@@ -1297,6 +1358,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn task_run_stop_quarantine_matches_companion_response_schema() {
+        let catalog: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../protocol/companion-response-schemas.json"
+        ))
+        .unwrap();
+        let schema = &catalog["$defs"]["TaskRun"];
+        let property = &schema["properties"]["executorStopUnconfirmed"];
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(property["type"], "boolean", "serialized stop quarantine must be accepted by the closed response schema");
+        assert_eq!(property["default"], false);
+        assert!(!schema["required"].as_array().unwrap().iter().any(|name| name == "executorStopUnconfirmed"));
+        let mut run: TaskRun = serde_json::from_value(serde_json::json!({
+            "runId":"run", "taskId":"task", "parentRunId":null,
+            "agentId":"agent", "agentKind":"cli", "executionRoot":"/workspace",
+            "isolationKind":"observed", "isolationRef":null,
+            "baselineRevision":0, "state":"running", "createdAt":1, "settledAt":null
+        })).unwrap();
+        assert!(!run.executor_stop_unconfirmed);
+        for quarantined in [false, true] {
+            run.executor_stop_unconfirmed = quarantined;
+            let value = serde_json::to_value(&run).unwrap();
+            assert_eq!(value["executorStopUnconfirmed"], quarantined);
+            assert!(schema["properties"].get("executorStopUnconfirmed").is_some());
+        }
+    }
+
+    #[test]
+    fn task_run_stop_quarantine_round_trips_and_defaults_for_legacy_rows() {
+        let mut run: TaskRun = serde_json::from_value(serde_json::json!({
+            "runId":"run", "taskId":"task", "parentRunId":null,
+            "agentId":"agent", "agentKind":"cli", "executionRoot":"/workspace",
+            "isolationKind":"observed", "isolationRef":null,
+            "baselineRevision":0, "state":"running", "createdAt":1, "settledAt":null
+        }))
+        .unwrap();
+        assert!(!run.executor_stop_unconfirmed);
+        run.executor_stop_unconfirmed = true;
+        assert_eq!(
+            serde_json::to_value(&run).unwrap()["executorStopUnconfirmed"],
+            true
+        );
+        assert_eq!(
+            serde_json::from_str::<TaskRun>(&serde_json::to_string(&run).unwrap()).unwrap(),
+            run
+        );
+    }
     #[test]
     fn legacy_resource_changes_default_to_captured_source() {
         let mut value = serde_json::to_value(ResourceChange {

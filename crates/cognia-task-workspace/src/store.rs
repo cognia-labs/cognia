@@ -2928,6 +2928,7 @@ mod tests {
             tracking_policy: ResourceTrackingPolicy::default(),
             baseline_revision: 0,
             state: RunState::Ready,
+            executor_stop_unconfirmed: false,
             created_at: 1,
             settled_at: Some(5),
         };
@@ -3106,6 +3107,7 @@ mod tests {
                     tracking_policy: ResourceTrackingPolicy::default(),
                     baseline_revision: 0,
                     state: RunState::Running,
+                    executor_stop_unconfirmed: false,
                     created_at: 1,
                     settled_at: None,
                 },

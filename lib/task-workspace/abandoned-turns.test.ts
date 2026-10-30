@@ -1,3 +1,7 @@
+jest.mock("./origin", () => ({
+  ...jest.requireActual("./origin"),
+  captureTaskWorkspaceOrigin: () => ({ kind: "local" }),
+}))
 import {
   __setAbandonedTurnDepsForTests,
   abortBundleTurnIfUndriven,
@@ -90,7 +94,12 @@ afterEach(() => {
 describe("recording what this document drives", () => {
   it("remembers a turn and forgets it once it settles", () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
     expect(h.records().map((r) => r.bundleTurnId)).toEqual(["wbt_1"])
     expect(liveBundleTurnIds()).toEqual(["wbt_1"])
 
@@ -101,8 +110,18 @@ describe("recording what this document drives", () => {
 
   it("does not record the same turn twice", () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 2 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 2,
+      origin: { kind: "local" },
+    })
     expect(h.records()).toHaveLength(1)
   })
 
@@ -111,7 +130,12 @@ describe("recording what this document drives", () => {
   // is no longer driving it — and the record is what the next refusal reclaims.
   it("drops the claim on a released turn but keeps its record", () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
 
     releaseOpenBundleTurn("wbt_1")
 
@@ -121,11 +145,51 @@ describe("recording what this document drives", () => {
 })
 
 describe("reclaiming", () => {
+  it("retains the original owner when a reclaim fails so another Host is never substituted", async () => {
+    h = harness()
+    const origin = { kind: "remote" as const, hostId: "host-a" }
+    h.seedRecords([{ bundleTurnId: "waiting", sessionId: "s_1", openedAt: 1, origin }])
+    const abort = jest.fn().mockRejectedValue(new Error("connection changed"))
+    const restore = __setAbandonedTurnDepsForTests({ abort })
+    try {
+      await expect(reclaimAbandonedBundleTurns("s_1", origin)).resolves.toEqual([])
+      expect(abort).toHaveBeenCalledWith("waiting", origin)
+      expect(h.records()).toHaveLength(1)
+    } finally {
+      restore()
+    }
+  })
+  it("never reclaims legacy unknown ownership or another Host's same-named turn", async () => {
+    h = harness()
+    h.seedRecords([
+      { bundleTurnId: "legacy", sessionId: "s_1", openedAt: 1 },
+      {
+        bundleTurnId: "same",
+        sessionId: "s_1",
+        openedAt: 1,
+        origin: { kind: "remote", hostId: "host-a" },
+      },
+      {
+        bundleTurnId: "same",
+        sessionId: "s_1",
+        openedAt: 2,
+        origin: { kind: "remote", hostId: "host-b" },
+      },
+    ])
+    await expect(
+      reclaimAbandonedBundleTurns("s_1", { kind: "remote", hostId: "host-a" })
+    ).resolves.toEqual(["same"])
+    expect(h.aborted).toEqual(["same"])
+    expect(h.records()).toHaveLength(2)
+    await expect(reclaimAbandonedBundleTurns("s_1", { kind: "local" })).resolves.toEqual([])
+  })
   // The reload case: the previous page left a turn open, this one has no live
   // turns at all, and no other tab claims it.
   it("aborts a turn no tab claims", async () => {
     h = harness()
-    h.seedRecords([{ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 }])
+    h.seedRecords([
+      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+    ])
     await expect(reclaimAbandonedBundleTurns("s_1")).resolves.toEqual(["wbt_1"])
     expect(h.aborted).toEqual(["wbt_1"])
     // The record goes with it, so the next refusal does not re-poll for a turn
@@ -151,7 +215,9 @@ describe("reclaiming", () => {
         bundleTurnIds: claimed,
       })
     })
-    h.seedRecords([{ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 }])
+    h.seedRecords([
+      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+    ])
 
     await expect(reclaimAbandonedBundleTurns("s_1")).resolves.toEqual([])
     expect(h.aborted).toEqual([])
@@ -162,7 +228,12 @@ describe("reclaiming", () => {
   // concurrent send inside one tab cannot abort the turn it is running.
   it("never aborts a turn this document is driving", async () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
     await expect(reclaimAbandonedBundleTurns("s_1")).resolves.toEqual([])
     expect(h.aborted).toEqual([])
   })
@@ -173,7 +244,12 @@ describe("reclaiming", () => {
   // Nothing was ever released and the conversation was refused for good.
   it("reclaims a turn this document opened but could not settle", async () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
     // What a definitively failed settle does.
     releaseOpenBundleTurn("wbt_1")
 
@@ -198,10 +274,15 @@ describe("reclaiming", () => {
       })
     })
     h.seedRecords([
-      { bundleTurnId: "wbt_mine", sessionId: "s_1", openedAt: 1 },
-      { bundleTurnId: "wbt_peer", sessionId: "s_1", openedAt: 2 },
+      { bundleTurnId: "wbt_mine", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+      { bundleTurnId: "wbt_peer", sessionId: "s_1", openedAt: 2, origin: { kind: "local" } },
     ])
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_mine", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_mine",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
     releaseOpenBundleTurn("wbt_mine")
 
     await expect(reclaimAbandonedBundleTurns("s_1")).resolves.toEqual(["wbt_mine"])
@@ -214,8 +295,8 @@ describe("reclaiming", () => {
   it("only considers the conversation that was refused", async () => {
     h = harness()
     h.seedRecords([
-      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 },
-      { bundleTurnId: "wbt_2", sessionId: "s_2", openedAt: 1 },
+      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+      { bundleTurnId: "wbt_2", sessionId: "s_2", openedAt: 1, origin: { kind: "local" } },
     ])
     await reclaimAbandonedBundleTurns("s_1")
     expect(h.aborted).toEqual(["wbt_1"])
@@ -226,7 +307,9 @@ describe("reclaiming", () => {
   // channel as "no claimants" would abort a turn that is running perfectly.
   it("reclaims nothing when it cannot poll at all", async () => {
     h = harness({ openChannel: () => null })
-    h.seedRecords([{ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 }])
+    h.seedRecords([
+      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+    ])
     await expect(reclaimAbandonedBundleTurns("s_1")).resolves.toEqual([])
     expect(h.aborted).toEqual([])
   })
@@ -234,7 +317,9 @@ describe("reclaiming", () => {
   // The host can refuse the abort (already settled, or this device may not
   // touch it). That is not a released turn, so the caller must not retry on it.
   it("does not report a turn the host refused to end", async () => {
-    let stored = JSON.stringify([{ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 }])
+    let stored = JSON.stringify([
+      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+    ])
     const bus = fakeBus()
     const restore = __setAbandonedTurnDepsForTests({
       readStorage: () => stored,
@@ -295,7 +380,12 @@ describe("aborting one unrecorded turn", () => {
 
   it("leaves a turn this document drives", async () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
     await expect(abortBundleTurnIfUndriven("wbt_1")).resolves.toBe(false)
     expect(h.aborted).toEqual([])
   })
@@ -312,14 +402,21 @@ describe("the poll leaves nothing behind", () => {
   // for turns this document stopped driving.
   it("closes every channel it opened", async () => {
     h = harness()
-    h.seedRecords([{ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 }])
+    h.seedRecords([
+      { bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1, origin: { kind: "local" } },
+    ])
     await reclaimAbandonedBundleTurns("s_1")
     expect(h.bus.openCount).toBe(0)
   })
 
   it("stops answering once the last turn settles", () => {
     h = harness()
-    rememberOpenBundleTurn({ bundleTurnId: "wbt_1", sessionId: "s_1", openedAt: 1 })
+    rememberOpenBundleTurn({
+      bundleTurnId: "wbt_1",
+      sessionId: "s_1",
+      openedAt: 1,
+      origin: { kind: "local" },
+    })
     expect(h.bus.openCount).toBe(1)
     forgetOpenBundleTurn("wbt_1")
     expect(h.bus.openCount).toBe(0)

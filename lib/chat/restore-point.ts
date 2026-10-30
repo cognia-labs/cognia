@@ -20,7 +20,13 @@
 import type { UIMessage } from "ai"
 
 import type { CodeAdoptionTurnRow } from "@/lib/code-adoption/types"
-import type { ApplyOutcome, PatchSet } from "@/lib/task-workspace/types"
+import type {
+  ApplyOutcome,
+  ContributionOrigin,
+  PatchSet,
+  TaskWorkspaceOrigin,
+  TaskWorkspaceRunRef,
+} from "@/lib/task-workspace/types"
 
 /** The Task Workspace run whose patch is this turn's diff, when there is one. */
 export function turnPatchRunId(row: CodeAdoptionTurnRow): string | null {
@@ -49,6 +55,7 @@ export function assistantMessagesAfter(
 /** One later turn's change record and the current state of its patch. */
 export interface RestoreTurnState {
   row: CodeAdoptionTurnRow
+  run?: TaskWorkspaceRunRef
   /** `null` when the turn has no ledger patch or it could not be read. */
   patch: PatchSet | null
 }
@@ -59,13 +66,26 @@ export type FileRestoreBlock =
   /** A turn's patch kept no inverse, or is not in an applied state. */
   | "irreversible"
 
+/** The same captured scope drives both confirmation and mutation. */
+export interface FileRestoreTarget {
+  run: TaskWorkspaceRunRef
+  files: Array<{ path: string; origin: ContributionOrigin; hunkIds: string[] }>
+}
+
 export type FileRestorePlan =
   /** No file changes were recorded after this message. */
   | { kind: "none" }
   /** Every change after this message has already been undone. */
   | { kind: "undone" }
   /** Revertible: these runs, newest first. */
-  | { kind: "undoable"; runIds: string[]; turns: number; files: number }
+  | {
+      kind: "undoable"
+      runIds: string[]
+      runRefs?: TaskWorkspaceRunRef[]
+      targets: FileRestoreTarget[]
+      turns: number
+      files: number
+    }
   /** At least one turn cannot be reverted; nothing is undone. */
   | { kind: "blocked"; reason: FileRestoreBlock; turns: number; files: number }
 
@@ -76,26 +96,122 @@ export type FileRestorePlan =
  * the conversation ever had.
  */
 export function planFileRestore(states: readonly RestoreTurnState[]): FileRestorePlan {
+  if (
+    states.some(
+      ({ row }) =>
+        row.trackingState === "unavailable" ||
+        row.trackingState === "truncated" ||
+        row.measurement === "unavailable"
+    )
+  ) {
+    return {
+      kind: "blocked",
+      reason: "untracked",
+      turns: new Set(states.map(({ row }) => row.id)).size,
+      files: new Set(
+        states.flatMap(({ row }) =>
+          (row.capturedFiles ?? row.files).map((file) =>
+            JSON.stringify([file.workspaceRoot ?? row.workspaceRoot, file.path])
+          )
+        )
+      ).size,
+    }
+  }
   const changed = states.filter(
-    ({ row }) => row.totalFiles > 0 && row.trackingState !== "unavailable"
+    ({ row, patch }) =>
+      (row.totalFiles > 0 ||
+        (row.capturedFiles?.length ?? 0) > 0 ||
+        (patch?.files.length ?? 0) > 0) &&
+      row.trackingState !== "unavailable"
   )
   if (changed.length === 0) return { kind: "none" }
-  const paths = new Set(changed.flatMap(({ row }) => row.files.map((file) => file.path)))
-  const files = paths.size || changed.reduce((sum, { row }) => sum + row.totalFiles, 0)
   const pending = changed.filter(
-    ({ row, patch }) => patch?.state !== "reverted" && row.adoptionState !== "reverted"
+    ({ row, patch, run }) =>
+      patch?.state !== "reverted" && (run ? true : row.adoptionState !== "reverted")
   )
   if (pending.length === 0) return { kind: "undone" }
+  const paths = new Set(
+    pending.flatMap(({ row, run, patch }) => {
+      if (patch?.files?.length) {
+        const selected = new Set(patch.appliedSelection?.map((selection) => selection.path) ?? [])
+        return patch.files
+          .filter((file) => selected.size === 0 || selected.has(file.path))
+          .map((file) =>
+            JSON.stringify([
+              run?.origin ?? row.origin,
+              run?.workspaceRoot ?? row.workspaceRoot,
+              file.path,
+            ])
+          )
+      }
+      return (row.capturedFiles ?? row.files)
+        .filter((file) => !run || !file.taskWorkspaceRunId || file.taskWorkspaceRunId === run.runId)
+        .map((file) =>
+          JSON.stringify([
+            run?.origin ?? row.origin,
+            file.workspaceRoot ?? row.workspaceRoot,
+            file.path,
+          ])
+        )
+    })
+  )
+  const files = paths.size || pending.reduce((sum, { row }) => sum + row.totalFiles, 0)
   for (const { row, patch } of pending) {
     if (!turnPatchRunId(row) || !patch) {
       return { kind: "blocked", reason: "untracked", turns: pending.length, files }
     }
-    if (patch.state !== "applied" || !patch.reversible) {
+    if (patch.state !== "applied" || !patch.reversible || patch.appliedSelectionKnown !== true) {
       return { kind: "blocked", reason: "irreversible", turns: pending.length, files }
     }
   }
-  const runIds = pending.map(({ row }) => turnPatchRunId(row)!).reverse()
-  return { kind: "undoable", runIds, turns: pending.length, files }
+  const ordered = [...pending].reverse()
+  const targets: FileRestoreTarget[] = ordered.map(({ row, run, patch }) => {
+    const ref = run ?? {
+      runId: turnPatchRunId(row)!,
+      workspaceRoot: row.workspaceRoot,
+      origin: row.origin,
+    }
+    const retained = (row.capturedFiles ?? row.files).filter(
+      (file) =>
+        (!file.taskWorkspaceRunId || file.taskWorkspaceRunId === ref.runId) &&
+        (!file.workspaceRoot || file.workspaceRoot === ref.workspaceRoot)
+    )
+    const selected = new Map(
+      patch?.appliedSelection?.map((entry) => [entry.path, entry.hunkIds]) ?? []
+    )
+    const captured = patch?.files.length ? patch.files : retained
+    return {
+      run: ref,
+      files: captured
+        .filter((file) => selected.size === 0 || selected.has(file.path))
+        .map((file) => ({
+          path: file.path,
+          origin:
+            file.origin ?? retained.find((entry) => entry.path === file.path)?.origin ?? "unknown",
+          hunkIds: selected.get(file.path) ?? [],
+        })),
+    }
+  })
+  const runIds = ordered.map(({ row, run }) => run?.runId ?? turnPatchRunId(row)!)
+  return {
+    kind: "undoable",
+    runIds,
+    targets,
+    ...(ordered.some(({ run }) => run)
+      ? {
+          runRefs: ordered.map(
+            ({ row, run }) =>
+              run ?? {
+                runId: turnPatchRunId(row)!,
+                workspaceRoot: row.workspaceRoot,
+                origin: row.origin,
+              }
+          ),
+        }
+      : {}),
+    turns: new Set(pending.map(({ row }) => row.id)).size,
+    files,
+  }
 }
 
 export type FileRestoreOutcome =
@@ -112,11 +228,13 @@ export type FileRestoreOutcome =
  */
 export async function runFileRestore(
   runIds: readonly string[],
-  undo: (runId: string) => Promise<ApplyOutcome>
+  undo: (runId: string, origin?: TaskWorkspaceOrigin) => Promise<ApplyOutcome>,
+  runRefs?: readonly TaskWorkspaceRunRef[]
 ): Promise<FileRestoreOutcome> {
   let undone = 0
-  for (const runId of runIds) {
-    const outcome = await undo(runId)
+  for (const [index, runId] of runIds.entries()) {
+    const origin = runRefs?.[index]?.origin
+    const outcome = origin ? await undo(runId, origin) : await undo(runId)
     if (outcome.state === "conflict") {
       return { state: "conflict", undone, runId, conflicts: outcome.conflicts.length }
     }

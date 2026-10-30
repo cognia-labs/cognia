@@ -172,6 +172,20 @@ describe("ReviewScopePicker", () => {
     expect(screen.queryByTestId("review-scope-turns")).toBeNull()
   })
 
+  it("preserves the originating Host and every root when selecting a captured turn", () => {
+    const origin = { kind: "remote" as const, hostId: "host-a", accountId: "account-a" }
+    const runs = [
+      { runId: "run:2", workspaceRoot: "/repo", origin },
+      { runId: "member:2", workspaceRoot: "/docs", origin },
+    ]
+    mockTurns[0] = { ...mockTurns[0], origin, runs }
+    const onChange = renderPicker({ scope: "uncommitted" })
+    fireEvent.click(screen.getByTestId("review-scope-last-turn"))
+    expect(onChange).toHaveBeenCalledWith({ scope: "lastTurn", runId: "run:2", origin, runs })
+    fireEvent.click(screen.getByTestId("review-scope-turn-2"))
+    expect(onChange).toHaveBeenLastCalledWith({ scope: "lastTurn", runId: "run:2", origin, runs })
+  })
+
   it("switches between working-tree scopes and marks the current one", () => {
     const onChange = renderPicker({ scope: "staged" }, { counts: { staged: 4 } })
     expect(screen.getByTestId("review-scope-staged")).toHaveAttribute("data-checked", "true")

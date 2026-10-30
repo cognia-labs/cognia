@@ -86,10 +86,18 @@ async function loadRestoreTurns(
   const states: RestoreTurnState[] = []
   for (const messageId of assistantIds) {
     const row = await getCodeAdoptionTurnForMessage(sessionId, messageId)
-    if (!row) continue
+    if (!row) throw new Error("Turn change record is unavailable")
     const runId = turnPatchRunId(row)
-    const patch = runId ? await getTaskPatchSet(runId).catch(() => null) : null
-    states.push({ row, patch })
+    const runs =
+      row.taskWorkspaceRuns ??
+      (runId ? [{ runId, workspaceRoot: row.workspaceRoot, origin: row.origin }] : [])
+    if (runs.length === 0) states.push({ row, patch: null })
+    for (const run of runs) {
+      const patch = run.origin
+        ? await getTaskPatchSet(run.runId, run.origin).catch(() => null)
+        : null
+      states.push({ row, run, patch })
+    }
   }
   return states
 }
@@ -106,6 +114,7 @@ export function RestorePointDialog({
   checkpoint,
 }: RestorePointDialogProps) {
   const t = useTranslations("chat.restorePoint")
+  const tChanges = useTranslations("chat.turnChanges")
   const checkpointsOn = useSdkCheckpointCapability()
   const slice = useChatStore((state) => state.sessions[sessionId])
   const assistantIds = useMemo(
@@ -120,7 +129,7 @@ export function RestorePointDialog({
   )
   // Keyed by the replies it was computed for, so a reply landing while the
   // dialog is open re-plans instead of acting on a stale list.
-  const assistantKey = assistantIds.join("\n")
+  const assistantKey = JSON.stringify([sessionId, assistantIds])
   const [planned, setPlanned] = useState<{ key: string; plan: FileRestorePlan } | null>(null)
   const [epoch, setEpoch] = useState(0)
   const [confirmFiles, setConfirmFiles] = useState(false)
@@ -129,19 +138,27 @@ export function RestorePointDialog({
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    loadRestoreTurns(sessionId, assistantKey ? assistantKey.split("\n") : [])
+    loadRestoreTurns(sessionId, assistantIds)
       .then((states) => {
         if (!cancelled) setPlanned({ key: assistantKey, plan: planFileRestore(states) })
       })
       .catch(() => {
-        if (!cancelled) setPlanned({ key: assistantKey, plan: { kind: "none" } })
+        if (!cancelled)
+          setPlanned({
+            key: assistantKey,
+            plan: { kind: "blocked", reason: "untracked", turns: assistantIds.length, files: 0 },
+          })
       })
     return () => {
       cancelled = true
     }
-  }, [open, sessionId, assistantKey, epoch])
+  }, [open, sessionId, assistantKey, assistantIds, epoch])
 
   const plan = planned?.key === assistantKey ? planned.plan : null
+  const targets = plan?.kind === "undoable" ? plan.targets : []
+  const targetFiles = targets.flatMap((target) => target.files)
+  const userContributions = targetFiles.filter((file) => file.origin === "user").length
+  const unknownContributions = targetFiles.filter((file) => file.origin === "unknown").length
 
   const choose = useCallback(
     (action: (() => void) | undefined) => {
@@ -156,9 +173,9 @@ export function RestorePointDialog({
     setConfirmFiles(false)
     setRestoring(true)
     try {
-      const outcome = await runFileRestore(plan.runIds, undoTaskWorkspace)
+      const outcome = await runFileRestore(plan.runIds, undoTaskWorkspace, plan.runRefs)
       if (outcome.state === "reverted") {
-        toast.success(t("files.restored", { turns: outcome.undone }))
+        toast.success(t("files.restored", { turns: plan.turns }))
       } else if (outcome.state === "conflict") {
         toast.error(t("files.conflict", { undone: outcome.undone, count: outcome.conflicts }))
       } else {
@@ -306,8 +323,63 @@ export function RestorePointDialog({
               {plan?.kind === "undoable"
                 ? t("files.confirmBody", { files: plan.files, turns: plan.turns })
                 : null}
+              {userContributions > 0 ? (
+                <span className="mt-1 block">
+                  {tChanges("undoUserContributions", { count: userContributions })}
+                </span>
+              ) : null}
+              {unknownContributions > 0 ? (
+                <span className="mt-1 block">
+                  {tChanges("undoUnattributedContributions", { count: unknownContributions })}
+                </span>
+              ) : null}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <section
+            className="max-h-64 overflow-y-auto text-sm"
+            aria-label={t("files.scopeHeading")}
+          >
+            {targets.map((target, index) => (
+              <div key={`${JSON.stringify(target.run)}:${index}`} className="mb-3 space-y-1">
+                <p className="break-all font-medium">{target.run.workspaceRoot}</p>
+                <p className="text-xs text-muted-foreground">
+                  {target.run.origin?.kind === "remote"
+                    ? t("files.scopeHost", { host: target.run.origin.hostId })
+                    : t("files.scopeLocal")}
+                </p>
+                {target.run.origin?.kind === "remote" && target.run.origin.accountId ? (
+                  <p className="text-xs text-muted-foreground">
+                    {t("files.scopeAccount", { account: target.run.origin.accountId })}
+                  </p>
+                ) : null}
+                <ul
+                  className="space-y-1"
+                  aria-label={t("files.scopeFiles", { root: target.run.workspaceRoot })}
+                >
+                  {target.files.map((file) => (
+                    <li key={file.path} className="break-all text-xs">
+                      <span>{file.path}</span>
+                      {file.origin === "user" ? (
+                        <span className="ml-2 text-muted-foreground">
+                          {tChanges("userContribution")}
+                        </span>
+                      ) : null}
+                      {file.origin === "unknown" ? (
+                        <span className="ml-2 text-muted-foreground">
+                          {tChanges("unattributedContribution")}
+                        </span>
+                      ) : null}
+                      {file.hunkIds.length > 0 ? (
+                        <span className="ml-2 text-muted-foreground">
+                          {tChanges("undoAppliedHunks", { count: file.hunkIds.length })}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </section>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
             <AlertDialogAction

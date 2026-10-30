@@ -332,6 +332,7 @@ mod tests {
             tracking_policy: ResourceTrackingPolicy::default(),
             baseline_revision: 0,
             state: RunState::Ready,
+            executor_stop_unconfirmed: false,
             created_at: settled - 1,
             settled_at: Some(settled),
         }

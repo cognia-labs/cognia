@@ -27,6 +27,40 @@ function result(overrides: Partial<AgentRunResultV1> = {}): AgentRunResultV1 {
 }
 
 describe("validateAgentRunResult", () => {
+  it("retains bounded ledger receipts in JSON results without file bodies", () => {
+    const workspaceCapture = {
+      available: true as const,
+      taskId: "cli:s1",
+      runId: "r1",
+      workspaceRoot: "/repo",
+    }
+    const encoded = JSON.parse(JSON.stringify(result({ workspaceCapture })))
+    expect(encoded.workspaceCapture).toEqual(workspaceCapture)
+    expect(validateAgentRunResult(encoded)).toEqual([])
+    expect(
+      validateAgentRunResult(
+        result({ workspaceCapture: { available: false, reason: "persistence-disabled" } })
+      )
+    ).toEqual([])
+    expect(
+      validateAgentRunResult({
+        ...encoded,
+        workspaceCapture: { ...workspaceCapture, files: ["body"] },
+      })
+    ).toContain("workspaceCapture must contain only ledger receipt fields")
+    expect(
+      validateAgentRunResult({
+        ...encoded,
+        workspaceCapture: { ...workspaceCapture, workspaceRoot: "a".repeat(32_769) },
+      })
+    ).toContain("workspaceCapture.workspaceRoot must be a bounded non-empty string")
+    expect(
+      validateAgentRunResult({
+        ...encoded,
+        workspaceCapture: { available: false, reason: "unknown" },
+      })
+    ).toContain("workspaceCapture.reason must be a known unavailable reason")
+  })
   it("accepts a complete successful result", () => {
     expect(validateAgentRunResult(result())).toEqual([])
     expect(isAgentRunResult(result())).toBe(true)

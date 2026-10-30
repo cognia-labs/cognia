@@ -18,6 +18,12 @@ jest.mock("@/lib/tauri/admin-lease", () => ({
 jest.mock("@/lib/runtime/runtime-snapshot-store", () => ({
   getRuntimeSnapshot: () => snapshotMock(),
 }))
+jest.mock("./origin", () => ({
+  ...jest.requireActual("./origin"),
+  captureTaskWorkspaceOrigin: jest.fn(),
+  openTaskWorkspaceOrigin: jest.fn(),
+}))
+import { captureTaskWorkspaceOrigin, openTaskWorkspaceOrigin } from "./origin"
 
 import {
   applyWorkspaceApproval,
@@ -60,6 +66,67 @@ beforeEach(() => {
   jest.clearAllMocks()
   issueLeaseMock.mockResolvedValue({ token: "lease-token", operations: [], expiresAt: 0 })
   snapshotMock.mockReturnValue(companionSnapshot())
+  ;(captureTaskWorkspaceOrigin as jest.Mock).mockImplementation(() =>
+    snapshotMock().target?.kind === "companion"
+      ? { kind: "remote", hostId: `companion:${snapshotMock().target.id}` }
+      : { kind: "local" }
+  )
+  ;(openTaskWorkspaceOrigin as jest.Mock).mockImplementation(async (origin) => ({
+    origin,
+    transport: { call: callMock },
+    assertCurrent: jest.fn(),
+    close: jest.fn(),
+  }))
+})
+
+describe("approval authority", () => {
+  it("leases an explicit remote owner even when the desktop snapshot has no client target", async () => {
+    snapshotMock.mockReturnValue(NATIVE_HOST_SNAPSHOT)
+    const origin = { kind: "remote" as const, hostId: "host-a" }
+    const scope = await openWorkspaceApprovalScope(WORKSPACE_TURN_COMMANDS, origin)
+    await approvalAwareTransport.call(
+      "task_workspace_bundle_turn_settle",
+      { bundleTurnId: "turn-a" },
+      origin
+    )
+    expect(issueLeaseMock).toHaveBeenCalledWith([...WORKSPACE_TURN_COMMANDS], 900, {
+      call: callMock,
+    })
+    expect(callMock).toHaveBeenCalledWith("task_workspace_bundle_turn_settle", {
+      bundleTurnId: "turn-a",
+      adminLease: "lease-token",
+    })
+    scope?.close()
+  })
+
+  it("keeps concurrent Host approvals and renewal on their own transports after A to B", async () => {
+    snapshotMock.mockReturnValue(NATIVE_HOST_SNAPSHOT)
+    const a = { kind: "remote" as const, hostId: "host-a" }
+    const b = { kind: "remote" as const, hostId: "host-b" }
+    const calls = { "host-a": jest.fn(), "host-b": jest.fn() }
+    ;(openTaskWorkspaceOrigin as jest.Mock).mockImplementation(async (origin) => ({
+      origin,
+      transport: { call: calls[origin.hostId as keyof typeof calls] },
+      assertCurrent: jest.fn(),
+      close: jest.fn(),
+    }))
+    issueLeaseMock
+      .mockResolvedValueOnce({ token: "a-old", expiresAt: 1 })
+      .mockResolvedValueOnce({ token: "b-token", expiresAt: Date.now() + 100_000 })
+      .mockResolvedValueOnce({ token: "a-renewed", expiresAt: Date.now() + 100_000 })
+    const scopeA = await openWorkspaceApprovalScope(WORKSPACE_TURN_COMMANDS, a)
+    const scopeB = await openWorkspaceApprovalScope(WORKSPACE_TURN_COMMANDS, b)
+    await approvalAwareTransport.call("task_workspace_bundle_turn_settle", {}, a)
+    expect(issueLeaseMock).toHaveBeenLastCalledWith([...WORKSPACE_TURN_COMMANDS], 900, {
+      call: calls["host-a"],
+    })
+    expect(calls["host-a"]).toHaveBeenCalledWith("task_workspace_bundle_turn_settle", {
+      adminLease: "a-renewed",
+    })
+    expect(calls["host-b"]).not.toHaveBeenCalled()
+    scopeA?.close()
+    scopeB?.close()
+  })
 })
 
 describe("runWorkspaceUserAction", () => {
@@ -95,7 +162,7 @@ describe("runWorkspaceUserAction", () => {
       )
       const args = { kind: "desktop-session", key: "s1", leaseId: "lease1" }
       await runWorkspaceUserAction(command, () => approvalAwareTransport.call(command, args))
-      expect(issueLeaseMock).toHaveBeenCalledWith([command], 120)
+      expect(issueLeaseMock).toHaveBeenCalledWith([command], 120, { call: callMock })
       expect(callMock).toHaveBeenCalledWith(command, { ...args, adminLease: "lease-token" })
     }
   )
@@ -127,7 +194,9 @@ describe("runWorkspaceUserAction", () => {
 
     await runWorkspaceUserAction("task_workspace_managed_delete", op)
 
-    expect(issueLeaseMock).toHaveBeenCalledWith(["task_workspace_managed_delete"], 120)
+    expect(issueLeaseMock).toHaveBeenCalledWith(["task_workspace_managed_delete"], 120, {
+      call: callMock,
+    })
   })
 
   it("refuses before the call when the device cannot obtain host.admin", async () => {

@@ -102,6 +102,10 @@ pub struct TaskWorkspaceService {
     transfers: TransferRegistry,
     upload_owners: Mutex<HashMap<String, UploadOwner>>,
     origin_hints: Mutex<HashMap<(String, String), ContributionOrigin>>,
+    /// An OS lock survives calls but releases on process death. A second CLI
+    /// helper opening the shared ledger must not recover or settle a still-live
+    /// capture as though its owner had crashed. Begin retries never acquire it.
+    run_capture_owners: Mutex<HashMap<String, RunCaptureOwner>>,
     watchers: WatchManager,
     /// `WorktreeCreate` / `WorktreeRemove` producer (ADR-0111 decision 9).
     lifecycle: crate::lifecycle::WorktreeLifecycleEmitter,
@@ -144,6 +148,17 @@ struct UploadOwner {
     run_id: String,
     path: String,
     existed: bool,
+}
+
+struct RunCaptureOwner(fs::File);
+
+impl Drop for RunCaptureOwner {
+    fn drop(&mut self) {
+        // Closing one descriptor does not release a flock while an inherited
+        // or duplicated descriptor still references its open file description.
+        // Those descriptors never own the capture lifetime.
+        let _ = self.0.unlock();
+    }
 }
 
 struct InspectedBundleRoot {
@@ -319,6 +334,18 @@ struct ResourceIndexFold {
 impl TaskWorkspaceService {
     pub fn open(config: ServiceConfig) -> Result<Self, String> {
         let service_dir = config.data_dir.join("task-workspaces");
+        // SQLite can reject concurrent first-time WAL negotiation immediately
+        // despite busy_timeout. Serialize schema/Registry/key initialization
+        // across helpers, then release before ordinary recovery or operations.
+        let bootstrap_dir = service_dir.join("sandbox-checkpoints").join("locks");
+        fs::create_dir_all(&bootstrap_dir)
+            .map_err(|error| format!("create workspace bootstrap lock directory: {error}"))?;
+        let bootstrap_file = fs::OpenOptions::new()
+            .read(true).write(true).create(true).truncate(false)
+            .open(bootstrap_dir.join("bootstrap"))
+            .map_err(|error| format!("open workspace bootstrap lock: {error}"))?;
+        bootstrap_file.lock().map_err(|error| format!("lock workspace bootstrap: {error}"))?;
+        let bootstrap_owner = RunCaptureOwner(bootstrap_file);
         let execution_dir = config.execution_dir();
         fs::create_dir_all(&execution_dir).map_err(|error| {
             format!("create execution dir {}: {error}", execution_dir.display())
@@ -357,6 +384,7 @@ impl TaskWorkspaceService {
             transfers: TransferRegistry::new(Duration::from_secs(5 * 60)),
             upload_owners: Mutex::new(HashMap::new()),
             origin_hints: Mutex::new(HashMap::new()),
+            run_capture_owners: Mutex::new(HashMap::new()),
             watchers: WatchManager::new(),
             lifecycle: crate::lifecycle::WorktreeLifecycleEmitter::default(),
             git_admin_locks: Mutex::new(HashMap::new()),
@@ -368,6 +396,7 @@ impl TaskWorkspaceService {
             open_recovery_failures: Mutex::new(Vec::new()),
             port_discovery_diagnostics: Mutex::new(BTreeMap::new()),
         };
+        drop(bootstrap_owner);
         service.recover_incomplete_runs()?;
         service.recover_workspace_bundle_turns()?;
         // Per-row recovery failures (an offline or broken repository) never
@@ -1089,6 +1118,7 @@ impl TaskWorkspaceService {
                 isolation_ref: record.branch,
                 base: record.base,
             }),
+            false,
         )
     }
 
@@ -1226,6 +1256,7 @@ impl TaskWorkspaceService {
                     isolation_ref: record.branch,
                     base: record.base,
                 }),
+                false,
             );
             let run = match run {
                 Ok(run) => run,
@@ -1389,13 +1420,85 @@ impl TaskWorkspaceService {
     }
 
     pub fn begin_run(&self, input: BeginTaskRun) -> Result<TaskRun, String> {
-        self.begin_run_internal(input, None)
+        self.begin_run_with_stop_requirement(input, false)
     }
 
+    pub(crate) fn assert_execution_allowed(&self, root: &Path) -> Result<(), String> {
+        let root = root
+            .canonicalize()
+            .map_err(|error| format!("canonicalize workspace {}: {error}", root.display()))?;
+        let _admission = self.lock_run_capture_admission()?;
+        self.check_capture_root_admission(&root, true)
+    }
+
+    fn check_capture_root_admission(
+        &self,
+        root: &Path,
+        observe_in_place: bool,
+    ) -> Result<(), String> {
+        // A quarantined executor can still write anywhere under its root.
+        // Refuse intersecting acquisition in either direction, including
+        // borrowed/isolated sources, until its explicit stop confirmation.
+        let store = self.store.lock();
+        for task in store.list_tasks()? {
+            if store.list_runs(&task.task_id)?.iter().any(|run| {
+                (run.executor_stop_unconfirmed
+                    || (observe_in_place && run.isolation_kind == IsolationKind::Observed))
+                    && (Path::new(&run.execution_root).starts_with(root)
+                        || root.starts_with(&run.execution_root))
+                    && matches!(run.state, RunState::Running | RunState::Settling)
+            }) {
+                return Err(
+                    "local workspace observation is already active for an overlapping root".into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn begin_worker_run(
+        &self,
+        mut input: BeginTaskRun,
+        binding: Option<&str>,
+    ) -> Result<TaskRun, String> {
+        if let Some(binding) = binding {
+            input.workspace_root = self.resolve_workspace_source(binding)?.source_root;
+        }
+        self.begin_run_with_stop_requirement(input, true)
+    }
+
+    fn begin_run_with_stop_requirement(
+        &self,
+        input: BeginTaskRun,
+        requires_executor_stop_confirmation: bool,
+    ) -> Result<TaskRun, String> {
+        if input.observe_in_place {
+            if input.base != WorkspaceBaseSpec::WorkingState {
+                return Err("an observed Local run requires a workingState baseline".into());
+            }
+            let root = PathBuf::from(&input.workspace_root)
+                .canonicalize()
+                .map_err(|error| {
+                    format!("canonicalize workspace {}: {error}", input.workspace_root)
+                })?;
+            return self.begin_run_internal(
+                input,
+                Some(BorrowedExecution {
+                    root,
+                    isolation_kind: IsolationKind::Observed,
+                    isolation_ref: None,
+                    base: WorkspaceBaseSpec::WorkingState,
+                }),
+                requires_executor_stop_confirmation,
+            );
+        }
+        self.begin_run_internal(input, None, requires_executor_stop_confirmation)
+    }
     fn begin_run_internal(
         &self,
         input: BeginTaskRun,
         borrowed: Option<BorrowedExecution>,
+        requires_executor_stop_confirmation: bool,
     ) -> Result<TaskRun, String> {
         let _perf = cognia_instrument::guard("workspace.begin_run");
         validate_id("taskId", &input.task_id)?;
@@ -1409,7 +1512,13 @@ impl TaskWorkspaceService {
         if !root.is_dir() {
             return Err(format!("workspace is not a directory: {}", root.display()));
         }
-        let _cold_acquisition = self.lock_cold_workspace_acquisition(&root, false)?;
+        if input.observe_in_place != borrowed.as_ref().is_some_and(|execution| execution.isolation_kind == IsolationKind::Observed) {
+            return Err("observed Local capture cannot borrow a managed workspace lease".into());
+        }
+        // Ancestor/descendant roots have different exact-root fences. Serialize
+        // their admission check and publication through the existing lock owner.
+        let _capture_admission = self.lock_run_capture_admission()?;
+        let _cold_acquisition = self.lock_cold_workspace_acquisition(&root, input.observe_in_place)?;
         let tracking_policy = resolve_tracking_policy(&root, &input.tracking_policy)?;
         if borrowed.is_some() {
             self.resolve_workspace_port_lease(crate::HOST_LOOPBACK_NAMESPACE, None, &root, true)
@@ -1425,6 +1534,7 @@ impl TaskWorkspaceService {
                     .get_task(&existing.task_id)?
                     .ok_or_else(|| format!("missing task: {}", existing.task_id))?;
                 let matches_request = existing.task_id == input.task_id
+                    && (existing.isolation_kind == IsolationKind::Observed) == input.observe_in_place
                     && existing.parent_run_id == input.parent_run_id
                     && existing.agent_id == input.agent_id
                     && existing.agent_kind == input.agent_kind
@@ -1454,6 +1564,9 @@ impl TaskWorkspaceService {
                 });
             }
         }
+        self.check_capture_root_admission(&root, input.observe_in_place)?;
+        let capture_owner = self.try_run_capture_owner(&input.run_id)?
+            .ok_or("task run capture still has a live owner")?;
         let now = now_ms();
         let reusable = if let Some(workspace_key) = input.workspace_key.as_deref() {
             let runs = self.store.lock().list_runs(&input.task_id)?;
@@ -1466,12 +1579,14 @@ impl TaskWorkspaceService {
                 ));
             }
             runs.into_iter().rev().find(|run| {
-                run.workspace_key.as_deref() == Some(workspace_key) && run.state == RunState::Ready
+                run.workspace_key.as_deref() == Some(workspace_key)
+                    && run.state == RunState::Ready
+                    && (run.isolation_kind == IsolationKind::Observed) == input.observe_in_place
             })
         } else {
             None
         };
-        let _reused_acquisition = reusable.as_ref().map(|previous| {
+        let _reused_acquisition = reusable.as_ref().filter(|_| !input.observe_in_place).map(|previous| {
             let execution_root = Path::new(&previous.execution_root);
             let guard = self.lock_cold_workspace_acquisition(execution_root, false)?;
             crate::sandbox_snapshot::reject_snapshot_reservation(
@@ -1492,7 +1607,7 @@ impl TaskWorkspaceService {
             self.enforce_managed_workspace_capacity(1)?;
         }
         let (
-            baseline,
+            mut baseline,
             blobs,
             execution_root,
             isolation_kind,
@@ -1651,6 +1766,7 @@ impl TaskWorkspaceService {
             )
         };
 
+        baseline.requires_executor_stop_confirmation = requires_executor_stop_confirmation;
         let mut store = self.store.lock();
         for (hash, bytes) in &blobs {
             if let Err(error) = store.put_blob(hash, bytes, now) {
@@ -1666,6 +1782,15 @@ impl TaskWorkspaceService {
                     );
                 }
                 return Err(error);
+            }
+        }
+        if isolation_kind == IsolationKind::Observed {
+            // The user may commit, rewrite history or prune Git objects while
+            // the Local turn runs. Retain the complete starting bytes before
+            // handing the live root to an executor; a future Undo must not
+            // depend on that repository still retaining its former objects.
+            for (hash, bytes) in hydrate_snapshot_blobs(&mut store, &baseline, &execution_root, now)? {
+                store.put_blob(&hash, &bytes, now)?;
             }
         }
         if let Some(workspace_id) = workspace_id.as_deref().filter(|_| {
@@ -1760,6 +1885,7 @@ impl TaskWorkspaceService {
             tracking_policy,
             baseline_revision: task.revision,
             state: RunState::Running,
+            executor_stop_unconfirmed: false,
             created_at: now,
             settled_at: None,
         };
@@ -1777,6 +1903,7 @@ impl TaskWorkspaceService {
             }
             return Err(error);
         }
+        self.run_capture_owners.lock().insert(run.run_id.clone(), capture_owner);
         Ok(run)
     }
 
@@ -4102,6 +4229,27 @@ impl TaskWorkspaceService {
     }
 
     fn settle_run_single(&self, run_id: &str) -> Result<Vec<ResourceChange>, String> {
+        let (run, baseline) = self.store.lock().get_run::<WorkspaceSnapshot>(run_id)?
+            .ok_or_else(|| format!("unknown task run: {run_id}"))?;
+        if run.executor_stop_unconfirmed {
+            return Err(format!("executor stop is unconfirmed for {run_id}; after stopping the executor, run worker settle --run-id {run_id} --executor-stopped"));
+        }
+        let owns_capture = self.owns_run_capture(run_id);
+        let mut orphan_owner = if matches!(run.state, RunState::Running | RunState::Settling) {
+            self.acquire_run_settle_owner(run_id)?
+        } else {
+            None
+        };
+        if baseline.requires_executor_stop_confirmation && !owns_capture {
+            if let Some(owner) = orphan_owner.take() {
+                // An observer opened while the helper was alive may outlive it.
+                // Losing the OS lock does not grant that observer proof of stop.
+                self.run_capture_owners.lock().insert(run_id.to_string(), owner);
+                self.mark_executor_unconfirmed(run_id)?;
+                self.run_capture_owners.lock().remove(run_id);
+                return Err(format!("executor stop is unconfirmed for {run_id}; explicit --executor-stopped recovery is required"));
+            }
+        }
         // Stop drains queued notifications and joins the watcher before the
         // authoritative snapshot, preventing provisional events after settle.
         let _ = self.watchers.stop(run_id);
@@ -4110,6 +4258,9 @@ impl TaskWorkspaceService {
         let (mut run, baseline): (TaskRun, WorkspaceSnapshot) = store
             .get_run(run_id)?
             .ok_or_else(|| format!("unknown task run: {run_id}"))?;
+        if run.executor_stop_unconfirmed {
+            return Err(format!("executor stop is unconfirmed for {run_id}"));
+        }
         if !matches!(
             run.state,
             RunState::Running | RunState::Settling | RunState::Ready
@@ -4138,6 +4289,9 @@ impl TaskWorkspaceService {
             run_id: &run.run_id,
             agent_id: &run.agent_id,
             origin_hints: &origin_hints,
+            default_origin: if run.isolation_kind == IsolationKind::Observed {
+                ContributionOrigin::Unknown
+            } else { ContributionOrigin::Agent },
             now,
             git_root: Some(execution_root_path.as_path()),
         };
@@ -4165,7 +4319,7 @@ impl TaskWorkspaceService {
             .parent()
             .unwrap_or(&self.execution_dir)
             .join("scratch");
-        let patch = ledger::build_patch_set(
+        let mut patch = ledger::build_patch_set(
             &task.task_id,
             &run.run_id,
             run.baseline_revision,
@@ -4174,16 +4328,25 @@ impl TaskWorkspaceService {
             &scratch,
             now,
         )?;
+        if run.isolation_kind == IsolationKind::Observed {
+            ledger::mark_observed_applied(&mut patch, task.revision, &baseline);
+        }
         store.put_patch_set(&patch)?;
-        if let Err(error) = crate::provenance::capture::record_pending(
+        let provenance = if run.isolation_kind == IsolationKind::Observed {
+            ledger::record_observed_applied(&mut store, &patch, Path::new(&task.workspace_root), now)
+        } else { crate::provenance::capture::record_pending(
             &mut store,
             &patch,
             Path::new(&task.workspace_root),
             now,
-        ) {
+        ) };
+        if let Err(error) = provenance {
+            let operation_key = if run.isolation_kind == IsolationKind::Observed {
+                format!("observe:{}:{}:{}", patch.run_id, patch.created_at, patch.applied_revision.unwrap_or_default())
+            } else { format!("pending:{}:{}", patch.run_id, patch.created_at) };
             crate::provenance::capture::warn_gap(
                 &mut store,
-                &format!("pending:{}:{}", patch.run_id, patch.created_at),
+                &operation_key,
                 &error,
             );
         }
@@ -4196,15 +4359,95 @@ impl TaskWorkspaceService {
             .any(|candidate| matches!(candidate.state, RunState::Running | RunState::Settling))
         {
             TaskWorkspaceState::Active
+        } else if run.isolation_kind == IsolationKind::Observed {
+            TaskWorkspaceState::Applied
         } else {
             TaskWorkspaceState::Ready
         };
         store.put_task(&task)?;
         drop(store);
         self.archive_run_workspace(&run, now)?;
+        self.run_capture_owners.lock().remove(&run.run_id);
         Ok(changes)
     }
 
+    pub(crate) fn owns_run_capture(&self, run_id: &str) -> bool {
+        self.run_capture_owners.lock().contains_key(run_id)
+    }
+
+    pub(crate) fn executor_stop_unconfirmed(&self, run_id: &str) -> Result<bool, String> {
+        Ok(self
+            .store
+            .lock()
+            .get_run::<WorkspaceSnapshot>(run_id)?
+            .is_some_and(|(run, _)| run.executor_stop_unconfirmed))
+    }
+
+    fn acquire_run_settle_owner(&self, run_id: &str) -> Result<Option<RunCaptureOwner>, String> {
+        if self.owns_run_capture(run_id) {
+            return Ok(None);
+        }
+        self.try_run_capture_owner(run_id)?
+            .map(Some)
+            .ok_or_else(|| format!("task run still has another live capture owner: {run_id}"))
+    }
+
+    /// A failed executor shutdown is not a completed capture. Persist the
+    /// quarantine in the existing run row so EOF and restart cannot publish an
+    /// inverse for a directory an executor may still be writing.
+    pub fn mark_executor_unconfirmed(&self, run_id: &str) -> Result<TaskRun, String> {
+        if !self.owns_run_capture(run_id) {
+            return Err(format!(
+                "only the capture owner can quarantine task run: {run_id}"
+            ));
+        }
+        let _ = self.watchers.stop(run_id);
+        let store = self.store.lock();
+        let (mut run, baseline): (TaskRun, WorkspaceSnapshot) = store
+            .get_run(run_id)?
+            .ok_or_else(|| format!("unknown task run: {run_id}"))?;
+        if !matches!(run.state, RunState::Running | RunState::Settling) {
+            return Err(format!("task run capture is already terminal: {run_id}"));
+        }
+        run.executor_stop_unconfirmed = true;
+        run.state = RunState::Settling;
+        store.put_run(&run, &baseline)?;
+        Ok(run)
+    }
+
+    /// Operator recovery after positive stop evidence releases the fence but
+    /// permanently leaves this incomplete capture without an applicable patch.
+    pub fn confirm_executor_stopped(&self, run_id: &str) -> Result<TaskRun, String> {
+        let _owner = self.acquire_run_settle_owner(run_id)?;
+        let store = self.store.lock();
+        let (mut run, baseline): (TaskRun, WorkspaceSnapshot) = store
+            .get_run(run_id)?
+            .ok_or_else(|| format!("unknown task run: {run_id}"))?;
+        if !run.executor_stop_unconfirmed {
+            return Err(format!(
+                "task run is not awaiting executor stop confirmation: {run_id}"
+            ));
+        }
+        run.executor_stop_unconfirmed = false;
+        run.state = RunState::Failed;
+        run.settled_at = Some(now_ms());
+        store.put_run(&run, &baseline)?;
+        let mut task = store
+            .get_task(&run.task_id)?
+            .ok_or_else(|| format!("missing task: {}", run.task_id))?;
+        if !store
+            .list_runs(&task.task_id)?
+            .iter()
+            .any(|candidate| matches!(candidate.state, RunState::Running | RunState::Settling))
+        {
+            task.state = TaskWorkspaceState::Ready;
+            store.put_task(&task)?;
+        }
+        drop(store);
+        self.archive_run_workspace(&run, now_ms())?;
+        self.run_capture_owners.lock().remove(run_id);
+        Ok(run)
+    }
     pub fn settle_failed_run(&self, run_id: &str) -> Result<Vec<ResourceChange>, String> {
         if let Some(turn) = self.workspace_bundle_turn_for_run(run_id)? {
             return self
@@ -4260,20 +4503,82 @@ impl TaskWorkspaceService {
                     store
                         .list_runs(&task.task_id)?
                         .into_iter()
-                        .filter(|run| matches!(run.state, RunState::Running | RunState::Settling))
+                        .filter(|run| {
+                            matches!(run.state, RunState::Running | RunState::Settling)
+                                && !run.executor_stop_unconfirmed
+                        })
                         .map(|run| run.run_id),
                 );
             }
             run_ids
         };
         for run_id in run_ids {
-            if self.settle_failed_run(&run_id).is_err() {
-                let _ = self.set_run_terminal_state(&run_id, RunState::Failed);
-            }
+            self.recover_incomplete_run(&run_id)?;
         }
         Ok(())
     }
 
+    fn recover_incomplete_run(&self, run_id: &str) -> Result<(), String> {
+        let Some(owner) = self.try_run_capture_owner(run_id)? else {
+            return Ok(());
+        };
+        self.run_capture_owners
+            .lock()
+            .insert(run_id.to_string(), owner);
+        let current = self.store.lock().get_run::<WorkspaceSnapshot>(run_id)?;
+        let Some((run, baseline)) = current else {
+            self.run_capture_owners.lock().remove(run_id);
+            return Ok(());
+        };
+        // A live owner can finish between enumeration and acquiring its
+        // released lock. Never quarantine a now-terminal successful run.
+        if !matches!(run.state, RunState::Running | RunState::Settling)
+            || run.executor_stop_unconfirmed
+        {
+            self.run_capture_owners.lock().remove(run_id);
+            return Ok(());
+        }
+        if baseline.requires_executor_stop_confirmation {
+            self.mark_executor_unconfirmed(run_id)?;
+            self.run_capture_owners.lock().remove(run_id);
+            return Ok(());
+        }
+        if self.settle_failed_run(run_id).is_err() {
+            let _ = self.set_run_terminal_state(run_id, RunState::Failed);
+            self.run_capture_owners.lock().remove(run_id);
+        }
+        Ok(())
+    }
+
+    fn try_run_capture_owner(&self, run_id: &str) -> Result<Option<RunCaptureOwner>, String> {
+        let file = self.open_run_capture_owner_file(run_id)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(RunCaptureOwner(file))),
+            Err(fs::TryLockError::WouldBlock) => Ok(None),
+            Err(error) => Err(format!("lock observed run owner: {error}")),
+        }
+    }
+
+    fn lock_run_capture_admission(&self) -> Result<RunCaptureOwner, String> {
+        // validate_id rejects NUL, so this private key cannot collide with a run.
+        let file = self.open_run_capture_owner_file("\0begin-admission")?;
+        file.lock()
+            .map_err(|error| format!("lock capture admission: {error}"))?;
+        Ok(RunCaptureOwner(file))
+    }
+
+    fn open_run_capture_owner_file(&self, run_id: &str) -> Result<fs::File, String> {
+        let directory = self.checkpoint_dir.join("locks").join("observed-runs");
+        fs::create_dir_all(&directory)
+            .map_err(|error| format!("create observed owner lock directory: {error}"))?;
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join(storage_key(run_id)))
+            .map_err(|error| format!("open observed owner lock: {error}"))
+    }
     fn set_run_terminal_state(&self, run_id: &str, state: RunState) -> Result<(), String> {
         if !matches!(
             state,
@@ -4285,6 +4590,9 @@ impl TaskWorkspaceService {
         let (mut run, baseline): (TaskRun, WorkspaceSnapshot) = store
             .get_run(run_id)?
             .ok_or_else(|| format!("unknown task run: {run_id}"))?;
+        if run.executor_stop_unconfirmed {
+            return Err(format!("executor stop is unconfirmed for {run_id}"));
+        }
         run.state = state;
         run.settled_at.get_or_insert_with(now_ms);
         store.put_run(&run, &baseline)
@@ -4601,6 +4909,7 @@ impl TaskWorkspaceService {
                 }
                 let execution_root = Path::new(&run.execution_root);
                 match run.isolation_kind {
+                    IsolationKind::Observed => {},
                     IsolationKind::GitWorktree => cleanup_git_worktree(
                         Path::new(&task.workspace_root),
                         execution_root,
@@ -4723,6 +5032,9 @@ impl TaskWorkspaceService {
             let (run, mut snapshot) = store
                 .get_run::<WorkspaceSnapshot>(run_id)?
                 .ok_or_else(|| format!("unknown task run: {run_id}"))?;
+            if run.isolation_kind == IsolationKind::Observed {
+                return Err("a Local observed run must be restored through its recorded inverse patch".into());
+            }
             if store.list_runs(&run.task_id)?.iter().any(|candidate| {
                 candidate.run_id != run.run_id
                     && matches!(candidate.state, RunState::Running | RunState::Settling)
@@ -4805,22 +5117,52 @@ impl TaskWorkspaceService {
             .iter()
             .find(|file| file.path == path)
             .ok_or_else(|| format!("resource is not part of patch set: {path}"))?;
+        if !allow_sensitive && file.old_path.as_deref().is_some_and(is_sensitive_resource) {
+            return Err(format!("sensitive resource requires explicit authorization: {path}"));
+        }
         if file.binary || file.resource_kind != crate::ResourceKind::File {
             return Err(format!("resource does not have a textual diff: {path}"));
         }
-        let mut diff = String::new();
+        // Older patch rows retained source blobs for creates/deletes but no
+        // hunks. Reconstruct their view from those immutable captures rather
+        // than disk, so upgrading does not strand already-recorded history.
+        if (file.hunks.is_empty() || file.origin == ContributionOrigin::Unknown) && file.before_hash != file.after_hash {
+            let before = file.before_hash.as_deref().map(|hash| store.get_blob(hash, now)).transpose()?;
+            let after = file.after_hash.as_deref().map(|hash| store.get_blob(hash, now)).transpose()?;
+            let scratch = self.execution_dir.parent().unwrap_or(&self.execution_dir).join("scratch");
+            let diff = ledger::unified_diff(&scratch, &file.path, before.as_deref(), after.as_deref())?;
+            let body = diff.split_inclusive('\n').scan(0, |offset, line| {
+                let at = *offset;
+                *offset += line.len();
+                Some((at, line))
+            }).find_map(|(at, line)| line.starts_with("@@ ").then_some(at));
+            let mut view = ledger::file_diff_header_with_body(file, body.is_some());
+            if let Some(body) = body { view.push_str(&diff[body..]); }
+            return Ok(view);
+        }
+        let mut diff = ledger::file_diff_header(file);
         for hunk in &file.hunks {
             let bytes = store.get_blob(&hunk.forward_patch_hash, now)?;
             let text = std::str::from_utf8(&bytes)
                 .map_err(|_| format!("stored patch is not UTF-8: {}", hunk.id))?;
-            diff.push_str(text);
+            // Each retained hunk has a complete header for independent
+            // application. The read surface emits one file and all its hunks.
+            let hunk_at = text
+                .split_inclusive('\n')
+                .scan(0, |offset, line| {
+                    let at = *offset;
+                    *offset += line.len();
+                    Some((at, line))
+                })
+                .find_map(|(at, line)| line.starts_with("@@ ").then_some(at))
+                .ok_or_else(|| format!("stored patch missing hunk: {}", hunk.id))?;
+            diff.push_str(&text[hunk_at..]);
             if !diff.ends_with('\n') {
                 diff.push('\n');
             }
         }
         Ok(diff)
     }
-
     pub fn apply_patch_set(
         &self,
         run_id: &str,
@@ -6056,6 +6398,7 @@ fn cleanup_execution(
     branch: Option<&str>,
 ) {
     match isolation_kind {
+        IsolationKind::Observed => {},
         IsolationKind::GitWorktree => {
             cleanup_git_worktree(workspace_root, execution_root, branch.unwrap_or_default())
         }
@@ -6068,6 +6411,7 @@ fn cleanup_execution(
 fn remove_managed_execution(record: &WorkspaceRecord) -> Result<(), String> {
     let execution_root = Path::new(&record.execution_root);
     match record.isolation_kind {
+        IsolationKind::Observed => Err("an observed Local directory is never a removable managed environment".into()),
         IsolationKind::Shadow => fs::remove_dir_all(execution_root).map_err(|error| {
             format!(
                 "remove managed shadow {}: {error}",
@@ -6752,6 +7096,7 @@ struct ReconcileContext<'a> {
     run_id: &'a str,
     agent_id: &'a str,
     origin_hints: &'a HashMap<(String, String), ContributionOrigin>,
+    default_origin: ContributionOrigin,
     now: i64,
     /// Repository to read Git-resident blobs from, when either side of the
     /// comparison was captured against a commit. A linked worktree shares its
@@ -6770,6 +7115,7 @@ fn reconcile(
         run_id: context.run_id,
         agent_id: context.agent_id,
         origin_hints: context.origin_hints,
+        default_origin: context.default_origin,
     };
     let mut deleted: Vec<_> = before
         .entries
@@ -6883,6 +7229,7 @@ struct ChangeMeta<'a> {
     run_id: &'a str,
     agent_id: &'a str,
     origin_hints: &'a HashMap<(String, String), ContributionOrigin>,
+    default_origin: ContributionOrigin,
 }
 
 fn change_from_entries(
@@ -6902,7 +7249,7 @@ fn change_from_entries(
         .origin_hints
         .get(&(meta.run_id.to_string(), path.to_string()))
         .copied()
-        .unwrap_or(ContributionOrigin::Agent);
+        .unwrap_or(meta.default_origin);
     ResourceChange {
         run_id: meta.run_id.to_string(),
         path: path.to_string(),
@@ -6918,7 +7265,7 @@ fn change_from_entries(
         before_hash: before.map(|entry| entry.hash.clone()),
         insertions: stats.map(|value| value.0),
         deletions: stats.map(|value| value.1),
-        binary: visible.map(|entry| entry.binary).unwrap_or(false),
+        binary: before.is_some_and(|entry| entry.binary) || after.is_some_and(|entry| entry.binary),
         resource_kind: match visible.map(|entry| entry.kind) {
             Some(crate::snapshot::EntryKind::Symlink) => crate::ResourceKind::Symlink,
             _ => crate::ResourceKind::File,
@@ -8888,6 +9235,7 @@ mod tests {
             agent_id: "agent-1".into(),
             agent_kind: "in-app".into(),
             workspace_root: root.path().to_string_lossy().into_owned(),
+            observe_in_place: false,
             base: WorkspaceBaseSpec::WorkingState,
             workspace_key: None,
             execution_run_id: None,
@@ -10962,6 +11310,15 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].origin, ContributionOrigin::User);
         assert_eq!(changes[0].agent_id, None);
+        let patch = service.get_patch_set("run-user").unwrap().unwrap();
+        let value = serde_json::to_value(&patch).unwrap();
+        assert_eq!(value["files"][0]["origin"], "user");
+        // Old rows must disclose that provenance is unknown, not silently
+        // classify a contribution as an agent edit after reopening.
+        let mut legacy = value;
+        legacy["files"][0].as_object_mut().unwrap().remove("origin");
+        let old_patch: crate::PatchSet = serde_json::from_value(legacy).unwrap();
+        assert_eq!(old_patch.files[0].origin, ContributionOrigin::Unknown);
         let events = service.list_resource_events("run-user", None, 10).unwrap();
         assert!(events.iter().any(|event| {
             event.path.as_deref() == Some("notes/user.txt")
@@ -11484,6 +11841,663 @@ mod tests {
         assert!(service.get_task("task-pinned").unwrap().is_some());
     }
 
+    #[test]
+    fn turn_diff_observed_local_captures_and_undoes_without_owning_the_root() {
+        for git in [false, true] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            if git { git2::Repository::init(workspace.path()).unwrap(); seed_git_repository(workspace.path()); }
+            let before = (1..=40).map(|line| format!("line {line}\n")).collect::<String>();
+            fs::write(workspace.path().join("story.txt"), &before).unwrap();
+            if git {
+                settle_git(workspace.path(), &["add", "-A"]);
+                settle_git(workspace.path(), &["commit", "-m", "before local turn"]);
+            }
+            let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let mut request = input(&workspace, "task-local", "run-local");
+            request.observe_in_place = true;
+            let run = service.begin_run(request).unwrap();
+            assert_eq!(run.isolation_kind, IsolationKind::Observed);
+            assert_eq!(Path::new(&run.execution_root), workspace.path().canonicalize().unwrap());
+            assert!(run.workspace_id.is_none());
+            let (_, baseline): (TaskRun, WorkspaceSnapshot) = service.store.lock().get_run(&run.run_id).unwrap().unwrap();
+            assert!(service.store.lock().get_blob(&baseline.entries["story.txt"].hash, 1).is_ok());
+            let after = before.replace("line 2\n", "local agent write\n");
+            fs::write(workspace.path().join("story.txt"), &after).unwrap();
+            service.record_tool_event(&run.run_id, "story.txt", None, ResourceEventKind::Modified, Some("path-hint-only")).unwrap();
+            let changes = service.settle_run(&run.run_id).unwrap();
+            assert_eq!(changes[0].origin, ContributionOrigin::Unknown);
+            let patch = service.get_patch_set(&run.run_id).unwrap().unwrap();
+            assert_eq!(patch.state, crate::PatchState::Applied);
+            assert!(patch.applied_selection_known);
+            assert!(service.read_patch_diff(&run.run_id, "story.txt", false).unwrap().contains("+local agent write"));
+            fs::write(workspace.path().join("story.txt"), after.replace("line 35\n", "later manual edit\n")).unwrap();
+            service.undo_patch_set(&run.run_id).unwrap();
+            assert_eq!(fs::read_to_string(workspace.path().join("story.txt")).unwrap(), before.replace("line 35\n", "later manual edit\n"));
+            assert_eq!(provenance_adoption_states(&service, &run.run_id), vec!["applied", "reverted"]);
+            assert!(service.restore_run_snapshot(&run.run_id).unwrap_err().contains("recorded inverse"));
+            let mut task = service.get_task(&run.task_id).unwrap().unwrap();
+            task.expires_at = 0;
+            service.store.lock().put_task(&task).unwrap();
+            assert_eq!(service.prune().unwrap().removed_task_ids, vec![run.task_id]);
+            assert!(workspace.path().join("story.txt").exists());
+            assert!(fs::read_to_string(workspace.path().join("story.txt")).unwrap().contains("later manual edit"));
+        }
+    }
+
+    #[test]
+    fn turn_diff_observed_local_serializes_windows_and_refuses_checkout_baselines() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("file.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let other = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut first = input(&workspace, "first-task", "first-run");
+        first.observe_in_place = true;
+        let mut second = input(&workspace, "second-task", "second-run");
+        second.session_id = "other-session".into();
+        second.observe_in_place = true;
+        service.begin_run(first.clone()).unwrap();
+        assert!(other.begin_run(second.clone()).unwrap_err().contains("observation is already active"));
+        assert_eq!(service.begin_run(first).unwrap().run_id, "first-run");
+        service.settle_run("first-run").unwrap();
+        other.begin_run(second).unwrap();
+        other.settle_run("second-run").unwrap();
+        let mut invalid = input(&workspace, "invalid-task", "invalid-run");
+        invalid.observe_in_place = true;
+        invalid.base = WorkspaceBaseSpec::GitRef { git_ref: "main".into() };
+        assert!(service.begin_run(invalid).unwrap_err().contains("workingState baseline"));
+        assert_eq!(fs::read_to_string(workspace.path().join("file.txt")).unwrap(), "before\n");
+    }
+
+    #[test]
+    fn turn_diff_review_lost_helper_owner_quarantines_before_any_recovery_capture() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("story.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "lost-helper-task", "lost-helper-run");
+        request.observe_in_place = true;
+        service.begin_worker_run(request.clone(), None).unwrap();
+        let (_, baseline): (TaskRun, WorkspaceSnapshot) = service
+            .store
+            .lock()
+            .get_run("lost-helper-run")
+            .unwrap()
+            .unwrap();
+        assert!(baseline.requires_executor_stop_confirmation);
+        fs::write(
+            workspace.path().join("story.txt"),
+            "executor still writing\n",
+        )
+        .unwrap();
+        drop(service);
+        let reopened = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let run = &reopened.list_runs("lost-helper-task").unwrap()[0];
+        assert_eq!(run.state, RunState::Settling);
+        assert!(run.executor_stop_unconfirmed);
+        assert!(reopened.get_patch_set("lost-helper-run").unwrap().is_none());
+        assert!(reopened.settle_run("lost-helper-run").is_err());
+        request.run_id = "next-helper-run".into();
+        assert!(reopened.begin_worker_run(request.clone(), None).is_err());
+        reopened
+            .confirm_executor_stopped("lost-helper-run")
+            .unwrap();
+        assert!(reopened.get_patch_set("lost-helper-run").unwrap().is_none());
+        reopened.begin_worker_run(request, None).unwrap();
+        reopened.settle_run("next-helper-run").unwrap();
+    }
+
+    #[test]
+    fn turn_diff_review_overlapping_roots_cannot_bypass_live_or_quarantined_capture() {
+        for first_nested in [false, true] {
+            for quarantined in [false, true] {
+                for next_observed in [false, true] {
+                    let data = TempDir::new().unwrap();
+                    let workspace = TempDir::new().unwrap();
+                    fs::create_dir(workspace.path().join("sub")).unwrap();
+                    fs::write(workspace.path().join("sub/story.txt"), "before\n").unwrap();
+                    let outer = workspace.path().to_path_buf();
+                    let nested = workspace.path().join("sub");
+                    let (first_root, next_root) = if first_nested {
+                        (&nested, &outer)
+                    } else {
+                        (&outer, &nested)
+                    };
+                    let service =
+                        TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+                    let mut first = input(&workspace, "first-task", "first-run");
+                    first.workspace_root = first_root.to_string_lossy().into_owned();
+                    first.observe_in_place = true;
+                    service.begin_worker_run(first, None).unwrap();
+                    if quarantined {
+                        service.mark_executor_unconfirmed("first-run").unwrap();
+                    }
+                    let mut next = input(&workspace, "next-task", "next-run");
+                    next.workspace_root = next_root.to_string_lossy().into_owned();
+                    next.observe_in_place = next_observed;
+                    // An isolated copy may be acquired from a live observed
+                    // source, but an uncertain executor fences all acquisitions.
+                    if quarantined || next_observed {
+                        assert!(service.begin_run(next).unwrap_err().contains("observation"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn turn_diff_review_concurrent_fresh_service_open_succeeds() {
+        for _ in 0..4 {
+            let data = TempDir::new().unwrap();
+            let barrier = Arc::new(std::sync::Barrier::new(4));
+            let threads = (0..4).map(|_| {
+                let directory = data.path().to_path_buf();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    TaskWorkspaceService::open(ServiceConfig::new(directory))
+                })
+            }).collect::<Vec<_>>();
+            for thread in threads {
+                thread.join().unwrap().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn turn_diff_review_concurrent_nested_admission_opens_only_one_observation() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::create_dir(workspace.path().join("sub")).unwrap();
+        let service =
+            Arc::new(TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap());
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let mut outer = input(&workspace, "outer-task", "outer-run");
+        outer.observe_in_place = true;
+        let mut nested = input(&workspace, "nested-task", "nested-run");
+        nested.observe_in_place = true;
+        nested.workspace_root = workspace.path().join("sub").to_string_lossy().into_owned();
+        let threads = [outer, nested]
+            .into_iter()
+            .map(|request| {
+                let service = Arc::clone(&service);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    service.begin_worker_run(request, None)
+                })
+            })
+            .collect::<Vec<_>>();
+        let results = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(results
+            .iter()
+            .filter_map(|result| result.as_ref().err())
+            .all(|error| error.contains("overlapping root")));
+    }
+
+    #[test]
+    fn turn_diff_review_capture_owner_unlocks_before_duplicate_descriptor_closes() {
+        let data = TempDir::new().unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let owner = service
+            .try_run_capture_owner("duplicated-owner")
+            .unwrap()
+            .unwrap();
+        let inherited = owner.0.try_clone().unwrap();
+        drop(owner);
+        assert!(
+            service
+                .try_run_capture_owner("duplicated-owner")
+                .unwrap()
+                .is_some(),
+            "a non-owner duplicate descriptor must not retain capture authority"
+        );
+        drop(inherited);
+    }
+
+    #[test]
+    fn turn_diff_review_stale_recovery_candidate_does_not_quarantine_a_settled_run() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("story.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "stale-task", "stale-run");
+        request.observe_in_place = true;
+        service.begin_worker_run(request, None).unwrap();
+        fs::write(workspace.path().join("story.txt"), "settled\n").unwrap();
+        service.settle_run("stale-run").unwrap();
+        let patch = service.get_patch_set("stale-run").unwrap();
+        // Model an ID enumerated while Running whose owner settled before
+        // recovery could acquire the process-owner lock.
+        service.recover_incomplete_run("stale-run").unwrap();
+        assert_eq!(
+            service.list_runs("stale-task").unwrap()[0].state,
+            RunState::Ready
+        );
+        assert!(!service.list_runs("stale-task").unwrap()[0].executor_stop_unconfirmed);
+        assert_eq!(service.get_patch_set("stale-run").unwrap(), patch);
+    }
+
+    #[test]
+    fn turn_diff_review_observer_cannot_publish_after_helper_owner_dies() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("story.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "observer-task", "observer-run");
+        request.observe_in_place = true;
+        service.begin_worker_run(request, None).unwrap();
+        let observer = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        drop(service);
+        fs::write(
+            workspace.path().join("story.txt"),
+            "executor outlived helper\n",
+        )
+        .unwrap();
+        assert!(observer
+            .settle_run("observer-run")
+            .unwrap_err()
+            .contains("executor stop"));
+        assert!(observer.list_runs("observer-task").unwrap()[0].executor_stop_unconfirmed);
+        assert!(observer.get_patch_set("observer-run").unwrap().is_none());
+        observer.confirm_executor_stopped("observer-run").unwrap();
+        assert!(observer.get_patch_set("observer-run").unwrap().is_none());
+    }
+
+    #[test]
+    fn turn_diff_review_duplicate_begin_cannot_settle_another_service_owner() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("story.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "owner-task", "owner-run");
+        request.observe_in_place = true;
+        service.begin_run(request.clone()).unwrap();
+        let observer = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        observer.begin_run(request).unwrap();
+        assert!(observer
+            .settle_cancelled_run("owner-run")
+            .unwrap_err()
+            .contains("owner"));
+        assert_eq!(
+            service.list_runs("owner-task").unwrap()[0].state,
+            RunState::Running
+        );
+        fs::write(workspace.path().join("story.txt"), "owner completed\n").unwrap();
+        service.settle_run("owner-run").unwrap();
+        assert!(service
+            .read_patch_diff("owner-run", "story.txt", false)
+            .unwrap()
+            .contains("+owner completed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turn_diff_review_undo_preserves_baseline_resource_kind() {
+        use std::os::unix::fs::symlink;
+        for baseline_symlink in [false, true] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            let item = workspace.path().join("item");
+            fs::write(workspace.path().join("target.txt"), "target\n").unwrap();
+            if baseline_symlink {
+                symlink("target.txt", &item).unwrap();
+            } else {
+                fs::write(&item, "original file bytes\n").unwrap();
+            }
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let mut request = input(&workspace, "kind-task", "kind-run");
+            request.observe_in_place = true;
+            service.begin_run(request).unwrap();
+            fs::remove_file(&item).unwrap();
+            if baseline_symlink {
+                fs::write(&item, "replacement file bytes\n").unwrap();
+            } else {
+                symlink("target.txt", &item).unwrap();
+            }
+            service.settle_run("kind-run").unwrap();
+            assert_eq!(
+                service.undo_patch_set("kind-run").unwrap().state,
+                crate::PatchState::Reverted
+            );
+            assert_eq!(
+                item.symlink_metadata().unwrap().is_symlink(),
+                baseline_symlink
+            );
+            if baseline_symlink {
+                assert_eq!(fs::read_link(&item).unwrap(), Path::new("target.txt"));
+            } else {
+                assert_eq!(fs::read(&item).unwrap(), b"original file bytes\n");
+            }
+        }
+    }
+
+    #[test]
+    fn turn_diff_review_late_opaque_bytes_do_not_abort_settlement() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "opaque-task", "opaque-run");
+        request.observe_in_place = true;
+        service.begin_run(request).unwrap();
+        let mut bytes = vec![b'a'; 9000];
+        bytes.extend([0xff, b'\n']);
+        fs::write(workspace.path().join("data.dat"), &bytes).unwrap();
+        fs::write(workspace.path().join("normal.txt"), "readable\n").unwrap();
+        service.settle_run("opaque-run").unwrap();
+        let patch = service.get_patch_set("opaque-run").unwrap().unwrap();
+        let opaque = patch
+            .files
+            .iter()
+            .find(|file| file.path == "data.dat")
+            .unwrap();
+        assert!(opaque.binary);
+        assert!(opaque.hunks.is_empty());
+        assert!(service
+            .read_patch_diff("opaque-run", "normal.txt", false)
+            .unwrap()
+            .contains("+readable"));
+        assert_eq!(
+            service.undo_patch_set("opaque-run").unwrap().state,
+            crate::PatchState::Reverted
+        );
+        assert!(!workspace.path().join("data.dat").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turn_diff_review_unknown_diff_preserves_modes_and_structure() {
+        use std::os::unix::fs::PermissionsExt;
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let script = workspace.path().join("script.sh");
+        fs::write(&script, "before\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(workspace.path().join("deleted.sh"), "deleted\n").unwrap();
+        fs::set_permissions(
+            workspace.path().join("deleted.sh"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "mode-task", "mode-run");
+        request.observe_in_place = true;
+        service.begin_run(request).unwrap();
+        fs::write(&script, "after\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_file(workspace.path().join("deleted.sh")).unwrap();
+        fs::write(workspace.path().join("created.sh"), "created\n").unwrap();
+        fs::set_permissions(
+            workspace.path().join("created.sh"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        service.settle_run("mode-run").unwrap();
+        let modified = service
+            .read_patch_diff("mode-run", "script.sh", false)
+            .unwrap();
+        assert!(
+            modified.contains("old mode 100644\nnew mode 100755\n"),
+            "{modified}"
+        );
+        assert!(modified.contains("-before\n+after\n"), "{modified}");
+        let created = service
+            .read_patch_diff("mode-run", "created.sh", false)
+            .unwrap();
+        assert!(created.contains("new file mode 100755\n"), "{created}");
+        assert!(
+            created.contains("--- /dev/null\n+++ b/created.sh\n"),
+            "{created}"
+        );
+        let deleted = service
+            .read_patch_diff("mode-run", "deleted.sh", false)
+            .unwrap();
+        assert!(deleted.contains("deleted file mode 100755\n"), "{deleted}");
+        assert!(
+            deleted.contains("--- a/deleted.sh\n+++ /dev/null\n"),
+            "{deleted}"
+        );
+    }
+    #[test]
+    fn turn_diff_observed_owner_is_not_recovered_while_live_but_is_after_drop() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("story.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let mut request = input(&workspace, "live-task", "live-run");
+        request.observe_in_place = true;
+        service.begin_run(request).unwrap();
+        fs::write(workspace.path().join("story.txt"), "after\n").unwrap();
+        let observer = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        assert_eq!(observer.list_runs("live-task").unwrap()[0].state, RunState::Running);
+        assert!(observer.get_patch_set("live-run").unwrap().is_none());
+        drop(observer);
+        drop(service);
+        let recovered = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        assert_eq!(recovered.list_runs("live-task").unwrap()[0].state, RunState::Failed);
+        assert_eq!(recovered.get_patch_set("live-run").unwrap().unwrap().state, crate::PatchState::Applied);
+        assert!(recovered.read_patch_diff("live-run", "story.txt", false).unwrap().contains("+after"));
+    }
+
+    #[test]
+    fn turn_diff_legacy_corrupt_hunks_cannot_apply_wrong_bytes() {
+        use sha2::{Digest, Sha256};
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        fs::write(workspace.path().join("story.txt"), "before\n").unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let run = service.begin_run(input(&workspace, "legacy-task", "legacy-run")).unwrap();
+        fs::write(Path::new(&run.execution_root).join("story.txt"), "before\na/old/resource\n").unwrap();
+        service.settle_run(&run.run_id).unwrap();
+        let mut patch = service.get_patch_set(&run.run_id).unwrap().unwrap();
+        patch.files[0].origin = ContributionOrigin::Unknown;
+        let mut store = service.store.lock();
+        let text = String::from_utf8(store.get_blob(&patch.files[0].hunks[0].forward_patch_hash, 1).unwrap()).unwrap();
+        let corrupt = text.replace("a/old/", "a/");
+        let hash = hex::encode(Sha256::digest(corrupt.as_bytes()));
+        store.put_blob(&hash, corrupt.as_bytes(), 1).unwrap();
+        patch.files[0].hunks[0].forward_patch_hash = hash;
+        store.put_patch_set(&patch).unwrap();
+        drop(store);
+        let diff = service.read_patch_diff(&run.run_id, "story.txt", false).unwrap();
+        assert!(diff.contains("+a/old/resource"), "{diff}");
+        let selection = [crate::PatchSelection { path: "story.txt".into(), hunk_ids: vec![patch.files[0].hunks[0].id.clone()] }];
+        assert!(service.apply_patch_set(&run.run_id, &selection).unwrap_err().contains("does not match retained content"));
+        assert_eq!(fs::read_to_string(workspace.path().join("story.txt")).unwrap(), "before\n");
+        // The retained complete source file remains safe to apply even when
+        // old partial-patch data is corrupt.
+        service.apply_patch_set(&run.run_id, &[]).unwrap();
+        assert_eq!(fs::read_to_string(workspace.path().join("story.txt")).unwrap(), "before\na/old/resource\n");
+    }
+
+    #[test]
+    fn turn_diff_partial_apply_preserves_payload_bytes() {
+        for path in [
+            "story.txt",
+            "space name.txt",
+            "a/old/nested.txt",
+            "quote\"name.txt",
+            "目录/文件.txt",
+        ] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            fs::create_dir_all(workspace.path().join(path).parent().unwrap()).unwrap();
+            fs::write(workspace.path().join(path), "unchanged\n").unwrap();
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let run = service
+                .begin_run(input(&workspace, "task-payload", "run-payload"))
+                .unwrap();
+            let expected = "unchanged\na/old/resource\nb/new/value\n";
+            fs::write(Path::new(&run.execution_root).join(path), expected).unwrap();
+            service.settle_run(&run.run_id).unwrap();
+            let diff = service.read_patch_diff(&run.run_id, path, false).unwrap();
+            assert!(diff.contains("+a/old/resource\n"), "{diff}");
+            assert!(diff.contains("+b/new/value\n"), "{diff}");
+            let patch = service.get_patch_set(&run.run_id).unwrap().unwrap();
+            let selected = [crate::PatchSelection {
+                path: path.into(),
+                hunk_ids: vec![patch.files[0].hunks[0].id.clone()],
+            }];
+            service.apply_patch_set(&run.run_id, &selected).unwrap();
+            assert_eq!(
+                fs::read_to_string(workspace.path().join(path)).unwrap(),
+                expected
+            );
+            service.undo_patch_set(&run.run_id).unwrap();
+            assert_eq!(
+                fs::read_to_string(workspace.path().join(path)).unwrap(),
+                "unchanged\n"
+            );
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn turn_diff_mode_only_change_settles_applies_and_undoes() {
+        use std::os::unix::fs::PermissionsExt;
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let target = workspace.path().join("run.sh");
+        fs::write(&target, "#!/bin/sh\necho hi\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let run = service
+            .begin_run(input(&workspace, "task-mode", "run-mode"))
+            .unwrap();
+        fs::set_permissions(
+            Path::new(&run.execution_root).join("run.sh"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        service.settle_run(&run.run_id).unwrap();
+        let patch = service.get_patch_set(&run.run_id).unwrap().unwrap();
+        assert_eq!(patch.files.len(), 1);
+        assert!(patch.files[0].hunks.is_empty());
+        let diff = service
+            .read_patch_diff(&run.run_id, "run.sh", false)
+            .unwrap();
+        assert!(diff.contains("old mode 100644\n"), "{diff}");
+        assert!(diff.contains("new mode 100755\n"), "{diff}");
+        service.apply_patch_set(&run.run_id, &[]).unwrap();
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        service.undo_patch_set(&run.run_id).unwrap();
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+    #[test]
+    fn turn_diff_file_kinds_have_history_without_expanding_hunk_selection() {
+        for kind in ["created", "deleted", "renamed"] {
+            let data = TempDir::new().unwrap();
+            let workspace = TempDir::new().unwrap();
+            if kind != "created" {
+                fs::write(workspace.path().join("old.txt"), "captured text\n").unwrap();
+            }
+            let service =
+                TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+            let run = service
+                .begin_run(input(&workspace, "task-kind", "run-kind"))
+                .unwrap();
+            let root = Path::new(&run.execution_root);
+            match kind {
+                "created" => fs::write(root.join("new.txt"), "captured text\n").unwrap(),
+                "deleted" => fs::remove_file(root.join("old.txt")).unwrap(),
+                "renamed" => fs::rename(root.join("old.txt"), root.join("new.txt")).unwrap(),
+                _ => unreachable!(),
+            }
+            service.settle_run(&run.run_id).unwrap();
+            let path = if kind == "deleted" {
+                "old.txt"
+            } else {
+                "new.txt"
+            };
+            let diff = service.read_patch_diff(&run.run_id, path, false).unwrap();
+            match kind {
+                "created" => assert!(
+                    diff.contains("--- /dev/null\n") && diff.contains("+captured text\n"),
+                    "{diff}"
+                ),
+                "deleted" => assert!(
+                    diff.contains("+++ /dev/null\n") && diff.contains("-captured text\n"),
+                    "{diff}"
+                ),
+                "renamed" => assert!(
+                    diff.contains("rename from old.txt\n") && diff.contains("rename to new.txt\n"),
+                    "{diff}"
+                ),
+                _ => unreachable!(),
+            }
+            let patch = service.get_patch_set(&run.run_id).unwrap().unwrap();
+            if let Some(hunk) = patch.files[0].hunks.first() {
+                let selection = [crate::PatchSelection {
+                    path: path.into(),
+                    hunk_ids: vec![hunk.id.clone()],
+                }];
+                assert!(
+                    service
+                        .apply_patch_set(&run.run_id, &selection)
+                        .unwrap_err()
+                        .contains("hunk selection")
+                );
+            }
+            service.apply_patch_set(&run.run_id, &[]).unwrap();
+            service.undo_patch_set(&run.run_id).unwrap();
+            assert_eq!(workspace.path().join("old.txt").exists(), kind != "created");
+            assert!(!workspace.path().join("new.txt").exists());
+        }
+    }
+    #[test]
+    fn turn_diff_reader_combines_multiple_hunks_under_one_file_header() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let before = (1..=40).map(|n| format!("line {n}\n")).collect::<String>();
+        fs::write(workspace.path().join("many.txt"), &before).unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let run = service
+            .begin_run(input(&workspace, "task-many", "run-many"))
+            .unwrap();
+        let after = before
+            .replace("line 2\n", "first change\n")
+            .replace("line 35\n", "last change\n");
+        fs::write(Path::new(&run.execution_root).join("many.txt"), &after).unwrap();
+        service.settle_run(&run.run_id).unwrap();
+        let diff = service
+            .read_patch_diff(&run.run_id, "many.txt", false)
+            .unwrap();
+        assert_eq!(diff.matches("diff --git ").count(), 1, "{diff}");
+        assert_eq!(
+            diff.lines().filter(|line| line.starts_with("@@ ")).count(),
+            2,
+            "{diff}"
+        );
+        assert!(diff.contains("+first change") && diff.contains("+last change"));
+    }
+
+    #[test]
+    fn turn_diff_reads_legacy_created_file_from_retained_blobs() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let service = TaskWorkspaceService::open(ServiceConfig::new(data.path().into())).unwrap();
+        let run = service.begin_run(input(&workspace, "task-legacy", "run-legacy")).unwrap();
+        fs::write(Path::new(&run.execution_root).join("new.txt"), "retained before upgrade\n").unwrap();
+        service.settle_run(&run.run_id).unwrap();
+        let mut patch = service.get_patch_set(&run.run_id).unwrap().unwrap();
+        patch.files[0].hunks.clear();
+        service.store.lock().put_patch_set(&patch).unwrap();
+        let diff = service.read_patch_diff(&run.run_id, "new.txt", false).unwrap();
+        assert!(diff.contains("--- /dev/null\n"), "{diff}");
+        assert!(diff.contains("+retained before upgrade\n"), "{diff}");
+    }
     #[test]
     fn reads_only_ledger_backed_text_diffs() {
         let data = TempDir::new().unwrap();
@@ -12871,7 +13885,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(recovered.runs.len(), 2);
-        assert_eq!(recovered.state, RunState::Failed);
+        assert_eq!(recovered.state, RunState::Failed, "recovered runs: {:?}", recovered.runs);
         assert!(recovered.settled_at.is_some());
     }
 

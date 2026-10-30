@@ -68,8 +68,12 @@ type Listing =
 
 /** A read diff. A selected file with no entry for its path is still loading. */
 type DiffState =
-  | { path: string; state: "error"; message: string }
-  | { path: string; state: "ready"; diff: GitDiff }
+  | { key: string; path: string; state: "error"; message: string }
+  | { key: string; path: string; state: "ready"; diff: GitDiff }
+
+function fileKey(file: ReviewScopeFileRef): string {
+  return JSON.stringify([file.repositoryRoot, file.path])
+}
 
 function selectionKey(rootPath: string, selection: SnapshotSelection): string {
   return JSON.stringify([rootPath, selection])
@@ -89,8 +93,23 @@ export function SnapshotReview({
   const request = useMemo<ReviewScopeRequest>(
     () => ({
       scope: selection.scope,
-      repositoryRoots: [rootPath],
-      defaults: refsForSelection(selection),
+      repositoryRoots:
+        selection.scope === "lastTurn" && selection.runs?.length
+          ? [...new Set(selection.runs.map((run) => run.workspaceRoot))]
+          : [rootPath],
+      ...(selection.scope === "lastTurn" && selection.runs?.length
+        ? {
+            refsByRoot: Object.fromEntries(
+              selection.runs.map((run) => [
+                run.workspaceRoot,
+                {
+                  lastTurnRunId: run.runId,
+                  ...(run.origin ? { origin: run.origin } : {}),
+                },
+              ])
+            ),
+          }
+        : { defaults: refsForSelection(selection) }),
     }),
     // `key` is the value identity of (rootPath, selection).
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,7 +131,7 @@ export function SnapshotReview({
         if (cancelled) return
         setListing({ key, value: { state: "ready", files, unavailable } })
         const focused = focusPath ? files.find((file) => file.path === focusPath) : undefined
-        setSelected(focused?.path ?? (stacked ? null : (files[0]?.path ?? null)))
+        setSelected(focused ? fileKey(focused) : stacked || !files[0] ? null : fileKey(files[0]))
       })
       .catch((error: unknown) => {
         if (cancelled) return
@@ -136,19 +155,21 @@ export function SnapshotReview({
     [listing, key]
   )
   const files = useMemo(() => (current.state === "ready" ? current.files : []), [current])
-  const selectedRef = files.find((file) => file.path === selected) ?? null
+  const selectedRef = files.find((file) => fileKey(file) === selected) ?? null
 
   useEffect(() => {
-    if (!selectedRef) return
+    if (!selectedRef || (selectedRef.availability && selectedRef.availability !== "available"))
+      return
     let cancelled = false
     loadReviewScopeDiff(request, selectedRef)
       .then((next) => {
-        if (!cancelled) setDiff({ path: selectedRef.path, state: "ready", diff: next })
+        if (!cancelled) setDiff({ key, path: fileKey(selectedRef), state: "ready", diff: next })
       })
       .catch((error: unknown) => {
         if (!cancelled) {
           setDiff({
-            path: selectedRef.path,
+            key,
+            path: fileKey(selectedRef),
             state: "error",
             message: error instanceof Error ? error.message : String(error),
           })
@@ -157,7 +178,7 @@ export function SnapshotReview({
     return () => {
       cancelled = true
     }
-  }, [request, selectedRef])
+  }, [request, selectedRef, key])
 
   const index = selectedRef ? files.indexOf(selectedRef) : -1
   const prev = index > 0 ? files[index - 1] : null
@@ -191,7 +212,7 @@ export function SnapshotReview({
           size="icon"
           className={navButton}
           disabled={!prev}
-          onClick={() => prev && open(prev.path)}
+          onClick={() => prev && open(fileKey(prev))}
           aria-label={t("reviewPrevFile")}
           title={t("reviewPrevFile")}
           data-testid="snapshot-review-prev-file"
@@ -212,7 +233,7 @@ export function SnapshotReview({
           size="icon"
           className={navButton}
           disabled={!next}
-          onClick={() => next && open(next.path)}
+          onClick={() => next && open(fileKey(next))}
           aria-label={t("reviewNextFile")}
           title={t("reviewNextFile")}
           data-testid="snapshot-review-next-file"
@@ -243,7 +264,7 @@ export function SnapshotReview({
       </div>
     ) : current.state === "error" ? (
       message(t("snapshot.listFailed", { error: current.message }), "snapshot-review-error")
-    ) : current.unavailable.length > 0 ? (
+    ) : current.unavailable.length > 0 && files.length === 0 ? (
       message(
         t(`snapshot.unavailable.${current.unavailable[0].reason}`),
         "snapshot-review-unavailable"
@@ -256,23 +277,35 @@ export function SnapshotReview({
           const deco = file.status ? statusDecoration(file.status) : null
           const { dir, name } = splitPath(file.path)
           return (
-            <li key={file.reviewKey}>
+            <li key={fileKey(file)}>
               <button
                 type="button"
-                onClick={() => open(file.path)}
-                aria-current={file.path === selected ? "true" : undefined}
+                onClick={() => open(fileKey(file))}
+                aria-current={fileKey(file) === selected ? "true" : undefined}
                 className={cn(
                   "flex w-full items-center gap-1.5 px-2 text-left text-xs hover:bg-accent",
-                  touch ? "min-h-11 py-1" : "h-7",
-                  file.path === selected && "bg-accent"
+                  touch
+                    ? "min-h-11 py-1"
+                    : request.repositoryRoots.length > 1
+                      ? "min-h-9 py-1"
+                      : "h-7",
+                  fileKey(file) === selected && "bg-accent"
                 )}
                 data-testid={`snapshot-review-file-${file.path}`}
               >
                 <FileTypeIcon path={file.path} />
-                <span className="min-w-0 flex-1 truncate" title={file.path}>
+                <span
+                  className="min-w-0 flex-1 truncate"
+                  title={`${file.repositoryRoot}/${file.path}`}
+                >
                   <span className="text-foreground">{name}</span>
                   {dir ? (
                     <span className="ml-1.5 text-[10px] text-muted-foreground">{dir}</span>
+                  ) : null}
+                  {request.repositoryRoots.length > 1 ? (
+                    <span className="block truncate text-[10px] text-muted-foreground">
+                      {file.repositoryRoot}
+                    </span>
                   ) : null}
                 </span>
                 {deco ? (
@@ -290,13 +323,30 @@ export function SnapshotReview({
   const list = (
     <div className="flex h-full min-h-0 flex-col" data-testid="snapshot-review-list">
       {header}
+      {current.state === "ready" &&
+        files.length > 0 &&
+        current.unavailable.map((root) => (
+          <p
+            key={root.repositoryRoot}
+            role="status"
+            className="px-3 py-2 text-xs text-muted-foreground"
+          >
+            {root.repositoryRoot}: {t(`snapshot.unavailable.${root.reason}`)}
+          </p>
+        ))}
       {listBody}
     </div>
   )
 
-  const currentDiff = diff && selectedRef && diff.path === selectedRef.path ? diff : null
+  const currentDiff =
+    diff && selectedRef && diff.key === key && diff.path === fileKey(selectedRef) ? diff : null
   const detail = !selectedRef ? (
     message(t("reviewEmpty"), "snapshot-review-no-selection")
+  ) : selectedRef.availability && selectedRef.availability !== "available" ? (
+    message(
+      t(`snapshot.diffUnavailable.${selectedRef.availability}`),
+      "snapshot-review-diff-unavailable"
+    )
   ) : currentDiff?.state === "error" ? (
     message(t("snapshot.diffFailed", { error: currentDiff.message }), "snapshot-review-diff-error")
   ) : (

@@ -130,4 +130,32 @@ describe("parseUnifiedPatch", () => {
     expect(parseUnifiedPatch("just words\nmore words")).toEqual([])
     expect(parseUnifiedPatch("")).toEqual([])
   })
+
+  it("keeps header-shaped content inside an unfinished hunk", () => {
+    const files = parseUnifiedPatch(
+      "--- a/notes.txt\n+++ b/notes.txt\n@@ -1 +1 @@\n--- old body\n+++ new body\n"
+    )
+    expect(files).toHaveLength(1)
+    expect(patchFilePath(files[0])).toBe("notes.txt")
+    expect(files[0].hunks[0].lines.map((line) => line.content)).toEqual([
+      "-- old body\n",
+      "++ new body\n",
+    ])
+  })
+
+  it("decodes Git octal-quoted UTF-8 paths without changing payload", () => {
+    const files = parseUnifiedPatch(
+      'diff --git "a/\\346\\226\\207.txt" "b/\\346\\226\\207.txt"\n--- "a/\\346\\226\\207.txt"\n+++ "b/\\346\\226\\207.txt"\n@@ -1 +1 @@\n-a/old/value\n+b/new/value\n'
+    )
+    expect(patchFilePath(files[0])).toBe("文.txt")
+    expect(files[0].hunks[0].lines[1].content).toBe("b/new/value\n")
+  })
+
+  it("decodes quoted rename metadata and preserves real a/ path prefixes", () => {
+    const [file] = parseUnifiedPatch(
+      'diff --git "a/\\346\\226\\207.txt" b/a/next.txt\nsimilarity index 100%\nrename from "\\346\\226\\207.txt"\nrename to a/next.txt\n'
+    )
+    expect(file.oldPath).toBe("文.txt")
+    expect(file.newPath).toBe("a/next.txt")
+  })
 })

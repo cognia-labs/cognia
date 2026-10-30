@@ -17,6 +17,10 @@ jest.mock("@/lib/companion/agent-team-write-handlers", () => ({
   handleTeamTaskComment: jest.fn(),
 }))
 
+jest.mock("@/lib/gateway/runtime-bridge", () => ({
+  dispatchGatewayRuntimeCommand: jest.fn(async () => ({ body: { input: "masked" } })),
+}))
+
 jest.mock("@/lib/db/workflows", () => ({
   createWorkflow: jest.fn(async (draft: Record<string, unknown>) => ({ id: "wf1", ...draft })),
   updateWorkflow: jest.fn(async () => undefined),
@@ -28,9 +32,6 @@ jest.mock("@/lib/scheduler/sources/workflow-source", () => ({
     pause: jest.fn(async () => undefined),
     resume: jest.fn(async () => undefined),
   })),
-}))
-jest.mock("@/lib/workflow/runtime/run-cancel-registry", () => ({
-  requestCancelRun: jest.fn(() => true),
 }))
 jest.mock("@/lib/db/twins", () => ({
   deleteTwin: jest.fn(async () => ({ sources: 2, chunks: 5 })),
@@ -105,13 +106,10 @@ jest.mock("@/lib/pet/remote/host-dispatch", () => ({
 }))
 
 import { dispatchCommand } from "./desktop-write-source"
+import { registerRun, unregisterRun } from "@/lib/workflow/runtime/run-cancel-registry"
 
 const workflows = jest.requireMock("@/lib/db/workflows") as Record<string, jest.Mock>
 const workflowSource = jest.requireMock("@/lib/scheduler/sources/workflow-source") as Record<
-  string,
-  jest.Mock
->
-const cancelRegistry = jest.requireMock("@/lib/workflow/runtime/run-cancel-registry") as Record<
   string,
   jest.Mock
 >
@@ -124,6 +122,31 @@ const references = jest.requireMock("@/lib/chat/mentions/host-reference-rpc") as
 >
 
 beforeEach(() => jest.clearAllMocks())
+
+describe("dispatchCommand: internal gateway runtime", () => {
+  it.each([
+    "gateway_privacy_prepare",
+    "gateway_middleware_request",
+    "gateway_middleware_provider",
+    "gateway_middleware_event",
+    "gateway_middleware_response",
+    "gateway_middleware_usage",
+    "gateway_bridge_search",
+    "gateway_bridge_vision",
+  ])("delegates %s through the shared desktop/headless handler", async (command) => {
+    const { dispatchGatewayRuntimeCommand } = jest.requireMock("@/lib/gateway/runtime-bridge")
+    const payload = {
+      requestId: "native-request",
+      accountGeneration: 2,
+      body: { input: "original" },
+    }
+    await expect(dispatchCommand(command, payload)).resolves.toEqual({
+      ok: true,
+      value: { body: { input: "masked" } },
+    })
+    expect(dispatchGatewayRuntimeCommand).toHaveBeenCalledWith(command, payload)
+  })
+})
 
 describe("dispatchCommand: team_run_start", () => {
   it("passes the authenticated host payload and returns canonical admission unchanged", async () => {
@@ -258,18 +281,60 @@ describe("dispatchCommand: workflow CRUD", () => {
   })
 
   it("workflow_cancel_run reports a live abort", async () => {
-    const res = (await dispatchCommand("workflow_cancel_run", { runId: "run1" })) as {
-      cancelled: boolean
-      live: boolean
+    const { getDb } = await import("@/lib/db/schema")
+    await getDb().workflowRuns.put({
+      id: "run1",
+      workflowId: "wf1",
+      status: "running",
+      startedAt: Date.now(),
+    } as never)
+    const controller = new AbortController()
+    registerRun("run1", controller)
+    try {
+      const res = await dispatchCommand("workflow_cancel_run", { runId: "run1" })
+      expect(res).toEqual({ cancelled: true, live: true, mode: "aborted" })
+      expect(controller.signal.aborted).toBe(true)
+      expect(controller.signal.reason).toMatchObject({ message: "cancelled via Companion API" })
+      expect(await getDb().workflowRuns.get("run1")).toMatchObject({
+        status: "cancelled",
+        cancelRequestedAt: expect.any(Number),
+        completedAt: expect.any(Number),
+      })
+    } finally {
+      unregisterRun("run1")
     }
-    expect(cancelRegistry.requestCancelRun).toHaveBeenCalledWith("run1", expect.any(String))
-    // `mode` joined the payload with the execution-lease work (cross-device
-    // cancel); a live in-process abort reports "aborted".
-    expect(res).toEqual({ cancelled: true, live: true, mode: "aborted" })
   })
 
+  it.each(["unknown", "terminal"])(
+    "workflow_cancel_run leaves the controller untouched when the run is %s",
+    async (state) => {
+      const { getDb } = await import("@/lib/db/schema")
+      const runId = `run-${state}`
+      if (state === "terminal") {
+        await getDb().workflowRuns.put({
+          id: runId,
+          workflowId: "wf1",
+          status: "succeeded",
+          startedAt: Date.now(),
+        } as never)
+      }
+      const controller = new AbortController()
+      registerRun(runId, controller)
+      try {
+        await expect(dispatchCommand("workflow_cancel_run", { runId })).resolves.toEqual({
+          cancelled: false,
+          live: false,
+          mode: "noop",
+        })
+        expect(controller.signal.aborted).toBe(false)
+        expect((await getDb().workflowRuns.get(runId))?.cancelRequestedAt).toBeUndefined()
+      } finally {
+        unregisterRun(runId)
+      }
+    }
+  )
+
   it("workflow_cancel_run soft-cancels a non-live run", async () => {
-    cancelRegistry.requestCancelRun.mockReturnValueOnce(false)
     const { getDb } = await import("@/lib/db/schema")
     await getDb().workflowRuns.put({
       id: "runStale",

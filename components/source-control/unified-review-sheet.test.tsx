@@ -301,7 +301,12 @@ type Covers<Union, List extends readonly Union[]> =
 const LEG_STATUSES = ["pending", "succeeded", "failed", "skipped"] as const
 const _legStatuses: Covers<ReviewDeliveryLeg["status"], typeof LEG_STATUSES> = true
 
-const UNAVAILABLE_REASONS = ["missing-run", "missing-commit", "missing-refs"] as const
+const UNAVAILABLE_REASONS = [
+  "missing-run",
+  "missing-commit",
+  "missing-refs",
+  "missing-patch",
+] as const
 const _reasons: Covers<UnavailableReviewRoot["reason"], typeof UNAVAILABLE_REASONS> = true
 
 void [_legStatuses, _reasons]

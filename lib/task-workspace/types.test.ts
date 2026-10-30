@@ -7,7 +7,35 @@ import type {
   WorkspaceEnvironmentSummary,
   WorkspacePortLeaseList,
   ExternalPortSubjectKind,
+  BeginTaskWorkspaceTurn,
+  TaskRun,
+  PatchSet,
 } from "./types"
+
+describe("observed turn contract", () => {
+  it("keeps Local execution and contribution provenance explicit", () => {
+    const observed: TaskRun["isolationKind"] = "observed"
+    const input: Pick<BeginTaskWorkspaceTurn, "observeInPlace" | "base"> = {
+      observeInPlace: true,
+      base: { kind: "workingState" },
+    }
+    const origin: NonNullable<PatchSet["files"][number]["origin"]> = "unknown"
+    expect(observed).toBe("observed")
+    expect(JSON.parse(JSON.stringify(input))).toEqual({
+      observeInPlace: true,
+      base: { kind: "workingState" },
+    })
+    expect(origin).toBe("unknown")
+    const quarantined: Pick<TaskRun, "state" | "executorStopUnconfirmed"> = {
+      state: "settling",
+      executorStopUnconfirmed: true,
+    }
+    expect(JSON.parse(JSON.stringify(quarantined))).toEqual({
+      state: "settling",
+      executorStopUnconfirmed: true,
+    })
+  })
+})
 
 describe("workspace port lease contract", () => {
   it("represents shared subjects and unavailable namespace occupancy separately", () => {

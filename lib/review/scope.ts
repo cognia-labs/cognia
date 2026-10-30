@@ -10,6 +10,10 @@ import { hunkContentHash, normalizeReviewKey } from "@/lib/git/hunk-review"
 import { parseUnifiedPatch, patchFilePath } from "@/lib/git/unified-patch"
 import { getTaskPatchSet, readTaskResourceDiff } from "@/lib/task-workspace/client"
 import type { PatchSet } from "@/lib/task-workspace/types"
+import {
+  projectPatchSetChanges,
+  type ChangeDiffAvailability,
+} from "@/lib/task-workspace/run-changes"
 import type { GitDiff, GitFileChange, GitFileStatus } from "@/types/git"
 import type {
   ReviewRepositoryRefs,
@@ -37,7 +41,10 @@ import type {
 export function refsForSelection(selection: ReviewScopeSelection): ReviewRepositoryRefs {
   switch (selection.scope) {
     case "lastTurn":
-      return { lastTurnRunId: selection.runId }
+      return {
+        lastTurnRunId: selection.runId,
+        ...(selection.origin ? { origin: selection.origin } : {}),
+      }
     case "commit":
       return { commitSha: selection.commitSha }
     case "branch":
@@ -58,7 +65,11 @@ export function selectionFromScope(
 ): ReviewScopeSelection {
   switch (scope) {
     case "lastTurn":
-      return { scope, runId: refs.lastTurnRunId ?? "" }
+      return {
+        scope,
+        runId: refs.lastTurnRunId ?? "",
+        ...(refs.origin ? { origin: refs.origin } : {}),
+      }
     case "commit":
       return { scope, commitSha: refs.commitSha ?? "" }
     case "branch":
@@ -71,7 +82,11 @@ export function selectionFromScope(
 /** Whether two choices name the same target (refs included). */
 export function sameScopeChoice(a: ReviewScopeChoice, b: ReviewScopeChoice): boolean {
   if (a.scope !== b.scope) return false
-  if (a.scope === "lastTurn" && b.scope === "lastTurn") return a.runId === b.runId
+  if (a.scope === "lastTurn" && b.scope === "lastTurn")
+    return (
+      a.runId === b.runId &&
+      JSON.stringify([a.origin, a.runs]) === JSON.stringify([b.origin, b.runs])
+    )
   if (a.scope === "commit" && b.scope === "commit") return a.commitSha === b.commitSha
   if (a.scope === "branch" && b.scope === "branch") {
     return a.baseRef === b.baseRef && a.targetRef === b.targetRef
@@ -96,6 +111,7 @@ export interface ReviewScopeFileRef {
   staged?: boolean
   /** How the file changed, when the listing knew. */
   status?: GitFileStatus
+  availability?: ChangeDiffAvailability
   reviewKey: string
   /**
    * Hunks the listing step already had.
@@ -115,7 +131,7 @@ export interface ReviewScopedFile extends ReviewScopeFileRef {
 /** A root that could not be scoped, and the reason a person can act on. */
 export interface UnavailableReviewRoot {
   repositoryRoot: string
-  reason: "missing-run" | "missing-commit" | "missing-refs"
+  reason: "missing-run" | "missing-commit" | "missing-refs" | "missing-patch"
 }
 
 export interface ReviewScopeListing {
@@ -220,13 +236,20 @@ async function listRootFiles(
   if (request.scope === "lastTurn") {
     const runId = refs.lastTurnRunId
     if (!runId) return { ok: false, reason: "missing-run" }
-    const patch = await getTaskPatchSet(runId)
-    const files = (patch?.files ?? []).map((file) => ({
+    const patch = refs.origin
+      ? await getTaskPatchSet(runId, refs.origin)
+      : await getTaskPatchSet(runId)
+    if (!patch) return { ok: false, reason: "missing-patch" }
+    const availability = new Map(
+      projectPatchSetChanges(patch).files.map((file) => [file.path, file.availability])
+    )
+    const files = patch.files.map((file) => ({
       repositoryRoot,
       path: file.path,
       ...(file.oldPath ? { oldPath: file.oldPath } : {}),
       source: request.scope,
       status: patchStatus(file.kind),
+      availability: availability.get(file.path),
       reviewKey: reviewKey({
         path: file.path,
         origPath: file.oldPath,
@@ -358,17 +381,18 @@ export async function loadReviewScopeDiff(
   if (!refs.lastTurnRunId) {
     throw new Error(`Turn review requires a run for ${ref.repositoryRoot}`)
   }
-  const text = await readTaskResourceDiff(refs.lastTurnRunId, ref.path)
+  const text = refs.origin
+    ? await readTaskResourceDiff(refs.lastTurnRunId, ref.path, false, refs.origin)
+    : await readTaskResourceDiff(refs.lastTurnRunId, ref.path)
   const files = parseUnifiedPatch(text)
-  const file =
-    files.find((candidate) => patchFilePath(candidate) === ref.path) ??
-    (files.length === 1 ? files[0] : undefined)
+  const matching = files.filter((candidate) => patchFilePath(candidate) === ref.path)
+  const selected = matching.length ? matching : files.length === 1 ? files : []
   return {
     path: ref.path,
     oldContent: "",
     newContent: "",
-    hunks: file?.hunks ?? [],
-    isBinary: file?.binary ?? false,
+    hunks: selected.flatMap((file) => file.hunks),
+    isBinary: selected.some((file) => file.binary),
     contentOmitted: true,
   }
 }

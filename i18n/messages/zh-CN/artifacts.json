@@ -327,9 +327,16 @@
       "unavailable": {
         "missing-run": "这一轮没有可显示的已记录改动。",
         "missing-commit": "请选择要审阅的提交。",
-        "missing-refs": "请选择要对比的分支。"
+        "missing-refs": "请选择要对比的分支。",
+        "missing-patch": "执行 Host 上已无法读取这一轮保存的改动。"
       },
-      "loading": "正在加载改动…"
+      "loading": "正在加载改动…",
+      "diffUnavailable": {
+        "binary": "二进制文件，无法显示文本差异。",
+        "symlink": "符号链接变更，无法显示文本差异。",
+        "sensitive": "敏感文件内容已隐藏。",
+        "noTextDiff": "文件元数据或重命名变更，没有可显示的文本差异。"
+      }
     }
   },
   "compareVersion": "比较此版本",

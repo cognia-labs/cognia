@@ -17,7 +17,9 @@ Cognia already has a Workspace Dock, project editor, Git review, Companion trans
 
 ## Decision
 
-One user intent owns a `TaskWorkspace`; retries, continuations, and child agents are versioned `TaskRun`s. Every run executes outside the user's live root: a Git worktree for repository roots and a materialized shadow for non-Git roots. Unsafe isolation fails closed.
+One user intent owns a `TaskWorkspace`; retries, continuations, and child agents are versioned `TaskRun`s. Managed execution uses a Git worktree for repository roots and a materialized shadow for non-Git roots. Unsafe isolation fails closed.
+
+**2026-10-29 amendment — explicit Local capture.** An interactive Local turn may instead request `observeInPlace` with a `workingState` base. The same engine records a baseline before returning the live execution root, then records an already-applied patch and inverse after execution stops. This is `IsolationKind::Observed`, with exclusive root ownership; it does not silently create a worktree or apply the forward patch a second time. Pruning and archive never delete an observed live root. Scheduled and team execution retain their managed isolation policy. Writes without tool provenance remain `Unknown`; a snapshot proves changed bytes, not who authored them.
 
 `cognia-task-workspace` is the transport-neutral implementation shared by Tauri and `cognia-server`. SQLite stores metadata and gzip-compressed SHA-256 content-addressed blobs in the execution host's app-data directory. Neither file bodies nor patches enter chat sync, telemetry, or resource events. The default retention is 30 days and the default blob budget is 1 GiB; pinned and unapplied tasks are not pruned.
 
@@ -34,6 +36,10 @@ The existing Workspace Dock is the only product surface. It defaults to Current 
 The legacy `code_adoption` commands remain for one compatibility cycle, but persisted metrics are projected from authoritative agent-origin task resources when available. `fs_read_workspace_file` remains available; an unbounded editor read is no longer silently truncated, while task previews use the structured resource API.
 
 Adoption is finalized by the existing Task Workspace review actions: Apply and Partial Apply record the successfully applied file/hunk selection. Undo marks that selection reverted. Keep Current marks it rejected. The line rate is accepted additions plus deletions divided by proposed additions plus deletions. The file rate uses accepted files divided by proposed files. Pending reviews and legacy fingerprint-only rows are excluded from both denominators, and missing or truncated tracking is reported as coverage rather than inferred as rejection.
+
+Historical Review and Undo expose the complete captured patch, including user uploads and unknown-origin changes, while adoption metrics retain their agent-only meaning. Each retained root carries its run and execution Host/account. Review aggregates roots; Undo is explicitly scoped to one root's recorded applied selection. Missing history, unknown ownership, unavailable filesystem capture, and clean captures are distinct states. A selected Host or account change never redirects historical reads, mutation leases, or asynchronous client indexing to the new owner. Client indexing can be skipped after a namespace change; the original execution Host keeps the authoritative ledger.
+
+Capture requires the executor and ledger to observe the same filesystem. Remote endpoints and sandbox providers without that authority report unavailable capture. Native provider diff events remain hints rather than a second historical ledger. Standalone CLI capture reuses the existing workspace worker's bounded JSONL interface and the same engine; it does not add a network service.
 
 The flag stays off until built-in chat, ACP/Codex/Claude/OpenCode, Agent Team, Tauri, Companion, headless, Docker, and Kubernetes PVC deployments pass the same DTO, permission, reconnect, isolation, and patch semantics. No second AgentServer or WebSocket protocol is introduced.
 

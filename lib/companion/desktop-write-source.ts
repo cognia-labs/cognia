@@ -338,6 +338,17 @@ export async function dispatchCommand(
   const authorization: HostStateAuthorizationStrategy = partition
     ? "person-partition"
     : "device-grants"
+  // Native-only gateway round-trips. The Rust gateway's brain bridge is the
+  // caller; these commands are not added to the public companion RPC surface.
+  if (
+    command === "gateway_privacy_prepare" ||
+    command.startsWith("gateway_middleware_") ||
+    command === "gateway_bridge_search" ||
+    command === "gateway_bridge_vision"
+  ) {
+    const { dispatchGatewayRuntimeCommand } = await import("@/lib/gateway/runtime-bridge")
+    return { ok: true, value: await dispatchGatewayRuntimeCommand(command, payload) }
+  }
   const { isPerformanceHostCommand, dispatchPerformanceHostCommand } =
     await import("@/lib/perf/host-dispatch")
   if (isPerformanceHostCommand(command)) {

@@ -11,6 +11,7 @@ import {
   undoTaskWorkspace,
   resolveTaskWorkspaceConflict,
   pinTaskWorkspace,
+  settleTaskWorkspaceTurn,
 } from "@/lib/task-workspace/client"
 
 const listRuns = jest.fn()
@@ -21,6 +22,18 @@ const listEvents = jest.fn()
 const getSummary = jest.fn()
 const exportManifest = jest.fn()
 const getAdoption = jest.fn()
+const mockHostCall = jest.fn()
+
+jest.mock("@/lib/tauri", () => ({ onTauriEvent: jest.fn() }))
+jest.mock("@/lib/task-workspace/user-action", () => ({
+  approvalAwareTransport: { call: (...args: unknown[]) => mockHostCall(...args) },
+  closeApprovalScopeForTurn: jest.fn(),
+}))
+jest.mock("@/lib/task-workspace/abandoned-turns", () => ({
+  forgetOpenBundleTurn: jest.fn(),
+}))
+jest.mock("@/lib/task-workspace/projection", () => ({}))
+jest.mock("@/lib/code-adoption/outcome", () => ({}))
 
 jest.mock("@/lib/code-adoption/persist", () => ({
   getCodeAdoptionTurnByTaskWorkspaceRun: (...args: unknown[]) => getAdoption(...args),
@@ -35,6 +48,7 @@ jest.mock("@/components/chat/markdown-renderer", () => ({
   ),
 }))
 jest.mock("@/lib/task-workspace/client", () => ({
+  ...jest.requireActual("@/lib/task-workspace/client"),
   installTaskWorkspaceEventListener: jest.fn(async () => jest.fn()),
   listTaskRuns: (...args: unknown[]) => listRuns(...args),
   listTaskResources: (...args: unknown[]) => listResources(...args),
@@ -80,6 +94,7 @@ const resource = {
 describe("TaskResourcesPanel", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockHostCall.mockReset().mockResolvedValue([])
     jest
       .mocked(getTaskPatchSet)
       .mockReset()
@@ -182,6 +197,122 @@ describe("TaskResourcesPanel", () => {
     expect(screen.getByTestId("markdown-renderer")).toHaveAttribute("data-rhythm", "document")
     await user.click(screen.getByRole("tab", { name: "diff" }))
     expect(await screen.findByText("@@ diff")).toBeInTheDocument()
+  })
+
+  it("keeps a streaming panel's lease until the real client settles it", async () => {
+    listRuns.mockResolvedValue([{ runId: "run-1", state: "running", agentId: "agent-1" }])
+    render(<TaskResourcesPanel sessionId="session-1" layout="desktop" />)
+    await screen.findByText("src/result.md")
+    expect(useTaskWorkspaceStore.getState().activeBySession["session-1"].state).toBe("running")
+    await act(async () => {
+      await expect(settleTaskWorkspaceTurn("session-1", 1)).resolves.toEqual([])
+    })
+    expect(mockHostCall).toHaveBeenCalledWith(
+      "task_workspace_settle",
+      {
+        runId: "run-1",
+        finalState: "ready",
+      },
+      undefined
+    )
+    expect(useTaskWorkspaceStore.getState().activeByRun["run-1"].state).toBe("ready")
+  })
+
+  it("ignores an old resource response after the session activates a new run", async () => {
+    let resolveOld!: (value: unknown) => void
+    let resolveNext!: (value: unknown) => void
+    listResources
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveNext = resolve
+        })
+      )
+    render(<TaskResourcesPanel sessionId="session-1" layout="desktop" />)
+    await waitFor(() => expect(listResources).toHaveBeenCalledWith("task-1"))
+    await act(async () => {
+      useTaskWorkspaceStore.getState().activate({
+        taskId: "task-1",
+        runId: "run-2",
+        sessionId: "session-1",
+        workspaceRoot: "/repo",
+        executionRoot: "/repo",
+        state: "running",
+      })
+      // Resolve in the same turn, before React can clean up the previous effect.
+      resolveOld([resource])
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(listResources).toHaveBeenCalledTimes(2))
+    expect(useTaskWorkspaceStore.getState().activeByRun["run-2"].state).toBe("running")
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession["session-1"]).toBe("run-2")
+    expect(useTaskWorkspaceStore.getState().resourcesByTask["task-1"]).toBeUndefined()
+    await act(async () => {
+      resolveNext([])
+    })
+    expect(useTaskWorkspaceStore.getState().resourcesByTask["task-1"]).toEqual([])
+  })
+
+  it("retains ready history without settling it for a later Host-owned turn", async () => {
+    useTaskWorkspaceStore.getState().clear()
+    useTaskWorkspaceStore.getState().activate({
+      taskId: "task-1",
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceRoot: "/repo",
+      executionRoot: "/repo",
+      state: "ready",
+    })
+    render(<TaskResourcesPanel sessionId="session-1" layout="desktop" />)
+    await screen.findByText("src/result.md")
+    await expect(settleTaskWorkspaceTurn("session-1", 2)).resolves.toBeNull()
+    expect(mockHostCall).not.toHaveBeenCalled()
+  })
+
+  it("settles every root using native outcome states after the primary panel refresh", async () => {
+    const store = useTaskWorkspaceStore.getState()
+    store.clear()
+    for (const [runId, taskId] of [
+      ["run-notes", "task-notes"],
+      ["run-1", "task-1"],
+    ]) {
+      store.activate({
+        taskId,
+        runId,
+        sessionId: "session-1",
+        workspaceRoot: `/repo/${runId}`,
+        executionRoot: `/repo/${runId}`,
+        state: "running",
+        bundleTurnId: "bundle-turn",
+      })
+    }
+    render(<TaskResourcesPanel sessionId="session-1" layout="desktop" />)
+    await screen.findByText("src/result.md")
+    mockHostCall.mockResolvedValueOnce({
+      bundleTurnId: "bundle-turn",
+      runs: [
+        { runId: "run-notes", state: "failed", resources: [] },
+        { runId: "run-1", state: "cancelled", resources: [] },
+      ],
+    })
+    await act(async () => {
+      await expect(settleTaskWorkspaceTurn("session-1", 1, "failed")).resolves.toEqual([])
+    })
+    expect(mockHostCall).toHaveBeenCalledWith(
+      "task_workspace_bundle_turn_settle",
+      {
+        bundleTurnId: "bundle-turn",
+        finalState: "failed",
+      },
+      undefined
+    )
+    expect(useTaskWorkspaceStore.getState().activeByRun["run-notes"].state).toBe("failed")
+    expect(useTaskWorkspaceStore.getState().activeByRun["run-1"].state).toBe("cancelled")
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession["session-1"]).toBeUndefined()
   })
 
   it("aborts the previous preview and ignores its late result after selecting another file", async () => {
@@ -595,6 +726,24 @@ describe("TaskResourcesPanel", () => {
     await selectOption(screen.getByRole("combobox", { name: "runFilter" }), "run-1")
   })
 
+  it("shows created-file history without offering unsupported partial application", async () => {
+    const user = userEvent.setup()
+    jest.mocked(getTaskPatchSet).mockResolvedValue({
+      reversible: true,
+      files: [
+        {
+          path: resource.path,
+          kind: "created",
+          hunks: [{ id: "h1", header: "@@ -0,0 +1 @@" }],
+        },
+      ],
+    } as never)
+    render(<TaskResourcesPanel sessionId="session-1" layout="desktop" />)
+    await user.click(await screen.findByRole("button", { name: /src\/result.md/ }))
+    await user.click(screen.getByRole("tab", { name: "diff" }))
+    expect(screen.queryByRole("button", { name: "applySelectedHunks" })).not.toBeInTheDocument()
+  })
+
   it("applies only checked hunks and disables undo for irreversible patches", async () => {
     const user = userEvent.setup()
     jest.mocked(getTaskPatchSet).mockResolvedValue({
@@ -602,6 +751,7 @@ describe("TaskResourcesPanel", () => {
       files: [
         {
           path: resource.path,
+          kind: "modified",
           hunks: [
             { id: "h1", header: "@@ first" },
             { id: "h2", header: "@@ second" },

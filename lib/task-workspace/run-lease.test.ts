@@ -1,3 +1,7 @@
+jest.mock("./origin", () => ({
+  ...jest.requireActual("./origin"),
+  captureTaskWorkspaceOrigin: jest.fn(() => ({ kind: "local" })),
+}))
 const beginBundleTurn = jest.fn()
 const settleBundleTurn = jest.fn()
 const abortBundleTurn = jest.fn()
@@ -31,6 +35,7 @@ jest.mock("./abandoned-turns", () => ({
 }))
 
 import { boundApprovalScopeTurnIds, closeApprovalScopeForTurn } from "./user-action"
+import { captureTaskWorkspaceOrigin } from "./origin"
 import { createHash } from "node:crypto"
 import { __setReconcileReadWaitForTests, openWorkspaceBundleTurnLease } from "./run-lease"
 
@@ -115,10 +120,14 @@ describe("openWorkspaceBundleTurnLease", () => {
     )
 
     expect(beginBundleTurn).toHaveBeenCalledTimes(1)
-    expect(beginBundleTurn).toHaveBeenCalledWith("bundle-1", {
-      primaryLogicalRootId: "app",
-      run: input,
-    })
+    expect(beginBundleTurn).toHaveBeenCalledWith(
+      "bundle-1",
+      {
+        primaryLogicalRootId: "app",
+        run: input,
+      },
+      { kind: "local" }
+    )
     expect(lease).toMatchObject({
       bundleId: "bundle-1",
       primaryAlias: "/aliases/app",
@@ -127,7 +136,7 @@ describe("openWorkspaceBundleTurnLease", () => {
     expect(lease?.runs).toHaveLength(2)
 
     await lease?.settle("ready")
-    expect(settleBundleTurn).toHaveBeenCalledWith("bundle-turn-1", "ready")
+    expect(settleBundleTurn).toHaveBeenCalledWith("bundle-turn-1", "ready", { kind: "local" })
   })
 
   it("fails closed when the host cannot open the complete persisted bundle turn", async () => {
@@ -194,7 +203,7 @@ describe("openWorkspaceBundleTurnLease", () => {
     })
 
     await lease?.abort()
-    expect(abortBundleTurn).toHaveBeenCalledWith("bundle-turn-1")
+    expect(abortBundleTurn).toHaveBeenCalledWith("bundle-turn-1", { kind: "local" })
   })
 })
 
@@ -253,6 +262,28 @@ describe("the turn's approval scope", () => {
     expect(close).not.toHaveBeenCalled()
   })
 
+  it("keeps its original authority when begin finishes after an A to B selection switch", async () => {
+    const a = { kind: "remote" as const, hostId: "host-a" }
+    const b = { kind: "remote" as const, hostId: "host-b" }
+    ;(captureTaskWorkspaceOrigin as jest.Mock).mockReturnValueOnce(a)
+    openScope.mockImplementationOnce(async () => {
+      ;(captureTaskWorkspaceOrigin as jest.Mock).mockReturnValueOnce(b)
+      return { origin: a, close }
+    })
+    beginBundleTurn.mockResolvedValue(openedTurn())
+    const lease = await openWorkspaceBundleTurnLease(bundle, "app", input)
+    await lease?.settle()
+    expect(beginBundleTurn).toHaveBeenCalledWith(
+      "bundle-1",
+      { primaryLogicalRootId: "app", run: input },
+      a
+    )
+    expect(settleBundleTurn).toHaveBeenCalledWith("bundle-turn-1", "ready", a)
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(captureTaskWorkspaceOrigin()).toEqual(b)
+    ;(captureTaskWorkspaceOrigin as jest.Mock).mockReturnValue({ kind: "local" })
+  })
+
   it("is closed once, by whichever path ends the turn first", async () => {
     beginBundleTurn.mockResolvedValue(openedTurn())
     const lease = await openWorkspaceBundleTurnLease(bundle, "app", input)
@@ -269,7 +300,7 @@ describe("the turn's approval scope", () => {
 
     await expect(openWorkspaceBundleTurnLease(bundle, "app", input)).resolves.toBeNull()
 
-    expect(abortBundleTurn).toHaveBeenCalledWith("bundle-turn-1")
+    expect(abortBundleTurn).toHaveBeenCalledWith("bundle-turn-1", { kind: "local" })
     expect(close).toHaveBeenCalledTimes(1)
     expect(boundApprovalScopeTurnIds()).toEqual([])
   })
@@ -336,7 +367,7 @@ describe("a lease settle that does not land", () => {
 
     await expect(lease?.settle("ready")).rejects.toThrow("host unreachable")
 
-    expect(releaseTurn).toHaveBeenCalledWith("bundle-turn-1")
+    expect(releaseTurn).toHaveBeenCalledWith("bundle-turn-1", { kind: "local" })
   })
 
   it("does the same for an abort that cannot land", async () => {
@@ -345,7 +376,7 @@ describe("a lease settle that does not land", () => {
 
     await expect(lease?.abort()).rejects.toThrow("host unreachable")
 
-    expect(releaseTurn).toHaveBeenCalledWith("bundle-turn-1")
+    expect(releaseTurn).toHaveBeenCalledWith("bundle-turn-1", { kind: "local" })
   })
 
   // A turn that ended cleanly is forgotten by `settleWorkspaceBundleTurn`, not
@@ -427,8 +458,8 @@ describe("a begin whose answer was lost", () => {
       "companion request dropped"
     )
 
-    expect(getBundleTurn).toHaveBeenCalledWith("connector-turn-1")
-    expect(abortIfUndriven).toHaveBeenCalledWith("connector-turn-1")
+    expect(getBundleTurn).toHaveBeenCalledWith("connector-turn-1", { kind: "local" })
+    expect(abortIfUndriven).toHaveBeenCalledWith("connector-turn-1", { kind: "local" })
     expect(close).toHaveBeenCalledTimes(1)
   })
 

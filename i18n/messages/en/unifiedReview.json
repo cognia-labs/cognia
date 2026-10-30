@@ -59,7 +59,8 @@
   "unavailable": {
     "missing-run": "{root} has no agent run to review — only the repository the last turn wrote in does.",
     "missing-commit": "{root} needs its own commit SHA.",
-    "missing-refs": "{root} needs its own base and target references."
+    "missing-refs": "{root} needs its own base and target references.",
+    "missing-patch": "{root} no longer has this turn’s retained patch."
   },
   "scopePicker": {
     "label": "Diff scope: {scope}",

@@ -11,11 +11,10 @@
  * read as "nothing changed". Two independent reasons a body can come back
  * empty, neither of which is an error:
  *
- *  - `build_patch_set` (crates/cognia-task-workspace/src/ledger.rs) stores
- *    hunks ONLY for a `modified`, non-binary, regular file. A created,
- *    deleted, renamed, binary or symlink change is recorded with `hunks: []`.
- *  - `read_patch_diff` concatenates exactly those stored hunks, so for such a
- *    file it returns `""` — a success, not a failure.
+ *  - Binary, symlink and metadata-only changes have no textual hunks. Older
+ *    retained created/deleted/renamed records can also lack stored hunks.
+ *  - Textual reads may reconstruct old records from retained blobs, while
+ *    metadata-only changes still correctly return no textual body.
  *
  * So availability is decided here from METADATA, before any request is made,
  * and every non-`available` reason is a label the surface renders in place of
@@ -31,7 +30,7 @@ export type ChangeDiffAvailability =
   | "binary"
   /** A symlink change: the target moved, there is no line diff. */
   | "symlink"
-  /** Created / deleted / renamed — real, but the ledger keeps no hunks for it. */
+  /** A metadata-only or legacy change without stored textual hunks. */
   | "noTextDiff"
   /** A credential-shaped path. Never requested from this surface. */
   | "sensitive"
@@ -130,7 +129,13 @@ function availabilityOf(file: PatchSet["files"][number]): ChangeDiffAvailability
   if (isSensitiveResourcePath(file.path)) return "sensitive"
   if (file.resourceKind === "symlink") return "symlink"
   if (file.binary) return "binary"
-  return file.hunks.length > 0 ? "available" : "noTextDiff"
+  // Older text records can be reconstructed by the Host from retained blobs.
+  // A mode-only change has equal hashes and still has no textual body.
+  const retainedText =
+    file.resourceKind === "file" &&
+    file.beforeHash !== file.afterHash &&
+    Boolean(file.beforeHash || file.afterHash)
+  return file.hunks.length > 0 || retainedText ? "available" : "noTextDiff"
 }
 
 export function projectPatchSetChanges(patch: PatchSet): RunChangeSet {

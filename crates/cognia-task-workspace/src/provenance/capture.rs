@@ -304,7 +304,8 @@ pub fn run_source(store: &mut WorkspaceStore, root: &ProvenanceRoot, patch: &Pat
     let source_key = serde_json::to_vec(&(&root.root_id, &run.run_id, receipt)).map_err(|e| e.to_string())?;
     let source_id = format!("run:{}", content_hash(&source_key));
     store.provenance().upsert_source(&ProvenanceSource {
-        provenance_id: source_id.clone(), root_id: root.root_id.clone(), origin: ProvenanceOrigin::Agent,
+        provenance_id: source_id.clone(), root_id: root.root_id.clone(),
+        origin: if run.isolation_kind == crate::IsolationKind::Observed && receipt.is_none() { ProvenanceOrigin::Unknown } else { ProvenanceOrigin::Agent },
         session_id: Some(task.session_id), turn_id: run.turn_id, task_id: Some(run.task_id), run_id: Some(run.run_id),
         agent_id: Some(run.agent_id), execution_run_id: run.execution_run_id, trace_id: run.trace_id,
         assistant_message_id: None, tool_call_id: receipt.map(str::to_string), event_id: None,
@@ -416,6 +417,34 @@ fn restore_map(saved: &[u8], saved_segments: &[Segment], current: &[u8], current
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn observed_run_source_does_not_claim_unproven_agent_ownership() {
+        let data = TempDir::new().unwrap();
+        let workspace = TempDir::new().unwrap();
+        let mut store = WorkspaceStore::open(data.path(), 1024 * 1024).unwrap();
+        let task: crate::TaskWorkspace = serde_json::from_value(serde_json::json!({
+            "taskId":"local-task", "sessionId":"session", "workspaceRoot":workspace.path().to_string_lossy(),
+            "state":"active", "revision":0, "createdAt":1, "expiresAt":100, "pinned":false
+        })).unwrap();
+        let run: crate::TaskRun = serde_json::from_value(serde_json::json!({
+            "runId":"local-run", "taskId":"local-task", "parentRunId":null,
+            "agentId":"agent", "agentKind":"test", "executionRoot":workspace.path().to_string_lossy(),
+            "isolationKind":"observed", "isolationRef":null, "baselineRevision":0,
+            "state":"ready", "createdAt":1, "settledAt":2
+        })).unwrap();
+        store.put_task(&task).unwrap();
+        store.put_run(&run, &serde_json::json!({})).unwrap();
+        let patch: PatchSet = serde_json::from_value(serde_json::json!({
+            "patchId":"local-patch", "taskId":"local-task", "runId":"local-run", "state":"applied",
+            "baseRevision":0, "appliedRevision":1, "files":[], "appliedFiles":[], "createdAt":1
+        })).unwrap();
+        let root = working_root(&mut store, workspace.path()).unwrap();
+        let unproven = run_source(&mut store, &root, &patch, None).unwrap();
+        assert_eq!(store.provenance().source(&root.root_id, &unproven).unwrap().unwrap().origin, ProvenanceOrigin::Unknown);
+        let confirmed = run_source(&mut store, &root, &patch, Some("trusted-receipt")).unwrap();
+        assert_eq!(store.provenance().source(&root.root_id, &confirmed).unwrap().unwrap().origin, ProvenanceOrigin::Agent);
+    }
 
     #[test]
     fn provenance_undo_preserves_later_agent_and_unobserved_human_lines() {

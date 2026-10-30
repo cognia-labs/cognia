@@ -327,9 +327,16 @@
       "unavailable": {
         "missing-run": "This turn has no recorded changes to show.",
         "missing-commit": "Pick a commit to review.",
-        "missing-refs": "Pick a branch to compare against."
+        "missing-refs": "Pick a branch to compare against.",
+        "missing-patch": "This turn’s retained changes are unavailable on its execution Host."
       },
-      "loading": "Loading changes…"
+      "loading": "Loading changes…",
+      "diffUnavailable": {
+        "binary": "Binary file; no text diff is available.",
+        "symlink": "Symbolic link change; no text diff is available.",
+        "sensitive": "Sensitive file content is withheld.",
+        "noTextDiff": "Metadata or rename change; there are no textual hunks to display."
+      }
     }
   },
   "compareVersion": "Compare this version",

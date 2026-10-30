@@ -49,24 +49,22 @@ pub fn build_patch_set(
 ) -> Result<PatchSet, String> {
     let mut files = Vec::with_capacity(changes.len());
     for change in changes {
-        let hunks = if change.kind == ChangeKind::Modified
-            && !change.binary
-            && change.resource_kind == ResourceKind::File
-        {
+        let (hunks, binary) = if !change.binary && change.resource_kind == ResourceKind::File {
             build_hunks(change, store, scratch_root, now)?
         } else {
-            Vec::new()
+            (Vec::new(), change.binary)
         };
         files.push(PatchFile {
             path: change.path.clone(),
             old_path: change.old_path.clone(),
             kind: change.kind,
+            origin: change.origin,
             resource_kind: change.resource_kind,
             before_hash: change.before_hash.clone(),
             after_hash: change.hash.clone(),
             before_mode: change.before_mode,
             after_mode: change.after_mode,
-            binary: change.binary,
+            binary,
             hunks,
         });
     }
@@ -454,7 +452,7 @@ fn prepare_capture(context: PreflightContext<'_>, patch: &PatchSet,
                 let current_segments = capture::map_before(store, &root, old_path.as_deref().unwrap_or(&plan.path), current, now)?;
                 let ids = selection.iter().find(|s| s.path == file.path).map(|s| s.hunk_ids.as_slice()).unwrap_or_default();
                 let patches = if file.hunks.is_empty() && !file.binary {
-                    vec![unified_diff(scratch, &file.path, &baseline, output.as_deref().unwrap_or_default())?]
+                    vec![unified_diff(scratch, &file.path, file.before_hash.as_ref().map(|_| baseline.as_slice()), output.as_deref())?]
                 } else {
                     file.hunks.iter().filter(|h| ids.is_empty() || ids.contains(&h.id)).map(|h|
                         store.get_blob(&h.forward_patch_hash, now).and_then(|b| String::from_utf8(b).map_err(|e| e.to_string()))).collect::<Result<Vec<_>, _>>()?
@@ -596,14 +594,25 @@ fn preflight_patch_file(
         let base_payload = base
             .as_ref()
             .ok_or_else(|| format!("hunk selection missing baseline: {}", file.path))?;
-        let bytes = apply_selected_hunks(
+        // Old releases normalized scratch paths throughout stored patch text.
+        // Before applying any subset, prove that the complete retained hunk
+        // set reconstructs the authoritative captured bytes. A corrupt legacy
+        // hunk must not become a successful but incorrect partial write.
+        let all_ids = file.hunks.iter().map(|hunk| hunk.id.clone()).collect::<Vec<_>>();
+        let complete = apply_selected_hunks(
             context.scratch_root,
             file,
-            hunk_ids,
+            &all_ids,
             &base_payload.bytes,
             context.store,
             context.now,
-        )?;
+        ).map_err(|error| format!("stored text patch integrity failure for {}: {error}", file.path))?;
+        if desired.as_ref().is_none_or(|desired| desired.bytes != complete) {
+            return Err(format!("stored text patch does not match retained content: {}", file.path));
+        }
+        let bytes = if hunk_ids == all_ids { complete } else {
+            apply_selected_hunks(context.scratch_root, file, hunk_ids, &base_payload.bytes, context.store, context.now)?
+        };
         desired = Some(EntryPayload {
             bytes,
             kind: ResourceKind::File,
@@ -631,24 +640,131 @@ fn preflight_patch_file(
     Ok(())
 }
 
+/// Observe an already-written Local directory without applying bytes again.
+/// Its inverse is the captured baseline, never the post-run bytes currently
+/// on disk. The shared undo engine then merges against later local edits.
+pub(crate) fn mark_observed_applied(
+    patch: &mut PatchSet,
+    revision: u64,
+    baseline: &crate::snapshot::WorkspaceSnapshot,
+) {
+    patch.applied_files.clear();
+    for file in &patch.files {
+        if let Some(old_path) = file
+            .old_path
+            .as_ref()
+            .filter(|_| file.kind == ChangeKind::Renamed)
+        {
+            patch.applied_files.push(AppliedFile {
+                path: old_path.clone(),
+                before_apply_hash: file.before_hash.clone(),
+                after_apply_hash: None,
+                before_kind: baseline
+                    .entries
+                    .get(old_path)
+                    .map(|entry| match entry.kind {
+                        crate::snapshot::EntryKind::File => ResourceKind::File,
+                        crate::snapshot::EntryKind::Symlink => ResourceKind::Symlink,
+                    }),
+                after_kind: None,
+                before_mode: file.before_mode,
+                after_mode: None,
+                binary: file.binary,
+            });
+        }
+        let renamed = file.kind == ChangeKind::Renamed;
+        patch.applied_files.push(AppliedFile {
+            path: file.path.clone(),
+            before_apply_hash: if renamed {
+                None
+            } else {
+                file.before_hash.clone()
+            },
+            after_apply_hash: file.after_hash.clone(),
+            before_kind: (!renamed)
+                .then(|| baseline.entries.get(&file.path))
+                .flatten()
+                .map(|entry| match entry.kind {
+                    crate::snapshot::EntryKind::File => ResourceKind::File,
+                    crate::snapshot::EntryKind::Symlink => ResourceKind::Symlink,
+                }),
+            after_kind: file.after_hash.as_ref().map(|_| file.resource_kind),
+            before_mode: if renamed { None } else { file.before_mode },
+            after_mode: file.after_mode,
+            binary: file.binary,
+        });
+    }
+    patch.state = PatchState::Applied;
+    patch.applied_revision = Some(revision);
+    patch.applied_selection.clear();
+    patch.applied_selection_known = true;
+}
+/// Persist the already-observed operation through the same intent/verification
+/// path as an apply. No bytes are written, and unproven line origins remain
+/// unknown. This gives Undo the durable before-map it uses for later edits.
+pub(crate) fn record_observed_applied(
+    store: &mut WorkspaceStore,
+    patch: &PatchSet,
+    workspace_root: &Path,
+    now: i64,
+) -> Result<(), String> {
+    use crate::provenance::{capture, AdoptionState};
+    let root = capture::working_root(store, workspace_root)?;
+    let source = capture::run_source(store, &root, patch, None)?;
+    let mut paths = Vec::with_capacity(patch.files.len());
+    for file in &patch.files {
+        paths.push(capture::CapturePath {
+            path: file.path.clone(), old_path: file.old_path.clone(),
+            before: file.before_hash.as_deref().map(|hash| store.get_blob(hash, now)).transpose()?,
+            after: file.after_hash.as_deref().map(|hash| store.get_blob(hash, now)).transpose()?,
+            segments: None,
+        });
+    }
+    let key = format!("observe:{}:{}:{}", patch.run_id, patch.created_at, patch.applied_revision.unwrap_or_default());
+    capture::prepare(store, &root, capture::CaptureOperation { key: &key, kind: "apply", now },
+        &paths, &capture::adoption_units(patch, &source, &[], AdoptionState::Applied),
+        capture::Verification::Disk { root: root.canonical_root.clone() }, Some(patch))?;
+    capture::record_applied_patch(store, &key)
+}
+
 fn build_hunks(
     change: &ResourceChange,
     store: &mut WorkspaceStore,
     scratch_root: &Path,
     now: i64,
-) -> Result<Vec<PatchHunk>, String> {
-    let before_hash = change
+) -> Result<(Vec<PatchHunk>, bool), String> {
+    let before = change
         .before_hash
         .as_deref()
-        .ok_or_else(|| format!("modified resource missing before hash: {}", change.path))?;
-    let after_hash = change
+        .map(|hash| store.get_blob(hash, now))
+        .transpose()?;
+    let after = change
         .hash
         .as_deref()
-        .ok_or_else(|| format!("modified resource missing after hash: {}", change.path))?;
-    let before = store.get_blob(before_hash, now)?;
-    let after = store.get_blob(after_hash, now)?;
-    let forward = unified_diff(scratch_root, &change.path, &before, &after)?;
-    let inverse = unified_diff(scratch_root, &change.path, &after, &before)?;
+        .map(|hash| store.get_blob(hash, now))
+        .transpose()?;
+    // Git-backed baselines may carry extension-only hints. The complete
+    // retained payloads decide whether generating a UTF-8 patch is safe.
+    if before.as_deref().is_some_and(detect_binary) || after.as_deref().is_some_and(detect_binary) {
+        return Ok((Vec::new(), true));
+    }
+    // Modes, empty-file creation/deletion, and pure renames are still real
+    // changes, but cannot have textual hunks when their bytes are identical.
+    if before.as_deref().unwrap_or_default() == after.as_deref().unwrap_or_default() {
+        return Ok((Vec::new(), false));
+    }
+    let forward = unified_diff(
+        scratch_root,
+        &change.path,
+        before.as_deref(),
+        after.as_deref(),
+    )?;
+    let inverse = unified_diff(
+        scratch_root,
+        &change.path,
+        after.as_deref(),
+        before.as_deref(),
+    )?;
     let forward = split_patch_hunks(&forward)?;
     let inverse = split_patch_hunks(&inverse)?;
     if forward.len() != inverse.len() {
@@ -670,14 +786,19 @@ fn build_hunks(
             deletions,
         });
     }
-    Ok(hunks)
+    Ok((hunks, false))
 }
 
 fn patch_line_counts(patch: &str) -> (u32, u32) {
     let mut additions = 0;
     let mut deletions = 0;
+    let mut in_hunk = false;
     for line in patch.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
+        if line.starts_with("@@ ") {
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
             continue;
         }
         if line.starts_with('+') {
@@ -689,11 +810,11 @@ fn patch_line_counts(patch: &str) -> (u32, u32) {
     (additions, deletions)
 }
 
-fn unified_diff(
+pub(crate) fn unified_diff(
     scratch_root: &Path,
     rel_path: &str,
-    before: &[u8],
-    after: &[u8],
+    before: Option<&[u8]>,
+    after: Option<&[u8]>,
 ) -> Result<String, String> {
     let scratch = scratch_root.join(format!("diff-{}", Uuid::now_v7()));
     let old_path = scratch.join("old").join(rel_path);
@@ -704,8 +825,10 @@ fn unified_diff(
     if let Some(parent) = new_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("create diff new: {error}"))?;
     }
-    fs::write(&old_path, before).map_err(|error| format!("write diff old: {error}"))?;
-    fs::write(&new_path, after).map_err(|error| format!("write diff new: {error}"))?;
+    fs::write(&old_path, before.unwrap_or_default())
+        .map_err(|error| format!("write diff old: {error}"))?;
+    fs::write(&new_path, after.unwrap_or_default())
+        .map_err(|error| format!("write diff new: {error}"))?;
     let old_arg = Path::new("old").join(rel_path);
     let new_arg = Path::new("new").join(rel_path);
     let output = Command::new("git")
@@ -725,7 +848,130 @@ fn unified_diff(
     }
     let patch = String::from_utf8(output.stdout)
         .map_err(|_| format!("git diff returned non-UTF-8 patch for {rel_path}"))?;
-    Ok(patch.replace("a/old/", "a/").replace("b/new/", "b/"))
+    // Rewrite structural paths only. Replacing scratch prefixes throughout
+    // the patch also rewrites arbitrary source lines and corrupts the stored
+    // forward/inverse patches consumed by partial application.
+    let mut normalized = String::new();
+    let mut in_hunk = false;
+    for line in patch.split_inclusive('\n') {
+        if line.starts_with("@@ ") {
+            in_hunk = true;
+        }
+        if in_hunk {
+            normalized.push_str(line);
+        } else if line.starts_with("diff --git ") {
+            normalized.push_str(&format!(
+                "diff --git {} {}\n",
+                git_quote_path(&format!("a/{rel_path}")),
+                git_quote_path(&format!("b/{rel_path}"))
+            ));
+        } else if line.starts_with("--- ") {
+            normalized.push_str(&format!(
+                "--- {}\n",
+                before.map_or_else(
+                    || "/dev/null".into(),
+                    |_| git_quote_path(&format!("a/{rel_path}"))
+                )
+            ));
+        } else if line.starts_with("+++ ") {
+            normalized.push_str(&format!(
+                "+++ {}\n",
+                after.map_or_else(
+                    || "/dev/null".into(),
+                    |_| git_quote_path(&format!("b/{rel_path}"))
+                )
+            ));
+        } else {
+            normalized.push_str(line);
+        }
+    }
+    Ok(normalized)
+}
+
+/// Quote file names using Git's C-style path grammar, including control and
+/// non-ASCII bytes. The body of a patch must never pass through this function.
+fn git_quote_path(path: &str) -> String {
+    if path
+        .bytes()
+        .all(|byte| (b'!'..=b'~').contains(&byte) && byte != b'"' && byte != b'\\')
+    {
+        return path.to_string();
+    }
+    let mut quoted = String::from("\"");
+    for byte in path.bytes() {
+        match byte {
+            b'"' => quoted.push_str("\\\""),
+            b'\\' => quoted.push_str("\\\\"),
+            b'\t' => quoted.push_str("\\t"),
+            b'\n' => quoted.push_str("\\n"),
+            b'\r' => quoted.push_str("\\r"),
+            b' '..=b'~' => quoted.push(char::from(byte)),
+            _ => quoted.push_str(&format!("\\{byte:03o}")),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// A single canonical file header for the read surface. Stored hunks keep
+/// their own headers so each remains independently applicable.
+pub(crate) fn file_diff_header(file: &PatchFile) -> String {
+    file_diff_header_with_body(file, !file.hunks.is_empty())
+}
+
+pub(crate) fn file_diff_header_with_body(file: &PatchFile, has_body: bool) -> String {
+    let old_path = file.old_path.as_deref().unwrap_or(&file.path);
+    let old = git_quote_path(&format!("a/{old_path}"));
+    let new = git_quote_path(&format!("b/{}", file.path));
+    let mut header = format!("diff --git {old} {new}\n");
+    match file.kind {
+        ChangeKind::Created => header.push_str(&format!(
+            "new file mode {:06o}\n",
+            file.after_mode.unwrap_or(0o100644)
+        )),
+        ChangeKind::Deleted => header.push_str(&format!(
+            "deleted file mode {:06o}\n",
+            file.before_mode.unwrap_or(0o100644)
+        )),
+        ChangeKind::Renamed => {
+            if file.before_hash == file.after_hash {
+                header.push_str("similarity index 100%\n");
+            }
+            header.push_str(&format!(
+                "rename from {}\nrename to {}\n",
+                git_quote_path(old_path),
+                git_quote_path(&file.path)
+            ));
+        }
+        ChangeKind::Modified => {}
+    }
+    if file.kind != ChangeKind::Created
+        && file.kind != ChangeKind::Deleted
+        && file.before_mode != file.after_mode
+    {
+        if let Some(mode) = file.before_mode {
+            header.push_str(&format!("old mode {mode:06o}\n"));
+        }
+        if let Some(mode) = file.after_mode {
+            header.push_str(&format!("new mode {mode:06o}\n"));
+        }
+    }
+    if has_body {
+        header.push_str(&format!(
+            "--- {}\n+++ {}\n",
+            if file.kind == ChangeKind::Created {
+                "/dev/null"
+            } else {
+                &old
+            },
+            if file.kind == ChangeKind::Deleted {
+                "/dev/null"
+            } else {
+                &new
+            }
+        ));
+    }
+    header
 }
 
 fn split_patch_hunks(patch: &str) -> Result<Vec<(String, String)>, String> {
@@ -1136,6 +1382,20 @@ fn create_symlink(path: &Path, bytes: &[u8]) -> Result<(), String> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn turn_diff_payload_shaped_like_headers_is_counted_as_content() {
+        let scratch = TempDir::new().unwrap();
+        let patch = unified_diff(
+            scratch.path(),
+            "notes.txt",
+            Some(b"-- old body\n"),
+            Some(b"++ new body\n"),
+        )
+        .unwrap();
+        assert_eq!(patch_line_counts(&patch), (1, 1));
+        assert!(patch.contains("--- old body\n+++ new body\n"));
+    }
 
     #[test]
     fn provenance_apply_failed_compensation_never_adopts_residual_output() {

@@ -12,10 +12,12 @@ import {
   closeApprovalScopeForTurn,
   openWorkspaceApprovalScope,
 } from "./user-action"
+import { captureTaskWorkspaceOrigin } from "./origin"
 import type {
   ResourceChange,
   TaskRun,
   WorkspaceBundle,
+  TaskWorkspaceOrigin,
   WorkspaceBundleTurnLease as HostWorkspaceBundleTurnLease,
 } from "./types"
 
@@ -46,7 +48,8 @@ export interface WorkspaceBundleTurnLease extends TaskWorkspaceRunLease {
 export async function openWorkspaceBundleTurnLease(
   bundle: Pick<WorkspaceBundle, "bundleId" | "leases">,
   primaryLogicalRootId: string,
-  input: BeginTaskWorkspaceTurn
+  input: BeginTaskWorkspaceTurn,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<WorkspaceBundleTurnLease | null> {
   // A turn's whole workspace lifecycle is `approval: "interactive"` — begin,
   // every tool event, settle. From a companion each was refused with "a current
@@ -54,19 +57,27 @@ export async function openWorkspaceBundleTurnLease(
   // all. One standing approval covers the turn and is dropped the moment it
   // settles: this is the seam every caller already funnels through, so the
   // lifetime of the approval is exactly the lifetime of the working copy.
-  const approval = await openWorkspaceApprovalScope()
+  const approval = await openWorkspaceApprovalScope(undefined, origin)
   let lease: Awaited<ReturnType<typeof beginWorkspaceBundleTurn>>
   try {
-    lease = await beginWorkspaceBundleTurn(bundle.bundleId, {
-      primaryLogicalRootId,
-      run: input,
-    })
+    lease = await beginWorkspaceBundleTurn(
+      bundle.bundleId,
+      {
+        primaryLogicalRootId,
+        run: input,
+      },
+      origin
+    )
   } catch (error) {
     // Reconciled while the approval scope is still open: the abort it may
     // issue is an interactive workspace command like the begin itself.
-    await reconcileUnansweredBegin(bundle.bundleId, primaryLogicalRootId, input, error).catch(
-      () => undefined
-    )
+    await reconcileUnansweredBegin(
+      bundle.bundleId,
+      primaryLogicalRootId,
+      input,
+      error,
+      origin
+    ).catch(() => undefined)
     approval?.close()
     throw error
   }
@@ -84,8 +95,8 @@ export async function openWorkspaceBundleTurnLease(
     logicalRootIds.includes(primaryLogicalRootId)
   )?.run
   if (!primaryRun) {
-    await abortWorkspaceBundleTurn(lease.bundleTurnId).catch(() => undefined)
-    closeApprovalScopeForTurn(lease.bundleTurnId)
+    await abortWorkspaceBundleTurn(lease.bundleTurnId, origin).catch(() => undefined)
+    closeApprovalScopeForTurn(lease.bundleTurnId, origin)
     return null
   }
 
@@ -105,19 +116,21 @@ export async function openWorkspaceBundleTurnLease(
   const release = <T>(promise: Promise<T>): Promise<T> =>
     promise
       .catch((error: unknown) => {
-        releaseOpenBundleTurn(lease.bundleTurnId)
+        releaseOpenBundleTurn(lease.bundleTurnId, origin)
         throw error
       })
-      .finally(() => closeApprovalScopeForTurn(lease.bundleTurnId))
+      .finally(() => closeApprovalScopeForTurn(lease.bundleTurnId, origin))
   const settle = (finalState: "ready" | "failed" | "cancelled" = "ready") => {
     completion ??= release(
-      settleWorkspaceBundleTurn(lease.bundleTurnId, finalState).then((outcome) => outcome.resources)
+      settleWorkspaceBundleTurn(lease.bundleTurnId, finalState, origin).then(
+        (outcome) => outcome.resources
+      )
     )
     return completion
   }
   const abort = () => {
     completion ??= release(
-      abortWorkspaceBundleTurn(lease.bundleTurnId).then((outcome) => outcome.resources)
+      abortWorkspaceBundleTurn(lease.bundleTurnId, origin).then((outcome) => outcome.resources)
     )
     return completion
   }
@@ -183,22 +196,26 @@ async function reconcileUnansweredBegin(
   bundleId: string,
   primaryLogicalRootId: string,
   input: BeginTaskWorkspaceTurn,
-  error: unknown
+  error: unknown,
+  origin: TaskWorkspaceOrigin
 ): Promise<void> {
   const turnId = input.turnId?.trim()
   if (!turnId || isWorkspaceBusyRefusal(error)) return
   const message = error instanceof Error ? error.message : String(error)
   if (TURN_IDENTITY_CONFLICT.test(message)) return
-  const turn = await readTurnBack(turnId)
+  const turn = await readTurnBack(turnId, origin)
   if (!turn || turn.settledAt !== null) return
   if (!(await isThisBeginRequest(turn, bundleId, primaryLogicalRootId, input, turnId))) return
-  await abortBundleTurnIfUndriven(turnId)
+  await abortBundleTurnIfUndriven(turnId, origin)
 }
 
-async function readTurnBack(turnId: string): Promise<HostWorkspaceBundleTurnLease | null> {
+async function readTurnBack(
+  turnId: string,
+  origin: TaskWorkspaceOrigin
+): Promise<HostWorkspaceBundleTurnLease | null> {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await getWorkspaceBundleTurn(turnId)
+      return await getWorkspaceBundleTurn(turnId, origin)
     } catch {
       const delay = RECONCILE_READ_RETRY_DELAYS_MS[attempt]
       if (delay === undefined) return null

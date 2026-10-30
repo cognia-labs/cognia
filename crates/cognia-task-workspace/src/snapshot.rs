@@ -77,6 +77,10 @@ pub struct WorkspaceSnapshot {
     /// deserializing as fully blob-backed.
     #[serde(default)]
     pub base: SnapshotBase,
+    /// Helper-owned executors must positively settle before crash recovery may
+    /// capture their final bytes. Persisted with the initial run publication.
+    #[serde(default)]
+    pub requires_executor_stop_confirmation: bool,
 }
 
 #[cfg(test)]
@@ -184,7 +188,10 @@ pub(crate) fn capture_with_budget(
         .git_exclude(!policy.self_contained)
         .git_global(!policy.self_contained)
         .ignore(!policy.self_contained)
-        .parents(!policy.self_contained)
+        // The selected workspace is its own capture boundary. An ancestor's
+        // .gitignore (for example, a project stored under .cache/) must not
+        // erase the complete Local run from its own history.
+        .parents(false)
         .require_git(false)
         .follow_links(false);
 
@@ -256,6 +263,7 @@ pub(crate) fn capture_with_budget(
             entries,
             generated_entries,
             base: SnapshotBase::Blobs,
+            requires_executor_stop_confirmation: false,
         },
         blobs,
     ))
@@ -557,6 +565,19 @@ fn capture_git_backed(
     policy: &ResourceTrackingPolicy,
     budget: &mut Option<CaptureBudget>,
 ) -> Result<Option<GitBackedCapture>, String> {
+    let Some(top_level) =
+        capture_git_stdout(canonical_root, &["rev-parse", "--show-toplevel"], budget)?
+    else {
+        return Ok(None);
+    };
+    let top_level = PathBuf::from(String::from_utf8_lossy(&top_level).trim())
+        .canonicalize()
+        .ok();
+    if top_level.as_deref() != Some(canonical_root) {
+        // Git's tree and status use repository scope. A selected subdirectory
+        // needs a filesystem baseline scoped to that directory instead.
+        return Ok(None);
+    }
     let Some(head) = capture_git_stdout(canonical_root, &["rev-parse", "HEAD"], budget)? else {
         return Ok(None);
     };
@@ -702,6 +723,7 @@ fn capture_git_backed(
             entries,
             generated_entries,
             base: SnapshotBase::GitCommit { commit },
+            requires_executor_stop_confirmation: false,
         },
         blobs,
     )))
@@ -1234,8 +1256,7 @@ pub fn materialize(
 }
 
 pub fn detect_binary(bytes: &[u8]) -> bool {
-    let sample = &bytes[..bytes.len().min(8192)];
-    sample.contains(&0) || std::str::from_utf8(sample).is_err()
+    bytes.contains(&0) || std::str::from_utf8(bytes).is_err()
 }
 
 #[cfg(unix)]
@@ -1276,6 +1297,17 @@ fn create_symlink(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn binary_detection_checks_complete_payload_without_splitting_utf8() {
+        let mut bytes = vec![b'a'; 9000];
+        bytes.push(0xff);
+        assert!(super::detect_binary(&bytes));
+        bytes.pop();
+        bytes.push(0);
+        assert!(super::detect_binary(&bytes));
+        let text = format!("{}中\n", "a".repeat(8191));
+        assert!(!super::detect_binary(text.as_bytes()));
+    }
     use super::*;
     use std::fs;
     #[cfg(unix)]
@@ -1541,6 +1573,28 @@ mod tests {
             "a clean worktree must not copy content Git already holds, got {:?}",
             blobs.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn selected_workspace_does_not_inherit_ancestor_git_or_ignore_scope() {
+        let parent = git_fixture(|root| {
+            fs::write(root.join(".gitignore"), ".cache/\n").unwrap();
+            fs::create_dir_all(root.join(".cache/local")).unwrap();
+            fs::write(root.join(".cache/local/story.txt"), "local bytes\n").unwrap();
+            fs::write(root.join(".cache/local/.gitignore"), "private.txt\n").unwrap();
+            fs::write(root.join(".cache/local/private.txt"), "excluded\n").unwrap();
+        });
+        let selected = parent.path().join(".cache/local");
+        for ancestor_has_git in [true, false] {
+            if !ancestor_has_git {
+                fs::rename(parent.path().join(".git"), parent.path().join("saved-git")).unwrap();
+            }
+            let (snapshot, blobs) = capture(&selected).unwrap();
+            assert_eq!(snapshot.base, SnapshotBase::Blobs);
+            assert_eq!(blobs[&snapshot.entries["story.txt"].hash], b"local bytes\n");
+            assert!(!snapshot.entries.contains_key("private.txt"));
+            assert!(!snapshot.entries.contains_key("tracked.txt"));
+        }
     }
 
     /// Entry hashes must be Git blob ids, not a private digest — `reconcile`

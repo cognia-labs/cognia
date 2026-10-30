@@ -27,6 +27,7 @@
  */
 
 import type { UIMessage } from "ai"
+import { publishChatLifecycleEvent } from "./lifecycle-events"
 import type { ChatSession } from "@cognia/agent-config-types"
 import { getDb } from "@/lib/db/schema"
 import { assertSessionWritable } from "@/lib/chat/session-write-guard"
@@ -396,5 +397,6 @@ export async function branchSessionAtMessage(params: BranchSessionParams): Promi
     throw error
   }
 
+  publishChatLifecycleEvent({ type: "session-created", sessionId: child.id })
   return child
 }

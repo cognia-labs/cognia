@@ -128,6 +128,25 @@ export function exitCodeForError(error: AgentStructuredError | undefined): Agent
 
 export type AgentRunStatus = "completed" | "failed" | "cancelled" | "timeout"
 
+export type AgentWorkspaceCaptureUnavailableReason =
+  | "not-started"
+  | "persistence-disabled"
+  | "remote-filesystem"
+  | "unsupported-runtime"
+  | "helper-unavailable"
+  | "capture-failed"
+
+/** A bounded pointer into the existing local Task Workspace ledger, never file bodies. */
+export type AgentWorkspaceCaptureReceipt =
+  | { available: true; taskId: string; runId: string; workspaceRoot: string }
+  | {
+      available: false
+      reason: AgentWorkspaceCaptureUnavailableReason
+      taskId?: string
+      runId?: string
+      workspaceRoot?: string
+    }
+
 export interface AgentRunUsage {
   inputTokens?: number
   outputTokens?: number
@@ -193,6 +212,8 @@ export interface AgentRunResultV1 {
   capabilities: AgentCapabilityId[]
 
   session: AgentSessionPersistence
+  /** Local filesystem capture availability and retained ledger identity. */
+  workspaceCapture?: AgentWorkspaceCaptureReceipt
   /** Present only when this run resumed or imported prior history. */
   resume?: AgentResumeReport
 
@@ -232,6 +253,38 @@ export function validateAgentRunResult(value: unknown): string[] {
     errors.push("session.persisted must be a boolean")
   } else if (session.persisted && !isNonEmptyString(session.sessionDir)) {
     errors.push("session.sessionDir is required when persisted")
+  }
+
+  if (value.workspaceCapture !== undefined) {
+    const capture = value.workspaceCapture
+    if (!isRecord(capture) || typeof capture.available !== "boolean") {
+      errors.push("workspaceCapture.available must be a boolean")
+    } else {
+      const reasons: readonly string[] = [
+        "not-started",
+        "persistence-disabled",
+        "remote-filesystem",
+        "unsupported-runtime",
+        "helper-unavailable",
+        "capture-failed",
+      ]
+      if (!capture.available && !reasons.includes(capture.reason as string))
+        errors.push("workspaceCapture.reason must be a known unavailable reason")
+      for (const key of ["taskId", "runId", "workspaceRoot"] as const) {
+        const field = capture[key]
+        if (
+          (capture.available || field !== undefined) &&
+          (!isNonEmptyString(field) || field.length > (key === "workspaceRoot" ? 32_768 : 512))
+        )
+          errors.push(`workspaceCapture.${key} must be a bounded non-empty string`)
+      }
+      if (
+        Object.keys(capture).some(
+          (key) => !["available", "reason", "taskId", "runId", "workspaceRoot"].includes(key)
+        )
+      )
+        errors.push("workspaceCapture must contain only ledger receipt fields")
+    }
   }
 
   if (value.resume !== undefined) {

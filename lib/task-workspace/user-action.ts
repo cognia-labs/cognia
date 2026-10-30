@@ -23,21 +23,8 @@
  * shape for task-workspace, sharing `resolveUserActionAvailability` so the two
  * planes cannot answer the same lease question differently.
  *
- * # Known limitation: a desktop driving a remote host
- *
- * This skips the lease whenever the runtime snapshot has no client target,
- * which covers the Tauri desktop and the headless brain. That is correct for a
- * desktop running against itself and WRONG for a desktop driving another
- * Cognia host through `RoutingTransport`, which does demand a lease.
- *
- * It is not fixable here. `host_admin_lease_issue` is `target: "host-admin"`,
- * and `RoutingTransport.call` rejects that target outright with "requires an
- * explicit host-admin execution context". A desktop therefore cannot mint a
- * lease for the host it is driving through the ordinary transport at all.
- * Minting one locally would produce a token the remote host will not accept,
- * which is worse than the current refusal because it looks like it worked.
- * Closing this needs a host-admin execution context on the routing plane,
- * which is a change to the routing layer rather than to either caller.
+ * Remote approvals retain an explicit Host transport, including on a desktop
+ * whose runtime snapshot has no companion target.
  */
 
 import { transport as baseTransport } from "@/lib/tauri"
@@ -48,10 +35,18 @@ import {
   resolveUserActionAvailability,
   type OperationAvailability,
 } from "@/lib/runtime/operation-availability"
+import {
+  captureTaskWorkspaceOrigin,
+  openTaskWorkspaceOrigin,
+  sameTaskWorkspaceOrigin,
+  type TaskWorkspaceAuthority,
+} from "./origin"
+import type { TaskWorkspaceOrigin } from "./types"
 
 interface PendingApproval {
   command: string
   token: string
+  authority: TaskWorkspaceAuthority
 }
 
 /**
@@ -72,9 +67,13 @@ const pendingApprovals: PendingApproval[] = []
  */
 export function applyWorkspaceApproval(
   command: string,
-  args?: unknown
+  args?: unknown,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Record<string, unknown> | undefined {
-  const index = pendingApprovals.findIndex((approval) => approval.command === command)
+  const index = pendingApprovals.findIndex(
+    (approval) =>
+      approval.command === command && sameTaskWorkspaceOrigin(approval.authority.origin, origin)
+  )
   if (index < 0) return args as Record<string, unknown> | undefined
   const [approval] = pendingApprovals.splice(index, 1)
   return { ...((args as Record<string, unknown>) ?? {}), adminLease: approval.token }
@@ -104,7 +103,8 @@ export class WorkspaceOperationUnavailableError extends Error {
 /** Bind one exact 120-second approval lease to a user-triggered workspace mutation. */
 export async function runWorkspaceUserAction<T>(
   command: string,
-  operation: () => Promise<T>
+  operation: () => Promise<T>,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<T> {
   const snapshot = getRuntimeSnapshot()
 
@@ -114,10 +114,10 @@ export async function runWorkspaceUserAction<T>(
   // Deliberately not `isTauri()`, which the git plane uses. `isTauri()` is also
   // false in the headless host, so that check would have sent a headless run
   // off to mint a lease from a host that does not exist.
-  if (!snapshot.target) return operation()
+  if (!snapshot.target && origin.kind === "local") return operation()
 
   const availability = resolveUserActionAvailability(snapshot, command)
-  if (availability.state !== "available") {
+  if (snapshot.target && availability.state !== "available") {
     // Refuse before the call. Issuing it would spend a round trip to learn
     // what the manifest already said, and return a host error that names the
     // wire failure instead of the missing grant.
@@ -127,21 +127,25 @@ export async function runWorkspaceUserAction<T>(
   // A standalone client runs against its own in-browser executor, and a
   // non-interactive command needs no approval. Only the interactive-over-a-
   // companion pair actually requires a lease.
-  if (
-    snapshot.target.kind !== "companion" ||
-    getCommandDescriptor(command)?.approval !== "interactive"
-  ) {
+  if (origin.kind !== "remote" || getCommandDescriptor(command)?.approval !== "interactive") {
     return operation()
   }
 
-  const lease = await issueHostAdminLease([command], 120)
-  const approval: PendingApproval = { command, token: lease.token }
-  pendingApprovals.push(approval)
+  const authority = await openTaskWorkspaceOrigin(origin)
   try {
-    return await operation()
+    authority.assertCurrent()
+    const lease = await issueHostAdminLease([command], 120, authority.transport)
+    authority.assertCurrent()
+    const approval: PendingApproval = { command, token: lease.token, authority }
+    pendingApprovals.push(approval)
+    try {
+      return await operation()
+    } finally {
+      const index = pendingApprovals.indexOf(approval)
+      if (index >= 0) pendingApprovals.splice(index, 1)
+    }
   } finally {
-    const index = pendingApprovals.indexOf(approval)
-    if (index >= 0) pendingApprovals.splice(index, 1)
+    authority.close()
   }
 }
 
@@ -176,6 +180,7 @@ interface ApprovalScope {
   token: string
   expiresAt: number
   closed: boolean
+  authority: TaskWorkspaceAuthority
 }
 
 /**
@@ -185,8 +190,18 @@ interface ApprovalScope {
  */
 const approvalScopes: ApprovalScope[] = []
 
+export function hasWorkspaceApprovalScope(command: string, origin: TaskWorkspaceOrigin): boolean {
+  return approvalScopes.some(
+    (scope) =>
+      !scope.closed &&
+      scope.commands.includes(command) &&
+      sameTaskWorkspaceOrigin(scope.authority.origin, origin)
+  )
+}
+
 /** A standing approval held open by {@link openWorkspaceApprovalScope}. */
 export interface WorkspaceApprovalScope {
+  readonly origin?: TaskWorkspaceOrigin
   close(): void
 }
 
@@ -204,34 +219,48 @@ export interface WorkspaceApprovalScope {
  * exists to prevent.
  */
 export async function openWorkspaceApprovalScope(
-  commands: readonly string[] = WORKSPACE_TURN_COMMANDS
+  commands: readonly string[] = WORKSPACE_TURN_COMMANDS,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<WorkspaceApprovalScope | null> {
   const snapshot = getRuntimeSnapshot()
-  if (!snapshot.target || snapshot.target.kind !== "companion") return null
+  if (origin.kind === "local") return null
   const gated = commands.filter(
     (command) => getCommandDescriptor(command)?.approval === "interactive"
   )
   if (gated.length === 0) return null
   for (const command of gated) {
     const availability = resolveUserActionAvailability(snapshot, command)
-    if (availability.state !== "available") {
+    if (snapshot.target && availability.state !== "available") {
       throw new WorkspaceOperationUnavailableError(command, availability)
     }
   }
 
-  const lease = await issueHostAdminLease([...gated], SCOPE_LEASE_TTL_SECONDS)
+  const authority = await openTaskWorkspaceOrigin(origin)
+  let lease
+  try {
+    authority.assertCurrent()
+    lease = await issueHostAdminLease([...gated], SCOPE_LEASE_TTL_SECONDS, authority.transport)
+    authority.assertCurrent()
+  } catch (error) {
+    authority.close()
+    throw error
+  }
   const scope: ApprovalScope = {
     commands: gated,
     token: lease.token,
     expiresAt: lease.expiresAt,
     closed: false,
+    authority,
   }
   approvalScopes.push(scope)
   return {
+    origin,
     close() {
+      if (scope.closed) return
       scope.closed = true
       const index = approvalScopes.indexOf(scope)
       if (index >= 0) approvalScopes.splice(index, 1)
+      authority.close()
     },
   }
 }
@@ -254,7 +283,10 @@ export async function openWorkspaceApprovalScope(
  * the right key because the scope's lifetime IS the turn's: it is opened to
  * cover one turn's workspace calls and is worthless the moment that turn ends.
  */
-const turnScopes = new Map<string, WorkspaceApprovalScope>()
+const turnScopes = new Map<
+  string,
+  { turnId: string; origin: TaskWorkspaceOrigin; scope: WorkspaceApprovalScope }
+>()
 
 /**
  * Hand a turn's scope to whoever ends that turn.
@@ -270,24 +302,31 @@ export function bindApprovalScopeToTurn(
   if (!scope) return
   // A turn id is minted per turn, so a collision means the previous turn under
   // this id never closed. Close it rather than orphan it.
-  turnScopes.get(bundleTurnId)?.close()
-  turnScopes.set(bundleTurnId, scope)
+  const origin = scope.origin ?? captureTaskWorkspaceOrigin()
+  const key = JSON.stringify([bundleTurnId, origin])
+  turnScopes.get(key)?.scope.close()
+  turnScopes.set(key, { turnId: bundleTurnId, origin, scope })
 }
 
 /**
  * Close the scope opened for one bundle turn. Idempotent, and safe for a turn
  * that never had one.
  */
-export function closeApprovalScopeForTurn(bundleTurnId: string): void {
-  const scope = turnScopes.get(bundleTurnId)
-  if (!scope) return
-  turnScopes.delete(bundleTurnId)
-  scope.close()
+export function closeApprovalScopeForTurn(
+  bundleTurnId: string,
+  origin?: TaskWorkspaceOrigin
+): void {
+  for (const [key, entry] of turnScopes) {
+    if (entry.turnId !== bundleTurnId || (origin && !sameTaskWorkspaceOrigin(entry.origin, origin)))
+      continue
+    turnScopes.delete(key)
+    entry.scope.close()
+  }
 }
 
 /** Which turns still hold an approval scope. Exported for its tests. */
 export function boundApprovalScopeTurnIds(): string[] {
-  return [...turnScopes.keys()]
+  return [...new Set([...turnScopes.values()].map((entry) => entry.turnId))]
 }
 
 /**
@@ -298,17 +337,31 @@ export function boundApprovalScopeTurnIds(): string[] {
  * scope alive rather than widening its TTL, so an abandoned scope still stops
  * being usable.
  */
-async function scopeLeaseFor(command: string): Promise<string | undefined> {
+async function scopeLeaseFor(
+  command: string,
+  origin: TaskWorkspaceOrigin
+): Promise<ApprovalScope | undefined> {
   const scope = [...approvalScopes]
     .reverse()
-    .find((candidate) => !candidate.closed && candidate.commands.includes(command))
+    .find(
+      (candidate) =>
+        !candidate.closed &&
+        candidate.commands.includes(command) &&
+        sameTaskWorkspaceOrigin(candidate.authority.origin, origin)
+    )
   if (!scope) return undefined
-  if (scope.expiresAt - Date.now() > SCOPE_RENEW_MARGIN_MS) return scope.token
-  const renewed = await issueHostAdminLease([...scope.commands], SCOPE_LEASE_TTL_SECONDS)
+  scope.authority.assertCurrent()
+  if (scope.expiresAt - Date.now() > SCOPE_RENEW_MARGIN_MS) return scope
+  const renewed = await issueHostAdminLease(
+    [...scope.commands],
+    SCOPE_LEASE_TTL_SECONDS,
+    scope.authority.transport
+  )
+  scope.authority.assertCurrent()
   if (scope.closed) return undefined
   scope.token = renewed.token
   scope.expiresAt = renewed.expiresAt
-  return scope.token
+  return scope
 }
 
 /**
@@ -316,20 +369,41 @@ async function scopeLeaseFor(command: string): Promise<string | undefined> {
  * directly, writes must come through here or they lose the lease.
  */
 export const approvalAwareTransport = {
-  async call<T>(command: string, args?: unknown): Promise<T> {
-    let next = applyWorkspaceApproval(command, args)
+  async call<T>(command: string, args?: unknown, explicitOrigin?: TaskWorkspaceOrigin): Promise<T> {
+    const origin = explicitOrigin ?? captureTaskWorkspaceOrigin()
+    const pending = pendingApprovals.find(
+      (entry) =>
+        entry.command === command && sameTaskWorkspaceOrigin(entry.authority.origin, origin)
+    )
+    let authority = pending?.authority
+    let next = applyWorkspaceApproval(command, args, origin)
     if (next?.adminLease === undefined) {
       // A one-shot lease wins: it was minted for this exact call. Only when
       // there is none does the standing scope answer.
-      const scoped = await scopeLeaseFor(command)
-      if (scoped)
-        next = { ...((next ?? args ?? {}) as Record<string, unknown>), adminLease: scoped }
+      const scoped = await scopeLeaseFor(command, origin)
+      if (scoped) {
+        authority = scoped.authority
+        next = { ...((next ?? args ?? {}) as Record<string, unknown>), adminLease: scoped.token }
+      }
     }
     // Preserve the caller's arity. A few commands take no arguments at all,
     // and forwarding an explicit `undefined` changes the call the transport
     // sees for no benefit.
-    return next === undefined
-      ? baseTransport.call<T>(command)
-      : baseTransport.call<T>(command, next)
+    const temporary =
+      !authority && (explicitOrigin || origin.kind === "remote")
+        ? await openTaskWorkspaceOrigin(origin)
+        : undefined
+    authority ??= temporary
+    try {
+      authority?.assertCurrent()
+      const target = authority?.transport ?? baseTransport
+      const result = await (next === undefined
+        ? target.call<T>(command)
+        : target.call<T>(command, next))
+      authority?.assertCurrent()
+      return result
+    } finally {
+      temporary?.close()
+    }
   },
 }

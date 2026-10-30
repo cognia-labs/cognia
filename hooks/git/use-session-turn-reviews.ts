@@ -15,12 +15,16 @@ import { useLiveQuery } from "dexie-react-hooks"
 import type { UIMessage } from "ai"
 
 import { listCodeAdoptionTurnsBySession } from "@/lib/code-adoption/persist"
-import type { CodeAdoptionTurnRow } from "@/lib/code-adoption/types"
+import type { CodeAdoptionRun, CodeAdoptionTurnRow } from "@/lib/code-adoption/types"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 import { useChatStore } from "@/stores/chat/chat-store"
 
 export interface TurnReviewOption {
   /** Task Workspace run whose patch set is this turn's diff. */
   runId: string
+  workspaceRoot?: string
+  origin?: TaskWorkspaceOrigin
+  runs?: CodeAdoptionRun[]
   /** 1-based position among the conversation's recorded turns. */
   ordinal: number
   ts: number
@@ -65,14 +69,23 @@ export function turnReviewOptions(
   const options: TurnReviewOption[] = []
   ordered.forEach((row, index) => {
     if (!row.taskWorkspaceRunId || row.measurement !== "taskWorkspace") return
-    if (row.totalFiles === 0) return
+    if (
+      row.taskWorkspaceRuns?.length ? row.taskWorkspaceRuns.some((run) => !run.origin) : !row.origin
+    )
+      return
+    const captured = row.capturedFiles
+    const fileCount = captured ? captured.length : row.totalFiles
+    if (fileCount === 0) return
     options.push({
       runId: row.taskWorkspaceRunId,
+      workspaceRoot: row.workspaceRoot,
+      ...(row.origin ? { origin: row.origin } : {}),
+      ...(row.taskWorkspaceRuns?.length ? { runs: row.taskWorkspaceRuns } : {}),
       ordinal: index + 1,
       ts: row.ts,
-      files: row.totalFiles,
-      added: row.totalAdded,
-      removed: row.totalRemoved,
+      files: fileCount,
+      added: captured ? captured.reduce((sum, file) => sum + file.added, 0) : row.totalAdded,
+      removed: captured ? captured.reduce((sum, file) => sum + file.removed, 0) : row.totalRemoved,
       prompt: promptBeforeMessage(messages, row.assistantMessageId),
     })
   })

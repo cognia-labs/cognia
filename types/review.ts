@@ -5,6 +5,8 @@
  * together; `staged` and `unstaged` are its two halves. `lastTurn` is one chat
  * turn's Task Workspace patch set, whichever turn the refs name.
  */
+import type { TaskWorkspaceOrigin, TaskWorkspaceRunRef } from "@/lib/task-workspace/types"
+
 export type ReviewScope = "lastTurn" | "uncommitted" | "unstaged" | "staged" | "commit" | "branch"
 
 /** One concrete review target, with the ref it needs. */
@@ -12,7 +14,7 @@ export type ReviewScopeSelection =
   | { scope: "uncommitted" }
   | { scope: "unstaged" }
   | { scope: "staged" }
-  | { scope: "lastTurn"; runId: string }
+  | { scope: "lastTurn"; runId: string; origin?: TaskWorkspaceOrigin; runs?: TaskWorkspaceRunRef[] }
   | { scope: "commit"; commitSha: string }
   | { scope: "branch"; baseRef: string; targetRef: string }
 
@@ -148,6 +150,7 @@ export interface ReviewRepositoryRefs {
   targetRef?: string
   /** Task Workspace run whose patch set is this root's last turn. */
   lastTurnRunId?: string
+  origin?: TaskWorkspaceOrigin
 }
 
 /** Provider-neutral PR boundary; GitHub is the first adapter. */

@@ -415,6 +415,7 @@ pub fn begin_hosted_turn(
 ) -> Result<TaskRun, String> {
     let service = service()?;
     let input = BeginTaskRun {
+        observe_in_place: false,
         task_id: envelope.task_id,
         session_id,
         run_id: envelope.run_id,
@@ -2449,6 +2450,7 @@ mod tests {
 
     fn begin_input(workspace: &TempDir, run_id: &str) -> BeginTaskRun {
         BeginTaskRun {
+            observe_in_place: false,
             task_id: "task-test".into(),
             session_id: "session-test".into(),
             run_id: run_id.into(),

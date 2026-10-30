@@ -158,7 +158,7 @@ pub use watcher::{
     ResourceEventChange, ResourceEventKind, TaskWorkspaceEventSink, TaskWorkspaceResourceEvent,
     WatchManager,
 };
-pub use worker_cli::run_worker_cli;
+pub use worker_cli::{run_worker_cli, run_worker_server};
 
 #[cfg(test)]
 mod tests {

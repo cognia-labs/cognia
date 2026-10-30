@@ -74,7 +74,7 @@ export function TaskResourcesPanel({
   const provisional = useTaskWorkspaceStore((state) =>
     active ? state.provisionalByRun[active.runId] : undefined
   )
-  const reconcile = useTaskWorkspaceStore((state) => state.reconcile)
+  const reconcileRun = useTaskWorkspaceStore((state) => state.reconcileRun)
   const [runs, setRuns] = useState<TaskRun[]>([])
   const [resources, setResources] = useState<ResourceChange[]>(cachedResources ?? [])
   const [events, setEvents] = useState<ResourceEvent[]>([])
@@ -139,10 +139,14 @@ export function TaskResourcesPanel({
     setSelectedRunId(active.runId)
     void Promise.all([listTaskRuns(active.taskId), listTaskResources(active.taskId)])
       .then(([nextRuns, nextResources]) => {
-        if (cancelled) return
+        if (
+          cancelled ||
+          useTaskWorkspaceStore.getState().activeBySession[sessionId]?.runId !== active.runId
+        )
+          return
         setRuns(nextRuns)
         setResources(nextResources)
-        reconcile(sessionId, nextResources)
+        reconcileRun(active.runId, nextResources)
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(String(reason))
@@ -150,7 +154,7 @@ export function TaskResourcesPanel({
     return () => {
       cancelled = true
     }
-  }, [active?.taskId, active?.runId, reconcile, sessionId, provisional?.revision])
+  }, [active?.taskId, active?.runId, reconcileRun, sessionId, provisional?.revision])
 
   useEffect(() => {
     setResources(cachedResources ?? [])
@@ -326,11 +330,15 @@ export function TaskResourcesPanel({
         ? getCodeAdoptionTurnByTaskWorkspaceRun(selectedRunId)
         : Promise.resolve(undefined),
     ])
-    if (signal?.aborted) return
+    if (
+      signal?.aborted ||
+      useTaskWorkspaceStore.getState().activeBySession[sessionId]?.runId !== active.runId
+    )
+      return
     setResources(next)
     setPatchSet(nextPatchSet)
     setAdoption(nextAdoption ?? null)
-    reconcile(sessionId, next)
+    reconcileRun(active.runId, next)
   }
 
   async function apply(selectionPath?: string, hunkIds: string[] = []) {
@@ -928,35 +936,36 @@ export function TaskResourcesPanel({
                     </div>
                   ) : tab === "diff" ? (
                     <div className="space-y-3">
-                      {selectedPatchFile && selectedPatchFile.hunks.length > 0 && (
-                        <div className="rounded-md border p-2">
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <span className="text-xs font-medium">{t("selectHunks")}</span>
-                            <Button
-                              size="sm"
-                              disabled={selectedHunks.length === 0}
-                              onClick={() => void apply(selected.path, selectedHunks)}
-                            >
-                              {t("applySelectedHunks", { count: selectedHunks.length })}
-                            </Button>
+                      {selectedPatchFile?.kind === "modified" &&
+                        selectedPatchFile.hunks.length > 0 && (
+                          <div className="rounded-md border p-2">
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium">{t("selectHunks")}</span>
+                              <Button
+                                size="sm"
+                                disabled={selectedHunks.length === 0}
+                                onClick={() => void apply(selected.path, selectedHunks)}
+                              >
+                                {t("applySelectedHunks", { count: selectedHunks.length })}
+                              </Button>
+                            </div>
+                            {selectedPatchFile.hunks.map((hunk) => (
+                              <label key={hunk.id} className="flex items-center gap-2 py-1 text-xs">
+                                <Checkbox
+                                  checked={selectedHunks.includes(hunk.id)}
+                                  onCheckedChange={(checked) =>
+                                    setSelectedHunks((current) =>
+                                      checked === true
+                                        ? [...current, hunk.id]
+                                        : current.filter((id) => id !== hunk.id)
+                                    )
+                                  }
+                                />
+                                <code>{hunk.header}</code>
+                              </label>
+                            ))}
                           </div>
-                          {selectedPatchFile.hunks.map((hunk) => (
-                            <label key={hunk.id} className="flex items-center gap-2 py-1 text-xs">
-                              <Checkbox
-                                checked={selectedHunks.includes(hunk.id)}
-                                onCheckedChange={(checked) =>
-                                  setSelectedHunks((current) =>
-                                    checked === true
-                                      ? [...current, hunk.id]
-                                      : current.filter((id) => id !== hunk.id)
-                                  )
-                                }
-                              />
-                              <code>{hunk.header}</code>
-                            </label>
-                          ))}
-                        </div>
-                      )}
+                        )}
                       <pre className="whitespace-pre-wrap font-mono text-xs [overflow-wrap:anywhere]">
                         {diff || t("diffUnavailable")}
                       </pre>

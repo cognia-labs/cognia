@@ -786,3 +786,26 @@ describe("complete host branch snapshots", () => {
     expect(await getDb().sessions.count()).toBe(1)
   })
 })
+
+it("announces a branch only after its seeded transcript exists", async () => {
+  const { subscribeChatLifecycleEvents } = await import("./lifecycle-events")
+  await seedSource()
+  const messages = visible()
+  await persistMessages("src1", messages)
+  const created: string[] = []
+  const stop = subscribeChatLifecycleEvents((event) => {
+    if (event.type === "session-created") created.push(event.sessionId)
+  })
+  try {
+    const child = await branchSessionAtMessage({
+      sourceId: "src1",
+      visibleMessages: messages,
+      messageId: "a1",
+      mode: "direct",
+    })
+    expect(created).toEqual([child.id])
+    expect((await listMessages(child.id)).length).toBe(2)
+  } finally {
+    stop()
+  }
+})

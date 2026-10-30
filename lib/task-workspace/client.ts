@@ -7,7 +7,9 @@ import { onTauriEvent } from "@/lib/tauri"
 import {
   approvalAwareTransport as transport,
   closeApprovalScopeForTurn,
-  runWorkspaceUserAction,
+  bindApprovalScopeToTurn,
+  hasWorkspaceApprovalScope,
+  openWorkspaceApprovalScope,
 } from "./user-action"
 import {
   forgetOpenBundleTurn,
@@ -16,8 +18,14 @@ import {
   rememberOpenBundleTurn,
 } from "./abandoned-turns"
 import { recordTaskWorkspaceOutcome } from "@/lib/code-adoption/outcome"
+import {
+  captureCodeAdoptionDatabaseScope,
+  isCodeAdoptionDatabaseScopeCurrent,
+  type CodeAdoptionDatabaseScope,
+} from "@/lib/code-adoption/persist"
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
 import { projectTaskWorkspaceRun } from "./projection"
+import { captureTaskWorkspaceOrigin, callTaskWorkspaceOrigin } from "./origin"
 import type {
   AcquireWorkspaceBundle,
   AppliedCodeResult,
@@ -49,6 +57,7 @@ import type {
   TaskResourceSummary,
   TaskRun,
   TaskWorkspace,
+  TaskWorkspaceOrigin,
   TaskWorkspaceResourceEvent,
   TransferChunk,
   UploadHandle,
@@ -114,12 +123,18 @@ export function turnRecordId(sessionId: string, runId: number): string {
 }
 
 export async function beginTaskWorkspaceTurn(
-  input: BeginTaskWorkspaceTurn
+  input: BeginTaskWorkspaceTurn,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<TaskRun | null> {
+  const approval = hasWorkspaceApprovalScope("task_workspace_begin", origin)
+    ? null
+    : await openWorkspaceApprovalScope(undefined, origin)
   try {
-    const run = await transport.call<TaskRun>("task_workspace_begin", { input })
+    const run = await transport.call<TaskRun>("task_workspace_begin", { input }, origin)
+    bindApprovalScopeToTurn(run.runId, approval)
     useTaskWorkspaceStore.getState().activate({
       taskId: run.taskId,
+      origin,
       runId: run.runId,
       sessionId: input.sessionId,
       workspaceRoot: input.workspaceRoot,
@@ -132,6 +147,7 @@ export async function beginTaskWorkspaceTurn(
     })
     return run
   } catch (error) {
+    approval?.close()
     const message = error instanceof Error ? error.message : String(error)
     const hostDeferred = /remote.control|not authorized|unknown.command|forbidden/i.test(message)
     if (!hostDeferred) throw error
@@ -139,19 +155,51 @@ export async function beginTaskWorkspaceTurn(
   }
 }
 
+/** Explicit Local execution stays in place while retaining a reversible turn baseline. */
+export async function beginObservedTaskWorkspaceTurn(
+  input: BeginTaskWorkspaceTurn
+): Promise<TaskRun> {
+  const origin = captureTaskWorkspaceOrigin()
+  const run = await beginTaskWorkspaceTurn(
+    { ...input, observeInPlace: true, base: { kind: "workingState" } },
+    origin
+  )
+  if (!run) throw new Error("Host cannot capture Local workspace turns")
+  if (run.isolationKind !== "observed") {
+    // Older Hosts deserialize unknown fields and silently create isolation.
+    // A Local execution gesture never authorizes changing that environment.
+    await settleTaskWorkspaceRun(run.runId, "cancelled", origin)
+    throw new Error("Host does not support in-place Local workspace capture")
+  }
+  return run
+}
+
 export async function beginTaskWorkspaceBundleTurn(
   bundleId: string,
   logicalRootId: string,
-  input: BeginTaskWorkspaceTurn
+  input: BeginTaskWorkspaceTurn,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<TaskRun | null> {
+  const approval = hasWorkspaceApprovalScope("task_workspace_bundle_begin", origin)
+    ? null
+    : await openWorkspaceApprovalScope(
+        ["task_workspace_bundle_begin", "task_workspace_settle"],
+        origin
+      )
   try {
-    const run = await transport.call<TaskRun>("task_workspace_bundle_begin", {
-      bundleId,
-      logicalRootId,
-      input,
-    })
+    const run = await transport.call<TaskRun>(
+      "task_workspace_bundle_begin",
+      {
+        bundleId,
+        logicalRootId,
+        input,
+      },
+      origin
+    )
+    bindApprovalScopeToTurn(run.runId, approval)
     useTaskWorkspaceStore.getState().activate({
       taskId: run.taskId,
+      origin,
       runId: run.runId,
       sessionId: input.sessionId,
       workspaceRoot: input.workspaceRoot,
@@ -164,6 +212,7 @@ export async function beginTaskWorkspaceBundleTurn(
     })
     return run
   } catch (error) {
+    approval?.close()
     const message = error instanceof Error ? error.message : String(error)
     const hostDeferred = /remote.control|not authorized|unknown.command|forbidden/i.test(message)
     if (!hostDeferred) throw error
@@ -196,10 +245,11 @@ export function isWorkspaceBusyRefusal(error: unknown): boolean {
 
 export async function beginWorkspaceBundleTurn(
   bundleId: string,
-  request: BeginWorkspaceBundleTurn
+  request: BeginWorkspaceBundleTurn,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<WorkspaceBundleTurnLease | null> {
   try {
-    return await beginWorkspaceBundleTurnOnce(bundleId, request)
+    return await beginWorkspaceBundleTurnOnce(bundleId, request, origin)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const hostDeferred = /remote.control|not authorized|unknown.command|forbidden/i.test(message)
@@ -209,25 +259,30 @@ export async function beginWorkspaceBundleTurn(
     // one somewhere (another tab, another device), in which case refusing is
     // right, or one this browser abandoned by reloading mid-turn, which nothing
     // else will ever end. Asking is the only way to tell the two apart.
-    const released = await reclaimAbandonedBundleTurns(request.run.sessionId).catch(() => [])
+    const released = await reclaimAbandonedBundleTurns(request.run.sessionId, origin).catch(
+      () => []
+    )
     if (released.length === 0) throw error
-    return await beginWorkspaceBundleTurnOnce(bundleId, request)
+    return await beginWorkspaceBundleTurnOnce(bundleId, request, origin)
   }
 }
 
 async function beginWorkspaceBundleTurnOnce(
   bundleId: string,
-  request: BeginWorkspaceBundleTurn
+  request: BeginWorkspaceBundleTurn,
+  origin: TaskWorkspaceOrigin
 ): Promise<WorkspaceBundleTurnLease> {
   {
     const turn = await transport.call<WorkspaceBundleTurnLease>(
       "task_workspace_bundle_turn_begin",
-      { bundleId, request }
+      { bundleId, request },
+      origin
     )
     rememberOpenBundleTurn({
       bundleTurnId: turn.bundleTurnId,
       sessionId: request.run.sessionId,
       openedAt: Date.now(),
+      origin,
     })
     const primaryIndex = turn.runs.findIndex((lease) =>
       lease.logicalRootIds.includes(turn.primaryLogicalRootId)
@@ -241,9 +296,10 @@ async function beginWorkspaceBundleTurnOnce(
       const run = lease.run
       useTaskWorkspaceStore.getState().activate({
         taskId: run.taskId,
+        origin,
         runId: run.runId,
         sessionId: request.run.sessionId,
-        workspaceRoot: request.run.workspaceRoot,
+        workspaceRoot: run.executionRoot,
         executionRoot: run.executionRoot,
         state: run.state,
         bundleTurnId: turn.bundleTurnId,
@@ -260,10 +316,23 @@ async function beginWorkspaceBundleTurnOnce(
 async function reconcileWorkspaceBundleTurnOutcome(
   outcome: WorkspaceBundleTurnOutcome
 ): Promise<WorkspaceBundleTurnOutcome> {
-  for (const settled of outcome.runs) {
-    const active = useTaskWorkspaceStore.getState().activeByRun[settled.runId]
+  const runs = outcome.runs.map((settled) => ({
+    settled,
+    active: useTaskWorkspaceStore.getState().activeByRun[settled.runId],
+  }))
+  // The native result is authoritative for every root. Best-effort indexing
+  // below must not delay release of another root's renderer lease.
+  for (const { settled } of runs) {
+    useTaskWorkspaceStore.getState().completeRun(settled.runId, settled.state, settled.resources)
+  }
+  for (const { settled, active } of runs) {
     if (active?.executionRunId || active?.traceSpanId) {
-      await getTaskResourceSummary(settled.runId)
+      await transport
+        .call<TaskResourceSummary>(
+          "task_workspace_get_resource_summary",
+          { runId: settled.runId },
+          active.origin
+        )
         .then((summary) =>
           projectTaskWorkspaceRun({
             ...(active.executionRunId ? { executionRunId: active.executionRunId } : {}),
@@ -278,7 +347,6 @@ async function reconcileWorkspaceBundleTurnOutcome(
         )
         .catch(() => undefined)
     }
-    useTaskWorkspaceStore.getState().reconcileRun(settled.runId, settled.resources)
   }
   return outcome
 }
@@ -313,31 +381,42 @@ async function changesLedger<T>(write: Promise<T>): Promise<T> {
 
 export async function settleWorkspaceBundleTurn(
   bundleTurnId: string,
-  finalState: "ready" | "failed" | "cancelled" = "ready"
+  finalState: "ready" | "failed" | "cancelled" = "ready",
+  origin = Object.values(useTaskWorkspaceStore.getState().activeByRun).find(
+    (run) => run.bundleTurnId === bundleTurnId
+  )?.origin
 ): Promise<WorkspaceBundleTurnOutcome> {
   const outcome = await changesLedger(
-    transport.call<WorkspaceBundleTurnOutcome>("task_workspace_bundle_turn_settle", {
-      bundleTurnId,
-      finalState,
-    })
+    transport.call<WorkspaceBundleTurnOutcome>(
+      "task_workspace_bundle_turn_settle",
+      {
+        bundleTurnId,
+        finalState,
+      },
+      origin
+    )
   )
-  forgetOpenBundleTurn(bundleTurnId)
+  forgetOpenBundleTurn(bundleTurnId, origin)
   // The turn is over, so its standing approval is too. Closed here rather than
   // only in `run-lease.ts` because a chat turn settles from the status edge,
   // which never holds the lease object that owns that scope.
-  closeApprovalScopeForTurn(bundleTurnId)
+  closeApprovalScopeForTurn(bundleTurnId, origin)
   return reconcileWorkspaceBundleTurnOutcome(outcome)
 }
 
 export async function abortWorkspaceBundleTurn(
-  bundleTurnId: string
+  bundleTurnId: string,
+  origin = Object.values(useTaskWorkspaceStore.getState().activeByRun).find(
+    (run) => run.bundleTurnId === bundleTurnId
+  )?.origin
 ): Promise<WorkspaceBundleTurnOutcome> {
   const outcome = await transport.call<WorkspaceBundleTurnOutcome>(
     "task_workspace_bundle_turn_abort",
-    { bundleTurnId }
+    { bundleTurnId },
+    origin
   )
-  forgetOpenBundleTurn(bundleTurnId)
-  closeApprovalScopeForTurn(bundleTurnId)
+  forgetOpenBundleTurn(bundleTurnId, origin)
+  closeApprovalScopeForTurn(bundleTurnId, origin)
   return reconcileWorkspaceBundleTurnOutcome(outcome)
 }
 
@@ -383,13 +462,14 @@ async function withSettleRetry<T>(operation: () => Promise<T>): Promise<T> {
 }
 
 export function getWorkspaceBundleTurn(
-  bundleTurnId: string
+  bundleTurnId: string,
+  origin?: TaskWorkspaceOrigin
 ): Promise<WorkspaceBundleTurnLease | null> {
-  return transport.call("task_workspace_bundle_turn_get", { bundleTurnId })
+  return transport.call("task_workspace_bundle_turn_get", { bundleTurnId }, origin)
 }
 
 /**
- * Settle the run this chat session currently holds.
+ * Settle the captured renderer lease this chat session owns.
  *
  * `chatRunId` is accepted for the caller's convenience and deliberately NOT
  * used to decide. It used to be: the guard compared `activeBySession[...]
@@ -402,10 +482,10 @@ export function getWorkspaceBundleTurn(
  * Widening the comparison to `executionRunId` was not enough either: the chat
  * store's per-session counter has already moved on by the time some settle
  * edges fire, so the derived id disagreed again. Comparing at all was the
- * mistake. `activeBySession[sessionId]` is BY CONSTRUCTION the one run this
- * session has open, and this is only called on that session's own
- * streaming-to-terminal edge, so there is nothing a second identity can
- * usefully rule out. Absent entry means nothing to settle.
+ * mistake. Ownership is recorded independently of resource/history views;
+ * refreshes never acquire or release it. Completed entries remain available
+ * for review without owning a lease. The Host acknowledgment completes only
+ * the captured run ID because another turn may start while it is responding.
  */
 export async function settleTaskWorkspaceTurn(
   sessionId: string,
@@ -413,30 +493,20 @@ export async function settleTaskWorkspaceTurn(
   finalState: "ready" | "failed" | "cancelled" = "ready"
 ): Promise<ResourceChange[] | null> {
   void chatRunId
-  const active = useTaskWorkspaceStore.getState().activeBySession[sessionId]
+  const state = useTaskWorkspaceStore.getState()
+  const active = state.activeByRun[state.ownedRunBySession[sessionId]]
   if (!active) return null
   // A bundle turn is settled as a turn. Only its last activation survives in
   // `activeBySession`, so settling `active.runId` would release the primary
   // root and strand every additional one.
   const bundleTurnId = active.bundleTurnId
   if (bundleTurnId) {
-    // Its own approval. This settle is driven by the chat status edge, not by
-    // `openWorkspaceBundleTurnLease`, so no one-shot lease is parked for it.
-    // Called bare, the Host answered `interactive_approval_required`, the run
-    // stayed `running` after a turn that had completed perfectly, and the
-    // session's next turn was wedged.
-    //
-    // The turn's standing scope is also still open here — `run-lease.ts` binds
-    // it by turn id precisely so this path can close it — but it is deliberately
-    // not what authorizes this call. A one-shot lease minted for this exact
-    // command keeps the settle working for a turn whose scope was never bound,
-    // which is every non-companion host.
+    // The Send gesture's standing scope owns this background settle. Never
+    // request a new interactive approval or follow a later selected Host.
     let outcome: WorkspaceBundleTurnOutcome
     try {
       outcome = await withSettleRetry(() =>
-        runWorkspaceUserAction("task_workspace_bundle_turn_settle", () =>
-          settleWorkspaceBundleTurn(bundleTurnId, finalState)
-        )
+        settleWorkspaceBundleTurn(bundleTurnId, finalState, active.origin)
       )
     } catch (error) {
       // A settle that will not land used to end here, silently: `.catch(() =>
@@ -453,8 +523,8 @@ export async function settleTaskWorkspaceTurn(
       // heals itself on the next send rather than staying wedged until the host
       // restarts. And the failure is reported rather than discarded, so the
       // next occurrence is diagnosable at the moment it happens.
-      closeApprovalScopeForTurn(bundleTurnId)
-      releaseOpenBundleTurn(bundleTurnId)
+      closeApprovalScopeForTurn(bundleTurnId, active.origin)
+      releaseOpenBundleTurn(bundleTurnId, active.origin)
       console.error(
         "task workspace bundle turn settle failed",
         { bundleTurnId, sessionId, finalState },
@@ -463,22 +533,30 @@ export async function settleTaskWorkspaceTurn(
       return null
     }
     const resources = outcome.runs.flatMap((settled) => settled.resources)
-    useTaskWorkspaceStore.getState().reconcile(sessionId, resources)
+    // settleWorkspaceBundleTurn already reconciled each outcome by run ID.
     return resources
   }
   try {
     const resources = await withSettleRetry(() =>
-      runWorkspaceUserAction("task_workspace_settle", () =>
-        changesLedger(
-          transport.call<ResourceChange[]>("task_workspace_settle", {
+      changesLedger(
+        transport.call<ResourceChange[]>(
+          "task_workspace_settle",
+          {
             runId: active.runId,
             finalState,
-          })
+          },
+          active.origin
         )
       )
     )
+    useTaskWorkspaceStore.getState().completeRun(active.runId, finalState, resources)
     if (active.executionRunId || active.traceSpanId) {
-      await getTaskResourceSummary(active.runId)
+      await transport
+        .call<TaskResourceSummary>(
+          "task_workspace_get_resource_summary",
+          { runId: active.runId },
+          active.origin
+        )
         .then((summary) =>
           projectTaskWorkspaceRun({
             ...(active.executionRunId ? { executionRunId: active.executionRunId } : {}),
@@ -493,7 +571,6 @@ export async function settleTaskWorkspaceTurn(
         )
         .catch(() => undefined)
     }
-    useTaskWorkspaceStore.getState().reconcile(sessionId, resources)
     return resources
   } catch (error) {
     // No bundle turn id, so there is no reclaim path to hand this to: an
@@ -506,29 +583,43 @@ export async function settleTaskWorkspaceTurn(
       error
     )
     return null
+  } finally {
+    closeApprovalScopeForTurn(active.runId, active.origin)
   }
 }
 
 export async function settleTaskWorkspaceRun(
   runId: string,
-  finalState: "ready" | "failed" | "cancelled" = "ready"
+  finalState: "ready" | "failed" | "cancelled" = "ready",
+  origin = useTaskWorkspaceStore.getState().activeByRun[runId]?.origin
 ): Promise<ResourceChange[]> {
-  return changesLedger(
-    transport.call<ResourceChange[]>("task_workspace_settle", {
-      runId,
-      finalState,
-    })
-  )
+  try {
+    const resources = await changesLedger(
+      transport.call<ResourceChange[]>(
+        "task_workspace_settle",
+        {
+          runId,
+          finalState,
+        },
+        origin
+      )
+    )
+    useTaskWorkspaceStore.getState().completeRun(runId, finalState, resources)
+    return resources
+  } finally {
+    closeApprovalScopeForTurn(runId, origin)
+  }
 }
 
 export async function settleTaskWorkspaceRunWithProjection(
   runId: string,
   finalState: "ready" | "failed" | "cancelled" = "ready"
 ): Promise<ResourceChange[]> {
-  const resources = await settleTaskWorkspaceRun(runId, finalState)
   const active = useTaskWorkspaceStore.getState().activeByRun[runId]
+  const resources = await settleTaskWorkspaceRun(runId, finalState)
   if (active?.executionRunId || active?.traceSpanId) {
-    await getTaskResourceSummary(runId)
+    await transport
+      .call<TaskResourceSummary>("task_workspace_get_resource_summary", { runId }, active.origin)
       .then((summary) =>
         projectTaskWorkspaceRun({
           ...(active.executionRunId ? { executionRunId: active.executionRunId } : {}),
@@ -1030,14 +1121,21 @@ export function recordTaskResourceToolEvent(input: {
   kind: "created" | "modified" | "deleted" | "renamed"
   toolCallId?: string
 }): Promise<ResourceEvent> {
-  return transport.call("task_workspace_record_tool_event", input)
+  return transport.call(
+    "task_workspace_record_tool_event",
+    input,
+    useTaskWorkspaceStore.getState().activeByRun[input.runId]?.origin
+  )
 }
 
 export function exportTaskResourceManifest(
   taskId: string,
-  runId?: string
+  runId?: string,
+  origin?: TaskWorkspaceOrigin
 ): Promise<TaskResourceManifest> {
-  return transport.call("task_workspace_export_resource_manifest", { taskId, runId })
+  return origin
+    ? callTaskWorkspaceOrigin(origin, "task_workspace_export_resource_manifest", { taskId, runId })
+    : transport.call("task_workspace_export_resource_manifest", { taskId, runId })
 }
 
 export function pinTaskWorkspace(taskId: string, pinned: boolean): Promise<TaskWorkspace> {
@@ -1066,8 +1164,13 @@ export function readTaskResource(
   return transport.call("task_resource_read_text", { runId, relPath, ...options })
 }
 
-export function getTaskPatchSet(runId: string): Promise<PatchSet | null> {
-  return transport.call("task_workspace_get_patch_set", { runId })
+export function getTaskPatchSet(
+  runId: string,
+  origin?: TaskWorkspaceOrigin
+): Promise<PatchSet | null> {
+  return origin
+    ? callTaskWorkspaceOrigin(origin, "task_workspace_get_patch_set", { runId })
+    : transport.call("task_workspace_get_patch_set", { runId })
 }
 
 export function restoreTaskWorkspaceSnapshot(runId: string): Promise<TaskRun> {
@@ -1077,21 +1180,38 @@ export function restoreTaskWorkspaceSnapshot(runId: string): Promise<TaskRun> {
 export function readTaskResourceDiff(
   runId: string,
   path: string,
-  allowSensitive = false
+  allowSensitive = false,
+  origin?: TaskWorkspaceOrigin
 ): Promise<string> {
-  return transport.call("task_resource_read_diff", { runId, path, allowSensitive })
+  return origin
+    ? callTaskWorkspaceOrigin(origin, "task_resource_read_diff", { runId, path, allowSensitive })
+    : transport.call("task_resource_read_diff", { runId, path, allowSensitive })
 }
 
 async function projectAdoptionOutcome(
   runId: string,
-  kind: "apply" | "undo" | "keepCurrent"
+  kind: "apply" | "undo" | "keepCurrent",
+  databaseScope: CodeAdoptionDatabaseScope | undefined,
+  origin?: TaskWorkspaceOrigin
 ): Promise<void> {
   try {
-    const patch = await transport.call<PatchSet | null>("task_workspace_get_patch_set", { runId })
-    if (patch) await recordTaskWorkspaceOutcome(patch, kind)
+    if (!databaseScope || !isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+    const patch = await getTaskPatchSet(runId, origin)
+    if (patch && isCodeAdoptionDatabaseScopeCurrent(databaseScope)) {
+      await recordTaskWorkspaceOutcome(patch, kind, origin, databaseScope)
+    }
   } catch {
     // Adoption accounting is best-effort and must not change the completed
     // workspace operation's success/failure semantics.
+  }
+}
+
+function captureOutcomeDatabaseScope(): CodeAdoptionDatabaseScope | undefined {
+  try {
+    return captureCodeAdoptionDatabaseScope()
+  } catch {
+    // A headless caller still owns its native operation without a renderer DB.
+    return undefined
   }
 }
 
@@ -1100,18 +1220,26 @@ export async function applyTaskWorkspace(
   selection: PatchSelection[] = [],
   allowIrreversible = false
 ): Promise<ApplyOutcome> {
+  const databaseScope = captureOutcomeDatabaseScope()
   const outcome = await changesLedger(
     transport.call<ApplyOutcome>("task_workspace_apply", { runId, selection, allowIrreversible })
   )
-  if (outcome.state === "applied") await projectAdoptionOutcome(runId, "apply")
+  if (outcome.state === "applied") await projectAdoptionOutcome(runId, "apply", databaseScope)
   return outcome
 }
 
-export async function undoTaskWorkspace(runId: string): Promise<ApplyOutcome> {
+export async function undoTaskWorkspace(
+  runId: string,
+  origin?: TaskWorkspaceOrigin
+): Promise<ApplyOutcome> {
+  const databaseScope = captureOutcomeDatabaseScope()
   const outcome = await changesLedger(
-    transport.call<ApplyOutcome>("task_workspace_undo", { runId })
+    origin
+      ? callTaskWorkspaceOrigin<ApplyOutcome>(origin, "task_workspace_undo", { runId }, true)
+      : transport.call<ApplyOutcome>("task_workspace_undo", { runId })
   )
-  if (outcome.state === "reverted") await projectAdoptionOutcome(runId, "undo")
+  if (outcome.state === "reverted")
+    await projectAdoptionOutcome(runId, "undo", databaseScope, origin)
   return outcome
 }
 
@@ -1121,6 +1249,7 @@ export async function resolveTaskWorkspaceConflict(
   selection: PatchSelection[] = [],
   allowIrreversible = false
 ): Promise<ApplyOutcome> {
+  const databaseScope = captureOutcomeDatabaseScope()
   const outcome = await changesLedger(
     transport.call<ApplyOutcome>("task_workspace_resolve_conflict", {
       runId,
@@ -1130,7 +1259,11 @@ export async function resolveTaskWorkspaceConflict(
     })
   )
   if (outcome.state === "applied" || outcome.state === "reverted") {
-    await projectAdoptionOutcome(runId, resolution === "keepCurrent" ? "keepCurrent" : "apply")
+    await projectAdoptionOutcome(
+      runId,
+      resolution === "keepCurrent" ? "keepCurrent" : "apply",
+      databaseScope
+    )
   }
   return outcome
 }

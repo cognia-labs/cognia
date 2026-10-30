@@ -26,12 +26,13 @@ jest.mock("@/components/source-control/diff-viewer", () => ({
     readOnly,
     toolbarStart,
   }: {
-    diff: { path: string } | null
+    diff: { path: string; newContent?: string } | null
     readOnly?: boolean
     toolbarStart?: ReactNode
   }) => (
     <div data-testid="diff" data-path={diff?.path ?? ""} data-readonly={String(Boolean(readOnly))}>
       {toolbarStart}
+      {diff?.newContent}
     </div>
   ),
 }))
@@ -162,6 +163,64 @@ describe("SnapshotReview", () => {
     renderSnapshot()
     await settle()
     expect(screen.getByTestId("snapshot-review-diff-error")).toHaveTextContent("no diff")
+  })
+
+  it("never keeps another run's same-path body while the new body is pending", async () => {
+    loadReviewScopeDiff.mockResolvedValueOnce({
+      path: "src/a.ts",
+      newContent: "Turn A body",
+      hunks: [],
+    })
+    const { rerender } = renderSnapshot()
+    await settle()
+    expect(screen.getByText("Turn A body")).toBeInTheDocument()
+    loadReviewScopeDiff.mockImplementation(() => new Promise(() => {}))
+    rerender(
+      <SnapshotReview
+        rootPath="/other"
+        selection={{ scope: "lastTurn", runId: "B" }}
+        stacked={false}
+        touch={false}
+        header={null}
+      />
+    )
+    await settle()
+    expect(screen.queryByText("Turn A body")).not.toBeInTheDocument()
+  })
+
+  it("requests each captured root using its own run and Host identity", async () => {
+    const origin = { kind: "remote" as const, hostId: "host-a" }
+    listReviewScopeFiles.mockResolvedValue({
+      files: [ref("a.ts"), { ...ref("a.ts"), repositoryRoot: "/other" }],
+      unavailable: [],
+    })
+    renderSnapshot({
+      selection: {
+        scope: "lastTurn",
+        runId: "A",
+        runs: [
+          { runId: "A", workspaceRoot: "/repo", origin },
+          { runId: "B", workspaceRoot: "/other", origin },
+        ],
+      },
+    })
+    await settle()
+    expect(listReviewScopeFiles).toHaveBeenCalledWith({
+      scope: "lastTurn",
+      repositoryRoots: ["/repo", "/other"],
+      refsByRoot: {
+        "/repo": { lastTurnRunId: "A", origin },
+        "/other": { lastTurnRunId: "B", origin },
+      },
+    })
+    expect(screen.getByText("/repo")).toBeInTheDocument()
+    expect(screen.getByText("/other")).toBeInTheDocument()
+    fireEvent.click(screen.getAllByRole("button", { name: /a.ts/ })[1])
+    await settle()
+    expect(loadReviewScopeDiff).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ repositoryRoot: "/other", path: "a.ts" })
+    )
   })
 
   it("reads a commit's diff with the commit's refs", async () => {

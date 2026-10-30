@@ -59,7 +59,8 @@
   "unavailable": {
     "missing-run": "{root} 没有可供评审的智能体运行——只有上一轮实际写入的那个仓库才有。",
     "missing-commit": "{root} 需要填写自己的提交 SHA。",
-    "missing-refs": "{root} 需要填写自己的基准与目标引用。"
+    "missing-refs": "{root} 需要填写自己的基准与目标引用。",
+    "missing-patch": "{root} 已无法读取这一轮保存的 patch。"
   },
   "scopePicker": {
     "label": "差异范围：{scope}",

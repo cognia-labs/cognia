@@ -1,6 +1,8 @@
 const call = jest.fn()
 const subscribe = jest.fn()
 const recordOutcome = jest.fn()
+let mockDatabaseName = "account-A"
+jest.mock("@/lib/db/schema", () => ({ getDb: () => ({ name: mockDatabaseName }) }))
 const userAction = jest.fn(
   (_command: string, operation: () => Promise<unknown>) => operation() as Promise<unknown>
 )
@@ -27,6 +29,16 @@ jest.mock("@/lib/tauri", () => ({
   transport: { call: (...args: unknown[]) => call(...args) },
   onTauriEvent: (...args: unknown[]) => subscribe(...args),
 }))
+jest.mock("./origin", () => ({
+  ...jest.requireActual("./origin"),
+  captureTaskWorkspaceOrigin: jest.fn(() => ({ kind: "local" })),
+  openTaskWorkspaceOrigin: jest.fn(async (origin) => ({
+    origin,
+    transport: { call: (...args: unknown[]) => call(...args) },
+    assertCurrent: jest.fn(),
+    close: jest.fn(),
+  })),
+}))
 
 const reclaim = jest.fn(async () => [] as string[])
 const remember = jest.fn()
@@ -41,6 +53,7 @@ jest.mock("./abandoned-turns", () => ({
 }))
 
 import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
+import { captureTaskWorkspaceOrigin, openTaskWorkspaceOrigin } from "./origin"
 import * as workspaceClient from "./client"
 import {
   abortWorkspaceBundleTurn,
@@ -50,6 +63,7 @@ import {
   applyTaskWorkspace,
   applyWorkspaceBundle,
   beginTaskWorkspaceTurn,
+  beginObservedTaskWorkspaceTurn,
   beginTaskWorkspaceBundleTurn,
   beginWorkspaceBundleTurn,
   adoptManagedWorkspace,
@@ -1039,7 +1053,7 @@ describe("task workspace client", () => {
       await expect(
         beginWorkspaceBundleTurn("bundle-1", { primaryLogicalRootId: "primary", run: input })
       ).resolves.toMatchObject({ bundleTurnId: "turn-2" })
-      expect(reclaim).toHaveBeenCalledWith("session-1")
+      expect(reclaim).toHaveBeenCalledWith("session-1", { kind: "local" })
       expect(call).toHaveBeenCalledTimes(2)
     })
 
@@ -1304,9 +1318,43 @@ describe("task workspace client", () => {
     })
     expect(recordOutcome).toHaveBeenCalledWith(
       expect.objectContaining({ runId: "run:session:1" }),
-      "apply"
+      "apply",
+      undefined,
+      { databaseName: "account-A" }
     )
   })
+
+  it.each(["apply", "undo", "keepCurrent"])(
+    "keeps the native %s result without projecting into a database selected during its wait",
+    async (kind) => {
+      mockDatabaseName = "account-A"
+      let finish!: (value: { state: string; revision: number; conflicts: [] }) => void
+      call.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          })
+      )
+      const running =
+        kind === "apply"
+          ? applyTaskWorkspace("run:session:1")
+          : kind === "undo"
+            ? undoTaskWorkspace("run:session:1")
+            : resolveTaskWorkspaceConflict("run:session:1", "keepCurrent")
+      while (!finish) await new Promise((resolve) => setTimeout(resolve, 0))
+      mockDatabaseName = "account-B"
+      const outcome = {
+        state: kind === "apply" ? "applied" : "reverted",
+        revision: 2,
+        conflicts: [] as [],
+      }
+      finish(outcome)
+      await expect(running).resolves.toEqual(outcome)
+      expect(recordOutcome).not.toHaveBeenCalled()
+      expect(call).toHaveBeenCalledTimes(1)
+      mockDatabaseName = "account-A"
+    }
+  )
 
   it("applies a multi-root handoff through one persisted Bundle transaction", async () => {
     const request = {
@@ -1595,6 +1643,115 @@ describe("settling a bundle turn", () => {
   })
 })
 
+describe("settlement run ownership", () => {
+  beforeEach(() => {
+    call.mockReset()
+    useTaskWorkspaceStore.getState().clear()
+  })
+
+  it.each([
+    ["running", "failed"],
+    ["settling", "cancelled"],
+  ] as const)("retains the %s owner until the Host acknowledges %s", async (state, finalState) => {
+    useTaskWorkspaceStore.getState().activate({
+      taskId: "task",
+      runId: "run",
+      sessionId: "session",
+      workspaceRoot: "/repo",
+      executionRoot: "/repo",
+      state,
+    })
+    let acknowledge!: (resources: unknown[]) => void
+    let enter!: () => void
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve
+    })
+    call.mockImplementationOnce(() => {
+      enter()
+      return new Promise((resolve) => {
+        acknowledge = resolve
+      })
+    })
+    const pending = settleTaskWorkspaceTurn("session", 1, finalState)
+    await entered
+    useTaskWorkspaceStore.getState().reconcileRun("run", [])
+    expect(useTaskWorkspaceStore.getState().activeByRun.run.state).toBe(state)
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession.session).toBe("run")
+    acknowledge([])
+    await expect(pending).resolves.toEqual([])
+    expect(useTaskWorkspaceStore.getState().activeByRun.run.state).toBe(finalState)
+    expect(useTaskWorkspaceStore.getState().ownedRunBySession.session).toBeUndefined()
+  })
+
+  it.each([false, true])(
+    "does not reconcile a newer session run after delayed settle (bundle=%s)",
+    async (bundle) => {
+      const old = {
+        taskId: "old-task",
+        runId: "old-run",
+        sessionId: "same-session",
+        workspaceRoot: "/old",
+        executionRoot: "/old",
+        state: "running" as const,
+        ...(bundle ? { bundleTurnId: "old-bundle" } : {}),
+      }
+      const next = {
+        taskId: "next-task",
+        runId: "next-run",
+        sessionId: "same-session",
+        workspaceRoot: "/next",
+        executionRoot: "/next",
+        state: "running" as const,
+      }
+      const resources = [{ runId: "old-run", path: "old.ts", origin: "agent", kind: "modified" }]
+      let finish!: (value: unknown) => void
+      let started!: () => void
+      const entered = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      call.mockImplementationOnce(() => {
+        started()
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      })
+      useTaskWorkspaceStore.getState().activate(old)
+      const settling = settleTaskWorkspaceTurn("same-session", 1)
+      await entered
+      useTaskWorkspaceStore.getState().activate(next)
+      finish(
+        bundle
+          ? { bundleTurnId: "old-bundle", runs: [{ runId: "old-run", state: "ready", resources }] }
+          : resources
+      )
+      await expect(settling).resolves.toEqual(resources)
+      const state = useTaskWorkspaceStore.getState()
+      expect(state.activeBySession["same-session"]).toMatchObject({
+        runId: "next-run",
+        state: "running",
+      })
+      expect(state.activeByRun["next-run"].state).toBe("running")
+      expect(state.activeByRun["old-run"].state).toBe("ready")
+      expect(state.ownedRunBySession["same-session"]).toBe("next-run")
+      expect(state.resourcesByTask["next-task"]).toBeUndefined()
+      expect(state.resourcesByTask["old-task"]).toEqual(resources)
+    }
+  )
+
+  it("does not settle a previous ready run for a later turn in the same conversation", async () => {
+    useTaskWorkspaceStore.getState().activate({
+      taskId: "old-task",
+      runId: "old-run",
+      sessionId: "same-session",
+      workspaceRoot: "/old",
+      executionRoot: "/old",
+      state: "ready",
+    })
+    await expect(settleTaskWorkspaceTurn("same-session", 2)).resolves.toBeNull()
+    expect(call).not.toHaveBeenCalled()
+  })
+})
+
 describe("the lookups that answer null", () => {
   beforeEach(() => call.mockReset())
 
@@ -1756,7 +1913,91 @@ describe("resource queries and host refusals", () => {
   })
 })
 
-describe("the settle carries its own approval", () => {
+describe("explicit Local capture compatibility", () => {
+  const input = {
+    taskId: "local-task",
+    sessionId: "local-session",
+    runId: "local-run",
+    agentId: "built-in",
+    agentKind: "in-app",
+    workspaceRoot: "/chosen/local",
+  }
+  it("rejects an old Host that ignores observeInPlace and cancels its isolated run", async () => {
+    call
+      .mockResolvedValueOnce({
+        taskId: "local-task",
+        runId: "local-run",
+        isolationKind: "shadow",
+        executionRoot: "/unexpected/isolation",
+        state: "running",
+      })
+      .mockResolvedValueOnce([])
+    await expect(beginObservedTaskWorkspaceTurn(input)).rejects.toThrow("in-place")
+    expect(call).toHaveBeenCalledWith("task_workspace_settle", {
+      runId: "local-run",
+      finalState: "cancelled",
+    })
+  })
+
+  it("accepts the Host's observed discriminator even when it canonicalizes a path alias", async () => {
+    const run = {
+      taskId: "local-task",
+      runId: "local-run",
+      isolationKind: "observed",
+      executionRoot: "/canonical/local",
+      state: "running",
+    }
+    call.mockResolvedValueOnce(run)
+    await expect(beginObservedTaskWorkspaceTurn(input)).resolves.toEqual(run)
+    expect(call).toHaveBeenCalledWith("task_workspace_begin", {
+      input: { ...input, observeInPlace: true, base: { kind: "workingState" } },
+    })
+  })
+})
+
+describe("the settle retains its gesture approval", () => {
+  it("settles and aborts the captured Host A after the ambient selection becomes Host B", async () => {
+    const a = { kind: "remote" as const, hostId: "host-a" }
+    const b = { kind: "remote" as const, hostId: "host-b" }
+    const remoteCall = jest.fn().mockResolvedValue({ bundleTurnId: "authority-turn", runs: [] })
+    ;(captureTaskWorkspaceOrigin as jest.Mock).mockReturnValueOnce(b)
+    ;(openTaskWorkspaceOrigin as jest.Mock)
+      .mockImplementationOnce(async (origin) => ({
+        origin,
+        transport: { call: remoteCall },
+        assertCurrent: jest.fn(),
+        close: jest.fn(),
+      }))
+      .mockImplementationOnce(async (origin) => ({
+        origin,
+        transport: { call: remoteCall },
+        assertCurrent: jest.fn(),
+        close: jest.fn(),
+      }))
+    useTaskWorkspaceStore.getState().activate({
+      taskId: "task-a",
+      runId: "run-a",
+      sessionId: "session-a",
+      workspaceRoot: "/repo/a",
+      executionRoot: "/execution/a",
+      state: "running",
+      bundleTurnId: "authority-turn",
+      origin: a,
+    })
+    await settleTaskWorkspaceTurn("session-a", 1)
+    await abortWorkspaceBundleTurn("authority-turn", a)
+    expect(remoteCall).toHaveBeenCalledWith("task_workspace_bundle_turn_settle", {
+      bundleTurnId: "authority-turn",
+      finalState: "ready",
+    })
+    expect(remoteCall).toHaveBeenCalledWith("task_workspace_bundle_turn_abort", {
+      bundleTurnId: "authority-turn",
+    })
+    expect(openTaskWorkspaceOrigin).toHaveBeenCalledWith(a)
+    expect(openTaskWorkspaceOrigin).not.toHaveBeenCalledWith(b)
+    expect(userAction).not.toHaveBeenCalled()
+    expect(call).not.toHaveBeenCalled()
+  })
   /**
    * The settle is driven by the chat status edge, not by
    * `openWorkspaceBundleTurnLease`, so the turn scope that covered the rest of
@@ -1765,7 +2006,7 @@ describe("the settle carries its own approval", () => {
    * refusal, and the run stayed `running` after a turn that had completed
    * perfectly, wedging the session's next turn.
    */
-  it("wraps the bundle settle so a companion is not refused", async () => {
+  it("uses the standing scope without opening a new interactive approval", async () => {
     useTaskWorkspaceStore.getState().activate({
       taskId: "task-workspace:approved",
       runId: `${runIdForTurn("approved", 1)}:ws-a`,
@@ -1780,10 +2021,11 @@ describe("the settle carries its own approval", () => {
 
     await settleTaskWorkspaceTurn("approved", 1)
 
-    expect(userAction).toHaveBeenCalledWith(
-      "task_workspace_bundle_turn_settle",
-      expect.any(Function)
-    )
+    expect(userAction).not.toHaveBeenCalled()
+    expect(call).toHaveBeenCalledWith("task_workspace_bundle_turn_settle", {
+      bundleTurnId: "turn-approved",
+      finalState: "ready",
+    })
   })
 
   it("closes the turn's standing scope once it settles", async () => {
@@ -1802,7 +2044,7 @@ describe("the settle carries its own approval", () => {
 
     // The chat controller drops the lease handle, so this is the only path that
     // ever closes the scope opened for the turn.
-    expect(closeTurnScope).toHaveBeenCalledWith("turn-scoped")
+    expect(closeTurnScope).toHaveBeenCalledWith("turn-scoped", undefined)
   })
 
   // The reclaim path ends a turn by ABORTING it, and that is the path a wedged
@@ -1813,11 +2055,11 @@ describe("the settle carries its own approval", () => {
 
     await abortWorkspaceBundleTurn("turn-aborted")
 
-    expect(closeTurnScope).toHaveBeenCalledWith("turn-aborted")
-    expect(forget).toHaveBeenCalledWith("turn-aborted")
+    expect(closeTurnScope).toHaveBeenCalledWith("turn-aborted", undefined)
+    expect(forget).toHaveBeenCalledWith("turn-aborted", undefined)
   })
 
-  it("wraps the legacy settle for the same reason", async () => {
+  it("does not request another interactive approval for an unbundled settle", async () => {
     useTaskWorkspaceStore.getState().activate({
       taskId: "task-workspace:legacy",
       runId: runIdForTurn("legacy", 2),
@@ -1830,7 +2072,11 @@ describe("the settle carries its own approval", () => {
 
     await settleTaskWorkspaceTurn("legacy", 2)
 
-    expect(userAction).toHaveBeenCalledWith("task_workspace_settle", expect.any(Function))
+    expect(userAction).not.toHaveBeenCalled()
+    expect(call).toHaveBeenCalledWith("task_workspace_settle", {
+      runId: runIdForTurn("legacy", 2),
+      finalState: "ready",
+    })
   })
 })
 
@@ -1912,7 +2158,7 @@ describe("a settle that does not land", () => {
     await expect(settleTaskWorkspaceTurn("wedged", 1)).resolves.toEqual([])
 
     expect(call).toHaveBeenCalledTimes(2)
-    expect(forget).toHaveBeenCalledWith("turn-wedged")
+    expect(forget).toHaveBeenCalledWith("turn-wedged", undefined)
     expect(release).not.toHaveBeenCalled()
     expect(reportedErrors).toEqual([])
   })
@@ -1964,9 +2210,9 @@ describe("a settle that does not land", () => {
 
     await settleTaskWorkspaceTurn("wedged", 1)
 
-    expect(release).toHaveBeenCalledWith("turn-wedged")
+    expect(release).toHaveBeenCalledWith("turn-wedged", undefined)
     // Released, NOT forgotten: the record is what the next refusal reclaims.
-    expect(forget).not.toHaveBeenCalledWith("turn-wedged")
+    expect(forget).not.toHaveBeenCalledWith("turn-wedged", undefined)
   })
 
   it("reports the failure instead of discarding it", async () => {
@@ -1989,7 +2235,7 @@ describe("a settle that does not land", () => {
 
     // Otherwise a turn that failed to settle keeps a step-up token alive for
     // its full TTL — the exact leak the scope exists to bound.
-    expect(closeTurnScope).toHaveBeenCalledWith("turn-wedged")
+    expect(closeTurnScope).toHaveBeenCalledWith("turn-wedged", undefined)
   })
 
   // No bundle turn id means no turn record, so there is nothing for a later

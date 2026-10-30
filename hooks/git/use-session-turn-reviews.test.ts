@@ -25,6 +25,7 @@ function row(runId: number, over: Partial<CodeAdoptionTurnRow> = {}): CodeAdopti
     runId,
     sessionId: "s1",
     taskWorkspaceRunId: `run:s1:${runId}`,
+    origin: { kind: "local" },
     workspaceRoot: "/repo",
     agentKind: "in-app",
     model: null,
@@ -89,6 +90,47 @@ describe("turnReviewOptions", () => {
       [1, "run:s1:1", "first"],
     ])
     expect(options[0]).toMatchObject({ files: 2, added: 5, removed: 1, ts: 200 })
+  })
+
+  it("retains every captured root and its owning Host for a historical selection", () => {
+    const origin = { kind: "remote" as const, hostId: "host-a" }
+    const runs = [
+      { runId: "r1", workspaceRoot: "/one", origin },
+      { runId: "r2", workspaceRoot: "/two", origin },
+    ]
+    const options = turnReviewOptions(
+      [
+        row(1, {
+          taskWorkspaceRunId: "r1",
+          workspaceRoot: "/one",
+          origin,
+          taskWorkspaceRuns: runs,
+        }),
+      ],
+      []
+    )
+    expect(options[0]).toMatchObject({ runId: "r1", workspaceRoot: "/one", origin, runs })
+  })
+
+  it("describes the full captured patch even when it contains only user contributions", () => {
+    const options = turnReviewOptions(
+      [
+        row(1, {
+          totalFiles: 0,
+          totalAdded: 0,
+          capturedFiles: [
+            { path: "upload.txt", added: 3, removed: 0, isNew: true, hunks: [], origin: "user" },
+          ],
+        }),
+      ],
+      []
+    )
+    expect(options).toHaveLength(1)
+    expect(options[0]).toMatchObject({ files: 1, added: 3, removed: 0 })
+  })
+
+  it("does not offer historical selections whose execution Host was never recorded", () => {
+    expect(turnReviewOptions([row(1, { origin: undefined })], [])).toEqual([])
   })
 })
 

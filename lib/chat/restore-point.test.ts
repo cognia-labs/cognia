@@ -16,6 +16,7 @@ function row(id: string, overrides: Partial<CodeAdoptionTurnRow> = {}): CodeAdop
     taskWorkspaceRunId: `run:${id}`,
     assistantMessageId: `a-${id}`,
     workspaceRoot: "/repo",
+    origin: { kind: "local" },
     agentKind: "in-app",
     model: null,
     ts: 1,
@@ -38,6 +39,7 @@ function patch(runId: string, overrides: Partial<PatchSet> = {}): PatchSet {
     baseRevision: 0,
     appliedRevision: 1,
     reversible: true,
+    appliedSelectionKnown: true,
     files: [],
     ...overrides,
   } as PatchSet
@@ -74,6 +76,52 @@ describe("turnPatchRunId", () => {
 })
 
 describe("planFileRestore", () => {
+  it("retains exact root, Host, contribution and applied-hunk scope for confirmation", () => {
+    const origin = { kind: "remote" as const, hostId: "host-a", accountId: "account-a" }
+    const captured = state(
+      "a",
+      {},
+      {
+        files: [
+          { path: "user.txt", origin: "user" },
+          { path: "unknown.txt", origin: "unknown" },
+          { path: "not-applied.txt", origin: "agent" },
+        ],
+        appliedSelection: [
+          { path: "user.txt", hunkIds: ["h1"] },
+          { path: "unknown.txt", hunkIds: [] },
+        ],
+      }
+    )
+    captured.run = { runId: "run:a", workspaceRoot: "/remote/project", origin }
+    const plan = planFileRestore([captured])
+    expect(plan).toMatchObject({
+      kind: "undoable",
+      files: 2,
+      targets: [
+        {
+          run: captured.run,
+          files: [
+            { path: "user.txt", origin: "user", hunkIds: ["h1"] },
+            { path: "unknown.txt", origin: "unknown", hunkIds: [] },
+          ],
+        },
+      ],
+    })
+  })
+  it("blocks restoration when any later capture is unavailable, including zero counted files", () => {
+    expect(
+      planFileRestore([
+        state("known"),
+        state("unknown", {
+          measurement: "unavailable",
+          trackingState: "unavailable",
+          totalFiles: 0,
+          files: [],
+        }),
+      ])
+    ).toMatchObject({ kind: "blocked", reason: "untracked", turns: 2 })
+  })
   it("has nothing to do when no later turn changed files", () => {
     expect(planFileRestore([])).toEqual({ kind: "none" })
     expect(planFileRestore([state("a", { totalFiles: 0, files: [] })])).toEqual({ kind: "none" })
@@ -85,6 +133,16 @@ describe("planFileRestore", () => {
       runIds: ["run:b", "run:a"],
       turns: 2,
       files: 2,
+      targets: [
+        {
+          run: { runId: "run:b", workspaceRoot: "/repo", origin: { kind: "local" } },
+          files: [{ path: "b.ts", origin: "unknown", hunkIds: [] }],
+        },
+        {
+          run: { runId: "run:a", workspaceRoot: "/repo", origin: { kind: "local" } },
+          files: [{ path: "a.ts", origin: "unknown", hunkIds: [] }],
+        },
+      ],
     })
   })
 
@@ -114,6 +172,26 @@ describe("planFileRestore", () => {
 })
 
 describe("runFileRestore", () => {
+  it("keeps distinct Host owners when roots reuse a run ID", async () => {
+    const undo = jest.fn().mockResolvedValue({ state: "reverted", conflicts: [], revision: 1 })
+    const refs = [
+      {
+        runId: "same-run",
+        workspaceRoot: "/repo",
+        origin: { kind: "remote" as const, hostId: "A" },
+      },
+      {
+        runId: "same-run",
+        workspaceRoot: "/repo",
+        origin: { kind: "remote" as const, hostId: "B" },
+      },
+    ]
+    await runFileRestore(["same-run", "same-run"], undo, refs)
+    expect(undo.mock.calls).toEqual([
+      ["same-run", refs[0].origin],
+      ["same-run", refs[1].origin],
+    ])
+  })
   const outcome = (state: ApplyOutcome["state"], conflicts = 0): ApplyOutcome => ({
     state,
     revision: 1,

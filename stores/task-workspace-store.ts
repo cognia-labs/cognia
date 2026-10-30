@@ -5,6 +5,7 @@ import type {
   ResourceChange,
   TaskRun,
   TaskWorkspaceResourceEvent,
+  TaskWorkspaceOrigin,
 } from "@/lib/task-workspace/types"
 
 export interface ActiveTaskRun {
@@ -18,6 +19,7 @@ export interface ActiveTaskRun {
   traceId?: string
   traceSpanId?: string
   surface?: string
+  origin?: TaskWorkspaceOrigin
   /**
    * The bundle turn this run belongs to, when it came from one.
    *
@@ -32,12 +34,15 @@ export interface ActiveTaskRun {
 interface TaskWorkspaceStore {
   activeBySession: Record<string, ActiveTaskRun>
   activeByRun: Record<string, ActiveTaskRun>
+  /** Renderer leases are independent of the resource/history presentation. */
+  ownedRunBySession: Record<string, string>
   resourcesByTask: Record<string, ResourceChange[]>
   provisionalByRun: Record<string, TaskWorkspaceResourceEvent>
   activate: (run: ActiveTaskRun) => void
   bindTrace: (sessionId: string, traceId: string, traceSpanId: string) => void
   reconcile: (sessionId: string, resources: ResourceChange[]) => void
   reconcileRun: (runId: string, resources: ResourceChange[]) => void
+  completeRun: (runId: string, finalState: TaskRun["state"], resources: ResourceChange[]) => void
   ingestEvent: (event: TaskWorkspaceResourceEvent) => void
   clear: () => void
 }
@@ -45,13 +50,23 @@ interface TaskWorkspaceStore {
 export const useTaskWorkspaceStore = create<TaskWorkspaceStore>((set) => ({
   activeBySession: {},
   activeByRun: {},
+  ownedRunBySession: {},
   resourcesByTask: {},
   provisionalByRun: {},
   activate: (run) =>
-    set((state) => ({
-      activeBySession: { ...state.activeBySession, [run.sessionId]: run },
-      activeByRun: { ...state.activeByRun, [run.runId]: run },
-    })),
+    set((state) => {
+      const ownedRunBySession = { ...state.ownedRunBySession }
+      if (run.state === "running" || run.state === "settling") {
+        ownedRunBySession[run.sessionId] = run.runId
+      } else if (ownedRunBySession[run.sessionId] === run.runId) {
+        delete ownedRunBySession[run.sessionId]
+      }
+      return {
+        activeBySession: { ...state.activeBySession, [run.sessionId]: run },
+        activeByRun: { ...state.activeByRun, [run.runId]: run },
+        ownedRunBySession,
+      }
+    }),
   bindTrace: (sessionId, traceId, traceSpanId) =>
     set((state) => {
       const active = state.activeBySession[sessionId]
@@ -74,14 +89,6 @@ export const useTaskWorkspaceStore = create<TaskWorkspaceStore>((set) => ({
       const provisionalByRun = { ...state.provisionalByRun }
       delete provisionalByRun[active.runId]
       return {
-        activeBySession: {
-          ...state.activeBySession,
-          [sessionId]: { ...active, state: "ready" },
-        },
-        activeByRun: {
-          ...state.activeByRun,
-          [active.runId]: { ...active, state: "ready" },
-        },
         resourcesByTask: { ...state.resourcesByTask, [active.taskId]: resources },
         provisionalByRun,
       }
@@ -90,19 +97,45 @@ export const useTaskWorkspaceStore = create<TaskWorkspaceStore>((set) => ({
     set((state) => {
       const active = state.activeByRun[runId]
       if (!active) return state
+      const current = state.activeBySession[active.sessionId]
+      if (current?.taskId === active.taskId && current.runId !== runId) return state
+      const provisionalByRun = { ...state.provisionalByRun }
+      delete provisionalByRun[runId]
+      return {
+        resourcesByTask: { ...state.resourcesByTask, [active.taskId]: resources },
+        provisionalByRun,
+      }
+    }),
+  completeRun: (runId, finalState, resources) =>
+    set((state) => {
+      const active = state.activeByRun[runId]
+      if (!active) return state
       const provisionalByRun = { ...state.provisionalByRun }
       delete provisionalByRun[runId]
       const activeBySession = { ...state.activeBySession }
       if (activeBySession[active.sessionId]?.runId === runId) {
-        activeBySession[active.sessionId] = { ...active, state: "ready" }
+        activeBySession[active.sessionId] = { ...active, state: finalState }
       }
+      const ownedRunBySession = { ...state.ownedRunBySession }
+      if (
+        finalState !== "running" &&
+        finalState !== "settling" &&
+        ownedRunBySession[active.sessionId] === runId
+      ) {
+        delete ownedRunBySession[active.sessionId]
+      }
+      const current = activeBySession[active.sessionId]
+      const newerTaskRun = current?.taskId === active.taskId && current.runId !== runId
       return {
         activeBySession,
         activeByRun: {
           ...state.activeByRun,
-          [runId]: { ...active, state: "ready" },
+          [runId]: { ...active, state: finalState },
         },
-        resourcesByTask: { ...state.resourcesByTask, [active.taskId]: resources },
+        ownedRunBySession,
+        resourcesByTask: newerTaskRun
+          ? state.resourcesByTask
+          : { ...state.resourcesByTask, [active.taskId]: resources },
         provisionalByRun,
       }
     }),
@@ -115,5 +148,11 @@ export const useTaskWorkspaceStore = create<TaskWorkspaceStore>((set) => ({
       }
     }),
   clear: () =>
-    set({ activeBySession: {}, activeByRun: {}, resourcesByTask: {}, provisionalByRun: {} }),
+    set({
+      activeBySession: {},
+      activeByRun: {},
+      ownedRunBySession: {},
+      resourcesByTask: {},
+      provisionalByRun: {},
+    }),
 }))

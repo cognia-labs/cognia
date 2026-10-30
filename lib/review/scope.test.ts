@@ -62,6 +62,48 @@ beforeEach(() => {
   readTaskResourceDiffMock.mockReset().mockResolvedValue("")
 })
 
+it("distinguishes a missing historical patch from an empty recorded turn", async () => {
+  const result = await listReviewScopeFiles({
+    scope: "lastTurn",
+    repositoryRoots: ["/r"],
+    defaults: { lastTurnRunId: "gone" },
+  })
+  expect(result).toEqual({
+    files: [],
+    unavailable: [{ repositoryRoot: "/r", reason: "missing-patch" }],
+  })
+})
+
+it("makes legacy retained text with no stored hunks reachable through Review", async () => {
+  getTaskPatchSetMock.mockResolvedValue({
+    runId: "old",
+    files: [
+      {
+        path: "created.txt",
+        kind: "created",
+        resourceKind: "file",
+        beforeHash: null,
+        afterHash: "retained",
+        binary: false,
+        hunks: [],
+      },
+    ],
+  })
+  readTaskResourceDiffMock.mockResolvedValue(
+    "diff --git a/created.txt b/created.txt\n--- /dev/null\n+++ b/created.txt\n@@ -0,0 +1 @@\n+retained body\n"
+  )
+  const request: ReviewScopeRequest = {
+    scope: "lastTurn",
+    repositoryRoots: ["/root"],
+    defaults: { lastTurnRunId: "old" },
+  }
+  const { files } = await listReviewScopeFiles(request)
+  expect(files[0].availability).toBe("available")
+  const diff = await loadReviewScopeDiff(request, files[0])
+  expect(readTaskResourceDiffMock).toHaveBeenCalledWith("old", "created.txt")
+  expect(diff.hunks).toHaveLength(1)
+})
+
 it("collects last-turn Task Workspace patches across selected roots", async () => {
   getTaskPatchSetMock
     .mockResolvedValueOnce({
@@ -377,6 +419,17 @@ describe("staged and unstaged scopes", () => {
 })
 
 describe("loadReviewScopeDiff", () => {
+  it("preserves every independently stored hunk for a single historical file", async () => {
+    const prefix = "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n"
+    readTaskResourceDiffMock.mockResolvedValue(
+      prefix + "@@ -1 +1 @@\n-a\n+b\n" + prefix + "@@ -20 +20 @@\n-c\n+d\n"
+    )
+    const diff = await loadReviewScopeDiff(
+      { scope: "lastTurn", repositoryRoots: ["/r"], defaults: { lastTurnRunId: "run:1" } },
+      { repositoryRoot: "/r", path: "x.ts", source: "lastTurn", reviewKey: "x" }
+    )
+    expect(diff.hunks.map((hunk) => hunk.newStart)).toEqual([1, 20])
+  })
   it("parses a turn's diff text into hunks without full texts", async () => {
     readTaskResourceDiffMock.mockResolvedValue(
       [
