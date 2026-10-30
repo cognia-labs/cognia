@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
+import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -288,6 +289,12 @@ function HandoffForm({ target, config }: Props) {
       proposal.quote.expiresAt <= Date.now()
     )
       return
+    // The criteria become the child's first prompt, which the send-time gate
+    // would refuse only after the Host has billed a desktop. Refuse first.
+    if (!hasNoLeakingPiiDeep(preparedInput.current.criteria)) {
+      setRunError("criteriaSensitive")
+      return
+    }
     pending.current = true
     setBusy(true)
     setRunError(undefined)

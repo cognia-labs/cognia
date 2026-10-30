@@ -7341,6 +7341,62 @@ describe("agent self-invocation tools (Skill / SlashCommand / spawn_task / sessi
     }
   })
 
+  it("gives only an attached acceptance child the evidence tools, and others the proposal (ADR-0233 A6)", async () => {
+    const tauri = isTauri as jest.Mock
+    tauri.mockReturnValue(true)
+    try {
+      const source = await resolveSendOptions({
+        session: makeSession({ id: "s1", characterId: "c1" }),
+        character: makeChar({ id: "c1" }),
+      })
+      expect(toolNames(source)).toContain("propose_acceptance")
+      expect(source.permissionRuleset?.propose_acceptance).toBe("allow")
+      expect(toolNames(source)).not.toContain("acceptance_checkpoint")
+      expect(source.permissionRuleset?.acceptance_checkpoint).toBeUndefined()
+
+      const child = await resolveSendOptions({
+        session: makeSession({
+          id: "child",
+          characterId: "c1",
+          managedAcceptance: { acceptanceId: "run-1" },
+        }),
+        character: makeChar({ id: "c1" }),
+      })
+      for (const name of ["acceptance_checkpoint", "acceptance_complete"]) {
+        expect(toolNames(child)).toContain(name)
+        expect(child.permissionRuleset?.[name]).toBe("allow")
+      }
+      // A child records evidence for its own run; it never proposes another.
+      expect(toolNames(child)).not.toContain("propose_acceptance")
+
+      const im = await resolveSendOptions({
+        session: makeSession({
+          id: "s2",
+          characterId: "c1",
+          platformBinding: { adapterId: "telegram" } as never,
+        }),
+        character: makeChar({ id: "c1" }),
+      })
+      expect(toolNames(im)).not.toContain("propose_acceptance")
+    } finally {
+      tauri.mockReturnValue(false)
+    }
+  })
+
+  it("withholds every acceptance tool and its tier off the desktop shell", async () => {
+    const opts = await resolveSendOptions({
+      session: makeSession({
+        id: "child",
+        characterId: "c1",
+        managedAcceptance: { acceptanceId: "run-1" },
+      }),
+      character: makeChar({ id: "c1" }),
+    })
+    expect(toolNames(opts)).not.toContain("acceptance_checkpoint")
+    expect(toolNames(opts)).not.toContain("propose_acceptance")
+    expect(opts.permissionRuleset?.acceptance_checkpoint).toBeUndefined()
+  })
+
   it.each([
     ["a plain browser", false],
     ["the mobile shell", true],

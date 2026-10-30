@@ -66,6 +66,12 @@ import {
   type ProjectHistoryToolDeps,
 } from "./project-history-tool"
 import {
+  isAcceptanceBuiltinTool,
+  isAcceptanceProposalTool,
+  runAcceptanceBuiltinTool,
+  runAcceptanceProposalTool,
+} from "./acceptance-builtin-tools"
+import {
   isArtifactBuiltinTool,
   resolveArtifactToolDeps,
   runArtifactBuiltinTool,
@@ -874,6 +880,22 @@ async function runPluginToolExec(
         await resolveTemplateToolDeps(),
         { sessionId: request.sessionId }
       )
+      return { ...baseResponse, result: assertSafePluginToolResult(result) }
+    }
+    // ── Managed desktop acceptance (ADR-0233 A6) ──────────────────────────
+    // The evidence tools act only for the session the Host run was attached
+    // to (the Host rechecks the delegation and session key); the proposal
+    // reads deliveries and a price and never spends.
+    if (isAcceptanceBuiltinTool(request.name)) {
+      const result = await runAcceptanceBuiltinTool(request.name, request.args, {
+        sessionId: request.sessionId,
+      })
+      return { ...baseResponse, result: assertSafePluginToolResult(result) }
+    }
+    if (isAcceptanceProposalTool(request.name)) {
+      const result = await runAcceptanceProposalTool(request.args, {
+        sessionId: request.sessionId,
+      })
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }
     if (isArtifactBuiltinTool(request.name)) {

@@ -1,4 +1,9 @@
 // Read the new split messages directly; aggregate regeneration belongs to the orchestrator.
+const mockPiiClean = jest.fn(() => true)
+jest.mock("@cognia/redact", () => ({
+  ...jest.requireActual("@cognia/redact"),
+  hasNoLeakingPiiDeep: (value: unknown) => mockPiiClean(value),
+}))
 jest.mock("next-intl", () => {
   const React = jest.requireActual<typeof import("react")>("react")
   const Context = React.createContext<Record<string, unknown>>({})
@@ -327,6 +332,17 @@ function notify(next: ManagedDesktopAcceptanceRun[]) {
   const calls = jest.mocked(watchManagedDesktopAcceptance).mock.calls
   calls[calls.length - 1][1](next)
 }
+test("criteria that would leak personal data are refused before anything is billed", async () => {
+  await prepareLocal()
+  mockPiiClean.mockReturnValueOnce(false)
+  fireEvent.click(screen.getByRole("checkbox", { name: acceptance.confirmCost }))
+  fireEvent.click(screen.getByRole("button", { name: acceptance.start }))
+  expect(await screen.findByText(acceptance.criteriaSensitive)).toBeInTheDocument()
+  expect(mockPiiClean).toHaveBeenCalledWith([
+    { description: "Login works", screenshotRequired: false },
+  ])
+  expect(api.acceptanceStart).not.toHaveBeenCalled()
+})
 test("a human must confirm a current quote; Start creates one child only after awaitingSession", async () => {
   await prepareLocal()
   expect(screen.getByRole("button", { name: acceptance.start })).toBeDisabled()

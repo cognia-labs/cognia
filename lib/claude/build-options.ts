@@ -3180,6 +3180,15 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // setting can change between the manifest being built and a tool being run.
   const petToolsSurfaced =
     appSettings?.selfInvokeTools?.pet === true && (await import("@/lib/tauri")).isTauri()
+  // Managed desktop acceptance (ADR-0233 A6). The evidence tools exist only in
+  // the child session a Host acceptance run was attached to; every other
+  // desktop chat may propose an acceptance, which reads deliveries and a price
+  // and cannot spend. Both talk to the local Host, so both need the desktop.
+  const managedAcceptanceHost = (await import("@/lib/tauri")).isTauri() && !isCliHost()
+  const acceptanceToolsSurfaced =
+    managedAcceptanceHost && Boolean(session?.managedAcceptance?.acceptanceId)
+  const acceptanceProposalSurfaced =
+    managedAcceptanceHost && artifactsChannelAvailable && !session?.managedAcceptance
   const { buildTemplateToolRuleset } = await import("@/lib/claude/permissions/template-tool-rules")
   const { buildPetToolRuleset } = await import("@/lib/claude/permissions/pet-tool-rules")
   const { buildMediaToolRuleset } = await import("@/lib/claude/permissions/media-tool-rules")
@@ -3187,6 +3196,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     await import("@/lib/claude/permissions/project-coordinator-tool-rules")
   const { buildAgentBuilderToolRuleset } =
     await import("@/lib/claude/permissions/agent-builder-tool-rules")
+  const { buildAcceptanceProposalToolRuleset, buildAcceptanceToolRuleset } =
+    await import("@/lib/claude/permissions/acceptance-tool-rules")
   // A conversation's files (ADR-0222 §9). One answer gates the manifest below
   // and this tier: reading and revoking for any conversation, sharing only
   // when the effective policy allows agent sharing.
@@ -3207,6 +3218,8 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     videoToolsSurfaced ? buildMediaToolRuleset() : undefined,
     projectRoleToolsSurfaced ? buildProjectCoordinatorToolRuleset() : undefined,
     agentBuilderToolsSurfaced ? buildAgentBuilderToolRuleset() : undefined,
+    acceptanceToolsSurfaced ? buildAcceptanceToolRuleset() : undefined,
+    acceptanceProposalSurfaced ? buildAcceptanceProposalToolRuleset() : undefined,
     filespaceTools.surfaced
       ? buildFilespaceToolRuleset({ sharing: filespaceTools.sharing })
       : undefined,
@@ -4245,6 +4258,24 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       ]
     } catch (err) {
       loggers.app.warn("failed to append artifact built-in tools", { error: String(err) })
+    }
+  }
+  // Managed desktop acceptance (ADR-0233 A6). Gated on the same flags as the
+  // consent tier above.
+  if (acceptanceToolsSurfaced || acceptanceProposalSurfaced) {
+    try {
+      const { buildAcceptanceManifestEntries, buildAcceptanceProposalManifestEntries } =
+        await import("@/lib/claude/acceptance-builtin-tools")
+      const entries = acceptanceToolsSurfaced
+        ? buildAcceptanceManifestEntries()
+        : buildAcceptanceProposalManifestEntries()
+      const existing = new Set((opts.pluginTools ?? []).map((entry) => entry.name))
+      opts.pluginTools = [
+        ...(opts.pluginTools ?? []),
+        ...entries.filter((entry) => !existing.has(entry.name)),
+      ]
+    } catch (err) {
+      loggers.app.warn("failed to append acceptance built-in tools", { error: String(err) })
     }
   }
   // A conversation's files and their shares (ADR-0222 §9). Gated on the same

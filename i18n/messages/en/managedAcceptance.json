@@ -44,5 +44,6 @@
     "optional": "Screenshot optional",
     "open": "Open acceptance panel",
     "openFailed": "The acceptance panel could not be opened. Unlock the source account and try again."
-  }
+  },
+  "criteriaSensitive": "A criterion looks like it contains personal or secret data. Remove it before starting: the criteria are sent to the acceptance agent."
 }

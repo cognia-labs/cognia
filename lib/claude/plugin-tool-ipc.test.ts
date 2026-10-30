@@ -137,6 +137,16 @@ jest.mock("./team-builtin-tools", () => {
     },
   }
 })
+const mockRunAcceptanceBuiltinTool = jest.fn()
+const mockRunAcceptanceProposalTool = jest.fn()
+jest.mock("./acceptance-builtin-tools", () => {
+  const actual = jest.requireActual("./acceptance-builtin-tools")
+  return {
+    ...actual,
+    runAcceptanceBuiltinTool: (...args: unknown[]) => mockRunAcceptanceBuiltinTool(...args),
+    runAcceptanceProposalTool: (...args: unknown[]) => mockRunAcceptanceProposalTool(...args),
+  }
+})
 const mockRunWorkingSetTool = jest.fn()
 jest.mock("./working-set-tool", () => ({
   isWorkingSetTool: (name: string) => name === "working_set",
@@ -1254,6 +1264,49 @@ describe("handlePluginToolExec — desktop pet built-ins", () => {
       ok: true,
       name: "Boba",
     })
+  })
+})
+
+describe("handlePluginToolExec — managed desktop acceptance built-ins", () => {
+  afterEach(() => {
+    mockRunAcceptanceBuiltinTool.mockReset()
+    mockRunAcceptanceProposalTool.mockReset()
+    __setPluginToolResolverForTesting(null)
+  })
+
+  it.each(["acceptance_checkpoint", "mcp__cognia-plugin-tools__acceptance_complete"])(
+    "routes %s to the acceptance runner with the calling session, ahead of plugins",
+    async (name) => {
+      const execute = jest.fn()
+      __setPluginToolResolverForTesting({ getTool: () => ({ pluginId: "x", execute }) })
+      mockRunAcceptanceBuiltinTool.mockResolvedValue({ ok: true, code: "recorded" })
+      const res = await handlePluginToolExec({
+        id: "r1",
+        name,
+        args: { criterionId: "criterion-0" },
+        sessionId: "child",
+      } as never)
+      expect(execute).not.toHaveBeenCalled()
+      expect(mockRunAcceptanceBuiltinTool).toHaveBeenCalledWith(
+        name,
+        { criterionId: "criterion-0" },
+        { sessionId: "child" }
+      )
+      expect((res as { result?: unknown }).result).toEqual({ ok: true, code: "recorded" })
+    }
+  )
+
+  it("routes the proposal to its side-effect-free runner", async () => {
+    mockRunAcceptanceProposalTool.mockResolvedValue({ ok: false, code: "invalid_arguments" })
+    const res = await handlePluginToolExec({
+      id: "r2",
+      name: "propose_acceptance",
+      args: {},
+      sessionId: "source",
+    } as never)
+    expect(mockRunAcceptanceProposalTool).toHaveBeenCalledWith({}, { sessionId: "source" })
+    expect(mockRunAcceptanceBuiltinTool).not.toHaveBeenCalled()
+    expect((res as { result?: unknown }).result).toEqual({ ok: false, code: "invalid_arguments" })
   })
 })
 

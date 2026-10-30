@@ -26758,6 +26758,7 @@
       "screenshot": "标准 {number} 必须截图",
       "title": "验收标准"
     },
+    "criteriaSensitive": "某条验收标准似乎包含个人或机密数据。请在开始前删除：验收标准会发送给验收 agent。",
     "deadline": "硬性截止时间：{at}",
     "executionDisabled": "此配置的资格验证和验收开关生效后才能开始验收。",
     "localOnly": "请在所属桌面 Host 上开始验收。远程 Host 子会话绑定尚不可用。",

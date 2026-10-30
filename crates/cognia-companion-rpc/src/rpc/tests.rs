@@ -1585,6 +1585,8 @@ fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
         let execute = matches!(
             *name,
             "managed_desktop_results_capture"
+                | "managed_desktop_acceptance_checkpoint"
+                | "managed_desktop_acceptance_complete"
                 | "managed_desktop_results_approve"
                 | "managed_desktop_results_complete"
                 | "managed_desktop_results_prepare_delete"

@@ -2,7 +2,7 @@
 //! transactions own fences; delivery and evidence stores remain their owners.
 use crate::managed_desktop_handoff::{self as handoff_rpc, PrepareHandoff, TransferMode};
 use crate::managed_desktop_results::{self as results, Capture, Complete};
-use crate::managed_desktops::{HostEventSink, ACCEPTANCE_COMMANDS};
+use crate::managed_desktops::HostEventSink;
 use cognia_automation::cua_sandbox::managed::{evidence::*, handoff::*, *};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -638,7 +638,9 @@ pub(crate) async fn tools(
     args: Value,
 ) -> Result<Value> {
     local_tools(local)?;
-    if !ACCEPTANCE_COMMANDS.contains(&name) {
+    if !name.starts_with("managed_desktop_acceptance_")
+        || !crate::managed_desktops::COMMANDS.contains(&name)
+    {
         return Err(refused("managed_desktop_unknown_command"));
     }
     let decode =

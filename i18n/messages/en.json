@@ -26758,6 +26758,7 @@
       "screenshot": "Screenshot required for criterion {number}",
       "title": "Acceptance criteria"
     },
+    "criteriaSensitive": "A criterion looks like it contains personal or secret data. Remove it before starting: the criteria are sent to the acceptance agent.",
     "deadline": "Hard deadline: {at}",
     "executionDisabled": "Acceptance is unavailable until this configuration's qualification and acceptance switch are effective.",
     "localOnly": "Start acceptance on the owning desktop Host. Remote-Host child bindings are unavailable.",

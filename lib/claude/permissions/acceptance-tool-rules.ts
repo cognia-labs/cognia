@@ -9,3 +9,11 @@ export function buildAcceptanceToolRuleset(): Ruleset {
   }
   return rules
 }
+
+/** The proposal only reads deliveries and a price; it cannot spend, so it never asks. */
+export function buildAcceptanceProposalToolRuleset(): Ruleset {
+  return {
+    propose_acceptance: "allow",
+    "mcp__cognia-plugin-tools__propose_acceptance": "allow",
+  }
+}
