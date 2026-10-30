@@ -91,6 +91,11 @@ describe("CompanionWorkerTransport pinning", () => {
     const server = https.createServer(
       { key: readFileSync(keyPath), cert: certificate },
       (request, response) => {
+        if (request.url === "/stream") {
+          response.writeHead(200, { "content-type": "text/event-stream" })
+          response.write("data: first\n\n")
+          return
+        }
         const chunks: Buffer[] = []
         request.on("data", (chunk) => chunks.push(Buffer.from(chunk)))
         request.on("end", () => {
@@ -129,6 +134,19 @@ describe("CompanionWorkerTransport pinning", () => {
         serverFingerprint: `sha256-${pin}`,
       })
       await expect(posted.json()).resolves.toEqual({ ok: true, method: "POST", body: "payload" })
+      const controller = new AbortController()
+      const streaming = await transport.fetch(`https://localhost:${address.port}/stream`, {
+        method: "GET",
+        serverFingerprint: pin,
+        signal: controller.signal,
+      })
+      const reader = streaming.body!.getReader()
+      const first = await reader.read()
+      expect(Buffer.from(first.value!).toString("utf8")).toBe("data: first\n\n")
+      controller.abort()
+      await expect(reader.read()).rejects.toThrow()
+      reader.releaseLock()
+
       await expect(
         transport.fetch(`https://localhost:${address.port}/health`, {
           method: "GET",

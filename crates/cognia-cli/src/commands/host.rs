@@ -862,18 +862,8 @@ fn run_call(
                 )
                 .with_exit(6)
             })?;
-            match poll_operation_with_retry(&agent, &resolved, &token, operation_id) {
-                Ok(outcome) => outcome,
-                Err(error) if error.http_status == Some(404) => post_rpc_with_retry(
-                    &agent,
-                    &resolved,
-                    &token,
-                    name,
-                    &body,
-                    idempotency_key.as_deref(),
-                )?,
-                Err(error) => return Err(error),
-            }
+            // A missing/hidden receipt is not permission to repeat a mutation.
+            poll_operation_with_retry(&agent, &resolved, &token, operation_id)?
         } else {
             post_rpc_with_retry(
                 &agent,
@@ -887,7 +877,8 @@ fn run_call(
         if outcome.status == 202 {
             last_operation_id = outcome
                 .body
-                .get("operationId")
+                .get("id")
+                .or_else(|| outcome.body.get("operationId"))
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .or(last_operation_id);
@@ -1684,6 +1675,18 @@ fn poll_operation_with_retry(
 }
 
 fn parse_operation_response(outcome: HttpOutcome) -> std::result::Result<HttpOutcome, HostFailure> {
+    if let Some(done) = outcome.body.get("done").and_then(Value::as_bool) {
+        if !done { return Ok(HttpOutcome { status: 202, body: outcome.body }); }
+        if outcome.body.get("status").and_then(Value::as_str) == Some("cancelled") {
+            return Err(HostFailure::new("server", "operation_cancelled", "the operation was cancelled").with_exit(6));
+        }
+        if let Some(error) = outcome.body.get("error").filter(|v| !v.is_null()) {
+            let status = error.get("status").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok()).unwrap_or(500);
+            return Err(server_failure_from_detail(status, error));
+        }
+        if let Some(result) = outcome.body.get("result") { return Ok(HttpOutcome {status:200,body:result.clone()}); }
+        return Err(HostFailure::new("server", "invalid_operation_response", "completed operation has no result or error").with_exit(6));
+    }
     let operation_status = outcome
         .body
         .get("status")
@@ -1796,7 +1799,8 @@ fn server_failure_from_detail(status: u16, detail: &Value) -> HostFailure {
         .and_then(Value::as_str)
         .unwrap_or("headless_rpc_failed");
     let message = detail
-        .get("message")
+        .get("detail")
+        .or_else(|| detail.get("message"))
         .and_then(Value::as_str)
         .unwrap_or("the Headless server rejected the RPC request");
     let retryable = detail
@@ -3445,5 +3449,15 @@ mod tests {
         // A non-object page aborts rather than silently dropping data.
         let error = merge_page(&mut acc, &json!([1]), &plan).expect_err("non-object");
         assert_eq!(error.code, "pagination_non_object_page");
+    }
+
+    #[test]
+    fn canonical_operation_values_are_preserved() {
+        for value in [json!(null), json!(false), json!("hello"), json!([1])] {
+            let outcome = parse_operation_response(HttpOutcome { status: 200, body: json!({"id":"op", "done":true,"status":"succeeded","result":value}) }).expect("canonical result");
+            assert_eq!(outcome.body, value);
+        }
+        let cancelled = parse_operation_response(HttpOutcome {status:200, body:json!({"id":"op","done":true,"status":"cancelled"})}).expect_err("cancelled must fail");
+        assert_eq!(cancelled.code, "operation_cancelled");
     }
 }

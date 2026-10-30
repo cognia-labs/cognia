@@ -1,3 +1,4 @@
+import Ajv, { type ValidateFunction } from "ajv"
 /**
  * Turn typed flags and `--data` into a request body, or refuse before sending.
  *
@@ -13,6 +14,51 @@ import fs from "node:fs"
 
 import { GLOBAL_FLAG_NAMES } from "../cli/format"
 import type { ApiCommandEntry, ApiCommandFlag } from "./types"
+
+const validator = new Ajv({ strict: false, allErrors: true, logger: false })
+validator.addFormat("uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
+validator.addFormat("uri", {
+  validate: (value: string) => {
+    try {
+      return Boolean(new URL(value).protocol)
+    } catch {
+      return false
+    }
+  },
+})
+validator.addFormat("date-time", {
+  validate: (value: string) =>
+    /^\d{4}-\d\d-\d\dT.+(?:Z|[+-]\d\d:\d\d)$/i.test(value) && Number.isFinite(Date.parse(value)),
+})
+for (const name of ["int64", "uint64", "uint32", "uint16", "uint", "int32"])
+  validator.addFormat(name, {
+    type: "number",
+    validate: (value: number) =>
+      Number.isSafeInteger(value) && (!name.startsWith("u") || value >= 0),
+  })
+validator.addFormat("double", { type: "number", validate: Number.isFinite })
+const compiled = new WeakMap<object, ValidateFunction>()
+
+export function validateContract(
+  entry: ApiCommandEntry,
+  value: unknown,
+  direction: "input" | "output" = "input"
+): BodyRefusal | undefined {
+  const schema = direction === "input" ? entry.inputSchema : entry.outputSchema
+  if (!schema) return undefined
+  let check = compiled.get(schema)
+  if (!check) {
+    check = validator.compile(schema)
+    compiled.set(schema, check)
+  }
+  if (check(value)) return undefined
+  return {
+    ok: false,
+    error: `${entry.name} violates its ${direction} schema`,
+    details: check.errors?.map((error) => `${error.instancePath || "/"}: ${error.message}`),
+    fix: [`cognia-agent api schema ${entry.name}`],
+  }
+}
 
 export interface BodyRefusal {
   ok: false
@@ -73,6 +119,7 @@ function coerce(
   flag: ApiCommandFlag,
   raw: string | boolean
 ): { value: unknown } | { error: string } {
+  if (flag.nullable && raw === "null") return { value: null }
   if (flag.type === "boolean") {
     if (typeof raw === "boolean") return { value: raw }
     if (raw === "true") return { value: true }
@@ -166,7 +213,7 @@ export function buildRequestBody(input: BuildBodyInput): BodyResult {
         fix: [`cognia-agent api describe ${entry.name}`],
       }
     }
-    return { ok: true, body }
+    return validateContract(entry, body) ?? { ok: true, body }
   }
 
   const unknown: string[] = []
@@ -250,7 +297,7 @@ export function buildRequestBody(input: BuildBodyInput): BodyResult {
     }
   }
 
-  return { ok: true, body }
+  return validateContract(entry, body) ?? { ok: true, body }
 }
 
 /** A fillable request body for `api schema --template`. */

@@ -33,6 +33,21 @@ export interface TranscriptFs {
   write?: (absPath: string, content: string) => void
 }
 
+/** Keep a --no-session conversation usable without reading or writing session files. */
+export function createTransientTranscriptFs(): TranscriptFs {
+  const files = new Map<string, string>()
+  return {
+    append: (target, line) => {
+      files.set(target, (files.get(target) ?? "") + line)
+    },
+    read: (target) => files.get(target) ?? null,
+    mkdirp() {},
+    write: (target, content) => {
+      files.set(target, content)
+    },
+  }
+}
+
 export const realTranscriptFs: TranscriptFs = {
   append: (p, line) => fs.appendFileSync(p, line),
   read: (p) => {

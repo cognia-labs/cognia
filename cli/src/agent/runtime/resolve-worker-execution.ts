@@ -62,6 +62,9 @@ export function resolveWorkerExecutionProfile(
       `worker backend is missing required capabilities: ${missingRequired.join(", ")}`
     )
   }
+  if (spec.runtimeAdapter === "vscode-chat") {
+    throw new Error("Chat participant execution cannot be advertised by a remote worker")
+  }
 
   return {
     backend: selected.backend,

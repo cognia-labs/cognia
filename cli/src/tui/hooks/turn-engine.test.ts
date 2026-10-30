@@ -16,6 +16,7 @@ import { DEFAULT_RESOLVED_CONFIG } from "../../config/schema"
 import { CliDbSnapshotError } from "../../db/bootstrap"
 import { resetRenderDiagnostics, snapshotRenderDiagnostics } from "../runtime/render-diagnostics"
 import { __clearLiveSubagentsForTesting, listLiveSubagents } from "../../agent/subagent-live-output"
+import { WorkerWorkspaceError } from "../../worker/workspace-client"
 
 const okResult = (overrides?: Partial<RunAndCaptureResult>): RunAndCaptureResult => ({
   text: "done",
@@ -23,6 +24,35 @@ const okResult = (overrides?: Partial<RunAndCaptureResult>): RunAndCaptureResult
   a2uiSurfaces: {},
   a2uiSurfaceOrder: [],
   ...overrides,
+})
+
+it("does not send when the capture authority refuses a fenced root", async () => {
+  const actions: TuiAction[] = []
+  const send = jest.fn(async () => okResult())
+  const stop = jest.fn(async () => undefined)
+  const outcome = await runTurn({
+    session: { send },
+    prompt: "write",
+    dispatch: (action) => actions.push(action),
+    gate: async () => ({ decision: "deny" }),
+    openWorkspaceCapture: async () => {
+      throw new WorkerWorkspaceError(
+        "capture_refused",
+        "local workspace observation is already active"
+      )
+    },
+    stopWorkspaceCaptureExecutor: stop,
+  })
+  expect(outcome).toEqual({ ok: false, recoverable: true })
+  expect(send).not.toHaveBeenCalled()
+  expect(stop).not.toHaveBeenCalled()
+  expect(actions).toContainEqual(
+    expect.objectContaining({
+      type: "TURN_ERROR",
+      message: "local workspace observation is already active",
+    })
+  )
+  expect(actions.some((action) => action.type === "TURN_COMMIT")).toBe(false)
 })
 
 describe("createGateController", () => {
@@ -229,6 +259,162 @@ describe("createGateController auto-approve", () => {
 })
 
 describe("runTurn", () => {
+  it("acquires the workspace baseline before sending and publishes its settled receipt", async () => {
+    const order: string[] = []
+    const receipt = {
+      available: true as const,
+      taskId: "cli:s",
+      runId: "r",
+      workspaceRoot: "/work",
+    }
+    const finish = jest.fn(async (state: string, stopped?: boolean) => {
+      order.push(`finish:${state}:${stopped}`)
+      return receipt
+    })
+    let acquired!: () => void
+    const pending = runTurn({
+      session: {
+        send: async () => {
+          order.push("send")
+          return okResult()
+        },
+      },
+      prompt: "edit",
+      dispatch: () => {},
+      gate: async () => ({ decision: "allow" }),
+      openWorkspaceCapture: async () => {
+        order.push("begin")
+        await new Promise<void>((resolve) => {
+          acquired = resolve
+        })
+        order.push("acquired")
+        return { finish }
+      },
+      onWorkspaceCapture: (value) => {
+        expect(value).toEqual(receipt)
+        order.push("receipt")
+      },
+    })
+    expect(order).toEqual(["begin"])
+    acquired()
+    await expect(pending).resolves.toMatchObject({ ok: true })
+    expect(order).toEqual(["begin", "acquired", "send", "finish:ready:true", "receipt"])
+    expect(finish).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])(
+    "stops the failed executor before settling capture (cancel=%s)",
+    async (cancel) => {
+      const order: string[] = []
+      const controller = new AbortController()
+      const finish = jest.fn(async (state: string, stopped?: boolean) => {
+        order.push(`finish:${state}:${stopped}`)
+        return { available: true as const, taskId: "cli:s", runId: "r", workspaceRoot: "/work" }
+      })
+      const out = await runTurn({
+        session: {
+          send: async () => {
+            order.push("send")
+            if (cancel) controller.abort()
+            throw new RunAndCaptureError("provider stopped", "session_error")
+          },
+        },
+        prompt: "edit",
+        dispatch: () => {},
+        gate: async () => ({ decision: "allow" }),
+        signal: controller.signal,
+        openWorkspaceCapture: async () => ({ finish }),
+        stopWorkspaceCaptureExecutor: async () => {
+          order.push("closed")
+        },
+      })
+      expect(out).toEqual({ ok: false, recoverable: false })
+      expect(order).toEqual(["send", "closed", `finish:${cancel ? "cancelled" : "failed"}:true`])
+      expect(finish).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("marks capture unavailable when executor teardown fails without masking the provider error", async () => {
+    const reported = jest.fn()
+    const finish = jest.fn(async (_state: string, _stopped?: boolean) => ({
+      available: false as const,
+      reason: "capture-failed" as const,
+    }))
+    const actions: TuiAction[] = []
+    const out = await runTurn({
+      session: {
+        send: async () => {
+          throw new RunAndCaptureError("original provider fault", "session_error")
+        },
+      },
+      prompt: "edit",
+      dispatch: (action) => actions.push(action),
+      gate: async () => ({ decision: "allow" }),
+      openWorkspaceCapture: async () => ({ finish }),
+      stopWorkspaceCaptureExecutor: async () => {
+        throw new Error("close failed")
+      },
+      onWorkspaceCapture: reported,
+    })
+    expect(finish).toHaveBeenCalledWith("failed", false)
+    expect(reported).toHaveBeenCalledWith({ available: false, reason: "capture-failed" })
+    expect(actions).toContainEqual(
+      expect.objectContaining({ type: "TURN_ERROR", message: "original provider fault" })
+    )
+    expect(out).toEqual({ ok: false, recoverable: false })
+  })
+
+  it("does not start the provider if cancelled while capture acquisition is pending", async () => {
+    const controller = new AbortController()
+    const send = jest.fn(async () => okResult())
+    const close = jest.fn(async () => {})
+    const finish = jest.fn(async () => ({
+      available: true as const,
+      taskId: "cli:s",
+      runId: "r",
+      workspaceRoot: "/work",
+    }))
+    await runTurn({
+      session: { send },
+      prompt: "edit",
+      dispatch: () => {},
+      gate: async () => ({ decision: "allow" }),
+      signal: controller.signal,
+      openWorkspaceCapture: async () => {
+        controller.abort()
+        return { finish }
+      },
+      stopWorkspaceCaptureExecutor: close,
+    })
+    expect(send).not.toHaveBeenCalled()
+    expect(close).not.toHaveBeenCalled()
+    expect(finish).toHaveBeenCalledWith("cancelled", true)
+  })
+
+  it("keeps the provider result when capture acquisition or settlement fails", async () => {
+    for (const acquisitionFails of [false, true]) {
+      const reported = jest.fn()
+      const out = await runTurn({
+        session: { send: async () => okResult() },
+        prompt: "edit",
+        dispatch: () => {},
+        gate: async () => ({ decision: "allow" }),
+        openWorkspaceCapture: async () => {
+          if (acquisitionFails) throw new Error("capture unavailable")
+          return {
+            finish: async () => {
+              throw new Error("settle unavailable")
+            },
+          }
+        },
+        onWorkspaceCapture: reported,
+      })
+      expect(out).toMatchObject({ ok: true, result: { text: "done" } })
+      expect(reported).toHaveBeenCalledWith({ available: false, reason: "capture-failed" })
+      expect(reported).toHaveBeenCalledTimes(1)
+    }
+  })
+
   it("ignores buffered quota pushes after the turn is cancelled", async () => {
     const controller = new AbortController()
     const actions: TuiAction[] = []

@@ -1,3 +1,4 @@
+import { GLOBAL_FLAG_NAMES } from "../cli/format"
 /**
  * Lookup and filtering over the generated command index.
  *
@@ -57,8 +58,15 @@ export interface CommandFilter {
 }
 
 export function listCommands(filter: CommandFilter = {}): ApiCommandEntry[] {
+  return filterCommands(API_COMMANDS, filter)
+}
+
+export function filterCommands(
+  entries: readonly ApiCommandEntry[],
+  filter: CommandFilter = {}
+): ApiCommandEntry[] {
   const needle = filter.search?.toLowerCase()
-  return API_COMMANDS.filter((entry) => {
+  return entries.filter((entry) => {
     if (filter.group && entry.group !== filter.group) return false
     if (filter.wire && !entry.wires.includes(filter.wire)) return false
     if (filter.capability && entry.capability !== filter.capability) return false
@@ -104,4 +112,72 @@ export function suggestCommands(name: string, limit = 5): string[] {
     .sort((a, b) => b.score - a.score || (a.name < b.name ? -1 : 1))
     .slice(0, limit)
     .map((candidate) => candidate.name)
+}
+
+/** Build a temporary entry from the authenticated Host's admitted catalog. */
+export function remoteCommandEntry(
+  descriptor: Record<string, unknown>,
+  schema: { input?: Record<string, unknown>; output?: Record<string, unknown> },
+  wire: ApiCommandEntry["wires"][number]
+): ApiCommandEntry {
+  if (
+    typeof descriptor.name !== "string" ||
+    !/^[a-z0-9_.]+$/.test(descriptor.name) ||
+    !["client", "execution", "service", "host-admin"].includes(String(descriptor.target)) ||
+    !["low", "high", "critical"].includes(String(descriptor.risk)) ||
+    !["none", "interactive", "signed-policy"].includes(String(descriptor.approval)) ||
+    !schema.input
+  )
+    throw new Error("host omitted the command name or input schema")
+  const properties = (schema.input.properties ?? {}) as Record<string, Record<string, unknown>>
+  const required = Array.isArray(schema.input.required) ? schema.input.required : []
+  const used = new Set(GLOBAL_FLAG_NAMES)
+  const flags: ApiCommandFlag[] = Object.entries(properties).map(([name, property]) => {
+    let flag =
+      name === "idempotencyKey"
+        ? "body-idempotency-key"
+        : name
+            .replace(/_/g, "-")
+            .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+            .toLowerCase()
+    if (used.has(flag)) flag = ""
+    else used.add(flag)
+    const types = Array.isArray(property.type) ? property.type : [property.type]
+    const raw = types.find((type) => type !== "null")
+    const type = ["string", "integer", "number", "boolean"].includes(raw)
+      ? (raw as ApiCommandFlag["type"])
+      : "json"
+    return {
+      name,
+      flag,
+      type,
+      ...(required.includes(name) ? { required: true as const } : {}),
+      ...(types.includes("null") ? { nullable: true as const } : {}),
+      ...(Array.isArray(property.enum)
+        ? { enum: property.enum.filter((value) => value !== null).map(String) }
+        : {}),
+    }
+  })
+  const name = descriptor.name
+  const cut = name.indexOf("_")
+  return {
+    name,
+    ...(typeof descriptor.description === "string"
+      ? { description: descriptor.description }
+      : typeof schema.input.description === "string"
+        ? { description: schema.input.description }
+        : {}),
+    group: cut < 0 ? name : name.slice(0, cut),
+    action: cut < 0 ? "" : name.slice(cut + 1).replace(/_/g, "-"),
+    target: descriptor.target as ApiCommandEntry["target"],
+    capability: String(descriptor.capability),
+    risk: descriptor.risk as ApiCommandEntry["risk"],
+    approval: descriptor.approval as ApiCommandEntry["approval"],
+    idempotency: String(descriptor.idempotency),
+    wires: [wire],
+    bodyKind: schema.input.oneOf || schema.input.anyOf ? "composed" : "fields",
+    flags,
+    inputSchema: schema.input,
+    outputSchema: schema.output,
+  }
 }

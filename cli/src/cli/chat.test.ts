@@ -11,9 +11,28 @@ import {
 import { PassThrough, Writable } from "node:stream"
 import { parseArgv } from "./args"
 import type { OutputSink } from "./output"
-import type { AgentSession } from "../agent/session-runner"
+import type { AgentSession, AgentSessionParams } from "../agent/session-runner"
 import { DEFAULT_RESOLVED_CONFIG, type ResolvedConfig } from "../config/schema"
 import { DEFAULT_BUILTIN_TOOLS } from "@cognia/agent-config-types"
+import type { WorkerTurnCapture } from "../worker/workspace-client"
+import { WorkerWorkspaceError } from "../worker/workspace-client"
+
+const mockCaptureFinish = jest.fn(async () => ({
+  available: false as const,
+  reason: "helper-unavailable" as const,
+}))
+const mockOpenCapture = jest.fn(
+  async () => ({ finish: mockCaptureFinish }) satisfies WorkerTurnCapture
+)
+jest.mock("../worker/workspace-client", () => ({
+  ...jest.requireActual("../worker/workspace-client"),
+  openWorkerTurnCapture: (...args: unknown[]) => mockOpenCapture(...(args as [])),
+}))
+
+beforeEach(() => {
+  mockOpenCapture.mockClear()
+  mockCaptureFinish.mockClear()
+})
 
 const mockTuiModeEvents: string[] = []
 jest.mock("../tui/mount", () => {
@@ -54,7 +73,7 @@ function scriptedReader(lines: string[]) {
 
 function fakeSessionFactory() {
   const sessions: Array<{ sessionId: string; send: jest.Mock; close: jest.Mock }> = []
-  const factory = jest.fn(() => {
+  const factory = jest.fn((_options: AgentSessionParams) => {
     const send = jest.fn(async (_prompt: string, opts: { onEvent?: (e: unknown) => void }) => {
       opts.onEvent?.({ type: "text-delta", delta: "reply" })
       return { text: "reply", messageId: "m", a2uiSurfaces: {}, a2uiSurfaceOrder: [] }
@@ -145,6 +164,95 @@ describe("chatCommand", () => {
     expect(f.sessions[0].send).toHaveBeenCalledWith("hello", expect.any(Object))
     expect(s.stdout()).toMatch(/reply/)
     expect(f.sessions[0].close).toHaveBeenCalled()
+    expect(mockOpenCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          sessionId: "s_0",
+          workspaceRoot: "/work",
+          surface: "cli",
+        }),
+        persist: true,
+      }),
+      expect.objectContaining({ dataDir: expect.any(String) })
+    )
+    expect(mockOpenCapture.mock.invocationCallOrder[0]).toBeLessThan(
+      f.sessions[0].send.mock.invocationCallOrder[0]
+    )
+    expect(mockCaptureFinish).toHaveBeenCalledWith("ready", true)
+  })
+
+  it("honors no-session for capture and uses an ephemeral transcript in the REPL", async () => {
+    const f = fakeSessionFactory()
+    await chatCommand(parseArgv(["chat", "--no-session"]), {
+      ...baseDeps(),
+      out: sink().out,
+      createSession: f.factory,
+      readLine: scriptedReader(["hi", "/clear", "/exit"]),
+    })
+    expect(mockOpenCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ persist: false }),
+      expect.anything()
+    )
+    expect(f.factory.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ transcriptFs: expect.any(Object) })
+    )
+    expect(f.factory.mock.calls[1][0].transcriptFs).not.toBe(
+      f.factory.mock.calls[0][0].transcriptFs
+    )
+  })
+
+  it("keeps the reply when capture acquisition fails", async () => {
+    mockOpenCapture.mockRejectedValueOnce(new Error("helper failed"))
+    const f = fakeSessionFactory()
+    const output = sink()
+    expect(
+      await chatCommand(parseArgv(["chat"]), {
+        ...baseDeps(),
+        out: output.out,
+        createSession: f.factory,
+        readLine: scriptedReader(["hello", "/exit"]),
+      })
+    ).toBe(0)
+    expect(f.sessions[0].send).toHaveBeenCalled()
+    expect(output.stdout()).toMatch(/reply/)
+    expect(output.stderr()).toMatch(/Workspace capture unavailable/)
+  })
+
+  it.each([true, false])("refuses a fenced REPL root before send (persist=%s)", async (persist) => {
+    mockOpenCapture.mockRejectedValueOnce(
+      new WorkerWorkspaceError("capture_refused", "local workspace observation is already active")
+    )
+    const f = fakeSessionFactory()
+    const output = sink()
+    expect(
+      await chatCommand(parseArgv(persist ? ["chat"] : ["chat", "--no-session"]), {
+        ...baseDeps(),
+        out: output.out,
+        createSession: f.factory,
+        readLine: scriptedReader(["hello", "/exit"]),
+      })
+    ).toBe(0)
+    expect(f.sessions[0].send).not.toHaveBeenCalled()
+    expect(f.factory).toHaveBeenCalledTimes(1)
+    expect(output.stdout()).not.toMatch(/reply/)
+    expect(output.stderr()).toContain("local workspace observation is already active")
+    expect(output.stderr()).toContain("worker settle --run-id RUN_ID --executor-stopped")
+    expect(mockCaptureFinish).not.toHaveBeenCalled()
+  })
+
+  it("refuses no-session in persistent TUI mode before starting a session", async () => {
+    const f = fakeSessionFactory()
+    const out = sink()
+    expect(
+      await chatCommand(parseArgv(["chat", "--no-session"]), {
+        ...baseDeps(),
+        out: out.out,
+        createSession: f.factory,
+        isTty: () => true,
+      })
+    ).toBe(2)
+    expect(f.factory).not.toHaveBeenCalled()
+    expect(out.stderr()).toMatch(/requires session storage/)
   })
 
   it("hands the TUI both session factories so /backend can switch mid-session", async () => {
@@ -295,6 +403,10 @@ describe("chatCommand", () => {
     })
     expect(code).toBe(0)
     expect(s.stderr()).toMatch(/turn failed: model down/)
+    expect(mockCaptureFinish).toHaveBeenCalledWith("failed", true)
+    expect(
+      jest.mocked(factory.mock.results[0].value.close).mock.invocationCallOrder[0]
+    ).toBeLessThan(mockCaptureFinish.mock.invocationCallOrder[0])
   })
 
   it("returns exit 2 on config error", async () => {

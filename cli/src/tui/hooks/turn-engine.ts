@@ -10,6 +10,7 @@ import { RunAndCaptureError } from "@/lib/claude/run-and-capture"
 import type { CapturePermissionDecision, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 import type { AgentEventEnvelope } from "@cognia/agent-config-types/agent-execution"
+import type { AgentWorkspaceCaptureReceipt } from "@cognia/agent-config-types/agent-run-result"
 
 import {
   captureEventFromCanonical,
@@ -26,6 +27,7 @@ import type { PermissionResponder } from "../../agent/permission-gate"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { TuiAction } from "../state/types"
 import { applyCanonicalTaskEnvelope } from "../../agent/subagent-live-output"
+import { isWorkspaceCaptureRefusal, type WorkerTurnCapture } from "../../worker/workspace-client"
 
 /** The subset of `AgentSession` the turn engine drives. */
 export interface TurnSession {
@@ -294,6 +296,13 @@ export interface RunTurnOptions {
   onEnvelopeGap?: (envelope: AgentEventEnvelope) => void
   /** Observe an accepted canonical envelope without projecting a second transcript. */
   onCanonicalEnvelope?: (envelope: AgentEventEnvelope) => void
+  /** Acquire the shared ledger baseline before the provider can mutate files. */
+  openWorkspaceCapture?: () => Promise<WorkerTurnCapture>
+  /** A failed send can outlive its bounded interrupt drain. Close its executor
+   * before final capture; a control-message acknowledgement is insufficient. */
+  stopWorkspaceCaptureExecutor?: () => Promise<void>
+  /** A bounded ledger pointer or explicit unavailability, never file bodies. */
+  onWorkspaceCapture?: (receipt: AgentWorkspaceCaptureReceipt) => void
 }
 
 // Keep the first durable warning in the transcript without repeating it every turn.
@@ -307,10 +316,9 @@ const reportedDatabaseErrors = new WeakMap<TurnSession, string>()
  *
  * Returns `{ ok: false, recoverable }` on error. `recoverable` tells the caller
  * (the session hook) whether the underlying session is still usable: a timeout,
- * idle stall, provider error, send failure or user interrupt all leave the
- * multi-turn session alive WITH its accumulated context, so the caller keeps it
- * and the next message continues the conversation. Only a dead sidecar (or an
- * unknown fault) is non-recoverable — the caller drops the session and respawns.
+ * idle stall, provider error, send failure or user interrupt normally leave the
+ * multi-turn session alive. A workspace capture that needs authoritative
+ * executor teardown instead retires that session before publishing its diff.
  * On success the captured `result` (assistant text + usage) rides along so a
  * self-driving caller (`/goal`, `/loop`) can feed it to a turn-driver without a
  * second, non-streaming capture.
@@ -324,7 +332,47 @@ export async function runTurn(
   // the reply. Hold it and append a permanent error cell once the turn commits.
   let databaseError: CliDbSnapshotError | null = null
   const envelopeOrder = createEnvelopeOrderTracker()
+  let workspaceCapture: WorkerTurnCapture | undefined
+  let sendStarted = false
+  let captureFinished = false
+  let executorRetired = false
+  const finishWorkspaceCapture = async (state: "ready" | "failed" | "cancelled") => {
+    if (!opts.openWorkspaceCapture || captureFinished) return
+    captureFinished = true
+    let executorStopped = state === "ready" || !sendStarted
+    if (workspaceCapture && !executorStopped && opts.stopWorkspaceCaptureExecutor) {
+      executorRetired = true
+      try {
+        await opts.stopWorkspaceCaptureExecutor()
+        executorStopped = true
+      } catch {
+        // The ledger can retain the failed window, but cannot claim a complete
+        // diff while an executor might still mutate its root.
+      }
+    }
+    let receipt: AgentWorkspaceCaptureReceipt = { available: false, reason: "capture-failed" }
+    try {
+      if (workspaceCapture) receipt = await workspaceCapture.finish(state, executorStopped)
+    } catch {
+      // Capture bookkeeping must not replace the provider result or its error.
+    }
+    try {
+      opts.onWorkspaceCapture?.(receipt)
+    } catch {
+      // A status renderer is observational and cannot change the turn outcome.
+    }
+  }
   try {
+    if (opts.openWorkspaceCapture) {
+      try {
+        workspaceCapture = await opts.openWorkspaceCapture()
+      } catch (error) {
+        if (isWorkspaceCaptureRefusal(error)) throw error
+        // The reply remains usable when the helper is missing or unhealthy.
+      }
+      opts.signal?.throwIfAborted()
+    }
+    sendStarted = true
     const result = await opts.session.send(opts.prompt, {
       gate: opts.gate,
       ...(opts.awaitApprovals ? { awaitApprovals: opts.awaitApprovals } : {}),
@@ -401,6 +449,8 @@ export async function runTurn(
       signal: opts.signal,
       timeoutMs: opts.timeoutMs,
     })
+    if (opts.openWorkspaceCapture) opts.signal?.throwIfAborted()
+    await finishWorkspaceCapture("ready")
     opts.dispatch({ type: "TURN_COMMIT", result })
     // A NOTICE would scroll away; this one must persist — it is the only thing
     // telling the user their data was preserved rather than lost.
@@ -422,12 +472,13 @@ export async function runTurn(
     opts.hooks?.onStop(true)
     return { ok: true, result }
   } catch (err) {
-    if (opts.signal?.aborted) {
-      // User interrupt: the session stays alive so the next message continues
-      // with the accumulated context (the sidecar resets its per-turn cancel).
+    // Closing the executor can abort its signal; retain the original outcome.
+    const aborted = opts.signal?.aborted === true
+    if (aborted) {
       opts.dispatch({ type: "TURN_ABORTED" })
       opts.hooks?.onStop(false)
-      return { ok: false, recoverable: true }
+      await finishWorkspaceCapture("cancelled")
+      return { ok: false, recoverable: !executorRetired }
     }
     const code = err instanceof RunAndCaptureError ? err.code : undefined
     const message = (err as Error).message
@@ -442,10 +493,13 @@ export async function runTurn(
       category: classified.category,
     })
     opts.hooks?.onStop(false)
+    await finishWorkspaceCapture("failed")
     // Keep the session for faults that leave it usable; drop only when the
     // sidecar process is gone (or the fault is unknown).
     const recoverable =
-      code === "session_error" || code === "send_failed" || code === "no_assistant_text"
+      isWorkspaceCaptureRefusal(err) ||
+      (!executorRetired &&
+        (code === "session_error" || code === "send_failed" || code === "no_assistant_text"))
     return { ok: false, recoverable }
   }
 }

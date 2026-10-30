@@ -18,6 +18,7 @@
  */
 
 import type { UnlistenFn } from "@tauri-apps/api/event"
+import type { AgentWorkspaceCaptureReceipt } from "@cognia/agent-config-types/agent-run-result"
 
 import { captureEventFromCanonical } from "@/lib/ai/agent/execution/event-envelope"
 import type { CaptureStreamEvent, RunAndCaptureResult } from "@/lib/claude/run-and-capture"
@@ -37,6 +38,7 @@ export interface RunHeadlessParams {
   prompt: string
   /** Reuse an existing session id (resume/handoff); minted when omitted. */
   sessionId?: string
+  persist?: boolean
   /** Permission responder (from `createPermissionGate`). */
   gate: PermissionResponder
   /** Incremental stream events for rendering. */
@@ -78,6 +80,18 @@ export interface RunHeadlessResult {
   text: string
   usage?: RunAndCaptureResult["usage"]
   sdkSessionId?: string
+  workspaceCapture?: AgentWorkspaceCaptureReceipt
+}
+
+export class RunHeadlessError extends Error {
+  constructor(
+    code: string,
+    message: string,
+    readonly workspaceCapture?: AgentWorkspaceCaptureReceipt
+  ) {
+    super(message)
+    this.name = code
+  }
 }
 
 /**
@@ -93,6 +107,7 @@ export async function runHeadlessTurn(params: RunHeadlessParams): Promise<RunHea
     prompt: params.prompt,
     gate: params.gate,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+    ...(params.persist !== undefined ? { persist: params.persist } : {}),
     ...(params.signal ? { signal: params.signal } : {}),
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.maxTurns !== undefined ? { maxSteps: params.maxTurns } : {}),
@@ -115,9 +130,7 @@ export async function runHeadlessTurn(params: RunHeadlessParams): Promise<RunHea
   })
 
   if (result.error) {
-    const error = new Error(result.error.message)
-    error.name = result.error.code
-    throw error
+    throw new RunHeadlessError(result.error.code, result.error.message, result.workspaceCapture)
   }
 
   return {
@@ -125,5 +138,6 @@ export async function runHeadlessTurn(params: RunHeadlessParams): Promise<RunHea
     text: result.text,
     ...(result.usage ? { usage: result.usage as RunAndCaptureResult["usage"] } : {}),
     ...(result.nativeSessionId ? { sdkSessionId: result.nativeSessionId } : {}),
+    ...(result.workspaceCapture ? { workspaceCapture: result.workspaceCapture } : {}),
   }
 }

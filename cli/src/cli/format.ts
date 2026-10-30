@@ -1,3 +1,4 @@
+import apiFlagNames from "./api-flags.json"
 /**
  * Output conventions shared by the `api` plane and the derived resource
  * commands, modelled on the resource CLIs this one is meant to feel like.
@@ -35,25 +36,7 @@ export const DEFAULT_TIMEOUT_MS = 30_000
  * unrecognised is refused locally rather than sent to a host that answers
  * `additionalProperties: false` with a 422.
  */
-export const GLOBAL_FLAG_NAMES: ReadonlySet<string> = new Set([
-  "help",
-  "version",
-  "format",
-  "output",
-  "o",
-  "endpoint",
-  "profile",
-  "host",
-  "tenant",
-  "timeout",
-  "debug",
-  "json",
-  "data",
-  "wait",
-  "template",
-  "yes",
-  "idempotency-key",
-])
+export const GLOBAL_FLAG_NAMES: ReadonlySet<string> = new Set(apiFlagNames)
 
 export interface OutputOptions {
   format: OutputFormat

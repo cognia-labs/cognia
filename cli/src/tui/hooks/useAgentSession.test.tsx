@@ -19,6 +19,29 @@ import type {
   AgentEventEnvelope,
   ResolvedAgentExecutionSpec,
 } from "@cognia/agent-config-types/agent-execution"
+import type { AgentWorkspaceCaptureUnavailableReason } from "@cognia/agent-config-types/agent-run-result"
+import { openWorkerTurnCapture } from "../../worker/workspace-client"
+
+jest.mock("../../worker/workspace-client", () => ({
+  ...jest.requireActual("../../worker/workspace-client"),
+  openWorkerTurnCapture: jest.fn(
+    async (request: {
+      input: { taskId: string; runId: string; workspaceRoot: string }
+      unavailableReason?: AgentWorkspaceCaptureUnavailableReason
+    }) => ({
+      finish: jest.fn(async (_state: string, stopped = true) =>
+        request.unavailableReason || !stopped
+          ? { available: false as const, reason: request.unavailableReason ?? "capture-failed" }
+          : {
+              available: true as const,
+              taskId: request.input.taskId,
+              runId: request.input.runId,
+              workspaceRoot: request.input.workspaceRoot,
+            }
+      ),
+    })
+  ),
+}))
 
 let nativeCheckpointFlag = false
 jest.mock("@/lib/ai/agent/execution/feature-flags", () => ({
@@ -88,6 +111,7 @@ function harness(
     resolvedSpec?: ResolvedAgentExecutionSpec
     canonicalEnvelopes?: AgentEventEnvelope[]
     createCheckpoints?: (getSessionId: () => string) => CheckpointCapture
+    config?: Partial<ResolvedConfig>
   } = {}
 ) {
   const actions: TuiAction[] = []
@@ -145,7 +169,7 @@ function harness(
   const appendMcpLog = jest.fn()
   const { result: hook, unmount } = renderHook(() =>
     useAgentSession({
-      config,
+      config: { ...config, ...opts.config },
       dispatch,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       createSession: create,
@@ -193,6 +217,133 @@ it("prepares manual subagents on the owned cold session without a main turn", as
     controller.abort()
     await expect(h.api().prepareForSubagent!(controller.signal)).rejects.toThrow()
     expect(h.prepareForSubagent).toHaveBeenCalledTimes(2)
+  } finally {
+    h.unmount()
+  }
+})
+
+it("binds each workspace capture to the actual session, cwd and backend with a fresh logical run", async () => {
+  const previousDataDir = process.env.COGNIA_DATA_DIR
+  process.env.COGNIA_DATA_DIR = "/capture-data"
+  const start = jest.mocked(openWorkerTurnCapture).mock.calls.length
+  const h = harness({ sessionId: "app-session", config: { agentBackend: "codex" } })
+  try {
+    await act(async () => {
+      await h.api().send("first")
+    })
+    await act(async () => {
+      await h.api().changeCwd("/next-workspace")
+    })
+    await act(async () => {
+      await h.api().send("second")
+    })
+    const calls = jest.mocked(openWorkerTurnCapture).mock.calls.slice(start)
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toEqual([
+      expect.objectContaining({
+        persist: true,
+        input: expect.objectContaining({
+          taskId: "cli:s",
+          sessionId: "s",
+          agentId: "codex",
+          agentKind: "external",
+          workspaceRoot: "/work",
+          base: { kind: "workingState" },
+          surface: "cli-tui",
+        }),
+      }),
+      { dataDir: "/capture-data" },
+    ])
+    expect(calls[1][0].input.workspaceRoot).toBe("/next-workspace")
+    expect(calls[1][0].input.runId).not.toBe(calls[0][0].input.runId)
+    for (const [request] of calls) {
+      expect(request.input.executionRunId).toBe(request.input.runId)
+      expect(request.input.turnId).toBe(`${request.input.runId}:t0`)
+    }
+    expect(h.actions).toContainEqual(
+      expect.objectContaining({
+        type: "NOTICE",
+        message: expect.stringContaining(calls[1][0].input.runId),
+      })
+    )
+  } finally {
+    if (previousDataDir === undefined) delete process.env.COGNIA_DATA_DIR
+    else process.env.COGNIA_DATA_DIR = previousDataDir
+    h.unmount()
+  }
+})
+
+it("uses the shared runtime support policy and exposes remote capture unavailability", async () => {
+  const start = jest.mocked(openWorkerTurnCapture).mock.calls.length
+  const h = harness({
+    config: { sandbox: { enabled: true, tier: "microvm" } as ResolvedConfig["sandbox"] },
+  })
+  try {
+    await act(async () => {
+      await h.api().send("remote")
+    })
+    expect(jest.mocked(openWorkerTurnCapture).mock.calls[start][0].unavailableReason).toBe(
+      "remote-filesystem"
+    )
+    expect(h.actions).toContainEqual(
+      expect.objectContaining({ type: "NOTICE", message: expect.stringMatching(/unavailable/i) })
+    )
+    expect(h.close).not.toHaveBeenCalled()
+    expect(h.capture.beginTurn).toHaveBeenCalledTimes(1)
+  } finally {
+    h.unmount()
+  }
+})
+
+it("waits for an already closing executor before finishing the cancelled capture", async () => {
+  const order: string[] = []
+  let rejectSend!: (error: Error) => void
+  let finishClose!: () => void
+  const h = harness({
+    sendImpl: async () =>
+      new Promise((_resolve, reject) => {
+        rejectSend = reject
+      }),
+  })
+  const finish = jest.fn(async () => {
+    order.push("capture-finished")
+    return { available: true as const, taskId: "cli:s", runId: "r", workspaceRoot: "/work" }
+  })
+  jest.mocked(openWorkerTurnCapture).mockResolvedValueOnce({ finish })
+  h.close.mockImplementationOnce(async () => {
+    order.push("closing")
+    await new Promise<void>((resolve) => {
+      finishClose = resolve
+    })
+    order.push("closed")
+  })
+  let turn!: Promise<unknown>
+  let cleared!: Promise<void>
+  try {
+    act(() => {
+      turn = h.api().send("edit")
+    })
+    await waitFor(() => expect(h.send).toHaveBeenCalledTimes(1))
+    act(() => {
+      cleared = h.api().clear("new-session")
+    })
+    await waitFor(() => expect(h.close).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      rejectSend(new Error("interrupted"))
+      await Promise.resolve()
+    })
+    expect(finish).not.toHaveBeenCalled()
+    await act(async () => {
+      finishClose()
+      await Promise.all([turn, cleared])
+    })
+    expect(order).toEqual(["closing", "closed", "capture-finished"])
+    expect(h.close).toHaveBeenCalledTimes(1)
+    expect(
+      h.actions.some(
+        (action) => action.type === "NOTICE" && action.message.includes("no longer visible")
+      )
+    ).toBe(false)
   } finally {
     h.unmount()
   }
@@ -397,9 +548,15 @@ describe("useAgentSession", () => {
     expect(h.create).toHaveBeenCalledTimes(1)
     expect(h.actions.map((a) => a.type)).toEqual([
       "TURN_START",
+      "NOTICE",
       "TURN_COMMIT",
       "TURN_START",
+      "NOTICE",
       "TURN_COMMIT",
+    ])
+    expect(h.actions.filter((action) => action.type === "NOTICE")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("Turn changes recorded") }),
+      expect.objectContaining({ message: expect.stringContaining("Turn changes recorded") }),
     ])
   })
 
@@ -823,6 +980,7 @@ describe("useAgentSession", () => {
       const sending = h.api().send("second")
       expect(h.create).toHaveBeenCalledTimes(1)
       expect(h.actions).not.toContainEqual({ type: "SET_CWD", cwd: "/new/dir" })
+      await Promise.resolve()
       release()
       await switching
       await sending
@@ -912,6 +1070,7 @@ describe("useAgentSession", () => {
     await act(async () => {
       const switching = h.api().changeCwd("/new/dir")
       const sending = h.api().send("second")
+      await Promise.resolve()
       rejectClose(new Error("close failed"))
       await expect(switching).rejects.toThrow("close failed")
       await expect(sending).resolves.toBeNull()
@@ -988,6 +1147,7 @@ describe("useAgentSession", () => {
       const reload = h.api().reloadHooks!()
       ask = true
       sending = h.api().send("second")
+      await Promise.resolve()
       release()
       await reload
     })
@@ -1399,30 +1559,35 @@ describe("useAgentSession", () => {
     expect(h.send).not.toHaveBeenCalled()
   })
 
-  it("KEEPS the session on a recoverable error (idle/timeout) so context survives", async () => {
+  it("retires an idle executor before capture settlement and announces its context reset", async () => {
     const h = harness()
     await act(async () => {
       await h.api().send("hi")
     })
     expect(h.create).toHaveBeenCalledTimes(1)
-    // A recoverable session_error (idle watchdog / timeout / provider error)
-    // leaves the multi-turn session alive — it must NOT be dropped.
+    // A timeout can reject before its bounded interrupt drain has stopped all
+    // mutations. Capture therefore requires authoritative executor teardown.
     h.send.mockRejectedValueOnce(new RunAndCaptureError("stream idle for 60000ms", "session_error"))
     await act(async () => {
       await h.api().send("stall")
     })
+    expect(h.actions).toContainEqual(
+      expect.objectContaining({
+        type: "TURN_ERROR",
+        message: "stream idle for 60000ms",
+        category: "timeout",
+      })
+    )
+    expect(h.close).toHaveBeenCalledTimes(1)
     expect(h.actions.at(-1)).toMatchObject({
-      type: "TURN_ERROR",
-      message: "stream idle for 60000ms",
-      category: "timeout",
+      type: "NOTICE",
+      message: expect.stringContaining("no longer visible"),
     })
-    expect(h.close).not.toHaveBeenCalled() // session kept
-    // The next message REUSES the same session (no respawn → still one create).
     h.send.mockResolvedValueOnce(result())
     await act(async () => {
       await h.api().send("continue")
     })
-    expect(h.create).toHaveBeenCalledTimes(1)
+    expect(h.create).toHaveBeenCalledTimes(2)
   })
 
   it("abort and close are safe to call", async () => {
@@ -1770,3 +1935,111 @@ it("subscribes the created session to idle UI and detaches before clearing", asy
   act(() => listener?.({ kind: "input-queue-cleared", text: "stale", imagePaths: [] }))
   expect(actions).toHaveLength(count)
 })
+
+it.each(["completed", "failed", "cancelled"] as const)(
+  "makes autonomous %s turns visibly untracked without inventing a baseline or historical controls",
+  async (terminal) => {
+    const actions: TuiAction[] = []
+    let emit!: (event: AgentEventEnvelope) => void
+    const beginTurn = jest.fn()
+    const close = jest.fn(async () => {})
+    const create: CreateSession = () => ({
+      sessionId: "autonomous-session",
+      send: async () => result(),
+      close,
+      isLive: () => true,
+      subscribeEvents: (callback) => {
+        emit = callback
+        return () => undefined
+      },
+    })
+    const { result: hook, unmount } = renderHook(() =>
+      useAgentSession({
+        config: { ...config, agentBackend: "pi" },
+        dispatch: (action) => actions.push(action),
+        createSession: create,
+        subscribeSidecar: () => () => undefined,
+        createHooks: spyHookRunner,
+        createCheckpoints: () =>
+          ({
+            beginTurn,
+            onToolCall: jest.fn(),
+            list: () => [],
+            store: { restore: jest.fn() },
+          }) as never,
+      })
+    )
+    try {
+      await act(async () => {
+        await hook.current.send("owned prompt")
+      })
+      actions.length = 0
+      beginTurn.mockClear()
+      const captureCount = jest.mocked(openWorkerTurnCapture).mock.calls.length
+      const envelope = (
+        event: AgentEventEnvelope["event"],
+        sequence: number,
+        turn = 1
+      ): AgentEventEnvelope => ({
+        schemaVersion: 1,
+        eventId: `oob:${turn}:${sequence}`,
+        sessionId: "autonomous-session",
+        runId: `s:oob${turn}`,
+        turnId: `s:oob${turn}`,
+        attemptId: `s:oob${turn}:a0`,
+        sequence,
+        timestamp: new Date().toISOString(),
+        hostRef: "external-agent:pi",
+        runtime: "pi",
+        event,
+      })
+      await act(async () => {
+        emit(envelope({ kind: "lifecycle", phase: "started" }, 0))
+        emit(
+          envelope(
+            {
+              kind: "tool-call",
+              toolCallId: "write-1",
+              toolName: "write",
+              input: { path: "/work/file" },
+            },
+            1
+          )
+        )
+        emit(
+          envelope(
+            terminal === "failed"
+              ? { kind: "failure", code: "provider_error", message: "background failed" }
+              : { kind: "lifecycle", phase: terminal === "completed" ? "ended" : "interrupted" },
+            2
+          )
+        )
+      })
+      expect(actions).toContainEqual({
+        type: "NOTICE",
+        message: expect.stringContaining("cannot be tracked or undone"),
+      })
+      expect(actions.findIndex((action) => action.type === "NOTICE")).toBeLessThan(
+        actions.findIndex((action) => action.type === "TOOL_CALL")
+      )
+      expect(actions.filter((action) => action.type === "NOTICE")).toHaveLength(1)
+      expect(jest.mocked(openWorkerTurnCapture).mock.calls).toHaveLength(captureCount)
+      expect(beginTurn).not.toHaveBeenCalled()
+      expect(hook.current.listCheckpoints()).toEqual([])
+      expect(close).not.toHaveBeenCalled()
+      await act(async () => {
+        emit(envelope({ kind: "lifecycle", phase: "started" }, 0, 2))
+        emit(envelope({ kind: "lifecycle", phase: "ended" }, 1, 2))
+      })
+      expect(actions.filter((action) => action.type === "NOTICE")).toHaveLength(2)
+      await act(async () => {
+        await hook.current.clear("replacement")
+      })
+      const count = actions.length
+      act(() => emit(envelope({ kind: "lifecycle", phase: "started" }, 0, 3)))
+      expect(actions).toHaveLength(count)
+    } finally {
+      unmount()
+    }
+  }
+)

@@ -1,3 +1,7 @@
+jest.mock("@/lib/ai/agent/execution/resolve-agent-execution-spec", () => {
+  const actual = jest.requireActual("@/lib/ai/agent/execution/resolve-agent-execution-spec")
+  return { ...actual, resolveAgentExecutionSpec: jest.fn(actual.resolveAgentExecutionSpec) }
+})
 import type { ResolvedConfig } from "../../config/schema"
 import { resolveWorkerExecutionProfile } from "./resolve-worker-execution"
 
@@ -81,4 +85,19 @@ describe("resolveWorkerExecutionProfile", () => {
       } as ResolvedConfig)
     ).toThrow('unknown backend "missing-backend"')
   })
+})
+
+it("refuses a local extension runtime at the worker advertisement boundary", async () => {
+  const resolver = await import("@/lib/ai/agent/execution/resolve-agent-execution-spec")
+  const valid = resolveWorkerExecutionProfile(config)
+  const spy = jest.mocked(resolver.resolveAgentExecutionSpec).mockReturnValueOnce({
+    spec: { ...valid.spec, runtimeAdapter: "vscode-chat" },
+    trace: {} as never,
+    missingRequired: [],
+  })
+  try {
+    expect(() => resolveWorkerExecutionProfile(config)).toThrow("remote worker")
+  } finally {
+    spy.mockClear()
+  }
 })

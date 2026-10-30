@@ -9,7 +9,9 @@ import {
   type CommandOutcome,
   type HostTransport,
   type TransportFetch,
+  type RequestOptions,
 } from "./transport"
+import type { WatchOptions } from "./events"
 
 interface Call {
   url: string
@@ -262,6 +264,69 @@ describe("withRelayFallback (ADR-0224 A4)", () => {
     return { execute, close: jest.fn() }
   }
 
+  it.each(["execute", "operation", "watch"])(
+    "shares the remaining budget across %s routes",
+    async (kind) => {
+      let now = 0
+      const clock = jest.spyOn(Date, "now").mockImplementation(() => now)
+      const direct = directReturning()
+      const unavailable = async () => {
+        now += 40
+        return unreachable
+      }
+      direct.execute = jest.fn(unavailable)
+      direct.request = jest.fn(unavailable)
+      direct.watch = jest.fn(unavailable)
+      const relay = {
+        ...relayReturning({ ok: true, result: {} }),
+        getOperation: jest.fn(async (_id: string, _options?: RequestOptions) => ({
+          ok: true as const,
+          result: {},
+        })),
+        watch: jest.fn(async (_options: WatchOptions) => ({ ok: true as const, result: {} })),
+      }
+      try {
+        const host = withRelayFallback(direct, relay)
+        if (kind === "execute") {
+          await host.execute("read", {}, { timeoutMs: 100 })
+          expect(relay.execute.mock.calls[0][2]).toMatchObject({ timeoutMs: 60 })
+        } else if (kind === "operation") {
+          await host.request(
+            "GET",
+            operationPath("http", "00000000-0000-4000-8000-000000000001"),
+            undefined,
+            { timeoutMs: 100 }
+          )
+          expect(relay.getOperation.mock.calls[0][1]).toMatchObject({ timeoutMs: 60 })
+        } else {
+          await host.watch!({ channels: ["a"], onEvent: () => {}, timeoutMs: 100 })
+          expect(relay.watch.mock.calls[0][0]).toMatchObject({ timeoutMs: 60 })
+        }
+      } finally {
+        clock.mockRestore()
+      }
+    }
+  )
+
+  it("does not start a fallback after its budget expires", async () => {
+    let now = 0
+    const clock = jest.spyOn(Date, "now").mockImplementation(() => now)
+    const direct = directReturning()
+    direct.execute = jest.fn(async () => {
+      now = 100
+      return unreachable
+    })
+    const relay = relayReturning({ ok: true, result: {} })
+    try {
+      await expect(
+        withRelayFallback(direct, relay).execute("write", {}, { timeoutMs: 100 })
+      ).resolves.toMatchObject({ ok: false, cause: "timeout" })
+      expect(relay.execute).not.toHaveBeenCalled()
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
   it("uses the address while it answers, and never joins the relay", async () => {
     const direct = directReturning({ ok: true, result: 1 })
     const relay = relayReturning()
@@ -342,6 +407,128 @@ describe("deviceTransport token exchange failures", () => {
     privateKeyJwk = await crypto.subtle.exportKey("jwk", pair.privateKey)
   })
 
+  it.each([false, true])(
+    "isolates short and long authentication waiters (short first: %p)",
+    async (shortFirst) => {
+      let release!: () => void
+      let entered!: () => void
+      const challenge = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const challenged = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      let rpcCount = 0
+      const host = await deviceTransport({
+        endpoint: ENDPOINT,
+        tenantId: "t",
+        deviceId: "d",
+        privateKeyJwk,
+        fetchImpl: async (url, init) => {
+          if (url.endsWith("/challenge")) {
+            entered()
+            await Promise.race([
+              challenge,
+              new Promise<void>((_resolve, reject) => {
+                const abort = () => reject(new DOMException("challenge stopped", "AbortError"))
+                if (init.signal?.aborted) abort()
+                else init.signal?.addEventListener("abort", abort, { once: true })
+              }),
+            ])
+            return Response.json({ challengeId: "c", nonce: "n" })
+          }
+          if (url.endsWith("/token"))
+            return Response.json({
+              accessToken: `e30.${Buffer.from('{"jti":"j"}').toString("base64url")}.sig`,
+              expiresIn: 300,
+            })
+          rpcCount++
+          return Response.json({ result: true, requestId: "r" })
+        },
+      })
+      const first = host.execute(
+        shortFirst ? "short" : "long",
+        {},
+        { timeoutMs: shortFirst ? 5 : 1000 }
+      )
+      await challenged
+      const second = host.execute(
+        shortFirst ? "long" : "short",
+        {},
+        { timeoutMs: shortFirst ? 1000 : 5 }
+      )
+      const short = shortFirst ? first : second
+      const long = shortFirst ? second : first
+      try {
+        await expect(
+          Promise.race([
+            short,
+            new Promise((resolve) => setTimeout(() => resolve("missed budget"), 50)),
+          ])
+        ).resolves.toMatchObject({ ok: false, cause: "timeout" })
+        expect(rpcCount).toBe(0)
+      } finally {
+        release()
+        await first
+        await second
+      }
+      await expect(long).resolves.toMatchObject({ ok: true })
+      expect(rpcCount).toBe(1)
+    }
+  )
+
+  it.each(["challenge", "token", "refresh"])(
+    "propagates cancellation during %s without a later RPC",
+    async (phase) => {
+      const controller = new AbortController()
+      const paths: string[] = []
+      let challenges = 0
+      let reached!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        reached = resolve
+      })
+      const transport = await deviceTransport({
+        endpoint: ENDPOINT,
+        tenantId: "t",
+        deviceId: "d",
+        privateKeyJwk,
+        fetchImpl: async (url, init) => {
+          const path = new URL(url).pathname
+          paths.push(path)
+          if (path.endsWith("/challenge")) challenges++
+          if (
+            (phase === "challenge" && path.endsWith("/challenge")) ||
+            (phase === "token" && path.endsWith("/token")) ||
+            (phase === "refresh" && challenges === 2)
+          ) {
+            reached()
+            return new Promise<Response>((_resolve, reject) => {
+              const abort = () => reject(new DOMException("stopped", "AbortError"))
+              if (init.signal?.aborted) abort()
+              else init.signal?.addEventListener("abort", abort, { once: true })
+            })
+          }
+          if (path.endsWith("/challenge")) return Response.json({ challengeId: "c", nonce: "n" })
+          if (path.endsWith("/token"))
+            return Response.json({
+              accessToken: `e30.${Buffer.from(JSON.stringify({ jti: "j" })).toString("base64url")}.sig`,
+              expiresIn: 300,
+            })
+          return Response.json({ code: "token_stale" }, { status: 401 })
+        },
+      })
+      const pending = transport.execute("write", {}, { signal: controller.signal, timeoutMs: 1000 })
+      await blocked
+      const countAtAbort = paths.length
+      controller.abort()
+      await expect(pending).resolves.toMatchObject({ ok: false, cause: "timeout" })
+      expect(paths).toHaveLength(countAtAbort)
+      expect(paths.filter((path) => path.includes("/_rpc/"))).toHaveLength(
+        phase === "refresh" ? 1 : 0
+      )
+    }
+  )
+
   /**
    * ADR-0224 A4. The token exchange is the first request a device makes, so a
    * dead address fails there. Reporting that as "auth" hid it from the relay
@@ -382,4 +569,221 @@ describe("deviceTransport token exchange failures", () => {
       status: 401,
     })
   })
+})
+
+describe("JSON value preservation", () => {
+  it.each([false, 7, "hello", null])("preserves %p on the internal wire", async (value) => {
+    const host = internalTransport({
+      endpoint: ENDPOINT,
+      serviceToken: "synthetic",
+      fetchImpl: stubFetch(() => ({ status: 200, body: value })),
+    })
+    expect(await host.execute("synthetic")).toMatchObject({ ok: true, result: value })
+  })
+})
+
+describe("REST response modes and metadata", () => {
+  it.each(["json", "text", "stream"] as const)(
+    "cancels a %s body even when it does not consume the fetch signal",
+    async (responseMode) => {
+      let body!: ReadableStreamDefaultController<Uint8Array>
+      const host = internalTransport({
+        endpoint: ENDPOINT,
+        serviceToken: "synthetic",
+        fetchImpl: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                body = controller
+                controller.enqueue(new TextEncoder().encode('{"partial":'))
+              },
+            })
+          ),
+      })
+      const pending = host.request("GET", "/stream", undefined, { responseMode, timeoutMs: 5 })
+      try {
+        await expect(
+          Promise.race([
+            pending,
+            new Promise((resolve) => setTimeout(() => resolve("missed budget"), 50)),
+          ])
+        ).resolves.toMatchObject({ ok: false, cause: "timeout" })
+      } finally {
+        body.error(new DOMException("cleanup", "AbortError"))
+        await pending
+      }
+    }
+  )
+
+  it.each([
+    { status: 200, responseMode: "json" as const },
+    { status: 500, responseMode: "json" as const },
+    { status: 200, responseMode: "text" as const },
+  ])("returns timeout during body reading: %p", async ({ status, responseMode }) => {
+    const controller = new AbortController()
+    let reached!: () => void
+    const headersReceived = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    const host = internalTransport({
+      endpoint: ENDPOINT,
+      serviceToken: "synthetic",
+      fetchImpl: async (_url, init) => {
+        const response = new Response(
+          new ReadableStream({
+            start(body) {
+              body.enqueue(new TextEncoder().encode('{"result":'))
+              init.signal?.addEventListener(
+                "abort",
+                () => body.error(new DOMException("stopped", "AbortError")),
+                { once: true }
+              )
+            },
+          }),
+          { status }
+        )
+        reached()
+        return response
+      },
+    })
+    const pending = host.execute("read", {}, { signal: controller.signal, responseMode })
+    await headersReceived
+    await Promise.resolve()
+    controller.abort(new Error("caller stopped"))
+    await expect(pending).resolves.toMatchObject({ ok: false, cause: "timeout" })
+  })
+
+  it("preserves RFC Problem details and retry advice", async () => {
+    const host = internalTransport({
+      endpoint: ENDPOINT,
+      serviceToken: "synthetic",
+      fetchImpl: stubFetch(() => ({
+        status: 429,
+        body: {
+          code: "rate_limited",
+          detail: "later",
+          retryable: true,
+          details: { replacement: "next" },
+        },
+      })),
+    })
+    expect(await host.execute("demo")).toMatchObject({
+      ok: false,
+      retryable: true,
+      problem: { details: { replacement: "next" } },
+    })
+  })
+  it("keeps text bytes intact instead of truncating JSON failures", async () => {
+    const text = "line\n".repeat(200)
+    const host = internalTransport({
+      endpoint: ENDPOINT,
+      serviceToken: "s",
+      fetchImpl: stubFetch(() => ({ status: 200, text })),
+    })
+    expect(await host.request("GET", "/export", undefined, { responseMode: "text" })).toMatchObject(
+      { ok: true, result: text }
+    )
+  })
+})
+
+describe("relay operation observation", () => {
+  it("observes an operation without replaying its mutation", async () => {
+    const direct: HostTransport = {
+      wire: "http",
+      label: "offline",
+      execute: jest.fn(async () => ({
+        ok: false as const,
+        cause: "network" as const,
+        message: "offline",
+      })),
+      request: jest.fn(async () => ({
+        ok: false as const,
+        cause: "network" as const,
+        message: "offline",
+      })),
+    }
+    const execute = jest.fn(async () => ({
+      ok: true as const,
+      accepted: true,
+      operationId: "11111111-1111-4111-8111-111111111111",
+      result: {},
+    }))
+    const getOperation = jest.fn(async () => ({
+      ok: true as const,
+      result: {
+        id: "11111111-1111-4111-8111-111111111111",
+        done: true,
+        status: "succeeded",
+        result: null,
+      },
+    }))
+    const host = withRelayFallback(direct, { execute, getOperation, close: () => {} })
+    await host.execute("mutation", {}, { idempotencyKey: "11111111-1111-4111-8111-111111111111" })
+    await expect(
+      host.request("GET", "/api/operations/11111111-1111-4111-8111-111111111111")
+    ).resolves.toMatchObject({ ok: true, result: { done: true, result: null } })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(getOperation).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("event transport preference and continuity", () => {
+  it("keeps a healthy direct stream independent of relay availability", async () => {
+    const watch = jest.fn(async () => ({ ok: true as const, result: { count: 1 } }))
+    const relayWatch = jest.fn(async () => ({
+      ok: false as const,
+      cause: "network" as const,
+      message: "offline",
+    }))
+    const direct: HostTransport = {
+      wire: "http",
+      label: "host",
+      execute: async () => ({ ok: true, result: {} }),
+      request: async () => ({ ok: true, result: {} }),
+      watch,
+    }
+    const host = withRelayFallback(direct, {
+      execute: direct.execute,
+      watch: relayWatch,
+      close: () => {},
+    })
+    await expect(
+      host.watch!({ channels: ["a"], maxEvents: 1, onEvent: () => {} })
+    ).resolves.toMatchObject({ ok: true })
+    expect(watch).toHaveBeenCalledTimes(1)
+    expect(relayWatch).not.toHaveBeenCalled()
+  })
+  it("preserves the cursor and remaining event bound when falling back", async () => {
+    const relayWatch = jest.fn(async () => ({ ok: true as const, result: { count: 1 } }))
+    const direct: HostTransport = {
+      wire: "http",
+      label: "host",
+      execute: async () => ({ ok: true, result: {} }),
+      request: async () => ({ ok: true, result: {} }),
+      watch: async (options) => {
+        options.onEvent({ type: "a", seq: 10, payload: 1 })
+        options.onCursor?.(12)
+        return { ok: false, cause: "network", message: "disconnected" }
+      },
+    }
+    const host = withRelayFallback(direct, {
+      execute: direct.execute,
+      watch: relayWatch,
+      close: () => {},
+    })
+    await host.watch!({ channels: ["a"], maxEvents: 2, onEvent: () => {} })
+    expect(relayWatch).toHaveBeenCalledWith(expect.objectContaining({ since: 12, maxEvents: 1 }))
+  })
+})
+
+it("merges raw request headers case-insensitively", async () => {
+  const fetchImpl = stubFetch(() => ({ status: 200, body: {} }))
+  const host = internalTransport({ endpoint: ENDPOINT, serviceToken: "s", fetchImpl })
+  await host.request("POST", "/upload", undefined, {
+    rawBody: "text",
+    headers: { "Content-Type": "application/octet-stream" },
+  })
+  expect(new Headers(fetchImpl.calls[0].init.headers).get("content-type")).toBe(
+    "application/octet-stream"
+  )
 })

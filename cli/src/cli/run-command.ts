@@ -4,7 +4,7 @@
  *
  * Flags: --model --provider --protocol --cwd --system --allow a,b --yes --timeout
  *        --max-turns --output-format text|json|stream-json (--json ⇒ stream-json)
- *        --plugin-tools --dev-plugins [--dev-plugins-dir <dir>].
+ *        --plugin-tools --dev-plugins [--dev-plugins-dir <dir>] --no-session.
  *
  * Prompt sources merge like pi/Claude Code: the positional prompt and piped
  * stdin are both honored (stdin appended as context, or used alone when no
@@ -15,6 +15,7 @@
  */
 
 import type { CliConfigFile } from "../config/schema"
+import type { AgentWorkspaceCaptureReceipt } from "@cognia/agent-config-types/agent-run-result"
 import { loadConfig as defaultLoadConfig } from "../config/load"
 import { configureCliLogging as defaultConfigureLogging } from "../config/cli-logging"
 import { createPermissionGate } from "../agent/permission-gate"
@@ -28,6 +29,25 @@ export type OutputFormat = "text" | "json" | "stream-json"
 
 /** Reject a piped prompt larger than this (Claude Code uses the same 10 MB cap). */
 export const MAX_STDIN_BYTES = 10 * 1024 * 1024
+
+function reportWorkspaceCapture(out: OutputSink, receipt?: AgentWorkspaceCaptureReceipt): void {
+  if (!receipt) return
+  out.error(
+    receipt.available
+      ? `Workspace changes retained at ${receipt.workspaceRoot}; review with cognia-agent worker diff --run-id '${receipt.runId.replace(/'/g, "'\\''")}'`
+      : `Workspace change capture unavailable (${receipt.reason}).`
+  )
+  if (
+    !receipt.available &&
+    receipt.reason === "capture-failed" &&
+    receipt.runId &&
+    receipt.workspaceRoot
+  ) {
+    out.error(
+      `Unconfirmed capture at ${receipt.workspaceRoot}; stop the original executor, then run cognia-agent worker settle --run-id '${receipt.runId.replace(/'/g, "'\\''")}' --executor-stopped.`
+    )
+  }
+}
 
 export interface RunDeps {
   loadConfig?: (flags?: Partial<CliConfigFile>) => ReturnType<typeof defaultLoadConfig>
@@ -235,6 +255,7 @@ async function runCommandInner(
       config,
       prompt,
       gate,
+      ...(boolFlag(args, "no-session") ? { persist: false } : {}),
       timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
       ...(maxTurns !== undefined && maxTurns >= 1 ? { maxTurns: Math.floor(maxTurns) } : {}),
       onEvent: (event) => {
@@ -253,6 +274,7 @@ async function runCommandInner(
       // Non-streaming providers emit no text-delta; print the final reply once.
       if (!streamedText) out.write(result.text)
       out.write("\n")
+      reportWorkspaceCapture(out, result.workspaceCapture)
     } else {
       // Both `json` and `stream-json` end with the authoritative result object;
       // `json` emits ONLY this line, `stream-json` appends it after the events.
@@ -263,6 +285,7 @@ async function runCommandInner(
         text: result.text,
         usage: result.usage,
         sdkSessionId: result.sdkSessionId,
+        ...(result.workspaceCapture ? { workspaceCapture: result.workspaceCapture } : {}),
       })
     }
 
@@ -273,7 +296,7 @@ async function runCommandInner(
     }
     return 0
   } catch (err) {
-    const error = err as Error
+    const error = err as Error & { workspaceCapture?: AgentWorkspaceCaptureReceipt }
     // A failed run must still TERMINATE the machine-readable stream. Without
     // this, `--output-format json|stream-json` wrote nothing at all to stdout
     // on failure — the reason went to stderr as prose — so a consumer saw an
@@ -287,9 +310,11 @@ async function runCommandInner(
         is_error: true,
         subtype: error.name && error.name !== "Error" ? error.name : "error_during_execution",
         error: error.message,
+        ...(error.workspaceCapture ? { workspaceCapture: error.workspaceCapture } : {}),
       })
     }
     out.error(`run failed: ${error.message}`)
+    if (format === "text") reportWorkspaceCapture(out, error.workspaceCapture)
     return 1
   }
 }

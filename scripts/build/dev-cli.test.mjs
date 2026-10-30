@@ -7,15 +7,31 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import ts from "typescript"
 
+test("CLI compilation supports the BigInt syntax in shared Node modules", () => {
+  const cliRoot = fileURLToPath(new URL("../../cli/", import.meta.url))
+  const config = ts.readConfigFile(path.join(cliRoot, "tsconfig.json"), ts.sys.readFile)
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, cliRoot)
+  assert.ok(parsed.options.target >= ts.ScriptTarget.ES2020)
+  assert.equal(path.resolve(parsed.options.tsBuildInfoFile), path.resolve(cliRoot, "../.cache/typecheck/cli.tsbuildinfo"))
+})
+
 test("CLI source resolution retains workspace aliases and the shared host modules", () => {
   const root = fileURLToPath(new URL("../../", import.meta.url))
   const cliRoot = path.join(root, "cli")
   const rootConfig = ts.readConfigFile(path.join(root, "tsconfig.json"), ts.sys.readFile)
   const cliConfig = ts.readConfigFile(path.join(cliRoot, "tsconfig.json"), ts.sys.readFile)
+  const cliPackage = JSON.parse(readFileSync(path.join(cliRoot, "package.json"), "utf8"))
   assert.equal(rootConfig.error, undefined)
   assert.equal(cliConfig.error, undefined)
   assert.equal(cliConfig.config.compilerOptions.baseUrl, undefined)
   for (const [alias, targets] of Object.entries(rootConfig.config.compilerOptions.paths)) {
+    // External package paths are scoped to each workspace's own installation.
+    const packageName = alias.replace(/\/\*$/, "")
+    if (targets.every((target) => target.startsWith("./node_modules/")) &&
+      (cliPackage.dependencies?.[packageName] || cliPackage.devDependencies?.[packageName])) {
+      assert.deepEqual(cliConfig.config.compilerOptions.paths[alias], targets)
+      continue
+    }
     assert.deepEqual(
       cliConfig.config.compilerOptions.paths[alias]?.map((target) => path.resolve(cliRoot, target)),
       targets.map((target) => path.resolve(root, target)),

@@ -1,6 +1,6 @@
 import { findCommand } from "./catalog"
-import { buildRequestBody, parseDataFlag, requestTemplate } from "./validate"
-import type { ApiCommandEntry } from "./types"
+import { buildRequestBody, parseDataFlag, requestTemplate, validateContract } from "./validate"
+import { commandForWire, type ApiCommandEntry } from "./types"
 
 function entry(overrides: Partial<ApiCommandEntry> = {}): ApiCommandEntry {
   return {
@@ -26,6 +26,37 @@ function entry(overrides: Partial<ApiCommandEntry> = {}): ApiCommandEntry {
     ...overrides,
   }
 }
+
+it.each([undefined, null, "source-1", 42])(
+  "validates the Host's delivery sourceId: %p",
+  (sourceId) => {
+    const command = commandForWire(findCommand("environment_delivery_list")!, "internal")
+    const invalid = validateContract(
+      command,
+      {
+        items: [
+          {
+            id: "delivery",
+            agentId: "agent",
+            providerId: "docker",
+            instanceId: "instance",
+            branch: "main",
+            publishState: "running",
+            cleanupState: "pending",
+            publish: { pushed: false },
+            createdAt: 100,
+            updatedAt: 100,
+            revision: 1,
+            ...(sourceId !== undefined ? { sourceId } : {}),
+          },
+        ],
+      },
+      "output"
+    )
+    if (sourceId === 42) expect(invalid).toMatchObject({ ok: false })
+    else expect(invalid).toBeUndefined()
+  }
+)
 
 describe("parseDataFlag", () => {
   it("parses inline JSON", () => {
@@ -284,5 +315,38 @@ describe("requestTemplate", () => {
     expect(buildRequestBody({ entry: command, flags: {}, data: template })).toMatchObject({
       ok: true,
     })
+  })
+})
+
+describe("complete schema validation", () => {
+  it("validates nested definitions, patterns and additional properties", () => {
+    const command = entry({
+      inputSchema: {
+        type: "object",
+        required: ["options"],
+        properties: { options: { $ref: "#/$defs/options" } },
+        additionalProperties: false,
+        $defs: {
+          options: {
+            type: "object",
+            required: ["id"],
+            properties: { id: { type: "string", pattern: "^ok-" } },
+            additionalProperties: false,
+          },
+        },
+      },
+    })
+    expect(validateContract(command, { options: { id: "ok-a" } })).toBeUndefined()
+    expect(validateContract(command, { options: { id: "bad", extra: true } })).toMatchObject({
+      ok: false,
+    })
+    expect(validateContract(command, { options: { id: "ok-a" }, extra: true })).toMatchObject({
+      ok: false,
+    })
+  })
+  it("validates the output direction independently", () => {
+    const command = entry({ outputSchema: { type: "null" } })
+    expect(validateContract(command, null, "output")).toBeUndefined()
+    expect(validateContract(command, {}, "output")).toMatchObject({ ok: false })
   })
 })

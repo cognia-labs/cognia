@@ -40,6 +40,7 @@ export interface CliFailure {
   cause: FailureCause
   fix?: string[]
   inspect?: string[]
+  problem?: Record<string, unknown>
   diagnostics?: Record<string, string | number | undefined>
 }
 
@@ -67,7 +68,8 @@ export function emitFailure(
   failure: CliFailure,
   exitCode: number = EXIT_FAILURE
 ): number {
-  out.error(renderFailure(failure).trimEnd())
+  if (out.failure) out.failure(failure, exitCode)
+  else out.error(renderFailure(failure).trimEnd())
   return exitCode
 }
 

@@ -13,6 +13,7 @@ import { reconnectDelayMs, waitForReconnectDelay } from "../runtime/reconnect-de
 import { createAgentRpcServer } from "../agent/rpc/server"
 import { createAgentRuntimeService } from "../agent/rpc/runtime-service"
 import { resolveWorkerExecutionProfile } from "../agent/runtime/resolve-worker-execution"
+import type { UnifiedWorkspaceCaptureLease } from "../agent/runtime/unified-runtime"
 import { resolveWakeIdentity } from "./wake-identity"
 import type { WorkerWorkspaceClient } from "./workspace-client"
 import {
@@ -160,6 +161,8 @@ async function serveWorkerConnection(
   socket.addEventListener("error", closeInput)
 
   const workspaceRefs = new Set(manifest.workspaceBindingRefs)
+  const captureLeases = new Set<UnifiedWorkspaceCaptureLease>()
+  let connectionClosed = false
   const assertHandoffExecution = (handoff: HandoffEnvelope) => {
     const executionErrors = validateWorkerHandoffExecution(manifest, handoff)
     if (executionErrors.length > 0) {
@@ -172,7 +175,8 @@ async function serveWorkerConnection(
     workerDispatch: {
       manifest,
       validateHandoffExecution: assertHandoffExecution,
-      async resolveHandoffWorkspace(handoff, commandId) {
+      async resolveHandoffWorkspace(handoff, commandId, sessionId) {
+        if (connectionClosed) throw new Error("worker connection is closed")
         assertHandoffExecution(handoff)
         const repositoryRef = handoff.resources?.find(
           (resource) => resource.kind === "repository"
@@ -182,14 +186,59 @@ async function serveWorkerConnection(
             `workspace binding is unavailable on this worker: ${repositoryRef ?? "missing repository ref"}`
           )
         }
-        const run = await options.workspace.begin(
-          repositoryRef,
-          beginRequestFromHandoff(handoff, commandId)
-        )
-        if (typeof run.executionRoot !== "string" || run.executionRoot.length === 0) {
-          throw new Error("Task Workspace helper did not return an execution root")
+        const capture = options.workspace.openCapture?.()
+        if (!capture) throw new Error("worker requires a persistent Task Workspace helper")
+        const input = beginRequestFromHandoff(handoff, commandId, sessionId)
+        try {
+          const run = await capture.begin(input, repositoryRef)
+          if (
+            typeof run.executionRoot !== "string" ||
+            !path.isAbsolute(run.executionRoot) ||
+            run.executorStopUnconfirmed !== false ||
+            run.runId !== input.runId ||
+            run.taskId !== input.taskId
+          )
+            throw new Error("Task Workspace helper did not return the requested execution run")
+          const tasks = await capture.listTasks(input.sessionId)
+          if (connectionClosed) throw new Error("worker connection is closed")
+          const task = tasks.find((task) => task.taskId === run.taskId)
+          if (!task?.workspaceRoot)
+            throw new Error("Task Workspace helper did not retain the requested task")
+          let finishing: Promise<void> | undefined
+          let quarantining: Promise<void> | undefined
+          let executorUnconfirmed = false
+          const finish = (state: "ready" | "failed" | "cancelled") => {
+            return (finishing ??= (async () => {
+              if (quarantining) await quarantining.catch(() => undefined)
+              try {
+                if (!executorUnconfirmed) await capture.settle(run.runId, state)
+              } finally {
+                captureLeases.delete(lease)
+                await capture.close()
+              }
+            })())
+          }
+          const lease: UnifiedWorkspaceCaptureLease = {
+            sessionId: input.sessionId,
+            taskId: run.taskId,
+            runId: run.runId,
+            workspaceRoot: task.workspaceRoot,
+            executionRoot: run.executionRoot,
+            settle: finish,
+            markExecutorUnconfirmed: () => {
+              // Set before delivery: even a lost RPC response must prevent
+              // close() from publishing a cancellation patch for a live writer.
+              executorUnconfirmed = true
+              return (quarantining ??= capture.markExecutorUnconfirmed(run.runId))
+            },
+            close: () => finish("cancelled"),
+          }
+          captureLeases.add(lease)
+          return { cwd: run.executionRoot, capture: lease }
+        } catch (error) {
+          await capture.close().catch(() => undefined)
+          throw error
         }
-        return run.executionRoot
       },
     },
   })
@@ -212,7 +261,9 @@ async function serveWorkerConnection(
   try {
     await server.serve()
   } finally {
+    connectionClosed = true
     options.signal?.removeEventListener("abort", onAbort)
+    await Promise.allSettled([...captureLeases].map((lease) => lease.close()))
   }
 }
 
@@ -354,10 +405,10 @@ export function workerSocketUrl(baseUrl: string, ticket: string): string {
   return url.toString()
 }
 
-function beginRequestFromHandoff(handoff: HandoffEnvelope, commandId: string) {
+function beginRequestFromHandoff(handoff: HandoffEnvelope, commandId: string, sessionId?: string) {
   return {
     taskId: handoff.identity.taskId ?? handoff.identity.childRunId,
-    sessionId: handoff.identity.childRunId,
+    sessionId: sessionId ?? handoff.identity.childRunId,
     runId: commandId,
     parentRunId: handoff.identity.parentRunId,
     agentId: handoff.identity.teamId ?? "agent-team",

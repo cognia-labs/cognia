@@ -1,4 +1,14 @@
 {
+  "workspaceCaptureAvailable": "已记录回合变更 · run {runId} · 工作区 {workspaceRoot}",
+  "workspaceCaptureUnavailable": "回合变更不可用 · {reason}",
+  "workspaceCaptureReasons": {
+    "not-started": "捕获尚未开始",
+    "persistence-disabled": "会话持久化已禁用",
+    "remote-filesystem": "此 Host 无法访问执行端文件系统",
+    "unsupported-runtime": "此运行时不提供工作区捕获",
+    "helper-unavailable": "工作区 helper 不可用",
+    "capture-failed": "工作区捕获失败"
+  },
   "manualSubagentUnsupported": "当前后端不支持手动运行 CLI 子 Agent。",
   "trustQuestion": "是否信任 {path} 中的文件？",
   "trustDescription": "Cognia Agent 可以读取和修改此目录中的文件，并运行命令。",
@@ -186,5 +196,7 @@
   "rewindReasonTooLarge": "文件过大，无法快照",
   "rewindReasonUnreadable": "无法读取",
   "rewindReasonOutsideWorkspace": "不在工作区内",
-  "rewindAmbiguousCheckpoint": "检查点 #{seq} 对应本会话先前运行留下的 {count} 个检查点，未执行恢复。"
+  "rewindAmbiguousCheckpoint": "检查点 #{seq} 对应本会话先前运行留下的 {count} 个检查点，未执行恢复。",
+  "workspaceCaptureAutonomousUnavailable": "自主后台回合的文件变更无法跟踪或撤销；此运行时未提供写入前的捕获边界。",
+  "workspaceCaptureRecoveryHint": "捕获尚未确认 · run {runId} · 工作区 {workspaceRoot}。先停止原执行器，再运行 cognia-agent worker settle --run-id {runId} --executor-stopped。"
 }

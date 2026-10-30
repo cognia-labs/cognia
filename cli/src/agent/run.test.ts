@@ -62,6 +62,10 @@ describe("mintSessionId", () => {
 })
 
 describe("runHeadlessTurn — parameter mapping", () => {
+  it("forwards the explicit no-session choice to the canonical runtime", async () => {
+    await runHeadlessTurn({ config, prompt: "p", gate, persist: false })
+    expect(lastParams().persist).toBe(false)
+  })
   it("forwards the attachment validation callback to the runtime", async () => {
     const onAttachments = jest.fn()
     await runHeadlessTurn({ config, prompt: "source", gate, onAttachments })
@@ -228,6 +232,30 @@ describe("runHeadlessTurn — event bridging", () => {
 })
 
 describe("runHeadlessTurn — result mapping", () => {
+  it("preserves retained capture receipts on both successful and failed runs", async () => {
+    const workspaceCapture = {
+      available: true as const,
+      taskId: "task",
+      runId: "capture-run",
+      workspaceRoot: "/repo",
+    }
+    mockedRun.mockResolvedValueOnce({ result: result({ workspaceCapture }), envelopes: [] })
+    await expect(runHeadlessTurn({ config, prompt: "p", gate })).resolves.toMatchObject({
+      workspaceCapture,
+    })
+    mockedRun.mockResolvedValueOnce({
+      result: result({
+        status: "failed",
+        error: { code: "provider_error", message: "stopped" },
+        workspaceCapture,
+      }),
+      envelopes: [],
+    })
+    await expect(runHeadlessTurn({ config, prompt: "p", gate })).rejects.toMatchObject({
+      name: "provider_error",
+      workspaceCapture,
+    })
+  })
   it("returns the session id, text, usage and native session handle", async () => {
     mockedRun.mockResolvedValue({
       result: result({

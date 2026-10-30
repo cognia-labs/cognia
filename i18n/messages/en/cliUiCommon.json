@@ -1,4 +1,14 @@
 {
+  "workspaceCaptureAvailable": "Turn changes recorded · run {runId} · workspace {workspaceRoot}",
+  "workspaceCaptureUnavailable": "Turn changes unavailable · {reason}",
+  "workspaceCaptureReasons": {
+    "not-started": "Capture did not start",
+    "persistence-disabled": "Session persistence is disabled",
+    "remote-filesystem": "The execution filesystem is not visible to this Host",
+    "unsupported-runtime": "This runtime does not provide workspace capture",
+    "helper-unavailable": "The workspace helper is unavailable",
+    "capture-failed": "Workspace capture failed"
+  },
   "manualSubagentUnsupported": "This backend cannot host manual CLI subagents.",
   "trustQuestion": "Do you trust the files in {path}?",
   "trustDescription": "Cognia Agent may read and edit files and run commands in this folder.",
@@ -186,5 +196,7 @@
   "rewindReasonTooLarge": "too large to snapshot",
   "rewindReasonUnreadable": "unreadable",
   "rewindReasonOutsideWorkspace": "outside the workspace",
-  "rewindAmbiguousCheckpoint": "Checkpoint #{seq} matches {count} checkpoints from earlier runs of this session, so nothing was restored."
+  "rewindAmbiguousCheckpoint": "Checkpoint #{seq} matches {count} checkpoints from earlier runs of this session, so nothing was restored.",
+  "workspaceCaptureAutonomousUnavailable": "Workspace changes from autonomous background turns cannot be tracked or undone. This runtime does not provide a before-write capture boundary.",
+  "workspaceCaptureRecoveryHint": "Unconfirmed capture · run {runId} · workspace {workspaceRoot}. Stop the original executor, then run cognia-agent worker settle --run-id {runId} --executor-stopped."
 }

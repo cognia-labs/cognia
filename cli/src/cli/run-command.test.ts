@@ -158,6 +158,77 @@ describe("mergePrompt", () => {
 })
 
 describe("runCommand", () => {
+  it("preserves capture receipts in JSON and the real no-session flag at dispatch", async () => {
+    const output = sink()
+    const workspaceCapture = { available: false as const, reason: "persistence-disabled" as const }
+    const run = jest.fn(async () => ({ sessionId: "s1", text: "done", workspaceCapture }))
+    expect(
+      await runCommand(parseArgv(["run", "hello", "--no-session", "--output-format", "json"]), {
+        ...noStdin,
+        out: output.out,
+        loadConfig: () => cfg(),
+        run,
+      })
+    ).toBe(0)
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ prompt: "hello", persist: false }))
+    expect(output.jsonl).toEqual([expect.objectContaining({ workspaceCapture })])
+  })
+
+  it("keeps failed-turn captures reviewable and prints a bounded text review command", async () => {
+    const workspaceCapture = {
+      available: true as const,
+      taskId: "task",
+      runId: "retained-run",
+      workspaceRoot: "/repo",
+    }
+    const failed = sink()
+    const error = Object.assign(new Error("provider stopped"), { workspaceCapture })
+    expect(
+      await runCommand(parseArgv(["run", "hello", "--output-format", "json"]), {
+        ...noStdin,
+        out: failed.out,
+        loadConfig: () => cfg(),
+        run: async () => {
+          throw error
+        },
+      })
+    ).toBe(1)
+    expect(failed.jsonl).toEqual([expect.objectContaining({ is_error: true, workspaceCapture })])
+    const successful = sink()
+    expect(
+      await runCommand(parseArgv(["run", "hello"]), {
+        ...noStdin,
+        out: successful.out,
+        loadConfig: () => cfg(),
+        run: async () => ({ sessionId: "s1", text: "done", workspaceCapture }),
+      })
+    ).toBe(0)
+    expect(successful.text()).toBe("done\n")
+    expect(successful.stderr.join("")).toContain("worker diff --run-id 'retained-run'")
+  })
+  it("exposes an unconfirmed capture recovery command without advertising diff or undo", async () => {
+    const output = sink()
+    const workspaceCapture = {
+      available: false as const,
+      reason: "capture-failed" as const,
+      taskId: "task",
+      runId: "quarantined-run",
+      workspaceRoot: "/repo",
+    }
+    await runCommand(parseArgv(["run", "hello"]), {
+      ...noStdin,
+      out: output.out,
+      loadConfig: () => cfg(),
+      run: async () => ({ sessionId: "s1", text: "done", workspaceCapture }),
+    })
+    expect(output.stderr.join("")).toContain("stop the original executor")
+    expect(output.stderr.join("")).toContain(
+      "worker settle --run-id 'quarantined-run' --executor-stopped"
+    )
+    expect(output.stderr.join("")).toContain("/repo")
+    expect(output.stderr.join("")).not.toContain("worker diff")
+    expect(output.stderr.join("")).not.toContain("worker undo")
+  })
   it("errors with exit 2 when no prompt is given", async () => {
     const s = sink()
     const code = await runCommand(parseArgv(["run"]), {

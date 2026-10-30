@@ -106,7 +106,7 @@ describe("preflight", () => {
       body: {},
     })
     expect(failure?.cause).toBe("refused")
-    expect(failure?.fix?.[0]).toContain("host lease demo_command")
+    expect(failure?.fix?.[0]).toContain("host_admin_lease_issue")
   })
 
   it("accepts an interactive command once a lease is supplied, in either spelling", () => {
@@ -182,10 +182,10 @@ describe("invokeCommand", () => {
       body: {},
       transport: host,
       timeoutMs: 1000,
-      idempotencyKey: "chosen",
+      idempotencyKey: "22222222-2222-4222-8222-222222222222",
       newId: () => "minted",
     })
-    expect(host.calls[0].options?.idempotencyKey).toBe("chosen")
+    expect(host.calls[0].options?.idempotencyKey).toBe("22222222-2222-4222-8222-222222222222")
   })
 
   it("returns a completed result without polling", async () => {
@@ -306,7 +306,7 @@ describe("preflight against real commands", () => {
     const command = findCommand("agent_task_cancel")!
     expect(command.approval).toBe("interactive")
     const failure = preflight({ entry: command, transport: transport("http", []), body: {} })
-    expect(failure?.fix?.[0]).toContain("host lease agent_task_cancel")
+    expect(failure?.fix?.[0]).toContain("host_admin_lease_issue")
   })
 
   it("lets the same command through on the headless wire", () => {
@@ -314,5 +314,19 @@ describe("preflight against real commands", () => {
     expect(
       preflight({ entry: command, transport: transport("internal", []), body: {} })
     ).toBeUndefined()
+  })
+})
+
+describe("canonical Operation values", () => {
+  it("preserves an explicit null result", async () => {
+    const result = await pollOperation({
+      transport: transport("internal", [
+        { ok: true, result: { id: "op", done: true, status: "succeeded", result: null } },
+      ]),
+      operationId: "op",
+      timeoutMs: 1000,
+      sleep: async () => {},
+    })
+    expect(result).toEqual({ ok: true, result: null })
   })
 })

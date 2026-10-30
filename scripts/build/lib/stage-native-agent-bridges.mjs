@@ -67,7 +67,10 @@ export function stageNativeAgentBridges({ root, sidecarOutDir, pin = false } = {
     const sdk = JSON.parse(fs.readFileSync(path.join(sdkRoot, "package.json"), "utf8"))
     if (sdk.version !== "0.10.7") throw new Error(`expected installed @codebuff/sdk@0.10.7, found ${sdk.version}`)
     copyRuntimeClosure({ names: ["@codebuff/sdk"], fromDir: sdkFrom, destNodeModules: path.join(scratch, "node_modules") })
-    for (const input of ["packages/agent-codebuff/package.json", "pnpm-lock.yaml", "scripts/build/lib/stage-native-agent-bridges.mjs", "scripts/build/lib/copy-runtime-closure.mjs"])
+    // Pin actual bridge inputs and every runtime dependency byte below. The
+    // workspace lockfile also covers unrelated applications: changing one of
+    // those dependencies must not invalidate an identical verified closure.
+    for (const input of ["packages/agent-codebuff/package.json", "scripts/build/lib/stage-native-agent-bridges.mjs", "scripts/build/lib/copy-runtime-closure.mjs"])
       if (fs.existsSync(path.join(root, input))) addSource(input)
     const files = inventory(scratch)
     const dependencyFiles = Object.fromEntries(Object.entries(files).filter(([file]) => file.startsWith("node_modules/")))

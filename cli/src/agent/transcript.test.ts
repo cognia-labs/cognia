@@ -13,6 +13,7 @@ import {
   truncateTranscriptToUserTurns,
   sessionTranscriptPath,
   writeTranscript,
+  createTransientTranscriptFs,
   type TranscriptFs,
 } from "./transcript"
 
@@ -31,6 +32,30 @@ function memFs() {
 }
 
 describe("transcript", () => {
+  it("keeps no-session history in memory without reading or overwriting existing session files", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-transient-transcript-"))
+    try {
+      appendTranscript(home, "private", { role: "user", content: "durable old history" })
+      const before = fs.readFileSync(sessionTranscriptPath(home, "private"))
+      const transient = createTransientTranscriptFs()
+      expect(readTranscript(home, "private", transient)).toEqual([])
+      appendTranscript(home, "private", { role: "user", content: "ephemeral question" }, transient)
+      appendTranscript(
+        home,
+        "private",
+        { role: "assistant", content: "ephemeral answer" },
+        transient
+      )
+      expect(readTranscript(home, "private", transient).map((row) => row.content)).toEqual([
+        "ephemeral question",
+        "ephemeral answer",
+      ])
+      expect(fs.readFileSync(sessionTranscriptPath(home, "private"))).toEqual(before)
+      expect(readTranscript(home, "private", createTransientTranscriptFs())).toEqual([])
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
   it("round-trips the native store and distinguishes missing files from I/O errors", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-transcript-check-"))
     try {

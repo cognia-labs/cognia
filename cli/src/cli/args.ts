@@ -29,6 +29,9 @@ export const BOOLEAN_FLAGS = new Set([
   "merge",
   "replace",
   "json",
+  // `worker settle` explicitly asserts the original executor has stopped.
+  "executor-stopped",
+  "no-session",
   "help",
   "version",
   "handoff",
@@ -74,6 +77,10 @@ export const BOOLEAN_FLAGS = new Set([
   // `api call --wait` — poll the operation receipt for a command the host
   // answered with 202 instead of a result.
   "wait",
+  "all",
+  "paginate",
+  "strict-output",
+  "output-schema",
   // `api schema --template` — print a fillable request body instead of calling.
   "template",
   // `host add --use` — make the new host active in the same step.
@@ -156,7 +163,14 @@ export function parseArgv(argv: string[], options: ParseOptions = {}): ParsedArg
       const { name: rawName, inlineValue } = normalizeFlagName(token)
       const name = isShort ? (SHORT_ALIAS[rawName] ?? rawName) : rawName
       if (booleanFlags.has(name)) {
-        flags[name] = true
+        flags[name] = inlineValue ?? true
+        if (
+          inlineValue === undefined &&
+          options.booleanFlags &&
+          ["true", "false", "null"].includes(argv[i + 1])
+        ) {
+          flags[name] = argv[++i]
+        }
         continue
       }
       if (inlineValue !== undefined) {

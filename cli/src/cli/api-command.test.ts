@@ -1,3 +1,6 @@
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { apiCommand, API_HELP, type ApiCommandDeps } from "./api-command"
 import { parseArgv } from "./args"
 import { API_COMMANDS } from "../api/generated/command-index"
@@ -179,11 +182,11 @@ describe("api describe and schema", () => {
     expect(template.defaultMode).toBe("auto")
   })
 
-  it("prints the field table without --template", async () => {
+  it("prints the complete input schema without --template", async () => {
     const d = deps(null)
     await run(["api", "schema", "adapter_update_policy", "--format", "raw"], d)
-    const fields = JSON.parse(d.out.stdout) as Array<{ field: string; flag: string }>
-    expect(fields.find((field) => field.field === "id")?.flag).toBe("--id")
+    const schema = JSON.parse(d.out.stdout) as { properties: Record<string, unknown> }
+    expect(schema.properties.id).toEqual({ type: "string" })
   })
 })
 
@@ -292,7 +295,7 @@ describe("api call", () => {
       )
     ).toBe(EXIT_FAILURE)
     const block = d.out.stderr[0]
-    expect(block).toContain("Fix: cognia-agent host lease agent_task_cancel")
+    expect(block).toContain("Fix: cognia-agent api call host_admin_lease_issue")
     expect(block).toContain("Diagnostics: status=428")
     expect(block).toContain("Diagnostics: requestId=req_9")
     expect(block).toContain("Diagnostics: wire=http")
@@ -304,7 +307,7 @@ describe("api call", () => {
     expect(
       await run(["api", "call", "agent_task_cancel", "--agent-id", "a", "--task-id", "t"], d)
     ).toBe(EXIT_FAILURE)
-    expect(d.out.stderr[0]).toContain("host lease agent_task_cancel")
+    expect(d.out.stderr[0]).toContain("host_admin_lease_issue")
     expect(host.calls).toHaveLength(0)
   })
 
@@ -430,3 +433,339 @@ describe("transport lifetime (ADR-0224 A4)", () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("API contract regression cases", () => {
+  it("redacts credentials recursively from debug output", async () => {
+    const d = deps(transport("internal", [{ ok: true, result: null }]))
+    const code = await run(
+      [
+        "api",
+        "call",
+        "host_provider_credential_set",
+        "--data",
+        '{"providerId":"p","apiKey":"CANARY_SECRET"}',
+        "--debug",
+        "--json",
+      ],
+      d
+    )
+    expect(code).toBe(0)
+    expect(d.out.stderr.join(" ")).not.toContain("CANARY_SECRET")
+  })
+  it("uses device workspace coordinates rather than service paths", async () => {
+    const host = transport("http", [{ ok: true, result: {} }])
+    const d = deps(host)
+    expect(
+      await run(["api", "call", "git_status", "--data", '{"workspaceId":"w"}', "--json"], d)
+    ).toBe(0)
+    expect(host.calls[0].body).toEqual({ workspaceId: "w" })
+  })
+  it("preserves explicit false and nullable null through derived boolean parsing", async () => {
+    const host = transport("internal", [{ ok: true, result: null }])
+    const d = deps(host)
+    expect(
+      await run(
+        [
+          "api",
+          "call",
+          "adapter_update_policy",
+          "--id",
+          "a",
+          "--muted=false",
+          "--a2ui-enabled=null",
+          "--json",
+        ],
+        d
+      )
+    ).toBe(0)
+    expect(host.calls[0].body).toMatchObject({ muted: false, a2uiEnabled: null })
+  })
+  it("separates a body intent key from its transport UUID", async () => {
+    const host = transport("internal", [{ ok: true, result: {} }])
+    const d = deps(host)
+    expect(
+      await run(
+        [
+          "api",
+          "call",
+          "execution_run_create",
+          "--mode",
+          "cascade",
+          "--text",
+          "test",
+          "--body-idempotency-key",
+          "intent",
+          "--idempotency-key",
+          "11111111-1111-4111-8111-111111111111",
+          "--json",
+        ],
+        d
+      )
+    ).toBe(0)
+    expect(host.calls[0].body).toMatchObject({ idempotencyKey: "intent" })
+    expect(host.calls[0].options?.idempotencyKey).toBe("11111111-1111-4111-8111-111111111111")
+  })
+  it("does not report a cancelled operation as success", async () => {
+    const host = transport("internal", [
+      { ok: true, accepted: true, operationId: "op", result: {} },
+      { ok: true, result: { id: "op", done: true, status: "cancelled" } },
+    ])
+    const d = deps(host, { sleep: async () => {} })
+    expect(await run(["api", "call", "session_list", "--wait", "--json"], d)).not.toBe(0)
+  })
+})
+
+describe("complete API workflows", () => {
+  it("exports the complete selected-wire input schema", async () => {
+    const d = deps(null)
+    expect(await run(["api", "schema", "git_status", "--wire", "http", "--json"], d)).toBe(0)
+    expect(JSON.parse(d.out.stdout)).toMatchObject({
+      type: "object",
+      required: ["workspaceId"],
+      additionalProperties: false,
+    })
+  })
+  it("validates nested data and unknown fields before dispatch", async () => {
+    const host = transport("internal", [])
+    const d = deps(host)
+    expect(
+      await run(
+        [
+          "api",
+          "call",
+          "adapter_update_policy",
+          "--data",
+          '{"id":42,"muted":"false","unknownField":true}',
+          "--json",
+        ],
+        d
+      )
+    ).toBe(2)
+    expect(host.calls).toHaveLength(0)
+    expect(JSON.parse(d.out.stderr[0])).toMatchObject({ ok: false, cause: "invalid-request" })
+  })
+  it("aggregates bounded page-token pages", async () => {
+    const host = transport("internal", [
+      { ok: true, result: { items: [{ id: "a" }], nextPageToken: "b" } },
+      { ok: true, result: { items: [{ id: "b" }] } },
+    ])
+    const d = deps(host)
+    expect(await run(["api", "call", "session_list", "--all", "--json"], d)).toBe(0)
+    expect(JSON.parse(d.out.stdout).items).toEqual([{ id: "a" }, { id: "b" }])
+    expect(host.calls[1].body).toEqual({ pageToken: "b" })
+  })
+  it("forwards idempotency keys through raw HTTP", async () => {
+    const host = transport("internal", [{ ok: true, result: {} }])
+    const d = deps(host)
+    expect(
+      await run(
+        [
+          "api",
+          "request",
+          "POST",
+          "/internal/_rpc/write",
+          "--idempotency-key",
+          "11111111-1111-4111-8111-111111111111",
+          "--json",
+        ],
+        d
+      )
+    ).toBe(0)
+    expect(host.calls[0].options?.idempotencyKey).toBe("11111111-1111-4111-8111-111111111111")
+  })
+})
+
+describe("live authenticated discovery", () => {
+  it("calls an admitted newer command using the Host schema", async () => {
+    const host = transport("internal", [
+      {
+        ok: true,
+        result: {
+          contractVersion: 3,
+          commands: [
+            {
+              name: "new_command",
+              target: "execution",
+              capability: "client.read",
+              risk: "low",
+              approval: "none",
+              idempotency: "forbidden",
+            },
+          ],
+          schemas: {
+            new_command: {
+              input: {
+                type: "object",
+                required: ["id"],
+                properties: { id: { type: "string" } },
+                additionalProperties: false,
+              },
+              output: { type: "null" },
+            },
+          },
+        },
+      },
+      { ok: true, result: null },
+    ])
+    const d = deps(host)
+    expect(await run(["api", "call", "new_command", "--live", "--id", "a", "--json"], d)).toBe(0)
+    expect(host.calls[1]).toMatchObject({ name: "new_command", body: { id: "a" } })
+  })
+  it("refuses a mismatched Host contract before dispatch", async () => {
+    const host = transport("internal", [
+      { ok: true, result: { contractVersion: 999, commands: [] } },
+    ])
+    const d = deps(host)
+    expect(await run(["api", "call", "session_list", "--live", "--json"], d)).not.toBe(0)
+    expect(host.calls).toHaveLength(1)
+  })
+})
+
+describe("file, stream and script boundaries", () => {
+  let directory: string
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-cli-api-"))
+  })
+  afterEach(() => fs.rmSync(directory, { recursive: true, force: true }))
+  it("writes byte responses atomically and preserves an existing file on failure", async () => {
+    const target = path.join(directory, "file.bin")
+    const first = deps(transport("internal", [{ ok: true, result: Buffer.from([0, 255, 10]) }]))
+    expect(
+      await run(
+        ["api", "request", "GET", "/download", "--response", "bytes", "--save", target],
+        first
+      )
+    ).toBe(0)
+    expect(fs.readFileSync(target)).toEqual(Buffer.from([0, 255, 10]))
+    const second = deps(transport("internal", [{ ok: false, cause: "network", message: "lost" }]))
+    expect(
+      await run(
+        ["api", "request", "GET", "/download", "--response", "bytes", "--save", target],
+        second
+      )
+    ).not.toBe(0)
+    expect(fs.readFileSync(target)).toEqual(Buffer.from([0, 255, 10]))
+    expect(fs.readdirSync(directory)).toEqual(["file.bin"])
+  })
+  it("sends raw file bytes and encodes multipart uploads with a boundary", async () => {
+    const file = path.join(directory, "source.bin")
+    fs.writeFileSync(file, Buffer.from([0, 255, 10]))
+    const host = transport("internal", [
+      { ok: true, result: {} },
+      { ok: true, result: {} },
+    ])
+    const d = deps(host)
+    expect(
+      await run(
+        [
+          "api",
+          "request",
+          "POST",
+          "/upload",
+          "--body-file",
+          file,
+          "--content-type",
+          "application/octet-stream",
+        ],
+        d
+      )
+    ).toBe(0)
+    expect(host.calls[0].options?.rawBody).toEqual(Buffer.from([0, 255, 10]))
+    expect(
+      await run(
+        [
+          "api",
+          "request",
+          "POST",
+          "/upload",
+          "--multipart",
+          JSON.stringify({ file: `@${file}`, label: "sample" }),
+        ],
+        d
+      )
+    ).toBe(0)
+    expect(host.calls[1].options?.headers?.["content-type"]).toContain(
+      "multipart/form-data; boundary="
+    )
+    expect(
+      Buffer.from(host.calls[1].options!.rawBody as Uint8Array).includes(Buffer.from([0, 255, 10]))
+    ).toBe(true)
+  })
+  it("keeps raw HTTP Problem metadata in JSON failures", async () => {
+    const d = deps(
+      transport("internal", [
+        {
+          ok: false,
+          cause: "refused",
+          message: "later",
+          requestId: "r1",
+          retryable: true,
+          retryAfter: "2",
+          problem: { details: { replacement: "new" } },
+        },
+      ])
+    )
+    expect(await run(["api", "request", "GET", "/catalog", "--json"], d)).not.toBe(0)
+    expect(JSON.parse(d.out.stderr[0])).toMatchObject({
+      problem: { details: { replacement: "new" } },
+      diagnostics: { requestId: "r1", retryAfter: "2", retryable: "true" },
+    })
+  })
+  it("cancels live discovery under the total budget before any mutation", async () => {
+    const host = transport("internal", [])
+    host.request = jest.fn(
+      async (_method, _route, _body, options) =>
+        new Promise((resolve) =>
+          options?.signal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, cause: "timeout", message: "stopped" }),
+            { once: true }
+          )
+        )
+    )
+    const d = deps(host)
+    expect(
+      await run(
+        [
+          "api",
+          "call",
+          "session_list",
+          "--live",
+          "--timeout",
+          "1s",
+          "--total-timeout",
+          "20ms",
+          "--json",
+        ],
+        d
+      )
+    ).not.toBe(0)
+    expect(host.calls).toHaveLength(0)
+    expect(JSON.parse(d.out.stderr[0]).cause).toBe("timeout")
+  })
+  it("checkpoints event output and rejects a cursor from a different Host", async () => {
+    const file = path.join(directory, "cursor.json")
+    const host = transport("internal", [])
+    const watch = jest.fn(async (options: import("../api/events").WatchOptions) => {
+      options.onEvent({ type: "a", seq: 7, payload: "event" })
+      return { ok: true as const, result: { count: 1 } }
+    })
+    const d = deps({ ...host, watch })
+    expect(
+      await run(["api", "events", "--channels", "a", "--max-events", "1", "--cursor-file", file], d)
+    ).toBe(0)
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({ seq: 7, host: host.label })
+    const other = deps({ ...host, label: "other Host", watch })
+    expect(await run(["api", "events", "--channels", "a", "--cursor-file", file], other)).toBe(2)
+    expect(watch).toHaveBeenCalledTimes(1)
+  })
+})
+
+it.each(["/export?access_token=CANARY_QUERY_SECRET", "export?access_token=CANARY_QUERY_SECRET"])(
+  "does not print raw request query credentials in debug or failures: %s",
+  async (routePath) => {
+    const d = deps(transport("internal", [{ ok: false, cause: "failed", message: "refused" }]))
+    await run(["api", "request", "GET", routePath, "--debug", "--json"], d)
+    expect(d.out.stderr.join(" ")).not.toContain("CANARY_QUERY_SECRET")
+  }
+)

@@ -20,6 +20,7 @@ import type { CliFailure } from "../cli/errors"
 import type { ApiCommandEntry } from "./types"
 import {
   operationPath,
+  failureFromResponse,
   type CommandOutcome,
   type HostTransport,
   type RequestOptions,
@@ -81,7 +82,7 @@ export function preflight(input: PreflightInput): CliFailure | undefined {
         error: `${entry.name} needs an approval lease a human granted on the host`,
         cause: "refused",
         fix: [
-          `cognia-agent host lease ${entry.name}`,
+          `cognia-agent api call host_admin_lease_issue --operations '["${entry.name}"]'`,
           "then pass the lease as --admin-lease <lease>",
         ],
         inspect: [`cognia-agent api describe ${entry.name}`],
@@ -112,6 +113,10 @@ export interface InvokeInput {
   timeoutMs: number
   /** Poll an accepted command until its receipt settles. */
   wait?: boolean
+  all?: boolean
+  maxPages?: number
+  totalTimeoutMs?: number
+  signal?: AbortSignal
   /** Overrides the minted key. Only useful when retrying a specific call. */
   idempotencyKey?: string
   /** Injected so the wait loop does not really sleep in tests. */
@@ -131,32 +136,140 @@ export interface InvokeResult {
 }
 
 export async function invokeCommand(input: InvokeInput): Promise<InvokeResult> {
-  const newId = input.newId ?? randomUUID
+  if (input.signal?.aborted)
+    return { outcome: { ok: false, cause: "timeout", message: "command stopped before dispatch" } }
+  const now = input.now ?? Date.now
+  const deadline = now() + (input.totalTimeoutMs ?? input.timeoutMs)
   const options: RequestOptions = {
     timeoutMs: input.timeoutMs,
-    // The host demands a UUID for `required` commands and rejects anything
-    // else, so mint one rather than letting the call fail on a missing header.
+    signal: input.signal,
     ...(input.entry.idempotency === "required"
-      ? { idempotencyKey: input.idempotencyKey ?? newId() }
+      ? { idempotencyKey: input.idempotencyKey ?? (input.newId ?? randomUUID)() }
       : input.idempotencyKey
         ? { idempotencyKey: input.idempotencyKey }
         : {}),
   }
-
-  const outcome = await input.transport.execute(input.entry.name, input.body, options)
-  if (!outcome.ok || !outcome.accepted) return { outcome }
-
-  const operationId = outcome.operationId
-  if (!input.wait || !operationId) return { outcome, ...(operationId ? { operationId } : {}) }
-
-  const settled = await pollOperation({
-    transport: input.transport,
-    operationId,
-    timeoutMs: input.timeoutMs,
-    sleep: input.sleep,
-    now: input.now,
-  })
-  return { outcome: settled, operationId, waited: true }
+  if (
+    options.idempotencyKey &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(options.idempotencyKey)
+  )
+    return {
+      outcome: {
+        ok: false,
+        cause: "invalid-request",
+        message:
+          "--idempotency-key must be a UUID (use --body-idempotency-key for business intents)",
+      },
+    }
+  const maxPages = input.maxPages ?? 1000
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 10000)
+    return {
+      outcome: {
+        ok: false,
+        cause: "invalid-request",
+        message: "--max-pages must be between 1 and 10000",
+      },
+    }
+  const execute = (body: Record<string, unknown>) =>
+    input.transport.execute(input.entry.name, body, {
+      ...options,
+      timeoutMs: Math.max(1, Math.min(input.timeoutMs, deadline - now())),
+    })
+  let outcome = await execute(input.body)
+  let operationId: string | undefined
+  let waited: boolean | undefined
+  if (outcome.ok && outcome.accepted) {
+    operationId = outcome.operationId
+    if (input.wait && !operationId)
+      return {
+        outcome: {
+          ok: false,
+          cause: "failed",
+          message: "accepted command returned no operation id",
+        },
+      }
+    if (input.wait && operationId) {
+      outcome = await pollOperation({
+        transport: input.transport,
+        operationId,
+        timeoutMs: input.timeoutMs,
+        deadline,
+        sleep: input.sleep,
+        now: input.now,
+        signal: input.signal,
+      })
+      waited = true
+    }
+  }
+  if (input.all && outcome.ok && !outcome.accepted) {
+    const result = outcome.result
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !Array.isArray((result as { items?: unknown }).items)
+    )
+      return {
+        outcome: {
+          ok: false,
+          cause: "failed",
+          message: "--all requires a Page with items and nextPageToken",
+        },
+      }
+    const page = result as Record<string, unknown> & { items: unknown[] }
+    const items = [...page.items]
+    const seen = new Set<string>(
+      typeof input.body.pageToken === "string" ? [input.body.pageToken] : []
+    )
+    let token = page.nextPageToken
+    let count = 1
+    while (typeof token === "string" && token.length > 0) {
+      if (input.signal?.aborted || now() >= deadline)
+        return {
+          outcome: { ok: false, cause: "timeout", message: "pagination exceeded its total budget" },
+        }
+      if (seen.has(token))
+        return {
+          outcome: {
+            ok: false,
+            cause: "failed",
+            code: "pagination_stalled",
+            message: "host repeated a page token",
+          },
+        }
+      if (count >= maxPages)
+        return {
+          outcome: {
+            ok: false,
+            cause: "failed",
+            code: "pagination_limit",
+            message: "--max-pages reached before the final page",
+          },
+        }
+      seen.add(token)
+      const next = await execute({ ...input.body, pageToken: token })
+      if (!next.ok) return { outcome: next }
+      if (
+        next.accepted ||
+        !next.result ||
+        typeof next.result !== "object" ||
+        !Array.isArray((next.result as { items?: unknown }).items)
+      )
+        return {
+          outcome: {
+            ok: false,
+            cause: "failed",
+            message: "host returned an invalid pagination page",
+          },
+        }
+      const nextPage = next.result as typeof page
+      items.push(...nextPage.items)
+      token = nextPage.nextPageToken
+      count++
+    }
+    const { nextPageToken: _continuation, ...metadata } = page
+    outcome = { ...outcome, result: { ...metadata, items } }
+  }
+  return { outcome, ...(operationId ? { operationId } : {}), ...(waited ? { waited } : {}) }
 }
 
 interface PollInput {
@@ -165,6 +278,8 @@ interface PollInput {
   timeoutMs: number
   sleep?: (ms: number) => Promise<void>
   now?: () => number
+  deadline?: number
+  signal?: AbortSignal
 }
 
 /**
@@ -176,17 +291,22 @@ interface PollInput {
 export async function pollOperation(input: PollInput): Promise<CommandOutcome> {
   const sleep = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)))
   const now = input.now ?? Date.now
-  const deadline = now() + input.timeoutMs
+  const deadline = input.deadline ?? now() + input.timeoutMs
   const routePath = operationPath(input.transport.wire, input.operationId)
 
   while (now() < deadline) {
-    await sleep(WAIT_POLL_INTERVAL_MS)
+    if (input.signal?.aborted) break
+    await sleep(Math.min(WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - now())))
+    if (input.signal?.aborted || now() >= deadline) break
     const outcome = await input.transport.request("GET", routePath, undefined, {
-      timeoutMs: input.timeoutMs,
+      timeoutMs: Math.max(1, Math.min(input.timeoutMs, deadline - now())),
+      signal: input.signal,
     })
     if (!outcome.ok) return outcome
     // The route answers the Operation document (ADR-0175 B3): branch on
     // `done`, then on `error`. Older hosts wrote a receipt with a status word.
+    if (!outcome.result || typeof outcome.result !== "object")
+      return { ok: false, cause: "failed", message: "host returned an invalid operation" }
     const operation = outcome.result as Record<string, unknown>
     const status = typeof operation.status === "string" ? operation.status : undefined
     const done =
@@ -195,7 +315,8 @@ export async function pollOperation(input: PollInput): Promise<CommandOutcome> {
         : status === "completed" ||
           status === "succeeded" ||
           status === "failed" ||
-          status === "error"
+          status === "error" ||
+          status === "cancelled"
     if (!done) continue
     const error = operation.error
     if (error !== undefined && error !== null) {
@@ -206,15 +327,27 @@ export async function pollOperation(input: PollInput): Promise<CommandOutcome> {
             ? (error as { detail: string }).detail
             : undefined
       return {
-        ok: false,
-        cause: "failed",
+        ...failureFromResponse(
+          typeof (error as { status?: unknown }).status === "number"
+            ? (error as { status: number }).status
+            : 500,
+          error
+        ),
         message: detail ?? `operation ${input.operationId} failed`,
       }
     }
+    if (status === "cancelled")
+      return {
+        ok: false,
+        cause: "failed",
+        code: "operation_cancelled",
+        operationId: input.operationId,
+        message: `operation ${input.operationId} was cancelled`,
+      }
     if (status === "failed" || status === "error") {
       return { ok: false, cause: "failed", message: `operation ${input.operationId} failed` }
     }
-    return { ok: true, result: operation.result ?? operation }
+    return { ok: true, result: Object.hasOwn(operation, "result") ? operation.result : operation }
   }
 
   return {

@@ -177,12 +177,12 @@ function TranscriptImpl({
       ] as const) {
         const display = show ? "flex" : "none"
         if (!target?.yogaNode || target.style.display === display) continue
-        target.style.display = display
+        target.style = { ...target.style, display }
         target.yogaNode.setDisplay(show ? visible : hidden)
         changed = true
       }
       if (node.style.maxHeight !== nextRows) {
-        node.style.maxHeight = nextRows
+        node.style = { ...node.style, maxHeight: nextRows }
         node.yogaNode!.setMaxHeight(nextRows)
         changed = true
       }
@@ -198,7 +198,7 @@ function TranscriptImpl({
     return () => {
       root.internal_layoutListeners?.delete(fit)
       if (node.parentNode) {
-        node.style.display = "none"
+        node.style = { ...node.style, display: "none" }
         node.yogaNode?.setDisplay(hidden)
       }
     }

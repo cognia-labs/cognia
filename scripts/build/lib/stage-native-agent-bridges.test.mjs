@@ -46,6 +46,20 @@ test("ordinary staging refuses absent pins and source drift without replacing ou
   assert.throws(() => stageNativeAgentBridges(args), /differs from embedded pins/)
   assert.equal(fs.readFileSync(path.join(staged.dir, "codebuff.cjs"), "utf8"), prior)
 })
+
+test("unrelated workspace lockfile changes preserve verified bridge integrity", (t) => {
+  const args = fixture(t)
+  const lockfile = path.join(args.root, "pnpm-lock.yaml")
+  const unrelatedDependency = (version) =>
+    `lockfileVersion: '9.0'\nimporters:\n  docs:\n    dependencies:\n      unrelated-package:\n        specifier: ${version}\n        version: ${version}\n`
+  fs.writeFileSync(lockfile, unrelatedDependency("1.0.0"))
+  const staged = stageNativeAgentBridges({ ...args, pin: true })
+  fs.writeFileSync(lockfile, unrelatedDependency("2.0.0"))
+  const ordinary = stageNativeAgentBridges(args)
+  assert.deepEqual(ordinary.manifest, staged.manifest)
+  assert.equal(ordinary.manifest.sdk.version, "0.10.7")
+  assert.ok(ordinary.manifest.dependencyFiles["node_modules/@codebuff/sdk/package.json"])
+})
 test("ordinary staging refuses changed SDK files and a non-pinned installed version", (t) => {
   const args = fixture(t)
   stageNativeAgentBridges({ ...args, pin: true })

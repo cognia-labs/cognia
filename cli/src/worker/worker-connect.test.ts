@@ -6,6 +6,8 @@ import type { Readable, Writable } from "node:stream"
 import type { HandoffEnvelope } from "@cognia/agent"
 
 import type { ResolvedConfig } from "../config/schema"
+import type { AgentRuntimeServiceOptions } from "../agent/rpc/runtime-service"
+import type { BeginTaskWorkspaceTurn } from "@/lib/task-workspace/types"
 import { CompanionWorkerTransportError } from "./companion-worker-transport"
 import {
   buildWorkerManifest,
@@ -550,15 +552,44 @@ describe("worker connect contract", () => {
 
   it("validates the handoff before Task Workspace begin and maps the begin request", async () => {
     const opened = openingSocket()
-    const begin = jest.fn(async () => ({ executionRoot: "/tmp/execution-root" }))
-    let resolveWorkspace!: (handoff: HandoffEnvelope, commandId: string) => Promise<string>
-    await connectWorker({
+    const begin = jest.fn(async (input: BeginTaskWorkspaceTurn, _repositoryRef: string) => ({
+      ...input,
+      executionRoot: "/tmp/execution-root",
+      executorStopUnconfirmed: false,
+    }))
+    const captures: Array<{
+      settle: jest.Mock
+      markExecutorUnconfirmed: jest.Mock
+      close: jest.Mock
+    }> = []
+    let finishServer!: () => void
+    const serving = new Promise<void>((resolve) => {
+      finishServer = resolve
+    })
+    let resolveWorkspace!: NonNullable<
+      AgentRuntimeServiceOptions["workerDispatch"]
+    >["resolveHandoffWorkspace"]
+    const connecting = connectWorker({
       deviceConfigPath: "worker.json",
       runtimeConfig: config,
       home: "/tmp/cognia-worker-test",
       workspace: {
         list: jest.fn(async () => [{ bindingRef: "repository:project:repo" }]),
-        begin,
+        openCapture: () => {
+          let input: BeginTaskWorkspaceTurn
+          const capture = {
+            begin: async (request: BeginTaskWorkspaceTurn, repositoryRef: string) => {
+              input = request
+              return begin(request, repositoryRef)
+            },
+            listTasks: async () => [{ taskId: input.taskId, workspaceRoot: "/tmp/source-root" }],
+            settle: jest.fn(async () => []),
+            markExecutorUnconfirmed: jest.fn(async () => {}),
+            close: jest.fn(async () => {}),
+          }
+          captures.push(capture)
+          return capture
+        },
       } as never,
       reconnect: false,
       stat: () => ({ mode: 0o100600 }),
@@ -569,8 +600,9 @@ describe("worker connect contract", () => {
         resolveWorkspace = serviceOptions.workerDispatch!.resolveHandoffWorkspace
         return { close: jest.fn() }
       }) as never,
-      createServer: jest.fn(() => ({ serve: jest.fn(async () => undefined) })) as never,
+      createServer: jest.fn(() => ({ serve: jest.fn(() => serving) })) as never,
     })
+    while (!resolveWorkspace) await new Promise((resolve) => setTimeout(resolve, 0))
     const manifest = buildWorkerManifest(config, ["repository:project:repo"])
     const handoff: HandoffEnvelope = {
       envelopeVersion: 1,
@@ -595,17 +627,24 @@ describe("worker connect contract", () => {
       createdAt: "2026-08-12T00:00:00.000Z",
     }
 
-    await expect(resolveWorkspace(handoff, "command-1")).resolves.toBe("/tmp/execution-root")
+    const first = await resolveWorkspace(handoff, "command-1", "actual-rpc-session")
+    if (typeof first !== "object" || !first.capture) throw new Error("capture lease missing")
+    expect(first.cwd).toBe("/tmp/execution-root")
     expect(begin).toHaveBeenCalledWith(
-      "repository:project:repo",
       expect.objectContaining({
         taskId: "task",
-        sessionId: "child",
+        sessionId: "actual-rpc-session",
         runId: "command-1",
         parentRunId: "parent",
         agentId: "team",
-      })
+      }),
+      "repository:project:repo"
     )
+    await first.capture.settle("ready")
+    await first.capture.close()
+    expect(captures[0].settle).toHaveBeenCalledTimes(1)
+    expect(captures[0].settle).toHaveBeenCalledWith("command-1", "ready")
+    expect(captures[0].close).toHaveBeenCalledTimes(1)
     await expect(
       resolveWorkspace(
         { ...handoff, execution: { ...handoff.execution, runtimeAdapter: "external" } },
@@ -624,8 +663,8 @@ describe("worker connect contract", () => {
         "command-4"
       )
     ).rejects.toThrow("repository:missing")
-    begin.mockResolvedValueOnce({ executionRoot: "" })
-    await expect(resolveWorkspace(handoff, "command-5")).rejects.toThrow("execution root")
+    begin.mockResolvedValueOnce({ executionRoot: "" } as never)
+    await expect(resolveWorkspace(handoff, "command-5")).rejects.toThrow("requested execution run")
     await expect(
       resolveWorkspace(
         {
@@ -634,10 +673,41 @@ describe("worker connect contract", () => {
         },
         "command-6"
       )
-    ).resolves.toBe("/tmp/execution-root")
+    ).resolves.toMatchObject({
+      cwd: "/tmp/execution-root",
+      capture: expect.objectContaining({ runId: "command-6" }),
+    })
     expect(begin).toHaveBeenLastCalledWith(
-      "repository:project:repo",
-      expect.objectContaining({ taskId: "child", agentId: "agent-team" })
+      expect.objectContaining({ taskId: "child", agentId: "agent-team" }),
+      "repository:project:repo"
+    )
+    const normalCapture = captures.at(-1)!
+    const quarantined = await resolveWorkspace(handoff, "command-7", "actual-rpc-session")
+    if (typeof quarantined !== "object" || !quarantined.capture)
+      throw new Error("capture lease missing")
+    const quarantinedOwner = captures.at(-1)!
+    await quarantined.capture.markExecutorUnconfirmed()
+    await quarantined.capture.close()
+    expect(quarantinedOwner.markExecutorUnconfirmed).toHaveBeenCalledWith("command-7")
+    expect(quarantinedOwner.settle).not.toHaveBeenCalled()
+    expect(quarantinedOwner.close).toHaveBeenCalledTimes(1)
+    const uncertain = await resolveWorkspace(handoff, "command-8", "actual-rpc-session")
+    if (typeof uncertain !== "object" || !uncertain.capture)
+      throw new Error("capture lease missing")
+    const uncertainOwner = captures.at(-1)!
+    uncertainOwner.markExecutorUnconfirmed.mockRejectedValueOnce(new Error("delivery unknown"))
+    await expect(uncertain.capture.markExecutorUnconfirmed()).rejects.toThrow("delivery unknown")
+    await uncertain.capture.close()
+    expect(uncertainOwner.settle).not.toHaveBeenCalled()
+    await uncertain.capture.settle("failed")
+    expect(uncertainOwner.settle).not.toHaveBeenCalled()
+    expect(uncertainOwner.close).toHaveBeenCalledTimes(1)
+    finishServer()
+    await connecting
+    expect(normalCapture.settle).toHaveBeenCalledWith("command-6", "cancelled")
+    expect(normalCapture.close).toHaveBeenCalledTimes(1)
+    await expect(resolveWorkspace(handoff, "after-disconnect")).rejects.toThrow(
+      "connection is closed"
     )
   })
 

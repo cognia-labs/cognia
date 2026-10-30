@@ -1,4 +1,6 @@
 import path from "node:path"
+import fs from "node:fs"
+import { spawn as nodeSpawn } from "node:child_process"
 
 import type {
   AgentEventEnvelope,
@@ -14,9 +16,40 @@ import { manifestPath } from "../session-store/paths"
 import { selectBackend } from "./backend-select"
 import { createProviderSessionLease } from "./provider-session"
 import { runUnifiedTurn, type UnifiedTurnParams } from "./unified-runtime"
+import {
+  createWorkerWorkspaceClient,
+  type WorkerWorkspaceCapture,
+  WorkerWorkspaceError,
+} from "../../worker/workspace-client"
 
 const HOME = path.join(path.sep, "home", "u", ".cognia")
 const REPO = path.join(path.sep, "repo")
+
+function workspaceCapture(order: string[] = []) {
+  return {
+    assertExecutionAllowed: jest.fn(async () => undefined),
+    begin: jest.fn(async (input) => {
+      order.push("begin")
+      return {
+        ...input,
+        executionRoot: input.workspaceRoot,
+        isolationKind: "observed",
+        workspaceId: null,
+        executorStopUnconfirmed: false,
+      }
+    }),
+    settle: jest.fn(async (_runId, state) => {
+      order.push(`settle:${state}`)
+      return []
+    }),
+    markExecutorUnconfirmed: jest.fn(async () => {
+      order.push("quarantine")
+    }),
+    close: jest.fn(async () => {
+      order.push("capture:close")
+    }),
+  } as unknown as jest.Mocked<WorkerWorkspaceCapture>
+}
 
 const config = {
   provider: "anthropic",
@@ -96,9 +129,348 @@ function params(fsx: MemoryFs, overrides: Partial<UnifiedTurnParams> = {}): Unif
     now: () => (clock += 1),
     random: () => 0.5,
     retry: { maxRetries: 0 },
+    createWorkspaceCapture: () => workspaceCapture(),
     ...overrides,
   } as UnifiedTurnParams
 }
+
+it("captures one observed cwd across retries and settles only after executor teardown", async () => {
+  const fsx = createMemoryFs()
+  const order: string[] = []
+  const capture = workspaceCapture(order)
+  const fake = fakeSession([
+    { kind: "throw", error: { status: 429, message: "busy" } },
+    { kind: "reply", text: "done" },
+  ])
+  const factory = (base: AgentSessionParams) => {
+    expect(base.config.cwd).toBe(REPO)
+    const session = fake.factory(base)
+    return {
+      ...session,
+      close: async () => {
+        order.push("executor:close")
+        await session.close()
+      },
+    }
+  }
+  const { result } = await runUnifiedTurn(
+    params(fsx, {
+      createSession: factory,
+      createWorkspaceCapture: () => capture,
+      retry: { maxRetries: 1, baseBackoffMs: 0 },
+    })
+  )
+  expect(capture.begin).toHaveBeenCalledTimes(1)
+  expect(capture.begin).toHaveBeenCalledWith(
+    expect.objectContaining({
+      runId: result.runId,
+      sessionId: result.sessionId,
+      workspaceRoot: REPO,
+      observeInPlace: true,
+    })
+  )
+  expect(capture.settle).toHaveBeenCalledWith(result.runId, "ready")
+  expect(order).toEqual([
+    "begin",
+    "executor:close",
+    "executor:close",
+    "settle:ready",
+    "capture:close",
+  ])
+  expect(result.workspaceCapture).toEqual({
+    available: true,
+    taskId: `cli:${result.sessionId}`,
+    runId: result.runId,
+    workspaceRoot: REPO,
+  })
+})
+
+it.each([false, true])(
+  "settles a failed or cancelled CLI executor after it stops (cancelled: %s)",
+  async (cancelled) => {
+    const order: string[] = []
+    const capture = workspaceCapture(order)
+    const controller = new AbortController()
+    const fake = fakeSession([{ kind: "throw", error: new Error("executor failed") }])
+    const base = fake.factory({} as AgentSessionParams)
+    const { result } = await runUnifiedTurn(
+      params(createMemoryFs(), {
+        createWorkspaceCapture: () => capture,
+        signal: controller.signal,
+        createSession: () => ({
+          ...base,
+          send: async (...args) => {
+            if (cancelled) controller.abort()
+            return base.send(...args)
+          },
+          close: async () => {
+            order.push("executor:close")
+          },
+        }),
+      })
+    )
+    expect(result.status).toBe(cancelled ? "cancelled" : "failed")
+    expect(capture.settle).toHaveBeenCalledWith(result.runId, cancelled ? "cancelled" : "failed")
+    expect(order).toEqual([
+      "begin",
+      "executor:close",
+      `settle:${cancelled ? "cancelled" : "failed"}`,
+      "capture:close",
+    ])
+  }
+)
+
+it.each([
+  { persist: false, reason: "persistence-disabled" },
+  { sandbox: { enabled: true, tier: "microvm" }, reason: "remote-filesystem" },
+])("reports unavailable capture without blocking execution: $reason", async (input) => {
+  const factory = jest.fn(() => workspaceCapture())
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      createSession: fake.factory,
+      createWorkspaceCapture: factory,
+      ...(input.persist === false ? { persist: false } : {}),
+      config: { ...config, ...(input.sandbox ? { sandbox: input.sandbox } : {}) } as ResolvedConfig,
+    })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toEqual({ available: false, reason: input.reason })
+  if (input.persist === false) {
+    expect(factory).toHaveBeenCalledTimes(1)
+    expect(factory.mock.results[0].value.assertExecutionAllowed).toHaveBeenCalledWith(REPO)
+    expect(factory.mock.results[0].value.begin).not.toHaveBeenCalled()
+  } else expect(factory).not.toHaveBeenCalled()
+})
+
+it("refuses a redirected or non-observed helper run while preserving executor cwd", async () => {
+  const capture = workspaceCapture()
+  capture.begin.mockResolvedValueOnce({
+    runId: "wrong",
+    isolationKind: "gitWorktree",
+    executionRoot: "/redirected",
+  } as never)
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), { createSession: fake.factory, createWorkspaceCapture: () => capture })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toMatchObject({ available: false, reason: "capture-failed" })
+  expect(capture.settle).toHaveBeenCalledTimes(1)
+  expect(capture.settle).toHaveBeenCalledWith(result.runId, "cancelled")
+})
+
+it("keeps capture failures explicit instead of reporting a clean turn", async () => {
+  const capture = workspaceCapture()
+  capture.settle.mockRejectedValueOnce(new Error("capture failed"))
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), { createSession: fake.factory, createWorkspaceCapture: () => capture })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toMatchObject({
+    available: false,
+    reason: "capture-failed",
+    runId: result.runId,
+    workspaceRoot: REPO,
+  })
+})
+
+it.each([
+  ["opencode-remote", "remote-filesystem"],
+  ["unverified-custom", "unsupported-runtime"],
+])("reports the actual external backend filesystem boundary for %s", async (id, reason) => {
+  const factory = jest.fn(() => workspaceCapture())
+  const fake = fakeSession([{ kind: "reply", text: "external done" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      createWorkspaceCapture: factory,
+      createExternalSession: fake.factory,
+      selectBackendFn: () => ({
+        ok: true,
+        backend: { id, kind: "external", displayName: id, capabilities: [], disabledOptional: [] },
+      }),
+    })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toEqual({ available: false, reason })
+  expect(factory).not.toHaveBeenCalled()
+  expect(fake.calls).toEqual(["do the thing"])
+})
+
+it("continues execution with an explicit receipt when the native helper cannot start", async () => {
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      createSession: fake.factory,
+      createWorkspaceCapture: () => {
+        throw new Error("ENOENT")
+      },
+    })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toEqual({ available: false, reason: "helper-unavailable" })
+})
+
+it("refuses provider execution when the native authority fences an active or quarantined root", async () => {
+  const capture = workspaceCapture()
+  capture.begin.mockRejectedValueOnce(
+    new WorkerWorkspaceError("capture_refused", "local workspace observation is already active")
+  )
+  const createSession = jest.fn(fakeSession([{ kind: "reply", text: "must not run" }]).factory)
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), { createSession, createWorkspaceCapture: () => capture })
+  )
+  expect(result.status).toBe("failed")
+  expect(result.error).toMatchObject({
+    code: "runtime_error",
+    detail: { workspaceCaptureRefused: true },
+  })
+  expect(result.session).toMatchObject({ persisted: true, turnsAppended: 0 })
+  expect(createSession).not.toHaveBeenCalled()
+  expect(capture.settle).not.toHaveBeenCalled()
+})
+
+it("honors authoritative root admission in no-session mode without creating history or snapshots", async () => {
+  const capture = workspaceCapture()
+  capture.assertExecutionAllowed.mockRejectedValueOnce(
+    new WorkerWorkspaceError("capture_refused", "local workspace observation is already active")
+  )
+  const createSession = jest.fn(fakeSession([{ kind: "reply", text: "must not run" }]).factory)
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      persist: false,
+      createSession,
+      createWorkspaceCapture: () => capture,
+    })
+  )
+  expect(result.status).toBe("failed")
+  expect(result.error).toMatchObject({
+    code: "runtime_error",
+    detail: { workspaceCaptureRefused: true },
+  })
+  expect(result.session).toEqual({ persisted: false })
+  expect(result.workspaceCapture).toEqual({ available: false, reason: "persistence-disabled" })
+  expect(createSession).not.toHaveBeenCalled()
+  expect(capture.begin).not.toHaveBeenCalled()
+  expect(capture.settle).not.toHaveBeenCalled()
+  expect(capture.close).toHaveBeenCalledTimes(1)
+})
+
+it("keeps no-session execution available when an admission helper cannot answer", async () => {
+  const capture = workspaceCapture()
+  capture.assertExecutionAllowed.mockRejectedValueOnce(
+    new WorkerWorkspaceError("helper_exited", "helper missing")
+  )
+  const provider = fakeSession([{ kind: "reply", text: "untracked" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      persist: false,
+      createSession: provider.factory,
+      createWorkspaceCapture: () => capture,
+    })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toEqual({ available: false, reason: "persistence-disabled" })
+  expect(provider.calls).toHaveLength(1)
+  expect(capture.begin).not.toHaveBeenCalled()
+})
+
+it("does not claim clean capture when executor teardown could not confirm it stopped", async () => {
+  const capture = workspaceCapture()
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), {
+      createWorkspaceCapture: () => capture,
+      createSession: (base) => ({
+        ...fake.factory(base),
+        close: async () => {
+          throw new Error("still stopping")
+        },
+      }),
+    })
+  )
+  expect(result.status).toBe("completed")
+  expect(result.workspaceCapture).toMatchObject({ available: false, reason: "capture-failed" })
+  expect(capture.settle).not.toHaveBeenCalled()
+  expect(capture.markExecutorUnconfirmed).toHaveBeenCalledWith(result.runId)
+  expect(capture.close).toHaveBeenCalledTimes(1)
+})
+
+it("consumes the worker provisioning lease without opening a second capture", async () => {
+  const setup = params(createMemoryFs())
+  const opened = setup.store!.create("borrowed-session", { cwd: REPO })
+  if (!opened.ok) throw new Error("test session creation failed")
+  opened.value.close()
+  const inherited = {
+    sessionId: "borrowed-session",
+    taskId: "worker-task",
+    runId: "provisioned-run",
+    workspaceRoot: "/source",
+    executionRoot: REPO,
+    settle: jest.fn(async () => {}),
+    markExecutorUnconfirmed: jest.fn(async () => {}),
+    close: jest.fn(async () => {}),
+  }
+  const factory = jest.fn(() => workspaceCapture())
+  const fake = fakeSession([{ kind: "reply", text: "done" }])
+  const { result } = await runUnifiedTurn({
+    ...setup,
+    sessionId: "borrowed-session",
+    createSession: fake.factory,
+    createWorkspaceCapture: factory,
+    workspaceCaptureLease: inherited,
+  })
+  expect(factory).not.toHaveBeenCalled()
+  expect(inherited.settle).toHaveBeenCalledTimes(1)
+  expect(inherited.settle).toHaveBeenCalledWith("ready")
+  expect(inherited.close).toHaveBeenCalledTimes(1)
+  expect(result.workspaceCapture).toEqual({
+    available: true,
+    taskId: "worker-task",
+    runId: "provisioned-run",
+    workspaceRoot: "/source",
+  })
+})
+
+it("settles an executor-originated AbortError as cancelled even without a caller signal", async () => {
+  const capture = workspaceCapture()
+  const fake = fakeSession([
+    { kind: "throw", error: Object.assign(new Error("stopped"), { name: "AbortError" }) },
+  ])
+  const { result } = await runUnifiedTurn(
+    params(createMemoryFs(), { createSession: fake.factory, createWorkspaceCapture: () => capture })
+  )
+  expect(result.status).toBe("cancelled")
+  expect(capture.settle).toHaveBeenCalledWith(result.runId, "cancelled")
+})
+
+it("uses a transient transcript adapter instead of an injected durable writer under --no-session", async () => {
+  const durable = {
+    append: jest.fn(),
+    mkdirp: jest.fn(),
+    read: jest.fn(() => "old durable history"),
+    write: jest.fn(),
+  }
+  const fake = fakeSession([{ kind: "reply", text: "private" }])
+  await runUnifiedTurn(
+    params(createMemoryFs(), {
+      persist: false,
+      transcriptFs: durable,
+      createSession: (base) => {
+        expect(base.transcriptFs).not.toBe(durable)
+        expect(base.transcriptFs?.read("session")).toBeNull()
+        base.transcriptFs?.append("session", "temporary")
+        expect(base.transcriptFs?.read("session")).toBe("temporary")
+        return fake.factory(base)
+      },
+    })
+  )
+  expect(durable.read).not.toHaveBeenCalled()
+  expect(durable.append).not.toHaveBeenCalled()
+  expect(durable.mkdirp).not.toHaveBeenCalled()
+  expect(durable.write).not.toHaveBeenCalled()
+})
 
 it("runs attachment validation before provider send and surfaces rejection", async () => {
   const fsx = createMemoryFs()
@@ -810,6 +1182,7 @@ describe("configuration plumbing", () => {
       persist: false,
       sessionDirOverride: path.join(path.sep, "tmp", "store"),
       retry: { maxRetries: 0 },
+      createWorkspaceCapture: () => workspaceCapture(),
       createSession: fakeSession([{ kind: "reply", text: "ok" }]).factory,
     })
     expect(result.status).toBe("completed")
@@ -971,6 +1344,7 @@ describe("sparse and defaulted inputs", () => {
       persist: false,
       store: createSessionStore({ home: HOME, fsx, heartbeatMs: 0 }),
       retry: { maxRetries: 0 },
+      createWorkspaceCapture: () => workspaceCapture(),
       createSession: fakeSession([{ kind: "reply", text: "ok" }]).factory,
     })
     expect(result.status).toBe("completed")
@@ -1045,6 +1419,127 @@ describe("cancellation", () => {
 })
 
 describe("provider-session lifetime", () => {
+  it("drains a rejected borrowed executor before publishing capture and rebuilds on the next turn", async () => {
+    const fsx = createMemoryFs()
+    const lease = createProviderSessionLease()
+    const order: string[] = []
+    const capture = workspaceCapture(order)
+    let release!: () => void
+    const closed = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const factory = jest.fn(
+      () =>
+        ({
+          sessionId: "borrowed",
+          send: async () => {
+            throw new Error("inner watchdog rejected before drain")
+          },
+          close: async () => {
+            order.push("executor:closing")
+            await closed
+            order.push("executor:closed")
+          },
+        }) as unknown as AgentSession
+    )
+    const pending = runUnifiedTurn(
+      params(fsx, {
+        providerSession: lease,
+        createSession: factory,
+        createWorkspaceCapture: () => capture,
+      })
+    )
+    for (let tick = 0; tick < 20 && !order.includes("executor:closing"); tick++)
+      await Promise.resolve()
+    expect(order).toEqual(["begin", "executor:closing"])
+    expect(capture.settle).not.toHaveBeenCalled()
+    release()
+    const { result } = await pending
+    expect(result.workspaceCapture).toMatchObject({ available: true })
+    expect(order).toEqual([
+      "begin",
+      "executor:closing",
+      "executor:closed",
+      "settle:failed",
+      "capture:close",
+    ])
+    expect(lease.current).toBeNull()
+    const next = fakeSession([{ kind: "reply", text: "recovered" }])
+    const recovered = await runUnifiedTurn(
+      params(fsx, {
+        providerSession: lease,
+        createSession: next.factory,
+        sessionId: result.sessionId,
+      })
+    )
+    expect(recovered.result.status).toBe("completed")
+    expect(next.closed).toBe(0)
+    await lease.close()
+  })
+
+  it("drains rejected attempts before starting a retry", async () => {
+    const lease = createProviderSessionLease()
+    const order: string[] = []
+    let builds = 0
+    const { result } = await runUnifiedTurn(
+      params(createMemoryFs(), {
+        providerSession: lease,
+        retry: { maxRetries: 1, baseBackoffMs: 0 },
+        createSession: () => {
+          const attempt = builds++
+          order.push(`build:${attempt}`)
+          return {
+            sessionId: "borrowed",
+            async send() {
+              order.push(`send:${attempt}`)
+              if (attempt === 0) throw Object.assign(new Error("retry"), { status: 429 })
+              return { text: "retried", messageId: "retry", a2uiSurfaces: {}, a2uiSurfaceOrder: [] }
+            },
+            async close() {
+              order.push(`close:${attempt}`)
+            },
+          } as AgentSession
+        },
+      })
+    )
+    expect(result.status).toBe("completed")
+    expect(order).toEqual(["build:0", "send:0", "close:0", "build:1", "send:1"])
+    await lease.close()
+  })
+
+  it("does not retry a borrowed executor whose stop could not be confirmed", async () => {
+    const lease = createProviderSessionLease()
+    const capture = workspaceCapture()
+    const send = jest.fn(async () => {
+      throw Object.assign(new Error("retryable failure"), { status: 429 })
+    })
+    const createSession = jest.fn(
+      () =>
+        ({
+          sessionId: "unconfirmed",
+          send,
+          close: async () => {
+            throw new Error("still running")
+          },
+        }) as AgentSession
+    )
+    const { result } = await runUnifiedTurn(
+      params(createMemoryFs(), {
+        providerSession: lease,
+        createSession,
+        createWorkspaceCapture: () => capture,
+        retry: { maxRetries: 1, baseBackoffMs: 0 },
+      })
+    )
+    expect(result.status).toBe("failed")
+    expect(result.workspaceCapture).toMatchObject({ available: false, reason: "capture-failed" })
+    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(capture.markExecutorUnconfirmed).toHaveBeenCalledWith(result.runId)
+    expect(capture.settle).not.toHaveBeenCalled()
+    await expect(lease.close()).rejects.toThrow("still running")
+  })
+
   it("closes its own session after a one-shot turn", async () => {
     const fsx = createMemoryFs()
     const provider = fakeSession([{ kind: "reply", text: "done" }])
@@ -1265,3 +1760,218 @@ it("retains one host deadline across provider retries", async () => {
   expect(stamps[0]).toEqual(stamps[1])
   expect(stamps[0]![1]! - stamps[0]![0]!).toBe(360_000)
 })
+
+const nativeWorkspaceHelper = process.env.COGNIA_TEST_WORKSPACE_HELPER
+const nativeCaptureTest = nativeWorkspaceHelper ? it : it.skip
+
+function nativeTurnSetup(label: string) {
+  const output = path.resolve(".cache/turn-diff-fix-2026-10-30/cli")
+  fs.mkdirSync(output, { recursive: true })
+  const root = fs.mkdtempSync(path.join(output, `${label}-`))
+  const cwd = path.join(root, "cwd")
+  fs.mkdirSync(cwd)
+  const file = path.join(cwd, "observed.txt")
+  fs.writeFileSync(file, "base\n")
+  const client = createWorkerWorkspaceClient({
+    dataDir: path.join(root, "data"),
+    helperPath: nativeWorkspaceHelper,
+    spawn: (command, args, options) => {
+      const child = nodeSpawn(command, args, options)
+      child.stderr.on("data", (chunk) =>
+        fs.appendFileSync(path.join(output, "helper-stderr.log"), `${label}: ${String(chunk)}`)
+      )
+      return child
+    },
+  })
+  const setup = params(createMemoryFs(), {
+    home: path.join(root, "home"),
+    config: { ...config, cwd },
+    now: Date.now,
+    random: Math.random,
+    createWorkspaceCapture: () => client.openCapture(),
+  })
+  return { root, cwd, file, client, setup }
+}
+
+nativeCaptureTest(
+  "native helper includes the rejected borrowed executor's final drained write",
+  async () => {
+    const { root, file, client, setup } = nativeTurnSetup("borrowed-drain")
+    const lease = createProviderSessionLease()
+    let stopped = false
+    const review = client.openCapture()
+    try {
+      const { result } = await runUnifiedTurn({
+        ...setup,
+        providerSession: lease,
+        createSession: () =>
+          ({
+            sessionId: "borrowed",
+            async send() {
+              fs.writeFileSync(file, "early\n")
+              throw new Error("watchdog before terminal drain")
+            },
+            async close() {
+              await Promise.resolve()
+              fs.writeFileSync(file, "drained-tail\n")
+              stopped = true
+            },
+          }) as AgentSession,
+      })
+      expect(stopped).toBe(true)
+      expect(result.status).toBe("failed")
+      expect(result.workspaceCapture).toMatchObject({ available: true })
+      const diff = await review.readDiff(result.runId, "observed.txt")
+      expect(diff).toContain("+drained-tail")
+      expect(diff).not.toContain("+early")
+      expect(lease.current).toBeNull()
+    } finally {
+      await review.close()
+      await lease.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+)
+
+nativeCaptureTest(
+  "native helper preserves healthy borrowed context across separately retained turns",
+  async () => {
+    const { root, file, client, setup } = nativeTurnSetup("borrowed-success")
+    const lease = createProviderSessionLease()
+    const close = jest.fn(async () => {})
+    let sends = 0
+    const createSession = jest.fn(
+      () =>
+        ({
+          sessionId: "borrowed",
+          close,
+          async send() {
+            fs.writeFileSync(file, `${++sends === 1 ? "first" : "second"}\n`)
+            return { text: "done", messageId: "native", a2uiSurfaces: {}, a2uiSurfaceOrder: [] }
+          },
+        }) as AgentSession
+    )
+    const review = client.openCapture()
+    try {
+      const first = await runUnifiedTurn({ ...setup, providerSession: lease, createSession })
+      const second = await runUnifiedTurn({
+        ...setup,
+        sessionId: first.result.sessionId,
+        providerSession: lease,
+        createSession,
+      })
+      expect(first.result.workspaceCapture).toMatchObject({ available: true })
+      expect(second.result.workspaceCapture).toMatchObject({ available: true })
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(close).not.toHaveBeenCalled()
+      expect(await review.readDiff(first.result.runId, "observed.txt")).toContain("+first")
+      expect(await review.readDiff(second.result.runId, "observed.txt")).toContain(
+        "-first\n+second"
+      )
+    } finally {
+      await review.close()
+      await lease.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+)
+
+nativeCaptureTest(
+  "native helper quarantines an unconfirmed executor through EOF/recovery and requires explicit stop proof",
+  async () => {
+    const { root, cwd, file, client, setup } = nativeTurnSetup("unconfirmed-stop")
+    const review = client.openCapture()
+    try {
+      const { result } = await runUnifiedTurn({
+        ...setup,
+        createSession: () =>
+          ({
+            sessionId: "borrowed",
+            async send() {
+              fs.writeFileSync(file, "early\n")
+              return { text: "done", messageId: "native", a2uiSurfaces: {}, a2uiSurfaceOrder: [] }
+            },
+            async close() {
+              throw new Error("executor still alive")
+            },
+          }) as AgentSession,
+      })
+      expect(result.workspaceCapture).toMatchObject({
+        available: false,
+        reason: "capture-failed",
+        runId: result.runId,
+        workspaceRoot: cwd,
+      })
+      fs.writeFileSync(file, "late-live-writer\n")
+      expect(await review.getPatch(result.runId)).toBeNull()
+      expect(await review.listRuns(`cli:${result.sessionId}`)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: result.runId,
+            state: "settling",
+            executorStopUnconfirmed: true,
+          }),
+        ])
+      )
+      await expect(review.readDiff(result.runId, "observed.txt")).rejects.toThrow()
+      await expect(review.undo(result.runId)).rejects.toThrow()
+      const nextInput = {
+        taskId: "next",
+        sessionId: "next",
+        runId: "next",
+        agentId: "builtin",
+        agentKind: "in-app" as const,
+        workspaceRoot: cwd,
+        observeInPlace: true as const,
+      }
+      await expect(review.begin(nextInput)).rejects.toThrow()
+      await expect(review.settle(result.runId, "failed")).rejects.toThrow()
+      expect(await review.getPatch(result.runId)).toBeNull()
+      const blockedProvider = jest.fn(
+        () =>
+          ({
+            sessionId: "blocked",
+            send: async () => {
+              fs.writeFileSync(file, "unsafe-second-writer\n")
+              return {
+                text: "must not run",
+                messageId: "blocked",
+                a2uiSurfaces: {},
+                a2uiSurfaceOrder: [],
+              }
+            },
+            close: async () => {},
+          }) as AgentSession
+      )
+      for (const persist of [true, false]) {
+        const blocked = await runUnifiedTurn({ ...setup, persist, createSession: blockedProvider })
+        expect(blocked.result.status).toBe("failed")
+        expect(blocked.result.error).toMatchObject({
+          code: "runtime_error",
+          detail: { workspaceCaptureRefused: true },
+        })
+        expect(blocked.result.workspaceCapture).toMatchObject({ available: false })
+      }
+      expect(blockedProvider).not.toHaveBeenCalled()
+      expect(fs.readFileSync(file, "utf8")).toBe("late-live-writer\n")
+      expect(await review.listTasks()).toHaveLength(1)
+      await review.settle(result.runId, "failed", true)
+      expect(await review.getPatch(result.runId)).toBeNull()
+      expect(await review.listRuns(`cli:${result.sessionId}`)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            runId: result.runId,
+            state: "failed",
+            executorStopUnconfirmed: false,
+          }),
+        ])
+      )
+      await review.begin(nextInput)
+      await review.settle("next", "cancelled")
+      expect(fs.readFileSync(file, "utf8")).toBe("late-live-writer\n")
+    } finally {
+      await review.close()
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+)

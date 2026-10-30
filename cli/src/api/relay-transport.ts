@@ -1,3 +1,4 @@
+import { channelMatches, type HostEvent, type WatchOptions } from "./events"
 /**
  * Commands over a device's relay room (ADR-0224 A4).
  *
@@ -15,8 +16,8 @@
  * host authenticates the room against the pairing, so the lane carries the
  * device's own grants and no bearer token.
  *
- * Only commands travel this way. The relay lane is the RPC plane; arbitrary
- * HTTP routes (`api request GET /…`, operation receipts) have no relay form.
+ * Commands, authenticated operation observations and event subscriptions use
+ * the relay. Arbitrary HTTP/file routes still require the direct address.
  */
 
 import { importSigningPrivateKey, type RoomDescriptor } from "@/lib/signaling/crypto"
@@ -42,6 +43,8 @@ export interface RelayRouteRecord {
 export const RELAY_HANDSHAKE_TIMEOUT_MS = 15_000
 
 export interface RelayCommandChannel {
+  watch?: (options: WatchOptions) => Promise<CommandOutcome>
+  getOperation?: (operationId: string, options?: RequestOptions) => Promise<CommandOutcome>
   execute: (
     name: string,
     args: Record<string, unknown>,
@@ -97,13 +100,24 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
   const factory = options.transportFactory ?? ((o: TransportRtcOptions) => new TransportRtc(o))
   const timeoutMs = options.handshakeTimeoutMs ?? RELAY_HANDSHAKE_TIMEOUT_MS
   let opening: Promise<TransportRtc> | null = null
+  let activeRtc: TransportRtc | undefined
   let closed = false
+  let watching: WatchOptions | undefined
+  let received: (event: HostEvent) => void = () => {}
+  let observeFailure: (outcome: CommandOutcome) => void = () => {}
+  let subscribed: (channels: unknown) => void = () => {}
+
+  const closeRoute = () => {
+    closed = true
+    activeRtc?.close()
+  }
 
   const open = (): Promise<TransportRtc> => {
     opening ??= (async () => {
       const signalingPrivateKey = await importSigningPrivateKey(
         options.route.signalingPrivateKeyJwk
       )
+      if (closed) throw new Error("the relay route is closed")
       const rtc = factory({
         signalingUrl: options.route.signalingUrl ?? DEFAULT_SIGNALING_URL,
         rendezvousId: options.route.rendezvousId,
@@ -113,11 +127,38 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
         role: "mobile",
         // Node has no WebRTC: the relay carrier is the whole route.
         p2p: false,
+        atomicEventWatch: Boolean(watching),
+        ...(watching
+          ? {
+              reconnectBackoffMs: Array.from(
+                { length: watching.reconnects ?? 3 },
+                (_, index) => 250 * 2 ** index
+              ),
+            }
+          : {}),
+        initialEventCursor: watching?.since,
+        eventObserver: (event) =>
+          received({ type: event.event, seq: event.seq, payload: event.payload }),
+        subscriptionObserver: (reply) => {
+          if (Array.isArray(reply.rejected) && reply.rejected.length)
+            observeFailure({ ok: false, cause: "refused", message: "host refused event channels" })
+          else subscribed(reply.channels)
+        },
+        resyncObserver: (notice) =>
+          observeFailure({
+            ok: false,
+            cause: "refused",
+            code: "resync_required",
+            message: "relay replay has a gap; refresh authoritative state",
+            problem: notice,
+          }),
         // One process, one session: nothing to resume from storage.
         persistEventCursor: false,
         relayHandshakeTimeoutMs: timeoutMs,
         peerWaitTimeoutMs: timeoutMs,
       })
+      activeRtc = rtc
+      if (watching) for (const channel of watching.channels) rtc.subscribe(channel, () => {})
       try {
         await rtc.connect()
       } catch (error) {
@@ -133,28 +174,70 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
     return opening
   }
 
-  return {
-    async execute(name, args, requestOptions) {
-      if (closed) return { ok: false, cause: "network", message: "the relay route is closed" }
-      let rtc: TransportRtc
-      try {
-        rtc = await open()
-      } catch (error) {
-        return {
-          ok: false,
-          cause: "network",
-          message: `the host's relay room could not be joined: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        }
+  async function bounded(
+    options: RequestOptions | undefined,
+    send: (rtc: TransportRtc, deadlineAt: number) => Promise<CommandOutcome>
+  ): Promise<CommandOutcome> {
+    if (closed) return { ok: false, cause: "network", message: "the relay route is closed" }
+    if (options?.signal?.aborted)
+      return { ok: false, cause: "timeout", message: "relay request stopped" }
+    const deadlineAt = Date.now() + (options?.timeoutMs ?? 30000)
+    return new Promise((resolve) => {
+      let done = false
+      const finish = (outcome: CommandOutcome) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        options?.signal?.removeEventListener("abort", abort)
+        resolve(outcome)
       }
-      try {
+      const abort = () => {
+        finish({
+          ok: false,
+          cause: "timeout",
+          message: "relay request stopped or exceeded its budget",
+        })
+        closeRoute()
+      }
+      const timer = setTimeout(abort, Math.max(1, deadlineAt - Date.now()))
+      options?.signal?.addEventListener("abort", abort, { once: true })
+      void open()
+        .then(async (rtc) => {
+          if (done || options?.signal?.aborted || Date.now() >= deadlineAt) {
+            rtc.close()
+            return
+          }
+          finish(await send(rtc, deadlineAt))
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : String(error)
+          finish({
+            ok: false,
+            cause: isHostError(error)
+              ? classifyRelayCode(error.code)
+              : /timed out/.test(message)
+                ? "timeout"
+                : "network",
+            message,
+            ...(isHostError(error) ? { code: error.code } : {}),
+            ...(typeof (error as { retryable?: unknown })?.retryable === "boolean"
+              ? { retryable: (error as { retryable: boolean }).retryable }
+              : {}),
+            ...(typeof (error as { retryAfterMs?: unknown })?.retryAfterMs === "number"
+              ? { retryAfterMs: (error as { retryAfterMs: number }).retryAfterMs }
+              : {}),
+          })
+        })
+    })
+  }
+
+  return {
+    execute(name, args, requestOptions) {
+      return bounded(requestOptions, async (rtc, deadlineAt) => {
         const result = await rtc.call<unknown>(name, args, {
+          deadlineAt,
           ...(requestOptions?.idempotencyKey
             ? { idempotencyKey: requestOptions.idempotencyKey }
-            : {}),
-          ...(requestOptions?.timeoutMs && requestOptions.timeoutMs > 0
-            ? { deadlineAt: Date.now() + requestOptions.timeoutMs }
             : {}),
         })
         const operationId =
@@ -165,26 +248,105 @@ export function relayCommandChannel(options: RelayCommandChannelOptions): RelayC
           (result as { status?: unknown }).status === "running"
           ? { ok: true, accepted: true, result, operationId }
           : { ok: true, result }
-      } catch (error) {
-        if (isHostError(error)) {
-          return {
-            ok: false,
-            cause: classifyRelayCode(error.code),
-            message: error.message,
-            code: error.code,
+      })
+    },
+    async watch(options) {
+      if (closed) return { ok: false, cause: "network", message: "relay route is closed" }
+      watching = options
+      return new Promise<CommandOutcome>((resolve) => {
+        let done = false
+        let count = 0
+        let cursor = options.since ?? 0
+        let detach: (() => void) | undefined
+        const accepted = new Set<string>()
+        const finish = (outcome: CommandOutcome) => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          clearTimeout(ackTimer)
+          options.signal?.removeEventListener("abort", abort)
+          detach?.()
+          closeRoute()
+          resolve(outcome)
+        }
+        observeFailure = finish
+        subscribed = (channels) => {
+          if (Array.isArray(channels))
+            for (const channel of channels) if (typeof channel === "string") accepted.add(channel)
+          if (
+            options.channels.every((channel) =>
+              [...accepted].some((pattern) => channelMatches(pattern, channel))
+            )
+          )
+            clearTimeout(ackTimer)
+        }
+        received = (event) => {
+          if (
+            done ||
+            !options.channels.some((channel) => channelMatches(channel, event.type)) ||
+            event.seq <= cursor
+          )
+            return
+          try {
+            options.onEvent(event)
+            cursor = event.seq
+            count++
+          } catch (error) {
+            finish({
+              ok: false,
+              cause: "failed",
+              message: error instanceof Error ? error.message : String(error),
+            })
+            return
           }
+          if (options.maxEvents !== undefined && count >= options.maxEvents)
+            finish({ ok: true, result: { cursor, count } })
         }
-        const message = error instanceof Error ? error.message : String(error)
-        return {
-          ok: false,
-          cause: /timed out/.test(message) ? "timeout" : "network",
-          message,
+        const abort = () => finish({ ok: false, cause: "timeout", message: "event watch stopped" })
+        const timer = setTimeout(abort, options.timeoutMs ?? 30000)
+        const ackTimer = setTimeout(
+          () =>
+            finish({
+              ok: false,
+              cause: "timeout",
+              message: "host did not acknowledge event subscriptions",
+            }),
+          Math.min(options.timeoutMs ?? 30000, 15000)
+        )
+        options.signal?.addEventListener("abort", abort, { once: true })
+        if (options.signal?.aborted) {
+          abort()
+          return
         }
-      }
+        void open()
+          .then((rtc) => {
+            detach = rtc.onStateChange((state) => {
+              if (state === "failed")
+                finish({ ok: false, cause: "network", message: "relay event connection failed" })
+            })
+            if (done) rtc.close()
+          })
+          .catch((error) =>
+            finish({
+              ok: false,
+              cause: "network",
+              message: error instanceof Error ? error.message : String(error),
+            })
+          )
+      })
+    },
+    getOperation(operationId, options) {
+      return bounded(options, async (rtc, deadlineAt) => ({
+        ok: true,
+        result: await rtc.call(
+          "host.operation.get",
+          { operationId },
+          { controlKind: "operation-get", deadlineAt }
+        ),
+      }))
     },
     close() {
-      closed = true
-      void opening?.then((rtc) => rtc.close()).catch(() => undefined)
+      closeRoute()
     },
   }
 }

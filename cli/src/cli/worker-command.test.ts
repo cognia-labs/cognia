@@ -26,6 +26,91 @@ function client(): jest.Mocked<WorkerWorkspaceClient> {
 }
 
 describe("workerCommand", () => {
+  it("requires operator stop proof before recovering a quarantined run without capture", async () => {
+    const output = sink()
+    const workspace = client()
+    const capture = {
+      settle: jest.fn(async () => []),
+      getPatch: jest.fn(async () => null),
+      close: jest.fn(async () => {}),
+    }
+    workspace.openCapture = jest.fn(() => capture as never)
+    expect(
+      await workerCommand(parseArgv(["worker", "settle", "--run-id", "quarantined"]), {
+        workspace,
+        out: output.out,
+      })
+    ).toBe(1)
+    expect(capture.settle).not.toHaveBeenCalled()
+    expect(workspace.openCapture).not.toHaveBeenCalled()
+    expect(output.stderr.join("")).toContain("original executor has stopped")
+    expect(
+      await workerCommand(
+        parseArgv(["worker", "settle", "--run-id", "quarantined", "--executor-stopped", "--json"]),
+        { workspace, out: output.out }
+      )
+    ).toBe(0)
+    expect(capture.settle).toHaveBeenCalledWith("quarantined", "failed", true)
+    expect(output.stdout.join("")).toContain('"captureAvailable":false')
+    expect(capture.close).toHaveBeenCalledTimes(1)
+  })
+
+  it("reviews and undoes retained runs through the same local capture authority", async () => {
+    const output = sink()
+    const workspace = client()
+    const capture = {
+      listTasks: jest.fn(async () => [{ taskId: "cli:session" }]),
+      listRuns: jest.fn(async () => [{ runId: "retained-run" }]),
+      getPatch: jest.fn(async () => ({ patchId: "patch", runId: "retained-run" })),
+      readDiff: jest.fn(async () => "-old\n+雪\n"),
+      undo: jest.fn(async () => ({ state: "reverted" })),
+      close: jest.fn(async () => {}),
+    }
+    workspace.openCapture = jest.fn(() => capture as never)
+    for (const argv of [
+      ["worker", "tasks", "--session-id", "session", "--json"],
+      ["worker", "runs", "--task-id", "cli:session", "--json"],
+      ["worker", "diff", "--run-id", "retained-run", "--json"],
+      ["worker", "diff", "--run-id", "retained-run", "--path", "雪.txt"],
+      ["worker", "undo", "--run-id", "retained-run", "--json"],
+    ]) {
+      expect(await workerCommand(parseArgv(argv), { workspace, out: output.out })).toBe(0)
+    }
+    expect(capture.listTasks).toHaveBeenCalledWith("session")
+    expect(capture.listRuns).toHaveBeenCalledWith("cli:session")
+    expect(capture.getPatch).toHaveBeenCalledWith("retained-run")
+    expect(capture.readDiff).toHaveBeenCalledWith("retained-run", "雪.txt")
+    expect(capture.undo).toHaveBeenCalledWith("retained-run")
+    expect(capture.close).toHaveBeenCalledTimes(5)
+    expect(output.stdout).toContain("-old\n+雪\n")
+  })
+
+  it("fails closed on review errors and reports undo conflicts without claiming success", async () => {
+    const output = sink()
+    const workspace = client()
+    const capture = {
+      getPatch: jest.fn(async () => {
+        throw new Error("native ledger unavailable")
+      }),
+      undo: jest.fn(async () => ({ state: "conflict" })),
+      close: jest.fn(async () => {}),
+    }
+    workspace.openCapture = jest.fn(() => capture as never)
+    expect(
+      await workerCommand(parseArgv(["worker", "diff", "--run-id", "run"]), {
+        workspace,
+        out: output.out,
+      })
+    ).toBe(1)
+    expect(output.stderr.join("")).toContain("native ledger unavailable")
+    expect(
+      await workerCommand(parseArgv(["worker", "undo", "--run-id", "run", "--json"]), {
+        workspace,
+        out: output.out,
+      })
+    ).toBe(4)
+    expect(capture.close).toHaveBeenCalledTimes(2)
+  })
   it("binds a repository through the Task Workspace authority", async () => {
     const output = sink()
     const workspace = client()

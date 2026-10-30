@@ -11,8 +11,18 @@
 
 import readline from "node:readline/promises"
 import { stdin, stdout } from "node:process"
+import os from "node:os"
+import path from "node:path"
 
-import { loadConfig as defaultLoadConfig } from "../config/load"
+import { loadConfig as defaultLoadConfig, resolveHome } from "../config/load"
+import {
+  openWorkerTurnCapture,
+  isWorkspaceCaptureRefusal,
+  type WorkerTurnCapture,
+} from "../worker/workspace-client"
+import { cliWorkspaceCaptureUnavailableReason } from "../agent/runtime/unified-runtime"
+import { mintRunId, mintTurnId } from "../agent/runtime/turn-events"
+import { createTransientTranscriptFs } from "../agent/transcript"
 import { createAgentSession, type AgentSession } from "../agent/session-runner"
 import { createExternalAgentSession } from "../agent/external-agent-session"
 import type { ResolvedConfig } from "../config/schema"
@@ -135,6 +145,7 @@ const CHAT_HELP = `Commands:
 `
 
 export interface ChatDeps {
+  openWorkspaceCapture?: typeof openWorkerTurnCapture
   loadConfig?: (
     flags?: Parameters<typeof defaultLoadConfig>[0]
   ) => ReturnType<typeof defaultLoadConfig>
@@ -176,6 +187,8 @@ export async function chatCommand(args: ParsedArgs, deps: ChatDeps = {}): Promis
   const builtinCreateSession = deps.createSession ?? createAgentSession
   const externalCreateSession = deps.externalCreateSession ?? createExternalAgentSession
   const pushHandoff = deps.pushHandoff ?? defaultPushHandoff
+  const openCapture = deps.openWorkspaceCapture ?? openWorkerTurnCapture
+  const home = resolveHome(process.env, os.homedir())
 
   let config: ReturnType<typeof defaultLoadConfig>
   try {
@@ -195,6 +208,12 @@ export async function chatCommand(args: ParsedArgs, deps: ChatDeps = {}): Promis
   const configureLogging = deps.configureLogging ?? defaultConfigureLogging
   const verbose = boolFlag(args, "verbose") || boolFlag(args, "debug")
   if (isTty() && !deps.readLine) {
+    if (boolFlag(args, "no-session")) {
+      out.error(
+        "--no-session supports run and readline chat; persistent TUI chat requires session storage."
+      )
+      return 2
+    }
     // Library logs (plugin activation, backend sync retries) would otherwise be
     // painted above the app by Ink's console patch. Route them through the
     // console at warn+ so the screen stays coherent and quiet.
@@ -232,7 +251,10 @@ export async function chatCommand(args: ParsedArgs, deps: ChatDeps = {}): Promis
 
   out.write(`cognia-agent — interactive (provider: ${config.provider}). /help for commands.\n`)
 
-  let session: AgentSession = createSession({ config })
+  const persistSession = !boolFlag(args, "no-session")
+  let transcriptFs = persistSession ? undefined : createTransientTranscriptFs()
+  const sessionOptions = () => ({ config, ...(transcriptFs ? { transcriptFs } : {}) })
+  let session: AgentSession = createSession(sessionOptions())
   const gate = createPermissionGate({ prompt: (req) => confirm(`Allow tool "${req.toolName}"?`) })
 
   try {
@@ -252,7 +274,8 @@ export async function chatCommand(args: ParsedArgs, deps: ChatDeps = {}): Promis
       }
       if (action.kind === "clear") {
         await session.close()
-        session = createSession({ config })
+        transcriptFs = persistSession ? undefined : createTransientTranscriptFs()
+        session = createSession(sessionOptions())
         out.write("Started a fresh session.\n")
         continue
       }
@@ -261,7 +284,37 @@ export async function chatCommand(args: ParsedArgs, deps: ChatDeps = {}): Promis
         continue
       }
       // send
+      let capture: WorkerTurnCapture | undefined
+      let captureState: "ready" | "failed" = "failed"
+      let executorStopped = true
+      let restartSessionId: string | undefined
       try {
+        const runId = mintRunId(Date.now(), Math.random())
+        try {
+          capture = await openCapture(
+            {
+              input: {
+                taskId: `cli:${session.sessionId}`,
+                sessionId: session.sessionId,
+                runId,
+                executionRunId: runId,
+                turnId: mintTurnId(runId, 0),
+                workspaceRoot: config.cwd,
+                agentId: config.agentBackend || "builtin",
+                agentKind:
+                  config.agentBackend && config.agentBackend !== "builtin" ? "external" : "in-app",
+                surface: "cli",
+                base: { kind: "workingState" },
+              },
+              persist: persistSession,
+              unavailableReason: cliWorkspaceCaptureUnavailableReason(config),
+            },
+            { dataDir: process.env.COGNIA_DATA_DIR?.trim() || path.join(home, "worker-data") }
+          )
+        } catch (error) {
+          if (isWorkspaceCaptureRefusal(error)) throw error
+          out.error("Workspace capture unavailable: capture-failed")
+        }
         let streamed = false
         const result = await session.send(action.text, {
           gate,
@@ -274,9 +327,37 @@ export async function chatCommand(args: ParsedArgs, deps: ChatDeps = {}): Promis
         })
         if (!streamed) out.write(result.text)
         out.write("\n")
+        captureState = "ready"
       } catch (err) {
         out.error(`turn failed: ${(err as Error).message}`)
+        if (isWorkspaceCaptureRefusal(err)) {
+          out.error(
+            `Workspace execution refused (${config.cwd}). Inspect cognia-agent worker tasks and cognia-agent worker runs --task-id TASK_ID. After the original executor stops, recover an unconfirmed run with cognia-agent worker settle --run-id RUN_ID --executor-stopped.`
+          )
+          continue
+        }
+        const sessionId = session.sessionId
+        try {
+          await session.close()
+        } catch {
+          executorStopped = false
+        }
+        if (executorStopped) restartSessionId = sessionId
+      } finally {
+        if (capture) {
+          try {
+            const receipt = await capture.finish(captureState, executorStopped)
+            if (receipt.available)
+              out.error(`Workspace changes: ${receipt.runId} (${receipt.workspaceRoot})`)
+            else out.error(`Workspace capture unavailable: ${receipt.reason}`)
+          } catch {
+            out.error("Workspace capture unavailable: capture-failed")
+          }
+        }
       }
+      if (!executorStopped) return 1
+      if (restartSessionId)
+        session = createSession({ ...sessionOptions(), sessionId: restartSessionId })
     }
     return 0
   } finally {

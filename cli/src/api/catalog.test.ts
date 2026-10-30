@@ -7,8 +7,10 @@ import {
   commandGroups,
   findByGroupAction,
   findCommand,
+  filterCommands,
   flagToProperty,
   listCommands,
+  remoteCommandEntry,
   suggestCommands,
 } from "./catalog"
 
@@ -117,6 +119,33 @@ describe("generated command index", () => {
 })
 
 describe("lookup", () => {
+  it("preserves live descriptions and applies all catalog filters", () => {
+    const entry = remoteCommandEntry(
+      {
+        name: "future_probe",
+        description: "Inspect the flux capacitor",
+        target: "execution",
+        capability: "agent",
+        risk: "low",
+        approval: "none",
+      },
+      { input: { type: "object", properties: {} } },
+      "http"
+    )
+    expect(
+      filterCommands([entry], {
+        search: "FLUX",
+        wire: "http",
+        group: "future",
+        capability: "agent",
+        risk: "low",
+        approval: "none",
+      })
+    ).toEqual([entry])
+    expect(filterCommands([entry], { wire: "internal" })).toEqual([])
+    expect(filterCommands([entry], { approval: "interactive" })).toEqual([])
+  })
+
   it("resolves a command by group and action", () => {
     expect(findByGroupAction("plugin", "list")?.name).toBe("plugin_list")
     expect(findByGroupAction("agent", "task-cancel")?.name).toBe("agent_task_cancel")

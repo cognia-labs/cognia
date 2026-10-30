@@ -1,7 +1,11 @@
 import os from "node:os"
 import path from "node:path"
 
-import { createWorkerWorkspaceClient, type WorkerWorkspaceClient } from "../worker/workspace-client"
+import {
+  createWorkerWorkspaceClient,
+  type WorkerWorkspaceClient,
+  type WorkerWorkspaceCapture,
+} from "../worker/workspace-client"
 import { connectWorker, enrollWorker } from "../worker/worker-connect"
 import {
   collectWorkerDaemonGarbage,
@@ -54,6 +58,7 @@ export async function workerCommand(
     createWorkerWorkspaceClient({
       dataDir: env.COGNIA_DATA_DIR?.trim() || path.join(home, "worker-data"),
     })
+  let capture: WorkerWorkspaceCapture | undefined
   try {
     let result: unknown
     switch (args.subcommand) {
@@ -69,6 +74,47 @@ export async function workerCommand(
       case "remove":
         result = await workspace.remove(requiredFlag(args, "repository-ref"))
         break
+      case "tasks":
+      case "runs":
+      case "diff":
+      case "undo": {
+        capture = workspace.openCapture?.()
+        if (!capture) throw new Error("Task Workspace helper does not support retained run review")
+        if (args.subcommand === "tasks") {
+          result = await capture.listTasks(stringFlag(args, "session-id"))
+        } else if (args.subcommand === "runs") {
+          result = await capture.listRuns(requiredFlag(args, "task-id"))
+        } else {
+          const runId = requiredFlag(args, "run-id")
+          if (args.subcommand === "undo") result = await capture.undo(runId)
+          else {
+            const file = stringFlag(args, "path")
+            if (file) {
+              const diff = await capture.readDiff(runId, file)
+              if (!boolFlag(args, "json")) {
+                out.write(diff.endsWith("\n") ? diff : `${diff}\n`)
+                return 0
+              }
+              result = { runId, path: file, diff }
+            } else result = await capture.getPatch(runId)
+          }
+        }
+        break
+      }
+      case "settle": {
+        if (!boolFlag(args, "executor-stopped"))
+          throw new Error("Confirm the original executor has stopped, then pass --executor-stopped")
+        capture = workspace.openCapture?.()
+        if (!capture) throw new Error("Task Workspace helper does not support capture recovery")
+        const runId = requiredFlag(args, "run-id")
+        await capture.settle(runId, "failed", true)
+        result = {
+          runId,
+          executorStopped: true,
+          captureAvailable: (await capture.getPatch(runId)) !== null,
+        }
+        break
+      }
       case "connect": {
         await (deps.connect ?? connectWorker)(connectOptions(args, deps, home, workspace))
         return 0
@@ -94,7 +140,12 @@ export async function workerCommand(
       }
       default:
         out.error(
-          "Usage: cognia-agent worker <enroll|bind|list|remove|connect|daemon|service>\n" +
+          "Usage: cognia-agent worker <enroll|bind|list|remove|tasks|runs|diff|undo|settle|connect|daemon|service>\n" +
+            "  tasks   [--session-id ID] [--json]\n" +
+            "  runs    --task-id ID [--json]\n" +
+            "  diff    --run-id ID [--path FILE] [--json]\n" +
+            "  undo    --run-id ID [--json]\n" +
+            "  settle  --run-id ID --executor-stopped [--json]\n" +
             "  daemon  start [--foreground] | stop | status | logs [-n N] | gc  [--profile <name>]\n" +
             "  service install | uninstall  [--profile <name>]\n"
         )
@@ -102,10 +153,14 @@ export async function workerCommand(
     }
     if (boolFlag(args, "json")) out.json(result)
     else out.write(`${JSON.stringify(result, null, 2)}\n`)
-    return 0
+    return args.subcommand === "undo" && (result as { state?: string })?.state !== "reverted"
+      ? 4
+      : 0
   } catch (error) {
     out.error(`${error instanceof Error ? error.message : String(error)}\n`)
     return 1
+  } finally {
+    await capture?.close().catch(() => undefined)
   }
 }
 

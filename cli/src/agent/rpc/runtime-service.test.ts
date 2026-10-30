@@ -450,6 +450,107 @@ describe("createAgentRuntimeService", () => {
     await restarted.close()
   })
 
+  it("transfers a provisioning capture to only the first turn and closes an unused session lease", async () => {
+    const handoff = {
+      envelopeVersion: 1 as const,
+      identity: { parentRunId: "parent", childRunId: "child", depth: 1, parentChain: ["parent"] },
+      task: { prompt: "Inspect" },
+      execution: { mode: "orchestrated" as const },
+      createdAt: new Date().toISOString(),
+    }
+    const captures: NonNullable<UnifiedTurnParams["workspaceCaptureLease"]>[] = []
+    let nextId = 0
+    const runTurn = emittingTurn(0)
+    const service = createAgentRuntimeService({
+      config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test-model" },
+      home,
+      runTurn,
+      mintSessionId: () => `lease-session-${++nextId}`,
+      workerDispatch: {
+        manifest: { hardCapabilities: [] } as never,
+        resolveHandoffWorkspace: async (_handoff, commandId, sessionId) => {
+          const capture = {
+            sessionId: sessionId!,
+            taskId: "worker-task",
+            runId: commandId,
+            workspaceRoot: home,
+            executionRoot: home,
+            settle: jest.fn(async () => {}),
+            markExecutorUnconfirmed: jest.fn(async () => {}),
+            close: jest.fn(async () => {}),
+          }
+          captures.push(capture)
+          return { cwd: home, capture }
+        },
+      },
+    })
+    const created = (await service.handle(
+      "session/create",
+      { commandId: "provision-1", handoff },
+      context as never
+    )) as { sessionId: string }
+    await service.handle(
+      "turn/run",
+      { sessionId: created.sessionId, commandId: "first-turn", input: "first" },
+      context as never
+    )
+    expect(runTurn.mock.calls[0][0].workspaceCaptureLease).toBe(captures[0])
+    expect(captures[0].sessionId).toBe(created.sessionId)
+    expect(captures[0].close).toHaveBeenCalledTimes(1)
+    await service.handle(
+      "turn/run",
+      { sessionId: created.sessionId, commandId: "second-turn", input: "second" },
+      context as never
+    )
+    expect(runTurn.mock.calls[1][0].workspaceCaptureLease).toBeUndefined()
+    await service.handle("session/create", { commandId: "provision-2", handoff }, context as never)
+    await service.close()
+    expect(captures[1].close).toHaveBeenCalledTimes(1)
+  })
+
+  it("closes a late provisioning lease when the RPC service shut down during acquisition", async () => {
+    const handoff = {
+      envelopeVersion: 1 as const,
+      identity: { parentRunId: "parent", childRunId: "child", depth: 1, parentChain: ["parent"] },
+      task: { prompt: "Inspect" },
+      execution: { mode: "orchestrated" as const },
+      createdAt: new Date().toISOString(),
+    }
+    const capture = {
+      sessionId: "closing-session",
+      taskId: "task",
+      runId: "provision",
+      workspaceRoot: home,
+      executionRoot: home,
+      settle: jest.fn(async () => {}),
+      markExecutorUnconfirmed: jest.fn(async () => {}),
+      close: jest.fn(async () => {}),
+    }
+    let finish!: (value: { cwd: string; capture: typeof capture }) => void
+    const service = createAgentRuntimeService({
+      config: { ...DEFAULT_RESOLVED_CONFIG, cwd: home, model: "test-model" },
+      home,
+      mintSessionId: () => "closing-session",
+      workerDispatch: {
+        manifest: { hardCapabilities: [] } as never,
+        resolveHandoffWorkspace: () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      },
+    })
+    const creating = service.handle(
+      "session/create",
+      { commandId: "provision", handoff },
+      context as never
+    )
+    while (!finish) await new Promise((resolve) => setTimeout(resolve, 0))
+    await service.close()
+    finish({ cwd: home, capture })
+    await expect(creating).rejects.toThrow("service is closing")
+    expect(capture.close).toHaveBeenCalledTimes(1)
+  })
+
   it("restores remote restrictions after restart and clamps live permission changes", async () => {
     const handoff = {
       envelopeVersion: 1 as const,

@@ -1,14 +1,15 @@
 /**
  * The single authoritative headless-turn orchestration.
  *
- * Every public entry point — `cognia-agent run`, the `@cognia/agent` SDK, the
- * RPC server, `generate-text`, handoff resume, TUI bootstrap — funnels through
+ * Headless entry points — `cognia-agent run`, the `@cognia/agent` SDK, the
+ * RPC server, `generate-text`, and handoff resume — funnel through
  * `runUnifiedTurn`. Before this module there were two orchestrations
  * (`runHeadlessTurn` for one-shot, `createAgentSession` for persistent) that
  * had already drifted: only one of them subscribed the plugin-tool dispatcher
  * unconditionally, only one honoured the stream-idle watchdog, and only one
  * registered per-turn subagent dispatch. A caller's behaviour depended on which
- * one it happened to reach.
+ * one it happened to reach. Interactive sessions drive their own turn loops
+ * and share the same `openWorkerTurnCapture` filesystem owner.
  *
  * This module owns ONLY orchestration. It does not assemble context (that is
  * `createCliContextAssembler`), does not talk to a provider (that is
@@ -24,6 +25,7 @@
  */
 
 import os from "node:os"
+import path from "node:path"
 
 import type { AgentCapabilityId } from "@cognia/agent-config-types/agent-execution"
 import type {
@@ -31,15 +33,27 @@ import type {
   AgentRunResultV1,
   AgentRunUsage,
   AgentStructuredError,
+  AgentWorkspaceCaptureReceipt,
+  AgentWorkspaceCaptureUnavailableReason,
 } from "@cognia/agent-config-types/agent-run-result"
 import type { CaptureStreamEvent } from "@/lib/claude/run-and-capture"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
 
 import { resolveHome } from "../../config/load"
+import {
+  openWorkerTurnCapture,
+  isWorkspaceCaptureRefusal,
+  type WorkerTurnCapture,
+  type WorkerWorkspaceCapture,
+  type WorkerWorkspaceCaptureLease,
+} from "../../worker/workspace-client"
+import { externalAgentWorkspaceCaptureSupport } from "@/lib/task-workspace/capture-support"
+import { getPresetConfig } from "@/lib/ai/agent/external/config/presets"
 import type { ResolvedConfig } from "../../config/schema"
 import { createAgentSession, type AgentSession, type AgentSessionParams } from "../session-runner"
 import { createExternalAgentSession } from "../external-agent-session"
 import { mintSessionId } from "../run"
+import { createTransientTranscriptFs } from "../transcript"
 import type { PermissionResponder } from "../permission-gate"
 import { createSessionStore, type SessionHandle, type SessionStore } from "../session-store/store"
 import {
@@ -68,6 +82,9 @@ import {
 
 export const HEADLESS_HOST_REF = "headless-agent-host"
 
+/** An existing provisioning run owned by the same helper, transferred to its executor. */
+export type UnifiedWorkspaceCaptureLease = WorkerWorkspaceCaptureLease
+
 export interface UnifiedTurnParams {
   config: ResolvedConfig
   prompt: string
@@ -77,7 +94,7 @@ export interface UnifiedTurnParams {
   sessionId?: string
   /** Preserve the logical run/turn when replaying a crash-suspended attempt. */
   recoveryIdentity?: { runId: string; turnId: string; attempt: number }
-  /** `--no-session`: run without persisting anything. Resume is then impossible. */
+  /** `--no-session`: omit Cognia history and workspace capture. Resume is impossible. */
   persist?: boolean
   /** `--session-dir` override for the canonical store. */
   sessionDirOverride?: string
@@ -138,7 +155,7 @@ export interface UnifiedTurnParams {
    * on the way out. Present (SDK `CogniaSession`, RPC per-session state) the
    * turn borrows it and leaves it open, so the conversation — and the live
    * control channel `compact`/`enqueue`/`setModel` need — survives to the next
-   * prompt. Cancellation closes it either way.
+   * prompt. A rejected send or cancellation retires it before capture/retry.
    */
   providerSession?: ProviderSessionLease
 
@@ -150,6 +167,9 @@ export interface UnifiedTurnParams {
   selectBackendFn?: typeof selectBackend
   now?: () => number
   random?: () => number
+  /** Existing local ledger helper; overridden by tests and embedded hosts. */
+  createWorkspaceCapture?: (options: { dataDir: string }) => WorkerWorkspaceCapture
+  workspaceCaptureLease?: UnifiedWorkspaceCaptureLease
 }
 
 export interface UnifiedTurnResult {
@@ -214,6 +234,16 @@ function statusForCancel(reason: CancelReason): AgentRunResultV1["status"] {
   return reason === "timeout" || reason === "idle-timeout" ? "timeout" : "cancelled"
 }
 
+export function cliWorkspaceCaptureUnavailableReason(
+  config: ResolvedConfig,
+  backendId = config.agentBackend ?? "builtin"
+): AgentWorkspaceCaptureUnavailableReason | undefined {
+  if (config.sandbox?.enabled && config.sandbox.tier === "microvm") return "remote-filesystem"
+  if (backendId === "builtin") return undefined
+  const support = externalAgentWorkspaceCaptureSupport(getPresetConfig(backendId) ?? undefined)
+  return support.available ? undefined : support.reason
+}
+
 /**
  * Run one headless turn end to end.
  *
@@ -245,6 +275,7 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
     ...(params.prefers ? { prefers: params.prefers } : {}),
   })
   if (!selection.ok) {
+    await params.workspaceCaptureLease?.close().catch(() => undefined)
     return failedResult({
       sessionId,
       runId,
@@ -285,6 +316,7 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
           runtimeBinding: { backend: backend.id },
         })
     if (!opened.ok) {
+      await params.workspaceCaptureLease?.close().catch(() => undefined)
       return failedResult({
         sessionId,
         runId,
@@ -350,8 +382,43 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
   let structuredOutput: unknown
   let failure: AgentStructuredError | undefined
   let attempt = params.recoveryIdentity?.attempt ?? 0
+  let capture: WorkerTurnCapture | undefined
+  let workspaceCapture: AgentWorkspaceCaptureReceipt = { available: false, reason: "not-started" }
+  let executorCloseFailed = false
+  let completedNormally = false
+  let turnsAppended = 0
 
   try {
+    capture = await openWorkerTurnCapture(
+      {
+        input: {
+          taskId: `cli:${sessionId}`,
+          sessionId,
+          runId,
+          agentId: backend.id,
+          agentKind: backend.kind === "external" ? "external" : "in-app",
+          workspaceRoot: params.config.cwd,
+          base: { kind: "workingState" },
+          executionRunId: runId,
+          turnId,
+          surface: "cli",
+        },
+        persist,
+        unavailableReason: cliWorkspaceCaptureUnavailableReason(params.config, backend.id),
+        inherited: params.workspaceCaptureLease,
+      },
+      {
+        dataDir: process.env.COGNIA_DATA_DIR?.trim() || path.join(home, "worker-data"),
+        ...(params.createWorkspaceCapture
+          ? {
+              openCapture: () =>
+                params.createWorkspaceCapture!({
+                  dataDir: process.env.COGNIA_DATA_DIR?.trim() || path.join(home, "worker-data"),
+                }),
+            }
+          : {}),
+      }
+    )
     for (;;) {
       const attemptId = mintAttemptId(turnId, attempt)
       const sideEffects = createSideEffectTracker()
@@ -379,8 +446,8 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
         emitter.emit({ kind: "warning", code: warning.code, message: warning.message })
       }
 
-      // The provider session is created once and reused across retries: a
-      // retry re-sends the turn, it does not rebuild the whole context.
+      // Healthy borrowed sessions retain their context. A rejected send must
+      // first retire its executor; a retry rebuilds after that drain completes.
       //
       // WHO CLOSES IT depends on who owns the lease. A one-shot run owns its
       // own, so the session dies with the turn. A caller that passed a lease
@@ -393,14 +460,19 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
             backendId: backend.id,
             ...(params.config.model ? { model: params.config.model } : {}),
             cwd: params.config.cwd,
-          }),
+          }) + (persist ? "" : "\u0000no-session"),
           () => buildSession(params, sessionId, home, backend)
         )
         cancellation.onCleanup(() => {
           // A borrowed lease still closes on cancellation — a cancelled turn
           // must not leave a sidecar or external agent running, and the lease
           // rebuilds on the caller's next prompt.
-          if (ownsLease || cancellation.cancelled) return lease.close()
+          if (ownsLease || cancellation.cancelled || failure || !completedNormally) {
+            return lease.close().catch((error: unknown) => {
+              executorCloseFailed = true
+              throw error
+            })
+          }
         })
       }
 
@@ -476,6 +548,14 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
         failure = undefined
         break
       } catch (error) {
+        // Rejection (including an inner watchdog) does not prove the provider
+        // or its tools have stopped. Drain before retrying or capturing disk.
+        try {
+          await lease.close()
+        } catch {
+          executorCloseFailed = true
+        }
+        session = null
         if (cancellation.cancelled) {
           emitter.emit({ kind: "lifecycle", phase: "interrupted" })
           failure = cancellation.toError() ?? { code: "cancelled", message: "cancelled" }
@@ -496,15 +576,15 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
           now: now(),
         })
 
-        if (!decision.retry) {
+        if (!decision.retry || executorCloseFailed) {
           failure = {
             code: signal.code,
             message: signal.message,
-            ...(decision.reason === "side-effect"
+            ...(!decision.retry && decision.reason === "side-effect"
               ? { detail: { notRetried: sideEffects.reason } }
               : {}),
           }
-          if (decision.reason === "exhausted") {
+          if (!decision.retry && decision.reason === "exhausted") {
             emitter.emit({
               kind: "retry",
               phase: "exhausted",
@@ -568,16 +648,47 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
           ...(params.config.provider ? { provider: params.config.provider } : {}),
         },
       })
+      turnsAppended = text.length > 0 ? 2 : 1
+    }
+    completedNormally = true
+  } catch (error) {
+    if (!isWorkspaceCaptureRefusal(error)) throw error
+    failure = {
+      code: "runtime_error",
+      message: error.message,
+      detail: { workspaceCaptureRefused: true },
+    }
+    workspaceCapture = {
+      available: false,
+      reason: params.persist === false ? "persistence-disabled" : "capture-failed",
     }
   } finally {
     await cancellation.finalize()
+    if (capture) {
+      workspaceCapture = await capture.finish(
+        cancellation.cancelled ||
+          failure?.code === "cancelled" ||
+          failure?.code === "interrupted" ||
+          failure?.code === "timeout" ||
+          failure?.code === "idle_timeout"
+          ? "cancelled"
+          : failure || !completedNormally || executorCloseFailed
+            ? "failed"
+            : "ready",
+        !executorCloseFailed
+      )
+    }
   }
 
   const cancelReason = cancellation.reason
   const status: AgentRunResultV1["status"] = failure
     ? cancelReason
       ? statusForCancel(cancelReason)
-      : "failed"
+      : failure.code === "timeout" || failure.code === "idle_timeout"
+        ? "timeout"
+        : failure.code === "cancelled" || failure.code === "interrupted"
+          ? "cancelled"
+          : "failed"
     : "completed"
 
   const result: AgentRunResultV1 = {
@@ -596,11 +707,12 @@ export async function runUnifiedTurn(params: UnifiedTurnParams): Promise<Unified
     model: params.config.model ?? "unknown",
     ...(params.config.provider ? { provider: params.config.provider } : {}),
     capabilities: backend.capabilities,
+    workspaceCapture,
     session: handle
       ? {
           persisted: true,
           sessionDir: handle.dir,
-          turnsAppended: text.length > 0 ? 2 : 1,
+          turnsAppended,
           turnCount: handle.manifest.turnCount,
           ...(handle.manifest.lineage ? { lineage: handle.manifest.lineage } : {}),
         }
@@ -634,7 +746,11 @@ function buildSession(
     sessionId,
     home,
     ...(params.resolveOptions ? { resolveOptions: params.resolveOptions } : {}),
-    ...(params.transcriptFs ? { transcriptFs: params.transcriptFs } : {}),
+    ...(params.persist === false
+      ? { transcriptFs: createTransientTranscriptFs() }
+      : params.transcriptFs
+        ? { transcriptFs: params.transcriptFs }
+        : {}),
     ...(params.subscribePluginTools ? { subscribePluginTools: params.subscribePluginTools } : {}),
     ...(params.resolveMcpServers ? { resolveMcpServers: params.resolveMcpServers } : {}),
     ...(params.compositionSelection ? { compositionSelection: params.compositionSelection } : {}),
@@ -695,6 +811,7 @@ function failedResult(input: {
       model: input.model,
       capabilities: [],
       session: { persisted: false },
+      workspaceCapture: { available: false, reason: "not-started" },
       error: input.error,
     },
     envelopes: [],

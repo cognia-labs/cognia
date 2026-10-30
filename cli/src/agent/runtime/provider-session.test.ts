@@ -86,7 +86,29 @@ describe("createProviderSessionLease", () => {
     expect(second).not.toBe(first)
   })
 
-  it("does not strand a half-dead session when close() rejects", async () => {
+  it("shares teardown proof across concurrent close and replace calls", async () => {
+    const lease = createProviderSessionLease()
+    let release!: () => void
+    const close = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    lease.session("k1", () => ({ close }) as unknown as AgentSession)
+    const first = lease.close()
+    const second = lease.close()
+    const build = jest.fn(() => fakeSession([], "b"))
+    const replacement = lease.replace("k2", build)
+    await Promise.resolve()
+    expect(build).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledTimes(1)
+    release()
+    await Promise.all([first, second, replacement])
+    expect(build).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not reuse or replace a session whose executor stop is unconfirmed", async () => {
     const lease = createProviderSessionLease()
     const exploding = {
       close: async () => {
@@ -96,11 +118,12 @@ describe("createProviderSessionLease", () => {
 
     lease.session("k1", () => exploding)
     await expect(lease.close()).rejects.toThrow("sidecar already gone")
-    // The lease must have let go regardless: reusing a session whose close()
-    // failed would hand the next turn a dead sidecar.
     expect(lease.openKey).toBeNull()
-    const rebuilt = lease.session("k1", () => fakeSession([], "b"))
-    expect(rebuilt).not.toBe(exploding)
+    await expect(lease.close()).rejects.toThrow("sidecar already gone")
+    const build = jest.fn(() => fakeSession([], "b"))
+    await expect(lease.replace("k1", build)).rejects.toThrow("sidecar already gone")
+    expect(() => lease.session("k1", build)).toThrow(/teardown/)
+    expect(build).not.toHaveBeenCalled()
   })
 })
 

@@ -3,6 +3,7 @@
  * stay testable (tests pass a capturing sink instead of the real streams).
  */
 export interface OutputSink {
+  failure?: (failure: import("./errors").CliFailure, exitCode: number) => void
   /** Write to stdout (no implicit newline). */
   write: (text: string) => void
   /** Write a line to stderr. */

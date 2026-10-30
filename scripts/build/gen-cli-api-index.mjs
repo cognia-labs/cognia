@@ -34,22 +34,27 @@ const DEVICE_PREFIX = "/api/_rpc/"
 /** Flags the global parser owns. A field with one of these names keeps its
  *  schema name but is only reachable through `--data`, never as a bare flag,
  *  so `api call x --format y` can never be ambiguous. */
-const RESERVED_FLAGS = new Set([
-  "help",
-  "version",
-  "format",
-  "output",
-  "endpoint",
-  "profile",
-  "host",
-  "timeout",
-  "debug",
-  "json",
-  "data",
-  "wait",
-  "template",
-  "yes",
-])
+const RESERVED_FLAGS = new Set(JSON.parse(fs.readFileSync(path.join(root, "cli/src/cli/api-flags.json"), "utf8")))
+
+export function standaloneSchema(schema, spec) {
+  if (!schema || typeof schema !== "object") return {}
+  const definitions = {}
+  const rewrite = value => {
+    if (Array.isArray(value)) return value.map(rewrite)
+    if (!value || typeof value !== "object") return value
+    if (typeof value.$ref === "string" && value.$ref.startsWith("#/components/schemas/")) {
+      const name = value.$ref.slice("#/components/schemas/".length)
+      if (!(name in definitions)) {
+        definitions[name] = {}
+        definitions[name] = rewrite(spec.components?.schemas?.[name] ?? {})
+      }
+      return { ...value, $ref: `#/$defs/${name}` }
+    }
+    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, rewrite(child)]))
+  }
+  const result = rewrite(schema)
+  return Object.keys(definitions).length ? { ...result, $defs: definitions } : result
+}
 
 /** `sessionId` -> `session-id`, `session_id` -> `session-id`, `a2uiEnabled` -> `a2ui-enabled`. */
 export function toFlagName(property) {
@@ -130,13 +135,17 @@ function readRpcSchemas(relativeSpec, prefix) {
     // already carries, so it is dropped. The request schema's own description
     // is the only prose worth keeping (7 commands have one).
     byCommand.set(route.slice(prefix.length), {
-      schema: operation.requestBody?.content?.["application/json"]?.schema ?? null,
+      schema: standaloneSchema(operation.requestBody?.content?.["application/json"]?.schema, spec),
+      outputSchema: (() => {
+        const output = operation.responses?.["200"]?.content?.["application/json"]?.schema
+        return standaloneSchema(output?.properties?.result ?? output, spec)
+      })(),
     })
   }
   return byCommand
 }
 
-function buildFlags(schema) {
+export function buildFlags(schema) {
   // A top-level oneOf/anyOf is a genuinely alternative body (8 commands).
   // Deriving flags from one arbitrary branch would be a lie, so those commands
   // take `--data` only and say so.
@@ -147,7 +156,7 @@ function buildFlags(schema) {
   const seen = new Set()
   for (const [property, propertySchema] of Object.entries(properties)) {
     const value = propertySchema && typeof propertySchema === "object" ? propertySchema : {}
-    let flag = toFlagName(property)
+    let flag = property === "idempotencyKey" ? "body-idempotency-key" : toFlagName(property)
     // Two schema properties can kebab-case to the same flag, and a property can
     // collide with a global flag. Both keep the property reachable via --data
     // and drop only the shorthand, so no field becomes unreachable.
@@ -202,6 +211,12 @@ function build() {
       wires,
       bodyKind,
       flags,
+      planes: Object.fromEntries([["internal", onHeadless], ["http", onDevice]].filter(([, value]) => value).map(([wire, value]) => [wire, {
+        ...buildFlags(value.schema),
+        inputSchema: value.schema,
+        outputSchema: value.outputSchema,
+        ...(requireOneOfGroups(value.schema) ? { requireOneOf: requireOneOfGroups(value.schema) } : {}),
+      }])),
       ...(requireOneOfGroups(source.schema) ? { requireOneOf: requireOneOfGroups(source.schema) } : {}),
     })
   }
@@ -218,6 +233,7 @@ function render(entries) {
 
 import type { ApiCommandEntry } from "../types"
 
+export const API_CONTRACT_VERSION = ${JSON.parse(fs.readFileSync(path.join(root, "protocol/companion-commands.json"), "utf8")).contractVersion}
 export const API_INDEX_SCHEMA_VERSION = ${SCHEMA_VERSION}
 
 export const API_COMMANDS: readonly ApiCommandEntry[] = [
@@ -225,6 +241,8 @@ ${lines.join("\n")}
 ]
 `
 }
+
+function main() {
 
 const entries = build()
 const rendered = render(entries)
@@ -251,3 +269,7 @@ const http = entries.filter((entry) => entry.wires.includes("http")).length
 console.log(
   `gen-cli-api-index: wrote ${path.relative(root, OUT)} (${entries.length} commands, ${internal} internal, ${http} http, ${(rendered.length / 1024).toFixed(0)} KB)`
 )
+
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main()

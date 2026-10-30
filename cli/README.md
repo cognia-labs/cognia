@@ -418,3 +418,50 @@ ordinary Bash remains available under its existing policy. A batch result does
 not certify the task or remove any acceptance requirement. Per-turn budgets
 share the original host deadline across retries and clear on turns without a
 budget. No automatic summary or answer to an unattended question is added.
+
+### Non-interactive Host automation
+
+`api call` chooses the request schema for the configured Host wire. For offline
+inspection use `api schema git_status --wire http --json` (device workspace
+coordinates) or `--wire internal` (service paths). `api schema` exports complete
+JSON Schema; add `--output-schema` for the domain response contract.
+
+```bash
+cognia-agent api call adapter_update_policy --id bot_1 --muted=false --a2ui-enabled=null
+cognia-agent api call execution_run_create --mode cascade --text "test" \
+  --body-idempotency-key intent_1 --idempotency-key 11111111-1111-4111-8111-111111111111
+cognia-agent api call session_list --all --max-pages 100 --json
+cognia-agent api list --live --risk low --json
+cognia-agent api call session_list --live --total-timeout 30s --json
+cognia-agent api request GET /export --response bytes --save export.bin
+cognia-agent api request POST /upload --multipart '{"file":"@./report.pdf","label":"report"}'
+cognia-agent api request GET /events --response stream --max-bytes 10485760
+cognia-agent api events --channels 'claude://message' --cursor-file events.cursor.json \
+  --max-events 100 --timeout 5m
+```
+
+Use channel identifiers allowed by the Host event catalog and the paired device grants. Event output is JSONL. Cursor files are scoped to the selected Host;
+a retention gap is an explicit failure that requires refreshing authoritative
+state. Without `--since`, watch starts at the live boundary. Current Hosts support
+atomic relay subscription/replay and device-owned operation observation; older
+Hosts that lack these controls cannot provide those relay observation features.
+Raw file/HTTP routes need a direct address. Saved responses are renamed into
+place only on success. `--json` and `--format raw|json` also produce structured
+failures on stderr. Debug logs contain field names, not credential values.
+
+The isolated Host smoke uses the current server and JavaScript CLI builds to
+test real owner pairing, DPoP RPC and live catalog reads, event replay with a
+persisted cursor, pinned stream saving and cancellation:
+
+```bash
+cargo build -p cognia-server --bin cognia-server
+node scripts/build/build-cli.mjs --js-only --outdir .cache/cli-api-host/dist
+pnpm cli:test:api:host --cli .cache/cli-api-host/dist/cognia-agent.mjs
+```
+
+It binds a private Host to loopback, disables signaling and execution, and uses
+synthetic keys under `.cache/diagnostics/cli-api-host/`. User credentials,
+Host profiles and proxies are excluded. Child processes and temporary data are
+removed on completion, failure, SIGINT and SIGTERM. This checks native Host APIs;
+remote relay services, model execution and cross-platform release packages need
+separate acceptance.

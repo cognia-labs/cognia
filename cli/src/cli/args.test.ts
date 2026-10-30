@@ -4,6 +4,12 @@
 import { parseArgv, stringFlag, boolFlag, numberFlag } from "./args"
 
 describe("parseArgv", () => {
+  it("keeps --no-session boolean without consuming a following prompt", () => {
+    const args = parseArgv(["run", "--no-session", "private prompt", "--output-format", "json"])
+    expect(boolFlag(args, "no-session")).toBe(true)
+    expect(args.positionals).toEqual(["private prompt"])
+    expect(stringFlag(args, "output-format")).toBe("json")
+  })
   it("parses a run command with a quoted prompt and value flags", () => {
     const a = parseArgv(["run", "fix the bug", "--model", "gpt-x", "--cwd", "/p"])
     expect(a.command).toBe("run")
@@ -213,5 +219,14 @@ describe("api plane flags", () => {
     const args = parseArgv(["api", "call", "x", "--wait", "--id", "abc"])
     expect(args.flags.wait).toBe(true)
     expect(args.flags.id).toBe("abc")
+  })
+})
+
+describe("API boolean values", () => {
+  it.each(["false", "null"])("preserves an explicit %s", (value) => {
+    const parsed = parseArgv(["api", "call", "adapter_update_policy", `--muted=${value}`], {
+      booleanFlags: ["muted"],
+    })
+    expect(parsed.flags.muted).toBe(value)
   })
 })

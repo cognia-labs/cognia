@@ -34,7 +34,11 @@ export interface ProviderSessionLease {
   session(key: string, build: () => AgentSession): AgentSession
   /** Replace a session built for a different key after awaiting its teardown. */
   replace(key: string, build: () => AgentSession): Promise<AgentSession>
-  /** Close the live session, if any. Idempotent and teardown-complete. */
+  /**
+   * Close the live session, sharing its teardown proof with concurrent callers.
+   * A rejected teardown stays latched; after stopping the original executor,
+   * the caller must reset the session and create a fresh lease.
+   */
   close(): Promise<void>
   /** The key of the live session, or null when none is open. */
   readonly openKey: string | null
@@ -45,18 +49,35 @@ export interface ProviderSessionLease {
 export function createProviderSessionLease(): ProviderSessionLease {
   let current: AgentSession | null = null
   let currentKey: string | null = null
+  let teardown: Promise<void> | null = null
 
-  const closeCurrent = async () => {
+  const closeCurrent = (): Promise<void> => {
+    if (teardown) return teardown
     const session = current
-    // Cleared BEFORE close() so a throwing close cannot leave the lease
-    // pointing at a half-dead session that the next turn would then reuse.
     current = null
     currentKey = null
-    if (session) await session.close()
+    if (!session) return Promise.resolve()
+    let closing: Promise<void>
+    try {
+      closing = Promise.resolve(session.close())
+    } catch (error) {
+      closing = Promise.reject(error)
+    }
+    teardown = closing
+    void closing.then(
+      () => {
+        if (teardown === closing) teardown = null
+      },
+      // Keep failed teardown latched: an idempotent close returning early on a
+      // second call is not proof that the old executor stopped.
+      () => undefined
+    )
+    return closing
   }
 
   return {
     session(key, build) {
+      if (teardown) throw new Error("provider session teardown must complete before reuse")
       if (current && currentKey === key) return current
       if (current) {
         throw new Error("provider session key changed; use replace() to await teardown")
@@ -67,6 +88,7 @@ export function createProviderSessionLease(): ProviderSessionLease {
       return session
     },
     async replace(key, build) {
+      if (teardown) await teardown
       if (current && currentKey === key) return current
       if (current) await closeCurrent()
       const session = build()
@@ -74,9 +96,7 @@ export function createProviderSessionLease(): ProviderSessionLease {
       currentKey = key
       return session
     },
-    async close() {
-      if (current) await closeCurrent()
-    },
+    close: closeCurrent,
     get openKey() {
       return currentKey
     },

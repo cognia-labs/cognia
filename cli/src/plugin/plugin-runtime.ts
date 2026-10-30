@@ -333,7 +333,7 @@ async function bootstrap(deps: PluginRuntimeDeps): Promise<PluginRuntimeResult> 
           manager,
           discover: () => defaultDiscoverDiskPlugins(roots),
           disabled,
-          notify: () => {},
+          notify: (message) => console.warn(`[plugin-runtime] ${message}`),
         })
       })
     try {

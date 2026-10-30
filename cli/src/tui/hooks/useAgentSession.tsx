@@ -7,6 +7,7 @@ import { createCliTranslator } from "../i18n"
  */
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import os from "node:os"
+import path from "node:path"
 
 import { transport } from "@/lib/tauri"
 import { compactSession } from "@/lib/claude/ipc"
@@ -25,6 +26,9 @@ import {
   type AgentSession,
 } from "../../agent/session-runner"
 import { runManualCompact } from "../../agent/manual-compact"
+import { cliWorkspaceCaptureUnavailableReason } from "../../agent/runtime/unified-runtime"
+import { mintRunId, mintTurnId } from "../../agent/runtime/turn-events"
+import { openWorkerTurnCapture } from "../../worker/workspace-client"
 import { readToolApprovals } from "../../agent/tool-approvals"
 import { approvalKey, commandIsAutoApprovable } from "../../agent/command-approval"
 import { resolveHome } from "../../config/load"
@@ -269,14 +273,36 @@ export function useAgentSession({
     sessionIdRef.current = sessionId
   }, [sessionId])
   const sessionRef = useRef<AgentSession | null>(null)
+  const sessionGenerationRef = useRef(0)
+  const sessionClosuresRef = useRef(new WeakMap<AgentSession, Promise<void>>())
+  const closeOwnedSession = useCallback((session: AgentSession) => {
+    let closing = sessionClosuresRef.current.get(session)
+    if (!closing) {
+      closing = Promise.resolve().then(() => session.close())
+      sessionClosuresRef.current.set(session, closing)
+    }
+    return closing
+  }, [])
   const sendInFlightCountRef = useRef(0)
   const uiUnsubscribeRef = useRef<(() => void) | undefined>(undefined)
   const runtimeUnsubscribeRef = useRef<(() => void) | undefined>(undefined)
   const autonomousBusyRef = useRef(false)
+  const autonomousCaptureTurnRef = useRef<string | null>(null)
   const pendingRuntimeEventsRef = useRef<AgentEventEnvelope[]>([])
   const compactAbortRef = useRef<AbortController | null>(null)
   const dispatchRuntimeEnvelope = useCallback(
     (envelope: AgentEventEnvelope) => {
+      if (
+        envelope.event.kind === "lifecycle" &&
+        envelope.event.phase === "started" &&
+        autonomousCaptureTurnRef.current !== envelope.turnId
+      ) {
+        autonomousCaptureTurnRef.current = envelope.turnId
+        // These notifications arrive after execution may already have written
+        // files. Opening a baseline here would invent incomplete history.
+        const t = createCliTranslator(configRef.current.locale, "cliUiCommon")
+        dispatch({ type: "NOTICE", message: t("workspaceCaptureAutonomousUnavailable") })
+      }
       for (const action of canonicalEnvelopeToActions(envelope, {
         autonomous: true,
         permissionHandledByGate: true,
@@ -291,6 +317,7 @@ export function useAgentSession({
       runtimeUnsubscribeRef.current?.()
       pendingRuntimeEventsRef.current = []
       autonomousBusyRef.current = false
+      autonomousCaptureTurnRef.current = null
       uiUnsubscribeRef.current = session.subscribeUiEvents?.((event) => {
         if (sessionRef.current !== session) return
         if (event.kind === "input-queue-cleared") {
@@ -582,32 +609,36 @@ export function useAgentSession({
     [dispatch, hookRunner]
   )
 
-  const captureExecutionSpec = useCallback((spec: ResolvedAgentExecutionSpec) => {
-    if (executionHandleRef.current) return
-    // This TUI session owns the built-in sidecar transport. External ACP
-    // sessions already expose their own live controls on AgentSession; binding
-    // their frozen spec to this handle would incorrectly route those controls
-    // into the built-in sidecar.
-    if (spec.runtimeAdapter !== "claude-agent-sdk") return
-    const sid =
-      spec.identity.sessionId ?? sessionIdRef.current ?? sessionRef.current?.sessionId ?? ""
-    checkpointAuthorityRef.current = {
-      sessionId: sid,
-      mode:
-        spec.runtimeAdapter === "claude-agent-sdk" &&
-        spec.capabilities.effective.includes("checkpoint") &&
-        getAgentExecutionFlags().claudeSdkCheckpoint
-          ? "native"
-          : "local",
-    }
-    executionHandleRef.current = createAgentExecutionHandle(sid, spec, {
-      // TUI session shutdown owns the spawned sidecar lifecycle; reuse it
-      // instead of opening a second controller/registry.
-      closeSession: async () => {
-        await sessionRef.current?.close()
-      },
-    })
-  }, [])
+  const captureExecutionSpec = useCallback(
+    (spec: ResolvedAgentExecutionSpec) => {
+      if (executionHandleRef.current) return
+      // This TUI session owns the built-in sidecar transport. External ACP
+      // sessions already expose their own live controls on AgentSession; binding
+      // their frozen spec to this handle would incorrectly route those controls
+      // into the built-in sidecar.
+      if (spec.runtimeAdapter !== "claude-agent-sdk") return
+      const sid =
+        spec.identity.sessionId ?? sessionIdRef.current ?? sessionRef.current?.sessionId ?? ""
+      checkpointAuthorityRef.current = {
+        sessionId: sid,
+        mode:
+          spec.runtimeAdapter === "claude-agent-sdk" &&
+          spec.capabilities.effective.includes("checkpoint") &&
+          getAgentExecutionFlags().claudeSdkCheckpoint
+            ? "native"
+            : "local",
+      }
+      executionHandleRef.current = createAgentExecutionHandle(sid, spec, {
+        // TUI session shutdown owns the spawned sidecar lifecycle; reuse it
+        // instead of opening a second controller/registry.
+        closeSession: async () => {
+          const session = sessionRef.current
+          if (session) await closeOwnedSession(session)
+        },
+      })
+    },
+    [closeOwnedSession]
+  )
 
   const ensureSession = useCallback((): AgentSession => {
     if (!sessionRef.current) {
@@ -661,37 +692,51 @@ export function useAgentSession({
     [gate, dispatch]
   )
 
-  const dropSession = useCallback(async () => {
-    compactAbortRef.current?.abort()
-    compactAbortRef.current = null
-    // Abort any in-flight turn FIRST. /clear, /resume, fork, and model/provider/
-    // thinking/agent-mode switches all funnel through here and can fire mid-turn
-    // (slash commands bypass the busy gate). Killing the sidecar from under a live
-    // capture would reject it as a non-abort error → a stray "error" cell landing
-    // in the freshly-RESET session. Aborting first routes it through the clean
-    // (recoverable) interrupt path before the reset wipes the old cells.
-    uiUnsubscribeRef.current?.()
-    uiUnsubscribeRef.current = undefined
-    runtimeUnsubscribeRef.current?.()
-    runtimeUnsubscribeRef.current = undefined
-    autonomousBusyRef.current = false
-    pendingRuntimeEventsRef.current = []
-    abortRef.current?.abort()
-    const current = sessionRef.current
-    if (current) {
-      // The session is being torn down (/clear, /resume, exit) — fire SessionEnd
-      // before closing so hook scripts can flush / summarize.
-      hookRunner.onSessionEnd(current.sessionId)
-      const handle = executionHandleRef.current
-      executionHandleRef.current = null
-      if (handle) await handle.cancel()
-      else await current.close()
-    }
-    sessionRef.current = null
-    checkpointAuthorityRef.current = null
-    nativeCheckpointsRef.current = []
-    nativeCheckpointSeqRef.current = 0
-  }, [hookRunner])
+  const dropSession = useCallback(
+    async (preserveCaptureNotice = false) => {
+      if (!preserveCaptureNotice) sessionGenerationRef.current += 1
+      compactAbortRef.current?.abort()
+      compactAbortRef.current = null
+      // Abort any in-flight turn FIRST. /clear, /resume, fork, and model/provider/
+      // thinking/agent-mode switches all funnel through here and can fire mid-turn
+      // (slash commands bypass the busy gate). Killing the sidecar from under a live
+      // capture would reject it as a non-abort error → a stray "error" cell landing
+      // in the freshly-RESET session. Aborting first routes it through the clean
+      // interrupt path before the reset wipes the old cells.
+      uiUnsubscribeRef.current?.()
+      uiUnsubscribeRef.current = undefined
+      runtimeUnsubscribeRef.current?.()
+      runtimeUnsubscribeRef.current = undefined
+      autonomousBusyRef.current = false
+      pendingRuntimeEventsRef.current = []
+      abortRef.current?.abort()
+      const current = sessionRef.current
+      if (current) {
+        // The session is being torn down (/clear, /resume, exit) — fire SessionEnd
+        // before closing so hook scripts can flush / summarize.
+        hookRunner.onSessionEnd(current.sessionId)
+        const handle = executionHandleRef.current
+        executionHandleRef.current = null
+        try {
+          try {
+            if (handle) await handle.cancel()
+          } finally {
+            await closeOwnedSession(current)
+          }
+        } finally {
+          if (sessionRef.current === current) sessionRef.current = null
+          checkpointAuthorityRef.current = null
+          nativeCheckpointsRef.current = []
+          nativeCheckpointSeqRef.current = 0
+        }
+      }
+      sessionRef.current = null
+      checkpointAuthorityRef.current = null
+      nativeCheckpointsRef.current = []
+      nativeCheckpointSeqRef.current = 0
+    },
+    [closeOwnedSession, hookRunner]
+  )
 
   // ── Workflow Copilot mode ──────────────────────────────────────────────────
   // A dedicated `workflow-editor`-kind session, isolated from the chat session
@@ -717,14 +762,18 @@ export function useAgentSession({
     [createSession]
   )
 
-  const dropCopilotSession = useCallback(async () => {
-    // Same rationale as dropSession: abort a live copilot turn before tearing the
-    // session down (both turn kinds share `abortRef`).
-    abortRef.current?.abort()
-    const current = copilotRef.current
-    copilotRef.current = null
-    if (current) await current.close()
-  }, [])
+  const dropCopilotSession = useCallback(
+    async (preserveCaptureNotice = false) => {
+      if (!preserveCaptureNotice) sessionGenerationRef.current += 1
+      // Same rationale as dropSession: abort a live copilot turn before tearing the
+      // session down (both turn kinds share `abortRef`).
+      abortRef.current?.abort()
+      const current = copilotRef.current
+      copilotRef.current = null
+      if (current) await closeOwnedSession(current)
+    },
+    [closeOwnedSession]
+  )
 
   const enterCopilot = useCallback((workflowId: string) => {
     copilotTargetRef.current = workflowId
@@ -782,6 +831,11 @@ export function useAgentSession({
       if (checkpointAuthorityRef.current?.mode !== "native") {
         checkpoint.beginTurn(checkpointCellCountRef.current, prompt)
       }
+      const turnConfig = configRef.current
+      const captureSessionId = sessionIdRef.current
+      const captureGeneration = sessionGenerationRef.current
+      const backendId = turnConfig.agentBackend ?? "builtin"
+      const runId = mintRunId(Date.now(), Math.random())
       const { ok, result, recoverable } = await runTurn({
         session,
         turnStarted: true,
@@ -793,6 +847,72 @@ export function useAgentSession({
         // about a different one.
         awaitApprovals: () => gate.whenSettled(),
         signal: controller.signal,
+        openWorkspaceCapture: () =>
+          openWorkerTurnCapture(
+            {
+              input: {
+                taskId: `cli:${session.sessionId}`,
+                sessionId: session.sessionId,
+                runId,
+                agentId: backendId,
+                agentKind: backendId === "builtin" ? "in-app" : "external",
+                workspaceRoot: turnConfig.cwd,
+                base: { kind: "workingState" },
+                executionRunId: runId,
+                turnId: mintTurnId(runId, 0),
+                surface: "cli-tui",
+              },
+              persist: true,
+              unavailableReason: cliWorkspaceCaptureUnavailableReason(turnConfig, backendId),
+            },
+            {
+              dataDir:
+                process.env.COGNIA_DATA_DIR?.trim() ||
+                path.join(resolveHome(process.env, os.homedir()), "worker-data"),
+            }
+          ),
+        stopWorkspaceCaptureExecutor: async () => {
+          // A concurrent /clear can already be closing this session. Share its
+          // full shutdown promise rather than accepting a second close's early
+          // idempotent return as proof the executor has stopped.
+          if (copilotTarget && copilotRef.current === session) await dropCopilotSession(true)
+          else if (!copilotTarget && sessionRef.current === session) await dropSession(true)
+          else await closeOwnedSession(session)
+        },
+        onWorkspaceCapture: (receipt) => {
+          if (
+            sessionGenerationRef.current !== captureGeneration ||
+            sessionIdRef.current !== captureSessionId ||
+            configRef.current.cwd !== turnConfig.cwd ||
+            (configRef.current.agentBackend ?? "builtin") !== backendId
+          )
+            return
+          const t = createCliTranslator(turnConfig.locale, "cliUiCommon")
+          dispatch({
+            type: "NOTICE",
+            message: receipt.available
+              ? t("workspaceCaptureAvailable", {
+                  runId: receipt.runId,
+                  workspaceRoot: receipt.workspaceRoot,
+                })
+              : t("workspaceCaptureUnavailable", {
+                  reason: t(`workspaceCaptureReasons.${receipt.reason}`),
+                }),
+          })
+          if (
+            !receipt.available &&
+            receipt.reason === "capture-failed" &&
+            receipt.runId &&
+            receipt.workspaceRoot
+          )
+            dispatch({
+              type: "NOTICE",
+              message: t("workspaceCaptureRecoveryHint", {
+                runId: receipt.runId,
+                workspaceRoot: receipt.workspaceRoot,
+              }),
+            })
+        },
         // Interactive turns impose NO wall-clock cap. A live agentic turn can
         // legitimately run for many minutes (long thinking, many tool legs) and
         // must not be killed mid-progress. The idle watchdog
@@ -847,12 +967,10 @@ export function useAgentSession({
         onLog(turnLifecycleLog(Date.now(), "interrupted", session.sessionId))
         // Always clear any orphaned gate resolver from the failed turn.
         gate.reset()
-        // Only drop the session when it's genuinely unusable (dead sidecar /
-        // unknown fault). A timeout, idle stall, provider error or user
-        // interrupt leaves the multi-turn session alive WITH its accumulated
-        // context, so keep it — the next message continues the conversation
-        // instead of silently restarting from an empty history.
-        if (!recoverable) {
+        // Capture can retire an executor whose failure arrived before a proven
+        // terminal drain. Announce that context reset unless a user command
+        // already replaced the session while teardown was pending.
+        if (!recoverable && sessionGenerationRef.current === captureGeneration) {
           // Dropping the session restarts the agent with an EMPTY history while
           // the transcript above still shows the whole conversation. Say so, in a
           // permanent cell — a toast scrolls away and the user would keep asking
@@ -875,6 +993,7 @@ export function useAgentSession({
       gate,
       dropSession,
       dropCopilotSession,
+      closeOwnedSession,
       hookRunner,
       checkpoint,
       getCellCount,

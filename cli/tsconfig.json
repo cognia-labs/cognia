@@ -1,6 +1,8 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "tsBuildInfoFile": "../.cache/typecheck/cli.tsbuildinfo",
     // TypeScript replaces inherited paths, so retain the canonical root aliases.
     // dev-cli.test.mjs verifies this parity.
     "paths": {
@@ -172,7 +174,19 @@
       "@cognia/plugin-ui": ["../packages/plugin-ui/src/index.ts"],
       "@cognia/plugin-ui/*": ["../packages/plugin-ui/src/*"],
       "@cognia/sync-protocol": ["./node_modules/@cognia/sync-protocol/src/index.ts"],
-      "@cognia/sync-protocol/*": ["./node_modules/@cognia/sync-protocol/src/*"]
+      "@cognia/sync-protocol/*": ["./node_modules/@cognia/sync-protocol/src/*"],
+      "@cognia/status-contract": ["../node_modules/@cognia/status-contract/src/index.ts"],
+      "@cognia/status-contract/*": ["../node_modules/@cognia/status-contract/src/*"],
+      "@cognia/agent-openclaude": ["../packages/agent-openclaude/src/index.ts"],
+      "@cognia/agent-openclaude/*": ["../packages/agent-openclaude/src/*"],
+      "@cognia/agent-crush": ["../packages/agent-crush/src/index.ts"],
+      "@cognia/agent-crush/*": ["../packages/agent-crush/src/*"],
+      "@cognia/agent-continue": ["../packages/agent-continue/src/index.ts"],
+      "@cognia/agent-continue/*": ["../packages/agent-continue/src/*"],
+      "@cognia/agent-rovo": ["../packages/agent-rovo/src/index.ts"],
+      "@cognia/agent-rovo/*": ["../packages/agent-rovo/src/*"],
+      "@cognia/agent-codebuff": ["../packages/agent-codebuff/src/index.ts"],
+      "@cognia/agent-codebuff/*": ["../packages/agent-codebuff/src/*"]
     },
     "types": ["node", "jest", "@testing-library/jest-dom"]
   },

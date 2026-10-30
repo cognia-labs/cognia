@@ -67,9 +67,25 @@ export interface ApiCommandEntry {
    */
   bodyKind: "fields" | "composed"
   flags: ApiCommandFlag[]
+  planes?: Partial<Record<ApiWire, ApiCommandShape>>
+  inputSchema?: Record<string, unknown>
+  outputSchema?: Record<string, unknown>
   /**
    * Alias requirement groups: at least one name from each group must be
    * present. The specs express "`session_id` or `sessionId`" this way.
    */
   requireOneOf?: string[][]
+}
+
+export interface ApiCommandShape {
+  bodyKind: "fields" | "composed"
+  flags: ApiCommandFlag[]
+  requireOneOf?: string[][]
+  inputSchema?: Record<string, unknown>
+  outputSchema?: Record<string, unknown>
+}
+
+/** Select a wire before interpreting its request coordinates or approval fields. */
+export function commandForWire(entry: ApiCommandEntry, wire: ApiWire): ApiCommandEntry {
+  return { ...entry, ...(entry.planes?.[wire] ?? {}) }
 }

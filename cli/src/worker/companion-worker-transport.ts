@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import http from "node:http"
 import https from "node:https"
-import type { Duplex } from "node:stream"
+import { Readable, type Duplex } from "node:stream"
 import tls from "node:tls"
 
 import WebSocket from "ws"
@@ -118,12 +118,11 @@ function responseFromNode(
   status: number,
   statusText: string,
   headers: http.IncomingHttpHeaders,
-  body: Buffer
+  body: Readable
 ): Response {
-  const responseBody = body.buffer.slice(
-    body.byteOffset,
-    body.byteOffset + body.byteLength
-  ) as ArrayBuffer
+  const responseBody = [204, 205, 304].includes(status)
+    ? null
+    : (Readable.toWeb(body) as ReadableStream<Uint8Array>)
   return new Response(responseBody, {
     status,
     statusText,
@@ -175,19 +174,15 @@ async function pinnedRequest(
         agent,
       },
       (response) => {
-        const chunks: Buffer[] = []
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)))
-        response.once("end", () => {
-          signal?.removeEventListener("abort", onAbort)
-          resolve(
-            responseFromNode(
-              response.statusCode ?? 0,
-              response.statusMessage ?? "",
-              response.headers,
-              Buffer.concat(chunks)
-            )
+        response.once("close", () => signal?.removeEventListener("abort", onAbort))
+        resolve(
+          responseFromNode(
+            response.statusCode ?? 0,
+            response.statusMessage ?? "",
+            response.headers,
+            response
           )
-        })
+        )
       }
     )
     request.once("error", (error) => {

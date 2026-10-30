@@ -41,7 +41,11 @@ import { mintSessionId as defaultMintSessionId } from "../run"
 import { createSessionStore, type SessionStore, type StoreResult } from "../session-store/store"
 import { createProviderSessionLease, type ProviderSessionLease } from "../runtime/provider-session"
 import { resolveWorkerExecutionProfile } from "../runtime/resolve-worker-execution"
-import { runUnifiedTurn, type UnifiedTurnParams } from "../runtime/unified-runtime"
+import {
+  runUnifiedTurn,
+  type UnifiedTurnParams,
+  type UnifiedWorkspaceCaptureLease,
+} from "../runtime/unified-runtime"
 import { subscribePluginToolDispatch } from "../../plugin/plugin-tool-dispatch"
 import { makeConfiguredCliPluginToolHandle } from "../configured-plugin-tool-handle"
 import { bindCliSessionHostRuntime } from "../cli-host-runtime"
@@ -281,6 +285,7 @@ interface HostedSession {
    */
   sandboxBinding?: Promise<SandboxBindOutcome>
   workerHandoff?: HandoffEnvelope
+  workspaceCaptureLease?: UnifiedWorkspaceCaptureLease
 }
 
 type SandboxBindOutcome = { ok: true } | { ok: false; error: unknown }
@@ -311,7 +316,14 @@ export interface AgentRuntimeServiceOptions {
   workerDispatch?: {
     manifest: AgentWorkerManifestV1
     validateHandoffExecution?(handoff: HandoffEnvelope): void
-    resolveHandoffWorkspace(handoff: HandoffEnvelope, commandId: string): string | Promise<string>
+    resolveHandoffWorkspace(
+      handoff: HandoffEnvelope,
+      commandId: string,
+      sessionId?: string
+    ):
+      | string
+      | { cwd: string; capture?: UnifiedWorkspaceCaptureLease }
+      | Promise<string | { cwd: string; capture?: UnifiedWorkspaceCaptureLease }>
   }
 }
 
@@ -1659,111 +1671,123 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       )
     }
     const base = options.config
-    const handoffWorkspace = handoff
-      ? await options.workerDispatch!.resolveHandoffWorkspace(handoff, commandId)
-      : undefined
-    const config = lowerAgentDefinitionConfig(
-      {
-        ...base,
-        ...(handoffWorkspace
-          ? { cwd: handoffWorkspace }
-          : typeof params.cwd === "string"
-            ? { cwd: params.cwd }
-            : {}),
-        ...(typeof params.model === "string" ? { model: params.model } : {}),
-        ...(typeof params.permissionMode === "string"
-          ? { permissionMode: params.permissionMode as ResolvedConfig["permissionMode"] }
-          : {}),
-      },
-      definition
-    )
     const id = uniqueSessionId()
-    const spec = resolveSessionExecutionSpec(config, { sessionId: id, runId: id })
-    const resolvedComposition = definition
-      ? await resolveTurnComposition({
-          selection: definition.composition as AgentCompositionSelectionV1,
-          prompt: { systemPrompt: config.systemPrompt },
-          tools: definition.toolRefs.map((tool) => ({
-            name: tool.name,
-            schema: tool.inputSchema,
-            visibility: definition.composition.toolPresentation === "code" ? "code" : "native",
-          })),
-          executionFingerprint: spec.executionFingerprint,
-        })
+    const handoffWorkspace = handoff
+      ? await options.workerDispatch!.resolveHandoffWorkspace(handoff, commandId, id)
       : undefined
-    const created = requireStore(
-      store.create(id, {
-        cwd: config.cwd,
-        ...(typeof params.name === "string" ? { name: params.name } : {}),
-        runtimeBinding: {
-          backend: config.agentBackend ?? "builtin",
-          model: spec.modelBindings.primary,
-          provider: config.provider,
+    const workspaceCaptureLease =
+      typeof handoffWorkspace === "object" ? handoffWorkspace.capture : undefined
+    let transferredCapture = false
+    try {
+      if (closing) throw structured("runtime_error", "agent service is closing")
+      const config = lowerAgentDefinitionConfig(
+        {
+          ...base,
+          ...(handoffWorkspace
+            ? {
+                cwd: typeof handoffWorkspace === "string" ? handoffWorkspace : handoffWorkspace.cwd,
+              }
+            : typeof params.cwd === "string"
+              ? { cwd: params.cwd }
+              : {}),
+          ...(typeof params.model === "string" ? { model: params.model } : {}),
+          ...(typeof params.permissionMode === "string"
+            ? { permissionMode: params.permissionMode as ResolvedConfig["permissionMode"] }
+            : {}),
         },
-      })
-    )
-    created.close()
-    if (handoff)
+        definition
+      )
+      const spec = resolveSessionExecutionSpec(config, { sessionId: id, runId: id })
+      const resolvedComposition = definition
+        ? await resolveTurnComposition({
+            selection: definition.composition as AgentCompositionSelectionV1,
+            prompt: { systemPrompt: config.systemPrompt },
+            tools: definition.toolRefs.map((tool) => ({
+              name: tool.name,
+              schema: tool.inputSchema,
+              visibility: definition.composition.toolPresentation === "code" ? "code" : "native",
+            })),
+            executionFingerprint: spec.executionFingerprint,
+          })
+        : undefined
+      const created = requireStore(
+        store.create(id, {
+          cwd: config.cwd,
+          ...(typeof params.name === "string" ? { name: params.name } : {}),
+          runtimeBinding: {
+            backend: config.agentBackend ?? "builtin",
+            model: spec.modelBindings.primary,
+            provider: config.provider,
+          },
+        })
+      )
+      created.close()
+      if (handoff)
+        durableState.update(id, (state) => {
+          state.workerHandoff = handoff
+        })
+      const session: HostedSession = {
+        id,
+        config,
+        spec,
+        lease: createLease(),
+        busy: false,
+        status: "idle",
+        abortController: null,
+        activeRun: null,
+        pendingPermissions: new Map(),
+        pendingElicitations: new Map(),
+        consumedExternalToolResponses: new Set(),
+        commandResults: new Map(),
+        followUps: [],
+        currentRunId: null,
+        currentAttemptId: null,
+        durableState,
+        ...(handoff ? { workerHandoff: handoff } : {}),
+        ...(workspaceCaptureLease ? { workspaceCaptureLease } : {}),
+        ...(definition ? { agentDefinition: definition } : {}),
+      }
+      if (Array.isArray(params.tags) && params.tags.length > 0) {
+        durableState.update(id, (state) => {
+          state.tags = [...new Set((params.tags as string[]).map((tag) => tag.trim()))]
+        })
+      }
+      const agentBinding: AgentSessionBinding | undefined = definition
+        ? {
+            agentId: definition.agentId,
+            version: definition.version,
+            definitionDigest: definition.definitionDigest,
+            compositionPresetId: definition.composition.presetId,
+            compositionDigest: resolvedComposition!.compositionDigest,
+            executionFingerprint: spec.executionFingerprint,
+          }
+        : undefined
+      if (agentBinding) {
+        session.agentBinding = agentBinding
+        durableState.update(id, (state) => {
+          state.agentBinding = agentBinding
+        })
+      }
+      sessions.set(id, session)
+      bindCliSessionHostRuntime(session.config, session.id)
+      // `createSessionOnce` registers the session itself instead of going through
+      // `materialize`, so without this a freshly created session never bound its
+      // ceiling at all — only one recovered from disk on a later call did.
+      void bindSandboxRuntime(session)
+      const createdResult = {
+        sessionId: id,
+        spec,
+        commandId,
+        ...(agentBinding ? { agentBinding } : {}),
+      }
       durableState.update(id, (state) => {
-        state.workerHandoff = handoff
+        state.commandResults[commandKey] = createdResult
       })
-    const session: HostedSession = {
-      id,
-      config,
-      spec,
-      lease: createLease(),
-      busy: false,
-      status: "idle",
-      abortController: null,
-      activeRun: null,
-      pendingPermissions: new Map(),
-      pendingElicitations: new Map(),
-      consumedExternalToolResponses: new Set(),
-      commandResults: new Map(),
-      followUps: [],
-      currentRunId: null,
-      currentAttemptId: null,
-      durableState,
-      ...(handoff ? { workerHandoff: handoff } : {}),
-      ...(definition ? { agentDefinition: definition } : {}),
+      transferredCapture = true
+      return createdResult
+    } finally {
+      if (!transferredCapture) await workspaceCaptureLease?.close().catch(() => undefined)
     }
-    if (Array.isArray(params.tags) && params.tags.length > 0) {
-      durableState.update(id, (state) => {
-        state.tags = [...new Set((params.tags as string[]).map((tag) => tag.trim()))]
-      })
-    }
-    const agentBinding: AgentSessionBinding | undefined = definition
-      ? {
-          agentId: definition.agentId,
-          version: definition.version,
-          definitionDigest: definition.definitionDigest,
-          compositionPresetId: definition.composition.presetId,
-          compositionDigest: resolvedComposition!.compositionDigest,
-          executionFingerprint: spec.executionFingerprint,
-        }
-      : undefined
-    if (agentBinding) {
-      session.agentBinding = agentBinding
-      durableState.update(id, (state) => {
-        state.agentBinding = agentBinding
-      })
-    }
-    sessions.set(id, session)
-    bindCliSessionHostRuntime(session.config, session.id)
-    // `createSessionOnce` registers the session itself instead of going through
-    // `materialize`, so without this a freshly created session never bound its
-    // ceiling at all — only one recovered from disk on a later call did.
-    void bindSandboxRuntime(session)
-    const createdResult = {
-      sessionId: id,
-      spec,
-      commandId,
-      ...(agentBinding ? { agentBinding } : {}),
-    }
-    durableState.update(id, (state) => {
-      state.commandResults[commandKey] = createdResult
-    })
-    return createdResult
   }
 
   function findPersistedCreateResult(commandKey: string): Record<string, unknown> | undefined {
@@ -1832,6 +1856,8 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
       inputPreview: prompt,
     })
     const turn = (async () => {
+      const workspaceCaptureLease = session.workspaceCaptureLease
+      session.workspaceCaptureLease = undefined
       try {
         const turnParams: UnifiedTurnParams = {
           config: session.config,
@@ -1852,6 +1878,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
           home: options.home,
           store,
           providerSession: session.lease,
+          ...(workspaceCaptureLease ? { workspaceCaptureLease } : {}),
           ...(session.agentDefinition
             ? {
                 compositionSelection: session.agentDefinition
@@ -1930,6 +1957,7 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
         })
         throw error
       } finally {
+        await workspaceCaptureLease?.close().catch(() => undefined)
         session.busy = false
         session.status =
           session.pendingPermissions.size > 0 || session.pendingElicitations.size > 0
@@ -2078,7 +2106,12 @@ export function createAgentRuntimeService(options: AgentRuntimeServiceOptions): 
     denyPending(session, "session closed")
     cancelPendingElicitations(session, "session closed")
     await session.activeRun?.catch(() => undefined)
-    await session.lease.close()
+    try {
+      await session.lease.close()
+    } finally {
+      await session.workspaceCaptureLease?.close().catch(() => undefined)
+      session.workspaceCaptureLease = undefined
+    }
     await sandboxSessionRuntime.releaseSession(session.id).catch(() => undefined)
     clearSessionHostRuntime(session.id)
     session.status = "closed"
