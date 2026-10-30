@@ -34,14 +34,14 @@ export const SOURCE_INPUTS = Object.freeze([
 
 export const RELEASE_IDENTITY = Object.freeze({
   architecture: "linux/amd64",
-  recipeRevision: "7",
+  recipeRevision: "8",
   protocol: "computer-server-0.3.46",
   serverVersion: "0.3.46",
   // Template snapshots must never contain a runtime guest token. The Host
   // starts the authenticated desktop over protected envd after create.
   startCommand: "sleep infinity",
   readyCommand:
-    "test -x /usr/local/bin/cognia-desktop && test -f /opt/cognia-desktop/server.py && test -f /opt/cognia-desktop/startup.py && test -x /usr/bin/git && test -x /usr/bin/node && test -x /usr/bin/npm && test -x /usr/bin/bwrap && test -x /usr/local/bin/cognia-desktop-guest && test -f /opt/cognia-desktop/handoff-import.py",
+    "test -x /usr/local/bin/cognia-desktop && test -f /opt/cognia-desktop/server.py && test -f /opt/cognia-desktop/startup.py && test -x /usr/bin/git && test -x /usr/bin/node && test -x /usr/bin/npm && test -x /usr/bin/xclip && test -x /usr/bin/bwrap && test -x /usr/local/bin/cognia-desktop-guest && test -f /opt/cognia-desktop/handoff-import.py",
 })
 
 export function createManagedDesktopRelease({ imageRepository, digest }) {
@@ -178,6 +178,9 @@ export function verifyImageSources(root = ROOT) {
   }
   if (!dockerfile.includes("dpkg-query -W git nodejs npm")) {
     throw new Error("Managed desktop handoff image must verify git, nodejs and npm")
+  }
+  if (!dockerfile.includes("test -x /usr/bin/xclip")) {
+    throw new Error("Managed desktop recipe 8 must verify its existing X clipboard tool")
   }
   for (const key of ["protocol", "recipeRevision", "serverVersion"]) {
     if (!server.includes(`"${key}": "${RELEASE_IDENTITY[key]}"`)) {

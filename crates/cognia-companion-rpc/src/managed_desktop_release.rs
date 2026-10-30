@@ -22,7 +22,7 @@ use serde::Serialize;
 
 pub const RELEASE_FILE: &str = "managed-desktop-release.json";
 pub const PROTOCOL: &str = "computer-server-0.3.46";
-pub const RECIPE: &str = "7";
+pub const RECIPE: &str = "8";
 
 /// Where the Host's trusted release came from (ADR-0233 amendment A2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -443,5 +443,14 @@ mod tests {
         )
         .unwrap();
         assert!(load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn recipe_8_never_loads_a_recipe_7_manifest() {
+        assert_eq!(RECIPE, "8");
+        let mut old = release();
+        old.recipe_revision = "7".into();
+        assert_eq!(validate_release(&old).unwrap_err().code, "managed_desktop_release_mismatch");
+        assert!(validate_release(&release()).is_ok());
     }
 }

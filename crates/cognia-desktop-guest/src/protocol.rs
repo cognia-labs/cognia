@@ -1,4 +1,9 @@
 //! Bounded Host-owned handoff framing. No guest output supplies source authority.
+//! Recipe-8 operations use the same root control socket, with one-hour sessions
+//! and a 30-second idle timeout. File limits (8 MiB per file, 32 MiB combined
+//! reads/writes per connection) bound transport, not total data volume. Exec
+//! output has its own 1 MiB cap and is uncharged; WP11 Host accounting owns
+//! volume limits across operations and connections.
 use cognia_desktop_guest::source_tree::{validate_path, MAX_SOURCE_BYTES, MAX_SOURCE_FILES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -59,6 +64,36 @@ pub(crate) struct Manifest {
 pub(crate) enum Report {
     Header(Request),
     Prepared(cognia_desktop_guest::observation::ProcessBoundaryReport),
+    Operations(OperationSession),
+    OperationsComplete,
+    OperationAudit(crate::operations::Audit),
+}
+
+/// One root control connection owns one transport/lifetime session. The 8 MiB
+/// file bound and 32 MiB combined file read/write byte counter are connection
+/// transport bounds, not total data-volume controls. Exec output is separately
+/// capped and never charged to them. WP11 Host accounting owns volume limits.
+/// A fresh generation must be supplied by the Host, never inferred from content.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OperationSession {
+    pub session_version: u32,
+    pub boundary_generation: String,
+}
+impl OperationSession {
+    pub(crate) fn validate(&self) -> io::Result<()> {
+        if self.session_version != 1 || !canonical_uuid(&self.boundary_generation) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct OperationReady {
+    pub session_version: u32,
+    pub admission: cognia_desktop_guest::observation::ProcessBoundaryReport,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

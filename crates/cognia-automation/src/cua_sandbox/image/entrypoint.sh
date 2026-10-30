@@ -2,6 +2,10 @@
 set -eu
 
 if [ "${1-}" = "--managed" ] && [ "$#" -eq 1 ]; then
+    test -x /usr/bin/xclip || {
+        echo "Managed desktop clipboard tool is unavailable" >&2
+        exit 1
+    }
     test -x /usr/local/bin/cognia-desktop-guest || {
         echo "Managed desktop isolation guard is unavailable" >&2
         exit 1

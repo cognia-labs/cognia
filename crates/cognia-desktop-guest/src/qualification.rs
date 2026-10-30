@@ -4,7 +4,7 @@ use crate::observation::{ProcessBoundaryReport, NAMESPACES};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const PROBE_VERSION: u32 = 2;
+pub const PROBE_VERSION: u32 = 3;
 pub const TARGETS: [&str; 15] = [
     "1.1.1.1",
     "10.0.0.1",
@@ -285,6 +285,73 @@ pub struct WorkloadQualificationReport {
     pub supervisor_pid: u32,
     pub supervisor_start_time: u64,
     pub ingress_errno: i32,
+    /// Absent in readable recipe-7 reports. Absence can never qualify recipe 8.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations: Option<OperationProbe>,
+}
+
+pub const OPERATION_REFUSALS: [&str; 19] = [
+    "symlink-read", "symlink-write", "directory-symlink-read", "directory-symlink-write",
+    "hardlink-read", "hardlink-write", "fifo-read", "fifo-write", "socket-read", "socket-write",
+    "parent-read", "parent-write", "special-file", "file-cap", "chunk-read-cap", "chunk-write-cap",
+    "session-read-cap", "session-write-cap", "clipboard-cap",
+];
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationNetworkClient {
+    pub target: String,
+    pub exit_code: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OperationProbe {
+    pub admission: ProcessBoundaryReport,
+    pub network_clients: Vec<OperationNetworkClient>,
+    pub refusals: Vec<ErrorObservation>,
+    pub written_bytes: u64,
+    pub read_bytes: u64,
+    pub output_bytes: u64,
+    pub output_truncated: bool,
+    pub timeout_ms: u64,
+    pub timeout_signal: i32,
+    pub clipboard_bytes: u64,
+    /// Workload namespace PIDs/start times from the fixed timeout fixture.
+    pub timeout_processes: BTreeMap<u32, u64>,
+    pub timeout_survivors: BTreeMap<u32, u64>,
+    /// Provider namespace identities observed during an active exec, before
+    /// independently killing the real supervisor while its Host is absent.
+    pub death_processes: BTreeMap<u32, u64>,
+}
+impl OperationProbe {
+    pub fn validate(&self, desktop: &ProcessBoundaryReport, terminated: &BTreeMap<u32, u64>) -> Result<(), &'static str> {
+        let fail = "validation_operations";
+        self.admission.validate(1000).map_err(|_| fail)?;
+        if self.admission.phase != crate::observation::ObservationPhase::AcceptanceAdmission
+            || self.admission.boundary_generation != desktop.boundary_generation
+            || self.admission.namespaces != desktop.namespaces
+            || self.admission.provider_namespaces != desktop.provider_namespaces
+            || self.admission.namespace_init_pid != desktop.namespace_init_pid
+            || self.admission.namespace_init_start_time != desktop.namespace_init_start_time
+            || self.network_clients.len() != TARGETS.len()
+            || TARGETS.iter().any(|target| self.network_clients.iter()
+                .filter(|attempt| attempt.target == *target && attempt.exit_code == 101).count() != 1)
+            || self.refusals.len() != OPERATION_REFUSALS.len()
+            || OPERATION_REFUSALS.iter().any(|name| self.refusals.iter()
+                .filter(|result| result.operation == *name && result.result == -1 && result.errno == 1).count() != 1)
+            || self.written_bytes != 8 * 1024 * 1024 || self.read_bytes != 8 * 1024 * 1024
+            || self.output_bytes != 1024 * 1024 || !self.output_truncated
+            || self.timeout_ms != 1000 || self.timeout_signal != 9
+            || self.clipboard_bytes != 1024 * 1024
+            || self.timeout_processes.len() != 2 || !self.timeout_survivors.is_empty()
+            || self.timeout_processes.iter().any(|(pid, start)| *pid <= 1 || *start == 0)
+            || self.death_processes.len() != 2
+            || self.death_processes.iter().any(|(pid, start)| *pid <= 1 || *start == 0 || terminated.get(pid) != Some(start)) {
+            return Err(fail);
+        }
+        Ok(())
+    }
 }
 impl ProcessSnapshot {
     pub fn validate(
@@ -540,6 +607,12 @@ impl WorkloadQualificationReport {
             })
         {
             return Err("validation_binding");
+        }
+        let operations = self.operations.as_ref().ok_or("validation_operations")?;
+        operations.validate(&self.desktop, &self.terminated_processes)?;
+        if operations.death_processes.keys().any(|pid| [self.supervisor_pid,
+            self.desktop.namespace_init_pid, self.desktop.workload_pid, self.detached_outer_pid].contains(pid)) {
+            return Err("validation_operations");
         }
         self.desktop_probe
             .acceptance
@@ -817,5 +890,123 @@ mod tests {
             r#"{"operation":"setuidRoot","result":-1,"errno":1,"passed":true}"#
         )
         .is_err());
+    }
+
+    fn operation_fixture() -> (OperationProbe, ProcessBoundaryReport, BTreeMap<u32, u64>) {
+        use crate::observation::{DescriptorObservation, ObservationPhase};
+        let process = valid_probe().process;
+        let desktop = ProcessBoundaryReport {
+            report_version: 1, phase: ObservationPhase::DesktopLive, workload_isolation_revision: 1,
+            boundary_generation: "6a370d8e-2d69-40fb-9586-786b7424365a".into(),
+            namespace_init_pid: 20, namespace_init_start_time: 1, workload_pid: 21, workload_start_time: 2,
+            namespaces: process.namespaces, provider_namespaces: NAMESPACES.into_iter().map(|n| (n.into(), format!("{n}:[1]"))).collect(),
+            status: process.status, network_devices: "header\nheader\n lo: 0\n".into(),
+            ipv4_routes: "header\n".into(), ipv6_routes: String::new(), descriptors: process.descriptors,
+        };
+        let mut admission = desktop.clone();
+        admission.phase = ObservationPhase::AcceptanceAdmission;
+        admission.workload_pid = 22;
+        for fd in [3, 4] {
+            admission.descriptors.insert(fd, DescriptorObservation { target: format!("pipe:[{fd}]"), flags: 0o2000000, socket_scope: None });
+        }
+        let probe = OperationProbe {
+            admission,
+            network_clients: TARGETS.into_iter().map(|target| OperationNetworkClient { target: target.into(), exit_code: 101 }).collect(),
+            refusals: OPERATION_REFUSALS.into_iter().map(|operation| ErrorObservation { operation: operation.into(), result: -1, errno: 1 }).collect(),
+            written_bytes: 8 * 1024 * 1024, read_bytes: 8 * 1024 * 1024,
+            output_bytes: 1024 * 1024, output_truncated: true,
+            timeout_ms: 1000, timeout_signal: 9, clipboard_bytes: 1024 * 1024,
+            timeout_processes: [(10, 1), (11, 2)].into(), timeout_survivors: BTreeMap::new(),
+            death_processes: [(70, 3), (71, 4)].into(),
+        };
+        (probe, desktop, [(20, 1), (70, 3), (71, 4)].into())
+    }
+
+    #[test]
+    fn offline_recipe_8_operations_require_each_observation_and_exact_admission() {
+        let (good, desktop, terminated) = operation_fixture();
+        assert!(good.validate(&desktop, &terminated).is_ok());
+        let mut variants = Vec::new();
+        for index in 0..TARGETS.len() {
+            let mut bad = good.clone(); bad.network_clients[index].exit_code = 0; variants.push(bad);
+        }
+        for index in 0..OPERATION_REFUSALS.len() {
+            let mut bad = good.clone(); bad.refusals[index].result = 0; variants.push(bad);
+        }
+        let mut bad = good.clone(); bad.network_clients.pop(); variants.push(bad);
+        let mut bad = good.clone(); bad.refusals.pop(); variants.push(bad);
+        let mut bad = good.clone(); bad.admission.status = bad.admission.status.replace("Seccomp:2", "Seccomp:0"); variants.push(bad);
+        let mut bad = good.clone(); bad.admission.namespaces = desktop.provider_namespaces.clone(); variants.push(bad);
+        let mut bad = good.clone(); bad.admission.boundary_generation = uuid::Uuid::new_v4().to_string(); variants.push(bad);
+        let mut bad = good.clone(); bad.output_bytes += 1; variants.push(bad);
+        let mut bad = good.clone(); bad.output_truncated = false; variants.push(bad);
+        let mut bad = good.clone(); bad.timeout_signal = 0; variants.push(bad);
+        let mut bad = good.clone(); bad.timeout_processes.clear(); variants.push(bad);
+        let mut bad = good.clone(); bad.timeout_survivors.insert(10, 1); variants.push(bad);
+        let mut bad = good.clone(); bad.death_processes.insert(71, 999); variants.push(bad);
+        let mut bad = good.clone(); bad.clipboard_bytes = 0; variants.push(bad);
+        for bad in variants { assert_eq!(bad.validate(&desktop, &terminated), Err("validation_operations")); }
+        let mut extra = serde_json::to_value(good).unwrap();
+        extra["passed"] = true.into();
+        assert!(serde_json::from_value::<OperationProbe>(extra).is_err());
+    }
+
+    #[test]
+    fn offline_supervisor_death_requires_operation_descendants_gone_and_old_reports_remain_readable() {
+        use crate::observation::ObservationPhase;
+        let (operations, desktop, mut terminated) = operation_fixture();
+        terminated.extend([(50, 1), (60, 1)]);
+        let mut importer = desktop.clone();
+        importer.phase = ObservationPhase::ImporterAdmission;
+        importer.namespace_init_pid = 30;
+        importer.workload_pid = 31;
+        importer.status = importer.status.replace("1000", "1001");
+        importer.namespaces = NAMESPACES.into_iter().map(|n| (n.into(), format!("{n}:[43]"))).collect();
+        importer.descriptors.get_mut(&0).unwrap().target = "pipe:[43]".into();
+        let mut weak = importer.clone();
+        weak.status = weak.status.replace("Seccomp:2", "Seccomp:0");
+        let acceptance = valid_probe();
+        let mut terminal = acceptance.clone(); terminal.process.pid = 6;
+        let mut browser = acceptance.process.clone();
+        browser.pid = 7; browser.executable = "/usr/lib/chromium/chromium".into();
+        let mut import_probe = valid_probe();
+        import_probe.process.status = importer.status.clone();
+        import_probe.process.namespaces = importer.namespaces.clone();
+        import_probe.process.descriptors = importer.descriptors.clone();
+        let mut git = import_probe.process.clone(); git.executable = "/usr/bin/git".into();
+        let mut negative = valid_probe().process;
+        negative.pid = 80; negative.status = "Uid:0 0 0 0".into();
+        negative.namespaces = desktop.provider_namespaces.clone();
+        let good = WorkloadQualificationReport {
+            report_version: PROBE_VERSION, boundary_generation: desktop.boundary_generation.clone(),
+            negative_control: negative,
+            weakened_launch: WeakenedLaunchEvidence {
+                profile: "importer-without-seccomp-v1".into(), executable: "/usr/local/bin/cognia-desktop-guest".into(),
+                terminated_processes: [(30, weak.namespace_init_start_time), (31, weak.workload_start_time)].into(),
+                surviving_processes: BTreeMap::new(), admission: weak,
+            },
+            acceptance_admission: operations.admission.clone(), importer_admission: importer,
+            desktop_probe: DesktopProbe {
+                acceptance, terminal, detached_pid: 50,
+                browser: BrowserRun { process: browser, exit_code: 0, local_preview: "cognia-qualified-loopback".into(),
+                    metadata_navigation_net_errors: vec![-109], redirect_net_errors: vec![-109], hostname_net_errors: vec![-105] },
+            },
+            importer_probe: ImporterProbe { importer: import_probe, git, git_exit_code: 0 },
+            desktop, terminated_processes: terminated, surviving_processes: BTreeMap::new(), detached_outer_pid: 50,
+            supervisor_pid: 60, supervisor_start_time: 1, ingress_errno: 111, operations: Some(operations),
+        };
+        good.validate().unwrap();
+        let mut bad = good.clone(); bad.surviving_processes.insert(71, 4);
+        assert_eq!(bad.validate(), Err("validation_teardown"));
+        let mut bad = good.clone(); bad.operations.as_mut().unwrap().death_processes = [(20, 1), (60, 1)].into();
+        assert_eq!(bad.validate(), Err("validation_operations"));
+        let mut bad = good.clone(); bad.operations = None;
+        assert_eq!(bad.validate(), Err("validation_operations"));
+        let mut old = serde_json::to_value(good).unwrap();
+        old["reportVersion"] = 2.into(); old.as_object_mut().unwrap().remove("operations");
+        let readable: WorkloadQualificationReport = serde_json::from_value(old).unwrap();
+        assert_eq!(readable.report_version, 2);
+        assert!(readable.operations.is_none());
+        assert!(readable.validate().is_err());
     }
 }

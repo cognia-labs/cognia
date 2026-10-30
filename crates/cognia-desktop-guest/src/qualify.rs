@@ -1,7 +1,7 @@
 //! Fixed root-only asynchronous collector. No workload-selected PID/path/argv.
 //! EnvD returns from start before this detached collector begins. Qualification
 //! result is a separate authenticated connection, never a prerequisite for death.
-use crate::{acceptance, boundary, promotion};
+use crate::{acceptance, boundary, operations, promotion, protocol};
 use cognia_desktop_guest::qualification::*;
 use cognia_exec_sandbox::importer::ImportLaunch;
 use std::collections::BTreeMap;
@@ -110,6 +110,7 @@ const ACCEPTANCE_STAGES: &[&str] = &[
     "negative_rejection",
     "negative_teardown",
     "validation_weakened_launch",
+    "validation_operations",
 ];
 pub(crate) fn acceptance_stage(value: &str) {
     if let Some(index) = ACCEPTANCE_STAGES.iter().position(|name| *name == value) {
@@ -626,6 +627,8 @@ fn collect() -> io::Result<WorkloadQualificationReport> {
         acceptance::spawn_diagnostic(&live, &operation, Instant::now() + Duration::from_secs(90))?;
     let acceptance_admission = job.boundary_report.take().ok_or_else(refused)?;
     let desktop_probe = job.diagnostic_report.take().ok_or_else(refused)?;
+    acceptance_stage("validation_operations");
+    let (mut operations, operation_socket, death_argv) = operation_probes(&live, supervisor_pid)?;
     stage(4);
     let mut pids = boundary::descendants(supervisor_pid)?;
     pids.insert(supervisor_pid);
@@ -651,6 +654,12 @@ fn collect() -> io::Result<WorkloadQualificationReport> {
                     == Some(desktop_probe.detached_pid)
         })
         .ok_or_else(refused)?;
+    let death_command = death_argv.iter().flat_map(|arg| arg.bytes().chain(std::iter::once(0))).collect::<Vec<_>>();
+    operations.death_processes = terminated_processes.iter().filter(|(pid, _)| {
+        fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|cmd| cmd == death_command)
+            && boundary::namespace(**pid, "pid").ok().as_ref() == live.namespaces.get("pid")
+    }).map(|(pid, start)| (*pid, *start)).collect();
+    if operations.death_processes.len() != 2 { return Err(refused()); }
     stage(5);
     // Pin identity, then kill the actual supervisor, not its workload namespace.
     // No Host connection, explicit desktop delete or AcceptanceJob drop triggers it.
@@ -692,6 +701,7 @@ fn collect() -> io::Result<WorkloadQualificationReport> {
     };
     // Only after recording post-supervisor evidence may local handle drop clean up.
     drop(job);
+    drop(operation_socket);
     let _ = fs::remove_dir_all(parent);
     let report = WorkloadQualificationReport {
         report_version: PROBE_VERSION,
@@ -709,6 +719,7 @@ fn collect() -> io::Result<WorkloadQualificationReport> {
         detached_outer_pid,
         supervisor_start_time,
         ingress_errno,
+        operations: Some(operations),
     };
     stage(6);
     if let Err(category) = report.validate() {
@@ -720,9 +731,193 @@ fn collect() -> io::Result<WorkloadQualificationReport> {
     }
     Ok(report)
 }
+
+struct OperationClient {
+    socket: UnixStream,
+    responses: io::BufReader<UnixStream>,
+    admission: cognia_desktop_guest::observation::ProcessBoundaryReport,
+}
+impl OperationClient {
+    fn connect(live: &boundary::Boundary) -> io::Result<Self> {
+        let mut socket = UnixStream::connect(crate::control::SOCKET)?;
+        socket.set_read_timeout(Some(Duration::from_secs(75)))?;
+        socket.set_write_timeout(Some(Duration::from_secs(30)))?;
+        operations::write_frame(&mut socket, &protocol::OperationSession {
+            session_version: 1, boundary_generation: live.generation.clone(),
+        })?;
+        let mut responses = io::BufReader::new(socket.try_clone()?);
+        let ready: protocol::OperationReady = serde_json::from_slice(
+            &operations::read_frame(&mut responses)?.ok_or_else(refused)?).map_err(|_| refused())?;
+        ready.admission.validate(1000).map_err(|_| refused())?;
+        if ready.session_version != 1 || ready.admission.boundary_generation != live.generation
+            || ready.admission.namespaces != live.namespaces { return Err(refused()); }
+        Ok(Self { socket, responses, admission: ready.admission })
+    }
+    fn request(&mut self, request: operations::Request) -> io::Result<operations::Response> {
+        operations::write_frame(&mut self.socket, &request)?;
+        serde_json::from_slice(&operations::read_frame(&mut self.responses)?.ok_or_else(refused)?).map_err(|_| refused())
+    }
+    fn success(&mut self, request: operations::Request) -> io::Result<operations::ResultValue> {
+        let response = self.request(request)?;
+        if response.error.is_some() { return Err(refused()); }
+        response.result.ok_or_else(refused)
+    }
+    fn refused(&mut self, name: &str, request: operations::Request) -> io::Result<ErrorObservation> {
+        let response = self.request(request)?;
+        if response.result.is_some() || response.error.as_deref() != Some("operation_refused") { return Err(refused()); }
+        Ok(ErrorObservation { operation: name.into(), result: -1, errno: 1 })
+    }
+    fn exec(&mut self, argv: Vec<String>, cwd: &str, timeout_ms: u64) -> io::Result<operations::ExecResult> {
+        match self.success(operations::Request::Exec { argv, cwd: cwd.into(), timeout_ms })? {
+            operations::ResultValue::Exec(result) => Ok(result),
+            _ => Err(refused()),
+        }
+    }
+    fn close(self) -> io::Result<()> {
+        self.socket.shutdown(std::net::Shutdown::Write)?;
+        let mut reader = self.responses;
+        if operations::read_frame(&mut reader)?.is_some() { return Err(refused()); }
+        Ok(())
+    }
+}
+
+fn python(code: &str, args: &[String]) -> Vec<String> {
+    [vec!["/usr/local/bin/python3".into(), "-I".into(), "-c".into(), code.into()], args.to_vec()].concat()
+}
+
+fn operation_survivors(
+    processes: &BTreeMap<u32, u64>, read: impl Fn(u32) -> io::Result<String>,
+) -> io::Result<BTreeMap<u32, u64>> {
+    let mut survivors = BTreeMap::new();
+    for (&pid, &start) in processes {
+        let stat = match read(pid) {
+            Ok(stat) => stat,
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => continue,
+            Err(error) => return Err(error),
+        };
+        if boundary::parse_start_time(&stat)? == start { survivors.insert(pid, start); }
+    }
+    Ok(survivors)
+}
+
+fn operation_probes(live: &boundary::Boundary, supervisor_pid: u32) -> io::Result<(OperationProbe, OperationClient, Vec<String>)> {
+    use operations::{Request, ResultValue, CHUNK_LIMIT, FILE_LIMIT, TEXT_LIMIT};
+    let mut client = OperationClient::connect(live)?;
+    let directory = format!("cognia-recipe8-{}", uuid::Uuid::new_v4());
+    let setup = client.exec(python(crate::probe::OPERATION_SETUP, std::slice::from_ref(&directory)), ".", 5000)?;
+    if setup.exit_code != Some(0) { return Err(refused()); }
+    let mut network_clients = Vec::new();
+    for target in TARGETS {
+        let result = client.exec(python(crate::probe::OPERATION_NETWORK, &[target.into()]), ".", 5000)?;
+        if result.timed_out || result.truncated || !result.output.is_empty() { return Err(refused()); }
+        network_clients.push(OperationNetworkClient { target: target.into(), exit_code: result.exit_code.ok_or_else(refused)? });
+    }
+    let mut refusals = Vec::new();
+    for (label, name) in [("symlink", "symlink"), ("directory-symlink", "directory-link/file"),
+        ("hardlink", "hard"), ("fifo", "fifo"), ("socket", "socket"), ("parent", "../escape")] {
+        let path = format!("{directory}/{name}");
+        refusals.push(client.refused(&format!("{label}-read"), Request::FileRead { path: path.clone(), offset: 0, length: 1 })?);
+        refusals.push(client.refused(&format!("{label}-write"), Request::FileWrite { path, offset: 0, chunk: vec![1], r#final: true })?);
+    }
+    // The in-home FIFO reaches descriptor metadata's !is_file refusal, rather
+    // than stopping at the outside-home path check as /dev/null would.
+    for (name, path, length) in [("special-file", format!("{directory}/fifo"), 1),
+        ("file-cap", format!("{directory}/large"), 1),
+        ("chunk-read-cap", format!("{directory}/single"), CHUNK_LIMIT + 1)] {
+        refusals.push(client.refused(name, Request::FileRead { path, offset: 0, length })?);
+    }
+    refusals.push(client.refused("chunk-write-cap", Request::FileWrite {
+        path: format!("{directory}/single"), offset: 0, chunk: vec![0; CHUNK_LIMIT + 1], r#final: true,
+    })?);
+    let output = client.exec(python("import os; os.write(1,b'x'*700000); os.write(2,b'y'*700000)", &[]), ".", 5000)?;
+    if output.exit_code != Some(0) || output.timed_out { return Err(refused()); }
+    let timeout = client.exec(python(crate::probe::OPERATION_TIMEOUT, &[]), &directory, 1000)?;
+    let timeout_processes = match client.success(Request::FileRead {
+        path: format!("{directory}/timeout.json"), offset: 0, length: CHUNK_LIMIT,
+    })? {
+        ResultValue::FileRead { chunk, .. } => serde_json::from_slice::<BTreeMap<u32, u64>>(&chunk).map_err(|_| refused())?,
+        _ => return Err(refused()),
+    };
+    let timeout_survivors = operation_survivors(&timeout_processes, |pid| {
+        fs::read_to_string(format!("/proc/{}/root/proc/{pid}/stat", live.namespace_init_pid))
+    })?;
+    let text = "x".repeat(TEXT_LIMIT);
+    match client.success(Request::ClipboardSet { text: text.clone() })? {
+        ResultValue::ClipboardSet { bytes } if bytes == TEXT_LIMIT => (),
+        _ => return Err(refused()),
+    }
+    let clipboard_bytes = match client.success(Request::ClipboardGet)? {
+        ResultValue::ClipboardGet { text: actual } if actual == text => actual.len() as u64,
+        _ => return Err(refused()),
+    };
+    refusals.push(client.refused("clipboard-cap", Request::ClipboardSet { text: "x".repeat(TEXT_LIMIT + 1) })?);
+    let admission = client.admission.clone();
+    // Quota starts afresh on the next root control connection, after this
+    // connection's exact EOF has been acknowledged by the supervisor.
+    client.close()?;
+    let mut quota = OperationClient::connect(live)?;
+    let path = format!("{directory}/transfer");
+    for offset in (0..FILE_LIMIT).step_by(CHUNK_LIMIT) {
+        match quota.success(Request::FileWrite { path: path.clone(), offset, chunk: vec![42; CHUNK_LIMIT], r#final: offset + CHUNK_LIMIT as u64 == FILE_LIMIT })? {
+            ResultValue::FileWrite { bytes, .. } if bytes == CHUNK_LIMIT => (),
+            _ => return Err(refused()),
+        }
+    }
+    for _ in 0..3 {
+        for offset in (0..FILE_LIMIT).step_by(CHUNK_LIMIT) {
+            match quota.success(Request::FileRead { path: path.clone(), offset, length: CHUNK_LIMIT })? {
+                ResultValue::FileRead { chunk, .. } if chunk == vec![42; CHUNK_LIMIT] => (),
+                _ => return Err(refused()),
+            }
+        }
+    }
+    refusals.push(quota.refused("session-read-cap", Request::FileRead { path: path.clone(), offset: 0, length: 1 })?);
+    refusals.push(quota.refused("session-write-cap", Request::FileWrite { path, offset: 0, chunk: vec![0], r#final: true })?);
+    quota.close()?;
+    let mut death = OperationClient::connect(live)?;
+    let death_argv = python(crate::probe::OPERATION_DEATH, &[]);
+    operations::write_frame(&mut death.socket, &Request::Exec { argv: death_argv.clone(), cwd: ".".into(), timeout_ms: 60_000 })?;
+    // Wait for both the original executable and its detached grandchild. Never
+    // infer supervisor-death coverage from a PID that was not observed alive.
+    let command = death_argv.iter().flat_map(|arg| arg.bytes().chain(std::iter::once(0))).collect::<Vec<_>>();
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let matches = boundary::descendants(supervisor_pid)?.into_iter().filter_map(|pid| {
+            if !fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|value| value == command) { return None; }
+            let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+            let (_, fields) = stat.rsplit_once(')')?;
+            let fields = fields.split_whitespace().collect::<Vec<_>>();
+            Some((fields.get(1)?.parse::<u32>().ok()?, fields.get(3)?.parse::<u32>().ok()?))
+        }).collect::<Vec<_>>();
+        // Both children must already have been adopted by the exec subreaper,
+        // in different sessions. Seeing two PIDs before double-fork is insufficient.
+        if matches.len() == 2 && matches[0].0 == matches[1].0 && matches[0].1 != matches[1].1 { break; }
+        if Instant::now() >= until { return Err(refused()); }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    Ok((OperationProbe {
+        admission, network_clients, refusals, written_bytes: FILE_LIMIT, read_bytes: FILE_LIMIT,
+        output_bytes: output.output.len() as u64, output_truncated: output.truncated,
+        timeout_ms: 1000, timeout_signal: if timeout.timed_out { timeout.signal.unwrap_or(0) } else { 0 },
+        clipboard_bytes, timeout_processes, timeout_survivors, death_processes: BTreeMap::new(),
+    }, death, death_argv))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timeout_survivor_observation_accepts_only_enoent_as_missing() {
+        let processes = BTreeMap::from([(123, 456)]);
+        assert!(operation_survivors(&processes,
+            |_| Err(io::Error::from_raw_os_error(libc::ENOENT))).unwrap().is_empty());
+        for code in [libc::EACCES, libc::EIO, libc::ESRCH] {
+            assert!(operation_survivors(&processes,
+                |_| Err(io::Error::from_raw_os_error(code))).is_err());
+        }
+        assert!(operation_survivors(&processes, |_| Ok("malformed".into())).is_err());
+        let stat = format!("123 (task) {} 456", vec!["0"; 19].join(" "));
+        assert_eq!(operation_survivors(&processes, |_| Ok(stat.clone())).unwrap(), processes);
+    }
     #[test]
     fn diagnostic_stage_catalog_is_unique_and_bounded() {
         let unique: std::collections::BTreeSet<_> = ACCEPTANCE_STAGES.iter().collect();

@@ -10,6 +10,13 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+// Data-free, immutable payloads invoked through the real root control session.
+// Network success exits zero; only the actual ENETUNREACH errno qualifies.
+pub(crate) const OPERATION_NETWORK: &str = "import socket,sys\ns=socket.socket(socket.AF_INET6 if ':' in sys.argv[1] else socket.AF_INET,socket.SOCK_STREAM)\ns.settimeout(1)\ntry: s.connect((sys.argv[1],80))\nexcept OSError as e: sys.exit(e.errno or 125)\nsys.exit(0)";
+pub(crate) const OPERATION_SETUP: &str = "import os,sys,socket\nos.mkdir(sys.argv[1]); os.chdir(sys.argv[1])\nopen('single','wb').write(b'x')\nos.link('single','hard')\nos.symlink('/etc/passwd','symlink')\nos.symlink('/tmp','directory-link')\nos.mkfifo('fifo')\ns=socket.socket(socket.AF_UNIX); s.bind('socket'); s.close()\nf=open('large','wb'); f.truncate(8*1024*1024+1); f.close()";
+pub(crate) const OPERATION_TIMEOUT: &str = "import os,time,json\np=os.fork()\nif not p:\n os.setsid(); time.sleep(30); os._exit(0)\ndef start(pid): return int(open('/proc/'+str(pid)+'/stat').read().rsplit(')',1)[1].split()[19])\njson.dump({os.getpid():start(os.getpid()),p:start(p)},open('timeout.json','x'))\ntime.sleep(30)";
+pub(crate) const OPERATION_DEATH: &str = "import os,time\np=os.fork()\nif not p:\n os.setsid(); p=os.fork()\n if p: os._exit(0)\ntime.sleep(30)";
+
 /// Only fixed diagnostic failure names cross the protected output channel.
 /// They cannot affect qualification or select any privileged operation.
 static PROBE_STAGE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);

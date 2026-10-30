@@ -30,6 +30,7 @@ RUN apt-get update \
     && mkdir -p /home/cua/.config/openbox /opt/cognia-desktop \
     && chown -R cua:cua /home/cua \
     && test -s /usr/sbin/gosu \
+    && test -x /usr/bin/xclip \
     && test -x /usr/bin/bwrap \
     && test -s /usr/bin/Xvfb \
     && test -s /usr/lib/chromium/chromium \
@@ -47,7 +48,7 @@ RUN chmod 0755 /usr/local/bin/cognia-desktop \
 
 LABEL org.opencontainers.image.title="Cognia Linux Desktop" \
       cognia.cua.protocol="computer-server-0.3.46" \
-      cognia.cua.recipe="7"
+      cognia.cua.recipe="8"
 EXPOSE 8000
 WORKDIR /home/cua
 ENTRYPOINT ["/usr/local/bin/cognia-desktop"]

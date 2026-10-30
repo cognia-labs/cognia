@@ -1,5 +1,5 @@
 //! Fixed, supervised entry into the already verified desktop boundary. There
-//! is no general nsenter/argv/environment API and no project parsing as root.
+//! is no unconfined nsenter/argv/environment API and no project parsing as root.
 
 use crate::boundary::{self, Boundary};
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ struct LaunchSpec {
     namespaces: BTreeMap<String, String>,
     #[serde(default)]
     diagnostic: bool,
+    #[serde(default)]
+    operations: bool,
 }
 
 struct PinnedDesktop {
@@ -93,9 +95,27 @@ pub(crate) struct AcceptanceJob {
     deadline: Instant,
     pub(crate) boundary_report: Option<cognia_desktop_guest::observation::ProcessBoundaryReport>,
     pub(crate) diagnostic_report: Option<cognia_desktop_guest::qualification::DesktopProbe>,
+    pub(crate) operations_control: Option<UnixStream>,
+    abort_on_drop: bool,
 }
 
 impl AcceptanceJob {
+    pub(crate) fn finish_operations(&mut self) -> io::Result<()> {
+        // Disarm only after EOF and a successful, reaped helper exit prove the
+        // operations payload (and each exec subreaper) is no longer running.
+        if self.operations_control.take().is_none() { return Err(refused()); }
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.helper.try_wait()? {
+                if !status.success() || !alive(self.pins.init.as_fd())? { return Err(refused()); }
+                self.abort_on_drop = false;
+                return Ok(());
+            }
+            if Instant::now() >= until { return Err(refused()); }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// Call on every supervisor monitor tick; do not discard successful jobs.
     pub(crate) fn check(&mut self) -> io::Result<()> {
         let live = match alive(self.pins.init.as_fd()) {
@@ -131,6 +151,7 @@ impl AcceptanceJob {
 
 impl Drop for AcceptanceJob {
     fn drop(&mut self) {
+        if !self.abort_on_drop { return; }
         self.abort();
         // Bounded reap. Provider TTL/destroy remains the independent backstop.
         let until = Instant::now() + Duration::from_secs(2);
@@ -151,7 +172,7 @@ pub(crate) fn spawn(
     script: &str,
     deadline: Instant,
 ) -> io::Result<AcceptanceJob> {
-    spawn_inner(boundary, operation, script, deadline, false)
+    spawn_inner(boundary, operation, script, deadline, false, false)
 }
 
 pub(crate) fn spawn_diagnostic(
@@ -159,7 +180,16 @@ pub(crate) fn spawn_diagnostic(
     operation: &str,
     deadline: Instant,
 ) -> io::Result<AcceptanceJob> {
-    spawn_inner(boundary, operation, "qualification", deadline, true)
+    spawn_inner(boundary, operation, "qualification", deadline, true, false)
+}
+
+/// Only the authenticated root control worker invokes this. Use exactly the
+/// acceptance launch/admission path; no alternate nsenter or bare exec path.
+pub(crate) fn spawn_operations(boundary: &Boundary) -> io::Result<AcceptanceJob> {
+    spawn_inner(boundary, &uuid::Uuid::new_v4().to_string(), "operations",
+        // The control session ends at one hour. Allow its last bounded exec
+        // and guarded helper exit to drain before this lifetime backstop.
+        Instant::now() + Duration::from_secs(3690), false, true)
 }
 
 fn spawn_inner(
@@ -168,6 +198,7 @@ fn spawn_inner(
     script: &str,
     deadline: Instant,
     diagnostic: bool,
+    operations: bool,
 ) -> io::Result<AcceptanceJob> {
     if diagnostic {
         crate::qualify::acceptance_stage("acceptance_prepare");
@@ -180,7 +211,7 @@ fn spawn_inner(
     {
         return Err(refused());
     }
-    validate_promoted_path(operation)?;
+    if !operations { validate_promoted_path(operation)?; }
     let pins = PinnedDesktop::pin(boundary)?;
     let supervisor = pidfd(std::process::id())?;
     let (mut control, helper_control) = UnixStream::pair()?;
@@ -241,6 +272,8 @@ fn spawn_inner(
         deadline,
         boundary_report: None,
         diagnostic_report: None,
+        operations_control: None,
+        abort_on_drop: true,
     };
     let spec = LaunchSpec {
         generation: boundary.generation.clone(),
@@ -248,6 +281,7 @@ fn spawn_inner(
         script: script.into(),
         namespaces: boundary.namespaces.clone(),
         diagnostic,
+        operations,
     };
     write_spec(&mut control, &spec)?;
     if diagnostic {
@@ -259,7 +293,7 @@ fn spawn_inner(
     if diagnostic {
         crate::qualify::acceptance_stage("acceptance_admission_validate");
     }
-    validate_child(job.helper.id(), pid, boundary, operation)?;
+    validate_child(job.helper.id(), pid, boundary, operation, operations)?;
     job.boundary_report = Some(boundary::report(boundary, pid, 1000, &boundary.generation)?);
     if !alive(job.pins.init.as_fd())?
         || !boundary::still_current(boundary)
@@ -296,10 +330,11 @@ fn spawn_inner(
         job.diagnostic_report = Some(serde_json::from_slice(&bytes).map_err(|_| refused())?);
     }
     job.check()?;
+    if operations { job.operations_control = Some(control); }
     Ok(job)
 }
 
-fn validate_child(parent: u32, pid: u32, boundary: &Boundary, operation: &str) -> io::Result<()> {
+fn validate_child(parent: u32, pid: u32, boundary: &Boundary, operation: &str, operations: bool) -> io::Result<()> {
     if pid <= 1 || !boundary::descendants(parent)?.contains(&pid) {
         return Err(refused());
     }
@@ -324,7 +359,7 @@ fn validate_child(parent: u32, pid: u32, boundary: &Boundary, operation: &str) -
     {
         return Err(refused());
     }
-    validate_promoted_path(operation)
+    if operations { Ok(()) } else { validate_promoted_path(operation) }
 }
 
 fn validate_child_fds(pid: u32) -> io::Result<()> {
@@ -423,7 +458,8 @@ fn read_spec(stream: &mut UnixStream) -> io::Result<LaunchSpec> {
     stream.read_exact(&mut bytes)?;
     let spec: LaunchSpec = serde_json::from_slice(&bytes).map_err(|_| refused())?;
     validate_identifiers(&spec.operation_id, &spec.script)?;
-    if uuid::Uuid::parse_str(&spec.generation).is_err()
+    if spec.operations && (spec.diagnostic || spec.script != "operations")
+        || uuid::Uuid::parse_str(&spec.generation).is_err()
         || spec.namespaces.len() != NAMES.len()
         || NAMES.iter().any(|name| {
             !spec.namespaces.get(*name).is_some_and(|value| {
@@ -670,6 +706,10 @@ pub(crate) fn helper_main() -> io::Result<()> {
         }
         let mut gate_write = gate_write;
         gate_write.write_all(b"G")?;
+        if spec.operations {
+            control.write_all(b"E")?;
+            return relay_operations(&mut control, gate_write, exec_read);
+        }
         drop(gate_write);
         let diagnostic_bytes = if spec.diagnostic {
             control.write_all(b"E")?;
@@ -873,6 +913,13 @@ fn child_exec(
     if read_byte(gate, SETUP)? != Some(b'G') {
         return Err(refused());
     }
+    if spec.operations {
+        let result = crate::operations::serve(
+            unsafe { File::from_raw_fd(gate) },
+            unsafe { File::from_raw_fd(error) },
+        );
+        unsafe { libc::_exit(if result.is_ok() { 0 } else { 125 }); }
+    }
     unsafe {
         libc::close(gate);
     }
@@ -902,6 +949,30 @@ fn child_exec(
     Err(command.exec())
 }
 
+fn relay_operations(control: &mut UnixStream, mut input: File, output: File) -> io::Result<()> {
+    use crate::operations::{read_frame, FRAME_LIMIT};
+    let mut requests = std::io::BufReader::new(control.try_clone()?);
+    let mut responses = std::io::BufReader::new(output);
+    // The root worker owns Host idle/session deadlines. Its EOF closes this
+    // idle read; only an in-flight payload response needs the 70-second guard.
+    control.set_read_timeout(None)?;
+    control.set_write_timeout(Some(Duration::from_secs(30)))?;
+    for _ in 0..10_000 {
+        let bytes = match read_frame(&mut requests) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) | Err(_) => return Ok(()),
+        };
+        input.write_all(&bytes)?;
+        diagnostic_wait_read(responses.get_ref().as_raw_fd(), Instant::now() + Duration::from_secs(70))?;
+        let response = read_frame(&mut responses)?.ok_or_else(refused)?;
+        if response.len() > FRAME_LIMIT { return Err(refused()); }
+        // A response has been drained: the payload's exec guard has reaped its
+        // descendants. Losing the root session now is a clean EOF to payload.
+        if control.write_all(&response).is_err() { return Ok(()); }
+    }
+    Ok(())
+}
+
 fn close_except(mut keep: [i32; 3]) -> io::Result<()> {
     if keep.iter().any(|fd| *fd < 3) {
         return Err(refused());
@@ -923,9 +994,129 @@ fn close_except(mut keep: [i32; 3]) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     const OP: &str = "12345678-1234-1234-1234-123456789abc";
+
+    pub(crate) struct TestDesktop(pub Child);
+    impl Drop for TestDesktop {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+    }
+    pub(crate) fn operation_job() -> (AcceptanceJob, TestDesktop) {
+        operation_reply_job(None)
+    }
+    pub(crate) fn operation_reply_job(response: Option<String>) -> (AcceptanceJob, TestDesktop) {
+        let desktop = TestDesktop(Command::new("/bin/sleep").arg("60").spawn().unwrap());
+        let (control, peer) = UnixStream::pair().unwrap();
+        let mut command = if let Some(response) = response {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "IFS= read -r request; printf '%s\\n' \"$1\"; cat >/dev/null", "sh", &response])
+                .stdout(Stdio::from(OwnedFd::from(peer.try_clone().unwrap())));
+            command
+        } else {
+            let mut command = Command::new("/bin/cat");
+            command.stdout(Stdio::null());
+            command
+        };
+        let helper = command.stdin(Stdio::from(OwnedFd::from(peer)))
+            .stderr(Stdio::null()).spawn().unwrap();
+        drop(command);
+        let job = AcceptanceJob {
+            helper, pins: PinnedDesktop { init: pidfd(desktop.0.id()).unwrap(),
+                root: File::open("/").unwrap(), _namespaces: Vec::new() },
+            deadline: Instant::now() + Duration::from_secs(60),
+            boundary_report: None, diagnostic_report: None,
+            operations_control: Some(control), abort_on_drop: true,
+        };
+        (job, desktop)
+    }
+
+    #[test]
+    fn finish_operations_disarms_only_after_success_and_preserves_desktop() {
+        let (mut job, mut desktop) = operation_job();
+        assert!(job.abort_on_drop);
+        job.finish_operations().unwrap();
+        assert!(!job.abort_on_drop);
+        assert!(job.operations_control.is_none());
+        assert!(job.helper.try_wait().unwrap().unwrap().success());
+        drop(job);
+        assert!(desktop.0.try_wait().unwrap().is_none());
+    }
+
+    #[test]
+    fn armed_drop_and_failed_helper_still_destroy_desktop() {
+        for failed_helper in [false, true] {
+            let (mut job, mut desktop) = operation_job();
+            if failed_helper {
+                job.helper.kill().unwrap();
+                job.helper.wait().unwrap();
+                assert!(job.finish_operations().is_err());
+                assert!(job.abort_on_drop);
+            }
+            drop(job);
+            assert!(!desktop.0.wait().unwrap().success());
+        }
+    }
+
+    #[test]
+    fn namespace_death_and_lifetime_deadline_remain_fatal_guards() {
+        for namespace_death in [false, true] {
+            let (mut job, mut desktop) = operation_job();
+            if namespace_death { desktop.0.kill().unwrap(); desktop.0.wait().unwrap(); }
+            else { job.deadline = Instant::now(); }
+            assert!(job.check().is_err());
+            assert!(job.abort_on_drop);
+        }
+    }
+
+    #[test]
+    fn relay_operations_drains_inflight_response_after_session_disconnect() {
+        let (mut root, mut relay) = UnixStream::pair().unwrap();
+        let (mut payload_read, payload_write) = pipe().unwrap();
+        let (response_read, mut response_write) = pipe().unwrap();
+        let relay_thread = std::thread::spawn(move || relay_operations(&mut relay, payload_write, response_read));
+        root.write_all(b"{}\n").unwrap();
+        let mut request = [0; 3];
+        payload_read.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"{}\n");
+        root.shutdown(std::net::Shutdown::Both).unwrap();
+        response_write.write_all(b"{}\n").unwrap();
+        relay_thread.join().unwrap().unwrap();
+        // The relay closes input only after consuming the completed response.
+        assert_eq!(payload_read.read(&mut [0]).unwrap(), 0);
+    }
+
+    #[test]
+    fn relay_operations_distinguishes_idle_eof_from_payload_guard_failure() {
+        for payload_failure in [false, true] {
+            let (mut root, mut relay) = UnixStream::pair().unwrap();
+            let (_payload_read, payload_write) = pipe().unwrap();
+            let (response_read, response_write) = pipe().unwrap();
+            drop(response_write);
+            if payload_failure { root.write_all(b"{}\n").unwrap(); }
+            else { root.shutdown(std::net::Shutdown::Write).unwrap(); }
+            assert_eq!(relay_operations(&mut relay, payload_write, response_read).is_err(), payload_failure);
+        }
+    }
+
+    #[test]
+    fn operations_spec_requires_fixed_payload_and_excludes_diagnostics() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let mut spec = LaunchSpec {
+            generation: OP.into(), operation_id: OP.into(), script: "operations".into(),
+            diagnostic: false, operations: true,
+            namespaces: NAMES.into_iter().map(|name| (name.into(), format!("{name}:[123]"))).collect(),
+        };
+        write_spec(&mut writer, &spec).unwrap();
+        assert!(read_spec(&mut reader).unwrap().operations);
+        spec.diagnostic = true;
+        write_spec(&mut writer, &spec).unwrap();
+        assert!(read_spec(&mut reader).is_err());
+        spec.diagnostic = false;
+        spec.script = "dev".into();
+        write_spec(&mut writer, &spec).unwrap();
+        assert!(read_spec(&mut reader).is_err());
+    }
     #[test]
     fn diagnostic_wait_uses_its_own_absolute_deadline() {
         let (read, mut write) = pipe().unwrap();
@@ -962,6 +1153,7 @@ mod tests {
             operation_id: OP.into(),
             script: "dev".into(),
             diagnostic: false,
+            operations: false,
             namespaces: NAMES
                 .into_iter()
                 .map(|name| (name.into(), format!("{name}:[123]")))

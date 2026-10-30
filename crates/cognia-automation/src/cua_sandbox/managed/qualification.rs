@@ -768,6 +768,16 @@ pub(super) mod enablement_tests {
         let mut negative = process(&desktop, 30, "/usr/local/bin/cognia-desktop-guest");
         negative.namespaces = desktop.provider_namespaces.clone();
         negative.status = "Uid:0 0 0 0".into();
+        let operations = OperationProbe {
+            admission: acceptance.clone(),
+            network_clients: TARGETS.into_iter().map(|target| OperationNetworkClient { target: target.into(), exit_code: 101 }).collect(),
+            refusals: OPERATION_REFUSALS.into_iter().map(|operation| ErrorObservation { operation: operation.into(), result: -1, errno: 1 }).collect(),
+            written_bytes: 8 * 1024 * 1024, read_bytes: 8 * 1024 * 1024,
+            output_bytes: 1024 * 1024, output_truncated: true,
+            timeout_ms: 1000, timeout_signal: 9, clipboard_bytes: 1024 * 1024,
+            timeout_processes: [(10, 1), (11, 1)].into(), timeout_survivors: Default::default(),
+            death_processes: [(70, 1), (71, 1)].into(),
+        };
         let report = WorkloadQualificationReport {
             report_version: PROBE_VERSION,
             boundary_generation: desktop.boundary_generation.clone(),
@@ -799,12 +809,13 @@ pub(super) mod enablement_tests {
                 git: process(&importer, 44, "/usr/bin/git"),
                 git_exit_code: 0,
             },
-            terminated_processes: [(desktop.namespace_init_pid, desktop.namespace_init_start_time), (50, 1), (60, 1)].into(),
+            terminated_processes: [(desktop.namespace_init_pid, desktop.namespace_init_start_time), (50, 1), (60, 1), (70, 1), (71, 1)].into(),
             surviving_processes: Default::default(),
             detached_outer_pid: 50,
             supervisor_pid: 60,
             supervisor_start_time: 1,
             ingress_errno: 111,
+            operations: Some(operations),
             desktop,
         };
         report.validate().unwrap();
@@ -885,6 +896,56 @@ pub(super) mod enablement_tests {
             Ok(())
         }).await.unwrap();
         rows
+    }
+
+    #[tokio::test]
+    async fn recipe_7_receipts_are_stale_under_a_recipe_8_trusted_release() {
+        let mut f = super::super::tests::Fixture::new();
+        f.config.release.recipe_revision = "7".into();
+        f.service.trusted_release = Some(f.config.release.clone());
+        f.service.store.save_registry(&super::super::super::journal::ManagedDesktopRegistry {
+            version: 1, providers: vec![f.config.clone()],
+        }).unwrap();
+        install_gui_evidence(&f).await;
+        let now = f.service.now().await;
+        {
+            let state = f.service.state.lock().await;
+            assert!(gui_current(&state, &f.config, now), "positive recipe-7 evidence qualifies its own release");
+            let receipt = &state.lifecycle_diagnostics[&f.config.binding_digest()];
+            assert_eq!(receipt.template.recipe_revision, "7");
+            let bytes = serde_json::to_vec(receipt).unwrap();
+            let readable: QualificationReceipt = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(readable.template.recipe_revision, "7");
+            let report = &state.workload_diagnostics[&f.config.binding_digest()].report;
+            let mut legacy = serde_json::to_value(report).unwrap();
+            legacy["reportVersion"] = 2.into();
+            legacy.as_object_mut().unwrap().remove("operations");
+            let readable: WorkloadQualificationReport = serde_json::from_value(legacy).unwrap();
+            assert!(readable.operations.is_none());
+            assert!(readable.validate().is_err(), "old reports remain readable but cannot qualify recipe 8");
+        }
+        let mut release8 = f.config.release.clone();
+        release8.recipe_revision = "8".into();
+        f.service.trusted_release = Some(release8.clone());
+        assert!(f.service.release(&f.config).is_err(), "a recipe-7 config cannot use the recipe-8 trusted release");
+        let mut config8 = f.config.clone();
+        config8.release = release8;
+        f.service.release(&config8).unwrap();
+        assert_ne!(config8.binding_digest(), f.config.binding_digest());
+        let mut state = f.service.state.lock().await;
+        let old = latest_template(&state, &f.config.binding_digest()).unwrap().identity.clone().unwrap();
+        let mut template8 = old.clone();
+        template8.recipe_revision = "8".into();
+        assert!(!lifecycle_receipt_valid(&state, &state.lifecycle_diagnostics[&f.config.binding_digest()], &config8.binding_digest(), &template8));
+        assert!(!gui_current(&state, &config8, now));
+        assert!(category_statuses(&state, &config8, now).iter().all(|status| !status.current));
+        assert_eq!(effective_enablement(&state, &config8, now), ManagedDesktopEnablement::default());
+        // Even relabelling the binding key cannot migrate a template-bound receipt.
+        let mut old_receipt = state.lifecycle_diagnostics[&f.config.binding_digest()].clone();
+        old_receipt.binding_digest = config8.binding_digest();
+        assert_eq!(old_receipt.template.recipe_revision, "7");
+        state.lifecycle_diagnostics.insert(config8.binding_digest(), old_receipt.clone());
+        assert!(!lifecycle_receipt_valid(&state, &old_receipt, &config8.binding_digest(), &template8));
     }
     #[tokio::test]
     async fn gui_switches_need_four_categories_acceptance_needs_handoff_and_edits_invalidate_both() {

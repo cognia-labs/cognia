@@ -28,7 +28,7 @@ pub(crate) fn start_time(pid: u32) -> io::Result<u64> {
     parse_start_time(&fs::read_to_string(format!("/proc/{pid}/stat"))?)
 }
 
-fn parse_start_time(stat: &str) -> io::Result<u64> {
+pub(crate) fn parse_start_time(stat: &str) -> io::Result<u64> {
     stat.rsplit_once(')')
         .ok_or_else(invalid)?
         .1

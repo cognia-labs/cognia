@@ -31,11 +31,13 @@ test("release uses the published immutable digest and contains no runtime token"
   assert.equal(release.image, `${imageRepository}@${digest}`)
   assert.equal(release.imageDigest, digest)
   assert.equal(release.architecture, "linux/amd64")
-  assert.equal(release.recipeRevision, "7")
+  assert.equal(release.recipeRevision, "8")
   assert.equal(release.protocol, "computer-server-0.3.46")
   assert.equal(release.serverVersion, "0.3.46")
   assert.equal(release.startCommand, "sleep infinity")
   assert.match(release.readyCommand, /test -x \/usr\/local\/bin\/cognia-desktop/)
+  assert.match(release.readyCommand, /test -x \/usr\/bin\/xclip/)
+  assert.throws(() => validateRelease({ ...release, recipeRevision: "7" }), /release identity/)
   assert.equal(Object.keys(release).length, 8, "Host release loader rejects unknown fields")
   assert.doesNotMatch(JSON.stringify(release), /TOKEN|secret|latest/)
 })
@@ -85,15 +87,17 @@ test("recipe drift and mutable base prevent publication of a stale manifest", ()
     writeFileSync(join(context, "server.py"), server)
     writeFileSync(
       join(context, "Dockerfile"),
-      dockerfile.replace('cognia.cua.recipe="7"', 'cognia.cua.recipe="8"')
+      dockerfile.replace('cognia.cua.recipe="8"', 'cognia.cua.recipe="7"')
     )
     assert.throws(() => verifyImageSources(root), /identity/)
     writeFileSync(join(context, "Dockerfile"), dockerfile.replace(/@sha256:[0-9a-f]{64}/, ""))
     assert.throws(() => verifyImageSources(root), /digest pinned/)
+    writeFileSync(join(context, "Dockerfile"), dockerfile.replace("test -x /usr/bin/xclip", "test -x /usr/bin/true"))
+    assert.throws(() => verifyImageSources(root), /clipboard tool/)
     writeFileSync(join(context, "Dockerfile"), dockerfile)
     writeFileSync(
       join(context, "server.py"),
-      server.replace('"recipeRevision": "7"', '"recipeRevision": "8"')
+      server.replace('"recipeRevision": "8"', '"recipeRevision": "7"')
     )
     assert.throws(() => verifyImageSources(root), /health identity/)
   } finally {
@@ -143,6 +147,7 @@ test("existing Images publication gate owns the release artifact and amd64 build
   assert.match(job, /platforms: linux\/amd64/)
   assert.match(job, /context: \$\{\{ runner.temp \}\}\/managed-desktop-image/)
   assert.match(job, /cargo build --locked --release -p cognia-desktop-guest/)
+  assert.match(job, /cargo test --locked -p cognia-desktop-guest/)
   assert.match(job, /managed-desktop-context\.mjs/)
   assert.match(job, /push: \$\{\{ needs.vars.outputs.should_push == 'true' \}\}/)
   assert.match(job, /DIGEST: \$\{\{ steps.build.outputs.digest \}\}/)
@@ -190,6 +195,15 @@ test("the source digest covers tracked guest inputs only and moves with any of t
     assert.deepEqual(computeSourceDigest(root), first)
     writeFileSync(join(root, "crates/cognia-desktop-guest/src/lib.rs"), "// changed guest\n")
     assert.notEqual(computeSourceDigest(root).sourceDigest, first.sourceDigest)
+    // The existing crate input covers recipe-8's new module once tracked;
+    // no parallel allowlist of individual guest source files is needed.
+    const operations = "crates/cognia-desktop-guest/src/operations.rs"
+    writeFileSync(join(root, operations), "// operation policy\n")
+    assert.equal(spawnSync("git", ["-C", root, "add", "--", operations]).status, 0)
+    const added = computeSourceDigest(root)
+    assert.equal(added.files, first.files + 1)
+    writeFileSync(join(root, operations), "// revised operation policy\n")
+    assert.notEqual(computeSourceDigest(root).sourceDigest, added.sourceDigest)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -203,7 +217,7 @@ test("a published release pins only onto the sources it was built from", () => {
     publish(root, artifact)
     const source = JSON.parse(readFileSync(join(artifact, SOURCE_FILE), "utf8"))
     assert.equal(source.imageDigest, digest)
-    assert.equal(source.recipeRevision, "7")
+    assert.equal(source.recipeRevision, "8")
     const pinned = pinRelease(artifact, root)
     assert.equal(pinned.imageDigest, digest)
     assert.equal(checkPinnedRelease(root).state, "pinned")

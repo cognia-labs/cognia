@@ -1,4 +1,5 @@
-//! Release-owned guest operations. No user-selected paths or commands.
+//! Release-owned guest entry points. Host operations require root control
+//! admission and the complete desktop workload boundary.
 
 #[cfg(target_os = "linux")]
 mod acceptance;
@@ -6,6 +7,8 @@ mod acceptance;
 mod boundary;
 #[cfg(target_os = "linux")]
 mod control;
+#[cfg(target_os = "linux")]
+mod operations;
 #[cfg(target_os = "linux")]
 mod probe;
 #[cfg(target_os = "linux")]
@@ -43,6 +46,7 @@ fn main() {
         }
         [operation] if operation == "relay" => (relay::run(), "relay"),
         [operation] if operation == "handoff" => (control::forward(), "handoff"),
+        [operation] if operation == "operations" => (control::forward_operations(), "operations"),
         [operation] if operation == "handoff-worker" => (control::worker(), "handoff_worker"),
         [operation] if operation == "acceptance-helper" => {
             (acceptance::helper_main(), "acceptance")

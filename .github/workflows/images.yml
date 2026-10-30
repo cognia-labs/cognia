@@ -316,6 +316,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
           rustup target add x86_64-unknown-linux-musl
+          cargo test --locked -p cognia-desktop-guest
           cargo build --locked --release -p cognia-desktop-guest --target x86_64-unknown-linux-musl
           node scripts/build/managed-desktop-context.mjs target/x86_64-unknown-linux-musl/release/cognia-desktop-guest "$RUNNER_TEMP/managed-desktop-image"
 
