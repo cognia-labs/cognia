@@ -10,6 +10,8 @@ import {
   type OpenSandboxDesktop,
 } from "@/lib/automation/sandbox-client"
 import type { Point, Screenshot, UiAction } from "@/lib/automation/types"
+import { openNativeFrameStream, type NativeFrameStream } from "@/lib/remote-desktop/native-stream"
+import { LOCAL_REMOTE_DESKTOP_HOST } from "@/lib/remote-desktop/types"
 
 export type SandboxDesktopError = "capture" | "control" | "input" | "release" | "session" | null
 const POLL_MS = 1_000
@@ -63,6 +65,7 @@ export function useSandboxDesktop(
   const [controlling, setControlling] = useState(false)
   const [acquiring, setAcquiring] = useState(false)
   const [error, setError] = useState<SandboxDesktopError>(null)
+  const [transport, setTransport] = useState<"stream" | "frames">("stream")
   // Read through refs: toggling the stream must not restart the session and
   // drop the lease.
   const streaming = useRef(Boolean(options.streaming))
@@ -98,6 +101,11 @@ export function useSandboxDesktop(
     let currentProof: SandboxDesktopFrame | null = null
     let controlStatus: SandboxDesktopStatus | null = null
     let invalidated = false
+    let nativeMode: "opening" | "stream" | "frames" = "opening"
+    let nativeController: AbortController | null = null
+    let nativeStream: NativeFrameStream | null = null
+    let nativePixels: { jpeg: Uint8Array; screenshot: Screenshot } | null = null
+    let controllerFrame: { resolve: () => void; reject: () => void } | null = null
     let detachInvalidated: (() => void) | undefined
     let desktop: SandboxDesktopSession | null = openDesktop
       ? null
@@ -139,6 +147,9 @@ export function useSandboxDesktop(
       !acquiringLease
     const scheduleRefresh = () => {
       clearTimeout(poll)
+      // Native pixels/proofs arrive only on the stream. Managed status still
+      // checks qualification and ownership through the existing session.
+      if (nativeMode !== "frames" && !desktop?.status) return
       if (alive && visible() && (refreshPending || !healthyObserver()))
         poll = setTimeout(
           () => void refresh(),
@@ -165,6 +176,7 @@ export function useSandboxDesktop(
       generation += 1
       const previous = lease
       lease = null
+      controllerFrame?.reject()
       clearTimeout(renewal)
       clearTimeout(expiry)
       if (alive) {
@@ -206,6 +218,118 @@ export function useSandboxDesktop(
       }, 5_000)
     }
 
+    const clearFrame = () => {
+      currentFrame = null
+      currentProof = null
+      if (alive) setFrame(null)
+    }
+    const stopNativeStream = () => {
+      const previous = nativeStream
+      nativeStream = null
+      nativeController?.abort()
+      nativeController = null
+      previous?.close()
+      nativePixels = null
+      if (nativeMode === "stream") nativeMode = "opening"
+    }
+    const startNativeStream = async () => {
+      if (nativeController || !alive || !visible() || !desktop) return
+      const controller = new AbortController()
+      nativeController = controller
+      const active = () => alive && visible() && !controller.signal.aborted
+      let opened: NativeFrameStream
+      try {
+        opened = await openNativeFrameStream(
+          LOCAL_REMOTE_DESKTOP_HOST,
+          desktop.managed ? `managed-desktop:${connectionId}` : `sandbox:${connectionId}`,
+          {
+            signal: controller.signal,
+            onReconnect: () => {
+              if (!active()) return
+              clearFrame()
+              void release()
+              setError("capture")
+            },
+          }
+        )
+      } catch {
+        // Only an initial open failure enables the legacy frame poller.
+        if (active()) {
+          nativeMode = "frames"
+          setTransport("frames")
+          void refresh()
+        }
+        return
+      }
+      if (!active()) {
+        opened.close()
+        return
+      }
+      nativeStream = opened
+      nativeMode = "stream"
+      setTransport("stream")
+      try {
+        for await (const next of opened) {
+          if (!active()) break
+          if (
+            mutationPending ||
+            (desktop.managed &&
+              (!controlStatus?.qualified ||
+                ["dormant", "quarantined", "unavailable"].includes(controlStatus.state)))
+          )
+            continue
+          // Acquiring advances the fence. Ignore an in-flight observer tick;
+          // a changed fence after acquisition ends the current control lease.
+          if (lease && next.fence !== lease.fence) {
+            if (!controllerFrame) {
+              clearFrame()
+              void release()
+            }
+            continue
+          }
+          const expiresAt = next.capturedAtMs + MAX_FRAME_AGE_MS
+          if (expiresAt <= Date.now()) continue
+          if (nativePixels?.jpeg !== next.jpeg) {
+            let binary = ""
+            for (let offset = 0; offset < next.jpeg.length; offset += 8192)
+              binary += String.fromCharCode(...next.jpeg.subarray(offset, offset + 8192))
+            nativePixels = {
+              jpeg: next.jpeg,
+              screenshot: {
+                bytes: btoa(binary),
+                width: next.width,
+                height: next.height,
+                capturedAt: next.capturedAtMs,
+                format: "jpeg",
+              },
+            }
+          }
+          // Header-only ticks retain the image (and its data URL) while
+          // refreshing the single-use proof and local freshness deadline.
+          currentFrame = nativePixels.screenshot
+          currentProof = {
+            screenshot: currentFrame,
+            frameId: next.frameId,
+            fence: next.fence,
+            expiresAt,
+          }
+          receivedAt = Date.now()
+          setFrame(currentFrame)
+          setError((previous) => (previous === "capture" ? null : previous))
+          controllerFrame?.resolve()
+        }
+      } catch {
+        // Transport recovery belongs to openNativeFrameStream. A live stream
+        // must never silently start a second frame source or regain control.
+      } finally {
+        if (active()) {
+          clearFrame()
+          void release()
+          setError("capture")
+        }
+      }
+    }
+
     const refresh = async () => {
       if (!alive || !visible() || !desktop) return
       if (capturing || mutationPending) {
@@ -240,9 +364,14 @@ export function useSandboxDesktop(
             return
           }
           if (lease && (!controlStatus.controllerIsSelf || controlStatus.fence !== lease.fence)) {
+            if (controllerFrame) return
             await release()
             return
           }
+        }
+        if (nativeMode !== "frames") {
+          if (nativeMode === "opening") void startNativeStream()
+          return
         }
         const proof = await desktop.frame().catch((error: unknown) => {
           frameRpcFailed = true
@@ -317,7 +446,41 @@ export function useSandboxDesktop(
         currentProof = null
         setFrame(null)
         const acquiredGeneration = generation
-        const proof = await desktop.frame()
+        if (nativeMode !== "frames") {
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => controllerFrame?.reject(), MAX_FRAME_AGE_MS)
+            const finish = (ready: boolean) => {
+              clearTimeout(timer)
+              controllerFrame = null
+              if (ready) resolve()
+              else reject(new Error("Controller frame unavailable"))
+            }
+            controllerFrame = { resolve: () => finish(true), reject: () => finish(false) }
+          })
+        } else {
+          const proof = await desktop.frame()
+          if (
+            !alive ||
+            !visible() ||
+            generation !== acquiredGeneration ||
+            lease?.token !== next.token
+          )
+            return
+          if (
+            !proof.frameId ||
+            !Number.isFinite(proof.expiresAt) ||
+            proof.fence !== next.fence ||
+            proof.expiresAt! <= Date.now() ||
+            !proof.screenshot.bytes ||
+            proof.screenshot.width <= 0 ||
+            proof.screenshot.height <= 0
+          )
+            throw new Error("Invalid controller frame")
+          currentProof = proof
+          currentFrame = proof.screenshot
+          receivedAt = Date.now()
+          setFrame(proof.screenshot)
+        }
         if (
           !alive ||
           !visible() ||
@@ -325,20 +488,6 @@ export function useSandboxDesktop(
           lease?.token !== next.token
         )
           return
-        if (
-          !proof.frameId ||
-          !Number.isFinite(proof.expiresAt) ||
-          proof.fence !== next.fence ||
-          proof.expiresAt! <= Date.now() ||
-          !proof.screenshot.bytes ||
-          proof.screenshot.width <= 0 ||
-          proof.screenshot.height <= 0
-        )
-          throw new Error("Invalid controller frame")
-        currentProof = proof
-        currentFrame = proof.screenshot
-        receivedAt = Date.now()
-        setFrame(proof.screenshot)
         setControlling(true)
         publishedLease = next
         releaseNotificationPending = false
@@ -424,8 +573,8 @@ export function useSandboxDesktop(
     const visibilityChanged = () => {
       if (!visible()) {
         clearTimeout(poll)
-        currentFrame = null
-        setFrame(null)
+        stopNativeStream()
+        clearFrame()
         void release()
       } else void refresh()
     }
@@ -438,6 +587,7 @@ export function useSandboxDesktop(
     const invalidate = () => {
       invalidated = true
       clearTimeout(poll)
+      stopNativeStream()
       currentFrame = null
       currentProof = null
       if (alive) {
@@ -462,6 +612,7 @@ export function useSandboxDesktop(
       setControlling(false)
       setError(null)
       setStatus(null)
+      setTransport("stream")
       if (openDesktop && enabled) {
         void openDesktop()
           .then((opened) => {
@@ -502,6 +653,7 @@ export function useSandboxDesktop(
       session.current = null
       clearTimeout(initial)
       clearTimeout(poll)
+      stopNativeStream()
       void release().finally(() => desktop?.close())
       detachInvalidated?.()
       windowFocus?.disconnect()
@@ -536,6 +688,7 @@ export function useSandboxDesktop(
     controlling: enabled && controlling,
     acquiring,
     error,
+    transport,
     acquire,
     release,
     refresh,

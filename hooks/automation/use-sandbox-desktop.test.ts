@@ -1,6 +1,10 @@
 import { act, renderHook } from "@testing-library/react"
 import { useSandboxDesktop } from "./use-sandbox-desktop"
 import { sandboxClient } from "@/lib/automation/sandbox-client"
+import { openNativeFrameStream, type NativeFrameStream } from "@/lib/remote-desktop/native-stream"
+import type { NativeFrame } from "@/lib/remote-desktop/frames"
+
+jest.mock("@/lib/remote-desktop/native-stream", () => ({ openNativeFrameStream: jest.fn() }))
 
 jest.mock("@/lib/automation/sandbox-client", () => ({
   sandboxClient: {
@@ -12,6 +16,7 @@ jest.mock("@/lib/automation/sandbox-client", () => ({
   },
 }))
 const client = jest.mocked(sandboxClient)
+const openNative = jest.mocked(openNativeFrameStream)
 const frame = { bytes: "aA==", width: 800, height: 600, capturedAt: 42, format: "png" as const }
 // The local Host issues a single-use proof with every capture, and acquiring
 // control advances the fence, exactly like the managed Host.
@@ -29,6 +34,7 @@ async function tick(ms = 0) {
 beforeEach(() => {
   jest.useFakeTimers()
   jest.resetAllMocks()
+  openNative.mockRejectedValue(new Error("native stream unavailable"))
   fence = 1
   frameSeq = 0
   client.desktopFrame.mockImplementation(async () => proofFor())
@@ -46,9 +52,398 @@ beforeEach(() => {
 })
 afterEach(() => jest.useRealTimers())
 
+function nativeFrames() {
+  let pending: ((frame: IteratorResult<NativeFrame>) => void) | undefined
+  const queued: NativeFrame[] = []
+  const close = jest.fn(() => {
+    pending?.({ done: true, value: undefined })
+    pending = undefined
+  })
+  const stream: NativeFrameStream = {
+    close,
+    [Symbol.asyncIterator]: () => ({
+      next: () =>
+        queued.length
+          ? Promise.resolve({ done: false, value: queued.shift()! })
+          : new Promise((resolve) => {
+              pending = resolve
+            }),
+    }),
+  }
+  return {
+    stream,
+    close,
+    async send(overrides: Partial<NativeFrame> = {}) {
+      await act(async () => {
+        const value: NativeFrame = {
+          jpeg: new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+          frameId: `native-${++frameSeq}`,
+          fence,
+          capturedAtMs: Date.now(),
+          width: 800,
+          height: 600,
+          encoding: "jpeg",
+          payloadBytes: 4,
+          ...overrides,
+        }
+        if (pending) {
+          const resolve = pending
+          pending = undefined
+          resolve({ done: false, value })
+        } else queued.push(value)
+      })
+    },
+  }
+}
+
+describe("native Host frames", () => {
+  test.each([false, true])(
+    "streams pixels and fresh input proofs (managed: %s)",
+    async (managed) => {
+      const source = nativeFrames()
+      openNative.mockResolvedValue(source.stream)
+      const desktop = managed ? managedSession() : undefined
+      const open = desktop ? jest.fn().mockResolvedValue(desktop) : undefined
+      const { result } = renderHook(() => useSandboxDesktop("c1", true, open))
+      await tick()
+      expect(openNative).toHaveBeenCalledWith(
+        { kind: "local" },
+        managed ? "managed-desktop:c1" : "sandbox:c1",
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          onReconnect: expect.any(Function),
+        })
+      )
+      const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+      await source.send({ jpeg })
+      expect(result.current.frame).toMatchObject({ bytes: "/9j/2Q==", format: "jpeg", width: 800 })
+      let acquired: Promise<void> | undefined
+      act(() => {
+        acquired = result.current.acquire()
+      })
+      await tick()
+      desktop?.status.mockResolvedValue({
+        qualified: true,
+        state: "controlled",
+        controllerIsSelf: true,
+        fence: 2,
+        canAcquire: false,
+      })
+      expect(result.current.controlling).toBe(false)
+      // An observer tick arriving after acquire cannot authorize input.
+      await source.send({ jpeg, fence: 1, encoding: "unchanged", payloadBytes: 0 })
+      expect(result.current.controlling).toBe(false)
+      await source.send({ jpeg, fence: 2, encoding: "unchanged", payloadBytes: 0 })
+      await act(async () => {
+        await acquired
+      })
+      expect(result.current.controlling).toBe(true)
+      const pixels = result.current.frame
+      await tick(2000)
+      await source.send({
+        jpeg,
+        fence: 2,
+        frameId: "header-proof",
+        encoding: "unchanged",
+        payloadBytes: 0,
+      })
+      expect(result.current.frame).toBe(pixels)
+      await act(async () => {
+        expect(
+          await result.current.input({ kind: "click" }, { x: 1, y: 2 }, pixels!.capturedAt)
+        ).toBe(true)
+        await result.current.refresh()
+      })
+      if (desktop) {
+        expect(desktop.input).toHaveBeenCalledWith(
+          expect.objectContaining({ fence: 2 }),
+          expect.objectContaining({ frameId: "header-proof", fence: 2 }),
+          { x: 1, y: 2 },
+          { kind: "click" }
+        )
+        expect(desktop.frame).not.toHaveBeenCalled()
+        expect(desktop.status).toHaveBeenCalled()
+      } else {
+        expect(client.controlInput).toHaveBeenCalledWith(
+          "c1",
+          "lease",
+          2,
+          "header-proof",
+          { x: 1, y: 2 },
+          { kind: "click" }
+        )
+      }
+      await tick(2000)
+      expect(client.desktopFrame).not.toHaveBeenCalled()
+    }
+  )
+
+  test("only converts changed JPEGs and refreshes proof freshness on header-only ticks", async () => {
+    const source = nativeFrames()
+    openNative.mockResolvedValue(source.stream)
+    const encode = jest.spyOn(window, "btoa")
+    try {
+      const { result } = renderHook(() => useSandboxDesktop("c1", true))
+      await tick()
+      const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
+      await source.send({ jpeg })
+      let acquired: Promise<void> | undefined
+      act(() => {
+        acquired = result.current.acquire()
+      })
+      await tick()
+      await source.send({ jpeg, fence: 2, encoding: "unchanged", payloadBytes: 0 })
+      await act(async () => {
+        await acquired
+      })
+      const pixels = result.current.frame
+      for (let tickIndex = 0; tickIndex < 3; tickIndex += 1) {
+        await tick(2000)
+        await source.send({ jpeg, encoding: "unchanged", payloadBytes: 0 })
+      }
+      expect(result.current.frame).toBe(pixels)
+      expect(encode).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        expect(
+          await result.current.input({ kind: "typeText", text: "a" }, null, pixels!.capturedAt)
+        ).toBe(true)
+        expect(
+          await result.current.input({ kind: "typeText", text: "b" }, null, pixels!.capturedAt)
+        ).toBe(false)
+      })
+      await source.send({ frameId: "changed" })
+      expect(encode).toHaveBeenCalledTimes(2)
+    } finally {
+      encode.mockRestore()
+    }
+  })
+
+  test("a reconnect releases control and recovers observation without polling or acquiring again", async () => {
+    const source = nativeFrames()
+    openNative.mockResolvedValue(source.stream)
+    const { result } = renderHook(() => useSandboxDesktop("c1", true))
+    await tick()
+    await source.send()
+    act(() => {
+      void result.current.acquire()
+    })
+    await tick()
+    await source.send()
+    expect(result.current.controlling).toBe(true)
+    await act(async () => {
+      openNative.mock.calls[0]![2]!.onReconnect!(1, new Error("dropped"))
+    })
+    expect(result.current.controlling).toBe(false)
+    expect(result.current.frame).toBeNull()
+    expect(client.releaseControl).toHaveBeenCalledTimes(1)
+    await source.send({ fence: 3 })
+    await tick(5000)
+    expect(result.current.frame).not.toBeNull()
+    expect(result.current.controlling).toBe(false)
+    expect(openNative).toHaveBeenCalledTimes(1)
+    expect(client.acquireControl).toHaveBeenCalledTimes(1)
+    expect(client.renewControl).not.toHaveBeenCalled()
+    expect(client.desktopFrame).not.toHaveBeenCalled()
+  })
+
+  test("a lease acquired after a stream drop is released instead of restoring control", async () => {
+    const source = nativeFrames()
+    openNative.mockResolvedValue(source.stream)
+    let complete!: (lease: { token: string; fence: number; expiresAt: number }) => void
+    client.acquireControl.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
+    const { result } = renderHook(() => useSandboxDesktop("c1", true))
+    await tick()
+    await source.send()
+    act(() => {
+      void result.current.acquire()
+    })
+    await tick()
+    await act(async () => {
+      openNative.mock.calls[0]![2]!.onReconnect!(1, new Error("dropped"))
+      complete({ token: "late", fence: 2, expiresAt: Date.now() + 15000 })
+    })
+    await source.send({ fence: 3 })
+    expect(result.current.controlling).toBe(false)
+    expect(client.releaseControl).toHaveBeenCalledWith("c1", "late", 2)
+    expect(client.acquireControl).toHaveBeenCalledTimes(1)
+    expect(client.desktopFrame).not.toHaveBeenCalled()
+  })
+
+  test("acquisition releases its lease if the stream never supplies a controller-fence frame", async () => {
+    const source = nativeFrames()
+    openNative.mockResolvedValue(source.stream)
+    const { result } = renderHook(() => useSandboxDesktop("c1", true))
+    await tick()
+    await source.send()
+    let acquired: Promise<void> | undefined
+    act(() => {
+      acquired = result.current.acquire()
+    })
+    await tick()
+    await source.send({ fence: 1 })
+    await tick(5000)
+    await act(async () => {
+      await acquired
+    })
+    expect(result.current.acquiring).toBe(false)
+    expect(result.current.controlling).toBe(false)
+    expect(result.current.error).toBe("control")
+    expect(client.releaseControl).toHaveBeenCalledWith("c1", "lease", 2)
+    expect(client.desktopFrame).not.toHaveBeenCalled()
+  })
+
+  test("a changed fence releases established control and only observation recovers", async () => {
+    const source = nativeFrames()
+    openNative.mockResolvedValue(source.stream)
+    const { result } = renderHook(() => useSandboxDesktop("c1", true))
+    await tick()
+    await source.send()
+    act(() => {
+      void result.current.acquire()
+    })
+    await tick()
+    await source.send()
+    expect(result.current.controlling).toBe(true)
+    await source.send({ fence: 3 })
+    expect(result.current.frame).toBeNull()
+    expect(result.current.controlling).toBe(false)
+    expect(client.releaseControl).toHaveBeenCalledWith("c1", "lease", 2)
+    await source.send({ fence: 3 })
+    expect(result.current.frame).not.toBeNull()
+    expect(client.acquireControl).toHaveBeenCalledTimes(1)
+    expect(
+      await result.current.input(
+        { kind: "typeText", text: "a" },
+        null,
+        result.current.frame!.capturedAt
+      )
+    ).toBe(false)
+    expect(client.desktopFrame).not.toHaveBeenCalled()
+  })
+
+  test("managed quarantine and session invalidation cannot restore streamed pixels", async () => {
+    const source = nativeFrames()
+    openNative.mockResolvedValue(source.stream)
+    const desktop = managedSession()
+    const open = jest.fn().mockResolvedValue(desktop)
+    const { result } = renderHook(() => useSandboxDesktop("cloud", true, open))
+    await tick()
+    await source.send()
+    expect(result.current.frame).not.toBeNull()
+    desktop.status.mockResolvedValue({ qualified: true, state: "quarantined", canAcquire: false })
+    await tick(1000)
+    await source.send()
+    expect(result.current.frame).toBeNull()
+    await act(async () => {
+      desktop.invalidate()
+    })
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(openNative.mock.calls[0]![2]!.signal!.aborted).toBe(true)
+    expect(result.current.error).toBe("session")
+    expect(desktop.frame).not.toHaveBeenCalled()
+  })
+
+  test("returning to a visible document reopens observation without resuming control", async () => {
+    const first = nativeFrames()
+    const second = nativeFrames()
+    openNative.mockResolvedValueOnce(first.stream).mockResolvedValueOnce(second.stream)
+    const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(false)
+    try {
+      const { result } = renderHook(() => useSandboxDesktop("c1", true))
+      await tick()
+      await first.send()
+      act(() => {
+        void result.current.acquire()
+      })
+      await tick()
+      await first.send()
+      expect(result.current.controlling).toBe(true)
+      hidden.mockReturnValue(true)
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"))
+      })
+      hidden.mockReturnValue(false)
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"))
+      })
+      await second.send({ fence: 3 })
+      expect(openNative).toHaveBeenCalledTimes(2)
+      expect(first.close).toHaveBeenCalledTimes(1)
+      expect(result.current.frame).not.toBeNull()
+      expect(result.current.controlling).toBe(false)
+      expect(client.acquireControl).toHaveBeenCalledTimes(1)
+      expect(client.desktopFrame).not.toHaveBeenCalled()
+    } finally {
+      hidden.mockRestore()
+    }
+  })
+
+  test.each(["disable", "target", "hidden", "unmount"])(
+    "closes and aborts the stream on %s",
+    async (change) => {
+      const source = nativeFrames()
+      openNative.mockResolvedValue(source.stream)
+      const { result, rerender, unmount } = renderHook(
+        ({ id, enabled }) => useSandboxDesktop(id, enabled),
+        {
+          initialProps: { id: "c1", enabled: true },
+        }
+      )
+      await tick()
+      await source.send()
+      const signal = openNative.mock.calls[0]![2]!.signal!
+      if (change === "disable") rerender({ id: "c1", enabled: false })
+      else if (change === "target") rerender({ id: "c2", enabled: true })
+      else if (change === "unmount") unmount()
+      else {
+        const hidden = jest.spyOn(document, "hidden", "get").mockReturnValue(true)
+        try {
+          await act(async () => {
+            document.dispatchEvent(new Event("visibilitychange"))
+          })
+          expect(result.current.frame).toBeNull()
+        } finally {
+          hidden.mockRestore()
+        }
+      }
+      expect(source.close).toHaveBeenCalledTimes(1)
+      expect(signal.aborted).toBe(true)
+      expect(client.desktopFrame).not.toHaveBeenCalled()
+    }
+  )
+
+  test("a late initial open is reclaimed and cannot start fallback after cleanup", async () => {
+    const source = nativeFrames()
+    let complete!: (stream: NativeFrameStream) => void
+    openNative.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          complete = resolve
+        })
+    )
+    const { unmount } = renderHook(() => useSandboxDesktop("c1", true))
+    await tick()
+    await tick(5000)
+    expect(client.desktopFrame).not.toHaveBeenCalled()
+    unmount()
+    await act(async () => {
+      complete(source.stream)
+    })
+    expect(source.close).toHaveBeenCalledTimes(1)
+    expect(client.desktopFrame).not.toHaveBeenCalled()
+  })
+})
+
 test("starts read-only, polls sequentially, and stops on unmount", async () => {
   const { result, unmount } = renderHook(() => useSandboxDesktop("c1", true))
   await tick()
+  expect(openNative).toHaveBeenCalledTimes(1)
+  expect(result.current.transport).toBe("frames")
   expect(result.current.frame).toEqual(frame)
   expect(result.current.controlling).toBe(false)
   expect(await result.current.input({ kind: "click" }, { x: 1, y: 2 }, 42)).toBe(false)
@@ -654,7 +1049,9 @@ test("managed sessions retain status checks and capture polling despite healthy 
   await tick()
   await tick(5000)
   await tick(5000)
-  expect(desktop.status).toHaveBeenCalledTimes(3)
+  // Qualification is checked before the initial stream attempt and again
+  // when that attempt rejects, before falling back to single-frame RPC.
+  expect(desktop.status).toHaveBeenCalledTimes(4)
   expect(desktop.frame).toHaveBeenCalledTimes(3)
   expect(result.current.frame).toEqual(frame)
   expect(desktop.acquire).not.toHaveBeenCalled()

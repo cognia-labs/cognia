@@ -48,8 +48,8 @@ function framePoint(
 }
 
 /**
- * Screenshots stay inside the authenticated command transport; no raw desktop
- * endpoint is exposed. A local sandbox built with Selkies (ADR-0234 Phase 4)
+ * Native frames use the authenticated Host stream, with single-frame RPC as
+ * the fallback. A local sandbox built with Selkies (ADR-0234 Phase 4)
  * is shown as its live stream instead: a loopback page with a Host-issued
  * session token that can only watch until this viewer holds the control lease.
  */
@@ -122,12 +122,22 @@ export function SandboxDesktopViewer({
     },
     [claimStream, reopenStream]
   )
-  const { frame, controlling, acquiring, error, acquire, release, refresh, input, status } =
-    useSandboxDesktop(connectionId, enabled, openDesktop, !mobileObservation, {
-      streaming,
-      streamHealthy: streamStatus === "open" && streamGrant?.healthVersion === 1,
-      onLeaseChange: openDesktop || !allowStreaming ? undefined : onLeaseChange,
-    })
+  const {
+    frame,
+    controlling,
+    acquiring,
+    error,
+    acquire,
+    release,
+    refresh,
+    input,
+    status,
+    transport,
+  } = useSandboxDesktop(connectionId, enabled, openDesktop, !mobileObservation, {
+    streaming,
+    streamHealthy: streamStatus === "open" && streamGrant?.healthVersion === 1,
+    onLeaseChange: openDesktop || !allowStreaming ? undefined : onLeaseChange,
+  })
   useLayoutEffect(() => {
     releaseRef.current = release
   })
@@ -275,9 +285,11 @@ export function SandboxDesktopViewer({
                 : t("readOnly")}
         </span>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {streaming ? t("streamCadence") : t("cadence")}
-      </p>
+      {streaming || transport === "frames" ? (
+        <p className="text-xs text-muted-foreground">
+          {streaming ? t("streamCadence") : t("cadence")}
+        </p>
+      ) : null}
       {streamStatus === "connecting" || streamStatus === "opening" ? (
         <p className="text-xs text-muted-foreground" aria-live="polite">
           {t("streamConnecting")}

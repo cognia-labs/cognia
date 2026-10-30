@@ -32,6 +32,7 @@ function state(overrides = {}) {
     controlling: false,
     acquiring: false,
     error: null,
+    transport: "frames" as const,
     acquire: jest.fn(),
     release: jest.fn(),
     refresh: jest.fn(),
@@ -67,6 +68,16 @@ test("requires explicit takeover before keyboard or pointer input", () => {
   fireEvent.click(screen.getByRole("button", { name: "Take control" }))
   expect(model.acquire).toHaveBeenCalledTimes(1)
   expect(screen.getByRole("status")).toHaveTextContent("View only")
+})
+
+test("native streams keep image input controls without the polling or Selkies cadence label", () => {
+  useDesktop.mockReturnValue({ ...state({ controlling: true }), transport: "stream" })
+  mount()
+  expect(screen.getByRole("img")).toBeInTheDocument()
+  expect(screen.getByRole("textbox")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Release control" })).toBeEnabled()
+  expect(screen.queryByText(messages.sandboxConnections.desktopViewer.cadence)).toBeNull()
+  expect(screen.queryByText(messages.sandboxConnections.desktopViewer.streamCadence)).toBeNull()
 })
 
 test.each(["open", "opening", "connecting", "unmonitored", "error"])(

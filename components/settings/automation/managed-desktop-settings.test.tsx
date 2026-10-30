@@ -64,6 +64,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en/settings/managedDesktops.json"
 import zhMessages from "@/i18n/messages/zh-CN/settings/managedDesktops.json"
+import managedAcceptance from "@/i18n/messages/en/managedAcceptance.json"
 jest.mock("@/stores/account/account-store", () => {
   const store = Object.assign(jest.fn(), {
     getState: jest.fn(),
@@ -73,8 +74,10 @@ jest.mock("@/stores/account/account-store", () => {
   return { useAccountStore: store }
 })
 jest.mock("@/lib/automation/managed-desktop-handoff-client", () => ({
+  ...jest.requireActual("@/lib/automation/managed-desktop-handoff-client"),
   managedDesktopHandoffClient: { deliveries: jest.fn(), prepare: jest.fn() },
   managedDesktopHandoffErrorKey: jest.fn(() => "prepareFailed"),
+  watchManagedDesktopAcceptance: jest.fn(() => jest.fn()),
 }))
 jest.mock("@/stores/remote-host/remote-host-store", () => {
   const store = Object.assign(jest.fn(), {
@@ -162,7 +165,10 @@ const currentProof = {
 }
 function settings() {
   return (
-    <NextIntlClientProvider locale="en" messages={{ settings: { managedDesktops: messages } }}>
+    <NextIntlClientProvider
+      locale="en"
+      messages={{ settings: { managedDesktops: messages }, managedAcceptance }}
+    >
       <ManagedDesktopSettings target={{ kind: "remote", hostId: "chosen-host" }} />
     </NextIntlClientProvider>
   )
@@ -252,7 +258,7 @@ test("labels dormancy on the real settings surface and makes no billed call on m
   expect(api.authorize).not.toHaveBeenCalled()
   expect(runSandboxConnectionOperation).not.toHaveBeenCalled()
   expect(screen.getByRole("region", { name: messages.handoff.title })).toBeVisible()
-  expect(screen.getByRole("button", { name: messages.handoff.start })).toBeDisabled()
+  expect(screen.getByRole("button", { name: managedAcceptance.start })).toBeDisabled()
   expect(managedDesktopHandoffClient.deliveries).not.toHaveBeenCalled()
   expect(managedDesktopHandoffClient.prepare).not.toHaveBeenCalled()
 })
@@ -519,7 +525,10 @@ test("active paired Host settings remain available without a remote Host row", a
     deviceId: "paired",
   })
   render(
-    <NextIntlClientProvider locale="en" messages={{ settings: { managedDesktops: messages } }}>
+    <NextIntlClientProvider
+      locale="en"
+      messages={{ settings: { managedDesktops: messages }, managedAcceptance }}
+    >
       <ManagedDesktopSettings target={{ kind: "remote", hostId: "companion:paired-host" }} />
     </NextIntlClientProvider>
   )
@@ -597,7 +606,7 @@ test.each([
     render(
       <NextIntlClientProvider
         locale={locale}
-        messages={{ settings: { managedDesktops: translated } }}
+        messages={{ settings: { managedDesktops: translated }, managedAcceptance }}
       >
         <ManagedDesktopSettings target={{ kind: "remote", hostId: "chosen-host" }} />
       </NextIntlClientProvider>

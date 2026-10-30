@@ -4,9 +4,12 @@ import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en/automation.json"
 import { SandboxDesktopViewer } from "@/components/settings/automation/sandbox-desktop-viewer"
 import { sandboxClient } from "@/lib/automation/sandbox-client"
+import { openNativeFrameStream } from "@/lib/remote-desktop/native-stream"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { runInNewContext } from "node:vm"
+
+jest.mock("@/lib/remote-desktop/native-stream", () => ({ openNativeFrameStream: jest.fn() }))
 
 jest.mock("@/lib/automation/sandbox-client", () => ({
   isSandboxStreamUnavailable: (error: unknown) =>
@@ -77,6 +80,8 @@ async function confirmHealthy() {
 beforeEach(() => {
   jest.useFakeTimers()
   jest.resetAllMocks()
+  // These Selkies recovery cases deliberately exercise the older Host fallback.
+  jest.mocked(openNativeFrameStream).mockRejectedValue(new Error("native stream unavailable"))
   fence = 1
   sequence = 0
   viewers = 0
