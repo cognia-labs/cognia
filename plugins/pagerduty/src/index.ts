@@ -684,6 +684,7 @@ export const INCIDENT_RESPONDER_BOT: PluginHandlerBotDef = {
   triggers: [
     {
       id: "incident-needs-triage",
+      inputCredentialSlot: "pagerduty",
       kind: "event",
       source: "integration",
       label: "PagerDuty incident needs triage",

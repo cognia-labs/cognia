@@ -1,4 +1,8 @@
-import { createOverlayRegistry, type OverlayRegistry } from "./createOverlayRegistry"
+import {
+  createOverlayRegistry,
+  reservePluginOwnership,
+  type OverlayRegistry,
+} from "./createOverlayRegistry"
 
 // Typed payload so the test exercises the generic parameter rather than
 // relying on `any`. Matches the shape callers in M1·T3 will use (a small
@@ -8,6 +12,21 @@ interface TestEntry {
 }
 
 describe("createOverlayRegistry", () => {
+  it("preserves paused ownership without retaining a callable entry", () => {
+    const registry = createOverlayRegistry<TestEntry>()
+    registry.register("tool", { value: "original" }, { pluginId: "consumer" })
+    const reservation = reservePluginOwnership("consumer")
+    try {
+      registry.unregisterByPlugin("consumer")
+      expect(registry.get("tool")).toBeUndefined()
+      registry.register("tool", { value: "replacement" }, { pluginId: "provider" })
+      expect(registry.get("tool")).toBeUndefined()
+      registry.register("tool", { value: "resumed" }, { pluginId: "consumer" })
+      expect(registry.get("tool")?.value).toBe("resumed")
+    } finally {
+      reservation.dispose()
+    }
+  })
   let registry: OverlayRegistry<TestEntry>
 
   beforeEach(() => {
@@ -26,9 +45,9 @@ describe("createOverlayRegistry", () => {
       expect(second?.entry.value).toBe("one")
       expect(second?.pluginId).toBe("p1")
 
-      // The new entry now lives in the store.
-      expect(registry.get("a")?.value).toBe("two")
-      expect(registry.getEntry("a")?.pluginId).toBe("p2")
+      // The incumbent is protected by the default cross-plugin policy.
+      expect(registry.get("a")?.value).toBe("one")
+      expect(registry.getEntry("a")?.pluginId).toBe("p1")
     })
 
     it("treats missing pluginId as anonymous registration", () => {
@@ -181,14 +200,25 @@ describe("createOverlayRegistry", () => {
       expect(onConflict).not.toHaveBeenCalled()
     })
 
-    it("does not fire onConflict for the default last-wins policy", () => {
+    it("allows last-wins only when explicitly requested", () => {
       const onConflict = jest.fn()
-      const reg = createOverlayRegistry<TestEntry>({ onConflict })
+      const reg = createOverlayRegistry<TestEntry>({ onConflict, conflictPolicy: "last-wins" })
       reg.register("a", { value: "one" }, { pluginId: "p1" })
       reg.register("a", { value: "two" }, { pluginId: "p2" })
       // last-wins overwrites and never reports.
       expect(reg.get("a")).toEqual({ value: "two" })
       expect(onConflict).not.toHaveBeenCalled()
+    })
+
+    it("reports a cross-plugin collision under the default policy", () => {
+      const onConflict = jest.fn()
+      const reg = createOverlayRegistry<TestEntry>({ onConflict })
+      reg.register("a", { value: "one" }, { pluginId: "p1" })
+      reg.register("a", { value: "two" }, { pluginId: "p2" })
+      expect(reg.get("a")).toEqual({ value: "one" })
+      expect(onConflict).toHaveBeenCalledWith(
+        expect.objectContaining({ existingPluginId: "p1", incomingPluginId: "p2" })
+      )
     })
   })
 

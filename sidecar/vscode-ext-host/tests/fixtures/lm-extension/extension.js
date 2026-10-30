@@ -4,6 +4,40 @@ const vscode = require("vscode")
 
 exports.activate = (context) => {
   const register = (id, fn) => context.subscriptions.push(vscode.commands.registerCommand(id, fn))
+  const participant = vscode.chat.createChatParticipant(
+    "fixture.helper",
+    async (request, chatContext, stream, token) => {
+      stream.progress("Working")
+      if (request.prompt === "cancel") {
+        await new Promise((resolve) => token.onCancellationRequested(resolve))
+        return { metadata: { cancelled: token.isCancellationRequested } }
+      }
+      stream.markdown(new vscode.MarkdownString("Hello "))
+      stream.markdown(request.prompt)
+      stream.reference(vscode.Uri.parse("https://example.com/source"))
+      return {
+        metadata: {
+          historyLength: chatContext.history.length,
+          typedHistory: chatContext.history[0] instanceof vscode.ChatRequestTurn,
+          model: request.model.id,
+        },
+      }
+    }
+  )
+  context.subscriptions.push(participant)
+  register("lmFixture.disposeParticipant", () => participant.dispose())
+  register("lmFixture.activationProbe", () => "ready")
+  if (process.env.COGNIA_TEST_REGISTER_ON_ACTIVATE === "1") {
+    context.subscriptions.push(
+      vscode.lm.registerTool("fixture_initial", {
+        invoke: async () =>
+          new vscode.LanguageModelToolResult([new vscode.LanguageModelTextPart("initial")]),
+      })
+    )
+    context.subscriptions.push(
+      vscode.tasks.registerTaskProvider("fixture", { provideTasks: async () => [] })
+    )
+  }
   const access = context.languageModelAccessInformation
   let modelsChanged = 0
   let accessChanged = 0
@@ -119,17 +153,18 @@ exports.activate = (context) => {
     ]
   })
   register("lmFixture.tools", async () => {
-    const registration = vscode.lm.registerTool("fixture_search", { invoke: () => undefined })
+    const registration = vscode.lm.registerTool("fixture_search", {
+      invoke: (options) =>
+        new vscode.LanguageModelToolResult([
+          new vscode.LanguageModelTextPart(`found:${options.input.query}`),
+        ]),
+    })
+    const result = await vscode.lm.invokeTool("fixture_search", { input: { query: "hello" } })
+    const tools = vscode.lm.tools.map((tool) => tool.name)
     registration.dispose()
-    let invoke
-    try {
-      await vscode.lm.invokeTool("fixture_search", { input: {} })
-    } catch (error) {
-      invoke = error.message
-    }
     return {
-      tools: vscode.lm.tools.length,
-      invoke,
+      tools,
+      content: result.content.map((part) => part.value),
       toolMode: vscode.LanguageModelChatToolMode.Required,
     }
   })

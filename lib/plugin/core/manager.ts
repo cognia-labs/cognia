@@ -196,7 +196,7 @@ import {
   reconcileWasmGrantLedgerWithManifest,
   type WasmCapabilityGrantDecision,
 } from "@/lib/plugin/security/wasm-grant"
-import { canUseTauriInvoke } from "@/lib/native/utils"
+import { canUseTauriInvoke, isTauri } from "@/lib/native/utils"
 import {
   installFromLocalFile,
   installPluginBundleFromLocalFile,
@@ -293,6 +293,7 @@ import {
   type PluginActivationLease,
   type PluginGraphReservation,
   type PluginLifecycleCoordinatorSnapshot,
+  type PluginIntentPauseLease,
 } from "./lifecycle-coordinator"
 
 export function shouldEnablePluginDebug(
@@ -463,8 +464,19 @@ function isPluginStatus(value: unknown): value is PluginStatus {
   return typeof value === "string" && Object.hasOwn(PLUGIN_STATUSES, value)
 }
 
-type PluginActivationRuntimeEvent =
+export type PluginActivationRuntimeEvent =
   | "startup"
+  | "onTerminal"
+  | `onTaskType:${string}`
+  | `onChatParticipant:${string}`
+  | `onLanguageModelTool:${string}`
+  | `onWebviewPanel:${string}`
+  | `onTerminalProfile:${string}`
+  | `onCustomEditor:${string}`
+  | `onFileSystem:${string}`
+  | `onDebugResolve:${string}`
+  | `onNotebook:${string}`
+  | `onWalkthrough:${string}`
   | `onCommand:${string}`
   | `onTool:${string}`
   | `onView:${string}`
@@ -484,6 +496,13 @@ interface PluginDiscoveryProjection {
 }
 
 interface ParsedActivationSpec {
+  managedEvents: string[]
+  terminal: boolean
+  taskTypes: string[]
+  chatParticipants: string[]
+  languageModelTools: string[]
+  webviewPanels: string[]
+  terminalProfiles: string[]
   startup: boolean
   commandEvents: string[]
   toolEvents: string[]
@@ -872,6 +891,7 @@ export class PluginManager {
   private a2uiBridge: PluginA2UIBridge | null = null
   private themesBridge: PluginThemesBridge | null = null
   private contexts: Map<string, FullPluginContext> = new Map()
+  private readonly managedIdeWakeups = new Map<string, number>()
   private readonly libraryModules = new PluginLibraryModules({
     getPluginDisposableScope: (pluginId) => this.getPluginDisposableScope(pluginId),
     peekPluginDisposableScope: (pluginId) => this.disposableScopes.get(pluginId),
@@ -897,6 +917,7 @@ export class PluginManager {
   >()
   private registeredSlashCommandsByPlugin: Map<string, string[]> = new Map()
   private activationInFlight: Set<string> = new Set()
+  private activationCompletions = new Map<string, Promise<void>>()
   /**
    * In-flight `enablePlugin` promises keyed by plugin id. Dedupes concurrent
    * enables of the same plugin (e.g. a shared dependency enabled by two
@@ -943,6 +964,8 @@ export class PluginManager {
    * next interval tick start a second concurrent sweep on the same plugins. */
   private idleSweepRunning = false
   private initialized = false
+  private vscodeActivationTriggersStop?: () => void
+  private vscodeWebviewRestorationStop?: () => void
   private disposed = false
   private compatibilityMode: "warn" | "block"
   private pluginPointGovernanceMode: PluginPointGovernanceMode
@@ -1624,16 +1647,89 @@ export class PluginManager {
     return false
   }
 
-  async setPluginIntent(pluginId: string, intent: PluginIntent, reason = "manual"): Promise<void> {
-    await this.updatePluginLifecycleState(pluginId, { intent })
+  async setPluginIntent(
+    pluginId: string,
+    intent: PluginIntent,
+    reason = "manual",
+    options: { reconcile?: boolean; emitChange?: boolean } = {}
+  ): Promise<void> {
+    return this.lifecycleCoordinator.withIntentTransition(this.managerId, pluginId, async () => {
+      await this.updatePluginLifecycleState(pluginId, { intent })
+      this.lifecycleCoordinator.invalidateIntentPause(pluginId)
+      await this.reconcilePluginIntent(pluginId, intent, reason, options)
+    })
+  }
+
+  private async reconcilePluginIntent(
+    pluginId: string,
+    intent: PluginIntent,
+    reason: string,
+    options: { reconcile?: boolean; emitChange?: boolean }
+  ): Promise<void> {
     await setPluginEnabled(pluginId, intent === "enabled").catch(() => undefined)
-    if (intent === "disabled") {
-      await this.disablePlugin(pluginId, reason)
-    } else if (intent === "enabled") {
-      await this.enablePlugin(pluginId, reason)
+    // A graph restore first restores durable intent, then reinstates each
+    // runtime in dependency order (including auto and suspended consumers).
+    if (options.reconcile !== false) {
+      if (intent === "disabled") {
+        await this.disablePlugin(pluginId, reason)
+      } else if (intent === "enabled") {
+        await this.enablePlugin(pluginId, reason)
+      }
     }
     // After the transition, and only when it did not throw (ADR-0209).
-    emitPluginIntentChange({ pluginId, intent, reason })
+    if (options.emitChange !== false) emitPluginIntentChange({ pluginId, intent, reason })
+  }
+
+  acquirePluginInstallPause(
+    pluginId: string,
+    options: { deferred?: boolean } = {}
+  ): Promise<PluginIntentPauseLease> {
+    return this.lifecycleCoordinator.acquireIntentPause(
+      this.managerId,
+      pluginId,
+      {
+        snapshot: async () => {
+          const plugin = this.getPlugin(pluginId)
+          if (!plugin) throw new Error(`Plugin not found: ${pluginId}`)
+          const { intent } = await this.getPluginLifecycleState(pluginId)
+          return {
+            intent,
+            resume:
+              intent !== "disabled" &&
+              ["enabled", "suspended", "loading", "enabling"].includes(plugin.status),
+            suspended: plugin.status === "suspended",
+          }
+        },
+        pause: async () => {
+          await this.updatePluginLifecycleState(pluginId, { intent: "disabled" })
+          await this.reconcilePluginIntent(pluginId, "disabled", "marketplace-review", {
+            emitChange: false,
+          })
+        },
+        restore: async (snapshot) => {
+          await this.updatePluginLifecycleState(pluginId, { intent: snapshot.intent })
+          await this.reconcilePluginIntent(pluginId, snapshot.intent, "marketplace-restore", {
+            reconcile: false,
+            emitChange: false,
+          })
+          if (snapshot.resume) {
+            await this.enablePlugin(pluginId, "marketplace-restore")
+            if (snapshot.suspended) await this.suspendPlugin(pluginId, "marketplace-restore")
+          }
+        },
+        commit: () => {
+          // The coordinator owns the completed disabled write and serializes
+          // publication with newer intent decisions. Keep publication free of
+          // storage I/O so a later replacement cannot fail after earlier events.
+          emitPluginIntentChange({
+            pluginId,
+            intent: "disabled",
+            reason: "marketplace-replacement",
+          })
+        },
+      },
+      options
+    )
   }
 
   async recoverPluginRuntime(pluginId: string): Promise<boolean> {
@@ -2060,6 +2156,32 @@ export class PluginManager {
     // Begin the idle sweep if any enabled plugin opted into idle-suspension.
     this.startIdleSweep()
 
+    if (this.canInvokeNativeHost()) {
+      const { installVscodeActivationTriggers, createVscodeActivationTriggerDependencies } =
+        await import("@/lib/plugin/vscode-shim/activation-triggers")
+      this.vscodeActivationTriggersStop = installVscodeActivationTriggers({
+        ...createVscodeActivationTriggerDependencies(),
+        wantsEnabled: async (pluginId) =>
+          (await this.lifecycleState.read(pluginId)).intent !== "disabled",
+        activate: (event) => this.handleActivationEvent(event as PluginActivationRuntimeEvent),
+      })
+      if (isTauri()) {
+        const { installVscodeWebviewRestoration, createWebviewRestorationDependencies } =
+          await import("@/lib/plugin/vscode-shim/webview-restoration")
+        this.vscodeWebviewRestorationStop = installVscodeWebviewRestoration(
+          createWebviewRestorationDependencies({
+            pluginIds: () =>
+              Object.values(usePluginStore.getState().plugins)
+                .filter((plugin) => plugin.manifest.type === "vscode-extension")
+                .map((plugin) => plugin.manifest.id),
+            wantsEnabled: async (pluginId) =>
+              Boolean(usePluginStore.getState().plugins[pluginId]) &&
+              (await this.lifecycleState.read(pluginId)).intent !== "disabled",
+            activate: (event) => this.handleActivationEvent(event),
+          })
+        )
+      }
+    }
     this.initialized = true
   }
 
@@ -3347,9 +3469,9 @@ export class PluginManager {
   ): Promise<Plugin> {
     const installed = await this.installStagedBundle(
       async () => {
-        const staged = await stage()
         const directory =
           this.config.pluginDirectory || (await invoke<string>("plugin_get_directory"))
+        const staged = await stage()
         return {
           manifest: staged.manifest,
           path: `${directory}/${staged.pluginId}`,
@@ -3950,6 +4072,8 @@ export class PluginManager {
         }
         registerDeclaredInterceptors(pluginId, interceptors, {
           generation: this.activationLeases.get(pluginId)?.generation ?? 0,
+          hasPermission: (permission) =>
+            context.permissions.hasPermission(permission as PluginPermission),
         })
       }
 
@@ -5083,13 +5207,21 @@ export class PluginManager {
 
   /** Release the manager only after its lifecycle queues and plugin leases are empty. */
   dispose(): void {
-    const outstanding = new Set([...this.activationLeases.keys(), ...this.lifecycleQueues.keys()])
+    const outstanding = new Set([
+      ...this.activationLeases.keys(),
+      ...this.lifecycleQueues.keys(),
+      ...this.lifecycleCoordinator.getIntentOperationPluginIds(this.managerId),
+    ])
     if (outstanding.size > 0) {
       throw new PluginManagerTeardownError(
         `plugins still own runtime resources: ${[...outstanding].join(", ")}`
       )
     }
     this.stopIdleSweep()
+    this.vscodeActivationTriggersStop?.()
+    this.vscodeActivationTriggersStop = undefined
+    this.vscodeWebviewRestorationStop?.()
+    this.vscodeWebviewRestorationStop = undefined
     this.pythonEventsUnlisten?.()
     this.pythonEventsUnlisten = null
     this.pythonHostRequestsUnlisten?.()
@@ -5413,6 +5545,30 @@ export class PluginManager {
     }
 
     const parsed = {
+      managedEvents: rawEvents.filter((event) =>
+        /^(onCustomEditor|onFileSystem|onDebugResolve|onNotebook|onWalkthrough):/.test(event)
+      ),
+      webviewPanels: rawEvents
+        .filter((event) => event.startsWith("onWebviewPanel:"))
+        .map((event) => event.slice("onWebviewPanel:".length))
+        .filter(Boolean),
+      terminalProfiles: rawEvents
+        .filter((event) => event.startsWith("onTerminalProfile:"))
+        .map((event) => event.slice("onTerminalProfile:".length))
+        .filter(Boolean),
+      terminal: rawEvents.includes("onTerminal"),
+      chatParticipants: rawEvents
+        .filter((event) => event.startsWith("onChatParticipant:"))
+        .map((event) => event.slice("onChatParticipant:".length))
+        .filter(Boolean),
+      languageModelTools: rawEvents
+        .filter((event) => event.startsWith("onLanguageModelTool:"))
+        .map((event) => event.slice("onLanguageModelTool:".length))
+        .filter(Boolean),
+      taskTypes: rawEvents
+        .filter((event) => event.startsWith("onTaskType:"))
+        .map((event) => event.slice("onTaskType:".length))
+        .filter(Boolean),
       startup,
       commandEvents,
       toolEvents,
@@ -5477,6 +5633,29 @@ export class PluginManager {
     if (event === "startup") {
       return spec.startup
     }
+    if (event === "onTerminal") return spec.terminal
+    if (/^(onCustomEditor|onFileSystem|onDebugResolve|onNotebook|onWalkthrough):/.test(event))
+      return spec.managedEvents.some((pattern) => this.matchesActivation(pattern, event))
+    if (event.startsWith("onTaskType:")) {
+      const type = event.slice("onTaskType:".length)
+      return type === "*"
+        ? spec.taskTypes.length > 0
+        : spec.taskTypes.some((pattern) => this.matchesActivation(pattern, type))
+    }
+
+    for (const [prefix, patterns] of [
+      ["onChatParticipant:", spec.chatParticipants],
+      ["onLanguageModelTool:", spec.languageModelTools],
+      ["onWebviewPanel:", spec.webviewPanels],
+      ["onTerminalProfile:", spec.terminalProfiles],
+    ] as const) {
+      if (event.startsWith(prefix)) {
+        const value = event.slice(prefix.length)
+        return value === "*"
+          ? patterns.length > 0
+          : patterns.some((pattern) => this.matchesActivation(pattern, value))
+      }
+    }
 
     if (event.startsWith("onCommand:")) {
       const command = event.slice("onCommand:".length)
@@ -5523,12 +5702,51 @@ export class PluginManager {
     return false
   }
 
-  async handleActivationEvent(event: PluginActivationRuntimeEvent): Promise<void> {
+  /** A verified live Pro IDE proxy must not reinstall itself while its callback waits. */
+  async activateManagedIdeContribution(
+    pluginId: string,
+    event: PluginActivationRuntimeEvent
+  ): Promise<void> {
+    if ((await this.lifecycleState.read(pluginId)).intent === "disabled")
+      throw new Error(`Managed IDE plugin ${pluginId} is disabled`)
+    this.managedIdeWakeups.set(pluginId, (this.managedIdeWakeups.get(pluginId) ?? 0) + 1)
+    try {
+      await this.handleActivationEvent(event, { targetPluginId: pluginId })
+      const separator = event.indexOf(":")
+      const prefix = `cognia.${pluginId}.`
+      const suffix = event.slice(separator + 1)
+      if (separator > 0 && suffix.startsWith(prefix))
+        await this.handleActivationEvent(
+          `${event.slice(0, separator + 1)}${suffix.slice(prefix.length)}` as PluginActivationRuntimeEvent,
+          { targetPluginId: pluginId }
+        )
+    } finally {
+      const remaining = (this.managedIdeWakeups.get(pluginId) ?? 1) - 1
+      if (remaining) this.managedIdeWakeups.set(pluginId, remaining)
+      else this.managedIdeWakeups.delete(pluginId)
+    }
+  }
+
+  async handleActivationEvent(
+    event: PluginActivationRuntimeEvent,
+    options?: { initiatorPluginId?: string; targetPluginId?: string }
+  ): Promise<void> {
     const store = usePluginStore.getState()
+    const initiator = options?.initiatorPluginId
+      ? store.plugins[options.initiatorPluginId]
+      : undefined
+    const reentrantActivation = Boolean(
+      options?.initiatorPluginId &&
+      (this.activationInFlight.has(options.initiatorPluginId) ||
+        initiator?.status === "loading" ||
+        initiator?.status === "enabling")
+    )
     const plugins = Object.values(store.plugins)
     const pluginsById = new Map(plugins.map((plugin) => [plugin.manifest.id, plugin]))
 
     for (const plugin of plugins) {
+      if (options?.targetPluginId && plugin.manifest.id !== options.targetPluginId) continue
+      if (reentrantActivation && plugin.manifest.id === options?.initiatorPluginId) continue
       if (plugin.status === "enabled") {
         continue
       }
@@ -5556,6 +5774,20 @@ export class PluginManager {
       }
 
       if (this.activationInFlight.has(plugin.manifest.id)) {
+        // Queries that consume a newly registered provider must join first
+        // activation. An extension querying during its own activate() cannot
+        // wait on itself; it can consume only providers already registered.
+        if (
+          !reentrantActivation &&
+          (event.startsWith("onTaskType:") ||
+            event.startsWith("onChatParticipant:") ||
+            event.startsWith("onLanguageModelTool:") ||
+            event.startsWith("onWebviewPanel:") ||
+            /^(onCustomEditor|onFileSystem|onDebugResolve|onNotebook|onWalkthrough):/.test(event) ||
+            event.startsWith("onTerminalProfile:"))
+        ) {
+          await this.activationCompletions.get(plugin.manifest.id)
+        }
         continue
       }
 
@@ -5579,6 +5811,11 @@ export class PluginManager {
       }
 
       this.activationInFlight.add(pluginId)
+      let complete!: () => void
+      const completion = new Promise<void>((resolve) => {
+        complete = resolve
+      })
+      this.activationCompletions.set(pluginId, completion)
       try {
         // A suspended plugin is resumed (fires onResume, reuses its preserved
         // permissions/i18n) rather than re-enabled, so it sees a transparent
@@ -5616,6 +5853,9 @@ export class PluginManager {
         loggers.manager.warn(`[plugin:${pluginId}] activation failed for event "${event}":`, error)
       } finally {
         this.activationInFlight.delete(pluginId)
+        if (this.activationCompletions.get(pluginId) === completion)
+          this.activationCompletions.delete(pluginId)
+        complete()
       }
     }
   }
@@ -6028,7 +6268,7 @@ export class PluginManager {
     const context = this.contexts.get(pluginId)
 
     if (!plugin || !context) return
-    if (plugin.manifest.ide?.targets.includes("pro-ide")) {
+    if (plugin.manifest.ide?.targets.includes("pro-ide") && !this.managedIdeWakeups.has(pluginId)) {
       const proxies = await import("@/lib/plugin/ide/proxy-manager")
       const { isDevModeActive } = await import("@/lib/plugin/ide/dev-mode")
       // Managed IDE Dev Mode: a local plugin's proxy goes in as a temporary
@@ -6167,6 +6407,7 @@ export class PluginManager {
       hasPermission: (permission: string) => context.permissions.hasPermission(permission as never),
       registerAgentTool: (tool: PluginTool) => {
         this.registry.registerTool(pluginId, tool)
+        if (this.registry.getTool(tool.name) !== tool) return () => {}
         usePluginStore.getState().registerPluginTool(pluginId, tool)
         return () => {
           if (this.registry.getTool(tool.name)?.pluginId === pluginId) {

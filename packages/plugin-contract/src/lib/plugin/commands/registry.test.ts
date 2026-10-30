@@ -20,6 +20,7 @@ import {
   unregisterCommand,
   unregisterCommandsByPlugin,
 } from "./registry"
+import { reservePluginOwnership } from "../registries/createOverlayRegistry"
 
 describe("command registry", () => {
   beforeEach(() => {
@@ -27,6 +28,19 @@ describe("command registry", () => {
   })
 
   describe("registration", () => {
+    it("keeps a paused owner's command key reserved without executing the old handler", () => {
+      registerCommand({ id: "shared", pluginId: "consumer", handler: jest.fn() })
+      const reservation = reservePluginOwnership("consumer")
+      try {
+        unregisterCommandsByPlugin("consumer")
+        registerCommand({ id: "shared", pluginId: "provider", handler: jest.fn() })
+        expect(getCommand("shared")).toBeUndefined()
+        registerCommand({ id: "shared", pluginId: "consumer", handler: jest.fn() })
+        expect(getCommand("shared")?.pluginId).toBe("consumer")
+      } finally {
+        reservation.dispose()
+      }
+    })
     it("registers a command and returns a dispose function", () => {
       const dispose = registerCommand({
         id: "hello.world",
@@ -38,16 +52,13 @@ describe("command registry", () => {
       expect(getCommand("hello.world")).toBeUndefined()
     })
 
-    it("overrides on duplicate id but warns", () => {
-      const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
-      try {
-        registerCommand({ id: "x", pluginId: "a", handler: () => 1 })
-        registerCommand({ id: "x", pluginId: "b", handler: () => 2 })
-        expect(getCommand("x")?.pluginId).toBe("b")
-        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/already registered/))
-      } finally {
-        warn.mockRestore()
-      }
+    it("keeps another owner's command and its disposer cannot remove the incumbent", async () => {
+      const handler = jest.fn(() => 1)
+      registerCommand({ id: "x", pluginId: "a", handler })
+      const rejected = registerCommand({ id: "x", pluginId: "b", handler: () => 2 })
+      rejected()
+      expect(await executeCommand("x")).toBe(1)
+      expect(getCommand("x")?.pluginId).toBe("a")
     })
 
     it("is idempotent on unregister", () => {

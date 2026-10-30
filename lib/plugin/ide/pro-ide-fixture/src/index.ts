@@ -39,6 +39,65 @@ interface SerializedDocument {
 
 const basename = (path: string) => path.split(/[/\\]/).pop() ?? path
 
+const virtualFiles = new Map<string, Uint8Array>()
+/** A real extension-owned memory filesystem, exercised through Code's workspace.fs. */
+export function fileSystem(
+  operation: string,
+  uri?: SerializedUri,
+  content?: Uint8Array | SerializedUri
+) {
+  const path = uri?.path ?? "/"
+  switch (operation) {
+    case "writeFile":
+      virtualFiles.set(path, Uint8Array.from(content as Uint8Array))
+      return null
+    case "readFile": {
+      const value = virtualFiles.get(path)
+      if (!value) throw new Error(`FileNotFound: ${path}`)
+      return value.slice()
+    }
+    case "stat":
+      return {
+        type: path === "/" ? 2 : 1,
+        ctime: 1,
+        mtime: 1,
+        size: virtualFiles.get(path)?.length ?? 0,
+      }
+    case "readDirectory":
+      return [...virtualFiles.keys()].map((name) => [basename(name), 1])
+    case "createDirectory":
+      return null
+    case "delete":
+      virtualFiles.delete(path)
+      return null
+    case "rename":
+    case "copy": {
+      const value = virtualFiles.get(path)
+      if (!value) throw new Error(`FileNotFound: ${path}`)
+      virtualFiles.set((content as SerializedUri).path, value.slice())
+      if (operation === "rename") virtualFiles.delete(path)
+      return null
+    }
+    case "watch":
+      return { id: path }
+    case "watch/dispose":
+      return null
+    default:
+      throw new Error(`unexpected filesystem operation ${operation}`)
+  }
+}
+
+export function debugConfiguration(
+  operation: string,
+  _folder?: unknown,
+  configuration?: Record<string, unknown>
+) {
+  if (operation === "provide") return []
+  if (operation === "resolve" || operation === "resolveSubstituted")
+    return { ...configuration, program: "resolved-main.cfx" }
+  throw new Error(`unexpected debug configuration operation ${operation}`)
+}
+
 /** The `command` provider: the lens click lands here. */
 export function ping(
   _operation: string,
@@ -222,6 +281,8 @@ export function languageModelTool(operation: string, options?: { input?: { text?
 
 /** The plugin runtime resolves provider handlers off this default export. */
 const fixture = {
+  fileSystem,
+  debugConfiguration,
   ping,
   provideFixtureLenses,
   sourceControl,

@@ -123,8 +123,8 @@ For payload schemas, see `types/plugin/plugin.ts:PluginHooks`.
 
 | Hook                      | Dispatched by                                                                  |
 | ------------------------- | ------------------------------------------------------------------------------ |
-| `onAgentStart`            | `lib/claude/sync.ts` (or SDK pump in `hooks/use-claude-chat.ts`) — wired in M3 |
-| `onAgentStep`             | same as above                                                                  |
+| `onAgentStart`            | `lib/ai/agent/team/teammate/dispatch-teammate.ts`                              |
+| `onAgentStep`             | `lib/ai/agent/team/teammate/dispatch-teammate.ts:onTurnCapture`                |
 | `onAgentToolCall`         | **deprecated** (`DEPRECATED_HOOK_POINTS`) — use `onPreToolUse`/`onPostToolUse` |
 | `onAgentComplete`         | same as above                                                                  |
 | `onAgentError`            | same as above                                                                  |
@@ -138,30 +138,30 @@ For payload schemas, see `types/plugin/plugin.ts:PluginHooks`.
 | `onMessageSend`    | `hooks/chat/use-claude-chat.ts` `send()` via `lib/claude/adapter-hooks.ts:dispatchOnMessageSend` — pipeline rewrite of the outgoing user message's text (runs after `onUserPromptSubmit`; text blocks only, attachments untouched).   |
 | `onMessageReceive` | `hooks/chat/use-claude-chat.ts` turn-seal via `lib/claude/adapter-hooks.ts:dispatchOnAssistantMessage` — pipeline rewrite of the sealed assistant message (applied post-seal to store + Dexie; streaming deltas are not intercepted). |
 | `onMessageRender`  | **deprecated** (`DEPRECATED_HOOK_POINTS`, plugin-points.ts) — never dispatched; use `ctx.messagePart` renderers instead.                                                                                                              |
-| `onMessageDelete`  | session ops                                                                                                                                                                                                                           |
-| `onMessageEdit`    | session ops                                                                                                                                                                                                                           |
+| `onMessageDelete`  | `lib/db/messages.ts` / accepted edit branches → `lib/chat/lifecycle-events.ts` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts`                                                                                                 |
+| `onMessageEdit`    | `lib/db/messages.ts` / accepted edit branches → `lib/chat/lifecycle-events.ts` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts`                                                                                                 |
 
 ### Sessions (5)
 
-| Hook                | Dispatched by                                              |
-| ------------------- | ---------------------------------------------------------- |
-| `onSessionCreate`   | `lib/sessions/*`                                           |
-| `onSessionSwitch`   | `lib/sessions/*`                                           |
-| `onSessionDelete`   | `lib/sessions/*`                                           |
-| `onSessionRename`   | `lib/sessions/*`                                           |
-| `onSessionClear`    | `lib/sessions/*`                                           |
-| `onSessionLinked`   | `stores/project/project-store.ts:addSessionToProject`      |
-| `onSessionUnlinked` | `stores/project/project-store.ts:removeSessionFromProject` |
+| Hook                | Dispatched by                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------- |
+| `onSessionCreate`   | `lib/db/sessions.ts` / `lib/db/messages.ts` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts` |
+| `onSessionSwitch`   | `stores/chat/chat-store.ts:activeSessionId` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts` |
+| `onSessionDelete`   | `lib/db/sessions.ts` / `lib/db/messages.ts` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts` |
+| `onSessionRename`   | `lib/db/sessions.ts` / `lib/db/messages.ts` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts` |
+| `onSessionClear`    | `lib/db/sessions.ts` / `lib/db/messages.ts` → `lib/plugin/messaging/chat-lifecycle-hook-source.ts` |
+| `onSessionLinked`   | `stores/project/project-store.ts:addSessionToProject`                                              |
+| `onSessionUnlinked` | `stores/project/project-store.ts:removeSessionFromProject`                                         |
 
 ### Commands & chat flow (4)
 
-| Hook                   | Dispatched by                                             |
-| ---------------------- | --------------------------------------------------------- |
-| `onCommand`            | `lib/chat/slash-command-registry.ts:dispatchSlashCommand` |
-| `onChatRegenerate`     | retry flow                                                |
-| `onModelSwitch`        | model picker                                              |
-| `onChatModeSwitch`     | mode picker                                               |
-| `onSystemPromptChange` | character / mode change                                   |
+| Hook                   | Dispatched by                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `onCommand`            | `lib/plugin/core/manager.ts:executeCommand` / `lib/slash-commands/registry.ts`              |
+| `onChatRegenerate`     | accepted regeneration in `hooks/chat/use-claude-chat-controller.ts` → chat lifecycle source |
+| `onModelSwitch`        | committed session metadata → chat lifecycle source                                          |
+| `onChatModeSwitch`     | committed `permissionMode` → chat lifecycle source                                          |
+| `onSystemPromptChange` | committed `systemPrompt` → chat lifecycle source                                            |
 
 ### Scheduled tasks (9) — already wired
 
@@ -239,14 +239,14 @@ under the synthetic owner `__host:canvas__` (cap 30/sec, refill 30/sec).
 
 ### Stream / chat request (5)
 
-| Hook            | Dispatched by                                         |
-| --------------- | ----------------------------------------------------- |
-| `onChatRequest` | `lib/claude/sync.ts` request build site — wired in M3 |
-| `onStreamStart` | SDK pump — wired in M3                                |
-| `onStreamChunk` | SDK pump — wired in M3                                |
-| `onStreamEnd`   | SDK pump — wired in M3                                |
-| `onChatError`   | SDK pump — wired in M3                                |
-| `onTokenUsage`  | SDK pump usage event — wired in M3                    |
+| Hook            | Dispatched by                                |
+| --------------- | -------------------------------------------- |
+| `onChatRequest` | **deprecated** — use `onBuildOptions`        |
+| `onStreamStart` | `lib/plugin/messaging/stream-hook-source.ts` |
+| `onStreamChunk` | `lib/plugin/messaging/stream-hook-source.ts` |
+| `onStreamEnd`   | `lib/plugin/messaging/stream-hook-source.ts` |
+| `onChatError`   | `lib/plugin/messaging/stream-hook-source.ts` |
+| `onTokenUsage`  | SDK pump usage event — wired in M3           |
 
 ### Tool use (3)
 
@@ -255,7 +255,7 @@ under the synthetic owner `__host:canvas__` (cap 30/sec, refill 30/sec).
 | `onUserPromptSubmit` | composer send path — wired in M4                                                                                                                                                                                                                                                                                             |
 | `onPreToolUse`       | `hooks/chat/use-claude-chat.ts` `permission_request` case (chat) via `lib/claude/adapter-hooks.ts:dispatchPreToolUse`; a plugin deny/modify resolves the sidecar's `canUseTool` round-trip before any user-facing approval flow. Also `lib/ai/agent/agent-executor.ts` for plugin-dispatched agent turns.                    |
 | `onPostToolUse`      | `hooks/chat/use-claude-chat.ts` `tool_result_review` case (chat; engaged via `sendOptions.toolResultReviewEnabled` when listeners exist) via `lib/claude/adapter-hooks.ts:dispatchPostToolUse`; a returned `modifiedResult` is the model-visible output. Also `lib/ai/agent/agent-executor.ts:toolResultReviewResponderFor`. |
-| `onPreCompact`       | compaction step (if any)                                                                                                                                                                                                                                                                                                     |
+| `onPreCompact`       | `sidecar/src/hooks/pre-compact.ts` → `lib/claude/plugin-hook-ipc.ts`                                                                                                                                                                                                                                                         |
 | `onPostChatReceive`  | `hooks/chat/use-claude-chat.ts` — fired once the assistant turn seals (no pending approvals); carries the sealed assistant `PluginMessage`. The canonical post-turn observation seam.                                                                                                                                        |
 
 ### RAG (3)

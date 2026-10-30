@@ -44,12 +44,13 @@ export function splitActivationContributions(result: PluginHooks): ActivationCon
   return { interceptors, hookBag }
 }
 
-export type ContributionRejection = "unknown-point" | "semantic-mismatch" | "handler-not-a-function"
+export type ContributionRejection =
+  "unknown-point" | "semantic-mismatch" | "handler-not-a-function" | "permission-denied"
 
 export interface ContributionOutcome {
   registered: number
   rejected: Array<{ point: string; reason: ContributionRejection }>
-  /** Registered on a point the host declares but does not yet dispatch. */
+  /** Declared on an unavailable point and excluded from executable registrations. */
   dormant: string[]
 }
 
@@ -58,14 +59,13 @@ export interface ContributionOutcome {
  *
  * A bad contribution is refused loudly rather than coerced: a silently dropped
  * interceptor looks exactly like one that ran and did nothing, which is the
- * hardest plugin bug to report. A contribution on a `virtual` point is accepted
- * — the author is ready for the seam to land — but the fact that nothing will
- * call it is stated, for the same reason.
+ * hardest plugin bug to report. A contribution on a `virtual` point is reported
+ * as dormant and excluded from the executable registry.
  */
 export function registerDeclaredInterceptors(
   pluginId: string,
   contributions: readonly PluginInterceptorContribution[],
-  options: { generation?: number } = {}
+  options: { generation?: number; hasPermission?: (permission: string) => boolean } = {}
 ): ContributionOutcome {
   const outcome: ContributionOutcome = { registered: 0, rejected: [], dormant: [] }
 
@@ -104,10 +104,19 @@ export function registerDeclaredInterceptors(
     }
     if (!isInterceptorPointLive(contribution.point)) {
       loggers.hooks.warn(
-        `[interceptors] plugin ${pluginId} registered on "${contribution.point}", which the ` +
-          `host declares but does not yet dispatch. The handler will not run until it does.`
+        `[interceptors] plugin ${pluginId} declared unavailable point "${contribution.point}". ` +
+          `The handler was not registered because the host has no consumer.`
       )
       outcome.dormant.push(contribution.point)
+      continue
+    }
+
+    if (point.permission && !options.hasPermission?.(point.permission)) {
+      loggers.hooks.error(
+        `[interceptors] plugin ${pluginId} requires ${point.permission} for ${contribution.point}`
+      )
+      outcome.rejected.push({ point: contribution.point, reason: "permission-denied" })
+      continue
     }
 
     registerInterceptor(
@@ -115,7 +124,18 @@ export function registerDeclaredInterceptors(
         pluginId,
         pointId: contribution.point,
         semantic: point.semantic,
-        handler: contribution.handler as never,
+        handler: ((...args: unknown[]) => {
+          const check = () => {
+            if (point.permission && !options.hasPermission?.(point.permission))
+              throw new Error(`Interceptor permission revoked: ${point.permission}`)
+          }
+          check()
+          const produced = (contribution.handler as (...values: unknown[]) => unknown)(...args)
+          return Promise.resolve(produced).then((value) => {
+            check()
+            return value
+          })
+        }) as never,
         order: {
           ...(contribution.before ? { before: contribution.before } : {}),
           ...(contribution.after ? { after: contribution.after } : {}),

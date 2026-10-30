@@ -113,17 +113,14 @@ export class PluginA2UIBridge {
     // first-wins — the surface rendered B, the registry said A owned it, and
     // disabling B deleted A's row. A same-plugin re-register (hot reload)
     // stays allowed.
-    const existingPluginId = this.registeredComponents.get(type)
-    if (existingPluginId && existingPluginId !== pluginId) {
-      loggers.manager.warn(
-        `Component type "${type}" already provided by plugin "${existingPluginId}" — ` +
-          `rejecting duplicate registration from "${pluginId}" (first-wins).`
-      )
-      // Route the rejection through the registry so the conflict is recorded
-      // on the same `plugin.conflict.rejected` channel the panel reads.
-      this.config.registry.registerComponent(pluginId, component)
+    this.config.registry.registerComponent(pluginId, component)
+    // Reservations can reject a registration even when no live component
+    // exists. Only the authoritative accepted object may reach the catalog.
+    if (
+      this.config.registry.getComponent(type) !== component ||
+      !this.config.registry.getComponentsByPlugin(pluginId).includes(component)
+    )
       return
-    }
 
     // Create wrapper component that provides plugin context
     const WrappedComponent = this.createWrappedComponent(pluginId, component)
@@ -135,7 +132,6 @@ export class PluginA2UIBridge {
 
     // Track registration
     this.registeredComponents.set(type, pluginId)
-    this.config.registry.registerComponent(pluginId, component)
     usePluginStore.getState().registerPluginComponent(pluginId, component)
   }
 
@@ -155,7 +151,13 @@ export class PluginA2UIBridge {
 
     unregisterComponent(componentType as never)
     this.registeredComponents.delete(componentType)
-    this.config.registry.unregisterComponent(componentType)
+    const registered = this.config.registry.getComponent(componentType)
+    if (
+      registered &&
+      this.config.registry.getComponentsByPlugin(ownerPluginId).includes(registered)
+    ) {
+      this.config.registry.unregisterComponent(componentType)
+    }
     usePluginStore.getState().unregisterPluginComponent(ownerPluginId, componentType)
   }
 

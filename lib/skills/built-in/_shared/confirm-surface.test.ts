@@ -21,6 +21,9 @@ describe("buildConfirmSurface (shared HITL card)", () => {
     expect(components.btn_cancel.props).toMatchObject({
       action: { type: "button", value: "cancel" },
     })
+    expect(components.summary).toMatchObject({ text: "This will do the thing." })
+    expect(components.btn_confirm).toMatchObject({ text: "Confirm", action: "approve" })
+    expect(components.btn_cancel).toMatchObject({ text: "Cancel", action: "cancel" })
   })
 
   it("stays importable from the legacy lark helper path (re-export)", async () => {

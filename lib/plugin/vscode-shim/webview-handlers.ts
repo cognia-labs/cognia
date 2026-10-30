@@ -48,6 +48,12 @@ import {
   type WebviewScript,
 } from "./webview-document"
 import { readAppTheme, type VscodeThemeKind } from "./webview-theme"
+import {
+  registerVscodeWebviewSerializer,
+  unregisterVscodeWebviewSerializer,
+  clearVscodeWebviewSerializersForPlugin,
+  __resetWebviewRestorationForTesting,
+} from "./webview-restoration"
 
 /** Where the frame loads its shell from: the app's own origin. */
 export const WEBVIEW_SHELL_PATH = "/vscode-webview/webview-shell.js"
@@ -397,6 +403,24 @@ export function connectWebviewFrame(
 
 export function installVscodeWebviewHandlers(): Array<() => void> {
   return [
+    registerMethod("window:registerWebviewPanelSerializer", (payload, context) => {
+      const value = owned(payload, context)
+      registerVscodeWebviewSerializer(
+        context.pluginId,
+        requiredString(value, "viewType"),
+        requiredString(value, "token")
+      )
+      return null
+    }),
+    registerMethod("window:unregisterWebviewPanelSerializer", (payload, context) => {
+      const value = owned(payload, context)
+      unregisterVscodeWebviewSerializer(
+        context.pluginId,
+        requiredString(value, "viewType"),
+        requiredString(value, "token")
+      )
+      return null
+    }),
     registerMethod("window:createWebviewPanel", (payload, context) => {
       const value = owned(payload, context)
       const handle = requiredString(value, "handle")
@@ -406,6 +430,7 @@ export function installVscodeWebviewHandlers(): Array<() => void> {
           handle,
           pluginId: context.pluginId,
           kind: "panel",
+          restorationId: globalThis.crypto.randomUUID(),
           viewType: requiredString(value, "viewType"),
           title: typeof value.title === "string" ? value.title : "",
           html: "",
@@ -503,14 +528,16 @@ export function installVscodeWebviewHandlers(): Array<() => void> {
 
 /** The extension stopped: its webviews close with it. */
 export function clearVscodeWebviewsForPlugin(pluginId: string): void {
+  clearVscodeWebviewSerializersForPlugin(pluginId)
   for (const webview of listWebviews()) {
     if (webview.pluginId !== pluginId) continue
-    removeWebview(webview.handle)
+    removeWebview(webview.handle, true)
     reportedVisible.delete(webview.handle)
   }
 }
 
 export function __resetVscodeWebviewsForTesting(): void {
+  __resetWebviewRestorationForTesting()
   reportedVisible.clear()
   configureVscodeWebviews(null)
 }

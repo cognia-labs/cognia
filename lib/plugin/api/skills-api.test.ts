@@ -32,6 +32,8 @@ it("lists only manifest-allowlisted built-in skills", () => {
 
 it("runs a built-in skill as the plugin's doing, for what it delivers (ADR-0239)", async () => {
   let seen: unknown
+  let seenSignal: unknown
+  const controller = new AbortController()
   registerBuiltInSkill({
     id: "lark.sheets.peek",
     family: "lark.sheets",
@@ -44,14 +46,16 @@ it("runs a built-in skill as the plugin's doing, for what it delivers (ADR-0239)
     inputSchema: z.object({}),
     execute: async (_args, ctx) => {
       seen = ctx.outboundAuthorization
+      seenSignal = ctx.signal
       return { ok: true }
     },
   })
   await createSkillsAPI("office", ["lark.sheets.*"]).invokeBuiltIn(
     "lark.sheets.peek",
     {},
-    { sessionId: "s1" }
+    { sessionId: "s1", signal: controller.signal }
   )
+  expect(seenSignal).toBe(controller.signal)
   expect(seen).toEqual({ kind: "plugin", pluginId: "office" })
 })
 

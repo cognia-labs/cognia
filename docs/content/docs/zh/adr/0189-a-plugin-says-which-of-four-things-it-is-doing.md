@@ -85,15 +85,17 @@ if (result.kind === "error")   { …; return next(req) }   // ← 第二次调�
 | `tool.result.project` | transform | `hooks-system.ts:dispatchPostToolUse` |
 | `ui.action.invoke` | guard | `commands/registry.ts:executeCommand` |
 | `operation.completed` | observe | `interceptors/dispatch.ts` |
-| `model.stream.transform` | transform | **virtual** |
-| `agent.turn.decide` | guard | **virtual** |
-| `ui.surface.project` | transform | **virtual** |
+| `model.stream.transform` | transform | `interceptors/consumers.ts`，在 standalone / AI SDK 事件映射之前 |
+| `agent.turn.decide` | guard | AI SDK `prepareStep`，复用 Sidecar hook 往返 |
+| `ui.surface.project` | transform | 两种 slot 渲染器共用异步 `useSurfaceProjections` |
 
-三个 virtual 扩展点被如实标注，而不是作为「调了也没反应」的 API 发布：
+实现更新（2026-10-29）：这三个点位已接入可等待的实际消费端。Web/mobile 的 `executeAgent` 文本回退复用相同消费者：单次模型调用在发起前等待 guard，由现有逐次权限回复器处理审批，没有回复器则拒绝继续。投影只改变展示文本，结构化结果仍来自原始模型输出。
 
-- `model.stream.transform` —— `dispatchStreamChunk` 是同步的且调用方丢弃返回值，改写后的分块无处可去。把它变成 transform 是改流式契约，不是改这份目录。
-- `agent.turn.decide` —— 轮次循环在 sidecar 内部，宿主侧没有可拦截的继续/停止决策。
-- `ui.surface.project` —— surface 投影在同步渲染内运行，无法承载其他扩展点都依赖的截止时间与撤销语义。以更弱的契约发布它，会让「失败策略说了算」这句话恰恰在插件离用户最近的地方失效。
+- 流变换在 mapper 累积之前改写展示文本，最终 assistant 快照使用同一结果；传输身份、工具参数和 Sidecar 的模型对话不被改写。Standalone 再次发送派生的 assistant 历史前会执行 PII 检查。
+- AI SDK 的每个模型 step 在既有准备与预算策略后等待 guard。遇到 deny 即停止；其他 guard 的审批请求统一收集，批准前一个请求不会跳过后面的 deny。审批复用现有会话隔离的等待与回复入口，复用会话也会逐轮刷新或清空 interceptor 配置。
+- UI 投影在 render 外处理可序列化的展示 DTO，普通 slot、overflow 和存在性判断共用 hook；宿主上下文与归属身份不可改写。注册版本、装饰插件启停和取消状态阻止迟到结果提交，收紧为严格失败策略时隐藏该 surface。
+
+声明式 interceptor 在注册和回调完成时都必须满足其规范权限，取消与过期注册不能提交结果。原生 Claude SDK 不暴露内部模型 step，因此启用流或轮次 interceptor 时会拒绝使用该运行时，避免静默绕过；Standalone Anthropic BYOK 实际使用 AI SDK，支持这些点位。
 
 ### 哪些旧 hook 被归一化
 

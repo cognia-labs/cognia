@@ -32,7 +32,11 @@ import {
   getCommand,
   getCommands,
 } from "@/lib/plugin/commands/registry"
-import { __resetTaskRegistryForTesting, fetchTasks } from "@/lib/plugin/commands/tasks-registry"
+import {
+  __resetTaskRegistryForTesting,
+  fetchTasks,
+  registerTaskProvider,
+} from "@/lib/plugin/commands/tasks-registry"
 import {
   __makeSession,
   __resetAuthRegistryForTesting,
@@ -168,6 +172,35 @@ describe("VS Code host-neutral runtime handlers", () => {
       expect(getCommand("extension.other")?.title).toBeUndefined()
     } finally {
       delete mockPlugins["publisher.extension"]
+    }
+  })
+
+  it.each([undefined, "npm"])("activates task providers before fetching %s tasks", async (type) => {
+    const tasks = [{ id: "npm:build", name: "build", source: "npm", definition: { type: "npm" } }]
+    const provideTasks = jest.fn(async () => tasks)
+    const activate = jest.fn(async () => {
+      registerTaskProvider({ type: "npm", pluginId: "publisher.npm", provideTasks })
+    })
+    configureVscodeRuntimeActivationForTesting(activate)
+    try {
+      const response = await request("tasks:fetchTasks", { ...(type ? { filter: { type } } : {}) })
+      expect(activate).toHaveBeenCalledWith(`onTaskType:${type ?? "*"}`, "publisher.extension")
+      expect(provideTasks).toHaveBeenCalledTimes(1)
+      expect(response).toMatchObject({ result: tasks })
+    } finally {
+      configureVscodeRuntimeActivationForTesting(null)
+    }
+  })
+
+  it("rejects invalid task filters before firing activation", async () => {
+    const activate = jest.fn(async () => {})
+    configureVscodeRuntimeActivationForTesting(activate)
+    try {
+      const response = await request("tasks:fetchTasks", { filter: { type: 42 } })
+      expect(response.error).toBeDefined()
+      expect(activate).not.toHaveBeenCalled()
+    } finally {
+      configureVscodeRuntimeActivationForTesting(null)
     }
   })
 

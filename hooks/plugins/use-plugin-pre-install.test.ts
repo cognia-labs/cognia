@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
 import { usePluginPreInstall } from "./use-plugin-pre-install"
 import type { RunMarketplaceInstallOpts } from "@/lib/plugin/marketplace/install-flow"
 import type { PluginManifest } from "@/types/plugin"
@@ -11,6 +11,15 @@ jest.mock("@/lib/telemetry/events/track-event", () => ({
 jest.mock("@/lib/db/plugins", () => ({
   listPlugins: jest.fn().mockResolvedValue([]),
   setPluginConfig: jest.fn().mockResolvedValue(undefined),
+  getPlugin: jest.fn(async (id: string) =>
+    id === "demo-plugin" ? { id, version: "1.0.0" } : null
+  ),
+}))
+jest.mock("@/lib/plugin/marketplace/review-client", () => ({
+  loadRegistryReviewClient: jest.fn(async () => ({
+    getPlugin: jest.fn(async () => null),
+    installPlugin: jest.fn(),
+  })),
 }))
 
 type MarketplaceClient = RunMarketplaceInstallOpts["client"]
@@ -35,6 +44,93 @@ function makeClient(over: Partial<MarketplaceClient> = {}): MarketplaceClient {
 }
 
 describe("usePluginPreInstall", () => {
+  it("explains why a required provider cannot be selected for replacement", async () => {
+    const { listPlugins } = jest.requireMock("@/lib/db/plugins") as { listPlugins: jest.Mock }
+    const tool = { name: "shared", description: "Shared", parametersSchema: {} }
+    listPlugins.mockResolvedValue([
+      {
+        id: "provider",
+        version: "1.0.0",
+        enabled: true,
+        manifest: makeManifest({ id: "provider", tools: [tool] }),
+      },
+    ])
+    const client = makeClient({
+      getPlugin: async () => ({
+        manifest: makeManifest({ tools: [tool], dependencies: { provider: "*" } }),
+      }),
+    })
+    const { result } = renderHook(() => usePluginPreInstall(client))
+    let pending: ReturnType<typeof result.current.install> | undefined
+    try {
+      act(() => {
+        pending = result.current.install("demo-plugin", undefined, "Demo")
+      })
+      await waitFor(() => expect(result.current.target?.step).toBe("conflict"))
+      await act(async () => {
+        result.current.resolveContinue("disable-conflicting")
+        expect(await pending).toMatchObject({
+          status: "failed",
+          stage: "conflict",
+          message:
+            "A plugin selected for replacement is required by this installation. Keep that provider or choose a different plugin version.",
+        })
+      })
+      expect(client.installPlugin).not.toHaveBeenCalled()
+    } finally {
+      listPlugins.mockResolvedValue([])
+    }
+  })
+  it("cancels and releases a package whose preparation completes after unmount", async () => {
+    let finish!: (value: {
+      manifest: PluginManifest
+      install: jest.Mock
+      dispose: jest.Mock
+    }) => void
+    const prepared = {
+      manifest: makeManifest(),
+      install: jest.fn(),
+      dispose: jest.fn(async () => undefined),
+    }
+    const client = makeClient({
+      preparePlugin: jest.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          })
+      ),
+    })
+    const { result, unmount } = renderHook(() => usePluginPreInstall(client))
+    let pending: ReturnType<typeof result.current.install> | undefined
+    await act(async () => {
+      pending = result.current.install("demo-plugin", undefined, "Demo")
+      await Promise.resolve()
+    })
+    unmount()
+    finish(prepared)
+    await expect(pending).resolves.toEqual({ status: "cancelled", stage: "install" })
+    expect(prepared.install).not.toHaveBeenCalled()
+    expect(prepared.dispose).toHaveBeenCalledTimes(1)
+  })
+  it("mounts required dependency review and allows cancellation", async () => {
+    const client = makeClient({
+      getPlugin: jest.fn(async () => ({
+        manifest: makeManifest({ dependencies: { dep: "^1.0.0" } }),
+      })),
+    })
+    const { result } = renderHook(() => usePluginPreInstall(client))
+    let pending: ReturnType<typeof result.current.install> | undefined
+    act(() => {
+      pending = result.current.install("demo-plugin", undefined, "Demo")
+    })
+    await waitFor(() => expect(result.current.target?.step).toBe("dependencies"))
+    expect(result.current.target?.dependencies?.missing).toEqual(["dep"])
+    await act(async () => {
+      result.current.resolveCancel()
+      expect(await pending).toEqual({ status: "cancelled", stage: "dependencies" })
+    })
+    expect(client.installPlugin).not.toHaveBeenCalled()
+  })
   it("returns failed/client_not_ready when client is null and never mounts dialog state", async () => {
     const { result } = renderHook(() => usePluginPreInstall(null))
 

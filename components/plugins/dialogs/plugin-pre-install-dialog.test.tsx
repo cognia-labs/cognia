@@ -89,6 +89,88 @@ const binariesTarget: PreInstallTarget = {
 }
 
 describe("PluginPreInstallDialog", () => {
+  it("requires an explicit action to disable competitors", () => {
+    const onContinue = jest.fn()
+    render(
+      <PluginPreInstallDialog
+        target={{
+          ...conflictTarget,
+          conflict: { ...conflictTarget.conflict!, conflictingPluginIds: ["other"] },
+        }}
+        onContinue={onContinue}
+        onCancel={() => {}}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "conflictUseNew" }))
+    expect(onContinue).toHaveBeenCalledWith("disable-conflicting")
+  })
+
+  it("shows dependency versions and executes the resolve choice", () => {
+    const onContinue = jest.fn()
+    render(
+      <PluginPreInstallDialog
+        target={{
+          ...conflictTarget,
+          step: "dependencies",
+          dependencies: {
+            pluginId: "p",
+            missing: ["dep"],
+            conflicts: [],
+            actions: [{ pluginId: "dep", required: "^2.0.0", version: "2.1.0" }],
+          },
+        }}
+        onContinue={onContinue}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByText('dependencySelected:{"version":"2.1.0"}')).toBeVisible()
+    fireEvent.click(screen.getByRole("button", { name: "dependenciesResolve" }))
+    expect(onContinue).toHaveBeenCalledWith("resolve")
+  })
+
+  it("cannot install dependencies when no compatible version is available", () => {
+    render(
+      <PluginPreInstallDialog
+        target={{
+          ...conflictTarget,
+          step: "dependencies",
+          dependencies: {
+            pluginId: "p",
+            missing: [],
+            conflicts: [{ pluginId: "dep", required: "^2.0.0", available: "1.0.0" }],
+            actions: [{ pluginId: "dep", required: "^2.0.0", available: "1.0.0" }],
+          },
+        }}
+        onContinue={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByRole("button", { name: "dependenciesResolve" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "dependenciesRecheck" })).toBeEnabled()
+  })
+
+  it("distinguishes a failed version lookup from an incompatible version", () => {
+    render(
+      <PluginPreInstallDialog
+        target={{
+          ...conflictTarget,
+          step: "dependencies",
+          dependencies: {
+            pluginId: "p",
+            missing: ["dep"],
+            conflicts: [],
+            actions: [{ pluginId: "dep", required: "^1.0.0", lookupFailed: true }],
+          },
+        }}
+        onContinue={() => {}}
+        onCancel={() => {}}
+      />
+    )
+    expect(screen.getByText("dependencyLookupFailed")).toBeVisible()
+    expect(screen.queryByText("dependencyUnavailable")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "dependenciesResolve" })).toBeDisabled()
+  })
+
   it("does not render content when target is null", () => {
     render(<PluginPreInstallDialog target={null} onContinue={() => {}} onCancel={() => {}} />)
     expect(screen.queryByTestId("plugin-pre-install-dialog")).not.toBeInTheDocument()

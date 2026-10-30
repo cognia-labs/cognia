@@ -60,6 +60,23 @@ beforeEach(() => {
 })
 
 describe("registerInterceptor", () => {
+  it("an old disposer cannot remove a replacement registration", () => {
+    const stale = registerInterceptor(make("same"))
+    const replacement = make("same")
+    registerInterceptor(replacement)
+    stale()
+    expect(getInterceptor("same")).toBe(replacement)
+  })
+  it.each(["unknown"])(
+    "refuses unavailable point %s without retaining a registration",
+    (pointId) => {
+      expect(() => registerInterceptor(make("unsupported", { pointId }))).toThrow(
+        "no host consumer"
+      )
+      expect(getInterceptor("unsupported")).toBeUndefined()
+      expect(listInterceptorPointsInUse()).toEqual([])
+    }
+  )
   it("registers, resolves and disposes", () => {
     const dispose = registerInterceptor(make("a"))
     expect(getInterceptor("a")).toBeDefined()

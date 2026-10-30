@@ -8,7 +8,7 @@ description: Distribution and lifecycle spine for Cognia plugins — five instal
 <Status variant="experimental" />
 
 <TLDR>
-Every plugin install — HTTP registry, GitHub marketplace repo, raw git build, signed HTTP zip, or local directory — uses `runMarketplaceInstall` (`install-flow.ts:328`), which runs an ordered gate (manifest → conflict → dependency → permission → binary → config) before calling the source-specific `installPlugin`. No Dexie `plugins` row exists until the install step (`install-flow.ts:6-7`). Once installed, `updater.ts`, `backup.ts`, and `rollback.ts` own versioning, snapshot rotation (default 5), and restore-with-migration.
+Reviewed marketplace installs use `runMarketplaceInstall`, which runs an ordered gate (manifest → conflict → dependency → permission → binary → config) before calling the source-specific installer. Direct local bundle, signed URL and VSIX dialogs retain separate install pipelines. Once installed, `updater.ts`, `backup.ts`, and `rollback.ts` own versioning, snapshot rotation (default 5), and restore-with-migration.
 </TLDR>
 
 <StatGrid>
@@ -32,7 +32,7 @@ The five sources:
 - **HTTP `.zip` bundles** (`http-installer.ts`) — a bundle URL with a detached Ed25519 signature.
 - **Local on-disk directory** (`local/`) — a "Load unpacked" directory containing `plugin.json`.
 
-All UI installs use `runMarketplaceInstall` (`marketplace/install-flow.ts`), which gates behind an ordered chain — manifest fetch → conflict detection (`conflict-detector.ts`) → dependency resolution (`dependency-resolver.ts`) → permission consent → binary-requirement probe → config — then calls the source-specific `installPlugin`. That source call performs the authoritative **Rust download + signature verification** before the row is promoted. Once installed (a Dexie `plugins` row exists), the lifecycle managers handle versioning: `updater.ts` (backup → download → install → verify), `backup.ts` (snapshot + rotation), `rollback.ts` (backup → disable/unload → restore → migrate → load/enable → verify).
+The marketplace and Discover sheet use `runMarketplaceInstall` (`marketplace/install-flow.ts`), with conflict, dependency, permission, binary-requirement and configuration review. The registry review client performs authoritative **Rust download + signature verification** before presenting the package manifest, then commits that same staged package. Other source adapters retain their own staging boundaries. Once installed (a Dexie `plugins` row exists), the lifecycle managers handle versioning: `updater.ts` (backup → download → install → verify), `backup.ts` (snapshot + rotation), `rollback.ts` (backup → disable/unload → restore → migrate → load/enable → verify).
 
 ## 2. `install-flow.ts` — `runMarketplaceInstall`
 
@@ -103,7 +103,7 @@ result.success = result.missing.length === 0 && result.conflicts.length === 0
 | capability | info | `:365` | ≥2 plugins declare an exclusive `themes` capability (`:367`) |
 | resource | warning | `:397` | shared resource path |
 
-The pipeline can proceed when there are no errors — `canProceed = errors.length === 0` (`:127`). Each type has a suggested auto-resolution (`generateAutoResolutions :473-565`): command → `skip`, shortcut → `rebind`, namespace → `prefix`, version → `upgrade`/`downgrade`, capability → `disable`, resource → `prioritize`.
+Candidate checks filter the full detector result, so all six check families use the same rules. Resolution plans describe the executable incumbent-first policy: shared keys remain with the first registrant; the same owner can refresh. No automatic rename, shortcut rebind or unverified version change is promised.
 
 The version detector tests each requirement against the installed dependency's version (`:200`):
 
@@ -112,6 +112,22 @@ const unsatisfied = requirements.filter(
   (req) => !satisfiesConstraint(installedDep.manifest.version, req.constraint),
 )
 ```
+
+### Reviewed resolution flow (2026-10-29)
+
+The marketplace and Discover sheet both mount the existing pre-install dialog. A conflict review can keep incumbent contributions or explicitly disable the named competing plugins through the manager. Cancellation/failure restores competitors across the entire dependency tree, including a dependency that already finished installing.
+
+Required dependencies have their own review step: show installed/required/selected versions, install compatible versions, recheck manually repaired dependencies, or cancel. Selection must satisfy **every installed consumer**, including the current parent version. Mutually incompatible coordinated upgrades are blocked rather than changing another consumer silently. Compatible active dependents are explicitly listed for temporary pause and are resumed after completion or cancellation. Approved dependency installations remain installed if a later step is cancelled.
+
+Dependencies use a registry client, never a GitHub/local client bound to the parent. The registry review client authenticates/stages the selected archive, reads that exact manifest for permission/configuration review, and passes the same staged package to the transactional installer. Unused staging is discarded on cancellation, including unmount during preparation. Implicit low-level dependency recursion is disabled on the reviewed adapter path. Required versions are read again before the target is committed.
+
+Temporary pauses hold key-only ownership reservations in the overlay registries, command bus and shortcut bridge. Paused handlers are absent and cannot execute, while a provider update cannot acquire the paused consumer's keys. Explicit replacements keep inactive reservations that activate only for compensation. Reservations are reference-counted and released in the root flow's finally block.
+
+Resolution snapshots persistent lifecycle intent before disabling a plugin, including a disable that fails after teardown. Temporary pauses restore both intent and runtime, including suspended or already-activating consumers. These internal transitions do not publish user-intent changes to Cogset write-through; only a successful explicit replacement publishes a permanent disabled decision. A replacement cannot disable a required provider of the requested tree or a consumer scheduled to resume. Cancellation is checked again after the asynchronous pause, before installation starts.
+
+Dependency siblings re-read installed versions after recursive installs. Already satisfied siblings are skipped; a changed version plan returns to dependency review before installing it. Manifest commands use their actual namespaced IDs and the runtime's preferred slash-token rules, including aliases. A2UI projects only components accepted by the registry. Desktop shortcut operations are serialized; stale disposers and cancelled pending binds cannot erase a replacement or bypass a paused owner's reservation.
+
+Only manifest-known shared keys can be checked before loading: tools/component types, command names/aliases and quick-action/tray accelerators (plus legacy command shortcuts). General resources and dynamically registered keys remain runtime checks. The core registry, command bus and browser shortcuts keep the incumbent across owners. Rejected tools are never projected into the live runtime store.
 
 ## 6. `catalog-entry.ts` + `marketplace.ts`
 

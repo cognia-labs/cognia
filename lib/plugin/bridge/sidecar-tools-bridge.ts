@@ -171,6 +171,20 @@ export function buildTerminalDockManifestEntries(
   ]
 }
 
+/** Materialize intent-enabled extension tools before building the model's catalog. */
+export async function prepareVscodeLanguageModelTools(): Promise<void> {
+  if (
+    !Object.values(usePluginStore.getState().plugins).some(
+      (plugin) =>
+        plugin.manifest.type === "vscode-extension" &&
+        plugin.manifest.vscodeExtension?.languageModelTools?.length
+    )
+  )
+    return
+  const { getPluginManager } = await import("@/lib/plugin/core/manager")
+  await getPluginManager().handleActivationEvent("onLanguageModelTool:*")
+}
+
 /**
  * Build the plugin-tools manifest from the live plugin store.
  *

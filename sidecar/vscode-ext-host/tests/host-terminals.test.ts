@@ -52,6 +52,81 @@ async function startTerminals(answer: any = () => undefined) {
   return { host, run, sent, report }
 }
 
+test("profile providers create real process and Pseudoterminal options in the Host", async () => {
+  const { host, sent } = await startTerminals()
+  try {
+    for (const id of ["fixture.process", "fixture.pty"]) {
+      const registration = sent("terminal:registerProfile").find(({ params }) => params.id === id)
+      assert.ok(registration)
+      const result = await host.request("extension:call", {
+        extensionId: ID,
+        token: registration.params.token,
+        method: "provideTerminalProfile",
+        payload: { profileLaunchId: `launch:${id}` },
+      })
+      const created = sent("terminal:create").find(
+        ({ params }) => params.terminalId === result.terminalId
+      )
+      assert.equal(created?.params.profileLaunchId, `launch:${id}`)
+      assert.equal(created?.params.kind, id === "fixture.pty" ? "pty" : "process")
+      if (id === "fixture.process") assert.equal(created?.params.shellPath, "/bin/sh")
+    }
+    await until(
+      () => sent("terminal:ptyWrite").some(({ params }) => params.data === "profile ready> "),
+      "profile PTY output"
+    )
+  } finally {
+    host.stop()
+  }
+})
+
+test("a cancelled delayed profile never creates a terminal", async () => {
+  const { host, sent } = await startTerminals()
+  try {
+    const registration = sent("terminal:registerProfile").find(
+      ({ params }) => params.id === "fixture.cancel"
+    )!
+    const pending = host.request("extension:call", {
+      extensionId: ID,
+      token: registration.params.token,
+      method: "provideTerminalProfile",
+      callId: "cancel-profile",
+      payload: { profileLaunchId: "cancelled-launch" },
+    })
+    const rejected = assert.rejects(pending, /cancelled/i)
+    await until(
+      () =>
+        sent("commands:execute").some(({ params }) => params.command === "fixture.profileStarted"),
+      "provider start"
+    )
+    await host.request("extension:cancel", { callId: "cancel-profile" })
+    await rejected
+    assert.equal(sent("terminal:create").length, 0)
+  } finally {
+    host.stop()
+  }
+})
+
+test("activation waits for terminal profile registration acknowledgement", async () => {
+  let release!: (value: unknown) => void
+  let settled = false
+  const pending = startTerminals((method: string, params: { id?: string }) =>
+    method === "terminal:registerProfile" && params.id === "fixture.process"
+      ? new Promise((resolve) => {
+          release = resolve
+        })
+      : undefined
+  )
+  void pending.then(() => {
+    settled = true
+  })
+  await until(() => release, "registration request")
+  assert.equal(settled, false)
+  release(null)
+  const { host } = await pending
+  host.stop()
+})
+
 test("a process terminal: created as asked, typed into in order, shown, hidden", async () => {
   // The dock reports the shell's process id with the new tab.
   const { host, run, sent } = await startTerminals((method: any, params: any) =>

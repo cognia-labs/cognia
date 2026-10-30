@@ -50,6 +50,17 @@ beforeEach(() => {
 })
 
 describe("im.broadcast", () => {
+  it("forwards explicit delivery intent to the governed common queue", async () => {
+    await skill().execute(
+      { conversationKeys: ["qq-official:a:g"], message: "Hello", deliveryMode: "proactive" },
+      { sessionId: "s" }
+    )
+    expect(mEnqueueMany).toHaveBeenCalledWith([
+      expect.objectContaining({
+        request: expect.objectContaining({ sendOptions: { mode: "proactive" } }),
+      }),
+    ])
+  })
   it("fans out to every target with a DISTINCT idempotency key", async () => {
     const keys = ["lark:a1:oc_1", "lark:a1:oc_2", "telegram:a2:chat_9"]
     const out = (await skill().execute(

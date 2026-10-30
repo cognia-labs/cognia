@@ -331,6 +331,14 @@ export interface ConnectorCallbackBindingRow {
   allowedActions?: string[]
   /** Set on first successful activation of a consume-once kind. */
   consumedAt?: number
+  /** Durable accepted workflow decision; written atomically with consumption. */
+  workflowDispatch?: {
+    status: "pending" | "started" | "settled"
+    decision: "approve" | "cancel"
+    acceptedAt: number
+    runId?: string
+    deliveryTarget?: ConversationDeliveryTarget
+  }
 }
 
 /**

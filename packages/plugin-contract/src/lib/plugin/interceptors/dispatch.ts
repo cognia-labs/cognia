@@ -388,7 +388,7 @@ export function dispatchObserve<TPayload>(
       continue
     }
     void runHandler(
-      () => handler(payload, meta),
+      () => handler(structuredClone(payload), meta),
       effectiveTimeout(point, registration, context),
       `interceptor:${pointId}:${registration.registrationId}`
     )
@@ -423,6 +423,49 @@ export interface TransformDispatchOptions<TValue> extends InterceptorDispatchCon
    * the point's failure policy instead of being trusted.
    */
   invariantFields?: readonly (keyof TValue & string)[]
+  /** Host validation runs within the point's failure policy before accepting a replacement. */
+  validateOutput?(value: TValue): void
+}
+
+/** Identity fields are scalars or JSON structures; opaque objects cannot be rewritten. */
+function sameInvariantValue(
+  left: unknown,
+  right: unknown,
+  seen = new WeakMap<object, object>()
+): boolean {
+  if (Object.is(left, right)) return true
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false
+  if (Array.isArray(left) !== Array.isArray(right)) return false
+  if (Array.isArray(left) && left.length !== (right as unknown[]).length) return false
+  const plain = (value: object) => {
+    if (Array.isArray(value)) return true
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype === null) return true
+    // structuredClone and worker/VM realms can have a different Object.prototype.
+    return (
+      Object.getPrototypeOf(prototype) === null &&
+      Object.prototype.hasOwnProperty.call(prototype, "constructor") &&
+      typeof prototype.constructor === "function" &&
+      Function.prototype.toString.call(prototype.constructor) ===
+        Function.prototype.toString.call(Object)
+    )
+  }
+  if (!plain(left) || !plain(right)) return false
+  if (seen.has(left)) return seen.get(left) === right
+  seen.set(left, right)
+  const keys = Object.keys(left)
+  return (
+    keys.length === Object.keys(right).length &&
+    keys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        sameInvariantValue(
+          (left as Record<string, unknown>)[key],
+          (right as Record<string, unknown>)[key],
+          seen
+        )
+    )
+  )
 }
 
 function assertInvariants<TValue>(
@@ -433,13 +476,13 @@ function assertInvariants<TValue>(
   fields: readonly string[] | undefined
 ): void {
   if (!fields?.length) return
-  if (before == null || after == null || typeof before !== "object" || typeof after !== "object") {
-    return
-  }
+  if (before == null || typeof before !== "object") return
+  if (after == null || typeof after !== "object")
+    throw new InterceptorInvariantError(pointId, registration.registrationId, fields[0]!)
   for (const field of fields) {
     const from = (before as Record<string, unknown>)[field]
     const to = (after as Record<string, unknown>)[field]
-    if (from !== to) {
+    if (!sameInvariantValue(from, to)) {
       throw new InterceptorInvariantError(pointId, registration.registrationId, field)
     }
   }
@@ -459,6 +502,7 @@ export async function dispatchTransform<TValue>(
   value: TValue,
   context: TransformDispatchOptions<TValue>
 ): Promise<{ value: TValue; report: InterceptorRunReport }> {
+  context.signal?.throwIfAborted()
   const point = requireInterceptorPoint(pointId)
   const report = createReport(pointId, context.operationId)
   const chain = resolveChain(pointId, context)
@@ -482,20 +526,26 @@ export async function dispatchTransform<TValue>(
         throw new InterceptorReentrancyError(pointId, registration.registrationId, depth)
       }
       const produced = await runHandler(
-        () => handler(current, meta),
+        () => handler(structuredClone(current), meta),
         effectiveTimeout(point, registration, context),
         `interceptor:${pointId}:${registration.registrationId}`
       )
+      context.signal?.throwIfAborted()
+      if (!context.chain && !resolveChain(pointId, context).includes(registration))
+        throw new InterceptorRevokedError(pointId, registration.registrationId)
       // A transform that returns nothing is treated as "no change" rather than
       // as "the value is now undefined" — the latter would let a forgotten
       // `return` blank the request.
       const next = (produced ?? current) as TValue
       assertInvariants(pointId, registration, current, next, context.invariantFields)
-      current = next
+      context.validateOutput?.(next)
+      // Detach accepted output from references retained by an extension.
+      current = structuredClone(next)
       const ownMs = now() - started
       noteSuccess(report, registration, ownMs, context)
       emitSpan(registration, context, wallClock, ownMs)
     } catch (error) {
+      context.signal?.throwIfAborted()
       const kind = noteFailure(report, registration, error, context)
       emitSpan(registration, context, wallClock, now() - started, error)
       const policy = effectivePolicy(point, registration)
@@ -531,11 +581,13 @@ export async function dispatchTransform<TValue>(
 export async function dispatchGuard<TPayload>(
   pointId: string,
   payload: TPayload,
-  context: InterceptorDispatchContext
+  context: InterceptorDispatchContext & { collectApprovals?: boolean }
 ): Promise<{ verdict: InterceptorGuardVerdict; report: InterceptorRunReport }> {
+  context.signal?.throwIfAborted()
   const point = requireInterceptorPoint(pointId)
   const report = createReport(pointId, context.operationId)
   const chain = resolveChain(pointId, context)
+  let approval: Extract<InterceptorGuardVerdict, { decision: "requireApproval" }> | undefined
 
   for (const registration of chain) {
     if (context.sink?.shouldSkip?.(registration)) {
@@ -555,17 +607,28 @@ export async function dispatchGuard<TPayload>(
         throw new InterceptorReentrancyError(pointId, registration.registrationId, depth)
       }
       const verdict = await runHandler(
-        () => handler(payload, meta),
+        () => handler(structuredClone(payload), meta),
         effectiveTimeout(point, registration, context),
         `interceptor:${pointId}:${registration.registrationId}`
       )
+      context.signal?.throwIfAborted()
+      if (!context.chain && !resolveChain(pointId, context).includes(registration))
+        throw new InterceptorRevokedError(pointId, registration.registrationId)
       const ownMs = now() - started
       noteSuccess(report, registration, ownMs, context)
       emitSpan(registration, context, wallClock, ownMs)
       if (verdict && verdict.decision !== "pass") {
+        if (context.collectApprovals && verdict.decision === "requireApproval") {
+          approval = {
+            decision: "requireApproval",
+            reason: approval ? `${approval.reason}; ${verdict.reason}` : verdict.reason,
+          }
+          continue
+        }
         return { verdict, report }
       }
     } catch (error) {
+      context.signal?.throwIfAborted()
       const kind = noteFailure(report, registration, error, context)
       emitSpan(registration, context, wallClock, now() - started, error)
       const policy = effectivePolicy(point, registration)
@@ -574,6 +637,14 @@ export async function dispatchGuard<TPayload>(
         continue
       }
       if (policy === "require-approval") {
+        if (context.collectApprovals) {
+          const reason = `guard "${registration.registrationId}" failed: ${messageOf(error)}`
+          approval = {
+            decision: "requireApproval",
+            reason: approval ? `${approval.reason}; ${reason}` : reason,
+          }
+          continue
+        }
         return {
           verdict: {
             decision: "requireApproval",
@@ -594,7 +665,7 @@ export async function dispatchGuard<TPayload>(
     }
   }
 
-  return { verdict: { decision: "pass" }, report }
+  return { verdict: approval ?? { decision: "pass" }, report }
 }
 
 /** Throwing variant for call sites whose contract is "proceed or raise". */

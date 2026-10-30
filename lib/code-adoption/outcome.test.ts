@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import Dexie from "dexie"
 
-import { getDb } from "@/lib/db/schema"
+import { activateAccountDatabase, clearAccountDatabaseSelection, getDb } from "@/lib/db/schema"
 import type { PatchSet } from "@/lib/task-workspace/types"
 
 import { recordTaskWorkspaceOutcome } from "./outcome"
@@ -89,8 +90,29 @@ const patch: PatchSet = {
 }
 
 beforeEach(async () => {
+  clearAccountDatabaseSelection()
   await getDb().codeAdoptionTurns.clear()
   await persistCodeAdoptionTurn(row)
+})
+
+afterEach(() => clearAccountDatabaseSelection())
+
+it("does not write the previous account's outcome after its row read completes in a new namespace", async () => {
+  const table = getDb().codeAdoptionTurns
+  let finish!: (value: CodeAdoptionTurnRow) => void
+  const read = jest.spyOn(table, "get").mockImplementationOnce(
+    () =>
+      new Dexie.Promise<CodeAdoptionTurnRow>((resolve) => {
+        finish = resolve
+      })
+  )
+  const result = recordTaskWorkspaceOutcome(patch)
+  activateAccountDatabase("code-adoption-outcome-other", "host-B")
+  await getDb().codeAdoptionTurns.clear()
+  finish(row)
+  await expect(result).rejects.toThrow(/database scope changed/i)
+  expect(await getDb().codeAdoptionTurns.toArray()).toEqual([])
+  read.mockRestore()
 })
 
 it("records a partial hunk application as the adopted subset", async () => {
@@ -117,4 +139,50 @@ it("removes adopted lines after the applied patch is undone", async () => {
       acceptedRemoved: 0,
     })
   )
+})
+
+it("updates only the owning root when two captured runs changed the same path", async () => {
+  await persistCodeAdoptionTurn({
+    ...row,
+    taskWorkspaceRuns: [
+      { runId: patch.runId, workspaceRoot: "/one" },
+      { runId: "run:other", workspaceRoot: "/two" },
+    ],
+    totalFiles: 2,
+    totalAdded: 8,
+    totalRemoved: 4,
+    proposedFiles: 2,
+    proposedAdded: 8,
+    proposedRemoved: 4,
+    files: [
+      {
+        ...row.files[0],
+        taskWorkspaceRunId: patch.runId,
+        workspaceRoot: "/one",
+        adoptionState: "accepted",
+        acceptedAdded: 4,
+        acceptedRemoved: 2,
+      },
+      {
+        ...row.files[0],
+        taskWorkspaceRunId: "run:other",
+        workspaceRoot: "/two",
+        adoptionState: "accepted",
+        acceptedAdded: 4,
+        acceptedRemoved: 2,
+      },
+    ],
+  })
+  await recordTaskWorkspaceOutcome({ ...patch, runId: "run:other", state: "reverted" })
+  const updated = await getCodeAdoptionTurn(row.id)
+  expect(updated?.files.map((file) => [file.taskWorkspaceRunId, file.adoptionState])).toEqual([
+    [patch.runId, "accepted"],
+    ["run:other", "reverted"],
+  ])
+  expect(updated).toMatchObject({
+    adoptionState: "partiallyAccepted",
+    acceptedFiles: 1,
+    acceptedAdded: 4,
+    acceptedRemoved: 2,
+  })
 })

@@ -3,6 +3,9 @@
  */
 
 import { render, screen, act } from "@testing-library/react"
+import { waitFor } from "@testing-library/react"
+import { registerInterceptor } from "@/lib/plugin/interceptors/registry"
+import { createInterceptorRegistration } from "@/lib/plugin/interceptors/normalize"
 import type { ExtensionRegistration } from "@/types/plugin/plugin"
 // Real (un-mocked) context-key store — drives the slot's second
 // useSyncExternalStore for when-clause reactivity.
@@ -14,6 +17,35 @@ import {
 let mockRegistrations: ExtensionRegistration[] = []
 const subscribers = new Set<() => void>()
 let revision = 0
+
+it("forwards accepted projection titles into the mounted surface", async () => {
+  mockRegistrations = [
+    {
+      id: "projected",
+      pluginId: "owner",
+      component: () => <span>Projected child</span>,
+      options: {},
+    },
+  ] as never
+  const dispose = registerInterceptor(
+    createInterceptorRegistration({
+      pluginId: "title",
+      pointId: "ui.surface.project",
+      semantic: "transform",
+      source: "interceptors",
+      handler: ((input: object) => ({
+        ...input,
+        presentation: { hidden: false, title: "Projected surface" },
+      })) as never,
+    })
+  )
+  try {
+    render(<PluginExtensionSlot point="chat.input.above" />)
+    await waitFor(() => expect(screen.getByTitle("Projected surface")).toBeVisible())
+  } finally {
+    dispose()
+  }
+})
 
 jest.mock("@/lib/plugin/api/extension-api", () => ({
   getExtensionsForPoint: () => mockRegistrations,

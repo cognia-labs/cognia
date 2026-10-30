@@ -439,6 +439,19 @@ describe("PluginLifecycleHooks - New Dispatchers", () => {
   })
 
   describe("Message Lifecycle Hooks", () => {
+    it("keeps agent-step observations isolated from the host and other plugins", () => {
+      const second = jest.fn()
+      lifecycleHooks.registerHooks("first", {
+        onAgentStep: (_id, step) => {
+          ;(step.toolArgs as { command: string }).command = "changed"
+        },
+      })
+      lifecycleHooks.registerHooks("second", { onAgentStep: second })
+      const step = { stepNumber: 1, type: "tool_call" as const, toolArgs: { command: "pwd" } }
+      lifecycleHooks.dispatchOnAgentStep("agent", step)
+      expect(step.toolArgs.command).toBe("pwd")
+      expect(second).toHaveBeenCalledWith("agent", step)
+    })
     it("dispatchOnMessageDelete should call registered hooks", () => {
       const onMessageDelete = jest.fn()
       lifecycleHooks.registerHooks("test-plugin", { onMessageDelete })
@@ -744,6 +757,116 @@ describe("Hook Type Definitions", () => {
     expect(withModified.modifiedContent).toBe("Enhanced response with formatting")
     expect(full.additionalMessages).toHaveLength(1)
     expect(full.metadata).toHaveProperty("sentiment", "positive")
+  })
+})
+
+describe("scheduler and registry hook delivery", () => {
+  beforeEach(() => {
+    resetPermissionGuard()
+    getPermissionGuard().registerPlugin("scheduler-listener", ["agent:control", "database:read"])
+  })
+
+  it("awaits every pre-run decision and never widens an earlier veto", async () => {
+    const allow = jest.fn(async () => true)
+    seedPlugins({
+      plugins: {
+        "scheduler-listener": {
+          status: "enabled",
+          hooks: { onScheduledTaskBeforeRun: async () => false },
+        },
+        "later-listener": { status: "enabled", hooks: { onScheduledTaskBeforeRun: allow } },
+      },
+    })
+    getPermissionGuard().registerPlugin("later-listener", ["agent:control"])
+    await expect(
+      new PluginEventHooks().dispatchScheduledTaskBeforeRun("task", "execution")
+    ).resolves.toBe(false)
+    expect(allow).toHaveBeenCalledWith("task", "execution")
+  })
+
+  it("fails closed on a pre-run handler error or timeout", async () => {
+    jest.useFakeTimers()
+    try {
+      seedPlugins({
+        plugins: {
+          "scheduler-listener": {
+            status: "enabled",
+            hooks: {
+              onScheduledTaskBeforeRun: () => new Promise<boolean>(() => {}),
+            },
+          },
+        },
+      })
+      const gate = new PluginEventHooks().dispatchScheduledTaskBeforeRun("task", "execution")
+      await jest.advanceTimersByTimeAsync(10_000)
+      await expect(gate).resolves.toBe(false)
+      expect(jest.getTimerCount()).toBe(0)
+      seedPlugins({
+        plugins: {
+          "scheduler-listener": {
+            status: "enabled",
+            hooks: {
+              onScheduledTaskBeforeRun: () => {
+                throw new Error("refused")
+              },
+            },
+          },
+        },
+      })
+      await expect(
+        new PluginEventHooks().dispatchScheduledTaskBeforeRun("task", "execution")
+      ).resolves.toBe(false)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it("delivers scheduler metadata only to granted live listeners", async () => {
+    const listener = jest.fn()
+    const denied = jest.fn()
+    seedPlugins({
+      plugins: {
+        "scheduler-listener": { status: "enabled", hooks: { onScheduledTaskCreate: listener } },
+        "denied-listener": { status: "enabled", hooks: { onScheduledTaskCreate: denied } },
+      },
+    })
+    const task = { id: "task", name: "Task", trigger: { type: "manual" } }
+    await new PluginEventHooks().dispatchScheduledTaskCreate(task)
+    expect(listener).toHaveBeenCalledWith(task)
+    expect(denied).not.toHaveBeenCalled()
+  })
+
+  it("isolates observation payloads from the host and every other listener", async () => {
+    const later = jest.fn()
+    seedPlugins({
+      plugins: {
+        "scheduler-listener": {
+          status: "enabled",
+          hooks: {
+            onScheduledTaskCreate: (task: { trigger: { intervalMs: number } }) => {
+              task.trigger.intervalMs = 1
+            },
+            onScheduledTaskUpdate: (_task: unknown, changes: { config: { timeout: number } }) => {
+              changes.config.timeout = 1
+            },
+          },
+        },
+        "later-listener": {
+          status: "enabled",
+          hooks: { onScheduledTaskCreate: later, onScheduledTaskUpdate: later },
+        },
+      },
+    })
+    getPermissionGuard().registerPlugin("later-listener", ["database:read"])
+    const task = { id: "task", name: "Task", trigger: { intervalMs: 60_000 } }
+    const changes = { config: { timeout: 30_000 } }
+    const dispatcher = new PluginEventHooks()
+    await dispatcher.dispatchScheduledTaskCreate(task)
+    await dispatcher.dispatchScheduledTaskUpdate(task, changes)
+    expect(task.trigger.intervalMs).toBe(60_000)
+    expect(changes.config.timeout).toBe(30_000)
+    expect(later).toHaveBeenCalledWith(expect.objectContaining({ trigger: { intervalMs: 60_000 } }))
+    expect(later).toHaveBeenCalledWith(expect.anything(), { config: { timeout: 30_000 } })
   })
 })
 

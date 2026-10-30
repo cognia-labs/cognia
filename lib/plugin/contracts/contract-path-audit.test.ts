@@ -41,6 +41,12 @@ describe("auditContractPaths (synthetic root)", () => {
     const phantom = auditContractPaths(root)
     expect(phantom.length).toBeGreaterThan(0)
     expect(phantom.every((p) => !existsSync(join(root, p.path)))).toBe(true)
+    expect(phantom).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ contractId: "chat.header", field: "binding" }),
+        expect.objectContaining({ contractId: "chat.header", field: "requiredTests" }),
+      ])
+    )
   })
 
   it("does NOT report a path once the file exists on disk", () => {

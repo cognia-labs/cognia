@@ -233,6 +233,29 @@ installEnvProxy()
 
 // Configure the vscode shim factory. The actual shim implementation lives
 // in `src/vscode-shim/index.ts` — wired below.
+const collectingRegistrations = new Set<string>()
+const pendingRegistrations = new Map<string, Set<Promise<unknown>>>()
+
+async function flushRegistrations(extensionId: string): Promise<void> {
+  const pending = pendingRegistrations.get(extensionId)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("Extension registrations did not settle before activation deadline")),
+      10_000
+    )
+  })
+  try {
+    while (pending?.size) {
+      const batch = [...pending]
+      pending.clear()
+      await Promise.race([Promise.all(batch), timeout])
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 setVscodeShimFactory((extensionId) => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { createVscodeShim } = require("./vscode-shim") as typeof import("./vscode-shim")
@@ -249,6 +272,16 @@ setVscodeShimFactory((extensionId) => {
     windowEnvironment: WINDOW_ENVIRONMENT,
     ownedPaths: () => OWNED_PATHS.get(extensionId) ?? { readOnly: [], readWrite: [] },
     registerProviderCallback,
+    trackRegistration: (registration) => {
+      if (!collectingRegistrations.has(extensionId)) return
+      let pending = pendingRegistrations.get(extensionId)
+      if (!pending) {
+        pending = new Set()
+        pendingRegistrations.set(extensionId, pending)
+      }
+      pending.add(registration)
+      void registration.catch(() => {})
+    },
   })
 })
 
@@ -265,50 +298,73 @@ function registerProviderCallback(token: string, cb: ProviderCallback): () => vo
 
 connection.onRequest("extension:load", async (params) => {
   const req = params as LoadRequest
+  collectingRegistrations.add(req.extensionId)
+  pendingRegistrations.delete(req.extensionId)
   setGrantedModules(req.extensionId, req.grantedModules ?? [])
   EXTENSION_ROOTS.set(nodePath.resolve(req.extensionPath), req.extensionId)
   OWNED_PATHS.set(req.extensionId, { readOnly: [req.extensionPath], readWrite: [] })
   CONFIGURATION.loadOwnDefaults(req.extensionPath)
-  await loadExtension({
-    extensionId: req.extensionId,
-    extensionPath: req.extensionPath,
-    main: req.main,
-    bundleFormat: req.bundleFormat,
-  })
+  try {
+    await loadExtension({
+      extensionId: req.extensionId,
+      extensionPath: req.extensionPath,
+      main: req.main,
+      bundleFormat: req.bundleFormat,
+    })
+  } catch (error) {
+    collectingRegistrations.delete(req.extensionId)
+    pendingRegistrations.delete(req.extensionId)
+    throw error
+  }
   return { ok: true }
 })
 
 connection.onRequest("extension:activate", async (params) => {
   const req = params as ActivateRequest
-  OWNED_PATHS.set(req.extensionId, {
-    readOnly: [req.extensionPath],
-    readWrite: [req.globalStoragePath, ...(req.storagePath ? [req.storagePath] : []), req.logPath],
-  })
-  // `window.state` and `window.activeColorTheme` are read synchronously, so
-  // they are known before any extension runs.
-  await WINDOW_ENVIRONMENT.load(connection, (message) =>
-    process.stderr.write(`[vscode-ext-host] WARN ${message}\n`)
-  )
-  const context = buildContext(req)
-  ACTIVE_CONTEXTS.set(req.extensionId, context)
-  const exports = await activateExtension(req.extensionId, context)
-  EXTENSIONS.setExports(req.extensionId, exports)
-  return {
-    sidecarPid: process.pid,
-    registeredCommands: [] as string[],
-    registeredWebviewViews: [] as string[],
-    registeredLanguageProviders: [] as string[],
-    exportsSerializable: serializeExports(exports),
+  collectingRegistrations.add(req.extensionId)
+  try {
+    OWNED_PATHS.set(req.extensionId, {
+      readOnly: [req.extensionPath],
+      readWrite: [
+        req.globalStoragePath,
+        ...(req.storagePath ? [req.storagePath] : []),
+        req.logPath,
+      ],
+    })
+    // `window.state` and `window.activeColorTheme` are read synchronously, so
+    // they are known before any extension runs.
+    await WINDOW_ENVIRONMENT.load(connection, (message) =>
+      process.stderr.write(`[vscode-ext-host] WARN ${message}\n`)
+    )
+    const context = buildContext(req)
+    ACTIVE_CONTEXTS.set(req.extensionId, context)
+    const exports = await activateExtension(req.extensionId, context)
+    await flushRegistrations(req.extensionId)
+    EXTENSIONS.setExports(req.extensionId, exports)
+    return {
+      sidecarPid: process.pid,
+      registeredCommands: [] as string[],
+      registeredWebviewViews: [] as string[],
+      registeredLanguageProviders: [] as string[],
+      exportsSerializable: serializeExports(exports),
+    }
+  } finally {
+    collectingRegistrations.delete(req.extensionId)
+    pendingRegistrations.delete(req.extensionId)
   }
 })
 
 connection.onRequest("extension:deactivate", async (params) => {
+  collectingRegistrations.delete((params as { extensionId: string }).extensionId)
+  pendingRegistrations.delete((params as { extensionId: string }).extensionId)
   const { extensionId } = params as { extensionId: string }
+  // Host shutdown detaches panels for restoration. Close them locally before
+  // disposing subscriptions, which otherwise sends user-style webview:dispose.
+  WEBVIEWS.closeAll(extensionId)
   await deactivateExtension(extensionId)
   ACTIVE_CONTEXTS.delete(extensionId)
   EXTENSIONS.clearExports(extensionId)
   TERMINALS.closeAll(extensionId)
-  WEBVIEWS.closeAll(extensionId)
   return { ok: true }
 })
 

@@ -720,6 +720,14 @@ export class PluginLoader {
     relativeEntry: string,
     absolutePath: string
   ): Promise<unknown> {
+    // A named Bot handler in the main entry shares activate()'s module state.
+    // Re-importing that entry creates an unactivated generation under Node
+    // and fetch/eval loaders. Dedicated secondary/library entries stay fresh.
+    const loaded = this.loadedModules.get(pluginId)
+    const main = loaded?.definition.manifest && selectRuntimeEntry(loaded.definition.manifest)
+    if (main && normalizePluginRelativePath(relativeEntry) === normalizePluginRelativePath(main)) {
+      return loaded!.exports
+    }
     if (pluginRoot.startsWith("builtin://")) {
       const entry = normalizePluginRelativePath(relativeEntry)
       const builtin = getBrowserBuiltinRegistryEntry(pluginId)

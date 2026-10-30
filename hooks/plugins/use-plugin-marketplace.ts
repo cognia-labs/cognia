@@ -99,6 +99,7 @@ export interface MarketplaceClient {
    * manager's (`uninstallPluginForHost`).
    */
   supportsTransactionalConfig?: boolean
+  preparePlugin?: import("@/lib/plugin/marketplace/install-flow").RunMarketplaceInstallOpts["client"]["preparePlugin"]
   installPlugin: (
     id: string,
     version?: string,
@@ -126,7 +127,10 @@ function toEntry(entry: RegistryEntry): PluginMarketplaceEntry & RegistryEntry {
  * methods it does not (`uninstallPlugin`) and so let a call to one ship. Each
  * method is now mapped by hand and type-checked against the real client.
  */
-function adaptRegistryClient(market: RegistryClient): MarketplaceClient {
+function adaptRegistryClient(
+  market: RegistryClient,
+  preparePlugin: MarketplaceClient["preparePlugin"]
+): MarketplaceClient {
   return {
     // Strict: the lenient `searchPlugins` turns an unreachable registry into
     // an empty list, so `refresh()` never reached its error branch. The pane
@@ -142,10 +146,11 @@ function adaptRegistryClient(market: RegistryClient): MarketplaceClient {
     getPlugin: (id) => market.getPlugin(id),
     getVersions: async (id) => (await market.getVersions(id)).map((version) => ({ ...version })),
     supportsTransactionalConfig: true,
+    preparePlugin,
     installPlugin: async (id, version, options) => {
       const result = options
-        ? await market.installPlugin(id, version, options)
-        : await market.installPlugin(id, version)
+        ? await market.installPlugin(id, version, { ...options, installDependencies: false })
+        : await market.installPlugin(id, version, { installDependencies: false })
       if (!result.success) throw new Error(result.error || `Failed to install plugin: ${id}`)
       return result
     },
@@ -155,7 +160,9 @@ function adaptRegistryClient(market: RegistryClient): MarketplaceClient {
 export async function loadPluginMarketplaceClient(): Promise<MarketplaceClient> {
   if (cachedClient) return cachedClient
   const mod = await import("@/lib/plugin/package/marketplace")
-  cachedClient = adaptRegistryClient(mod.getPluginMarketplace())
+  const { createRegistryReviewClient } = await import("@/lib/plugin/marketplace/review-client")
+  const market = mod.getPluginMarketplace()
+  cachedClient = adaptRegistryClient(market, createRegistryReviewClient(market).preparePlugin)
   return cachedClient
 }
 

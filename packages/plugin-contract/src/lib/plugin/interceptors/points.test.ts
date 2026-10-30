@@ -81,4 +81,21 @@ describe("interceptor point catalog", () => {
       expect(requireInterceptorPoint(id).parallelTransforms).toBe(false)
     }
   })
+
+  it("bounds gateway wire transforms and requires the interception permission", () => {
+    for (const id of [
+      "gateway.request.prepare",
+      "gateway.provider.prepare",
+      "gateway.stream.transform",
+      "gateway.response.transform",
+    ] as const) {
+      const point = requireInterceptorPoint(id)
+      expect(point.semantic).toBe("transform")
+      expect(point.failurePolicy).toBe("fail-closed")
+      expect(point.permission).toBe("hooks:chat-intercept")
+      expect(point.timeoutCeilingMs).toBeLessThanOrEqual(2_000)
+      expect(point.executionPlacement).toBe("host-service")
+    }
+    expect(requireInterceptorPoint("gateway.usage.recorded").semantic).toBe("observe")
+  })
 })

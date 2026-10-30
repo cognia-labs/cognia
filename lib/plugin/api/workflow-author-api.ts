@@ -1,5 +1,7 @@
 /** Host-governed workflow authoring and execution façade for plugins. */
 
+import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"
+import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import type { NodeCatalogEntry } from "@/lib/workflow/nodes/catalog"
 
@@ -192,7 +194,71 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
     findWorkflowById,
     resolveTriggerOrigin: resolveWorkflowTriggerOrigin,
     approvalActorScope,
+    prepareWorkflowApproval: async ({ workflowId, runParams, triggeredFrom }) => {
+      const [
+        { holdWorkflowDispatchForApproval },
+        { getAdapterInstance },
+        { readForResolution },
+        { buildImPermissionCeiling },
+        { parseConversationKey },
+      ] = await Promise.all([
+        import("@/lib/connectors/hitl/workflow-run-approval"),
+        import("@/lib/db/adapter-instances"),
+        import("@/lib/db/conversation-overrides"),
+        import("@/lib/connectors/im-permission-ceiling"),
+        import("@/types/connectors/event"),
+      ])
+      if (
+        triggeredFrom.source !== "im" ||
+        !triggeredFrom.adapterId ||
+        !triggeredFrom.conversationKey
+      )
+        throw new Error("Workflow approval requires an IM origin")
+      const adapter = await getAdapterInstance(triggeredFrom.adapterId)
+      if (!adapter) throw new Error("Workflow approval adapter not found")
+      const override = (await readForResolution(triggeredFrom.conversationKey)) ?? null
+      const { platform } = parseConversationKey(triggeredFrom.conversationKey)
+      const currentCeiling = await buildImPermissionCeiling({
+        adapter,
+        override,
+        platform,
+        target: "workflow",
+      })
+      const parentCeiling = triggeredFrom.sessionId
+        ? getResolvedPermissionCeiling(triggeredFrom.sessionId)
+        : undefined
+      const permissionCeiling = deriveExternalSessionPermission(parentCeiling ?? {}, currentCeiling)
+      const result = await holdWorkflowDispatchForApproval({
+        workflowId,
+        runParams: runParams ?? {},
+        triggeredFrom,
+        adapterId: adapter.id,
+        conversationKey: triggeredFrom.conversationKey,
+        conversationRef: { platform, adapterId: adapter.id },
+        initiatorUserId: triggeredFrom.initiator?.remoteUserId,
+        permissionCeiling,
+        deliverCard: false,
+      })
+      if (!result.held) throw new Error(result.message)
+      return {
+        surfaceId: result.surfaceId,
+        workflowName: result.workflowName,
+        surface: result.surface,
+      }
+    },
     recordCallbackBinding: async (input) => {
+      if (
+        (input.kind === "wf_approve" || input.kind === "wf_cancel") &&
+        typeof input.payload?.workflowId === "string"
+      ) {
+        const { createPublishedWorkflowDependencyBinding } =
+          await import("@/lib/workflow/runtime/execution-authority")
+        const lockedDependency = await createPublishedWorkflowDependencyBinding(
+          input.payload.workflowId
+        )
+        await recordCallbackBinding({ ...input, payload: { ...input.payload, lockedDependency } })
+        return
+      }
       await recordCallbackBinding(input)
     },
     buildApprovalSurface,

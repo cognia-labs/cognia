@@ -69,6 +69,18 @@ describe("unregisterNodeExecutor", () => {
 })
 
 describe("subscribeNodeRegistry", () => {
+  it("retains owner metadata through unregister without exposing the executor", async () => {
+    __resetRegistryForTesting()
+    const listener = jest.fn()
+    subscribeNodeRegistry(listener)
+    registerNodeExecutor({ kind: "ai.prompt", typeVersion: 1, pluginId: "owner", execute: noop })
+    unregisterNodeExecutor("ai.prompt", 1)
+    await Promise.resolve()
+    expect(listener.mock.calls.map(([event]) => event)).toEqual([
+      { type: "register", kind: "ai.prompt", typeVersion: 1, pluginId: "owner" },
+      { type: "unregister", kind: "ai.prompt", typeVersion: 1, pluginId: "owner" },
+    ])
+  })
   beforeEach(() => {
     __resetRegistryForTesting()
   })

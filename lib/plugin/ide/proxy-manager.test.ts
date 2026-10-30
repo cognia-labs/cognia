@@ -46,6 +46,30 @@ beforeEach(() => {
   clearAllPluginPointDiagnostics()
 })
 
+it("packages walkthrough media with their original contained relative paths", () => {
+  expect(
+    collectProxyAssets("/plugins/acme", {
+      walkthroughs: [
+        {
+          steps: [
+            { media: { markdown: "guide/start.md" } },
+            { media: { image: "media/start.png" } },
+            { media: { svg: "media/diagram.svg" } },
+          ],
+        },
+      ],
+    }).map((asset) => asset.packagePath)
+  ).toEqual(["guide/start.md", "media/diagram.svg", "media/start.png"])
+})
+it.each(["../escape.md", "/private.md", "https://example.com/remote.md"])(
+  "rejects unsafe walkthrough media %s",
+  (markdown) => {
+    expect(() =>
+      collectProxyAssets("/plugins/acme", { walkthroughs: [{ steps: [{ media: { markdown } }] }] })
+    ).toThrow("contained package path")
+  }
+)
+
 it("collects only confined static contribution assets", () => {
   expect(
     collectProxyAssets("/plugins/acme", {

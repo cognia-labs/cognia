@@ -5,6 +5,7 @@
 
 import {
   buildPluginToolsManifest,
+  prepareVscodeLanguageModelTools,
   buildTerminalDockManifestEntries,
   buildDispatchAgentManifestEntries,
   type PluginToolManifestEntry,
@@ -388,4 +389,26 @@ describe("buildPluginToolsManifest — dispatch_agent inclusion", () => {
     const manifest = buildPluginToolsManifest({})
     expect(manifest.some((e) => e.name === DISPATCH_AGENT_TOOL_NAME)).toBe(false)
   })
+})
+
+jest.mock("@/lib/plugin/core/manager", () => ({
+  getPluginManager: () => ({ handleActivationEvent: mockActivateToolCatalog }),
+}))
+const mockActivateToolCatalog = jest.fn(async () => {})
+it("activates declared model tools before taking the synchronous tool catalog snapshot", async () => {
+  mockActivateToolCatalog.mockClear()
+  setStore({})
+  await prepareVscodeLanguageModelTools()
+  expect(mockActivateToolCatalog).not.toHaveBeenCalled()
+  setStore({
+    extension: makePlugin("extension", {
+      status: "loaded",
+      manifestOverrides: {
+        type: "vscode-extension",
+        vscodeExtension: { languageModelTools: [{ name: "search" }] },
+      },
+    }),
+  })
+  await prepareVscodeLanguageModelTools()
+  expect(mockActivateToolCatalog).toHaveBeenCalledWith("onLanguageModelTool:*")
 })

@@ -14,7 +14,20 @@ describe("plugin interface catalog", () => {
   it("indexes the canonical ctx method surface", () => {
     // A canary, not a fact worth memorising: any catalog edit lands here so
     // the method surface cannot grow or shrink without someone noticing.
-    expect(listPluginApiMethodContracts()).toHaveLength(895)
+    expect(listPluginApiMethodContracts()).toHaveLength(937)
+    expect(getPluginApiMethodContract("files.save")).toMatchObject({
+      requiredPermissions: ["filesystem:write"],
+      namespace: { enforcement: "active", platforms: ["desktop", "web", "mobile"] },
+    })
+    expect(getPluginApiMethodContract("skills.invokeBuiltIn")).toMatchObject({
+      requiredPermissions: ["builtin-skills:invoke"],
+      cancellable: true,
+      idempotent: false,
+    })
+    expect(getPluginApiMethodContract("plans.run")).toMatchObject({
+      requiredPermissions: ["plan:write"],
+      namespace: { enforcement: "active" },
+    })
     for (const method of [
       "listKnowledgeDocuments",
       "readKnowledgeOutline",

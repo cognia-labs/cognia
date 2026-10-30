@@ -6,6 +6,11 @@ export interface OutboundRequest {
   /** Complete persisted destination; preferred over the legacy loose reference. */
   deliveryTarget?: ConversationDeliveryTarget
   segments: MessageSegment[]
+  /** Explicit intent; an expired reply never changes its mode automatically. */
+  sendOptions?: {
+    mode?: "reply" | "proactive" | "reengagement"
+    imagePolicy?: "best-effort" | "require-complete"
+  }
   replyTo?: { messageId: string }
   threadId?: string
   /**
@@ -24,6 +29,8 @@ export interface OutboundRequest {
     larkEphemeral?: { recipientOpenId: string }
     /** Stable across retries; required. */
     idempotencyKey: string
+    /** Correlates live previews with this durable authoritative reply. */
+    streamKey?: string
     /** When this is a reply, the inbound StoredMessage.id that triggered it. */
     sourceMessageId?: string
     /** When this comes from a scheduled task, the task id. */
@@ -110,6 +117,8 @@ export interface SegmentDowngrade {
 
 export interface OutboundResult {
   ok: boolean
+  /** Accepted asynchronously, not delivered. The queue waits for exact provider evidence. */
+  pendingReceipt?: { id: string }
   platformMessageId?: string
   /**
    * The platform's id of the chat a send landed in, when the platform reports

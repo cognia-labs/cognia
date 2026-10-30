@@ -109,6 +109,7 @@ function setup(overrides: Partial<VscodeLmDependencies> = {}) {
     currentModel: () => ({ providerId: "anthropic", modelId: "claude-sonnet" }),
     modelInfo: () => ({ name: "Claude Sonnet", maxInputTokens: 200_000 }),
     hasPermission: () => true,
+    hasToolPermission: () => true,
     rateLimit: () => {},
     chat: () => (async function* () {})(),
     countTokens: (text) => text.split(" ").length,
@@ -120,6 +121,15 @@ function setup(overrides: Partial<VscodeLmDependencies> = {}) {
       sent.push([pluginId, method, payload])
       return null
     },
+    toolDefinition: (_pluginId, name) => ({
+      name,
+      modelDescription: "Find things",
+      inputSchema: { type: "object" },
+    }),
+    registerTool: async () => () => {},
+    callProvider: async () => ({ content: [{ value: "tool-result" }] }),
+    activateTool: async () => {},
+    invokeTool: async () => "result",
     hosts: () => [EXT],
     ...overrides,
   }
@@ -492,7 +502,6 @@ describe("lm:modelsChanged", () => {
 
 describe("registrations nothing calls", () => {
   it.each([
-    ["lm:registerTool", { name: "search" }, /tools from extensions/],
     ["lm:registerChatModelProvider", { id: "mine" }, /providers from extensions/],
     ["lm:registerMcpServerDefinitionProvider", { id: "srv" }, /MCP server definitions/],
   ])("%s is accepted, unused, and logged as such", async (method, payload, message) => {
@@ -574,4 +583,136 @@ describe("createVscodeLmDependencies", () => {
     expect(mockSettingsListeners.size).toBe(0)
     mockSettings = previous
   })
+})
+
+describe("live language-model tools", () => {
+  it("registers through the plugin tool API, executes the callback and cleans up", async () => {
+    let registered: import("@/types/plugin").PluginToolRegistration | undefined
+    const dispose = jest.fn()
+    const provider = jest.fn(async () => ({ content: [{ value: "found" }] }))
+    const { call } = setup({
+      registerTool: async (_owner, tool) => {
+        registered = tool
+        return dispose
+      },
+      callProvider: provider,
+    })
+    expect(await call("lm:registerTool", { name: "search", token: "provider" })).toEqual({
+      registered: true,
+    })
+    const controller = new AbortController()
+    expect(
+      await registered!.execute({ query: "hello" }, { signal: controller.signal } as never)
+    ).toBe("found")
+    expect(provider).toHaveBeenCalledWith(
+      EXT,
+      "invoke",
+      expect.objectContaining({ token: "provider", input: { query: "hello" } }),
+      controller.signal
+    )
+    unregisterAllLmFor(EXT)
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it("activates the matching tool and delegates invocation through the standard tool seam", async () => {
+    const activate = jest.fn(async () => {})
+    const invoke = jest.fn(async () => "answer")
+    const { call } = setup({ activateTool: activate, invokeTool: invoke })
+    await call("lm:registerTool", { name: "search", token: "provider" })
+    expect(
+      await call("lm:invokeTool", { name: "search", input: { query: "hello" }, callId: "call" })
+    ).toEqual({ content: [{ value: "answer" }] })
+    expect(activate).toHaveBeenCalledWith("search", EXT)
+    expect(invoke).toHaveBeenCalledWith(EXT, "search", { query: "hello" }, expect.any(AbortSignal))
+  })
+
+  it("refuses undeclared and cross-extension tool registrations and stale unregistrations", async () => {
+    const { call } = setup({
+      toolDefinition: (_owner, name) =>
+        name === "search" ? { name, modelDescription: "Find" } : undefined,
+    })
+    await expect(call("lm:registerTool", { name: "undeclared", token: "t" })).rejects.toThrow(
+      "not declared"
+    )
+    await call("lm:registerTool", { name: "search", token: "first" })
+    await expect(
+      call("lm:registerTool", { name: "search", token: "other" }, "other.ext")
+    ).rejects.toThrow("owned")
+    await call("lm:registerTool", { name: "search", token: "second" })
+    await call("lm:unregisterTool", { name: "search", token: "first" })
+    expect(await call("lm:listTools", {})).toEqual([expect.objectContaining({ name: "search" })])
+  })
+})
+
+it("refuses direct tool invocation without the caller's AI and agent permissions", async () => {
+  const invoke = jest.fn()
+  for (const permission of [{ hasPermission: () => false }, { hasToolPermission: () => false }]) {
+    const { call } = setup({ ...permission, invokeTool: invoke })
+    await expect(
+      call("lm:invokeTool", { name: "search", input: {}, callId: "denied" })
+    ).rejects.toThrow(/permission|require/i)
+  }
+  expect(invoke).not.toHaveBeenCalled()
+})
+
+it("restricts direct tool discovery and invocation to the calling owner", async () => {
+  const invoke = jest.fn()
+  const { call } = setup({ invokeTool: invoke })
+  await call("lm:registerTool", { name: "search", token: "provider" })
+  expect(await call("lm:listTools", {}, "other.ext")).toEqual([])
+  await expect(
+    call("lm:invokeTool", { name: "search", input: {}, callId: "cross" }, "other.ext")
+  ).rejects.toThrow("owned")
+  expect(invoke).not.toHaveBeenCalled()
+})
+
+it("honors cancellation during activation and scopes cancellation to the caller", async () => {
+  let release!: () => void
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const invoke = jest.fn()
+  const { call } = setup({
+    activateTool: async () => {
+      started()
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    },
+    invokeTool: invoke,
+  })
+  await call("lm:registerTool", { name: "search", token: "provider" })
+  const pending = call("lm:invokeTool", { name: "search", input: {}, callId: "pending" })
+  const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" })
+  await ready
+  await call("lm:cancelTool", { callId: "pending" }, "other.ext")
+  await call("lm:cancelTool", { callId: "pending" })
+  release()
+  await rejection
+  expect(invoke).not.toHaveBeenCalled()
+})
+
+it("aborts owned tool calls when the host exits", async () => {
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const { call } = setup({
+    invokeTool: async (_owner, _name, _input, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new DOMException("host stopped", "AbortError")),
+          { once: true }
+        )
+        started()
+      }),
+  })
+  await call("lm:registerTool", { name: "search", token: "provider" })
+  const pending = call("lm:invokeTool", { name: "search", input: {}, callId: "running" })
+  const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" })
+  await ready
+  unregisterAllLmFor(EXT)
+  await rejection
 })

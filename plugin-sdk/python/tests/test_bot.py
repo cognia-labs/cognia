@@ -11,6 +11,15 @@ from cognia.bot import BotRun, BotRunParked, bot_run, define_bot
 
 
 class TestDefineBot:
+    def test_input_slot_references_and_unique_triggers(self):
+        trigger = {"id": "input", "kind": "event", "source": "integration", "types": ["opened"], "inputCredentialSlot": "github"}
+        requires = {"credentials": [{"id": "github", "label": "GitHub"}]}
+        assert define_bot("x", "X", "1.0.0", "handler", [trigger], requires=requires).triggers[0]["inputCredentialSlot"] == "github"
+        with pytest.raises(ValueError, match="inputCredentialSlot"):
+            define_bot("x", "X", "1.0.0", "handler", [trigger])
+        with pytest.raises(ValueError, match="unique"):
+            define_bot("x", "X", "1.0.0", "handler", [trigger, trigger], requires=requires)
+
     def test_emits_the_camel_case_manifest_shape(self):
         bot = define_bot(
             id="digest",

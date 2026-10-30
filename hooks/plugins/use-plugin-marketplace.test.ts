@@ -332,12 +332,13 @@ describe("loadPluginMarketplaceClient", () => {
     market.installPlugin.mockResolvedValueOnce({ success: true })
     const client = await loadPluginMarketplaceClient()
     await expect(client.installPlugin("r1", "1.0.0")).resolves.toEqual({ success: true })
-    expect(market.installPlugin).toHaveBeenCalledWith("r1", "1.0.0")
+    expect(market.installPlugin).toHaveBeenCalledWith("r1", "1.0.0", { installDependencies: false })
     market.installPlugin.mockResolvedValueOnce({ success: true })
     expect(client.supportsTransactionalConfig).toBe(true)
     await client.installPlugin("r1", "1.0.0", { config: { token: "atomic" } })
     expect(market.installPlugin).toHaveBeenLastCalledWith("r1", "1.0.0", {
       config: { token: "atomic" },
+      installDependencies: false,
     })
   })
 

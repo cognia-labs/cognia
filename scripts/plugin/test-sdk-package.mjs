@@ -156,6 +156,9 @@ try {
       'import { SystemEvents } from "@cognia/plugin-sdk/events";',
       'import { CANONICAL_EXTENSION_POINTS } from "@cognia/plugin-sdk/extensions";',
       'import { defineContextPanel } from "@cognia/plugin-sdk/api/context-panel";',
+      'import { PLUGIN_CONTRACT_VERSION, PLUGIN_API_NAMESPACE_CONTRACTS, AUTHOR_PLUGIN_POINT_CONTRACTS } from "@cognia/plugin-sdk/contracts";',
+      `if (PLUGIN_CONTRACT_VERSION !== ${JSON.stringify(catalog.contractVersion)}) process.exit(1);`,
+      "if (!PLUGIN_API_NAMESPACE_CONTRACTS.length || !AUTHOR_PLUGIN_POINT_CONTRACTS.length) process.exit(1);",
       "if (definePlugin({ manifest: {} }).manifest == null) process.exit(1);",
       'if (SystemEvents.PLUGIN_LOADED !== "system:plugin:loaded") process.exit(1);',
       'if (!CANONICAL_EXTENSION_POINTS.includes("chat.input.above")) process.exit(1);',
@@ -165,7 +168,12 @@ try {
   )
   writeFileSync(
     join(consumer, "cjs.cjs"),
-    'const { defineTool } = require("@cognia/plugin-sdk/api/tool"); const probe = { name: "x" }; if (defineTool(probe) !== probe) process.exit(1)\n'
+    [
+      'const { defineTool } = require("@cognia/plugin-sdk/api/tool"); const probe = { name: "x" }; if (defineTool(probe) !== probe) process.exit(1);',
+      'const { PLUGIN_CONTRACT_VERSION, PLUGIN_API_NAMESPACE_CONTRACTS, AUTHOR_PLUGIN_POINT_CONTRACTS } = require("@cognia/plugin-sdk/contracts");',
+      `if (PLUGIN_CONTRACT_VERSION !== ${JSON.stringify(catalog.contractVersion)} || !PLUGIN_API_NAMESPACE_CONTRACTS.length || !AUTHOR_PLUGIN_POINT_CONTRACTS.length) process.exit(1);`,
+      "",
+    ].join("\n")
   )
   writeFileSync(
     join(consumer, "index.ts"),
@@ -190,6 +198,13 @@ try {
       'registerPluginI18n("test");',
       "void petHelper; void i18nResult; void turnRequest; void turnError;",
       'import { defineContextPanel, type PluginManifest } from "@cognia/plugin-sdk";',
+      'import type { ModelStreamProjection, AgentTurnDecisionInput, PluginSurfaceProjection } from "@cognia/plugin-sdk";',
+      'const streamProjection: ModelStreamProjection = { operationId: "run", identity: { type: "text-delta" }, text: "safe" };',
+      'const stepDecision: AgentTurnDecisionInput = { sessionId: "session", step: 1 };',
+      'const surfaceProjection: PluginSurfaceProjection = { point: "toolbar", pluginId: "owner", extensionId: "entry", context: undefined, presentation: { hidden: false } };',
+      "// @ts-expect-error semantic stream projections preserve their text contract",
+      'const invalidStreamProjection: ModelStreamProjection = { operationId: "run", identity: {}, text: 1 };',
+      "void streamProjection; void stepDecision; void surfaceProjection; void invalidStreamProjection;",
       'import { PLUGIN_CONTRACT_VERSION, PLUGIN_GATEWAY_CLIENT_VERSION, type PluginApiNamespaceContract } from "@cognia/plugin-sdk/contracts";',
       'import type { EventFilter } from "@cognia/plugin-sdk/events";',
       'import type { PluginHooks } from "@cognia/plugin-sdk/hooks";',

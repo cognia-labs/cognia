@@ -108,8 +108,13 @@ function walkContributionAssets(
   paths: Set<string>
 ): void {
   if (typeof value === "string") {
+    if ((key === "image" || key === "markdown" || key === "svg") && !safeRelativeAsset(value))
+      throw new Error(`Managed IDE media must be a contained package path: ${value}`)
     if (
       (key === "path" ||
+        key === "image" ||
+        key === "markdown" ||
+        key === "svg" ||
         key === "icon" ||
         key === "fontPath" ||
         key === "entrypoint" ||

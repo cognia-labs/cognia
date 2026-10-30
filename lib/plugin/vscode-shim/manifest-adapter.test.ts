@@ -394,17 +394,40 @@ describe("adaptVscodeManifest", () => {
     expect(result.warnings.join("\n")).toMatch(/"onView:act\.tree" starts the extension at launch/)
   })
 
+  it("keeps terminal, task-type and extension profile activation", () => {
+    const result = adaptActivation({
+      activationEvents: ["onTerminal", "onTaskType:npm", "onTerminalProfile:remote"],
+    })
+    expect(result.manifest.activationEvents).toEqual([
+      "onTerminal",
+      "onTaskType:npm",
+      "onTerminalProfile:remote",
+    ])
+    expect(result.manifest.vscodeExtension?.unsupportedActivationEvents).toBeUndefined()
+  })
+
   it("records the events Cognia never fires as unsupported", () => {
     const result = adaptActivation({
       activationEvents: ["onDebug", "onWebviewPanel:cat", "onNotebook:jupyter", "onCommand:a.b"],
     })
-    expect(result.manifest.activationEvents).toEqual(["onCommand:a.b"])
+    expect(result.manifest.activationEvents).toEqual(["onWebviewPanel:cat", "onCommand:a.b"])
     expect(result.manifest.vscodeExtension?.unsupportedActivationEvents).toEqual([
       "onDebug",
-      "onWebviewPanel:cat",
       "onNotebook:jupyter",
     ])
     expect(result.warnings.join("\n")).toMatch(/"onDebug" is not supported in Cognia/)
+  })
+
+  it("preserves terminal profile descriptors and infers their dormant activation", () => {
+    const result = adaptActivation({
+      contributes: {
+        terminal: { profiles: [{ id: "build", title: "Build shell", icon: "terminal" }] },
+      },
+    })
+    expect(result.manifest.vscodeExtension?.terminalProfiles).toEqual([
+      { id: "build", title: "Build shell", icon: "terminal" },
+    ])
+    expect(result.manifest.activationEvents).toContain("onTerminalProfile:build")
   })
 
   it("does not start an extension whose only events are unsupported", () => {
@@ -919,4 +942,64 @@ describe("signedBy", () => {
     expect(adapt("openvsx")).not.toHaveProperty("signedBy")
     expect(adapt("vsix-upload", true)).not.toHaveProperty("signedBy")
   })
+})
+
+it("preserves chat and tool descriptions and infers their lazy activation events", () => {
+  const participant = {
+    id: "fixture.helper",
+    fullName: "Fixture Helper",
+    name: "Helper",
+    description: "Answers questions",
+  }
+  const tool = {
+    name: "fixture_search",
+    modelDescription: "Searches fixtures",
+    inputSchema: { type: "object", properties: { query: { type: "string" } } },
+  }
+  const { manifest } = adaptVscodeManifest({
+    vsix: makeVsixResult({
+      name: "fixture",
+      publisher: "test",
+      version: "1.0.0",
+      engines: { vscode: "^1.90.0" },
+      main: "extension.js",
+      contributes: {
+        chatParticipants: [participant],
+        languageModelTools: [tool],
+        taskDefinitions: [{ type: "fixture-task" }],
+      },
+    }),
+    inference: emptyInference,
+    source: "vsix-upload",
+  })
+  expect(manifest.vscodeExtension).toEqual(
+    expect.objectContaining({ chatParticipants: [participant], languageModelTools: [tool] })
+  )
+  expect(manifest.activationEvents).toEqual(
+    expect.arrayContaining([
+      "onChatParticipant:fixture.helper",
+      "onLanguageModelTool:fixture_search",
+      "onTaskType:fixture-task",
+    ])
+  )
+  expect(manifest.vscodeExtension?.unsupportedActivationEvents ?? []).not.toContain(
+    "onChatParticipant:fixture.helper"
+  )
+})
+
+it("ignores malformed chat and tool contribution containers", () => {
+  const { manifest } = adaptVscodeManifest({
+    vsix: makeVsixResult({
+      name: "fixture",
+      publisher: "test",
+      version: "1.0.0",
+      engines: { vscode: "^1.90.0" },
+      main: "extension.js",
+      contributes: { chatParticipants: {} as never, languageModelTools: null as never },
+    }),
+    inference: emptyInference,
+    source: "vsix-upload",
+  })
+  expect(manifest.vscodeExtension?.chatParticipants).toBeUndefined()
+  expect(manifest.vscodeExtension?.languageModelTools).toBeUndefined()
 })

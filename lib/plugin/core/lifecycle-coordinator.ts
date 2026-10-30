@@ -40,6 +40,39 @@ export interface PluginGraphReservation {
   token: number
 }
 
+export interface PluginIntentPauseSnapshot {
+  intent: PluginIntent
+  resume: boolean
+  suspended: boolean
+}
+
+export interface PluginIntentPauseOperations {
+  snapshot(): Promise<PluginIntentPauseSnapshot>
+  pause(): Promise<void>
+  restore(snapshot: PluginIntentPauseSnapshot): Promise<void>
+  commit(): void | Promise<void>
+}
+
+export interface PluginIntentPauseLease {
+  isCurrent(): boolean
+  willResume(): boolean
+  pause(): Promise<void>
+  restore(): Promise<void>
+  commit(): Promise<void>
+}
+
+interface IntentPauseState {
+  managerId: string
+  pluginId: string
+  snapshot?: PluginIntentPauseSnapshot
+  operations: PluginIntentPauseOperations
+  holders: Set<symbol>
+  current: boolean
+  committed: boolean
+  paused: boolean
+  failure?: AggregateError
+}
+
 export class PluginActivationConflictError extends Error {
   constructor(
     readonly pluginId: string,
@@ -64,7 +97,174 @@ export class PluginLifecycleCoordinator {
   private readonly reservationDepth = new Map<string, number>()
   private readonly diagnosticSnapshots = new Map<string, PluginLifecycleCoordinatorSnapshot>()
   private readonly snapshotListeners = new Set<SnapshotListener>()
+  private readonly intentQueues = new Map<string, Promise<void>>()
+  private readonly intentOperations = new Map<string, Map<string, number>>()
+  private readonly intentPauses = new Map<string, IntentPauseState>()
+  private readonly activeIntentPauses = new Set<IntentPauseState>()
   private reservationSequence = 0
+
+  /** Serialize decisions and their publication, not only runtime teardown. */
+  async withIntentTransition<T>(
+    managerId: string,
+    pluginId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    let pending = this.intentOperations.get(managerId)
+    if (!pending) {
+      pending = new Map()
+      this.intentOperations.set(managerId, pending)
+    }
+    pending.set(pluginId, (pending.get(pluginId) ?? 0) + 1)
+    const run = (this.intentQueues.get(pluginId) ?? Promise.resolve()).then(operation)
+    const tail = run.then(
+      () => {},
+      () => {}
+    )
+    this.intentQueues.set(pluginId, tail)
+    try {
+      return await run
+    } finally {
+      const count = (pending.get(pluginId) ?? 1) - 1
+      if (count) pending.set(pluginId, count)
+      else pending.delete(pluginId)
+      if (!pending.size) this.intentOperations.delete(managerId)
+      if (this.intentQueues.get(pluginId) === tail) this.intentQueues.delete(pluginId)
+    }
+  }
+
+  /** A successful external intent write supersedes every older pause owner. */
+  invalidateIntentPause(pluginId: string): void {
+    const pause = this.intentPauses.get(pluginId)
+    if (pause) pause.current = false
+  }
+
+  getIntentOperationPluginIds(managerId: string): string[] {
+    return [
+      ...new Set([
+        ...(this.intentOperations.get(managerId)?.keys() ?? []),
+        ...[...this.activeIntentPauses]
+          .filter((pause) => pause.managerId === managerId && pause.holders.size > 0)
+          .map((pause) => pause.pluginId),
+      ]),
+    ]
+  }
+
+  async acquireIntentPause(
+    managerId: string,
+    pluginId: string,
+    operations: PluginIntentPauseOperations,
+    options: { deferred?: boolean } = {}
+  ): Promise<PluginIntentPauseLease> {
+    return this.withIntentTransition(managerId, pluginId, async () => {
+      let state = this.intentPauses.get(pluginId)
+      if (state?.current && state.managerId !== managerId) {
+        throw new PluginActivationConflictError(pluginId, state.managerId)
+      }
+      const token = Symbol(pluginId)
+      if (state?.current) {
+        state.holders.add(token)
+      } else {
+        state = {
+          managerId,
+          pluginId,
+          operations,
+          holders: new Set([token]),
+          current: true,
+          committed: false,
+          paused: false,
+        }
+        this.intentPauses.set(pluginId, state)
+        this.activeIntentPauses.add(state)
+      }
+      const pause = state
+      if (!options.deferred) {
+        try {
+          await this.pauseIntentState(pause)
+        } catch (error) {
+          pause.holders.delete(token)
+          if (!pause.holders.size) this.finishIntentPause(pause)
+          throw error
+        }
+      }
+      let released = false
+      const owns = () => pause.current && this.intentPauses.get(pluginId) === pause
+      const release = async (commit: boolean) => {
+        if (released) return
+        released = true
+        await this.withIntentTransition(managerId, pluginId, async () => {
+          pause.holders.delete(token)
+          const errors: unknown[] = []
+          try {
+            if (commit && owns() && !pause.committed) {
+              try {
+                await this.pauseIntentState(pause)
+                await pause.operations.commit()
+                pause.committed = true
+              } catch (error) {
+                errors.push(error)
+              }
+            }
+            if (
+              !pause.holders.size &&
+              owns() &&
+              !pause.committed &&
+              pause.paused &&
+              pause.snapshot
+            ) {
+              try {
+                await pause.operations.restore(pause.snapshot)
+              } catch (error) {
+                errors.push(error)
+              }
+            }
+          } finally {
+            if (!pause.holders.size) this.finishIntentPause(pause)
+          }
+          if (errors.length) throw new AggregateError(errors, "restoreFailed")
+        })
+      }
+      return {
+        isCurrent: () => !released && owns(),
+        willResume: () =>
+          !released && owns() && !pause.committed && Boolean(pause.snapshot?.resume),
+        pause: () =>
+          this.withIntentTransition(managerId, pluginId, async () => {
+            if (!released && owns()) await this.pauseIntentState(pause)
+          }),
+        restore: () => release(false),
+        commit: () => release(true),
+      }
+    })
+  }
+
+  private async pauseIntentState(pause: IntentPauseState): Promise<void> {
+    if (!pause.current || this.intentPauses.get(pause.pluginId) !== pause) return
+    if (pause.failure) throw pause.failure
+    if (pause.paused) return
+    const snapshot = await pause.operations.snapshot()
+    pause.snapshot = snapshot
+    pause.paused = true
+    try {
+      await pause.operations.pause()
+    } catch (error) {
+      try {
+        await pause.operations.restore(snapshot)
+        pause.paused = false
+        pause.snapshot = undefined
+      } catch (restoreError) {
+        // Other holders must not treat a partially compensated pause as a
+        // completed disabled decision. The last release may retry restoration.
+        pause.failure = new AggregateError([error, restoreError], "restoreFailed")
+        throw pause.failure
+      }
+      throw error
+    }
+  }
+
+  private finishIntentPause(pause: IntentPauseState): void {
+    this.activeIntentPauses.delete(pause)
+    if (this.intentPauses.get(pause.pluginId) === pause) this.intentPauses.delete(pause.pluginId)
+  }
 
   acquire(managerId: string, pluginId: string): PluginActivationLease {
     const current = this.leases.get(pluginId)

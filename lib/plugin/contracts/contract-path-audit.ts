@@ -15,6 +15,7 @@ import { existsSync } from "node:fs"
 import { resolve } from "node:path"
 
 import { PLUGIN_CAPABILITY_CONTRACTS } from "./plugin-capabilities"
+import { auditPluginPointContracts } from "./plugin-points"
 
 /** Repo root, derived from this file's location: lib/plugin/contracts → repo. */
 export const REPO_ROOT = resolve(__dirname, "..", "..", "..")
@@ -27,6 +28,7 @@ export type ContractPathField =
   | "builtinContributionPaths"
   | "docs"
   | "requiredTests"
+  | "binding"
 
 export interface PhantomContractPath {
   contractId: string
@@ -79,6 +81,29 @@ export function auditContractPaths(root: string = REPO_ROOT): PhantomContractPat
       if (!path) continue
       if (!existsSync(resolve(root, path))) {
         phantom.push({ contractId: contract.id, field, raw, path })
+      }
+    }
+  }
+  for (const point of auditPluginPointContracts()) {
+    if (point.status !== "implemented") continue
+    const paths: Array<{ field: ContractPathField; raw: string; path: string }> = [
+      { field: "docs", raw: point.docs, path: stripPathAnchor(point.docs) },
+      ...point.requiredTests.map((raw) => ({
+        field: "requiredTests" as const,
+        raw,
+        path: stripPathAnchor(raw),
+      })),
+    ]
+    // Bindings may include a symbol or several source files joined by prose.
+    // Probe every source path, rather than treating the whole description as a path.
+    for (const match of point.binding.matchAll(
+      /(?:^|[\s+,(])((?:lib|hooks|stores|app|components|packages|sidecar|src-tauri)\/[\w./-]+\.(?:tsx?|rs|mjs))/g
+    )) {
+      paths.push({ field: "binding", raw: point.binding, path: match[1] })
+    }
+    for (const { field, raw, path } of paths) {
+      if (!path || !existsSync(resolve(root, path))) {
+        phantom.push({ contractId: point.id, field, raw, path })
       }
     }
   }

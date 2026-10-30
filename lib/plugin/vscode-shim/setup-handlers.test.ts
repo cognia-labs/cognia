@@ -61,6 +61,10 @@ const EXPECTED_METHODS = [
   "lm:registerChatModelProvider",
   "lm:registerMcpServerDefinitionProvider",
   "lm:registerTool",
+  "lm:unregisterTool",
+  "lm:listTools",
+  "lm:invokeTool",
+  "lm:cancelTool",
   "chat:createParticipant",
   "chat:disposeParticipant",
   "chat:registerVariableResolver",
@@ -207,7 +211,7 @@ describe("installVscodeRpcHandlers", () => {
       const methods = listMethods()
       const lmCount = methods.filter((m) => m.startsWith("lm:")).length
       const chatCount = methods.filter((m) => m.startsWith("chat:")).length
-      expect(lmCount).toBe(8)
+      expect(lmCount).toBe(12)
       expect(chatCount).toBe(6)
     } finally {
       reset()
@@ -370,4 +374,48 @@ describe("installVscodeRpcHandlers", () => {
       markers: [],
     })
   })
+})
+
+it("binds chat payload ownership to the authenticated RPC context", () => {
+  jest.isolateModules(() => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ownedChatPayload } = require("./setup-handlers")
+    const context = { pluginId: "owner", method: "chat:createParticipant", requestId: 1 }
+    expect(ownedChatPayload({ id: "helper" }, context)).toEqual({
+      id: "helper",
+      extensionId: "owner",
+    })
+    expect(() => ownedChatPayload({ id: "helper", extensionId: "other" }, context)).toThrow(
+      "ownership"
+    )
+    expect(() => ownedChatPayload({}, context)).toThrow("participant id")
+  })
+})
+
+it("refuses cross-owner cleanup before clearing owned serializers or terminal providers", async () => {
+  let dispatch!: (id: string, raw: string) => Promise<void>
+  let cleanup!: jest.Mock
+  jest.isolateModules(() => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require("./setup-handlers").installVscodeRpcHandlers()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    dispatch = require("./rpc-dispatcher").handleInboundFrame
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    cleanup = require("./languages-handler").handleExtensionCleanup
+    cleanup.mockClear()
+  })
+  await dispatch(
+    "owner",
+    JSON.stringify({
+      jsonrpc: "2.0",
+      method: "extension:cleanup",
+      params: { extensionId: "victim" },
+    })
+  )
+  expect(cleanup).not.toHaveBeenCalled()
+  await dispatch(
+    "owner",
+    JSON.stringify({ jsonrpc: "2.0", method: "extension:cleanup", params: {} })
+  )
+  expect(cleanup).toHaveBeenCalledWith({ extensionId: "owner" })
 })

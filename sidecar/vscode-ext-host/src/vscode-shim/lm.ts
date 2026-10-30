@@ -18,9 +18,9 @@
  * Not supported, and said so where an extension meets it:
  *   - Tools: the model never calls an extension's tools. A request whose
  *     `toolMode` is `Required` is refused; with `Auto` the tools are dropped
- *     (the renderer logs it). `lm.tools` is empty and `lm.invokeTool` finds
- *     nothing.
- *   - `registerTool`, `registerChatModelProvider` and
+ *     (the renderer logs it). Registered tools use the app tool manifest;
+ *     direct discovery and invocation are limited to this extension's tools.
+ *   - `registerChatModelProvider` and
  *     `registerMcpServerDefinitionProvider` are accepted but never used; the
  *     renderer logs each to the extension's log.
  *   - Messages with tool-call, tool-result or prompt-tsx parts are refused:
@@ -34,6 +34,7 @@ import {
   LanguageModelPromptTsxPart,
   LanguageModelTextPart,
   LanguageModelToolCallPart,
+  LanguageModelToolResult,
   LanguageModelToolResultPart,
 } from "./api-types"
 import { Disposable, EventEmitter, type CancellationToken } from "./types"
@@ -79,9 +80,24 @@ const SYSTEM_ROLE = 3
  */
 export class LanguageModels {
   private readonly models = new Map<string, ChatModelInfo>()
+  private tools: Array<Record<string, unknown>> = []
+  readonly toolsChanged = new EventEmitter<void>()
+  rememberTools(tools: unknown): void {
+    this.tools = Array.isArray(tools)
+      ? tools.filter((tool) => tool && typeof tool.name === "string")
+      : []
+    this.toolsChanged.fire(undefined)
+  }
+  availableTools(): readonly Record<string, unknown>[] {
+    return this.tools.map((tool) => ({ ...tool }))
+  }
   readonly changed = new EventEmitter<void>()
 
   attach(connection: RpcConnection): void {
+    connection.onRequest("lm:toolsChanged", (params) => {
+      this.rememberTools((params as { tools?: unknown }).tools)
+      return null
+    })
     // The app's model changed (the user picked another provider or model).
     connection.onRequest("lm:modelsChanged", (params) => {
       const { models } = params as { models?: unknown }
@@ -270,7 +286,7 @@ export class ChatResponseBuffer {
 
 let requestSequence = 0
 
-function createChatModel(info: ChatModelInfo, deps: ShimDependencies) {
+export function createChatModel(info: ChatModelInfo, deps: ShimDependencies) {
   const { connection, extensionId } = deps
   return {
     id: info.id,
@@ -346,7 +362,12 @@ function createChatModel(info: ChatModelInfo, deps: ShimDependencies) {
 }
 
 export function createLmNamespace(deps: ShimDependencies) {
-  const { connection, extensionId, languageModels } = deps
+  const { connection, extensionId, languageModels, registerProviderCallback } = deps
+  const registrations = new Map<string, Promise<unknown>>()
+  void connection
+    .sendRequest("lm:listTools", { extensionId })
+    .then((tools) => languageModels.rememberTools(tools))
+    .catch(() => {})
   // Registrations nothing calls back: the renderer logs each to the
   // extension's log, and disposing one is a no-op there.
   const inert = (method: string, payload: Record<string, unknown>) => {
@@ -370,12 +391,56 @@ export function createLmNamespace(deps: ShimDependencies) {
     },
     onDidChangeChatModels: languageModels.changed.event,
 
-    tools: Object.freeze([]) as readonly unknown[],
-    async invokeTool(name: string): Promise<never> {
-      throw new Error(`Tool "${name}" was not found: no language model tools are available`)
+    get tools() {
+      return languageModels.availableTools()
     },
-    registerTool(name: string, _tool: unknown) {
-      return inert("lm:registerTool", { name })
+    onDidChangeTools: languageModels.toolsChanged.event,
+    async invokeTool(
+      name: string,
+      options: { input?: Record<string, unknown> } = {},
+      token?: CancellationToken
+    ): Promise<LanguageModelToolResult> {
+      if (token?.isCancellationRequested) throw new CancellationError()
+      await registrations.get(name)
+      if (token?.isCancellationRequested) throw new CancellationError()
+      const callId = `${extensionId}:tool:${++requestSequence}`
+      const subscription = token?.onCancellationRequested(() => {
+        void connection.sendRequest("lm:cancelTool", { extensionId, callId }).catch(() => {})
+      })
+      try {
+        const result = await connection.sendRequest<{ content: Array<{ value: string }> }>(
+          "lm:invokeTool",
+          { extensionId, callId, name, input: options.input ?? {} }
+        )
+        if (token?.isCancellationRequested) throw new CancellationError()
+        return new LanguageModelToolResult(
+          result.content.map((part) => new LanguageModelTextPart(part.value))
+        )
+      } finally {
+        subscription?.dispose()
+      }
+    },
+    registerTool(
+      name: string,
+      tool: { invoke(options: { input: unknown }, token: CancellationToken): unknown }
+    ) {
+      if (!name || typeof tool?.invoke !== "function")
+        throw new Error("registerTool requires a name and invoke handler")
+      const token = `lm-tool:${extensionId}:${name}:${++requestSequence}:${globalThis.crypto.randomUUID()}`
+      const unregister = registerProviderCallback(token, (payload, call) =>
+        tool.invoke({ input: (payload as { input?: unknown }).input }, call.cancellation)
+      )
+      const registration = connection.sendRequest("lm:registerTool", { extensionId, name, token })
+      deps.trackRegistration?.(registration)
+      registrations.set(name, registration)
+      void registration.catch(() => {})
+      return new Disposable(() => {
+        unregister()
+        if (registrations.get(name) === registration) registrations.delete(name)
+        void registration
+          .then(() => connection.sendRequest("lm:unregisterTool", { extensionId, name, token }))
+          .catch(() => {})
+      })
     },
     registerChatModelProvider(id: string, _provider: unknown) {
       return inert("lm:registerChatModelProvider", { id })

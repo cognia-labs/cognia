@@ -63,6 +63,9 @@ describe("PluginToolsBridge", () => {
     jest.clearAllMocks()
 
     mockRegistry = createMockRegistry()
+    mockRegistry.registerTool.mockImplementation((_id, tool) => {
+      mockRegistry.getTool.mockReturnValue(tool)
+    })
     mockStore = {
       plugins: { "test-plugin": { config: { key: "value" } } },
       registerPluginTool: jest.fn(),
@@ -75,6 +78,13 @@ describe("PluginToolsBridge", () => {
   })
 
   describe("registerTool", () => {
+    it("does not project a rejected tool into the runtime store", () => {
+      const incumbent = createMockTool()
+      mockRegistry.registerTool.mockImplementation(() => undefined)
+      mockRegistry.getTool.mockReturnValue(incumbent)
+      bridge.registerTool("another-plugin", { ...incumbent, pluginId: "another-plugin" })
+      expect(mockStore.registerPluginTool).not.toHaveBeenCalled()
+    })
     it("should register tool with registry", () => {
       const tool = createMockTool()
 

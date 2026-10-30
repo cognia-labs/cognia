@@ -8,6 +8,7 @@ exports.activate = (context) => {
   let panel
   let view
   let provider
+  let serializer
 
   register("webviewFixture.panel", () => {
     const media = vscode.Uri.joinPath(context.extensionUri, "media")
@@ -22,6 +23,7 @@ exports.activate = (context) => {
         retainContextWhenHidden: true,
       }
     )
+    context.subscriptions.push(panel)
     const script = panel.webview.asWebviewUri(vscode.Uri.joinPath(media, "main.js"))
     panel.webview.html = `<script src="${script}"></script>`
     panel.title = "Preview (1)"
@@ -85,12 +87,22 @@ exports.activate = (context) => {
   register("webviewFixture.showView", () => view.show(true))
   register("webviewFixture.unregisterView", () => provider.dispose())
   register("webviewFixture.serializer", () => {
-    const disposable = vscode.window.registerWebviewPanelSerializer("fixture.preview", {
-      deserializeWebviewPanel() {},
+    serializer = vscode.window.registerWebviewPanelSerializer("fixture.preview", {
+      deserializeWebviewPanel(restored, state, cancellation) {
+        panel = restored
+        restored.webview.options = { enableScripts: true }
+        restored.webview.html = `<p>restored ${state.count}</p>`
+        restored.title = "Restored preview"
+        events.push({
+          event: "deserialized",
+          state,
+          cancelled: cancellation.isCancellationRequested,
+        })
+      },
     })
-    disposable.dispose()
     return "ok"
   })
+  register("webviewFixture.unregisterSerializer", () => serializer.dispose())
   register("webviewFixture.state", () => ({
     events,
     panel: panel && { visible: panel.visible, active: panel.active, title: panel.title },

@@ -4171,6 +4171,27 @@ function validateBots(m: PluginManifest, pushError: PushDiagnostic): void {
       return
     }
 
+    const required = bot.requires as { credentials?: Array<{ id?: unknown }> } | undefined
+    const credentialIds = new Set<string>()
+    if (required?.credentials !== undefined) {
+      if (!Array.isArray(required.credentials))
+        pushError(
+          `${field}.requires.credentials`,
+          "manifest.bots.credentials.invalid",
+          "Bot credentials must be an array"
+        )
+      else
+        for (const slot of required.credentials) {
+          if (!slot || typeof slot.id !== "string" || !slot.id.trim() || credentialIds.has(slot.id))
+            pushError(
+              `${field}.requires.credentials`,
+              "manifest.bots.credentials.invalid",
+              "Credential slot IDs must be non-empty and unique"
+            )
+          else credentialIds.add(slot.id)
+        }
+    }
+    const triggerIds = new Set<unknown>()
     triggers.forEach((rawTrigger, t) => {
       const triggerField = `${field}.triggers[${t}]`
       if (!rawTrigger || typeof rawTrigger !== "object" || Array.isArray(rawTrigger)) {
@@ -4190,6 +4211,29 @@ function validateBots(m: PluginManifest, pushError: PushDiagnostic): void {
           `${triggerField} is missing a non-empty "id"`
         )
       }
+
+      if (triggerIds.has(trigger.id))
+        pushError(
+          `${triggerField}.id`,
+          "manifest.bots.trigger.id.duplicate",
+          "Trigger IDs must be unique"
+        )
+      triggerIds.add(trigger.id)
+      if (
+        trigger.inputCredentialSlot !== undefined &&
+        (typeof trigger.inputCredentialSlot !== "string" ||
+          !credentialIds.has(trigger.inputCredentialSlot) ||
+          !(
+            trigger.kind === "interaction" ||
+            (trigger.kind === "event" &&
+              ["connector", "integration"].includes(trigger.source as string))
+          ))
+      )
+        pushError(
+          `${triggerField}.inputCredentialSlot`,
+          "manifest.bots.trigger.inputCredentialSlot.invalid",
+          "Input slot must reference a declared credential on an account-bound trigger"
+        )
 
       const kind = trigger.kind
       if (typeof kind !== "string" || !PLUGIN_BOT_TRIGGER_KINDS.includes(kind as never)) {

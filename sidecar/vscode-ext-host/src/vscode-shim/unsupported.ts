@@ -35,8 +35,6 @@ export const UNSUPPORTED_VSCODE_API: Readonly<Record<string, string>> = {
   "window.registerFileDecorationProvider":
     "Cognia's file tree does not take decorations from extensions.",
   "window.registerTerminalLinkProvider": "Cognia's terminal does not take links from extensions.",
-  "window.registerTerminalProfileProvider":
-    "Cognia's terminal does not take profiles from extensions.",
   "window.tabGroups": "Cognia does not describe its editor tabs to extensions.",
   "window.withScmProgress":
     "Cognia has no source control view for extensions; the task runs without visible progress.",

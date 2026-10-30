@@ -93,6 +93,27 @@ function setup(files: Record<string, string> = {}) {
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 
+it("mounts owned panel serializer registration and token-scoped disposal", async () => {
+  const h = setup()
+  expect(handlers.has("window:registerWebviewPanelSerializer")).toBe(true)
+  await expect(
+    h.call("window:registerWebviewPanelSerializer", {
+      extensionId: "another.extension",
+      viewType: "preview",
+      token: "serializer",
+    })
+  ).rejects.toThrow("ownership mismatch")
+  await h.call("window:registerWebviewPanelSerializer", { viewType: "preview", token: "current" })
+  await h.call("window:unregisterWebviewPanelSerializer", { viewType: "preview", token: "old" })
+  await expect(
+    h.call("window:registerWebviewPanelSerializer", { viewType: "preview", token: "new" })
+  ).rejects.toThrow("already registered")
+  await h.call("window:unregisterWebviewPanelSerializer", { viewType: "preview", token: "current" })
+  await expect(
+    h.call("window:registerWebviewPanelSerializer", { viewType: "preview", token: "new" })
+  ).resolves.toBeNull()
+})
+
 async function panel(
   h: ReturnType<typeof setup>,
   handle = "p1",
@@ -117,6 +138,17 @@ beforeEach(() => {
 })
 
 describe("panels", () => {
+  it("assigns independent restoration identities when a restarted host reuses a handle", async () => {
+    const h = setup()
+    await panel(h, "reused-handle")
+    const previousId = getWebview("reused-handle")?.restorationId
+    expect(previousId).toEqual(expect.any(String))
+    clearVscodeWebviewsForPlugin("acme.ext")
+    await panel(h, "reused-handle")
+    expect(getWebview("reused-handle")?.restorationId).toEqual(expect.any(String))
+    expect(getWebview("reused-handle")?.restorationId).not.toBe(previousId)
+  })
+
   it("open as a selected tab with their options, unless the extension keeps focus", async () => {
     const h = setup()
     await panel(h, "p1", {

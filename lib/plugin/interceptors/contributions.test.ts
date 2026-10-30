@@ -6,7 +6,10 @@
  * contribution that comes out of it.
  */
 
-import { registerDeclaredInterceptors, splitActivationContributions } from "./contributions"
+import {
+  registerDeclaredInterceptors as registerContributions,
+  splitActivationContributions,
+} from "./contributions"
 import {
   listInterceptorsForPoint,
   registerInterceptor,
@@ -14,6 +17,7 @@ import {
 } from "./registry"
 import { __resetInterceptorIdentityForTesting } from "./identity"
 import { usePluginStore } from "@/stores/plugin-runtime"
+import { dispatchTransform } from "./dispatch"
 import type { PluginHooks } from "@/types/plugin"
 import type { PluginInterceptorContribution } from "@/types/plugin/plugin-interceptors"
 
@@ -24,6 +28,9 @@ const contribution = (
   handler: () => undefined,
   ...overrides,
 })
+
+const registerDeclaredInterceptors: typeof registerContributions = (id, entries, options) =>
+  registerContributions(id, entries, { hasPermission: () => true, ...options })
 
 beforeEach(() => {
   __resetInterceptorRegistryForTesting()
@@ -77,6 +84,41 @@ describe("splitActivationContributions", () => {
 })
 
 describe("registerDeclaredInterceptors", () => {
+  it("rejects a result if its permission is revoked while the handler waits", async () => {
+    let allowed = true
+    let finish!: () => void
+    registerContributions(
+      "p1",
+      [
+        contribution({
+          handler: (async (value: object) => {
+            await new Promise<void>((resolve) => {
+              finish = resolve
+            })
+            return { ...value, projection: "late" }
+          }) as never,
+          failurePolicy: "fail-closed",
+        }),
+      ],
+      { hasPermission: () => allowed }
+    )
+    const pending = dispatchTransform(
+      "tool.result.project",
+      { projection: "original" },
+      { operationId: "revoked" }
+    )
+    await Promise.resolve()
+    allowed = false
+    finish()
+    await expect(pending).rejects.toMatchObject({ name: "InterceptorFailClosedError" })
+  })
+  it("refuses declared interception without the canonical permission", () => {
+    const outcome = registerContributions("p1", [contribution()], { hasPermission: () => false })
+    expect(outcome.registered).toBe(0)
+    expect(outcome.rejected).toEqual([
+      { point: "tool.result.project", reason: "permission-denied" },
+    ])
+  })
   it("registers a valid contribution", () => {
     const outcome = registerDeclaredInterceptors("p1", [contribution()])
     expect(outcome.registered).toBe(1)
@@ -103,15 +145,15 @@ describe("registerDeclaredInterceptors", () => {
     expect(outcome.rejected[0]?.reason).toBe("handler-not-a-function")
   })
 
-  it("accepts a contribution on a virtual point but reports it as dormant", () => {
-    // The author is allowed to be ready for the seam; they are not allowed to
-    // be unaware that nothing calls it yet.
-    const outcome = registerDeclaredInterceptors("p1", [
-      contribution({ point: "agent.turn.decide" }),
-    ])
-    expect(outcome.registered).toBe(1)
-    expect(outcome.dormant).toEqual(["agent.turn.decide"])
-  })
+  it.each(["agent.turn.decide", "model.stream.transform", "ui.surface.project"] as const)(
+    "registers the real consumer point %s",
+    (point) => {
+      const outcome = registerDeclaredInterceptors("p1", [contribution({ point })])
+      expect(outcome.registered).toBe(1)
+      expect(outcome.dormant).toEqual([])
+      expect(listInterceptorsForPoint(point)).toHaveLength(1)
+    }
+  )
 
   it("replaces the plugin's previous interceptors rather than stacking them", () => {
     registerDeclaredInterceptors("p1", [contribution()])

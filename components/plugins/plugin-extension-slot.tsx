@@ -9,11 +9,8 @@
 
 import { useEffect, useSyncExternalStore, type ReactNode } from "react"
 import { PluginSurface } from "@/components/plugins/plugin-surface"
-import {
-  getExtensionsForPoint,
-  getExtensionRevision,
-  subscribeExtensionChanges,
-} from "@/lib/plugin/api/extension-api"
+import { useSurfaceProjections } from "./use-surface-projections"
+import { getExtensionRevision, subscribeExtensionChanges } from "@/lib/plugin/api/extension-api"
 import {
   getContextKeyRevision,
   subscribeContextKeys,
@@ -97,8 +94,7 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
     }
   }, [point, runtimeRequested])
 
-  const all = getExtensionsForPoint(point)
-  const ordered = [...all].sort((a, b) => (b.options.priority ?? 0) - (a.options.priority ?? 0))
+  const ordered = useSurfaceProjections(point, context)
   const visible = typeof limit === "number" ? ordered.slice(0, limit) : ordered
 
   if (visible.length === 0) {
@@ -135,6 +131,7 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
             formFactor={formFactor}
             minWidth={ext.options.minWidth}
             maxWidth={ext.options.maxWidth}
+            title={ext.projectionTitle}
           >
             <Cmp
               pluginId={ext.pluginId}
@@ -158,8 +155,11 @@ export function PluginExtensionSlot({ point, className, limit, fallback, context
  * `PluginExtensionSlot`, so it stays in sync as plugins enable/disable and as
  * `when`-gated extensions appear/disappear.
  */
-export function usePluginSlotHasExtensions(point: CanonicalExtensionPoint): boolean {
+export function usePluginSlotHasExtensions(
+  point: CanonicalExtensionPoint,
+  context?: Readonly<Record<string, unknown>>
+): boolean {
   useSyncExternalStore(subscribeExtensionChanges, getExtensionRevision, () => 0)
   useSyncExternalStore(subscribeContextKeys, getContextKeyRevision, () => 0)
-  return getExtensionsForPoint(point).length > 0
+  return useSurfaceProjections(point, context).length > 0
 }

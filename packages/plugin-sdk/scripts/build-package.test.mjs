@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import ts from "typescript"
-import { assertDeclaredArtifacts } from "./build-package.mjs"
+import { assertDeclaredArtifacts, assertRuntimeContracts } from "./build-package.mjs"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
@@ -106,4 +106,30 @@ test("declares the schema dependency exposed by portable handoff policy types", 
     readFileSync(resolve(packageRoot, "../agent/package.json"), "utf8")
   )
   assert.equal(manifest.dependencies.valibot, agentManifest.dependencies.valibot)
+})
+
+test("rejects built ESM contracts whose exports disappeared despite a successful bundle", async (t) => {
+  const root = fixture(t)
+  writeFileSync(resolve(root, "package.json"), JSON.stringify({ type: "module" }))
+  writeFileSync(resolve(root, "dist/contracts.js"), "export {}")
+  writeFileSync(resolve(root, "dist/contracts.cjs"), "exports.PLUGIN_CONTRACT_VERSION = '1.5.0'")
+  await assert.rejects(assertRuntimeContracts(root), /ESM\/CJS contract exports differ/)
+})
+
+test("accepts matching usable ESM/CJS contract metadata", async (t) => {
+  const root = fixture(t)
+  writeFileSync(resolve(root, "package.json"), JSON.stringify({ type: "module" }))
+  const values = {
+    PLUGIN_CONTRACT_VERSION: "1.5.0",
+    PLUGIN_API_NAMESPACE_CONTRACTS: [{ id: "agent" }],
+    AUTHOR_PLUGIN_POINT_CONTRACTS: [{ id: "onTerminal" }],
+  }
+  writeFileSync(
+    resolve(root, "dist/contracts.js"),
+    Object.entries(values)
+      .map(([key, value]) => `export const ${key} = ${JSON.stringify(value)}`)
+      .join("\n")
+  )
+  writeFileSync(resolve(root, "dist/contracts.cjs"), `module.exports = ${JSON.stringify(values)}`)
+  await assert.doesNotReject(assertRuntimeContracts(root))
 })

@@ -17,6 +17,8 @@
     "cognia": ">=0.1.0"
   },
   "permissions": [
+    "filesystem:read",
+    "filesystem:write",
     "editor:read",
     "process:spawn",
     "debug:control",
@@ -32,6 +34,22 @@
     "schemaVersion": 1,
     "targets": ["pro-ide"],
     "contributions": {
+      "walkthroughs": [
+        {
+          "id": "welcome",
+          "title": "Fixture walkthrough",
+          "description": "Managed activation and completion",
+          "steps": [
+            {
+              "id": "ping-step",
+              "title": "Ping the fixture",
+              "description": "Run the fixture command",
+              "completionEvents": ["onCommand:ping"],
+              "media": { "markdown": "assets/walkthrough.md" }
+            }
+          ]
+        }
+      ],
       "commands": [
         {
           "command": "ping",
@@ -124,6 +142,18 @@
       ]
     },
     "providers": [
+      {
+        "id": "fixture-fs",
+        "kind": "file-system",
+        "handler": "fileSystem",
+        "metadata": { "scheme": "fixture-fs" }
+      },
+      {
+        "id": "fixture-debug-config",
+        "kind": "debug-configuration",
+        "handler": "debugConfiguration",
+        "metadata": { "debugType": "fixture-dap" }
+      },
       {
         "id": "ping",
         "kind": "command",

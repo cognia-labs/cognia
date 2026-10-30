@@ -33,6 +33,7 @@ export const githubDevinBotDef = {
     },
     {
       id: "github",
+      inputCredentialSlot: "github",
       kind: "event",
       source: "integration",
       label: "GitHub events",

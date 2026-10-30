@@ -56,6 +56,7 @@ import type { ExternalAgentChangeEvent } from "@/lib/plugin/api/external-agents-
 import type { PluginGlanceVisibilityEvent } from "@/types/plugin/plugin-glance"
 import type {
   PluginHooksAll,
+  PluginWorkflowRegistryHookEvent,
   HookSandboxExecutionResult,
   PluginTerminalSpawnRequest,
   PluginTerminalSpawnDecision,
@@ -107,6 +108,24 @@ export enum HookPriority {
   NORMAL = 50, // Default
   LOW = 25, // Low priority
   DEFERRED = 0, // Execute last
+}
+
+/** Shared in-process and Sidecar broadcast compaction semantics. */
+export function mergePreCompactResults(
+  results: readonly import("@/types/plugin/plugin-hooks").PreCompactResult[]
+): import("@/types/plugin/plugin-hooks").PreCompactResult {
+  const merged: import("@/types/plugin/plugin-hooks").PreCompactResult = {}
+  for (const result of results) {
+    if (result.skipCompaction === true) merged.skipCompaction = true
+    if (typeof result.contextToInject === "string" && result.contextToInject) {
+      merged.contextToInject = merged.contextToInject
+        ? `${merged.contextToInject}\n${result.contextToInject}`
+        : result.contextToInject
+    }
+    if (["aggressive", "moderate", "minimal"].includes(result.customStrategy ?? ""))
+      merged.customStrategy = result.customStrategy
+  }
+  return merged
 }
 
 /** Convert legacy priority values to unified enum */
@@ -372,7 +391,7 @@ export class PluginLifecycleHooks {
       const registered = this.registered(pluginId)
       if (registered?.hooks.onAgentStep) {
         try {
-          registered.hooks.onAgentStep(agentId, step)
+          registered.hooks.onAgentStep(agentId, structuredClone(step))
         } catch (error) {
           loggers.hooks.error(`Error in plugin ${pluginId} onAgentStep:`, error)
         }
@@ -1083,6 +1102,70 @@ export class PluginEventHooks {
   // Project Hooks
   // =============================================================================
 
+  dispatchScheduledTaskCreate(
+    task: Parameters<NonNullable<PluginHooksAll["onScheduledTaskCreate"]>>[0]
+  ) {
+    return this.executeHook("onScheduledTaskCreate", (hooks) =>
+      hooks.onScheduledTaskCreate?.(structuredClone(task))
+    )
+  }
+
+  dispatchScheduledTaskUpdate(
+    task: Parameters<NonNullable<PluginHooksAll["onScheduledTaskUpdate"]>>[0],
+    changes: Record<string, unknown>
+  ) {
+    return this.executeHook("onScheduledTaskUpdate", (hooks) =>
+      hooks.onScheduledTaskUpdate?.(structuredClone(task), structuredClone(changes))
+    )
+  }
+
+  dispatchScheduledTaskDelete(taskId: string) {
+    return this.executeHook("onScheduledTaskDelete", (hooks) =>
+      hooks.onScheduledTaskDelete?.(taskId)
+    )
+  }
+
+  dispatchScheduledTaskPause(taskId: string) {
+    return this.executeHook("onScheduledTaskPause", (hooks) => hooks.onScheduledTaskPause?.(taskId))
+  }
+
+  dispatchScheduledTaskResume(taskId: string) {
+    return this.executeHook("onScheduledTaskResume", (hooks) =>
+      hooks.onScheduledTaskResume?.(taskId)
+    )
+  }
+
+  async dispatchScheduledTaskBeforeRun(taskId: string, executionId: string): Promise<boolean> {
+    const results = await this.executeHook("onScheduledTaskBeforeRun", (hooks) =>
+      hooks.onScheduledTaskBeforeRun?.(taskId, executionId)
+    )
+    return results.every((result) => result.success && result.result !== false)
+  }
+
+  dispatchWorkflowNodeRegister(event: PluginWorkflowRegistryHookEvent) {
+    return this.executeHook("onWorkflowNodeRegister", (hooks) =>
+      hooks.onWorkflowNodeRegister?.(structuredClone(event))
+    )
+  }
+
+  dispatchWorkflowNodeUnregister(event: PluginWorkflowRegistryHookEvent) {
+    return this.executeHook("onWorkflowNodeUnregister", (hooks) =>
+      hooks.onWorkflowNodeUnregister?.(structuredClone(event))
+    )
+  }
+
+  dispatchWorkflowTriggerRegister(event: PluginWorkflowRegistryHookEvent) {
+    return this.executeHook("onWorkflowTriggerRegister", (hooks) =>
+      hooks.onWorkflowTriggerRegister?.(structuredClone(event))
+    )
+  }
+
+  dispatchWorkflowTriggerUnregister(event: PluginWorkflowRegistryHookEvent) {
+    return this.executeHook("onWorkflowTriggerUnregister", (hooks) =>
+      hooks.onWorkflowTriggerUnregister?.(structuredClone(event))
+    )
+  }
+
   async dispatchProjectCreate(project: Project) {
     return this.executeHook("onProjectCreate", (hooks) => hooks.onProjectCreate?.(project))
   }
@@ -1418,13 +1501,8 @@ export class PluginEventHooks {
   /**
    * Dispatch pre-compact hook - allows plugins to customize context compression.
    *
-   * NOTE: this dispatcher is part of the public plugin `onPreCompact` API
-   * surface but is not yet wired into a live compaction trigger. The Anthropic
-   * path self-manages compaction inside the Agent SDK, and the generic
-   * (AI-SDK) path summarizes in the sidecar, which cannot call back into `lib/`
-   * (`types/plugin/plugin-compaction-strategy.ts:11-14`). Kept for contract
-   * parity (mirrored in the Python `PluginHook.ON_PRE_COMPACT` enum and guarded
-   * by `runtime-proof-audit.test.ts`).
+   * The Sidecar compaction seam reaches the same hook registry through
+   * plugin_hook_exec; both paths use mergePreCompactResults.
    */
   async dispatchPreCompact(
     context: import("@/types/plugin/plugin-hooks").PreCompactContext
@@ -1436,24 +1514,9 @@ export class PluginEventHooks {
       return {}
     })
 
-    // Merge all results
-    const finalResult: import("@/types/plugin/plugin-hooks").PreCompactResult = {}
-    for (const result of results) {
-      if (result.success && result.result) {
-        if (result.result.skipCompaction) {
-          finalResult.skipCompaction = true
-        }
-        if (result.result.contextToInject) {
-          finalResult.contextToInject = finalResult.contextToInject
-            ? `${finalResult.contextToInject}\n${result.result.contextToInject}`
-            : result.result.contextToInject
-        }
-        if (result.result.customStrategy) {
-          finalResult.customStrategy = result.result.customStrategy
-        }
-      }
-    }
-    return finalResult
+    return mergePreCompactResults(
+      results.flatMap((result) => (result.success && result.result ? [result.result] : []))
+    )
   }
 
   /**

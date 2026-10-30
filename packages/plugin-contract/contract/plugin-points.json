@@ -1231,44 +1231,50 @@
     {
       "id": "onScheduledTaskCreate",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.1.0"
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.1.0",
+      "permission": "database:read"
     },
     {
       "id": "onScheduledTaskUpdate",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.1.0"
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.1.0",
+      "permission": "database:read"
     },
     {
       "id": "onScheduledTaskDelete",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.1.0"
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.1.0",
+      "permission": "database:read"
     },
     {
       "id": "onScheduledTaskPause",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.1.0"
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.1.0",
+      "permission": "database:read"
     },
     {
       "id": "onScheduledTaskResume",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.1.0"
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.1.0",
+      "permission": "database:read"
     },
     {
       "id": "onScheduledTaskBeforeRun",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.1.0"
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.1.0",
+      "permission": "agent:control"
     },
     {
       "id": "onExternalAgentConnect",
@@ -1386,29 +1392,29 @@
     {
       "id": "onWorkflowNodeRegister",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
+      "stability": "stable",
+      "status": "implemented",
       "introducedIn": "0.1.0"
     },
     {
       "id": "onWorkflowNodeUnregister",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
+      "stability": "stable",
+      "status": "implemented",
       "introducedIn": "0.1.0"
     },
     {
       "id": "onWorkflowTriggerRegister",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
+      "stability": "stable",
+      "status": "implemented",
       "introducedIn": "0.1.0"
     },
     {
       "id": "onWorkflowTriggerUnregister",
       "kind": "hook",
-      "stability": "experimental",
-      "status": "virtual",
+      "stability": "stable",
+      "status": "implemented",
       "introducedIn": "0.1.0"
     },
     {
@@ -1524,6 +1530,46 @@
       "introducedIn": "0.1.0"
     },
     {
+      "id": "gateway.request.prepare",
+      "kind": "interceptor",
+      "stability": "experimental",
+      "status": "implemented",
+      "introducedIn": "0.9.0",
+      "permission": "hooks:chat-intercept"
+    },
+    {
+      "id": "gateway.provider.prepare",
+      "kind": "interceptor",
+      "stability": "experimental",
+      "status": "implemented",
+      "introducedIn": "0.9.0",
+      "permission": "hooks:chat-intercept"
+    },
+    {
+      "id": "gateway.stream.transform",
+      "kind": "interceptor",
+      "stability": "experimental",
+      "status": "implemented",
+      "introducedIn": "0.9.0",
+      "permission": "hooks:chat-intercept"
+    },
+    {
+      "id": "gateway.response.transform",
+      "kind": "interceptor",
+      "stability": "experimental",
+      "status": "implemented",
+      "introducedIn": "0.9.0",
+      "permission": "hooks:chat-intercept"
+    },
+    {
+      "id": "gateway.usage.recorded",
+      "kind": "interceptor",
+      "stability": "experimental",
+      "status": "implemented",
+      "introducedIn": "0.9.0",
+      "permission": "hooks:chat-intercept"
+    },
+    {
       "id": "agent.context.prepare",
       "kind": "interceptor",
       "stability": "experimental",
@@ -1551,7 +1597,7 @@
       "id": "model.stream.transform",
       "kind": "interceptor",
       "stability": "experimental",
-      "status": "virtual",
+      "status": "implemented",
       "introducedIn": "0.9.0",
       "permission": "hooks:chat-intercept"
     },
@@ -1583,7 +1629,7 @@
       "id": "agent.turn.decide",
       "kind": "interceptor",
       "stability": "experimental",
-      "status": "virtual",
+      "status": "implemented",
       "introducedIn": "0.9.0",
       "permission": "hooks:chat-intercept"
     },
@@ -1599,7 +1645,7 @@
       "id": "ui.surface.project",
       "kind": "interceptor",
       "stability": "experimental",
-      "status": "virtual",
+      "status": "implemented",
       "introducedIn": "0.9.0",
       "permission": "extension:ui"
     },
@@ -2150,18 +2196,16 @@
     {
       "id": "onWebviewPanel:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Restoring webview panels after a restart is not supported."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onCustomEditor:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Cognia has no custom editors."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onAuthenticationRequest",
@@ -2173,26 +2217,23 @@
     {
       "id": "onTaskType:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Fetching tasks does not start extensions."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onFileSystem:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Cognia does not read files through extension file systems."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onDebugResolve:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Cognia has no debugger."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onStartupFinished",
@@ -2211,50 +2252,44 @@
     {
       "id": "onTerminal",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Opening a terminal does not start extensions."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onTerminalProfile:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Cognia has no extension terminal profiles."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onNotebook:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Cognia has no notebooks."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onWalkthrough:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Cognia has no walkthroughs."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onChatParticipant:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Extension chat participants are not invoked."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "onLanguageModelTool:*",
       "kind": "activation",
-      "stability": "experimental",
-      "status": "virtual",
-      "introducedIn": "0.5.0",
-      "retirementNote": "Models never call extension tools."
+      "stability": "stable",
+      "status": "implemented",
+      "introducedIn": "0.5.0"
     },
     {
       "id": "workspaceContains:*",

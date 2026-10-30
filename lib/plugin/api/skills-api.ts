@@ -47,6 +47,7 @@ export function createSkillsAPI(
       // What the skill delivers is the plugin's doing (ADR-0239).
       const result = await runBuiltInSkill(skillId, args, {
         ...ctx,
+        signal: options.signal,
         outboundAuthorization: { kind: "plugin", pluginId },
       })
       if (options.signal?.aborted)

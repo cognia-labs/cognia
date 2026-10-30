@@ -99,7 +99,51 @@ export interface MentionDescriptor {
  */
 export type InboundEventKind = "create" | "edit" | "delete" | "system"
 
+/** Canonical filter catalogue, shared by the bus and workflow editor/runtime. */
+export const CONNECTOR_SYSTEM_EVENT_KINDS = [
+  "reaction_added",
+  "reaction_removed",
+  "poke",
+  "request",
+  "lifecycle",
+  "interaction",
+  "delivery_status",
+] as const
+
+export function isConnectorSystemEventKind(
+  value: unknown
+): value is (typeof CONNECTOR_SYSTEM_EVENT_KINDS)[number] {
+  return (
+    typeof value === "string" && (CONNECTOR_SYSTEM_EVENT_KINDS as readonly string[]).includes(value)
+  )
+}
+
+/** Provider controls are observations, not instructions to mutate local state. */
+export type ConnectorSystemInteraction =
+  | { kind: "menu"; featureId: string }
+  | { kind: "feedback"; messageId: string; vote: "positive" | "negative"; selected: boolean }
+  | { kind: "session_reset" }
+  | { kind: "story"; action: "enter" | "exit" }
+  | { kind: "model_change"; action?: string }
+  | { kind: "authorization"; scope?: "proactive"; source?: "settings" | "dialog"; state: "unknown" }
+
+/** Definitive provider evidence, correlated by receipt and conversation, never by recency. */
+export interface ConnectorDeliveryStatus {
+  receiptId: string
+  status: "delivered" | "rejected"
+  platformMessageId?: string
+}
+
 export interface NormalizedInboundEvent {
+  interaction?: ConnectorSystemInteraction
+  deliveryStatus?: ConnectorDeliveryStatus
+  /** Untrusted invitation attribution; never identity, consent or reply authority. */
+  referral?: { source?: string; state?: string }
+  /** Verified transport event identity, distinct from a replyable message id. */
+  originEventId?: string
+  /** Only adapters with an explicitly replyable native event may supply this. */
+  passiveEvent?: { id: string; expiresAt: number }
+  deliveryPermissionChange?: { proactive: boolean }
   /**
    * What this turn's media may hand to a model, decided once by the bus
    * (`bus.ts` step 9.7) and honoured by `inboundEventToSendContent`.
@@ -169,6 +213,8 @@ export interface NormalizedInboundEvent {
     // Transport lifecycle marker (OneBot meta_event enable/disable/connect).
     // Bookkeeping only, same caveat as `request`.
     | "lifecycle"
+    | "interaction"
+    | "delivery_status"
 }
 
 /**

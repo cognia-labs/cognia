@@ -25,7 +25,7 @@
 
 import type { PluginContext } from "@cognia/plugin-contract/types/plugin/plugin"
 
-import { PLUGIN_API_NAMESPACE_CONTRACTS } from "../contracts/catalog"
+import { PLUGIN_API_NAMESPACE_CONTRACTS } from "@cognia/plugin-contract/contracts/catalog"
 
 export interface TestPluginContextCall {
   /** Catalog method id, e.g. `agent.registerTool`. */

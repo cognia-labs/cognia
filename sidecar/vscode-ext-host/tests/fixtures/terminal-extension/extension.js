@@ -34,6 +34,43 @@ exports.activate = (context) => {
   const close = new vscode.EventEmitter()
   const rename = new vscode.EventEmitter()
 
+  context.subscriptions.push(
+    vscode.window.registerTerminalProfileProvider("fixture.process", {
+      provideTerminalProfile() {
+        return new vscode.TerminalProfile({
+          name: "Profile shell",
+          shellPath: "/bin/sh",
+          shellArgs: ["-l"],
+        })
+      },
+    })
+  )
+  context.subscriptions.push(
+    vscode.window.registerTerminalProfileProvider("fixture.pty", {
+      provideTerminalProfile() {
+        return new vscode.TerminalProfile({
+          name: "Profile PTY",
+          pty: {
+            onDidWrite: write.event,
+            open() {
+              write.fire("profile ready> ")
+            },
+            close() {},
+          },
+        })
+      },
+    })
+  )
+  context.subscriptions.push(
+    vscode.window.registerTerminalProfileProvider("fixture.cancel", {
+      async provideTerminalProfile(token) {
+        await vscode.commands.executeCommand("fixture.profileStarted")
+        await new Promise((resolve) => token.onCancellationRequested(resolve))
+        return new vscode.TerminalProfile({ name: "Cancelled profile", shellPath: "/bin/sh" })
+      },
+    })
+  )
+
   register("terminalFixture.process", async () => {
     build = vscode.window.createTerminal({
       name: "Build",

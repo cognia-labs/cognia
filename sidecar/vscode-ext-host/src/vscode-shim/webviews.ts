@@ -284,6 +284,9 @@ function createQueue(context: WebviewContext, first: Promise<unknown>) {
     close(): void {
       closed = true
     },
+    flush(): Promise<unknown> {
+      return queue
+    },
   }
 }
 
@@ -327,28 +330,35 @@ export class WebviewPanel implements ViewStateOwner {
     readonly viewType: string,
     title: string,
     showOptions: unknown,
-    options: WebviewPanelOptions & WebviewOptions
+    options: WebviewPanelOptions & WebviewOptions,
+    restored?: { visible: boolean; active: boolean }
   ) {
     this.currentTitle = String(title)
+    if (restored) {
+      this.isVisible = restored.visible
+      this.isActive = restored.active
+    }
     this.viewColumn = columnOf(showOptions)
     this.options = {
       enableFindWidget: options.enableFindWidget,
       retainContextWhenHidden: options.retainContextWhenHidden === true,
     }
-    const created = context.connection.sendRequest("window:createWebviewPanel", {
-      extensionId: context.extensionId,
-      handle: context.handle,
-      viewType,
-      title: this.currentTitle,
-      preserveFocus:
-        typeof showOptions === "object" && showOptions !== null
-          ? (showOptions as { preserveFocus?: unknown }).preserveFocus === true
-          : false,
-      options: {
-        ...wireWebviewOptions(options),
-        retainContextWhenHidden: this.options.retainContextWhenHidden,
-      },
-    })
+    const created = restored
+      ? Promise.resolve(null)
+      : context.connection.sendRequest("window:createWebviewPanel", {
+          extensionId: context.extensionId,
+          handle: context.handle,
+          viewType,
+          title: this.currentTitle,
+          preserveFocus:
+            typeof showOptions === "object" && showOptions !== null
+              ? (showOptions as { preserveFocus?: unknown }).preserveFocus === true
+              : false,
+          options: {
+            ...wireWebviewOptions(options),
+            retainContextWhenHidden: this.options.retainContextWhenHidden,
+          },
+        })
     created.catch((error: unknown) => {
       stderr(
         `${context.extensionId}: webview panel "${this.currentTitle}" was not shown: ${error instanceof Error ? error.message : String(error)}`
@@ -363,6 +373,11 @@ export class WebviewPanel implements ViewStateOwner {
   }
 
   private readonly queue: ReturnType<typeof createQueue>
+
+  /** Serializer completion includes all HTML/options updates queued by the extension. */
+  flush(): Promise<unknown> {
+    return this.queue.flush()
+  }
 
   get extensionId(): string {
     return this.context.extensionId
@@ -600,6 +615,7 @@ async function contributedViewName(
 
 /** The `window` members about webviews, for one extension. */
 export function createWebviewWindowMembers(input: {
+  trackRegistration?: (registration: Promise<unknown>) => void
   registry: WebviewRegistry
   connection: RpcConnection
   extensionId: string
@@ -618,6 +634,7 @@ export function createWebviewWindowMembers(input: {
     defaultRoots: input.defaultRoots,
   })
   const registeredViews = new Set<string>()
+  const serializers = new Map<string, { token: string }>()
   return {
     createWebviewPanel(
       viewType: string,
@@ -701,9 +718,82 @@ export function createWebviewWindowMembers(input: {
       })
     },
 
-    /** Not supported: webviews do not outlive the app, so there is nothing to restore. */
-    registerWebviewPanelSerializer(_viewType: string, _serializer: unknown): Disposable {
-      return new Disposable(() => undefined)
+    registerWebviewPanelSerializer(
+      viewType: string,
+      serializer: {
+        deserializeWebviewPanel(
+          panel: WebviewPanel,
+          state: unknown,
+          cancellation: unknown
+        ): void | Thenable<void>
+      }
+    ): Disposable {
+      if (!viewType || typeof serializer?.deserializeWebviewPanel !== "function")
+        throw new Error("Webview serializer requires a viewType and deserializeWebviewPanel")
+      if (serializers.has(viewType))
+        throw new Error(`A webview serializer is already registered for ${viewType}`)
+      const registration = { token: `wvs:${extensionId}:${globalThis.crypto.randomUUID()}` }
+      serializers.set(viewType, registration)
+      const ready = connection.sendRequest("window:registerWebviewPanelSerializer", {
+        extensionId,
+        viewType,
+        token: registration.token,
+      })
+      input.trackRegistration?.(ready)
+      void ready.catch((error: unknown) =>
+        stderr(`${extensionId}: webview serializer registration failed: ${String(error)}`)
+      )
+      const unregister = input.registerProviderCallback(registration.token, async (raw, call) => {
+        const payload = raw as {
+          handle?: string
+          title?: string
+          state?: unknown
+          viewType?: string
+          visible?: boolean
+          active?: boolean
+        }
+        if (
+          serializers.get(viewType) !== registration ||
+          typeof payload?.handle !== "string" ||
+          payload.viewType !== viewType
+        )
+          throw new Error("Webview serializer is gone or has an invalid restoration request")
+        const cancellation = call.cancellation as { isCancellationRequested?: boolean }
+        if (cancellation.isCancellationRequested) throw new Error("Webview restoration cancelled")
+        const panel = new WebviewPanel(
+          registry,
+          context(payload.handle),
+          viewType,
+          typeof payload.title === "string" ? payload.title : viewType,
+          1,
+          {},
+          { visible: payload.visible === true, active: payload.active === true }
+        )
+        try {
+          await serializer.deserializeWebviewPanel(panel, payload.state, call.cancellation)
+          if (cancellation.isCancellationRequested || serializers.get(viewType) !== registration)
+            throw new Error("Webview restoration cancelled")
+          await panel.flush()
+          return null
+        } catch (error) {
+          panel.closed()
+          throw error
+        }
+      })
+      return new Disposable(() => {
+        if (serializers.get(viewType) !== registration) return
+        serializers.delete(viewType)
+        unregister()
+        void ready
+          .then(() =>
+            connection.sendRequest("window:unregisterWebviewPanelSerializer", {
+              extensionId,
+              viewType,
+              token: registration.token,
+            })
+          )
+          .catch(() => undefined)
+      })
     },
   }
 }

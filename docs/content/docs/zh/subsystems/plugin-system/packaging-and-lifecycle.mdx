@@ -8,7 +8,7 @@ description: Cognia 插件的分发与生命周期主干 —— 五种安装来�
 <Status variant="experimental" />
 
 <TLDR>
-任何插件安装 —— HTTP 注册中心、GitHub 市场仓库、原始 git 构建、签名的 HTTP zip、本地目录 —— 都汇入 `runMarketplaceInstall`（`install-flow.ts:328`），它先依次执行检查（manifest → 冲突 → 依赖 → 权限 → 二进制 → 配置），再调用各来源各自的 `installPlugin`。在安装步骤之前不存在任何 Dexie `plugins` 行（`install-flow.ts:6-7`）。安装完成后，`updater.ts`、`backup.ts`、`rollback.ts` 负责版本管理、快照轮转（默认 5）以及带迁移的恢复。
+经过审查的市场安装汇入 `runMarketplaceInstall`，先依次执行检查（manifest → 冲突 → 依赖 → 权限 → 二进制 → 配置），再调用各来源的安装器。本地 bundle、签名 URL 和 VSIX 对话框仍有各自独立的安装流程。安装完成后，`updater.ts`、`backup.ts`、`rollback.ts` 负责版本管理、快照轮转（默认 5）以及带迁移的恢复。
 </TLDR>
 
 <StatGrid>
@@ -32,7 +32,7 @@ description: Cognia 插件的分发与生命周期主干 —— 五种安装来�
 - **HTTP `.zip` 包**（`http-installer.ts`）—— 带分离式 Ed25519 签名的包 URL。
 - **本地磁盘目录**（`local/`）—— 含 `plugin.json` 的“加载已解压”目录。
 
-所有 UI 安装都汇入 `runMarketplaceInstall`（`marketplace/install-flow.ts`），它在一条有序链上设闸 —— manifest 拉取 → 冲突检测（`conflict-detector.ts`）→ 依赖解析（`dependency-resolver.ts`）→ 权限同意 → 二进制需求探测 → 配置 —— 随后调用各来源各自的 `installPlugin`。该来源调用在行被提升之前执行权威的 **Rust 下载 + 签名校验**。一旦安装完成（存在一行 Dexie `plugins`），生命周期管理器接手版本管理：`updater.ts`（备份 → 下载 → 安装 → 校验）、`backup.ts`（快照 + 轮转）、`rollback.ts`（备份 → 禁用/卸载 → 恢复 → 迁移 → 加载/启用 → 校验）。
+插件市场和 Discover 面板使用 `runMarketplaceInstall`（`marketplace/install-flow.ts`），依次审查冲突、依赖、权限、二进制需求和配置。Registry review client 在展示安装包 manifest 前执行权威的 **Rust 下载 + 签名校验**，随后提交同一份暂存包。其他来源适配器保留各自的暂存边界。一旦安装完成（存在一行 Dexie `plugins`），生命周期管理器接手版本管理：`updater.ts`（备份 → 下载 → 安装 → 校验）、`backup.ts`（快照 + 轮转）、`rollback.ts`（备份 → 禁用/卸载 → 恢复 → 迁移 → 加载/启用 → 校验）。
 
 ## 2. `install-flow.ts` —— `runMarketplaceInstall`
 
@@ -103,7 +103,7 @@ result.success = result.missing.length === 0 && result.conflicts.length === 0
 | capability | info | `:365` | ≥2 个插件声明排他的 `themes` 能力（`:367`） |
 | resource | warning | `:397` | 共享资源路径 |
 
-当不存在 error 时流水线可继续 —— `canProceed = errors.length === 0`（`:127`）。每种类型都有建议的自动解决方案（`generateAutoResolutions :473-565`）：command → `skip`、shortcut → `rebind`、namespace → `prefix`、version → `upgrade`/`downgrade`、capability → `disable`、resource → `prioritize`。
+候选检查过滤全量检测结果，因此六类检查使用同一套规则。解决建议统一描述可执行的「现有提供者优先」策略：共享键由先注册者保留，同一插件可刷新自己的条目。不再承诺自动改名、重绑快捷键或未经验证的版本变更。
 
 version 检测器对已安装依赖的版本测试每条需求（`:200`）：
 
@@ -112,6 +112,22 @@ const unsatisfied = requirements.filter(
   (req) => !satisfiesConstraint(installedDep.manifest.version, req.constraint),
 )
 ```
+
+### 确认后的解决流程（2026-10-29）
+
+插件市场和 Discover 面板均挂载现有安装前确认对话框。冲突步骤支持保留现有贡献，或通过 manager 明确禁用列出的冲突插件。取消或失败时，恢复整个依赖树中因此禁用的插件，包括已完成安装的依赖所产生的变更。
+
+处理流程在停用前保存持久化 intent 和运行状态，也覆盖已拆除运行时后才失败的停用。临时暂停会恢复原有 intent 和运行状态，包括休眠或已在激活中的使用方。临时变更不向 Cogset 写回发布用户意图；只有整个安装成功后，明确替换的永久停用才发布该事件。替换不得停用本次安装或待恢复使用方的必需依赖。异步暂停结束后、开始安装前，会再次检查取消状态。
+
+递归安装后，后续依赖会重新读取已安装版本；已满足的项跳过，版本计划改变时先重新审查。命令检测采用真实的命名空间 ID 和运行时 slash token 规则，也包含别名。A2UI 只投射注册表实际接受的组件。桌面快捷键操作串行执行；旧释放器和取消的在途绑定不能删除新绑定，也不能绕过暂停插件的保留键。
+
+必需依赖有独立确认步骤：展示已安装、要求和选定版本，安装兼容版本、重新检查人工修复结果，或取消。版本必须满足**所有已安装使用方**，包括父插件当前版本。需要同时升级多个不兼容使用方的情况会明确阻止，不会静默修改它们。兼容但正在运行的使用方会列出供临时停用，并在结束或取消后恢复。后续步骤取消时，已确认安装的依赖仍保留。
+
+依赖使用 registry client，不复用绑定父插件的 GitHub／本地来源 client。registry review client 先验证并暂存所选安装包，使用该包真实 manifest 进行权限及配置确认，再把同一份暂存包交给事务安装器。取消时丢弃未使用的暂存包，也覆盖准备期间组件卸载的情况。经过确认的适配器路径禁止底层递归安装依赖，提交目标前再次核查必需版本。
+
+临时停用会在覆盖注册表、命令总线和快捷键桥保留仅含键的所有权预留。停用的处理器已经移除，不能执行；提供者更新也不能占用使用方暂时释放的键。明确选择替换的插件只保留非激活预留，发生补偿时才激活。预留采用引用计数，并在最外层流程的 finally 中释放。
+
+安装前只能检查 manifest 已知共享键：工具名、组件类型、命令名称／别名及 quick-action／tray 快捷键（兼容旧版 command shortcut）。通用资源及动态注册键仍由运行时检查。核心注册表、命令总线和浏览器快捷键统一保留先注册者；被拒绝的工具不会进入运行时 store。
 
 ## 6. `catalog-entry.ts` + `marketplace.ts`
 
@@ -186,7 +202,7 @@ flowchart TD
 
 ## 插件组合
 
-市场预设、齿轮组（可在其间切换的具名插件集合）和齿轮包（携带齿轮组并锁定版本的签名文件）见[齿轮组、齿轮包与安装来源](./cogsets-and-cogpacks)。上述每种安装来源都会把插件来源记录到 `pluginInstallOrigins`，这使齿轮包可以复现。
+市场预设、Cogset（可在其间切换的具名插件集合）和 Cogpack（携带 Cogset 并锁定版本的签名文件）见[Cogset、Cogpack 与安装来源](./cogsets-and-cogpacks)。上述每种安装来源都会把插件来源记录到 `pluginInstallOrigins`，这使 Cogpack 可以复现。
 
 ## 9. 注意事项
 

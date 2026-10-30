@@ -7,6 +7,9 @@ import { disposeOsSandboxExec } from "@/lib/sandbox/os-exec-bridge"
 import { disposeMicrovmAdapters } from "@/lib/sandbox/microvm-bridge"
 import { installExternalAgentConfigHookSource } from "@/lib/plugin/messaging/external-agent-config-hook-source"
 import { installGlanceVisibilityHookSource } from "@/lib/plugin/messaging/glance-visibility-hook-source"
+import { installChatLifecycleHookSource } from "@/lib/plugin/messaging/chat-lifecycle-hook-source"
+import { installStreamHookSource } from "@/lib/plugin/messaging/stream-hook-source"
+import { installWorkflowRegistryHookSource } from "@/lib/plugin/messaging/workflow-registry-hook-source"
 
 import { registerHeadlessRuntime } from "../registry"
 
@@ -16,24 +19,33 @@ import { registerHeadlessRuntime } from "../registry"
  * installing its hook does not advertise headless glance snapshot support.
  */
 export function startPluginHookSources(): () => void {
-  const stopExternalAgents = installExternalAgentConfigHookSource()
-  let stopGlance: () => void
+  const stops: Array<() => void> = []
+  const stop = () => {
+    let firstError: unknown
+    for (const dispose of stops.splice(0).reverse()) {
+      try {
+        dispose()
+      } catch (error) {
+        firstError ??= error
+      }
+    }
+    if (firstError) throw firstError
+  }
   try {
-    stopGlance = installGlanceVisibilityHookSource()
+    stops.push(installExternalAgentConfigHookSource())
+    stops.push(installGlanceVisibilityHookSource())
+    stops.push(installWorkflowRegistryHookSource())
+    stops.push(installChatLifecycleHookSource())
+    stops.push(installStreamHookSource())
   } catch (error) {
-    stopExternalAgents()
+    try {
+      stop()
+    } catch {
+      /* Preserve the installation error. */
+    }
     throw error
   }
-  let stopped = false
-  return () => {
-    if (stopped) return
-    stopped = true
-    try {
-      stopGlance()
-    } finally {
-      stopExternalAgents()
-    }
-  }
+  return stop
 }
 
 function parsePluginChange(payload: unknown): HeadlessPluginChange | null {

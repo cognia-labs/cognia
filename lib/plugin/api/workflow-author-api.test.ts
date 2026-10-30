@@ -81,6 +81,11 @@ jest.mock("@/lib/db/workflow-waitpoints", () => ({
   emitWorkflowWaitEvent: jest.fn(),
 }))
 
+const mockPinPublication = jest.fn()
+jest.mock("@/lib/workflow/runtime/execution-authority", () => ({
+  createPublishedWorkflowDependencyBinding: (...args: unknown[]) => mockPinPublication(...args),
+}))
+
 const mockGetEditorStore = jest.mocked(getEditorStore)
 const mockListEditorStores = jest.mocked(listEditorStores)
 
@@ -333,5 +338,29 @@ describe("createWorkflowAuthorAPI", () => {
     )
     expect(await api.emitWaitEvent({ key: "ready", source: "plugin" })).toBe(waitEvent)
     expect(emitWorkflowWaitEvent).toHaveBeenCalledWith(waitEvent)
+  })
+})
+
+it("pins host-resolved publications for plugin-created workflow approval bindings", async () => {
+  const lock = {
+    workflowId: "wf",
+    versionId: "trusted-v1",
+    deploymentId: "d1",
+    deploymentRevision: 1,
+  }
+  mockPinPublication.mockResolvedValue(lock)
+  const input = {
+    adapterId: "ad",
+    actionId: "approve",
+    surfaceId: "s",
+    kind: "wf_approve" as const,
+    actorScope: { mode: "operators" as const },
+    payload: { workflowId: "wf", lockedDependency: { versionId: "untrusted" } },
+  }
+  await createWorkflowAuthorAPI().recordCallbackBinding(input)
+  expect(mockPinPublication).toHaveBeenCalledWith("wf")
+  expect(recordCallbackBinding).toHaveBeenLastCalledWith({
+    ...input,
+    payload: { ...input.payload, lockedDependency: lock },
   })
 })

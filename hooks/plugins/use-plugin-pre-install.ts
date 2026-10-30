@@ -13,7 +13,8 @@
  * next to its own JSX — no global dialog stack required.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useTranslations } from "next-intl"
 import {
   runMarketplaceInstall,
   type RunMarketplaceInstallOpts,
@@ -57,9 +58,13 @@ export interface UsePluginPreInstall {
  * to avoid reaching this branch in normal flows.
  */
 export function usePluginPreInstall(client: MarketplaceClient | null): UsePluginPreInstall {
+  const t = useTranslations("plugins.preInstall")
   const [target, setTarget] = useState<PreInstallTarget | null>(null)
   const [busy, setBusy] = useState(false)
   const pendingResolver = useRef<((value: unknown) => void) | null>(null)
+  const mounted = useRef(true)
+  const running = useRef(false)
+  const controller = useRef<AbortController | null>(null)
   // Track the active step so resolveContinue/resolveCancel can map a
   // generic "continue/cancel" into each step's discriminated result shape.
   const activeStep = useRef<PreInstallStepId | null>(null)
@@ -71,7 +76,8 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
     activeStep.current = null
     setTarget(null)
     if (!resolver) return
-    if (stepId === "conflict") resolver("continue")
+    if (stepId === "conflict") resolver(value === "disable-conflicting" ? value : "continue")
+    else if (stepId === "dependencies") resolver(value === "resolve" ? "resolve" : "continue")
     else if (stepId === "permission") resolver("approve")
     else if (stepId === "binaries") resolver("proceed")
     else if (stepId === "config") resolver({ result: "save", value: value ?? {} })
@@ -84,14 +90,26 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
     activeStep.current = null
     setTarget(null)
     if (!resolver) return
-    if (stepId === "conflict") resolver("cancel")
+    if (stepId === "conflict" || stepId === "dependencies") resolver("cancel")
     else if (stepId === "permission") resolver("cancel")
     else if (stepId === "binaries") resolver("cancel")
     else if (stepId === "config") resolver({ result: "cancel" })
   }, [])
 
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      controller.current?.abort()
+      pendingResolver.current?.(activeStep.current === "config" ? { result: "cancel" } : "cancel")
+      pendingResolver.current = null
+    }
+  }, [])
+
   const awaitStep = useCallback(
     <T>(stepId: PreInstallStepId, mountTarget: () => void): Promise<T> => {
+      if (!mounted.current)
+        return Promise.resolve((stepId === "config" ? { result: "cancel" } : "cancel") as T)
       return new Promise<T>((resolve) => {
         activeStep.current = stepId
         pendingResolver.current = resolve as (v: unknown) => void
@@ -117,6 +135,9 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
         }
       }
 
+      if (running.current || !mounted.current) return { status: "cancelled", stage: "install" }
+      running.current = true
+      controller.current = new AbortController()
       setBusy(true)
 
       // Pre-fetch the manifest once so we can compute totalSteps before any
@@ -148,48 +169,60 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
           pluginId,
           version,
           client: activeClient,
+          signal: controller.current?.signal,
           requestConflictReview: (conflict) =>
-            awaitStep<"continue" | "cancel">("conflict", () => {
+            awaitStep<"continue" | "disable-conflicting" | "cancel">("conflict", () => {
               setTarget({
-                pluginId,
-                pluginName,
+                pluginId: conflict.pluginId,
+                pluginName: conflict.pluginId === pluginId ? pluginName : conflict.pluginId,
                 step: "conflict",
                 conflict,
                 stepNumber: advanceStep(),
-                totalSteps,
+                totalSteps: Math.max(totalSteps, stepCounter),
+              })
+            }),
+          requestDependencyReview: (dependencies) =>
+            awaitStep<"continue" | "resolve" | "cancel">("dependencies", () => {
+              setTarget({
+                pluginId: dependencies.pluginId,
+                pluginName: dependencies.pluginId === pluginId ? pluginName : dependencies.pluginId,
+                step: "dependencies",
+                dependencies,
+                stepNumber: advanceStep(),
+                totalSteps: Math.max(totalSteps, stepCounter),
               })
             }),
           requestPermissionReview: (permission) =>
             awaitStep<"approve" | "cancel">("permission", () => {
               setTarget({
-                pluginId,
-                pluginName,
+                pluginId: permission.pluginId,
+                pluginName: permission.pluginId === pluginId ? pluginName : permission.pluginId,
                 step: "permission",
                 permission,
                 stepNumber: advanceStep(),
-                totalSteps,
+                totalSteps: Math.max(totalSteps, stepCounter),
               })
             }),
           requestBinaryReview: (binaries) =>
             awaitStep<"proceed" | "cancel">("binaries", () => {
               setTarget({
-                pluginId,
-                pluginName,
+                pluginId: binaries.pluginId,
+                pluginName: binaries.pluginId === pluginId ? pluginName : binaries.pluginId,
                 step: "binaries",
                 binaries,
                 stepNumber: advanceStep(),
-                totalSteps,
+                totalSteps: Math.max(totalSteps, stepCounter),
               })
             }),
           requestConfig: (config) =>
             awaitStep<{ result: "save"; value: unknown } | { result: "cancel" }>("config", () => {
               setTarget({
-                pluginId,
-                pluginName,
+                pluginId: config.pluginId,
+                pluginName: config.pluginId === pluginId ? pluginName : config.pluginId,
                 step: "config",
                 config,
                 stepNumber: advanceStep(),
-                totalSteps,
+                totalSteps: Math.max(totalSteps, stepCounter),
               })
             }),
         }
@@ -202,9 +235,13 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
           outcome: result.status === "installed" ? "succeeded" : result.status,
           ...(result.status === "installed" ? {} : { stage: result.stage }),
         })
+        if (result.status === "failed" && REVIEW_ERROR_CODES.has(result.message)) {
+          return { ...result, message: t(`errors.${result.message}` as never) }
+        }
         return result
       } finally {
         setBusy(false)
+        running.current = false
         // Belt and braces — leave no orphaned target if the orchestrator
         // throws.
         pendingResolver.current = null
@@ -212,7 +249,7 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
         setTarget(null)
       }
     },
-    [awaitStep, client]
+    [awaitStep, client, t]
   )
 
   return useMemo(
@@ -226,3 +263,16 @@ export function usePluginPreInstall(client: MarketplaceClient | null): UsePlugin
     [install, target, resolveContinue, resolveCancel, busy]
   )
 }
+
+const REVIEW_ERROR_CODES = new Set([
+  "dependencyCycle",
+  "dependentVersionConflict",
+  "requiredProviderConflict",
+  "dependencyUnavailable",
+  "dependenciesUnresolved",
+  "dependenciesChanged",
+  "reviewIdentityMismatch",
+  "restoreFailed",
+  "stagingCleanupFailed",
+  "reviewVersionUnavailable",
+])

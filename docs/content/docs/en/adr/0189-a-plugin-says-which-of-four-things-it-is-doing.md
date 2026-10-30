@@ -136,23 +136,17 @@ generated `plugin-points.json` mirror and the docs keep seeing one catalog.
 | `tool.result.project` | transform | `hooks-system.ts:dispatchPostToolUse` |
 | `ui.action.invoke` | guard | `commands/registry.ts:executeCommand` |
 | `operation.completed` | observe | `interceptors/dispatch.ts` |
-| `model.stream.transform` | transform | **virtual** |
-| `agent.turn.decide` | guard | **virtual** |
-| `ui.surface.project` | transform | **virtual** |
+| `model.stream.transform` | transform | `interceptors/consumers.ts`, before standalone/AI SDK event mapping |
+| `agent.turn.decide` | guard | AI SDK `prepareStep`, through the existing Sidecar hook round trip |
+| `ui.surface.project` | transform | shared asynchronous `useSurfaceProjections` for both slot renderers |
 
-The three virtual points are declared and honestly labelled rather than shipped
-as an API that silently does nothing:
+Implementation update, 2026-10-29: these three points now have awaited consumers. The web/mobile `executeAgent` completion fallback uses the same consumers: its single model call is gated before dispatch, its existing per-call permission responder handles approval, and a missing responder denies continuation. Projection changes display text while structured provider output remains authoritative.
 
-- `model.stream.transform` — `dispatchStreamChunk` is synchronous and its
-  callers discard the return value, so a rewritten chunk has nowhere to go.
-  Making it a transform is a change to the streaming contract, not to this
-  catalog.
-- `agent.turn.decide` — the turn loop lives inside the sidecar, so the host has
-  no continue/stop decision to gate.
-- `ui.surface.project` — surface projection runs inside a synchronous render,
-  which cannot carry the deadline and revocation semantics every other point
-  relies on. Shipping it with a weaker contract would make "the failure policy
-  decides" false exactly where a plugin is closest to the user.
+- Stream transforms change presentation text before mapper accumulation, including final assistant snapshots. Transport identity, tool input and the Sidecar's model conversation remain authoritative. Derived assistant history passes the PII gate before standalone reuse.
+- Every exposed AI SDK model step awaits the turn guard after existing preparation/budget policy. All guards run until a deny; approval requests are collected so accepting one cannot skip a later deny. Human decisions use the existing scoped approval owners. Retained sessions refresh or clear their semantic configuration for each send.
+- UI projection runs outside render on serializable presentation DTOs. Inline, overflow and presence checks share one hook; host context and owner identity cannot be rewritten. Registry revisions, decorator liveness and cancellation fence late output. Narrowed strict failures suppress the surface.
+
+Declared interceptors require their canonical permission, including at callback completion. Cancellation and retired registrations cannot commit output. Native Claude SDK internal model steps are not exposed: active stream/turn interceptors are refused on that runtime instead of silently ignored. Standalone Anthropic BYOK uses AI SDK and supports these seams.
 
 ### Which legacy hooks normalize
 

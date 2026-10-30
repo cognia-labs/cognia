@@ -1,7 +1,7 @@
 """Parity: ``cognia.PluginHook`` must equal the host ``CANONICAL_HOOK_POINTS``.
 
 ``types.py`` documents that the ``PluginHook`` enum "mirrors the host registry
-``CANONICAL_HOOK_POINTS`` in ``lib/plugin/contracts/plugin-points.ts`` exactly (a
+``CANONICAL_HOOK_POINTS`` in ``packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts`` exactly (a
 parity test asserts this enum equals that list)." This is that test — previously
 the claim was comment-only. It reads the canonical list straight from the repo
 so a hook added on one side and not the other fails CI.
@@ -20,7 +20,7 @@ import pytest
 
 import cognia
 
-_POINTS_REL = Path("lib/plugin/contracts/plugin-points.ts")
+_POINTS_REL = Path("packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts")
 
 
 def _repo_root() -> Path | None:

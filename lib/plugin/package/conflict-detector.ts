@@ -8,8 +8,10 @@
  * - Incompatible capability requirements
  */
 
+import { intersects, validRange } from "semver"
 import type { PluginManifest, PluginCapability } from "@/types/plugin"
 import { satisfiesConstraint } from "./dependency-resolver"
+import { slashCommandToken } from "@/lib/slash-commands/plugin-commands"
 
 // =============================================================================
 // Types
@@ -25,14 +27,7 @@ export interface PluginConflict {
 }
 
 export type ConflictType =
-  | "version"
-  | "namespace"
-  | "resource"
-  | "capability"
-  | "permission"
-  | "api"
-  | "command"
-  | "shortcut"
+  "version" | "namespace" | "resource" | "capability" | "command" | "shortcut"
 
 export type ConflictSeverity = "error" | "warning" | "info"
 
@@ -47,8 +42,7 @@ export interface ConflictDetectionResult {
 
 export interface ConflictResolution {
   conflict: PluginConflict
-  action:
-    "skip" | "upgrade" | "downgrade" | "rename" | "disable" | "rebind" | "prefix" | "prioritize"
+  action: "prioritize"
   targetPlugin?: string
   details: string
 }
@@ -59,6 +53,38 @@ export interface PluginRegistration {
   shortcuts?: string[]
   namespaces?: string[]
   resources?: string[]
+}
+
+/** Manifest-known shared keys. Runtime-only resources remain registration
+ * metadata; plugin-local modes/templates are already namespaced by the host. */
+export function createPluginRegistration(manifest: PluginManifest): PluginRegistration {
+  return {
+    manifest,
+    commands: (manifest.commands ?? []).flatMap((command) => {
+      const id = `${manifest.id}.${command.id}`
+      const aliases = [
+        ...new Set((command.aliases ?? []).map((a) => a.trim().toLowerCase())),
+      ].filter((a) => a && a !== command.id.toLowerCase())
+      return [
+        `id:${id}`,
+        `slash:${slashCommandToken({ id, name: command.name })}`,
+        ...aliases.flatMap((alias) => {
+          const aliasId = `${id}#alias:${alias}`
+          return [`id:${aliasId}`, `slash:${slashCommandToken({ id: aliasId, name: alias })}`]
+        }),
+      ]
+    }),
+    shortcuts: [
+      ...(manifest.quickActions ?? []).map((a) => a.accelerator),
+      ...(manifest.trayItems ?? []).map((a) => a.accelerator),
+      // Backward compatibility with older manifests carrying command shortcuts.
+      ...(manifest.commands ?? []).map((c) => (c as { shortcut?: string }).shortcut),
+    ].filter((s): s is string => Boolean(s)),
+    namespaces: [
+      ...(manifest.tools ?? []).map((tool) => `tool:${tool.name}`),
+      ...(manifest.a2uiComponents ?? []).map((component) => `component:${component.type}`),
+    ],
+  }
 }
 
 // =============================================================================
@@ -123,31 +149,11 @@ export class ConflictDetector {
   }
 
   detectForPlugin(pluginId: string): ConflictDetectionResult {
-    const registration = this.registrations.get(pluginId)
-    if (!registration) {
-      return {
-        hasConflicts: false,
-        errors: [],
-        warnings: [],
-        info: [],
-        canProceed: true,
-        autoResolutions: [],
-      }
-    }
-
-    const conflicts: PluginConflict[] = []
-
-    // Check against all other plugins
-    for (const [otherId, otherReg] of this.registrations.entries()) {
-      if (otherId === pluginId) continue
-
-      conflicts.push(...this.detectPairConflicts(registration, otherReg))
-    }
-
-    const errors = conflicts.filter((c) => c.severity === "error")
-    const warnings = conflicts.filter((c) => c.severity === "warning")
-    const info = conflicts.filter((c) => c.severity === "info")
-
+    const all = this.detectAll()
+    const errors = all.errors.filter((c) => c.plugins.includes(pluginId))
+    const warnings = all.warnings.filter((c) => c.plugins.includes(pluginId))
+    const info = all.info.filter((c) => c.plugins.includes(pluginId))
+    const conflicts = [...errors, ...warnings, ...info]
     return {
       hasConflicts: conflicts.length > 0,
       errors,
@@ -184,24 +190,24 @@ export class ConflictDetector {
 
     // Check for conflicting requirements
     for (const [depId, requirements] of dependencyRequirements.entries()) {
-      if (requirements.length < 2) continue
+      if (requirements.length === 0) continue
 
       // Check if all constraints can be satisfied by a single version
       const installedDep = this.registrations.get(depId)
-      if (!installedDep) continue
+      const unsatisfied = installedDep
+        ? requirements.filter(
+            (req) => !satisfiesConstraint(installedDep.manifest.version, req.constraint)
+          )
+        : []
 
-      const unsatisfied = requirements.filter(
-        (req) => !satisfiesConstraint(installedDep.manifest.version, req.constraint)
-      )
-
-      if (unsatisfied.length > 0) {
+      if (installedDep && unsatisfied.length > 0) {
         conflicts.push({
           type: "version",
           severity: "error",
           plugins: [depId, ...unsatisfied.map((u) => u.pluginId)],
           description: `Version conflict for ${depId}: installed ${installedDep.manifest.version} does not satisfy constraints from ${unsatisfied.map((u) => `${u.pluginId}(${u.constraint})`).join(", ")}`,
           resolution: `Update ${depId} to a version that satisfies all constraints`,
-          autoResolvable: true,
+          autoResolvable: false,
         })
       }
 
@@ -225,20 +231,9 @@ export class ConflictDetector {
   }
 
   private constraintsCompatible(a: string, b: string): boolean {
-    // Simple compatibility check - in production would need full semver range intersection
-    const aMajor = this.extractMajorFromConstraint(a)
-    const bMajor = this.extractMajorFromConstraint(b)
-
-    if (aMajor !== null && bMajor !== null && aMajor !== bMajor) {
-      return false
-    }
-
-    return true
-  }
-
-  private extractMajorFromConstraint(constraint: string): number | null {
-    const match = constraint.match(/\d+/)
-    return match ? parseInt(match[0]) : null
+    const rangeA = a.trim() === "latest" ? "*" : a
+    const rangeB = b.trim() === "latest" ? "*" : b
+    return validRange(rangeA) !== null && validRange(rangeB) !== null && intersects(rangeA, rangeB)
   }
 
   // ===========================================================================
@@ -250,7 +245,7 @@ export class ConflictDetector {
     const namespaceOwners: Map<string, string[]> = new Map()
 
     for (const [pluginId, reg] of this.registrations.entries()) {
-      const namespaces = reg.namespaces || [pluginId]
+      const namespaces = new Set(reg.namespaces || [pluginId])
 
       for (const ns of namespaces) {
         if (!namespaceOwners.has(ns)) {
@@ -267,7 +262,8 @@ export class ConflictDetector {
           severity: "error",
           plugins: owners,
           description: `Namespace collision: "${namespace}" is claimed by multiple plugins`,
-          resolution: "Later plugins will be prefixed with their plugin ID",
+          resolution:
+            "The first registered plugin keeps this key; disable it to select another provider",
           autoResolvable: true,
         })
       }
@@ -285,7 +281,7 @@ export class ConflictDetector {
     const commandOwners: Map<string, string[]> = new Map()
 
     for (const [pluginId, reg] of this.registrations.entries()) {
-      const commands = reg.commands || []
+      const commands = new Set(reg.commands || [])
 
       for (const cmd of commands) {
         if (!commandOwners.has(cmd)) {
@@ -302,7 +298,7 @@ export class ConflictDetector {
           severity: "warning",
           plugins: owners,
           description: `Command collision: "${command}" is registered by multiple plugins`,
-          resolution: "The last registered plugin will handle this command",
+          resolution: "The first registered plugin keeps this command",
           autoResolvable: true,
         })
       }
@@ -320,7 +316,7 @@ export class ConflictDetector {
     const shortcutOwners: Map<string, string[]> = new Map()
 
     for (const [pluginId, reg] of this.registrations.entries()) {
-      const shortcuts = reg.shortcuts || []
+      const shortcuts = new Set((reg.shortcuts || []).map((s) => this.normalizeShortcut(s)))
 
       for (const shortcut of shortcuts) {
         const normalized = this.normalizeShortcut(shortcut)
@@ -338,7 +334,7 @@ export class ConflictDetector {
           severity: "warning",
           plugins: owners,
           description: `Shortcut collision: "${shortcut}" is registered by multiple plugins`,
-          resolution: "The later-registered plugin shortcut will be rebound",
+          resolution: "The first registered binding keeps this shortcut",
           autoResolvable: true,
         })
       }
@@ -348,7 +344,13 @@ export class ConflictDetector {
   }
 
   private normalizeShortcut(shortcut: string): string {
-    return shortcut.toLowerCase().split("+").sort().join("+")
+    return shortcut
+      .toLowerCase()
+      .split("+")
+      .map((key) => key.trim())
+      .filter(Boolean)
+      .sort()
+      .join("+")
   }
 
   // ===========================================================================
@@ -374,8 +376,8 @@ export class ConflictDetector {
           severity: "info",
           plugins: pluginsWithCapability,
           description: `Multiple plugins provide "${capability}" capability`,
-          resolution: "Only one theme plugin can be active at a time",
-          autoResolvable: true,
+          resolution: "Select the active theme in settings; theme providers can remain installed",
+          autoResolvable: false,
         })
       }
     }
@@ -392,7 +394,7 @@ export class ConflictDetector {
     const resourceOwners: Map<string, string[]> = new Map()
 
     for (const [pluginId, reg] of this.registrations.entries()) {
-      const resources = reg.resources || []
+      const resources = new Set(reg.resources || [])
 
       for (const resource of resources) {
         if (!resourceOwners.has(resource)) {
@@ -418,144 +420,19 @@ export class ConflictDetector {
     return conflicts
   }
 
-  // ===========================================================================
-  // Pair Conflict Detection
-  // ===========================================================================
-
-  private detectPairConflicts(a: PluginRegistration, b: PluginRegistration): PluginConflict[] {
-    const conflicts: PluginConflict[] = []
-
-    // Check command conflicts
-    const aCommands = new Set(a.commands || [])
-    const bCommands = new Set(b.commands || [])
-    for (const cmd of aCommands) {
-      if (bCommands.has(cmd)) {
-        conflicts.push({
-          type: "command",
-          severity: "warning",
-          plugins: [a.manifest.id, b.manifest.id],
-          description: `Command "${cmd}" conflict`,
-          autoResolvable: true,
-        })
-      }
-    }
-
-    // Check shortcut conflicts
-    const aShortcuts = new Set((a.shortcuts || []).map((s) => this.normalizeShortcut(s)))
-    const bShortcuts = new Set((b.shortcuts || []).map((s) => this.normalizeShortcut(s)))
-    for (const shortcut of aShortcuts) {
-      if (bShortcuts.has(shortcut)) {
-        conflicts.push({
-          type: "shortcut",
-          severity: "warning",
-          plugins: [a.manifest.id, b.manifest.id],
-          description: `Shortcut "${shortcut}" conflict`,
-          resolution: "The later-registered plugin shortcut will be rebound",
-          autoResolvable: true,
-        })
-      }
-    }
-
-    return conflicts
-  }
-
-  // ===========================================================================
-  // Auto-Resolution
-  // ===========================================================================
-
+  // Resolution plans describe executable policy, never promise an unimplemented
+  // rename/rebind or an unverified dependency version. Version changes are
+  // reviewed and installed through the marketplace dependency flow.
   private generateAutoResolutions(conflicts: PluginConflict[]): ConflictResolution[] {
-    const resolutions: ConflictResolution[] = []
-
-    for (const conflict of conflicts) {
-      if (!conflict.autoResolvable) continue
-
-      switch (conflict.type) {
-        case "command":
-          resolutions.push({
-            conflict,
-            action: "skip",
-            details: `Later registered plugin will handle the command`,
-          })
-          break
-
-        case "capability":
-          if (conflict.plugins.length > 1) {
-            resolutions.push({
-              conflict,
-              action: "disable",
-              targetPlugin: conflict.plugins.slice(1).join(", "),
-              details: `Only the first plugin with this capability will be active`,
-            })
-          }
-          break
-
-        case "shortcut":
-          if (conflict.plugins.length > 1) {
-            resolutions.push({
-              conflict,
-              action: "rebind",
-              targetPlugin: conflict.plugins[conflict.plugins.length - 1],
-              details: `The shortcut for "${conflict.plugins[conflict.plugins.length - 1]}" will be reassigned to avoid collision`,
-            })
-          }
-          break
-
-        case "namespace":
-          if (conflict.plugins.length > 1) {
-            resolutions.push({
-              conflict,
-              action: "prefix",
-              targetPlugin: conflict.plugins.slice(1).join(", "),
-              details: `Later plugins will have their namespace prefixed with their plugin ID to avoid collision`,
-            })
-          }
-          break
-
-        case "version": {
-          // Determine if we should upgrade or downgrade the dependency
-          const depId = conflict.plugins[0]
-          const installedDep = this.registrations.get(depId)
-          if (installedDep) {
-            // Check which direction resolves more constraints
-            const requirers = conflict.plugins.slice(1)
-            const highestConstraint = requirers.reduce((max, pId) => {
-              const reg = this.registrations.get(pId)
-              const constraint = reg?.manifest.dependencies?.[depId]
-              if (!constraint) return max
-              const major = this.extractMajorFromConstraint(constraint)
-              const maxMajor = this.extractMajorFromConstraint(max)
-              return major !== null && maxMajor !== null && major > maxMajor ? constraint : max
-            }, "0.0.0")
-
-            const installedMajor = this.extractMajorFromConstraint(installedDep.manifest.version)
-            const targetMajor = this.extractMajorFromConstraint(highestConstraint)
-            const shouldUpgrade =
-              targetMajor !== null && installedMajor !== null && targetMajor >= installedMajor
-
-            resolutions.push({
-              conflict,
-              action: shouldUpgrade ? "upgrade" : "downgrade",
-              targetPlugin: depId,
-              details: `${shouldUpgrade ? "Upgrade" : "Downgrade"} "${depId}" to satisfy version constraints from dependent plugins`,
-            })
-          }
-          break
-        }
-
-        case "resource":
-          if (conflict.plugins.length > 1) {
-            resolutions.push({
-              conflict,
-              action: "prioritize",
-              targetPlugin: conflict.plugins[0],
-              details: `"${conflict.plugins[0]}" gets priority for this resource as the first-registered plugin`,
-            })
-          }
-          break
-      }
-    }
-
-    return resolutions
+    return conflicts
+      .filter((c) => c.autoResolvable && c.type !== "version")
+      .map((conflict) => ({
+        conflict,
+        action: "prioritize" as const,
+        targetPlugin: conflict.plugins[0],
+        details:
+          "Keep the first registered provider; replacing it requires explicit disable confirmation.",
+      }))
   }
 
   // ===========================================================================

@@ -56,6 +56,7 @@ export interface NodeRegistryEvent {
   type: NodeRegistryEventType
   kind: WorkflowNodeKind
   typeVersion: number
+  pluginId?: string
 }
 
 export type NodeRegistryListener = (event: NodeRegistryEvent) => void
@@ -113,7 +114,12 @@ export function registerNodeExecutor(reg: NodeExecutorRegistration): void {
   // already logged it). Only emit a register event when the incoming entry
   // actually took effect, so listeners don't think a rejected node appeared.
   if (registry.get(k) === reg) {
-    emit({ type: "register", kind: reg.kind, typeVersion: reg.typeVersion })
+    emit({
+      type: "register",
+      kind: reg.kind,
+      typeVersion: reg.typeVersion,
+      ...(reg.pluginId ? { pluginId: reg.pluginId } : {}),
+    })
   }
 }
 
@@ -124,8 +130,15 @@ export function registerNodeExecutor(reg: NodeExecutorRegistration): void {
  * (kind, version) pair is not registered.
  */
 export function unregisterNodeExecutor(kind: WorkflowNodeKind, version: number): void {
+  const previous = registry.get(key(kind, version))
   const removed = registry.unregisterById(key(kind, version))
-  if (removed) emit({ type: "unregister", kind, typeVersion: version })
+  if (removed)
+    emit({
+      type: "unregister",
+      kind,
+      typeVersion: version,
+      ...(previous?.pluginId ? { pluginId: previous.pluginId } : {}),
+    })
 }
 
 export function getExecutor(

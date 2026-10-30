@@ -46,6 +46,70 @@ async function startWebviews(answer: any = () => undefined) {
   return { host, run, sent }
 }
 
+test("a serializer restores the existing panel handle and flushes its actual HTML and state", async () => {
+  const { host, run, sent } = await startWebviews()
+  try {
+    await run("webviewFixture.serializer")
+    const registration = await until(
+      () => sent("window:registerWebviewPanelSerializer")[0],
+      "serializer registration"
+    )
+    await host.request("extension:call", {
+      extensionId: ID,
+      token: registration.params.token,
+      method: "deserializeWebviewPanel",
+      payload: {
+        handle: "persisted-panel",
+        viewType: "fixture.preview",
+        title: "Saved preview",
+        state: { count: 8 },
+        visible: false,
+        active: false,
+      },
+    })
+    assert.equal(sent("window:createWebviewPanel").length, 0)
+    assert.deepEqual(
+      sent("webview:update")
+        .map(({ params }) => ({ handle: params.handle, html: params.html, title: params.title }))
+        .filter((value) => value.html || value.title),
+      [
+        { handle: "persisted-panel", html: "<p>restored 8</p>", title: undefined },
+        { handle: "persisted-panel", html: undefined, title: "Restored preview" },
+      ]
+    )
+    const state = await run("webviewFixture.state")
+    assert.deepEqual(state.panel, { visible: false, active: false, title: "Restored preview" })
+    assert.deepEqual(state.events, [
+      { event: "deserialized", state: { count: 8 }, cancelled: false },
+    ])
+    await run("webviewFixture.unregisterSerializer")
+    await until(() => sent("window:unregisterWebviewPanelSerializer")[0], "serializer disposal")
+    await assert.rejects(
+      host.request("extension:call", {
+        extensionId: ID,
+        token: registration.params.token,
+        method: "deserializeWebviewPanel",
+        payload: {},
+      }),
+      /callback|provider|registered|Unknown/i
+    )
+  } finally {
+    host.stop()
+  }
+})
+
+test("graceful deactivation detaches subscribed panels without deleting their restoration state", async () => {
+  const { host, run, sent } = await startWebviews()
+  try {
+    await run("webviewFixture.panel")
+    await until(() => sent("webview:update").length === 2, "initial panel updates")
+    await host.request("extension:deactivate", { extensionId: ID })
+    assert.equal(sent("webview:dispose").length, 0)
+  } finally {
+    host.stop()
+  }
+})
+
 test("a panel: created with its options, then filled, titled, revealed, in order", async () => {
   const { host, run, sent } = await startWebviews()
   try {

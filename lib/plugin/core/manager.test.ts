@@ -2,6 +2,21 @@
  * PluginManager Tests
  */
 
+const mockActivationTriggerStop = jest.fn()
+const mockActivationTriggerInstall = jest.fn<() => void, unknown[]>(() => mockActivationTriggerStop)
+jest.mock("@/lib/plugin/vscode-shim/activation-triggers", () => ({
+  createVscodeActivationTriggerDependencies: () => ({}),
+  installVscodeActivationTriggers: (...args: unknown[]) => mockActivationTriggerInstall(...args),
+}))
+const mockWebviewRestorationStop = jest.fn()
+const mockWebviewRestorationInstall = jest.fn<() => void, unknown[]>(
+  () => mockWebviewRestorationStop
+)
+jest.mock("@/lib/plugin/vscode-shim/webview-restoration", () => ({
+  createWebviewRestorationDependencies: (input: unknown) => input,
+  installVscodeWebviewRestoration: (...args: unknown[]) => mockWebviewRestorationInstall(...args),
+}))
+
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -49,7 +64,7 @@ import {
   getPluginExtensionRegistrationCount,
   clearPluginExtensions,
 } from "@/lib/plugin/api/extension-api"
-import { canUseTauriInvoke } from "@/lib/native/utils"
+import { canUseTauriInvoke, isTauri } from "@/lib/native/utils"
 import {
   listPluginWallpapers,
   __resetPluginWallpapersForTesting,
@@ -150,6 +165,7 @@ jest.mock("@/lib/plugin/dexie/bridge", () => ({
 // the install/update lifecycle tracking (getPlugin/updatePlugin) is observable
 // without a real database.
 jest.mock("@/lib/db/plugins", () => ({
+  listPlugins: jest.fn(async () => []),
   getPlugin: jest.fn(async () => undefined),
   deletePlugin: jest.fn(async () => undefined),
   updatePlugin: jest.fn(async () => undefined),
@@ -1465,6 +1481,17 @@ describe("PluginManager", () => {
         )
       }
     )
+
+    it("resolves the install directory before taking ownership of a reviewed package", async () => {
+      const { manager } = setup()
+      ;(manager as unknown as { config: { pluginDirectory: string } }).config.pluginDirectory = ""
+      mockInvoke.mockRejectedValueOnce(new Error("directory unavailable"))
+      const stage = jest.fn()
+      await expect(manager.installPluginFromRegistry(stage)).rejects.toThrow(
+        "directory unavailable"
+      )
+      expect(stage).not.toHaveBeenCalled()
+    })
 
     it("registers a frontend registry package and persists its row before finalizing", async () => {
       const { store, manager } = setup()
@@ -5177,6 +5204,51 @@ describe("PluginManager", () => {
   })
 
   describe("module-bridge capability wiring", () => {
+    it("does not project a module bridge tool rejected by the shared registry", async () => {
+      const plugin = createWallpaperPlugin("loaded")
+      plugin.manifest.capabilities = ["ai-provider"]
+      plugin.manifest.wallpapers = undefined
+      plugin.manifest.themePacks = undefined
+      plugin.manifest.aiProviders = [
+        {
+          id: "provider",
+          label: "Provider",
+          kind: "llm",
+          entry: "factory.js",
+          export: "createProvider",
+        },
+      ]
+      const store = {
+        plugins: { "mb-plugin": plugin },
+        enablePlugin: jest.fn(),
+        registerPluginTool: jest.fn(),
+      }
+      mockGetState.mockReturnValue(store)
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      ;(manager as unknown as { contexts: Map<string, unknown> }).contexts.set("mb-plugin", {
+        permissions: { hasPermission: () => true },
+      })
+      ;(manager as unknown as { loader: { isLoaded: () => boolean } }).loader.isLoaded = () => true
+      const tool = {
+        name: "shared_tool",
+        pluginId: "incumbent",
+        definition: { name: "shared_tool", description: "Shared", parametersSchema: {} },
+        execute: jest.fn(),
+      }
+      manager.getRegistry().registerTool("incumbent", tool)
+      const register = jest
+        .spyOn(MODULE_BRIDGE_CAPABILITIES["ai-provider"], "register")
+        .mockImplementation(async (ctx) => {
+          ctx.registerAgentTool({ ...tool, pluginId: "mb-plugin" })
+        })
+      try {
+        await manager.enablePlugin("mb-plugin")
+        expect(store.registerPluginTool).not.toHaveBeenCalled()
+        expect(manager.getRegistry().getTool("shared_tool")).toBe(tool)
+      } finally {
+        register.mockRestore()
+      }
+    })
     const createWallpaperPlugin = (status: Plugin["status"] = "loaded"): Plugin => ({
       manifest: {
         ...createManifest("mb-plugin"),
@@ -5337,6 +5409,153 @@ describe("PluginManager", () => {
       expect(shouldActivate(createManifest("acme.none"), "workspaceContains:acme.none")).toBe(false)
     })
 
+    it("matches terminal and filtered/all task-provider activation", () => {
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const shouldActivate = (
+        manager as unknown as {
+          shouldActivateForEvent(manifest: PluginManifest, event: string): boolean
+        }
+      ).shouldActivateForEvent.bind(manager)
+      const manifest: PluginManifest = {
+        ...createManifest("acme.tasks"),
+        activationEvents: ["onTerminal", "onTaskType:npm"],
+      }
+      expect(shouldActivate(manifest, "onTerminal")).toBe(true)
+      expect(shouldActivate(manifest, "onTaskType:npm")).toBe(true)
+      expect(shouldActivate(manifest, "onTaskType:*")).toBe(true)
+      expect(shouldActivate(manifest, "onTaskType:cargo")).toBe(false)
+      expect(shouldActivate(createManifest("none"), "onTerminal")).toBe(false)
+      expect(shouldActivate(createManifest("none"), "onTaskType:*")).toBe(false)
+    })
+
+    it.each([
+      "onTaskType:npm",
+      "onWebviewPanel:preview",
+      "onTerminalProfile:build",
+      "onCustomEditor:editor",
+      "onFileSystem:virtual",
+      "onDebugResolve:debug",
+      "onNotebook:book",
+      "onWalkthrough:welcome",
+    ] as const)(
+      "joins %s activation without waiting on an extension's own activation",
+      async (event) => {
+        const plugin: Plugin = {
+          manifest: { ...createManifest("joined-provider"), activationEvents: [event] },
+          status: "disabled",
+          source: "builtin",
+          path: "/plugins/joined-provider",
+          config: {},
+        }
+        mockGetState.mockReturnValue({
+          plugins: {
+            "joined-provider": plugin,
+            "enabling-caller": {
+              ...plugin,
+              manifest: { ...createManifest("enabling-caller"), activationEvents: ["startup"] },
+              status: "enabling",
+            },
+          },
+          setPluginError: jest.fn(),
+        })
+        const manager = new PluginManager({ pluginDirectory: "/plugins" })
+        let release!: () => void
+        let started!: () => void
+        const ready = new Promise<void>((resolve) => {
+          started = resolve
+        })
+        const enable = jest.spyOn(manager, "enablePlugin").mockImplementation(async () => {
+          started()
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          plugin.status = "enabled"
+        })
+        const first = manager.handleActivationEvent(event)
+        await ready
+        let joined = false
+        const second = manager.handleActivationEvent(event).then(() => {
+          joined = true
+        })
+        await manager.handleActivationEvent(event, {
+          initiatorPluginId: plugin.manifest.id,
+        })
+        await manager.handleActivationEvent(event, {
+          initiatorPluginId: "enabling-caller",
+        })
+        expect(joined).toBe(false)
+        release()
+        await Promise.all([first, second])
+        expect(joined).toBe(true)
+        expect(enable).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it.each([
+      "onCustomEditor",
+      "onFileSystem",
+      "onDebugResolve",
+      "onNotebook",
+      "onWalkthrough",
+    ] as const)(
+      "addresses %s activation to its verified owner despite colliding local names",
+      async (family) => {
+        const plugins = Object.fromEntries(
+          ["owner", "other"].map((id) => [
+            id,
+            {
+              manifest: { ...createManifest(id), activationEvents: [`${family}:shared`] },
+              status: "installed",
+              source: "builtin",
+              path: `/plugins/${id}`,
+              config: {},
+            },
+          ])
+        ) as Record<string, Plugin>
+        mockGetState.mockReturnValue({ plugins, setPluginError: jest.fn() })
+        const manager = new PluginManager({ pluginDirectory: "/plugins" })
+        const enable = jest.spyOn(manager, "enablePlugin").mockImplementation(async (id) => {
+          plugins[id].status = "enabled"
+        })
+        await manager.activateManagedIdeContribution("owner", `${family}:cognia.owner.shared`)
+        expect(enable.mock.calls.map(([id]) => id)).toEqual(["owner"])
+        expect(plugins.other.status).toBe("installed")
+      }
+    )
+
+    it("reuses a verified live proxy while waking its owner and restores normal proxy setup afterwards", async () => {
+      const lifecycleStateAdapter = new InMemoryPluginLifecycleStateAdapter()
+      const plugin: Plugin = {
+        manifest: { ...createManifest("managed"), ide: { schemaVersion: 1, targets: ["pro-ide"] } },
+        status: "enabled",
+        config: {},
+        source: "builtin",
+        path: "/plugins/managed",
+      }
+      mockGetState.mockReturnValue({ plugins: { managed: plugin } })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", lifecycleStateAdapter })
+      const internals = manager as unknown as {
+        contexts: Map<string, unknown>
+        registerPluginContributions(id: string): Promise<void>
+      }
+      internals.contexts.set("managed", {})
+      const activation = jest
+        .spyOn(manager, "handleActivationEvent")
+        .mockImplementation(async () => {
+          await internals.registerPluginContributions("managed")
+        })
+      mockProxies.prepareManagedIdeProxy.mockClear()
+      await manager.activateManagedIdeContribution("managed", "onNotebook:cognia.managed.book")
+      expect(activation).toHaveBeenCalledWith("onNotebook:book", { targetPluginId: "managed" })
+      expect(mockProxies.prepareManagedIdeProxy).not.toHaveBeenCalled()
+      await internals.registerPluginContributions("managed")
+      expect(mockProxies.prepareManagedIdeProxy).toHaveBeenCalledTimes(1)
+      await lifecycleStateAdapter.write("managed", 0, { intent: "disabled" })
+      await expect(
+        manager.activateManagedIdeContribution("managed", "onNotebook:book")
+      ).rejects.toThrow("disabled")
+    })
+
     it("reuses precompiled activation specs and wildcard matchers", () => {
       const manager = new PluginManager({ pluginDirectory: "/plugins" })
       const manifest: PluginManifest = {
@@ -5431,6 +5650,47 @@ describe("PluginManager", () => {
 
       expect(dispose).toHaveBeenCalledTimes(1)
     })
+
+    it.each([true, false])(
+      "owns activation listeners and only installs panel recovery on desktop=%s",
+      async (desktop) => {
+        jest.mocked(isTauri).mockReturnValue(desktop)
+        mockWebviewRestorationInstall.mockClear()
+        mockWebviewRestorationStop.mockClear()
+        mockActivationTriggerInstall.mockClear()
+        mockActivationTriggerStop.mockClear()
+        mockGetState.mockReturnValue({ plugins: {}, initialize: jest.fn(async () => {}) })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", enablePython: false })
+        const internals = manager as unknown as {
+          scanPlugins(): Promise<void>
+          syncRuntimeState(): Promise<void>
+          restorePluginDexieTables(): Promise<void>
+          restorePluginStates(): Promise<void>
+          handleActivationEvent(event: string): Promise<void>
+        }
+        for (const method of [
+          "scanPlugins",
+          "syncRuntimeState",
+          "restorePluginDexieTables",
+          "restorePluginStates",
+          "handleActivationEvent",
+        ] as const)
+          jest.spyOn(internals, method).mockResolvedValue(undefined)
+        await manager.initialize()
+        expect(mockWebviewRestorationInstall).toHaveBeenCalledTimes(desktop ? 1 : 0)
+        expect(mockActivationTriggerInstall).toHaveBeenCalledTimes(1)
+        expect(mockActivationTriggerInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            activate: expect.any(Function),
+            wantsEnabled: expect.any(Function),
+          })
+        )
+        manager.dispose()
+        expect(mockActivationTriggerStop).toHaveBeenCalledTimes(1)
+        expect(mockWebviewRestorationStop).toHaveBeenCalledTimes(desktop ? 1 : 0)
+        jest.mocked(isTauri).mockReturnValue(false)
+      }
+    )
 
     it("recovers persisted dirty generations before startup restoration", async () => {
       const plugin = {
@@ -8228,6 +8488,403 @@ describe("PluginManager", () => {
       })
       expect(resumeSpy).not.toHaveBeenCalled()
       resumeSpy.mockRestore()
+    })
+
+    it("preserves a newer manual disable during a marketplace pause", async () => {
+      const { resolveConflictingPlugins } = await import("@/lib/plugin/marketplace/install-flow")
+      const plugins: Record<string, Plugin> = { p: mkPlugin("p", "enabled") }
+      const store = {
+        plugins,
+        disablePlugin: async (id: string) => {
+          plugins[id].status = "disabled"
+        },
+        setPluginStatus: (id: string, status: Plugin["status"]) => {
+          plugins[id].status = status
+        },
+        setPluginError: jest.fn(),
+      }
+      mockGetState.mockReturnValue(store)
+      const lifecycleStateAdapter = new InMemoryPluginLifecycleStateAdapter()
+      await lifecycleStateAdapter.write("p", 0, { intent: "enabled", actual: "active" })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", lifecycleStateAdapter })
+      const internals = manager as unknown as {
+        deactivatePluginRuntime: () => Promise<void>
+        unregisterPluginContributions: () => Promise<void>
+      }
+      jest.spyOn(internals, "deactivatePluginRuntime").mockResolvedValue(undefined)
+      jest.spyOn(internals, "unregisterPluginContributions").mockResolvedValue(undefined)
+      jest.spyOn(manager, "enablePlugin").mockImplementation(async (id) => {
+        plugins[id].status = "enabled"
+      })
+      const restore = await resolveConflictingPlugins(["p"], manager)
+      await manager.setPluginIntent("p", "disabled", "manual")
+      await restore()
+      expect((await manager.getPluginLifecycleState("p")).intent).toBe("disabled")
+      expect(plugins.p.status).toBe("disabled")
+    })
+
+    it.each([false, true])(
+      "holds overlapping marketplace pauses until the final release (reverse: %s)",
+      async (reverse) => {
+        const { resolveConflictingPlugins } = await import("@/lib/plugin/marketplace/install-flow")
+        const plugins: Record<string, Plugin> = { p: mkPlugin("p", "enabled") }
+        const store = {
+          plugins,
+          disablePlugin: async (id: string) => {
+            plugins[id].status = "disabled"
+          },
+          setPluginStatus: (id: string, status: Plugin["status"]) => {
+            plugins[id].status = status
+          },
+          setPluginError: jest.fn(),
+        }
+        mockGetState.mockReturnValue(store)
+        const lifecycleStateAdapter = new InMemoryPluginLifecycleStateAdapter()
+        await lifecycleStateAdapter.write("p", 0, { intent: "enabled", actual: "active" })
+        const manager = new PluginManager({ pluginDirectory: "/plugins", lifecycleStateAdapter })
+        const internals = manager as unknown as {
+          deactivatePluginRuntime: () => Promise<void>
+          unregisterPluginContributions: () => Promise<void>
+        }
+        jest.spyOn(internals, "deactivatePluginRuntime").mockResolvedValue(undefined)
+        jest.spyOn(internals, "unregisterPluginContributions").mockResolvedValue(undefined)
+        jest.spyOn(manager, "enablePlugin").mockImplementation(async (id) => {
+          plugins[id].status = "enabled"
+        })
+        const restore = await resolveConflictingPlugins(["p"], manager)
+        const second = await resolveConflictingPlugins(["p"], manager)
+        const [first, last] = reverse ? [second, restore] : [restore, second]
+        await first()
+        expect((await manager.getPluginLifecycleState("p")).intent).toBe("disabled")
+        expect(plugins.p.status).toBe("disabled")
+        await last()
+        expect((await manager.getPluginLifecycleState("p")).intent).toBe("enabled")
+        expect(plugins.p.status).toBe("enabled")
+      }
+    )
+
+    it("refuses disposal while a deferred marketplace decision is held", async () => {
+      mockGetState.mockReturnValue({ plugins: { p: mkPlugin("p", "enabled") } })
+      const manager = new PluginManager({
+        pluginDirectory: "/plugins",
+        lifecycleStateAdapter: new InMemoryPluginLifecycleStateAdapter(),
+      })
+      const lease = await manager.acquirePluginInstallPause("p", { deferred: true })
+      expect(() => manager.dispose()).toThrow("plugins still own runtime resources: p")
+      await lease.restore()
+      expect(() => manager.dispose()).not.toThrow()
+    })
+
+    it("does not publish a stale replacement disable after a newer manual enable", async () => {
+      const { runMarketplaceInstall, resolveConflictingPlugins } =
+        await import("@/lib/plugin/marketplace/install-flow")
+      const { subscribePluginIntentChanges } =
+        await import("@/lib/plugin/core/plugin-intent-events")
+      const { listPlugins } = jest.requireMock("@/lib/db/plugins") as { listPlugins: jest.Mock }
+      const shared = { name: "shared_tool", description: "Shared", parametersSchema: {} }
+      const plugins: Record<string, Plugin> = { p: mkPlugin("p", "enabled", { tools: [shared] }) }
+      const store = {
+        plugins,
+        disablePlugin: async (id: string) => {
+          plugins[id].status = "disabled"
+        },
+        setPluginStatus: (id: string, status: Plugin["status"]) => {
+          plugins[id].status = status
+        },
+        setPluginError: jest.fn(),
+      }
+      mockGetState.mockReturnValue(store)
+      listPlugins.mockImplementation(async () => [
+        {
+          id: "p",
+          version: "1.0.0",
+          enabled: plugins.p.status === "enabled",
+          manifest: plugins.p.manifest,
+        },
+      ])
+      const lifecycleStateAdapter = new InMemoryPluginLifecycleStateAdapter()
+      await lifecycleStateAdapter.write("p", 0, { intent: "enabled", actual: "active" })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", lifecycleStateAdapter })
+      const internals = manager as unknown as {
+        deactivatePluginRuntime: () => Promise<void>
+        unregisterPluginContributions: () => Promise<void>
+      }
+      jest.spyOn(internals, "deactivatePluginRuntime").mockResolvedValue(undefined)
+      jest.spyOn(internals, "unregisterPluginContributions").mockResolvedValue(undefined)
+      jest.spyOn(manager, "enablePlugin").mockImplementation(async (id) => {
+        plugins[id].status = "enabled"
+      })
+      const { startCogsetWriteThrough } = await import("@/lib/plugin/cogset/write-through")
+      let members = [
+        { pluginId: "p", config: { saved: true }, expectedVersion: "1.0.0", optional: true },
+      ]
+      const follower = startCogsetWriteThrough({
+        subscribeIntent: subscribePluginIntentChanges,
+        subscribeConfig: () => () => {},
+        getState: async () => ({
+          id: "host",
+          appliedCogsetId: "active",
+          alwaysOn: [],
+          updatedAt: 0,
+        }),
+        getCogset: async () => ({
+          id: "active",
+          name: "Active",
+          members,
+          source: { kind: "manual" },
+          createdAt: 0,
+          updatedAt: 0,
+        }),
+        updateState: async () => undefined,
+        updateCogset: async (_id, patch) => {
+          members = patch.members as typeof members
+        },
+        getPluginManifest: async () => undefined,
+        isReconciling: () => false,
+      })
+      const changes: unknown[] = []
+      const off = subscribePluginIntentChanges((change) => changes.push(change))
+      try {
+        expect(
+          await runMarketplaceInstall({
+            pluginId: "target",
+            client: {
+              getPlugin: async () => ({
+                manifest: {
+                  ...createManifest("target"),
+                  tools: [shared],
+                  permissions: ["network:fetch"],
+                },
+              }),
+              installPlugin: async () => ({ success: true }),
+            },
+            requestConflictReview: async () => "disable-conflicting",
+            requestPermissionReview: async () => {
+              await manager.setPluginIntent("p", "enabled", "manual")
+              return "approve"
+            },
+            requestConfig: async () => ({ result: "save", value: {} }),
+            resolveConflictingPlugins: (ids) => resolveConflictingPlugins(ids, manager),
+          })
+        ).toEqual({ status: "installed", pluginId: "target" })
+        expect((await manager.getPluginLifecycleState("p")).intent).toBe("enabled")
+        await follower.settled()
+        expect(members).toEqual([
+          { pluginId: "p", config: { saved: true }, expectedVersion: "1.0.0", optional: true },
+        ])
+        expect(changes).toEqual([{ pluginId: "p", intent: "enabled", reason: "manual" }])
+      } finally {
+        follower.stop()
+        off()
+        listPlugins.mockReset().mockResolvedValue([])
+      }
+    })
+
+    it("restores intent without reconciling runtime before its graph is ready", async () => {
+      const store = { plugins: { p: mkPlugin("p", "disabled") } }
+      mockGetState.mockReturnValue(store)
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      const enable = jest.spyOn(manager, "enablePlugin").mockResolvedValue(undefined)
+      try {
+        await manager.setPluginIntent("p", "enabled", "graph-restore", { reconcile: false })
+        expect(enable).not.toHaveBeenCalled()
+        expect(store.plugins.p.status).toBe("disabled")
+        await expect(manager.getPluginLifecycleState("p")).resolves.toMatchObject({
+          intent: "enabled",
+        })
+      } finally {
+        enable.mockRestore()
+      }
+    })
+
+    it.each([false, true])(
+      "restores a multi-level consumer graph without changing its cogset (late failure: %s)",
+      async (lateFailure) => {
+        const { resolveConflictingPlugins } = await import("../marketplace/install-flow")
+        const { subscribePluginIntentChanges } = await import("./plugin-intent-events")
+        const { startCogsetWriteThrough } = await import("../cogset/write-through")
+        const updateCogset = jest.fn(async () => undefined)
+        const updateState = jest.fn(async () => undefined)
+        const follower = startCogsetWriteThrough({
+          subscribeIntent: subscribePluginIntentChanges,
+          subscribeConfig: () => () => {},
+          getState: async () => ({
+            id: "host",
+            alwaysOn: ["middle"],
+            appliedCogsetId: "active",
+            updatedAt: 0,
+          }),
+          getCogset: async () => ({
+            id: "active",
+            name: "Active",
+            members: [
+              {
+                pluginId: "leaf",
+                expectedVersion: "1.0.0",
+                config: { saved: true },
+                optional: true,
+              },
+            ],
+            source: { kind: "manual" },
+            createdAt: 0,
+            updatedAt: 0,
+          }),
+          updateState,
+          updateCogset,
+          getPluginManifest: async () => undefined,
+          isReconciling: () => false,
+        })
+        const plugins: Record<string, Plugin> = {
+          leaf: mkPlugin("leaf", "enabled", { dependencies: { middle: "*" } }),
+          middle: mkPlugin("middle", "enabled", { dependencies: { provider: "*" } }),
+          provider: mkPlugin("provider", "enabled"),
+        }
+        const store = {
+          plugins,
+          disablePlugin: async (id: string) => {
+            plugins[id].status = "disabled"
+          },
+          setPluginStatus: (id: string, status: Plugin["status"]) => {
+            plugins[id].status = status
+          },
+          setPluginError: jest.fn(),
+        }
+        mockGetState.mockReturnValue(store)
+        const lifecycleStateAdapter = new InMemoryPluginLifecycleStateAdapter()
+        for (const id of Object.keys(plugins)) {
+          await lifecycleStateAdapter.write(id, 0, { intent: "enabled", actual: "active" })
+        }
+        const manager = new PluginManager({ pluginDirectory: "/plugins", lifecycleStateAdapter })
+        const internals = manager as unknown as {
+          deactivatePluginRuntime: () => Promise<void>
+          unregisterPluginContributions: () => Promise<void>
+          revokePluginPermissions: () => Promise<void>
+          getRuntimeBlockingDependentIds: (id: string) => Promise<string[]>
+        }
+        const deactivate = jest
+          .spyOn(internals, "deactivatePluginRuntime")
+          .mockResolvedValue(undefined)
+        const unregister = jest
+          .spyOn(internals, "unregisterPluginContributions")
+          .mockResolvedValue(undefined)
+        const revoke = jest.spyOn(internals, "revokePluginPermissions")
+        if (lateFailure) revoke.mockRejectedValueOnce(new Error("late permission cleanup failure"))
+        const enable = jest.spyOn(manager, "enablePlugin").mockImplementation(async (id) => {
+          plugins[id].status = "enabled"
+        })
+        try {
+          if (lateFailure) {
+            await expect(resolveConflictingPlugins(["leaf", "middle"], manager)).rejects.toThrow(
+              "late permission cleanup failure"
+            )
+            expect(unregister).toHaveBeenCalled()
+            expect(plugins.leaf.status).toBe("enabled")
+          } else {
+            const restore = await resolveConflictingPlugins(["leaf", "middle"], manager)
+            await expect(internals.getRuntimeBlockingDependentIds("provider")).resolves.toEqual([])
+            expect((await lifecycleStateAdapter.read("leaf")).intent).toBe("disabled")
+            expect((await lifecycleStateAdapter.read("middle")).intent).toBe("disabled")
+            await restore()
+            expect(enable.mock.calls.map(([id]) => id)).toEqual(["middle", "leaf"])
+          }
+          expect((await lifecycleStateAdapter.read("leaf")).intent).toBe("enabled")
+          expect((await lifecycleStateAdapter.read("middle")).intent).toBe("enabled")
+          await follower.settled()
+          expect(updateCogset).not.toHaveBeenCalled()
+          expect(updateState).not.toHaveBeenCalled()
+        } finally {
+          follower.stop()
+          deactivate.mockRestore()
+          unregister.mockRestore()
+          revoke.mockRestore()
+          enable.mockRestore()
+        }
+      }
+    )
+
+    it("plans and pauses an active auto-intent consumer through the real lifecycle blocker", async () => {
+      const { runMarketplaceInstall, resolveConflictingPlugins } =
+        await import("../marketplace/install-flow")
+      const { listPlugins } = jest.requireMock("@/lib/db/plugins") as { listPlugins: jest.Mock }
+      const plugins: Record<string, Plugin> = {
+        consumer: mkPlugin("consumer", "enabled", { dependencies: { provider: ">=0.5.0 <2.0.0" } }),
+        provider: mkPlugin("provider", "installed", { version: "0.5.0" }),
+      }
+      const store = {
+        plugins,
+        disablePlugin: async (id: string) => {
+          plugins[id].status = "disabled"
+        },
+        setPluginStatus: (id: string, status: Plugin["status"]) => {
+          plugins[id].status = status
+        },
+        setPluginError: jest.fn(),
+      }
+      mockGetState.mockReturnValue(store)
+      listPlugins.mockImplementation(async () =>
+        Object.values(plugins).map((plugin) => ({
+          id: plugin.manifest.id,
+          version: plugin.manifest.version,
+          enabled: false,
+          manifest: plugin.manifest,
+        }))
+      )
+      const lifecycleStateAdapter = new InMemoryPluginLifecycleStateAdapter()
+      await lifecycleStateAdapter.write("consumer", 0, { intent: "auto", actual: "active" })
+      const manager = new PluginManager({ pluginDirectory: "/plugins", lifecycleStateAdapter })
+      const internals = manager as unknown as {
+        deactivatePluginRuntime: () => Promise<void>
+        unregisterPluginContributions: () => Promise<void>
+        getRuntimeBlockingDependentIds: (id: string) => Promise<string[]>
+      }
+      const deactivate = jest
+        .spyOn(internals, "deactivatePluginRuntime")
+        .mockResolvedValue(undefined)
+      const unregister = jest
+        .spyOn(internals, "unregisterPluginContributions")
+        .mockResolvedValue(undefined)
+      const enable = jest.spyOn(manager, "enablePlugin").mockImplementation(async (id) => {
+        plugins[id].status = "enabled"
+      })
+      const pause = jest.fn((ids: string[]) => resolveConflictingPlugins(ids, manager))
+      try {
+        const result = await runMarketplaceInstall({
+          pluginId: "target",
+          client: {
+            getPlugin: async () => ({
+              manifest: { ...createManifest("target"), dependencies: { provider: "^1.0.0" } },
+            }),
+            installPlugin: jest.fn(),
+          },
+          dependencyClient: {
+            getPlugin: async () => ({
+              manifest: { ...createManifest("provider"), version: "1.2.0" },
+            }),
+            installPlugin: async () => {
+              await expect(internals.getRuntimeBlockingDependentIds("provider")).resolves.toEqual(
+                []
+              )
+              plugins.provider.manifest = { ...plugins.provider.manifest, version: "1.2.0" }
+            },
+          },
+          checkInstalledPlugin: async (id) =>
+            plugins[id] ? { version: plugins[id].manifest.version } : null,
+          requestConflictReview: async () => "continue",
+          requestDependencyReview: async () => "resolve",
+          requestPermissionReview: async () => "approve",
+          requestConfig: async () => ({ result: "cancel" }),
+          resolveConflictingPlugins: pause,
+        })
+        expect(result).toEqual({ status: "installed", pluginId: "target" })
+        expect(pause).toHaveBeenCalledWith(["consumer"])
+        expect(plugins.consumer.status).toBe("enabled")
+        expect((await lifecycleStateAdapter.read("consumer")).intent).toBe("auto")
+      } finally {
+        listPlugins.mockReset().mockResolvedValue([])
+        deactivate.mockRestore()
+        unregister.mockRestore()
+        enable.mockRestore()
+      }
     })
 
     it("announces a completed intent change with its reason, and nothing when it throws", async () => {

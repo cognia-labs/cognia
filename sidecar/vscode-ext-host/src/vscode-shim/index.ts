@@ -70,6 +70,8 @@ import {
 import { createL10nNamespace } from "./l10n"
 
 export interface ShimDependencies {
+  /** Registrations started while loading/activating must settle before activation ACK. */
+  trackRegistration?: (registration: Promise<unknown>) => void
   extensionId: string
   connection: RpcConnection
   /** The host's open documents and editors (`documents.ts`). */

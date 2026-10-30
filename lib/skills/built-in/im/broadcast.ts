@@ -32,6 +32,12 @@ const schema = z.object({
       "Target conversation keys (platform:adapterId:chatId). Use the current conversation's key or keys from the Inbox; max 20 per call."
     ),
   message: z.string().min(1).describe("Text message to deliver to every target."),
+  deliveryMode: z
+    .enum(["reply", "proactive", "reengagement"])
+    .optional()
+    .describe(
+      "Explicit delivery intent; never upgrades expired reply context. Requires platform support and outbound authorization."
+    ),
 })
 
 interface TargetOutcome {
@@ -99,6 +105,7 @@ const skill: BuiltInSkill<typeof schema> = {
         conversationKey: key,
         request: {
           conversationRef,
+          ...(args.deliveryMode ? { sendOptions: { mode: args.deliveryMode } } : {}),
           segments: [{ type: "text", text: args.message }],
           // DISTINCT key per target — a shared key would make the runner's
           // idempotency short-circuit collapse the fan-out to one send.

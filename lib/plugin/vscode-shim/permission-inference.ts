@@ -77,8 +77,14 @@ const VSCODE_API_PERMISSIONS: ReadonlyArray<{
     permissions: ["filesystem:read", "filesystem:write"],
   },
   { api: "vscode.window.createTerminal", permissions: ["terminal:spawn", "terminal:write"] },
+  {
+    api: "vscode.window.registerTerminalProfileProvider",
+    permissions: ["terminal:spawn", "terminal:write"],
+  },
   { api: "vscode.tasks.executeTask", permissions: ["terminal:spawn"] },
   { api: "vscode.lm.selectChatModels", permissions: ["ai:chat"] },
+  { api: "vscode.lm.invokeTool", permissions: ["ai:chat", "agent:control"] },
+  { api: "vscode.chat.createChatParticipant", permissions: ["session:read"] },
 ]
 
 /**

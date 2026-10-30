@@ -973,6 +973,32 @@ describe("PluginLoader", () => {
   })
 
   describe("importEntry and restoreModule", () => {
+    it("keeps an installed Bot main handler in its activated module generation", async () => {
+      const importer = jest.fn().mockResolvedValue({ handler: () => undefined })
+      const diskLoader = new PluginLoader({ frontendImporter: importer })
+      let active: unknown
+      const manifest = createMockManifest("disk-bot")
+      const definition: PluginDefinition = {
+        manifest,
+        activate: (context) => {
+          active = context
+        },
+      }
+      const handler = () => active
+      const exports = { default: definition, handler }
+      diskLoader.restoreModule(manifest.id, definition, exports)
+      const { ctx: context } = createTestPluginContext({ pluginId: manifest.id })
+      await definition.activate(context)
+      const imported = await diskLoader.importEntry(
+        `/plugins/disk-bot/${manifest.main}`,
+        manifest.id,
+        "/plugins/disk-bot"
+      )
+      expect(imported).toBe(exports)
+      expect((imported.handler as () => unknown)()).toBe(context)
+      expect(importer).not.toHaveBeenCalled()
+    })
+
     it("imports secondary entries through the fetch/eval loader", async () => {
       ;(global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,

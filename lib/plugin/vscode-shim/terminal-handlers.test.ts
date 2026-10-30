@@ -42,6 +42,7 @@ import {
 import type { SessionInfo } from "@/lib/terminal/types"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
+import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 
 import { ExtensionPtySession } from "./extension-pty-session"
 import {
@@ -53,6 +54,8 @@ import {
   installVscodeTerminalHandlers,
   TERMINAL_EXIT_REASON,
   type VscodeTerminalDependencies,
+  openVscodeTerminalProfile,
+  listVscodeTerminalProfiles,
 } from "./terminal-handlers"
 
 class FakeShell extends BaseTerminalSession {
@@ -87,6 +90,10 @@ function setup(options: { granted?: string[] } = {}) {
   const changed = () => [...listeners].forEach((listener) => listener())
   const sent: Array<[string, string, Record<string, unknown>]> = []
   const deps: VscodeTerminalDependencies = {
+    localProfileTarget: jest.fn(() => true),
+    wantsEnabled: jest.fn(async () => true),
+    activateProfile: jest.fn(async () => {}),
+    callProvider: jest.fn(async () => null),
     permissions: async () => granted,
     spawn: jest.fn(async () => {
       const id = `shell-${++next}`
@@ -180,6 +187,160 @@ beforeEach(() => {
   jest.clearAllMocks()
   __resetVscodeTerminalsForTesting()
   installVscodeTerminalHandlers()
+})
+
+describe("extension terminal profiles", () => {
+  it("discovers manifest profiles before activation or provider registration", async () => {
+    const h = setup()
+    const previous = usePluginStore.getState().plugins
+    usePluginStore.setState({
+      plugins: {
+        dormant: {
+          manifest: {
+            id: "dormant",
+            type: "vscode-extension",
+            vscodeExtension: { terminalProfiles: [{ id: "build", title: "Dormant build" }] },
+          },
+          status: "disabled",
+        },
+      } as never,
+    })
+    try {
+      expect(await listVscodeTerminalProfiles()).toEqual([
+        { pluginId: "dormant", id: "build", title: "Dormant build" },
+      ])
+      expect(h.deps.activateProfile).not.toHaveBeenCalled()
+      expect(h.deps.callProvider).not.toHaveBeenCalled()
+      jest.mocked(h.deps.wantsEnabled).mockResolvedValue(false)
+      expect(await listVscodeTerminalProfiles()).toEqual([])
+    } finally {
+      usePluginStore.setState({ plugins: previous })
+    }
+  })
+  it("activates the provider and shows its real process terminal without shell fallback", async () => {
+    const h = setup()
+    jest.mocked(h.deps.activateProfile).mockImplementation(async (id) => {
+      await h.call("terminal:registerProfile", { id, token: "provider" })
+    })
+    jest.mocked(h.deps.callProvider).mockImplementation(async (_plugin, method, raw) => {
+      const payload = raw as { profileLaunchId: string; token: string }
+      expect(method).toBe("provideTerminalProfile")
+      expect(payload.token).toBe("provider")
+      await h.call("terminal:create", {
+        terminalId: "profile-terminal",
+        kind: "process",
+        shellPath: "/bin/sh",
+        profileLaunchId: payload.profileLaunchId,
+      })
+      return { terminalId: "profile-terminal" }
+    })
+    expect(await openVscodeTerminalProfile("acme.ext", "build")).toBe("shell-1")
+    expect(h.deps.activateProfile).toHaveBeenCalledWith("build")
+    expect(h.deps.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ shell: "/bin/sh", profileLaunchId: expect.any(String) })
+    )
+    expect(h.deps.show).toHaveBeenCalledWith("shell-1")
+    expect(await listVscodeTerminalProfiles()).toEqual([
+      expect.objectContaining({ pluginId: "acme.ext", id: "build" }),
+    ])
+  })
+
+  it.each(["permissions", "disabled", "remote"])(
+    "refuses %s before invoking the provider",
+    async (reason) => {
+      const h = setup({ granted: reason === "permissions" ? [] : undefined })
+      if (reason === "disabled") jest.mocked(h.deps.wantsEnabled).mockResolvedValue(false)
+      if (reason === "remote") jest.mocked(h.deps.localProfileTarget).mockReturnValue(false)
+      await expect(openVscodeTerminalProfile("acme.ext", "build")).rejects.toThrow()
+      expect(h.deps.activateProfile).not.toHaveBeenCalled()
+      expect(h.deps.callProvider).not.toHaveBeenCalled()
+      expect(h.deps.spawn).not.toHaveBeenCalled()
+    }
+  )
+
+  it("does not remove a provider for a stale token and fails on an empty profile", async () => {
+    const h = setup()
+    await h.call("terminal:registerProfile", { id: "build", token: "current" })
+    await h.call("terminal:unregisterProfile", { id: "build", token: "old" })
+    await expect(openVscodeTerminalProfile("acme.ext", "build")).rejects.toThrow("did not create")
+    expect(h.deps.callProvider).toHaveBeenCalledWith(
+      "acme.ext",
+      "provideTerminalProfile",
+      expect.objectContaining({ token: "current" }),
+      expect.any(AbortSignal)
+    )
+    expect(h.deps.spawn).not.toHaveBeenCalled()
+  })
+
+  it.each(["cancel", "remote", "unregister"])(
+    "prevents delayed provider creation after %s",
+    async (action) => {
+      const h = setup()
+      await h.call("terminal:registerProfile", { id: "build", token: "current" })
+      let resume!: () => void
+      jest.mocked(h.deps.callProvider).mockImplementation(async (_plugin, _method, raw) => {
+        await new Promise<void>((resolve) => {
+          resume = resolve
+        })
+        await h.call("terminal:create", {
+          terminalId: "late",
+          kind: "pty",
+          profileLaunchId: (raw as { profileLaunchId: string }).profileLaunchId,
+        })
+        return { terminalId: "late" }
+      })
+      const controller = new AbortController()
+      const pending = openVscodeTerminalProfile("acme.ext", "build", controller.signal)
+      const denied = expect(pending).rejects.toThrow()
+      await tick()
+      if (action === "cancel") controller.abort()
+      if (action === "remote") jest.mocked(h.deps.localProfileTarget).mockReturnValue(false)
+      if (action === "unregister")
+        await h.call("terminal:unregisterProfile", { id: "build", token: "current" })
+      resume()
+      await denied
+      expect(h.deps.addPtySession).not.toHaveBeenCalled()
+      expect(h.deps.spawn).not.toHaveBeenCalled()
+    }
+  )
+
+  it("cleans up a process whose native creation finishes after cancellation", async () => {
+    const h = setup()
+    await h.call("terminal:registerProfile", { id: "build", token: "current" })
+    const spawn = jest.mocked(h.deps.spawn).getMockImplementation()!
+    let resume!: () => void
+    jest.mocked(h.deps.spawn).mockImplementation(async (...args) => {
+      await new Promise<void>((resolve) => {
+        resume = resolve
+      })
+      return spawn(...args)
+    })
+    jest.mocked(h.deps.callProvider).mockImplementation(async (_plugin, _method, raw) => {
+      await h.call("terminal:create", {
+        terminalId: "late",
+        kind: "process",
+        profileLaunchId: (raw as { profileLaunchId: string }).profileLaunchId,
+      })
+      return { terminalId: "late" }
+    })
+    const controller = new AbortController()
+    const pending = openVscodeTerminalProfile("acme.ext", "build", controller.signal)
+    const denied = expect(pending).rejects.toThrow()
+    await tick()
+    controller.abort()
+    resume()
+    await denied
+    expect(h.deps.kill).toHaveBeenCalledWith("shell-1")
+    expect(h.tabs.size).toBe(0)
+  })
+
+  it("requires terminal:spawn for Pseudoterminals too", async () => {
+    const h = setup({ granted: [] })
+    await expect(h.call("terminal:create", { terminalId: "pty", kind: "pty" })).rejects.toThrow(
+      "terminal:spawn"
+    )
+    expect(h.deps.addPtySession).not.toHaveBeenCalled()
+  })
 })
 
 describe("process terminals", () => {
@@ -328,7 +489,7 @@ describe("process terminals", () => {
 
 describe("extension terminals", () => {
   it("open a tab fed by the extension, sized, and send back what the user types", async () => {
-    const h = setup({ granted: [] })
+    const h = setup({ granted: ["terminal:spawn"] })
     await expect(
       h.call("terminal:create", {
         terminalId: "p1",

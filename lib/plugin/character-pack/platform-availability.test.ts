@@ -64,3 +64,11 @@ describe("isAvailableOnProfile", () => {
     expect(isAvailableOnProfile(["browser"])).toBe(true)
   })
 })
+
+it("preserves the headless profile and hides native participants from browser/mobile", () => {
+  detectPlatformMock.mockReturnValue("headless")
+  expect(currentRuntimeProfile()).toBe("headless")
+  expect(isAvailableOnProfile(["tauri", "headless"])).toBe(true)
+  expect(isAvailableOnProfile(["tauri", "headless"], "browser")).toBe(false)
+  expect(isAvailableOnProfile(["tauri", "headless"], "mobile")).toBe(false)
+})

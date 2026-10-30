@@ -27,16 +27,25 @@
  *
  * Not supported, and logged to the extension's log where an extension meets
  * it: tools (a request with `toolMode: Required` is refused, other tools are
- * dropped), and the registrations nothing calls (`lm.registerTool`,
- * `registerChatModelProvider`, `registerMcpServerDefinitionProvider`).
+ * dropped), `registerChatModelProvider`, and `registerMcpServerDefinitionProvider`.
+ * Registered extension tools use the shared plugin tool registry. Models use
+ * its normal approval ladder; direct `lm.invokeTool` is caller-owned only and
+ * requires ai:chat plus agent:control. Cross-extension direct calls have no
+ * trusted session/consent token and are refused.
  */
 
+import type { PluginToolRegistration } from "@/types/plugin"
+import type { VsCodeExtensionBlock } from "@/types/plugin/plugin-vscode"
 import { getModelConfig } from "@cognia/provider-types/provider"
 
 import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
 import { createAIProviderAPI } from "@/lib/plugin/api/ai-provider-api"
 import { hasApiOrGuardPermission } from "@/lib/plugin/api/api-permission-gate"
-import { assertNoLeakingPii, PluginPiiError } from "@/lib/plugin/api/plugin-pii-gate"
+import {
+  assertNoLeakingPii,
+  assertNoLeakingPiiDeep,
+  PluginPiiError,
+} from "@/lib/plugin/api/plugin-pii-gate"
 import { PluginHostRuntimeUnavailableError } from "@/lib/plugin/runtime/host-runtime"
 import { PermissionError } from "@/lib/plugin/security/permission-guard"
 import { getPluginRateLimiter, RateLimitError } from "@/lib/plugin/security/rate-limiter"
@@ -77,13 +86,35 @@ export const UNKNOWN_MODEL_INPUT_TOKENS = 8_192
 /** `toolMode` values (`LanguageModelChatToolMode`). */
 const TOOL_MODE_REQUIRED = 2
 
+type LmToolDescription = NonNullable<VsCodeExtensionBlock["languageModelTools"]>[number]
+
 export interface VscodeLmDependencies {
+  toolDefinition(
+    pluginId: string,
+    name: string
+  ): LmToolDescription | undefined | Promise<LmToolDescription | undefined>
+  registerTool(pluginId: string, tool: PluginToolRegistration): Promise<() => void>
+  callProvider(
+    pluginId: string,
+    method: string,
+    payload: unknown,
+    signal?: AbortSignal
+  ): Promise<unknown>
+  activateTool(name: string, initiatorPluginId?: string): Promise<void>
+  invokeTool(
+    pluginId: string,
+    name: string,
+    input: Record<string, unknown>,
+    signal: AbortSignal
+  ): Promise<unknown>
+
   /** The provider and model `ctx.ai` would use for this extension, or `null` for none. */
   currentModel(pluginId: string): { providerId: string; modelId: string } | null
   /** What the provider catalog knows about a model. */
   modelInfo(providerId: string, modelId: string): { name?: string; maxInputTokens?: number } | null
   /** Whether the extension holds `ai:chat`. */
   hasPermission(pluginId: string): boolean
+  hasToolPermission(pluginId: string): boolean
   /** Take one `ai:chat` from the plugin rate limit; throws `RateLimitError` when spent. */
   rateLimit(pluginId: string): void
   /** `ctx.ai.chat` for the extension. */
@@ -105,6 +136,33 @@ export function createVscodeLmDependencies(input: {
 }): VscodeLmDependencies {
   return {
     ...input,
+    toolDefinition: async (pluginId, name) => {
+      const { getPluginManager } = await import("@/lib/plugin/core/manager")
+      return getPluginManager()
+        .getPlugin(pluginId)
+        ?.manifest.vscodeExtension?.languageModelTools?.find((tool) => tool.name === name)
+    },
+    registerTool: async (pluginId, tool) => {
+      const { getPluginManager } = await import("@/lib/plugin/core/manager")
+      const context = getPluginManager().getPluginContext(pluginId)
+      if (!context) throw new Error(`Extension context ${pluginId} is unavailable`)
+      return context.agent.registerTool(tool)
+    },
+    callProvider: async (pluginId, method, payload, signal) => {
+      const { callVscodeProvider } = await import("@/lib/plugin/core/vscode-loader")
+      return callVscodeProvider(pluginId, method, payload, signal)
+    },
+    activateTool: async (name, initiatorPluginId) => {
+      const { getPluginManager } = await import("@/lib/plugin/core/manager")
+      await getPluginManager().handleActivationEvent(`onLanguageModelTool:${name}`, {
+        initiatorPluginId,
+      })
+    },
+    invokeTool: async (pluginId, name, args, signal) => {
+      const { invokePluginTool } = await import("@/lib/plugin/core/invoke-plugin-tool")
+      return (await invokePluginTool(pluginId, name, args, { signal })).result
+    },
+    hasToolPermission: (pluginId) => hasApiOrGuardPermission(pluginId, "agent:control"),
     currentModel: (pluginId) => {
       const api = createAIProviderAPI(pluginId)
       const providerId = api.getDefaultProvider()
@@ -450,8 +508,188 @@ function cancelChatRequest(payload: unknown, context: RpcContext): null {
   return null
 }
 
+interface LmToolRegistration {
+  pluginId: string
+  name: string
+  token: string
+  description: LmToolDescription
+  dispose?: () => void
+}
+const registeredTools = new Map<string, LmToolRegistration>()
+const toolCalls = new Map<
+  string,
+  { caller: string; owner: string; name: string; controller: AbortController }
+>()
+
+function listTools(pluginId: string) {
+  return [...registeredTools.values()]
+    .filter((entry) => entry.dispose && entry.pluginId === pluginId)
+    .map(({ name, description }) => ({
+      name,
+      description: description.modelDescription ?? description.userDescription ?? name,
+      inputSchema: description.inputSchema ?? { type: "object" },
+      ...(description.tags ? { tags: description.tags } : {}),
+    }))
+}
+
+function broadcastTools(): void {
+  const current = deps
+  if (!current) return
+  for (const pluginId of current.hosts()) {
+    void current
+      .sendToHost(pluginId, "lm:toolsChanged", { tools: listTools(pluginId) })
+      .catch((error: unknown) =>
+        log(pluginId, "warn", `Tool catalog delivery failed: ${errorMessage(error)}`)
+      )
+  }
+}
+
+async function registerLmTool(payload: unknown, context: RpcContext) {
+  const value = owned(payload, context)
+  const name = requiredString(value, "name")
+  const token = requiredString(value, "token")
+  const runtime = requireDeps()
+  const description = await runtime.toolDefinition(context.pluginId, name)
+  if (!description)
+    throw new Error(`Language model tool ${name} is not declared by ${context.pluginId}`)
+  const previous = registeredTools.get(name)
+  if (previous && previous.pluginId !== context.pluginId)
+    throw new Error(`Language model tool ${name} is owned by ${previous.pluginId}`)
+  previous?.dispose?.()
+  const entry: LmToolRegistration = {
+    pluginId: context.pluginId,
+    name,
+    token,
+    description: structuredClone(description),
+  }
+  registeredTools.set(name, entry)
+  try {
+    const dispose = await runtime.registerTool(context.pluginId, {
+      name,
+      definition: {
+        name,
+        description: description.modelDescription ?? description.userDescription ?? name,
+        parametersSchema:
+          description.inputSchema &&
+          typeof description.inputSchema === "object" &&
+          !Array.isArray(description.inputSchema)
+            ? (description.inputSchema as Record<string, unknown>)
+            : { type: "object", properties: {} },
+        requiresApproval: true,
+        retryable: false,
+      },
+      execute: async (input, invocation) => {
+        assertNoLeakingPiiDeep(context.pluginId, "vscode.lm.tool", [input])
+        const result = await runtime.callProvider(
+          context.pluginId,
+          "invoke",
+          { token, input },
+          invocation.signal
+        )
+        const content = (result as { content?: unknown } | null)?.content
+        if (!Array.isArray(content))
+          throw new Error(`Language model tool ${name} returned no content`)
+        return content
+          .map((part: unknown) => {
+            const text = (part as { value?: unknown } | null)?.value
+            if (typeof text !== "string")
+              throw new Error(`Language model tool ${name} returned unsupported non-text content`)
+            return text
+          })
+          .join("\n")
+      },
+    })
+    if (registeredTools.get(name) !== entry) dispose()
+    else entry.dispose = dispose
+    broadcastTools()
+    return { registered: registeredTools.get(name) === entry }
+  } catch (error) {
+    if (registeredTools.get(name) === entry) registeredTools.delete(name)
+    throw error
+  }
+}
+
+function unregisterLmTool(payload: unknown, context: RpcContext) {
+  const value = owned(payload, context)
+  const name = requiredString(value, "name")
+  const entry = registeredTools.get(name)
+  if (!entry || entry.pluginId !== context.pluginId || entry.token !== value.token) return
+  registeredTools.delete(name)
+  for (const call of toolCalls.values())
+    if (call.owner === entry.pluginId && call.name === name) call.controller.abort()
+  entry.dispose?.()
+  broadcastTools()
+}
+
+async function invokeLmTool(payload: unknown, context: RpcContext) {
+  const value = owned(payload, context)
+  const name = requiredString(value, "name")
+  const callId = requiredString(value, "callId")
+  const input = object(value.input)
+  const runtime = requireDeps()
+  if (!runtime.hasPermission(context.pluginId))
+    throw new PermissionError("Language model tools require ai:chat", context.pluginId, "ai:chat")
+  if (!runtime.hasToolPermission(context.pluginId))
+    throw new PermissionError(
+      "Language model tool invocation requires agent:control",
+      context.pluginId,
+      "agent:control"
+    )
+  const key = streamKey(context.pluginId, callId)
+  if (toolCalls.has(key)) throw new Error(`Duplicate tool call ${callId}`)
+  const invocation = {
+    caller: context.pluginId,
+    owner: context.pluginId,
+    name,
+    controller: new AbortController(),
+  }
+  toolCalls.set(key, invocation)
+  try {
+    if (
+      (registeredTools.has(name) && registeredTools.get(name)?.pluginId !== context.pluginId) ||
+      !(await runtime.toolDefinition(context.pluginId, name))
+    )
+      throw new Error(`Language model tool ${name} is not owned by ${context.pluginId}`)
+    invocation.controller.signal.throwIfAborted()
+    await runtime.activateTool(name, context.pluginId)
+    if (invocation.controller.signal.aborted)
+      throw new DOMException("Tool invocation cancelled", "AbortError")
+    const entry = registeredTools.get(name)
+    if (!entry?.dispose) throw new Error(`Language model tool ${name} is unavailable`)
+    // Cross-extension execution needs a host-owned session and consent token.
+    // Model-side calls already use the normal tool approval ladder.
+    if (entry.pluginId !== context.pluginId)
+      throw new Error(`Language model tool ${name} is not owned by ${context.pluginId}`)
+    invocation.owner = entry.pluginId
+    const result = await runtime.invokeTool(
+      entry.pluginId,
+      name,
+      input,
+      invocation.controller.signal
+    )
+    if (invocation.controller.signal.aborted)
+      throw new DOMException("Tool invocation cancelled", "AbortError")
+    return {
+      content: [{ value: typeof result === "string" ? result : (JSON.stringify(result) ?? "") }],
+    }
+  } finally {
+    if (toolCalls.get(key) === invocation) toolCalls.delete(key)
+  }
+}
+
 /** Stop every request an extension has running; its host is going away. */
 export function unregisterAllLmFor(pluginId: string): void {
+  for (const [name, tool] of registeredTools)
+    if (tool.pluginId === pluginId) {
+      registeredTools.delete(name)
+      tool.dispose?.()
+    }
+  for (const [key, call] of toolCalls)
+    if (call.owner === pluginId || call.caller === pluginId) {
+      call.controller.abort()
+      toolCalls.delete(key)
+    }
+  broadcastTools()
   for (const [key, stream] of streams) {
     if (stream.pluginId !== pluginId) continue
     stream.controller.abort()
@@ -505,7 +743,19 @@ export function installVscodeLmHandlers(): Array<() => void> {
       if (typeof text !== "string") throw new Error("lm:countTokens requires text")
       return requireDeps().countTokens(text)
     }),
-    registerMethod("lm:registerTool", inertRegistration("registerTool")),
+    registerMethod("lm:registerTool", registerLmTool),
+    registerMethod("lm:unregisterTool", unregisterLmTool),
+    registerMethod("lm:listTools", (payload, context) => {
+      owned(payload, context)
+      return structuredClone(listTools(context.pluginId))
+    }),
+    registerMethod("lm:invokeTool", invokeLmTool),
+    registerMethod("lm:cancelTool", (payload, context) => {
+      const value = owned(payload, context)
+      toolCalls
+        .get(streamKey(context.pluginId, requiredString(value, "callId")))
+        ?.controller.abort()
+    }),
     registerMethod("lm:registerChatModelProvider", inertRegistration("registerChatModelProvider")),
     registerMethod(
       "lm:registerMcpServerDefinitionProvider",
@@ -516,6 +766,10 @@ export function installVscodeLmHandlers(): Array<() => void> {
 
 /** Test-only: forget every request and dependency. */
 export function __resetVscodeLmForTesting(): void {
+  for (const entry of registeredTools.values()) entry.dispose?.()
+  registeredTools.clear()
+  for (const call of toolCalls.values()) call.controller.abort()
+  toolCalls.clear()
   configureVscodeLm(null)
   for (const stream of streams.values()) stream.controller.abort()
   streams.clear()

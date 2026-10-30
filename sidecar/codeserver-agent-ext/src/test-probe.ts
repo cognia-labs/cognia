@@ -176,6 +176,16 @@ export function createTestProbe(vscode: any, recorder: any = probe, { emit }: an
   const debugMessages: any[] = []
 
   const actions = {
+    async fileSystem({ uri, text }: { uri: string; text: string }) {
+      const resource = vscode.Uri.parse(uri)
+      if (!resource.scheme.startsWith("cognia."))
+        throw new Error("TEST_PROBE_FILESYSTEM_SCHEME_REFUSED")
+      await vscode.workspace.fs.writeFile(resource, new TextEncoder().encode(text))
+      const contents = new TextDecoder().decode(await vscode.workspace.fs.readFile(resource))
+      const stat = await vscode.workspace.fs.stat(resource)
+      await vscode.workspace.fs.delete(resource)
+      return { contents, size: stat.size }
+    },
     // Run an allowlisted command and return its result as JSON. `open` shows
     // a file first: the CodeLens command refuses a document with no editor
     // model, and a language server only hears of a file once it is opened.

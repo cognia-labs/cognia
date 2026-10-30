@@ -11,10 +11,8 @@
  *
  * Mirrors `lib/plugin/core/wasm-loader.ts` line-for-line where applicable.
  *
- * Phase M0: the Rust commands are not yet implemented. In dev / test the
- * loader returns a stub `PluginDefinition` that logs and exits — same
- * pattern WASM uses for browser fallback. The full sidecar wiring lands
- * in later phases of the plan (~/.claude/plans/vscode-snug-squid.md).
+ * Desktop and headless Hosts use the native process bridge. Browser-only
+ * sessions retain an explicit desktop-required fallback.
  */
 
 import { nanoid } from "nanoid"
@@ -42,28 +40,53 @@ let documentSync: import("@/lib/plugin/vscode-shim/document-sync").DocumentSync 
  * gave at registration (`payload.token`); the call id lets Monaco's
  * cancellation reach the provider's `CancellationToken`.
  */
-async function callVscodeProvider<T>(
+export async function callVscodeProvider<T>(
   pluginId: string,
   method: string,
   payload: unknown,
-  cancellation?: { onCancellationRequested(listener: () => unknown): { dispose(): void } }
+  cancellation?:
+    AbortSignal | { onCancellationRequested(listener: () => unknown): { dispose(): void } }
 ): Promise<T> {
+  const signal = cancellation && "aborted" in cancellation ? cancellation : undefined
+  const abortError = () => new DOMException("Extension provider call aborted", "AbortError")
+  if (signal?.aborted) throw abortError()
+  const generation = requireVscodeGeneration(pluginId)
   const { token, ...args } = (payload ?? {}) as { token?: string } & Record<string, unknown>
   const callId = nanoid()
-  const subscription = cancellation?.onCancellationRequested(() => {
-    void invokeVscodeRpc(pluginId, "extension:cancel", { callId }).catch(() => {
+  let rejectAbort: ((reason: unknown) => void) | undefined
+  const aborted = signal
+    ? new Promise<never>((_resolve, reject) => {
+        rejectAbort = reject
+      })
+    : undefined
+  const onAbort = () => {
+    void invokeVscodeRpc(pluginId, "extension:cancel", { callId }, generation).catch(() => {
       // The call already finished, or the host is gone; nothing to cancel.
     })
-  })
+    rejectAbort?.(abortError())
+  }
+  const subscription =
+    cancellation && "onCancellationRequested" in cancellation
+      ? cancellation.onCancellationRequested(onAbort)
+      : undefined
+  signal?.addEventListener("abort", onAbort, { once: true })
   try {
-    return await invokeVscodeRpc<T>(pluginId, "extension:call", {
-      extensionId: pluginId,
-      token,
-      method,
-      callId,
-      payload: args,
-    })
+    const response = invokeVscodeRpc<T>(
+      pluginId,
+      "extension:call",
+      {
+        extensionId: pluginId,
+        token,
+        method,
+        callId,
+        payload: args,
+      },
+      generation,
+      signal
+    )
+    return await (aborted ? Promise.race([response, aborted]) : response)
   } finally {
+    signal?.removeEventListener("abort", onAbort)
     subscription?.dispose()
   }
 }
@@ -169,11 +192,8 @@ export async function ensureDispatcherConfigured(): Promise<void> {
       sendToHost: (pluginId, method, payload) => invokeVscodeRpc(pluginId, method, payload),
     })
   )
-  // What starts an enabled extension that waits for its activation events,
-  // and the commands and languages it shows until then.
-  const { installVscodeActivationTriggers, createVscodeActivationTriggerDependencies } =
-    await import("@/lib/plugin/vscode-shim/activation-triggers")
-  installVscodeActivationTriggers(createVscodeActivationTriggerDependencies())
+  // Activation sources belong to PluginManager initialization; installing
+  // them here would leave every extension dormant until the first one loads.
   // `vscode.lm`: the app's own model, through the plugin AI API.
   const { configureVscodeLm, createVscodeLmDependencies } =
     await import("@/lib/plugin/vscode-shim/lm-handler")
@@ -532,12 +552,14 @@ export async function invokeVscodeRpc<T = unknown>(
   pluginId: string,
   method: string,
   payload: unknown,
-  runtimeGeneration?: string
+  runtimeGeneration?: string,
+  signal?: AbortSignal
 ): Promise<T> {
   if (!isVscodeHostAvailable()) {
     throw new Error("VS Code extension host unavailable (browser mode)")
   }
   const invoke = await getInvoke()
+  signal?.throwIfAborted()
   const generation = runtimeGeneration ?? requireVscodeGeneration(pluginId)
   const result = await invoke<string>("plugin_invoke_vscode_rpc", {
     pluginId,

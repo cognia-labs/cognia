@@ -7,7 +7,7 @@ import type { ProviderDescriptor, ProxyDescriptor, ProviderBroker } from "./type
  * invokes the single Cognia-owned runtime through the managed broker.
  */
 
-import { managedIdPrefix } from "./contribution-ids.ts"
+import { managedIdPrefix, walkthroughCommandId } from "./contribution-ids.ts"
 import { probe } from "./test-probe.ts"
 
 export const PROVIDER_ADAPTER_KINDS = Object.freeze([
@@ -82,6 +82,15 @@ export async function registerManagedProviders(
   validateDescriptor(descriptor)
   const registrations: any[] = []
   try {
+    for (const walkthrough of descriptor.contributions?.walkthroughs ?? []) {
+      if (!broker.openWalkthrough)
+        throw compatibilityError("IDE_WALKTHROUGH_BROKER_UNAVAILABLE", walkthrough.id)
+      registrations.push(
+        vscode.commands.registerCommand(walkthroughCommandId(walkthrough.id), () =>
+          broker.openWalkthrough!(walkthrough.id)
+        )
+      )
+    }
     for (const provider of descriptor.providers ?? []) {
       const adapter = ADAPTERS[provider.kind]
       if (!adapter) {

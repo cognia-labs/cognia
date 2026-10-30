@@ -48,11 +48,13 @@ export function translatePluginMessage(
 export function createI18nAPI(pluginId: string): PluginI18nAPI {
   const logger = createPluginSystemLogger(pluginId)
   const fullKey = (key: string) => pluginMessageKey(pluginId, key)
+  const getCurrentLocale = (): PluginLocale => useSettingsStore.getState().language as PluginLocale
+  const hasTranslation = (key: string): boolean =>
+    lookupPluginMessage(useSettingsStore.getState().language as Locale, fullKey(key)) !== undefined
 
   return {
-    getCurrentLocale: (): PluginLocale => {
-      return useSettingsStore.getState().language as PluginLocale
-    },
+    getCurrentLocale,
+    getLocale: getCurrentLocale,
 
     getAvailableLocales: (): PluginLocale[] => {
       return locales as unknown as PluginLocale[]
@@ -84,10 +86,8 @@ export function createI18nAPI(pluginId: string): PluginI18nAPI {
       logger.info(`Registered ${Object.keys(translations).length} translations for ${locale}`)
     },
 
-    hasTranslation: (key: string): boolean => {
-      const currentLocale = useSettingsStore.getState().language as Locale
-      return lookupPluginMessage(currentLocale, fullKey(key)) !== undefined
-    },
+    hasTranslation,
+    hasKey: hasTranslation,
 
     onLocaleChange: (handler: (locale: PluginLocale) => void) => {
       let lastLocale = useSettingsStore.getState().language

@@ -3,15 +3,12 @@
 import { useState, useSyncExternalStore, type ReactNode } from "react"
 import { MoreHorizontalIcon } from "lucide-react"
 import { PluginSurface } from "@/components/plugins/plugin-surface"
+import { useSurfaceProjections } from "./use-surface-projections"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import {
-  getExtensionRevision,
-  getExtensionsForPoint,
-  subscribeExtensionChanges,
-} from "@/lib/plugin/api/extension-api"
+import { getExtensionRevision, subscribeExtensionChanges } from "@/lib/plugin/api/extension-api"
 import {
   getExtensionPointFormFactor,
   type CanonicalExtensionPoint,
@@ -63,8 +60,7 @@ export function PluginExtensionSlotWithOverflow({
   useSyncExternalStore(subscribeExtensionChanges, getExtensionRevision, () => 0)
   const [failedIds, setFailedIds] = useState<ReadonlySet<string>>(EMPTY_FAILED_IDS)
 
-  const all = getExtensionsForPoint(point)
-  const ordered = [...all].sort((a, b) => (b.options.priority ?? 0) - (a.options.priority ?? 0))
+  const ordered = useSurfaceProjections(point, context)
 
   // A crashed compact surface renders nothing but still counts here, so
   // without this filter the contribution's dead declared-width box both ate
@@ -106,6 +102,7 @@ export function PluginExtensionSlotWithOverflow({
           key={ext.id}
           pluginId={ext.pluginId}
           surfaceId={ext.id}
+          title={ext.projectionTitle}
           formFactor={formFactor}
           minWidth={compact ? undefined : ext.options.minWidth}
           maxWidth={compact ? undefined : ext.options.maxWidth}
@@ -151,6 +148,7 @@ export function PluginExtensionSlotWithOverflow({
                 key={ext.id}
                 pluginId={ext.pluginId}
                 surfaceId={ext.id}
+                title={ext.projectionTitle}
                 formFactor={formFactor}
                 minWidth={ext.options.minWidth}
                 maxWidth={ext.options.maxWidth}

@@ -1485,7 +1485,7 @@
       "javascriptEntryRequiredForContributions": false
     }
   },
-  "contractVersion": "1.3.0",
+  "contractVersion": "1.7.0",
   "protocol": {
     "version": "2.0.0",
     "minimumSdkVersion": "0.1.0",
@@ -1988,7 +1988,7 @@
       "stability": "stable",
       "introducedIn": "0.3.0",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.agentConfig",
       "enforcement": "active",
@@ -3086,7 +3086,7 @@
       "stability": "stable",
       "introducedIn": "0.3.228",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.browser",
       "enforcement": "active",
@@ -4994,6 +4994,42 @@
           "resourceEffect": {
             "kind": "none"
           }
+        },
+        {
+          "id": "connectors.listManagementOperations",
+          "name": "listManagementOperations",
+          "requiredPermissions": ["connectors:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "connectors.queryManagement",
+          "name": "queryManagement",
+          "requiredPermissions": ["connectors:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "connectors.manage",
+          "name": "manage",
+          "requiredPermissions": ["connectors:manage"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
         }
       ]
     },
@@ -5571,7 +5607,7 @@
       "stability": "stable",
       "introducedIn": "0.3.228",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.eval",
       "enforcement": "active",
@@ -7908,7 +7944,7 @@
       "stability": "stable",
       "introducedIn": "0.4.0",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.lifecycle",
       "enforcement": "active",
@@ -10482,6 +10518,18 @@
           "resourceEffect": {
             "kind": "returned-disposer"
           }
+        },
+        {
+          "id": "sandbox.fileOperation",
+          "name": "fileOperation",
+          "requiredPermissions": ["native:filesystem"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": true,
+          "resourceEffect": {
+            "kind": "none"
+          }
         }
       ]
     },
@@ -10842,7 +10890,7 @@
       "stability": "experimental",
       "introducedIn": "0.4.0",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.services",
       "enforcement": "active",
@@ -10897,7 +10945,7 @@
       "stability": "stable",
       "introducedIn": "0.3.228",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.securityScans",
       "enforcement": "active",
@@ -11432,7 +11480,7 @@
       "stability": "stable",
       "introducedIn": "0.3.228",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.sites",
       "enforcement": "active",
@@ -12978,7 +13026,7 @@
       "stability": "stable",
       "introducedIn": "0.3.228",
       "runtimes": ["frontend", "hybrid", "python"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.userScheduler",
       "enforcement": "active",
@@ -13459,7 +13507,7 @@
       "stability": "stable",
       "introducedIn": "0.1.0",
       "runtimes": ["frontend", "hybrid"],
-      "platforms": ["desktop", "web", "mobile"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
       "transport": "direct",
       "factory": "context.workflow",
       "enforcement": "active",
@@ -13768,6 +13816,18 @@
           "resourceEffect": {
             "kind": "none"
           }
+        },
+        {
+          "id": "workflow.prepareWorkflowApproval",
+          "name": "prepareWorkflowApproval",
+          "requiredPermissions": ["connectors:send"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
         }
       ]
     },
@@ -14035,6 +14095,418 @@
           "cancellable": false,
           "resourceEffect": {
             "kind": "host-owned"
+          }
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "authorPath": "ctx.files",
+      "type": "PluginFilesAPI",
+      "stability": "stable",
+      "introducedIn": "1.4.0",
+      "runtimes": ["frontend", "hybrid"],
+      "platforms": ["desktop", "web", "mobile"],
+      "transport": "direct",
+      "factory": "context.files",
+      "enforcement": "active",
+      "dataClassification": "sensitive",
+      "timeoutMs": null,
+      "retry": "never",
+      "errorPolicy": "preserve",
+      "lifecycle": "plugin",
+      "methods": [
+        {
+          "id": "files.open",
+          "name": "open",
+          "requiredPermissions": ["filesystem:read"],
+          "consentTier": "none",
+          "risk": "medium",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "files.save",
+          "name": "save",
+          "requiredPermissions": ["filesystem:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "files.readAttachment",
+          "name": "readAttachment",
+          "requiredPermissions": ["filesystem:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "skills",
+      "authorPath": "ctx.skills",
+      "type": "PluginSkillsAPI",
+      "stability": "stable",
+      "introducedIn": "1.4.0",
+      "runtimes": ["frontend", "hybrid"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
+      "transport": "direct",
+      "factory": "context.skills",
+      "enforcement": "active",
+      "dataClassification": "sensitive",
+      "timeoutMs": null,
+      "retry": "never",
+      "errorPolicy": "preserve",
+      "lifecycle": "plugin",
+      "methods": [
+        {
+          "id": "skills.listBuiltIns",
+          "name": "listBuiltIns",
+          "requiredPermissions": ["builtin-skills:invoke"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "skills.invokeBuiltIn",
+          "name": "invokeBuiltIn",
+          "requiredPermissions": ["builtin-skills:invoke"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": true,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "plans",
+      "authorPath": "ctx.plans",
+      "type": "PluginPlanAPI",
+      "stability": "stable",
+      "introducedIn": "1.4.0",
+      "runtimes": ["frontend", "hybrid"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
+      "transport": "direct",
+      "factory": "context.plans",
+      "enforcement": "active",
+      "dataClassification": "sensitive",
+      "timeoutMs": null,
+      "retry": "never",
+      "errorPolicy": "preserve",
+      "lifecycle": "plugin",
+      "methods": [
+        {
+          "id": "plans.get",
+          "name": "get",
+          "requiredPermissions": ["plan:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.listBySession",
+          "name": "listBySession",
+          "requiredPermissions": ["plan:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.listAll",
+          "name": "listAll",
+          "requiredPermissions": ["plan:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.getOpenForSession",
+          "name": "getOpenForSession",
+          "requiredPermissions": ["plan:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.getExecutingForSession",
+          "name": "getExecutingForSession",
+          "requiredPermissions": ["plan:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.getEvents",
+          "name": "getEvents",
+          "requiredPermissions": ["plan:read"],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.create",
+          "name": "create",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.updateDraft",
+          "name": "updateDraft",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.approve",
+          "name": "approve",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.reject",
+          "name": "reject",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.start",
+          "name": "start",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.run",
+          "name": "run",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.pause",
+          "name": "pause",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.resume",
+          "name": "resume",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.cancel",
+          "name": "cancel",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.setStepStatus",
+          "name": "setStepStatus",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.refine",
+          "name": "refine",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "plans.delete",
+          "name": "delete",
+          "requiredPermissions": ["plan:write"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        }
+      ]
+    },
+    {
+      "id": "hooks",
+      "authorPath": "ctx.hooks",
+      "type": "PluginHooksAPI",
+      "stability": "stable",
+      "introducedIn": "1.4.0",
+      "runtimes": ["frontend", "hybrid", "python"],
+      "platforms": ["desktop", "web", "mobile", "headless"],
+      "transport": "direct",
+      "factory": "context.hooks",
+      "enforcement": "active",
+      "dataClassification": "internal",
+      "timeoutMs": null,
+      "retry": "never",
+      "errorPolicy": "preserve",
+      "lifecycle": "plugin",
+      "methods": [
+        {
+          "id": "hooks.listOwn",
+          "name": "listOwn",
+          "requiredPermissions": [],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "hooks.isActive",
+          "name": "isActive",
+          "requiredPermissions": [],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "hooks.hasListener",
+          "name": "hasListener",
+          "requiredPermissions": [],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "hooks.binding",
+          "name": "binding",
+          "requiredPermissions": [],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
+          "id": "hooks.requiresInterceptPermission",
+          "name": "requiresInterceptPermission",
+          "requiredPermissions": [],
+          "consentTier": "none",
+          "risk": "low",
+          "idempotent": true,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
           }
         }
       ]

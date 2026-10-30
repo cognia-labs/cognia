@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join, resolve } from "node:path"
+import { spawnSync } from "node:child_process"
 import { test } from "node:test"
 import ts from "typescript"
 
@@ -132,6 +133,33 @@ test("every linked package can build, and the sidecar's runtime imports resolve 
     [],
     "run `node scripts/build/build-sidecar-linked-packages.mjs`; if it still fails, the package lacks a `node` export condition for that subpath"
   )
+})
+
+test("the materialized sidecar imports plugin refusal identities without TypeScript stripping", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "cognia-plugin-interception-staging-"))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const source = resolve(sidecarRoot, "../packages/agent-config-types")
+  materializeLinkedPackages([{ name: "@cognia/agent-config-types", dir: source }], root)
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `import { PLUGIN_INTERCEPTOR_REFUSED, isPluginInterceptorRefusal } from "@cognia/agent-config-types/plugin-interception";
+       console.log(JSON.stringify({
+         code: PLUGIN_INTERCEPTOR_REFUSED,
+         recognized: isPluginInterceptorRefusal({ code: PLUGIN_INTERCEPTOR_REFUSED }),
+         unrelated: isPluginInterceptorRefusal({ code: "network_error" })
+       }));`,
+    ],
+    { cwd: root, encoding: "utf8" }
+  )
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), {
+    code: "PLUGIN_INTERCEPTOR_REFUSED",
+    recognized: true,
+    unrelated: false,
+  })
 })
 
 test("the sidecar tsconfig maps exactly the linked packages to their source, for bundlers", () => {

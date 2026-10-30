@@ -5,7 +5,9 @@ import {
   seedPlatformBoundSession,
   seedRunningInboundJob,
 } from "@/lib/plugin/api/testing"
-import { createWorkflow } from "@/lib/db/workflows"
+import { getDb } from "@/lib/db/schema"
+import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
+import { createWorkflow, updateWorkflow } from "@/lib/db/workflows"
 import { createWorkflowAuthorAPI } from "@/lib/plugin/api/workflow-author-api"
 import { buildFanoutApprovalSurface, buildRunByNameTools } from "./run-by-name-tools"
 import { configureWorkflowApi } from "../store-bridge"
@@ -26,6 +28,21 @@ function translator(locale: Locale = "en") {
 }
 
 async function seedSession(opts: { sessionId: string; bindToIM?: boolean }): Promise<void> {
+  if (opts.bindToIM)
+    await getDb().adapterInstances.put({
+      id: "wecom:a",
+      type: "wecom",
+      displayName: "Test",
+      enabled: true,
+      transportMode: "stub",
+      settings: {},
+      credentialsRef: { keyringService: "test", accounts: [] },
+      trigger: { rules: [], blockers: [], storeUnmatchedInDraftMode: false },
+      defaultMode: "auto",
+      mediaModelPolicy: "local_extract_only",
+      createdAt: 1,
+      updatedAt: 1,
+    })
   await seedPlatformBoundSession({
     sessionId: opts.sessionId,
     ...(opts.bindToIM
@@ -136,12 +153,62 @@ describe("wf_run_workflow_by_name", () => {
     expect(result.error?.message).toContain("Report A")
   })
 
+  it("keeps a plugin approval below the calling turn ceiling after live policy widens", async () => {
+    await seedSession({ sessionId: "s1", bindToIM: true })
+    await getDb().adapterInstances.update("wecom:a", {
+      defaultAuthority: "bypassPermissions",
+      defaultAutonomy: "autopilot",
+    })
+    const wf = await createWorkflow({ name: "Parent constrained" })
+    await publishWorkflow(wf.id, Date.now())
+    recordResolvedPermissionCeiling("s1", { permissionMode: "plan", disallowedTools: ["Bash"] })
+    try {
+      expect(await runByNameTool.execute({ name: "Parent constrained" }, ctx("s1"))).toMatchObject({
+        ok: true,
+      })
+      const binding = (await listCallbackBindings()).find((row) => row.kind === "wf_approve")
+      expect(
+        (binding?.payload as { permissionCeiling?: unknown } | undefined)?.permissionCeiling
+      ).toMatchObject({
+        permissionMode: "plan",
+        disallowedTools: expect.arrayContaining(["Bash"]),
+      })
+    } finally {
+      clearResolvedPermissionCeiling("s1")
+    }
+  })
+
+  it("describes and pins the published graph when its editable draft has changed", async () => {
+    await seedSession({ sessionId: "s1", bindToIM: true })
+    const wf = await createWorkflow({
+      name: "Published version",
+      description: "PUBLISHED_BEHAVIOR",
+    })
+    const version = await publishWorkflow(wf.id, Date.now())
+    await updateWorkflow(wf.id, { name: "Unpublished draft", description: "UNPUBLISHED_BEHAVIOR" })
+    const result = (await runByNameTool.execute({ name: "Unpublished draft" }, ctx("s1"))) as {
+      ok: boolean
+      workflowName: string
+      surface: unknown
+    }
+    expect(result.ok).toBe(true)
+    expect(result.workflowName).toBe("Published version")
+    expect(JSON.stringify(result.surface)).toContain("PUBLISHED_BEHAVIOR")
+    expect(JSON.stringify(result.surface)).not.toContain("UNPUBLISHED_BEHAVIOR")
+    const binding = (await listCallbackBindings()).find((row) => row.kind === "wf_approve")
+    expect(binding?.payload).toMatchObject({
+      workflowName: "Published version",
+      lockedDependency: { versionId: version.versionId },
+    })
+  })
+
   it("on success, returns surface + writes wf_approve / wf_cancel bindings", async () => {
     await seedSession({ sessionId: "s1", bindToIM: true })
     const wf = await createWorkflow({
       name: "Daily Standup",
       description: "Runs every morning",
     })
+    await publishWorkflow(wf.id, Date.now())
     const result = (await runByNameTool.execute(
       { name: "Daily Standup", runParams: { focus: "today" } },
       ctx("s1")
@@ -186,7 +253,8 @@ describe("wf_run_workflow_by_name", () => {
 
   it("scopes the approval to the current turn's sender when a job is running", async () => {
     await seedSession({ sessionId: "s1", bindToIM: true })
-    await createWorkflow({ name: "Scoped Flow" })
+    const scoped = await createWorkflow({ name: "Scoped Flow" })
+    await publishWorkflow(scoped.id, Date.now())
     await seedRunningInboundJob({
       adapterId: "wecom:a",
       conversationKey: "wecom:wecom:a:room",
@@ -297,3 +365,8 @@ describe("fan-out approval card copy", () => {
     )
   })
 })
+
+import {
+  recordResolvedPermissionCeiling,
+  clearResolvedPermissionCeiling,
+} from "@/lib/claude/agents/dispatch-context-registry"

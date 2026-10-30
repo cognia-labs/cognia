@@ -6,7 +6,7 @@
  * stays focused on lifecycle.
  */
 
-import { registerMethod } from "./rpc-dispatcher"
+import { registerMethod, type RpcContext } from "./rpc-dispatcher"
 import { installVscodeLmHandlers, unregisterAllLmFor } from "./lm-handler"
 import {
   handleChatParticipantRespond,
@@ -48,6 +48,20 @@ import { installVscodeWindowEnvironmentHandlers } from "./window-environment"
 
 let installed = false
 
+export function ownedChatPayload(
+  value: unknown,
+  context: RpcContext
+): Record<string, unknown> & { extensionId: string; id: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Chat RPC requires an object")
+  const payload = value as Record<string, unknown>
+  if (payload.extensionId !== undefined && payload.extensionId !== context.pluginId)
+    throw new Error("Chat RPC ownership mismatch")
+  const id = payload.id ?? payload.participantId
+  if (typeof id !== "string" || !id.trim()) throw new Error("Chat RPC requires a participant id")
+  return { ...payload, extensionId: context.pluginId, id }
+}
+
 /**
  * Idempotent registration of every method handler. Returns a disposer
  * primarily for the test suite — production code never tears these down.
@@ -57,36 +71,40 @@ export function installVscodeRpcHandlers(): () => void {
   installed = true
   const disposers: Array<() => void> = []
 
-  // lm:* — the app's language model, and the registrations nothing calls.
+  // lm:* — the app's model and extension tools on the unified tool registry.
   disposers.push(...installVscodeLmHandlers())
 
   // chat:* — participants & variable resolvers.
   disposers.push(
-    registerMethod("chat:createParticipant", (p) => handleCreateChatParticipant(p as never))
+    registerMethod("chat:createParticipant", (p, context) =>
+      handleCreateChatParticipant(ownedChatPayload(p, context))
+    )
   )
   disposers.push(
-    registerMethod("chat:disposeParticipant", (p) => handleDisposeChatParticipant(p as never))
+    registerMethod("chat:disposeParticipant", (p, context) =>
+      handleDisposeChatParticipant(ownedChatPayload(p, context))
+    )
   )
   disposers.push(
-    registerMethod("chat:registerChatVariableResolver", (p) =>
-      handleRegisterChatVariableResolver(p as never)
+    registerMethod("chat:registerChatVariableResolver", (p, context) =>
+      handleRegisterChatVariableResolver(ownedChatPayload(p, context) as never)
     )
   )
   // Compatibility alias for early persisted sidecar builds.
   disposers.push(
-    registerMethod("chat:registerVariableResolver", (p) =>
-      handleRegisterChatVariableResolver(p as never)
+    registerMethod("chat:registerVariableResolver", (p, context) =>
+      handleRegisterChatVariableResolver(ownedChatPayload(p, context) as never)
     )
   )
   disposers.push(
-    registerMethod("chat:unregisterChatVariableResolver", (p) =>
-      handleUnregisterChatVariableResolver(p as never)
+    registerMethod("chat:unregisterChatVariableResolver", (p, context) =>
+      handleUnregisterChatVariableResolver(ownedChatPayload(p, context))
     )
   )
   disposers.push(
-    registerMethod("chat:respond", (p) => {
-      handleChatParticipantRespond(p as never)
-    })
+    registerMethod("chat:respond", (p, context) =>
+      handleChatParticipantRespond(ownedChatPayload(p, context) as never)
+    )
   )
 
   // languages:* — provider registration + diagnostics + decorations.
@@ -151,8 +169,11 @@ export function installVscodeRpcHandlers(): () => void {
     )
   )
   disposers.push(
-    registerMethod("extension:cleanup", (p) => {
-      const payload = p as { extensionId: string }
+    registerMethod("extension:cleanup", (p, context) => {
+      const provided = p as { extensionId?: unknown } | null
+      if (provided?.extensionId !== undefined && provided.extensionId !== context.pluginId)
+        throw new Error("VS Code cleanup extension ownership mismatch")
+      const payload = { extensionId: context.pluginId }
       cleanupVscodeRuntimeRegistrations(payload.extensionId)
       clearVscodeWindowUi(payload.extensionId)
       clearVscodeEnvForPlugin(payload.extensionId)

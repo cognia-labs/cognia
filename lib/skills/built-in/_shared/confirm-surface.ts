@@ -27,6 +27,7 @@ export function buildConfirmSurface(input: {
 }): A2UISegmentContent {
   const detailRows = (input.details ?? []).map((d, i) => ({
     component: "Text",
+    text: `**${d.label}**: ${d.value}`,
     props: { text: `**${d.label}**: ${d.value}` },
     id: `detail_${i}`,
   }))
@@ -37,11 +38,13 @@ export function buildConfirmSurface(input: {
     components: {
       [input.surfaceId]: {
         component: "Card",
+        title: input.title,
         props: { title: input.title },
         children: ["summary", ...detailRows.map((r) => r.id), "actions"],
       },
       summary: {
         component: "Text",
+        text: input.summary,
         props: { text: input.summary },
       },
       ...Object.fromEntries(detailRows.map((r) => [r.id, r])),
@@ -51,6 +54,8 @@ export function buildConfirmSurface(input: {
       },
       btn_confirm: {
         component: "Button",
+        text: input.confirmLabel ?? "Confirm",
+        action: "approve",
         props: {
           label: input.confirmLabel ?? "Confirm",
           variant: "primary",
@@ -59,6 +64,8 @@ export function buildConfirmSurface(input: {
       },
       btn_cancel: {
         component: "Button",
+        text: input.cancelLabel ?? "Cancel",
+        action: "cancel",
         props: {
           label: input.cancelLabel ?? "Cancel",
           variant: "secondary",

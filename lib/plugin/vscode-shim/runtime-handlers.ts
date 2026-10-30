@@ -53,11 +53,14 @@ export function configureVscodeRuntimeHandlersForTesting(impl: InvokeSidecar | n
     })
 }
 
-type ActivateEvent = (event: `onAuthenticationRequest:${string}`) => Promise<void>
+type ActivateEvent = (
+  event: `onTaskType:${string}` | `onAuthenticationRequest:${string}`,
+  initiatorPluginId?: string
+) => Promise<void>
 
-const managerActivate: ActivateEvent = async (event) => {
+const managerActivate: ActivateEvent = async (event, initiatorPluginId) => {
   const { getPluginManager } = await import("@/lib/plugin/core/manager")
-  await getPluginManager().handleActivationEvent(event)
+  await getPluginManager().handleActivationEvent(event, { initiatorPluginId })
 }
 let activateEvent: ActivateEvent = managerActivate
 
@@ -261,15 +264,15 @@ export function installVscodeRuntimeRpcHandlers(): Array<() => void> {
     })
   )
   disposers.push(
-    registerMethod("tasks:fetchTasks", (payload) => {
+    registerMethod("tasks:fetchTasks", async (payload, context) => {
       const value = payloadObject(payload)
-      return fetchTasks(
-        value.filter && typeof value.filter === "object"
-          ? (value.filter as { type?: string })
-          : undefined
-      )
+      const filter = value.filter === undefined ? undefined : payloadObject(value.filter)
+      const type = filter?.type === undefined ? undefined : requiredString(filter, "type")
+      await activateEvent(`onTaskType:${type ?? "*"}`, context.pluginId)
+      return fetchTasks(type ? { type } : undefined)
     })
   )
+
   disposers.push(
     registerMethod("authentication:registerProvider", async (payload, context) => {
       const value = ownedPayload(payload, context)

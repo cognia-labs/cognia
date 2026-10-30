@@ -72,49 +72,7 @@ describe("plugin point contracts", () => {
   // dormancy cannot enter silently, and wiring a point up means deleting its
   // row here. The list may only shrink.
   it("keeps every virtual registry entry on the known-dormant list", () => {
-    const EXPECTED_VIRTUAL: readonly string[] = [
-      // Scheduler CRUD + pre-run hooks — lib/scheduler/ mutates tasks without
-      // notifying the hooks system.
-      "onScheduledTaskCreate",
-      "onScheduledTaskUpdate",
-      "onScheduledTaskDelete",
-      "onScheduledTaskPause",
-      "onScheduledTaskResume",
-      "onScheduledTaskBeforeRun",
-      // Workflow node/trigger registry churn — the registries never notify the
-      // hooks system when an entry is added or removed.
-      "onWorkflowNodeRegister",
-      "onWorkflowNodeUnregister",
-      "onWorkflowTriggerRegister",
-      "onWorkflowTriggerUnregister",
-      // ADR-0189 interceptor points declared ahead of a fire site.
-      // `agent.turn.decide`: the turn loop lives inside the sidecar, so the
-      // host has no continue/stop decision to gate yet.
-      "agent.turn.decide",
-      // `model.stream.transform`: `dispatchStreamChunk` is synchronous and its
-      // callers discard the return value, so a rewritten chunk has nowhere to
-      // go until the streaming contract learns to await.
-      "model.stream.transform",
-      // `ui.surface.project`: surface projection runs inside a synchronous
-      // render, which cannot carry the deadline and revocation semantics every
-      // other point relies on.
-      "ui.surface.project",
-      // VS Code activation events Cognia has nothing to fire for. These were
-      // dormant all along but registered as implemented, bound to a host
-      // function that did not exist; `manifest-adapter.ts` records them as an
-      // extension's unsupported events.
-      "onWebviewPanel:*",
-      "onCustomEditor:*",
-      "onTaskType:*",
-      "onFileSystem:*",
-      "onDebugResolve:*",
-      "onTerminal",
-      "onTerminalProfile:*",
-      "onNotebook:*",
-      "onWalkthrough:*",
-      "onChatParticipant:*",
-      "onLanguageModelTool:*",
-    ]
+    const EXPECTED_VIRTUAL: readonly string[] = []
     const virtualIds = PLUGIN_POINT_CONTRACTS.filter((e) => e.status === "virtual")
       .map((e) => e.id)
       .sort()
@@ -129,11 +87,11 @@ describe("plugin point contracts", () => {
     }
   })
 
-  it("warns a plugin author who registers a virtual hook", () => {
+  it("reports the now-wired scheduler gate as implemented", () => {
     const outcome = validateHookPoint("onScheduledTaskBeforeRun")
     expect(outcome.allowed).toBe(true)
-    expect(outcome.contract?.status).toBe("virtual")
-    expect(outcome.diagnostics.map((d) => d.code)).toContain("plugin.point.virtual")
+    expect(outcome.contract?.status).toBe("implemented")
+    expect(outcome.diagnostics).toEqual([])
   })
 
   it("does not warn for a hook the host actually fires", () => {
@@ -385,6 +343,17 @@ describe("plugin point contracts", () => {
       "onStartupFinished",
       "onUri",
       "workspaceContains:*",
+      "onTerminal",
+      "onTaskType:*",
+      "onChatParticipant:*",
+      "onLanguageModelTool:*",
+      "onWebviewPanel:*",
+      "onTerminalProfile:*",
+      "onCustomEditor:*",
+      "onFileSystem:*",
+      "onDebugResolve:*",
+      "onNotebook:*",
+      "onWalkthrough:*",
     ] as const
 
     it("allows the VS Code activation patterns Cognia fires, even in block mode", () => {
@@ -394,15 +363,10 @@ describe("plugin point contracts", () => {
       }
     })
 
-    it("reports the others as declared but never fired", () => {
-      for (const pattern of vscodePatterns) {
-        if ((firedPatterns as readonly string[]).includes(pattern)) continue
-        const result = validateActivationEvent(pattern, { governanceMode: "warn" })
-        expect(result.diagnostics).toEqual(
-          expect.arrayContaining([expect.objectContaining({ code: "plugin.point.virtual" })])
-        )
-        expect(validateActivationEvent(pattern, { governanceMode: "block" }).allowed).toBe(false)
-      }
+    it("accounts for every declared VS Code activation through a real host consumer", () => {
+      expect(
+        vscodePatterns.filter((pattern) => !(firedPatterns as readonly string[]).includes(pattern))
+      ).toEqual([])
     })
 
     it("accepts onAuthenticationRequest with a provider id", () => {
@@ -429,10 +393,11 @@ describe("plugin point contracts", () => {
       expect(resolveActivationPattern("onTaskType:npm")).toBe("onTaskType:*")
     })
 
-    it("says why each unfired pattern never fires", () => {
+    it("binds debugging to the existing Managed Pro IDE broker", () => {
       const contract = PLUGIN_POINT_CONTRACTS.find((c) => c.id === "onDebugResolve:*")
-      expect(contract?.status).toBe("virtual")
-      expect(contract?.retirementNote).toBe("Cognia has no debugger.")
+      expect(contract?.status).toBe("implemented")
+      expect(contract?.binding).toContain("lib/plugin/ide/broker-runtime.ts")
+      expect(contract?.binding).toContain("Managed Pro IDE")
     })
 
     it("binds each fired VS Code pattern to what fires it", () => {

@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import {
   usePluginMarketplace,
+  loadPluginMarketplaceClient,
   type PluginMarketplaceEntry,
 } from "@/hooks/plugins/use-plugin-marketplace"
 import { usePlatform } from "@/hooks/use-platform"
@@ -31,6 +32,8 @@ import { InstalledMarker } from "@/components/plugins/_shared/installed-marker"
 import { PluginEmptyState } from "@/components/plugins/_shared/plugin-empty-state"
 import { PluginErrorCard } from "@/components/plugins/_shared/plugin-error-card"
 import { PluginVersionBadge } from "@/components/plugins/_shared/plugin-version-badge"
+import { usePluginPreInstall } from "@/hooks/plugins/use-plugin-pre-install"
+import { PluginPreInstallDialog } from "@/components/plugins/dialogs/plugin-pre-install-dialog"
 
 export interface PluginMarketplaceSheetProps {
   /**
@@ -54,6 +57,23 @@ export function PluginMarketplaceSheet({
   const isMobile = platform === "mobile"
   const market = usePluginMarketplace()
   const [open, setOpen] = useState(false)
+  const preInstall = usePluginPreInstall(null)
+  const [installingId, setInstallingId] = useState<string | null>(null)
+  const install = async (entry: PluginMarketplaceEntry) => {
+    if (installingId) return
+    setInstallingId(entry.id)
+    try {
+      const client = await loadPluginMarketplaceClient()
+      const result = await preInstall.install(entry.id, entry.version, entry.name, client)
+      if (result.status === "installed")
+        toast.success(t("marketplace.installSuccess", { name: entry.name }))
+      else if (result.status === "failed") toast.error(result.message)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setInstallingId(null)
+    }
+  }
 
   // Refresh once the sheet opens — the hook auto-refreshes on first mount
   // anyway, so this is a no-op for users who opened the sheet from a cold
@@ -102,9 +122,20 @@ export function PluginMarketplaceSheet({
           />
         </div>
         <div className="flex-1 overflow-y-auto px-4 pb-4">
-          <MarketplaceListings market={market} installedIds={installedIds} isMobile={isMobile} />
+          <MarketplaceListings
+            market={market}
+            installedIds={installedIds}
+            isMobile={isMobile}
+            installingId={installingId}
+            onInstall={install}
+          />
         </div>
       </SheetContent>
+      <PluginPreInstallDialog
+        target={preInstall.target}
+        onContinue={preInstall.resolveContinue}
+        onCancel={preInstall.resolveCancel}
+      />
     </Sheet>
   )
 }
@@ -113,10 +144,14 @@ function MarketplaceListings({
   market,
   installedIds,
   isMobile,
+  installingId,
+  onInstall,
 }: {
   market: ReturnType<typeof usePluginMarketplace>
   installedIds: ReadonlySet<string>
   isMobile: boolean
+  installingId: string | null
+  onInstall: (entry: PluginMarketplaceEntry) => Promise<void>
 }) {
   const t = useTranslations("discover")
 
@@ -161,15 +196,10 @@ function MarketplaceListings({
           <MarketplaceRow
             entry={entry}
             installed={installedIds.has(entry.id)}
-            installing={market.installingId === entry.id}
-            disabled={isMobile}
+            installing={installingId === entry.id}
+            disabled={isMobile || installingId !== null}
             onInstall={() => {
-              void market
-                .install(entry.id, entry.version)
-                .then(() => toast.success(t("marketplace.installSuccess", { name: entry.name })))
-                .catch((err: unknown) =>
-                  toast.error(err instanceof Error ? err.message : String(err))
-                )
+              void onInstall(entry)
             }}
           />
         </li>

@@ -7,7 +7,7 @@ description: Generated from the canonical Plugin Interface Catalog.
 
 # Plugin API Reference
 
-Contract `1.3.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtime enforcement remains fail-closed for unmapped methods.
+Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtime enforcement remains fail-closed for unmapped methods.
 
 | Namespace | Methods | Declared permissions | Runtimes | Data class |
 | --- | ---: | --- | --- | --- |
@@ -29,7 +29,7 @@ Contract `1.3.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.commands` | 7 | `commands:write`, `commands:read` | frontend, hybrid, python | internal |
 | `ctx.companion` | 10 | `companion:read`, `companion:control` | frontend, hybrid | internal |
 | `ctx.configuration` | 5 | `settings:read`, `settings:write` | frontend, hybrid | internal |
-| `ctx.connectors` | 65 | `connectors:send`, `connectors:manage`, `connectors:read` | frontend, hybrid | sensitive |
+| `ctx.connectors` | 68 | `connectors:send`, `connectors:manage`, `connectors:read` | frontend, hybrid | sensitive |
 | `ctx.contextMenu` | 2 | None | frontend, hybrid | internal |
 | `ctx.contextPanels` | 10 | `extension:ui` | frontend, hybrid, python | internal |
 | `ctx.db` | 6 | `database:write`, `database:read` | frontend, hybrid | internal |
@@ -69,7 +69,7 @@ Contract `1.3.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.resources` | 7 | `database:read` | frontend, hybrid | sensitive |
 | `ctx.recorder` | 19 | `media:image:write`, `native:input`, `native:screen`, `media:image:read` | frontend, hybrid | sensitive |
 | `ctx.remoteDesktop` | 1 | `remote-desktop:provide` | frontend, hybrid | internal |
-| `ctx.sandbox` | 6 | `session:read`, `native:filesystem`, `native:process`, `native:input` | frontend, hybrid | sensitive |
+| `ctx.sandbox` | 7 | `session:read`, `native:filesystem`, `native:process`, `native:input` | frontend, hybrid | sensitive |
 | `ctx.scheduler` | 20 | None | frontend, hybrid | internal |
 | `ctx.secrets` | 6 | `secrets:write`, `secrets:read` | frontend, hybrid, python | secret |
 | `ctx.services` | 3 | None | frontend, hybrid | internal |
@@ -94,10 +94,14 @@ Contract `1.3.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.vector` | 13 | `vector:write`, `vector:read` | frontend, hybrid | internal |
 | `ctx.webview` | 1 | None | frontend, hybrid | internal |
 | `ctx.window` | 4 | None | frontend, hybrid | internal |
-| `ctx.workflow` | 25 | `canvas:write`, `canvas:run`, `workflow:read`, `connectors:send`, `session:read` | frontend, hybrid | internal |
+| `ctx.workflow` | 26 | `canvas:write`, `canvas:run`, `workflow:read`, `connectors:send`, `session:read` | frontend, hybrid | internal |
 | `ctx.workspace` | 11 | `filesystem:read`, `network:fetch`, `git:read`, `filesystem:write`, `git:write`, `integrations:execute` | frontend, hybrid, python | internal |
 | `ctx.nodeRuntime` | 5 | `filesystem:read`, `filesystem:write`, `shell:execute`, `network:fetch` | frontend, hybrid, python | internal |
 | `ctx.libraries` | 1 | `ipc:call` | frontend, hybrid | internal |
+| `ctx.files` | 3 | `filesystem:read`, `filesystem:write` | frontend, hybrid | sensitive |
+| `ctx.skills` | 2 | `builtin-skills:invoke` | frontend, hybrid | sensitive |
+| `ctx.plans` | 18 | `plan:read`, `plan:write` | frontend, hybrid | sensitive |
+| `ctx.hooks` | 5 | None | frontend, hybrid, python | internal |
 
 ## Adapter error codes
 
@@ -464,6 +468,9 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `connectors.a2ui.component.list` | None | low | Yes | frontend, hybrid |
 | `connectors.a2ui.component.divider` | None | low | Yes | frontend, hybrid |
 | `connectors.a2ui.component.badge` | None | low | Yes | frontend, hybrid |
+| `connectors.listManagementOperations` | `connectors:read` | low | Yes | frontend, hybrid |
+| `connectors.queryManagement` | `connectors:read` | low | Yes | frontend, hybrid |
+| `connectors.manage` | `connectors:manage` | high | No | frontend, hybrid |
 
 ## `ctx.contextMenu`
 
@@ -1056,6 +1063,7 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `sandbox.decorateComputerUseContext` | `native:input`, `session:read` | high | Yes | frontend, hybrid |
 | `sandbox.execute` | `native:process` | high | No | frontend, hybrid |
 | `sandbox.registerMicrovmAdapter` | `native:process` | high | No | frontend, hybrid |
+| `sandbox.fileOperation` | `native:filesystem` | high | No | frontend, hybrid |
 
 ## `ctx.scheduler`
 
@@ -1415,6 +1423,7 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `workflow.resolveTriggerOrigin` | `session:read` | medium | Yes | frontend, hybrid |
 | `workflow.runWorkflow` | `canvas:run` | high | No | frontend, hybrid |
 | `workflow.stageProposal` | `canvas:write` | medium | No | frontend, hybrid |
+| `workflow.prepareWorkflowApproval` | `connectors:send` | high | No | frontend, hybrid |
 
 ## `ctx.workspace`
 
@@ -1447,3 +1456,51 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | Method | Permissions | Risk | Idempotent | Runtimes |
 | --- | --- | --- | --- | --- |
 | `libraries.importModule` | `ipc:call` | medium | No | frontend, hybrid |
+
+## `ctx.files`
+
+| Method | Permissions | Risk | Idempotent | Runtimes |
+| --- | --- | --- | --- | --- |
+| `files.open` | `filesystem:read` | medium | No | frontend, hybrid |
+| `files.save` | `filesystem:write` | high | No | frontend, hybrid |
+| `files.readAttachment` | `filesystem:read` | low | Yes | frontend, hybrid |
+
+## `ctx.skills`
+
+| Method | Permissions | Risk | Idempotent | Runtimes |
+| --- | --- | --- | --- | --- |
+| `skills.listBuiltIns` | `builtin-skills:invoke` | low | Yes | frontend, hybrid |
+| `skills.invokeBuiltIn` | `builtin-skills:invoke` | high | No | frontend, hybrid |
+
+## `ctx.plans`
+
+| Method | Permissions | Risk | Idempotent | Runtimes |
+| --- | --- | --- | --- | --- |
+| `plans.get` | `plan:read` | low | Yes | frontend, hybrid |
+| `plans.listBySession` | `plan:read` | low | Yes | frontend, hybrid |
+| `plans.listAll` | `plan:read` | low | Yes | frontend, hybrid |
+| `plans.getOpenForSession` | `plan:read` | low | Yes | frontend, hybrid |
+| `plans.getExecutingForSession` | `plan:read` | low | Yes | frontend, hybrid |
+| `plans.getEvents` | `plan:read` | low | Yes | frontend, hybrid |
+| `plans.create` | `plan:write` | high | No | frontend, hybrid |
+| `plans.updateDraft` | `plan:write` | high | No | frontend, hybrid |
+| `plans.approve` | `plan:write` | high | No | frontend, hybrid |
+| `plans.reject` | `plan:write` | high | No | frontend, hybrid |
+| `plans.start` | `plan:write` | high | No | frontend, hybrid |
+| `plans.run` | `plan:write` | high | No | frontend, hybrid |
+| `plans.pause` | `plan:write` | high | No | frontend, hybrid |
+| `plans.resume` | `plan:write` | high | No | frontend, hybrid |
+| `plans.cancel` | `plan:write` | high | No | frontend, hybrid |
+| `plans.setStepStatus` | `plan:write` | high | No | frontend, hybrid |
+| `plans.refine` | `plan:write` | high | No | frontend, hybrid |
+| `plans.delete` | `plan:write` | high | No | frontend, hybrid |
+
+## `ctx.hooks`
+
+| Method | Permissions | Risk | Idempotent | Runtimes |
+| --- | --- | --- | --- | --- |
+| `hooks.listOwn` | None | low | Yes | frontend, hybrid, python |
+| `hooks.isActive` | None | low | Yes | frontend, hybrid, python |
+| `hooks.hasListener` | None | low | Yes | frontend, hybrid, python |
+| `hooks.binding` | None | low | Yes | frontend, hybrid, python |
+| `hooks.requiresInterceptPermission` | None | low | Yes | frontend, hybrid, python |

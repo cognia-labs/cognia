@@ -17,6 +17,42 @@ test("every stable Code 1.128 provider family has an adapter", () => {
   )
 })
 
+test("walkthrough commands call the governed native opening route and dispose", async () => {
+  let handler!: () => Promise<unknown>
+  let disposed = false
+  const opened: string[] = []
+  const registration = await registerManagedProviders(
+    {
+      commands: {
+        registerCommand(id: string, callback: () => Promise<unknown>) {
+          assert.equal(id, "cognia.acme.tools.welcome.openWalkthrough")
+          handler = callback
+          return {
+            dispose() {
+              disposed = true
+            },
+          }
+        },
+      },
+    },
+    {
+      ...descriptor([]),
+      contributions: { walkthroughs: [{ id: "cognia.acme.tools.welcome", title: "Welcome" }] },
+    },
+    {
+      invoke: async () => null,
+      openWalkthrough: async (id) => {
+        opened.push(id)
+        return "opened"
+      },
+    }
+  )
+  assert.equal(await handler(), "opened")
+  assert.deepEqual(opened, ["cognia.acme.tools.welcome"])
+  registration.dispose()
+  assert.equal(disposed, true)
+})
+
 test("command provider invokes Cognia runtime and unregisters transactionally", async () => {
   const calls: any[] = []
   let registered

@@ -153,7 +153,7 @@ def test_event_kinds_match_the_host_list():
     root = _repo_root()
     if root is None:
         pytest.skip("host source not reachable (standalone SDK checkout)")
-    source = (root / "types" / "pet" / "events.ts").read_text(encoding="utf-8")
+    source = (root / "packages" / "plugin-contract" / "src" / "types" / "pet" / "events.ts").read_text(encoding="utf-8")
     block = source.split("export const PET_EVENT_KINDS = [", 1)[1].split("] as const", 1)[0]
     host = set(re.findall(r'^\s*"([A-Za-z]+)",', block, re.M))
     assert host == set(PET_EVENT_KINDS)

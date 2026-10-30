@@ -5,7 +5,12 @@ import { invoke } from "@tauri-apps/api/core"
 
 import { isTauri } from "@/lib/tauri"
 
-import { beginCodeAdoptionTurn, endCodeAdoptionTurn } from "./client"
+import {
+  beginCodeAdoptionTurn,
+  consumeCodeAdoptionTrackingAttempt,
+  endCodeAdoptionTurn,
+  markCodeAdoptionTrackingUnavailable,
+} from "./client"
 import type { CodeAdoptionTurnRow } from "./types"
 
 const mockInvoke = invoke as jest.Mock
@@ -70,4 +75,17 @@ describe("endCodeAdoptionTurn", () => {
     mockInvoke.mockRejectedValue(new Error("x"))
     expect(await endCodeAdoptionTurn("s1:7")).toBeNull()
   })
+})
+
+it("retains an explicit unsupported-environment reason without a Tauri bridge", () => {
+  mockIsTauri.mockReturnValue(false)
+  markCodeAdoptionTrackingUnavailable(undefined, META, "remote-filesystem")
+  expect(consumeCodeAdoptionTrackingAttempt("s1:7")).toEqual({
+    ...META,
+    cwd: "",
+    status: "unavailable",
+    reason: "remote-filesystem",
+  })
+  expect(consumeCodeAdoptionTrackingAttempt("s1:7")).toBeUndefined()
+  expect(mockInvoke).not.toHaveBeenCalled()
 })

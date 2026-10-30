@@ -23,7 +23,7 @@
  */
 
 import type { RpcConnection } from "../rpc"
-import { Disposable, EventEmitter, Uri } from "./types"
+import { Disposable, EventEmitter, Uri, type CancellationToken } from "./types"
 
 export const TerminalExitReason = {
   Unknown: 0,
@@ -160,7 +160,8 @@ class ExtensionTerminal implements Terminal {
     private readonly connection: RpcConnection,
     readonly extensionId: string,
     readonly terminalId: string,
-    options: TerminalOptions | ExtensionTerminalOptions
+    options: TerminalOptions | ExtensionTerminalOptions,
+    profileLaunchId?: string
   ) {
     this.creationOptions = Object.freeze({ ...options })
     // An unnamed process terminal takes the name the dock gives its tab.
@@ -168,6 +169,7 @@ class ExtensionTerminal implements Terminal {
     const created = connection.sendRequest<CreateResult | null>("terminal:create", {
       extensionId,
       terminalId,
+      ...(profileLaunchId ? { profileLaunchId } : {}),
       ...wireOptions(options),
     })
     this.queue = created.catch(() => undefined)
@@ -432,11 +434,19 @@ export class TerminalRegistry {
   create(
     connection: RpcConnection,
     extensionId: string,
-    options: TerminalOptions | ExtensionTerminalOptions
+    options: TerminalOptions | ExtensionTerminalOptions,
+    profileLaunchId?: string
   ): Terminal {
     this.sequence += 1
     const terminalId = `term:${extensionId}:${this.sequence}`
-    const terminal = new ExtensionTerminal(this, connection, extensionId, terminalId, options)
+    const terminal = new ExtensionTerminal(
+      this,
+      connection,
+      extensionId,
+      terminalId,
+      options,
+      profileLaunchId
+    )
     this.terminals.set(terminalId, terminal)
     this.onDidOpen.fire(terminal)
     return terminal
@@ -515,6 +525,11 @@ export function createTerminalWindowMembers(input: {
   registry: TerminalRegistry
   connection: RpcConnection
   extensionId: string
+  trackRegistration?: (registration: Promise<unknown>) => void
+  registerProviderCallback?: (
+    token: string,
+    callback: (payload: unknown, call: { cancellation: CancellationToken }) => Promise<unknown>
+  ) => () => void
 }) {
   const { registry, connection, extensionId } = input
   const own = (terminal: Terminal) => registry.ownerOf(terminal) === extensionId
@@ -532,7 +547,81 @@ export function createTerminalWindowMembers(input: {
       return subscription
     }
   const never = new EventEmitter<never>()
+  const profiles = new Map<string, { token: string }>()
   return {
+    registerTerminalProfileProvider(
+      id: string,
+      provider: {
+        provideTerminalProfile(
+          token: CancellationToken
+        ):
+          | { options: TerminalOptions | ExtensionTerminalOptions }
+          | undefined
+          | Thenable<{ options: TerminalOptions | ExtensionTerminalOptions } | undefined>
+      }
+    ): Disposable {
+      if (
+        !id ||
+        typeof provider?.provideTerminalProfile !== "function" ||
+        !input.registerProviderCallback
+      )
+        throw new Error("Terminal profile requires an id and provider")
+      if (profiles.has(id)) throw new Error(`Terminal profile ${id} is already registered`)
+      const registration = {
+        token: `terminal-profile:${extensionId}:${globalThis.crypto.randomUUID()}`,
+      }
+      profiles.set(id, registration)
+      const unregister = input.registerProviderCallback(registration.token, async (raw, call) => {
+        const payload = raw as { profileLaunchId?: unknown }
+        if (typeof payload?.profileLaunchId !== "string")
+          throw new Error("Terminal profile requires a launch identity")
+        const current = () =>
+          profiles.get(id) === registration && !call.cancellation.isCancellationRequested
+        if (!current()) throw new Error("Terminal profile cancelled")
+        const profile = await provider.provideTerminalProfile(call.cancellation)
+        if (!current()) throw new Error("Terminal profile cancelled")
+        if (!profile) return null
+        if (!profile.options || typeof profile.options !== "object")
+          throw new Error("Terminal profile returned invalid options")
+        const terminal = registry.create(
+          connection,
+          extensionId,
+          profile.options,
+          payload.profileLaunchId
+        ) as ExtensionTerminal
+        try {
+          await terminal.ready
+          if (!current()) throw new Error("Terminal profile cancelled")
+          return { terminalId: terminal.terminalId }
+        } catch (error) {
+          terminal.dispose()
+          throw error
+        }
+      })
+      const ready = connection.sendRequest("terminal:registerProfile", {
+        extensionId,
+        id,
+        token: registration.token,
+      })
+      input.trackRegistration?.(ready)
+      void ready.catch((error: unknown) =>
+        stderr(`${extensionId}: terminal profile ${id} registration failed: ${String(error)}`)
+      )
+      return new Disposable(() => {
+        if (profiles.get(id) !== registration) return
+        profiles.delete(id)
+        unregister()
+        void ready
+          .then(() =>
+            connection.sendRequest("terminal:unregisterProfile", {
+              extensionId,
+              id,
+              token: registration.token,
+            })
+          )
+          .catch(() => undefined)
+      })
+    },
     createTerminal(...args: unknown[]): Terminal {
       return registry.create(connection, extensionId, terminalOptionsOf(args))
     },

@@ -201,3 +201,35 @@ describe("resumePluginAgentSession", () => {
     await expect(resumePluginAgentSession("missing")).rejects.toThrow(/not found/)
   })
 })
+
+it("persists participant response metadata and carries it into the next send", async () => {
+  const metadata = {
+    vscodeChat: {
+      pluginId: "ext",
+      participantId: "helper",
+      result: { metadata: { toolState: "saved" } },
+    },
+  }
+  mockRendererTurn.mockResolvedValue({
+    text: "reply",
+    channel: "sidecar",
+    toolsAvailable: false,
+    runtime: "vscode-chat",
+    messageMetadata: metadata,
+  })
+  const session = await createPluginAgentSession({ characterId: "vscode-chat:ext:helper" })
+  await session.send("first")
+  const stored = mockPersist.mock.calls[0][1]
+  expect(stored[1].metadata).toEqual(metadata)
+  mockList.mockResolvedValue(stored)
+  await session.send("follow-up")
+  expect(mockRendererTurn).toHaveBeenLastCalledWith(
+    "follow-up",
+    expect.objectContaining({
+      priorMessages: expect.arrayContaining([
+        expect.objectContaining({ role: "assistant", metadata }),
+      ]),
+    }),
+    { surface: "plugin" }
+  )
+})

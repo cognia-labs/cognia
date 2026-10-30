@@ -497,3 +497,46 @@ it("revalidates policy-authorized writes against the current explicit installati
     "no longer authorized"
   )
 })
+
+it("fences a queued input after account rebinding without using output credentials as input", async () => {
+  registerBot(
+    "monitor",
+    {
+      id: "bot:monitor",
+      definition: {
+        ...definition,
+        triggers: [
+          {
+            id: "input",
+            kind: "event",
+            source: "integration",
+            types: ["opened"],
+            inputCredentialSlot: "github",
+          },
+        ],
+      },
+      handler: async () => ({}),
+    },
+    { pluginId: "bot" }
+  )
+  await getDb().botEventDeliveries.put({
+    id: "delivery",
+    runId: "run",
+    triggerId: "input",
+    envelope: {
+      triggerId: "input",
+      source: "integration",
+      binding: { integrationAccountId: "account" },
+    },
+  } as never)
+  await expect(resolveBotIntegrationBinding("bot", ref)).resolves.toHaveProperty(
+    "account.id",
+    "account"
+  )
+  await getDb().botInstallations.update("install", {
+    credentialBindings: { github: { integrationAccountId: "different" } },
+  })
+  await expect(resolveBotIntegrationBinding("bot", ref)).rejects.toThrow(
+    /input account binding changed/
+  )
+})

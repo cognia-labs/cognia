@@ -1095,6 +1095,8 @@ export interface WorkflowRunSecurityContext {
    * their deployment and node-level security policy.
    */
   permissionCeiling?: import("../agent/permission-ceiling").AgentPermissionCeiling
+  /** Host-owned Bot causation; retained across recovery and completion fan-out. */
+  botProvenance?: import("../bot/event").BotEventProvenanceV1
 }
 
 export interface WorkflowRunRow {

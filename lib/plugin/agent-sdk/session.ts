@@ -65,7 +65,10 @@ function buildSession(
     // Prior turns for the text-channel fallback (ignored on the sidecar, where
     // native resume carries the conversation).
     const priorMessages = existing
-      .map(toSessionMessage)
+      .map((message) => ({
+        ...toSessionMessage(message),
+        ...(message.metadata ? { metadata: message.metadata as Record<string, unknown> } : {}),
+      }))
       .filter((m): m is { role: "user" | "assistant"; content: string } => m.role !== "system")
 
     const result = await executeAgentTurnFromRenderer(
@@ -97,6 +100,7 @@ function buildSession(
       id: newMessageId(),
       role: "assistant",
       parts: [{ type: "text", text: result.text }],
+      ...(result.messageMetadata ? { metadata: result.messageMetadata } : {}),
     }
     await messagesDb
       .persistMessages(id, [...existing, userMsg, assistantMsg])

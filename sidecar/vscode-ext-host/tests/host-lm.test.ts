@@ -27,12 +27,16 @@ async function startLm({ send = () => ({ ok: true }), reads = [], models = [MODE
   const commands = new Map()
   const requests: any[] = []
   const queue = [...reads]
+  const tools = new Map<string, string>()
   const host = startHost(ID, (method: any, params: any) => {
     requests.push({ method, params })
     if (method === "commands:register") {
       commands.set(params.command, params.token)
       return { registered: true }
     }
+    if (method === "chat:createParticipant")
+      return { characterId: "vscode-chat:" + ID + ":" + params.id }
+    if (method === "chat:disposeParticipant" || method === "chat:respond") return null
     if (method === "lm:selectChatModels") {
       return models.filter(
         (model: any) =>
@@ -46,6 +50,26 @@ async function startLm({ send = () => ({ ok: true }), reads = [], models = [MODE
     }
     if (method === "lm:countTokens") return params.text.split(" ").length
     if (method === "lm:cancelChatRequest") return null
+    if (method === "lm:listTools") return [...tools.keys()].map((name) => ({ name }))
+    if (method === "lm:registerTool") {
+      tools.set(params.name, params.token)
+      void host.request("lm:toolsChanged", { tools: [...tools.keys()].map((name) => ({ name })) })
+      return { registered: true }
+    }
+    if (method === "lm:unregisterTool") {
+      if (tools.get(params.name) === params.token) tools.delete(params.name)
+      return null
+    }
+    if (method === "lm:invokeTool") {
+      const token = tools.get(params.name)
+      if (!token) throw new Error(`Tool ${params.name} not found`)
+      return host.request("extension:call", {
+        token,
+        method: "invoke",
+        callId: params.callId,
+        payload: { input: params.input },
+      })
+    }
     if (method.startsWith("lm:register")) return { registered: false }
     return null
   })
@@ -211,15 +235,17 @@ test("countTokens counts strings and messages through the renderer", async () =>
   }
 })
 
-test("tools: registering is reported and inert, and no tool can be invoked", async () => {
+test("tools register and invoke the real extension callback through the host", async () => {
   const { host, run, sent } = await startLm()
   try {
     assert.deepEqual(await run("lmFixture.tools"), {
-      tools: 0,
-      invoke: 'Tool "fixture_search" was not found: no language model tools are available',
+      tools: ["fixture_search"],
+      content: ["found:hello"],
       toolMode: 2,
     })
-    assert.deepEqual(sent("lm:registerTool")[0].params, { extensionId: ID, name: "fixture_search" })
+    assert.equal(sent("lm:registerTool")[0].params.name, "fixture_search")
+    assert.equal(typeof sent("lm:registerTool")[0].params.token, "string")
+    assert.deepEqual(sent("lm:invokeTool")[0].params.input, { query: "hello" })
   } finally {
     host.stop()
   }
@@ -243,3 +269,142 @@ test("lm:modelsChanged fires both change events and updates access", async () =>
     host.stop()
   }
 })
+
+test("chat participants receive local stream and history objects over the real callback transport", async () => {
+  const { host, sent, run } = await startLm()
+  try {
+    const registration = sent("chat:createParticipant")[0].params
+    const result = await host.request("extension:call", {
+      token: registration.token,
+      method: "respond",
+      callId: "participant-call",
+      payload: {
+        requestId: "response-owner",
+        request: { prompt: "world" },
+        context: { history: [{ request: { prompt: "before" }, participant: "fixture.helper" }] },
+      },
+    })
+    assert.deepEqual(result, {
+      metadata: { historyLength: 1, typedHistory: true, model: MODEL.id },
+    })
+    assert.deepEqual(
+      sent("chat:respond").map((entry: any) => ({
+        requestId: entry.params.requestId,
+        part: entry.params.part,
+      })),
+      [
+        { requestId: "response-owner", part: { kind: "progress", value: "Working" } },
+        { requestId: "response-owner", part: { kind: "markdown", value: "Hello " } },
+        { requestId: "response-owner", part: { kind: "markdown", value: "world" } },
+        {
+          requestId: "response-owner",
+          part: { kind: "reference", value: "https://example.com/source" },
+        },
+      ]
+    )
+    await run("lmFixture.disposeParticipant")
+    await assert.rejects(
+      host.request("extension:call", { token: registration.token, payload: {} }),
+      /callback|Unknown|not found/i
+    )
+  } finally {
+    host.stop()
+  }
+})
+
+test("chat participants use the extension call cancellation token", async () => {
+  const { host, sent } = await startLm()
+  try {
+    const registration = sent("chat:createParticipant")[0].params
+    const result = host.request("extension:call", {
+      token: registration.token,
+      method: "respond",
+      callId: "cancel-participant",
+      payload: {
+        requestId: "cancel-response",
+        request: { prompt: "cancel" },
+        context: { history: [] },
+      },
+    })
+    const deadline = Date.now() + 3000
+    while (!sent("chat:respond").length && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.ok(sent("chat:respond").length, "participant did not start before the deadline")
+    await host.request("extension:cancel", { callId: "cancel-participant" })
+    assert.deepEqual(await result, { metadata: { cancelled: true } })
+  } finally {
+    host.stop()
+  }
+})
+
+for (const delayedMethod of [
+  "chat:createParticipant",
+  "lm:registerTool",
+  "tasks:registerProvider",
+]) {
+  test(
+    `activation waits for ${delayedMethod} registration acknowledgement`,
+    { timeout: 5000 },
+    async () => {
+      const commands = new Map<string, string>()
+      let release!: (value: unknown) => void
+      let notify!: () => void
+      const registrationStarted = new Promise<void>((resolve) => {
+        notify = resolve
+      })
+      const host = startHost(
+        ID,
+        (method: string, params: any) => {
+          if (method === "commands:register") {
+            commands.set(params.command, params.token)
+            return { registered: true }
+          }
+          if (method === delayedMethod) {
+            const pending = new Promise((resolve) => {
+              release = resolve
+            })
+            notify()
+            return pending
+          }
+          return null
+        },
+        { env: { COGNIA_TEST_REGISTER_ON_ACTIVATE: "1" } }
+      )
+      try {
+        await host.request("extension:load", {
+          extensionId: ID,
+          extensionPath: PATH,
+          main: "./extension.js",
+          bundleFormat: "cjs",
+          grantedModules: [],
+        })
+        let activated = false
+        const activationResult = host
+          .request("extension:activate", activation(ID, PATH))
+          .then((result: unknown) => {
+            activated = true
+            return result
+          })
+        await registrationStarted
+        const deadline = Date.now() + 3000
+        while (!commands.has("lmFixture.activationProbe") && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        assert.ok(commands.has("lmFixture.activationProbe"))
+        assert.equal(
+          await host.request("extension:call", {
+            token: commands.get("lmFixture.activationProbe"),
+            payload: [],
+          }),
+          "ready"
+        )
+        assert.equal(activated, false)
+        release({ registered: true })
+        await activationResult
+        assert.equal(activated, true)
+      } finally {
+        release?.({ registered: false })
+        host.stop()
+      }
+    }
+  )
+}

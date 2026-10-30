@@ -143,6 +143,7 @@ export function createWindowNamespace(deps: ShimDependencies): SidecarWindow {
   const documents = deps.documents
   let uriHandlerRegistered = false
   const webviews = createWebviewWindowMembers({
+    trackRegistration: deps.trackRegistration,
     registry: deps.webviews,
     connection,
     extensionId,
@@ -157,6 +158,8 @@ export function createWindowNamespace(deps: ShimDependencies): SidecarWindow {
     registry: deps.terminals,
     connection,
     extensionId,
+    trackRegistration: deps.trackRegistration,
+    registerProviderCallback: deps.registerProviderCallback,
   })
 
   /**
@@ -314,6 +317,7 @@ export function createWindowNamespace(deps: ShimDependencies): SidecarWindow {
     createWebviewPanel: webviews.createWebviewPanel,
     registerWebviewViewProvider: webviews.registerWebviewViewProvider,
     registerWebviewPanelSerializer: webviews.registerWebviewPanelSerializer,
+    registerTerminalProfileProvider: terminals.registerTerminalProfileProvider,
     registerUriHandler(handler) {
       // As in VS Code, one handler at a time; the app routes
       // `cognia://<extension id>/...` links to it.

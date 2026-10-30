@@ -481,18 +481,18 @@ export function createTasksNamespace(deps: ShimDependencies) {
             return wire
           })
       })
-      void connection
-        .sendRequest("tasks:registerProvider", {
+      const registration = connection.sendRequest("tasks:registerProvider", {
+        extensionId,
+        type,
+        tokens: { provideTasks: token },
+      })
+      deps.trackRegistration?.(registration)
+      void registration.catch((error: unknown) =>
+        warn(
           extensionId,
-          type,
-          tokens: { provideTasks: token },
-        })
-        .catch((error: unknown) =>
-          warn(
-            extensionId,
-            `task provider "${type}" was not registered: ${error instanceof Error ? error.message : String(error)}`
-          )
+          `task provider "${type}" was not registered: ${error instanceof Error ? error.message : String(error)}`
         )
+      )
       return new Disposable(() => {
         if (providers.get(type) === provider) providers.delete(type)
         unregister()

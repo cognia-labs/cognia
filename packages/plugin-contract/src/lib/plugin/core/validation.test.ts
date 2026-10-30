@@ -321,7 +321,60 @@ describe("Plugin Validation", () => {
       expect(validatePluginManifest({ ...createValidManifest(), icon }).valid).toBe(true)
     })
 
-    it("validates declarative subagent gateway bindings without accepting secret fields", () => {
+    it.each([1, 2] as const)(
+      "validates version %s declarative subagent bindings without accepting secret fields",
+      (version) => {
+        const manifest = {
+          ...createValidManifest(),
+          capabilities: ["subagent"],
+          subagents: [
+            {
+              id: "coder",
+              name: "Coder",
+              description: "Writes code",
+              prompt: "Code",
+              externalPresetId: "codex-app-server",
+              modelRoles: {
+                version,
+                slots: { "subagent.default": { kind: "inherit-primary" as const } },
+              },
+              cogniaModel: {
+                providerId: "plugin:kimi:subscription",
+                modelId: "kimi-for-coding",
+                accountId: "account-a",
+              },
+            },
+          ],
+        }
+        expect(validatePluginManifest(manifest).valid).toBe(true)
+        Object.assign(manifest.subagents[0].modelRoles, { version: 3 })
+        expect(validatePluginManifest(manifest).diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              field: "subagents[0].modelRoles",
+              code: "manifest.subagent.invalid_model_roles",
+            }),
+          ])
+        )
+        Object.assign(manifest.subagents[0].modelRoles, { version })
+        Object.assign(manifest.subagents[0].cogniaModel, { apiKey: "not-permitted" })
+        expect(validatePluginManifest(manifest).diagnostics).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              field: "subagents[0].cogniaModel",
+              code: "manifest.subagent.invalid_cognia_model",
+            }),
+          ])
+        )
+      }
+    )
+
+    it("validates version 2 spawn model candidates without accepting secret fields", () => {
+      const candidate = {
+        providerId: "plugin:kimi:subscription",
+        modelId: "kimi-for-coding",
+        accountId: "account-a",
+      }
       const manifest = {
         ...createValidManifest(),
         capabilities: ["subagent"],
@@ -332,37 +385,17 @@ describe("Plugin Validation", () => {
             description: "Writes code",
             prompt: "Code",
             externalPresetId: "codex-app-server",
-            modelRoles: {
-              version: 1 as const,
-              slots: { "subagent.default": { kind: "inherit-primary" as const } },
-            },
-            cogniaModel: {
-              providerId: "plugin:kimi:subscription",
-              modelId: "kimi-for-coding",
-              accountId: "account-a",
-            },
+            modelRoles: { version: 2, slots: {}, allowedSpawnModels: [candidate] },
           },
         ],
       }
       expect(validatePluginManifest(manifest).valid).toBe(true)
-      Object.assign(manifest.subagents[0].modelRoles, { version: 2 })
-      expect(validatePluginManifest(manifest).diagnostics).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            field: "subagents[0].modelRoles",
-            code: "manifest.subagent.invalid_model_roles",
-          }),
-        ])
-      )
-      Object.assign(manifest.subagents[0].modelRoles, { version: 1 })
-      Object.assign(manifest.subagents[0].cogniaModel, { apiKey: "not-permitted" })
-      expect(validatePluginManifest(manifest).diagnostics).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            field: "subagents[0].cogniaModel",
-            code: "manifest.subagent.invalid_cognia_model",
-          }),
-        ])
+      Object.assign(candidate, { apiKey: "not-permitted" })
+      expect(validatePluginManifest(manifest).diagnostics).toContainEqual(
+        expect.objectContaining({
+          field: "subagents[0].modelRoles",
+          code: "manifest.subagent.invalid_model_roles",
+        })
       )
     })
 
@@ -4173,6 +4206,29 @@ describe("manifest.bots validation", () => {
 
   const codesFor = (bots: unknown): string[] =>
     (validatePluginManifest(manifestWith(bots)).diagnostics ?? []).map((d) => d.code)
+
+  it("validates unique trigger identities and declared input slots", () => {
+    const trigger = {
+      id: "input",
+      kind: "event",
+      source: "integration",
+      types: ["opened"],
+      inputCredentialSlot: "github",
+    }
+    const declared = { credentials: [{ id: "github", label: "GitHub" }] }
+    expect(
+      validatePluginManifest(manifestWith([bot({ triggers: [trigger], requires: declared })])).valid
+    ).toBe(true)
+    expect(codesFor([bot({ triggers: [trigger] })])).toContain(
+      "manifest.bots.trigger.inputCredentialSlot.invalid"
+    )
+    expect(codesFor([bot({ triggers: [trigger, trigger], requires: declared })])).toContain(
+      "manifest.bots.trigger.id.duplicate"
+    )
+    expect(
+      codesFor([bot({ triggers: [{ ...trigger, kind: "manual" }], requires: declared })])
+    ).toContain("manifest.bots.trigger.inputCredentialSlot.invalid")
+  })
 
   it("accepts a well-formed handler bot", () => {
     expect(validatePluginManifest(manifestWith([bot()])).valid).toBe(true)

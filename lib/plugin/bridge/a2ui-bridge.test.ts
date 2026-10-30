@@ -7,7 +7,8 @@ import React from "react"
 import { render, screen } from "@testing-library/react"
 import { PluginA2UIBridge } from "./a2ui-bridge"
 import type { PluginA2UIComponent, A2UITemplateDef } from "@/types/plugin"
-import type { PluginRegistry } from "../core/registry"
+import { PluginRegistry } from "../core/registry"
+import { reservePluginOwnership } from "../registries/createOverlayRegistry"
 import type { PluginLifecycleHooks } from "../messaging/hooks-system"
 
 const mockRegisterCatalogComponent = jest.fn()
@@ -75,6 +76,7 @@ jest.mock("@/lib/a2ui/events", () => ({
 const mockManagerLoggerError = jest.fn()
 jest.mock("../core/logger", () => ({
   loggers: {
+    registry: { warn: jest.fn() },
     manager: {
       warn: jest.fn(),
       error: (...args: unknown[]) => mockManagerLoggerError(...args),
@@ -83,9 +85,21 @@ jest.mock("../core/logger", () => ({
 }))
 
 function createMockRegistry(): jest.Mocked<PluginRegistry> {
+  const components = new Map<string, PluginA2UIComponent>()
+  const owners = new Map<string, string>()
   return {
-    registerComponent: jest.fn(),
-    unregisterComponent: jest.fn(),
+    registerComponent: jest.fn((pluginId: string, component: PluginA2UIComponent) => {
+      const previous = components.get(component.type)
+      if (!previous || owners.get(component.type) === pluginId) {
+        components.set(component.type, component)
+        owners.set(component.type, pluginId)
+      }
+    }),
+    getComponent: jest.fn((type: string) => components.get(type)),
+    getComponentsByPlugin: jest.fn((pluginId: string) =>
+      [...components.values()].filter((component) => owners.get(component.type) === pluginId)
+    ),
+    unregisterComponent: jest.fn((type: string) => components.delete(type)),
     registerTemplate: jest.fn(),
     unregisterTemplate: jest.fn(),
     getTemplate: jest.fn(),
@@ -151,6 +165,55 @@ describe("PluginA2UIBridge", () => {
     expect(registry.registerComponent).toHaveBeenCalledWith("plugin-a", component)
     expect(mockRegisterPluginComponent).toHaveBeenCalledWith("plugin-a", component)
   })
+
+  it("never projects a component rejected by a paused incumbent reservation", () => {
+    const actualRegistry = new PluginRegistry()
+    const actualBridge = new PluginA2UIBridge({ registry: actualRegistry, hooksManager })
+    const original = createMockComponent()
+    actualBridge.registerComponent("plugin-a", original)
+    const reservation = reservePluginOwnership("plugin-a")
+    try {
+      actualBridge.unregisterPluginComponents("plugin-a")
+      mockRegisterCatalogComponent.mockClear()
+      mockRegisterPluginComponent.mockClear()
+      actualBridge.registerComponent("plugin-b", { ...original, pluginId: "plugin-b" })
+      expect(actualRegistry.getComponent(original.type)).toBeUndefined()
+      expect(mockRegisterCatalogComponent).not.toHaveBeenCalled()
+      expect(mockRegisterPluginComponent).not.toHaveBeenCalled()
+      actualBridge.registerComponent("plugin-a", original)
+      actualBridge.unregisterPluginComponents("plugin-b")
+      expect(actualRegistry.getComponent(original.type)).toBe(original)
+      expect(actualBridge.getComponentPluginId(original.type)).toBe("plugin-a")
+    } finally {
+      actualBridge.unregisterPluginComponents("plugin-a")
+      actualBridge.unregisterPluginComponents("plugin-b")
+      actualBridge.dispose()
+      reservation.dispose()
+    }
+  })
+
+  it.each([false, true])(
+    "does not accept a rejected shared component reference (mutated tag: %s)",
+    (mutated) => {
+      const actualRegistry = new PluginRegistry()
+      const actualBridge = new PluginA2UIBridge({ registry: actualRegistry, hooksManager })
+      const component = createMockComponent()
+      actualBridge.registerComponent("plugin-a", component)
+      if (mutated) component.pluginId = "plugin-b"
+      mockRegisterCatalogComponent.mockClear()
+      mockRegisterPluginComponent.mockClear()
+      actualBridge.registerComponent("plugin-b", component)
+      expect(actualRegistry.getComponentsByPlugin("plugin-b")).toEqual([])
+      expect(mockRegisterCatalogComponent).not.toHaveBeenCalled()
+      expect(mockRegisterPluginComponent).not.toHaveBeenCalled()
+      expect(actualBridge.getComponentPluginId(component.type)).toBe("plugin-a")
+      actualBridge.unregisterPluginComponents("plugin-b")
+      expect(actualRegistry.getComponent(component.type)).toBe(component)
+      actualBridge.unregisterPluginComponents("plugin-a")
+      expect(actualRegistry.getComponent(component.type)).toBeUndefined()
+      actualBridge.dispose()
+    }
+  )
 
   it("renders explicit fallback when plugin context is missing", () => {
     const component = createMockComponent()

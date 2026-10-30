@@ -29,6 +29,20 @@ export interface TrackingAttempt extends BeginTurnMeta {
 
 const trackingAttempts = new Map<string, TrackingAttempt>()
 
+/** Record an unsupported capture boundary even when no native bridge exists. */
+export function markCodeAdoptionTrackingUnavailable(
+  cwd: string | undefined,
+  meta: BeginTurnMeta,
+  reason: string
+): void {
+  trackingAttempts.set(`${meta.sessionId}:${meta.runId}`, {
+    ...meta,
+    cwd: cwd ?? "",
+    status: "unavailable",
+    reason,
+  })
+}
+
 /** Consume the begin-side coverage record when the matching turn settles. */
 export function consumeCodeAdoptionTrackingAttempt(turnKey: string): TrackingAttempt | undefined {
   const attempt = trackingAttempts.get(turnKey)

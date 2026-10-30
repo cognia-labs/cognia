@@ -28,6 +28,173 @@ jest.mock("./dev-mode", () => ({
 const ROOT = "/work/project"
 
 describe("ManagedIdeBrokerRuntime", () => {
+  it("revokes a timed-out activation before its late callback can execute", async () => {
+    const plugin = makePlugin("filesystem:read")
+    plugin.manifest.ide!.providers = [
+      {
+        id: "fs",
+        kind: "file-system",
+        handler: "fs",
+        metadata: { scheme: "virtual", timeoutMs: 5 },
+      },
+    ]
+    let release!: () => void
+    const activate = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    const invoke = jest.fn(async () => null)
+    const runtime = new ManagedIdeBrokerRuntime(dependencies(plugin, { activate, invoke }))
+    const frame = await request(plugin)
+    ;(frame.params as Record<string, unknown>).operation = "readFile"
+    await expect(runtime.dispatch(frame)).rejects.toThrow(/TIMEOUT|timed out/i)
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it.each(["disabled", "version", "generation", "untrusted"])(
+    "rejects %s while activation waits",
+    async (change) => {
+      const plugin = makePlugin("filesystem:read")
+      plugin.manifest.ide!.providers = [
+        { id: "fs", kind: "file-system", handler: "fs", metadata: { scheme: "virtual" } },
+      ]
+      let trusted = true
+      const invoke = jest.fn(async () => null)
+      const runtime = new ManagedIdeBrokerRuntime(
+        dependencies(plugin, {
+          invoke,
+          isWorkspaceTrusted: async () => trusted,
+          activate: async () => {
+            if (change === "disabled") plugin.status = "disabled"
+            if (change === "version") plugin.manifest.version = "2.0.0"
+            if (change === "generation") runtime.disconnect(ROOT)
+            if (change === "untrusted") trusted = false
+          },
+        })
+      )
+      const frame = await request(plugin)
+      ;(frame.params as Record<string, unknown>).operation = "readFile"
+      await expect(runtime.dispatch(frame)).rejects.toThrow()
+      expect(invoke).not.toHaveBeenCalled()
+    }
+  )
+  it.each([
+    ["custom-editor", "extension:ui", "resolve", "onCustomEditor:cognia.acme.tools.entry"],
+    ["file-system", "filesystem:read", "readFile", "onFileSystem:cognia.acme.tools.virtual"],
+    ["debug-configuration", "debug:control", "resolve", "onDebugResolve:cognia.acme.tools.debug"],
+    ["notebook-serializer", "editor:read", "deserialize", "onNotebook:cognia.acme.tools.notebook"],
+  ])(
+    "awaits real %s activation before its declared handler",
+    async (kind, permission, operation, event) => {
+      const plugin = makePlugin(permission as PluginPermission)
+      plugin.status = "loaded"
+      plugin.manifest.ide!.providers = [
+        {
+          id: "entry",
+          kind: kind as never,
+          handler: "consume",
+          metadata: { scheme: "virtual", debugType: "debug", notebookType: "notebook" },
+        },
+      ]
+      let release!: () => void
+      let reached!: () => void
+      const started = new Promise<void>((resolve) => {
+        reached = resolve
+      })
+      const activate = jest.fn(async () => {
+        reached()
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        plugin.status = "enabled"
+      })
+      const invoke = jest.fn(async () => ({ consumed: true }))
+      const runtime = new ManagedIdeBrokerRuntime(dependencies(plugin, { activate, invoke }))
+      const frame = await request(plugin)
+      ;(frame.params as Record<string, unknown>).operation = operation
+      const task = runtime.dispatch(frame)
+      await started
+      expect(invoke).not.toHaveBeenCalled()
+      expect(activate).toHaveBeenCalledWith("acme.tools", event)
+      release()
+      await expect(task).resolves.toEqual({ consumed: true })
+      expect(invoke).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("requires filesystem write permission before activation for mutating operations", async () => {
+    const plugin = makePlugin("filesystem:read")
+    plugin.manifest.ide!.providers = [
+      { id: "fs", kind: "file-system", handler: "fs", metadata: { scheme: "virtual" } },
+    ]
+    const activate = jest.fn(async () => {})
+    const invoke = jest.fn(async () => null)
+    const runtime = new ManagedIdeBrokerRuntime(dependencies(plugin, { activate, invoke }))
+    const frame = await request(plugin)
+    ;(frame.params as Record<string, unknown>).operation = "writeFile"
+    await expect(runtime.dispatch(frame)).rejects.toThrow("IDE_PERMISSION_NOT_DECLARED")
+    expect(activate).not.toHaveBeenCalled()
+    expect(invoke).not.toHaveBeenCalled()
+    plugin.manifest.permissions!.push("filesystem:write")
+    const allowed = await request(plugin)
+    ;(allowed.params as Record<string, unknown>).operation = "writeFile"
+    await expect(runtime.dispatch(allowed)).resolves.toBeNull()
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it("treats only the declared virtual URI scheme as provider paths, preserving file-path validation", async () => {
+    const plugin = makePlugin("filesystem:read")
+    plugin.manifest.ide!.providers = [
+      { id: "fs", kind: "file-system", handler: "fs", metadata: { scheme: "virtual" } },
+    ]
+    const validatePaths = jest.fn(async (_root: string, paths: string[]) => paths)
+    const runtime = new ManagedIdeBrokerRuntime(dependencies(plugin, { validatePaths }))
+    const frame = await request(plugin)
+    ;(frame.params as Record<string, unknown>).arguments = [
+      { scheme: "cognia.acme.tools.virtual", path: "/virtual.txt", fsPath: "/virtual.txt" },
+    ]
+    ;(frame.params as Record<string, unknown>).operation = "readFile"
+    await runtime.dispatch(frame)
+    expect(validatePaths).not.toHaveBeenCalled()
+    ;(frame.params as Record<string, unknown>).invocationId = "second"
+    ;(frame.params as Record<string, unknown>).arguments = [
+      { scheme: "file", path: "/private.txt" },
+    ]
+    await runtime.dispatch(frame)
+    expect(validatePaths).toHaveBeenCalledWith(ROOT, ["/private.txt"])
+  })
+
+  it("refuses a walkthrough not declared by the signed manifest", async () => {
+    const plugin = makePlugin("editor:read")
+    const activate = jest.fn(async () => {})
+    const frame = await request(plugin)
+    frame.method = "cognia/contribution/activate"
+    frame.params = { ...(frame.params as object), walkthroughId: "cognia.other.welcome" }
+    const runtime = new ManagedIdeBrokerRuntime(dependencies(plugin, { activate }))
+    await expect(runtime.dispatch(frame)).rejects.toThrow("IDE_WALKTHROUGH_NOT_DECLARED")
+    expect(activate).not.toHaveBeenCalled()
+  })
+
+  it("activates the verified walkthrough and returns its owned opening receipt", async () => {
+    const plugin = makePlugin("editor:read")
+    plugin.manifest.ide!.contributions = {
+      walkthroughs: [{ id: "welcome", title: "Welcome", description: "Start", steps: [] }],
+    }
+    const activate = jest.fn(async () => {})
+    const frame = await request(plugin)
+    frame.method = "cognia/contribution/activate"
+    frame.params = { ...(frame.params as object), walkthroughId: "cognia.acme.tools.welcome" }
+    const runtime = new ManagedIdeBrokerRuntime(dependencies(plugin, { activate }))
+    await expect(runtime.dispatch(frame)).resolves.toEqual({
+      walkthroughId: "cognia.acme.tools.welcome",
+    })
+    expect(activate).toHaveBeenCalledWith("acme.tools", "onWalkthrough:cognia.acme.tools.welcome")
+  })
+
   afterEach(() => {
     jest.restoreAllMocks()
     clearManagedIdeRpcTraces()

@@ -2,18 +2,28 @@ import type { ProxyDescriptor } from "./types.ts"
 
 import { createHash } from "node:crypto"
 import JSZip from "jszip"
-import { assertManagedContributionIds, managedIdPrefix } from "./contribution-ids.ts"
+import {
+  assertManagedContributionIds,
+  managedIdPrefix,
+  walkthroughCommandId,
+} from "./contribution-ids.ts"
 
 const FIXED_ZIP_DATE = new Date("1980-01-01T00:00:00.000Z")
 
 export function buildProxyPackageJson(input: ProxyDescriptor) {
   validateInput(input)
+  const contributions = structuredClone(input.contributions ?? {})
+  for (const walkthrough of contributions.walkthroughs ?? []) {
+    const command = walkthroughCommandId(walkthrough.id)
+    if ((contributions.commands ?? []).some((entry: any) => entry.command === command))
+      throw new Error(`IDE_WALKTHROUGH_COMMAND_COLLISION: ${command}`)
+    contributions.commands = [
+      ...(contributions.commands ?? []),
+      { command, title: walkthrough.title },
+    ]
+  }
   const name = proxyName(input.pluginId)
-  const activationEvents = deriveActivationEvents(
-    input.contributions,
-    input.providers,
-    input.protocols
-  )
+  const activationEvents = deriveActivationEvents(contributions, input.providers, input.protocols)
   return {
     name,
     displayName: `${input.pluginId} (Cognia Managed Proxy)`,
@@ -35,7 +45,7 @@ export function buildProxyPackageJson(input: ProxyDescriptor) {
       },
       virtualWorkspaces: { supported: "limited" },
     },
-    contributes: structuredClone(input.contributions ?? {}),
+    contributes: contributions,
     cogniaManaged: {
       pluginId: input.pluginId,
       pluginVersion: input.pluginVersion,
@@ -141,6 +151,8 @@ function deriveActivationEvents(
   protocols: any = {}
 ) {
   const events: any[] = []
+  for (const walkthrough of contributions.walkthroughs ?? [])
+    events.push(`onWalkthrough:${walkthrough.id}`)
   for (const command of contributions.commands ?? []) events.push(`onCommand:${command.command}`)
   for (const language of contributions.languages ?? []) events.push(`onLanguage:${language.id}`)
   for (const views of Object.values(contributions.views ?? {}) as any[][]) {

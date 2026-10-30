@@ -24,7 +24,7 @@
 import { loggers } from "../core/logger"
 import { createOverlayRegistry } from "../registries/createOverlayRegistry"
 import { isPluginHooksEnabled } from "../registries/plugin-liveness"
-import { getInterceptorPoint } from "./points"
+import { getInterceptorPoint, isInterceptorPointLive } from "./points"
 import { resolveInterceptorOrder, type InterceptorOrderResult } from "./order"
 import type { InterceptorOrderDiagnostic, InterceptorRegistration } from "./types"
 
@@ -34,6 +34,9 @@ const registry = createOverlayRegistry<InterceptorRegistration>({
   // means the same registration being refreshed (hot reload, snapshot restore).
   conflictPolicy: "last-wins",
 })
+
+export const subscribeInterceptorChanges = registry.subscribe
+export const getInterceptorRevision = registry.getRevision
 
 /** Ordering is pure over (registrations on a point), so it caches by revision. */
 interface OrderCacheEntry extends InterceptorOrderResult {
@@ -81,12 +84,18 @@ function publishDiagnostics(diagnostics: readonly InterceptorOrderDiagnostic[]):
  * rather than from anything the plugin can state about itself.
  */
 export function registerInterceptor(registration: InterceptorRegistration): () => void {
+  if (!isInterceptorPointLive(registration.pointId)) {
+    throw new Error(
+      `[interceptors] interceptor point "${registration.pointId}" has no host consumer`
+    )
+  }
   registry.register(registration.registrationId, registration, {
     pluginId: registration.pluginId,
   })
   orderCache.delete(registration.pointId)
   return () => {
-    unregisterInterceptor(registration.registrationId)
+    if (registry.get(registration.registrationId) === registration)
+      unregisterInterceptor(registration.registrationId)
   }
 }
 

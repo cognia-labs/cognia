@@ -9,6 +9,12 @@ import type { Project, KnowledgeFile, ChatMode } from "./_compat"
 import type { Artifact } from "../artifact/artifact"
 import type { PluginGlanceVisibilityEvent } from "./plugin-glance"
 
+export interface PluginWorkflowRegistryHookEvent {
+  kind: string
+  typeVersion: number
+  pluginId?: string
+}
+
 // =============================================================================
 // Project Hooks
 // =============================================================================
@@ -340,7 +346,7 @@ export interface PreCompactContext {
   sessionId: string
   messageCount: number
   tokenCount: number
-  compressionRatio: number
+  compressionRatio?: number
 }
 
 /** Result of pre-compact hook */
@@ -439,13 +445,10 @@ export interface AIHookEvents {
   /**
    * Called before context compression.
    *
-   * DORMANT — not yet wired to a live compaction trigger. The Anthropic path
-   * self-manages compaction inside the Agent SDK and the generic (AI-SDK) path
-   * summarizes in the sidecar, which cannot call back into `lib/`. Registering
-   * this hook today is a silent no-op. Kept for contract parity (mirrored in the
-   * Python `PluginHook.ON_PRE_COMPACT` enum, guarded by `runtime-proof-audit`).
-   * See `hooks-system.ts` `dispatchPreCompact`.
-   * @deprecated Dormant: no host call site yet — registering this is a silent no-op.
+   * The generic AI-SDK Sidecar asks through plugin_hook_exec before summarizing.
+   * The host broadcasts to live contributors; injected context is concatenated
+   * and any skipCompaction vote is retained. Native Agent SDK compaction keeps
+   * its SDK-owned behavior.
    */
   onPreCompact?: (context: PreCompactContext) => PreCompactResult | Promise<PreCompactResult>
 
@@ -790,7 +793,7 @@ export interface PluginHooksAll extends PluginHooks {
   onUserPromptSubmit?: AIHookEvents["onUserPromptSubmit"]
   onPreToolUse?: AIHookEvents["onPreToolUse"]
   onPostToolUse?: AIHookEvents["onPostToolUse"]
-  /** @deprecated Dormant: not yet wired to a compaction trigger — registering this is a silent no-op. See `AIHookEvents.onPreCompact`. */
+  /** See `AIHookEvents.onPreCompact` for the Sidecar compaction bridge. */
   onPreCompact?: AIHookEvents["onPreCompact"]
   onPostChatReceive?: AIHookEvents["onPostChatReceive"]
   onBuildOptions?: AIHookEvents["onBuildOptions"]
@@ -847,27 +850,34 @@ export interface PluginHooksAll extends PluginHooks {
   onScheduledTaskStart?: PluginHooks["onScheduledTaskStart"]
   onScheduledTaskComplete?: PluginHooks["onScheduledTaskComplete"]
   onScheduledTaskError?: PluginHooks["onScheduledTaskError"]
-  /** Called when a scheduled task is created */
+  /** Called after any host task is created; plugin ownership is present only for plugin tasks. */
   onScheduledTaskCreate?: (task: {
     id: string
-    pluginId: string
+    pluginId?: string
     name: string
+    type?: string
     trigger: unknown
-    handler: string
-  }) => void
-  /** Called when a scheduled task is updated */
+    handler?: string
+  }) => void | Promise<void>
+  /** Called after explicit definition or ownership edits, excluding execution counters. */
   onScheduledTaskUpdate?: (
-    task: { id: string; pluginId: string; name: string },
+    task: { id: string; pluginId?: string; name: string; type?: string },
     changes: Record<string, unknown>
-  ) => void
+  ) => void | Promise<void>
   /** Called when a scheduled task is deleted */
-  onScheduledTaskDelete?: (taskId: string) => void
+  onScheduledTaskDelete?: (taskId: string) => void | Promise<void>
   /** Called when a scheduled task is paused */
-  onScheduledTaskPause?: (taskId: string) => void
+  onScheduledTaskPause?: (taskId: string) => void | Promise<void>
   /** Called when a scheduled task is resumed */
-  onScheduledTaskResume?: (taskId: string) => void
+  onScheduledTaskResume?: (taskId: string) => void | Promise<void>
   /** Called before a scheduled task runs (return false to cancel) */
   onScheduledTaskBeforeRun?: (taskId: string, executionId: string) => boolean | Promise<boolean>
+
+  /** Registry changes are metadata only; implementations and task contents are never exposed. */
+  onWorkflowNodeRegister?: (event: PluginWorkflowRegistryHookEvent) => void | Promise<void>
+  onWorkflowNodeUnregister?: (event: PluginWorkflowRegistryHookEvent) => void | Promise<void>
+  onWorkflowTriggerRegister?: (event: PluginWorkflowRegistryHookEvent) => void | Promise<void>
+  onWorkflowTriggerUnregister?: (event: PluginWorkflowRegistryHookEvent) => void | Promise<void>
 
   // External Agent hooks
   onExternalAgentConnect?: (agentId: string, agentName: string) => void

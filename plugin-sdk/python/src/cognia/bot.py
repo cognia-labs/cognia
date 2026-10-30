@@ -567,6 +567,28 @@ def define_bot(
     if not triggers:
         raise ValueError("a bot needs at least one trigger, or it can never start")
 
+    if any(not isinstance(trigger, Mapping) for trigger in triggers):
+        raise ValueError("bot triggers must be objects")
+    trigger_ids = [trigger.get("id") for trigger in triggers]
+    if len(set(trigger_ids)) != len(trigger_ids):
+        raise ValueError("bot trigger IDs must be unique")
+    slots = (requires or {}).get("credentials", [])
+    if not isinstance(slots, (list, tuple)) or any(not isinstance(slot, Mapping) for slot in slots):
+        raise ValueError("bot credentials must be objects")
+    slot_ids = [slot.get("id") for slot in slots]
+    if any(not isinstance(slot, str) or not slot.strip() for slot in slot_ids) or len(set(slot_ids)) != len(slot_ids):
+        raise ValueError("bot credential slot IDs must be non-empty and unique")
+    for trigger in triggers:
+        input_slot = trigger.get("inputCredentialSlot")
+        if input_slot is not None and (
+            not isinstance(input_slot, str) or input_slot not in slot_ids or not (
+                trigger.get("kind") == "interaction" or (
+                    trigger.get("kind") == "event" and trigger.get("source") in ("connector", "integration")
+                )
+            )
+        ):
+            raise ValueError("bot inputCredentialSlot must reference a declared input credential")
+
     lifecycle_dict: Optional[Dict[str, Any]] = None
     if lifecycle is not None:
         if not isinstance(lifecycle, Mapping):

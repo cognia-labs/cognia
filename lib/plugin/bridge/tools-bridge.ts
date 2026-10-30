@@ -48,6 +48,7 @@ export class PluginToolsBridge {
 
     // Register with registry
     this.config.registry.registerTool(pluginId, tool)
+    if (this.config.registry.getTool(tool.name) !== tool) return
 
     // Register with plugin store
     usePluginStore.getState().registerPluginTool(pluginId, tool)

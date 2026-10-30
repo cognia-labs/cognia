@@ -141,7 +141,34 @@ export function adaptVscodeManifest(input: AdaptVscodeManifestInput): VsCodeExte
     }
   }
 
+  const chatParticipants = (
+    Array.isArray(pkgJson.contributes?.chatParticipants) ? pkgJson.contributes.chatParticipants : []
+  ).filter(
+    (entry) => entry && typeof entry.id === "string" && entry.id && typeof entry.name === "string"
+  )
+  const languageModelTools = (
+    Array.isArray(pkgJson.contributes?.languageModelTools)
+      ? pkgJson.contributes.languageModelTools
+      : []
+  ).filter(
+    (entry) =>
+      entry &&
+      typeof entry.name === "string" &&
+      entry.name &&
+      typeof entry.modelDescription === "string"
+  )
+
   // ── vscodeExtension block ─────────────────────────────────────────────
+  const terminalProfiles = (
+    Array.isArray(pkgJson.contributes?.terminal?.profiles)
+      ? pkgJson.contributes.terminal.profiles
+      : []
+  )
+    .filter((entry) => entry && typeof entry.id === "string" && entry.id)
+    .map((entry) => ({
+      ...entry,
+      ...(typeof entry.title === "string" ? { title: resolveNls(entry.title, nls) } : {}),
+    }))
   const vscodeExtensionBlock: VsCodeExtensionBlock = {
     identifier: id,
     version: pkgJson.version,
@@ -155,6 +182,9 @@ export function adaptVscodeManifest(input: AdaptVscodeManifestInput): VsCodeExte
       ? { unsupportedActivationEvents: activation.unsupported }
       : {}),
     ...(contributedCommands.length > 0 ? { commands: contributedCommands } : {}),
+    ...(chatParticipants.length ? { chatParticipants } : {}),
+    ...(languageModelTools.length ? { languageModelTools } : {}),
+    ...(terminalProfiles.length ? { terminalProfiles } : {}),
     ...(unsupportedContributions.length > 0 ? { unsupportedContributions } : {}),
     activationPlanned: true,
     // Both spread-conditionally: an absent key is "not applicable" (a `.vsix`
@@ -319,17 +349,12 @@ function resolveRepositoryUrl(repo: VsCodeManifest["repository"]): string | unde
  */
 export const UNSUPPORTED_VSCODE_ACTIVATION_PREFIXES: readonly string[] = [
   "onDebug",
-  "onWebviewPanel:",
   "onCustomEditor:",
-  "onTaskType:",
   "onFileSystem:",
-  "onTerminal",
   "onNotebook:",
   "onRenderer:",
   "onSearch:",
   "onWalkthrough:",
-  "onChatParticipant:",
-  "onLanguageModelTool:",
   "onEditSession",
   "onIssueReporterOpened",
   "onOpenExternalUri",
@@ -351,12 +376,18 @@ export function mapActivationEvent(
 ): ActivationEventDeclaration | undefined {
   if (event === "*" || event === "onStartupFinished") return "startup"
   if (event === "onUri") return "onUri"
+  if (event === "onTerminal") return "onTerminal"
   if (event === "onAuthenticationRequest") return "onAuthenticationRequest"
   if (event.startsWith("onAuthenticationRequest:") && event.length > 24) {
     return event as ActivationEventDeclaration
   }
   if (
-    (event.startsWith("onCommand:") ||
+    (event.startsWith("onChatParticipant:") ||
+      event.startsWith("onLanguageModelTool:") ||
+      event.startsWith("onWebviewPanel:") ||
+      event.startsWith("onTerminalProfile:") ||
+      event.startsWith("onTaskType:") ||
+      event.startsWith("onCommand:") ||
       event.startsWith("onLanguage:") ||
       event.startsWith("workspaceContains:")) &&
     !event.endsWith(":")
@@ -410,6 +441,12 @@ export function planVscodeActivation(
 
   const contributes = pkgJson.contributes
   if (contributes && typeof contributes === "object") {
+    for (const profile of Array.isArray(contributes.terminal?.profiles)
+      ? contributes.terminal.profiles
+      : []) {
+      if (profile && typeof profile.id === "string" && profile.id)
+        add(`onTerminalProfile:${profile.id}`)
+    }
     for (const command of Array.isArray(contributes.commands) ? contributes.commands : []) {
       if (typeof command?.command === "string" && command.command) {
         add(`onCommand:${command.command}`)
@@ -425,6 +462,22 @@ export function planVscodeActivation(
       if (typeof provider?.id === "string" && provider.id) {
         add(`onAuthenticationRequest:${provider.id}` as ActivationEventDeclaration)
       }
+    }
+    for (const participant of Array.isArray(contributes.chatParticipants)
+      ? contributes.chatParticipants
+      : []) {
+      if (typeof participant?.id === "string" && participant.id)
+        add(`onChatParticipant:${participant.id}`)
+    }
+    for (const task of Array.isArray(contributes.taskDefinitions)
+      ? contributes.taskDefinitions
+      : []) {
+      if (typeof task?.type === "string" && task.type) add(`onTaskType:${task.type}`)
+    }
+    for (const tool of Array.isArray(contributes.languageModelTools)
+      ? contributes.languageModelTools
+      : []) {
+      if (typeof tool?.name === "string" && tool.name) add(`onLanguageModelTool:${tool.name}`)
     }
     const views =
       contributes.views && typeof contributes.views === "object" ? contributes.views : {}

@@ -370,6 +370,75 @@ describe("createConnectorsAPI", () => {
   })
 
   describe("permission gating", () => {
+    it("exposes link creation only through the manage permission and named capability", async () => {
+      const link = { purpose: "add-contact", url: "https://example.org/invite" }
+      const execute = jest.fn(async () => ({ status: "ok" as const, link }))
+      adapters.set("links", {
+        ...makeAdapter("links"),
+        meta: { ...makeAdapter("links").meta, capabilities: ["links.create"] },
+        management: { operations: ["links.create"], execute },
+      } as never)
+      const request = {
+        operation: "links.create",
+        input: { purpose: "add-contact", state: "campaign" },
+      } as const
+      try {
+        guard.registerPlugin(PLUGIN, ["connectors:read", "connectors:send"])
+        const api = createConnectorsAPI(PLUGIN)
+        expect(api.listManagementOperations("links")).toContainEqual({
+          operation: "links.create",
+          capability: "links.create",
+          mutation: "destructive",
+        })
+        expect(() => api.queryManagement("links", request as never)).toThrow(/mutation/)
+        expect(() => api.manage("links", request as never)).toThrow(PermissionError)
+        expect(execute).not.toHaveBeenCalled()
+        guard.registerPlugin(PLUGIN, ["connectors:read", "connectors:manage"])
+        await expect(
+          createConnectorsAPI(PLUGIN).manage("links", request as never)
+        ).resolves.toMatchObject({ link })
+        expect(execute).toHaveBeenCalledWith(request)
+      } finally {
+        adapters.delete("links")
+      }
+    })
+    it("keeps resource queries read-only and mutations behind connectors:manage", async () => {
+      const execute = jest.fn(async () => ({ status: "ok" as const }))
+      const managed = {
+        ...makeAdapter("resources"),
+        meta: { ...makeAdapter("resources").meta, capabilities: ["menus.manage"] },
+        management: { operations: ["menus.get", "menus.set"], execute },
+      }
+      adapters.set("resources", managed as never)
+      try {
+        guard.registerPlugin(PLUGIN, ["connectors:read"])
+        const api = createConnectorsAPI(PLUGIN)
+        expect(api.listManagementOperations("resources")).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ operation: "menus.get", mutation: "read" }),
+          ])
+        )
+        expect(
+          await api.queryManagement("resources", { operation: "menus.get", input: {} })
+        ).toMatchObject({ status: "ok" })
+        expect(() =>
+          api.queryManagement("resources", { operation: "menus.set", input: { items: [] } })
+        ).toThrow(/mutation/)
+        expect(() =>
+          api.manage("resources", { operation: "menus.set", input: { items: [] } })
+        ).toThrow(PermissionError)
+        expect(execute).toHaveBeenCalledTimes(1)
+        guard.registerPlugin(PLUGIN, ["connectors:read", "connectors:manage"])
+        expect(
+          await createConnectorsAPI(PLUGIN).manage("resources", {
+            operation: "menus.set",
+            input: { items: [] },
+          })
+        ).toMatchObject({ status: "ok" })
+      } finally {
+        adapters.delete("resources")
+      }
+    })
     it("read-tier methods need connectors:read", () => {
       guard.registerPlugin(PLUGIN, [])
       const api = createConnectorsAPI(PLUGIN)
@@ -413,6 +482,24 @@ describe("createConnectorsAPI", () => {
 
   describe("reads", () => {
     beforeEach(() => guard.registerPlugin(PLUGIN, ["connectors:read"]))
+
+    it("preserves pending provider correlation in delivery-feedback snapshots", async () => {
+      const pendingReceipt = { id: "audit", acceptedAt: 1 }
+      outboundQueueGet.mockResolvedValueOnce({
+        id: "oqj_9",
+        adapterId: "tg",
+        conversationKey: "telegram:tg:42",
+        status: "delivery_unknown",
+        nextAttemptAt: 100,
+        idempotencyKey: "idem-9",
+        attempts: 1,
+        pendingReceipt,
+      })
+      expect(await createConnectorsAPI(PLUGIN).getOutboundJob("oqj_9")).toMatchObject({
+        status: "delivery_unknown",
+        pendingReceipt,
+      })
+    })
 
     it("listAdapters returns credential-free summaries with capability flags", () => {
       const api = createConnectorsAPI(PLUGIN)
@@ -782,6 +869,117 @@ describe("createConnectorsAPI", () => {
       expect(await api.streamReply("sl", req as never)).toBe(false)
       expect(streamReplyOutbound).not.toHaveBeenCalled()
       spy.mockRestore()
+    })
+    it("plans explicit stream intent against the canonical host destination before streaming", async () => {
+      const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+      const spy = jest
+        .spyOn(getConnectorDeliveryGateway(), "sendNow")
+        .mockImplementationOnce(async (_input, send) => send())
+      const api = createConnectorsAPI(PLUGIN)
+      const req = {
+        conversationKey: "telegram:tg:42",
+        conversationRef: { platform: "telegram", adapterId: "tg", chatId: 999 },
+        streamKey: "recall",
+        sendOptions: { mode: "reengagement" as const },
+        text: "Hello",
+      }
+      try {
+        expect(await api.streamReply("tg", req)).toBe(true)
+        expect(spy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            conversationKey: "telegram:tg:42",
+            deliveryMode: "reengagement",
+            authorization: { kind: "plugin", pluginId: PLUGIN },
+            auditKind: "delivery.stream_authorized",
+            segments: [{ type: "markdown", md: "Hello" }],
+          }),
+          expect.any(Function)
+        )
+        expect(streamReplyOutbound).toHaveBeenCalledWith(
+          "tg",
+          expect.objectContaining({
+            conversationRef: TARGET_42.conversationRef,
+            sendOptions: { mode: "reengagement" },
+          })
+        )
+      } finally {
+        spy.mockRestore()
+      }
+    })
+    it("isolates each plugin's stream identity and preserves it through queued final handoff", async () => {
+      const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+      const gateway = getConnectorDeliveryGateway()
+      const plan = jest.spyOn(gateway, "sendNow").mockImplementation(async (_input, send) => send())
+      const queue = jest
+        .spyOn(gateway, "enqueueAuthorized")
+        .mockImplementation(
+          async (input) => ({ kind: "queued", job: await enqueueOutbound(input as never) }) as never
+        )
+      const other = "another-stream-plugin"
+      guard.registerPlugin(other, ["connectors:send"])
+      const req = {
+        conversationKey: "telegram:tg:42",
+        conversationRef: TARGET_42.conversationRef,
+        streamKey: "shared-capture",
+        sendOptions: { mode: "reengagement" as const },
+        text: "Hello",
+      }
+      try {
+        const api = createConnectorsAPI(PLUGIN),
+          second = createConnectorsAPI(other)
+        expect(await api.streamReply("tg", req)).toBe(true)
+        expect(await second.streamReply("tg", req)).toBe(true)
+        const firstKey = (streamReplyOutbound.mock.calls[0][1] as { streamKey: string }).streamKey
+        const secondKey = (streamReplyOutbound.mock.calls[1][1] as { streamKey: string }).streamKey
+        expect(firstKey).not.toBe(secondKey)
+        expect(firstKey).not.toBe(req.streamKey)
+        expect(req.streamKey).toBe("shared-capture")
+        const final = {
+          conversationRef: req.conversationRef,
+          segments: [{ type: "markdown" as const, md: "Hello world" }],
+          sendOptions: req.sendOptions,
+          metadata: { idempotencyKey: "final", streamKey: req.streamKey },
+        }
+        await api.enqueueSend("tg", req.conversationKey, final)
+        await second.enqueueSend("tg", req.conversationKey, final)
+        expect(queue.mock.calls.map(([input]) => input.request.metadata.streamKey)).toEqual([
+          firstKey,
+          secondKey,
+        ])
+        expect(plan.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+          firstKey,
+          secondKey,
+        ])
+        await api.send("tg", { ...final, deliveryTarget: TARGET_42 } as never)
+        expect(
+          (sendOutbound.mock.calls[0][1] as { metadata: { streamKey: string } }).metadata.streamKey
+        ).toBe(firstKey)
+      } finally {
+        plan.mockRestore()
+        queue.mockRestore()
+      }
+    })
+    it("refuses an explicit unapproved stream instead of using the unplanned shadow waiver", async () => {
+      const api = createConnectorsAPI(PLUGIN)
+      const req = {
+        conversationKey: "telegram:tg:42",
+        conversationRef: TARGET_42.conversationRef,
+        streamKey: "recall",
+        sendOptions: { mode: "reengagement" as const },
+        text: "Hello",
+      }
+      const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+      const spy = jest.spyOn(getConnectorDeliveryGateway(), "sendNow").mockResolvedValueOnce({
+        ok: false,
+        error: { code: "connector_delivery_denied", message: "not approved", retryable: false },
+      })
+      try {
+        expect(await api.streamReply("tg", req)).toBe(false)
+        expect(streamReplyOutbound).not.toHaveBeenCalled()
+        expect(await api.streamReply("tg", { ...req, conversationKey: undefined })).toBe(false)
+      } finally {
+        spy.mockRestore()
+      }
     })
 
     it("streamReply forwards to the bus and returns its boolean", async () => {

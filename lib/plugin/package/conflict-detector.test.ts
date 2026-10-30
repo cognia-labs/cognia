@@ -7,6 +7,7 @@ import {
   getConflictDetector,
   resetConflictDetector,
   type PluginRegistration,
+  createPluginRegistration,
 } from "./conflict-detector"
 import type { PluginManifest } from "@/types/plugin"
 
@@ -47,6 +48,65 @@ describe("ConflictDetector", () => {
   })
 
   describe("Plugin Registration", () => {
+    it("normalizes aliases with the runtime slash token rules", () => {
+      detector.setPlugins([
+        createPluginRegistration(
+          createManifest("alpha", "1.0.0", {
+            commands: [{ id: "one", name: "/alpha", aliases: [" /SHARED "] }],
+          })
+        ),
+        createPluginRegistration(
+          createManifest("beta", "1.0.0", {
+            commands: [{ id: "two", name: "/shared" }],
+          })
+        ),
+      ])
+      expect(detector.detectForPlugin("beta").warnings.some((c) => c.type === "command")).toBe(true)
+    })
+    it("keeps plugin-local command ids separate when their slash tokens differ", () => {
+      detector.setPlugins([
+        createPluginRegistration(
+          createManifest("alpha", "1.0.0", {
+            commands: [{ id: "run", name: "/alpha" }],
+          })
+        ),
+        createPluginRegistration(
+          createManifest("beta", "1.0.0", {
+            commands: [{ id: "run", name: "/beta" }],
+          })
+        ),
+      ])
+      expect(detector.detectAll().warnings.filter((c) => c.type === "command")).toEqual([])
+    })
+
+    it("detects preferred slash token collisions even when local ids differ", () => {
+      detector.setPlugins([
+        createPluginRegistration(
+          createManifest("alpha", "1.0.0", {
+            commands: [{ id: "one", name: "/shared" }],
+          })
+        ),
+        createPluginRegistration(
+          createManifest("beta", "1.0.0", {
+            commands: [{ id: "two", name: "/shared" }],
+          })
+        ),
+      ])
+      expect(detector.detectAll().warnings.some((c) => c.type === "command")).toBe(true)
+    })
+
+    it("extracts actual manifest accelerators and shared tool/component keys", () => {
+      const registration = createPluginRegistration(
+        createManifest("p", "1.0.0", {
+          tools: [{ name: "shared_tool" }],
+          a2uiComponents: [{ type: "shared.component" }],
+          quickActions: [{ accelerator: "Ctrl+Y" }],
+          trayItems: [{ accelerator: "Ctrl+Z" }],
+        } as never)
+      )
+      expect(registration.shortcuts).toEqual(["Ctrl+Y", "Ctrl+Z"])
+      expect(registration.namespaces).toEqual(["tool:shared_tool", "component:shared.component"])
+    })
     it("should register plugins", () => {
       const reg = createRegistration(createManifest("plugin-a", "1.0.0"))
       detector.registerPlugin(reg)
@@ -294,6 +354,68 @@ describe("ConflictDetector", () => {
   })
 
   describe("Single Plugin Detection", () => {
+    it("uses the full ruleset and only returns conflicts involving the candidate", () => {
+      detector.setPlugins([
+        createRegistration(createManifest("core", "1.0.0")),
+        createRegistration(
+          createManifest("existing", "1.0.0", {
+            capabilities: ["themes"],
+            dependencies: { core: "^1.0.0" },
+          }),
+          {
+            namespaces: ["shared"],
+            resources: ["/shared"],
+            commands: ["cmd"],
+            shortcuts: [" Ctrl + Shift + S "],
+          }
+        ),
+        createRegistration(
+          createManifest("candidate", "1.0.0", {
+            capabilities: ["themes"],
+            dependencies: { core: "^2.0.0" },
+          }),
+          {
+            namespaces: ["shared"],
+            resources: ["/shared"],
+            commands: ["cmd"],
+            shortcuts: ["shift+ctrl+s"],
+          }
+        ),
+        createRegistration(createManifest("unrelated", "1.0.0"), { commands: ["other"] }),
+      ])
+      const result = detector.detectForPlugin("candidate")
+      const conflicts = [...result.errors, ...result.warnings, ...result.info]
+      expect(new Set(conflicts.map((c) => c.type))).toEqual(
+        new Set(["version", "namespace", "resource", "capability", "command", "shortcut"])
+      )
+      expect(conflicts.every((c) => c.plugins.includes("candidate"))).toBe(true)
+    })
+
+    it("detects a single consumer with an incompatible installed dependency", () => {
+      detector.setPlugins([
+        createRegistration(createManifest("core", "1.0.0")),
+        createRegistration(
+          createManifest("candidate", "1.0.0", { dependencies: { core: "^2.0.0" } })
+        ),
+      ])
+      expect(detector.detectForPlugin("candidate").errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "version", plugins: ["core", "candidate"] }),
+        ])
+      )
+    })
+
+    it("does not mistake intersecting semver ranges for incompatible major versions", () => {
+      detector.setPlugins([
+        createRegistration(createManifest("core", "2.0.0")),
+        createRegistration(
+          createManifest("a", "1.0.0", { dependencies: { core: ">=1.0.0 <3.0.0" } })
+        ),
+        createRegistration(createManifest("b", "1.0.0", { dependencies: { core: "^2.0.0" } })),
+      ])
+      expect(detector.detectAll().hasConflicts).toBe(false)
+    })
+
     it("should detect conflicts for a single plugin", () => {
       detector.setPlugins([
         createRegistration(createManifest("existing", "1.0.0"), {

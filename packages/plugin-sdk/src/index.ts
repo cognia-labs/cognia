@@ -292,6 +292,9 @@ export {
 } from "./define/define-interceptors"
 export type {
   InterceptorAroundHandler,
+  AgentTurnDecisionInput,
+  ModelStreamProjection,
+  PluginSurfaceProjection,
   InterceptorFailurePolicy,
   InterceptorGuardHandler,
   InterceptorGuardVerdict,

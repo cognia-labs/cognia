@@ -35,9 +35,10 @@
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { dirname, join } from "node:path"
+import ts from "typescript"
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
-const CONTRACT_FILE = "lib/plugin/contracts/plugin-points.ts"
+const CONTRACT_FILE = "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.ts"
 
 /**
  * Parse the canonical hook list and the virtual set straight out of the
@@ -45,44 +46,79 @@ const CONTRACT_FILE = "lib/plugin/contracts/plugin-points.ts"
  * runtime (and its `@/` aliases) into a plain `node` gate.
  */
 export function parseContract(source) {
-  const hookBlock = source.match(/CANONICAL_HOOK_POINTS\s*=\s*\[([\s\S]*?)\n\]/)
-  if (!hookBlock) throw new Error(`CANONICAL_HOOK_POINTS not found in ${CONTRACT_FILE}`)
-  const hooks = [
-    ...hookBlock[1]
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("//"))
-      .join("\n")
-      .matchAll(/"(on[A-Za-z0-9]+)"/g),
-  ].map((m) => m[1])
+  const declarations = variableInitializers(source)
+  const hooks = declarations.get("CANONICAL_HOOK_POINTS")
+  const virtual = declarations.get("VIRTUAL_HOOK_POINTS")
+  const binding = declarations.get("HOOK_POINT_BINDING")
+  if (!hooks || !ts.isArrayLiteralExpression(hooks))
+    throw new Error(`CANONICAL_HOOK_POINTS not found in ${CONTRACT_FILE}`)
+  if (!virtual || !ts.isNewExpression(virtual))
+    throw new Error(`VIRTUAL_HOOK_POINTS not found in ${CONTRACT_FILE}`)
+  if (!binding || !ts.isStringLiteral(binding))
+    throw new Error(`HOOK_POINT_BINDING not found in ${CONTRACT_FILE}`)
+  const values = (array) =>
+    array && ts.isArrayLiteralExpression(array)
+      ? array.elements.filter(ts.isStringLiteral).map((element) => element.text)
+      : []
+  return { hooks: values(hooks), virtual: values(virtual.arguments?.[0]), binding: binding.text }
+}
 
-  const virtualBlock = source.match(
-    /VIRTUAL_HOOK_POINTS\s*=\s*new Set<CanonicalHookPoint>\(\[([\s\S]*?)\n\]\)/
-  )
-  if (!virtualBlock) throw new Error(`VIRTUAL_HOOK_POINTS not found in ${CONTRACT_FILE}`)
-  const virtual = [
-    ...virtualBlock[1]
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("//"))
-      .join("\n")
-      .matchAll(/"(on[A-Za-z0-9]+)"/g),
-  ].map((m) => m[1])
-
-  const binding = source.match(/HOOK_POINT_BINDING\s*=\s*"([^"]+)"/)
-  if (!binding) throw new Error(`HOOK_POINT_BINDING not found in ${CONTRACT_FILE}`)
-
-  return { hooks, virtual, binding: binding[1] }
+function variableInitializers(source) {
+  const parsed = ts.createSourceFile("contract.ts", source, ts.ScriptTarget.Latest, true)
+  const declarations = new Map()
+  const unwrap = (node) =>
+    node &&
+    (ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node) ||
+      ts.isParenthesizedExpression(node))
+      ? unwrap(node.expression)
+      : node
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name))
+      declarations.set(node.name.text, unwrap(node.initializer))
+    ts.forEachChild(node, visit)
+  }
+  visit(parsed)
+  return declarations
 }
 
 /** A hook fires if the binding file mentions it as a whole word. */
 export function hasFireSite(bindingSource, hook) {
-  return new RegExp(`\\b${hook}\\b`).test(bindingSource)
+  const source = ts.createSourceFile("binding.ts", bindingSource, ts.ScriptTarget.Latest, true)
+  let found = false
+  const visit = (node) => {
+    if (ts.isCallExpression(node)) {
+      const expression = node.expression
+      if (ts.isPropertyAccessExpression(expression) && expression.name.text === hook) found = true
+      if (ts.isIdentifier(expression) && expression.text === hook) found = true
+      if (node.arguments.some((argument) => ts.isStringLiteral(argument) && argument.text === hook))
+        found = true
+      // Typed shared dispatchers forward a hook-name parameter to executeHook.
+      for (const argument of node.arguments.filter(ts.isIdentifier)) {
+        let parent = node.parent
+        while (parent && !ts.isFunctionLike(parent)) parent = parent.parent
+        const parameter = parent?.parameters.find((entry) => entry.name.getText() === argument.text)
+        if (parameter?.type && parameter.type.getText().includes(`"${hook}"`)) found = true
+      }
+    }
+    if (!found) ts.forEachChild(node, visit)
+  }
+  visit(source)
+  return found
 }
 
 export function parseNormalizedHookPoints(source) {
-  const block = source.match(/const LEGACY_HOOK_POINTS[^=]*= Object\.freeze\(\{([\s\S]*?)\n\}\)/)
-  if (!block) throw new Error("LEGACY_HOOK_POINTS not found in interceptor normalizer")
+  const initializer = variableInitializers(source).get("LEGACY_HOOK_POINTS")
+  const object =
+    initializer && ts.isCallExpression(initializer) ? initializer.arguments[0] : initializer
+  if (!object || !ts.isObjectLiteralExpression(object))
+    throw new Error("LEGACY_HOOK_POINTS not found in interceptor normalizer")
   return Object.fromEntries(
-    [...block[1].matchAll(/(on[A-Za-z0-9]+): "([^"]+)"/g)].map((match) => [match[1], match[2]])
+    object.properties.flatMap((property) =>
+      ts.isPropertyAssignment(property) && ts.isStringLiteral(property.initializer)
+        ? [[property.name.getText().replaceAll('"', ""), property.initializer.text]]
+        : []
+    )
   )
 }
 
@@ -131,7 +167,10 @@ export function runAudit(repoRoot = REPO_ROOT) {
   const { hooks, virtual, binding } = parseContract(source)
   const bindingSource = readFileSync(join(repoRoot, binding), "utf8")
   const normalizedHookPoints = parseNormalizedHookPoints(
-    readFileSync(join(repoRoot, "lib/plugin/interceptors/normalize.ts"), "utf8")
+    readFileSync(
+      join(repoRoot, "packages/plugin-contract/src/lib/plugin/interceptors/normalize.ts"),
+      "utf8"
+    )
   )
   return evaluate({ hooks, virtual, bindingSource, binding, normalizedHookPoints })
 }

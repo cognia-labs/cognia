@@ -112,10 +112,6 @@ export function createUnsupportedWindowMembers(reporter: UnsupportedApiReporter)
     registerCustomEditorProvider: registration(reporter, "window.registerCustomEditorProvider"),
     registerFileDecorationProvider: registration(reporter, "window.registerFileDecorationProvider"),
     registerTerminalLinkProvider: registration(reporter, "window.registerTerminalLinkProvider"),
-    registerTerminalProfileProvider: registration(
-      reporter,
-      "window.registerTerminalProfileProvider"
-    ),
     tabGroups,
     async withScmProgress<R>(task: (progress: { report(value: number): void }) => Thenable<R>) {
       reporter.report("window.withScmProgress")

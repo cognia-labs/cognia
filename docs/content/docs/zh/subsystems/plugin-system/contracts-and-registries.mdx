@@ -33,7 +33,7 @@ description: 声明式契约层——声明插件可贡献什么、证明每个�
 
 ## 覆盖注册表模式
 
-`createOverlayRegistry.ts` 是一个叶子工厂，产出隔离的 `Map<string, InternalEntry<T>>` 闭包（`createOverlayRegistry.ts:149`）。每个条目携带可选的 `pluginId` 标签，因此 `unregisterByPlugin` 能一次性丢弃某插件的全部贡献（`createOverlayRegistry.ts:189-198`）。条目按存储键去重；冲突策略默认 **last-wins**，并有可选的 `first-wins-cross-plugin` 模式——保护由*不同*插件拥有的现任条目，同时仍允许*同一*插件刷新自己的条目（`createOverlayRegistry.ts:160-183`）：
+`createOverlayRegistry.ts` 是一个叶子工厂，产出隔离的 `Map<string, InternalEntry<T>>` 闭包（`createOverlayRegistry.ts:149`）。每个条目携带可选的 `pluginId` 标签，因此 `unregisterByPlugin` 能一次性丢弃某插件的全部贡献（`createOverlayRegistry.ts:189-198`）。条目按存储键去重；冲突策略默认 **first-wins-cross-plugin**，仅显式指定 `last-wins` 时才允许后写覆盖——保护由*不同*插件拥有的现任条目，同时仍允许*同一*插件刷新自己的条目（`createOverlayRegistry.ts:160-183`）：
 
 ```ts
 if (
@@ -210,7 +210,7 @@ graph LR
 - **Validating 与 plain 覆盖。** 只有 `character-pack`、`agent-team-template` 与 `workflow-template` 使用 `createValidatingOverlayRegistry`；其余为 plain。警告是非阻塞的——条目无论如何都会注册——因此兄弟覆盖的变更必须调用 `refreshAll*Warnings()` 以清除陈旧的缺失依赖警告（接线于 `capability-bridge-map.ts:165-176`）。
 - **能力桥与模块桥映射。** `capability-bridge-map.ts` 是同步内联 def 覆盖能力（`:151-156`）；`module-bridge-map.ts` 是异步模块加载能力，归一化在单一 `register(ctx) => Promise` / `unregister` 之后（`:84-110`）。定制接线（modes / commands / themes / lsp / a2ui）两者皆不在（`capability-bridge-map.ts:10-16`）。字段驱动模块桥现在都是规范能力标签，并仍依据 `manifest[manifestField]?.length` 做派发门控（`module-bridge-map.ts:113-117`）。
 - **审计的"证明"是字段存在，而非可达性。** 审计检查证明字符串非空；真正的可达性由单独的静态槽审计脚本强制执行，该脚本按 `REGISTRATION_HOST_EXTENSION_POINTS` / `hostKind` 分支（`plugin-points.ts:222-233`）。
-- **first-wins-cross-plugin 是可选的。** 默认是 last-wins；此处的 plain id-键注册表在跨插件 id 冲突时静默 last-wins。
+- **默认保留现有提供者。** 跨插件共享键冲突被拒绝。已经按所有者隔离键的注册表可显式选择 last-wins；同一所有者始终可以刷新条目。
 
 <Cards>
   <Card title="桥" href="./bridges" description="把 manifest 字段连到运行时子系统的异步模块加载桥。" />

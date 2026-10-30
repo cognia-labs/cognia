@@ -12,6 +12,7 @@
 
 import type { PluginPointGovernanceMode } from "@/lib/plugin/contracts/plugin-points"
 import type { PluginSource } from "@/types/plugin"
+import { isHeadlessHost } from "@/lib/platform/detect"
 
 export const POLICY_STORAGE_KEY = "cognia.plugins.policy"
 
@@ -54,10 +55,17 @@ export const DEFAULT_POLICY: PluginsPolicy = {
   trustedFrontendPlugins: [],
 }
 
+function policyStorage(): Storage | undefined {
+  if (typeof window !== "undefined") return window.localStorage
+  if (!isHeadlessHost()) return undefined
+  // Headless installs its own value-backed Storage. Avoid invoking Node's
+  // unconfigured localStorage accessor before that bootstrap has happened.
+  return Object.getOwnPropertyDescriptor(globalThis, "localStorage")?.value
+}
+
 export function readPolicy(): PluginsPolicy {
-  if (typeof window === "undefined") return DEFAULT_POLICY
   try {
-    const raw = window.localStorage.getItem(POLICY_STORAGE_KEY)
+    const raw = policyStorage()?.getItem(POLICY_STORAGE_KEY)
     if (!raw) return DEFAULT_POLICY
     const parsed = JSON.parse(raw)
     return {
@@ -81,9 +89,8 @@ export function readPolicy(): PluginsPolicy {
 }
 
 export function writePolicy(policy: PluginsPolicy): void {
-  if (typeof window === "undefined") return
   try {
-    window.localStorage.setItem(POLICY_STORAGE_KEY, JSON.stringify(policy))
+    policyStorage()?.setItem(POLICY_STORAGE_KEY, JSON.stringify(policy))
   } catch {
     // ignore quota errors
   }

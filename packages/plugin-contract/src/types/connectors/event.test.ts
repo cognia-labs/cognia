@@ -3,10 +3,20 @@ import {
   connectorOccurrenceKey,
   deliveryTargetFromEvent,
   parseConversationKey,
+  CONNECTOR_SYSTEM_EVENT_KINDS,
+  isConnectorSystemEventKind,
   type NormalizedInboundEvent,
 } from "./event"
 
 describe("conversationKey", () => {
+  it("shares the system-event catalogue with filters while rejecting arbitrary kinds", () => {
+    expect(CONNECTOR_SYSTEM_EVENT_KINDS).toEqual(
+      expect.arrayContaining(["interaction", "delivery_status"])
+    )
+    expect(isConnectorSystemEventKind("interaction")).toBe(true)
+    expect(isConnectorSystemEventKind("delivery_status")).toBe(true)
+    expect(isConnectorSystemEventKind("arbitrary-command")).toBe(false)
+  })
   it("formats and parses without thread", () => {
     const k = buildConversationKey("telegram", "tg-personal", "12345")
     expect(k).toBe("telegram:tg-personal:12345")

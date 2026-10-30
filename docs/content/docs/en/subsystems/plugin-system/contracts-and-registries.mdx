@@ -33,7 +33,7 @@ description: The declarative truth layer that states what a plugin may contribut
 
 ## Overlay-registry pattern
 
-`createOverlayRegistry.ts` is a leaf factory producing an isolated `Map<string, InternalEntry<T>>` closure (`createOverlayRegistry.ts:149`). Each entry carries an optional `pluginId` tag so `unregisterByPlugin` can drop all of a plugin's contributions at once (`createOverlayRegistry.ts:189-198`). Entries are deduped by storage key; the conflict policy defaults to **last-wins**, with an opt-in `first-wins-cross-plugin` mode that protects an incumbent owned by a *different* plugin while still letting the *same* plugin refresh its own entry (`createOverlayRegistry.ts:160-183`):
+`createOverlayRegistry.ts` is a leaf factory producing an isolated `Map<string, InternalEntry<T>>` closure (`createOverlayRegistry.ts:149`). Each entry carries an optional `pluginId` tag so `unregisterByPlugin` can drop all of a plugin's contributions at once (`createOverlayRegistry.ts:189-198`). Entries are deduped by storage key; the conflict policy defaults to **first-wins-cross-plugin**, with explicit `last-wins` reserved for owner-scoped keys. The default protects an incumbent owned by a *different* plugin while still letting the *same* plugin refresh its own entry (`createOverlayRegistry.ts:160-183`):
 
 ```ts
 if (
@@ -210,7 +210,7 @@ graph LR
 - **Validating vs plain overlay.** Only `character-pack`, `agent-team-template`, and `workflow-template` use `createValidatingOverlayRegistry`; the rest are plain. Warnings are non-blocking — the entry registers regardless — so sibling overlay mutations must call `refreshAll*Warnings()` to clear stale missing-dependency warnings (wired at `capability-bridge-map.ts:165-176`).
 - **Capability vs module bridge map.** `capability-bridge-map.ts` is synchronous inline-def overlay capabilities (`:151-156`); `module-bridge-map.ts` is async module-loading capabilities normalized behind one `register(ctx) => Promise` / `unregister` (`:84-110`). Bespoke wiring (modes / commands / themes / lsp / a2ui) lives in neither (`capability-bridge-map.ts:10-16`). Field-driven module bridges are now canonical capability tags, and dispatch still gates on `manifest[manifestField]?.length` (`module-bridge-map.ts:113-117`).
 - **Audit "proof" is field-presence, not reachability.** The audit checks that proof strings are non-empty; real reachability is enforced by the separate static slot-audit script that branches on `REGISTRATION_HOST_EXTENSION_POINTS` / `hostKind` (`plugin-points.ts:222-233`).
-- **first-wins-cross-plugin is opt-in.** The default is last-wins; the plain id-keyed registries here silently last-wins on a cross-plugin id collision.
+- **The default is incumbent-first.** Cross-plugin shared-key collisions are rejected. Explicit last-wins remains available for registries whose keys are already owner-scoped; same-owner refresh is always supported.
 
 <Cards>
   <Card title="Bridges" href="./bridges" description="The async module-loading bridges that connect manifest fields to runtime subsystems." />

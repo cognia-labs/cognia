@@ -13,7 +13,7 @@ Cognia 在桌面端把**真实**的 VS Code 扩展作为插件运行。来自 Op
 
 <StatGrid>
   <Stat label="API 版本" value="1.91.0" hint="SHIM_VSCODE_API_VERSION，即 vscode-languageclient 的要求" />
-  <Stat label="API 成员" value="316 / 66" hint="已实现 / 标注为不支持，缺失 0（vscode-api-coverage.generated.json）" />
+  <Stat label="API 成员" value="317 / 65" hint="已实现 / 标注为不支持，缺失 0（vscode-api-coverage.generated.json）" />
   <Stat label="Provider 种类" value="28" hint="languages-handler.ts 中的 PROVIDER_REGISTRY" />
   <Stat label="宿主" value="每扩展 1 个" hint="崩溃只影响一个扩展" />
   <Stat label="重启" value="5 次" hint="1 s·2ⁿ 退避，上限 30 s，host-supervisor.ts" />
@@ -66,13 +66,15 @@ Rust 安装器把解压后的文件写入 `<data>/cognia/vscode-extensions/<id>`
 4. `extension-runner.ts` 在 `vm` 上下文中运行 CommonJS 包，提供 `queueMicrotask`、`structuredClone`、`AbortController`、`performance`、`atob`/`btoa`、`crypto`，以及无法让宿主退出的 `process`。`fetch` 和 `WebSocket` 仅在持有 `network:fetch` / `network:websocket` 时可用，每次调用都检查。ESM 包会被拒绝并给出原因。
 5. 在 `activate` 之前，渲染端发送工作区文件夹、配置、已安装扩展和窗口状态，宿主会等它们到齐。
 
-**激活**（`activation-triggers.ts`）。已启用的扩展只有在 `*`、`onStartupFinished` 或贡献了视图时才在启动时运行。否则它保持休眠，同时列出其贡献的命令和语言，并在以下情况启动：`onCommand:<id>`（随后执行该命令）、`onLanguage:<id>`（编辑器打开了该语言的文档）、`workspaceContains:<glob>`（进入休眠时以及文件夹变化时检查）。其他激活事件记为不支持。
+**激活**（`activation-triggers.ts`）。已启用的扩展只有在 `*`、`onStartupFinished` 或贡献了视图时才在启动时运行。否则它保持休眠，其命令、语言、聊天参与者和工具仍可被发现。支持 `onCommand:<id>`、`onLanguage:<id>`、`workspaceContains:<glob>`、`onTerminal`、`onTaskType:<type>`、`onChatParticipant:<id>` 、`onLanguageModelTool:<id>`、`onTerminalProfile:<id>` 和 `onWebviewPanel:<viewType>`。任务、参与者、工具和终端 Profile 贡献会推导出对应激活事件。面板恢复会激活保存记录所属的扩展。终端监听在首个扩展加载前安装；提供者查询会等待匹配的扩展激活及注册确认，并始终尊重用户禁用状态。其他激活事件记为不支持。
 
 **崩溃**（`host-supervisor.ts`）。Rust 报告 `host:exited` 并附上收集到的 stderr（stderr 同时写入插件日志）。监督器在 1 s·2ⁿ（上限 30 s）后重新加载扩展，`MAX_RESTARTS`（5）次后放弃，宿主持续运行五分钟后清零之前的崩溃计数。放弃后插件保持错误状态，直到用户再次启用。
 
 **输出通道**和宿主自身的告警写入插件的运行时日志，插件面板有链接指向它。
 
 ## 4. API 及其后端
+
+**Managed Pro IDE 复用现有 Code 宿主。** 受控 broker 在实际调用自定义编辑器、文件系统、调试配置、Notebook serializer/kernel 前，触发 `onCustomEditor:*`、`onFileSystem:*`、`onDebugResolve:*` 和 `onNotebook:*`。事件和目标归属只从已校验的清单元数据派生，激活前后重查禁用意图、工作区信任、权限、版本和连接 generation。唤醒插件时复用发起请求的签名代理，避免重装自身。文件写入额外要求 `filesystem:write`，虚拟 URI 路径只按其已声明的 scheme 解释。Walkthrough 提供专属命令面板入口，等待 `onWalkthrough:*` 激活后再打开 Code 原生页面，复用包内媒体和原生完成进度。直接点击 Code Welcome 磁贴或调用 `workbench.action.openWalkthrough` 不会通知 Cognia 插件；需要唤醒归属插件时应使用生成的命令。这些实现不改变下文 standalone 1.91 shim 对相应 API 的不支持声明。
 
 宿主挂载 VS Code 1.91 API（`sidecar/vscode-ext-host/src/vscode-shim/index.ts`）。`scripts/gates/vscode-api-coverage.mjs` 把 `@types/vscode` 与之比对，生成 `vscode-api-coverage.generated.json`（`pnpm audit:vscode-api-coverage`）：每个成员要么已实现，要么带原因列为不支持，没有缺失。`engine-compat.ts` 读取同一份报告，对使用了不支持命名空间的扩展给出提示。该提示仅供参考，从不阻止安装。
 
@@ -93,10 +95,14 @@ Rust 安装器把解压后的文件写入 `<data>/cognia/vscode-extensions/<id>`
 | 命令 | `runtime-handlers.ts` | `lib/plugin/commands/registry.ts`（贡献的标题、分类、`when`） |
 | `env`（剪贴板、`openExternal`、`asExternalUri`、URI 处理器） | `env-handlers.ts` | Tauri 剪贴板与 opener、Cognia 深链接 |
 | `vscode.lm` | `lm-handler.ts` | 用户配置的提供方和模型，vendor 为 `cognia`，流式输出。需要 `ai:chat`、插件速率限制和 PII 门控。扩展从不自带密钥 |
-| `vscode.chat` 参与者 | `chat-participant-registry.ts` | 注册为虚拟角色（`vscode-chat:<pluginId>:<id>`）。尚不会被调用 |
+| `vscode.chat` 参与者 | `chat-participant-registry.ts`、`chat-turn.ts` | 虚拟角色（`vscode-chat:<pluginId>:<id>`），由现有前后台执行路径调用，支持流式输出、取消和历史 |
 | secrets、Memento | `runtime-handlers.ts`、`memento.rs` | 密钥存储，扩展状态目录中的文件 |
 
 `unavailable-methods.ts` 列出渲染端无法服务的宿主方法。在所有方法都有后端时它为空。
+
+注册了 `WebviewPanelSerializer` 的面板可在渲染端或 Host 重启后恢复到桌面扩展栏。复用原有插件 Storage API，按项目保存最多 32 个面板的 JSON 状态、标题和 view type，HTML 与资源授权由扩展重新建立。用户关闭会删除记录，运行时停用则保留；恢复遵守禁用意图、所属扩展和 token 身份、取消及工作区切换限制。Headless 不安装此 UI 恢复器。
+
+扩展贡献的终端 Profile 会在扩展休眠时出现在现有新建终端菜单中。选择后等待激活和注册，调用所属提供者，再经现有终端服务创建真实 shell 或 Pseudoterminal。启动要求 `terminal:spawn`，并固定在本地桌面和项目；提供者消失或不返回 Profile 时明确失败，不回退到默认 shell。远程 Host、浏览器和移动端不支持启动扩展 Profile。
 
 ## 5. 语言功能
 
@@ -129,7 +135,13 @@ Rust 安装器把解压后的文件写入 `<data>/cognia/vscode-extensions/<id>`
 
 **API 命名空间**（`unsupportedApis`，从扩展代码中找出）：`debug`、`scm`、`tests`、`comments`、`notebooks`。它们的注册返回无效果的 disposable，事件从不触发，会产生动作的调用抛出带原因的 `NotSupportedError`。宿主对每个扩展的每个不支持成员只报告一次（`vscode:unsupportedApi`），插件日志会写明。
 
-**其他缺口：** 聊天参与者只注册不调用，任务的问题匹配器被忽略，`createTelemetryLogger` 不发送任何内容。对于在本机运行的终端，`Terminal.processId` 是 shell 的进程 id，扩展的 `Pseudoterminal` 则为 `undefined`。
+**聊天与模型工具。** 清单声明的参与者无需先启动扩展即可出现在角色选择器中。前台聊天与后台 Agent 均调用所属扩展，携带文本历史、响应 metadata、取消信号，以及冻结的插件、注册版本和轮次身份。支持 Markdown、可见进度和 HTTP(S) 引用；`ChatResult.errorDetails` 会使轮次失败。图片、文件及行范围引用、原生会话控制、跨 Host 执行，以及要求原生工作区或权限约束的轮次会被明确拒绝。参与者输入和工具参数在扩展回调前经过统一 PII 检查。
+
+`lm.registerTool` 使用 Cognia 的标准插件工具注册表，模型调用保留现有审批链。直接 `lm.tools` 和 `lm.invokeTool` 只暴露调用者自己的工具，调用需要 `ai:chat` 和 `agent:control`。跨扩展直接调用缺少与会话绑定的同意契约，因此被拒绝。`lm.sendChatRequest` 仍仅支持文本，尚未实现原生工具调用循环。任务提供者查询、已有及新开的终端会激活匹配且未被用户禁用的扩展。Host 激活会等待聊天、工具和任务注册确认。
+
+参与者运行时回调卸载后，保存的角色权限和 sandbox 设置会保留。发现逻辑隐藏不可用的参与者，扩展重新注册不会擦除策略。API 成员审计只统计已挂载符号，不能证明每个选项或完整宿主功能均已实现。
+
+**其他缺口：** 任务的问题匹配器被忽略，`createTelemetryLogger` 不发送任何内容。对于在本机运行的终端，`Terminal.processId` 是 shell 的进程 id，扩展的 `Pseudoterminal` 则为 `undefined`。
 
 **浏览器与移动端。** 没有扩展宿主。Open VSX 来源被隐藏，拖入的 `.vsix` 被拒绝，已安装的带 `main` 的扩展以桩形式加载，并在插件列表中标明。
 

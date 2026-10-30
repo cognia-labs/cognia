@@ -115,14 +115,20 @@ export interface HistoryPage {
  * content on each call rather than appending.
  */
 export interface StreamReplyRequest {
+  /** Explicit non-passive streams use the same delivery intent as their queued final. */
+  sendOptions?: OutboundRequest["sendOptions"]
+  /** Logical destination, resolved to the host's stored target before plugin streaming. */
+  conversationKey?: string
   conversationRef: ConversationReference
+  /** Per-capture identity shared with the authoritative final request. */
+  streamKey?: string
   /** Accumulated assistant reply text so far (full text, not a delta). */
   text: string
 }
 
 export interface AdapterContext {
   /** Push a normalized inbound event to the bus. */
-  emit: (event: NormalizedInboundEvent) => Promise<void>
+  emit: (event: NormalizedInboundEvent, options?: { requireAcceptance?: boolean }) => Promise<void>
   /** Reach into Rust-side connectors_* commands. */
   tauri: {
     httpRequest: (req: TauriHttpRequest) => Promise<TauriHttpResponse>
@@ -220,9 +226,95 @@ export interface ForwardMessageInput {
   target: string
 }
 
+/** Host-owned persistence callbacks, separate from cloneable/untrusted request payloads. */
+export interface AdapterSendOptions {
+  onPendingReceipt?: (receipt: { id: string }) => Promise<void>
+}
+
 export interface PlatformAdapter {
+  /** Explicit caller-initiated encrypted room-key backup; recovery keys are secrets. */
+  readonly crossSigning?: {
+    bootstrap(auth?: Record<string, unknown>): Promise<{
+      hasMaster: boolean
+      hasSelfSigning: boolean
+      hasUserSigning: boolean
+      masterKey: string | null
+      identityVerified: boolean
+      deviceCrossSigned: boolean
+      deviceTrusted: boolean
+    }>
+    status(
+      userId?: string,
+      deviceId?: string
+    ): Promise<{
+      hasMaster: boolean
+      hasSelfSigning: boolean
+      hasUserSigning: boolean
+      masterKey: string | null
+      identityVerified: boolean
+      deviceCrossSigned: boolean
+      deviceTrusted: boolean
+    }>
+  }
+  /** Caller compares SAS / scans QR and explicitly confirms; never auto-trust. */
+  readonly verification?: {
+    /** Refresh signed keys only after proof completion; does not confirm SAS or QR. */
+    refreshTrust(
+      userId: string,
+      flowId: string
+    ): ReturnType<NonNullable<PlatformAdapter["verification"]>["interact"]>
+    pending(userId: string): Promise<
+      Array<{
+        flowId: string
+        userId: string
+        deviceId: string | null
+        state: string
+        deviceVerified: boolean
+      }>
+    >
+    interact(input: {
+      action:
+        | "request"
+        | "status"
+        | "accept"
+        | "startSas"
+        | "acceptSas"
+        | "confirmSas"
+        | "generateQr"
+        | "scanQr"
+        | "confirmQr"
+        | "cancel"
+      userId: string
+      deviceId?: string
+      flowId?: string
+      qrBytes?: number[]
+    }): Promise<{
+      flowId: string
+      userId: string
+      deviceId: string | null
+      state: "requested" | "ready" | "sas" | "qr" | "done" | "cancelled"
+      deviceVerified: boolean
+      decimals?: [number, number, number] | null
+      emojiIndices?: number[] | null
+      confirmed?: boolean
+      scanned?: boolean
+      qrBytes?: number[]
+      qrImage?: { size: number; modules: boolean[] }
+      sasStartedByUs?: boolean
+    }>
+  }
+  readonly keyBackup?: {
+    create(): Promise<{ version: string; recoveryKey: string }>
+    restore(
+      recoveryKey: string,
+      version?: string
+    ): Promise<{ version: string; imported: number; total: number }>
+  }
+
   readonly meta: AdapterMeta
   readonly id: string
+  /** Optional, capability-gated reusable assets, publication and administration. */
+  readonly management?: import("./management").ConnectorManagement
 
   start(ctx: AdapterContext): Promise<void>
   stop(): Promise<void>
@@ -245,11 +337,13 @@ export interface PlatformAdapter {
   /** Native cursor domain expected by the legacy history stream. */
   readonly historyCursorKind?: "message_id" | "timestamp"
 
-  send(req: OutboundRequest): Promise<OutboundResult>
+  send(req: OutboundRequest, options?: AdapterSendOptions): Promise<OutboundResult>
+  /** Encoded voice formats accepted in this destination; absent means unknown. */
+  voiceFormats?(conversationRef: ConversationReference): readonly string[]
   /**
    * Stream an incremental reply chunk to the platform while the assistant
-   * turn is still generating (e.g. WeCom 智能机器人 `aibot_respond_msg`
-   * stream frames with `finish:false`). Optional — only adapters whose
+   * turn is still generating (WeCom `aibot_respond_msg` or QQ C2C
+   * `stream_messages`). Optional — only adapters whose
    * platform supports updating a message in place implement it.
    *
    * The connector runtime calls this from `runAndCapture`'s `onPartial`
@@ -257,11 +351,17 @@ export interface PlatformAdapter {
    * (b) the turn is a live reply (the inbound `conversationRef` is still
    * correlatable). The authoritative final message ALWAYS flows through the
    * durable outbound queue via `send()`; `streamReply` is a best-effort live
-   * preview that shares the same platform-side stream id, so `send()`
-   * finalises the stream (`finish:true`) without duplicating the message.
+   * preview. QQ uses `streamKey` to correlate the queued final with its
+   * acknowledged platform stream; ambiguous writes require reconciliation.
    * A throwing `streamReply` must never break the turn — callers swallow it.
    */
   streamReply?(req: StreamReplyRequest): Promise<void>
+  /** Close a cancelled/failed capture using only already accepted safe content. */
+  cancelStreamReply?(req: {
+    conversationRef: ConversationReference
+    streamKey: string
+    sendOptions?: OutboundRequest["sendOptions"]
+  }): Promise<void>
   edit?(messageId: string, patch: OutboundRequest): Promise<OutboundResult>
   delete?(messageId: string): Promise<void>
   /**

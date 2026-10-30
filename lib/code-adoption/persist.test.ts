@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import Dexie from "dexie"
 
-import { getDb } from "@/lib/db/schema"
+import { activateAccountDatabase, clearAccountDatabaseSelection, getDb } from "@/lib/db/schema"
 
 import {
   getCodeAdoptionTurn,
@@ -12,12 +13,15 @@ import {
   listRecentCodeAdoptionTurns,
   persistCodeAdoptionTurn,
   pruneCodeAdoptionTurns,
+  captureCodeAdoptionDatabaseScope,
 } from "./persist"
 import type { CodeAdoptionTurnRow } from "./types"
 
 beforeEach(async () => {
+  clearAccountDatabaseSelection()
   await getDb().codeAdoptionTurns.clear()
 }, 30_000)
+afterEach(() => clearAccountDatabaseSelection())
 
 function turn(sessionId: string, runId: number, ts: number): CodeAdoptionTurnRow {
   return {
@@ -41,6 +45,41 @@ it("persists and reads back by id", async () => {
   const row = await getCodeAdoptionTurn("s1:1")
   expect(row?.totalAdded).toBe(3)
   expect(row?.files[0].hunks).toEqual([[1, 3]])
+})
+
+it("rejects stale writes and pruning instead of selecting the newly active database", async () => {
+  const scope = captureCodeAdoptionDatabaseScope()
+  activateAccountDatabase("code-adoption-persist-other", "host-B")
+  await getDb().codeAdoptionTurns.clear()
+  await persistCodeAdoptionTurn(turn("new-account", 1, 100))
+  await expect(persistCodeAdoptionTurn(turn("old-account", 1, 1), scope)).rejects.toThrow(
+    /database scope changed/i
+  )
+  await expect(pruneCodeAdoptionTurns(0, scope)).rejects.toThrow(/database scope changed/i)
+  expect((await getDb().codeAdoptionTurns.toArray()).map((row) => row.sessionId)).toEqual([
+    "new-account",
+  ])
+})
+
+it("does not fall through a delayed run lookup into a newly active database", async () => {
+  const table = getDb().codeAdoptionTurns
+  let finish!: (value: undefined) => void
+  const read = jest.spyOn(table, "get").mockImplementationOnce(
+    () =>
+      new Dexie.Promise<undefined>((resolve) => {
+        finish = resolve
+      })
+  )
+  const result = getCodeAdoptionTurnByTaskWorkspaceRun("run:missing")
+  activateAccountDatabase("code-adoption-lookup-other", "host-B")
+  await getDb().codeAdoptionTurns.clear()
+  await persistCodeAdoptionTurn({
+    ...turn("other-account", 1, 10),
+    taskWorkspaceRunId: "run:missing",
+  })
+  finish(undefined)
+  await expect(result).rejects.toThrow(/database scope changed/i)
+  read.mockRestore()
 })
 
 it("put is idempotent on the same turn key", async () => {
@@ -85,6 +124,43 @@ it("resolves a row from its authoritative Task Workspace run", async () => {
     measurement: "taskWorkspace",
   })
   expect((await getCodeAdoptionTurnByTaskWorkspaceRun("run:s1:1"))?.id).toBe("s1:1")
+})
+
+it("resolves every physical run of a multi-root turn", async () => {
+  await persistCodeAdoptionTurn({
+    ...turn("s1", 1, 10),
+    measurement: "taskWorkspace",
+    taskWorkspaceRunId: "run:primary",
+    taskWorkspaceRuns: [
+      { runId: "run:primary", workspaceRoot: "/primary", origin: { kind: "local" } },
+      { runId: "run:other", workspaceRoot: "/other", origin: { kind: "remote", hostId: "host-a" } },
+    ],
+  })
+  expect((await getCodeAdoptionTurnByTaskWorkspaceRun("run:other"))?.id).toBe("s1:1")
+})
+
+it("does not project a same-named run from a different originating Host", async () => {
+  await persistCodeAdoptionTurn({
+    ...turn("s1", 1, 10),
+    taskWorkspaceRunId: "native-run",
+    origin: { kind: "remote", hostId: "host-a" },
+  })
+  await persistCodeAdoptionTurn({
+    ...turn("s1", 2, 20),
+    taskWorkspaceRunId: "native-run",
+    origin: { kind: "remote", hostId: "host-b" },
+  })
+  expect(
+    (
+      await getCodeAdoptionTurnByTaskWorkspaceRun("native-run", {
+        kind: "remote",
+        hostId: "host-b",
+      })
+    )?.id
+  ).toBe("s1:2")
+  expect(
+    await getCodeAdoptionTurnByTaskWorkspaceRun("native-run", { kind: "local" })
+  ).toBeUndefined()
 })
 
 it("returns every row in an explicit inclusive time window", async () => {

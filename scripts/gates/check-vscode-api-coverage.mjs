@@ -108,7 +108,13 @@ export function inertDependencies() {
       apply: () => make(),
       construct: () => make(),
     })
-  return make({ extensionId: "cognia.api-coverage" })
+  return make({
+    extensionId: "cognia.api-coverage",
+    connection: make({
+      // The live JSON-RPC contract is asynchronous, including initial tool discovery.
+      sendRequest: async (method) => (method === "lm:listTools" ? [] : make()),
+    }),
+  })
 }
 
 /** Every declared value as `implemented`, `unsupported` (with its reason) or `missing`. */

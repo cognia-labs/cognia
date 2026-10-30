@@ -3,8 +3,9 @@
 import { execFileSync } from "node:child_process"
 import { existsSync, readFileSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
+import assert from "node:assert/strict"
 import ts from "typescript"
 import {
   assertStandaloneDeclaration,
@@ -75,8 +76,29 @@ export function assertDeclaredArtifacts(root = packageRoot) {
   }
 }
 
-export function buildPackage() {
+/** A successful bundle must expose the same actual contract in both formats. */
+export async function assertRuntimeContracts(root = packageRoot) {
+  const esm = await import(pathToFileURL(resolve(root, "dist/contracts.js")).href)
+  const cjs = createRequire(import.meta.url)(resolve(root, "dist/contracts.cjs"))
+  assert.deepEqual(
+    Object.keys(esm).sort(),
+    Object.keys(cjs).sort(),
+    "SDK ESM/CJS contract exports differ"
+  )
+  assert.match(
+    esm.PLUGIN_CONTRACT_VERSION ?? "",
+    /^\d+\.\d+\.\d+$/,
+    "SDK contract version is missing"
+  )
+  for (const key of ["PLUGIN_API_NAMESPACE_CONTRACTS", "AUTHOR_PLUGIN_POINT_CONTRACTS"]) {
+    assert.ok(Array.isArray(esm[key]) && esm[key].length > 0, `SDK contract ${key} is missing`)
+    assert.deepEqual(esm[key], cjs[key], `SDK ESM/CJS ${key} values differ`)
+  }
+}
+
+export async function buildPackage() {
   runTsup(packageRoot)
+  await assertRuntimeContracts()
   // Keep root workspace dependencies out of tsup's unconditional DTS externals.
   withDeclarationBuildRoot((cwd) =>
     runTsup(cwd, ["--config", resolve(packageRoot, "tsup.package-types.config.ts")])
@@ -85,5 +107,5 @@ export function buildPackage() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  buildPackage()
+  await buildPackage()
 }

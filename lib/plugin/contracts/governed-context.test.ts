@@ -1,5 +1,11 @@
 import { recordPluginApiAudit } from "./interface-catalog"
 import { PluginApiPolicyError, withGovernedPluginContext } from "./governed-context"
+import { detectPlatform, isCliHost } from "@/lib/platform/detect"
+
+jest.mock("@/lib/platform/detect", () => ({
+  detectPlatform: jest.fn(() => "web"),
+  isCliHost: jest.fn(() => false),
+}))
 
 jest.mock("./interface-catalog", () => {
   const actual = jest.requireActual("./interface-catalog")
@@ -9,7 +15,66 @@ jest.mock("./interface-catalog", () => {
 const audit = jest.mocked(recordPluginApiAudit)
 
 describe("withGovernedPluginContext", () => {
-  beforeEach(() => audit.mockClear())
+  beforeEach(() => {
+    audit.mockClear()
+    jest.mocked(detectPlatform).mockReturnValue("web")
+    jest.mocked(isCliHost).mockReturnValue(false)
+  })
+
+  it.each(["web", "mobile", "headless"] as const)(
+    "rejects desktop-only methods on the detected %s host before invocation",
+    (platform) => {
+      jest.mocked(detectPlatform).mockReturnValue(platform)
+      const getAvailability = jest.fn()
+      const context = withGovernedPluginContext(
+        { recorder: { getAvailability } },
+        { pluginId: "demo", hasPermission: () => true }
+      )
+
+      expect(() => context.recorder.getAvailability()).toThrow(
+        'cannot call "recorder.getAvailability": platform'
+      )
+      expect(getAvailability).not.toHaveBeenCalled()
+    }
+  )
+
+  it("classifies the standalone CLI as a headless host", () => {
+    jest.mocked(isCliHost).mockReturnValue(true)
+    const context = withGovernedPluginContext(
+      { recorder: { getAvailability: jest.fn() } },
+      { pluginId: "demo", hasPermission: () => true }
+    )
+
+    expect(() => context.recorder.getAvailability()).toThrow(
+      'cannot call "recorder.getAvailability": platform'
+    )
+  })
+
+  it("maps Tauri to the desktop contract platform", () => {
+    jest.mocked(detectPlatform).mockReturnValue("tauri")
+    const context = withGovernedPluginContext(
+      { recorder: { getAvailability: () => "ready" } },
+      { pluginId: "demo", hasPermission: () => true }
+    )
+
+    expect(context.recorder.getAvailability()).toBe("ready")
+  })
+
+  it.each([
+    ["files", "save"],
+    ["skills", "invokeBuiltIn"],
+    ["plans", "listAll"],
+    ["hooks", "listOwn"],
+  ])("allows the implemented %s.%s API through the catalog", (namespace, method) => {
+    const implementation = jest.fn(() => "called")
+    const context = withGovernedPluginContext(
+      { [namespace]: { [method]: implementation } },
+      { pluginId: "demo", hasPermission: () => true }
+    )
+
+    expect(context[namespace][method]()).toBe("called")
+    expect(implementation).toHaveBeenCalledTimes(1)
+  })
 
   it("preserves results and audits metadata for nested catalog methods", async () => {
     const context = withGovernedPluginContext(
@@ -62,5 +127,56 @@ describe("withGovernedPluginContext", () => {
     )
 
     expect(context.capabilities.handle).toBe(handle)
+  })
+})
+
+describe("new namespace policy refusals", () => {
+  it.each(["files.save", "skills.invokeBuiltIn", "plans.create"])(
+    "denies %s without its permission before invoking host code",
+    (id) => {
+      const [namespace, method] = id.split(".")
+      const implementation = jest.fn()
+      const context = withGovernedPluginContext(
+        { [namespace]: { [method]: implementation } },
+        {
+          pluginId: "unprivileged",
+          platform: "web",
+          hasPermission: () => false,
+        }
+      )
+      expect(() => context[namespace][method]()).toThrow("permission")
+      expect(implementation).not.toHaveBeenCalled()
+    }
+  )
+  it.each(["files.save", "skills.invokeBuiltIn", "plans.create"])(
+    "denies the frontend-only %s on Python",
+    (id) => {
+      const [namespace, method] = id.split(".")
+      const implementation = jest.fn()
+      const context = withGovernedPluginContext(
+        { [namespace]: { [method]: implementation } },
+        {
+          pluginId: "python",
+          runtime: "python",
+          platform: "desktop",
+          hasPermission: () => true,
+        }
+      )
+      expect(() => context[namespace][method]()).toThrow("runtime")
+      expect(implementation).not.toHaveBeenCalled()
+    }
+  )
+  it("denies file dialogs on headless hosts", () => {
+    const implementation = jest.fn()
+    const context = withGovernedPluginContext(
+      { files: { save: implementation } },
+      {
+        pluginId: "headless",
+        platform: "headless",
+        hasPermission: () => true,
+      }
+    )
+    expect(() => context.files.save()).toThrow("platform")
+    expect(implementation).not.toHaveBeenCalled()
   })
 })

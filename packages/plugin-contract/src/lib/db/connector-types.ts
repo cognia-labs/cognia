@@ -635,6 +635,8 @@ export interface OutboundJobRow {
   conversationKey: string
   request: OutboundRequest
   status: OutboundJobStatus
+  /** Non-indexed async correlation. Held in delivery_unknown and never automatically resent. */
+  pendingReceipt?: { id: string; acceptedAt: number; resolvedAt?: number }
   attempts: number
   lastError?: string
   /** Error code from the last attempt, used by the audit log + breaker. */

@@ -4,9 +4,14 @@
  * per-hunk added/deleted counters persisted by the patch ledger.
  */
 
-import type { PatchSet } from "@/lib/task-workspace/types"
+import type { PatchSet, TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 
-import { getCodeAdoptionTurnByTaskWorkspaceRun, persistCodeAdoptionTurn } from "./persist"
+import {
+  assertCodeAdoptionDatabaseScope,
+  captureCodeAdoptionDatabaseScope,
+  getCodeAdoptionTurnByTaskWorkspaceRun,
+  persistCodeAdoptionTurn,
+} from "./persist"
 import type { CodeAdoptionFile, CodeAdoptionState, CodeAdoptionTurnRow } from "./types"
 
 export type TaskWorkspaceOutcomeKind = "apply" | "undo" | "keepCurrent"
@@ -60,6 +65,18 @@ function summarize(row: CodeAdoptionTurnRow, files: CodeAdoptionFile[]): CodeAdo
     acceptedFiles === proposedFiles &&
     acceptedAdded === proposedAdded &&
     acceptedRemoved === proposedRemoved
+  const state: CodeAdoptionState =
+    files.length === 0
+      ? "notApplicable"
+      : files.every((file) => file.adoptionState === "reverted")
+        ? "reverted"
+        : files.every((file) => file.adoptionState === "rejected")
+          ? "rejected"
+          : acceptedFiles === 0 && files.some((file) => file.adoptionState === "pending")
+            ? "pending"
+            : complete
+              ? "accepted"
+              : "partiallyAccepted"
   return {
     ...row,
     files,
@@ -69,7 +86,7 @@ function summarize(row: CodeAdoptionTurnRow, files: CodeAdoptionFile[]): CodeAdo
     acceptedFiles,
     acceptedAdded,
     acceptedRemoved,
-    adoptionState: complete ? "accepted" : "partiallyAccepted",
+    adoptionState: state,
     adoptionReason: undefined,
   }
 }
@@ -77,30 +94,55 @@ function summarize(row: CodeAdoptionTurnRow, files: CodeAdoptionFile[]): CodeAdo
 /** Best-effort caller: failures must never alter the already-completed apply/undo action. */
 export async function recordTaskWorkspaceOutcome(
   patch: PatchSet,
-  kind: TaskWorkspaceOutcomeKind = patch.state === "reverted" ? "undo" : "apply"
+  kind: TaskWorkspaceOutcomeKind = patch.state === "reverted" ? "undo" : "apply",
+  origin?: TaskWorkspaceOrigin,
+  databaseScope = captureCodeAdoptionDatabaseScope()
 ): Promise<void> {
-  const row = await getCodeAdoptionTurnByTaskWorkspaceRun(patch.runId)
+  const row = await getCodeAdoptionTurnByTaskWorkspaceRun(patch.runId, origin, databaseScope)
+  assertCodeAdoptionDatabaseScope(databaseScope)
   if (!row || row.measurement !== "taskWorkspace") return
+
+  const ownsFile = (file: CodeAdoptionFile) =>
+    (file.taskWorkspaceRunId ?? row.taskWorkspaceRunId) === patch.runId
 
   if (kind === "undo" || kind === "keepCurrent" || patch.state === "reverted") {
     const state: CodeAdoptionState = kind === "keepCurrent" ? "rejected" : "reverted"
-    await persistCodeAdoptionTurn({
-      ...row,
-      files: row.files.map((file) => zeroAccepted(file, state)),
-      adoptionState: state,
-      acceptedFiles: 0,
-      acceptedAdded: 0,
-      acceptedRemoved: 0,
-    })
+    const files = row.files.map((file) => (ownsFile(file) ? zeroAccepted(file, state) : file))
+    await persistCodeAdoptionTurn(
+      {
+        ...summarize(row, files),
+        ...(row.capturedFiles
+          ? {
+              capturedFiles: row.capturedFiles.map((file) =>
+                ownsFile(file) ? zeroAccepted(file, state) : file
+              ),
+            }
+          : {}),
+      },
+      databaseScope
+    )
     return
   }
   if (patch.state !== "applied") return
   if (patch.appliedSelectionKnown !== true) {
-    await persistCodeAdoptionTurn({
-      ...row,
-      adoptionState: "unavailable",
-      adoptionReason: "appliedSelectionUnknown",
-    })
+    await persistCodeAdoptionTurn(
+      {
+        ...summarize(
+          row,
+          row.files.map((file) => (ownsFile(file) ? zeroAccepted(file, "unavailable") : file))
+        ),
+        adoptionState: "unavailable",
+        adoptionReason: "appliedSelectionUnknown",
+        ...(row.capturedFiles
+          ? {
+              capturedFiles: row.capturedFiles.map((file) =>
+                ownsFile(file) ? zeroAccepted(file, "unavailable") : file
+              ),
+            }
+          : {}),
+      },
+      databaseScope
+    )
     return
   }
 
@@ -109,6 +151,7 @@ export async function recordTaskWorkspaceOutcome(
     (patch.appliedSelection ?? []).map((selection) => [selection.path, selection.hunkIds])
   )
   const files = row.files.map((file) => {
+    if (!ownsFile(file)) return file
     const selected = appliesAll ? null : selections.get(file.path)
     if (selected === undefined) return zeroAccepted(file, "rejected")
     return acceptedFile(
@@ -117,5 +160,22 @@ export async function recordTaskWorkspaceOutcome(
       selected
     )
   })
-  await persistCodeAdoptionTurn(summarize(row, files))
+  const capturedFiles = row.capturedFiles?.map((file) => {
+    if (!ownsFile(file)) return file
+    const selected = appliesAll ? null : selections.get(file.path)
+    return selected === undefined
+      ? zeroAccepted(file, "rejected")
+      : acceptedFile(
+          file,
+          patch.files.find((candidate) => candidate.path === file.path),
+          selected
+        )
+  })
+  await persistCodeAdoptionTurn(
+    {
+      ...summarize(row, files),
+      ...(capturedFiles ? { capturedFiles } : {}),
+    },
+    databaseScope
+  )
 }

@@ -247,6 +247,9 @@ export interface A2UIButtonComponent extends A2UIBaseComponent {
   icon?: string
   iconPosition?: "left" | "right"
   loading?: A2UIBooleanOrPath
+  /** Shared interaction semantics; adapters must preserve or refuse them. */
+  confirmation?: { message: string; confirmLabel?: string; cancelLabel?: string }
+  exclusiveGroup?: string
 }
 
 /**

@@ -39,6 +39,14 @@ describe("I18n API", () => {
   })
 
   describe("createI18nAPI", () => {
+    it("uses the same translation and locale policy for compatibility aliases", () => {
+      const api = createI18nAPI(testPluginId)
+      expect(api.getLocale).toBe(api.getCurrentLocale)
+      expect(api.hasKey).toBe(api.hasTranslation)
+      api.registerTranslations("en", { greeting: "Hello" })
+      expect(api.hasKey("greeting")).toBe(true)
+      expect(api.getLocale()).toBe("en")
+    })
     it("should create an API object with all expected methods", () => {
       const api = createI18nAPI(testPluginId)
 

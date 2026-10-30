@@ -134,6 +134,7 @@ export interface ManagedIdeBrokerDependencies {
   authorize(pluginId: string, permission: PluginPermission, reason: string): Promise<boolean>
   requirePermission(pluginId: string, permission: PluginPermission, reason: string): void
   invoke(pluginId: string, handler: string, args: unknown[]): Promise<unknown>
+  activate?(pluginId: string, event: string): Promise<void>
   invokeAgent(
     agentId: string,
     prompt: string,
@@ -294,6 +295,25 @@ interface InflightProtocolInvocation {
   consumerId?: string
 }
 
+function managedProviderActivation(
+  provider: PluginIdeProviderDeclaration,
+  operation: string
+): string | undefined {
+  const metadata = provider.metadata ?? {}
+  if (provider.kind === "custom-editor" && operation === "resolve")
+    return `onCustomEditor:${provider.id}`
+  if (provider.kind === "file-system" && typeof metadata.scheme === "string")
+    return `onFileSystem:${metadata.scheme}`
+  if (
+    (provider.kind === "notebook-serializer" || provider.kind === "notebook-controller") &&
+    typeof metadata.notebookType === "string"
+  )
+    return `onNotebook:${metadata.notebookType}`
+  if (provider.kind === "debug-configuration" && typeof metadata.debugType === "string")
+    return `onDebugResolve:${metadata.debugType}`
+  return undefined
+}
+
 export class ManagedIdeBrokerRuntime {
   private readonly generations = new Map<string, number>()
   private readonly circuits = new Map<string, CircuitState>()
@@ -336,6 +356,7 @@ export class ManagedIdeBrokerRuntime {
   }
 
   private async dispatchInner(request: CodeServerBrokerRequest): Promise<unknown> {
+    if (request.method === "cognia/contribution/activate") return this.activateContribution(request)
     if (request.method.startsWith("cognia/protocol/")) {
       return this.dispatchProtocol(request)
     }
@@ -349,35 +370,24 @@ export class ManagedIdeBrokerRuntime {
       throw brokerError(-32601, "IDE_BROKER_METHOD_NOT_FOUND", request.method)
     }
     const params = validateInvokeParams(request.params)
-    this.acceptGeneration(request.root, request.generation)
-    if (params.workspaceRoot !== request.root) {
-      throw brokerError(-32002, "IDE_WORKSPACE_SCOPE_MISMATCH", params.workspaceRoot)
-    }
-    if (params.hostId !== this.dependencies.expectedHostId) {
-      throw brokerError(-32002, "IDE_HOST_SCOPE_MISMATCH", params.hostId)
-    }
-    if (!params.workspaceTrusted || !(await this.dependencies.isWorkspaceTrusted(request.root))) {
-      throw brokerError(-32003, "IDE_WORKSPACE_UNTRUSTED", request.root)
-    }
-
-    const plugin = this.dependencies.getPlugin(params.pluginId)
-    if (!plugin || plugin.status !== "enabled") {
-      throw brokerError(-32004, "IDE_PLUGIN_NOT_ACTIVE", params.pluginId)
-    }
-    if (plugin.manifest.version !== params.pluginVersion) {
-      throw brokerError(-32001, "IDE_PLUGIN_VERSION_MISMATCH", params.pluginVersion)
-    }
-    if (params.catalogHash !== IDE_CAPABILITY_CATALOG.catalogHash) {
-      throw brokerError(-32001, "IDE_CATALOG_MISMATCH", params.catalogHash)
-    }
-
-    const normalized = normalizeIdeManifest(params.pluginId, plugin.manifest).manifest
-    const expectedHash = await hashIdeManifest(normalized)
-    if (params.manifestHash !== expectedHash) {
-      throw brokerError(-32001, "IDE_MANIFEST_HASH_MISMATCH", params.manifestHash)
-    }
+    const { plugin, normalized } = await this.verifyManifestScope(request, params)
     const provider = findProvider(normalized.providers, params)
-    await this.authorizeProvider(plugin, provider, params)
+    const mutation =
+      provider.kind === "file-system" &&
+      ["writeFile", "createDirectory", "delete", "rename", "copy"].includes(params.operation)
+    const effectiveProvider = mutation
+      ? { ...provider, permission: "filesystem:write" as const }
+      : provider
+    if (
+      effectiveProvider.permission &&
+      !(plugin.manifest.permissions ?? []).includes(effectiveProvider.permission)
+    )
+      throw brokerError(-32003, "IDE_PERMISSION_NOT_DECLARED", effectiveProvider.permission)
+    if (
+      mutation &&
+      (provider.metadata?.options as { isReadonly?: unknown } | undefined)?.isReadonly === true
+    )
+      throw brokerError(-32003, "IDE_FILESYSTEM_READONLY", provider.id)
     const providerArguments = (await transformContentHandles(params.arguments, {
       decode: (handleId) =>
         this.dependencies.redeemContent(
@@ -389,7 +399,12 @@ export class ManagedIdeBrokerRuntime {
           handleId
         ),
     })) as unknown[]
-    const hostPaths = collectHostPaths(providerArguments)
+    const hostPaths = collectHostPaths(
+      providerArguments,
+      provider.kind === "file-system" && typeof provider.metadata?.scheme === "string"
+        ? provider.metadata.scheme
+        : undefined
+    )
     if (hostPaths.length > 0) {
       await this.dependencies.validatePaths(request.root, hostPaths)
     }
@@ -421,46 +436,72 @@ export class ManagedIdeBrokerRuntime {
         throw brokerError(-32800, "IDE_PROVIDER_CANCELLED", params.invocationId)
       }
       const result = await withDeadline(
-        provider.handler.startsWith("$agent:")
-          ? this.dependencies.invokeAgent(
-              provider.handler.slice("$agent:".length),
-              agentPrompt(providerArguments),
-              {
-                signal: controller.signal,
-                onEvent: (event) => {
-                  this.queueInvocationEvent({
-                    request,
-                    params,
-                    provider,
-                    invocationKey,
-                    invocation,
-                    event: "stream",
-                    payload: event,
-                  })
-                },
-                requestApproval: (toolName, input) =>
-                  this.requestAgentApproval({
-                    request,
-                    params,
-                    provider,
-                    invocationKey,
-                    invocation,
-                    toolName,
-                    input,
-                  }),
-              }
-            )
-          : this.dependencies.invoke(params.pluginId, provider.handler, [
-              params.operation,
-              ...providerArguments,
-            ]),
+        (async () => {
+          const event = managedProviderActivation(provider, params.operation)
+          if (event) await this.dependencies.activate?.(params.pluginId, event)
+          controller.signal.throwIfAborted()
+          this.acceptGeneration(request.root, request.generation)
+          const current = this.dependencies.getPlugin(params.pluginId)
+          if (
+            !current ||
+            current.status !== "enabled" ||
+            current.manifest.version !== params.pluginVersion ||
+            (await hashIdeManifest(
+              normalizeIdeManifest(params.pluginId, current.manifest).manifest
+            )) !== params.manifestHash
+          )
+            throw brokerError(-32004, "IDE_PLUGIN_NOT_ACTIVE", params.pluginId)
+          await this.authorizeProvider(current, effectiveProvider, params)
+          await this.verifyManifestScope(request, params)
+          controller.signal.throwIfAborted()
+          if (
+            this.inflight.get(invocationKey) !== invocation ||
+            this.dependencies.getPlugin(params.pluginId)?.status !== "enabled"
+          )
+            throw brokerError(-32800, "IDE_PROVIDER_INVOCATION_STALE", params.invocationId)
+          return provider.handler.startsWith("$agent:")
+            ? this.dependencies.invokeAgent(
+                provider.handler.slice("$agent:".length),
+                agentPrompt(providerArguments),
+                {
+                  signal: controller.signal,
+                  onEvent: (event) => {
+                    this.queueInvocationEvent({
+                      request,
+                      params,
+                      provider,
+                      invocationKey,
+                      invocation,
+                      event: "stream",
+                      payload: event,
+                    })
+                  },
+                  requestApproval: (toolName, input) =>
+                    this.requestAgentApproval({
+                      request,
+                      params,
+                      provider,
+                      invocationKey,
+                      invocation,
+                      toolName,
+                      input,
+                    }),
+                }
+              )
+            : this.dependencies.invoke(params.pluginId, provider.handler, [
+                params.operation,
+                ...providerArguments,
+              ])
+        })(),
         deadline,
         controller.signal
       )
       await invocation.eventTail
       return result
     }
-    const write = provider.permission ? WRITE_PERMISSIONS.has(provider.permission) : false
+    const write = effectiveProvider.permission
+      ? WRITE_PERMISSIONS.has(effectiveProvider.permission)
+      : false
     const key = `${request.root}:${params.providerId}`
     try {
       const result = await this.scheduler.run(key, write, operation)
@@ -481,12 +522,104 @@ export class ManagedIdeBrokerRuntime {
       throw error
     } finally {
       if (this.inflight.get(invocationKey)?.controller === controller) {
+        controller.abort(brokerError(-32800, "IDE_PROVIDER_INVOCATION_CLOSED", params.invocationId))
         this.rejectApprovals(
           this.inflight.get(invocationKey),
           brokerError(-32800, "IDE_PROVIDER_INVOCATION_CLOSED", params.invocationId)
         )
         this.inflight.delete(invocationKey)
       }
+    }
+  }
+
+  private async verifyManifestScope(
+    request: CodeServerBrokerRequest,
+    params: Pick<
+      ProviderInvokeParams,
+      | "workspaceRoot"
+      | "hostId"
+      | "workspaceTrusted"
+      | "pluginId"
+      | "pluginVersion"
+      | "catalogHash"
+      | "manifestHash"
+    >
+  ) {
+    this.acceptGeneration(request.root, request.generation)
+    if (params.workspaceRoot !== request.root)
+      throw brokerError(-32002, "IDE_WORKSPACE_SCOPE_MISMATCH", params.workspaceRoot)
+    if (params.hostId !== this.dependencies.expectedHostId)
+      throw brokerError(-32002, "IDE_HOST_SCOPE_MISMATCH", params.hostId)
+    if (!params.workspaceTrusted || !(await this.dependencies.isWorkspaceTrusted(request.root)))
+      throw brokerError(-32003, "IDE_WORKSPACE_UNTRUSTED", request.root)
+    const plugin = this.dependencies.getPlugin(params.pluginId)
+    if (!plugin) throw brokerError(-32004, "IDE_PLUGIN_NOT_ACTIVE", params.pluginId)
+    if (plugin.manifest.version !== params.pluginVersion)
+      throw brokerError(-32001, "IDE_PLUGIN_VERSION_MISMATCH", params.pluginVersion)
+    if (params.catalogHash !== IDE_CAPABILITY_CATALOG.catalogHash)
+      throw brokerError(-32001, "IDE_CATALOG_MISMATCH", params.catalogHash)
+    const normalized = normalizeIdeManifest(params.pluginId, plugin.manifest).manifest
+    if (params.manifestHash !== (await hashIdeManifest(normalized)))
+      throw brokerError(-32001, "IDE_MANIFEST_HASH_MISMATCH", params.manifestHash)
+    return { plugin, normalized }
+  }
+
+  private async activateContribution(request: CodeServerBrokerRequest): Promise<unknown> {
+    const raw = request.params as Record<string, unknown> | undefined
+    for (const field of [
+      "pluginId",
+      "pluginVersion",
+      "manifestHash",
+      "catalogHash",
+      "workspaceRoot",
+      "hostId",
+      "walkthroughId",
+      "invocationId",
+    ])
+      if (typeof raw?.[field] !== "string" || !raw[field])
+        throw brokerError(-32602, "IDE_CONTRIBUTION_PARAMS_INVALID", field)
+    const params = raw as unknown as Pick<
+      ProviderInvokeParams,
+      | "pluginId"
+      | "pluginVersion"
+      | "manifestHash"
+      | "catalogHash"
+      | "workspaceRoot"
+      | "hostId"
+      | "workspaceTrusted"
+      | "invocationId"
+    > & { walkthroughId: string }
+    const { normalized } = await this.verifyManifestScope(request, params)
+    if (!normalized.contributions.walkthroughs?.some((entry) => entry.id === params.walkthroughId))
+      throw brokerError(-32602, "IDE_WALKTHROUGH_NOT_DECLARED", params.walkthroughId)
+    const key = this.invocationKey(request.root, request.generation, params.invocationId)
+    if (this.inflight.has(key))
+      throw brokerError(-32600, "IDE_DUPLICATE_INVOCATION_ID", params.invocationId)
+    const controller = new AbortController()
+    this.inflight.set(key, {
+      controller,
+      pluginId: params.pluginId,
+      providerId: params.walkthroughId,
+      operation: "open",
+      eventTail: Promise.resolve(),
+      queuedEvents: 0,
+      approvals: new Map(),
+    })
+    try {
+      await withDeadline(
+        this.dependencies.activate?.(params.pluginId, `onWalkthrough:${params.walkthroughId}`) ??
+          Promise.resolve(),
+        DEFAULT_PROVIDER_TIMEOUT_MS,
+        controller.signal
+      )
+      controller.signal.throwIfAborted()
+      const { plugin } = await this.verifyManifestScope(request, params)
+      controller.signal.throwIfAborted()
+      if (plugin.status !== "enabled")
+        throw brokerError(-32004, "IDE_PLUGIN_NOT_ACTIVE", params.pluginId)
+      return { walkthroughId: params.walkthroughId }
+    } finally {
+      this.inflight.delete(key)
     }
   }
 
@@ -1350,6 +1483,11 @@ export function createManagedIdeBrokerDependencies(): ManagedIdeBrokerDependenci
     },
     invoke: (pluginId, handler, args) =>
       getPluginManager().invokeIdeProvider(pluginId, handler, args),
+    activate: (pluginId, event) =>
+      getPluginManager().activateManagedIdeContribution(
+        pluginId,
+        event as import("@/lib/plugin/core/manager").PluginActivationRuntimeEvent
+      ),
     invokeAgent: async (agentId, prompt, context) => {
       const { dispatchSubagent } = await import("@/lib/plugin/agent-sdk/dispatch")
       const result = await dispatchSubagent(agentId, prompt, {
@@ -1626,7 +1764,7 @@ function findProvider(
   return provider
 }
 
-function collectHostPaths(value: unknown): string[] {
+function collectHostPaths(value: unknown, virtualScheme?: string): string[] {
   const paths = new Set<string>()
 
   const visit = (entry: unknown, key?: string): void => {
@@ -1666,6 +1804,12 @@ function collectHostPaths(value: unknown): string[] {
       paths.add(record.path)
     }
     for (const [childKey, child] of Object.entries(record)) {
+      if (
+        virtualScheme &&
+        record.scheme === virtualScheme &&
+        (childKey === "path" || childKey === "fsPath")
+      )
+        continue
       visit(child, childKey)
     }
   }

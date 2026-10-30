@@ -14,8 +14,8 @@
  *    shadowed ids).
  *  - The map is the only mutable state held by the closure; the factory is
  *    a true leaf module with no external imports.
- *  - Registration is idempotent under the default `last-wins` policy:
- *    re-registering the same key replaces the previous entry. The previous
+ *  - Registration is idempotent under the default `first-wins-cross-plugin` policy:
+ *    re-registering the same owner's key refreshes the previous entry. The previous
  *    entry is returned so callers can detect collisions.
  *  - Every entry carries an optional `pluginId` tag so the plugin manager
  *    can clean up all of one plugin's contributions in a single call via
@@ -35,15 +35,73 @@
  * factory instead of a hand-rolled Map.
  */
 
+// Ownership reservations contain keys only, never live handlers. A temporary
+// lifecycle pause must not let another plugin acquire the paused owner's keys.
+const ownershipReservations = new Map<
+  string,
+  { refs: number; active: number; keys: Map<symbol, Set<string>> }
+>()
+
+export function reservePluginOwnership(
+  pluginId: string,
+  enforce = true
+): { activate: () => void; dispose: () => void } {
+  const reservation = ownershipReservations.get(pluginId) ?? {
+    refs: 0,
+    active: 0,
+    keys: new Map<symbol, Set<string>>(),
+  }
+  ownershipReservations.set(pluginId, reservation)
+  reservation.refs += 1
+  let active = enforce
+  let disposed = false
+  if (active) reservation.active += 1
+  return {
+    activate: () => {
+      if (!disposed && !active) {
+        active = true
+        reservation.active += 1
+      }
+    },
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      reservation.refs -= 1
+      if (active) reservation.active -= 1
+      if (reservation.refs === 0) ownershipReservations.delete(pluginId)
+    },
+  }
+}
+
+export function rememberReservedPluginKey(
+  pluginId: string | null | undefined,
+  scope: symbol,
+  key: string
+): void {
+  if (!pluginId) return
+  const reservation = ownershipReservations.get(pluginId)
+  if (!reservation) return
+  const keys = reservation.keys.get(scope) ?? new Set<string>()
+  keys.add(key)
+  reservation.keys.set(scope, keys)
+}
+
+export function getReservedPluginKeyOwner(scope: symbol, key: string): string | undefined {
+  for (const [id, reservation] of ownershipReservations) {
+    if (reservation.active > 0 && reservation.keys.get(scope)?.has(key)) return id
+  }
+  return undefined
+}
+
 export interface OverlayRegistry<T> {
   /**
    * Register an entry. Returns the previously registered entry (if any) so
    * callers can detect collisions.
    *
    * Conflict behaviour depends on `conflictPolicy` (factory option):
-   *  - `"last-wins"` (default): re-registering the same key replaces the
+   *  - `"last-wins"` (explicit opt-in): re-registering the same key replaces the
    *    previous entry — registration is idempotent.
-   *  - `"first-wins-cross-plugin"`: a key already held by a *different*
+   *  - `"first-wins-cross-plugin"` (default): a key already held by a *different*
    *    pluginId is NOT overwritten (the incumbent wins); `onConflict` fires
    *    and the incumbent is returned. A re-register by the *same* pluginId
    *    still refreshes (so hot-reload / snapshot-restore keep working).
@@ -125,8 +183,7 @@ export interface CreateOverlayRegistryOptions<T> {
    */
   keyFn?: (id: string, entry: T, opts?: { pluginId?: string }) => string
   /**
-   * Collision resolution. Defaults to `"last-wins"` (preserves the original
-   * overlay-registry semantics). `"first-wins-cross-plugin"` keeps the
+   * Collision resolution. Defaults to `"first-wins-cross-plugin"`. `"first-wins-cross-plugin"` keeps the
    * incumbent when a *different* plugin re-uses a key, but still lets the
    * *same* plugin refresh its own entry.
    */
@@ -160,8 +217,9 @@ export function createOverlayRegistry<T>(
   // Map preserves insertion order, which `entries()` and `list()` rely on
   // so callers see registrations in the order they happened.
   const store = new Map<string, InternalEntry<T>>()
+  const ownershipScope = Symbol(options?.name)
   const keyFn = options?.keyFn
-  const conflictPolicy = options?.conflictPolicy ?? "last-wins"
+  const conflictPolicy = options?.conflictPolicy ?? "first-wins-cross-plugin"
   const onConflict = options?.onConflict
   const metadata = options?.metadata
 
@@ -176,11 +234,12 @@ export function createOverlayRegistry<T>(
     register(id, entry, opts) {
       const key = keyFn ? keyFn(id, entry, opts) : id
       const previous = store.get(key)
+      const reservedOwner = getReservedPluginKeyOwner(ownershipScope, key)
 
       if (
-        previous &&
+        (previous || reservedOwner) &&
         conflictPolicy === "first-wins-cross-plugin" &&
-        previous.pluginId !== opts?.pluginId
+        (reservedOwner ?? previous?.pluginId) !== opts?.pluginId
       ) {
         // A different plugin already owns this key — the incumbent wins.
         // Report and leave the store untouched; the caller gets the
@@ -190,7 +249,7 @@ export function createOverlayRegistry<T>(
         onConflict?.({
           name: options?.name,
           key,
-          existingPluginId: previous.pluginId,
+          existingPluginId: reservedOwner ?? previous?.pluginId,
           incomingPluginId: opts?.pluginId,
         })
         return previous
@@ -206,6 +265,7 @@ export function createOverlayRegistry<T>(
     },
 
     unregisterById(id) {
+      rememberReservedPluginKey(store.get(id)?.pluginId, ownershipScope, id)
       const removed = store.delete(id)
       if (removed) notifyChanged()
       return removed
@@ -215,6 +275,7 @@ export function createOverlayRegistry<T>(
       let removed = 0
       for (const [id, value] of store) {
         if (value.pluginId === pluginId) {
+          rememberReservedPluginKey(pluginId, ownershipScope, id)
           store.delete(id)
           removed += 1
         }

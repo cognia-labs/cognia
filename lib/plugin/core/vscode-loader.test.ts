@@ -423,6 +423,59 @@ describe("vscode-loader — Tauri mode", () => {
     jest.dontMock("@/lib/plugin/vscode-shim/workspace-document-handlers")
   })
 
+  it("cancels provider calls in their original generation and blocks an aborted queued send", async () => {
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const invoke = jest.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "plugin_load_vscode") return { generation: "test-generation" }
+      if (cmd === "plugin_invoke_vscode_rpc" && args?.method === "extension:call") {
+        started()
+        return new Promise(() => {})
+      }
+      return undefined
+    })
+    jest.doMock("@tauri-apps/api/core", () => ({ invoke }))
+    const { loadVscodeDefinition, callVscodeProvider } = await import("./vscode-loader")
+    await loadVscodeDefinition(baseManifest, "/tmp/plugin")
+    const controller = new AbortController()
+    const pending = callVscodeProvider(
+      baseManifest.id,
+      "invoke",
+      { token: "tool" },
+      controller.signal
+    )
+    const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" })
+    await ready
+    controller.abort()
+    await rejection
+    await Promise.resolve()
+    expect(invoke.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          "plugin_invoke_vscode_rpc",
+          expect.objectContaining({ generation: "test-generation", method: "extension:cancel" }),
+        ],
+      ])
+    )
+    const previousCalls = invoke.mock.calls.filter(
+      ([, args]) => args?.method === "extension:call"
+    ).length
+    const queuedController = new AbortController()
+    const queued = callVscodeProvider(
+      baseManifest.id,
+      "invoke",
+      { token: "tool" },
+      queuedController.signal
+    )
+    queuedController.abort()
+    await expect(queued).rejects.toMatchObject({ name: "AbortError" })
+    expect(invoke.mock.calls.filter(([, args]) => args?.method === "extension:call")).toHaveLength(
+      previousCalls
+    )
+  })
+
   it("survives configured Monaco failing to load (logs warn + continues activation)", async () => {
     const invoke = jest.fn(async (cmd: string) => {
       if (cmd === "plugin_load_vscode") return { generation: "test-generation" }
@@ -467,7 +520,7 @@ describe("vscode-loader — activation triggers", () => {
     jest.dontMock("@/lib/plugin/vscode-shim/activation-triggers")
   })
 
-  it("starts watching for dormant extensions' activation events when the dispatcher comes up", async () => {
+  it("does not replace the manager-owned activation listeners when the dispatcher comes up", async () => {
     jest.doMock("@tauri-apps/api/event", () => ({ listen: jest.fn(async () => () => {}) }))
     jest.doMock("@tauri-apps/api/core", () => ({ invoke: jest.fn(async () => undefined) }))
     const installVscodeActivationTriggers = jest.fn()
@@ -478,7 +531,7 @@ describe("vscode-loader — activation triggers", () => {
     }))
     const { ensureDispatcherConfigured } = await import("./vscode-loader")
     await ensureDispatcherConfigured()
-    expect(installVscodeActivationTriggers).toHaveBeenCalledWith(dependencies)
+    expect(installVscodeActivationTriggers).not.toHaveBeenCalled()
   })
 })
 

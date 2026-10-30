@@ -81,6 +81,8 @@ export type MessageSegment =
       /** The mentioned entity's stable platform id. For role/channel mentions on platforms that distinguish those (Discord), this carries the role or channel id; for user mentions, the user id. */
       userId: string
       displayName?: string
+      /** Broadcast mention. Requires explicit adapter support; not a user id. */
+      audience?: "all" | "online"
       /**
        * Mention kind. Defaults to `"user"` when unspecified so v18-v40
        * readers continue to treat every mention as a user mention.

@@ -32,6 +32,9 @@ import { killFromDock, spawnFromDock, wireSessionToStore } from "@/lib/terminal/
 import type { TabColorPreset } from "@/lib/terminal/tab-appearance"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useTerminalStore } from "@/stores/terminal/terminal-store"
+import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
+import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
+import { isTauri } from "@/lib/native/utils"
 
 import { ExtensionPtySession } from "./extension-pty-session"
 import { listProjectWorkspaceFolders } from "./lsp-workspace-manager"
@@ -63,6 +66,7 @@ const TAB_COLORS: Record<string, TabColorPreset> = {
 }
 
 export interface VscodeTerminalSpawn {
+  profileLaunchId?: string
   pluginId: string
   name?: string
   shell: string
@@ -73,6 +77,15 @@ export interface VscodeTerminalSpawn {
 }
 
 export interface VscodeTerminalDependencies {
+  localProfileTarget(): boolean
+  wantsEnabled(pluginId: string): Promise<boolean>
+  activateProfile(id: string): Promise<void>
+  callProvider(
+    pluginId: string,
+    method: string,
+    payload: unknown,
+    signal: AbortSignal
+  ): Promise<unknown>
   permissions(pluginId: string): Promise<readonly string[]>
   /**
    * Spawn a dock PTY for the extension; resolves with the new session's id,
@@ -113,6 +126,25 @@ export function createVscodeTerminalDependencies(input: {
   const store = () => useTerminalStore.getState()
   return {
     ...input,
+    localProfileTarget: () => isTauri() && useRemoteHostStore.getState().activeHostId === null,
+    wantsEnabled: async (pluginId) => {
+      if (!usePluginStore.getState().plugins[pluginId]) return false
+      return (
+        (
+          await (
+            await import("@/lib/plugin/core/manager")
+          )
+            .getPluginManager()
+            .getPluginLifecycleState(pluginId)
+        ).intent !== "disabled"
+      )
+    },
+    activateProfile: async (id) =>
+      (await import("@/lib/plugin/core/manager"))
+        .getPluginManager()
+        .handleActivationEvent(`onTerminalProfile:${id}`),
+    callProvider: async (...args) =>
+      (await import("@/lib/plugin/core/vscode-loader")).callVscodeProvider(...args),
     permissions: (pluginId) => listPluginPermissions(pluginId),
     async spawn(request) {
       const outcome = await spawnFromDock({
@@ -128,6 +160,16 @@ export function createVscodeTerminalDependencies(input: {
           enableShellIntegration: true,
         },
         store: store(),
+        ...(request.profileLaunchId
+          ? {
+              spawn: async (req: import("@/lib/terminal/types").SpawnRequest) => {
+                assertProfileLaunch(request.pluginId, request.profileLaunchId!)
+                const { TerminalSession } = await import("@/lib/terminal/session")
+                assertProfileLaunch(request.pluginId, request.profileLaunchId!)
+                return TerminalSession.spawn(req)
+              },
+            }
+          : {}),
         ...(request.name ? { title: request.name } : {}),
       })
       if (outcome.kind === "denied") {
@@ -193,6 +235,7 @@ export function createVscodeTerminalDependencies(input: {
 }
 
 interface Tracked {
+  profileLaunchId?: string
   pluginId: string
   terminalId: string
   sessionId: string
@@ -213,6 +256,163 @@ let stopWatching: (() => void) | null = null
 const terminals = new Map<string, Tracked>()
 /** Per extension, the active terminal it was last told. */
 const reportedActive = new Map<string, string | null>()
+const profileProviders = new Map<string, { pluginId: string; id: string; token: string }>()
+const profileListeners = new Set<() => void>()
+const profileLaunches = new Map<
+  string,
+  {
+    pluginId: string
+    id: string
+    projectId: string | null
+    token?: string
+    controller: AbortController
+  }
+>()
+
+export interface VscodeTerminalProfileDescriptor {
+  pluginId: string
+  id: string
+  title: string
+}
+const profileKey = (pluginId: string, id: string) => JSON.stringify([pluginId, id])
+const profilesChanged = () => {
+  for (const listener of profileListeners) listener()
+}
+
+export function subscribeVscodeTerminalProfiles(listener: () => void): () => void {
+  profileListeners.add(listener)
+  const stopPlugins = usePluginStore.subscribe(listener)
+  return () => {
+    profileListeners.delete(listener)
+    stopPlugins()
+  }
+}
+
+export async function listVscodeTerminalProfiles(): Promise<VscodeTerminalProfileDescriptor[]> {
+  if (!deps && (!isTauri() || useRemoteHostStore.getState().activeHostId !== null)) return []
+  const d = profileDependencies()
+  if (!d.localProfileTarget()) return []
+  const declared = Object.values(usePluginStore.getState().plugins).flatMap((plugin) =>
+    (plugin.manifest.vscodeExtension?.terminalProfiles ?? []).map((profile) => ({
+      pluginId: plugin.manifest.id,
+      id: profile.id,
+      title: profile.title ?? profile.id,
+    }))
+  )
+  const combined = new Map(
+    declared.map((profile) => [profileKey(profile.pluginId, profile.id), profile])
+  )
+  for (const provider of profileProviders.values())
+    if (!combined.has(profileKey(provider.pluginId, provider.id)))
+      combined.set(profileKey(provider.pluginId, provider.id), { ...provider, title: provider.id })
+  const available = await Promise.all(
+    [...combined.values()].map(async (profile) =>
+      (await d.wantsEnabled(profile.pluginId)) ? profile : undefined
+    )
+  )
+  return available.filter((profile): profile is VscodeTerminalProfileDescriptor => Boolean(profile))
+}
+
+function assertProfileLaunch(pluginId: string, launchId: string): void {
+  const launch = profileLaunches.get(launchId)
+  if (
+    !launch ||
+    launch.pluginId !== pluginId ||
+    launch.controller.signal.aborted ||
+    !requireDeps().localProfileTarget() ||
+    launch.projectId !== requireDeps().activeProjectId()
+  )
+    throw new Error("Terminal profile launch was cancelled or its local workspace target changed")
+}
+
+/** Discovery must work before the first dormant extension loads the shared RPC services. */
+function profileDependencies(): VscodeTerminalDependencies {
+  if (!deps)
+    configureVscodeTerminals(
+      createVscodeTerminalDependencies({
+        sendToHost: async (...args) =>
+          (await import("@/lib/plugin/core/vscode-loader")).invokeVscodeRpc(...args),
+      })
+    )
+  return requireDeps()
+}
+
+export async function openVscodeTerminalProfile(
+  pluginId: string,
+  id: string,
+  signal?: AbortSignal
+): Promise<string> {
+  const d = profileDependencies()
+  if (!d.localProfileTarget())
+    throw new Error("Extension terminal profiles require the local desktop Host")
+  const controller = new AbortController()
+  const abort = () => controller.abort(signal?.reason)
+  if (signal?.aborted) abort()
+  else signal?.addEventListener("abort", abort, { once: true })
+  const launchId = globalThis.crypto.randomUUID()
+  const launch = {
+    pluginId,
+    id,
+    projectId: d.activeProjectId(),
+    controller,
+    token: undefined as string | undefined,
+  }
+  profileLaunches.set(launchId, launch)
+  const timer = setTimeout(
+    () => controller.abort(new DOMException("Terminal profile timed out", "TimeoutError")),
+    30_000
+  )
+  let succeeded = false
+  try {
+    if (!(await d.wantsEnabled(pluginId)))
+      throw new Error("Terminal profile owner is disabled or unavailable")
+    await requirePermission(pluginId, "terminal:spawn")
+    assertProfileLaunch(pluginId, launchId)
+    await d.activateProfile(id)
+    assertProfileLaunch(pluginId, launchId)
+    if (!(await d.wantsEnabled(pluginId))) throw new Error("Terminal profile owner was disabled")
+    const provider = profileProviders.get(profileKey(pluginId, id))
+    if (!provider) throw new Error(`No terminal profile provider registered for ${id}`)
+    launch.token = provider.token
+    const result = (await d.callProvider(
+      pluginId,
+      "provideTerminalProfile",
+      { token: provider.token, profileLaunchId: launchId },
+      controller.signal
+    )) as { terminalId?: unknown } | null
+    assertProfileLaunch(pluginId, launchId)
+    if (
+      profileProviders.get(profileKey(pluginId, id)) !== provider ||
+      !(await d.wantsEnabled(pluginId))
+    )
+      throw new Error("Terminal profile provider was removed")
+    assertProfileLaunch(pluginId, launchId)
+    const terminal =
+      typeof result?.terminalId === "string"
+        ? terminals.get(keyOf(pluginId, result.terminalId))
+        : undefined
+    if (!terminal || terminal.profileLaunchId !== launchId || !d.hasTab(terminal.sessionId))
+      throw new Error("Terminal profile did not create a terminal")
+    d.show(terminal.sessionId)
+    succeeded = true
+    return terminal.sessionId
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener("abort", abort)
+    if (!succeeded) {
+      controller.abort()
+      for (const entry of terminals.values())
+        if (entry.profileLaunchId === launchId) {
+          try {
+            await d.kill(entry.sessionId)
+          } catch (error) {
+            log.warn("Failed to close a cancelled terminal profile", { error })
+          }
+        }
+    }
+    profileLaunches.delete(launchId)
+  }
+}
 
 const keyOf = (pluginId: string, terminalId: string) => `${pluginId}\u0000${terminalId}`
 
@@ -357,7 +557,6 @@ async function createProcessTerminal(
   terminalId: string,
   value: Record<string, unknown>
 ): Promise<{ name: string; processId?: number }> {
-  await requirePermission(pluginId, "terminal:spawn")
   const d = requireDeps()
   const name = typeof value.name === "string" && value.name ? value.name : undefined
   if (value.strictEnv === true || Array.isArray(value.unsetEnv)) {
@@ -379,6 +578,9 @@ async function createProcessTerminal(
   const previous = d.activeSessionId()
   const { sessionId, title, processId } = await d.spawn({
     pluginId,
+    ...(typeof value.profileLaunchId === "string"
+      ? { profileLaunchId: value.profileLaunchId }
+      : {}),
     name,
     shell: typeof value.shellPath === "string" ? value.shellPath : "",
     args: Array.isArray(value.shellArgs) ? value.shellArgs.map(String) : undefined,
@@ -386,8 +588,19 @@ async function createProcessTerminal(
     env,
     projectId: projectId ?? undefined,
   })
+  if (typeof value.profileLaunchId === "string") {
+    try {
+      assertProfileLaunch(pluginId, value.profileLaunchId)
+    } catch (error) {
+      await d.kill(sessionId)
+      throw error
+    }
+  }
   const entry: Tracked = {
     pluginId,
+    ...(typeof value.profileLaunchId === "string"
+      ? { profileLaunchId: value.profileLaunchId }
+      : {}),
     terminalId,
     sessionId,
     kind: "process",
@@ -418,6 +631,9 @@ function createPtyTerminal(
     pluginId,
     terminalId,
     sessionId: "",
+    ...(typeof value.profileLaunchId === "string"
+      ? { profileLaunchId: value.profileLaunchId }
+      : {}),
     kind: "pty",
     disposed: false,
     ended: false,
@@ -453,11 +669,39 @@ function applyColor(sessionId: string, color: unknown): void {
 
 export function installVscodeTerminalHandlers(): Array<() => void> {
   return [
+    registerMethod("terminal:registerProfile", (payload, context) => {
+      const value = owned(payload, context)
+      const id = requiredString(value, "id")
+      const key = profileKey(context.pluginId, id)
+      if (profileProviders.has(key)) throw new Error(`Terminal profile ${id} is already registered`)
+      profileProviders.set(key, {
+        pluginId: context.pluginId,
+        id,
+        token: requiredString(value, "token"),
+      })
+      profilesChanged()
+      return null
+    }),
+    registerMethod("terminal:unregisterProfile", (payload, context) => {
+      const value = owned(payload, context)
+      const id = requiredString(value, "id")
+      const provider = profileProviders.get(profileKey(context.pluginId, id))
+      if (provider?.token !== requiredString(value, "token")) return null
+      profileProviders.delete(profileKey(context.pluginId, id))
+      for (const launch of profileLaunches.values())
+        if (launch.pluginId === context.pluginId && launch.id === id) launch.controller.abort()
+      profilesChanged()
+      return null
+    }),
     registerMethod("terminal:create", async (payload, context) => {
       const value = owned(payload, context)
       const terminalId = requiredString(value, "terminalId")
       if (terminals.has(keyOf(context.pluginId, terminalId))) {
         throw new Error(`Terminal ${terminalId} already exists`)
+      }
+      await requirePermission(context.pluginId, "terminal:spawn")
+      if (value.profileLaunchId !== undefined) {
+        assertProfileLaunch(context.pluginId, requiredString(value, "profileLaunchId"))
       }
       return value.kind === "pty"
         ? createPtyTerminal(context.pluginId, terminalId, value)
@@ -527,6 +771,11 @@ export function installVscodeTerminalHandlers(): Array<() => void> {
 
 /** The extension's host stopped: its extension terminals end; its shells stay with the user. */
 export function clearVscodeTerminalsForPlugin(pluginId: string): void {
+  for (const [key, provider] of profileProviders)
+    if (provider.pluginId === pluginId) profileProviders.delete(key)
+  for (const launch of profileLaunches.values())
+    if (launch.pluginId === pluginId) launch.controller.abort()
+  profilesChanged()
   reportedActive.delete(pluginId)
   for (const [key, entry] of [...terminals]) {
     if (entry.pluginId !== pluginId) continue
@@ -537,6 +786,10 @@ export function clearVscodeTerminalsForPlugin(pluginId: string): void {
 }
 
 export function __resetVscodeTerminalsForTesting(): void {
+  for (const launch of profileLaunches.values()) launch.controller.abort()
+  profileLaunches.clear()
+  profileProviders.clear()
+  profileListeners.clear()
   for (const entry of terminals.values()) for (const stop of entry.stops) stop()
   terminals.clear()
   reportedActive.clear()

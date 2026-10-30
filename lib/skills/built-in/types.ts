@@ -68,6 +68,8 @@ export interface BilingualString {
 export interface BuiltInSkillContext {
   /** The chat session this invocation belongs to. */
   sessionId: string
+  /** Host-owned cancellation; never serialized into persisted confirmation bindings. */
+  signal?: AbortSignal
   /**
    * Effective working directory resolved from the session or its linked
    * workspace. Filesystem-backed desktop skills are confined to this root.

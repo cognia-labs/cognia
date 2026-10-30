@@ -110,6 +110,7 @@ const BUILT_IN_OVERRIDES: Partial<Record<PlatformKind, Partial<ConnectorRuntimeC
     // idempotency key so a retry is REJECTED (not delivered twice), but the
     // rejection is an error rather than the original id → still reconcile.
     "qq-official": {
+      textStreaming: true,
       unmentionedDelivery: true,
       interactiveControls: true,
       ambiguousDelivery: "reconciliation_required",
@@ -144,6 +145,8 @@ export function connectorRuntimeCapabilitiesForScope(
   scopeKind: ChannelKind
 ): ConnectorRuntimeCapabilityMatrix {
   const capabilities = builtInConnectorRuntimeCapabilities(platform)
+  if (platform === "qq-official" && scopeKind !== "private")
+    return { ...capabilities, textStreaming: false }
   if (platform === "lark" && scopeKind !== "private") {
     return { ...capabilities, followUpBubbles: false }
   }

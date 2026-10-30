@@ -1,5 +1,9 @@
 import type { ProxyDescriptor } from "./types.ts"
 
+export function walkthroughCommandId(id: string): string {
+  return `${id}.openWalkthrough`
+}
+
 /**
  * Enumerate the Code 1.128 contribution identifiers that occupy a global
  * extension-host registry. The same table is used at generation time and at

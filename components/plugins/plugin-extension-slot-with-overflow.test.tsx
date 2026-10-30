@@ -1,4 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react"
+import { registerInterceptor } from "@/lib/plugin/interceptors/registry"
+import { createInterceptorRegistration } from "@/lib/plugin/interceptors/normalize"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { PluginExtensionSlotWithOverflow } from "./plugin-extension-slot-with-overflow"
 import {
@@ -64,6 +66,32 @@ const renderUI = (ui: Parameters<typeof render>[0]) =>
   render(<TooltipProvider>{ui}</TooltipProvider>)
 
 describe("PluginExtensionSlotWithOverflow", () => {
+  it("uses transformed visibility before allocating overflow", async () => {
+    ;(getExtensionsForPoint as jest.Mock).mockReturnValue([
+      makeExt("a", 2, "A"),
+      makeExt("b", 1, "B"),
+      makeExt("c", 0, "C"),
+    ])
+    const dispose = registerInterceptor(
+      createInterceptorRegistration({
+        pluginId: "filter",
+        pointId: "ui.surface.project",
+        semantic: "transform",
+        source: "interceptors",
+        handler: ((input: { extensionId: string }) => ({
+          ...input,
+          presentation: { hidden: input.extensionId !== "c", title: "Only C" },
+        })) as never,
+      })
+    )
+    try {
+      renderUI(<PluginExtensionSlotWithOverflow point={POINT} limit={1} overflowLabel="More" />)
+      await waitFor(() => expect(screen.getByTitle("Only C")).toBeVisible())
+      expect(screen.queryByRole("button", { name: "More" })).not.toBeInTheDocument()
+    } finally {
+      dispose()
+    }
+  })
   it("renders the fallback when no extensions are registered", () => {
     ;(getExtensionsForPoint as jest.Mock).mockReturnValue([])
     renderUI(

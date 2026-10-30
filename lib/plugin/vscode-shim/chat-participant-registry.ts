@@ -8,25 +8,25 @@
  * `characters` table so cognia's existing character chooser, inbox, and
  * chat composer treat it like any first-party character.
  *
- * Participant invocation (the actual `chatParticipant.respond(...)` call)
- * isn't wired here — that piece is the next iteration of this plan. For
- * now we cover the registration / disposal lifecycle so extensions don't
- * see "method not found" and so the character appears in cognia's UI as a
- * stable, dismissable entry.
+ * Invocation uses the same extension callback and cancellation transport as
+ * language providers. Response parts belong to one live request and owner.
  */
 
 import type { Character } from "@cognia/agent-config-types"
 import { getDb } from "@/lib/db/schema"
 import { loggers } from "@cognia/logging"
+import { hasApiOrGuardPermission } from "@/lib/plugin/api/api-permission-gate"
+import { assertNoLeakingPiiDeep } from "@/lib/plugin/api/plugin-pii-gate"
 
 const chatLogger = loggers.plugin.child("vscode-chat")
 
-interface ParticipantHandle {
+export interface ParticipantHandle {
   pluginId: string
   participantId: string
   characterId: string
   /** Token the sidecar gave us for `respond` callbacks. */
   respondToken?: string
+  generation: string
   /** Token for `chatVariableResolver`. */
   variableResolverToken?: string
 }
@@ -49,11 +49,13 @@ interface CreateParticipantPayload {
   iconEmoji?: string
   /** Token the sidecar gave us so we can call the participant later. */
   respondToken?: string
+  token?: string
 }
 
 interface DisposeParticipantPayload {
   extensionId: string
   id: string
+  token?: string
 }
 
 interface RegisterVariableResolverPayload {
@@ -67,16 +69,23 @@ interface RegisterVariableResolverPayload {
   token: string
 }
 
+export type ChatParticipantPart =
+  { kind: "markdown" | "progress"; value: string } | { kind: "reference"; value: string }
+
+export interface ChatParticipantHistoryTurn {
+  role: "user" | "assistant"
+  content: string
+  participant?: string
+  result?: { metadata?: unknown }
+}
+
 interface ParticipantRespondPayload {
   /** Plugin/extension that owns the participant. */
   extensionId: string
   /** Participant id. */
   id: string
-  /** Free-form payload — at minimum a `prompt` string. */
-  payload: {
-    prompt: string
-    [key: string]: unknown
-  }
+  requestId: string
+  part: ChatParticipantPart
 }
 
 /**
@@ -85,17 +94,101 @@ interface ParticipantRespondPayload {
  * keep the suite Dexie-free.
  */
 interface ChatRegistryDeps {
+  declarations: () => Promise<
+    Array<{ pluginId: string; id: string; name: string; description?: string }>
+  >
   upsertCharacter: (character: Character) => Promise<void>
-  deleteCharacter: (id: string) => Promise<void>
+  activate: (participantId: string) => Promise<void>
+  canInvoke: (pluginId: string) => Promise<boolean>
+  callProvider: (
+    pluginId: string,
+    method: string,
+    payload: unknown,
+    signal?: AbortSignal
+  ) => Promise<unknown>
 }
 
-let deps: ChatRegistryDeps = {
-  upsertCharacter: async (character) => {
-    await getDb().characters.put(character)
-  },
-  deleteCharacter: async (id) => {
-    await getDb().characters.delete(id)
-  },
+function createDefaultDeps(): ChatRegistryDeps {
+  return {
+    declarations: async () => {
+      const { usePluginStore } = await import("@/stores/plugin-runtime/plugin-store")
+      const plugins = Object.values(usePluginStore.getState().plugins).filter(
+        (plugin) => plugin.manifest.vscodeExtension?.chatParticipants?.length
+      )
+      if (!plugins.length) return []
+      const { getPluginManager } = await import("@/lib/plugin/core/manager")
+      const rows = await Promise.all(
+        plugins.map(async (plugin) => {
+          if (
+            (await getPluginManager().getPluginLifecycleState(plugin.manifest.id)).intent ===
+            "disabled"
+          )
+            return []
+          return plugin.manifest.vscodeExtension!.chatParticipants!.map((item) => ({
+            ...item,
+            pluginId: plugin.manifest.id,
+          }))
+        })
+      )
+      return rows.flat()
+    },
+    upsertCharacter: async (character) => {
+      const db = getDb()
+      await db.transaction("rw", db.characters, async () => {
+        const stored = await db.characters.get(character.id)
+        await db.characters.put({
+          ...character,
+          ...stored,
+          id: character.id,
+          sourcePluginId: character.sourcePluginId,
+          availableOnPlatforms: character.availableOnPlatforms,
+        })
+      })
+    },
+    activate: async (id) => {
+      const { getPluginManager } = await import("@/lib/plugin/core/manager")
+      await getPluginManager().handleActivationEvent(`onChatParticipant:${id}`)
+    },
+    canInvoke: async (id) => {
+      const { getPluginManager } = await import("@/lib/plugin/core/manager")
+      const plugin = getPluginManager().getPlugin(id)
+      return (
+        plugin?.status === "enabled" &&
+        (await getPluginManager().getPluginLifecycleState(id)).intent !== "disabled" &&
+        hasApiOrGuardPermission(id, "session:read")
+      )
+    },
+    callProvider: async (...args) => {
+      const { callVscodeProvider } = await import("@/lib/plugin/core/vscode-loader")
+      return callVscodeProvider(...args)
+    },
+  }
+}
+let deps = createDefaultDeps()
+const requests = new Map<
+  string,
+  {
+    handle: ParticipantHandle
+    controller: AbortController
+    text: string
+    sessionId: string
+    onPart?: (part: ChatParticipantPart) => void | Promise<void>
+    pending: Promise<void>
+  }
+>()
+
+function abortParticipant(handle: ParticipantHandle): void {
+  for (const call of requests.values()) {
+    if (call.handle === handle)
+      call.controller.abort(new DOMException("Chat participant cancelled", "AbortError"))
+  }
+}
+
+export function cancelVscodeChatParticipantSession(sessionId: string): void {
+  for (const call of requests.values()) {
+    if (call.sessionId === sessionId)
+      call.controller.abort(new DOMException("Chat participant cancelled", "AbortError"))
+  }
 }
 
 export function configureChatRegistry(overrides: Partial<ChatRegistryDeps>): void {
@@ -103,15 +196,10 @@ export function configureChatRegistry(overrides: Partial<ChatRegistryDeps>): voi
 }
 
 export function __resetChatRegistryForTesting(): void {
+  for (const handle of participants.values()) abortParticipant(handle)
+  requests.clear()
   participants.clear()
-  deps = {
-    upsertCharacter: async (character) => {
-      await getDb().characters.put(character)
-    },
-    deleteCharacter: async (id) => {
-      await getDb().characters.delete(id)
-    },
-  }
+  deps = createDefaultDeps()
 }
 
 export async function handleCreateChatParticipant(
@@ -124,21 +212,34 @@ export async function handleCreateChatParticipant(
       pluginId: payload.extensionId,
       participantId: payload.id,
     })
-    existing.respondToken = payload.respondToken ?? existing.respondToken
+    abortParticipant(existing)
+    existing.respondToken = payload.token ?? payload.respondToken ?? existing.respondToken
+    existing.generation = globalThis.crypto.randomUUID()
     return { characterId: existing.characterId }
   }
   const characterId = buildCharacterId(payload.extensionId, payload.id)
   const now = Date.now()
   const character: Character = {
     id: characterId,
+    sourcePluginId: payload.extensionId,
     name: payload.name ?? payload.id,
     description: payload.description,
     avatarColor: "oklch(0.72 0.14 285)",
     avatarEmoji: payload.iconEmoji,
     systemPrompt: "",
+    availableOnPlatforms: ["tauri", "headless"],
     createdAt: now,
     updatedAt: now,
   }
+  const handle: ParticipantHandle = {
+    pluginId: payload.extensionId,
+    participantId: payload.id,
+    characterId,
+    respondToken: payload.token ?? payload.respondToken,
+    generation: globalThis.crypto.randomUUID(),
+  }
+  const generation = handle.generation
+  participants.set(key, handle)
   try {
     await deps.upsertCharacter(character)
   } catch (err) {
@@ -148,12 +249,8 @@ export async function handleCreateChatParticipant(
       error: err instanceof Error ? err.message : String(err),
     })
   }
-  participants.set(key, {
-    pluginId: payload.extensionId,
-    participantId: payload.id,
-    characterId,
-    respondToken: payload.respondToken,
-  })
+  if (participants.get(key) !== handle || handle.generation !== generation)
+    throw new Error("Chat participant registration was cancelled or replaced")
   return { characterId }
 }
 
@@ -163,16 +260,11 @@ export async function handleDisposeChatParticipant(
   const key = `${payload.extensionId}::${payload.id}`
   const handle = participants.get(key)
   if (!handle) return
+  if (payload.token && payload.token !== handle.respondToken) return
+  abortParticipant(handle)
   participants.delete(key)
-  try {
-    await deps.deleteCharacter(handle.characterId)
-  } catch (err) {
-    chatLogger.warn("deleteCharacter failed during participant disposal", {
-      pluginId: payload.extensionId,
-      participantId: payload.id,
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
+  // The row owns user policy/preferences. Discovery hides unavailable participants;
+  // dropping a live callback must not erase restrictions on its next activation.
 }
 
 export function handleRegisterChatVariableResolver(payload: RegisterVariableResolverPayload): {
@@ -200,24 +292,171 @@ export function handleUnregisterChatVariableResolver(
   if (handle) handle.variableResolverToken = undefined
 }
 
-/**
- * Notification handler the sidecar can fire to surface a streaming chunk
- * back from a participant. The renderer side currently just logs; the
- * chat UI binding lands in the next iteration. We keep the handler in
- * place so the sidecar's `respond()` callback gets a valid pipe.
- */
-export function handleChatParticipantRespond(payload: ParticipantRespondPayload): void {
-  chatLogger.debug("chat participant respond received", {
-    pluginId: payload.extensionId,
-    participantId: payload.id,
-    promptLength: payload.payload?.prompt?.length ?? 0,
+export async function handleChatParticipantRespond(
+  payload: ParticipantRespondPayload
+): Promise<void> {
+  const call = requests.get(payload.requestId)
+  if (!call || call.controller.signal.aborted)
+    throw new Error("Chat participant request is inactive")
+  if (call.handle.pluginId !== payload.extensionId || call.handle.participantId !== payload.id) {
+    throw new Error("Chat participant response ownership mismatch")
+  }
+  const part = payload.part
+  if (
+    !part ||
+    !["markdown", "progress", "reference"].includes(part.kind) ||
+    typeof part.value !== "string"
+  ) {
+    throw new Error("Unsupported chat participant response part")
+  }
+  if (part.kind === "reference" && !/^https?:\/\//i.test(part.value))
+    throw new Error("Chat participant references support HTTP(S) URLs only")
+  call.pending = call.pending.then(async () => {
+    if (call.controller.signal.aborted)
+      throw new DOMException("Chat participant cancelled", "AbortError")
+    if (part.kind === "markdown") call.text += part.value
+    await call.onPart?.(part)
   })
+  await call.pending
+}
+
+export async function resolveVscodeChatParticipant(
+  characterId: string
+): Promise<ParticipantHandle> {
+  let handle = [...participants.values()].find((item) => item.characterId === characterId)
+  if (!handle && characterId.startsWith("vscode-chat:")) {
+    const participant = (await deps.declarations()).find(
+      (item) => buildCharacterId(item.pluginId, item.id) === characterId
+    )
+    if (participant) await deps.activate(participant.id)
+    handle = [...participants.values()].find((item) => item.characterId === characterId)
+  } else if (handle) {
+    await deps.activate(handle.participantId)
+    handle = participants.get(`${handle.pluginId}::${handle.participantId}`)
+  }
+  if (!handle?.respondToken || !(await deps.canInvoke(handle.pluginId))) {
+    throw new Error("Chat participant is disabled or unavailable")
+  }
+  return { ...handle }
+}
+
+/** Data-only discovery keeps dormant extensions selectable without running them. */
+export async function listVscodeChatParticipantCharacters(): Promise<Character[]> {
+  const characters = new Map<string, Character>()
+  for (const item of await deps.declarations()) {
+    const id = buildCharacterId(item.pluginId, item.id)
+    characters.set(id, {
+      id,
+      name: item.name,
+      description: item.description,
+      sourcePluginId: item.pluginId,
+      systemPrompt: "",
+      availableOnPlatforms: ["tauri", "headless"],
+      avatarColor: "oklch(0.72 0.14 285)",
+      createdAt: 0,
+      updatedAt: 0,
+    })
+  }
+  for (const handle of participants.values()) {
+    if (characters.has(handle.characterId) || !(await deps.canInvoke(handle.pluginId))) continue
+    characters.set(handle.characterId, {
+      id: handle.characterId,
+      name: handle.participantId,
+      sourcePluginId: handle.pluginId,
+      systemPrompt: "",
+      availableOnPlatforms: ["tauri", "headless"],
+      avatarColor: "oklch(0.72 0.14 285)",
+      createdAt: 0,
+      updatedAt: 0,
+    })
+  }
+  return [...characters.values()]
+}
+
+export async function runVscodeChatParticipant(input: {
+  characterId: string
+  prompt: string
+  sessionId: string
+  history?: ChatParticipantHistoryTurn[]
+  signal?: AbortSignal
+  generation?: string
+  onPart?: (part: ChatParticipantPart) => void | Promise<void>
+}): Promise<{ text: string; metadata?: unknown }> {
+  input.signal?.throwIfAborted()
+  const resolved = await resolveVscodeChatParticipant(input.characterId)
+  const handle = participants.get(`${resolved.pluginId}::${resolved.participantId}`)!
+  if (
+    !handle ||
+    handle.generation !== resolved.generation ||
+    (input.generation && input.generation !== handle.generation)
+  )
+    throw new Error("Chat participant registration changed; retry the turn")
+  input.signal?.throwIfAborted()
+  const controller = new AbortController()
+  const abort = () => controller.abort(input.signal?.reason)
+  input.signal?.addEventListener("abort", abort, { once: true })
+  const requestId = globalThis.crypto.randomUUID()
+  const call = {
+    handle,
+    controller,
+    sessionId: input.sessionId,
+    text: "",
+    onPart: input.onPart,
+    pending: Promise.resolve(),
+  }
+  requests.set(requestId, call)
+  try {
+    const payload = {
+      token: handle.respondToken,
+      requestId,
+      request: {
+        prompt: input.prompt,
+        command: undefined,
+        references: [],
+        toolReferences: [],
+        sessionId: input.sessionId,
+      },
+      context: {
+        history: (input.history ?? []).map((message) =>
+          message.role === "user"
+            ? { request: { prompt: message.content }, participant: handle.participantId }
+            : {
+                response: [{ kind: "markdown", value: message.content }],
+                participant: message.participant ?? handle.participantId,
+                result: message.result ?? {},
+              }
+        ),
+      },
+    }
+    assertNoLeakingPiiDeep(handle.pluginId, "vscode.chat.respond", [payload])
+    const result = await deps.callProvider(handle.pluginId, "respond", payload, controller.signal)
+    await call.pending
+    controller.signal.throwIfAborted()
+    if (result != null && (typeof result !== "object" || Array.isArray(result)))
+      throw new Error("Chat participant returned an invalid ChatResult")
+    const details =
+      result && typeof result === "object"
+        ? (result as { errorDetails?: { message?: unknown } }).errorDetails
+        : undefined
+    if (details)
+      throw new Error(
+        typeof details.message === "string" && details.message
+          ? details.message
+          : "Chat participant returned an error"
+      )
+    const metadata =
+      result && typeof result === "object" ? (result as { metadata?: unknown }).metadata : undefined
+
+    return { text: call.text, ...(metadata !== undefined ? { metadata } : {}) }
+  } finally {
+    input.signal?.removeEventListener("abort", abort)
+    requests.delete(requestId)
+  }
 }
 
 /**
- * Drop every participant owned by `extensionId` and delete the matching
- * virtual characters. Called by the plugin manager during extension
- * deactivate.
+ * Drop every callback owned by `extensionId`, preserving stored user policy.
+ * Called by the plugin manager during extension deactivate.
  */
 export async function disposeAllParticipantsFor(extensionId: string): Promise<void> {
   const keys: string[] = []
@@ -227,16 +466,8 @@ export async function disposeAllParticipantsFor(extensionId: string): Promise<vo
   for (const key of keys) {
     const handle = participants.get(key)
     if (!handle) continue
+    abortParticipant(handle)
     participants.delete(key)
-    try {
-      await deps.deleteCharacter(handle.characterId)
-    } catch (err) {
-      chatLogger.warn("deleteCharacter failed during bulk disposal", {
-        pluginId: extensionId,
-        participantId: handle.participantId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
   }
 }
 

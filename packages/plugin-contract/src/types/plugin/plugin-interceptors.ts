@@ -152,6 +152,30 @@ export type InterceptorGuardVerdict =
   | { decision: "deny"; reason: string }
   | { decision: "requireApproval"; reason: string; approvalRef?: string }
 
+/** Presentation text only; transport fields and correlation identity are immutable. */
+export interface ModelStreamProjection {
+  sessionId?: string
+  operationId: string
+  identity: Readonly<Record<string, unknown>>
+  text: string
+}
+
+/** One exposed AI SDK model step, after the host's existing policy and budget checks. */
+export interface AgentTurnDecisionInput {
+  sessionId: string
+  step: number
+  runId?: string
+}
+
+/** Serializable decoration; components and authority remain in their existing host owners. */
+export interface PluginSurfaceProjection {
+  point: string
+  pluginId: string
+  extensionId: string
+  context: Readonly<Record<string, unknown>> | undefined
+  presentation: { hidden: boolean; title?: string }
+}
+
 /** `next` as an around handler sees it. Callable at most once per invocation. */
 export type InterceptorNext<TIn, TOut> = (input?: TIn) => Promise<TOut>
 
@@ -227,6 +251,11 @@ export interface InterceptorPointSemantics {
  * what keeps "declared" and "dispatched" from drifting.
  */
 export const PLUGIN_INTERCEPTOR_POINTS = [
+  "gateway.request.prepare",
+  "gateway.provider.prepare",
+  "gateway.stream.transform",
+  "gateway.response.transform",
+  "gateway.usage.recorded",
   "agent.context.prepare",
   "model.request.prepare",
   "model.request.invoke",
@@ -239,6 +268,37 @@ export const PLUGIN_INTERCEPTOR_POINTS = [
   "ui.surface.project",
   "operation.completed",
 ] as const
+
+/** Native gateway wire payloads, distinct from ChatMiddlewareRequest. */
+export interface GatewayInterceptorContext {
+  requestId: string
+  sessionId?: string
+  ownerAccountId?: string | null
+  accountGeneration: number
+  protocol: string
+  modelAlias: string
+  providerId?: string
+  sourceProviderId?: string
+  modelId?: string
+  /** Selected provider subscription account, distinct from ownerAccountId. */
+  accountId?: string
+}
+
+/** Identity and deployment selectors are immutable; only body may change. */
+export interface GatewayBodyInterceptorPayload extends GatewayInterceptorContext {
+  body: Record<string, unknown>
+}
+
+/** A stream transform must return one event. Event dropping is unsupported. */
+export interface GatewayStreamInterceptorPayload extends GatewayInterceptorContext {
+  event: string
+  data: unknown
+}
+
+/** Notification of native accounting; observers cannot rewrite the bill. */
+export interface GatewayUsageInterceptorPayload extends GatewayInterceptorContext {
+  usage: unknown
+}
 
 export type PluginInterceptorPoint = (typeof PLUGIN_INTERCEPTOR_POINTS)[number]
 

@@ -25,6 +25,7 @@
  * fired where those happen (`route-deep-link.ts`, `runtime-handlers.ts`).
  */
 
+import { listLiveSessions, subscribeLiveSessions } from "@/lib/terminal/session-registry"
 import { statWorkspaceFile, walkWorkspace } from "@/lib/files/workspace-fs"
 import {
   registerLanguagesForPlugin,
@@ -86,6 +87,8 @@ export interface VscodeActivationTriggerDependencies {
   }
   /** Each document an editor opens, by language id. */
   onEditorLanguage(listener: (languageId: string) => void): () => void
+  hasTerminals(): boolean
+  onTerminalsChanged(listener: () => void): () => void
   /** Absolute paths of the open project folders. */
   folders(): string[]
   onFoldersChanged(listener: () => void): () => void
@@ -150,6 +153,8 @@ export function createVscodeActivationTriggerDependencies(): VscodeActivationTri
         const language = getEditorById(event.editorId)?.getModel()?.language
         if (language) listener(language)
       }),
+    hasTerminals: () => listLiveSessions().length > 0,
+    onTerminalsChanged: subscribeLiveSessions,
     folders: () => listProjectWorkspaceFolders().map((folder) => folder.path),
     onFoldersChanged: onWorkspaceFoldersChanged,
     exists: async (root, relPath) => (await statWorkspaceFile(root, relPath)).exists,
@@ -169,6 +174,7 @@ interface DormantState {
   /** Command id → the placeholder handler registered for it. */
   commands: Map<string, CommandHandler>
   languages: boolean
+  terminalObserved: boolean
   /** The folders its `workspaceContains:` globs were checked against. */
   checkedFolders: string
 }
@@ -316,7 +322,7 @@ async function reconcile(): Promise<void> {
     if (!latest || !DORMANT_STATUSES.has(latest.status) || deps !== current) continue
     let state = dormant.get(pluginId)
     if (!state) {
-      state = { commands: new Map(), languages: false, checkedFolders: "" }
+      state = { commands: new Map(), languages: false, terminalObserved: false, checkedFolders: "" }
       dormant.set(pluginId, state)
     }
     showCommands(latest, state)
@@ -324,6 +330,18 @@ async function reconcile(): Promise<void> {
     if (!state.languages && languages.length > 0) {
       current.languages.register(pluginId, languages)
       state.languages = true
+    }
+    if (!current.hasTerminals()) state.terminalObserved = false
+    else if (!state.terminalObserved && latest.manifest.activationEvents?.includes("onTerminal")) {
+      state.terminalObserved = true
+      await current.activate("onTerminal").catch((error: unknown) => {
+        state.terminalObserved = false
+        current.log(
+          pluginId,
+          "warn",
+          `onTerminal: ${error instanceof Error ? error.message : String(error)}`
+        )
+      })
     }
     await evaluateWorkspaceContains(latest, state).catch((error: unknown) =>
       current.log(
@@ -380,15 +398,21 @@ function onEditorLanguage(languageId: string): void {
 }
 
 /** Start watching. Replaces an earlier installation. */
-export function installVscodeActivationTriggers(next: VscodeActivationTriggerDependencies): void {
+export function installVscodeActivationTriggers(
+  next: VscodeActivationTriggerDependencies
+): () => void {
   uninstallVscodeActivationTriggers()
   deps = next
   teardown = [
     next.subscribePlugins(schedule),
     next.onFoldersChanged(schedule),
     next.onEditorLanguage(onEditorLanguage),
+    next.onTerminalsChanged(schedule),
   ]
   schedule()
+  return () => {
+    if (deps === next) uninstallVscodeActivationTriggers()
+  }
 }
 
 /** Stop watching and take down everything shown for dormant extensions. */

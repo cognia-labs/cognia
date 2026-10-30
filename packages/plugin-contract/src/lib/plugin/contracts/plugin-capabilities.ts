@@ -156,7 +156,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/agent.py"],
     builtinContributionPaths: ["plugins/anthropic-skills/src/index.ts"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
-    requiredTests: ["lib/plugin/registries/skill-registry.test.ts"],
+    requiredTests: ["packages/plugin-contract/src/lib/plugin/registries/skill-registry.test.ts"],
   },
   {
     id: "media",
@@ -246,7 +246,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-theme.test.ts",
-      "lib/plugin/core/validation.test.ts",
+      "packages/plugin-contract/src/lib/plugin/core/validation.test.ts",
     ],
   },
   {
@@ -296,7 +296,10 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
       "plugins/workspace-tools/src/index.ts",
     ],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
-    requiredTests: ["lib/plugin/core/manager.test.ts", "lib/plugin/interceptors/dispatch.test.ts"],
+    requiredTests: [
+      "lib/plugin/core/manager.test.ts",
+      "packages/plugin-contract/src/lib/plugin/interceptors/dispatch.test.ts",
+    ],
   },
   {
     id: "command-hooks",
@@ -336,7 +339,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     typescriptSdk: [],
     pythonSdk: ["plugin-sdk/python/src/cognia/capability_contract.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
-    requiredTests: ["lib/plugin/core/validation.test.ts"],
+    requiredTests: ["packages/plugin-contract/src/lib/plugin/core/validation.test.ts"],
   },
   {
     id: "providers",
@@ -351,7 +354,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     ],
     pythonSdk: ["plugin-sdk/python/src/cognia/context.py", "plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
-    requiredTests: ["lib/plugin/core/validation.test.ts"],
+    requiredTests: ["packages/plugin-contract/src/lib/plugin/core/validation.test.ts"],
   },
   {
     id: "exporters",
@@ -370,7 +373,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-exporter.test.ts",
-      "lib/plugin/core/validation.test.ts",
+      "packages/plugin-contract/src/lib/plugin/core/validation.test.ts",
     ],
   },
   {
@@ -548,7 +551,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-link-matcher.test.ts",
-      "lib/plugin/api/link-matchers.test.ts",
+      "packages/plugin-contract/src/lib/plugin/api/link-matchers.test.ts",
       "lib/plugin/bridge/link-matcher-bridge.test.tsx",
       "components/chat/markdown/chat-link.test.tsx",
     ],
@@ -594,7 +597,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-density-preset.test.ts",
-      "lib/appearance/density-preset-registry.test.ts",
+      "packages/plugin-contract/src/lib/appearance/density-preset-registry.test.ts",
     ],
   },
   {
@@ -637,7 +640,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-modal-mount.test.ts",
-      "lib/plugin/bridge/modal-mount-bridge.test.ts",
+      "packages/plugin-contract/src/lib/plugin/bridge/modal-mount-bridge.test.ts",
     ],
   },
   {
@@ -883,7 +886,9 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
       "plugins/e2b-sandbox/src/index.ts",
     ],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
-    requiredTests: ["lib/plugin/registries/mcp-server-preset-registry.test.ts"],
+    requiredTests: [
+      "packages/plugin-contract/src/lib/plugin/registries/mcp-server-preset-registry.test.ts",
+    ],
   },
   {
     // Plugin-first Computer Use plan (M1·T4). Plugins declaring this
@@ -916,7 +921,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     builtinContributionPaths: ["plugins/computer-use/src/index.ts"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/native-anthropic-tool-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/native-anthropic-tool-registry.test.ts",
       "packages/plugin-sdk/src/api/native-anthropic-tool.test.ts",
       "packages/plugin-sdk/src/context/index.test.ts",
     ],
@@ -993,9 +998,9 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     builtinContributionPaths: ["plugins/cognia-builtin-characters/src/index.ts"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/character-pack-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/character-pack-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
-      "lib/plugin/character-pack/validate-requires.test.ts",
+      "packages/plugin-contract/src/lib/plugin/character-pack/validate-requires.test.ts",
     ],
   },
   {
@@ -1021,7 +1026,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     ],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/subagent-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/subagent-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
   },
@@ -1062,7 +1067,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     ],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/agent-team-template-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/agent-team-template-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
   },
@@ -1086,7 +1091,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     builtinContributionPaths: ["plugins/agent-team-examples/src/demo-adapter.ts"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/shared-memory-adapter-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/shared-memory-adapter-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
   },
@@ -1105,7 +1110,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/unified-subscription.mdx",
     requiredTests: [
       "lib/plugin/contracts/capability-bridge-map.test.ts",
-      "lib/plugin/core/validation.test.ts",
+      "packages/plugin-contract/src/lib/plugin/core/validation.test.ts",
       "packages/plugin-sdk/src/define/define-subscription-provider.test.ts",
     ],
   },
@@ -1132,7 +1137,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/balance-adapter-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/balance-adapter-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
   },
@@ -1160,7 +1165,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/limits-source-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/limits-source-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
   },
@@ -1216,7 +1221,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/im-rate-source-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/im-rate-source-registry.test.ts",
       "lib/connectors/im-rate/registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
@@ -1245,7 +1250,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/compaction-strategy-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/compaction-strategy-registry.test.ts",
       "lib/plugin/contracts/capability-bridge-map.test.ts",
     ],
   },
@@ -1386,7 +1391,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-theme-pack.test.ts",
-      "lib/theme/theme-pack-registry.test.ts",
+      "packages/plugin-contract/src/lib/theme/theme-pack-registry.test.ts",
     ],
   },
   {
@@ -1409,7 +1414,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-font-contribution.test.ts",
-      "lib/plugin/bridge/font-bridge.test.ts",
+      "packages/plugin-contract/src/lib/plugin/bridge/font-bridge.test.ts",
     ],
   },
   {
@@ -1431,7 +1436,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "packages/plugin-sdk/src/define/define-wallpaper.test.ts",
-      "lib/plugin/bridge/wallpaper-bridge.test.ts",
+      "packages/plugin-contract/src/lib/plugin/bridge/wallpaper-bridge.test.ts",
     ],
   },
   {
@@ -1554,7 +1559,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/context.py", "plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/tray/registry.test.ts",
+      "packages/plugin-contract/src/lib/tray/registry.test.ts",
       "packages/plugin-sdk/src/define/define-tray-item.test.ts",
     ],
   },
@@ -1680,7 +1685,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
       "lib/plugin/bridge/context-panel-webview-protocol.test.ts",
       "lib/plugin/bridge/context-panel-webview-rpc.test.ts",
       "lib/plugin/api/context-panel-api.test.ts",
-      "lib/context-workbench/panel-registry.test.ts",
+      "packages/plugin-contract/src/lib/context-workbench/panel-registry.test.ts",
       "lib/context-workbench/panel-icons.test.ts",
       "lib/context-workbench/active-context.test.ts",
       "components/plugins/plugin-context-panel-webview.test.tsx",
@@ -1714,7 +1719,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/types.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/registries/view-container-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/view-container-registry.test.ts",
       "lib/plugin/api/view-container-api.test.ts",
       "components/shell/plugin-view-container-panel.test.tsx",
     ],
@@ -1744,7 +1749,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
       "lib/plugin/bridge/view-bridge.test.ts",
-      "lib/plugin/registries/tree-view-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/registries/tree-view-registry.test.ts",
       "components/plugins/plugin-tree-view-host.test.tsx",
     ],
   },
@@ -1804,7 +1809,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     requiredTests: [
       "lib/plugin/api/auth-api.test.ts",
       "lib/plugin/auth/auth-secrets-adapter.test.ts",
-      "lib/plugin/auth/auth-pkce-flow.test.ts",
+      "packages/plugin-contract/src/lib/plugin/auth/auth-pkce-flow.test.ts",
     ],
   },
   {
@@ -1831,8 +1836,8 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/context.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
     requiredTests: [
-      "lib/plugin/uri/parse-deep-link.test.ts",
-      "lib/plugin/uri/uri-handler-registry.test.ts",
+      "packages/plugin-contract/src/lib/plugin/uri/parse-deep-link.test.ts",
+      "packages/plugin-contract/src/lib/plugin/uri/uri-handler-registry.test.ts",
       "lib/plugin/api/uri-api.test.ts",
     ],
   },
@@ -1913,7 +1918,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     typescriptSdk: ["packages/plugin-sdk/src/manifest/index.ts"],
     pythonSdk: ["plugin-sdk/python/src/cognia/pet.py"],
     docs: "docs/content/docs/en/subsystems/plugin-system/contracts-and-registries.mdx#capabilities",
-    requiredTests: ["lib/plugin/registries/pet-item-registry.test.ts"],
+    requiredTests: ["packages/plugin-contract/src/lib/plugin/registries/pet-item-registry.test.ts"],
   },
   {
     // A Bot binds an event source, a policy ceiling, an executor and its
@@ -1952,7 +1957,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     pythonSdk: ["plugin-sdk/python/src/cognia/ctx.py"],
     docs: "docs/content/docs/en/plugin-dev/library-plugins.mdx",
     requiredTests: [
-      "lib/plugin/core/validation.test.ts",
+      "packages/plugin-contract/src/lib/plugin/core/validation.test.ts",
       "lib/plugin/library/modules.test.ts",
       "lib/plugin/messaging/ipc.test.ts",
     ],

@@ -112,6 +112,10 @@ export interface ConsoleEntry {
   level: "log" | "info" | "warn" | "error" | "debug"
   text: string
   ts: number
+  /** Entries discarded before this batch because its unread budget was exceeded. */
+  droppedBefore?: number
+  /** The captured text was clipped to the diagnostic string budget. */
+  truncated?: boolean
 }
 
 /** A captured network request (status/timing only — not the response body). */
@@ -123,4 +127,8 @@ export interface NetworkEntry {
   status: number
   ok: boolean
   durationMs: number | null
+  /** Entries discarded before this batch because its unread budget was exceeded. */
+  droppedBefore?: number
+  /** The captured URL or method was clipped to the diagnostic string budget. */
+  truncated?: boolean
 }

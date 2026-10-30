@@ -595,3 +595,21 @@ describe("inferPermissions", () => {
     })
   })
 })
+
+it.each([
+  ["lm.invokeTool", "ai:chat"],
+  ["lm.invokeTool", "agent:control"],
+  ["chat.createChatParticipant", "session:read"],
+  ["window.registerTerminalProfileProvider", "terminal:spawn"],
+  ["window.registerTerminalProfileProvider", "terminal:write"],
+])("infers %s permission %s in parsed and fallback scans", (api, permission) => {
+  for (const suffix of ["", "; ((( unbalanced"]) {
+    const result = inferPermissions({
+      vsix: makeVsix(
+        { ...HEAD, main: "out/extension.js" },
+        { "out/extension.js": `const vscode = require("vscode"); vscode.${api}()${suffix}` }
+      ),
+    })
+    expect(result.permissions).toContain(permission)
+  }
+})

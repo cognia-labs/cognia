@@ -48,12 +48,13 @@ import type {
   PreInstallPermissionPayload,
   PreInstallConfigPayload,
   PreInstallBinaryPayload,
+  PreInstallDependencyPayload,
 } from "@/lib/plugin/marketplace/install-flow"
 import { localizeConfigSchema } from "@/lib/plugin/i18n/config-schema-text"
 import { ConfigSchemaFields, useConfigSchemaForm } from "../detail/plugin-config-form"
 import { PermissionIdentity } from "../plugin-permission-review"
 
-export type PreInstallStepId = "conflict" | "permission" | "binaries" | "config"
+export type PreInstallStepId = "conflict" | "dependencies" | "permission" | "binaries" | "config"
 
 export interface PreInstallTarget {
   pluginId: string
@@ -61,6 +62,7 @@ export interface PreInstallTarget {
   step: PreInstallStepId
   /** Filled when `step === "conflict"`. */
   conflict?: PreInstallConflict
+  dependencies?: PreInstallDependencyPayload
   /** Filled when `step === "permission"`. */
   permission?: PreInstallPermissionPayload
   /** Filled when `step === "binaries"`. */
@@ -118,7 +120,14 @@ export function PluginPreInstallDialog({ target, notice, onContinue, onCancel }:
             {target.step === "conflict" && target.conflict && (
               <ConflictStep
                 conflict={target.conflict}
-                onContinue={() => onContinue()}
+                onContinue={onContinue}
+                onCancel={onCancel}
+              />
+            )}
+            {target.step === "dependencies" && target.dependencies && (
+              <DependencyStep
+                dependencies={target.dependencies}
+                onContinue={onContinue}
                 onCancel={onCancel}
               />
             )}
@@ -180,7 +189,7 @@ function ConflictStep({
   onCancel,
 }: {
   conflict: PreInstallConflict
-  onContinue: () => void
+  onContinue: (value?: unknown) => void
   onCancel: () => void
 }) {
   const t = useTranslations("plugins.preInstall")
@@ -189,6 +198,12 @@ function ConflictStep({
     <>
       <StepBody>
         <p className="text-sm text-muted-foreground">{t("conflictHint")}</p>
+        {conflict.canContinue === false && <p role="alert">{t("conflictBlocked")}</p>}
+        {!!conflict.conflictingPluginIds?.length && (
+          <p className="text-sm text-muted-foreground">
+            {t("conflictDisableHint", { plugins: conflict.conflictingPluginIds.join(", ") })}
+          </p>
+        )}
         <Card className="p-0">
           <ul className="divide-y" data-testid="pre-install-conflict-list">
             {conflict.reasons.map((reason, idx) => {
@@ -230,8 +245,75 @@ function ConflictStep({
         <Button variant="outline" onClick={onCancel}>
           {t("cancel")}
         </Button>
-        <Button onClick={onContinue} data-testid="pre-install-conflict-continue">
+        {!!conflict.conflictingPluginIds?.length && (
+          <Button
+            variant="destructive"
+            disabled={conflict.canContinue === false}
+            onClick={() => onContinue("disable-conflicting")}
+          >
+            {t("conflictUseNew")}
+          </Button>
+        )}
+        <Button
+          disabled={conflict.canContinue === false}
+          onClick={() => onContinue()}
+          data-testid="pre-install-conflict-continue"
+        >
           {t("next")}
+        </Button>
+      </StepFooter>
+    </>
+  )
+}
+
+function DependencyStep({
+  dependencies,
+  onContinue,
+  onCancel,
+}: {
+  dependencies: PreInstallDependencyPayload
+  onContinue: (value?: unknown) => void
+  onCancel: () => void
+}) {
+  const t = useTranslations("plugins.preInstall")
+  const actions = dependencies.actions ?? []
+  const canResolve = actions.length > 0 && actions.every((action) => action.version)
+  return (
+    <>
+      <StepBody>
+        <p className="text-sm text-muted-foreground">{t("dependenciesHint")}</p>
+        {dependencies.unresolved && <p role="alert">{t("dependenciesUnresolved")}</p>}
+        <ul className="divide-y rounded-md border">
+          {actions.map((action) => (
+            <li key={action.pluginId} className="space-y-1 p-3 text-sm">
+              <p className="break-all font-medium">{action.pluginId}</p>
+              <p>{t("dependencyRequired", { range: action.required })}</p>
+              {!!action.pausePluginIds?.length && (
+                <p>{t("dependencyPause", { plugins: action.pausePluginIds.join(", ") })}</p>
+              )}
+              <p>
+                {action.available
+                  ? t("dependencyInstalled", { version: action.available })
+                  : t("dependencyMissing")}
+              </p>
+              <p>
+                {action.version
+                  ? t("dependencySelected", { version: action.version })
+                  : t(action.lookupFailed ? "dependencyLookupFailed" : "dependencyUnavailable")}
+              </p>
+            </li>
+          ))}
+        </ul>
+      </StepBody>
+      <StepFooter>
+        <Button variant="outline" onClick={onCancel}>
+          {t("cancel")}
+        </Button>
+        <Button variant="outline" onClick={() => onContinue("continue")}>
+          {t("dependenciesRecheck")}
+        </Button>
+        <Button disabled={!canResolve} onClick={() => onContinue("resolve")}>
+          {t("dependenciesResolve")}
         </Button>
       </StepFooter>
     </>

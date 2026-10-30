@@ -42,6 +42,49 @@ export const ConflictStep: Story = {
   },
 }
 
+export const DependencyReview: Story = {
+  args: {
+    target: {
+      ...base,
+      step: "dependencies",
+      stepNumber: 2,
+      totalSteps: 4,
+      dependencies: {
+        pluginId: base.pluginId,
+        missing: ["shared-tools"],
+        conflicts: [{ pluginId: "shared-library", required: "^2.0.0", available: "1.0.0" }],
+        actions: [
+          { pluginId: "shared-tools", required: "^1.0.0", version: "1.2.0" },
+          {
+            pluginId: "shared-library",
+            required: "^2.0.0",
+            available: "1.0.0",
+            version: "2.3.0",
+            pausePluginIds: ["consumer-plugin"],
+          },
+        ],
+      },
+    },
+  },
+}
+
+export const UnavailableDependency: Story = {
+  args: {
+    target: {
+      ...base,
+      step: "dependencies",
+      stepNumber: 2,
+      totalSteps: 4,
+      dependencies: {
+        pluginId: base.pluginId,
+        missing: ["shared-library"],
+        conflicts: [],
+        actions: [{ pluginId: "shared-library", required: "^2.0.0" }],
+      },
+    },
+  },
+}
+
 // Step 2 — permission review, including a dangerous permission + network access.
 export const PermissionStep: Story = {
   args: {

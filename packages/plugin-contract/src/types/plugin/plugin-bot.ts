@@ -90,6 +90,8 @@ export interface PluginBotRetryPolicy {
 }
 
 interface PluginBotTriggerBase {
+  /** Input credential slot; output credentials never constrain this trigger. */
+  inputCredentialSlot?: string
   id: string
   conditions?: PluginBotTriggerConditions
   /** Author-facing label. User-facing text is resolved from `labelKey`. */

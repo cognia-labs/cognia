@@ -17,6 +17,7 @@ jest.mock("@/lib/db/trusted-workspaces", () => ({
 jest.mock("@/lib/plugin/core/manager", () => ({
   getPluginManager: jest.fn(() => ({
     invokeIdeProvider: jest.fn(async () => "provider-result"),
+    activateManagedIdeContribution: jest.fn(async () => undefined),
   })),
 }))
 jest.mock("@/lib/plugin/core/transport", () => ({
@@ -148,6 +149,10 @@ describe("managed IDE broker default dependencies", () => {
     expect(
       jest.mocked(getPluginManager).mock.results[0].value.invokeIdeProvider
     ).toHaveBeenCalledWith("acme.tools", "provideHover", ["provide"])
+    await dependencies.activate?.("acme.tools", "onFileSystem:cognia.acme.tools.fs")
+    expect(
+      jest.mocked(getPluginManager).mock.results.at(-1)?.value.activateManagedIdeContribution
+    ).toHaveBeenCalledWith("acme.tools", "onFileSystem:cognia.acme.tools.fs")
 
     const onEvent = jest.fn()
     const requestApproval = jest.fn(async () => ({ behavior: "allow" as const }))

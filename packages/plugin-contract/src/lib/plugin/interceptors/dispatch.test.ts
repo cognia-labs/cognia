@@ -47,6 +47,32 @@ function registration(
 
 const context = { operationId: "op-1" }
 
+it.each(["transform", "guard"])("does not commit a cancelled %s result", async (semantic) => {
+  const controller = new AbortController()
+  let finish!: (value: unknown) => void
+  const chain = [
+    registration({
+      semantic: semantic as InterceptorSemantic,
+      handler: (() =>
+        new Promise((resolve) => {
+          finish = resolve
+        })) as never,
+    }),
+  ]
+  const task =
+    semantic === "transform"
+      ? dispatchTransform(
+          "model.request.prepare",
+          { text: "original" },
+          { ...context, signal: controller.signal, chain }
+        )
+      : dispatchGuard("ui.action.invoke", {}, { ...context, signal: controller.signal, chain })
+  await Promise.resolve()
+  controller.abort()
+  finish(semantic === "transform" ? { text: "late" } : { decision: "pass" })
+  await expect(task).rejects.toMatchObject({ name: "AbortError" })
+})
+
 beforeEach(() => {
   __resetInterceptorDispatchForTesting()
 })
@@ -529,4 +555,123 @@ describe("InterceptorInvariantError", () => {
     expect(error.message).toContain("sessionId")
     expect(error.name).toBe("InterceptorInvariantError")
   })
+})
+
+describe("untrusted interceptor input isolation", () => {
+  it("rejects in-place identity rewrites without changing the caller", async () => {
+    const input = { sessionId: "owner", nested: { text: "safe" } }
+    const chain = [
+      registration({
+        pointId: "model.request.prepare",
+        semantic: "transform",
+        handler: ((value: typeof input) => {
+          value.sessionId = "other"
+          value.nested.text = "poisoned"
+          return value
+        }) as never,
+      }),
+    ]
+    const result = await dispatchTransform("model.request.prepare", input, {
+      ...context,
+      chain,
+      invariantFields: ["sessionId"],
+    })
+    expect(result.value).toEqual({ sessionId: "owner", nested: { text: "safe" } })
+    expect(result.report.failed[0]?.kind).toBe("invariant")
+    expect(input.nested.text).toBe("safe")
+  })
+  it("discards mutations from a throwing handler and detaches committed outputs", async () => {
+    const input = { nested: { text: "safe" } }
+    let retained: typeof input | undefined
+    const chain = [
+      registration({
+        pointId: "model.request.prepare",
+        semantic: "transform",
+        handler: ((value: typeof input) => {
+          value.nested.text = "poisoned"
+          throw new Error("failed")
+        }) as never,
+      }),
+      registration({
+        registrationId: "t2",
+        pointId: "model.request.prepare",
+        semantic: "transform",
+        handler: ((value: typeof input) => {
+          retained = value
+          value.nested.text += "-committed"
+          return value
+        }) as never,
+      }),
+    ]
+    const result = await dispatchTransform("model.request.prepare", input, { ...context, chain })
+    expect(result.value.nested.text).toBe("safe-committed")
+    retained!.nested.text = "late"
+    expect(result.value.nested.text).toBe("safe-committed")
+    expect(input.nested.text).toBe("safe")
+  })
+  it("does not let observers or guards mutate an operation", async () => {
+    const input = { text: "safe" }
+    const mutate = (value: typeof input) => {
+      value.text = "poisoned"
+      return { decision: "pass" }
+    }
+    dispatchObserve("operation.completed", input, {
+      ...context,
+      chain: [
+        registration({
+          pointId: "operation.completed",
+          semantic: "observe",
+          handler: mutate as never,
+        }),
+      ],
+    })
+    await dispatchGuard("ui.action.invoke", input, {
+      ...context,
+      chain: [
+        registration({ pointId: "ui.action.invoke", semantic: "guard", handler: mutate as never }),
+      ],
+    })
+    expect(input.text).toBe("safe")
+  })
+})
+
+it("checks nested invariant identities structurally without accepting opaque replacements", async () => {
+  const input = { identity: { owner: "ext" }, text: "original" }
+  const transform = (handler: (value: typeof input) => unknown) => [
+    registration({
+      pointId: "model.request.prepare",
+      semantic: "transform",
+      handler: handler as never,
+    }),
+  ]
+  const accepted = await dispatchTransform("model.request.prepare", input, {
+    ...context,
+    invariantFields: ["identity"],
+    chain: transform((value) => ({ ...value, text: "updated" })),
+  })
+  expect(accepted.value.text).toBe("updated")
+  const rejected = await dispatchTransform("model.request.prepare", input, {
+    ...context,
+    invariantFields: ["identity"],
+    chain: transform((value) => {
+      value.identity.owner = "other"
+      return value
+    }),
+  })
+  expect(rejected.value.identity.owner).toBe("ext")
+  expect(rejected.report.failed[0]?.kind).toBe("invariant")
+  const opaque = await dispatchTransform("model.request.prepare", input, {
+    ...context,
+    invariantFields: ["identity"],
+    chain: transform((value) => ({ ...value, identity: new Date() })),
+  })
+  expect(opaque.value).toEqual(input)
+  expect(opaque.report.failed[0]?.kind).toBe("invariant")
+  const primitive = await dispatchTransform("model.request.prepare", input, {
+    ...context,
+    invariantFields: ["identity"],
+    chain: transform(() => "invalid"),
+  })
+  expect(primitive.value).toEqual(input)
+  expect(primitive.report.failed[0]?.kind).toBe("invariant")
 })

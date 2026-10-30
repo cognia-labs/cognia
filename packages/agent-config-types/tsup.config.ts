@@ -12,7 +12,7 @@ import { defineConfig } from "tsup"
 // when the sidecar starts importing another runtime module. Keep it current
 // with `node scripts/build/build-sidecar-linked-packages.mjs`.
 export default defineConfig({
-  entry: ["src/claude-agent-sdk-options.ts"],
+  entry: ["src/claude-agent-sdk-options.ts", "src/plugin-interception.ts"],
   format: ["esm"],
   dts: false,
   sourcemap: true,

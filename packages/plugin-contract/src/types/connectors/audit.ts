@@ -1,6 +1,7 @@
 export type AuditKind =
   | "delivery.success"
   | "delivery.error"
+  | "delivery.pending"
   | "delivery.deadlettered"
   // Circuit-open failover (multi-bot): the job's own adapter had an open
   // breaker, so the runner re-enqueued the payload through an enabled
@@ -31,6 +32,7 @@ export type AuditKind =
   // plan covers (ADR-0239): enforcement would not let it stream. fields: {
   // pluginId, source, governed: false, receiptId }.
   | "delivery.stream_unplanned"
+  | "delivery.stream_authorized"
   | "inbound.received"
   | "inbound.deduped"
   | "inbound.policy_blocked"
@@ -50,6 +52,8 @@ export type AuditKind =
   | "inbound.poke"
   | "inbound.request"
   | "inbound.lifecycle"
+  | "inbound.interaction"
+  | "inbound.delivery_status"
   | "inbound.deferred_quiet_hours"
   | "inbound.deferred_muted"
   | "inbound.deferred_manual_mode"

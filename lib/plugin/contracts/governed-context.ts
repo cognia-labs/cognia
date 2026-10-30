@@ -1,10 +1,18 @@
 import type { PluginPermission } from "@/types/plugin"
+import { detectPlatform, isCliHost } from "@/lib/platform/detect"
 import {
   evaluatePluginApiCall,
   recordPluginApiAudit,
   type PluginApiPlatform,
   type PluginApiRuntime,
 } from "./interface-catalog"
+
+/** Resolve the executing host, including the CLI's browser-free runtime. */
+export function resolvePluginApiPlatform(): PluginApiPlatform {
+  if (isCliHost()) return "headless"
+  const platform = detectPlatform()
+  return platform === "tauri" ? "desktop" : platform
+}
 
 export class PluginApiPolicyError extends Error {
   constructor(
@@ -57,7 +65,7 @@ export function withGovernedPluginContext<T extends object>(
           const decision = evaluatePluginApiCall({
             methodId,
             runtime,
-            platform: options.platform ?? "desktop",
+            platform: options.platform ?? resolvePluginApiPlatform(),
             hasPermission: options.hasPermission,
           })
           const finish = (outcome: "allowed" | "denied" | "error", errorCode?: string) => {

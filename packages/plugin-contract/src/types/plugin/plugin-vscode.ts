@@ -784,6 +784,10 @@ export interface VsCodeExtensionBlock {
    * extensions installed before it was recorded.
    */
   unsupportedContributions?: VsCodeUnsupportedContribution[]
+  /** Host-validated contributed AI surfaces, retained for discovery and activation. */
+  chatParticipants?: VsCodeChatParticipant[]
+  languageModelTools?: NonNullable<VsCodeContributions["languageModelTools"]>
+  terminalProfiles?: VsCodeTerminalProfile[]
 }
 
 /**

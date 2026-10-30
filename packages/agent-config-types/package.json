@@ -17,6 +17,12 @@
       "node": "./dist/claude-agent-sdk-options.js",
       "default": "./src/claude-agent-sdk-options.ts"
     },
+    "./plugin-interception": {
+      "cognia-source": "./src/plugin-interception.ts",
+      "types": "./src/plugin-interception.ts",
+      "node": "./dist/plugin-interception.js",
+      "default": "./src/plugin-interception.ts"
+    },
     "./*": {
       "cognia-source": "./src/*.ts",
       "default": "./src/*.ts"

@@ -13,7 +13,7 @@ function imSkills() {
 }
 
 describe("im.* skill family — registration smoke", () => {
-  it("registers exactly the documented seven skills", () => {
+  it("registers the shared messaging and management skills", () => {
     expect(
       imSkills()
         .map((s) => s.id)
@@ -23,8 +23,11 @@ describe("im.* skill family — registration smoke", () => {
       "im.create_chat",
       "im.dispatch_task",
       "im.invite_members",
+      "im.manage_resource",
+      "im.query_resource",
       "im.remove_members",
       "im.resolve_contact",
+      "im.send_voice",
       "im.update_chat",
     ])
   })
@@ -85,6 +88,8 @@ function sampleArgsFor(id: string): never {
     "im.invite_members": { memberIds: ["ou_a"], chatId: "oc_1" },
     "im.remove_members": { memberIds: ["ou_a"], chatId: "oc_1" },
     "im.update_chat": { chatId: "oc_1", name: "N" },
+    "im.manage_resource": { adapterId: "a", operation: "menus.set", input: { items: [] } },
+    "im.send_voice": { conversationKey: "qq-official:a:g", text: "Hello" },
     "im.broadcast": { conversationKeys: ["lark:a1:oc_1"], message: "hello" },
     "im.dispatch_task": {
       title: "Ship W4",

@@ -125,13 +125,7 @@ import type { AgentSessionSourceAdapter } from "../../lib/session-import/types"
 import type { ChatImporter } from "../../lib/data/importers/types"
 import type { PythonExecResult } from "../../lib/tauri/canvas"
 import type { CanvasComment, CollaborativeSession } from "../canvas/collaboration"
-// PluginMediaAPI and CanonicalExtensionPoint live in `lib/plugin/api/media-api`
-// and `lib/plugin/contracts/plugin-points` respectively. We mark
-// `PluginMediaAPI` as an opaque object type rather than a
-// `Record<string, unknown>` so the real media API type (with named methods, no
-// index signature) can be assigned to it without the structural mismatch
-// flagged by TS2322.
-type PluginMediaAPI = object
+import type { PluginMediaAPI } from "../../lib/plugin/api/media-api"
 type CanonicalExtensionPoint = string
 
 // =============================================================================
@@ -2276,14 +2270,14 @@ export interface PluginHooks {
   // Chat flow hooks
   /** Called when user regenerates an AI response */
   onChatRegenerate?: (messageId: string, sessionId: string) => void
-  /** Called when the AI model/provider is switched */
+  /** Session model/provider overrides changed; an empty value means inherit host defaults. */
   onModelSwitch?: (
     provider: string,
     model: string,
     previousProvider?: string,
     previousModel?: string
   ) => void
-  /** Called when chat mode switches (chat/agent/learning) */
+  /** Session execution permission mode changed (for example default, plan, acceptEdits). */
   onChatModeSwitch?: (sessionId: string, newMode: string, previousMode: string) => void
   /** Called when the system prompt is changed at runtime */
   onSystemPromptChange?: (sessionId: string, newPrompt: string, previousPrompt?: string) => void
@@ -4884,6 +4878,9 @@ export interface PluginI18nAPI {
   /** Get current locale */
   getCurrentLocale: () => Locale
 
+  /** Compatibility alias of getCurrentLocale. */
+  getLocale: () => Locale
+
   /** Get available locales */
   getAvailableLocales: () => Locale[]
 
@@ -4898,6 +4895,9 @@ export interface PluginI18nAPI {
 
   /** Check if a translation key exists */
   hasTranslation: (key: string) => boolean
+
+  /** Compatibility alias of hasTranslation. */
+  hasKey: (key: string) => boolean
 
   /** Subscribe to locale changes */
   onLocaleChange: (handler: (locale: Locale) => void) => () => void

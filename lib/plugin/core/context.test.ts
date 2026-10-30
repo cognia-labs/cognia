@@ -78,6 +78,7 @@ jest.mock("@/lib/tauri/transport-instance", () => ({
 jest.mock("./logger", () => ({
   loggers: {
     manager: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+    registry: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
   },
   createPluginSystemLogger: jest.fn(() => {
     const base = {
@@ -2605,6 +2606,33 @@ describe("createFullPluginContext", () => {
     expect(registry.getTool("office_test")).toBeUndefined()
   })
 
+  it("does not let a stale disposer remove a replacement tool from the same owner", async () => {
+    const scope = new PluginDisposableScope("test-plugin")
+    const registry = new PluginRegistry()
+    const manager = {
+      getPluginPointGovernanceMode: () => "warn",
+      getPluginDisposableScope: () => scope,
+      getRegistry: () => registry,
+      createPluginServicesAPI: mockManager.createPluginServicesAPI,
+    } as unknown as PluginManager
+    const context = createFullPluginContext(createMockPlugin(), manager)
+    const first = context.agent.registerTool({
+      name: "replaceable",
+      definition: { name: "replaceable", description: "first", parametersSchema: {} },
+      execute: jest.fn(),
+    })
+    const secondExecute = jest.fn()
+    const second = context.agent.registerTool({
+      name: "replaceable",
+      definition: { name: "replaceable", description: "second", parametersSchema: {} },
+      execute: secondExecute,
+    })
+    await first()
+    expect(registry.getTool("replaceable")?.execute).toBe(secondExecute)
+    await second()
+    expect(registry.getTool("replaceable")).toBeUndefined()
+  })
+
   it("does not let a plugin unregister a dependency-owned tool", () => {
     const registry = new PluginRegistry()
     registry.registerTool("dependency", {
@@ -2619,6 +2647,13 @@ describe("createFullPluginContext", () => {
       createPluginServicesAPI: mockManager.createPluginServicesAPI,
     } as unknown as PluginManager)
 
+    expect(() =>
+      context.agent.registerTool({
+        name: "dependency_tool",
+        definition: { name: "dependency_tool", description: "collision", parametersSchema: {} },
+        execute: jest.fn(),
+      })
+    ).toThrow("already owned")
     expect(() => context.agent.unregisterTool("dependency_tool")).toThrow("does not own")
     expect(registry.getTool("dependency_tool")?.pluginId).toBe("dependency")
   })
@@ -3345,6 +3380,7 @@ describe("python host-call parity (ADR-0145)", () => {
         // manifest and publishes with ctx.glance.update; visibility arrives
         // through the onGlanceVisibilityChange hook.
         "glance",
+        "hooks",
         "i18n",
         "integrations",
         "logger",
@@ -3477,11 +3513,32 @@ describe("ctx → catalog parity", () => {
     const prototype = Object.getPrototypeOf(root)
     if (prototype !== Object.prototype && prototype !== null) return []
     return Object.entries(root as Record<string, unknown>).flatMap(([key, value]) => {
-      const path = `${prefix}.${key}`
+      const path = prefix ? `${prefix}.${key}` : key
       if (typeof value === "function") return [path]
       return callablePaths(value, path, seen)
     })
   }
+
+  it("checks every mounted namespace, including namespaces missing entirely from the catalog", () => {
+    const context = createFullPluginContext(
+      createMockPlugin({
+        manifest: { ...mockManifest, capabilities: ["tools", "scheduler"] },
+      }),
+      mockManager
+    )
+    const paths = callablePaths(context, "")
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        "files.save",
+        "skills.invokeBuiltIn",
+        "plans.listAll",
+        "hooks.listOwn",
+        "sandbox.fileOperation",
+        "workflow.prepareWorkflowApproval",
+      ])
+    )
+    expect(paths.filter((path) => !catalogMethodIds.has(path))).toEqual([])
+  })
 
   it("enumerates the scheduler's methods, so the check below is not vacuous for it", () => {
     const context = createFullPluginContext(

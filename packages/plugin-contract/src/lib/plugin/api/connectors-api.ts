@@ -41,6 +41,11 @@ import type { DispatchRuleHit } from "../../connectors/dispatch-rules"
 import type { PlatformSkillCapability } from "../../../types/connectors/skill-capability"
 import type { PluginConnectorsA2UIBuilder } from "../../connectors/a2ui-bridge/surface-builder"
 import type { SiblingConversation } from "../../connectors/session-bindings"
+import type {
+  ConnectorManagementOperation,
+  ConnectorManagementRequest,
+  ConnectorManagementResult,
+} from "../../../types/connectors/management"
 
 /** Optional-method support flags so plugins can feature-detect per adapter. */
 export interface PluginConnectorAdapterSupport {
@@ -114,6 +119,8 @@ export interface PluginOutboundJobInfo {
  * to its terminal state (`sent` / `deadlettered`).
  */
 export interface PluginOutboundJobStatus extends PluginOutboundJobInfo {
+  /** An unresolved accepted send is held, not a final failure. */
+  pendingReceipt?: { id: string; acceptedAt: number; resolvedAt?: number }
   attempts: number
   lastError?: string
   lastErrorCode?: string
@@ -129,6 +136,19 @@ export interface PluginOutboundJobStatus extends PluginOutboundJobInfo {
 }
 
 export interface PluginConnectorsAPI {
+  /** Capability discovery for reusable assets, publication and administration. */
+  listManagementOperations(adapterId: string): Array<{
+    operation: ConnectorManagementOperation
+    mutation: "read" | "destructive"
+    capability: Capability
+  }>
+  /** Read-only operations; mutations are refused even if a plugin guesses a name. */
+  queryManagement(
+    adapterId: string,
+    request: ConnectorManagementRequest
+  ): Promise<ConnectorManagementResult>
+  /** Requires connectors:manage; input is a named, validated common operation. */
+  manage(adapterId: string, request: ConnectorManagementRequest): Promise<ConnectorManagementResult>
   // ── Reads (connectors:read) ──────────────────────────────────────────────
   /** Summaries of every connected adapter instance. */
   listAdapters(): PluginConnectorAdapterInfo[]
@@ -340,7 +360,13 @@ export interface PluginConnectorsAPI {
    * the adapter is missing or the platform has no streaming surface — so the
    * plugin can fall back to {@link enqueueSend}.
    *
-   * A stream cannot be planned by the outbound policy (ADR-0239), so while
+   * Explicit non-reply intent requires `conversationKey`, `streamKey` and
+   * `sendOptions.mode`. The host resolves its stored destination and plans
+   * every frame through the ordinary immediate-delivery policy and PII gate.
+   * A refusal returns false; it never falls through to the shadow waiver.
+   * Queue the final with the same mode and metadata.streamKey.
+   *
+   * A legacy reference-only stream cannot be planned by the outbound policy (ADR-0239), so while
    * messaging is enforced it always resolves `false` and the fallback send is
    * what is planned. In shadow mode it streams, and the first frame of each
    * stream (frames to the same `conversationRef` within a minute of each

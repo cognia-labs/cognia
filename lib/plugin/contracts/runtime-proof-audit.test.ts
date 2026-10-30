@@ -62,7 +62,9 @@ describe("plugin runtime proof audit", () => {
         proofStatus: "verified",
       })
     )
-    expect(chatHeaderPoint?.docs).toContain("docs/features/plugin-development.md")
+    expect(chatHeaderPoint?.docs).toContain(
+      "docs/content/docs/en/plugin-dev/extension-points-v2.mdx"
+    )
     expect(chatHeaderPoint?.requiredTests.length).toBeGreaterThan(0)
   })
 
@@ -97,10 +99,13 @@ describe("plugin runtime proof audit", () => {
       const map = new Map<string, string>()
       let files: string[]
       try {
-        const out = execSync(`git -C "${REPO_ROOT}" ls-files lib hooks stores app components`, {
-          encoding: "utf8",
-          maxBuffer: 1024 * 1024 * 32,
-        })
+        const out = execSync(
+          `git -C "${REPO_ROOT}" ls-files --cached --others --exclude-standard lib hooks stores app components sidecar/src`,
+          {
+            encoding: "utf8",
+            maxBuffer: 1024 * 1024 * 32,
+          }
+        )
         files = out
           .split("\n")
           .filter((p) => p.endsWith(".ts") || p.endsWith(".tsx"))
@@ -112,13 +117,13 @@ describe("plugin runtime proof audit", () => {
               !p.endsWith("plugin-points.ts")
           )
       } catch {
-        return map // empty map → suite soft-passes (sandboxed CI without git)
+        throw new Error("Cannot inspect production sources: git ls-files failed")
       }
       for (const file of files) {
         try {
           map.set(file, readFileSync(resolve(REPO_ROOT, file), "utf8"))
         } catch {
-          // ignore unreadable files
+          throw new Error(`Cannot read production source ${file}`)
         }
       }
       return map
@@ -190,6 +195,14 @@ describe("plugin runtime proof audit", () => {
           new Set([ADAPTER_HOOKS_FILE])
         )
         if (literal.length > 0) return literal[0]
+        const bridges = filesMatching(new RegExp(`hookId:\\s*["']${hookName}["']`))
+        if (
+          bridges.length &&
+          productionSources
+            .get("lib/claude/plugin-hook-ipc.ts")
+            ?.includes("resolveHandler(req.pluginId, req.hookId)")
+        )
+          return bridges[0]
       }
       const wrappers = adapterWrapperNames(dispatcherCandidates)
       for (const wrapper of wrappers) {
@@ -199,75 +212,27 @@ describe("plugin runtime proof audit", () => {
       return null
     }
 
-    // Hooks where we've made an explicit policy choice not to demote even
-    // though the call site lives in a place the simple grep can't see (e.g.,
-    // the chat send/receive pump in sidecar/, or hooks dispatched via an
-    // intermediate framework). Keep this list small and prefer wiring or
-    // demoting over adding exceptions.
-    const ALLOWED_SILENT_EXCEPTIONS = new Set<string>([
-      // 2026-06-10 — allowlist shrunk against real call sites. The chat / tool /
-      // stream dispatchers now resolve through `lib/claude/adapter-hooks.ts`
-      // (chat pump via `hooks/use-claude-chat.ts`), `lib/plugin/core/manager.ts`
-      // (onCommand), and `lib/ai/agent/team/teammate/dispatch-teammate.ts` (agent hooks),
-      // so they are no longer allowlisted — the build-time grep verifies them
-      // directly. The entries below are the residue: dispatcher methods that
-      // still have no host call site but are NOT yet demoted (kept canonical as
-      // wire candidates — session lifecycle, message edit/delete, chat-flow,
-      // model switch, compaction, workflow contribution events). The fully-dead
-      // ones with no wire plan (onMessageRender / onAgentToolCall / onChatRequest)
-      // were demoted to DEPRECATED_HOOK_POINTS instead of allowlisted.
-      "onMessageEdit",
-      "onMessageDelete",
-      "onChatRegenerate",
-      "onChatModeSwitch",
-      "onModelSwitch",
-      "onPreCompact",
-      "onSystemPromptChange",
-      "onSessionRename",
-      "onSessionClear",
-      "onSessionCreate",
-      "onSessionDelete",
-      "onSessionSwitch",
-      "onAgentStep",
-      // 2026-07-10 (W3.4) — the scheduled-task lifecycle hooks have no host
-      // dispatch anywhere (lib/scheduler never calls the dispatchers); kept
-      // canonical as wire candidates for the scheduler executor.
-      "onScheduledTaskCreate",
-      "onScheduledTaskUpdate",
-      "onScheduledTaskDelete",
-      "onScheduledTaskPause",
-      "onScheduledTaskResume",
-      "onScheduledTaskBeforeRun",
-      "onWorkflowNodeRegister",
-      "onWorkflowNodeUnregister",
-      "onWorkflowTriggerRegister",
-      "onWorkflowTriggerUnregister",
-    ])
-
     for (const hookName of CANONICAL_HOOK_POINTS) {
-      if ((ALLOWED_SILENT_EXCEPTIONS as Set<string>).has(hookName)) continue
       it(`hook "${hookName}" has a live dispatch chain`, () => {
-        // If the file snapshot is unavailable (sandboxed CI without git),
-        // soft-pass — the CI workflow runs `pnpm audit:silent-flags` too.
-        if (productionSources.size === 0) return
+        expect(productionSources.size).toBeGreaterThan(0)
         const callSite = findLiveCallSite([...candidateDispatcherNames(hookName)], hookName)
         if (callSite === null) {
           throw new Error(
             `Canonical hook "${hookName}" has no live dispatch chain: no production file ` +
               `calls its dispatcher (directly or through a referenced adapter-hooks wrapper). ` +
-              `Wire it, demote it to DEPRECATED_HOOK_POINTS, or allowlist it with a wire plan.`
+              `Wire it or mark its contract unavailable.`
           )
         }
       })
     }
 
     it("the chain check itself fails on a deliberately-unwired dispatcher", () => {
-      if (productionSources.size === 0) return
+      expect(productionSources.size).toBeGreaterThan(0)
       expect(findLiveCallSite(["dispatchThisHookDoesNotExistAnywhere"])).toBeNull()
     })
 
     it("follows the adapter-wrapper chain for the W3.1 tool hooks", () => {
-      if (productionSources.size === 0) return
+      expect(productionSources.size).toBeGreaterThan(0)
       // Regression lock: these were the dormant hooks that motivated the
       // chain check — they must now resolve through adapter-hooks to a real
       // production caller (the chat pump).
@@ -288,29 +253,13 @@ describe("plugin runtime proof audit", () => {
     // function must be referenced by some production file other than its own
     // definition file (bridges/ctx APIs count — they are the feeding path).
     describe("every canonical runtime point's binding function is referenced", () => {
-      // Bindings whose reachability the simple reference-grep cannot prove
-      // (descriptive bindings without a `:function` part are skipped inline).
-      // Keep empty unless a point is knowingly dormant WITH a wire plan —
-      // additions here are debt, reviewed like ALLOWED_SILENT_EXCEPTIONS.
-      const KNOWN_DORMANT_RUNTIME_POINTS = new Set<string>([
-        // 2026-07-10 (W3.4 initial sweep) — registries that exist but are not
-        // fed by any production caller yet. Each needs its bridge/ctx wiring
-        // (or a truthful demotion) in a follow-up; do NOT add new entries
-        // without a wire plan.
-        "workflow.task", // executePluginInvoke defined but the node never routes to it
-        "provider.ai-llm", // ai-provider-registry.registerLlmProvider unfed
-        "provider.ai-embedding", // ai-provider-registry.registerEmbeddingProvider unfed
-        "modal.mount", // plugin-modal-store.registerPluginModal unfed
-      ])
-
       for (const point of CANONICAL_RUNTIME_POINTS) {
-        if (KNOWN_DORMANT_RUNTIME_POINTS.has(point)) continue
         const binding = RUNTIME_POINT_BINDINGS[point]
         const match = /^(\S+\.tsx?):(\w+)/.exec(binding)
         if (!match) continue // descriptive binding (no function) — path audit covers it
         const [, bindingFile, fnName] = match
         it(`runtime point "${point}" (${fnName}) is fed by production code`, () => {
-          if (productionSources.size === 0) return
+          expect(productionSources.size).toBeGreaterThan(0)
           const refs = filesMatching(new RegExp(`\\b${fnName}\\b`), new Set([bindingFile]))
           // A point bound to a `ctx.*` method is fed by plugins calling that
           // method; the host's half of the wiring is the API factory that
@@ -330,7 +279,7 @@ describe("plugin runtime proof audit", () => {
             throw new Error(
               `Runtime point "${point}" binds ${binding}, but no production file references ` +
                 `${fnName} outside its definition — the registry can never be fed. Wire the ` +
-                `bridge/ctx API or add the point to KNOWN_DORMANT_RUNTIME_POINTS with a wire plan.`
+                `bridge/ctx API and its real consumer.`
             )
           }
         })

@@ -44,7 +44,7 @@ character pack, a theme pack or a style pack. The names come from Cognia's own
 "cog": a plugin is a cog in the machine, a **cogset** is the set of cogs that
 turn together (like a bicycle's gear set, you change it to change how the
 machine runs), and a **cogpack** is the packed-up cogset you hand to someone
-else. User-facing Chinese copy uses 齿轮组 (cogset) and 齿轮包 (cogpack).
+else. User-facing copy in every locale preserves the names **Cogset** and **Cogpack** without translating them.
 
 ## Glossary
 

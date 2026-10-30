@@ -13,7 +13,7 @@ Cognia runs **real** VS Code extensions as plugins on the desktop. A `.vsix` fro
 
 <StatGrid>
   <Stat label="API level" value="1.91.0" hint="SHIM_VSCODE_API_VERSION, what vscode-languageclient requires" />
-  <Stat label="API members" value="316 / 66" hint="implemented / labelled unsupported, 0 missing (vscode-api-coverage.generated.json)" />
+  <Stat label="API members" value="317 / 65" hint="implemented / labelled unsupported, 0 missing (vscode-api-coverage.generated.json)" />
   <Stat label="Provider kinds" value="28" hint="PROVIDER_REGISTRY in languages-handler.ts" />
   <Stat label="Hosts" value="1 per extension" hint="a crash takes down one extension" />
   <Stat label="Restarts" value="5" hint="1 s·2ⁿ backoff capped at 30 s, host-supervisor.ts" />
@@ -66,13 +66,15 @@ Otherwise starting it fails with `PluginFrontendTrustError` (`reason: "unsigned-
 4. `extension-runner.ts` runs the CommonJS bundle in a `vm` context with `queueMicrotask`, `structuredClone`, `AbortController`, `performance`, `atob`/`btoa`, `crypto` and a `process` that cannot exit the host. `fetch` and `WebSocket` work only with `network:fetch` / `network:websocket`, checked per call. ESM bundles are refused with a reason.
 5. Before `activate`, the renderer sends the workspace folders, configuration, installed extensions and window state, and the host awaits them.
 
-**Activation** (`activation-triggers.ts`). An enabled extension starts at launch only for `*`, `onStartupFinished` or contributed views. Otherwise it stays dormant while its contributed commands and languages are listed, and starts on `onCommand:<id>` (then runs the command), `onLanguage:<id>` (an editor opens a document of that language), or `workspaceContains:<glob>` (checked when it becomes dormant and when folders change). Other activation events are recorded as unsupported.
+**Activation** (`activation-triggers.ts`). An enabled extension starts at launch only for `*`, `onStartupFinished` or contributed views. Otherwise it stays dormant while its contributed commands, languages, chat participants and tools are discoverable. It starts on `onCommand:<id>`, `onLanguage:<id>`, `workspaceContains:<glob>`, `onTerminal`, `onTaskType:<type>`, `onChatParticipant:<id>` or `onLanguageModelTool:<id>`, `onTerminalProfile:<id>` or `onWebviewPanel:<viewType>`. Task, participant, tool and terminal profile contributions infer their matching activation events. Panel restoration activates the saved panel owner. Terminal listeners are installed before the first extension loads; provider queries await matching activation and registration acknowledgement. Disabled intent is always respected. Other activation events are recorded as unsupported.
 
 **Crashes** (`host-supervisor.ts`). Rust reports `host:exited` with the stderr it collected (stderr also goes to the plugin log). The supervisor reloads the extension after 1 s·2ⁿ, capped at 30 s, gives up after `MAX_RESTARTS` (5) and forgets earlier crashes after five minutes up. A host that gives up leaves the plugin in an error state until the user enables it again.
 
 **Output channels** and the host's own warnings go to the plugin's runtime log, which the plugin pane links to.
 
 ## 4. The API and what backs it
+
+**Managed Pro IDE uses its existing Code host.** Its governed broker now fires `onCustomEditor:*`, `onFileSystem:*`, `onDebugResolve:*`, `onNotebook:*` before the actual custom-editor, filesystem, debug configuration or serializer/kernel consumer. Only verified manifest metadata determines the event and addressed owner; disabled intent, workspace trust, permissions, version and connection generation are rechecked around activation. A waking plugin reuses the initiating signed proxy. Filesystem writes require `filesystem:write`; virtual URI paths are interpreted only within their declared scheme. Walkthroughs get an owned command-palette entry that awaits `onWalkthrough:*` activation before opening Code's native page, with contained package media and native completion tracking. Direct Code Welcome tiles and `workbench.action.openWalkthrough` do not notify the Cognia owner; use the generated command when owner activation is required. These implementations do not enable the corresponding unsupported APIs in the standalone 1.91 shim described below.
 
 The host mounts the VS Code 1.91 API (`sidecar/vscode-ext-host/src/vscode-shim/index.ts`). `scripts/gates/vscode-api-coverage.mjs` diffs `@types/vscode` against it into `vscode-api-coverage.generated.json` (`pnpm audit:vscode-api-coverage`): every member is implemented or listed as unsupported with a reason, and none is missing. `engine-compat.ts` reads the same report to warn about extensions that use unsupported namespaces. That warning is advisory and never blocks an install.
 
@@ -93,10 +95,14 @@ Calls the host makes arrive as `vscode://rpc/<pluginId>` events. `rpc-dispatcher
 | commands | `runtime-handlers.ts` | `lib/plugin/commands/registry.ts` (contributed titles, categories, `when`) |
 | `env` (clipboard, `openExternal`, `asExternalUri`, URI handler) | `env-handlers.ts` | Tauri clipboard and opener, Cognia deep links |
 | `vscode.lm` | `lm-handler.ts` | the provider and model the user configured, as vendor `cognia`, streaming. Needs `ai:chat`, the plugin rate limit and the PII gate. Extensions never bring their own key |
-| `vscode.chat` participants | `chat-participant-registry.ts` | registered as virtual characters (`vscode-chat:<pluginId>:<id>`). Not invoked yet |
+| `vscode.chat` participants | `chat-participant-registry.ts`, `chat-turn.ts` | virtual characters (`vscode-chat:<pluginId>:<id>`), invoked by the existing foreground/background execution paths with streaming, cancellation and history |
 | secrets, Mementos | `runtime-handlers.ts`, `memento.rs` | the secret store, files in the extension's state directory |
 
 `unavailable-methods.ts` lists host methods the renderer cannot serve. It is empty while every method is backed.
+
+Panels with a registered `WebviewPanelSerializer` restore in the desktop rail after renderer/Host restart. The existing per-plugin Storage API saves JSON state, title and view type for up to 32 panels per project; HTML and resource grants are rebuilt by the extension. User close deletes the saved entry, while runtime deactivation retains it. Recovery respects disabled intent, owner/token identity, cancellation and workspace changes; it is excluded from Headless.
+
+Contributed terminal profiles appear in the existing New Terminal picker before their extension activates. Selecting one awaits activation/registration, invokes the owning provider, then creates its real shell or Pseudoterminal through the existing terminal services. Launch requires `terminal:spawn`, remains on the local desktop/project, and cancels instead of falling back to a shell when the provider disappears or returns no profile. Remote/browser/mobile launch is refused.
 
 ## 5. Language features
 
@@ -129,7 +135,13 @@ Each item is typed, shown in the plugin detail's **VS Code compatibility** secti
 
 **API namespaces** (`unsupportedApis`, found in the extension's code): `debug`, `scm`, `tests`, `comments`, `notebooks`. Their registrations return inert disposables, their events never fire, and calls that would act throw `NotSupportedError` with the reason. The host reports each unsupported member once per extension (`vscode:unsupportedApi`), and the plugin log names it.
 
-**Other gaps:** chat participants are registered but not invoked, task problem matchers are ignored, and `createTelemetryLogger` sends nothing. `Terminal.processId` is the shell's process id for a terminal running on this machine, and `undefined` for an extension's `Pseudoterminal`.
+**Chat and model tools.** Declared participants appear in the character picker before activation. Foreground chat and background agent turns invoke the owning extension with text history, response metadata, cancellation, and frozen owner/registration/turn identities. Markdown, visible progress, and HTTP(S) references are supported. `ChatResult.errorDetails` fails the turn. Images, file/range references, native session controls, cross-host execution, and turns requiring native workspace or permission guarantees are refused. Participant inputs and tool arguments pass the shared PII gate before extension callbacks.
+
+`lm.registerTool` registers on Cognia's standard plugin tool registry; model calls retain its approval path. Direct `lm.tools` and `lm.invokeTool` expose caller-owned tools only, with `ai:chat` and `agent:control` required for invocation. Direct cross-extension invocation needs a session-bound consent contract and is refused. `lm.sendChatRequest` remains text-only and does not implement a native tool-call loop. Task-provider queries and existing/new terminals activate matching enabled-intent extensions. Host activation waits for chat/tool/task registration acknowledgement.
+
+Participant callback teardown preserves saved character permissions and sandbox preferences. Unavailable participants are hidden by discovery; re-registering an extension cannot erase the saved policy. The API-member audit counts mounted symbols and does not prove every option or whole-host feature is implemented.
+
+**Other gaps:** task problem matchers are ignored, and `createTelemetryLogger` sends nothing. `Terminal.processId` is the shell's process id for a terminal running on this machine, and `undefined` for an extension's `Pseudoterminal`.
 
 **Browser and mobile.** There is no extension host. The Open VSX origin is hidden, a dropped `.vsix` is refused, and an installed extension with `main` loads as a stub that marks itself in the plugin list.
 

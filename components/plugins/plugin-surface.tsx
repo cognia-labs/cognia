@@ -64,6 +64,7 @@ function surfaceStyle(
 }
 
 export interface PluginSurfaceProps {
+  title?: string
   pluginId: string
   pluginName?: string
   surfaceId: string
@@ -261,6 +262,7 @@ export class PluginSurfaceBoundary extends Component<BoundaryProps, BoundaryStat
 }
 
 export function PluginSurface({
+  title,
   pluginId,
   pluginName,
   surfaceId,
@@ -283,6 +285,7 @@ export function PluginSurface({
   return (
     <Root
       className={className}
+      title={title}
       data-plugin-root={variant === "default" ? pluginId : undefined}
       data-plugin-surface={surfaceId}
       data-plugin-form-factor={formFactor}

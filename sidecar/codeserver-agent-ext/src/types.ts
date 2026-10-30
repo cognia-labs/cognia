@@ -38,6 +38,7 @@ export interface ProxyDescriptor {
 }
 
 export interface ProviderBroker {
+  openWalkthrough?(id: string): Promise<unknown>
   invoke(
     provider: ProviderDescriptor,
     operation: string,

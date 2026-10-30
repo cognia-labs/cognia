@@ -7,6 +7,15 @@
 
 import "fake-indexeddb/auto"
 import { z } from "zod"
+import { buildConfirmSurface } from "./_shared/confirm-surface"
+const mockEnqueue = jest.fn(async () => ({ kind: "queued", job: { id: "card" } }))
+jest.mock("@/lib/connectors/delivery-gateway", () => ({
+  enqueueGoverned: (...args: unknown[]) => mockEnqueue(...(args as [])),
+}))
+jest.mock("@/lib/connectors/hitl/im-elicitation-context", () => ({
+  getImElicitationContext: jest.fn(),
+}))
+import { getImElicitationContext } from "@/lib/connectors/hitl/im-elicitation-context"
 
 // Desktop consent surface (W2 dual-channel HITL) — mocked so tests control
 // the approve/deny outcome instead of waiting on a real dialog + TTL.
@@ -21,11 +30,12 @@ import type { BuiltInSkill, BuiltInSkillContext } from "./types"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 
-const hitlSurface = () => ({
-  components: { btn: { component: "Button" } },
-  dataModel: {},
-  rootId: "sfc_confirm",
-})
+const hitlSurface = () =>
+  buildConfirmSurface({
+    surfaceId: "sfc_confirm",
+    title: "Confirm operation",
+    summary: "Apply the requested change",
+  })
 
 function mkSkill(overrides: Partial<BuiltInSkill> = {}): BuiltInSkill {
   return {
@@ -70,6 +80,16 @@ const imCtx: BuiltInSkillContext = {
 }
 
 beforeEach(async () => {
+  mockEnqueue.mockReset().mockResolvedValue({ kind: "queued", job: { id: "card" } })
+  jest
+    .mocked(getImElicitationContext)
+    .mockReset()
+    .mockReturnValue({
+      sessionId: "s_x",
+      adapterId: "lark-1",
+      conversationKey: "lark:lark-1:oc_x",
+      conversationRef: { platform: "lark", adapterId: "lark-1", channelId: "oc_x" },
+    })
   __resetSharedBuiltInSkillRegistry()
   await getDb().delete()
   __resetDbForTesting()
@@ -215,6 +235,103 @@ describe("runBuiltInSkill — piiArgFields exemption (identifier-lookup fields)"
 })
 
 describe("runBuiltInSkill — write tier HITL routing", () => {
+  it("removes both author bindings if the confirmation cannot be queued", async () => {
+    registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface }))
+    mockEnqueue.mockRejectedValueOnce(new Error("queue unavailable"))
+    expect(
+      await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal_1" }, imCtx)
+    ).toMatchObject({ status: "error", message: "queue unavailable" })
+    expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+  })
+  it("refuses a drafting target without creating an approval or queue job", async () => {
+    registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface }))
+    jest.mocked(getImElicitationContext).mockReturnValue({
+      sessionId: "s_x",
+      ...imBinding,
+      conversationRef: { platform: "lark", adapterId: "lark-1", channelId: "oc_x" },
+      drafting: true,
+    })
+    expect(
+      await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal_1" }, imCtx)
+    ).toMatchObject({ status: "error" })
+    expect(mockEnqueue).not.toHaveBeenCalled()
+    expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+  })
+  it("rechecks cancellation after binding storage and removes only this attempt's choices", async () => {
+    registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface }))
+    const controller = new AbortController()
+    const context = jest.mocked(getImElicitationContext).mock.results.at(-1)?.value
+    jest.mocked(getImElicitationContext).mockReturnValue({
+      ...(context ?? {
+        sessionId: "s_x",
+        ...imBinding,
+        conversationRef: { platform: "lark", adapterId: "lark-1", channelId: "oc_x" },
+      }),
+      signal: controller.signal,
+    })
+    const table = getDb().connectorCallbackBindings,
+      put = table.put.bind(table)
+    const spy = jest
+      .spyOn(table, "put")
+      .mockImplementationOnce((...args: Parameters<typeof put>) => {
+        controller.abort()
+        return put(...args)
+      })
+    try {
+      expect(
+        await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal_1" }, imCtx)
+      ).toMatchObject({ status: "error", message: expect.stringContaining("cancelled") })
+      expect(mockEnqueue).not.toHaveBeenCalled()
+      expect(await table.count()).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+  it.each(["preflight", "binding"] as const)(
+    "does not queue confirmation when only the host signal aborts during %s",
+    async (stage) => {
+      const host = new AbortController(),
+        live = new AbortController()
+      jest.mocked(getImElicitationContext).mockReturnValue({
+        sessionId: "s_x",
+        ...imBinding,
+        conversationRef: { platform: "lark", adapterId: "lark-1", channelId: "oc_x" },
+        signal: live.signal,
+      })
+      registerBuiltInSkill(
+        mkSkill({
+          mutation: "write",
+          hitlSurface,
+          preflight: async () => {
+            if (stage === "preflight") host.abort()
+          },
+        })
+      )
+      const table = getDb().connectorCallbackBindings,
+        put = table.put.bind(table)
+      const spy =
+        stage === "binding"
+          ? jest.spyOn(table, "put").mockImplementationOnce((...args: Parameters<typeof put>) => {
+              host.abort()
+              return put(...args)
+            })
+          : undefined
+      try {
+        expect(
+          await runBuiltInSkill(
+            "lark.calendar.list_events",
+            { calendarId: "cal_1" },
+            { ...imCtx, signal: host.signal }
+          )
+        ).toMatchObject({ status: "error" })
+        expect(live.signal.aborted).toBe(false)
+        expect(mockEnqueue).not.toHaveBeenCalled()
+        expect(await table.count()).toBe(0)
+      } finally {
+        spy?.mockRestore()
+      }
+    }
+  )
   it("returns pending_hitl in IM by default", async () => {
     registerBuiltInSkill(
       mkSkill({
@@ -235,12 +352,41 @@ describe("runBuiltInSkill — write tier HITL routing", () => {
       .connectorCallbackBindings.where("kind")
       .equals("skill_invoke")
       .toArray()
-    expect(bindings).toHaveLength(1)
-    expect(bindings[0].actionId).toMatch(/^skill_invoke:lark\.calendar\.create_event:/)
+    expect(bindings).toHaveLength(2)
+    expect(bindings.map((binding) => binding.actionId)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^skill_invoke:/),
+        expect.stringMatching(/^skill_cancel:/),
+      ])
+    )
     expect(bindings[0].payload?.skillId).toBe("lark.calendar.create_event")
     // No running inbound job in this harness → confirm button is scoped to
     // configured operators only (plan 2026-07-24 Phase 2).
     expect(bindings[0].actorScope).toEqual({ mode: "operators" })
+    expect(mockEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        conversationKey: imBinding.conversationKey,
+        request: expect.objectContaining({
+          segments: [
+            expect.objectContaining({
+              type: "a2ui",
+              content: expect.objectContaining({
+                components: expect.objectContaining({
+                  btn_confirm: expect.objectContaining({
+                    action: "approve",
+                    value: expect.stringMatching(/^skill_invoke:/),
+                  }),
+                  btn_cancel: expect.objectContaining({
+                    action: "cancel",
+                    value: expect.stringMatching(/^skill_cancel:/),
+                  }),
+                }),
+              }),
+            }),
+          ],
+        }),
+      })
+    )
   })
 
   it("scopes the confirm binding to the current turn's sender when a job is running", async () => {

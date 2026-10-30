@@ -1,3 +1,8 @@
+import {
+  executeConnectorManagement,
+  listConnectorManagementOperations,
+  connectorManagementIsRead,
+} from "@/lib/connectors/management"
 /**
  * Plugin Connectors API (`ctx.connectors`) — the full plugin-facing surface
  * of the Platform Connectors / IM subsystem. Lets plugins enumerate the
@@ -116,6 +121,7 @@ function toJobStatus(row: OutboundJobRow): PluginOutboundJobStatus {
     ...(row.lastError !== undefined ? { lastError: row.lastError } : {}),
     ...(row.lastErrorCode !== undefined ? { lastErrorCode: row.lastErrorCode } : {}),
     ...(row.platformMessageId !== undefined ? { platformMessageId: row.platformMessageId } : {}),
+    ...(row.pendingReceipt ? { pendingReceipt: { ...row.pendingReceipt } } : {}),
     ...(row.reroutedToJobId !== undefined ? { reroutedToJobId: row.reroutedToJobId } : {}),
   }
 }
@@ -203,6 +209,15 @@ function resolveChatAdapter(adapterId: string, requiredCaps: readonly Capability
  */
 export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
   const api: PluginConnectorsAPI = {
+    listManagementOperations: (adapterId) =>
+      listConnectorManagementOperations(getBus().getAdapter(adapterId)),
+    queryManagement: (adapterId, request) => {
+      if (!connectorManagementIsRead(request.operation))
+        throw new TypeError("Connector query cannot execute a mutation")
+      return executeConnectorManagement(getBus().getAdapter(adapterId), request)
+    },
+    manage: (adapterId, request) =>
+      executeConnectorManagement(getBus().getAdapter(adapterId), request),
     // ── reads ──────────────────────────────────────────────────────────────
     listAdapters: () => getBus().listAdapters().map(toInfo),
     getAdapter: (adapterId) => {
@@ -309,11 +324,49 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
     setTyping: (adapterId, conversationKey, on) =>
       getBus().setTypingOutbound(adapterId, conversationKey, on),
     uploadFile: (adapterId, file) => getBus().uploadFileOutbound(adapterId, file),
-    // A stream can be neither planned nor drafted: under enforcement it
-    // reports "no streaming", and the plugin falls back to a governed send;
-    // in shadow mode each stream is recorded once (ADR-0239).
-    streamReply: (adapterId, req) =>
-      getConnectorDeliveryGateway().streamUnplanned(
+    // Explicit intent uses the ordinary immediate planner. Legacy reference-only
+    // streams return false under enforcement and are audited in shadow mode
+    // so callers can fall back to governed delivery (ADR-0239).
+    streamReply: async (adapterId, req) => {
+      req = structuredClone(req)
+      if (req.sendOptions?.mode && req.sendOptions.mode !== "reply") {
+        if (!req.conversationKey || typeof req.streamKey !== "string" || !req.streamKey)
+          return false
+        req.streamKey = explicitPluginStreamKey(pluginId, req.streamKey)
+        try {
+          const addressed = await pluginDestination(adapterId, req.conversationKey, {
+            conversationRef: req.conversationRef,
+            segments: [{ type: "markdown", md: req.text }],
+            sendOptions: req.sendOptions,
+            metadata: { idempotencyKey: req.streamKey, streamKey: req.streamKey },
+          })
+          const result = await getConnectorDeliveryGateway().sendNow(
+            {
+              adapterId,
+              conversationKey: req.conversationKey,
+              deliveryMode: req.sendOptions.mode,
+              segments: addressed.segments,
+              idempotencyKey: req.streamKey,
+              source: "plugin",
+              authorization: { kind: "plugin", pluginId },
+              auditKind: "delivery.stream_authorized",
+              auditFields: { pluginId },
+            },
+            async () => ({
+              ok: await getBus().streamReplyOutbound(adapterId, {
+                ...req,
+                conversationRef: addressed.conversationRef,
+              }),
+            })
+          )
+          return result.ok
+        } catch (error) {
+          if (error instanceof PluginDestinationError || error instanceof ConnectorDeliveryPiiError)
+            return false
+          throw error
+        }
+      }
+      return getConnectorDeliveryGateway().streamUnplanned(
         {
           adapterId,
           conversationRef: req.conversationRef,
@@ -322,14 +375,21 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
           auditFields: { pluginId },
         },
         () => getBus().streamReplyOutbound(adapterId, req)
-      ),
+      )
+    },
     enqueueSend: async (adapterId, conversationKey, req, opts) => {
       const result = await getConnectorDeliveryGateway().enqueueAuthorized({
         adapterId,
         conversationKey,
         // Sent where the host stored this conversation, never to a reference
         // of the plugin's own (ADR-0239).
-        request: await pluginDestination(adapterId, conversationKey, req, {}, { queued: true }),
+        request: await pluginDestination(
+          adapterId,
+          conversationKey,
+          namespaceExplicitPluginStream(pluginId, req),
+          {},
+          { queued: true }
+        ),
         source: "plugin",
         // Covered by one of this plugin's running, authorized tool calls, or
         // planned as the plugin's own unattended send, with the list of the
@@ -425,6 +485,9 @@ export function createConnectorsAPI(pluginId: string): PluginConnectorsAPI {
     api,
     {
       listAdapters: "connectors:read",
+      listManagementOperations: "connectors:read",
+      queryManagement: "connectors:read",
+      manage: "connectors:manage",
       getAdapter: "connectors:read",
       getA2UICapabilityMatrix: "connectors:read",
       getSkillCapabilities: "connectors:read",
@@ -494,11 +557,37 @@ function refusedResult(error: { code: string; message: string }): OutboundResult
  * enforcement it is refused, and in shadow mode it is sent as before and
  * recorded.
  */
+function explicitPluginStreamKey(pluginId: string, streamKey: string): string {
+  return `plugin-stream:${JSON.stringify([pluginId, streamKey])}`
+}
+
+function namespaceExplicitPluginStream(
+  pluginId: string,
+  request: OutboundRequest
+): OutboundRequest {
+  if (
+    !request.sendOptions?.mode ||
+    request.sendOptions.mode === "reply" ||
+    !request.metadata.streamKey
+  )
+    return request
+  if (typeof request.metadata.streamKey !== "string")
+    throw new TypeError("Invalid connector stream key")
+  return {
+    ...request,
+    metadata: {
+      ...request.metadata,
+      streamKey: explicitPluginStreamKey(pluginId, request.metadata.streamKey),
+    },
+  }
+}
+
 async function legacyDirectSend(
   pluginId: string,
   adapterId: string,
   request: OutboundRequest
 ): Promise<OutboundResult> {
+  request = namespaceExplicitPluginStream(pluginId, structuredClone(request))
   console.warn(
     `[connectors-api] plugin ${pluginId} used deprecated direct send; migrate to ctx.connectors.enqueueSend`
   )
@@ -518,6 +607,7 @@ async function legacyDirectSend(
         adapterId,
         ...(conversationKey ? { conversationKey } : {}),
         segments: addressed.segments,
+        ...(addressed.sendOptions?.mode ? { deliveryMode: addressed.sendOptions.mode } : {}),
         idempotencyKey: addressed.metadata.idempotencyKey,
         source: "plugin",
         authorization: { kind: "plugin", pluginId },

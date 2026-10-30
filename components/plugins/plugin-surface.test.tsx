@@ -35,6 +35,19 @@ function Boom({ enabled = true }: { enabled?: boolean }) {
 }
 
 describe("PluginSurface", () => {
+  it("applies governed presentation titles to its actual host node", () => {
+    render(
+      <PluginSurface
+        pluginId="acme.reference"
+        surfaceId="title"
+        formFactor="row"
+        title="Projected title"
+      >
+        <span>Content</span>
+      </PluginSurface>
+    )
+    expect(screen.getByTitle("Projected title")).toHaveAttribute("data-plugin-surface", "title")
+  })
   it("uses phrasing content and a host fallback for inline failures", async () => {
     const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {})
     const { container } = render(

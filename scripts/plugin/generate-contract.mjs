@@ -7,6 +7,7 @@ import { Command, CommanderError } from "commander"
 import { execaSync } from "execa"
 import writeFileAtomic from "write-file-atomic"
 import { z } from "zod"
+import { verifyPublicContextSurface } from "./context-surface.mjs"
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const catalogPath = resolve(repoRoot, "packages/plugin-contract/contract/catalog.json")
@@ -496,6 +497,7 @@ function writeOrCheck(path, content, check) {
 
 export function generate({ check = false } = {}) {
   const catalog = readCatalog()
+  verifyPublicContextSurface(repoRoot, catalog)
   writeOrCheck(
     pluginPointCatalogPath,
     formatPrettier(

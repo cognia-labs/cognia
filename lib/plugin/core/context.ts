@@ -249,7 +249,7 @@ import type { FullPluginContext as PublicFullPluginContext } from "@cognia/plugi
 import { PluginDisposableScope, withPluginDisposableScope } from "./disposable-scope"
 import { PluginLibraryError } from "../library/access"
 import { PLUGIN_RESOURCE_EFFECTS } from "./resource-effects"
-import { withGovernedPluginContext } from "../contracts/governed-context"
+import { resolvePluginApiPlatform, withGovernedPluginContext } from "../contracts/governed-context"
 import { pluginApiRuntimeForType } from "../contracts/interface-catalog"
 
 /** @deprecated `PluginContext` is now the complete activated context. */
@@ -434,15 +434,6 @@ export function createFullPluginContext(
     bus: eventAPI,
   }
 
-  // Keep the compatibility aliases on the same shared overlay-backed API.
-  // Using the legacy i18n loader for `t` here would hide manifest messages
-  // registered by PluginManager immediately before activate().
-  const enhancedI18n = {
-    ...contextAPI.i18n,
-    getLocale: contextAPI.i18n.getCurrentLocale,
-    hasKey: contextAPI.i18n.hasTranslation,
-  }
-
   // Combine base and feature API contexts with enhanced APIs + ADR-0026
   // v2 namespaces (`ocr`, `workspace`). Both are stateless wrappers; the
   // underlying registries already auto-clean on disable through the
@@ -459,7 +450,7 @@ export function createFullPluginContext(
       },
     },
     events: enhancedEvents,
-    i18n: enhancedI18n,
+    i18n: contextAPI.i18n,
     ocr: createOcrAPI(pluginId),
     decisions: createDecisionsAPI(pluginId),
     prompts: createPromptsAPI(pluginId),
@@ -524,6 +515,7 @@ export function createFullPluginContext(
   })
   const governedContext = withGovernedPluginContext(fullContext, {
     pluginId,
+    platform: resolvePluginApiPlatform(),
     // Classify by manifest type rather than defaulting to "frontend": a python
     // plugin's calls were being audited as a runtime it does not run in, which
     // meant the catalog's per-runtime gate could never fire for it. Enforcement
@@ -926,13 +918,16 @@ function createAgentAPI(pluginId: string, manager: PluginManager): PluginAgentAP
     registerTool: (tool: PluginToolRegistration) => {
       const ownedTool = { ...tool, pluginId }
       manager.getRegistry().registerTool(pluginId, ownedTool)
+      if (manager.getRegistry().getTool(tool.name) !== ownedTool) {
+        throw new Error(`Tool ${tool.name} is already owned by another plugin`)
+      }
       usePluginStore.getState().registerPluginTool(pluginId, ownedTool)
       let registered = true
       return () => {
         if (!registered) return
         registered = false
         const current = manager.getRegistry().getTool(tool.name)
-        if (current?.pluginId === pluginId) {
+        if (current === ownedTool) {
           manager.getRegistry().unregisterTool(tool.name)
           usePluginStore.getState().unregisterPluginTool(pluginId, tool.name)
         }

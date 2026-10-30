@@ -144,51 +144,15 @@ export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistrat
 
           // Type narrowing: `lookup.ok === true` past this point.
           if (!lookup.ok) throw new Error("unreachable")
-          const { workflowId, name: resolvedName } = lookup
-
-          const summary = await readWorkflowSummary(workflowId)
-          const bindingId = newBindingId()
-          const approveActionId = "wfapp:" + bindingId
-          const cancelActionId = "wfcan:" + bindingId
-          const surfaceId = "wfsurf:" + bindingId
-
-          const payload = {
-            workflowId,
+          const { workflowId } = lookup
+          const {
             workflowName: resolvedName,
+            surfaceId,
+            surface,
+          } = await getWorkflowApi().prepareWorkflowApproval({
+            workflowId,
             runParams: (args.runParams as Record<string, unknown>) ?? {},
             triggeredFrom,
-          }
-
-          const actorScope = getWorkflowApi().approvalActorScope(triggeredFrom)
-          await Promise.all([
-            getWorkflowApi().recordCallbackBinding({
-              adapterId: triggeredFrom.adapterId!,
-              actionId: approveActionId,
-              kind: "wf_approve",
-              surfaceId,
-              componentId: "approve",
-              conversationKey: triggeredFrom.conversationKey,
-              payload,
-              actorScope,
-              allowedActions: ["approve", "cancel"],
-            }),
-            getWorkflowApi().recordCallbackBinding({
-              adapterId: triggeredFrom.adapterId!,
-              actionId: cancelActionId,
-              kind: "wf_cancel",
-              surfaceId,
-              componentId: "cancel",
-              conversationKey: triggeredFrom.conversationKey,
-              payload,
-              actorScope,
-              allowedActions: ["approve", "cancel"],
-            }),
-          ])
-
-          const surface = getWorkflowApi().buildApprovalSurface({
-            bindingId,
-            workflowName: resolvedName,
-            summary,
           })
 
           return {
@@ -386,11 +350,6 @@ export function buildFanoutApprovalSurface(
     title,
     widget: { fallbackText: mirrorLines.join("\n") },
   }
-}
-
-async function readWorkflowSummary(workflowId: string): Promise<string | undefined> {
-  const desc = (await getWorkflowApi().findWorkflowById(workflowId))?.description?.trim()
-  return desc && desc.length > 0 ? desc : undefined
 }
 
 function clampInt(raw: unknown, fallback: number, min: number, max: number): number {

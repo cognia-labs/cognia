@@ -538,9 +538,9 @@ const IMPLEMENTED_EXTENSION_POINT_BINDINGS: Partial<Record<CanonicalExtensionPoi
   "canvas.toolbar": "components/canvas/canvas-panel.tsx",
   "canvas.sidebar": "components/canvas/canvas-side-panels.tsx",
   "goal.toolbar": "components/goal/console/goal-console.tsx",
-  "goal.detail.actions": "components/goal/goal-detail-sheet.tsx",
+  "goal.detail.actions": "components/goal/goal-detail-panel.tsx",
   "pet.console.tab": "components/pet/console/pet-console.tsx",
-  "pet.panel.actions": "components/pet/pet-interaction-panel.tsx",
+  "pet.panel.actions": "components/pet/console/home-tab.tsx",
   "perf.panel": "components/performance/performance-dashboard.tsx",
   "terminal.toolbar": "components/terminal/terminal-dock.tsx",
   "agent.team.panel": "components/settings/squads/squad-detail-panel.tsx",
@@ -584,32 +584,32 @@ const EXTENSION_POINT_ALIASES: Record<string, CanonicalExtensionPoint> = {
   "context:menu": "chat.message.actions",
 }
 
-const UI_POINT_DOCS = "docs/features/plugin-development.md#ui-extension-points"
+const UI_POINT_DOCS = "docs/content/docs/en/plugin-dev/extension-points-v2.mdx"
 
-const HOOK_POINT_DOCS = "docs/features/plugin-development.md#canonical-plugin-point-contract"
+const HOOK_POINT_DOCS = "docs/content/docs/en/plugin-dev/extension-points-v2.mdx"
 
-const ACTIVATION_POINT_DOCS = "docs/features/plugin-development.md#activation-events"
+const ACTIVATION_POINT_DOCS = "docs/content/docs/en/plugin-dev/extension-points-v2.mdx"
 
 const UI_POINT_TESTS = [
   "components/plugins/plugin-extension-slot.test.tsx",
-  "lib/plugin/contracts/plugin-points.test.ts",
+  "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.test.ts",
 ] as const
 
 const HOOK_POINT_TESTS = [
   "lib/plugin/messaging/hooks-system.test.ts",
-  "lib/plugin/contracts/plugin-points.test.ts",
+  "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.test.ts",
 ] as const
 
 const ACTIVATION_POINT_TESTS = [
   "lib/plugin/core/manager.test.ts",
-  "lib/plugin/contracts/plugin-points.test.ts",
+  "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.test.ts",
 ] as const
 
-const RUNTIME_POINT_DOCS = "docs/content/docs/adr/0017-workflow-plugin-extension-points.md"
+const RUNTIME_POINT_DOCS = "docs/content/docs/en/adr/0017-workflow-plugin-extension-points.md"
 
 const RUNTIME_POINT_TESTS = [
-  "lib/workflow/nodes/registry.test.ts",
-  "lib/plugin/contracts/plugin-points.test.ts",
+  "packages/plugin-contract/src/lib/workflow/nodes/registry.test.ts",
+  "packages/plugin-contract/src/lib/plugin/contracts/plugin-points.test.ts",
 ] as const
 
 export const CANONICAL_HOOK_POINTS = [
@@ -862,8 +862,8 @@ export const CANONICAL_ACTIVATION_PATTERNS = [
   "onTaskType:*",
   "onFileSystem:*",
   // onDebug* patterns: the manifest adapter normalises VS Code's onDebug*
-  // family to a single `onDebugResolve:*` here. Runtime stays Tier 4
-  // (throw NotSupportedError) because cognia has no DAP viewport.
+  // family to a single `onDebugResolve:*` here. Managed Pro IDE owns the
+  // configuration/DAP consumer; the standalone shim remains unsupported.
   "onDebugResolve:*",
   "onStartupFinished",
   "onUri",
@@ -979,25 +979,7 @@ const extensionPointContracts: Record<CanonicalExtensionPoint, PluginPointContra
  * `executeHook`/`hooks.<name>` call in the binding file first, then delete the
  * entry here — `audit:hooks` fails while the two disagree in either direction.
  */
-const VIRTUAL_HOOK_POINTS = new Set<CanonicalHookPoint>([
-  // Scheduler CRUD + pre-run hooks. `lib/scheduler/` mutates tasks without
-  // going through the plugin hooks system; only onScheduledTaskStart /
-  // Complete / Error are fired today.
-  "onScheduledTaskCreate",
-  "onScheduledTaskUpdate",
-  "onScheduledTaskDelete",
-  "onScheduledTaskPause",
-  "onScheduledTaskResume",
-  "onScheduledTaskBeforeRun",
-  // Workflow node/trigger registry churn. The registries in
-  // `lib/workflow/{nodes,triggers}/registry.ts` do not notify the hooks
-  // system when an entry is added or removed; only the *execution* hooks
-  // (onWorkflowNodeStart / Complete / Error, onWorkflowTriggerFired) fire.
-  "onWorkflowNodeRegister",
-  "onWorkflowNodeUnregister",
-  "onWorkflowTriggerRegister",
-  "onWorkflowTriggerUnregister",
-])
+const VIRTUAL_HOOK_POINTS = new Set<CanonicalHookPoint>([])
 
 /** The file whose fire sites `audit:hooks` checks for non-virtual hooks. */
 export const HOOK_POINT_BINDING = "lib/plugin/messaging/hooks-system.ts"
@@ -1013,6 +995,12 @@ export const HOOK_POINT_BINDING = "lib/plugin/messaging/hooks-system.ts"
 export const HOOK_POINT_PERMISSIONS: Readonly<
   Partial<Record<CanonicalHookPoint, PluginPermission>>
 > = {
+  onScheduledTaskCreate: "database:read",
+  onScheduledTaskUpdate: "database:read",
+  onScheduledTaskDelete: "database:read",
+  onScheduledTaskPause: "database:read",
+  onScheduledTaskResume: "database:read",
+  onScheduledTaskBeforeRun: "agent:control",
   onPetInteract: "pet:read",
   onPetLevelUp: "pet:read",
   onPetEvolved: "pet:read",
@@ -1076,10 +1064,11 @@ const hookPointContracts: Record<CanonicalHookPoint, PluginPointContract> = Obje
  * host never reaches would hand plugin authors an API that silently does
  * nothing, which is worse than not shipping it.
  */
-const INTERCEPTOR_POINT_DOCS = "docs/content/docs/en/adr/0189-semantic-interceptors.mdx"
+const INTERCEPTOR_POINT_DOCS =
+  "docs/content/docs/en/adr/0189-a-plugin-says-which-of-four-things-it-is-doing.md"
 
 const INTERCEPTOR_POINT_TESTS = [
-  "lib/plugin/interceptors/dispatch.test.ts",
+  "packages/plugin-contract/src/lib/plugin/interceptors/dispatch.test.ts",
   "lib/plugin/interceptors/registry.test.ts",
 ] as const
 
@@ -1120,6 +1109,76 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
   CanonicalInterceptorPoint,
   InterceptorPointDeclaration
 > = {
+  "gateway.request.prepare": {
+    semantics: {
+      ...GUARDED_TRANSFORM,
+      semantic: "transform",
+      permission: "hooks:chat-intercept",
+      failurePolicy: "fail-closed",
+      executionPlacement: "host-service",
+      timeoutCeilingMs: 2_000,
+    },
+    binding: "lib/gateway/runtime-bridge.ts:dispatchGatewayRuntimeCommand",
+    status: "implemented",
+    stability: "experimental",
+    introducedIn: "0.9.0",
+  },
+  "gateway.provider.prepare": {
+    semantics: {
+      ...GUARDED_TRANSFORM,
+      semantic: "transform",
+      permission: "hooks:chat-intercept",
+      failurePolicy: "fail-closed",
+      executionPlacement: "host-service",
+      timeoutCeilingMs: 2_000,
+    },
+    binding: "lib/gateway/runtime-bridge.ts:dispatchGatewayRuntimeCommand",
+    status: "implemented",
+    stability: "experimental",
+    introducedIn: "0.9.0",
+  },
+  "gateway.stream.transform": {
+    semantics: {
+      ...GUARDED_TRANSFORM,
+      semantic: "transform",
+      permission: "hooks:chat-intercept",
+      failurePolicy: "fail-closed",
+      executionPlacement: "host-service",
+      timeoutCeilingMs: 1_000,
+    },
+    binding: "lib/gateway/runtime-bridge.ts:dispatchGatewayRuntimeCommand",
+    status: "implemented",
+    stability: "experimental",
+    introducedIn: "0.9.0",
+  },
+  "gateway.response.transform": {
+    semantics: {
+      ...GUARDED_TRANSFORM,
+      semantic: "transform",
+      permission: "hooks:chat-intercept",
+      failurePolicy: "fail-closed",
+      executionPlacement: "host-service",
+      timeoutCeilingMs: 2_000,
+    },
+    binding: "lib/gateway/runtime-bridge.ts:dispatchGatewayRuntimeCommand",
+    status: "implemented",
+    stability: "experimental",
+    introducedIn: "0.9.0",
+  },
+  "gateway.usage.recorded": {
+    semantics: {
+      ...GUARDED_TRANSFORM,
+      semantic: "observe",
+      permission: "hooks:chat-intercept",
+      failurePolicy: "fail-open",
+      executionPlacement: "host-service",
+      timeoutCeilingMs: 1_000,
+    },
+    binding: "lib/gateway/runtime-bridge.ts:dispatchGatewayRuntimeCommand",
+    status: "implemented",
+    stability: "experimental",
+    introducedIn: "0.9.0",
+  },
   // Extra context (RAG, project files) folded into the outgoing turn. Bounded
   // by the token budget the host already enforces on assembled options.
   "agent.context.prepare": {
@@ -1192,14 +1251,9 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       // Per-chunk presentation: a dropped transform shows the raw chunk.
       failurePolicy: "fail-open",
     },
-    // Declared, not fired. `dispatchStreamChunk` is synchronous and its callers
-    // discard the return value, so there is nowhere for a rewritten chunk to
-    // go — turning it into a transform means making the per-chunk path await,
-    // which is a change to the streaming contract rather than to this catalog.
-    // Marked virtual until that seam exists, because an interceptor point the
-    // host never reads is worse than one that is honestly absent.
-    binding: "declared only (no fire site)",
-    status: "virtual",
+    binding:
+      "lib/plugin/interceptors/consumers.ts:transformModelStreamPart (standalone and AI SDK Sidecar)",
+    status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",
   },
@@ -1257,9 +1311,7 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
     stability: "experimental",
     introducedIn: "0.9.0",
   },
-  // Continue / stop / ask a human. Declared but not yet fired: the turn loop
-  // lives inside the sidecar, so the host has no continue decision to gate.
-  // Marked virtual rather than implemented until that seam exists.
+  // AI SDK prepareStep awaits every guard; all denies precede any combined human ask.
   "agent.turn.decide": {
     semantics: {
       ...GUARDED_TRANSFORM,
@@ -1268,8 +1320,9 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       scopeBinding: "run",
       failurePolicy: "require-approval",
     },
-    binding: "declared only (no fire site)",
-    status: "virtual",
+    binding:
+      "lib/plugin/interceptors/consumers.ts:decideAgentTurn; lib/claude/plugin-hook-ipc.ts:handlePluginHookExec (AI SDK prepareStep)",
+    status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",
   },
@@ -1299,13 +1352,8 @@ const INTERCEPTOR_POINT_DECLARATIONS: Record<
       scopeBinding: "session",
       timeoutCeilingMs: 250,
     },
-    // Declared, not fired. Surface projection has to run inside a synchronous
-    // render, and a synchronous handler cannot be given the deadline and
-    // revocation semantics every other point here relies on. Shipping it with
-    // a weaker contract than the rest would make "the failure policy decides"
-    // false exactly where a plugin is closest to the user.
-    binding: "declared only (no fire site)",
-    status: "virtual",
+    binding: "components/plugins/use-surface-projections.ts:useSurfaceProjections",
+    status: "implemented",
     stability: "experimental",
     introducedIn: "0.9.0",
   },
@@ -1363,7 +1411,19 @@ const interceptorPointContracts: Record<CanonicalInterceptorPoint, PluginPointCo
           owner: "plugin-platform",
           binding: declaration.binding,
           docs: INTERCEPTOR_POINT_DOCS,
-          requiredTests: INTERCEPTOR_POINT_TESTS,
+          requiredTests: [
+            ...INTERCEPTOR_POINT_TESTS,
+            ...(id === "ui.surface.project"
+              ? ["components/plugins/use-surface-projections.test.tsx"]
+              : []),
+            ...(id === "model.stream.transform" || id === "agent.turn.decide"
+              ? [
+                  "lib/ai/chat/standalone-engine.test.ts",
+                  "sidecar/src/hooks/semantic-consumers.test.ts",
+                  "sidecar/src/runtimes/ai-sdk/index.test.ts",
+                ]
+              : []),
+          ],
           introducedIn: declaration.introducedIn,
           ...(declaration.semantics.permission
             ? { permission: declaration.semantics.permission }
@@ -1459,8 +1519,7 @@ export type CanonicalRuntimePoint = (typeof CANONICAL_RUNTIME_POINTS)[number]
 export const RUNTIME_POINT_BINDINGS: Record<CanonicalRuntimePoint, string> = {
   "workflow.node": "lib/workflow/nodes/registry.ts:registerNodeExecutor",
   "workflow.trigger": "lib/workflow/triggers/registry.ts:registerPluginTrigger",
-  "workflow.task":
-    "lib/workflow/nodes/built-ins.ts:executePluginInvoke (action.plugin.invoke node)",
+  "workflow.task": "lib/workflow/nodes/integrations/index.ts (action.plugin.invoke node)",
   // The bindings below point at registries that will be exposed via
   // `lib/plugin/api/<name>-api.ts` and `lib/plugin/bridge/<name>-bridge.ts`
   // in Phases 2-4. The contract declares the intent; the audit script
@@ -1470,10 +1529,10 @@ export const RUNTIME_POINT_BINDINGS: Record<CanonicalRuntimePoint, string> = {
   "provider.workspace-backend": "lib/github/workspace-backend-registry.ts:registerWorkspaceBackend",
   "provider.message-renderer":
     "lib/plugin/api/message-part-renderers.ts:registerMessagePartRenderer",
-  "provider.ai-llm": "lib/plugin/api/ai-provider-registry.ts:registerLlmProvider",
-  "provider.ai-embedding": "lib/plugin/api/ai-provider-registry.ts:registerEmbeddingProvider",
+  "provider.ai-llm": "lib/plugin/bridge/ai-providers-bridge.ts:registerAiProvidersForPlugin",
+  "provider.ai-embedding": "lib/plugin/bridge/ai-providers-bridge.ts:registerAiProvidersForPlugin",
   "chat.middleware": "lib/claude/chat-middleware/registry.ts:registerChatMiddleware",
-  "modal.mount": "stores/plugin/plugin-modal-store.ts:registerPluginModal",
+  "modal.mount": "lib/plugin/bridge/modal-mount-bridge.ts:registerModalMountsForPlugin",
   "scheduler.task": "lib/scheduler/executors/plugin-executor.ts (plugin scheduled task)",
   "terminal.completion": "lib/terminal/completion/registry.ts:registerCompletionProvider",
   "provider.routing-strategy":
@@ -1527,7 +1586,7 @@ export const RUNTIME_POINT_BINDINGS: Record<CanonicalRuntimePoint, string> = {
   "a2ui.component": "lib/plugin/bridge/a2ui-bridge.ts:registerComponent",
   "a2ui.template": "lib/plugin/bridge/a2ui-bridge.ts:registerTemplate",
   "agent.mode": "lib/plugin/core/registry.ts:registerMode",
-  "command.slash": "lib/chat/slash-command-registry.ts:registerSlashCommand",
+  "command.slash": "lib/slash-commands/registry.ts:registerSlashCommand",
   "importer.format": "lib/plugin/api/import-api.ts:registerImporter",
   "exporter.format": "lib/plugin/api/export-api.ts:registerExporter",
   "appearance.theme": "lib/plugin/bridge/themes-bridge.ts:registerPluginThemes",
@@ -1773,29 +1832,31 @@ const activationPatternContracts: Record<CanonicalActivationPattern, PluginPoint
     retirementNote:
       "No file-open runtime dispatch in Cognia; declare startup activation and filter inside the plugin.",
   },
-  // VS Code activation patterns. The ones Cognia fires name where; the rest
-  // are declared by VS Code extensions but never fire here (`virtual`), and
-  // `manifest-adapter.ts` records them as the extension's unsupported events.
+  // VS Code activation patterns name their actual consuming runtime. Managed
+  // Pro IDE bindings do not imply support in the standalone VS Code shim.
   "onView:*": vscodeActivationContract("onView:*", {
     binding: "components/plugins/plugin-extension-slot.tsx:handleActivationEvent",
   }),
   "onWebviewPanel:*": vscodeActivationContract("onWebviewPanel:*", {
-    note: "Restoring webview panels after a restart is not supported.",
+    binding: "lib/plugin/vscode-shim/webview-restoration.ts:restoreVscodeWebviewPanelsForPlugin",
   }),
   "onCustomEditor:*": vscodeActivationContract("onCustomEditor:*", {
-    note: "Cognia has no custom editors.",
+    binding:
+      "lib/plugin/ide/broker-runtime.ts:managedProviderActivation (Managed Pro IDE custom-editor resolve)",
   }),
   onAuthenticationRequest: vscodeActivationContract("onAuthenticationRequest", {
     binding: "lib/plugin/vscode-shim/runtime-handlers.ts:authentication:getSession",
   }),
   "onTaskType:*": vscodeActivationContract("onTaskType:*", {
-    note: "Fetching tasks does not start extensions.",
+    binding: "lib/plugin/vscode-shim/runtime-handlers.ts:tasks:fetchTasks",
   }),
   "onFileSystem:*": vscodeActivationContract("onFileSystem:*", {
-    note: "Cognia does not read files through extension file systems.",
+    binding:
+      "lib/plugin/ide/broker-runtime.ts:managedProviderActivation (Managed Pro IDE file-system operations)",
   }),
   "onDebugResolve:*": vscodeActivationContract("onDebugResolve:*", {
-    note: "Cognia has no debugger.",
+    binding:
+      "lib/plugin/ide/broker-runtime.ts:managedProviderActivation (Managed Pro IDE debug configuration and DAP)",
   }),
   onStartupFinished: vscodeActivationContract("onStartupFinished", {
     binding: "lib/plugin/vscode-shim/manifest-adapter.ts:mapActivationEvent (startup)",
@@ -1804,22 +1865,24 @@ const activationPatternContracts: Record<CanonicalActivationPattern, PluginPoint
     binding: "lib/plugin/uri/route-deep-link.ts:routePluginDeepLink",
   }),
   onTerminal: vscodeActivationContract("onTerminal", {
-    note: "Opening a terminal does not start extensions.",
+    binding: "lib/plugin/vscode-shim/activation-triggers.ts:installVscodeActivationTriggers",
   }),
   "onTerminalProfile:*": vscodeActivationContract("onTerminalProfile:*", {
-    note: "Cognia has no extension terminal profiles.",
+    binding: "lib/plugin/vscode-shim/terminal-handlers.ts:openVscodeTerminalProfile",
   }),
   "onNotebook:*": vscodeActivationContract("onNotebook:*", {
-    note: "Cognia has no notebooks.",
+    binding:
+      "lib/plugin/ide/broker-runtime.ts:managedProviderActivation (Managed Pro IDE serializer/kernel)",
   }),
   "onWalkthrough:*": vscodeActivationContract("onWalkthrough:*", {
-    note: "Cognia has no walkthroughs.",
+    binding:
+      "lib/plugin/ide/broker-runtime.ts:activateContribution (Managed Pro IDE owned walkthrough command)",
   }),
   "onChatParticipant:*": vscodeActivationContract("onChatParticipant:*", {
-    note: "Extension chat participants are not invoked.",
+    binding: "lib/plugin/vscode-shim/chat-participant-registry.ts:resolveVscodeChatParticipant",
   }),
   "onLanguageModelTool:*": vscodeActivationContract("onLanguageModelTool:*", {
-    note: "Models never call extension tools.",
+    binding: "lib/plugin/bridge/sidecar-tools-bridge.ts:prepareVscodeLanguageModelTools",
   }),
   "workspaceContains:*": vscodeActivationContract("workspaceContains:*", {
     binding: "lib/plugin/vscode-shim/activation-triggers.ts:evaluateWorkspaceContains",
@@ -1843,7 +1906,14 @@ function vscodeActivationContract(
     owner: "plugin-platform",
     binding: implemented ? opts.binding : "",
     docs: ACTIVATION_POINT_DOCS,
-    requiredTests: ACTIVATION_POINT_TESTS,
+    requiredTests:
+      implemented && opts.binding.includes("lib/plugin/ide/broker-runtime.ts")
+        ? [
+            ...ACTIVATION_POINT_TESTS,
+            "lib/plugin/ide/broker-runtime.test.ts",
+            "lib/plugin/ide/real-code-server.e2e.test.ts",
+          ]
+        : ACTIVATION_POINT_TESTS,
     introducedIn: "0.5.0",
     ...(implemented ? {} : { retirementNote: opts.note }),
   }

@@ -257,6 +257,7 @@ describeReal.each(["managed", "native"] as const)(SUITE, (profile) => {
   let connected = false
   let coldReadinessMs = 0
   const brokerErrors: string[] = []
+  const activationEvents: string[] = []
 
   const probe = <T = unknown>(params: Record<string, unknown>) =>
     host.call<T>("request", { root: ready.root, method: "testProbe", params })
@@ -328,6 +329,10 @@ describeReal.each(["managed", "native"] as const)(SUITE, (profile) => {
       expectedHostId: ready.hostId,
       notify,
       getPlugin: (pluginId) => (pluginId === manifest.id ? plugin : undefined),
+      activate: async (pluginId, event) => {
+        expect(pluginId).toBe(manifest.id)
+        activationEvents.push(event)
+      },
       isWorkspaceTrusted: async () => true,
       validatePaths: (root, paths) => host.call("validatePaths", { root, paths }),
       createContent: (root, generation, pluginId, providerId, permission, bytes) =>
@@ -527,7 +532,8 @@ describeReal.each(["managed", "native"] as const)(SUITE, (profile) => {
         program: "main.cfx",
       },
     })
-    expect(output.join("")).toContain("Cognia fixture debug: main.cfx")
+    expect(output.join("")).toContain("Cognia fixture debug: resolved-main.cfx")
+    expect(activationEvents).toContain(`onDebugResolve:${NS}.fixture-dap`)
   })
 
   it("MCP: the stdio server's tools are listed through the platform relay", async () => {
@@ -567,6 +573,7 @@ describeReal.each(["managed", "native"] as const)(SUITE, (profile) => {
       success: true,
       outputs: [[{ mime: "text/plain", text: "fixture ran: 1 + 1" }]],
     })
+    expect(activationEvents).toContain(`onNotebook:${NS}.fixture-notebook`)
   })
 
   it("webviews: the view and the custom editor render the plugin's pages", async () => {
@@ -582,6 +589,27 @@ describeReal.each(["managed", "native"] as const)(SUITE, (profile) => {
     })
     expect(editor.uri).toMatch(/doc\.cfxed$/)
     expect(editor.htmlLength).toBeGreaterThan(0)
+    expect(activationEvents).toContain(`onCustomEditor:${NS}.fixture-editor`)
+  })
+
+  it("file systems write and read bytes through the real Code provider", async () => {
+    expect(
+      await probe({
+        action: "fileSystem",
+        uri: `${NS}.fixture-fs:/example.txt`,
+        text: "Actual provider bytes",
+      })
+    ).toEqual({ contents: "Actual provider bytes", size: 21 })
+    expect(activationEvents).toContain(`onFileSystem:${NS}.fixture-fs`)
+  })
+
+  it("walkthroughs open their actual native view after governed activation", async () => {
+    await probe({ action: "command", command: `${NS}.welcome.openWalkthrough` })
+    await page
+      .getByText("Fixture walkthrough", { exact: true })
+      .first()
+      .waitFor({ state: "visible" })
+    expect(activationEvents).toContain(`onWalkthrough:${NS}.welcome`)
   })
 
   it("chat: participant registered, model answers, tool runs", async () => {

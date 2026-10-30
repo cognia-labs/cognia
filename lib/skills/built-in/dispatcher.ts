@@ -35,7 +35,7 @@ import { z } from "zod"
 
 import { hasNoLeakingPii } from "@cognia/redact"
 import { append as appendAudit } from "@/lib/db/connector-audit"
-import { SKILL_INVOKE_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
+import { SKILL_INVOKE_PREFIX, SKILL_CANCEL_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { getSharedBuiltInSkillRegistry } from "./registry"
 import type { BuiltInSkill, BuiltInSkillContext, BuiltInSkillResult } from "./types"
@@ -92,6 +92,7 @@ export async function runBuiltInSkill(
   args: unknown,
   ctx: BuiltInSkillContext
 ): Promise<BuiltInSkillResult> {
+  ctx.signal?.throwIfAborted()
   const now = ctx.now ?? Date.now()
   const skill = getSharedBuiltInSkillRegistry().get(skillId)
   if (!skill) {
@@ -254,6 +255,7 @@ export async function runBuiltInSkill(
     }
   }
 
+  if (ctx.signal?.aborted) return { status: "error", message: "Skill invocation was cancelled" }
   let desktopApproved = false
   // Only an explicit click on THIS request counts; a remembered session grant
   // approves the call without a person having looked at it.
@@ -269,21 +271,104 @@ export async function runBuiltInSkill(
       }
     }
     if (ctx.imBinding) {
+      const { getImElicitationContext } =
+        await import("@/lib/connectors/hitl/im-elicitation-context")
+      const { getDb } = await import("@/lib/db/schema")
+      const live = getImElicitationContext(ctx.sessionId)
+      const signal =
+        ctx.signal && live?.signal
+          ? AbortSignal.any([ctx.signal, live.signal])
+          : (ctx.signal ?? live?.signal)
+      const stored = (await getDb().sessions.get(ctx.sessionId))?.platformBinding
+      const target = live ?? stored
+      if (
+        !target ||
+        target.adapterId !== ctx.imBinding.adapterId ||
+        target.conversationKey !== ctx.imBinding.conversationKey ||
+        (live && (live.drafting || live.signal?.aborted))
+      )
+        return { status: "error", message: "No active delivery target for this confirmation" }
+      const conversationRef = target.deliveryTarget?.conversationRef ?? target.conversationRef
+      if (!conversationRef)
+        return { status: "error", message: "Confirmation delivery target is unavailable" }
       const surface = skill.hitlSurface(validArgs as never)
       // Persist the binding so the inbound callback can re-fire the skill
       // with `hitlBypass: true`.
       const actionId = `${SKILL_INVOKE_PREFIX}${skill.id}:${cryptoRandomId()}`
-      await recordCallbackBinding({
-        adapterId: ctx.imBinding.adapterId,
-        actionId,
-        kind: "skill_invoke",
-        surfaceId: surface.rootId,
-        conversationKey: ctx.imBinding.conversationKey,
-        createdAt: now,
-        expiresAt: now + SKILL_INVOKE_TTL_MS,
-        payload: { skillId: skill.id, args: validArgs as never },
-        actorScope: await skillInvokeActorScope(ctx.imBinding.conversationKey),
-      })
+      const cancelId = `${SKILL_CANCEL_PREFIX}${skill.id}:${cryptoRandomId()}`
+      const scope =
+        live?.actorScope ??
+        (live?.initiatorUserId
+          ? { mode: "initiator" as const, allowedUserIds: [live.initiatorUserId] }
+          : await skillInvokeActorScope(ctx.imBinding.conversationKey))
+      for (const [componentId, value, action] of [
+        ["btn_confirm", actionId, "approve"],
+        ["btn_cancel", cancelId, "cancel"],
+      ] as const) {
+        const node = surface.components[componentId]
+        surface.components[componentId] = {
+          ...(node && typeof node === "object" ? node : {}),
+          component: "Button",
+          text:
+            node && typeof node === "object" && "text" in node
+              ? node.text
+              : action === "approve"
+                ? "Confirm"
+                : "Cancel",
+          action,
+          value,
+        }
+      }
+      try {
+        if (signal?.aborted) throw new Error("Confirmation request was cancelled")
+        for (const [value, componentId, action] of [
+          [actionId, "btn_confirm", "approve"],
+          [cancelId, "btn_cancel", "cancel"],
+        ] as const)
+          await recordCallbackBinding({
+            adapterId: ctx.imBinding.adapterId,
+            actionId: value,
+            componentId,
+            kind: "skill_invoke",
+            surfaceId: surface.rootId,
+            conversationKey: ctx.imBinding.conversationKey,
+            createdAt: now,
+            expiresAt: now + SKILL_INVOKE_TTL_MS,
+            payload: { skillId: skill.id, args: validArgs as never, sessionId: ctx.sessionId },
+            actorScope: scope,
+            allowedActions: [action],
+          })
+        const { enqueueGoverned } = await import("@/lib/connectors/delivery-gateway")
+        const { buildA2UISegment } = await import("@/lib/connectors/a2ui-bridge/a2ui-to-segments")
+        if (signal?.aborted || live?.drafting) throw new Error("Confirmation request was cancelled")
+        await enqueueGoverned(
+          {
+            adapterId: ctx.imBinding.adapterId,
+            conversationKey: ctx.imBinding.conversationKey,
+            source: "skill",
+            authorization: {
+              kind: "system-notice",
+              inboundConversationKey: ctx.imBinding.conversationKey,
+            },
+            request: {
+              conversationRef,
+              ...(target.deliveryTarget ? { deliveryTarget: target.deliveryTarget } : {}),
+              segments: [buildA2UISegment(surface.rootId, surface)],
+              metadata: { idempotencyKey: actionId },
+            },
+          },
+          ...(signal ? [{ signal }] : [])
+        )
+      } catch (error) {
+        await getDb().connectorCallbackBindings.bulkDelete([
+          `${ctx.imBinding.adapterId}:${actionId}`,
+          `${ctx.imBinding.adapterId}:${cancelId}`,
+        ])
+        return {
+          status: "error",
+          message: error instanceof Error ? error.message : "Confirmation card could not be queued",
+        }
+      }
       await safeAppendAudit({
         adapterId: ctx.imBinding.adapterId,
         kind: "builtin_skill_hitl_pending",
@@ -348,6 +433,7 @@ export async function runBuiltInSkill(
   })
 
   try {
+    ctx.signal?.throwIfAborted()
     const data = await skill.execute(validArgs as never, {
       ...ctx,
       humanConfirmed: ctx.hitlBypass === true || desktopConfirmedByUser,

@@ -11,6 +11,8 @@ import fixture, {
   FIXTURE_TESTS,
   chatParticipant,
   customEditor,
+  fileSystem,
+  debugConfiguration,
   languageModel,
   languageModelTool,
   notebookKernel,
@@ -28,6 +30,18 @@ const doc = (path: string) => ({
   uri: { scheme: "file", path },
   languageId: "typescript",
   version: 1,
+})
+
+it("provides real byte round trips and consumes debug configuration rewrites", () => {
+  const uri = { scheme: "virtual", path: "/test.txt" }
+  fileSystem("writeFile", uri, new TextEncoder().encode("hello"))
+  expect(new TextDecoder().decode(fileSystem("readFile", uri) as Uint8Array)).toBe("hello")
+  expect(fileSystem("stat", uri)).toMatchObject({ size: 5 })
+  fileSystem("delete", uri)
+  expect(() => fileSystem("readFile", uri)).toThrow("FileNotFound")
+  expect(debugConfiguration("resolve", undefined, { program: "original" })).toMatchObject({
+    program: "resolved-main.cfx",
+  })
 })
 
 describe("the manifest the E2E builds a proxy from", () => {

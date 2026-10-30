@@ -105,6 +105,24 @@ async function registerProxy(
   let providerRegistration
   try {
     providerRegistration = await registerManagedProviders(api, runtimeDescriptor, {
+      openWalkthrough: async (walkthroughId: string) => {
+        await bridge!.request("cognia/contribution/activate", {
+          invocationId: randomUUID(),
+          pluginId: runtimeDescriptor.pluginId,
+          pluginVersion: runtimeDescriptor.pluginVersion,
+          manifestHash: runtimeDescriptor.manifestHash,
+          catalogHash: runtimeDescriptor.catalogHash,
+          walkthroughId,
+          hostId: process.env.COGNIA_CS_HOST_ID ?? "local",
+          workspaceRoot: process.env.COGNIA_CS_WORKSPACE ?? "",
+          workspaceTrusted: vscode.workspace.isTrusted,
+        })
+        return api.commands.executeCommand(
+          "workbench.action.openWalkthrough",
+          `${context.extension.id}#${walkthroughId}`,
+          false
+        )
+      },
       managedStorage,
       onEvent: (listener: any) =>
         bridge!.onNotification((message: any) => {

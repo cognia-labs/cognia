@@ -35,6 +35,16 @@ test("hasFireSite matches whole words only", () => {
   assert.equal(hasFireSite("hooks.onLoad(x)", "onLoad"), true)
   // onLoadExtra must not satisfy onLoad
   assert.equal(hasFireSite("hooks.onLoadExtra(x)", "onLoad"), false)
+  assert.equal(hasFireSite("// hooks.onLoad()", "onLoad"), false)
+  assert.equal(hasFireSite("const description = 'onLoad';", "onLoad"), false)
+})
+
+test("parses an empty virtual set after formatter compaction", () => {
+  const source = CONTRACT_FIXTURE.replace(
+    /new Set<CanonicalHookPoint>\(\[[\s\S]*?\]\)/,
+    "new Set<CanonicalHookPoint>([])"
+  )
+  assert.deepEqual(parseContract(source).virtual, [])
 })
 
 test("green: implemented hook fires, virtual hook does not", () => {
@@ -86,13 +96,11 @@ test("red: VIRTUAL_HOOK_POINTS naming a hook that is not canonical", () => {
   assert.match(report.errors[0], /\[virtual-unknown\]/)
 })
 
-test("the real repo passes, and the virtual set is not empty", () => {
+test("the real repo passes with all hooks backed by dispatchers", () => {
   const report = runAudit()
   assert.equal(report.ok, true, report.errors.join("\n"))
   assert.ok(report.total > 100, `expected the full hook catalog, saw ${report.total}`)
-  // Guards the gate against being trivially satisfied by an empty virtual set:
-  // the ten dormant hooks this gate was written for must still be labelled.
-  assert.ok(report.virtual > 0)
+  assert.equal(report.virtual, 0)
 })
 
 test("normalized hooks require a mapping and a live semantic dispatch", () => {

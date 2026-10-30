@@ -58,6 +58,21 @@ interface FakeMarketplaceState {
 let market: FakeMarketplaceState
 jest.mock("@/hooks/plugins/use-plugin-marketplace", () => ({
   usePluginMarketplace: () => market,
+  loadPluginMarketplaceClient: jest.fn(async () => ({})),
+}))
+jest.mock("@/hooks/plugins/use-plugin-pre-install", () => ({
+  usePluginPreInstall: () => ({
+    target: null,
+    resolveContinue: jest.fn(),
+    resolveCancel: jest.fn(),
+    install: async (id: string, version?: string) => {
+      await market.install(id, version)
+      return { status: "installed", pluginId: id }
+    },
+  }),
+}))
+jest.mock("@/components/plugins/dialogs/plugin-pre-install-dialog", () => ({
+  PluginPreInstallDialog: () => null,
 }))
 
 import { PluginMarketplaceSheet } from "./plugin-marketplace-sheet"

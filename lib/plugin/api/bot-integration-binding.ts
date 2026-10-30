@@ -1,3 +1,4 @@
+import { resolveBotInputBinding, botInputStillMatches } from "@/lib/bot/events/input-binding"
 /** Host-only resolution of a Bot's explicitly installed integration binding. */
 import { getDb } from "@/lib/db/schema"
 import { getBotRunStep } from "@/lib/db/bot-run-steps"
@@ -29,6 +30,19 @@ export async function resolveBotIntegrationBinding(
   if (!definition || definition.version !== installation.pinnedVersion) {
     throw new Error("Bot integration definition is unavailable or changed")
   }
+  const delivery = await getDb().botEventDeliveries.where("runId").equals(ref.runId).first()
+  if (delivery && !botInputStillMatches(installation, definition, delivery.envelope))
+    throw new Error("Bot input account binding changed")
+  const inputTrigger =
+    delivery && definition.triggers.find((trigger) => trigger.id === delivery.triggerId)
+  const inputBinding =
+    inputTrigger && resolveBotInputBinding(installation, definition, inputTrigger)
+  if (
+    inputBinding?.kind === "bound" &&
+    inputBinding.slotId === ref.slotId &&
+    inputBinding.integrationAccountId !== delivery?.envelope.binding?.integrationAccountId
+  )
+    throw new Error("Bot input credential does not match the accepted event")
   const slot = definition.requires?.credentials?.find((candidate) => candidate.id === ref.slotId)
   const connectorAccountId = installation.credentialBindings[ref.slotId]?.integrationAccountId
   const account = connectorAccountId

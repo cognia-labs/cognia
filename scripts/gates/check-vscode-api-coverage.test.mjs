@@ -101,12 +101,15 @@ test("a namespace the shim does not mount leaves all its members missing", () =>
   assert.ok(report.missing.includes("comments.createCommentController"))
 })
 
-test("inertDependencies answers anything with something callable", () => {
+test("inertDependencies retains asynchronous RPC and callable registrations", async () => {
   const deps = inertDependencies()
   assert.equal(deps.extensionId, "cognia.api-coverage")
   assert.equal(typeof deps.connection.onRequest, "function")
   assert.equal(typeof deps.connection.onRequest("x", () => {}).dispose, "function")
   assert.equal(deps.then, undefined)
+  const tools = deps.connection.sendRequest("lm:listTools", {})
+  assert.equal(typeof tools.then, "function")
+  assert.deepEqual(await tools, [])
 })
 
 test("sameReport compares content, whatever the layout", () => {

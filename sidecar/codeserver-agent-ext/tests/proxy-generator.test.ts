@@ -49,10 +49,44 @@ test("buildProxyPackageJson emits a platform-owned extension with no author entr
   })
 })
 
+test("walkthroughs receive actual command-palette entries and precise activation", () => {
+  const pkg = buildProxyPackageJson({
+    ...input,
+    contributions: {
+      walkthroughs: [
+        {
+          id: "cognia.acme.tools.welcome",
+          title: "Welcome",
+          steps: [],
+        },
+      ],
+    },
+  })
+  assert.ok(pkg.activationEvents?.includes("onWalkthrough:cognia.acme.tools.welcome"))
+  assert.ok(pkg.activationEvents?.includes("onCommand:cognia.acme.tools.welcome.openWalkthrough"))
+  assert.deepEqual(pkg.contributes.commands, [
+    { command: "cognia.acme.tools.welcome.openWalkthrough", title: "Welcome" },
+  ])
+})
+
 test("canonicalJson is independent of object key insertion order", () => {
   assert.equal(
     canonicalJson({ z: 1, nested: { b: 2, a: 1 }, a: [3, 2] }),
     canonicalJson({ a: [3, 2], nested: { a: 1, b: 2 }, z: 1 })
+  )
+})
+
+test("walkthrough command collisions are rejected before generating a proxy", () => {
+  assert.throws(
+    () =>
+      buildProxyPackageJson({
+        ...input,
+        contributions: {
+          commands: [{ command: "cognia.acme.tools.welcome.openWalkthrough", title: "Reserved" }],
+          walkthroughs: [{ id: "cognia.acme.tools.welcome", title: "Welcome", steps: [] }],
+        },
+      }),
+    /collision/i
   )
 })
 

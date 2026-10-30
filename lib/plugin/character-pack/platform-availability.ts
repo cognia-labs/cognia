@@ -12,13 +12,14 @@ import type { PluginRuntimeProfile } from "@/types/plugin/plugin"
 
 /**
  * The host profile the renderer is currently running in. Maps the platform
- * detector's `"web"` to the plugin system's `"browser"` surface; tauri and
- * mobile pass through. (Tauri wins over mobile when both are somehow present.)
+ * detector's `"web"` to the plugin system's `"browser"` surface; tauri,
+ * headless and mobile pass through.
  */
 export function currentRuntimeProfile(): PluginRuntimeProfile {
   const platform = detectPlatform()
   if (platform === "tauri") return "tauri"
   if (platform === "mobile") return "mobile"
+  if (platform === "headless") return "headless"
   return "browser"
 }
 

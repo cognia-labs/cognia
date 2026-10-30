@@ -20,6 +20,11 @@
  */
 
 import { hasInterceptors, requireGuardPass } from "../interceptors"
+import { reportRegistryConflict } from "../contracts/conflict-reporter"
+import {
+  getReservedPluginKeyOwner,
+  rememberReservedPluginKey,
+} from "../registries/createOverlayRegistry"
 
 export type CommandHandler = (...args: unknown[]) => unknown | Promise<unknown>
 
@@ -49,6 +54,7 @@ export interface CommandRegistryEvent {
 export type CommandRegistryListener = (event: CommandRegistryEvent) => void
 
 const registry = new Map<string, CommandRegistration>()
+const ownershipScope = Symbol("commands")
 
 const listeners = new Set<CommandRegistryListener>()
 
@@ -67,17 +73,20 @@ function emit(event: CommandRegistryEvent): void {
 }
 
 /**
- * Register a command. If a command with the same id already exists, the
- * new registration wins and a `replace` warning is logged — VS Code allows
- * overrides, and the cognia agent system relies on later registrations
- * taking precedence (e.g. a plugin overriding a built-in slash command).
+ * Keep the incumbent across owners; the same owner can refresh its handler.
+ * A rejected registration gets an inert disposer, so it cannot remove the winner.
  */
 export function registerCommand(reg: CommandRegistration): () => void {
-  if (registry.has(reg.id)) {
-    const existing = registry.get(reg.id)
-    console.warn(
-      `Command "${reg.id}" already registered by plugin "${existing?.pluginId ?? "cognia"}" — overridden by "${reg.pluginId ?? "cognia"}"`
-    )
+  const existing = registry.get(reg.id)
+  const reservedOwner = getReservedPluginKeyOwner(ownershipScope, reg.id)
+  if ((existing || reservedOwner) && (reservedOwner ?? existing?.pluginId) !== reg.pluginId) {
+    reportRegistryConflict({
+      pluginId: reg.pluginId ?? "cognia",
+      attemptedId: reg.id,
+      registry: "command",
+      winnerPluginId: reservedOwner ?? existing?.pluginId ?? "cognia",
+    })
+    return () => {}
   }
   // Each call owns a distinct entry, even if the caller reuses `reg`.
   const entry = { ...reg }
@@ -94,6 +103,7 @@ export function registerCommand(reg: CommandRegistration): () => void {
 export function unregisterCommand(id: string): void {
   const entry = registry.get(id)
   if (!entry) return
+  rememberReservedPluginKey(entry.pluginId, ownershipScope, id)
   registry.delete(id)
   emit({ type: "unregister", id, pluginId: entry.pluginId })
 }
@@ -106,6 +116,7 @@ export function unregisterCommandsByPlugin(pluginId: string): number {
   let removed = 0
   for (const [id, entry] of registry) {
     if (entry.pluginId === pluginId) {
+      rememberReservedPluginKey(pluginId, ownershipScope, id)
       registry.delete(id)
       emit({ type: "unregister", id, pluginId })
       removed += 1

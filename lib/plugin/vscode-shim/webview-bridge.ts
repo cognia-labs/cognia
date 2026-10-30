@@ -42,8 +42,10 @@ export interface VscodeWebviewRecord {
   state: unknown
   /** A view's provider token. */
   token?: string
-  /** A view's provider has been asked to fill it. Panels always are. */
+  /** The view provider or panel serializer has completed; new panels start resolved. */
   resolved: boolean
+  /** Stable persisted panel identity, independent of the current Host handle. */
+  restorationId?: string
 }
 
 export const DEFAULT_WEBVIEW_OPTIONS: VscodeWebviewOptions = {
@@ -60,6 +62,26 @@ let snapshot: readonly VscodeWebviewRecord[] = []
 let selected: string | null = null
 const listeners = new Set<() => void>()
 const frames = new Map<string, Poster>()
+type WebviewMutation = { kind: "save" | "remove" | "detach"; record: VscodeWebviewRecord }
+const mutationListeners = new Set<(change: WebviewMutation) => void>()
+
+/** Durable state observes mutations without causing iframe reloads on setState. */
+export function subscribeWebviewMutations(listener: (change: WebviewMutation) => void): () => void {
+  mutationListeners.add(listener)
+  return () => {
+    mutationListeners.delete(listener)
+  }
+}
+
+function mutated(kind: WebviewMutation["kind"], record: VscodeWebviewRecord): void {
+  for (const listener of mutationListeners) {
+    try {
+      listener({ kind, record })
+    } catch (error) {
+      console.warn("webview-bridge: persistence listener threw:", error)
+    }
+  }
+}
 
 function emit(): void {
   snapshot = [...webviews.values()]
@@ -103,6 +125,7 @@ export function addWebview(
     resolved: record.resolved ?? record.kind === "panel",
   }
   webviews.set(added.handle, added)
+  mutated("save", added)
   if (options.select || selected === null) selected = added.handle
   emit()
   return added
@@ -130,15 +153,20 @@ export function updateWebview(handle: string, patch: WebviewPatch): boolean {
   if (patch.badge !== undefined) next.badge = patch.badge ?? undefined
   if (patch.resolved !== undefined) next.resolved = patch.resolved
   webviews.set(handle, next)
+  mutated("save", next)
   emit()
   return true
 }
 
-export function removeWebview(handle: string): VscodeWebviewRecord | undefined {
+export function removeWebview(
+  handle: string,
+  preserveForRestore = false
+): VscodeWebviewRecord | undefined {
   const removed = webviews.get(handle)
   if (!removed) return undefined
   const order = [...webviews.keys()]
   webviews.delete(handle)
+  mutated(preserveForRestore ? "detach" : "remove", removed)
   frames.delete(handle)
   if (selected === handle) {
     // The tab after it, else the one before, as a tab strip does.
@@ -161,7 +189,11 @@ export function selectWebview(handle: string): boolean {
 /** The frame's `setState`, kept for its next load. */
 export function setWebviewState(handle: string, state: unknown): void {
   const current = webviews.get(handle)
-  if (current) webviews.set(handle, { ...current, state })
+  if (current) {
+    const next = { ...current, state }
+    webviews.set(handle, next)
+    mutated("save", next)
+  }
 }
 
 /** A frame is ready for messages; returns its detach. */
@@ -190,4 +222,5 @@ export function __resetWebviewBridgeForTesting(): void {
   selected = null
   listeners.clear()
   frames.clear()
+  mutationListeners.clear()
 }

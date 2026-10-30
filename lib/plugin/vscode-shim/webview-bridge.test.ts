@@ -11,6 +11,7 @@ import {
   selectWebview,
   setWebviewState,
   subscribeWebviews,
+  subscribeWebviewMutations,
   updateWebview,
 } from "./webview-bridge"
 
@@ -25,6 +26,33 @@ const panel = (handle: string) => ({
 })
 
 beforeEach(() => __resetWebviewBridgeForTesting())
+
+it("reports durable state mutations separately from iframe snapshots and distinguishes detach from close", () => {
+  const mutations = jest.fn()
+  const renders = jest.fn()
+  const stop = subscribeWebviewMutations(mutations)
+  subscribeWebviews(renders)
+  addWebview(panel("a"), { select: true })
+  const before = listWebviews()
+  setWebviewState("a", { count: 1 })
+  expect(listWebviews()).toBe(before)
+  expect(mutations).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      kind: "save",
+      record: expect.objectContaining({ state: { count: 1 } }),
+    })
+  )
+  removeWebview("a", true)
+  expect(mutations).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "detach" }))
+  addWebview(panel("b"), { select: true })
+  removeWebview("b")
+  expect(mutations).toHaveBeenLastCalledWith(expect.objectContaining({ kind: "remove" }))
+  stop()
+  const count = mutations.mock.calls.length
+  addWebview(panel("c"), { select: true })
+  expect(mutations).toHaveBeenCalledTimes(count)
+  expect(renders).toHaveBeenCalledTimes(5)
+})
 
 it("adds webviews in order, selecting a new panel unless asked not to", () => {
   const changes = jest.fn()

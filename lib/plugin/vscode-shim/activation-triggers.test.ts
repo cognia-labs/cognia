@@ -124,6 +124,8 @@ function setup(
       languageListeners.add(listener)
       return () => languageListeners.delete(listener)
     },
+    hasTerminals: () => false,
+    onTerminalsChanged: () => () => {},
     folders: () => folders,
     onFoldersChanged: (listener) => {
       folderListeners.add(listener)
@@ -448,4 +450,57 @@ describe("createVscodeActivationTriggerDependencies", () => {
       message: "hello",
     })
   })
+})
+
+it("wakes a terminal extension when a terminal already exists, including later installs", async () => {
+  const terminalPlugin = extension("terminal.ext", "installed", {
+    activationEvents: ["onTerminal"],
+  })
+  const env = setup([terminalPlugin], { hasTerminals: () => true })
+  await __settleVscodeActivationTriggers()
+  expect(env.activated).toEqual(["onTerminal"])
+  await env.setPlugins([
+    terminalPlugin,
+    extension("later.ext", "installed", { activationEvents: ["onTerminal"] }),
+  ])
+  expect(env.activated).toEqual(["onTerminal", "onTerminal"])
+})
+
+it("reacts to actual terminal registrations and releases its subscription", async () => {
+  let terminalOpen = false
+  let changed = () => {}
+  const dispose = jest.fn()
+  const env = setup(
+    [extension("terminal.ext", "installed", { activationEvents: ["onTerminal"] })],
+    {
+      hasTerminals: () => terminalOpen,
+      onTerminalsChanged: (listener) => {
+        changed = listener
+        return dispose
+      },
+    }
+  )
+  await __settleVscodeActivationTriggers()
+  expect(env.activated).toEqual([])
+  terminalOpen = true
+  changed()
+  await __settleVscodeActivationTriggers()
+  expect(env.activated).toEqual(["onTerminal"])
+  changed()
+  await __settleVscodeActivationTriggers()
+  expect(env.activated).toEqual(["onTerminal"])
+  uninstallVscodeActivationTriggers()
+  expect(dispose).toHaveBeenCalledTimes(1)
+  changed()
+  await __settleVscodeActivationTriggers()
+  expect(env.activated).toEqual(["onTerminal"])
+})
+
+it("does not wake a user-disabled terminal extension", async () => {
+  const env = setup([extension("disabled.ext", "disabled", { activationEvents: ["onTerminal"] })], {
+    hasTerminals: () => true,
+    wantsEnabled: async () => false,
+  })
+  await __settleVscodeActivationTriggers()
+  expect(env.activated).toEqual([])
 })

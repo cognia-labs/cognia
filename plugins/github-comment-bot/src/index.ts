@@ -24,6 +24,7 @@ export const githubCommentBotDef = {
   triggers: [
     {
       id: "github",
+      inputCredentialSlot: "github",
       kind: "event",
       source: "integration",
       label: "GitHub comments",
