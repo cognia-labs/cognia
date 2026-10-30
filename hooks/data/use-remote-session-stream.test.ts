@@ -48,10 +48,12 @@ const interruptMock = jest.fn().mockResolvedValue(undefined)
 const approveToolMock = jest.fn().mockResolvedValue(undefined)
 const enqueueHostStateIntentMock = jest.fn().mockResolvedValue(null)
 jest.mock("@/lib/claude/ipc", () => ({
+  rememberRemoteApprovalContext: jest.fn(),
   sendPrompt: (...a: unknown[]) => sendPromptMock(...a),
   interruptSession: (...a: unknown[]) => interruptMock(...a),
   approveTool: (...a: unknown[]) => approveToolMock(...a),
 }))
+import { rememberRemoteApprovalContext } from "@/lib/claude/ipc"
 const withdrawUnsentMock = jest.fn().mockResolvedValue([])
 jest.mock("@/lib/db/mobile-outbound-queue", () => ({
   enqueueHostStateIntentIfAvailable: (...args: unknown[]) => enqueueHostStateIntentMock(...args),
@@ -96,6 +98,7 @@ beforeEach(() => {
   sendPromptMock.mockClear().mockResolvedValue(undefined)
   interruptMock.mockClear().mockResolvedValue(undefined)
   approveToolMock.mockClear().mockResolvedValue(undefined)
+  jest.mocked(rememberRemoteApprovalContext).mockClear()
   enqueueHostStateIntentMock.mockReset().mockResolvedValue(null)
   withdrawUnsentMock.mockReset().mockResolvedValue([])
   restoreWithdrawnMock.mockReset().mockResolvedValue(undefined)
@@ -316,6 +319,44 @@ describe("useRemoteSessionStream", () => {
     })
     expect(result.current.messages).toHaveLength(0)
   })
+
+  it.each([true, false])(
+    "caches only valid remote approval identity before responding (valid=%s)",
+    async (valid) => {
+      const context = {
+        hostId: "host-a",
+        originDeviceId: "device-a",
+        sessionId: "sess-1",
+        generation: 1,
+        requestId: "turn-a",
+        issuedAt: 1,
+        expiresAt: 2,
+      }
+      const { result } = renderHook(() => useRemoteSessionStream("sess-1"))
+      await waitFor(() => expect(streamHandler).toBeTruthy())
+      act(() => {
+        streamHandler?.({
+          type: "permission_request",
+          sessionId: "sess-1",
+          requestId: "req-bound",
+          toolUseID: "tu-bound",
+          toolName: "bash",
+          input: { command: "hostname" },
+          remoteExecutionContext: valid ? context : { hostId: "incomplete" },
+        } as unknown as ClaudeEvent)
+      })
+      await waitFor(() => expect(result.current.pendingApproval?.requestId).toBe("req-bound"))
+      if (valid) {
+        expect(rememberRemoteApprovalContext).toHaveBeenCalledWith("sess-1", "req-bound", context)
+      } else {
+        expect(rememberRemoteApprovalContext).not.toHaveBeenCalled()
+      }
+      await act(async () => {
+        await result.current.respond("allow")
+      })
+      expect(approveToolMock).toHaveBeenCalledWith("sess-1", "req-bound", "allow")
+    }
+  )
 
   it("surfaces a permission_request and resolves it via approveTool", async () => {
     const { result } = renderHook(() => useRemoteSessionStream("sess-1"))

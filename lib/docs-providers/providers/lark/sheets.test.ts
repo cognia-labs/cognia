@@ -4,6 +4,26 @@ import { readLarkSpreadsheet } from "./sheets"
 
 const TOKEN = "shtcnAbCdEfGh1234567890"
 
+it("returns no body for empty visible worksheets even when their capacity exceeds the cap", async () => {
+  const { api } = fakeApi([
+    {
+      match: "sheets/query",
+      data: {
+        sheets: [
+          {
+            sheet_id: "empty",
+            title: "Empty",
+            grid_properties: { row_count: 1000, column_count: 100 },
+          },
+        ],
+      },
+    },
+    { match: "/values/", data: { valueRange: { values: [[null, "  "]] } } },
+    { match: "/spreadsheets/", data: { spreadsheet: { title: "Empty workbook" } } },
+  ])
+  expect((await readLarkSpreadsheet(api, TOKEN)).text).toBe("")
+})
+
 interface Route {
   match: string
   data: unknown

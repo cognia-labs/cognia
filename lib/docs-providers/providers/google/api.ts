@@ -263,7 +263,7 @@ export async function readGoogleSpreadsheet(
   }
 
   let text = renderCsvSections(sections)
-  if (selected.length < visible.length) {
+  if (text && selected.length < visible.length) {
     text += truncationMarker("this spreadsheet", MAX_SHEET_TABS, "worksheets")
   }
   return { title: meta.properties?.title ?? id, text, truncated }

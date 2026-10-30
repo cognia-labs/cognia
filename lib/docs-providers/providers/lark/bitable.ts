@@ -98,7 +98,7 @@ export async function readLarkBitable(
   }
 
   let text = renderCsvSections(sections)
-  if (selected.length < items.length || tables.has_more) {
+  if (text && (selected.length < items.length || tables.has_more)) {
     text += truncationMarker("this Bitable app", MAX_BITABLE_TABLES, "tables")
   }
   return { title: app.app?.name ?? appToken, text, truncated }

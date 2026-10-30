@@ -44,6 +44,13 @@ export function csvRow(cells: readonly unknown[]): string {
  * section renders as bare CSV.
  */
 export function renderCsvSections(sections: readonly CsvSection[]): string {
+  // Presentation headings/limit notes are not data. Keep genuine zero/false
+  // and header cells, while excluding tabs containing only blank cells.
+  sections = sections.filter((section) =>
+    section.rows.some((row) =>
+      row.some((cell) => (typeof cell === "string" ? cell : csvCell(cell)).trim().length > 0)
+    )
+  )
   if (sections.length === 0) return ""
   if (sections.length === 1 && !sections[0].title && !sections[0].note) {
     return sections[0].rows.map(csvRow).join("\n")

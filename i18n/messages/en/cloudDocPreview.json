@@ -1,0 +1,90 @@
+{
+  "title": "Cloud document",
+  "openSystem": "Open in system browser",
+  "openLive": "Open live",
+  "retry": "Retry",
+  "refresh": "Refresh",
+  "copyLink": "Copy link",
+  "copyFailed": "Could not copy the link.",
+  "chooseAccount": "Choose the account to read with",
+  "noAccounts": "No connected accounts. Connect an account in Settings.",
+  "sentAt": "Sent snapshot · {time}",
+  "readAt": "Read at {time}",
+  "sentSnapshot": "Sent snapshot",
+  "latestPreview": "Latest preview",
+  "refreshFailed": "Last snapshot · refresh failed",
+  "partial": "Partial snapshot · {reasons}",
+  "truncated": "This snapshot was truncated.",
+  "providers": {
+    "lark": "Feishu / Lark",
+    "google": "Google Workspace"
+  },
+  "kinds": {
+    "doc": "Document",
+    "wiki": "Wiki",
+    "sheet": "Spreadsheet",
+    "bitable": "Bitable",
+    "resource": "Resource"
+  },
+  "views": {
+    "label": "Document view",
+    "snapshot": "Content snapshot",
+    "live": "Live original"
+  },
+  "grid": {
+    "source": "Source",
+    "section": "Section {number}",
+    "dimensions": "{rows} rows · {columns} columns"
+  },
+  "snapshot": {
+    "states": {
+      "idle": "Choose Refresh to read this document.",
+      "resolving": "Resolving saved snapshot…",
+      "loading": "Reading document…",
+      "refreshing": "Refreshing snapshot…",
+      "ready": "Read-only snapshot",
+      "partial": "Some content was not read.",
+      "empty": "The document is empty.",
+      "error": "The snapshot could not be read."
+    }
+  },
+  "live": {
+    "states": {
+      "idle": "Live view has not started.",
+      "preparing": "Preparing isolated browser…",
+      "needs-login": "Sign in to the document provider.",
+      "loading": "Loading original document…",
+      "ready": "Live original",
+      "error": "The original could not be loaded.",
+      "blocked": "Live view is unavailable."
+    },
+    "reasons": {
+      "web": "Live documents need the desktop app.",
+      "chromium": "Install local Chromium to open live documents.",
+      "isolation-unavailable": "The isolated document browser is not available in this build.",
+      "unknown-link": "Original link unknown.",
+      "browser-error": "Could not open the original document."
+    }
+  },
+  "reasons": {
+    "budget": "Read limit reached",
+    "upstream-truncated": "Provider returned truncated content",
+    "inaccessible-block": "Some blocks were inaccessible",
+    "unsupported-content": "Some content is unsupported",
+    "parse-degraded": "Some content could not be parsed"
+  },
+  "errors": {
+    "notConfigured": "The document provider is not configured.",
+    "notAuthorized": "This authorization expired. Choose an account again.",
+    "noPermission": "This account does not have permission to read the document.",
+    "notFound": "The document or saved snapshot was not found.",
+    "unsupportedType": "This document type is not supported.",
+    "rateLimited": "Too many requests. Try again later.",
+    "empty": "The document is empty.",
+    "hostUnsupported": "This host cannot read cloud documents.",
+    "network": "Could not reach the document provider.",
+    "tooLarge": "This document is too large to read.",
+    "invalidRef": "This document reference is invalid."
+  },
+  "sourceRemoved": "The attached copy was removed from this conversation. Refresh to read the document again."
+}

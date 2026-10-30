@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
-import { __resetDbForTesting, getDb } from "./schema"
+import { __resetDbForTesting, CogniaDB, getDb } from "./schema"
 import {
   approveBindRequest,
   createBindRequest,
@@ -75,6 +75,26 @@ describe("feishu-principals", () => {
       cogniaAccountId: "acct_a",
       cogniaUserId: "acct_a",
     }
+
+    it("keeps explicit-database list, linkage and status writes on their owning database", async () => {
+      const created = await createFeishuPrincipal({ ...base, unionId: "on_owned" })
+      const owningDb = new CogniaDB("cognia-feishu-explicit-owner-test")
+      await owningDb.open()
+      try {
+        await owningDb.feishuPrincipals.put(created)
+        expect(await listFeishuPrincipalsByUnionId("tk_a", "on_owned", owningDb)).toEqual([created])
+        await rebindFeishuPrincipal(created.id, { logtoSubject: "owner_sub" }, T0, owningDb)
+        await setFeishuPrincipalStatus(created.id, "unlinked", T0 + 1, owningDb)
+        expect(await owningDb.feishuPrincipals.get(created.id)).toMatchObject({
+          logtoSubject: "owner_sub",
+          status: "unlinked",
+          version: 3,
+        })
+        expect(await getDb().feishuPrincipals.get(created.id)).toEqual(created)
+      } finally {
+        await owningDb.delete()
+      }
+    })
 
     it("enforces uniqueness on (tenantKey, appId, openId)", async () => {
       await createFeishuPrincipal(base)

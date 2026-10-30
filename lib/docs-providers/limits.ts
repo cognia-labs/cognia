@@ -35,6 +35,8 @@ export const MAX_BITABLE_ROWS = 200
 
 /** Characters kept from a document body. ~50 KB ≈ the composer's soft ceiling. */
 export const MAX_DOC_CHARS = 200_000
+/** Per-response transfer ceiling, enforced by the native collector before decoding. */
+export const MAX_REMOTE_DOC_RESPONSE_BYTES = 10 * 1024 * 1024
 
 /**
  * Build the marker appended to a truncated body.

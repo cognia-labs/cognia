@@ -13,8 +13,17 @@
  * settings and error handling.
  */
 
+import {
+  throwIfRequestAborted as throwIfGoogleRequestAborted,
+  withRequestAbort as withGoogleRequestAbort,
+} from "@/lib/network/request-abort"
+export { throwIfGoogleRequestAborted, withGoogleRequestAbort }
+
 import { isTauri } from "@/lib/platform/detect"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
+import { readBodyBounded, isResponseTooLarge } from "@cognia/web-search/bounded-response"
+import { DocsProviderError } from "@/lib/docs-providers/types"
+import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 
 export interface GoogleHttpRequest {
   url: string
@@ -62,55 +71,21 @@ async function fetchTransport(request: GoogleHttpRequest): Promise<GoogleHttpRes
       body: request.body,
       signal: controller.signal,
     })
-    const body = await response.text()
+    const body = await readBodyBounded(response, MAX_REMOTE_DOC_RESPONSE_BYTES)
     throwIfGoogleRequestAborted(controller.signal)
     return {
       status: response.status,
       headers: lowerHeaders(response.headers as unknown as Iterable<[string, string]>),
       body,
     }
+  } catch (error) {
+    // Stop the browser transfer too when its body collector rejects a budget.
+    controller.abort()
+    throw error
   } finally {
     clearTimeout(timer)
     request.signal?.removeEventListener("abort", abort)
   }
-}
-
-/** Preserve the caller's AbortSignal reason without creating a transport error. */
-export function throwIfGoogleRequestAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw signal.reason ?? new DOMException("Request aborted", "AbortError")
-}
-
-/** Stop waiting without cancelling work (such as a shared token refresh). */
-export async function withGoogleRequestAbort<T>(
-  signal: AbortSignal | undefined,
-  operation: () => Promise<T>
-): Promise<T> {
-  throwIfGoogleRequestAborted(signal)
-  if (!signal) return operation()
-  return new Promise((resolve, reject) => {
-    const cleanup = () => signal.removeEventListener("abort", abort)
-    const abort = () => {
-      cleanup()
-      reject(signal.reason ?? new DOMException("Request aborted", "AbortError"))
-    }
-    signal.addEventListener("abort", abort, { once: true })
-    try {
-      void operation().then(
-        (result) => {
-          cleanup()
-          if (signal.aborted) return abort()
-          resolve(result)
-        },
-        (err: unknown) => {
-          cleanup()
-          reject(err)
-        }
-      )
-    } catch (err) {
-      cleanup()
-      reject(err)
-    }
-  })
 }
 
 async function tauriTransport(request: GoogleHttpRequest): Promise<GoogleHttpResponse> {
@@ -121,6 +96,7 @@ async function tauriTransport(request: GoogleHttpRequest): Promise<GoogleHttpRes
       headers: request.headers,
       body: request.body,
       timeoutMs: request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
     })
     return {
       status: response.status,
@@ -137,7 +113,11 @@ export function resolveGoogleHttp(): GoogleHttpFn {
 
 /** Run one request through the resolved transport. */
 export function googleHttp(request: GoogleHttpRequest): Promise<GoogleHttpResponse> {
-  return resolveGoogleHttp()(request)
+  return resolveGoogleHttp()(request).catch((error: unknown) => {
+    if (isResponseTooLarge(error) || String(error).includes("download_body_too_large"))
+      throw new DocsProviderError("tooLarge")
+    throw error
+  })
 }
 
 /** Parse a JSON body defensively (returns `null` for non-JSON). */

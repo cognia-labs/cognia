@@ -108,6 +108,7 @@ export type DocsProviderErrorCode =
   | "empty"
   | "hostUnsupported"
   | "network"
+  | "tooLarge"
   | "invalidRef"
 
 export class DocsProviderError extends Error {
@@ -136,6 +137,8 @@ export interface DocsProviderAccount {
   label: string
   /** Stable across token refresh; changes when authorization is invalidated. */
   authorizationEpoch?: string
+  /** False means this account can use direct links but needs search authorization. */
+  searchable?: boolean
 }
 
 /** Per-call options shared by `search` and `fetch`. */

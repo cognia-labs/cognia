@@ -6,9 +6,9 @@
  * Two providers, two very different setup stories, which is the whole reason
  * this card exists rather than a row in a generic list:
  *
- *   - Feishu needs NOTHING. It borrows the credentials of whichever Lark
- *     connector instances the user already bound, so the card's job is to say
- *     so and point at the adapter list. Inventing a second Feishu connection
+ *   - Feishu borrows the credentials of configured Lark connector instances.
+ *     The card reports configuration and document search consent separately
+ *     and points at the existing adapter controls. A second Feishu connection
  *     here would be a second thing to keep in sync and a second thing to
  *     revoke.
  *   - Google needs the user's own Google Cloud "Desktop app" credential,
@@ -39,7 +39,6 @@ import {
 } from "@/components/docs-providers/docs-provider-notice"
 import { openUrl } from "@/lib/native/opener"
 import { connectionsHref } from "@/lib/settings/deep-link"
-import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { DocsProviderError, larkDocsProvider, googleDocsProvider } from "@/lib/docs-providers"
 import {
   GOOGLE_DOCS_SCOPES,
@@ -114,18 +113,33 @@ function LarkDocsRow() {
   const t = useTranslations("docsProviders")
   const reach = useDocsProviderReach(larkDocsProvider)
   const [count, setCount] = useState<number | null>(null)
+  const [searchCount, setSearchCount] = useState(0)
 
   useEffect(() => {
     let cancelled = false
-    void listAdapterInstancesByType("lark")
-      .then((rows) => {
-        if (!cancelled) setCount(rows.filter((row) => row.enabled).length)
-      })
-      .catch(() => {
-        if (!cancelled) setCount(0)
-      })
+    let version = 0
+    const reload = () => {
+      const attempt = ++version
+      void larkDocsProvider
+        .listAccounts()
+        .then((accounts) => {
+          if (!cancelled && attempt === version) {
+            setCount(accounts.length)
+            setSearchCount(accounts.filter((account) => account.searchable).length)
+          }
+        })
+        .catch(() => {
+          if (!cancelled && attempt === version) {
+            setCount(0)
+            setSearchCount(0)
+          }
+        })
+    }
+    const stop = larkDocsProvider.subscribeAccounts?.(reload)
+    reload()
     return () => {
       cancelled = true
+      stop?.()
     }
   }, [])
 
@@ -139,12 +153,15 @@ function LarkDocsRow() {
             ? null
             : count === 0
               ? t("settings.larkNoAccount")
-              : t("settings.larkAccountCount", { count })
+              : t("settings.larkReadiness", { count, searchCount })
         }
         statusTone={count && count > 0 ? "connected" : "idle"}
         testId="docs-provider-lark-status"
       />
       <p className="text-muted-foreground text-xs">{t("settings.larkDescription")}</p>
+      {count !== null && count > searchCount && (
+        <p className="text-muted-foreground text-xs">{t("settings.larkSearchAuthorization")}</p>
+      )}
       <DocsProviderNotice reach={reach} data-testid="docs-provider-lark-notice" />
       {/* The accounts this provider borrows are managed one tab over, and the
        * row used to only describe that rather than offer it. Deep-links to the

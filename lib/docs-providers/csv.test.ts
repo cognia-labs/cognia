@@ -78,3 +78,21 @@ describe("renderCsvSections", () => {
     expect(renderCsvSections([{ title: "", rows: [["a", "b"], ["c"]] }])).toBe("a,b\nc")
   })
 })
+it("does not turn blank cells into a heading-only document", () => {
+  expect(renderCsvSections([{ title: "Empty", rows: [[], [null, undefined, "  "]] }])).toBe("")
+})
+
+it.each(["\n", "\r\n", "\t\n"])("does not treat CSV quoting of %j as data", (cell) => {
+  expect(renderCsvSections([{ title: "Empty", rows: [[cell]], note: "[capped]" }])).toBe("")
+})
+
+it("retains real zero, false and header-only data while omitting empty sections", () => {
+  const text = renderCsvSections([
+    { title: "Blank", rows: [] },
+    { title: "Values", rows: [[0, false]] },
+    { title: "Headers", rows: [["Name", "Count"]] },
+  ])
+  expect(text).not.toContain("## Blank")
+  expect(text).toContain("0,false")
+  expect(text).toContain("Name,Count")
+})

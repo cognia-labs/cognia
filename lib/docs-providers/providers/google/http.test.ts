@@ -4,9 +4,27 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsHttpRequest: jes
 import { isTauri } from "@/lib/platform/detect"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { googleHttp, parseJson, resolveGoogleHttp } from "./http"
+import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 
 const isTauriMock = isTauri as jest.Mock
 const connectorsHttpMock = connectorsHttpRequest as jest.Mock
+
+it("reports a refused native body budget as tooLarge without accepting partial content", async () => {
+  isTauriMock.mockReturnValue(true)
+  connectorsHttpMock.mockRejectedValueOnce("download_body_too_large")
+  await expect(
+    googleHttp({ url: "https://www.googleapis.com/drive/v3/files", method: "GET" })
+  ).rejects.toMatchObject({ code: "tooLarge" })
+})
+
+it("carries the response budget to the native collector for all document API methods", async () => {
+  isTauriMock.mockReturnValue(true)
+  connectorsHttpMock.mockResolvedValue({ status: 200, headers: {}, body: "ok" })
+  await googleHttp({ url: "https://www.googleapis.com/drive/v3/files", method: "GET" })
+  expect(connectorsHttpMock).toHaveBeenCalledWith(
+    expect.objectContaining({ maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES })
+  )
+})
 
 beforeEach(() => {
   jest.clearAllMocks()

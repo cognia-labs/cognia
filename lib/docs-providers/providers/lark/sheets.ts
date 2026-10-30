@@ -91,7 +91,7 @@ export async function readLarkSpreadsheet(
   }
 
   let text = renderCsvSections(sections)
-  if (selected.length < visible.length) {
+  if (text && selected.length < visible.length) {
     text += truncationMarker("this spreadsheet", MAX_SHEET_TABS, "worksheets")
   }
   return { title: meta.spreadsheet?.title ?? token, text, truncated }

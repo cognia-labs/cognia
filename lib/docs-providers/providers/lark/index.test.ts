@@ -1,4 +1,15 @@
 jest.mock("@/lib/db/adapter-instances", () => ({ listAdapterInstancesByType: jest.fn() }))
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { subscribe: jest.fn(() => jest.fn()) },
+  transport: { subscribe: jest.fn(() => jest.fn()) },
+}))
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    authorizationEpoch: "authorization-a",
+    configured: true,
+    accessToken: "user-a",
+  })),
+}))
 jest.mock("@/lib/connectors/adapters/lark/authed-api", () => ({
   ...jest.requireActual("@/lib/connectors/adapters/lark/authed-api"),
   withLarkAuthedApi: jest.fn(),
@@ -9,6 +20,7 @@ jest.mock("@/lib/twin/ingest/lark-doc-fetcher", () => ({
 }))
 
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import {
   LarkAccessError,
   withLarkAuthedApi,
@@ -19,6 +31,7 @@ import { LarkIngestError, fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark
 import { MAX_DOC_CHARS } from "@/lib/docs-providers/limits"
 import { DocsProviderError } from "@/lib/docs-providers/types"
 import { larkDocsProvider } from "./index"
+import { localTransport, transport } from "@/lib/tauri/transport-instance"
 
 const listByTypeMock = listAdapterInstancesByType as jest.Mock
 const withAuthMock = withLarkAuthedApi as jest.Mock
@@ -54,9 +67,73 @@ function runWith(api: StubLarkApi) {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+    authorizationEpoch: "authorization-a",
+    configured: true,
+    accessToken: "user-a",
+  })
 })
 
 describe("larkDocsProvider — shape", () => {
+  it("releases an aborted caller while the initial native authorization snapshot is pending", async () => {
+    const controller = new AbortController()
+    let finish!: (value: unknown) => void
+    ;(connectorsLarkUserAuth as jest.Mock).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      })
+    )
+    const reading = larkDocsProvider.fetch(
+      { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
+      { accountId: ACCOUNT, signal: controller.signal }
+    )
+    let settled = false
+    const observed = reading.catch((error: unknown) => {
+      settled = true
+      return error
+    })
+    controller.abort()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    const releasedBeforeSnapshot = settled
+    finish({ configured: true, authorizationEpoch: "authorization-a" })
+    expect(await observed).toMatchObject({ name: "AbortError" })
+    expect(releasedBeforeSnapshot).toBe(true)
+  })
+
+  it.each(["fetch", "search"])(
+    "does not publish %s results after cancellation during the final authorization continuation",
+    async (operation) => {
+      const controller = new AbortController()
+      let snapshots = 0
+      ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
+        if (++snapshots === 2) queueMicrotask(() => queueMicrotask(() => controller.abort()))
+        return { configured: true, authorizationEpoch: "authorization-a", accessToken: "user-a" }
+      })
+      fetchDocMock.mockResolvedValue({ title: "Doc", text: "must not publish" })
+      withAuthMock.mockResolvedValue([])
+      const options = { accountId: ACCOUNT, signal: controller.signal, limit: 20 }
+      const reading =
+        operation === "fetch"
+          ? larkDocsProvider.fetch(
+              { providerId: "lark", kind: "doc", id: "doc", title: "Doc" },
+              options
+            )
+          : larkDocsProvider.search!("query", options)
+      await expect(reading).rejects.toMatchObject({ name: "AbortError" })
+    }
+  )
+
+  it("subscribes native authorization events on the local credential host", () => {
+    const listener = jest.fn()
+    const stop = larkDocsProvider.subscribeAccounts!(listener)
+    expect(localTransport.subscribe).toHaveBeenCalledWith(
+      "lark-user-authorization-changed",
+      listener
+    )
+    expect(transport.subscribe).not.toHaveBeenCalled()
+    stop()
+  })
+
   it("declares a colon-terminated prefix and the four readable kinds", () => {
     expect(larkDocsProvider.id).toBe("lark")
     expect(larkDocsProvider.mentionPrefix).toBe("lark:")
@@ -69,6 +146,36 @@ describe("larkDocsProvider — shape", () => {
 })
 
 describe("larkDocsProvider.listAccounts", () => {
+  it("pins the native authorization lineage rather than the adapter label", async () => {
+    listByTypeMock.mockResolvedValue([
+      { id: ACCOUNT, enabled: true, displayName: "Same adapter", settings: {} },
+    ])
+    expect(await larkDocsProvider.listAccounts()).toEqual([
+      expect.objectContaining({ id: ACCOUNT, authorizationEpoch: "authorization-a" }),
+    ])
+  })
+
+  it("rejects a stale same-adapter binding before reading a document", async () => {
+    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValueOnce({
+      authorizationEpoch: "authorization-b",
+      configured: true,
+      accessToken: "user-b",
+    })
+    await expect(
+      larkDocsProvider.fetch(
+        {
+          providerId: "lark",
+          id: "doxcnAbCdEfGh1234567890",
+          kind: "doc",
+          title: "Old pick",
+          accountBinding: { accountId: ACCOUNT, authorizationEpoch: "authorization-a" },
+        },
+        { accountId: ACCOUNT, expectedAuthorizationEpoch: "authorization-a" }
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(fetchDocMock).not.toHaveBeenCalled()
+  })
+
   it("projects enabled Lark adapters and labels the connected OAuth user", async () => {
     listByTypeMock.mockResolvedValue([
       {
@@ -81,13 +188,50 @@ describe("larkDocsProvider.listAccounts", () => {
       { id: "a3", enabled: false, displayName: "Off", settings: {} },
     ])
     expect(await larkDocsProvider.listAccounts()).toEqual([
-      { id: "a1", label: "Acme · Ada" },
-      { id: "a2", label: "BotOnly" },
+      { id: "a1", label: "Acme", authorizationEpoch: "authorization-a", searchable: false },
+      { id: "a2", label: "BotOnly", authorizationEpoch: "authorization-a", searchable: false },
     ])
   })
 
   it("returns nothing when no Lark account is bound", async () => {
     listByTypeMock.mockResolvedValue([])
+    expect(await larkDocsProvider.listAccounts()).toEqual([])
+  })
+
+  it("takes its account label and scopes from the native lineage, not delayed DB metadata", async () => {
+    listByTypeMock.mockResolvedValue([
+      {
+        id: ACCOUNT,
+        enabled: true,
+        displayName: "Acme",
+        settings: { connectedUser: { name: "Stale A" } },
+      },
+    ])
+    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+      authorizationEpoch: "authorization-b",
+      configured: true,
+      accessToken: "user-b",
+      accountLabel: "Current B",
+      scopes: ["search:docs:read"],
+    })
+    expect(await larkDocsProvider.listAccounts()).toEqual([
+      {
+        id: ACCOUNT,
+        label: "Acme · Current B",
+        authorizationEpoch: "authorization-b",
+        searchable: true,
+      },
+    ])
+  })
+
+  it("does not advertise enabled adapters whose host credentials are missing", async () => {
+    listByTypeMock.mockResolvedValue([
+      { id: ACCOUNT, enabled: true, displayName: "Unconfigured", settings: {} },
+    ])
+    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+      authorizationEpoch: "missing",
+      configured: false,
+    })
     expect(await larkDocsProvider.listAccounts()).toEqual([])
   })
 })
@@ -202,13 +346,20 @@ describe("larkDocsProvider.fetch — documents", () => {
     }
   )
 
-  it("delegates docs and wiki nodes to the existing twin fetcher", async () => {
+  it("delegates document bodies to the existing twin fetcher with identity and transfer bounds", async () => {
     fetchDocMock.mockResolvedValue({ title: "Spec", text: "body" })
     const out = await larkDocsProvider.fetch(
       { providerId: "lark", kind: "doc", id: "doxcn1", title: "stale" },
       { accountId: ACCOUNT }
     )
-    expect(fetchDocMock).toHaveBeenCalledWith("doxcn1", { adapterId: ACCOUNT })
+    expect(fetchDocMock).toHaveBeenCalledWith(
+      "doxcn1",
+      expect.objectContaining({
+        adapterId: ACCOUNT,
+        expectedAuthorizationEpoch: "authorization-a",
+        maxResponseBytes: 10 * 1024 * 1024,
+      })
+    )
     expect(out).toEqual({
       ref: { providerId: "lark", kind: "doc", id: "doxcn1", title: "Spec" },
       title: "Spec",
@@ -223,17 +374,17 @@ describe("larkDocsProvider.fetch — documents", () => {
     await larkDocsProvider.fetch(
       {
         providerId: "lark",
-        kind: "wiki",
-        id: "wikcn1",
+        kind: "doc",
+        id: "doxcn1",
         title: "T",
-        url: "https://acme.feishu.cn/wiki/wikcn1",
+        url: "https://acme.feishu.cn/docx/doxcn1",
       },
       { accountId: ACCOUNT }
     )
-    expect(fetchDocMock).toHaveBeenCalledWith("https://acme.feishu.cn/wiki/wikcn1", {
-      adapterId: ACCOUNT,
-      kind: "wiki",
-    })
+    expect(fetchDocMock).toHaveBeenCalledWith(
+      "https://acme.feishu.cn/docx/doxcn1",
+      expect.objectContaining({ adapterId: ACCOUNT })
+    )
   })
 
   it("clamps an oversized body and reports it", async () => {
@@ -257,7 +408,151 @@ describe("larkDocsProvider.fetch — documents", () => {
   })
 })
 
+describe("Lark Wiki resource dispatch", () => {
+  it.each(["doc", "docx"])("keeps the Wiki citation while reading its %s body", async (objType) => {
+    const token = "doxcnAbCdEfGh1234567890"
+    runWith({
+      get: async (path) =>
+        path.includes("get_node")
+          ? { node: { obj_token: token, obj_type: objType, title: "Wiki title" } }
+          : path.endsWith("raw_content")
+            ? { content: "Actual document" }
+            : { document: { title: "Body title" } },
+    })
+    fetchDocMock.mockImplementation(
+      jest.requireActual("@/lib/twin/ingest/lark-doc-fetcher").fetchLarkDocAsRawSource
+    )
+    const ref = {
+      providerId: "lark",
+      kind: "wiki" as const,
+      id: "wikcnAbCdEfGh123456789",
+      title: "Old",
+      url: "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789",
+    }
+    const result = await larkDocsProvider.fetch(ref, { accountId: ACCOUNT })
+    expect(result.ref).toEqual({ ...ref, title: "Wiki title" })
+    expect(result.text).toBe("Actual document")
+  })
+
+  it.each([{}, { obj_token: "x", obj_type: "slides" }])(
+    "rejects unreadable Wiki objects before dispatch",
+    async (node) => {
+      runWith({ get: async () => ({ node }) })
+      await expect(
+        larkDocsProvider.fetch(
+          { providerId: "lark", kind: "wiki", id: "wiki", title: "Wiki" },
+          { accountId: ACCOUNT }
+        )
+      ).rejects.toMatchObject({ code: "unsupportedType" })
+      expect(fetchDocMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it("preserves Wiki permission failures", async () => {
+    runWith({
+      get: async () => {
+        throw new LarkApiError({ status: 403, code: 99991672, message: "denied" })
+      },
+    })
+    await expect(
+      larkDocsProvider.fetch(
+        { providerId: "lark", kind: "wiki", id: "wiki", title: "Wiki" },
+        { accountId: ACCOUNT }
+      )
+    ).rejects.toMatchObject({ code: "noPermission" })
+  })
+
+  it.each(["sheet", "bitable"])(
+    "reads a Wiki %s through the existing reader and preserves its citation",
+    async (objType) => {
+      runWith({
+        get: async (path) => {
+          if (path.includes("get_node"))
+            return { node: { obj_token: "resource", obj_type: objType, title: "Wiki title" } }
+          if (path.includes("sheets/query")) return { sheets: [{ sheet_id: "s1", title: "Data" }] }
+          if (path.includes("/values/")) return { valueRange: { values: [[0, false]] } }
+          if (path.includes("/tables?")) return { items: [{ table_id: "t1", name: "Data" }] }
+          return { spreadsheet: { title: "Grid" }, app: { name: "Base" } }
+        },
+        post: async () => ({ items: [{ fields: { Count: 0, Active: false } }] }),
+      })
+      const ref = {
+        providerId: "lark",
+        kind: "wiki" as const,
+        id: "wikcnAbCdEfGh123456789",
+        title: "Old",
+        url: "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789",
+      }
+      const body = await larkDocsProvider.fetch(ref, { accountId: ACCOUNT })
+      expect(body.ref).toEqual({ ...ref, title: "Wiki title" })
+      expect(body.title).toBe("Wiki title")
+      expect(body.format).toBe("csv")
+      expect(body.text).toContain("0,false")
+    }
+  )
+
+  it("rejects authorization changes while a body is in flight", async () => {
+    fetchDocMock.mockImplementation(async () => {
+      ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+        authorizationEpoch: "authorization-b",
+        configured: true,
+      })
+      return { title: "New account", text: "must not attach" }
+    })
+    await expect(
+      larkDocsProvider.fetch(
+        { providerId: "lark", id: "d", kind: "doc", title: "Old" },
+        { accountId: ACCOUNT, expectedAuthorizationEpoch: "authorization-a" }
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+  })
+})
+
 describe("larkDocsProvider.fetch — grids", () => {
+  it.each(["\n", "\r\n", "\t\n"])(
+    "rejects a real sheet whose cells only contain %j",
+    async (cell) => {
+      runWith({
+        get: async (path) =>
+          path.includes("/sheets/query")
+            ? {
+                sheets: [
+                  {
+                    sheet_id: "s",
+                    title: "Empty",
+                    grid_properties: { row_count: 99999, column_count: 1 },
+                  },
+                ],
+              }
+            : path.includes("values/")
+              ? { valueRange: { values: [[cell]] } }
+              : { spreadsheet: { title: "Empty" } },
+      })
+      await expect(
+        larkDocsProvider.fetch(
+          { providerId: "lark", kind: "sheet", id: "sheet", title: "Empty" },
+          { accountId: ACCOUNT }
+        )
+      ).rejects.toMatchObject({ code: "empty" })
+    }
+  )
+
+  it("rejects a Base with visible tables but no data", async () => {
+    runWith({
+      get: async (path) =>
+        path.includes("/tables")
+          ? { items: [{ table_id: "t", name: "Empty" }] }
+          : { app: { name: "Empty" } },
+      post: async () => ({ items: [] }),
+    })
+    await expect(
+      larkDocsProvider.fetch(
+        { providerId: "lark", kind: "bitable", id: "base", title: "Empty" },
+        { accountId: ACCOUNT }
+      )
+    ).rejects.toMatchObject({ code: "empty" })
+  })
+
   it("reads a spreadsheet as CSV without demanding the user identity", async () => {
     runWith({
       get: async (path: string) =>

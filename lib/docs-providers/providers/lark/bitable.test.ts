@@ -4,6 +4,17 @@ import { bitableColumns, readLarkBitable } from "./bitable"
 
 const APP = "bascnAbCdEfGh1234567890"
 
+it("does not attach table headings or pagination notes without any record fields", async () => {
+  const { api } = fakeApi(
+    [
+      ["/tables?", { items: [{ table_id: "t1", name: "Empty" }], has_more: true }],
+      ["/apps/", { app: { name: "Empty app" } }],
+    ],
+    [["/records/search", { items: [], has_more: false }]]
+  )
+  expect((await readLarkBitable(api, APP)).text).toBe("")
+})
+
 function fakeApi(gets: Array<[string, unknown]>, posts: Array<[string, unknown]>) {
   const paths: string[] = []
   const api: LarkAuthedApi = {
@@ -94,7 +105,7 @@ describe("readLarkBitable", () => {
         [`/bitable/v1/apps/${APP}/tables`, { items }],
         [`/bitable/v1/apps/${APP}`, { app: { name: "A" } }],
       ],
-      [["/records/search", { items: [] }]]
+      [["/records/search", { items: [{ fields: { Name: "A real row" } }] }]]
     )
     const out = await readLarkBitable(api, APP)
     expect(out.truncated).toBe(true)

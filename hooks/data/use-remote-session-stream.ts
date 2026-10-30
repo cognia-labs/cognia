@@ -29,7 +29,13 @@ import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { applySdkEvent } from "@/lib/claude/adapter"
-import { approveTool, interruptSession, sendPrompt } from "@/lib/claude/ipc"
+import {
+  approveTool,
+  interruptSession,
+  rememberRemoteApprovalContext,
+  sendPrompt,
+} from "@/lib/claude/ipc"
+import { isRemoteExecutionContext } from "@/lib/claude/remote-execution"
 import type {
   ApprovalDecision,
   ApprovalResponseOptions,
@@ -413,6 +419,16 @@ export function useRemoteSessionStream(
             return
           }
           case "permission_request": {
+            if (
+              "remoteExecutionContext" in evt &&
+              isRemoteExecutionContext(evt.remoteExecutionContext)
+            ) {
+              rememberRemoteApprovalContext(
+                evt.sessionId,
+                evt.requestId,
+                evt.remoteExecutionContext
+              )
+            }
             setPendingApproval({
               sessionId: evt.sessionId,
               requestId: evt.requestId,

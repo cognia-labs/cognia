@@ -358,3 +358,31 @@ it.each([
     ).toMatchObject({ code })
   }
 )
+it("does not turn empty visible Google tabs into content even with overflow metadata", async () => {
+  const result = await readGoogleSpreadsheet(
+    {
+      accessToken: "fixture",
+      http: async (req) => ({
+        status: 200,
+        headers: {},
+        body: JSON.stringify(
+          req.url.includes("values:batchGet")
+            ? { valueRanges: [{}] }
+            : {
+                properties: { title: "Empty" },
+                sheets: [
+                  {
+                    properties: {
+                      title: "Empty tab",
+                      gridProperties: { rowCount: 1000, columnCount: 100 },
+                    },
+                  },
+                ],
+              }
+        ),
+      }),
+    },
+    "fixture"
+  )
+  expect(result.text).toBe("")
+})

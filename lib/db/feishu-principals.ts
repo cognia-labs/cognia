@@ -17,7 +17,7 @@ import type {
   FeishuTenantRow,
   FeishuTenantStatus,
 } from "./connector-types"
-import { getDb } from "./schema"
+import { getDb, type CogniaDB } from "./schema"
 
 const BIND_REQUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -165,9 +165,9 @@ export async function getFeishuPrincipalById(id: string): Promise<FeishuPrincipa
 export async function setFeishuPrincipalStatus(
   id: string,
   status: FeishuPrincipalStatus,
-  now?: number
+  now?: number,
+  db: CogniaDB = getDb()
 ): Promise<void> {
-  const db = getDb()
   await db.transaction("rw", db.feishuPrincipals, async () => {
     const current = await db.feishuPrincipals.get(id)
     if (!current) return
@@ -192,9 +192,9 @@ export interface RebindFeishuPrincipalPatch {
 export async function rebindFeishuPrincipal(
   id: string,
   patch: RebindFeishuPrincipalPatch,
-  now?: number
+  now?: number,
+  db: CogniaDB = getDb()
 ): Promise<FeishuPrincipalRow> {
-  const db = getDb()
   return db.transaction("rw", db.feishuPrincipals, async () => {
     const current = await db.feishuPrincipals.get(id)
     if (!current) throw new Error(`feishu-principals: principal "${id}" not found`)
@@ -233,10 +233,11 @@ export async function listFeishuPrincipalsByTenant(
  */
 export async function listFeishuPrincipalsByUnionId(
   tenantKey: string,
-  unionId: string
+  unionId: string,
+  db: CogniaDB = getDb()
 ): Promise<FeishuPrincipalRow[]> {
-  return getDb()
-    .feishuPrincipals.filter((row) => row.tenantKey === tenantKey && row.unionId === unionId)
+  return db.feishuPrincipals
+    .filter((row) => row.tenantKey === tenantKey && row.unionId === unionId)
     .toArray()
 }
 

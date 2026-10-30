@@ -9,7 +9,8 @@
     "notConfigured": "No account is connected for this document source.",
     "notFound": "That document no longer exists.",
     "rateLimited": "The document service is rate limiting — try again shortly.",
-    "unsupportedType": "This document type cannot be read."
+    "unsupportedType": "This document type cannot be read.",
+    "tooLarge": "The document response exceeded the download limit. No attachment was added."
   },
   "kind": {
     "bitable": "Base",
@@ -29,7 +30,7 @@
     "attached": "Attached “{title}”",
     "fetching": "Fetching “{title}”…",
     "hostUnsupported": "Remote documents are available on the desktop app only.",
-    "linkOnlyHint": "This provider has no search — paste a document link.",
+    "linkOnlyHint": "Paste a document link. Keyword search may require additional account authorization.",
     "noAccount": "Connect an account in Settings to use this.",
     "noMatches": "No document matches \"{query}\"",
     "pasteHint": "Type keywords, or paste a document link.",
@@ -73,10 +74,12 @@
     "googleClientSecret": "OAuth client secret",
     "googleScopes": "Read-only access to Drive, Docs and Sheets.",
     "larkAccountCount": "{count} connected",
-    "larkDescription": "Uses your connected Feishu accounts — no extra setup.",
+    "larkDescription": "Uses your Feishu connector credentials. Document access also depends on its scopes and the file permissions.",
     "larkManage": "Manage Feishu accounts",
     "larkNoAccount": "No Feishu account is connected yet.",
     "notConnected": "Not connected",
-    "title": "Remote documents"
+    "title": "Remote documents",
+    "larkReadiness": "{count} configured · {searchCount} with search permission",
+    "larkSearchAuthorization": "For keyword search, open Manage Feishu accounts, enable Read cloud documents and reconnect. Direct links can also use the bot identity."
   }
 }

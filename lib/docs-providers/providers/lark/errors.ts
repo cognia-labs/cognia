@@ -44,6 +44,7 @@ const ACCESS_TO_PROVIDER: Record<LarkAccessError["code"], DocsProviderErrorCode>
  * `account` labels the failure with the bound Feishu account when known.
  */
 export function toDocsProviderError(err: unknown, account?: string): DocsProviderError {
+  if (String(err).includes("download_body_too_large")) return new DocsProviderError("tooLarge")
   if (err instanceof DocsProviderError) return err
   if (err instanceof LarkAccessError) {
     return new DocsProviderError(

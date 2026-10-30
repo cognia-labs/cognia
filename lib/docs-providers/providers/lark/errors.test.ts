@@ -58,3 +58,6 @@ describe("toDocsProviderError", () => {
     })
   })
 })
+it("maps a native transfer-budget rejection to a document size error", () => {
+  expect(toDocsProviderError("download_body_too_large")).toMatchObject({ code: "tooLarge" })
+})

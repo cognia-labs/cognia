@@ -1,0 +1,90 @@
+{
+  "title": "云文档",
+  "openSystem": "在系统浏览器中打开",
+  "openLive": "打开实时原文",
+  "retry": "重试",
+  "refresh": "刷新",
+  "copyLink": "复制链接",
+  "copyFailed": "无法复制链接。",
+  "chooseAccount": "选择用于读取的账号",
+  "noAccounts": "没有已连接账号，请在设置中连接账号。",
+  "sentAt": "已发送快照 · {time}",
+  "readAt": "读取于 {time}",
+  "sentSnapshot": "已发送快照",
+  "latestPreview": "最新预览",
+  "refreshFailed": "上次快照 · 刷新失败",
+  "partial": "不完整快照 · {reasons}",
+  "truncated": "此快照已截断。",
+  "providers": {
+    "lark": "飞书 / Lark",
+    "google": "Google Workspace"
+  },
+  "kinds": {
+    "doc": "文档",
+    "wiki": "知识库",
+    "sheet": "电子表格",
+    "bitable": "多维表格",
+    "resource": "资源"
+  },
+  "views": {
+    "label": "文档视图",
+    "snapshot": "内容快照",
+    "live": "实时原文"
+  },
+  "grid": {
+    "source": "源码",
+    "section": "第 {number} 节",
+    "dimensions": "{rows} 行 · {columns} 列"
+  },
+  "snapshot": {
+    "states": {
+      "idle": "点击刷新以读取此文档。",
+      "resolving": "正在解析已保存的快照…",
+      "loading": "正在读取文档…",
+      "refreshing": "正在刷新快照…",
+      "ready": "只读快照",
+      "partial": "部分内容未读取。",
+      "empty": "文档为空。",
+      "error": "无法读取快照。"
+    }
+  },
+  "live": {
+    "states": {
+      "idle": "实时视图尚未启动。",
+      "preparing": "正在准备隔离浏览器…",
+      "needs-login": "请登录文档提供商。",
+      "loading": "正在加载原文…",
+      "ready": "实时原文",
+      "error": "无法加载原文。",
+      "blocked": "实时视图不可用。"
+    },
+    "reasons": {
+      "web": "实时原文需要桌面应用。",
+      "chromium": "请安装本地 Chromium 以打开实时原文。",
+      "isolation-unavailable": "此版本尚未提供隔离文档浏览器。",
+      "unknown-link": "原文链接未知。",
+      "browser-error": "无法打开原文。"
+    }
+  },
+  "reasons": {
+    "budget": "已达到读取上限",
+    "upstream-truncated": "提供商返回的内容已截断",
+    "inaccessible-block": "部分内容块无法访问",
+    "unsupported-content": "部分内容尚不支持",
+    "parse-degraded": "部分内容无法解析"
+  },
+  "errors": {
+    "notConfigured": "尚未配置文档提供商。",
+    "notAuthorized": "授权已失效，请重新选择账号。",
+    "noPermission": "此账号没有读取文档的权限。",
+    "notFound": "未找到文档或已保存的快照。",
+    "unsupportedType": "不支持此文档类型。",
+    "rateLimited": "请求过于频繁，请稍后重试。",
+    "empty": "文档为空。",
+    "hostUnsupported": "当前环境无法读取云文档。",
+    "network": "无法连接文档提供商。",
+    "tooLarge": "文档过大，无法读取。",
+    "invalidRef": "文档引用无效。"
+  },
+  "sourceRemoved": "此附件副本已从对话中移除。可刷新以重新读取文档。"
+}

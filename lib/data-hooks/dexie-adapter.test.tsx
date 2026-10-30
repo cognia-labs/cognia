@@ -4,6 +4,11 @@
 // missing dep key) — not just type-shape regressions.
 
 import "fake-indexeddb/auto"
+import {
+  configureChatRegistry,
+  __resetChatRegistryForTesting,
+} from "@/lib/plugin/vscode-shim/chat-participant-registry"
+import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import { renderHook, act, waitFor } from "@testing-library/react"
 import { render } from "@testing-library/react"
 import type { ReactNode } from "react"
@@ -32,6 +37,8 @@ import { isWorkspaceTrusted, listTrustedWorkspaces } from "@/lib/db/trusted-work
 import { listMessages } from "@/lib/db/messages"
 
 beforeEach(async () => {
+  __resetChatRegistryForTesting()
+  configureChatRegistry({ declarations: async () => [] })
   await getDb().delete()
   __resetDbForTesting()
   getDb()
@@ -278,3 +285,24 @@ describe("DataAdapterProvider + convenience hooks", () => {
 // from `@/lib/db/skills` and we only need the side-effect of `listSkillsByIds`
 // being importable as a sanity-check against a stale path.
 void listSkillsByIds
+
+it("refreshes dormant participant discovery when plugin metadata changes without a Dexie write", async () => {
+  let declarations: Array<{ pluginId: string; id: string; name: string }> = []
+  configureChatRegistry({ declarations: async () => declarations })
+  const { result, unmount } = renderHook(
+    () => ({
+      all: dexieAdapter.useCharacters(),
+      one: dexieAdapter.useCharacter("vscode-chat:ext:helper"),
+    }),
+    { wrapper }
+  )
+  await waitFor(() => expect(result.current.all).toEqual([]))
+  await act(async () => {
+    declarations = [{ pluginId: "ext", id: "helper", name: "Extension helper" }]
+    usePluginStore.setState((state) => ({ plugins: { ...state.plugins } }))
+  })
+  await waitFor(() => expect(result.current.all?.[0]?.name).toBe("Extension helper"))
+  await waitFor(() => expect(result.current.one?.name).toBe("Extension helper"))
+  unmount()
+  __resetChatRegistryForTesting()
+})

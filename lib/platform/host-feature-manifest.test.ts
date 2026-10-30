@@ -1138,3 +1138,22 @@ it.each(["none", "tool-less"] as const)(
     }
   }
 )
+
+it("advertises automation control only on hosts with the Bot mutation executor", () => {
+  for (const platform of ["headless", "tauri"] as const)
+    expect(
+      supportsHostFeatureOperation(
+        buildLocalHostFeatureManifest({ platform }),
+        "bots.automation",
+        "bot_installation_mutate"
+      )
+    ).toBe(true)
+  for (const platform of ["web", "mobile"] as const)
+    expect(
+      supportsHostFeatureOperation(
+        buildLocalHostFeatureManifest({ platform }),
+        "bots.automation",
+        "bot_installation_mutate"
+      )
+    ).toBe(false)
+})

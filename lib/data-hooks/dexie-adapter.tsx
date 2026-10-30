@@ -25,25 +25,17 @@ const isClient = (): boolean => typeof window !== "undefined"
  */
 export const dexieAdapter: DataAdapter = {
   useCharacters() {
-    return useLiveQuery(() => (isClient() ? listCharacters() : Promise.resolve([])), [])
+    const plugins = usePluginStore((state) => state.plugins)
+    return useLiveQuery(() => (isClient() ? listCharacters() : Promise.resolve([])), [plugins])
   },
 
   useCharacter(id) {
-    // ADR-0030 — resolve through the overlay-aware path so chat sessions
-    // whose `characterId` points at a plugin-contributed (synthetic)
-    // overlay id render correctly. `useLiveQuery` only tracks Dexie
-    // mutations, so we add an enabled-plugin count tick that flips
-    // whenever the plugin manager toggles a plugin's status — this is
-    // when the character-pack-registry overlay mutates. The tick is a
-    // proxy: it doesn't fire for every overlay change (e.g., a local-pack
-    // import bypasses the plugin store), but the chat header re-renders
-    // on a session-id change too, so transient drift is bounded.
-    const enabledPluginsTick = usePluginStore(
-      (s) => Object.values(s.plugins).filter((p) => p.status === "enabled").length
-    )
+    // Overlay characters and dormant chat participants also change when a
+    // manifest changes without changing the count of enabled extensions.
+    const plugins = usePluginStore((state) => state.plugins)
     return useLiveQuery(
       () => (isClient() && id ? resolveCharacterById(id) : Promise.resolve(undefined)),
-      [id ?? "", enabledPluginsTick]
+      [id ?? "", plugins]
     )
   },
 

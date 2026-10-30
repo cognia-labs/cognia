@@ -2,11 +2,10 @@
  * Feishu/Lark remote document provider (ADR-0134).
  *
  * Credentials are NOT its own: it acts as a bound Lark connector instance, so
- * a user who has already connected Feishu for IM gets document reading with
- * zero extra setup, and document ACLs are evaluated against the OAuth user
- * they connected. `listAccounts` is therefore a projection of the enabled
- * Lark adapter rows — the same list `components/twin/lark-account-picker.tsx`
- * shows.
+ * document reading reuses the connected adapter's credentials and requires
+ * the corresponding document permissions. Document ACLs are evaluated against
+ * that identity. `listAccounts` projects enabled, configured adapters through
+ * the host's current authorization lineage.
  *
  * Document bodies come straight from `fetchLarkDocAsRawSource`; only the two
  * grid-shaped kinds (电子表格 / 多维表格) needed new readers, and those run on
@@ -15,10 +14,14 @@
 
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
-import type { LarkConnectedUser } from "@/lib/connectors/adapters/lark/oauth-handler"
-import { fetchLarkDocAsRawSource } from "@/lib/twin/ingest/lark-doc-fetcher"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { onCredentialsRotated } from "@/lib/connectors/credentials-events"
+import { localTransport } from "@/lib/tauri/transport-instance"
+import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
+import { hasLarkDocumentSearchScope } from "@/lib/connectors/adapters/lark/auth"
+import { fetchLarkDocAsRawSource, resolveLarkWikiNode } from "@/lib/twin/ingest/lark-doc-fetcher"
 import { parseLarkResourceUrl } from "@/lib/twin/ingest/lark-url"
-import { clampDocText } from "@/lib/docs-providers/limits"
+import { clampDocText, MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 import { assertRemoteDocBinding } from "@/lib/docs-providers/account-binding"
 import {
   DocsProviderError,
@@ -36,6 +39,22 @@ import { searchLarkDocs } from "./search"
 import { readLarkSpreadsheet } from "./sheets"
 
 export const LARK_PROVIDER_ID = "lark"
+
+async function assertLarkAuthorization(opts: DocsProviderCallOptions): Promise<string> {
+  throwIfRequestAborted(opts.signal)
+  const state = await withRequestAbort(opts.signal, () =>
+    connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.accountId })
+  )
+  throwIfRequestAborted(opts.signal)
+  if (!state.configured) throw new DocsProviderError("notConfigured")
+  if (
+    opts.expectedAuthorizationEpoch !== undefined &&
+    state.authorizationEpoch !== opts.expectedAuthorizationEpoch
+  )
+    throw new DocsProviderError("notAuthorized")
+  throwIfRequestAborted(opts.signal)
+  return state.authorizationEpoch
+}
 
 /** `parseLarkResourceUrl` kinds → provider kinds. `docx` and `doc` both read as a document. */
 const RESOURCE_KIND_TO_DOC_KIND: Record<string, RemoteDocKind> = {
@@ -65,15 +84,33 @@ export const larkDocsProvider: DocsProvider = {
 
   async listAccounts(): Promise<DocsProviderAccount[]> {
     const rows = await listAdapterInstancesByType(LARK_PROVIDER_ID)
-    return rows
-      .filter((row) => row.enabled)
-      .map((row) => {
-        const connected = (row.settings as { connectedUser?: LarkConnectedUser }).connectedUser
-        return {
-          id: row.id,
-          label: connected?.name ? `${row.displayName} · ${connected.name}` : row.displayName,
-        }
-      })
+    const accounts = await Promise.all(
+      rows
+        .filter((row) => row.enabled)
+        .map(async (row) => {
+          const state = await connectorsLarkUserAuth({ action: "snapshot", adapterId: row.id })
+          if (!state.configured) return null
+          return {
+            id: row.id,
+            label: state.accountLabel
+              ? `${row.displayName} · ${state.accountLabel}`
+              : row.displayName,
+            authorizationEpoch: state.authorizationEpoch,
+            searchable:
+              Boolean(state.accessToken) && hasLarkDocumentSearchScope(state.scopes ?? []),
+          }
+        })
+    )
+    return accounts.filter((account): account is NonNullable<typeof account> => account !== null)
+  },
+
+  subscribeAccounts(listener) {
+    const stopCredentials = onCredentialsRotated(() => listener())
+    const stopNative = localTransport.subscribe("lark-user-authorization-changed", listener)
+    return () => {
+      stopCredentials()
+      stopNative()
+    }
   },
 
   matchRef(input) {
@@ -90,56 +127,102 @@ export const larkDocsProvider: DocsProvider = {
 
   async search(query: string, opts: DocsProviderSearchOptions): Promise<RemoteDocRef[]> {
     try {
-      return await withLarkAuthedApi(
-        { adapterId: opts.accountId, requireUserIdentity: true },
+      opts = { ...opts, expectedAuthorizationEpoch: await assertLarkAuthorization(opts) }
+      throwIfRequestAborted(opts.signal)
+      const refs = await withLarkAuthedApi(
+        {
+          adapterId: opts.accountId,
+          requireUserIdentity: true,
+          expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+          signal: opts.signal,
+          maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
+        },
         (api) => searchLarkDocs(api, query, opts.limit)
       )
+      await assertLarkAuthorization(opts)
+      throwIfRequestAborted(opts.signal)
+      return refs
     } catch (err) {
+      throwIfRequestAborted(opts.signal)
       throw toDocsProviderError(err)
     }
   },
 
   async fetch(ref: RemoteDocRef, opts: DocsProviderCallOptions): Promise<RemoteDocContent> {
     try {
+      opts = {
+        ...opts,
+        expectedAuthorizationEpoch:
+          opts.expectedAuthorizationEpoch ?? ref.accountBinding?.authorizationEpoch,
+      }
       assertRemoteDocBinding(
         ref,
         opts.accountId,
         opts.expectedAuthorizationEpoch ?? ref.accountBinding?.authorizationEpoch
       )
-      if (ref.kind === "doc" || ref.kind === "wiki") {
-        const fetched = await fetchLarkDocAsRawSource(docInputFor(ref), {
+      opts = { ...opts, expectedAuthorizationEpoch: await assertLarkAuthorization(opts) }
+      throwIfRequestAborted(opts.signal)
+      let bodyRef = ref
+      let wikiTitle = ""
+      const apiOptions = {
+        adapterId: opts.accountId,
+        expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+        signal: opts.signal,
+        maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
+      }
+      if (ref.kind === "wiki") {
+        const node = await withLarkAuthedApi(apiOptions, (api) => resolveLarkWikiNode(api, ref.id))
+        throwIfRequestAborted(opts.signal)
+        const kind = RESOURCE_KIND_TO_DOC_KIND[node.objType]
+        if (!kind || kind === "wiki")
+          throw new DocsProviderError("unsupportedType", { type: node.objType })
+        wikiTitle = node.title
+        bodyRef = { ...ref, kind, id: node.token, url: undefined, sourceType: node.objType }
+      }
+      if (bodyRef.kind === "doc") {
+        const fetched = await fetchLarkDocAsRawSource(docInputFor(bodyRef), {
           adapterId: opts.accountId,
-          ...(ref.sourceType === "doc" || ref.sourceType === "docx"
-            ? { kind: ref.sourceType }
-            : ref.kind === "wiki"
-              ? { kind: "wiki" as const }
-              : {}),
+          expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+          signal: opts.signal,
+          maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
+          ...(bodyRef.sourceType === "doc" || bodyRef.sourceType === "docx"
+            ? { kind: bodyRef.sourceType }
+            : {}),
         })
+        await assertLarkAuthorization(opts)
+        throwIfRequestAborted(opts.signal)
         const clamped = clampDocText(fetched.text)
         return {
-          ref: { ...ref, title: fetched.title },
-          title: fetched.title,
+          ref: { ...ref, title: wikiTitle || fetched.title },
+          title: wikiTitle || fetched.title,
           text: clamped.text,
           format: "text",
           truncated: clamped.truncated,
         }
       }
 
-      const read = await withLarkAuthedApi({ adapterId: opts.accountId }, (api) =>
-        ref.kind === "sheet" ? readLarkSpreadsheet(api, ref.id) : readLarkBitable(api, ref.id)
+      if (bodyRef.kind !== "sheet" && bodyRef.kind !== "bitable")
+        throw new DocsProviderError("unsupportedType", { type: bodyRef.kind })
+      const read = await withLarkAuthedApi(apiOptions, (api) =>
+        bodyRef.kind === "sheet"
+          ? readLarkSpreadsheet(api, bodyRef.id)
+          : readLarkBitable(api, bodyRef.id)
       )
+      await assertLarkAuthorization(opts)
+      throwIfRequestAborted(opts.signal)
       if (!read.text.trim()) {
         throw new DocsProviderError("empty", { title: read.title })
       }
       const clamped = clampDocText(read.text)
       return {
-        ref: { ...ref, title: read.title },
-        title: read.title,
+        ref: { ...ref, title: wikiTitle || read.title },
+        title: wikiTitle || read.title,
         text: clamped.text,
         format: "csv",
         truncated: read.truncated || clamped.truncated,
       }
     } catch (err) {
+      throwIfRequestAborted(opts.signal)
       throw toDocsProviderError(err)
     }
   },

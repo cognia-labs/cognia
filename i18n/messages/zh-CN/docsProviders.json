@@ -9,7 +9,8 @@
     "notConfigured": "该文档来源尚未连接账号。",
     "notFound": "该文档不存在。",
     "rateLimited": "文档服务限流中，请稍后重试。",
-    "unsupportedType": "暂不支持读取该类型的文档。"
+    "unsupportedType": "暂不支持读取该类型的文档。",
+    "tooLarge": "文档响应超过下载大小上限，未添加附件。"
   },
   "kind": {
     "bitable": "多维表格",
@@ -29,7 +30,7 @@
     "attached": "已附加「{title}」",
     "fetching": "正在获取「{title}」…",
     "hostUnsupported": "云端文档仅在桌面端可用。",
-    "linkOnlyHint": "该来源不支持搜索，请粘贴文档链接。",
+    "linkOnlyHint": "请粘贴文档链接；关键词搜索可能需要补充账号授权。",
     "noAccount": "请先在设置中连接账号。",
     "noMatches": "没有匹配「{query}」的文档",
     "pasteHint": "输入关键词，或粘贴文档链接。",
@@ -73,10 +74,12 @@
     "googleClientSecret": "OAuth 客户端密钥",
     "googleScopes": "仅申请 Drive、Docs、Sheets 的只读权限。",
     "larkAccountCount": "已连接 {count} 个",
-    "larkDescription": "复用已连接的飞书账号，无需额外配置。",
+    "larkDescription": "复用飞书连接器凭据；文档访问还取决于授权范围和文件权限。",
     "larkManage": "管理飞书账号",
     "larkNoAccount": "尚未连接飞书账号。",
     "notConnected": "未连接",
-    "title": "云端文档"
+    "title": "云端文档",
+    "larkReadiness": "已配置 {count} 个，{searchCount} 个具有搜索授权",
+    "larkSearchAuthorization": "如需关键词搜索，请在“管理飞书账号”中开启“读取云文档”并重新授权。直接链接也可使用机器人身份读取。"
   }
 }

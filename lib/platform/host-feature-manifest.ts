@@ -143,6 +143,7 @@ export const HOST_FEATURE_IDS = [
   // a dead letter. Advertised by a host that runs a delivery runner. The
   // installation lifecycle has no operation here on purpose.
   "bots.control",
+  "bots.automation",
   // Receiving always-on work moved from another device (ADR-0224): a whole
   // connector instance, a Bot installation in one operation, scheduled tasks
   // with their provenance. Its absence is what a migration preflight reads as
@@ -888,6 +889,7 @@ export function buildLocalHostFeatureManifest({
     // arm, run or replay may leave the device at all, so advertising it ahead
     // of the arms would have produced a control that enqueues into a Host that
     // answers `unknown command`.
+    features["bots.automation"] = { version: 1, operations: ["bot_installation_mutate"] }
     features["bots.control"] = {
       version: 1,
       operations: [...BOT_CONTROL_HOST_OPERATIONS],

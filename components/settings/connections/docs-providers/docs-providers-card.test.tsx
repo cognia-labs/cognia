@@ -10,7 +10,20 @@ jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn(async () => undefined
 jest.mock("@/lib/db/adapter-instances", () => ({ listAdapterInstancesByType: jest.fn() }))
 jest.mock("@/lib/docs-providers", () => ({
   ...jest.requireActual("@/lib/docs-providers/types"),
-  larkDocsProvider: { id: "lark", mentionPrefix: "lark:", hosts: ["tauri"] },
+  larkDocsProvider: {
+    id: "lark",
+    mentionPrefix: "lark:",
+    hosts: ["tauri"],
+    listAccounts: jest.fn(async () => {
+      const rows = await jest
+        .requireMock("@/lib/db/adapter-instances")
+        .listAdapterInstancesByType("lark")
+      return rows
+        .filter((row: { enabled: boolean }) => row.enabled)
+        .map((row: { id: string }) => ({ id: row.id, searchable: false }))
+    }),
+    subscribeAccounts: jest.fn(() => jest.fn()),
+  },
   googleDocsProvider: { id: "google", mentionPrefix: "gdoc:", hosts: ["tauri"] },
 }))
 // The card asks `docsProviderReach`, which asks the host profile. Driving the
@@ -36,7 +49,7 @@ jest.mock("@/lib/docs-providers/providers/google/auth", () => ({
 import { toast } from "sonner"
 import { openUrl } from "@/lib/native/opener"
 import { listAdapterInstancesByType } from "@/lib/db/adapter-instances"
-import { DocsProviderError } from "@/lib/docs-providers"
+import { DocsProviderError, larkDocsProvider } from "@/lib/docs-providers"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import {
   getGoogleDocsSettings,
@@ -109,6 +122,36 @@ describe("DocsProvidersCard — host gating", () => {
 })
 
 describe("DocsProvidersCard — Feishu row", () => {
+  it("retains the latest native readiness when an older account read finishes late", async () => {
+    let finish!: (accounts: unknown[]) => void
+    ;(larkDocsProvider.listAccounts as jest.Mock)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve
+        })
+      )
+      .mockResolvedValueOnce([{ id: "fresh", searchable: true }])
+    let notify!: () => void
+    const stop = jest.fn()
+    ;(larkDocsProvider.subscribeAccounts as jest.Mock).mockImplementationOnce((listener) => {
+      notify = listener
+      return stop
+    })
+    const view = renderCard()
+    act(() => notify())
+    await waitFor(() =>
+      expect(screen.getByTestId("docs-provider-lark-status")).toHaveTextContent(
+        "1 configured · 1 with search permission"
+      )
+    )
+    await act(async () => finish([]))
+    expect(screen.getByTestId("docs-provider-lark-status")).toHaveTextContent(
+      "1 configured · 1 with search permission"
+    )
+    view.unmount()
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
+
   it("says no Feishu account is bound yet", async () => {
     renderCard()
     await waitFor(() =>
@@ -126,7 +169,9 @@ describe("DocsProvidersCard — Feishu row", () => {
     ])
     renderCard()
     await waitFor(() =>
-      expect(screen.getByTestId("docs-provider-lark-status")).toHaveTextContent("2 connected")
+      expect(screen.getByTestId("docs-provider-lark-status")).toHaveTextContent(
+        "2 configured · 0 with search permission"
+      )
     )
   })
 
