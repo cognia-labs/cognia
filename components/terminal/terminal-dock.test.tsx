@@ -5,6 +5,21 @@
 import { render, screen, fireEvent, act, cleanup, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
+jest.mock("@/lib/plugin/vscode-shim/terminal-handlers", () => {
+  const stop = jest.fn()
+  return {
+    listVscodeTerminalProfiles: jest.fn(async () => []),
+    openVscodeTerminalProfile: jest.fn(async () => "extension-session"),
+    subscribeVscodeTerminalProfiles: jest.fn(() => stop),
+    __stop: stop,
+  }
+})
+import {
+  listVscodeTerminalProfiles,
+  openVscodeTerminalProfile,
+} from "@/lib/plugin/vscode-shim/terminal-handlers"
+import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
+
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
@@ -211,15 +226,27 @@ jest.mock("./terminal-share-dialog", () => ({
 
 jest.mock("./terminal-shell-picker", () => ({
   TerminalShellPicker: ({
+    extensionProfiles,
+    onNewExtensionProfile,
     onNew,
     sshHosts,
     onNewSshHost,
   }: {
+    extensionProfiles?: Array<{ pluginId: string; id: string; title: string }>
+    onNewExtensionProfile?: (pluginId: string, id: string) => void | Promise<void>
     onNew: (shell?: string) => void | Promise<void>
     sshHosts?: Array<{ id: string }>
     onNewSshHost?: (hostId: string) => void | Promise<void>
   }) => (
     <div>
+      {(extensionProfiles ?? []).map((profile) => (
+        <button
+          key={profile.id}
+          onClick={() => void onNewExtensionProfile?.(profile.pluginId, profile.id)}
+        >
+          {profile.title}
+        </button>
+      ))}
       <button type="button" data-testid="terminal-dock-new" onClick={() => void onNew()} />
       {(sshHosts ?? []).map((host) => (
         <button
@@ -247,6 +274,10 @@ import { useChatStore } from "@/stores/chat/chat-store"
 import { useSettingsStore } from "@/stores/settings"
 
 beforeEach(() => {
+  jest.mocked(listVscodeTerminalProfiles).mockReset().mockResolvedValue([])
+  jest.mocked(openVscodeTerminalProfile).mockReset().mockResolvedValue("extension-session")
+  jest.requireMock("@/lib/plugin/vscode-shim/terminal-handlers").__stop.mockClear()
+  useRemoteHostStore.setState({ activeHostId: null })
   cleanup()
   useTerminalStore.getState().reset()
   // Hard-reset the project store too.
@@ -296,6 +327,31 @@ function seedProjectAndSession(
 }
 
 describe("TerminalDock", () => {
+  it("discovers dormant extension profiles, opens the selected owner and removes its subscription", async () => {
+    seedProjectAndSession()
+    jest
+      .mocked(listVscodeTerminalProfiles)
+      .mockResolvedValue([{ pluginId: "ext", id: "build", title: "Extension shell" }])
+    const { unmount } = render(<TerminalDock />)
+    fireEvent.click(await screen.findByRole("button", { name: "Extension shell" }))
+    await waitFor(() => expect(openVscodeTerminalProfile).toHaveBeenCalledWith("ext", "build"))
+    expect(mockSpawnFromDock).not.toHaveBeenCalled()
+    unmount()
+    expect(jest.requireMock("@/lib/plugin/vscode-shim/terminal-handlers").__stop).toHaveBeenCalled()
+  })
+
+  it("reports extension profile errors and hides their launch rows on remote hosts", async () => {
+    seedProjectAndSession()
+    jest
+      .mocked(listVscodeTerminalProfiles)
+      .mockResolvedValue([{ pluginId: "ext", id: "build", title: "Extension shell" }])
+    jest.mocked(openVscodeTerminalProfile).mockRejectedValueOnce(new Error("provider failed"))
+    render(<TerminalDock />)
+    fireEvent.click(await screen.findByRole("button", { name: "Extension shell" }))
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("spawnError"))
+    act(() => useRemoteHostStore.setState({ activeHostId: "remote-test" }))
+    expect(screen.queryByRole("button", { name: "Extension shell" })).toBeNull()
+  })
   it("mounts AI Shell through its toolbar and registered shortcut", () => {
     seedProjectAndSession({ sessionId: "s-1" })
     render(<TerminalDock />)

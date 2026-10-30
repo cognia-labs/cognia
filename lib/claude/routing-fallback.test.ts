@@ -121,6 +121,17 @@ describe("attemptRoutingFallback", () => {
     setRoutingEnabled(true)
   })
 
+  it("never reroutes a structured semantic refusal even when its reason sounds transient", async () => {
+    seedCache("s1", [
+      { providerId: "openai", modelId: "gpt-4o-mini" },
+      { providerId: "anthropic", modelId: "claude-haiku-4-5" },
+    ])
+    await expect(
+      attemptRoutingFallback("s1", "network timeout", { code: "PLUGIN_INTERCEPTOR_REFUSED" })
+    ).resolves.toBe(false)
+    expect(sendPromptMock).not.toHaveBeenCalled()
+  })
+
   it("discloses the provider substitution once the retry is actually in flight", async () => {
     // The turn is now running somewhere the user did not choose, which changes
     // cost and output quality. The previous English `toast.message(...)` fired

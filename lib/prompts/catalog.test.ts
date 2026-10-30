@@ -2,11 +2,16 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { getPromptDefinition, listPromptDefinitions } from "./catalog"
 import { validatePromptBody } from "./template"
+import { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
 
 const repoRoot = path.resolve(__dirname, "../..")
 
 describe("prompt catalog", () => {
   const defs = listPromptDefinitions()
+
+  it("indexes the pure executor definition without depending on executor initialization", () => {
+    expect(getPromptDefinition(EXECUTOR_FALLBACK_PROMPT.id)).toBe(EXECUTOR_FALLBACK_PROMPT)
+  })
 
   it("registers the mounted AI Shell planning and error advisor consumers", () => {
     expect(getPromptDefinition("developer.ai-shell.plan")).toMatchObject({

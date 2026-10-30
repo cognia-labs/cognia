@@ -34,6 +34,7 @@ import {
 import { partitionPrompt } from "../prompt-partition.ts"
 import { providerForbidsRetry } from "../http-error-meta.ts"
 import { APICallError } from "@ai-sdk/provider"
+import { createHash } from "node:crypto"
 import { aiSdkTelemetry, withTraceparent } from "../../platform/telemetry/index.ts"
 import {
   EFFORT_TO_BUDGET,
@@ -632,6 +633,19 @@ export function makeAiSdkAdapter(protocol: string, nativeCall?: SiwcNativeCall):
       }
       if (protocol === SIWC_PROTOCOL) {
         streamArgs.providerOptions = { openai: { store: false } }
+      }
+      const requestHeaders = (streamArgs.headers as Record<string, string> | undefined) ?? {}
+      const hasConversationHeader = [
+        ...Object.keys(creds.headers ?? {}),
+        ...Object.keys(requestHeaders),
+      ].some((name) => name.toLowerCase() === "x-cognia-session-id")
+      if (protocol === "openai" && req.sessionId && !hasConversationHeader) {
+        // Relays can preserve conversation affinity without receiving a raw
+        // local identifier. Keep the same opaque identity for every turn.
+        streamArgs.headers = {
+          ...requestHeaders,
+          "x-cognia-session-id": `cognia-${createHash("sha256").update(req.sessionId).digest("hex")}`,
+        }
       }
       // OpenCode Go requires an honest client identity and stable per-conversation
       // session header, including auxiliary requests (docs checked 2026-09-11).

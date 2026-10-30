@@ -15,6 +15,10 @@
 // emits assistant snapshots as they stream, a trailing `result` envelope with
 // usage, then a single `session_ended` so the existing settle/seal logic runs.
 
+import {
+  isPluginInterceptorRefusal,
+  PLUGIN_INTERCEPTOR_REFUSED,
+} from "@cognia/agent-config-types/plugin-interception"
 import { convertToModelMessages, isStepCount, streamText, type UIMessage } from "ai"
 
 import { composeSystem } from "@/lib/ai/agent/agent-executor"
@@ -32,6 +36,8 @@ import { RoutingAttemptController } from "@cognia/provider-routing"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { useSettingsStore } from "@/stores/settings/settings-store"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import { decideAgentTurn, transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
+import { requestLocalToolApproval } from "@/lib/claude/ipc"
 
 import { resolveStandaloneProvider } from "./resolve-standalone-provider"
 import { createSdkEventMapper } from "./sdk-event-mapper"
@@ -165,7 +171,10 @@ function retryAfterMsFromHeaders(headers: unknown, now: () => number): number | 
  * `session_ended.error` only after safe candidates are exhausted.
  */
 export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<void> {
-  const { sessionId, messages, sendOptions, emit, signal } = params
+  const { sessionId, messages, sendOptions, emit, signal: callerSignal } = params
+  const turnController = new AbortController()
+  const signal = AbortSignal.any([callerSignal, turnController.signal])
+  const operationId = `standalone:${sessionId}:${sendOptions.turnId ?? globalThis.crypto.randomUUID()}`
   const stream = params.streamTextImpl ?? streamText
 
   try {
@@ -228,7 +237,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       const partitioned = partitionPrompt(modelMessages, system)
       const derivedSystemPayload = {
         instructions: partitioned.instructions,
-        embeddedSystemMessages: partitioned.messages.filter((message) => message.role === "system"),
+        derivedMessages: partitioned.messages.filter((message) => message.role !== "user"),
       }
       if (!hasNoLeakingPiiDeep(derivedSystemPayload)) {
         throw new Error(
@@ -270,6 +279,27 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
           // integration, tracing channels are Node-only, and the failure still
           // reaches the turn through the stream's error part / abort signal.
           telemetry: { isEnabled: false },
+          prepareStep: async ({ stepNumber }) => {
+            signal.throwIfAborted()
+            await decideAgentTurn(
+              { sessionId, step: stepNumber },
+              {
+                sessionId,
+                operationId,
+                signal,
+              },
+              (verdict) =>
+                requestLocalToolApproval({
+                  sessionId,
+                  step: stepNumber,
+                  reason: verdict.reason,
+                  signal,
+                  ttlMs: sendOptions.approvalTtlMs,
+                  emit,
+                })
+            )
+            return undefined
+          },
           ...(resolvedTools
             ? { tools: resolvedTools.tools, stopWhen: isStepCount(STANDALONE_MAX_STEPS) }
             : {}),
@@ -283,7 +313,12 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
             committedOutput = true
             controller?.commit()
           }
-          for (const env of mapper.handle(part)) {
+          const projected = await transformModelStreamPart(part, {
+            sessionId,
+            operationId,
+            signal,
+          })
+          for (const env of mapper.handle(projected)) {
             await emit({ type: "event", sessionId, event: env })
           }
         }
@@ -320,6 +355,10 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       } catch (error) {
         lastError = error
         if (signal.aborted) throw error
+        if (isPluginInterceptorRefusal(error)) {
+          turnController.abort(error)
+          throw error
+        }
         candidate = controller?.failAndAdvance() ?? null
         fallbackAttempt = Boolean(candidate)
         if (fallbackAttempt) finishRetries = 0 // a fresh candidate gets a fresh budget
@@ -334,7 +373,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
     )
   } catch (err) {
     // An abort is a user Stop, not a failure — seal the partial cleanly.
-    if (signal.aborted) {
+    if (callerSignal.aborted) {
       await emit({ type: "session_ended", sessionId })
       return
     }
@@ -343,6 +382,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
       type: "session_ended",
       sessionId,
       error: message,
+      ...(isPluginInterceptorRefusal(err) ? { code: PLUGIN_INTERCEPTOR_REFUSED } : {}),
       ...providerHttpMetaOf(err),
       ...(err instanceof ProviderResolutionError
         ? {
@@ -354,5 +394,7 @@ export async function runStandaloneTurn(params: StandaloneTurnParams): Promise<v
           }
         : {}),
     })
+  } finally {
+    turnController.abort()
   }
 }

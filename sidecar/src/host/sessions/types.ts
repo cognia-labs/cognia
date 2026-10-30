@@ -31,6 +31,10 @@ export interface HostSession {
   pushUserMessage?(prompt: Prompt, priority?: string): unknown
   setNextTurnLedger?(ledger: unknown, remoteExecutionContext?: unknown): void
   setNextTurnVerificationBudget?(stamp: SendOptions["verificationBudget"]): void
+  setNextTurnSemanticInterceptors?(
+    stamp: SendOptions["semanticInterceptors"],
+    approvalTtlMs?: number
+  ): void
   closeInput?(): void
   drainPending?(reason: string): void
   restoreConversation?(messages: unknown): unknown

@@ -22,6 +22,7 @@ import {
 } from "@/components/ai-elements/prompt-input"
 import type { ChatStatus as PromptStatus, UIMessage } from "ai"
 import { FileTextIcon, XIcon } from "lucide-react"
+import { chatDockColumnClass } from "./chat-column"
 import {
   ChangeEvent,
   type CSSProperties,
@@ -4903,10 +4904,7 @@ export const Composer = forwardRef<ComposerHandle, Props>(function Composer(
           instead, the cap measured the padded box and the composer ran 20px
           wider per side than the messages above it on any pane past ~872px
           (see `message-list.tsx`'s reading column, which caps then pads). */}
-      <div
-        className="mx-auto w-full max-w-[52rem] px-3 sm:px-5"
-        data-slot="composer-reading-column"
-      >
+      <div className={chatDockColumnClass} data-slot="composer-reading-column">
         {/* Scope the shared hover delay to the composer: every tooltip on the
             box, its toolbar, and the detached toolbar row waits 500ms before
             opening, so a pointer sweeping the strip no longer fires a wall of

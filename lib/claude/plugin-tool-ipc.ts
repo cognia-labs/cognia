@@ -1052,6 +1052,7 @@ async function runPluginToolExec(
       const skillCtx = await resolveBuiltInSkillContext(request.sessionId)
       const result = await runBuiltInSkill(builtIn.id, request.args, {
         ...skillCtx,
+        signal: request.abortSignal,
         outboundAuthorization: toolCallAuthorization(request),
       })
       // The dispatcher returns a discriminated union; on `denied` /

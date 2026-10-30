@@ -42,6 +42,7 @@ import { VideoGenerateCard } from "./mcp-renderers/video-generate-card"
 import { ProjectThreadCard } from "./mcp-renderers/project-thread-card"
 import { FilespaceShareCard } from "./mcp-renderers/filespace-share-card"
 import { SuggestedThreadsCard } from "./mcp-renderers/suggested-threads-card"
+import { AcceptanceProposalCard } from "./mcp-renderers/acceptance-proposal-card"
 import { PROJECT_COORDINATOR_TOOL_NAMES } from "@/lib/claude/project-coordinator-builtin-tools"
 import { FILESPACE_TOOL_NAMES } from "@/lib/claude/filespace-builtin-tools"
 import { SCHEDULED_TASK_CARDS } from "./mcp-renderers/scheduled-task-card"
@@ -51,6 +52,8 @@ import { ManagedMcpAppCard } from "@/components/mcp-apps/managed-mcp-app-card"
 type CardComponent = (props: { part: ToolUIPart; sessionId?: string }) => React.JSX.Element | null
 
 const REGISTRY: Record<string, CardComponent> = {
+  propose_acceptance: AcceptanceProposalCard,
+  "mcp__cognia-plugin-tools__propose_acceptance": AcceptanceProposalCard,
   // cognia external bridge
   wiki_search: WikiSearchCard,
   wiki_read: WikiReadCard,

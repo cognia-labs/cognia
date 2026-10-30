@@ -21,6 +21,7 @@
  * available, so callers can degrade gracefully.
  */
 
+import { isPluginInterceptorRefusal } from "@cognia/agent-config-types/plugin-interception"
 import { streamText, type ModelMessage } from "ai"
 import { partitionPrompt } from "@/lib/ai/prompt-partition"
 import { webviewSafeTelemetry } from "@/lib/ai/webview-safe-telemetry"
@@ -44,7 +45,7 @@ import type { DispatchContext } from "@/lib/claude/agents/dispatch-context-regis
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
 import { buildJsonInstruction, parseStructured } from "@/lib/workflow/nodes/ai/structured"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
-import { definePrompt } from "@/lib/prompts/types"
+import { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
 import { estimateCJKTokenCount } from "@cognia/rag/cjk-tokenizer"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { RoutingAttemptController } from "@cognia/provider-routing"
@@ -64,6 +65,7 @@ import type {
 } from "@/types/plugin/plugin-agent-sdk"
 import type { PluginPostToolUseFn } from "@/types/plugin/plugin-agent-hooks"
 import { routingPlanTraceAttributes } from "@/lib/routing/plan-trace-attributes"
+import { decideAgentTurn, transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
 
 export interface AgentTool {
   /** Stable id; defaults to `name` when the caller omits it. */
@@ -240,7 +242,11 @@ export interface ExecuteAgentConfig {
    * degraded multi-turn experience where the sidecar (and its native resume)
    * is unavailable. Ignored on the sidecar channel (resume handles continuity).
    */
-  priorMessages?: Array<{ role: "user" | "assistant"; content: string }>
+  priorMessages?: Array<{
+    role: "user" | "assistant"
+    content: string
+    metadata?: Record<string, unknown>
+  }>
   /**
    * Nested-dispatch context for this run (depth, maxDepth, parent chain). When
    * present, the run is a dispatched subagent: the executor registers it by the
@@ -300,6 +306,8 @@ export type ExecuteAgentChannel = "sidecar" | "text"
 
 export interface ExecuteAgentResult {
   text: string
+  /** Host-owned response state to persist with the assistant row, never model instructions. */
+  messageMetadata?: Record<string, unknown>
   finishReason?: string
   /** Which execution channel actually ran. */
   channel: ExecuteAgentChannel
@@ -384,27 +392,7 @@ function toolResultReviewResponderFor(
   }
 }
 
-/**
- * The identity a persona-less tool-enabled run gets when its caller supplied
- * no system prompt of its own (ADR-0236). A caller's `systemPrompt` always
- * wins; this only fills the gap.
- */
-export const EXECUTOR_FALLBACK_PROMPT = definePrompt({
-  id: "agent.executor.fallback",
-  contractVersion: 1,
-  kind: "role",
-  group: "agents",
-  operation: "replace-template",
-  scopes: ["account"],
-  activation: "next-operation",
-  risk: "ordinary",
-  hosts: ["app"],
-  maxChars: 8_000,
-  outputContract:
-    "The system prompt of the synthesized agent for an `executeAgent` run with tools, no agent and no caller-supplied system prompt.",
-  consumers: ["lib/ai/agent/agent-executor.ts"],
-  defaultBody: "You are a focused, helpful agent.",
-})
+export { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
 
 /**
  * Build a minimal in-memory `Character` from a config that has no
@@ -743,6 +731,10 @@ async function runToolEnabledStandalone(
         break
       } catch (error) {
         lastError = error
+        if (isPluginInterceptorRefusal(error)) {
+          controller?.cancel()
+          throw error
+        }
         if (config.abortSignal?.aborted) {
           controller?.cancel()
           throw error
@@ -1079,8 +1071,15 @@ export async function runCompletionRail(
     ...(config.priorMessages ?? []).map((message) => message.content),
     prompt,
   ].join("\n")
+  const operationId = `completion:${globalThis.crypto.randomUUID()}`
+  const sessionId = config.sessionId ?? operationId
 
   while (candidate) {
+    const attemptController = new AbortController()
+    const attemptSignal = config.abortSignal
+      ? AbortSignal.any([config.abortSignal, attemptController.signal])
+      : attemptController.signal
+    const semanticContext = { operationId, sessionId, signal: attemptSignal }
     let lease: import("@/lib/ai/ledgered-model-call").LedgeredGenerationLease | null = null
     let streamed = false
     try {
@@ -1140,18 +1139,40 @@ export async function runCompletionRail(
         ...(lease ? lease.options : {}),
       }
       if (config.temperature !== undefined) options.temperature = config.temperature
-      if (config.abortSignal) options.abortSignal = config.abortSignal
+      options.abortSignal = attemptSignal
 
+      // This rail makes exactly one model step and exposes no tools. Gate that
+      // step before dispatch so a policy refusal cannot become a provider retry.
+      await decideAgentTurn(
+        { sessionId, step: 0 },
+        semanticContext,
+        config.canUseTool
+          ? async (verdict) => {
+              const answer = await config.canUseTool!(
+                "agent.turn.decide",
+                { step: 0, reason: verdict.reason },
+                { signal: config.abortSignal }
+              )
+              return answer.behavior === "allow"
+            }
+          : undefined
+      )
       const result = streamText(options as Parameters<typeof streamText>[0])
       let text = ""
+      let providerText = ""
       for await (const chunk of result.textStream) {
         if (chunk.length > 0 && controller.state.phase === "inFlight") {
           controller.commit()
         }
         if (chunk.length > 0) streamed = true
-        text += chunk
-        config.onDelta?.(chunk)
-        config.onEvent?.({ type: "text-delta", delta: chunk })
+        providerText += chunk
+        const projected = await transformModelStreamPart(
+          { type: "text-delta", text: chunk },
+          semanticContext
+        )
+        text += projected.text
+        config.onDelta?.(projected.text)
+        config.onEvent?.({ type: "text-delta", delta: projected.text })
       }
       const finishReason = await result.finishReason
       const rawUsage = await Promise.resolve(result.usage).catch(() => undefined)
@@ -1172,7 +1193,7 @@ export async function runCompletionRail(
         ...(rawUsage
           ? { usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens } }
           : {}),
-        ...finalizeStructured(text, config.outputFormat),
+        ...finalizeStructured(providerText, config.outputFormat),
       }
     } catch (error) {
       lastError = error
@@ -1186,7 +1207,17 @@ export async function runCompletionRail(
         controller.cancel()
         throw error
       }
+      if (
+        error instanceof Error &&
+        (error.name === "InterceptorGuardDeniedError" ||
+          error.name === "InterceptorFailClosedError")
+      ) {
+        controller.cancel()
+        throw error
+      }
       candidate = controller.failAndAdvance()
+    } finally {
+      attemptController.abort()
     }
   }
 

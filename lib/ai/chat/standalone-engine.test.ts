@@ -4,11 +4,17 @@ import type { RoutingPlan } from "@cognia/provider-types/auto-router"
 
 import { streamText, type UIMessage } from "ai"
 import { MockLanguageModelV4 } from "ai/test"
+import { abortableStreamModel } from "@/lib/ai/webview-stream-fixtures"
 
 import { createFeatureProviderModel } from "@/lib/ai/provider-consumption"
 
 import { resolveStandaloneProvider } from "./resolve-standalone-provider"
 import { providerHttpMetaOf, runStandaloneTurn } from "./standalone-engine"
+import {
+  registerInterceptor,
+  __resetInterceptorRegistryForTesting,
+} from "@/lib/plugin/interceptors/registry"
+import { createInterceptorRegistration } from "@/lib/plugin/interceptors/normalize"
 
 jest.mock("./resolve-standalone-provider", () => ({ resolveStandaloneProvider: jest.fn() }))
 jest.mock("@/lib/ai/provider-consumption", () => ({
@@ -43,9 +49,13 @@ jest.mock("@/lib/ai/finish-reason-retry", () => ({
   finishRetryDelayMs: jest.fn(() => 0),
 }))
 let mockPiiSafe = true
+let mockPiiPrivateToken: string | undefined
 let mockPiiResults: boolean[] = []
 jest.mock("@cognia/redact", () => ({
-  hasNoLeakingPiiDeep: () => mockPiiResults.shift() ?? mockPiiSafe,
+  hasNoLeakingPiiDeep: (value: unknown) =>
+    mockPiiPrivateToken && JSON.stringify(value).includes(mockPiiPrivateToken)
+      ? false
+      : (mockPiiResults.shift() ?? mockPiiSafe),
 }))
 
 const mockResolve = resolveStandaloneProvider as jest.MockedFunction<
@@ -120,10 +130,91 @@ function run(over: Partial<Parameters<typeof runStandaloneTurn>[0]> = {}) {
 }
 
 beforeEach(() => {
+  __resetInterceptorRegistryForTesting()
   jest.clearAllMocks()
   mockResolve.mockReturnValue(resolved)
   mockPiiSafe = true
+  mockPiiPrivateToken = undefined
   mockPiiResults = []
+})
+afterEach(() => __resetInterceptorRegistryForTesting())
+
+it("gates derived assistant history before the first provider attempt", async () => {
+  mockPiiPrivateToken = "LOCAL_PRIVATE_NOTE"
+  const stream = jest.fn(fakeStream([]))
+  const { promise, events } = run({
+    messages: [
+      { role: "assistant", content: "LOCAL_PRIVATE_NOTE" },
+      { role: "user", content: "Continue" },
+    ] as never,
+    streamTextImpl: stream as never,
+  })
+  await promise
+  expect(stream).not.toHaveBeenCalled()
+  expect(events.at(-1)).toMatchObject({
+    error: expect.stringContaining("derived context contains private data"),
+  })
+})
+
+it("consumes transformed deltas in the actual accumulated assistant snapshot", async () => {
+  registerInterceptor(
+    createInterceptorRegistration({
+      pluginId: "projection",
+      pointId: "model.stream.transform",
+      semantic: "transform",
+      source: "interceptors",
+      handler: ((value: { text: string }) => ({
+        ...value,
+        text: value.text.replace("private", "safe"),
+      })) as never,
+    })
+  )
+  const { events, promise } = run({
+    streamTextImpl: fakeStream([{ type: "text-delta", id: "message", text: "private answer" }]),
+  })
+  await promise
+  const snapshots = events.filter(
+    (event) => event.type === "event" && (event.event as { type: string }).type === "assistant"
+  )
+  expect(JSON.stringify(snapshots)).toContain("safe answer")
+  expect(JSON.stringify(events)).not.toContain("private answer")
+})
+
+it("correlates guards and stream chunks within one unique standalone turn", async () => {
+  const operations: string[] = []
+  for (const pointId of ["agent.turn.decide", "model.stream.transform"] as const) {
+    registerInterceptor(
+      createInterceptorRegistration({
+        pluginId: "correlator",
+        pointId,
+        semantic: pointId === "agent.turn.decide" ? "guard" : "transform",
+        source: "interceptors",
+        handler: ((value: unknown, meta: { operationId: string }) => {
+          operations.push(meta.operationId)
+          return pointId === "agent.turn.decide" ? { decision: "pass" } : value
+        }) as never,
+      })
+    )
+  }
+  const streamTextImpl = ((options: {
+    prepareStep(input: { stepNumber: number }): Promise<unknown>
+  }) => ({
+    stream: (async function* () {
+      await options.prepareStep({ stepNumber: 0 })
+      yield { type: "text-delta", text: "one" }
+      yield { type: "text-delta", text: "two" }
+    })(),
+    usage: Promise.resolve({ promptTokens: 1, completionTokens: 1 }),
+    finishReason: Promise.resolve("stop"),
+  })) as never
+  await run({ streamTextImpl }).promise
+  expect(operations).toHaveLength(3)
+  expect(new Set(operations).size).toBe(1)
+  const first = operations[0]
+  operations.length = 0
+  await run({ streamTextImpl }).promise
+  expect(operations).toHaveLength(3)
+  expect(operations[0]).not.toBe(first)
 })
 
 describe("runStandaloneTurn", () => {
@@ -746,6 +837,57 @@ describe("runStandaloneTurn with the real AI SDK stream (webview runtime)", () =
   })
 
   const drainRejectionReports = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+  it("denies the real SDK model step before any provider call", async () => {
+    registerInterceptor(
+      createInterceptorRegistration({
+        pluginId: "guard",
+        pointId: "agent.turn.decide",
+        semantic: "guard",
+        source: "interceptors",
+        handler: (() => ({ decision: "deny", reason: "Turn denied by policy" })) as never,
+      })
+    )
+    const doStream = jest.fn(async () => {
+      throw new Error("Provider must not be called")
+    })
+    mockModel.mockReturnValueOnce(new MockLanguageModelV4({ doStream }) as never)
+    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {})
+    const { events, promise } = run({ messages: history, streamTextImpl: actualAi.streamText })
+    await promise
+    expect(doStream).not.toHaveBeenCalled()
+    expect(events.at(-1)).toMatchObject({
+      type: "session_ended",
+      error: expect.stringContaining("Turn denied by policy"),
+    })
+    consoleError.mockRestore()
+  })
+
+  it("aborts the real provider stream after strict projection refusal", async () => {
+    registerInterceptor(
+      createInterceptorRegistration({
+        pluginId: "projector",
+        pointId: "model.stream.transform",
+        semantic: "transform",
+        source: "interceptors",
+        failurePolicy: "fail-closed",
+        handler: (() => {
+          throw new Error("projection refused")
+        }) as never,
+      })
+    )
+    const model = abortableStreamModel()
+    const dispatch = jest.spyOn(model, "doStream")
+    mockModel.mockReturnValueOnce(model as never)
+    const { events, promise } = run({ messages: history, streamTextImpl: actualAi.streamText })
+    await promise
+    expect(dispatch.mock.calls[0][0].abortSignal?.aborted).toBe(true)
+    expect(events.at(-1)).toMatchObject({
+      code: "PLUGIN_INTERCEPTOR_REFUSED",
+      error: expect.stringContaining("projection refused"),
+    })
+    await drainRejectionReports()
+  })
 
   it("reports a provider auth failure without leaking an unhandled rejection", async () => {
     // The SDK's default `onError` logs the provider error; the turn reports it.

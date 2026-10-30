@@ -1,3 +1,10 @@
+import {
+  configureChatRegistry,
+  __resetChatRegistryForTesting,
+  handleCreateChatParticipant,
+  handleDisposeChatParticipant,
+  disposeAllParticipantsFor,
+} from "@/lib/plugin/vscode-shim/chat-participant-registry"
 // CRUD coverage for the characters table — list/get/create/update/delete
 // plus the duplicate path and idempotent built-in seeder. ADR-0030 added
 // overlay-aware paths exercised below.
@@ -77,6 +84,8 @@ const dbFixture = createDbTestFixture()
 
 beforeAll(dbFixture.initialize)
 beforeEach(async () => {
+  __resetChatRegistryForTesting()
+  configureChatRegistry({ declarations: async () => [] })
   await dbFixture.restore()
   await getDb().characters.clear()
   __resetCharacterPacksForTesting()
@@ -703,3 +712,63 @@ describe("agent variants", () => {
     await expect(updateCharacter(variant.id, { model: "opus" })).rejects.toThrow(/missing/)
   })
 })
+
+it("lists and resolves dormant extension participants and hides stale persisted participants", async () => {
+  configureChatRegistry({
+    declarations: async () => [{ pluginId: "ext", id: "helper", name: "Extension helper" }],
+  })
+  const participantId = "vscode-chat:ext:helper"
+  const listed = await listCharacters()
+  expect(listed).toEqual([expect.objectContaining({ id: participantId, sourcePluginId: "ext" })])
+  expect((await resolveCharacterById(participantId))?.name).toBe("Extension helper")
+  expect((await listCharactersByIds([participantId]))[0]?.id).toBe(participantId)
+  await getDb().characters.put({ ...listed[0]!, id: "vscode-chat:removed:stale" })
+  expect((await listCharacters()).map((row) => row.id)).toEqual([participantId])
+  expect(await resolveCharacterById("vscode-chat:removed:stale")).toBeUndefined()
+})
+
+it("retains persisted participant authority rather than replacing it with discovery metadata", async () => {
+  configureChatRegistry({
+    declarations: async () => [{ pluginId: "ext", id: "helper", name: "Extension helper" }],
+  })
+  const [projected] = await listCharacters()
+  await getDb().characters.put({ ...projected!, permissionMode: "plan", sandboxEnabled: true })
+  expect(await resolveCharacterById("vscode-chat:ext:helper")).toEqual(
+    expect.objectContaining({
+      permissionMode: "plan",
+      sandboxEnabled: true,
+      availableOnPlatforms: ["tauri", "headless"],
+    })
+  )
+  expect((await listCharacters())[0]?.permissionMode).toBe("plan")
+})
+
+it.each(["single", "extension"])(
+  "preserves participant policy across %s disposal and re-registration",
+  async (disposal) => {
+    configureChatRegistry({
+      declarations: async () => [{ pluginId: "ext", id: "helper", name: "Extension helper" }],
+    })
+    const { characterId } = await handleCreateChatParticipant({
+      extensionId: "ext",
+      id: "helper",
+      token: "first",
+    })
+    await updateCharacter(characterId, {
+      permissionMode: "plan",
+      sandboxEnabled: true,
+      systemPrompt: "User policy",
+    })
+    if (disposal === "single")
+      await handleDisposeChatParticipant({ extensionId: "ext", id: "helper", token: "first" })
+    else await disposeAllParticipantsFor("ext")
+    await handleCreateChatParticipant({ extensionId: "ext", id: "helper", token: "second" })
+    expect(await resolveCharacterById(characterId)).toEqual(
+      expect.objectContaining({
+        permissionMode: "plan",
+        sandboxEnabled: true,
+        systemPrompt: "User policy",
+      })
+    )
+  }
+)

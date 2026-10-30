@@ -870,3 +870,25 @@ describe("createSdkEventMapper", () => {
     expect(textBlock.text).toBe("turn-two")
   })
 })
+
+it("keeps host commentary in the same assistant row and outside answer text", () => {
+  const mapper = createSdkEventMapper({
+    sessionId: "s",
+    sdkSessionId: "sdk",
+    provider: "vscode-chat",
+  })
+  const before = mapper.setCommentary("Searching")
+  mapper.handle({ type: "text-delta", text: "Answer" })
+  const after = mapper.sealAssistant()
+  const first = before.find(
+    (event) => event.type === "assistant"
+  ) as import("@cognia/agent-config-types").SDKAssistantMessage
+  const last = after[0] as import("@cognia/agent-config-types").SDKAssistantMessage
+  expect(last.message.id).toBe(first.message.id)
+  expect(last.message.content).toEqual([
+    { type: "data-commentary", data: { text: "Searching" } },
+    { type: "text", text: "Answer" },
+  ])
+  mapper.reset()
+  expect(mapper.sealAssistant()).toEqual([])
+})

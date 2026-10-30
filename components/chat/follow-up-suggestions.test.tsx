@@ -87,6 +87,9 @@ describe("FollowUpSuggestions", () => {
       />
     )
     expect(screen.getByRole("status")).toHaveTextContent("unavailable")
+    expect(screen.getByRole("status")).toHaveClass("grid-cols-[minmax(0,1fr)_auto]", "items-center")
+    expect(screen.getByText("unavailable")).toHaveClass("truncate")
+    expect(screen.getByText("unavailable")).toHaveAttribute("title", "unavailable")
     for (const name of ["configure", "retry", "dontShowAgain"]) {
       expect(screen.getByRole("button", { name })).toHaveTextContent(/^$/)
     }

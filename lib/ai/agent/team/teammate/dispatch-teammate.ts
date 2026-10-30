@@ -1181,9 +1181,28 @@ export async function dispatchTeammate(
         )
       : null
     reporter?.start()
+    let pluginStepNumber = 0
     const onTurnCapture =
-      durableDispatch || (streamFull && reporter)
+      durableDispatch || (streamFull && reporter) || hooks.hasAnyHook("onAgentStep")
         ? (event: CaptureStreamEvent) => {
+            if (hooks.hasAnyHook("onAgentStep")) {
+              const step =
+                event.type === "tool-call"
+                  ? { type: "tool_call" as const, tool: event.toolName, toolArgs: event.input }
+                  : event.type === "tool-result"
+                    ? {
+                        type: "tool_result" as const,
+                        tool: event.toolName,
+                        toolResult: event.result,
+                      }
+                    : event.type === "thinking-delta"
+                      ? { type: "thinking" as const, content: event.delta }
+                      : event.type === "text-delta"
+                        ? { type: "response" as const, content: event.delta }
+                        : undefined
+              if (step)
+                hooks.dispatchOnAgentStep(teammate.id, { stepNumber: ++pluginStepNumber, ...step })
+            }
             if (streamFull) reporter?.onCaptureEvent(event)
             durableDispatch?.capture(event)
           }

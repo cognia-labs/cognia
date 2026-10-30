@@ -153,7 +153,7 @@ import type { ConnectorMode } from "@/types/connectors/policy"
 import { type AgentModeConfig } from "@/types/agent/agent-mode"
 import { buildAgentModeSessionUpdate } from "@/lib/agent/mode-session-update"
 import { MODE_PROMPT_PASSTHROUGH_VALUES, shippedModePrompt } from "@/lib/agent/modes/built-ins"
-import { resolveTurnAgentMode } from "./turn-agent-mode"
+import { resolveTurnAgentMode, resolveTurnAuthority } from "./turn-agent-mode"
 import {
   resolveAgentEnvironment,
   resolveAgentExecutionPolicy,
@@ -206,6 +206,7 @@ import {
 } from "@cognia/provider-routing/build-preview-engine"
 import { DEFAULT_ROUTING_CONFIG } from "@cognia/provider-types/model-mapping"
 import { estimateCJKTokenCount } from "@cognia/rag/cjk-tokenizer"
+import { withRemoteHostKeyedProviders } from "@/lib/host-secrets/remote-host-keys"
 import { DEFAULT_SKILL_CATALOG_TOKEN_BUDGET } from "@/lib/skills/prompt-budget"
 import { estimateFallbackTokens } from "@/lib/ai/tokens/fallback-estimator"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
@@ -1440,6 +1441,65 @@ export function resolvedSessionAsideRuntime(options: SendOptions): AgentRuntimeR
 }
 
 export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<SendOptions> {
+  const participantCharacterId =
+    ctx.character?.id ?? ctx.memberOverride?.characterId ?? ctx.session?.characterId
+  if (
+    !ctx.personChat &&
+    !ctx.externalRuntimeId &&
+    participantCharacterId?.startsWith("vscode-chat:")
+  ) {
+    const { permissionMode, sandboxEnabled: sandboxRequired } = resolveTurnAuthority({
+      session: ctx.session,
+      character: ctx.character,
+      appSettings: ctx.appSettings,
+      explicitMode: ctx.agentMode,
+      selection: ctx.compositionSelection,
+    })
+    if (
+      (permissionMode && permissionMode !== "default") ||
+      ctx.workspaceRestricted ||
+      sandboxRequired ||
+      ctx.character?.systemPrompt?.trim() ||
+      ctx.character?.allowedTools?.length ||
+      ctx.character?.skillIds?.length ||
+      ctx.character?.mcpServerIds?.length ||
+      ctx.permissionCeiling ||
+      ctx.dispatchContext ||
+      ctx.isDispatchedSubagent ||
+      ctx.capabilityGrants?.length ||
+      ctx.compositionSelection ||
+      ctx.session?.kind === "resource-workbench"
+    ) {
+      throw new Error(
+        "Chat participant cannot satisfy this turn's permission, workspace, or composition contract"
+      )
+    }
+    const [
+      { resolveVscodeChatParticipant },
+      { resolveAgentExecutionSpec, sendSpecFromResolved },
+      { resolveAgentExecutionEnvironment },
+      { getAgentExecutionFlags },
+    ] = await Promise.all([
+      import("@/lib/plugin/vscode-shim/chat-participant-registry"),
+      import("@/lib/ai/agent/execution/resolve-agent-execution-spec"),
+      import("@/lib/ai/agent/execution/host-environment"),
+      import("@/lib/ai/agent/execution/feature-flags"),
+    ])
+    const participant = await resolveVscodeChatParticipant(participantCharacterId)
+    const { spec } = resolveAgentExecutionSpec({
+      surface: "chat",
+      environment: resolveAgentExecutionEnvironment(),
+      flags: getAgentExecutionFlags(),
+      chatParticipant: {
+        pluginId: participant.pluginId,
+        participantId: participant.participantId,
+        generation: participant.generation,
+      },
+      identity: { sessionId: ctx.session?.id, ...ctx.executionIdentity },
+    })
+    ctx.onResolvedExecutionSpec?.(spec)
+    return { toolSurface: "none", allowedTools: [], execution: sendSpecFromResolved(spec) }
+  }
   if (ctx.personChat) {
     const grant = foldCapabilityGrants(ctx.capabilityGrants)
     if (!grant?.tools?.restrictTo || grant.tools.restrictTo.length !== 0) {
@@ -1943,11 +2003,19 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     // health metrics, circuit breaker, today-spend mirror, rate window,
     // pricing, and the context-window resolver all live in
     // `lib/ai/routing/build-preview-engine.ts`.
-    const deps: RoutingEngineDeps = buildRoutingEngineDeps(appSettings, {
-      ...(manualRequested && isSiwcRoutingProvider(appSettings, providerId!)
-        ? { explicitProviderId: providerId }
-        : {}),
-    })
+    // Match the model picker and credential resolver: a driven Host can serve
+    // its sealed-key providers even when this browser has no enabled key.
+    const deps: RoutingEngineDeps = buildRoutingEngineDeps(
+      {
+        ...appSettings,
+        providerSettings: withRemoteHostKeyedProviders(appSettings.providerSettings),
+      },
+      {
+        ...(manualRequested && isSiwcRoutingProvider(appSettings, providerId!)
+          ? { explicitProviderId: providerId }
+          : {}),
+      }
+    )
     // Rough token estimate of the outgoing prompt (CJK-aware). Uses the hoisted
     // `promptText` (also feeds auto-routing above). History/system additions are
     // not counted, keeping the check conservative-but-cheap (no awaits).
@@ -3718,7 +3786,9 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // unchanged.
   if (!character?.disablePluginTools) {
     try {
-      const { buildPluginToolsManifest } = await import("@/lib/plugin/bridge/sidecar-tools-bridge")
+      const { buildPluginToolsManifest, prepareVscodeLanguageModelTools } =
+        await import("@/lib/plugin/bridge/sidecar-tools-bridge")
+      await prepareVscodeLanguageModelTools()
       // Wave 1 — when the user has opted into agent-driven terminal use,
       // the manifest carries 4 synthetic `terminal_dock_*` entries that
       // route through the existing plugin_tool_exec wire and land in
@@ -6436,6 +6506,14 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       throw new AgentCapabilityError(capability, "send")
     }
   }
+  const { hasInterceptors } = await import("@/lib/plugin/interceptors/registry")
+  opts.semanticInterceptors = (["model.stream.transform", "agent.turn.decide"] as const).filter(
+    (point) => hasInterceptors(point)
+  )
+  if (adapter === "claude-agent-sdk" && !isStandaloneChatMode() && opts.semanticInterceptors.length)
+    throw new Error(
+      "Active stream or turn interceptors require an AI SDK runtime; the native Claude SDK exposes no model-step gate"
+    )
   return opts
 }
 

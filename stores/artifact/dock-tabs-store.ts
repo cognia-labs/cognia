@@ -40,7 +40,12 @@ import { isBrowserErrorUrl } from "@/lib/browser/protocol"
 import { isSandboxPreviewBootstrapUrl } from "@/lib/security/redact-credentials"
 
 /** A tab's identity across kinds: `panel:<panelId>`, `artifact:<artifactId>` or `page:<tabId>`. */
-export type DockTabKey = `panel:${string}` | `artifact:${string}` | `page:${string}`
+export type DockTabKey =
+  `panel:${string}` | `artifact:${string}` | `page:${string}` | `doc:${string}`
+
+export function documentTabKey(docTabId: string): DockTabKey {
+  return `doc:${docTabId}`
+}
 
 export function panelTabKey(panelId: string): DockTabKey {
   return `panel:${panelId}`
@@ -59,9 +64,11 @@ export function parseDockTabKey(
 ):
   | { kind: "panel"; panelId: string }
   | { kind: "artifact"; artifactId: string }
+  | { kind: "doc"; docTabId: string }
   | { kind: "page"; tabId: string } {
   if (key.startsWith("panel:")) return { kind: "panel", panelId: key.slice("panel:".length) }
   if (key.startsWith("page:")) return { kind: "page", tabId: key.slice("page:".length) }
+  if (key.startsWith("doc:")) return { kind: "doc", docTabId: key.slice("doc:".length) }
   return { kind: "artifact", artifactId: key.slice("artifact:".length) }
 }
 

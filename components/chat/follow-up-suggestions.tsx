@@ -62,22 +62,24 @@ export function FollowUpSuggestions({
     ].filter((action) => action.onClick)
     return (
       <div
-        className="@container/prediction px-[var(--composer-notice-inset,0.5rem)] pt-1 pb-2"
+        className="px-[var(--composer-notice-inset,0.5rem)] pt-1 pb-2"
         data-slot="composer-prediction-notice"
       >
         <div
           role="status"
-          className="grid grid-cols-1 items-start gap-x-2 gap-y-1 text-xs text-muted-foreground @2xl/prediction:grid-cols-[minmax(0,1fr)_auto]"
+          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 text-xs text-muted-foreground"
         >
-          <div className="flex min-w-0 items-start gap-2 self-center">
+          <div className="flex min-w-0 items-center gap-2">
             {status === "error" ? (
-              <AlertCircleIcon className="mt-[3px] size-3.5 shrink-0 text-warning" aria-hidden />
+              <AlertCircleIcon className="size-3.5 shrink-0 text-warning" aria-hidden />
             ) : (
-              <InfoIcon className="mt-[3px] size-3.5 shrink-0 opacity-70" aria-hidden />
+              <InfoIcon className="size-3.5 shrink-0 opacity-70" aria-hidden />
             )}
-            <span className="min-w-0 leading-5 [overflow-wrap:anywhere]">{t(status)}</span>
+            <span className="min-w-0 truncate leading-5" title={t(status)}>
+              {t(status)}
+            </span>
           </div>
-          <div className="ms-2 flex min-w-0 flex-wrap items-center gap-1 @2xl/prediction:col-start-2 @2xl/prediction:ms-0 @2xl/prediction:self-center">
+          <div className="flex shrink-0 items-center gap-1">
             {actions.map(({ key, label, Icon, onClick }) => (
               <Tooltip key={key}>
                 <TooltipTrigger asChild>

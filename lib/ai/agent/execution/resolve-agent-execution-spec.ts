@@ -69,6 +69,7 @@ export function buildCapabilitySupport(
 // ---- Runtime capability tables (Phase 0 static; refined by certification) ---
 
 export const RUNTIME_CAPABILITIES: Record<AgentRuntimeAdapterId, readonly AgentCapabilityId[]> = {
+  "vscode-chat": ["streaming", "stream-interruption", "session.multi-turn"],
   "claude-agent-sdk": [
     "streaming",
     "session.multi-turn",
@@ -233,6 +234,8 @@ export interface AgentExecutionEnvironment {
 }
 
 export interface AgentExecutionResolveInput {
+  /** Local extension identity, resolved before choosing an execution rail. */
+  chatParticipant?: { pluginId: string; participantId: string; generation: string }
   surface: AgentExecutionSurface
   policy?: Partial<AgentExecutionPolicy>
   legacy?: LegacyExecutionSignals
@@ -302,6 +305,21 @@ function resolveRuntimeAdapter(input: AgentExecutionResolveInput): {
   source: ResolvedAgentExecutionSpec["runtimePolicySource"]
 } {
   const runtimePolicy = input.policy?.runtimePolicy
+  if (input.chatParticipant) {
+    if (
+      (runtimePolicy && runtimePolicy !== "auto") ||
+      (!input.environment.isTauri && !input.environment.isHeadlessHost) ||
+      input.environment.pairedHost ||
+      input.policy?.executionTarget?.mode === "pinned" ||
+      (input.policy?.routePolicy && input.policy.routePolicy !== "direct") ||
+      input.policy?.executionKind === "completion"
+    ) {
+      throw new Error(
+        "Chat participant execution conflicts with the requested runtime or host authority"
+      )
+    }
+    return { adapter: "vscode-chat", source: "explicit" }
+  }
   if (runtimePolicy === "claude-agent-sdk" || runtimePolicy === "ai-sdk") {
     return { adapter: runtimePolicy, source: "explicit" }
   }
@@ -398,14 +416,17 @@ export function resolveAgentExecutionSpec(
     requireTools: input.legacy?.requireTools,
     hasExplicitPolicy: input.policy?.executionKind !== undefined,
   })
-  const executionKind = input.policy?.executionKind ?? kindMapping.executionKind
+  const executionKind = input.chatParticipant
+    ? "agent"
+    : (input.policy?.executionKind ?? kindMapping.executionKind)
   let fallbackPolicy = input.policy?.fallbackPolicy ?? kindMapping.fallbackPolicy
   if (input.environment.prohibitCompletionFallback && fallbackPolicy === "completion") {
     fallbackPolicy = "none"
   }
+  if (input.chatParticipant) fallbackPolicy = "none"
 
   const routePolicy =
-    input.policy?.routePolicy ??
+    (input.chatParticipant ? "direct" : input.policy?.routePolicy) ??
     routePolicyFromProxyMode(input.legacy?.proxyMode, {
       isHeadlessManaged: input.environment.isHeadlessHost,
     })
@@ -418,7 +439,7 @@ export function resolveAgentExecutionSpec(
     ? { kind: "gateway", routePolicy }
     : { kind: "direct", routePolicy, credentialProfileRef: input.policy?.credentialProfileRef }
 
-  const hostRef = resolveHostRef(input)
+  const hostRef = input.chatParticipant ? "vscode-extension-host" : resolveHostRef(input)
   const identity = deterministicIdentity(input.identity)
 
   const externalProfile = resolveExternalCapabilities(adapter, input.externalCapabilities)
@@ -440,7 +461,12 @@ export function resolveAgentExecutionSpec(
         input.environment.hostCapabilities!.includes(capability)
       )
     : hostRuntimeCaps
-  const requires = input.policy?.requires ?? []
+  const requires = [
+    ...new Set([
+      ...(input.policy?.requires ?? []),
+      ...(input.chatParticipant && input.legacy?.requireTools ? ["tools.ordinary" as const] : []),
+    ]),
+  ]
   const prefers = input.policy?.prefers ?? []
   const missingRequired = requires.filter((cap) => !runtimeCaps.includes(cap))
   const disabledOptional = prefers.filter((cap) => !runtimeCaps.includes(cap))
@@ -456,6 +482,7 @@ export function resolveAgentExecutionSpec(
     identity,
     executionKind,
     runtimeAdapter: adapter,
+    ...(input.chatParticipant ? { chatParticipant: { ...input.chatParticipant } } : {}),
     runtimePolicySource: source,
     deploymentRef: input.policy?.deploymentRef,
     modelBindings: {
@@ -582,6 +609,7 @@ export function sendSpecFromResolved(
     specVersion: spec.specVersion,
     executionFingerprint: spec.executionFingerprint,
     runtimeAdapter: spec.runtimeAdapter,
+    ...(spec.chatParticipant ? { chatParticipant: { ...spec.chatParticipant } } : {}),
     executionKind: spec.executionKind,
     route:
       spec.route.kind === "gateway" && gateway
@@ -610,9 +638,12 @@ export function sendSpecFromResolved(
 export function rebindResolvedAgentExecutionHost(
   spec: ResolvedAgentExecutionSpec,
   hostRef: string
-): ResolvedAgentExecutionSpec {
+): ResolvedAgentExecutionSpec & { runtimeAdapter: Exclude<AgentRuntimeAdapterId, "vscode-chat"> } {
   if (!hostRef.trim()) throw new Error("hostRef must be a non-empty string")
-  const rebound = { ...spec, hostRef }
+  const runtimeAdapter = spec.runtimeAdapter
+  if (runtimeAdapter === "vscode-chat")
+    throw new Error("Chat participant execution cannot move to another host")
+  const rebound = { ...spec, runtimeAdapter, hostRef }
   return {
     ...rebound,
     executionFingerprint: computeExecutionFingerprint(rebound),

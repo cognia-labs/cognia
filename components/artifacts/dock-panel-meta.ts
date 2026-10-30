@@ -25,6 +25,7 @@ import {
   BrainIcon,
   ChartPieIcon,
   FileSearchIcon,
+  FileTextIcon,
   FolderKanbanIcon,
   FolderOpenIcon,
   GitBranchIcon,
@@ -72,6 +73,11 @@ export const DOCK_SESSION_PANEL_META: Readonly<Record<string, DockPanelMeta>> = 
   "squad-context": { labelKey: "contextWorkbench.squadPanel.title", icon: AgentTeamIcon },
   "team-members": { labelKey: "contextWorkbench.teamMembersPanel.title", icon: UsersIcon },
   browser: { labelKey: "browser.title", icon: GlobeIcon, preferredMode: "wide" },
+  "cloud-document": {
+    labelKey: "cloudDocPreview.title",
+    icon: FileTextIcon,
+    preferredMode: "wide",
+  },
   [SANDBOX_DESKTOP_PANEL_ID]: {
     labelKey: "automation.sandboxConnections.desktopViewer.dockTitle",
     icon: MonitorPlayIcon,

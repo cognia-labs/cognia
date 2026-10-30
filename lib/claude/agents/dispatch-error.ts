@@ -13,6 +13,7 @@ import {
   classifyProviderErrorInfo,
   isTransientErrorClass,
 } from "@cognia/provider-routing/error-classifier"
+import { isPluginInterceptorRefusal } from "@cognia/agent-config-types/plugin-interception"
 import type {
   PluginDispatchErrorEnvelope,
   PluginSubagentDispatchRejection,
@@ -45,6 +46,9 @@ export function toDispatchErrorEnvelope(
   const code = runAndCaptureCode(err)
   if (opts.aborted || code === "aborted") {
     return { code: "aborted", retryable: false, message, ...partial }
+  }
+  if (isPluginInterceptorRefusal(err)) {
+    return { code: "rejection-policy", retryable: false, message, ...partial }
   }
   if (code === "sidecar_exited") {
     // The Rust supervisor respawns the sidecar; one retry is worthwhile.

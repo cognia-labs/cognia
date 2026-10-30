@@ -1,5 +1,6 @@
 "use client"
 
+import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 import { waitForModelSelection } from "@/lib/chat/model-selection"
 
 import { withWorkbenchMessageContext } from "@/lib/context-workbench/provider-context"
@@ -147,7 +148,11 @@ import { useInFlightStore } from "@/stores/settings/in-flight-store"
 import { endSpan, recordEvent, startSpan } from "@cognia/agent-trace/emitter"
 import { toTraceparent } from "@/lib/agent-trace/trace-context"
 import { emitSystemBusEvent, SystemEvents } from "@/lib/plugin/messaging/message-bus"
-import { beginCodeAdoptionTurn } from "@/lib/code-adoption/client"
+import {
+  beginCodeAdoptionTurn,
+  markCodeAdoptionTrackingUnavailable,
+} from "@/lib/code-adoption/client"
+import { externalAgentWorkspaceCaptureSupport } from "@/lib/task-workspace/capture-support"
 import { compositionForSession, useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import {
   markTaskWorkspaceTurnCancelled,
@@ -155,6 +160,7 @@ import {
 } from "@/lib/code-adoption/turn-tracker"
 import {
   acquireWorkspaceBundle,
+  beginObservedTaskWorkspaceTurn,
   isWorkspaceBusyRefusal,
   runIdForTurn,
   taskIdForMessage,
@@ -251,6 +257,7 @@ import { advanceResourceAsideContextCursor } from "@/lib/db/resource-workbench-s
 import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
 import { isStandaloneChatMode } from "@/lib/runtime/standalone-mode"
 import { runStandaloneTurn } from "@/lib/ai/chat/standalone-engine"
+import { runVscodeChatTurn } from "@/lib/plugin/vscode-shim/chat-turn"
 import type {
   ApprovalDecision,
   ApprovalResponseOptions,
@@ -1282,6 +1289,7 @@ export function useClaudeChat() {
     const executionHandles = executionHandlesRef.current
     const squadWatchers = squadWatchersRef.current
     const gatewayControllers = externalGatewayAbortRef.current
+    const localControllers = standaloneAbortRef.current
     const toolHosts = externalToolHostsRef.current
     return () => {
       for (const sessionId of toolHosts.keys()) {
@@ -1291,6 +1299,8 @@ export function useClaudeChat() {
       }
       for (const controller of gatewayControllers.values()) controller.abort()
       gatewayControllers.clear()
+      for (const controller of localControllers.values()) controller.abort()
+      localControllers.clear()
       registry.flushAllPersist()
       registry.clear()
       executionHandles.clear()
@@ -1555,7 +1565,11 @@ export function useClaudeChat() {
          *  being tagged is created right here — a ref would have to survive
          *  until an SDK event arrives, which is only necessary when the target
          *  is an assistant message that does not exist yet. */
-        branchTag?: { groupId: string; index: number }
+        branchTag?: {
+          groupId: string
+          index: number
+          edit?: { messageId: string; previousContent: string }
+        }
         /** Own this turn's replies by an edit's replacement row that is
          *  already in the transcript (set by the external-delegation fallback
          *  when it re-issues an `editAndResend`, alongside `skipUserAppend`).
@@ -2392,6 +2406,7 @@ export function useClaudeChat() {
       // other send pays nothing; the hand-off below re-checks with the final
       // content and options.
       const hostStateForeseen =
+        !session?.characterId?.startsWith("vscode-chat:") &&
         !isSessionAside &&
         !opts &&
         routerFusionGate(useSettingsStore.getState().settings, "chat") === "on" &&
@@ -2789,6 +2804,7 @@ export function useClaudeChat() {
         const merged = markTurnAdmission(tagged, groupId, null)
         store.getState().replaceSessionMessages(sessionId, merged)
         await persistMessages(sessionId, merged)
+        publishChatLifecycleEvent({ type: "chat-regenerated", sessionId, messageId: groupId })
         // `handleEvent` stamps the first assistant message that arrives with
         // this tag, and selects it.
         armedTag = { groupId, index: nextIndexByGroup.get(groupId) ?? 0 }
@@ -3089,6 +3105,7 @@ export function useClaudeChat() {
       // foresee as host-state) is dispatched here, where its run is created:
       // host-state sends never stamp (ADR-0188 B1).
       const hostStateEligible =
+        sendOptions.execution?.runtimeAdapter !== "vscode-chat" &&
         !isSessionAside &&
         hostStateSendEligible({
           pairedHost: turnsRunOnPairedHost(),
@@ -3674,7 +3691,33 @@ export function useClaudeChat() {
       // `isStandaloneChatMode()` and not `hasHostRuntime()`: the question is
       // where the turn executes, and the host profile answers
       // "mobile-companion" for a phone in standalone mode, paired or not.
-      const standaloneEngineTurn = !manualExternal && !delegation && isStandaloneChatMode()
+      const participantBinding =
+        sendOptions.execution?.runtimeAdapter === "vscode-chat"
+          ? sendOptions.execution.chatParticipant
+          : undefined
+      if (sendOptions.execution?.runtimeAdapter === "vscode-chat" && !participantBinding)
+        throw new Error("Chat participant execution is missing its owner binding")
+      if (
+        participantBinding &&
+        (requestedRuntimeCapabilities(sendOptions).length ||
+          sendOptions.cwd ||
+          sendOptions.allowedTools?.length ||
+          sendOptions.pluginTools?.length ||
+          (sendOptions.permissionMode && sendOptions.permissionMode !== "default"))
+      ) {
+        throw new Error(
+          "Chat participant execution cannot satisfy native tool, workspace, or permission options"
+        )
+      }
+      if (
+        !manualExternal &&
+        !delegation &&
+        session?.characterId?.startsWith("vscode-chat:") &&
+        !participantBinding
+      )
+        throw new Error("Chat participant options must be resolved again before sending")
+      const standaloneEngineTurn =
+        !participantBinding && !manualExternal && !delegation && isStandaloneChatMode()
       // A working copy exists for an executor that opens files in it. A
       // zero-tool turn has none, and neither has a standalone engine turn, so
       // for both the managed bundle, the turn lease and the project environment
@@ -3690,8 +3733,22 @@ export function useClaudeChat() {
       // managed one cannot be materialized at all, so every rootless chat with
       // a Host agent was refused before it reached the Host.
       const hostOwnedExternalTurn = manualExternal && turnRuntimeRef?.kind === "host"
+      const captureConfig =
+        routedExternalAgentId && !hostOwnedExternalTurn
+          ? (useExternalAgentStore.getState().agents[routedExternalAgentId] ??
+            (await import("@/lib/ai/agent/external/manager"))
+              .getExternalAgentManager()
+              .getAgent(routedExternalAgentId)?.config)
+          : undefined
+      const captureSupport =
+        routedExternalAgentId && !hostOwnedExternalTurn
+          ? externalAgentWorkspaceCaptureSupport(captureConfig)
+          : { available: true as const }
       const turnUsesWorkingCopy =
-        !hasNoToolSurface && !standaloneEngineTurn && !hostOwnedExternalTurn
+        !hasNoToolSurface &&
+        !standaloneEngineTurn &&
+        !hostOwnedExternalTurn &&
+        captureSupport.available
       if (!hasNoToolSurface && executionContext?.location === "local") {
         sendOptions = { ...sendOptions, cwd: executionContext.projectRoot }
       }
@@ -3750,34 +3807,47 @@ export function useClaudeChat() {
       // External-agent turns use their own durable runtime. Register only the
       // built-in path here; otherwise a long external turn would leave a chat
       // submission with no replayable SendOptions and the outbox could race it.
-      const durableReceipt = routedExternalAgentId
-        ? null
-        : await acceptChatTurn({
-            sessionId,
-            runId: executionRunId,
-            messageId: userMsg.id,
-            content: effectiveContent,
-            visibleMessageIds: next.map((message) => message.id),
-            ...(session?.projectId ? { projectId: session.projectId } : {}),
-            ...(session?.issueId
-              ? { workItemRef: { kind: "issue" as const, id: session.issueId } }
-              : {}),
-            // The user message lands in the SAME transaction as the submission.
-            // Without this the row would still reach Dexie eventually, via the
-            // debounced transcript writer — but a crash in between would leave a
-            // submission whose message is not in the transcript, which is the
-            // mirror image of the bug this feature exists to remove. A delta
-            // upsert, not `persistMessages`: the latter treats omissions as
-            // deletions and would wipe history we are not holding here.
-            ...(skipAppend
-              ? {}
-              : { writeTranscript: () => commitMessageDelta(sessionId, { upserts: [userMsg] }) }),
-          }).catch((error) => {
-            // Never block a send on the ledger: the legacy path still runs.
-            console.error("acceptChatTurn failed", error)
-            return null
-          })
+      const durableReceipt =
+        routedExternalAgentId || participantBinding
+          ? null
+          : await acceptChatTurn({
+              sessionId,
+              runId: executionRunId,
+              messageId: userMsg.id,
+              content: effectiveContent,
+              visibleMessageIds: next.map((message) => message.id),
+              ...(session?.projectId ? { projectId: session.projectId } : {}),
+              ...(session?.issueId
+                ? { workItemRef: { kind: "issue" as const, id: session.issueId } }
+                : {}),
+              // The user message lands in the SAME transaction as the submission.
+              // Without this the row would still reach Dexie eventually, via the
+              // debounced transcript writer — but a crash in between would leave a
+              // submission whose message is not in the transcript, which is the
+              // mirror image of the bug this feature exists to remove. A delta
+              // upsert, not `persistMessages`: the latter treats omissions as
+              // deletions and would wipe history we are not holding here.
+              ...(skipAppend
+                ? {}
+                : { writeTranscript: () => commitMessageDelta(sessionId, { upserts: [userMsg] }) }),
+            }).catch((error) => {
+              // Never block a send on the ledger: the legacy path still runs.
+              console.error("acceptChatTurn failed", error)
+              return null
+            })
       if (durableReceipt) callOptions?.backgroundDelivery?.onAccepted()
+      if (callOptions?.branchTag?.edit) {
+        // The replacement must exist before observers see an edit. Legacy and
+        // external-agent turns do not have acceptChatTurn's transcript writer.
+        if (!durableReceipt) await commitMessageDelta(sessionId, { upserts: [userMsg] })
+        publishChatLifecycleEvent({
+          type: "message-edited",
+          sessionId,
+          messageId: callOptions.branchTag.edit.messageId,
+          previousContent: callOptions.branchTag.edit.previousContent,
+          content: userPromptText(effectiveContent, turnManifest?.length ?? 0),
+        })
+      }
       let dispatchClaim: Awaited<ReturnType<typeof claimChatTurnForDispatch>> = "legacy"
       let stopAssemblyHeartbeat = () => {}
       let durableLeaseLost = false
@@ -4016,6 +4086,45 @@ export function useClaudeChat() {
       const legacyWorkspaceEnabled = !executionContext && Boolean(sendOptions.cwd)
       if (
         turnUsesWorkingCopy &&
+        executionContext?.location === "local" &&
+        sendOptions.cwd &&
+        !sendOptions.taskWorkspace &&
+        (isTauri() || isCapacitor() || hasWebCompanionTarget())
+      ) {
+        try {
+          await beginObservedTaskWorkspaceTurn({
+            taskId: taskIdForMessage(
+              skipAppend
+                ? ([...previousMessages].reverse().find((message) => message.role === "user")?.id ??
+                    userMsg.id)
+                : userMsg.id
+            ),
+            sessionId,
+            runId: executionRunId,
+            executionRunId,
+            turnId: userMsg.id,
+            workspaceKey: `local:${sessionId}`,
+            workspaceRoot: sendOptions.cwd,
+            agentId: routedExternalAgentId ?? "built-in",
+            agentKind: adoptionAgentKind,
+            surface: "chat",
+          })
+        } catch (error) {
+          markTaskWorkspaceTurnUnowned(sessionId, chatRunId)
+          await refuseTurn({
+            errorCode: "task_workspace_unavailable",
+            finishRun: true,
+            diagnostic: createDiagnostic("workspaceUnavailable", {
+              source: "chat",
+              message: error instanceof Error ? error.message : String(error),
+              meta: { sessionId },
+            }),
+          })
+          return
+        }
+      }
+      if (
+        turnUsesWorkingCopy &&
         (executionContext?.location === "managedWorktree" || legacyWorkspaceEnabled)
       ) {
         if (executionContext?.location === "managedWorktree" && !boundWorkspaceRoot) {
@@ -4165,6 +4274,10 @@ export function useClaudeChat() {
         }
         sendOptions = { ...sendOptions, taskWorkspace: taskEnvelope }
         if (taskLease) {
+          // The renderer already owns this bundle turn and its settlement.
+          // This envelope asks the Host to acquire another workspace; sending
+          // it again strands that second run after the bundle has settled.
+          delete sendOptions.taskWorkspace
           sendOptions = bundleTurnLease
             ? redirectSendToBundleAliases(
                 sendOptions,
@@ -4286,13 +4399,28 @@ export function useClaudeChat() {
       // Code-adoption tracking (Phase 1): open a per-turn attribution window.
       // Fire-and-forget — must never block or disrupt the turn. `runId` is read
       // back from the store, whose streaming flip above bumped it for this turn.
-      if (!hasNoToolSurface) {
+      if (hostOwnedExternalTurn) {
+        // The execution Host persists this turn; no renderer run is owned.
+        markTaskWorkspaceTurnUnowned(sessionId, chatRunId)
+      } else if (!hasNoToolSurface && captureSupport.available) {
         void beginCodeAdoptionTurn(sendOptions.cwd, {
           sessionId,
           runId: chatRunId,
           model: sendOptions.model ?? null,
           agentKind: adoptionAgentKind,
         })
+      } else if (!hasNoToolSurface && !captureSupport.available) {
+        markTaskWorkspaceTurnUnowned(sessionId, chatRunId)
+        markCodeAdoptionTrackingUnavailable(
+          sendOptions.cwd ?? "",
+          {
+            sessionId,
+            runId: chatRunId,
+            model: sendOptions.model ?? null,
+            agentKind: adoptionAgentKind,
+          },
+          captureSupport.reason
+        )
       }
 
       // ── External agent branch ──────────────────────────────────────────
@@ -5320,6 +5448,7 @@ export function useClaudeChat() {
                     lifecycleGeneration: hostSelection.lifecycleGeneration,
                   },
                   chatSessionId: sessionId,
+                  workspaceCapture: { runId: chatRunId, assistantMessageId: assistantId },
                   // Only the gateway task the selection names. A native turn
                   // after a Cognia one must not hand the Host that task.
                   ...(modelSelection.gatewayLink && !modelSelection.rebind
@@ -5771,7 +5900,10 @@ export function useClaudeChat() {
                 !standaloneEngineTurn &&
                 asideProviderHistoryMode(sendOptions, false) === "rebuild")
             ),
-            skipHydration: standaloneEngineTurn || Boolean(callOptions?.sharedRequest),
+            skipHydration:
+              standaloneEngineTurn ||
+              Boolean(participantBinding) ||
+              Boolean(callOptions?.sharedRequest),
             activeBranchByGroup:
               useChatStore.getState().sessions[sessionId]?.activeBranchByGroup ??
               session?.activeBranchByGroup,
@@ -5837,7 +5969,7 @@ export function useClaudeChat() {
           // later on a conversation that had finished. Arming first puts the
           // session in `armed()` before any frame can arrive.
           silenceWatchdogRef.current?.arm(sessionId)
-          if (standaloneEngineTurn) {
+          if (standaloneEngineTurn || participantBinding) {
             // Standalone (BYOK): run the turn in-renderer against the user's own
             // provider. Fire-and-forget like `sendPrompt` — streaming reaches the
             // store via the same event queue; the engine emits `session_ended`.
@@ -5845,13 +5977,25 @@ export function useClaudeChat() {
             abortStaleLocalRuntime = () => controller.abort()
             standaloneAbortRef.current.set(sessionId, controller)
             chatTurnPerformance.markDispatched(sessionId)
-            void runStandaloneTurn({
-              sessionId,
-              messages: providerPayload.messages,
-              sendOptions,
-              emit: enqueueClaudeEvent,
-              signal: controller.signal,
-            }).finally(() => {
+            const run = participantBinding
+              ? runVscodeChatTurn({
+                  sessionId,
+                  turnId: sendOptions.turnId ?? frozenTurnId,
+                  characterId: `vscode-chat:${participantBinding.pluginId}:${participantBinding.participantId}`,
+                  prompt: effectiveContent,
+                  binding: participantBinding,
+                  messages: providerPayload.messages,
+                  emit: enqueueClaudeEvent,
+                  signal: controller.signal,
+                })
+              : runStandaloneTurn({
+                  sessionId,
+                  messages: providerPayload.messages,
+                  sendOptions,
+                  emit: enqueueClaudeEvent,
+                  signal: controller.signal,
+                })
+            void run.finally(() => {
               if (standaloneAbortRef.current.get(sessionId) === controller) {
                 standaloneAbortRef.current.delete(sessionId)
               }
@@ -6737,7 +6881,7 @@ export function useClaudeChat() {
       }
       const handle = getExecutionHandle(approval.sessionId)
       const denialMessage = denialReason ? denialMessageForModel(denialReason) : undefined
-      if (handle) {
+      if (handle && !approval.requestId.startsWith("local:")) {
         await handle.resolvePermission(
           approval.requestId,
           decision,
@@ -6800,8 +6944,12 @@ export function useClaudeChat() {
     async (sessionId: string) => {
       const handle = getExecutionHandle(sessionId)
       try {
+        const localController = standaloneAbortRef.current.get(sessionId)
         const gatewayController = externalGatewayAbortRef.current.get(sessionId)
-        if (gatewayController) gatewayController.abort()
+        if (localController) {
+          localController.abort()
+          standaloneAbortRef.current.delete(sessionId)
+        } else if (gatewayController) gatewayController.abort()
         else if (handle) await handle.cancel()
         else await closeSession(sessionId)
       } catch (err) {
@@ -7013,7 +7161,11 @@ export function useClaudeChat() {
         // The replacement is a *user* message, created inside `send` itself,
         // so it is tagged there rather than through the assistant-event path
         // `regenerate` uses.
-        branchTag: { groupId, index: nextIndex },
+        branchTag: {
+          groupId,
+          index: nextIndex,
+          edit: { messageId, previousContent: userPromptText(edited.parts as SendContent, 0) },
+        },
         ...(turnRoute ? { turnRoute } : {}),
       })
     },

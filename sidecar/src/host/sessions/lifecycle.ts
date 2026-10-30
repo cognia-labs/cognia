@@ -257,6 +257,7 @@ export async function routeSendIntoLiveLoop(
   if (existing.turnRef) existing.turnRef.id = options?.turnId
   existing.setNextTurnLedger?.(options?.ledger, options?.remoteExecutionContext)
   existing.setNextTurnVerificationBudget?.(options?.verificationBudget)
+  existing.setNextTurnSemanticInterceptors?.(options?.semanticInterceptors, options?.approvalTtlMs)
   existing.turnPending = true
   existing.pushUserMessage!(prompt)
   return true

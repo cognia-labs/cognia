@@ -175,9 +175,15 @@ describe("the /pair Host this app is connected to", () => {
     expect(pairedHostIdOf("local-row")).toBeNull()
   })
 
-  it("borrows the app's own connection, never closes it, and keeps the keys out", async () => {
+  it("guards the paired connection and keeps private keys out of its public record", async () => {
     const target = await openRemoteHostTarget("companion:box", { paired: paired() })
-    expect(target.transport).toBe(appTransport)
+    expect(target.transport).not.toBe(appTransport)
+    await target.transport.call("task_workspace_get_patch_set", { runId: "old" })
+    expect(appTransport.call).toHaveBeenCalledWith(
+      "task_workspace_get_patch_set",
+      { runId: "old" },
+      undefined
+    )
     expect(target.host).toMatchObject({
       id: "companion:box",
       label: "Cognia云主机",
@@ -196,6 +202,44 @@ describe("the /pair Host this app is connected to", () => {
     target.close()
     // The store path's transports are destroyed on close; this one is the app's.
     expect(appTransport).not.toHaveProperty("destroy")
+  })
+
+  it.each(["target", "generation", "device"])(
+    "refuses a %s switch while the paired record is loading",
+    async (change) => {
+      let active = { accountId: "acct", targetId: "box", routingGeneration: 1 }
+      let config = { ...liveConfig }
+      await expect(
+        openRemoteHostTarget("companion:box", {
+          paired: paired({
+            activeTarget: () => active,
+            loadConfig: () => config,
+            loadRecord: async () => {
+              if (change === "target") active = { ...active, targetId: "desk" }
+              if (change === "generation") active = { ...active, routingGeneration: 2 }
+              if (change === "device") config = { ...config, deviceId: "new-device" }
+              return record as never
+            },
+          }),
+        })
+      ).rejects.toThrow("connection changed")
+    }
+  )
+
+  it("does not send to a same-account replacement Host after opening the paired target", async () => {
+    let active = { accountId: "acct", targetId: "box", routingGeneration: 1 }
+    const pinnedCall = jest.fn()
+    const target = await openRemoteHostTarget("companion:box", {
+      paired: paired({
+        activeTarget: () => active,
+        transport: () => ({ call: pinnedCall, subscribe: jest.fn() }),
+      }),
+    })
+    active = { ...active, targetId: "desk", routingGeneration: 2 }
+    await expect(target.transport.call("task_workspace_undo", {})).rejects.toThrow(
+      "connection changed"
+    )
+    expect(pinnedCall).not.toHaveBeenCalled()
   })
 
   it("refuses a /pair Host the app is not connected to, or one no longer paired", async () => {

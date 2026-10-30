@@ -283,6 +283,8 @@ import type { VerificationBudgetStamp } from "./execution-budget"
 export type { VerificationBudgetStamp, VerificationRuntimeConfig } from "./execution-budget"
 
 export type SendOptions = {
+  /** Host-stamped active semantic seams for this turn; never forwarded to a model. */
+  semanticInterceptors?: Array<"model.stream.transform" | "agent.turn.decide">
   verificationBudget?: VerificationBudgetStamp
   /** Standalone hosts use the existing session-owned process supervisor. */
   backgroundProcessHost?: "sidecar" | "host"
@@ -1380,8 +1382,12 @@ export interface LogEvent {
   message: string
 }
 
+export { PLUGIN_INTERCEPTOR_REFUSED, isPluginInterceptorRefusal } from "./plugin-interception"
+
 export interface SessionEndedEvent {
   type: "session_ended"
+  /** Frozen turn owner; late completion must not settle a newer turn. */
+  turnId?: string
   /** Safe structured upstream refusal fields, without the response body. */
   code?: string
   resetAt?: number | string
@@ -1509,6 +1515,8 @@ export interface ExplicitToolAllowedEvent {
 
 export interface SDKEventEnvelope {
   type: "event"
+  /** Frozen turn owner for both native and local stream engines. */
+  turnId?: string
   sessionId: string
   event: SDKMessage
 }
@@ -2806,6 +2814,13 @@ export interface ChatSession {
    * local (`lib/automation/sandbox-target.ts`).
    */
   computerUseTarget?: import("@cognia/plugin-contract/lib/automation/sandbox-target").ComputerUseTargetSetting
+  /**
+   * ADR-0233 A6 — set only on the child session the Host's acceptance run
+   * was attached to. It alone receives `acceptance_checkpoint` /
+   * `acceptance_complete`, which record evidence for exactly this run; the
+   * Host still checks the run's live delegation and this session's key.
+   */
+  managedAcceptance?: { acceptanceId: string }
   /**
    * Per-session override of the sandbox tier (Epic 5). Beats
    * `Character.sandboxTier`, which beats `AppSettings.sandboxTier`.

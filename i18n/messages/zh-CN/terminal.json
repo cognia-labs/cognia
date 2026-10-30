@@ -336,6 +336,7 @@
     "auto": "默认 Shell",
     "bash": "bash",
     "cmd": "命令提示符",
+    "extensionProfilesLabel": "扩展终端配置",
     "fish": "fish",
     "label": "选择 Shell",
     "nu": "Nushell",

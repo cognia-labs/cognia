@@ -81,7 +81,7 @@ import {
   VERIFIER_PROMPT,
 } from "@/lib/agent/composition/verified-fresh-agent"
 import { SUBAGENT_CONTRACT_PROMPT } from "@/lib/agent/prompts/subagent-frame"
-import { EXECUTOR_FALLBACK_PROMPT } from "@/lib/ai/agent/agent-executor"
+import { EXECUTOR_FALLBACK_PROMPT } from "@/lib/agent/prompts/executor"
 import { COUNCIL_SYNTHESIS_PROMPT } from "@/lib/ai/council/run-council"
 import {
   TEMPLATE_ASSIST_GENERATE_PROMPT,

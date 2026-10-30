@@ -11,7 +11,7 @@
  * policy this includes `external`, which is never chosen by policy directly — it is derived from an external-agent binding (teammate
  * runtime / preset) by the resolver.
  */
-export type AgentRuntimeAdapterId = "claude-agent-sdk" | "ai-sdk" | "external"
+export type AgentRuntimeAdapterId = "claude-agent-sdk" | "ai-sdk" | "external" | "vscode-chat"
 
 /**
  * Capability vocabulary for the compatibility matrix and the per-spec

@@ -22,6 +22,7 @@
  * ...)` semantics without discarding tokens already billed by completed steps.
  */
 
+import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
 import { redactText } from "@cognia/redact"
 import {
   sendPrompt,
@@ -341,7 +342,12 @@ export class RunAndCaptureError extends Error {
   constructor(
     message: string,
     readonly code:
-      "session_error" | "no_assistant_text" | "aborted" | "send_failed" | "sidecar_exited",
+      | "session_error"
+      | "policy_refused"
+      | "no_assistant_text"
+      | "aborted"
+      | "send_failed"
+      | "sidecar_exited",
     meta?: { httpStatus?: number; retryAfterMs?: number; partial?: RunAndCapturePartial }
   ) {
     super(message)
@@ -1577,10 +1583,14 @@ async function captureAssistantReplyCore(
           // `result` frame reporting `api_error_status`), and without it every
           // caller has to string-match the message to classify the failure.
           finishErr(
-            new RunAndCaptureError(evt.error, "session_error", {
-              ...(typeof evt.httpStatus === "number" ? { httpStatus: evt.httpStatus } : {}),
-              ...(typeof evt.retryAfterMs === "number" ? { retryAfterMs: evt.retryAfterMs } : {}),
-            })
+            new RunAndCaptureError(
+              evt.error,
+              evt.code === PLUGIN_INTERCEPTOR_REFUSED ? "policy_refused" : "session_error",
+              {
+                ...(typeof evt.httpStatus === "number" ? { httpStatus: evt.httpStatus } : {}),
+                ...(typeof evt.retryAfterMs === "number" ? { retryAfterMs: evt.retryAfterMs } : {}),
+              }
+            )
           )
           return
         }

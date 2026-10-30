@@ -71,7 +71,8 @@ export interface ResolvedAgentExecutionSpec {
   }
   executionFingerprint: string
   executionKind: "agent" | "completion"
-  runtimeAdapter: "claude-agent-sdk" | "ai-sdk" | "external"
+  runtimeAdapter: "claude-agent-sdk" | "ai-sdk" | "external" | "vscode-chat"
+  chatParticipant?: { pluginId: string; participantId: string; generation: string }
   runtimePolicySource: "explicit" | "auto" | "legacy-mapped"
   deploymentRef?: string
   modelBindings: { primary: string; fast?: string; powerful?: string }

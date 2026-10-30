@@ -2,6 +2,10 @@
 // exercised as a pure function. We never want to touch Dexie or Zustand here.
 
 // Paired by default — the standalone (BYOK) branch is opted into per-test.
+jest.mock("@/lib/plugin/interceptors/registry", () => ({
+  ...jest.requireActual("@/lib/plugin/interceptors/registry"),
+  hasInterceptors: jest.fn(() => false),
+}))
 jest.mock("@/lib/runtime/standalone-mode", () => ({
   isStandaloneChatMode: jest.fn(() => false),
   getMobileRuntimeMode: jest.fn(() => undefined),
@@ -117,6 +121,7 @@ jest.mock("@/lib/agent/mode-session-update", () => ({
 }))
 
 jest.mock("@/lib/plugin/bridge/sidecar-tools-bridge", () => ({
+  prepareVscodeLanguageModelTools: jest.fn(async () => {}),
   buildPluginToolsManifest: jest.fn(() => []),
 }))
 
@@ -252,6 +257,14 @@ jest.mock("@/lib/claude/skills-bridge", () => ({
     mRenderResolvedSkillsSection(...a),
 }))
 
+jest.mock("@/lib/ai/agent/execution/host-environment", () => {
+  const actual = jest.requireActual("@/lib/ai/agent/execution/host-environment")
+  return {
+    ...actual,
+    resolveAgentExecutionEnvironment: jest.fn(actual.resolveAgentExecutionEnvironment),
+  }
+})
+
 // Desktop probe. Defaults to `false` — the same value the real `isTauri()`
 // returns under Jest — so every pre-existing expectation is unchanged; the
 // desktop-only vector tools flip it per-test.
@@ -281,6 +294,10 @@ jest.mock("@/lib/support-agent/context", () => {
 })
 
 import { isTauri } from "@/lib/tauri"
+import {
+  resetRemoteHostKeysForTests,
+  setRemoteHostKeyedProviders,
+} from "@/lib/host-secrets/remote-host-keys"
 import { ensureExecutionPortLease } from "@/lib/task-workspace/execution-port-lease"
 import { isNativeMobile } from "@/lib/platform/detect"
 import { createManagedWorkspaceContext } from "@/lib/task-workspace/managed-workspace"
@@ -318,6 +335,7 @@ import { buildPluginToolsManifest } from "@/lib/plugin/bridge/sidecar-tools-brid
 import { loggers } from "@cognia/logging"
 import { getBuiltInProviderDefaultModel } from "@cognia/provider-types/built-in-provider-catalog"
 import * as standaloneMode from "@/lib/runtime/standalone-mode"
+import { hasInterceptors } from "@/lib/plugin/interceptors/registry"
 import { ProviderRoutingEngine, RoutingNoCandidatesError } from "@cognia/provider-routing"
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import { useAgentRuntimeStore } from "@/stores/agent"
@@ -379,6 +397,22 @@ function selectPreset(presetId: string, authority?: string) {
 }
 const mCustomGet = (useCustomModeStore as unknown as { getState: jest.Mock }).getState
 const mPluginGet = (usePluginStore as unknown as { getState: jest.Mock }).getState
+
+it("stamps active semantics for Anthropic standalone and refuses unsupported native SDK steps", async () => {
+  jest.mocked(hasInterceptors).mockReturnValue(true)
+  jest.mocked(standaloneMode.isStandaloneChatMode).mockReturnValue(true)
+  try {
+    const opts = await resolveSendOptions({ character: makeChar({ providerId: "anthropic" }) })
+    expect(opts.semanticInterceptors).toEqual(["model.stream.transform", "agent.turn.decide"])
+    jest.mocked(standaloneMode.isStandaloneChatMode).mockReturnValue(false)
+    await expect(
+      resolveSendOptions({ character: makeChar({ providerId: "anthropic" }) })
+    ).rejects.toThrow("exposes no model-step gate")
+  } finally {
+    jest.mocked(hasInterceptors).mockReturnValue(false)
+    jest.mocked(standaloneMode.isStandaloneChatMode).mockReturnValue(false)
+  }
+})
 const mBuildModeUpdate = buildAgentModeSessionUpdate as jest.Mock
 const mResolveAccountId = resolveAccountId as jest.Mock
 const mResolveAccountEnv = resolveAccountEnv as jest.Mock
@@ -8925,6 +8959,57 @@ describe("SIWC explicit-only routing", () => {
   })
 })
 
+describe("resolveSendOptions — paired Host provider routing", () => {
+  afterEach(resetRemoteHostKeysForTests)
+
+  const settings = (apiKey?: string) =>
+    ({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-luna",
+      providerSettings: {
+        openai: {
+          enabled: false,
+          baseURL: "http://127.0.0.1:8787/v1",
+          apiFlavor: "chat",
+          defaultModel: "gpt-5.6-luna",
+          ...(apiKey ? { apiKey } : {}),
+        },
+      },
+    }) as unknown as AppSettings
+
+  it("routes a Host-keyed provider without enabling or storing a browser key", async () => {
+    setRemoteHostKeyedProviders("paired-host", ["openai"])
+    const appSettings = settings()
+    const opts = await resolveSendOptions({ appSettings })
+
+    expect(opts.routingPlan?.selected).toMatchObject({
+      providerId: "openai",
+      modelId: "gpt-5.6-luna",
+    })
+    expect(opts.providerCredentials).toMatchObject({
+      baseURL: "http://127.0.0.1:8787/v1",
+      protocol: "openai",
+      apiFlavor: "chat",
+    })
+    expect(opts.providerCredentials?.apiKey).toBeUndefined()
+    expect(appSettings.providerSettings?.openai.enabled).toBe(false)
+    expect(appSettings.providerSettings?.openai.apiKey).toBeUndefined()
+  })
+
+  it("keeps an unkeyed disabled provider unavailable", async () => {
+    await expect(resolveSendOptions({ appSettings: settings() })).rejects.toThrow(
+      "No viable provider"
+    )
+  })
+
+  it("honors a disabled provider with a browser-owned key", async () => {
+    setRemoteHostKeyedProviders("paired-host", ["openai"])
+    await expect(resolveSendOptions({ appSettings: settings("browser-test-key") })).rejects.toThrow(
+      "No viable provider"
+    )
+  })
+})
+
 it("resolves a partition ticket under a deny-all grant without reading host keys", async () => {
   const { resolveSendOptions } = await import("./build-options")
   const ctx = {
@@ -8957,4 +9042,81 @@ it("resolves a partition ticket under a deny-all grant without reading host keys
   await expect(resolveSendOptions({ personChat: ctx.personChat })).rejects.toThrow(
     "person_chat_deny_all_grant_required"
   )
+})
+
+it("resolves participants before provider or key work and freezes the extension identity", async () => {
+  const registry = await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+  const environment = await import("@/lib/ai/agent/execution/host-environment")
+  registry.__resetChatRegistryForTesting()
+  registry.configureChatRegistry({
+    upsertCharacter: async () => {},
+    activate: async () => {},
+    canInvoke: async () => true,
+  })
+  jest
+    .mocked(environment.resolveAgentExecutionEnvironment)
+    .mockReturnValue({ isTauri: true, isHeadlessHost: false })
+  try {
+    await registry.handleCreateChatParticipant({
+      extensionId: "ext",
+      id: "helper",
+      token: "callback",
+    })
+    const context: BuildOptionsContext = {
+      character: makeChar({ id: "vscode-chat:ext:helper" }),
+      session: makeSession({ id: "s" }),
+      executionIdentity: { turnId: "t", runId: "r", attemptId: "a1" },
+    }
+    const options = await resolveSendOptions(context)
+    expect(options).toEqual(
+      expect.objectContaining({
+        toolSurface: "none",
+        allowedTools: [],
+        execution: expect.objectContaining({
+          runtimeAdapter: "vscode-chat",
+          hostRef: "vscode-extension-host",
+          chatParticipant: {
+            pluginId: "ext",
+            participantId: "helper",
+            generation: expect.any(String),
+          },
+        }),
+      })
+    )
+    expect(mListSkills).not.toHaveBeenCalled()
+    expect(mResolveProxyEnv).not.toHaveBeenCalled()
+    for (const overrides of [
+      { workspaceRestricted: true },
+      { permissionCeiling: {} },
+      { capabilityGrants: [{}] },
+      { compositionSelection: { presetId: "code" } },
+      { session: makeSession({ sandboxEnabled: true }) },
+      ...[
+        { permissionMode: "plan" as const },
+        { sandboxEnabled: true },
+        { systemPrompt: "User policy" },
+        { allowedTools: ["Read"] },
+        { skillIds: ["skill-1"] },
+        { mcpServerIds: ["server-1"] },
+      ].map((character) => ({
+        character: makeChar({ id: "vscode-chat:ext:helper", ...character }),
+      })),
+    ]) {
+      await expect(
+        resolveSendOptions({ ...context, ...overrides } as BuildOptionsContext)
+      ).rejects.toThrow("cannot satisfy")
+    }
+    jest
+      .mocked(environment.resolveAgentExecutionEnvironment)
+      .mockReturnValue({ isTauri: false, isHeadlessHost: false, pairedHost: true })
+    await expect(resolveSendOptions(context)).rejects.toThrow(/participant.*authority/i)
+  } finally {
+    registry.__resetChatRegistryForTesting()
+    jest
+      .mocked(environment.resolveAgentExecutionEnvironment)
+      .mockImplementation(
+        jest.requireActual("@/lib/ai/agent/execution/host-environment")
+          .resolveAgentExecutionEnvironment
+      )
+  }
 })

@@ -4166,8 +4166,9 @@ describe("Cognia gateway task lifecycle", () => {
     }
   })
 
-  it("refuses another provider's explicit child model before minting a lease", async () => {
+  it("admits another provider's explicit child through its frozen client selector", async () => {
     const { manager, restorePlane } = prepare()
+    const connected = jest.spyOn(MockAdapter.prototype, "connect")
     try {
       const source = managedConfig()
       source.process!.env = {
@@ -4176,16 +4177,23 @@ describe("Cognia gateway task lifecycle", () => {
         }),
       }
       await manager.addAgent(source)
-      await expect(manager.execute("managed", "task")).rejects.toThrow(
-        "cross-provider-unsupported (opencode.agent.reviewer)"
+      await manager.execute("managed", "task")
+      const plan = mockGatewayMint.mock.calls[0][0].modelPlan
+      const selector = plan.additionalModels[0]
+      expect(plan.bindings[selector]).toEqual({ providerId: "elsewhere", modelId: "review" })
+      const child = connected.mock.calls
+        .map(([config]) => config)
+        .find((config) => config.metadata?.cogniaGatewayTask)
+      expect(JSON.parse(child!.process!.env!.OPENCODE_CONFIG_CONTENT!).agent.reviewer.model).toBe(
+        `cognia/${selector}`
       )
-      expect(mockGatewayMint).not.toHaveBeenCalled()
     } finally {
+      connected.mockRestore()
       restorePlane()
     }
   })
 
-  it.each(["unsupported-slot", "cross-provider-unsupported", "effort-unsupported"])(
+  it.each(["unsupported-slot", "effort-unsupported"])(
     "refuses %s before acquiring any lease",
     async (reason) => {
       const { manager, restorePlane } = prepare()
@@ -4195,7 +4203,7 @@ describe("Cognia gateway task lifecycle", () => {
         const selection = {
           kind: "cognia" as const,
           binding: {
-            providerId: reason === "cross-provider-unsupported" ? "other" : binding.providerId,
+            providerId: binding.providerId,
             modelId: "child",
           },
           ...(reason === "effort-unsupported" ? { reasoningEffort: "high" } : {}),
@@ -5134,7 +5142,7 @@ describe("Cognia gateway task lifecycle", () => {
         mockGatewayMint.mockImplementationOnce(async () => leaseFor(moved))
         await manager.execute("managed", "moved", { cogniaModel: moved })
         expect(mockGatewayMint.mock.calls[0][0].modelPlan).toBeUndefined()
-        // A caller's own sub-task models are still held to the turn's provider.
+        // A caller may explicitly authorize another provider/account for this turn.
         const pinnedChild = {
           version: 1 as const,
           slots: {
@@ -5144,9 +5152,11 @@ describe("Cognia gateway task lifecycle", () => {
             },
           },
         }
-        await expect(
-          manager.execute("managed", "moved", { cogniaModel: moved, modelRoles: pinnedChild })
-        ).rejects.toThrow(/cross-(provider|account)-unsupported/)
+        await manager.execute("managed", "moved", { cogniaModel: moved, modelRoles: pinnedChild })
+        const request = mockGatewayMint.mock.calls.at(-1)![0]
+        expect(Object.values(request.modelPlan.bindings)).toContainEqual(
+          pinnedChild.slots["subagent.default"].binding
+        )
       } finally {
         restorePlane()
       }

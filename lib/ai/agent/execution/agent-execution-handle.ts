@@ -309,15 +309,29 @@ export function createAgentExecutionHandle(
     sessionId,
     spec,
     async events(onEnvelope) {
+      if (spec.runtimeAdapter === "vscode-chat")
+        throw new AgentCapabilityError("session.manage", "events")
       const unlisten = await io.ipc.subscribeAgentEvents((envelope) => {
         if (envelope.sessionId === sessionId) onEnvelope(envelope)
       })
       return unlisten
     },
     async interrupt() {
+      if (spec.runtimeAdapter === "vscode-chat") {
+        const { cancelVscodeChatParticipantSession } =
+          await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+        cancelVscodeChatParticipantSession(sessionId)
+        return
+      }
       await io.ipc.interruptSession(sessionId, nextCommandId())
     },
     async cancel() {
+      if (spec.runtimeAdapter === "vscode-chat") {
+        const { cancelVscodeChatParticipantSession } =
+          await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+        cancelVscodeChatParticipantSession(sessionId)
+        return
+      }
       await io.closeSession(sessionId, nextCommandId())
     },
     async compact(focus) {
@@ -330,24 +344,20 @@ export function createAgentExecutionHandle(
     async resolvePermission(requestId, decision, options) {
       requireCapability(spec, "permissions.interrupt-resume", "resolvePermission")
       const commandId = nextCommandId()
-      try {
-        await runCapabilityCommand("permissions.interrupt-resume", () =>
-          io.ipc.resolvePermission(
-            sessionId,
-            requestId,
-            decision,
-            options?.message,
-            options?.updatedInput,
-            options?.interrupt,
-            commandId,
-            ipc.peekRemoteApprovalContext(sessionId, requestId)
-          )
+      await runCapabilityCommand("permissions.interrupt-resume", () =>
+        io.ipc.resolvePermission(
+          sessionId,
+          requestId,
+          decision,
+          options?.message,
+          options?.updatedInput,
+          options?.interrupt,
+          commandId,
+          ipc.peekRemoteApprovalContext(sessionId, requestId)
         )
-      } finally {
-        // Evicted only once the ask has been answered — a read must not strip
-        // the context out from under the other approval path.
-        ipc.forgetRemoteApprovalContext(sessionId, requestId)
-      }
+      )
+      // Rejected dispatches keep the pending ask bound to its original caller.
+      ipc.forgetRemoteApprovalContext(sessionId, requestId)
     },
     async setModel(model) {
       requireCapability(spec, "set-model", "setModel")

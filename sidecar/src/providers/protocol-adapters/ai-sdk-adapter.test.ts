@@ -416,6 +416,87 @@ test("OpenCode requests identify Cognia and keep a stable conversation header ac
   assert.equal(calls[2]?.headers?.["x-opencode-session"], "conversation-b")
 })
 
+test("OpenAI-compatible relays receive an opaque stable conversation identity", async () => {
+  const calls: StreamArgs[] = []
+  for (const sessionId of ["conversation-a", "conversation-a", "conversation-b"]) {
+    await makeAiSdkAdapter("openai").start({
+      model: "gpt-x",
+      messages: [],
+      sessionId,
+      credentials: { apiKey: "synthetic", baseURL: "https://relay.example/v1" },
+      streamTextFn: (args: Record<string, unknown>) => {
+        calls.push(args as StreamArgs)
+        return { stream: (async function* () {})(), usage: Promise.resolve({}) }
+      },
+    })
+  }
+  const ids = calls.map((args) => args.headers?.["x-cognia-session-id"])
+  assert.match(ids[0]!, /^cognia-[a-f0-9]{64}$/)
+  assert.equal(ids[0], ids[1])
+  assert.notEqual(ids[0], ids[2])
+  assert.ok(!ids[0]!.includes("conversation-a"))
+})
+
+test("conversation identity preserves explicitly configured headers and omits sessionless requests", async () => {
+  for (const credentials of [
+    { apiKey: "synthetic", headers: { "X-Cognia-Session-Id": "operator-scope" } },
+    { apiKey: "synthetic" },
+  ]) {
+    let captured: StreamArgs | undefined
+    await makeAiSdkAdapter("openai").start({
+      model: "gpt-x",
+      messages: [],
+      ...(credentials.headers ? { sessionId: "conversation-a" } : {}),
+      credentials,
+      streamTextFn: (args: Record<string, unknown>) => {
+        captured = args as StreamArgs
+        return { stream: (async function* () {})(), usage: Promise.resolve({}) }
+      },
+    })
+    assert.equal(captured!.headers?.["x-cognia-session-id"], undefined)
+  }
+})
+
+test("installed SDK preserves explicit conversation headers on the actual HTTP request", async (t) => {
+  const headers: Headers[] = []
+  t.mock.method(globalThis, "fetch", async (_input: unknown, init: RequestInit) => {
+    headers.push(new Headers(init.headers))
+    return new Response(
+      `data: ${JSON.stringify({
+        id: "test",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "gpt-x",
+        choices: [{ index: 0, delta: { content: "OK" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+      })}\n\ndata: [DONE]\n\n`,
+      { headers: { "content-type": "text/event-stream" } }
+    )
+  })
+  for (const configuredAt of ["credentials", "request"] as const) {
+    const result = await makeAiSdkAdapter("openai").start({
+      model: "gpt-x",
+      messages: [{ role: "user", content: "test" }],
+      sessionId: "local-session",
+      credentials: {
+        apiKey: "synthetic",
+        baseURL: "https://relay.example/v1",
+        ...(configuredAt === "credentials"
+          ? { headers: { "X-Cognia-Session-Id": "operator-scope" } }
+          : {}),
+      },
+      ...(configuredAt === "request"
+        ? { modelParams: { headers: { "X-Cognia-Session-Id": "operator-scope" } } }
+        : {}),
+    })
+    for await (const _event of result.fullStream) {
+      /* Consume the installed SDK stream. */
+    }
+  }
+  assert.equal(headers.length, 2)
+  assert.ok(headers.every((value) => value.get("x-cognia-session-id") === "operator-scope"))
+})
+
 test("start passes model/messages/params through to streamText verbatim", async () => {
   let captured: StreamArgs | undefined
   const fakeStreamText = (args: Record<string, unknown>) => {

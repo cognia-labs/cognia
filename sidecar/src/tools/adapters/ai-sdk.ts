@@ -226,17 +226,7 @@ function builtinDefToAiSdkTool(
  */
 function pluginToolToAiSdkTool(
   manifest: PluginToolManifestEntry,
-  {
-    emit,
-    sessionId,
-    pendingPluginToolCalls,
-    gate,
-    reviewToolOutput,
-    remoteExecutionContext,
-    sandboxRuntimeRef,
-    turnId,
-    attemptId,
-  }: {
+  context: {
     emit: (frame: Record<string, unknown>) => void
     sessionId: string
     pendingPluginToolCalls: PendingPluginToolCalls
@@ -248,6 +238,16 @@ function pluginToolToAiSdkTool(
     attemptId?: string | undefined
   }
 ): AiSdkTool {
+  const {
+    emit,
+    sessionId,
+    pendingPluginToolCalls,
+    gate,
+    reviewToolOutput,
+    sandboxRuntimeRef,
+    turnId,
+    attemptId,
+  } = context
   const namespaced = `mcp__${PLUGIN_TOOLS_SERVER_NAME}__${manifest.name}`
   return tool({
     description: manifest.description ?? "",
@@ -257,6 +257,7 @@ function pluginToolToAiSdkTool(
       >[0]
     ),
     execute: async (args: unknown, options) => {
+      const remoteExecutionContext = context.remoteExecutionContext
       const effective = gate
         ? await gate(namespaced, args ?? {}, options?.abortSignal)
         : (args ?? {})
@@ -506,7 +507,9 @@ export function buildAiSdkTools({
           pendingPluginToolCalls,
           gate,
           reviewToolOutput,
-          remoteExecutionContext: sendOptions.remoteExecutionContext,
+          get remoteExecutionContext() {
+            return sendOptions.remoteExecutionContext
+          },
           sandboxRuntimeRef: sendOptions.sandboxRuntimeRef,
           turnId: sendOptions.turnId,
           attemptId: sendOptions.execution?.identity?.attemptId,

@@ -122,6 +122,7 @@ pub(crate) async fn person_agent_policy_get(args: Value, scope: Option<&str>, te
     cognia_companion::host_surface_gate::person_execution_standing(&person).await
         .map_err(|p| (p.status_code(), Json(RpcError::new(p.code, p.detail))))?;
     let available = cognia_companion::host_surface_gate::person_execution_available().await;
+    let telemetry_owner = person.account_id.clone();
     let (policy, usage, keyed) = tokio::task::spawn_blocking(move || (cognia_companion::org_agent_policy::get(&person.org_id),
         cognia_companion::org_policy::person_own_usage(&person.org_id, &person.user_id),
         cognia_companion::org_credentials::OrgCredentials::list(&person.org_id))).await
@@ -137,7 +138,15 @@ pub(crate) async fn person_agent_policy_get(args: Value, scope: Option<&str>, te
                 .and_then(|meta| meta.fields.get("name")).and_then(Value::as_str).map(str::to_string);
             (id.clone(), name)
         }).collect::<Vec<ServedModel>>()))).unwrap_or_default();
-    Ok(person_policy_view(policy, available, usage, &keyed, &models))
+    let mut view = person_policy_view(policy, available, usage, &keyed, &models);
+    // The closed member channel exposes only the member's log audience and
+    // current Gateway epoch. Never return operator status, routing or keys.
+    view["gatewayTelemetry"] = shared.gateway().map(|gateway| json!({
+        "ownerAccountId": telemetry_owner,
+        "accountGeneration": gateway.status().account_generation,
+        "accountRequired": true,
+    })).unwrap_or(Value::Null);
+    Ok(view)
 }
 
 #[derive(Deserialize)]
@@ -463,6 +472,12 @@ mod tests {
         }
         let view = scope(Some(person.clone()), person_agent_policy_get(json!({}),Some("person-brain"),Some(&person.account_id),&host)).await.unwrap();
         assert_eq!(view["execution"], "none");
+        assert_eq!(view["gatewayTelemetry"], json!({
+            "ownerAccountId":person.account_id,
+            "accountGeneration":host.gateway.status().account_generation,
+            "accountRequired":true,
+        }));
+        assert!(!host.gateway.status().running, "member telemetry authority does not require a listener");
         let error = scope(Some(person.clone()), person_agent_lease_prepare(json!({"runtimeId":"pi","provider":"provider","model":"model"}),
             Some("person-brain"),Some(&person.account_id),&state,&host)).await.unwrap_err();
         assert_eq!(error.0, StatusCode::SERVICE_UNAVAILABLE); assert_eq!(error.1.code,"execution_isolation_unavailable");

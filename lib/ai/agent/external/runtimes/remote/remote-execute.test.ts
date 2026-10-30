@@ -17,6 +17,7 @@ let startReply: unknown = { started: true, runId: "run-1" }
 let subscribedRunId: string | undefined
 
 const channelReady: string[] = []
+let waitForChannel: Promise<void> | undefined
 jest.mock("./remote-run-client", () => ({
   subscribeRemoteExternalRun: (runId: string, h: never) => {
     subscribedRunId = runId
@@ -25,6 +26,7 @@ jest.mock("./remote-run-client", () => ({
   },
   whenRemoteRunChannelSubscribed: async () => {
     channelReady.push(`ready:${started.length}`)
+    if (waitForChannel) await waitForChannel
   },
   startRemoteExternalTurn: async (input: Record<string, unknown>) => {
     started.push(input)
@@ -46,6 +48,25 @@ jest.mock("./remote-run-client", () => ({
 }))
 
 const recordReportedAgentModelSurface = jest.fn()
+let mockDatabaseName = "account-A"
+jest.mock("@/lib/db/schema", () => ({ getDb: () => ({ name: mockDatabaseName }) }))
+let mockWorkspaceOrigin: import("@/lib/task-workspace/types").TaskWorkspaceOrigin = {
+  kind: "local",
+}
+jest.mock("@/lib/task-workspace/origin", () => ({
+  captureTaskWorkspaceOrigin: () => mockWorkspaceOrigin,
+}))
+const mockPersistWorkspaceTurn = jest.fn(async () => ({}))
+const mockPersistUnavailableTurn = jest.fn(async () => ({}))
+const mockManifest = jest.fn()
+jest.mock("@/lib/code-adoption/turn-tracker", () => ({
+  persistTaskWorkspaceTurn: (...args: unknown[]) => mockPersistWorkspaceTurn(...(args as [])),
+  persistUnavailableTaskWorkspaceTurn: (...args: unknown[]) =>
+    mockPersistUnavailableTurn(...(args as [])),
+}))
+jest.mock("@/lib/task-workspace/client", () => ({
+  exportTaskResourceManifest: (...args: unknown[]) => mockManifest(...args),
+}))
 jest.mock("../../capability/model-surface-cache", () => ({
   recordReportedAgentModelSurface: (...args: unknown[]) => recordReportedAgentModelSurface(...args),
 }))
@@ -76,18 +97,224 @@ function evt(over: Partial<ExternalAgentEvent> & { type: string }): ExternalAgen
 }
 
 beforeEach(() => {
+  mockDatabaseName = "account-A"
   started.length = 0
   cancelled.length = 0
   handlers = undefined
   subscribedRunId = undefined
   startReply = { started: true, runId: "run-1" }
+  waitForChannel = undefined
   stop.mockClear()
   recordReportedAgentModelSurface.mockClear()
+  mockPersistWorkspaceTurn.mockClear()
+  mockPersistUnavailableTurn.mockClear()
+  mockManifest.mockReset()
+  mockWorkspaceOrigin = { kind: "local" }
   mountIsLocal = false
   hostTakesCogniaModel = true
   hostTakesImages = true
   stagedFor.length = 0
   stageFails = false
+})
+
+it.each([false, true])(
+  "suppresses stale Host capture and unavailable fallback after a database switch (manifest fails: %s)",
+  async (fails) => {
+    let finish!: () => void
+    mockManifest.mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = () =>
+            fails ? reject(new Error("old manifest unavailable")) : resolve({ resources: [] })
+        })
+    )
+    const run = executeOnRemoteHostAgent("edit", {
+      stamp: STAMP,
+      chatSessionId: "chat-1",
+      newRunId: () => "run-1",
+      workspaceCapture: { runId: 3, assistantMessageId: "assistant-3" },
+    })
+    handlers?.onEvent(evt({ type: "session_end" }), {
+      terminal: "completed",
+      workspace: {
+        runs: [
+          {
+            runId: "task-run",
+            taskId: "task",
+            workspaceRoot: "/repo",
+            executionRoot: "/alias",
+            origin: { kind: "local" },
+          },
+        ],
+      },
+    })
+    handlers?.onTerminal("completed")
+    while (!finish) await Promise.resolve()
+    mockDatabaseName = "account-B"
+    finish()
+    await expect(run).resolves.toMatchObject({ success: true })
+    expect(mockPersistWorkspaceTurn).not.toHaveBeenCalled()
+    expect(mockPersistUnavailableTurn).not.toHaveBeenCalled()
+    expect((await run)?.workspaceUnavailable).toBeUndefined()
+  }
+)
+
+it("persists Host ledger identities against the captured turn and originating Host", async () => {
+  const origin = { kind: "remote" as const, hostId: "host-A", accountId: "account-A" }
+  mockWorkspaceOrigin = origin
+  const resource = {
+    runId: "task-run",
+    path: "a.ts",
+    origin: "agent",
+    captureClass: "source",
+    kind: "modified",
+    insertions: 1,
+    deletions: 1,
+  }
+  mockManifest.mockResolvedValue({ resources: [resource] })
+  const run = executeOnRemoteHostAgent("edit", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    newRunId: () => "run-1",
+    workspaceCapture: { runId: 3, assistantMessageId: "assistant-3", origin },
+  })
+  const workspace = {
+    bundleTurnId: "bundle-turn",
+    runs: [
+      {
+        runId: "task-run",
+        taskId: "task",
+        workspaceRoot: "/repo",
+        executionRoot: "/alias",
+        origin: { kind: "local" },
+      },
+    ],
+  }
+  handlers?.onEvent(evt({ type: "session_end" }), { terminal: "completed", workspace })
+  handlers?.onTerminal("completed")
+  await expect(run).resolves.toMatchObject({ workspace })
+  expect(mockManifest).toHaveBeenCalledWith("task", "task-run", origin)
+  expect(mockPersistWorkspaceTurn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: "chat-1",
+      runId: 3,
+      assistantMessageId: "assistant-3",
+      resources: [resource],
+      runs: [expect.objectContaining({ runId: "task-run", origin })],
+      bundleTurnId: "bundle-turn",
+    }),
+    { databaseName: "account-A" }
+  )
+})
+
+it("returns an explicit history-unavailable reason when a retained manifest cannot be read", async () => {
+  mockWorkspaceOrigin = { kind: "remote", hostId: "host-A" }
+  mockManifest.mockRejectedValue(new Error("Host went offline"))
+  const run = executeOnRemoteHostAgent("edit", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    newRunId: () => "run-1",
+    workspaceCapture: {
+      runId: 3,
+      assistantMessageId: "assistant-3",
+      origin: { kind: "remote", hostId: "host-A" },
+    },
+  })
+  handlers?.onEvent(evt({ type: "session_end" }), {
+    terminal: "completed",
+    workspace: {
+      bundleTurnId: "bundle-turn",
+      runs: [
+        {
+          runId: "task-run",
+          taskId: "task",
+          workspaceRoot: "/repo",
+          executionRoot: "/alias",
+          origin: { kind: "local" },
+        },
+      ],
+    },
+  })
+  handlers?.onTerminal("completed")
+  await expect(run).resolves.toMatchObject({
+    success: true,
+    workspaceUnavailable: "capture-failed",
+  })
+  expect(mockPersistWorkspaceTurn).not.toHaveBeenCalled()
+  expect(mockPersistUnavailableTurn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      reason: "capture-failed",
+      assistantMessageId: "assistant-3",
+      runs: [expect.objectContaining({ origin: { kind: "remote", hostId: "host-A" } })],
+    }),
+    { databaseName: "account-A" }
+  )
+})
+
+it("records remote-only files as unavailable instead of inventing a clean snapshot", async () => {
+  const run = executeOnRemoteHostAgent("edit", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    newRunId: () => "run-1",
+    workspaceCapture: { runId: 3, assistantMessageId: "assistant-3" },
+  })
+  handlers?.onEvent(evt({ type: "session_end" }), {
+    terminal: "completed",
+    workspaceUnavailable: "remote-filesystem",
+  })
+  handlers?.onTerminal("completed")
+  await expect(run).resolves.toMatchObject({
+    success: true,
+    workspaceUnavailable: "remote-filesystem",
+  })
+  expect(mockManifest).not.toHaveBeenCalled()
+  expect(mockPersistWorkspaceTurn).not.toHaveBeenCalled()
+  expect(mockPersistUnavailableTurn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: "chat-1",
+      runId: 3,
+      assistantMessageId: "assistant-3",
+      reason: "remote-filesystem",
+    }),
+    { databaseName: "account-A" }
+  )
+})
+
+it("suppresses an old Host's unavailable notice after switching database scope", async () => {
+  const run = executeOnRemoteHostAgent("edit", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    newRunId: () => "run-1",
+    workspaceCapture: { runId: 3, assistantMessageId: "assistant-3" },
+  })
+  mockDatabaseName = "account-B"
+  handlers?.onEvent(evt({ type: "session_end" }), {
+    terminal: "completed",
+    workspaceUnavailable: "remote-filesystem",
+  })
+  handlers?.onTerminal("completed")
+  await expect(run).resolves.toMatchObject({ success: true })
+  expect((await run)?.workspaceUnavailable).toBeUndefined()
+  expect(mockPersistUnavailableTurn).not.toHaveBeenCalled()
+})
+
+it("refuses a Host/account change during the subscription wait before dispatch", async () => {
+  mockWorkspaceOrigin = { kind: "remote", hostId: "host-A", accountId: "account-A" }
+  let subscribed!: () => void
+  waitForChannel = new Promise((resolve) => {
+    subscribed = resolve
+  })
+  const run = executeOnRemoteHostAgent("edit", {
+    stamp: STAMP,
+    chatSessionId: "chat-1",
+    newRunId: () => "run-1",
+    workspaceCapture: { runId: 3, assistantMessageId: "assistant-3" },
+  })
+  mockWorkspaceOrigin = { kind: "remote", hostId: "host-B", accountId: "account-A" }
+  subscribed()
+  await expect(run).rejects.toThrow(/target changed/)
+  expect(started).toEqual([])
+  expect(mockPersistWorkspaceTurn).not.toHaveBeenCalled()
 })
 
 // The Host reports the session's options at the end of each turn. This client

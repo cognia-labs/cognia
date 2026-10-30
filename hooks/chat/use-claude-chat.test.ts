@@ -5,7 +5,10 @@
  * The hook also wires a long-lived sidecar event handler through `onClaudeMessage`
  * — that handler is exercised indirectly via `send` / `respondToApproval`.
  */
+import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
+jest.mock("@/lib/chat/lifecycle-events", () => ({ publishChatLifecycleEvent: jest.fn() }))
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
+import { useTaskWorkspaceStore } from "@/stores/task-workspace-store"
 import { act, renderHook } from "@testing-library/react"
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import type { WithdrawnHostStateMessage } from "@/lib/db/mobile-outbound-queue"
@@ -38,6 +41,11 @@ jest.mock("@/lib/task-workspace/client", () => {
     ...actual,
     acquireWorkspaceBundle: jest.fn(actual.acquireWorkspaceBundle),
     settleTaskWorkspaceTurn: jest.fn(actual.settleTaskWorkspaceTurn),
+    beginObservedTaskWorkspaceTurn: jest.fn(async (input: { workspaceRoot: string }) => ({
+      ...input,
+      executionRoot: input.workspaceRoot,
+      isolationKind: "observed",
+    })),
   }
 })
 jest.mock("@/lib/code-adoption/client", () => {
@@ -47,6 +55,10 @@ jest.mock("@/lib/code-adoption/client", () => {
     endCodeAdoptionTurn: jest.fn(actual.endCodeAdoptionTurn),
     consumeCodeAdoptionTrackingAttempt: jest.fn(actual.consumeCodeAdoptionTrackingAttempt),
   }
+})
+jest.mock("@/lib/code-adoption/turn-tracker", () => {
+  const actual = jest.requireActual("@/lib/code-adoption/turn-tracker")
+  return { ...actual, markTaskWorkspaceTurnUnowned: jest.fn(actual.markTaskWorkspaceTurnUnowned) }
 })
 
 const persistSessionAssetsMock = jest.fn(
@@ -227,6 +239,10 @@ jest.mock("@/lib/db/mobile-outbound-queue", () => ({
 // unaffected; individual tests flip the flag.
 const standaloneFlag = { value: false }
 const runStandaloneTurnMock = jest.fn(async (_args?: unknown): Promise<void> => undefined)
+const runVscodeChatTurnMock = jest.fn(async (_args?: unknown): Promise<void> => undefined)
+jest.mock("@/lib/plugin/vscode-shim/chat-turn", () => ({
+  runVscodeChatTurn: (args: unknown) => runVscodeChatTurnMock(args),
+}))
 const gateWorkbenchProviderPayloadMock = jest.fn((payload: unknown) => payload)
 jest.mock("@/lib/runtime/standalone-mode", () => ({
   isStandaloneChatMode: () => standaloneFlag.value,
@@ -330,6 +346,7 @@ const persistMessagesMock = jest.fn().mockResolvedValue(undefined)
 const truncateAfterMock = jest.fn().mockResolvedValue(undefined)
 const listMessagesMock = jest.fn().mockResolvedValue([])
 jest.mock("@/lib/db/messages", () => ({
+  commitMessageDelta: jest.fn(async () => undefined),
   updateMessageMetadata: jest.fn(async () => undefined),
   listMessages: (id: string) => listMessagesMock(id),
   persistMessages: (...a: unknown[]) => persistMessagesMock(...a),
@@ -380,12 +397,16 @@ jest.mock("sonner", () => ({
     info: (msg: string) => toastInfo(msg),
   },
 }))
-const resolveSendOptionsMock = jest.fn<Promise<SendOptions>, []>(async () => ({
+const resolveSendOptionsMock = jest.fn<
+  Promise<SendOptions>,
+  [context?: { externalRuntimeId?: string }]
+>(async () => ({
   model: "sonnet",
   systemPrompt: "sys",
 }))
 jest.mock("@/lib/claude/build-options", () => ({
-  resolveSendOptions: (...args: unknown[]) => resolveSendOptionsMock(...(args as [])),
+  resolveSendOptions: (...args: Parameters<typeof resolveSendOptionsMock>) =>
+    resolveSendOptionsMock(...args),
 }))
 
 const ensureExecutionPortLeaseMock = jest.fn()
@@ -554,6 +575,7 @@ jest.mock("@/lib/ai/agent/external/manager", () => ({
     getAgent: () => ({
       config: {
         protocol: externalProtocolMock.value,
+        transport: "stdio",
         metadata: { preset: externalPresetMock.value },
       },
     }),
@@ -643,6 +665,7 @@ jest.mock("@/lib/chat/turn-route/snapshot", () => ({
 interface SliceLike {
   messages: unknown[]
   status: string
+  runId: number
   errorMessage: string | null
   errorDiagnostic: { message?: string } | null
   pendingApprovals: unknown[]
@@ -655,6 +678,7 @@ interface SliceLike {
 const makeSlice = (): SliceLike => ({
   messages: [],
   status: "idle",
+  runId: 0,
   errorMessage: null,
   errorDiagnostic: null,
   pendingApprovals: [],
@@ -674,6 +698,7 @@ interface ChatStateLike {
   readonly sessions: Record<string, SliceLike>
   messages: unknown[]
   status: string
+  runId: number
   errorMessage: string | null
   errorDiagnostic: { message?: string } | null
   pendingApprovals: unknown[]
@@ -713,10 +738,21 @@ interface ChatStateLike {
 }
 
 const sliceWrite = (id: string, patch: Partial<SliceLike>) => {
+  const previous = chatState.sessions[id] ?? makeSlice()
+  // Match the store's fresh-turn counter, preserving approval resumes.
+  if (
+    patch.status === "streaming" &&
+    previous.status !== "streaming" &&
+    previous.status !== "awaiting_approval"
+  ) {
+    patch = { ...patch, runId: previous.runId + 1 }
+  }
   if (id === chatState.activeSessionId) {
     if (patch.messages !== undefined) chatState.messages = patch.messages
     if (patch.status !== undefined) chatState.status = patch.status
+    if (patch.runId !== undefined) chatState.runId = patch.runId
     if (patch.errorMessage !== undefined) chatState.errorMessage = patch.errorMessage
+    if (patch.errorDiagnostic !== undefined) chatState.errorDiagnostic = patch.errorDiagnostic
     if (patch.pendingApprovals !== undefined) chatState.pendingApprovals = patch.pendingApprovals
     if (patch.activeBranchByGroup !== undefined)
       chatState.activeBranchByGroup = patch.activeBranchByGroup
@@ -738,6 +774,7 @@ const chatState: ChatStateLike = {
       map[chatState.activeSessionId] = {
         messages: chatState.messages,
         status: chatState.status,
+        runId: chatState.runId,
         errorMessage: chatState.errorMessage,
         errorDiagnostic: chatState.errorDiagnostic,
         pendingApprovals: chatState.pendingApprovals,
@@ -748,6 +785,7 @@ const chatState: ChatStateLike = {
   },
   messages: [],
   status: "idle",
+  runId: 0,
   errorMessage: null,
   errorDiagnostic: null,
   pendingApprovals: [],
@@ -1069,7 +1107,12 @@ import {
 // broken send guard when it was only slow.
 jest.setTimeout(30_000)
 
+// The real tracker keeps per-turn marks across mounts. Never recycle an identity
+// across fixture resets: a synthetic old refusal must not consume a new run.
+let fixtureRunEpoch = 0
 beforeEach(() => {
+  useTaskWorkspaceStore.getState().clear()
+  jest.mocked(publishChatLifecycleEvent).mockClear()
   persistSessionAssetsMock.mockReset().mockImplementation(async (_sessionId, message) => message)
   chatState.paneIdsBySession = {}
   chatState.backgroundHolds = {}
@@ -1112,6 +1155,7 @@ beforeEach(() => {
   beginSharedSessionRunMock.mockReset().mockResolvedValue({ kind: "private" })
   standaloneFlag.value = false
   runStandaloneTurnMock.mockReset().mockResolvedValue(undefined)
+  runVscodeChatTurnMock.mockReset().mockResolvedValue(undefined)
   gateWorkbenchProviderPayloadMock.mockClear()
   runTurnMemoryMock.mockReset().mockResolvedValue(undefined)
   releaseSkillLoadContextMock.mockClear()
@@ -1177,7 +1221,9 @@ beforeEach(() => {
   chatState.otherSlices = {}
   chatState.messages = []
   chatState.status = "idle"
+  chatState.runId = fixtureRunEpoch += 100
   chatState.errorMessage = null
+  chatState.errorDiagnostic = null
   chatState.pendingApprovals = []
   chatState.activeBranchByGroup = {}
   chatState.pendingCommandOverrides = null
@@ -1491,6 +1537,10 @@ describe("useClaudeChat — actions", () => {
   // was therefore recorded as an in-app turn under the agent id "built-in", and
   // it registered the durable chat receipt that an external turn must not have.
   it("treats a host-owned agent turn as external, not as a built-in turn", async () => {
+    const unowned = jest.mocked(
+      (await import("@/lib/code-adoption/turn-tracker")).markTaskWorkspaceTurnUnowned
+    )
+    unowned.mockClear()
     useAgentRuntimeStore.setState({
       runtimeRef: {
         kind: "host",
@@ -1518,7 +1568,18 @@ describe("useClaudeChat — actions", () => {
         allowedTools: ["read"],
         mcpServers: [],
         chatSessionId: "sess-1",
+        workspaceCapture: {
+          runId: expect.any(Number),
+          assistantMessageId: expect.any(String),
+        },
       })
+    )
+    const capture = executeOnRemoteHostAgentMock.mock.calls[0][1].workspaceCapture
+    expect(unowned).toHaveBeenCalledWith("sess-1", capture.runId)
+    expect(chatState.sessions["sess-1"].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: capture.assistantMessageId, role: "assistant" }),
+      ])
     )
     expect(acceptChatTurnMock).not.toHaveBeenCalled()
     expect(sendPromptMock).not.toHaveBeenCalled()
@@ -1746,6 +1807,32 @@ describe("useClaudeChat — actions", () => {
       lifecycle: { state: "ready", createdAt: 1, updatedAt: 2, pinned: false },
     }
 
+    it("preserves Host-owned materialization when no renderer lease is opened", async () => {
+      getSessionMock.mockResolvedValue({ id: "sess-1", executionContext: localContext })
+      const taskWorkspace: NonNullable<SendOptions["taskWorkspace"]> = {
+        taskId: "host-task",
+        runId: "host-run",
+        workspaceRoot: "/repo",
+        agentId: "built-in",
+        agentKind: "in-app",
+      }
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        await result.current.send("hello", { model: "sonnet", taskWorkspace })
+      })
+      expect(openWorkspaceBundleTurnLeaseMock).not.toHaveBeenCalled()
+      expect(
+        jest.mocked(await import("@/lib/task-workspace/client")).beginObservedTaskWorkspaceTurn
+      ).not.toHaveBeenCalled()
+      expect(sendPromptMock).toHaveBeenCalledWith(
+        "sess-1",
+        expect.anything(),
+        expect.objectContaining({ taskWorkspace }),
+        { transcriptRuntime: "prepared" }
+      )
+    })
+
     it.each([true, false])(
       "admits the final local cwd once before launch (prebuilt=%s)",
       async (prebuilt) => {
@@ -1771,6 +1858,15 @@ describe("useClaudeChat — actions", () => {
           await flush()
         })
         expect(ensureExecutionPortLeaseMock).toHaveBeenCalledTimes(1)
+        expect(
+          jest.mocked(await import("@/lib/task-workspace/client")).beginObservedTaskWorkspaceTurn
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionId: "sess-1",
+            workspaceRoot: "/repo",
+            workspaceKey: "local:sess-1",
+          })
+        )
         expect(ensureExecutionPortLeaseMock).toHaveBeenCalledWith({
           cwd: "/repo",
           sessionId: "sess-1",
@@ -1847,12 +1943,27 @@ describe("useClaudeChat — actions", () => {
           projectId: "project-1",
           executionContext: { ...localContext, location: "managedWorktree" },
         })
-        openWorkspaceBundleTurnLeaseMock.mockResolvedValue({
-          bundleTurnId: "turn-1",
-          run: { runId: "run-1", executionRoot: "/physical/workspace-1" },
-          primaryAlias: "/managed/sess-1",
-          additionalAliases: [],
-        })
+        openWorkspaceBundleTurnLeaseMock.mockImplementation(
+          async (_bundle, _logicalRoot, input) => {
+            const run = {
+              ...input,
+              runId: `${input.runId}:primary`,
+              executionRoot: "/physical/workspace-1",
+              state: "running",
+            }
+            useTaskWorkspaceStore.getState().activate({
+              ...run,
+              origin: { kind: "local" },
+              bundleTurnId: "turn-1",
+            })
+            return {
+              bundleTurnId: "turn-1",
+              run,
+              primaryAlias: "/managed/sess-1",
+              additionalAliases: [],
+            }
+          }
+        )
         if (runtime === "external") {
           useAgentRuntimeStore.setState({ runtimeRef: { kind: "external", agentId: "ext-1" } })
         } else {
@@ -1862,6 +1973,14 @@ describe("useClaudeChat — actions", () => {
         const reason = "portRangeStart/portRangeEnd/portBlockSize exhausted"
         ensureExecutionPortLeaseMock.mockRejectedValueOnce(new Error(reason))
         const oldSetStatus = chatState.setSessionStatus.getMockImplementation()!
+        const oldSetDiagnostic = chatState.setSessionDiagnostic.getMockImplementation()!
+        chatState.setSessionDiagnostic.mockImplementation((id: string, diagnostic: unknown) => {
+          const before = { sessions: { [id]: { ...chatState.sessions[id] } } }
+          oldSetDiagnostic(id, diagnostic)
+          for (const sub of [...subscribers]) {
+            ;(sub as (state: unknown, previous: unknown) => void)(chatState, before)
+          }
+        })
         chatState.setSessionStatus.mockImplementation((id: string, status: string) => {
           const before = { sessions: { [id]: { ...chatState.sessions[id] } } }
           oldSetStatus(id, status)
@@ -1890,7 +2009,9 @@ describe("useClaudeChat — actions", () => {
           )
           expect(finishDirectChatExecutionRun).toHaveBeenCalledWith("sess-1", "failed")
           expect(settle).toHaveBeenCalledTimes(1)
-          expect(settle).toHaveBeenCalledWith("sess-1", undefined, "ready")
+          // Admission ends the unused working copy on its idle edge, before
+          // writing the diagnostic. The execution submission separately fails.
+          expect(settle).toHaveBeenCalledWith("sess-1", expect.any(Number), "ready")
           expect(settleChatTurnForSessionMock).toHaveBeenCalledWith("sess-1", {
             outcome: "failed",
             errorCode: "workspace_port_lease_unavailable",
@@ -1903,6 +2024,7 @@ describe("useClaudeChat — actions", () => {
         } finally {
           stop()
           chatState.setSessionStatus.mockImplementation(oldSetStatus)
+          chatState.setSessionDiagnostic.mockImplementation(oldSetDiagnostic)
           const realWorkspace = jest.requireActual("@/lib/task-workspace/client")
           const realAdoption = jest.requireActual("@/lib/code-adoption/client")
           settle.mockReset().mockImplementation(realWorkspace.settleTaskWorkspaceTurn)
@@ -1956,73 +2078,92 @@ describe("useClaudeChat — actions", () => {
     })
   })
 
-  it("reuses the persisted managed-worktree binding and redirects the turn", async () => {
-    getSessionMock.mockResolvedValue({
-      id: "sess-1",
-      title: "Managed",
-      model: "sonnet",
-      executionContext: {
-        location: "managedWorktree",
-        projectId: "project-1",
-        projectRoot: "/repo",
-        taskWorkspace: { taskId: "task-workspace:sess-1", workspaceKey: "sess-1" },
-        lifecycle: { state: "ready", createdAt: 1, updatedAt: 2, pinned: false },
-      },
-    })
-    openWorkspaceBundleTurnLeaseMock.mockResolvedValue({
-      bundleTurnId: "bundle-turn-1",
-      run: {
-        runId: "run:sess-1:1",
-        executionRoot: "/physical/workspace-1",
-        isolationRef: "codex/sess-1",
-      },
-      primaryAlias: "/managed/sess-1",
-      additionalAliases: ["/managed/docs"],
-      settle: jest.fn(),
-    })
-
-    const { result } = renderHook(() => useClaudeChat())
-    await flush()
-    await act(async () => {
-      await result.current.send("hello")
-    })
-
-    expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledWith(
-      expect.objectContaining({ bundleId: "bundle-1" }),
-      "root-1",
-      expect.objectContaining({
-        taskId: "task-workspace:sess-1",
-        workspaceKey: "sess-1",
-        workspaceRoot: "/managed/sess-1",
+  it.each([false, true])(
+    "reuses one renderer-owned managed workspace (prebuilt=%s)",
+    async (prebuilt) => {
+      const options: SendOptions = {
+        model: "sonnet",
+        cwd: "/repo",
+        trustedWorkspaceRoots: ["/repo"],
+        taskWorkspace: {
+          taskId: "stale-task",
+          runId: "stale-run",
+          workspaceRoot: "/stale",
+          agentId: "built-in",
+          agentKind: "in-app",
+        },
+      }
+      resolveSendOptionsMock.mockResolvedValue(options)
+      getSessionMock.mockResolvedValue({
+        id: "sess-1",
+        title: "Managed",
+        model: "sonnet",
+        executionContext: {
+          location: "managedWorktree",
+          projectId: "project-1",
+          projectRoot: "/repo",
+          taskWorkspace: { taskId: "task-workspace:sess-1", workspaceKey: "sess-1" },
+          lifecycle: { state: "ready", createdAt: 1, updatedAt: 2, pinned: false },
+        },
       })
-    )
-    expect(sendPromptMock).toHaveBeenCalledWith(
-      "sess-1",
-      expect.anything(),
-      expect.objectContaining({
-        cwd: "/managed/sess-1",
-        additionalDirectories: ["/managed/docs"],
-      }),
-      { transcriptRuntime: "prepared" }
-    )
-    expect(updateSessionMock).toHaveBeenCalledWith(
-      "sess-1",
-      expect.objectContaining({
-        executionContext: expect.objectContaining({
-          taskWorkspace: expect.objectContaining({
-            runId: "run:sess-1:1",
-            bundleTurnId: "bundle-turn-1",
-          }),
-          lifecycle: expect.objectContaining({ state: "active" }),
+      openWorkspaceBundleTurnLeaseMock.mockResolvedValue({
+        bundleTurnId: "bundle-turn-1",
+        run: {
+          runId: "run:sess-1:1",
+          executionRoot: "/physical/workspace-1",
+          isolationRef: "codex/sess-1",
+        },
+        primaryAlias: "/managed/sess-1",
+        additionalAliases: ["/managed/docs"],
+        settle: jest.fn(),
+      })
+
+      const { result } = renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        await result.current.send("hello", prebuilt ? options : undefined)
+      })
+
+      expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledTimes(1)
+      expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledWith(
+        expect.objectContaining({ bundleId: "bundle-1" }),
+        "root-1",
+        expect.objectContaining({
+          taskId: "task-workspace:sess-1",
+          workspaceKey: "sess-1",
+          workspaceRoot: "/managed/sess-1",
+        })
+      )
+      expect(sendPromptMock).toHaveBeenCalledWith(
+        "sess-1",
+        expect.anything(),
+        expect.objectContaining({
+          cwd: "/managed/sess-1",
+          additionalDirectories: ["/managed/docs"],
+          trustedWorkspaceRoots: ["/managed/sess-1"],
         }),
-      })
-    )
-    const persistedContext = updateSessionMock.mock.calls.findLast(
-      (call) => call[1]?.executionContext
-    )?.[1]?.executionContext
-    expect(persistedContext).not.toHaveProperty("worktreePath")
-    expect(persistedContext).not.toHaveProperty("branch")
-  })
+        { transcriptRuntime: "prepared" }
+      )
+      expect(sendPromptMock.mock.calls[0][2]).not.toHaveProperty("taskWorkspace")
+      expect(updateSessionMock).toHaveBeenCalledWith(
+        "sess-1",
+        expect.objectContaining({
+          executionContext: expect.objectContaining({
+            taskWorkspace: expect.objectContaining({
+              runId: "run:sess-1:1",
+              bundleTurnId: "bundle-turn-1",
+            }),
+            lifecycle: expect.objectContaining({ state: "active" }),
+          }),
+        })
+      )
+      const persistedContext = updateSessionMock.mock.calls.findLast(
+        (call) => call[1]?.executionContext
+      )?.[1]?.executionContext
+      expect(persistedContext).not.toHaveProperty("worktreePath")
+      expect(persistedContext).not.toHaveProperty("branch")
+    }
+  )
 
   it("carries the Workspace Trust proof onto the managed-worktree alias the turn runs in", async () => {
     // `resolveSendOptions` stamps the trusted SOURCE root; the sidecar honours
@@ -2671,6 +2812,8 @@ describe("useClaudeChat — actions", () => {
     } as never)
     const settle = (workspace.settleTaskWorkspaceTurn as jest.Mock).mockImplementation(async () => {
       leased = false
+      const active = useTaskWorkspaceStore.getState().activeBySession["sess-1"]
+      if (active) useTaskWorkspaceStore.getState().completeRun(active.runId, "failed", [])
       return null
     })
     const end = (adoption.endCodeAdoptionTurn as jest.Mock).mockResolvedValue(null)
@@ -2678,12 +2821,21 @@ describe("useClaudeChat — actions", () => {
       undefined
     )
     resolveSendOptionsMock.mockResolvedValue({ model: "sonnet", cwd: "/repo" })
-    openWorkspaceBundleTurnLeaseMock.mockImplementation(async () => {
+    openWorkspaceBundleTurnLeaseMock.mockImplementation(async (_bundle, _logicalRoot, input) => {
       if (leased) throw new Error("working copy in use")
       leased = true
+      const run = {
+        ...input,
+        runId: `${input.runId}:primary`,
+        executionRoot: "/repo",
+        state: "running",
+      }
+      useTaskWorkspaceStore
+        .getState()
+        .activate({ ...run, origin: { kind: "local" }, bundleTurnId: "pi-turn" })
       return {
         bundleTurnId: "pi-turn",
-        run: { runId: "pi-run", executionRoot: "/repo" },
+        run,
         primaryAlias: "/repo",
         additionalAliases: [],
       }
@@ -2722,7 +2874,7 @@ describe("useClaudeChat — actions", () => {
       await flush()
       expect(openWorkspaceBundleTurnLeaseMock).toHaveBeenCalledTimes(1)
       expect(executeOnExternalAgentMock).toHaveBeenCalledTimes(1)
-      expect(settle).toHaveBeenCalledWith("sess-1", undefined, "failed")
+      expect(settle).toHaveBeenCalledWith("sess-1", expect.any(Number), "failed")
       expect(leased).toBe(false)
       await act(async () => {
         await result.current.send("second")
@@ -5234,6 +5386,31 @@ describe("useClaudeChat — actions", () => {
     ])
   })
 
+  it("routes a local model-step approval through the local response funnel even with an execution handle", async () => {
+    const resolvePermission = jest.fn(async () => undefined)
+    const { result } = renderHook(
+      () => ({ chat: useClaudeChat(), directory: useAgentExecutionHandleDirectory() }),
+      { wrapper: AgentExecutionHandleProvider }
+    )
+    await flush()
+    act(() => {
+      result.current.directory.register({ sessionId: "sess-h", resolvePermission } as never)
+    })
+    await act(async () => {
+      await result.current.chat.respondToApproval(
+        {
+          sessionId: "sess-h",
+          requestId: "local:step",
+          toolName: "agent.turn.decide",
+          requiresPerCallApproval: true,
+        } as never,
+        "allow"
+      )
+    })
+    expect(resolvePermission).not.toHaveBeenCalled()
+    expect(approveToolMock).toHaveBeenCalledWith("sess-h", "local:step", "allow")
+  })
+
   it("keeps a manual approval pending when permission dispatch fails", async () => {
     approveToolMock.mockRejectedValueOnce(new Error("sidecar unavailable"))
     const { result } = renderHook(() => useClaudeChat())
@@ -5614,6 +5791,13 @@ describe("useClaudeChat — actions", () => {
       await result.current.editAndResend("u-1", "edited")
     })
 
+    expect(publishChatLifecycleEvent).toHaveBeenCalledWith({
+      type: "message-edited",
+      sessionId: "sess-1",
+      messageId: "u-1",
+      previousContent: "original",
+      content: "edited",
+    })
     expect(truncateAfterMock).not.toHaveBeenCalled()
     const persisted = persistMessagesMock.mock.calls.at(-1)?.[1] as Array<{
       id: string
@@ -5682,6 +5866,7 @@ describe("useClaudeChat — actions", () => {
       await result.current.editAndResend("gone", "edited")
     })
     expect(sendPromptMock).not.toHaveBeenCalled()
+    expect(publishChatLifecycleEvent).not.toHaveBeenCalled()
   })
 
   it("editAndResend is a no-op while the session is mid-turn", async () => {
@@ -5751,7 +5936,7 @@ describe("useClaudeChat — actions", () => {
         (resolveSendOptionsMock.mock.calls.at(-1)?.[0] as { externalRuntimeId?: string })
           .externalRuntimeId
       ).toBe(kind === "external" ? "ext-1" : undefined)
-      expect(chatState.messages.map((message) => message.id)).toEqual(
+      expect(chatState.messages.map((message) => (message as { id: string }).id)).toEqual(
         expect.arrayContaining(["original", "partial"])
       )
       expect(truncateAfterMock).not.toHaveBeenCalled()
@@ -5803,9 +5988,11 @@ describe("useClaudeChat — actions", () => {
     await act(async () => {
       await result.current.send("Work", undefined, { skipUserAppend: true, bypassDelegation: true })
     })
-    expect(chatState.messages[0].metadata).toMatchObject({
-      continuationRuntime: { kind: "builtin" },
-    })
+    expect((chatState.messages[0] as { metadata: Record<string, unknown> }).metadata).toMatchObject(
+      {
+        continuationRuntime: { kind: "builtin" },
+      }
+    )
     expect(sendPromptMock).toHaveBeenCalled()
   })
 
@@ -11009,4 +11196,68 @@ describe("precise external steering ownership", () => {
     )
     setSessionExternalLane("sess-1", null)
   })
+})
+
+describe("VS Code participant foreground dispatch", () => {
+  it.each(["stop", "close", "unmount"] as const)(
+    "runs the participant instead of the model and cancels on %s",
+    async (action) => {
+      const binding = { pluginId: "ext", participantId: "helper", generation: "generation-1" }
+      resolveSendOptionsMock.mockResolvedValue({
+        toolSurface: "none",
+        allowedTools: [],
+        execution: {
+          specVersion: 3,
+          executionFingerprint: "participant-turn",
+          runtimeAdapter: "vscode-chat",
+          chatParticipant: binding,
+          executionKind: "agent",
+          route: { kind: "direct" },
+          modelBindings: { primary: "helper" },
+          capabilities: { effective: ["streaming"], disabledOptional: [] },
+          identity: { runId: "participant-run", attemptId: "participant-attempt" },
+          hostRef: "local",
+        },
+      } satisfies SendOptions)
+      getSessionMock.mockResolvedValue({
+        id: "sess-1",
+        title: "Extension chat",
+        characterId: "vscode-chat:ext:helper",
+      })
+      let signal!: AbortSignal
+      runVscodeChatTurnMock.mockImplementation(async (raw) => {
+        signal = (raw as { signal: AbortSignal }).signal
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true })
+        )
+      })
+      const { result, unmount } = renderHook(() => useClaudeChat())
+      await flush()
+      await act(async () => {
+        await result.current.send("hello extension")
+      })
+      expect(runVscodeChatTurnMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "sess-1",
+          turnId: expect.any(String),
+          characterId: "vscode-chat:ext:helper",
+          binding,
+          prompt: expect.anything(),
+        })
+      )
+      expect(sendPromptMock).not.toHaveBeenCalled()
+      expect(runStandaloneTurnMock).not.toHaveBeenCalled()
+      expect(acceptChatTurnMock).not.toHaveBeenCalled()
+      expect(signal.aborted).toBe(false)
+      if (action === "unmount") unmount()
+      else
+        await act(async () => {
+          await result.current[action]("sess-1")
+        })
+      expect(signal.aborted).toBe(true)
+      expect(interruptSessionMock).not.toHaveBeenCalled()
+      expect(closeSessionIpcMock).not.toHaveBeenCalled()
+      if (action !== "unmount") unmount()
+    }
+  )
 })

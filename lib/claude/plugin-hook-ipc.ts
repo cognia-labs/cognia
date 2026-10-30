@@ -24,8 +24,12 @@
  */
 
 import { getPluginHookHandler, listHookContributors } from "@/lib/plugin/registries/hook-registry"
+import { mergePreCompactResults } from "@/lib/plugin/messaging/hooks-system"
+import type { PreCompactResult } from "@/types/plugin/plugin-hooks"
 import type { PluginHooksAll } from "@/types/plugin/plugin-hooks"
 import { createLogger } from "@cognia/logging"
+import { transformModelStreamPart } from "@/lib/plugin/interceptors/consumers"
+import { dispatchGuard } from "@/lib/plugin/interceptors/dispatch"
 
 const log = createLogger("claude.plugin-hook-ipc")
 
@@ -94,6 +98,43 @@ export async function handlePluginHookExec(
   const label = `${req.pluginId}:${req.hookId}`
 
   if (req.pluginId === PLUGIN_HOOK_BROADCAST) {
+    if (
+      req.hookId === "interceptor:model.stream.transform" ||
+      req.hookId === "interceptor:agent.turn.decide"
+    ) {
+      if (
+        typeof req.payload.operationId !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+          req.payload.operationId
+        )
+      )
+        return { error: "Invalid semantic operation identity" }
+      const operationId = `semantic:${req.sessionId}:${req.payload.operationId}`
+      try {
+        if (req.hookId === "interceptor:model.stream.transform")
+          return {
+            result: {
+              part: await transformModelStreamPart(req.payload.part, {
+                operationId,
+                sessionId: req.sessionId,
+              }),
+            },
+          }
+        if (!Number.isInteger(req.payload.step) || Number(req.payload.step) < 0)
+          return { error: "Invalid model step" }
+        const { verdict } = await dispatchGuard(
+          "agent.turn.decide",
+          {
+            sessionId: req.sessionId,
+            step: req.payload.step,
+          },
+          { operationId, sessionId: req.sessionId, collectApprovals: true }
+        )
+        return { result: verdict }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) }
+      }
+    }
     return runBroadcast(req, resolveHandler)
   }
 
@@ -143,12 +184,16 @@ async function runBroadcast(
   if (contributors.length === 0) return { result: null }
 
   const merged: Record<string, unknown> = {}
+  const compaction: PreCompactResult[] = []
   for (const pluginId of contributors) {
     const handler = resolveHandler(pluginId, req.hookId)
     if (!handler) continue
     try {
       const value = await handler(req.payload as never)
-      if (value && typeof value === "object") Object.assign(merged, value)
+      if (value && typeof value === "object") {
+        if (req.hookId === "onPreCompact") compaction.push(value as PreCompactResult)
+        else Object.assign(merged, value)
+      }
     } catch (e) {
       log.warn("plugin_broadcast_hook_failed", {
         plugin: pluginId,
@@ -157,5 +202,5 @@ async function runBroadcast(
       })
     }
   }
-  return { result: merged }
+  return { result: req.hookId === "onPreCompact" ? mergePreCompactResults(compaction) : merged }
 }

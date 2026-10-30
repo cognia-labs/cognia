@@ -22,6 +22,14 @@
  */
 
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
+import {
+  assertCodeAdoptionDatabaseScope,
+  captureCodeAdoptionDatabaseScope,
+  isCodeAdoptionDatabaseScopeCurrent,
+  type CodeAdoptionDatabaseScope,
+} from "@/lib/code-adoption/persist"
+import { captureTaskWorkspaceOrigin } from "@/lib/task-workspace/origin"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 import type {
   AcpMcpServerConfig,
   ExternalAgentCogniaModelBinding,
@@ -39,7 +47,11 @@ import {
   whenRemoteRunChannelSubscribed,
   type RemoteRunAttachment,
 } from "./remote-run-client"
-import { remoteDecisionId } from "./remote-run-service"
+import {
+  remoteDecisionId,
+  type RemoteRunWorkspace,
+  type RemoteRunFrame,
+} from "./remote-run-service"
 import {
   HostCogniaModelUpdateRequiredError,
   hostSupportsAttachmentTurns,
@@ -95,12 +107,25 @@ export interface RemoteExecuteOptions {
   onAttachmentsWithheld?: (withheld: RemoteAttachmentsWithheld) => void
   /** Injected in tests. */
   newRunId?: () => string
+  /** Immutable turn identity allocated by the caller before the remote stream starts. */
+  workspaceCapture?: {
+    runId: number
+    assistantMessageId: string
+    origin?: TaskWorkspaceOrigin
+  }
 }
 
 export interface RemoteAttachmentsWithheld {
   reason: "agent" | "model" | "upload" | "host"
   /** The model with no vision, for `model`. */
   model?: string
+}
+
+export type RemoteExternalAgentResult = ExternalAgentResult & {
+  runId: string
+  /** The source Host's ledger identities. The client must bind their originating Host. */
+  workspace?: RemoteRunWorkspace
+  workspaceUnavailable?: RemoteRunFrame["workspaceUnavailable"]
 }
 
 /** The chat-side id for a question this run is blocked on. */
@@ -157,6 +182,70 @@ function recordHostModelReport(
   })
 }
 
+async function recordWorkspaceTurn(
+  options: RemoteExecuteOptions,
+  workspace: RemoteRunWorkspace,
+  origin: TaskWorkspaceOrigin,
+  databaseScope: CodeAdoptionDatabaseScope
+): Promise<void> {
+  const capture = options.workspaceCapture
+  if (!capture) return
+  const [{ exportTaskResourceManifest }, { persistTaskWorkspaceTurn }] = await Promise.all([
+    import("@/lib/task-workspace/client"),
+    import("@/lib/code-adoption/turn-tracker"),
+  ])
+  const manifests = await Promise.all(
+    workspace.runs.map((run) => exportTaskResourceManifest(run.taskId, run.runId, origin))
+  )
+  assertCodeAdoptionDatabaseScope(databaseScope)
+  await persistTaskWorkspaceTurn(
+    {
+      sessionId: options.chatSessionId,
+      runId: capture.runId,
+      assistantMessageId: capture.assistantMessageId,
+      resources: manifests.flatMap((manifest, index) =>
+        manifest.resources.filter((resource) => resource.runId === workspace.runs[index].runId)
+      ),
+      runs: workspace.runs.map((run) => ({ ...run, origin })),
+      bundleTurnId: workspace.bundleTurnId,
+      agentKind: "external",
+      model: options.model ?? options.cogniaModel?.modelId ?? null,
+    },
+    databaseScope
+  )
+}
+
+async function recordUnavailableWorkspaceTurn(
+  options: RemoteExecuteOptions,
+  reason: NonNullable<RemoteRunFrame["workspaceUnavailable"]>,
+  origin: TaskWorkspaceOrigin,
+  databaseScope: CodeAdoptionDatabaseScope,
+  workspace?: RemoteRunWorkspace
+): Promise<void> {
+  const capture = options.workspaceCapture
+  if (!capture) return
+  const { persistUnavailableTaskWorkspaceTurn } = await import("@/lib/code-adoption/turn-tracker")
+  assertCodeAdoptionDatabaseScope(databaseScope)
+  await persistUnavailableTaskWorkspaceTurn(
+    {
+      sessionId: options.chatSessionId,
+      runId: capture.runId,
+      assistantMessageId: capture.assistantMessageId,
+      reason,
+      agentKind: "external",
+      model: options.model ?? options.cogniaModel?.modelId ?? null,
+      ...(workspace
+        ? {
+            runs: workspace.runs.map((run) => ({ ...run, origin })),
+            bundleTurnId: workspace.bundleTurnId,
+            workspaceRoot: workspace.runs[0]?.workspaceRoot,
+          }
+        : {}),
+    },
+    databaseScope
+  )
+}
+
 /**
  * Run one turn on the host and resolve when it ends.
  *
@@ -168,7 +257,13 @@ function recordHostModelReport(
 export async function executeOnRemoteHostAgent(
   prompt: string,
   options: RemoteExecuteOptions
-): Promise<(ExternalAgentResult & { runId: string }) | null> {
+): Promise<RemoteExternalAgentResult | null> {
+  // This run plane targets the selected Host. Freeze its identity before any
+  // attachment/approval wait, and refuse a route change before dispatch.
+  const workspaceOrigin = options.workspaceCapture
+    ? (options.workspaceCapture.origin ?? captureTaskWorkspaceOrigin())
+    : undefined
+  const databaseScope = options.workspaceCapture ? captureCodeAdoptionDatabaseScope() : undefined
   // A Host built before per-turn Cognia selection closes its request schema
   // against the field, and cannot resume a gateway task it was never asked to
   // run. Asking it to would be a 422 at best; say what fixes it instead.
@@ -205,15 +300,21 @@ export async function executeOnRemoteHostAgent(
   }
   let text = ""
   let externalSessionId = options.externalSessionId ?? ""
+  let workspace: RemoteRunWorkspace | undefined
+  let workspaceUnavailable: RemoteRunFrame["workspaceUnavailable"]
 
   const startedAt = Date.now()
-  let settle: (value: (ExternalAgentResult & { runId: string }) | null) => void = () => {}
-  const finished = new Promise<(ExternalAgentResult & { runId: string }) | null>((resolve) => {
+  let settle: (value: RemoteExternalAgentResult | null) => void = () => {}
+  const finished = new Promise<RemoteExternalAgentResult | null>((resolve) => {
     settle = resolve
   })
 
   const stop = subscribeRemoteExternalRun(runId, {
-    onEvent: (event) => {
+    onEvent: (event, frame) => {
+      if (frame?.terminal) {
+        workspace = frame.workspace
+        workspaceUnavailable = frame.workspaceUnavailable
+      }
       if (event.type === "session_start" && (event as { sessionId?: string }).sessionId) {
         externalSessionId = (event as { sessionId: string }).sessionId
       }
@@ -228,21 +329,58 @@ export async function executeOnRemoteHostAgent(
         ...(withheld.model ? { model: withheld.model } : {}),
       }),
     onTerminal: (terminal, error) => {
-      settle({
-        runId,
-        success: terminal === "completed",
-        sessionId: externalSessionId,
-        finalResponse: text,
-        // Empty rather than reconstructed: the host already rendered the turn
-        // into parts through the event stream, and these three fields exist for
-        // callers that consume a completed transcript. Rebuilding them from the
-        // frames would be a second, divergent renderer.
-        messages: [],
-        steps: [],
-        toolCalls: [],
-        duration: Date.now() - startedAt,
-        ...(terminal === "completed" ? {} : { error: error ?? terminal }),
-      })
+      const finish = () =>
+        settle({
+          runId,
+          success: terminal === "completed",
+          sessionId: externalSessionId,
+          finalResponse: text,
+          // Empty rather than reconstructed: the host already rendered the turn
+          // into parts through the event stream, and these three fields exist for
+          // callers that consume a completed transcript. Rebuilding them from the
+          // frames would be a second, divergent renderer.
+          messages: [],
+          steps: [],
+          toolCalls: [],
+          duration: Date.now() - startedAt,
+          ...(workspace ? { workspace } : {}),
+          ...(workspaceUnavailable ? { workspaceUnavailable } : {}),
+          ...(terminal === "completed" ? {} : { error: error ?? terminal }),
+        })
+      if (workspaceOrigin && databaseScope) {
+        const record = async () => {
+          if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+          if (workspace && !workspaceUnavailable) {
+            try {
+              await recordWorkspaceTurn(options, workspace, workspaceOrigin, databaseScope)
+              return
+            } catch {
+              if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+              workspaceUnavailable = "capture-failed"
+            }
+          }
+          if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+          workspaceUnavailable ??= "no-workspace"
+          await recordUnavailableWorkspaceTurn(
+            options,
+            workspaceUnavailable,
+            workspaceOrigin,
+            databaseScope,
+            workspace
+          )
+        }
+        void record()
+          .catch(() => {
+            if (isCodeAdoptionDatabaseScopeCurrent(databaseScope))
+              workspaceUnavailable = "capture-failed"
+          })
+          .finally(() => {
+            if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) workspaceUnavailable = undefined
+            finish()
+          })
+      } else {
+        finish()
+      }
     },
   })
 
@@ -250,6 +388,17 @@ export async function executeOnRemoteHostAgent(
     // Subscribed is not the same as delivered: wait for the host to
     // acknowledge the topic before it has anything to stream on it.
     await whenRemoteRunChannelSubscribed()
+    if (workspaceOrigin) {
+      const current = captureTaskWorkspaceOrigin()
+      if (
+        current.kind !== workspaceOrigin.kind ||
+        (current.kind === "remote" &&
+          workspaceOrigin.kind === "remote" &&
+          (current.hostId !== workspaceOrigin.hostId ||
+            current.accountId !== workspaceOrigin.accountId))
+      )
+        throw new Error("External run target changed before dispatch")
+    }
     const started = await startRemoteExternalTurn({
       runId,
       chatSessionId: options.chatSessionId,

@@ -58,6 +58,40 @@ function makeDeps() {
 makeDeps.lastSubscriber = undefined as unknown as (e: unknown) => void
 
 describe("createAgentExecutionHandle", () => {
+  it("retains device-bound approval identity after a rejected dispatch", async () => {
+    const context = {
+      hostId: "host-a",
+      originDeviceId: "device-a",
+      sessionId: "s1",
+      generation: 1,
+      requestId: "turn-retry",
+      issuedAt: 1,
+      expiresAt: 2,
+    }
+    claudeIpc.rememberRemoteApprovalContext("s1", "req-retry", context)
+    const deps = makeDeps()
+    const failure = new Error("transport unavailable")
+    deps.ipc.resolvePermission.mockRejectedValueOnce(failure)
+    const handle = createAgentExecutionHandle("s1", spec(), deps)
+    try {
+      await expect(handle.resolvePermission("req-retry", "allow")).rejects.toBe(failure)
+      expect(claudeIpc.peekRemoteApprovalContext("s1", "req-retry")).toBe(context)
+      await handle.resolvePermission("req-retry", "allow")
+      expect(deps.ipc.resolvePermission).toHaveBeenLastCalledWith(
+        "s1",
+        "req-retry",
+        "allow",
+        undefined,
+        undefined,
+        undefined,
+        expect.any(String),
+        context
+      )
+      expect(claudeIpc.peekRemoteApprovalContext("s1", "req-retry")).toBeUndefined()
+    } finally {
+      claudeIpc.forgetRemoteApprovalContext("s1", "req-retry")
+    }
+  })
   it("routes supported commands through the injected IPC", async () => {
     const deps = makeDeps()
     const handle = createAgentExecutionHandle("s1", spec(), deps)
@@ -478,4 +512,32 @@ describe("session controls", () => {
       expect.anything()
     )
   })
+})
+
+jest.mock("@/lib/plugin/vscode-shim/chat-participant-registry", () => ({
+  cancelVscodeChatParticipantSession: jest.fn(),
+}))
+it("cancels extension participants locally and refuses native session controls", async () => {
+  const { cancelVscodeChatParticipantSession } =
+    await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+  const deps = makeDeps()
+  const handle = createAgentExecutionHandle(
+    "s1",
+    spec({
+      runtimeAdapter: "vscode-chat",
+      chatParticipant: { pluginId: "ext", participantId: "helper", generation: "g" },
+      capabilities: {
+        effective: ["streaming", "stream-interruption", "session.multi-turn"],
+        disabledOptional: [],
+      },
+    }),
+    deps
+  )
+  await handle.interrupt()
+  await handle.cancel()
+  expect(cancelVscodeChatParticipantSession).toHaveBeenCalledWith("s1")
+  expect(deps.ipc.interruptSession).not.toHaveBeenCalled()
+  expect(deps.closeSession).not.toHaveBeenCalled()
+  await expect(handle.compact()).rejects.toBeInstanceOf(AgentCapabilityError)
+  await expect(handle.events(() => {})).rejects.toBeInstanceOf(AgentCapabilityError)
 })

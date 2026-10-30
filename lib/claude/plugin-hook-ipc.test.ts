@@ -7,6 +7,11 @@ jest.mock("@/lib/plugin/registries/hook-registry", () => ({
 
 import { getPluginHookHandler, listHookContributors } from "@/lib/plugin/registries/hook-registry"
 import {
+  registerInterceptor,
+  __resetInterceptorRegistryForTesting,
+} from "@/lib/plugin/interceptors/registry"
+import { createInterceptorRegistration } from "@/lib/plugin/interceptors/normalize"
+import {
   handlePluginHookExec,
   BLOCKING_HOOK_EVENTS,
   HOOK_INTERCEPT_PERMISSION,
@@ -26,8 +31,95 @@ const req = (over: Partial<Parameters<typeof handlePluginHookExec>[0]> = {}) => 
 })
 
 beforeEach(() => {
+  __resetInterceptorRegistryForTesting()
   resolveMock.mockReset()
   contributorsMock.mockReset().mockReturnValue([])
+})
+
+it("binds semantic stream requests to their transport session and consumes canonical projection", async () => {
+  const operations: string[] = []
+  registerInterceptor(
+    createInterceptorRegistration({
+      pluginId: "stream",
+      pointId: "model.stream.transform",
+      semantic: "transform",
+      source: "interceptors",
+      handler: ((value: { sessionId: string; operationId: string }) => {
+        expect(value.sessionId).toBe("s1")
+        operations.push(value.operationId)
+        return { ...value, text: "projected" }
+      }) as never,
+    })
+  )
+  await expect(
+    handlePluginHookExec(
+      req({
+        pluginId: "*",
+        hookId: "interceptor:model.stream.transform",
+        payload: {
+          operationId: "00000000-0000-4000-8000-000000000001",
+          sessionId: "forged",
+          part: { type: "text-delta", text: "raw" },
+        },
+      })
+    )
+  ).resolves.toMatchObject({ result: { part: { text: "projected" } } })
+  await handlePluginHookExec(
+    req({
+      pluginId: "*",
+      hookId: "interceptor:model.stream.transform",
+      execId: "next-delta",
+      payload: {
+        operationId: "00000000-0000-4000-8000-000000000001",
+        part: { type: "text-delta", text: "next" },
+      },
+    })
+  )
+  expect(operations).toEqual([
+    "semantic:s1:00000000-0000-4000-8000-000000000001",
+    "semantic:s1:00000000-0000-4000-8000-000000000001",
+  ])
+  await expect(
+    handlePluginHookExec(
+      req({
+        pluginId: "*",
+        hookId: "interceptor:model.stream.transform",
+        payload: { operationId: "forged" },
+      })
+    )
+  ).resolves.toEqual({ error: "Invalid semantic operation identity" })
+})
+
+it("rejects invalid semantic steps and never skips later denial after an approval guard", async () => {
+  const dispatch = (step: unknown) =>
+    handlePluginHookExec(
+      req({
+        pluginId: "*",
+        hookId: "interceptor:agent.turn.decide",
+        payload: { step, operationId: "00000000-0000-4000-8000-000000000001" },
+      })
+    )
+  expect((await dispatch(-1)).error).toContain("Invalid model step")
+  registerInterceptor(
+    createInterceptorRegistration({
+      pluginId: "ask",
+      pointId: "agent.turn.decide",
+      semantic: "guard",
+      source: "interceptors",
+      order: { priority: 10 },
+      handler: (() => ({ decision: "requireApproval", reason: "ask" })) as never,
+    })
+  )
+  registerInterceptor(
+    createInterceptorRegistration({
+      pluginId: "deny",
+      pointId: "agent.turn.decide",
+      semantic: "guard",
+      source: "interceptors",
+      handler: (() => ({ decision: "deny", reason: "denied" })) as never,
+    })
+  )
+  await expect(dispatch(0)).resolves.toMatchObject({ result: { decision: "deny" } })
 })
 
 describe("handlePluginHookExec", () => {
@@ -109,17 +201,17 @@ describe("the intercept permission gate", () => {
 })
 
 describe("broadcast fan-out", () => {
-  it("merges every contributor's result, later winning per key", async () => {
+  it("preserves every compaction vote and concatenates injected context", async () => {
     contributorsMock.mockReturnValue(["a", "b"])
     resolveMock.mockImplementation((pluginId: string) =>
       pluginId === "a"
         ? async () => ({ skipCompaction: true, contextToInject: "from-a" })
-        : async () => ({ contextToInject: "from-b" })
+        : async () => ({ skipCompaction: false, contextToInject: "from-b" })
     )
     const out = await handlePluginHookExec(
       req({ pluginId: PLUGIN_HOOK_BROADCAST, hookId: "onPreCompact" })
     )
-    expect(out.result).toEqual({ skipCompaction: true, contextToInject: "from-b" })
+    expect(out.result).toEqual({ skipCompaction: true, contextToInject: "from-a\nfrom-b" })
   })
 
   it("skips a throwing contributor instead of failing the fan-out", async () => {

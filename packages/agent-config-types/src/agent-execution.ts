@@ -230,6 +230,7 @@ export function isRemoteExternalBinding(
  * credentials) are NOT here — they ride `SendOptions.env`.
  */
 export interface AgentExecutionSendSpec {
+  chatParticipant?: { pluginId: string; participantId: string; generation: string }
   specVersion: 1 | 2 | 3
   executionFingerprint: string
   runtimeAdapter: AgentRuntimeAdapterId
@@ -371,7 +372,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 const RUNTIME_POLICIES: readonly string[] = ["auto", "claude-agent-sdk", "ai-sdk"]
-const RUNTIME_ADAPTERS: readonly string[] = ["claude-agent-sdk", "ai-sdk", "external"]
+const RUNTIME_ADAPTERS: readonly string[] = [
+  "claude-agent-sdk",
+  "ai-sdk",
+  "external",
+  "vscode-chat",
+]
 const ROUTE_POLICIES: readonly string[] = ["gateway-required", "gateway-preferred", "direct"]
 const AFFINITIES: readonly string[] = ["session-sticky", "sticky-with-failover", "per-request"]
 const EXECUTION_KINDS: readonly string[] = ["agent", "completion"]
@@ -513,6 +519,18 @@ export function validateResolvedAgentExecutionSpec(
   if (!EXECUTION_KINDS.includes(v.executionKind as string)) {
     errors.push(`executionKind must be one of ${EXECUTION_KINDS.join("|")}`)
   }
+  if (v.runtimeAdapter === "vscode-chat" || v.chatParticipant !== undefined) {
+    const binding = v.chatParticipant
+    if (
+      v.runtimeAdapter !== "vscode-chat" ||
+      !isRecord(binding) ||
+      ["pluginId", "participantId", "generation"].some(
+        (key) => typeof binding[key] !== "string" || !(binding[key] as string).trim()
+      )
+    ) {
+      errors.push("vscode-chat requires a valid chatParticipant binding")
+    }
+  }
   if (!RUNTIME_ADAPTERS.includes(v.runtimeAdapter as string)) {
     errors.push(`runtimeAdapter must be one of ${RUNTIME_ADAPTERS.join("|")}`)
   }
@@ -652,6 +670,18 @@ export function validateAgentExecutionSendSpec(
     errors.push("executionFingerprint must be a non-empty string")
   }
   validateExternalBinding(v.externalBinding, v.specVersion, errors)
+  if (v.runtimeAdapter === "vscode-chat" || v.chatParticipant !== undefined) {
+    const binding = v.chatParticipant
+    if (
+      v.runtimeAdapter !== "vscode-chat" ||
+      !isRecord(binding) ||
+      ["pluginId", "participantId", "generation"].some(
+        (key) => typeof binding[key] !== "string" || !(binding[key] as string).trim()
+      )
+    ) {
+      errors.push("vscode-chat requires a valid chatParticipant binding")
+    }
+  }
   if (!RUNTIME_ADAPTERS.includes(v.runtimeAdapter as string)) {
     errors.push(`runtimeAdapter must be one of ${RUNTIME_ADAPTERS.join("|")}`)
   }

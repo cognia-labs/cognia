@@ -336,6 +336,7 @@
     "auto": "Default shell",
     "bash": "bash",
     "cmd": "Command Prompt",
+    "extensionProfilesLabel": "Extension profiles",
     "fish": "fish",
     "label": "Choose a shell",
     "nu": "Nushell",

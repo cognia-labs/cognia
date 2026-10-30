@@ -1,4 +1,8 @@
 import { drainPendingRoundTrips } from "../common/round-trips.ts"
+import {
+  createSemanticConsumers,
+  SemanticInterceptionError,
+} from "../../hooks/semantic-consumers.ts"
 import { createOutputReviewer } from "./output-review.ts"
 import { createCompactor, manualCompactOutcomeEvent } from "./compaction.ts"
 import type { ToolSet } from "ai"
@@ -15,6 +19,11 @@ import {
 } from "../../context/compaction.ts"
 import { planDeliveryReady } from "../../context/progress-checkpoint.ts"
 import { partitionPrompt } from "../../providers/prompt-partition.ts"
+import {
+  normalizeCacheCreation,
+  normalizeUsageBlock,
+  toLanguageModelUsage,
+} from "../../providers/usage-normalize.ts"
 import type { CallLedgerGate, CallReport } from "../common/call-ledger-gate.ts"
 import type { PendingApproval } from "../../policy/permission/approval.ts"
 import type { PendingPluginToolCalls } from "../../tools/plugin/proxy.ts"
@@ -293,16 +302,16 @@ export function dispatchAiSdk({
     emit,
     sessionId,
     pendingProtocolExecs,
-    remoteExecutionContext: sendOptions.remoteExecutionContext,
-    onCancel: (execId, reason) => {
+    get remoteExecutionContext() {
+      return sendOptions.remoteExecutionContext
+    },
+    onCancel: (execId, reason, remoteExecutionContext) => {
       emit({
         type: "protocol_adapter_cancel",
         sessionId,
         execId,
         reason,
-        ...(sendOptions.remoteExecutionContext
-          ? { remoteExecutionContext: sendOptions.remoteExecutionContext }
-          : {}),
+        ...(remoteExecutionContext ? { remoteExecutionContext } : {}),
       })
     },
   })
@@ -415,6 +424,8 @@ export function dispatchAiSdk({
   let nextTurnVerificationBudget = sendOptions.verificationBudget
     ? { ...sendOptions.verificationBudget }
     : undefined
+  let nextTurnSemanticInterceptors = sendOptions.semanticInterceptors?.slice()
+  let nextTurnApprovalTtlMs = sendOptions.approvalTtlMs
   const verificationBudget = createVerificationBudget()
   // The paired device's execution context of the send behind the NEXT turn, or
   // undefined for a host-started send. Per turn like the stamp: a reservation
@@ -583,7 +594,9 @@ export function dispatchAiSdk({
     sessionId,
     emit,
     isStopped: () => closing || cancelled,
-    remoteExecutionContext: sendOptions.remoteExecutionContext,
+    get remoteExecutionContext() {
+      return sendOptions.remoteExecutionContext
+    },
   })
 
   // Build a flat conversation from accumulated user/assistant turns.
@@ -740,9 +753,16 @@ export function dispatchAiSdk({
     // Clear any leftover interrupt from a previous turn so this turn streams.
     cancelled = false
     active = true
+    // Cached native/MCP permission gates retain these options objects. Their
+    // caller binding belongs to the current send, including an absent context
+    // for a Host-originated turn, rather than the session's first generation.
+    sendOptions.remoteExecutionContext = nextTurnRemoteContext
+    agentScopedSendOptions.remoteExecutionContext = nextTurnRemoteContext
     const turnStartedAt = Date.now()
     const verificationWasEnabled = verificationBudget.snapshot().enabled
     verificationBudget.reset(nextTurnVerificationBudget)
+    sendOptions.semanticInterceptors = nextTurnSemanticInterceptors?.slice()
+    sendOptions.approvalTtlMs = nextTurnApprovalTtlMs
     nextTurnVerificationBudget = undefined
     let closePreviousMcp: (() => Promise<void>) | null = null
     if (verificationWasEnabled !== verificationBudget.snapshot().enabled) {
@@ -801,6 +821,37 @@ export function dispatchAiSdk({
     let currentLegStepOutputTokens = 0
     let currentLegLastInputTokens = 0
     let currentLegStepUsage: Record<string, unknown> | null = null
+    const emptyCacheUsage = () => ({ read: 0, total: 0, ephemeral5m: 0, ephemeral1h: 0 })
+    const accCacheUsage = emptyCacheUsage()
+    let currentLegStepCacheUsage = emptyCacheUsage()
+    const reportedNumber = (...values: unknown[]) =>
+      values.some((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)
+    const addCacheUsage = (
+      target: ReturnType<typeof emptyCacheUsage>,
+      value: unknown,
+      fallback = emptyCacheUsage()
+    ) => {
+      const raw = record(value)
+      const reported = toLanguageModelUsage(value).inputTokens
+      const split = record(raw.cache_creation ?? raw.cacheCreation)
+      const creation = normalizeCacheCreation(value)
+      const ttl5m = reportedNumber(split.ephemeral_5m_input_tokens, split.ephemeral5mInputTokens)
+      const ttl1h = reportedNumber(split.ephemeral_1h_input_tokens, split.ephemeral1hInputTokens)
+      const flatWrites = reportedNumber(reported.cacheWrite, raw.cache_creation_input_tokens)
+      const zeroWrites = flatWrites && creation.total === 0
+      const merged5m = zeroWrites ? 0 : ttl5m ? creation.ephemeral5m : fallback.ephemeral5m
+      const merged1h = zeroWrites ? 0 : ttl1h ? creation.ephemeral1h : fallback.ephemeral1h
+      target.read += reportedNumber(reported.cacheRead, raw.cache_read_input_tokens)
+        ? (normalizeUsageBlock(value).cache_read_input_tokens as number)
+        : fallback.read
+      target.total += flatWrites
+        ? creation.total
+        : ttl5m || ttl1h
+          ? merged5m + merged1h
+          : fallback.total
+      target.ephemeral5m += merged5m
+      target.ephemeral1h += merged1h
+    }
     // The turn's latest single model call (prompt incl. cached tokens + its
     // output): what actually occupies the window once the turn ends. Unlike the
     // per-leg fields these are never reset between legs.
@@ -819,6 +870,7 @@ export function dispatchAiSdk({
       }
       if (typeof output === "number" && output > 0) currentLegStepOutputTokens += output
       currentLegStepUsage = usage
+      addCacheUsage(currentLegStepCacheUsage, usage)
     }
     const finishUsageSnapshot = () => {
       const inputTokens = accInputTokens + currentLegStepInputTokens
@@ -827,8 +879,16 @@ export function dispatchAiSdk({
       if (!base && inputTokens <= 0 && outputTokens <= 0) return undefined
       return {
         ...(base ?? {}),
-        ...(inputTokens > 0 ? { inputTokens } : {}),
-        ...(outputTokens > 0 ? { outputTokens } : {}),
+        cacheReadInputTokens: accCacheUsage.read + currentLegStepCacheUsage.read,
+        cacheCreationInputTokens: accCacheUsage.total + currentLegStepCacheUsage.total,
+        cache_creation: {
+          ephemeral_5m_input_tokens:
+            accCacheUsage.ephemeral5m + currentLegStepCacheUsage.ephemeral5m,
+          ephemeral_1h_input_tokens:
+            accCacheUsage.ephemeral1h + currentLegStepCacheUsage.ephemeral1h,
+        },
+        ...(inputTokens > 0 ? { inputTokens, promptTokens: inputTokens } : {}),
+        ...(outputTokens > 0 ? { outputTokens, completionTokens: outputTokens } : {}),
         ...(turnLastStepInputTokens > 0 || lastInputTokens > 0
           ? { contextInputTokens: turnLastStepInputTokens || lastInputTokens }
           : {}),
@@ -849,6 +909,7 @@ export function dispatchAiSdk({
     // agent-loop leg below (so every leg renders as a fresh content block, and
     // turn N+1 never re-emits turn N's reply — the "duplicate output" bug). The
     // adapter is created once per session, so `init` is emitted only once.
+    let turnProducedOutput = false
     try {
       const creds = sendOptions.providerCredentials ?? {}
       // `modelParams` carries the provider's configured sampling settings
@@ -865,6 +926,14 @@ export function dispatchAiSdk({
       // `maybeCompact`, leaving the summary request un-abortable).
       const abortController = new AbortController()
       activeAbortController = abortController
+      const semantics = createSemanticConsumers({
+        sessionId,
+        sendOptions,
+        emit,
+        signal: abortController.signal,
+        pendingPluginHookCalls,
+        pendingApprovals,
+      })
       if (closePreviousMcp) {
         const disconnecting = closePreviousMcp().catch((error) =>
           log("warn", `mcp teardown failed: ${errorToMessage(error)}`)
@@ -1037,7 +1106,6 @@ export function dispatchAiSdk({
       // transport attempts (opencode v1.18.17: capped retries + jitter).
       let transportRetries = 0
       let overflowRecoveryAttempted = false
-      let turnProducedOutput = false
       // Unknown finishReasons keep the loop going — bounded so a provider that
       // always ends "other" can't spin the turn forever (opencode v1.18.21).
       let unknownFinishContinues = 0
@@ -1047,6 +1115,7 @@ export function dispatchAiSdk({
         currentLegStepOutputTokens = 0
         currentLegLastInputTokens = 0
         currentLegStepUsage = null
+        currentLegStepCacheUsage = emptyCacheUsage()
         // Fresh content block per leg (new messageId) so the renderer keeps each
         // leg's text/tool calls distinct instead of merging them into one block.
         adapter.reset()
@@ -1187,16 +1256,33 @@ export function dispatchAiSdk({
           // Near-miss tool names and aliased argument keys (common behind
           // relays) are repaired instead of failing the call.
           repairToolCall: repairToolCallFn,
-          ...(verificationBudget.snapshot().enabled
+          ...(sendOptions.semanticInterceptors?.includes("agent.turn.decide")
             ? {
-                prepareStep: withVerificationFeedback(
-                  verificationBudget,
-                  toolSearchController?.prepareStep
-                ),
+                prepareStep: async (
+                  step: Parameters<ReturnType<typeof withVerificationFeedback>>[0]
+                ) => {
+                  abortController.signal.throwIfAborted()
+                  const prepare = verificationBudget.snapshot().enabled
+                    ? withVerificationFeedback(
+                        verificationBudget,
+                        toolSearchController?.prepareStep
+                      )
+                    : toolSearchController?.prepareStep
+                  const prepared = await prepare?.(step)
+                  await semantics.beforeStep(step.stepNumber)
+                  return prepared
+                },
               }
-            : toolSearchController
-              ? { prepareStep: toolSearchController.prepareStep }
-              : {}),
+            : verificationBudget.snapshot().enabled
+              ? {
+                  prepareStep: withVerificationFeedback(
+                    verificationBudget,
+                    toolSearchController?.prepareStep
+                  ),
+                }
+              : toolSearchController
+                ? { prepareStep: toolSearchController.prepareStep }
+                : {}),
           maxSteps: perLegCap,
           captureRequestMessages: sendOptions.compaction?.enabled !== false,
           credentials: creds,
@@ -1262,6 +1348,7 @@ export function dispatchAiSdk({
         })
 
         let legText = ""
+        let legPresentationText = ""
         let legProducedOutput = false
         // Capture a streamed error part. AI SDK v6 surfaces provider/auth/network
         // failures as a `{ type:"error", error }` part in `fullStream` (and only
@@ -1286,7 +1373,10 @@ export function dispatchAiSdk({
             const evt = record(event)
             if (cancelled) break
             trackExecutingToolCall(executingToolCalls, evt)
-            if (evt?.type === "error") streamError = evt.error
+            if (evt?.type === "error") {
+              if (evt.error instanceof SemanticInterceptionError) throw evt.error
+              streamError = evt.error
+            }
             if (evt?.type === "finish") finishReason = evt.finishReason ?? finishReason
             if (evt?.type === "finish-step") {
               recordCompletedStepUsage(evt.usage ?? evt.totalUsage)
@@ -1294,10 +1384,13 @@ export function dispatchAiSdk({
             // NB: the PostToolUse review no longer intercepts here — it runs at
             // the tool EXECUTE layer (see `reviewToolOutput`), so tool-result
             // events already carry the reviewed output the model will see.
-            const out = adapter.handle(evt)
+            const projected = await semantics.transform(evt)
+            const out = adapter.handle(projected)
             flushAdapter(out)
             if (evt?.type === "text-delta") {
               legText += evt.text ?? evt.textDelta ?? evt.delta ?? ""
+              legPresentationText +=
+                projected?.text ?? projected?.textDelta ?? projected?.delta ?? ""
             }
             if (
               evt?.type === "text-delta" ||
@@ -1325,7 +1418,7 @@ export function dispatchAiSdk({
         // renderer replaces the in-progress preview by id. No-op for a leg that
         // produced only tool results (its boundary snapshots already sealed it).
         flushAdapter(adapter.sealAssistant())
-        assistantText += legText
+        assistantText += legPresentationText
 
         // A call the provider refused before producing anything may be retried.
         // Under Router + Fusion the failed reserved attempt is reported and a
@@ -1489,7 +1582,7 @@ export function dispatchAiSdk({
         // from the `finish-step` events. A leg that reported no step usage falls
         // back to the leg total.
         if (usage) {
-          const inTok = usage.inputTokens ?? usage.promptTokens
+          const inTok = usage.inputTokens ?? usage.promptTokens ?? currentLegStepInputTokens
           if (typeof inTok === "number" && inTok > 0) {
             lastInputTokens = currentLegLastInputTokens > 0 ? currentLegLastInputTokens : inTok
             // A ledgered leg is exactly one request: compare its actual input
@@ -1501,9 +1594,10 @@ export function dispatchAiSdk({
             if (currentLegLastInputTokens === 0) turnLastStepInputTokens = 0
             accInputTokens += inTok
           }
-          const outTok = usage.outputTokens ?? usage.completionTokens
+          const outTok = usage.outputTokens ?? usage.completionTokens ?? currentLegStepOutputTokens
           if (typeof outTok === "number" && outTok > 0) accOutputTokens += outTok
           lastUsageForFinish = usage
+          addCacheUsage(accCacheUsage, usage, currentLegStepCacheUsage)
           // The resolved leg usage is authoritative and already includes the
           // completed steps observed above; clear the fallback to avoid counting
           // both paths on a normal completion.
@@ -1511,6 +1605,7 @@ export function dispatchAiSdk({
           currentLegStepOutputTokens = 0
           currentLegLastInputTokens = 0
           currentLegStepUsage = null
+          currentLegStepCacheUsage = emptyCacheUsage()
         }
 
         if (openLedgerAttempt) {
@@ -1656,11 +1751,16 @@ export function dispatchAiSdk({
         emit({ type: "session_ended", sessionId, conversationSnapshot: conversation })
       }
     } catch (err) {
+      const policyRefusal = err instanceof SemanticInterceptionError
+      if (policyRefusal) activeAbortController?.abort(err)
       // A reserved call that threw instead of streaming: a configuration error
       // that never left the process is failed; anything else was possibly sent
       // and is UNKNOWN until reconciled.
       if (openLedgerAttempt) {
-        const errorClass = classifyCallError(err, { aborted: cancelled })
+        const errorClass =
+          policyRefusal && err.pointId === "agent.turn.decide" && !turnProducedOutput
+            ? "not_sent"
+            : classifyCallError(err, { aborted: cancelled })
         reportOpenAttempt({
           status:
             errorClass === "not_sent" || errorClass === "invalid_request" || errorClass === "auth"
@@ -1683,6 +1783,7 @@ export function dispatchAiSdk({
           type: "session_ended",
           sessionId,
           error: terminalErrorMessage(err),
+          ...(policyRefusal ? { code: err.code } : {}),
           // Thrown (non-streamed) failures — buildModel errors, the variant
           // adapter's HTTP throw, getter rejections — carry status/Retry-After
           // too; forward it so the renderer's breaker doesn't fall back to
@@ -1809,6 +1910,13 @@ export function dispatchAiSdk({
     setNextTurnVerificationBudget: (stamp: SendOptions["verificationBudget"]) => {
       validateVerificationBudgetStamp(stamp)
       nextTurnVerificationBudget = stamp ? { ...stamp } : undefined
+    },
+    setNextTurnSemanticInterceptors: (
+      stamp: SendOptions["semanticInterceptors"],
+      approvalTtlMs?: number
+    ) => {
+      nextTurnSemanticInterceptors = stamp?.slice()
+      nextTurnApprovalTtlMs = approvalTtlMs
     },
     /** Resolve a pending reservation (`call_reserve_decision` from the renderer). */
     resolveCallReserve: (message: unknown) => turnLedgerGate?.resolveDecision(message) ?? false,

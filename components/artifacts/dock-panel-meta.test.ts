@@ -34,6 +34,7 @@ describe("DOCK_SESSION_PANEL_META", () => {
     expect(wide).toEqual([
       "best-of-n",
       "browser",
+      "cloud-document",
       "project-overview",
       "sandbox-desktop",
       "workspace",

@@ -147,6 +147,7 @@ const assistantEvent = (text: string, opts?: { uuid?: string; messageId?: string
 
 const sessionEnded = (opts?: {
   error?: string
+  code?: string
   resultText?: string
   httpStatus?: number
   retryAfterMs?: number
@@ -154,6 +155,7 @@ const sessionEnded = (opts?: {
   type: "session_ended",
   sessionId: SESSION,
   error: opts?.error,
+  code: opts?.code,
   ...(opts?.httpStatus !== undefined ? { httpStatus: opts.httpStatus } : {}),
   ...(opts?.retryAfterMs !== undefined ? { retryAfterMs: opts.retryAfterMs } : {}),
   result: opts?.resultText
@@ -428,6 +430,15 @@ describe("runAndCaptureAssistantReply", () => {
       message: "rate-limited",
     })
     expect(unlistenMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("preserves semantic policy refusal across the capture boundary", async () => {
+    const promise = runAndCaptureAssistantReply(SESSION, "hi", undefined, { timeoutMs: 1_000 })
+    await Promise.resolve()
+    fire(
+      sessionEnded({ error: "network timeout policy denied", code: "PLUGIN_INTERCEPTOR_REFUSED" })
+    )
+    await expect(promise).rejects.toMatchObject({ code: "policy_refused" })
   })
 
   it("carries the sidecar's HTTP metadata onto the rejection", async () => {

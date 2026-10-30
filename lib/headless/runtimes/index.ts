@@ -84,6 +84,10 @@
  *
  * ## Deliberately NOT registered (lifecycle owned elsewhere or UI-only)
  *
+ * - `vscode-webview-restoration` — PluginManager installs panel persistence and
+ *   serializer recovery only in the Tauri renderer. Headless has no extension
+ *   rail or iframe; a native Node invoker does not make a UI surface available.
+ *
  * - `lume-local-vm` — desktop-only Apple Silicon lifecycle and SSH/MCP
  *   supervision owned by the native account-bound CuaSandboxRegistry. Local
  *   IPC starts bounded operation handles; account lock and desktop shutdown
@@ -105,10 +109,9 @@
  *   Headless hosts have no document; their metrics use `performance-runtime`.
  * - `operation-performance` — local renderer startup/storage/transport/network
  *   summaries. Instrumented shared helpers are inert without a browser window.
- * - renderer `GatewayProvider` — desktop-only settings/vault projection and
- *   account-generation event filtering. Rust owns gateway lock/switch/vault
- *   invalidation even without a renderer; the headless gateway owns its own
- *   host projection and never mounts this account-scoped UI bridge.
+ * - renderer `GatewayProvider` — desktop-only settings/vault projection.
+ *   Rust owns gateway lock/switch/vault invalidation without a renderer;
+ *   `gateway-telemetry` installs the shared usage/log sink in both brain profiles.
  * - `managed-desktop-lifecycle` — ADR-0233 cloud resource journals, deadlines
  *   and destroy retries belong to the native Host service in cognia-automation.
  *   cognia-companion/server boot starts its reconciler independently of the
@@ -208,6 +211,7 @@ import "./host-event-publisher"
 import "./host-provider-keys"
 import "./desktop-sync-source"
 import "./desktop-message-source"
+import "./gateway-telemetry"
 import "./a2ui-dispatch"
 import "./behavior-telemetry"
 import "./plugin-runtime"
@@ -242,6 +246,7 @@ export const PERSON_BRAIN_RUNTIMES = [
   "host-event-publisher",
   "desktop-sync-source",
   "desktop-message-source",
+  "gateway-telemetry",
   // Opt-in terminal write-back only in person brains; no replay runner, workers,
   // plugins or Host keys. The listener persists into the process's account DB.
   "work-submission-outbox",

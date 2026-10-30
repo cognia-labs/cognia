@@ -2,6 +2,11 @@
  * @jest-environment jsdom
  */
 import { useContextWorkbenchStore } from "@/stores/context-workbench/context-workbench-store"
+import { subscribeDockDocumentLifecycle } from "@/lib/artifacts/dock-documents"
+
+jest.mock("@/lib/artifacts/dock-documents", () => ({
+  subscribeDockDocumentLifecycle: jest.fn(() => jest.fn()),
+}))
 
 import { render, screen, act, waitFor, fireEvent } from "@testing-library/react"
 
@@ -295,6 +300,18 @@ beforeEach(() => {
 })
 
 describe("ArtifactWorkspaceDock", () => {
+  it("installs and releases document cache/account lifecycle listeners", () => {
+    ;(subscribeDockDocumentLifecycle as jest.Mock).mockClear()
+    const { unmount } = render(
+      <ArtifactWorkspaceDock>
+        <div />
+      </ArtifactWorkspaceDock>
+    )
+    expect(subscribeDockDocumentLifecycle).toHaveBeenCalledTimes(1)
+    const stop = (subscribeDockDocumentLifecycle as jest.Mock).mock.results[0].value
+    unmount()
+    expect(stop).toHaveBeenCalledTimes(1)
+  })
   it("desktop: renders children plus the dock (no Sheet)", () => {
     act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(false))
     render(

@@ -52,6 +52,10 @@ import { listen } from "@tauri-apps/api/event"
 
 import {
   approveTool,
+  requestLocalToolApproval,
+  rememberRemoteApprovalContext,
+  peekRemoteApprovalContext,
+  forgetRemoteApprovalContext,
   closeSession,
   defaultExportDir,
   deleteMessage,
@@ -149,6 +153,62 @@ describe("connector approval review settlement", () => {
     })
   })
   afterAll(fixture.dispose)
+
+  it("routes local model-step approval through the existing response funnel without native IPC", async () => {
+    const events: import("@cognia/agent-config-types").ClaudeEvent[] = []
+    const controller = new AbortController()
+    const waiting = requestLocalToolApproval({
+      sessionId: "session-approval",
+      step: 1,
+      reason: "Review next model step",
+      signal: controller.signal,
+      emit: (event) => {
+        events.push(event)
+      },
+    })
+    await waitFor(() =>
+      expect(events.some((event) => event.type === "permission_request")).toBe(true)
+    )
+    const ask = events.find(
+      (event) => event.type === "permission_request"
+    ) as import("@cognia/agent-config-types").PermissionRequestEvent
+    expect(ask.requiresPerCallApproval).toBe(true)
+    await expect(approveTool("other-session", ask.requestId, "allow")).rejects.toThrow(
+      "belongs to another session"
+    )
+    await approveTool("session-approval", ask.requestId, "allow", undefined, undefined, undefined, {
+      authority: "human",
+    })
+    await expect(waiting).resolves.toBe(true)
+    expect(callSpy).not.toHaveBeenCalledWith("claude_approve", expect.anything())
+    await expect(approveTool("session-approval", ask.requestId, "allow")).rejects.toThrow("expired")
+    expect(await getActionReviewReceipt(ask.requestId)).toMatchObject({ authority: "human" })
+  })
+
+  it("aborts local model-step asks and records denial without accepting late answers", async () => {
+    const events: import("@cognia/agent-config-types").ClaudeEvent[] = []
+    const controller = new AbortController()
+    const waiting = requestLocalToolApproval({
+      sessionId: "session-approval",
+      step: 1,
+      reason: "Ask",
+      signal: controller.signal,
+      emit: (event) => {
+        events.push(event)
+      },
+    })
+    await waitFor(() =>
+      expect(events.some((event) => event.type === "permission_request")).toBe(true)
+    )
+    const ask = events.find(
+      (event) => event.type === "permission_request"
+    ) as import("@cognia/agent-config-types").PermissionRequestEvent
+    controller.abort()
+    await expect(waiting).resolves.toBe(false)
+    expect(events.some((event) => event.type === "permission_interrupted")).toBe(true)
+    expect(await getActionReviewReceipt(ask.requestId)).toMatchObject({ authority: "system" })
+    await expect(approveTool("session-approval", ask.requestId, "allow")).rejects.toThrow("expired")
+  })
 
   async function requestReview() {
     const handlers: Array<(event: unknown) => void> = []
@@ -723,6 +783,33 @@ describe("Claude session commands", () => {
     expect(mockRecordToolAuthorizationGovernance).toHaveBeenCalledWith(
       expect.objectContaining({ requestId: "req-failed", dispatched: false })
     )
+  })
+
+  it("retains a device-bound approval context until its dispatch succeeds", async () => {
+    const context = {
+      hostId: "host-a",
+      originDeviceId: "device-a",
+      sessionId: "retry-session",
+      generation: 1,
+      requestId: "turn-a",
+      issuedAt: 1,
+      expiresAt: 2,
+    }
+    rememberRemoteApprovalContext("retry-session", "retry-approval", context)
+    const failure = new Error("transport unavailable")
+    callSpy.mockRejectedValueOnce(failure).mockResolvedValueOnce(undefined)
+    try {
+      await expect(approveTool("retry-session", "retry-approval", "allow")).rejects.toBe(failure)
+      expect(peekRemoteApprovalContext("retry-session", "retry-approval")).toBe(context)
+      await approveTool("retry-session", "retry-approval", "allow")
+      expect(callSpy).toHaveBeenLastCalledWith(
+        "claude_approve",
+        expect.objectContaining({ remoteExecutionContext: context })
+      )
+      expect(peekRemoteApprovalContext("retry-session", "retry-approval")).toBeUndefined()
+    } finally {
+      forgetRemoteApprovalContext("retry-session", "retry-approval")
+    }
   })
 
   it("approveTool does not fail a successful dispatch when governance projection fails", async () => {

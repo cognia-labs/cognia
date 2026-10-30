@@ -32,6 +32,7 @@ import type { PanelImperativeHandle } from "react-resizable-panels"
 import { FocusScope } from "radix-ui/internal"
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable"
 import { onBrowserUrlReveal } from "@/lib/browser/open-url-request"
+import { subscribeDockDocumentLifecycle } from "@/lib/artifacts/dock-documents"
 import { runShellViewTransition } from "@/lib/ui/shell-view-transition"
 import { useShellColumnsStore } from "@/stores/ui/shell-columns-store"
 import {
@@ -430,6 +431,7 @@ function useSideBrowserReveal({ pageTabs }: { pageTabs: boolean }): void {
 }
 
 export function ArtifactWorkspaceDock({ children }: { children: ReactNode }) {
+  useEffect(() => subscribeDockDocumentLifecycle(), [])
   const breakpoint = useBreakpoint()
   useArtifactDockShortcuts()
   useDockAttentionSignal({ raiseOnConversationChange: breakpoint === "desktop" })

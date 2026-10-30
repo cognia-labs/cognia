@@ -25,7 +25,13 @@ import { appPresetCatalog } from "@/lib/agent/composition/app-preset-catalog"
 import { compositionForSession } from "@/stores/agent/agent-runtime-store"
 import { STANDARD_PRESET, presetFromAgentMode } from "@/lib/agent/composition/preset-catalog"
 import type { AgentModeConfig } from "@/types/agent/agent-mode"
-import type { AgentPermissionMode } from "@cognia/agent-config-types"
+import type {
+  AgentPermissionMode,
+  AppSettings,
+  Character,
+  ChatSession,
+} from "@cognia/agent-config-types"
+import { resolveSandboxEnabled } from "@/lib/sandbox/binding"
 import type {
   AgentCompositionSelectionV1,
   AgentPresetDefinitionV1,
@@ -61,6 +67,30 @@ export interface ResolveTurnAgentModeInput {
    * user's default for any session the store has never seen.
    */
   selection?: AgentCompositionSelectionV1
+}
+
+/** The permission/sandbox ladder shared by local extension execution surfaces. */
+export function resolveTurnAuthority(
+  input: ResolveTurnAgentModeInput & {
+    session?: Pick<ChatSession, "id" | "permissionMode" | "sandboxEnabled"> | null
+    character?: Pick<Character, "permissionMode" | "sandboxEnabled"> | null
+    appSettings?: Pick<AppSettings, "permissionMode" | "sandboxDefaultEnabled"> | null
+  }
+): { permissionMode?: AgentPermissionMode; sandboxEnabled: boolean } {
+  const mode = resolveTurnAgentMode({ ...input, sessionId: input.session?.id ?? input.sessionId })
+  return {
+    permissionMode:
+      input.session?.permissionMode ??
+      mode.requestedAuthority ??
+      mode.mode?.permissionMode ??
+      input.character?.permissionMode ??
+      input.appSettings?.permissionMode,
+    sandboxEnabled: resolveSandboxEnabled({
+      session: { sandboxEnabled: input.session?.sandboxEnabled },
+      character: { sandboxEnabled: input.character?.sandboxEnabled },
+      appSettings: { sandboxDefaultEnabled: input.appSettings?.sandboxDefaultEnabled },
+    }),
+  }
 }
 
 /** Rank used only to apply a preset's `maxAuthority` cap. */

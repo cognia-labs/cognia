@@ -16,6 +16,8 @@ import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
 import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layout-store"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
+import { useDockDocumentsStore } from "@/stores/artifact/dock-documents-store"
+import { subscribeDockDocumentLifecycle } from "@/lib/artifacts/dock-documents"
 import { useChatStore } from "@/stores/chat"
 import { useChatViewportStore } from "@/stores/chat/chat-viewport-store"
 import { useContextWorkbenchStore } from "@/stores/context-workbench/context-workbench-store"
@@ -94,10 +96,57 @@ beforeEach(() => {
   localStorage.clear()
   useChatStore.setState({ activeSessionId: SESSION })
   useDockTabsStore.setState({ bySession: {} })
+  useDockDocumentsStore.setState({ bySession: {} })
   useArtifactDockLayoutStore.getState().resetLayout()
   act(() => useArtifactDockLayoutStore.getState().setDockCollapsed(false))
   useContextWorkbenchStore.setState({ layouts: {} })
   setArtifacts([], null)
+})
+
+afterEach(() => subscribeDockDocumentLifecycle()())
+
+it("draws document titles/provider icons, activates and closes individual documents", () => {
+  useDockDocumentsStore.getState().put(SESSION, {
+    id: "d1",
+    providerId: "google",
+    resourceKind: "doc",
+    resourceId: "abcdefghijklmnop1234",
+    url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+    title: "Cloud report",
+    view: "snapshot",
+    openedAt: 1,
+  })
+  setPanels(["cloud-document", "new-tab"], "new-tab")
+  renderStrip()
+  expect(tabNames()).toEqual(["contextWorkbench.newTab.title", "DCloud report"])
+  fireEvent.click(screen.getByRole("tab", { name: "Cloud report" }))
+  expect(useDockDocumentsStore.getState().bySession[SESSION].activeDocumentTabId).toBe("d1")
+  expect(useContextWorkbenchStore.getState().layouts[SCOPE].activePanelId).toBe("cloud-document")
+  expect(onWidthHint).toHaveBeenCalledWith("wide", "cloud-document")
+  fireEvent.click(screen.getByRole("button", { name: 'close{"name":"Cloud report"}' }))
+  expect(useDockDocumentsStore.getState().bySession[SESSION].documents).toHaveLength(0)
+})
+
+it("offers document open/copy actions and uses the canonical link", async () => {
+  const user = userEvent.setup()
+  ;(openExternal as jest.Mock).mockResolvedValue(undefined)
+  const url = "https://docs.google.com/document/d/abcdefghijklmnop1234/edit"
+  useDockDocumentsStore.getState().put(SESSION, {
+    id: "doc",
+    providerId: "google",
+    resourceKind: "doc",
+    resourceId: "abcdefghijklmnop1234",
+    url,
+    title: "Cloud",
+    view: "live",
+    openedAt: 1,
+  })
+  setPanels(["cloud-document"], "cloud-document")
+  renderStrip()
+  await user.pointer({ keys: "[MouseRight]", target: screen.getByRole("tab", { name: "Cloud" }) })
+  expect(screen.getByRole("menuitem", { name: "copyLink" })).toBeInTheDocument()
+  await user.click(screen.getByRole("menuitem", { name: "openSystem" }))
+  expect(openExternal).toHaveBeenCalledWith(url)
 })
 
 describe("presentDockTabs", () => {

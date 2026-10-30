@@ -747,7 +747,15 @@ export class ExternalAgentManager {
                 additionalModels: modelPlan.models.filter(
                   (model) => model !== modelPlan!.primaryModelId
                 ),
-                modelBindings: {},
+                modelBindings: modelPlan.bindings
+                  ? Object.fromEntries(
+                      Object.entries(modelPlan.bindings).map(([selector, selected]) => [
+                        selector,
+                        selected.modelId,
+                      ])
+                    )
+                  : {},
+                ...(modelPlan.bindings ? { bindings: modelPlan.bindings } : {}),
               },
             }
           : {}),

@@ -345,6 +345,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
   }
 
   private client!: OpencodeClient
+  private sessionClients = new Map<string, OpencodeClient>()
   private abortControllers: Map<string, AbortController> = new Map()
   private sessionSystemPrompts: Map<string, string> = new Map()
   // Latest assistant-message outcome (tokens / cost / error / finish) per
@@ -732,6 +733,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
     await this.killSpawnedServer()
 
     this._sessions.clear()
+    this.sessionClients.clear()
     this.pendingInteractions.clear()
     this.baseUrl = ""
     this.requestFetch = undefined
@@ -819,6 +821,8 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
   // ============================================================================
 
   async createSession(options?: SessionCreateOptions): Promise<ExternalAgentSession> {
+    const cwd = options?.cwd ?? this._config?.process?.cwd
+    const client = await this.clientForDirectory(cwd)
     const body: Record<string, unknown> = {}
     if (options?.metadata?.title) {
       body.title = options.metadata.title
@@ -829,11 +833,13 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
 
     if (!this.outboundGate(body))
       throw new Error("OpenCode session metadata blocked by the PII gate")
-    const resp = await this.client.session.create({ body })
+    const resp = await client.session.create({ body })
     const ocSession = unwrap<OcSession>(resp)
+    this.assertSessionDirectory(ocSession, cwd)
 
     const session = this.mapOcSessionToExternal(ocSession)
     this._sessions.set(session.id, session)
+    this.sessionClients.set(session.id, client)
     if (options?.systemPrompt) {
       this.sessionSystemPrompts.set(session.id, options.systemPrompt)
     }
@@ -852,6 +858,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
       // Best effort
     }
     this._sessions.delete(sessionId)
+    this.sessionClients.delete(sessionId)
     this.sessionSystemPrompts.delete(sessionId)
     this.sessionModels.delete(sessionId)
     this.sessionModelOverrides.delete(sessionId)
@@ -886,15 +893,24 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
         : undefined)
     if (target && (target.kind !== "entry" || target.boundary !== "before" || !target.id.trim()))
       throw new Error("OpenCode only supports forking before a message entry")
+    const client = this.getSdkClient(sessionId)
+    const source = this.getSession(sessionId)?.metadata?.cwd
+    const cwd = options?.cwd ?? (typeof source === "string" ? source : undefined)
+    if (cwd) {
+      const sourceSession = unwrap<OcSession>(await client.session.get({ path: { id: sessionId } }))
+      this.assertSessionDirectory(sourceSession, cwd)
+    }
     if (target && (await this.getSessionMessage(sessionId, target.id)).info.id !== target.id)
       throw new Error("OpenCode fork boundary was not found")
-    const resp = await this.client.session.fork({
+    const resp = await client.session.fork({
       path: { id: sessionId },
       body: target ? { messageID: target.id } : {},
     })
     const ocSession = unwrap<OcSession>(resp)
+    this.assertSessionDirectory(ocSession, cwd)
     const session = this.mapOcSessionToExternal(ocSession)
     this._sessions.set(session.id, session)
+    this.sessionClients.set(session.id, client)
     const systemPrompt = options?.systemPrompt ?? this.sessionSystemPrompts.get(sessionId)
     if (systemPrompt) this.sessionSystemPrompts.set(session.id, systemPrompt)
     const model = this.sessionModelOverrides.get(sessionId)
@@ -907,10 +923,14 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
     sessionId: string,
     options?: SessionCreateOptions
   ): Promise<ExternalAgentSession> {
-    const resp = await this.client.session.get({ path: { id: sessionId } })
+    const cwd = options?.cwd ?? this._config?.process?.cwd
+    const client = cwd ? await this.clientForDirectory(cwd) : this.getSdkClient(sessionId)
+    const resp = await client.session.get({ path: { id: sessionId } })
     const ocSession = unwrap<OcSession>(resp)
+    this.assertSessionDirectory(ocSession, cwd)
     const session = this.mapOcSessionToExternal(ocSession)
     this._sessions.set(session.id, session)
+    this.sessionClients.set(session.id, client)
 
     if (options?.systemPrompt) {
       this.sessionSystemPrompts.set(sessionId, options.systemPrompt)
@@ -1021,7 +1041,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
         let submitted = false
         let completed = false
         const interrupt = () =>
-          (channel.interrupt ??= this.client.session.abort({
+          (channel.interrupt ??= this.getSdkClient(sessionId).session.abort({
             path: { id: sessionId },
             signal: AbortSignal.timeout(5000),
           }))
@@ -1039,7 +1059,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
           asyncPromptAccepted = true
           submitted = true
           unwrap(
-            await this.client.session.promptAsync({
+            await this.getSdkClient(sessionId).session.promptAsync({
               path: { id: sessionId },
               body: promptBody,
               signal: abortController.signal,
@@ -1063,13 +1083,13 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
       // Subscribe to the event stream BEFORE sending the prompt. The SSE stream
       // has no replay, so opening it first guarantees we don't miss the early
       // message.part.updated events the assistant emits right after promptAsync.
-      const events = (await this.client.event.subscribe({
+      const events = (await this.getSdkClient(sessionId).event.subscribe({
         signal: abortController.signal,
       })) as OcEventStream
 
       // Send the prompt asynchronously (non-blocking; the server responds 204).
       unwrap(
-        await this.client.session.promptAsync({
+        await this.getSdkClient(sessionId).session.promptAsync({
           path: { id: sessionId },
           body: promptBody,
         })
@@ -1102,7 +1122,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
 
       // Fallback: use synchronous prompt
       try {
-        const resp = await this.client.session.prompt({
+        const resp = await this.getSdkClient(sessionId).session.prompt({
           path: { id: sessionId },
           body: promptBody,
         })
@@ -1159,7 +1179,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
         this.pendingInteractions.delete(key)
         return
       }
-      await this.client.postSessionIdPermissionsPermissionId({
+      await this.getSdkClient(sessionId).postSessionIdPermissionsPermissionId({
         path: { id: sessionId, permissionID: response.requestId },
         body: {
           response: response.granted ? (response.rememberChoice ? "always" : "once") : "reject",
@@ -1189,7 +1209,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
         pending.kind === "permissionV2"
           ? `/api/session/${sessionId}/permission/${requestId}/reply`
           : `/permission/${requestId}/reply`
-      await this.postInteraction(path, { reply })
+      await this.postInteraction(path, { reply }, pending.sessionId)
       return
     }
 
@@ -1198,16 +1218,23 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
         ? `/api/session/${sessionId}/question/${requestId}`
         : `/question/${requestId}`
     if (!response.granted) {
-      await this.postInteraction(`${basePath}/reject`)
+      await this.postInteraction(`${basePath}/reject`, undefined, pending.sessionId)
       return
     }
     const answers = (pending.questionIds ?? []).map((id) => response.answers?.[id] ?? [])
-    await this.postInteraction(`${basePath}/reply`, { answers })
+    await this.postInteraction(`${basePath}/reply`, { answers }, pending.sessionId)
   }
 
-  private async postInteraction(path: string, body?: Record<string, unknown>): Promise<void> {
+  private async postInteraction(
+    path: string,
+    body?: Record<string, unknown>,
+    sessionId?: string
+  ): Promise<void> {
     if (!this.baseUrl) throw new Error("OpenCode server is not connected")
-    const request = new Request(`${this.baseUrl}${path}`, {
+    const url = new URL(`${this.baseUrl}${path}`)
+    const directory = sessionId ? this.getSession(sessionId)?.metadata?.cwd : undefined
+    if (typeof directory === "string") url.searchParams.set("directory", directory)
+    const request = new Request(url, {
       method: "POST",
       ...(body
         ? {
@@ -1241,7 +1268,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
         await pending
         return
       }
-      await this.client.session.abort({ path: { id: sessionId } })
+      await this.getSdkClient(sessionId).session.abort({ path: { id: sessionId } })
     } catch {
       // Best effort - session may already be idle
     }
@@ -1475,7 +1502,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
   ): Promise<{ info: OcMessage; parts: OcPart[] }> {
     if (!this.outboundGate({ command, args }))
       throw new Error("OpenCode command blocked by the PII gate")
-    const resp = await this.client.session.command({
+    const resp = await this.getSdkClient(sessionId).session.command({
       path: { id: sessionId },
       body: {
         command,
@@ -1496,7 +1523,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
   ): Promise<unknown> {
     if (!this.outboundGate({ command, agent, model }))
       throw new Error("OpenCode shell blocked by the PII gate")
-    const resp = await this.client.session.shell({
+    const resp = await this.getSdkClient(sessionId).session.shell({
       path: { id: sessionId },
       body: {
         command,
@@ -1511,7 +1538,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Get session diff
    */
   async getSessionDiff(sessionId: string, messageID?: string): Promise<OcFileDiff[]> {
-    const resp = await this.client.session.diff({
+    const resp = await this.getSdkClient(sessionId).session.diff({
       path: { id: sessionId },
       query: messageID ? { messageID } : undefined,
     })
@@ -1522,7 +1549,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Get session todos
    */
   async getSessionTodos(sessionId: string): Promise<OcTodo[]> {
-    const resp = await this.client.session.todo({
+    const resp = await this.getSdkClient(sessionId).session.todo({
       path: { id: sessionId },
     })
     return unwrap(resp)
@@ -1535,7 +1562,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
     sessionId: string,
     limit?: number
   ): Promise<Array<{ info: OcMessage; parts: OcPart[] }>> {
-    const resp = await this.client.session.messages({
+    const resp = await this.getSdkClient(sessionId).session.messages({
       path: { id: sessionId },
       query: limit ? { limit } : undefined,
     })
@@ -1549,7 +1576,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
     sessionId: string,
     messageID: string
   ): Promise<{ info: OcMessage; parts: OcPart[] }> {
-    const resp = await this.client.session.message({
+    const resp = await this.getSdkClient(sessionId).session.message({
       path: { id: sessionId, messageID },
     })
     return unwrap(resp)
@@ -1560,7 +1587,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    */
   async updateSessionTitle(sessionId: string, title: string): Promise<OcSession> {
     if (!this.outboundGate(title)) throw new Error("OpenCode title blocked by the PII gate")
-    const resp = await this.client.session.update({
+    const resp = await this.getSdkClient(sessionId).session.update({
       path: { id: sessionId },
       body: { title },
     })
@@ -1712,7 +1739,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Share a session
    */
   async shareSession(sessionId: string): Promise<OcSession> {
-    const resp = await this.client.session.share({ path: { id: sessionId } })
+    const resp = await this.getSdkClient(sessionId).session.share({ path: { id: sessionId } })
     return unwrap(resp)
   }
 
@@ -1720,7 +1747,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Unshare a session
    */
   async unshareSession(sessionId: string): Promise<OcSession> {
-    const resp = await this.client.session.unshare({ path: { id: sessionId } })
+    const resp = await this.getSdkClient(sessionId).session.unshare({ path: { id: sessionId } })
     return unwrap(resp)
   }
 
@@ -1728,7 +1755,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Delete a session
    */
   async deleteSession(sessionId: string): Promise<boolean> {
-    const resp = await this.client.session.delete({ path: { id: sessionId } })
+    const resp = await this.getSdkClient(sessionId).session.delete({ path: { id: sessionId } })
     return unwrap(resp)
   }
 
@@ -1736,7 +1763,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Summarize a session
    */
   async summarizeSession(sessionId: string, providerID: string, modelID: string): Promise<boolean> {
-    const resp = await this.client.session.summarize({
+    const resp = await this.getSdkClient(sessionId).session.summarize({
       path: { id: sessionId },
       body: { providerID, modelID },
     })
@@ -1747,7 +1774,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Revert a message in a session
    */
   async revertMessage(sessionId: string, messageID: string, partID?: string): Promise<void> {
-    await this.client.session.revert({
+    await this.getSdkClient(sessionId).session.revert({
       path: { id: sessionId },
       body: { messageID, partID },
     })
@@ -1757,7 +1784,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Unrevert all reverted messages in a session
    */
   async unrevertMessages(sessionId: string): Promise<void> {
-    await this.client.session.unrevert({ path: { id: sessionId } })
+    await this.getSdkClient(sessionId).session.unrevert({ path: { id: sessionId } })
   }
 
   /**
@@ -1769,7 +1796,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
     providerID: string,
     modelID: string
   ): Promise<boolean> {
-    const resp = await this.client.session.init({
+    const resp = await this.getSdkClient(sessionId).session.init({
       path: { id: sessionId },
       body: { messageID, providerID, modelID },
     })
@@ -1780,7 +1807,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
    * Get child sessions
    */
   async getChildSessions(sessionId: string): Promise<OcSession[]> {
-    const resp = await this.client.session.children({ path: { id: sessionId } })
+    const resp = await this.getSdkClient(sessionId).session.children({ path: { id: sessionId } })
     return unwrap(resp)
   }
 
@@ -2017,7 +2044,7 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
   async refreshSessionCommands(sessionId: string): Promise<AcpAvailableCommand[]> {
     const session = this.getSession(sessionId)
     if (!session) throw new Error(`Unknown OpenCode session: ${sessionId}`)
-    this.availableCommands = unwrap(await this.client.command.list())
+    this.availableCommands = unwrap(await this.getSdkClient(sessionId).command.list())
     const commands = this.getAvailableCommands()
     session.metadata = { ...session.metadata, availableCommands: commands }
     this.publishSessionEvent(sessionId, {
@@ -2166,7 +2193,9 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
       }, this._config?.timeout ?? 30000)
       void (async () => {
         try {
-          const stream = await this.client.event.subscribe({ signal: channel.controller.signal })
+          const stream = await this.getSdkClient(sessionId).event.subscribe({
+            signal: channel.controller.signal,
+          })
           for await (const event of stream.stream) {
             if (channel.controller.signal.aborted) break
             if (event.type === "server.connected") {
@@ -2225,7 +2254,9 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
             channel.queue?.end(channel.failure)
             channel.queue = undefined
             if (channel.running)
-              await this.client.session.abort({ path: { id: sessionId } }).catch(() => undefined)
+              await this.getSdkClient(sessionId)
+                .session.abort({ path: { id: sessionId } })
+                .catch(() => undefined)
             if (!owned) {
               this.publishSessionEvent(sessionId, {
                 type: "error",
@@ -2265,8 +2296,26 @@ export class OpenCodeClientAdapter extends BaseProtocolAdapter {
   /**
    * Get the underlying SDK client for advanced use cases
    */
-  getSdkClient(): OpencodeClient {
-    return this.client
+  getSdkClient(sessionId?: string): OpencodeClient {
+    return (sessionId ? this.sessionClients.get(sessionId) : undefined) ?? this.client
+  }
+
+  /** One SDK client's directory header follows every prompt, event and permission request. */
+  private async clientForDirectory(cwd?: string): Promise<OpencodeClient> {
+    if (cwd === undefined) return this.client
+    if (!cwd || !/^(?:\/|[A-Za-z]:[\\/])/.test(cwd) || cwd.includes("\0")) {
+      throw new Error("OpenCode requires an absolute working directory")
+    }
+    if (!this.outboundGate({ cwd }))
+      throw new Error("OpenCode working directory blocked by the PII gate")
+    const { createOpencodeClient } = await import("@opencode-ai/sdk/client")
+    return createOpencodeClient({ baseUrl: this.baseUrl, fetch: this.requestFetch, directory: cwd })
+  }
+
+  private assertSessionDirectory(session: OcSession, cwd?: string): void {
+    if (cwd !== undefined && session.directory !== cwd) {
+      throw new Error("OpenCode session belongs to a different working directory")
+    }
   }
 
   // ============================================================================

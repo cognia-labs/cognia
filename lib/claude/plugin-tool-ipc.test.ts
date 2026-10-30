@@ -779,11 +779,15 @@ describe("handlePluginToolExec — built-in skill fallback", () => {
       execute,
     })
 
+    const controller = new AbortController()
     const response = await handlePluginToolExec(
-      makeRequest({ name: "fallback_test", args: { x: "y" } })
+      makeRequest({ name: "fallback_test", args: { x: "y" }, abortSignal: controller.signal })
     )
 
-    expect(execute).toHaveBeenCalledWith({ x: "y" }, expect.anything())
+    expect(execute).toHaveBeenCalledWith(
+      { x: "y" },
+      expect.objectContaining({ signal: controller.signal })
+    )
     expect(response).toEqual(
       expect.objectContaining({
         type: "plugin_tool_response",

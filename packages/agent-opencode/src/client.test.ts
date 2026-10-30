@@ -1154,6 +1154,70 @@ describe("OpenCodeClientAdapter — session + delegating ops", () => {
     await expect(a.closeSession("s1")).resolves.toBeUndefined()
   })
 
+  it("binds each created session and its execution requests to its requested directory", async () => {
+    const scoped = makeFakeClient()
+    scoped.session.create.mockResolvedValue({ data: { id: "scoped", directory: "/managed/turn" } })
+    mockCreateOpencodeClient.mockReturnValueOnce(scoped)
+    const session = await a.createSession({ cwd: "/managed/turn" })
+    expect(mockCreateOpencodeClient).toHaveBeenLastCalledWith(
+      expect.objectContaining({ directory: "/managed/turn" })
+    )
+    expect(session.metadata?.cwd).toBe("/managed/turn")
+    await a.getSessionDiff(session.id)
+    expect(scoped.session.diff).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { id: "scoped" } })
+    )
+    expect(client.session.diff).not.toHaveBeenCalled()
+    await collect(a.prompt(session.id, textMessage("change")))
+    expect(scoped.session.promptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { id: "scoped" } })
+    )
+    expect(client.session.promptAsync).not.toHaveBeenCalled()
+  })
+
+  it.each(["create", "resume"])(
+    "gates the directory before %s can send it as an SDK header",
+    async (operation) => {
+      const before = mockCreateOpencodeClient.mock.calls.length
+      const options = { cwd: "/Users/alice@example.com/project" }
+      const pending =
+        operation === "create" ? a.createSession(options) : a.resumeSession("foreign", options)
+      await expect(pending).rejects.toThrow(/working directory blocked by the PII gate/)
+      expect(mockCreateOpencodeClient).toHaveBeenCalledTimes(before)
+      expect(client.session.create).not.toHaveBeenCalled()
+      expect(client.session.get).not.toHaveBeenCalled()
+    }
+  )
+
+  it("refuses create or resume when the server's session directory differs", async () => {
+    const scoped = makeFakeClient()
+    scoped.session.create.mockResolvedValue({ data: { id: "foreign", directory: "/foreign" } })
+    scoped.session.get.mockResolvedValue({ data: { id: "foreign", directory: "/foreign" } })
+    mockCreateOpencodeClient.mockReturnValue(scoped)
+    await expect(a.createSession({ cwd: "/managed/turn" })).rejects.toThrow(/working directory/)
+    expect(a.getSession("foreign")).toBeUndefined()
+    await expect(a.resumeSession("foreign", { cwd: "/managed/turn" })).rejects.toThrow(
+      /working directory/
+    )
+    expect(a.getSession("foreign")).toBeUndefined()
+  })
+
+  it("keeps a fork in its source directory and refuses a requested foreign root", async () => {
+    const scoped = makeFakeClient()
+    scoped.session.create.mockResolvedValue({ data: { id: "scoped", directory: "/managed/turn" } })
+    scoped.session.get.mockResolvedValue({ data: { id: "scoped", directory: "/managed/turn" } })
+    scoped.session.fork.mockResolvedValue({ data: { id: "forked", directory: "/managed/turn" } })
+    mockCreateOpencodeClient.mockReturnValue(scoped)
+    await a.createSession({ cwd: "/managed/turn" })
+    await expect(a.forkSession("scoped", { cwd: "/foreign" })).rejects.toThrow(/working directory/)
+    expect(scoped.session.fork).not.toHaveBeenCalled()
+    const forked = await a.forkSession("scoped", { cwd: "/managed/turn" })
+    await a.getSessionDiff(forked.id)
+    expect(scoped.session.diff).toHaveBeenCalledWith(
+      expect.objectContaining({ path: { id: "forked" } })
+    )
+  })
+
   it("exposes precise message forks, command refresh, normalized history and native rename", async () => {
     await a.createSession()
     client.session.message.mockResolvedValueOnce({ data: { info: { id: "before" }, parts: [] } })

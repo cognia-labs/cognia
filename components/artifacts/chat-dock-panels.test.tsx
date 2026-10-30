@@ -21,6 +21,12 @@ import { useDockTabsStore } from "@/stores/artifact/dock-tabs-store"
 import type { Artifact } from "@/types/artifact/artifact"
 import type { Project, Session } from "@/types/plugin/_compat"
 
+jest.mock("./dock-document/document-panel", () => ({
+  DockDocumentPanel: ({ sessionId }: { sessionId: string | null }) => (
+    <article aria-label="cloud-document">{sessionId}</article>
+  ),
+}))
+
 const navigatePanel = jest.fn()
 const smartReveal = jest.fn(() => true)
 const closePanelTab = jest.fn()
@@ -738,7 +744,7 @@ describe("the selection composer inside the resource chat", () => {
 })
 
 describe("useSessionSurfacePanels", () => {
-  it("offers exactly the twenty session-surface panels, in a stable order", () => {
+  it("offers the session-surface panels in a stable order", () => {
     const panels = collect(useSessionSurfacePanels, sessionInput())
     expect(panels.find((panel) => panel.id === "squad-context")?.icon).toBe(AgentTeamIcon)
     expect(panels.map((p) => [p.id, p.activity, p.order])).toEqual([
@@ -747,6 +753,7 @@ describe("useSessionSurfacePanels", () => {
       ["plan", "review", 12],
       ["session-sidechat", "ai", 15],
       ["browser", "preview-run", 20],
+      ["cloud-document", "preview-run", 21],
       ["sandbox-desktop", "preview-run", 22],
       [PROJECT_OVERVIEW_PANEL_ID, "workspace", 25],
       ["conversation-files", "workspace", 28],
@@ -846,6 +853,12 @@ describe("useSessionSurfacePanels", () => {
         },
       ])
     }
+  })
+
+  it("registers the document panel for the active session", () => {
+    const panels = collect(useSessionSurfacePanels, sessionInput())
+    renderPanel(panelById(panels, "cloud-document"), SESSION_RESOURCE)
+    expect(screen.getByRole("article", { name: "cloud-document" })).toHaveTextContent("s1")
   })
 
   it("opens a tool from the New Tab page in the page's place", () => {

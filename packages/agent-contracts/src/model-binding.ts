@@ -18,8 +18,9 @@ export interface ExternalAgentCogniaModelBinding {
  *
  * `inherit-primary` explicitly follows the task's primary model and stops a
  * lower layer's selection for that slot from applying. `cognia` names another
- * gateway model; it must share the primary binding's provider and account
- * (an omitted `accountId` follows the primary's account). `reasoningEffort`
+ * gateway model on any selected provider and account. On the primary provider,
+ * an omitted `accountId` follows the primary's account; on another provider it
+ * uses that provider's default. `reasoningEffort`
  * is accepted only on slots that declare effort support.
  *
  * Only the Cognia gateway lane projects slots; a configuration on its own

@@ -22,7 +22,7 @@
  * that edge is laid out.
  */
 
-import { useCallback, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useAiShell } from "@/hooks/terminal/use-ai-shell"
 import { useAppShortcut } from "@/hooks/shortcuts/use-app-shortcut"
@@ -99,6 +99,12 @@ import { TerminalPaneGroup } from "./terminal-pane-group"
 import { TerminalSearchOverlay } from "./terminal-search-overlay"
 import { TerminalShareDialog } from "./terminal-share-dialog"
 import { TerminalShellPicker } from "./terminal-shell-picker"
+import {
+  listVscodeTerminalProfiles,
+  openVscodeTerminalProfile,
+  subscribeVscodeTerminalProfiles,
+  type VscodeTerminalProfileDescriptor,
+} from "@/lib/plugin/vscode-shim/terminal-handlers"
 import { TerminalTabContextMenu } from "./terminal-tab-context-menu"
 import type { TabColorPreset, TabIconPreset } from "@/lib/terminal/tab-appearance"
 import { TerminalTabStrip } from "./terminal-tab-strip"
@@ -180,6 +186,39 @@ export function TerminalDock({
    * to infer which machine the bastion is reached from.
    */
   const remoteHostActive = useRemoteHostStore((s) => s.activeHostId !== null)
+  const [extensionProfiles, setExtensionProfiles] = useState<VscodeTerminalProfileDescriptor[]>([])
+  useEffect(() => {
+    let active = true
+    let revision = 0
+    const refresh = () => {
+      const current = ++revision
+      void listVscodeTerminalProfiles()
+        .then((profiles) => {
+          if (active && current === revision) setExtensionProfiles(profiles)
+        })
+        .catch(() => {
+          if (active && current === revision) setExtensionProfiles([])
+        })
+    }
+    refresh()
+    const stop = subscribeVscodeTerminalProfiles(refresh)
+    return () => {
+      active = false
+      stop()
+    }
+  }, [remoteHostActive])
+  const handleNewExtensionProfile = useCallback(
+    async (pluginId: string, id: string) => {
+      try {
+        await openVscodeTerminalProfile(pluginId, id)
+      } catch (error) {
+        toast.error(
+          t("spawnError", { message: error instanceof Error ? error.message : String(error) })
+        )
+      }
+    },
+    [t]
+  )
 
   const projectKey = activeProjectId ?? ""
 
@@ -767,6 +806,8 @@ export function TerminalDock({
                 onNew={handleNewWithShell}
                 profiles={settingsProfiles}
                 onNewProfile={handleNewFromProfile}
+                extensionProfiles={remoteHostActive ? [] : extensionProfiles}
+                onNewExtensionProfile={handleNewExtensionProfile}
                 sshHosts={pickerSshHosts}
                 onNewSshHost={handleNewSshHost}
                 onManageSshHosts={() => router.push(sshHostSettingsHref())}

@@ -1,5 +1,7 @@
 "use client"
 
+import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
+
 // Renderer-side routing fallback retry — when a turn fails with a transient
 // error and the original send carried `aliasResolution.fallbackEntries`,
 // re-issue the turn against the next entry in the chain instead of bubbling
@@ -327,8 +329,9 @@ async function issueRetry(
 export async function attemptRoutingFallback(
   sessionId: string,
   errorMessage: string,
-  meta: ProviderErrorMeta = {}
+  meta: ProviderErrorMeta & { code?: string } = {}
 ): Promise<boolean> {
+  if (meta.code === PLUGIN_INTERCEPTOR_REFUSED) return false
   const settings = useSettingsStore.getState().settings
   // Default-on: only `=== false` disables. `?? true` would also match the
   // intent but keeps an unrecognised falsy value in line with the type.

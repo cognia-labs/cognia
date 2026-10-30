@@ -32,6 +32,7 @@ import {
   CornerUpLeftIcon,
   ExternalLinkIcon,
   FeatherIcon,
+  FileTextIcon,
   GlobeIcon,
   MessageSquarePlusIcon,
   PanelRightIcon,
@@ -55,6 +56,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useActiveArtifactId, useOpenArtifactIds } from "@/hooks/artifacts/use-session-artifacts"
+import { useCopy } from "@/hooks/ui/use-copy"
 import {
   DOCK_BROWSER_PANEL_ID,
   activateDockPageTab,
@@ -63,6 +65,12 @@ import {
   setDockPageEngine,
 } from "@/lib/artifacts/dock-pages"
 import { wholeArtifactSelection } from "@/lib/artifacts/format-selection-context"
+import {
+  activateDockDocument,
+  closeDockDocument,
+  DOCK_DOCUMENT_PANEL_ID,
+} from "@/lib/artifacts/dock-documents"
+import { selectDockDocuments, useDockDocumentsStore } from "@/stores/artifact/dock-documents-store"
 import { isLocalChromiumInstalled } from "@/lib/browser/agent-engine"
 import { contextPanelRegistry } from "@/lib/context-workbench/panel-registry"
 import { resolveWorkbenchPanelLabel } from "@/lib/context-workbench/panel-label"
@@ -72,6 +80,7 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { selectOpenArtifactIds, useArtifactStore } from "@/stores/artifact/artifact-store"
 import {
   artifactTabKey,
+  documentTabKey,
   orderDockTabs,
   pageTabKey,
   panelTabKey,
@@ -107,6 +116,7 @@ export function presentDockTabs({
   artifactExists,
   isKnownPanel,
   pageTabIds,
+  documentTabIds,
 }: {
   activatedPanelIds: readonly string[]
   activePanelId: string | null
@@ -114,6 +124,7 @@ export function presentDockTabs({
   artifactExists: (artifactId: string) => boolean
   isKnownPanel: (panelId: string) => boolean
   pageTabIds?: readonly string[]
+  documentTabIds?: readonly string[]
 }): DockTabKey[] {
   const panelIds =
     activePanelId && !activatedPanelIds.includes(activePanelId)
@@ -121,10 +132,16 @@ export function presentDockTabs({
       : activatedPanelIds
   return [
     ...panelIds
-      .filter((id) => isKnownPanel(id) && !(pageTabIds && id === DOCK_BROWSER_PANEL_ID))
+      .filter(
+        (id) =>
+          isKnownPanel(id) &&
+          !(pageTabIds && id === DOCK_BROWSER_PANEL_ID) &&
+          id !== DOCK_DOCUMENT_PANEL_ID
+      )
       .map(panelTabKey),
     ...openArtifactIds.filter(artifactExists).map(artifactTabKey),
     ...(pageTabIds ?? []).map(pageTabKey),
+    ...(documentTabIds ?? []).map(documentTabKey),
   ]
 }
 
@@ -142,6 +159,9 @@ export function drawnDockTabs(sessionId: string, sessionScopeKey: string): DockT
       artifactExists: (id) => Boolean(artifacts.artifacts[id]),
       isKnownPanel: isKnownDockPanel,
       pageTabIds: selectPageTabs(tabs, sessionId).map((tab) => tab.id),
+      documentTabIds: selectDockDocuments(useDockDocumentsStore.getState(), sessionId).map(
+        (tab) => tab.id
+      ),
     })
   )
 }
@@ -249,6 +269,8 @@ export function DockTabStrip({
   const t = useTranslations("contextWorkbench.dockTabs")
   const tArtifacts = useTranslations("artifacts")
   const tJump = useTranslations("chat.jump")
+  const tDoc = useTranslations("cloudDocPreview")
+  const { copy } = useCopy()
   const panelInfo = usePanelInfo()
   const layout = useContextWorkbenchStore((state) => state.layouts[sessionScopeKey])
   const navigatePanel = useContextWorkbenchStore((state) => state.navigatePanel)
@@ -269,6 +291,10 @@ export function DockTabStrip({
     sessionId ? (state.bySession[sessionId]?.activePageTabId ?? null) : null
   )
   const moveTab = useDockTabsStore((state) => state.moveTab)
+  const documentTabs = useDockDocumentsStore((state) => selectDockDocuments(state, sessionId))
+  const activeDocumentTabId = useDockDocumentsStore((state) =>
+    sessionId ? state.bySession[sessionId]?.activeDocumentTabId : null
+  )
   const addContextSelection = useChatStore((state) => state.addContextSelection)
   const activeTurnMessageIds = useChatViewportStore((state) => state.activeTurnMessageIds)
   const jumpToMessage = useChatViewportStore((state) => state.jumpToMessage)
@@ -291,21 +317,35 @@ export function DockTabStrip({
           artifactExists: (id) => Boolean(artifacts[id]),
           isKnownPanel: (id) => panelInfo(id) !== null,
           pageTabIds: pageTabs.map((tab) => tab.id),
+          documentTabIds: documentTabs.map((tab) => tab.id),
         })
       ),
-    [activatedPanelIds, activePanelId, artifacts, openArtifactIds, pageTabs, panelInfo, storedOrder]
+    [
+      activatedPanelIds,
+      activePanelId,
+      artifacts,
+      openArtifactIds,
+      pageTabs,
+      documentTabs,
+      panelInfo,
+      storedOrder,
+    ]
   )
 
   const activeKey: DockTabKey | null =
     activeArtifactId && artifacts[activeArtifactId]
       ? artifactTabKey(activeArtifactId)
-      : activePanelId === DOCK_BROWSER_PANEL_ID
-        ? activePageTabId && keys.includes(pageTabKey(activePageTabId))
-          ? pageTabKey(activePageTabId)
+      : activePanelId === DOCK_DOCUMENT_PANEL_ID
+        ? activeDocumentTabId && keys.includes(documentTabKey(activeDocumentTabId))
+          ? documentTabKey(activeDocumentTabId)
           : null
-        : activePanelId && keys.includes(panelTabKey(activePanelId))
-          ? panelTabKey(activePanelId)
-          : null
+        : activePanelId === DOCK_BROWSER_PANEL_ID
+          ? activePageTabId && keys.includes(pageTabKey(activePageTabId))
+            ? pageTabKey(activePageTabId)
+            : null
+          : activePanelId && keys.includes(panelTabKey(activePanelId))
+            ? panelTabKey(activePanelId)
+            : null
 
   const overflow = useOverflow(strip, keys.join("\u0000"))
 
@@ -324,7 +364,11 @@ export function DockTabStrip({
   const activate = (key: DockTabKey) => {
     const tab = parseDockTabKey(key)
     if (tab.kind === "artifact") setActiveArtifact(tab.artifactId, sessionId)
-    else if (tab.kind === "page") {
+    else if (tab.kind === "doc") {
+      if (!sessionId) return
+      activateDockDocument(sessionId, tab.docTabId)
+      onWidthHint("wide", DOCK_DOCUMENT_PANEL_ID)
+    } else if (tab.kind === "page") {
       if (!sessionId) return
       activateDockPageTab(sessionId, tab.tabId)
       onWidthHint("wide", DOCK_BROWSER_PANEL_ID)
@@ -336,7 +380,9 @@ export function DockTabStrip({
     const remaining = keys.filter((candidate) => candidate !== key)
     const tab = parseDockTabKey(key)
     if (tab.kind === "artifact") closeArtifact(tab.artifactId)
-    else if (tab.kind === "page") {
+    else if (tab.kind === "doc") {
+      if (sessionId) closeDockDocument(sessionId, tab.docTabId)
+    } else if (tab.kind === "page") {
       if (sessionId) closeDockPageTab(sessionId, tab.tabId)
     } else closePanelTab(sessionScopeKey, tab.panelId)
     // Nothing left open in this task: the dock has nothing to show.
@@ -374,6 +420,20 @@ export function DockTabStrip({
 
   const describe = (key: DockTabKey) => {
     const tab = parseDockTabKey(key)
+    if (tab.kind === "doc") {
+      const doc = documentTabs.find((entry) => entry.id === tab.docTabId)!
+      const brand = doc.providerId === "google" ? "docs.google.com" : "feishu.cn"
+      return {
+        label: doc.title || pageTabLabel(doc) || tDoc("title"),
+        icon: brand ? (
+          <SourceFavicon host={brand} />
+        ) : (
+          <FileTextIcon className="size-3.5 shrink-0" />
+        ),
+        artifact: null,
+        page: null,
+      }
+    }
     if (tab.kind === "artifact") {
       const artifact = artifacts[tab.artifactId]
       return {
@@ -426,6 +486,8 @@ export function DockTabStrip({
             const { label, icon, artifact, page } = describe(key)
             const active = key === activeKey
             const tab = parseDockTabKey(key)
+            const documentTab =
+              tab.kind === "doc" ? documentTabs.find((doc) => doc.id === tab.docTabId) : null
             const pending = tab.kind === "panel" && pendingPanelIds.includes(tab.panelId)
             const sourceInView =
               artifact !== null && !active && activeTurnMessageIds.includes(artifact.messageId)
@@ -526,6 +588,36 @@ export function DockTabStrip({
                   </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
+                  {documentTab ? (
+                    <>
+                      <ContextMenuItem
+                        disabled={!documentTab.url}
+                        onSelect={() =>
+                          void openExternal(documentTab.url).catch(() =>
+                            toast.error(tDoc("live.reasons.browser-error"))
+                          )
+                        }
+                      >
+                        <ExternalLinkIcon className="size-4" />
+                        {tDoc("openSystem")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        disabled={!documentTab.url}
+                        onSelect={() =>
+                          void copy(documentTab.url).then((copied) => {
+                            if (!copied) toast.error(tDoc("copyFailed"))
+                          })
+                        }
+                      >
+                        {tDoc("copyLink")}
+                      </ContextMenuItem>
+                      {!documentTab.url ? (
+                        <ContextMenuItem disabled>
+                          {tDoc("live.reasons.unknown-link")}
+                        </ContextMenuItem>
+                      ) : null}
+                    </>
+                  ) : null}
                   {artifact ? (
                     <>
                       <ContextMenuItem

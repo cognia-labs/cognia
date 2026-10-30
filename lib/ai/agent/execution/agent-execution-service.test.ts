@@ -489,3 +489,147 @@ it("treats a paired companion host as a real host: the rail runs on the host's s
   expect(agentRail).toHaveBeenCalledTimes(1)
   expect(completionRail).not.toHaveBeenCalled()
 })
+
+jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => undefined) }))
+jest.mock("@/lib/plugin/vscode-shim/chat-participant-registry", () => ({
+  resolveVscodeChatParticipant: jest.fn(async (characterId: string) => ({
+    characterId,
+    pluginId: "ext",
+    participantId: "helper",
+    generation: "g1",
+  })),
+}))
+jest.mock("@/lib/plugin/vscode-shim/chat-turn", () => ({
+  runVscodeChatAgentTurn: jest.fn(async () => ({
+    text: "participant reply",
+    channel: "sidecar",
+    toolsAvailable: false,
+  })),
+}))
+
+it("routes a participant with its own frozen runtime and refuses hard tools before execution", async () => {
+  const { runVscodeChatAgentTurn } = await import("@/lib/plugin/vscode-shim/chat-turn")
+  const config = { characterId: "vscode-chat:ext:helper" }
+  const result = await executeAgentTurn("hello", config, { isTauri: true, isHeadlessHost: false })
+  expect(result).toEqual(
+    expect.objectContaining({
+      text: "participant reply",
+      runtime: "vscode-chat",
+      toolsAvailable: false,
+    })
+  )
+  expect(agentRail).not.toHaveBeenCalled()
+  expect(completionRail).not.toHaveBeenCalled()
+  jest.mocked(runVscodeChatAgentTurn).mockClear()
+  await expect(
+    executeAgentTurn(
+      "hello",
+      config,
+      { isTauri: true, isHeadlessHost: false },
+      { requireTools: true }
+    )
+  ).rejects.toBeInstanceOf(AgentCapabilityUnsatisfiedError)
+  expect(runVscodeChatAgentTurn).not.toHaveBeenCalled()
+  await expect(
+    executeAgentTurn(
+      "hello",
+      { ...config, permissionCeiling: {} as never },
+      { isTauri: true, isHeadlessHost: false }
+    )
+  ).rejects.toThrow("permission contract")
+})
+
+it("recognizes a session-owned participant and never falls back when it is unavailable", async () => {
+  const { getSession } = await import("@/lib/db/sessions")
+  const { resolveVscodeChatParticipant } =
+    await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+  jest
+    .mocked(getSession)
+    .mockResolvedValueOnce({ id: "persistent", characterId: "vscode-chat:ext:helper" } as never)
+  const result = await executeAgentTurn(
+    "hello",
+    { sessionId: "persistent" },
+    { isTauri: true, isHeadlessHost: false }
+  )
+  expect(result.runtime).toBe("vscode-chat")
+  expect(resolveVscodeChatParticipant).toHaveBeenCalledWith("vscode-chat:ext:helper")
+  jest.mocked(resolveVscodeChatParticipant).mockRejectedValueOnce(new Error("participant disabled"))
+  await expect(
+    executeAgentTurn(
+      "hello",
+      { characterId: "vscode-chat:ext:helper" },
+      { isTauri: true, isHeadlessHost: false },
+      { policy: { fallbackPolicy: "completion" } }
+    )
+  ).rejects.toThrow("participant disabled")
+  expect(agentRail).not.toHaveBeenCalled()
+  expect(completionRail).not.toHaveBeenCalled()
+})
+
+jest.mock("@/lib/db/settings", () => ({
+  getSettings: jest.fn(async () => ({ permissionMode: "default", sandboxDefaultEnabled: false })),
+}))
+jest.mock("@/lib/db/characters", () => ({ resolveCharacterById: jest.fn(async () => undefined) }))
+it.each([{ permissionMode: "plan" }, { sandboxEnabled: true }])(
+  "refuses persistent participant session authority %j before extension execution",
+  async (authority) => {
+    const { getSession } = await import("@/lib/db/sessions")
+    const { resolveVscodeChatParticipant } =
+      await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+    jest.mocked(getSession).mockResolvedValueOnce({
+      id: "persistent",
+      characterId: "vscode-chat:ext:helper",
+      ...authority,
+    } as never)
+    await expect(
+      executeAgentTurn(
+        "hello",
+        { sessionId: "persistent" },
+        { isTauri: true, isHeadlessHost: false }
+      )
+    ).rejects.toThrow("permission or sandbox contract")
+    expect(resolveVscodeChatParticipant).not.toHaveBeenCalled()
+    expect(agentRail).not.toHaveBeenCalled()
+    expect(completionRail).not.toHaveBeenCalled()
+  }
+)
+it("refuses application sandbox defaults for background participants", async () => {
+  const { getSettings } = await import("@/lib/db/settings")
+  jest.mocked(getSettings).mockResolvedValueOnce({ sandboxDefaultEnabled: true } as never)
+  await expect(
+    executeAgentTurn(
+      "hello",
+      { characterId: "vscode-chat:ext:helper" },
+      { isTauri: true, isHeadlessHost: false }
+    )
+  ).rejects.toThrow("permission or sandbox contract")
+  expect(agentRail).not.toHaveBeenCalled()
+  expect(completionRail).not.toHaveBeenCalled()
+})
+
+it.each([
+  { permissionMode: "plan" },
+  { sandboxEnabled: true },
+  { systemPrompt: "User policy" },
+  { allowedTools: ["Read"] },
+  { skillIds: ["skill-1"] },
+  { mcpServerIds: ["server-1"] },
+])(
+  "refuses unsupported persisted participant profile fields %j before activation",
+  async (fields) => {
+    const { resolveCharacterById } = await import("@/lib/db/characters")
+    const { resolveVscodeChatParticipant } =
+      await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+    jest
+      .mocked(resolveCharacterById)
+      .mockResolvedValueOnce({ id: "vscode-chat:ext:helper", ...fields } as never)
+    await expect(
+      executeAgentTurn(
+        "hello",
+        { characterId: "vscode-chat:ext:helper" },
+        { isTauri: true, isHeadlessHost: false }
+      )
+    ).rejects.toThrow("permission or sandbox contract")
+    expect(resolveVscodeChatParticipant).not.toHaveBeenCalled()
+  }
+)

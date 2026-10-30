@@ -1,6 +1,10 @@
 jest.mock("@/lib/db/sessions", () => ({ getSession: jest.fn(async () => undefined) }))
 import { getSession } from "@/lib/db/sessions"
-import { pluginSlashCommandsToSlashCommands, getPluginSlashCommands } from "./plugin-commands"
+import {
+  pluginSlashCommandsToSlashCommands,
+  getPluginSlashCommands,
+  slashCommandToken,
+} from "./plugin-commands"
 import {
   registerSlashCommand,
   seedBuiltinSlashCommands,
@@ -28,6 +32,15 @@ function makeCtx(over: Partial<SlashContext> = {}): SlashContext {
 }
 
 describe("pluginSlashCommandsToSlashCommands", () => {
+  it("uses the same token for pre-install metadata and runtime projection", () => {
+    const metadata = { id: "plugin.run", name: " //friendly " }
+    const [command] = pluginSlashCommandsToSlashCommands([
+      { ...metadata, source: "plugin", handler: () => ({}) },
+    ])
+    expect(slashCommandToken(metadata)).toBe("friendly")
+    expect(command.name).toBe(slashCommandToken(metadata))
+    expect(slashCommandToken({ id: "plugin.run", name: "Display title" })).toBe("plugin.run")
+  })
   it("maps a plugin definition to the composer SlashCommand shape", () => {
     const [cmd] = pluginSlashCommandsToSlashCommands([
       {

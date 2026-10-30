@@ -30,6 +30,29 @@ function unavailableHost(): AgentProcessHost {
 }
 
 describe("Codex host wiring", () => {
+  beforeEach(() => mockRecord.mockClear())
+
+  it("records file-change evidence against the owning Cognia conversation", async () => {
+    const adapter = createCodexAppServerAdapterFactory(unavailableHost())() as unknown as {
+      _sessions: Map<string, { metadata: Record<string, unknown> }>
+      onFileChanges: (sessionId: string, toolId: string, changes: unknown) => void
+    }
+    adapter._sessions.set("native-thread", { metadata: { cogniaSessionId: "chat-session" } })
+    const changes = [{ path: "/managed/src/a.ts", kind: "modified" }]
+    adapter.onFileChanges("native-thread", "tool-1", changes)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockRecord).toHaveBeenCalledWith("chat-session", "tool-1", changes)
+  })
+
+  it("does not attribute an unbound native session's writes to another conversation", async () => {
+    const adapter = createCodexAppServerAdapterFactory(unavailableHost())() as unknown as {
+      onFileChanges: (sessionId: string, toolId: string, changes: unknown) => void
+    }
+    adapter.onFileChanges("unbound-native", "tool-1", [{ path: "src/a.ts" }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockRecord).not.toHaveBeenCalled()
+  })
+
   it("builds the codex-app-server adapter with turn-scoped cancel semantics", () => {
     const adapter = createCodexAppServerAdapterFactory(unavailableHost())()
     expect(adapter).toBeInstanceOf(CodexAppServerAdapter)

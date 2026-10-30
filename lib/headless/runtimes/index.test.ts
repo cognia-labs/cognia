@@ -19,6 +19,7 @@ describe("headless runtime roster", () => {
           "desktop-message-source",
           "desktop-sync-source",
           "external-agent",
+          "gateway-telemetry",
           "host-event-publisher",
           "host-provider-keys",
           "plugin-runtime",
@@ -40,7 +41,7 @@ describe("headless runtime roster", () => {
             (runtime) => runtime.criticality === "required" || runtime.criticality === "optional"
           )
       ).toBe(true)
-      expect(names).toHaveLength(43)
+      expect(names).toHaveLength(44)
       expect(names[0]).toBe("host-event-publisher")
       // Sealed provider keys are loaded before anything that can start a run.
       expect(names.indexOf("host-provider-keys")).toBeGreaterThan(0)
@@ -71,6 +72,7 @@ describe("headless runtime roster", () => {
       expect([...PERSON_BRAIN_RUNTIMES].sort()).toEqual([
         "desktop-message-source",
         "desktop-sync-source",
+        "gateway-telemetry",
         "host-event-publisher",
         "person-agent",
         "work-submission-outbox",

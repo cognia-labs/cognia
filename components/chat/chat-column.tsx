@@ -20,6 +20,12 @@ import { cn } from "@/lib/utils"
 /** Cap + gutter shared by the transcript, the composer and every chat notice. */
 export const chatColumnClass = "mx-auto w-full max-w-[52rem] px-3 sm:px-5"
 
+/** Docked columns share the transcript's usable width and centre, excluding its native gutter. */
+export const chatDockColumnClass = cn(
+  chatColumnClass,
+  "relative w-[calc(100%_-_var(--chat-native-scrollbar-inset,0px))] start-[calc(var(--chat-native-scrollbar-inset,0px)_/_-2)]"
+)
+
 /**
  * Wraps a docked chat notice into the reading column. `empty:hidden` keeps a
  * notice that renders `null` from contributing the wrapper's own vertical
@@ -30,7 +36,7 @@ export function ChatColumn({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="chat-notice-column"
-      className={cn(chatColumnClass, "empty:hidden", className)}
+      className={cn(chatDockColumnClass, "empty:hidden", className)}
       {...props}
     />
   )

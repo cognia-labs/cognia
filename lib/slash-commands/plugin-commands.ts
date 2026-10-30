@@ -67,7 +67,7 @@ function makePluginHandler(def: SlashCommandDefinition): (ctx: SlashContext) => 
  * dispatches by `def.id` internally, so the projected name is free to be the
  * friendly one — the id still does the resolving.
  */
-export function slashCommandToken(def: SlashCommandDefinition): string {
+export function slashCommandToken(def: Pick<SlashCommandDefinition, "id" | "name">): string {
   const declared = def.name?.trim().replace(/^\/+/, "") ?? ""
   // A name with whitespace isn't typeable as a single `/token`, so fall back.
   return declared.length > 0 && !/\s/.test(declared) ? declared : def.id

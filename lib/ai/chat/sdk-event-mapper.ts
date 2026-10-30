@@ -154,6 +154,8 @@ export interface SdkEventMapper {
   reset(): void
   /** Update the model tagged on subsequent assistant snapshots. */
   setModel(model: string): void
+  /** Host progress rendered through the existing commentary part, outside answer text. */
+  setCommentary(text: string): SDKMessage[]
   /** Translate one AI SDK fullStream event into zero or more SDKMessages. */
   handle(event: unknown): SDKMessage[]
   /** Emit the canonical full `assistant` snapshot sealing the streamed deltas. */
@@ -231,6 +233,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
   let activeBlockKind: "text" | "reasoning" | "tool_use" | null = null
   let textBuf = ""
   let reasoningBuf = ""
+  let commentaryBuf = ""
   let textProviderMetadata: ProviderMetadata | undefined
   let reasoningProviderMetadata: ProviderMetadata | undefined
   let messageMetadata: unknown
@@ -485,6 +488,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
 
   function buildAssistantSnapshot(): SDKMessage {
     const content: Array<Record<string, unknown>> = []
+    if (commentaryBuf) content.push({ type: "data-commentary", data: { text: commentaryBuf } })
     // Emit a text block when there is text OR accumulated citations to carry.
     if (textBuf || sourceCitations.length) {
       const textBlock: Record<string, unknown> = { type: "text", text: textBuf }
@@ -531,6 +535,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
       activeBlockKind = null
       textBuf = ""
       reasoningBuf = ""
+      commentaryBuf = ""
       textProviderMetadata = undefined
       reasoningProviderMetadata = undefined
       messageMetadata = undefined
@@ -545,6 +550,14 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
     setModel(nextModel: string): void {
       if (typeof nextModel === "string" && nextModel) ctx.model = nextModel
     },
+    setCommentary(text: string): SDKMessage[] {
+      commentaryBuf = text
+      const out: SDKMessage[] = []
+      emitInitIfNeeded(out)
+      emitStreamStartIfNeeded(out)
+      out.push(buildAssistantSnapshot())
+      return out
+    },
 
     /**
      * Emit the canonical full `assistant` snapshot sealing the `stream_event`
@@ -557,6 +570,7 @@ export function createSdkEventMapper(ctx: SdkEventMapperContext): SdkEventMapper
       if (
         !textBuf &&
         !reasoningBuf &&
+        !commentaryBuf &&
         completedToolUses.length === 0 &&
         sourceCitations.length === 0
       ) {

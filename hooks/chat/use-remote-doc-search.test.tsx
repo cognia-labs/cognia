@@ -86,6 +86,19 @@ describe("useRemoteDocSearch — host gating", () => {
 })
 
 describe("useRemoteDocSearch — accounts", () => {
+  it("offers direct links without dispatching keyword searches for an account lacking search permission", async () => {
+    const p = provider({
+      listAccounts: async () => [{ id: "cai_1", label: "Bot", searchable: false }],
+    })
+    byPrefixMock.mockReturnValue(p)
+    const { result } = renderHook(() => useRemoteDocSearch({ namespace: "lark:", query: "spec" }))
+    await act(async () => {
+      await Promise.resolve()
+    })
+    await flushDebounce()
+    expect(result.current.linkOnly).toBe(true)
+    expect(p.search).not.toHaveBeenCalled()
+  })
   it("does not revive the first A response after an A-B-A account switch", async () => {
     let finishA!: (hits: RemoteDocRef[]) => void
     let finishB!: (hits: RemoteDocRef[]) => void

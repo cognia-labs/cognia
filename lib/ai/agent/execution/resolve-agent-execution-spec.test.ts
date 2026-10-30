@@ -1,6 +1,7 @@
 import {
   AGENT_CAPABILITY_IDS,
   validateResolvedAgentExecutionSpec,
+  validateAgentExecutionSendSpec,
   type AgentCapabilityId,
 } from "@cognia/agent-config-types/agent-execution"
 
@@ -693,4 +694,69 @@ describe("portable features require the actual execution host", () => {
     expect(result.missingRequired).toEqual([])
     expect(result.spec.capabilities.effective).toEqual(portable)
   })
+})
+
+describe("VS Code chat participant execution identity", () => {
+  const chatParticipant = { pluginId: "ext", participantId: "helper", generation: "g1" }
+  it("freezes the owner and generation with conservative capabilities", () => {
+    const first = resolveAgentExecutionSpec(baseInput({ chatParticipant }))
+    expect(first.spec.runtimeAdapter).toBe("vscode-chat")
+    expect(first.spec.chatParticipant).toEqual(chatParticipant)
+    expect(first.spec.capabilities.effective).toEqual([
+      "streaming",
+      "stream-interruption",
+      "session.multi-turn",
+    ])
+    expect(first.spec.fallbackPolicy).toBe("none")
+    expect(() => rebindResolvedAgentExecutionHost(first.spec, "remote")).toThrow("another host")
+    expect(validateResolvedAgentExecutionSpec(first.spec).ok).toBe(true)
+    expect(sendSpecFromResolved(first.spec).chatParticipant).toEqual(chatParticipant)
+    for (const change of [{ participantId: "other" }, { generation: "g2" }]) {
+      expect(
+        resolveAgentExecutionSpec(baseInput({ chatParticipant: { ...chatParticipant, ...change } }))
+          .spec.executionFingerprint
+      ).not.toBe(first.spec.executionFingerprint)
+    }
+  })
+  it("refuses hard tools and native capabilities", () => {
+    expect(
+      resolveAgentExecutionSpec(
+        baseInput({
+          chatParticipant,
+          policy: { requires: ["mcp", "tools.ordinary", "sandbox.native"] },
+        })
+      ).missingRequired
+    ).toEqual(["mcp", "tools.ordinary", "sandbox.native"])
+    expect(
+      resolveAgentExecutionSpec(baseInput({ chatParticipant, legacy: { requireTools: true } }))
+        .missingRequired
+    ).toContain("tools.ordinary")
+  })
+  it.each([
+    { environment: web },
+    { environment: { ...web, pairedHost: true } },
+    { policy: { runtimePolicy: "claude-agent-sdk" as const } },
+    { policy: { routePolicy: "gateway-required" as const } },
+  ])("refuses a conflicting execution authority: %j", (overrides) => {
+    expect(() => resolveAgentExecutionSpec(baseInput({ chatParticipant, ...overrides }))).toThrow(
+      /participant/
+    )
+  })
+})
+
+it("validates participant binding on both the resolved and send contracts", () => {
+  const { spec } = resolveAgentExecutionSpec(
+    baseInput({ chatParticipant: { pluginId: "ext", participantId: "helper", generation: "g" } })
+  )
+  const wire = sendSpecFromResolved(spec)
+  expect(validateAgentExecutionSendSpec(wire).ok).toBe(true)
+  for (const binding of [
+    undefined,
+    {},
+    { pluginId: "ext", participantId: "helper", generation: "" },
+  ]) {
+    expect(validateAgentExecutionSendSpec({ ...wire, chatParticipant: binding }).ok).toBe(false)
+    expect(validateResolvedAgentExecutionSpec({ ...spec, chatParticipant: binding }).ok).toBe(false)
+  }
+  expect(validateAgentExecutionSendSpec({ ...wire, runtimeAdapter: "ai-sdk" }).ok).toBe(false)
 })

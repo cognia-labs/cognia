@@ -157,6 +157,12 @@ function providerMetadataPart(block: {
 
 function blockToPart(block: BetaContentBlock): Part | null {
   switch (block.type) {
+    case "data-commentary": {
+      const data = (block as { data?: { text?: unknown } }).data
+      return typeof data?.text === "string"
+        ? ({ type: "data-commentary", data: { text: data.text } } as unknown as Part)
+        : null
+    }
     case "text": {
       const b = block as Extract<BetaContentBlock, { type: "text" }>
       return {

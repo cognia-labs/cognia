@@ -1,5 +1,7 @@
 "use client"
 
+import { PLUGIN_INTERCEPTOR_REFUSED } from "@cognia/agent-config-types/plugin-interception"
+
 import { hasCaptureResponder } from "@/lib/connectors/hitl/approval-registry"
 import { mergeInboundMessagesForStream } from "@/lib/connectors/inbound-stored-parts"
 import { startTransition } from "react"
@@ -644,7 +646,12 @@ export async function handleEvent(
           // (which overwrites the cached send). Trips its breaker after repeats.
           const failedSend = useChatStore.getState().lastSendBySession[evt.sessionId]
           const failedProvider = failedSend?.options.provider
-          if (failedProvider && !routerFusionRefusal && !providerUnresolved) {
+          if (
+            failedProvider &&
+            !routerFusionRefusal &&
+            !providerUnresolved &&
+            evt.code !== PLUGIN_INTERCEPTOR_REFUSED
+          ) {
             recordProviderOutcome({
               providerId: failedProvider,
               ok: false,
@@ -671,6 +678,7 @@ export async function handleEvent(
             isStandaloneChatMode() || routerFusionRefusal || providerUnresolved
               ? false
               : await attemptRoutingFallback(evt.sessionId, evt.error, {
+                  code: evt.code,
                   httpStatus: evt.httpStatus,
                   retryAfterMs: evt.retryAfterMs,
                 })

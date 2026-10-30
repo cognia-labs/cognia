@@ -45,6 +45,12 @@ const part = (type: string, output?: unknown, input?: unknown): ToolUIPart =>
   }) as unknown as ToolUIPart
 
 describe("isStructuredMcpToolPart", () => {
+  it("routes acceptance proposals under both provider names", () => {
+    expect(isStructuredMcpToolPart(part("tool-propose_acceptance"))).toBe(true)
+    expect(isStructuredMcpToolPart(part("tool-mcp__cognia-plugin-tools__propose_acceptance"))).toBe(
+      true
+    )
+  })
   it("routes the schedule.* tools to their card, bare or through the plugin bridge", () => {
     expect(isStructuredMcpToolPart(part("tool-scheduler_create_task"))).toBe(true)
     expect(isStructuredMcpToolPart(part("tool-scheduler_list_tasks"))).toBe(true)

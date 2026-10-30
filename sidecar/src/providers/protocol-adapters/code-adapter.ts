@@ -36,7 +36,7 @@ export interface CodeAdapterBridge {
   sessionId: string
   pendingProtocolExecs: Map<string, ProtocolExecChannel>
   makeExecId?: () => string
-  onCancel?: (execId: string, reason?: string) => void
+  onCancel?: (execId: string, reason?: string, remoteExecutionContext?: unknown) => void
   remoteExecutionContext?: unknown
 }
 
@@ -92,9 +92,10 @@ export function makeCodeAdapter(spec: CodeAdapterSpec, bridge: CodeAdapterBridge
   return {
     id: `code:${spec.pluginId}:${spec.adapterId}`,
     async start(req) {
+      const remoteExecutionContext = bridge.remoteExecutionContext
       const execId = (bridge.makeExecId ?? randomUUID)()
       const channel = registerProtocolExec(bridge.pendingProtocolExecs, execId, {
-        onCancel: bridge.onCancel,
+        onCancel: (id, reason) => bridge.onCancel?.(id, reason, remoteExecutionContext),
       })
       bridge.emit({
         type: "protocol_adapter_exec",
@@ -110,9 +111,7 @@ export function makeCodeAdapter(spec: CodeAdapterSpec, bridge: CodeAdapterBridge
           ...(req.reasoning ? { reasoning: req.reasoning } : {}),
           ...(typeof req.maxSteps === "number" ? { maxSteps: req.maxSteps } : {}),
         },
-        ...(bridge.remoteExecutionContext
-          ? { remoteExecutionContext: bridge.remoteExecutionContext }
-          : {}),
+        ...(remoteExecutionContext ? { remoteExecutionContext } : {}),
       })
       return { fullStream: channel.fullStream, usage: channel.usage, response: null }
     },

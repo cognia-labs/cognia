@@ -133,6 +133,8 @@ jest.mock("@/lib/claude/provider-attempt-options", () => ({
 }))
 
 const hookFns = {
+  hasAnyHook: jest.fn(() => false),
+  dispatchOnAgentStep: jest.fn(),
   dispatchOnTeammateClaim: jest.fn(),
   dispatchOnTeammateRelease: jest.fn(),
   dispatchOnAgentStart: jest.fn(),
@@ -2656,4 +2658,35 @@ describe("dispatchTeammate — Router + Fusion member action", () => {
     expect(executeAgentMock).not.toHaveBeenCalled()
     expect(pool.recordFailure).toHaveBeenCalled()
   })
+})
+
+it("delivers agent steps independently of progress-panel rendering", async () => {
+  hookFns.hasAnyHook.mockReturnValue(true)
+  isTauriMock.mockReturnValue(true)
+  createSessionMock.mockResolvedValue({ id: "sess1" })
+  getSessionMock.mockResolvedValue({ id: "sess1", kind: "team" })
+  runAndCaptureMock.mockImplementation(
+    async (_id: string, _p: string, _o: unknown, cap: { onEvent?: (e: unknown) => void }) => {
+      cap.onEvent?.({ type: "tool-call", toolName: "Bash", input: { command: "pwd" } })
+      cap.onEvent?.({ type: "text-delta", delta: "done" })
+      return { text: "done" }
+    }
+  )
+  try {
+    const { ctx } = makeCtx(makeTeammate(), { streamProgress: false })
+    await dispatchTeammate(ctx, { taskId: "t1", prompt: "go" })
+    expect(hookFns.dispatchOnAgentStep).toHaveBeenNthCalledWith(1, "tm1", {
+      stepNumber: 1,
+      type: "tool_call",
+      tool: "Bash",
+      toolArgs: { command: "pwd" },
+    })
+    expect(hookFns.dispatchOnAgentStep).toHaveBeenNthCalledWith(2, "tm1", {
+      stepNumber: 2,
+      type: "response",
+      content: "done",
+    })
+  } finally {
+    hookFns.hasAnyHook.mockReturnValue(false)
+  }
 })

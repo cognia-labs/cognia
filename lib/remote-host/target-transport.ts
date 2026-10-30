@@ -6,7 +6,6 @@ import { companionCredentialBook, type CompanionHostRecord } from "@/lib/compani
 import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 import type { CompanionConfig } from "@/lib/tauri/companion-storage"
 import { loadCompanionConfig } from "@/lib/tauri/transport-companion"
-import * as transportInstance from "@/lib/tauri/transport-instance"
 import type { Transport } from "@/lib/tauri/transport-types"
 import {
   getRemoteTransportFactory,
@@ -21,6 +20,8 @@ export interface RemoteHostTarget {
   host: RemoteHost
   transport: Transport
   close: () => void
+  /** A paired channel is invalid after a route or device identity changes. */
+  assertCurrent?: () => void
 }
 
 export interface RemoteHostTargetDeps {
@@ -44,7 +45,7 @@ export function pairedHostIdOf(ref: string): string | null {
 }
 
 export interface PairedHostTargetDeps {
-  activeTarget?: () => { accountId: string; targetId: string } | null
+  activeTarget?: () => { accountId: string; targetId: string; routingGeneration?: number } | null
   loadRecord?: (localAccountId: string, hostId: string) => Promise<CompanionHostRecord | null>
   loadConfig?: () => CompanionConfig | null
   transport?: () => Transport
@@ -70,26 +71,40 @@ export function isPairedHostTargetCurrent(
 }
 
 /**
- * Open the management channel to the `/pair` Host. Only the active one can be
- * reached: its connection is the app's own, so the channel borrows it and its
- * `close` never tears it down. The Host's record supplies its name and age;
- * the live config supplies the pairing, without its private keys.
+ * Open a fixed-config management channel to the active `/pair` Host. Its
+ * authority expires when that route or paired device changes. The Host's
+ * public record supplies its name and age without exposing private keys.
  */
 async function openPairedHostTarget(
   ref: string,
   hostId: string,
   deps: PairedHostTargetDeps = {}
 ): Promise<RemoteHostTarget> {
-  const active = (deps.activeTarget ?? getActiveRuntimeTargetContext)()
-  const config = (deps.loadConfig ?? loadCompanionConfig)()
+  const currentActive = (deps.activeTarget ?? getActiveRuntimeTargetContext)()
+  const currentConfig = (deps.loadConfig ?? loadCompanionConfig)()
+  const active = currentActive ? { ...currentActive } : null
+  const config = currentConfig ? { ...currentConfig } : null
   if (!active || active.targetId !== hostId || config?.targetId !== hostId) {
     throw new Error(`Paired Host ${hostId} is not the Host this app is connected to`)
+  }
+  const assertCurrent = () => {
+    const next = (deps.activeTarget ?? getActiveRuntimeTargetContext)()
+    const nextConfig = (deps.loadConfig ?? loadCompanionConfig)()
+    if (
+      next?.accountId !== active.accountId ||
+      next?.targetId !== active.targetId ||
+      next?.routingGeneration !== active.routingGeneration ||
+      nextConfig?.targetId !== config.targetId ||
+      nextConfig?.deviceId !== config.deviceId
+    )
+      throw new Error(`Paired Host ${hostId} connection changed`)
   }
   const record = await (
     deps.loadRecord ??
     ((localAccountId, id) =>
       companionCredentialBook().get({ accountNamespace: localAccountId, hostId: id }))
   )(active.accountId, hostId)
+  assertCurrent()
   if (!record) throw new Error(`Paired Host ${hostId} is not paired`)
   const publicConfig: CompanionConfig = { ...config }
   delete publicConfig.devicePrivateKeyJwk
@@ -104,8 +119,69 @@ async function openPairedHostTarget(
     addedAt: record.createdAt,
     connectionState: "ready",
   }
-  const transport = (deps.transport ?? (() => transportInstance.transport))()
-  return { host, transport, close: () => undefined }
+  // A fixed config is essential: the app router and the default companion
+  // transport both follow the currently selected Host after an async boundary.
+  const pinnedConfig = await withSigningKey({ ...config }).catch(() => ({ ...config }))
+  assertCurrent()
+  const pinned = deps.transport
+    ? deps.transport()
+    : (getRemoteTransportFactory() as (provider: () => CompanionConfig) => DisposableTransport)(
+        () => pinnedConfig
+      )
+  const transport: Transport = {
+    ...(pinned.whenSubscribed
+      ? {
+          async whenSubscribed(channels: readonly string[], timeoutMs?: number) {
+            assertCurrent()
+            await pinned.whenSubscribed!(channels, timeoutMs)
+            assertCurrent()
+          },
+        }
+      : {}),
+    ...(pinned.hasSubscribedChannels
+      ? {
+          hasSubscribedChannels(channels: readonly string[]) {
+            assertCurrent()
+            return pinned.hasSubscribedChannels!(channels)
+          },
+        }
+      : {}),
+    async call<T>(
+      command: string,
+      args?: Record<string, unknown>,
+      options?: Parameters<Transport["call"]>[2]
+    ) {
+      assertCurrent()
+      const result = await pinned.call<T>(command, args, options)
+      assertCurrent()
+      return result
+    },
+    subscribe<T>(event: string, handler: (payload: T) => void) {
+      assertCurrent()
+      return pinned.subscribe<T>(event, (payload) => {
+        assertCurrent()
+        handler(payload)
+      })
+    },
+    ...(pinned.readBinary
+      ? {
+          async readBinary(resource: Parameters<NonNullable<Transport["readBinary"]>>[0]) {
+            assertCurrent()
+            const result = await pinned.readBinary!(resource)
+            assertCurrent()
+            return result
+          },
+        }
+      : {}),
+  }
+  return {
+    host,
+    transport,
+    assertCurrent,
+    close: () => {
+      if (!deps.transport) (pinned as DisposableTransport).destroy?.()
+    },
+  }
 }
 
 /**

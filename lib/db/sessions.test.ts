@@ -2643,6 +2643,37 @@ it("atomically retains concurrent cleanup Host admissions", async () => {
   expect((await getSession(row.id))?.deliverySourceHosts).toHaveLength(2)
 })
 
+it("publishes session facts after commit and suppresses aborted outer transactions", async () => {
+  const { subscribeChatLifecycleEvents } = await import("@/lib/chat/lifecycle-events")
+  const receive = jest.fn()
+  const stop = subscribeChatLifecycleEvents(receive)
+  try {
+    const session = await createSession({ title: "Before" })
+    expect(receive).toHaveBeenCalledWith({ type: "session-created", sessionId: session.id })
+    await updateSession(session.id, { title: "After", systemPrompt: "Prompt" })
+    expect(receive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "session-updated",
+        previous: expect.objectContaining({ title: "Before" }),
+        current: expect.objectContaining({ title: "After", systemPrompt: "Prompt" }),
+      })
+    )
+    receive.mockClear()
+    const db = getDb()
+    await expect(
+      db.transaction("rw", db.sessions, async () => {
+        await updateSession(session.id, { title: "Aborted" })
+        throw new Error("abort")
+      })
+    ).rejects.toThrow("abort")
+    expect(receive).not.toHaveBeenCalled()
+    await deleteSession(session.id)
+    expect(receive).toHaveBeenCalledWith({ type: "session-deleted", sessionId: session.id })
+  } finally {
+    stop()
+  }
+})
+
 it("deletes the conversation's plans and their trail with it", async () => {
   const { createPlan, appendPlanEvent, getPlan, listPlanEvents } = await import("./plans")
   const { DEFAULT_PLAN_CONFIG } = await import("@/types/agent/plan")

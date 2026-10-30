@@ -31,6 +31,7 @@ import { stampOrganizationalWrite } from "./session-row-stamps"
 import { surfaceBindingKey } from "@/lib/context-workbench/resource-session"
 import { readVerifiedSessionListRows } from "./session-list"
 import { isTauri } from "@/lib/platform/detect"
+import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 
 export interface SessionPersistenceScope {
   db: ReturnType<typeof getDb>
@@ -448,6 +449,10 @@ export async function createSession(
   scope?.assertActive()
   await (scope?.db ?? getDb()).sessions.put(session)
   scope?.assertActive()
+  publishChatLifecycleEvent(
+    { type: "session-created", sessionId: session.id },
+    Dexie.currentTransaction
+  )
   if (autoAppliedPresetId) {
     // Wait for the usage bump so the "Recent" filter in the section reflects
     // this session immediately. The cost is one extra Dexie update per
@@ -467,10 +472,17 @@ export async function updateSession(
   }
   await withDbReopenRetry(async () => {
     const db = getDb()
+    let previous: ChatSession | undefined
     await db.transaction("rw", db.sessions, async () => {
-      assertSessionWritable(await db.sessions.get(id), "metadata")
+      previous = await db.sessions.get(id)
+      assertSessionWritable(previous, "metadata")
       await db.sessions.update(id, { ...patch, updatedAt: Date.now() })
     })
+    if (previous)
+      publishChatLifecycleEvent(
+        { type: "session-updated", previous, current: { ...previous, ...patch } },
+        Dexie.currentTransaction
+      )
   })
 }
 
@@ -1362,6 +1374,8 @@ export async function bulkDeleteSessions(
     throw error
   }
   // A failed external acknowledgment cannot roll a committed conversation back.
+  for (const sessionId of deletedIds)
+    publishChatLifecycleEvent({ type: "session-deleted", sessionId }, Dexie.currentTransaction)
   await desktopDeletion.finish(true).catch(() => undefined)
   scope?.assertActive()
   if (orphanCandidates.size > 0) {

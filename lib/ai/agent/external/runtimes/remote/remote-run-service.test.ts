@@ -142,6 +142,9 @@ function setup(
     },
     getManager: async () => manager,
     now: () => 1_700_000_000_000,
+    placeRun: async () => ({}),
+    openWorkspace: async () => null,
+    prepareExecution: async () => ({ captureAvailable: true }),
   })
 
   h = {
@@ -395,7 +398,7 @@ describe("placement on an always-on host (ADR-0224 A8)", () => {
     }
   })
 
-  it("changes nothing off an always-on host", async () => {
+  it("resolves a desktop Host's working directory as well", async () => {
     delete globals.__COGNIA_HEADLESS__
     const placeRun = jest.fn(async () => ({ workingDirectory: "/never" }))
     const undo = __setRemoteRunDepsForTests({ placeRun })
@@ -407,8 +410,266 @@ describe("placement on an always-on host (ADR-0224 A8)", () => {
     })
     await flush()
     undo()
-    expect(placeRun).not.toHaveBeenCalled()
-    expect(h.manager.executed[0]).not.toHaveProperty("workingDirectory")
+    expect(placeRun).toHaveBeenCalledWith(expect.objectContaining({ chatSessionId: "chat-1" }))
+    expect(h.manager.executed[0]).toHaveProperty("workingDirectory", "/never")
+  })
+})
+
+describe("Host-owned workspace capture", () => {
+  function capture() {
+    const settle = jest.fn(async () => [])
+    return {
+      workingDirectory: "/managed/alias",
+      bundleTurnId: "bundle-turn-1",
+      runs: [
+        {
+          runId: "task-run-1",
+          taskId: "task-1",
+          workspaceRoot: "/repo",
+          executionRoot: "/managed/alias",
+          origin: { kind: "local" as const },
+        },
+      ],
+      settle,
+    }
+  }
+
+  it("executes in the Host-owned alias and captures before publishing completion", async () => {
+    const workspace = capture()
+    const openWorkspace = jest.fn(async () => workspace)
+    const prepareExecution = jest.fn(async () => ({ captureAvailable: true }))
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo" }),
+      openWorkspace,
+      prepareExecution,
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      expect(openWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-1",
+          chatSessionId: "chat-1",
+          workingDirectory: "/repo",
+        })
+      )
+      expect(h.manager.executed[0]).toHaveProperty("workingDirectory", "/managed/alias")
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ workingDirectory: "/managed/alias", projectPath: "/repo" })
+      )
+      h.finish({ success: true })
+      await flush()
+      expect(workspace.settle).toHaveBeenCalledTimes(1)
+      expect(workspace.settle).toHaveBeenCalledWith("ready")
+      expect(h.frames.find((frame) => frame.terminal)).toMatchObject({
+        terminal: "completed",
+        workspace: { bundleTurnId: "bundle-turn-1", runs: workspace.runs },
+      })
+    } finally {
+      undo()
+    }
+  })
+
+  it("keeps explicit Local execution in place without inventing a managed bundle", async () => {
+    const captured = capture()
+    const workspace = { workingDirectory: "/repo", runs: captured.runs, settle: captured.settle }
+    const openWorkspace = jest.fn(async () => workspace)
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo", observeInPlace: true }),
+      openWorkspace,
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      expect(openWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ workingDirectory: "/repo", observeInPlace: true })
+      )
+      expect(h.manager.executed[0]).toHaveProperty("workingDirectory", "/repo")
+      h.finish({ success: true })
+      await flush()
+      const terminal = h.frames.find((frame) => frame.terminal)
+      expect(terminal?.workspace?.runs).toEqual(workspace.runs)
+      expect(terminal?.workspace).not.toHaveProperty("bundleTurnId")
+    } finally {
+      undo()
+    }
+  })
+
+  it("does not claim a Host-local diff for a remote-only filesystem", async () => {
+    const openWorkspace = jest.fn(async () => capture())
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({
+        workingDirectory: "/remote/repo",
+        captureUnavailable: "remote-filesystem" as const,
+      }),
+      openWorkspace,
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      expect(openWorkspace).not.toHaveBeenCalled()
+      expect(h.manager.executed[0]).toHaveProperty("workingDirectory", "/remote/repo")
+      h.finish({ success: true })
+      await flush()
+      const terminal = h.frames.find((frame) => frame.terminal)
+      expect(terminal).toMatchObject({
+        terminal: "completed",
+        workspaceUnavailable: "remote-filesystem",
+      })
+      expect(terminal).not.toHaveProperty("workspace")
+    } finally {
+      undo()
+    }
+  })
+
+  it("marks a remote placement receipt unavailable instead of exposing its Host-local snapshot", async () => {
+    const workspace = capture()
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo" }),
+      openWorkspace: async () => workspace,
+      prepareExecution: async () => ({ captureAvailable: false }),
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      h.finish({ success: true })
+      await flush()
+      const terminal = h.frames.find((frame) => frame.terminal)
+      expect(terminal).toMatchObject({
+        terminal: "completed",
+        workspaceUnavailable: "remote-filesystem",
+      })
+      expect(terminal).not.toHaveProperty("workspace")
+    } finally {
+      undo()
+    }
+  })
+
+  it("settles an unsuccessful execution as failed exactly once", async () => {
+    const workspace = capture()
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo" }),
+      openWorkspace: async () => workspace,
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      h.finish({ success: false, error: "agent failed" })
+      await flush()
+      expect(workspace.settle).toHaveBeenCalledTimes(1)
+      expect(workspace.settle).toHaveBeenCalledWith("failed")
+      expect(h.frames.filter((frame) => frame.terminal)).toHaveLength(1)
+    } finally {
+      undo()
+    }
+  })
+
+  it("waits for the running executor before capturing cancellation", async () => {
+    const workspace = capture()
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo" }),
+      openWorkspace: async () => workspace,
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      const cancelled = cancelRemoteExternalRun("run-1")
+      await flush()
+      expect(workspace.settle).not.toHaveBeenCalled()
+      expect(h.frames.some((frame) => frame.terminal)).toBe(false)
+      h.finish({ success: false })
+      await cancelled
+      expect(workspace.settle).toHaveBeenCalledTimes(1)
+      expect(workspace.settle).toHaveBeenCalledWith("cancelled")
+      expect(h.frames.find((frame) => frame.terminal)?.terminal).toBe("cancelled")
+    } finally {
+      undo()
+    }
+  })
+
+  it("does not execute after cancellation while workspace acquisition is pending", async () => {
+    const workspace = capture()
+    let acquired!: (value: typeof workspace) => void
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo" }),
+      openWorkspace: () =>
+        new Promise((resolve) => {
+          acquired = resolve
+        }),
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      const cancelled = cancelRemoteExternalRun("run-1")
+      acquired(workspace)
+      await cancelled
+      expect(h.manager.executed).toEqual([])
+      expect(workspace.settle).toHaveBeenCalledWith("cancelled")
+    } finally {
+      undo()
+    }
+  })
+
+  it("reports a capture failure instead of a successful turn with missing history", async () => {
+    const workspace = capture()
+    workspace.settle.mockRejectedValue(new Error("disk unavailable") as never)
+    const undo = __setRemoteRunDepsForTests({
+      placeRun: async () => ({ workingDirectory: "/repo" }),
+      openWorkspace: async () => workspace,
+    })
+    try {
+      await startRemoteExternalRun({
+        runId: "run-1",
+        chatSessionId: "chat-1",
+        stamp: STAMP,
+        prompt: "edit",
+      })
+      await flush()
+      h.finish({ success: true })
+      await flush()
+      expect(h.frames.find((frame) => frame.terminal)).toMatchObject({
+        terminal: "failed",
+        workspaceUnavailable: "capture-failed",
+      })
+      expect(h.released).toEqual(["run-1"])
+    } finally {
+      undo()
+    }
   })
 })
 

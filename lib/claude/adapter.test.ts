@@ -2904,3 +2904,16 @@ describe("makeUserMessage — videos", () => {
     expect(msg.parts).toEqual([])
   })
 })
+
+it("projects participant progress into the existing visible commentary part", () => {
+  const event = asAssistant({
+    id: "participant-progress",
+    role: "assistant",
+    content: [{ type: "data-commentary", data: { text: "Searching" } }],
+  })
+  const output = applySdkEvent([], event)
+  expect(output.messages[0]?.parts).toEqual([
+    { type: "data-commentary", data: { text: "Searching" } },
+  ])
+  expect(output.turnComplete).toBe(false)
+})

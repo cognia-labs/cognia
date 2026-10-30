@@ -61,6 +61,8 @@ const DEFAULT_SERIAL_BAUD = 115200
 export type DetectShells = (bins: string[]) => Promise<ReadonlySet<string>>
 
 export interface TerminalShellPickerProps {
+  extensionProfiles?: readonly { pluginId: string; id: string; title: string }[]
+  onNewExtensionProfile?: (pluginId: string, id: string) => void | Promise<void>
   /**
    * Spawn a new tab. `undefined` shell → resolve the project / settings /
    * platform default; a concrete value launches that shell directly.
@@ -201,6 +203,8 @@ async function defaultListTmuxSessions() {
 }
 
 export function TerminalShellPicker({
+  extensionProfiles,
+  onNewExtensionProfile,
   onNew,
   profiles,
   onNewProfile,
@@ -335,6 +339,26 @@ export function TerminalShellPicker({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          {extensionProfiles?.length && onNewExtensionProfile ? (
+            <>
+              <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+                {t("terminal.shellPicker.extensionProfilesLabel")}
+              </DropdownMenuLabel>
+              {extensionProfiles.map((profile) => (
+                <DropdownMenuItem
+                  key={`${profile.pluginId}:${profile.id}`}
+                  onSelect={() => {
+                    void onNewExtensionProfile(profile.pluginId, profile.id)
+                  }}
+                  className="flex-col items-start gap-0 text-xs"
+                >
+                  <span>{profile.title}</span>
+                  <span className="text-[10px] text-muted-foreground">{profile.pluginId}</span>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+            </>
+          ) : null}
           {namedProfiles.length > 0 && onNewProfile ? (
             <>
               <DropdownMenuLabel className="text-[11px] text-muted-foreground">

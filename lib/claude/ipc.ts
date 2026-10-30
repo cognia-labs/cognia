@@ -47,11 +47,79 @@ import {
   forgetPlannedOutboundToolCall,
 } from "@/lib/policy/action-review/authorized-tool-calls"
 import { isRemoteExecutionContext, type RemoteExecutionContext } from "./remote-execution"
+import {
+  awaitApproval as awaitLocalApproval,
+  hasPendingApproval,
+  resolveApproval as resolveLocalApproval,
+} from "@/lib/connectors/hitl/approval-registry"
 
 const SIDECAR_EVENT = "claude://message"
 /** Canonical agent-event channel (ADR-0090 Phase 3). */
 const AGENT_EVENT = "agent://message"
 const remoteApprovalContexts = new Map<string, RemoteExecutionContext>()
+
+/** Local AI SDK turns use the same approval card, response funnel and review receipts. */
+export async function requestLocalToolApproval(input: {
+  sessionId: string
+  reason: string
+  step: number
+  signal: AbortSignal
+  ttlMs?: number
+  emit(event: ClaudeEvent): void | Promise<void>
+}): Promise<boolean> {
+  input.signal.throwIfAborted()
+  const requestId = `local:${globalThis.crypto.randomUUID()}`
+  let answered = false
+  let expired = false
+  const promise = awaitLocalApproval(input.sessionId, requestId, {
+    signal: input.signal,
+    ttlMs: input.ttlMs,
+    onExpire: () => {
+      expired = true
+    },
+  })
+  try {
+    const { openChatToolReview } = await import("@/lib/policy/action-review/chat-tool-channel")
+    await openChatToolReview({
+      sessionId: input.sessionId,
+      requestId,
+      toolName: "agent.turn.decide",
+    })
+    input.signal.throwIfAborted()
+    if (!hasPendingApproval(input.sessionId, requestId)) return false
+    await input.emit({
+      type: "permission_request",
+      sessionId: input.sessionId,
+      requestId,
+      toolUseID: requestId,
+      toolName: "agent.turn.decide",
+      input: { step: input.step, reason: input.reason },
+      requiresPerCallApproval: true,
+      suppressAlwaysAllowRule: true,
+      defaultToNo: true,
+    })
+    const answer = await promise
+    answered = !expired
+    return answer.decision === "allow"
+  } finally {
+    resolveLocalApproval(input.sessionId, requestId, {
+      decision: "deny",
+      message: "Local approval owner ended",
+    })
+    if (!answered) {
+      const reason = input.signal.aborted ? "interrupted" : "timeout"
+      await recordApprovalReceipt(input.sessionId, requestId, "deny", reason, {
+        authority: input.signal.aborted ? "system" : "timeout",
+      })
+      await input.emit({
+        type: "permission_interrupted",
+        sessionId: input.sessionId,
+        requestId,
+        reason,
+      })
+    }
+  }
+}
 
 function remoteApprovalKey(sessionId: string, requestId: string): string {
   return `${sessionId}:${requestId}`
@@ -846,18 +914,33 @@ export async function approveTool(
   const { recordToolAuthorizationGovernance } =
     await import("@/lib/governance/producers/tool-authorization")
   const key = remoteApprovalKey(sessionId, requestId)
+  const local = requestId.startsWith("local:")
+  if (local && !hasPendingApproval(sessionId, requestId))
+    throw new Error("Local approval has expired or belongs to another session")
   const context = remoteExecutionContext ?? remoteApprovalContexts.get(key)
   const decidedAt = Date.now()
   const governanceOutcome = decision === "deny" ? "deny" : "allow"
   try {
-    await transport.call("claude_approve", {
-      sessionId,
-      requestId,
-      decision,
-      message,
-      updatedInput,
-      ...(context ? { remoteExecutionContext: context } : {}),
-    })
+    if (local) {
+      if (
+        remoteExecutionContext ||
+        !resolveLocalApproval(sessionId, requestId, {
+          decision: decision === "allow" ? "allow" : "deny",
+        })
+      )
+        throw new Error("Local approval identity changed")
+    } else
+      await transport.call("claude_approve", {
+        sessionId,
+        requestId,
+        decision,
+        message,
+        updatedInput,
+        ...(context ? { remoteExecutionContext: context } : {}),
+      })
+    // A rejected dispatch leaves the ask pending. Retain its caller binding
+    // so a later operator retry cannot fall into a different identity path.
+    remoteApprovalContexts.delete(key)
     // Canonical event log (ADR-0090). Recorded here rather than at the call
     // sites because every resolution path — plugin firewall, allowlist,
     // auto-mode, the modal, a remote device, the backstop deny — funnels
@@ -927,8 +1010,6 @@ export async function approveTool(
       )
     }
     throw error
-  } finally {
-    remoteApprovalContexts.delete(key)
   }
 }
 

@@ -1017,6 +1017,7 @@ describe("edit-as-branch owner stamping", () => {
           ...(useChatStore.getState().sessions.s9 ?? {}),
           messages: prior,
           status: "streaming",
+          activeBranchByGroup: {},
           pendingApprovals: [],
         },
       },
@@ -1046,7 +1047,7 @@ describe("edit-as-branch owner stamping", () => {
         registry,
         getExecutionHandle: () => undefined,
       } as never
-    ).catch(() => {})
+    )
 
     const messages = useChatStore.getState().sessions.s9?.messages ?? []
     expect(messages.find((m) => m.id === "r1")?.metadata).toMatchObject({
@@ -1091,6 +1092,7 @@ describe("edit-as-branch owner stamping", () => {
           ...(useChatStore.getState().sessions.s9 ?? {}),
           messages: prior,
           status: "streaming",
+          activeBranchByGroup: {},
           pendingApprovals: [],
         },
       },
@@ -1120,7 +1122,7 @@ describe("edit-as-branch owner stamping", () => {
         registry,
         getExecutionHandle: () => undefined,
       } as never
-    ).catch(() => {})
+    )
 
     const messages = useChatStore.getState().sessions.s9?.messages ?? []
     expect(messages.find((m) => m.id === "r1")?.metadata).toMatchObject({
@@ -1380,6 +1382,22 @@ describe("Router + Fusion turn wiring (ADR-0188)", () => {
     expect(diagnostic.code).toBe("routerFusionRefused")
     expect(diagnostic.detail).toBe("CALL_LIMIT_EXCEEDED\nwithheld")
     expect(diagnostic.meta?.spanId).toBe("span-7")
+  })
+
+  it("forwards semantic refusal identity to the existing fallback owner", async () => {
+    seed({ provider: "openai", model: "gpt-5" })
+    await dispatch({
+      type: "session_ended",
+      sessionId: "rf",
+      error: "network timeout",
+      code: "PLUGIN_INTERCEPTOR_REFUSED",
+    })
+    expect(mockAttemptRoutingFallback).toHaveBeenCalledWith(
+      "rf",
+      "network timeout",
+      expect.objectContaining({ code: "PLUGIN_INTERCEPTOR_REFUSED" })
+    )
+    expect(mockRecordProviderOutcome).not.toHaveBeenCalled()
   })
 
   it("seals a failed ledgered turn before a routing fallback may start the next run", async () => {

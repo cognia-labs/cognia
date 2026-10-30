@@ -29,13 +29,20 @@ export function createCodexAppServerAdapterFactory(
   processHost = createAgentTransportProcessHost("any")
 ): ProtocolAdapterFactory {
   const logger = createAgentLogger(loggers.agent)
-  return () =>
-    new CodexAppServerAdapter({
+  return () => {
+    const adapter = new CodexAppServerAdapter({
       processHost,
       resolveLaunchEnvironment: buildAgentEnv,
       approvalPolicy: configuredApprovalPolicy,
       outboundGate: hasNoLeakingPiiDeep,
       logger,
-      onFileChanges: recordFileChanges,
+      onFileChanges: (nativeSessionId, toolUseId, changes) => {
+        const conversationId = adapter.getSession(nativeSessionId)?.metadata?.cogniaSessionId
+        if (typeof conversationId === "string" && conversationId.trim()) {
+          recordFileChanges(conversationId, toolUseId, changes)
+        }
+      },
     })
+    return adapter
+  }
 }

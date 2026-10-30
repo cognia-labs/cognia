@@ -74,6 +74,82 @@ const labels = {
 }
 
 describe("<TranscriptTimelineSurface />", () => {
+  it("keeps measured scrollbar insets current and owned by each pane", () => {
+    const originalObserver = globalThis.ResizeObserver
+    const callbacks: Array<() => void> = []
+    const insets: Record<string, number> = { first: 8, replacement: 17, other: 17 }
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(() => callback([], this as unknown as ResizeObserver))
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver
+    const width = jest.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(707)
+    const client = jest
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return 707 - (insets[this.dataset.sessionId ?? ""] ?? 0)
+      })
+    const base: TranscriptTimelineSurfaceProps = {
+      sessionId: "first",
+      items: [],
+      expandedTurnKeys: new Set(),
+      getDetail: () => undefined,
+      onExpand: jest.fn(),
+      onCollapse: jest.fn(),
+      onLoadOlder: jest.fn(),
+      onRetry: jest.fn(),
+      hasMore: false,
+      loading: false,
+      loadingOlder: false,
+      error: null,
+      liveMessages: [],
+      liveStatus: "idle",
+      labels,
+    }
+    const tree = (first: boolean, replacement: boolean, other: boolean) => (
+      <>
+        <div data-slot="chat-surface-stage" data-testid="pane-a">
+          {first && <TranscriptTimelineSurface key="first" {...base} />}
+          {replacement && (
+            <TranscriptTimelineSurface key="replacement" {...base} sessionId="replacement" />
+          )}
+        </div>
+        <div data-slot="chat-surface-stage" data-testid="pane-b">
+          {other && <TranscriptTimelineSurface {...base} sessionId="other" />}
+        </div>
+      </>
+    )
+    const view = render(tree(true, false, true))
+    try {
+      const firstPane = screen.getByTestId("pane-a")
+      const otherPane = screen.getByTestId("pane-b")
+      const inset = (element: HTMLElement) =>
+        element.style.getPropertyValue("--chat-native-scrollbar-inset")
+      expect(inset(firstPane)).toBe("8px")
+      expect(inset(otherPane)).toBe("17px")
+      insets.first = 0
+      callbacks.forEach((callback) => callback())
+      expect(inset(firstPane)).toBe("0px")
+      expect(inset(otherPane)).toBe("17px")
+      view.rerender(tree(true, true, true))
+      expect(inset(firstPane)).toBe("17px")
+      view.rerender(tree(false, true, true))
+      callbacks.forEach((callback) => callback())
+      expect(inset(firstPane)).toBe("17px")
+      view.rerender(tree(false, false, false))
+      callbacks.forEach((callback) => callback())
+      expect(inset(firstPane)).toBe("")
+      expect(inset(otherPane)).toBe("")
+    } finally {
+      view.unmount()
+      width.mockRestore()
+      client.mockRestore()
+      globalThis.ResizeObserver = originalObserver
+    }
+  })
   it("does not rerender settled messages when only the live tail changes", () => {
     const props: TranscriptTimelineSurfaceProps = {
       sessionId: "stream-session",
@@ -183,6 +259,15 @@ describe("<TranscriptTimelineSurface />", () => {
       "Result",
       "A",
     ])
+    const column = document.querySelector('[data-slot="conversation-reading-column"]')
+    expect(column).toHaveClass("mx-auto", "max-w-[52rem]", "px-3", "sm:px-5")
+    for (const message of screen.getAllByTestId(/^message-/)) {
+      expect(column).toContainElement(message)
+    }
+    expect(screen.getByRole("button", { name: labels.retry }).parentElement).not.toHaveClass(
+      "px-3",
+      "sm:px-5"
+    )
     fireEvent.click(screen.getByRole("button", { name: labels.retry }))
     // A failed page stops automatic loading; the retry button is the way on.
     expect(props.onLoadOlder).not.toHaveBeenCalled()

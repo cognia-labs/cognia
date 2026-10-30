@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react"
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
@@ -24,6 +24,9 @@ import type { RewindFilesResult } from "@/lib/claude/ipc"
 import type { ResolvedMessageDisplayOptions } from "@/lib/chat/message-display"
 import { assistantAgentKey, hasMultipleAgentKeys } from "@/lib/chat/transcript-agents"
 import { TranscriptAgentsProvider } from "@/components/chat/transcript-agents-context"
+import { chatColumnClass } from "./chat-column"
+
+const scrollbarInsetOwners = new WeakMap<Element, symbol>()
 
 export interface TranscriptTimelineLabels {
   expand: string
@@ -150,6 +153,35 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
   const tTimeline = useTranslations("chat.timeline")
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current
+    const stage = scroller?.closest<HTMLElement>('[data-slot="chat-surface-stage"]')
+    if (!scroller || !stage) return
+    const owner = Symbol()
+    scrollbarInsetOwners.set(stage, owner)
+    const measure = () => {
+      if (scrollbarInsetOwners.get(stage) !== owner) return
+      const style = getComputedStyle(scroller)
+      const borders =
+        (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0)
+      // Use layout widths: an animated pane can scale its visual rectangle.
+      const inset = Math.max(0, scroller.offsetWidth - scroller.clientWidth - borders)
+      const value = `${inset}px`
+      if (stage.style.getPropertyValue("--chat-native-scrollbar-inset") !== value) {
+        stage.style.setProperty("--chat-native-scrollbar-inset", value)
+      }
+    }
+    measure()
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure)
+    observer?.observe(scroller)
+    return () => {
+      observer?.disconnect()
+      // A departing transcript must not clear the replacement pane's inset.
+      if (scrollbarInsetOwners.get(stage) !== owner) return
+      scrollbarInsetOwners.delete(stage)
+      stage.style.removeProperty("--chat-native-scrollbar-inset")
+    }
+  }, [props.sessionId])
 
   // The same scroll ownership as the local transcript (ADR-0138): open at the
   // latest turn, follow a live turn while the reader stays at the foot, and
@@ -233,10 +265,11 @@ export function TranscriptTimelineSurface(props: TranscriptTimelineSurfaceProps)
             <div
               ref={contentRef}
               onClickCapture={handleContentClick}
-              className="mx-auto w-full max-w-[52rem] py-5 sm:py-7"
+              className={`${chatColumnClass} py-5 sm:py-7`}
+              data-slot="conversation-reading-column"
             >
               {props.error ? (
-                <div className="px-3 pb-3 sm:px-5">
+                <div className="pb-3">
                   <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
                     {props.labels.retry}
                   </Button>
@@ -406,10 +439,10 @@ function TranscriptTimelineRow({
     <div data-turn-key={item.turnKey}>
       {renderMessages(messages, false, adapters, allowRegenerate)}
       {expanded && !detail ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">{labels.loading}</p>
+        <p className="py-2 text-xs text-muted-foreground">{labels.loading}</p>
       ) : null}
       {expanded && detail && onPageTurn && (detail.hasPrevious || detail.hasMore) ? (
-        <div className="flex items-center gap-2 px-3 py-2 sm:px-5" aria-busy={loadingDetail}>
+        <div className="flex items-center gap-2 py-2" aria-busy={loadingDetail}>
           <Button
             type="button"
             variant="outline"
@@ -431,7 +464,7 @@ function TranscriptTimelineRow({
         </div>
       ) : null}
       {item.collapsed.exists || detail ? (
-        <div className="px-3 pb-3 sm:px-5">
+        <div className="pb-3">
           <Button
             type="button"
             variant="ghost"

@@ -174,6 +174,7 @@ describe("scoped layout controls", () => {
           panels={[
             {
               id: "comments",
+              activity: "comments",
               labelKey: "contextWorkbench.comments",
               appliesTo: () => true,
               retention: "stateful",
@@ -214,6 +215,7 @@ describe("scoped layout controls", () => {
     const panels: ContextPanelDefinition[] = [
       {
         id: "comments",
+        activity: "comments",
         labelKey: "contextWorkbench.comments",
         appliesTo: () => true,
         retention: "stateful",
@@ -299,6 +301,7 @@ describe("scoped layout controls", () => {
             panels={[
               {
                 id: "comments",
+                activity: "comments",
                 labelKey: "contextWorkbench.comments",
                 appliesTo: () => true,
                 retention: "stateful",

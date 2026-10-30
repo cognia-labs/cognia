@@ -34,6 +34,16 @@ import {
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
+import { EXECUTOR_FALLBACK_PROMPT as PURE_EXECUTOR_PROMPT } from "@/lib/agent/prompts/executor"
+import {
+  registerInterceptor,
+  __resetInterceptorRegistryForTesting,
+} from "@/lib/plugin/interceptors/registry"
+import { createInterceptorRegistration } from "@/lib/plugin/interceptors/normalize"
+
+it("preserves the public executor prompt export from its pure owner", () => {
+  expect(EXECUTOR_FALLBACK_PROMPT).toBe(PURE_EXECUTOR_PROMPT)
+})
 
 const mockPlanRoute = jest.fn()
 const mockApplyCircuitBreakerSettings = jest.fn()
@@ -204,6 +214,7 @@ function primeTextChannel(parts: string[] = ["hello"], finishReason = "stop") {
 
 describe("executeAgent", () => {
   beforeEach(() => {
+    __resetInterceptorRegistryForTesting()
     jest.clearAllMocks()
     mockLiveSettingsState.settings = undefined
     mockIsTauri.mockReturnValue(false)
@@ -214,7 +225,92 @@ describe("executeAgent", () => {
     })
   })
 
+  afterEach(() => __resetInterceptorRegistryForTesting())
+
   describe("text-only channel", () => {
+    it("aborts the dispatched completion when strict stream projection fails", async () => {
+      primeTextChannel(["raw"])
+      registerInterceptor(
+        createInterceptorRegistration({
+          pointId: "model.stream.transform",
+          pluginId: "projector",
+          semantic: "transform",
+          source: "interceptors",
+          failurePolicy: "fail-closed",
+          handler: (() => {
+            throw new Error("projection refused")
+          }) as never,
+        })
+      )
+      await expect(runCompletionRail("hi")).rejects.toThrow("projection refused")
+      expect(mockStreamText.mock.calls).toHaveLength(1)
+      expect(mockStreamText.mock.calls[0][0].abortSignal?.aborted).toBe(true)
+    })
+    it("gates the completion fallback before any provider dispatch or routing retry", async () => {
+      primeTextChannel(["raw"])
+      registerInterceptor(
+        createInterceptorRegistration({
+          pointId: "agent.turn.decide",
+          pluginId: "guard",
+          semantic: "guard",
+          source: "interceptors",
+          handler: (async () => ({ decision: "deny", reason: "blocked completion" })) as never,
+        })
+      )
+      await expect(runCompletionRail("hi")).rejects.toThrow("blocked completion")
+      expect(mockStreamText).not.toHaveBeenCalled()
+    })
+
+    it("projects completion deltas and snapshots while preserving structured provider output", async () => {
+      primeTextChannel(['{"raw":true}'])
+      registerInterceptor(
+        createInterceptorRegistration({
+          pointId: "model.stream.transform",
+          pluginId: "projector",
+          semantic: "transform",
+          source: "interceptors",
+          handler: (async (value: { text: string }) => ({
+            ...value,
+            text: "safe display",
+          })) as never,
+        })
+      )
+      const onDelta = jest.fn()
+      const result = await runCompletionRail("hi", {
+        onDelta,
+        outputFormat: { type: "json_schema", schema: { type: "object" } },
+      })
+      expect(onDelta).toHaveBeenCalledWith("safe display")
+      expect(result.text).toBe("safe display")
+      expect(result.object).toEqual({ raw: true })
+    })
+
+    it("uses the existing per-call responder for completion approvals and denies missing responders", async () => {
+      primeTextChannel(["approved"])
+      registerInterceptor(
+        createInterceptorRegistration({
+          pointId: "agent.turn.decide",
+          pluginId: "guard",
+          semantic: "guard",
+          source: "interceptors",
+          handler: (async () => ({
+            decision: "requireApproval",
+            reason: "review completion",
+          })) as never,
+        })
+      )
+      await expect(runCompletionRail("hi")).rejects.toThrow("review completion")
+      expect(mockStreamText).not.toHaveBeenCalled()
+      const canUseTool = jest.fn(async () => ({ behavior: "allow" as const }))
+      await expect(runCompletionRail("hi", { canUseTool })).resolves.toMatchObject({
+        text: "approved",
+      })
+      expect(canUseTool).toHaveBeenCalledWith(
+        "agent.turn.decide",
+        { step: 0, reason: "review completion" },
+        expect.anything()
+      )
+    })
     it("speaks as the named agent when the caller leaves prompt and model unset", async () => {
       primeTextChannel(["ok"])
       mockResolveCharacter.mockResolvedValue({
@@ -436,7 +532,7 @@ describe("executeAgent", () => {
       expect(mockStreamText).toHaveBeenCalledTimes(1)
     })
 
-    it("cancels an aborted attempt without trying the next candidate", async () => {
+    it("refuses a pre-aborted attempt before dispatch or trying the next candidate", async () => {
       primeTextChannel()
       mockPlanRoute.mockResolvedValue(
         routingPlan([
@@ -456,7 +552,7 @@ describe("executeAgent", () => {
       await expect(executeAgent("hi", { abortSignal: controller.signal })).rejects.toThrow(
         "aborted"
       )
-      expect(mockStreamText).toHaveBeenCalledTimes(1)
+      expect(mockStreamText).not.toHaveBeenCalled()
     })
 
     it("advances when a planned candidate cannot resolve credentials", async () => {
@@ -517,7 +613,7 @@ describe("executeAgent", () => {
         expect.objectContaining({
           system: "be brief",
           temperature: 0.2,
-          abortSignal: controller.signal,
+          abortSignal: expect.any(AbortSignal),
         })
       )
     })
@@ -555,7 +651,11 @@ describe("executeAgent", () => {
       await executeAgent("follow-up", {
         priorMessages: [
           { role: "user", content: "first" },
-          { role: "assistant", content: "reply" },
+          {
+            role: "assistant",
+            content: "reply",
+            metadata: { vscodeChat: { privateState: "never send as model instructions" } },
+          },
         ],
       })
       const opts = mockStreamText.mock.calls[0][0] as { messages?: unknown; prompt?: unknown }
@@ -615,6 +715,27 @@ describe("executeAgent", () => {
         mockStreamText.mockImplementation(actualAi.streamText)
       })
       afterEach(() => restoreRuntime())
+
+      it("aborts the real provider signal after strict presentation refusal", async () => {
+        registerInterceptor(
+          createInterceptorRegistration({
+            pluginId: "projector",
+            pointId: "model.stream.transform",
+            semantic: "transform",
+            source: "interceptors",
+            failurePolicy: "fail-closed",
+            handler: (() => {
+              throw new Error("projection refused")
+            }) as never,
+          })
+        )
+        const model = abortableStreamModel()
+        const dispatch = jest.spyOn(model, "doStream")
+        mockCreateModel.mockReturnValue(model as never)
+        await expect(runCompletionRail("hi")).rejects.toThrow("projection refused")
+        expect(dispatch.mock.calls[0][0].abortSignal?.aborted).toBe(true)
+        await drainRejectionReports()
+      })
 
       it("rejects a stream cut off mid-response without leaking an unhandled rejection", async () => {
         // The SDK's default `onError` logs the stream error.

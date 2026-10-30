@@ -43,6 +43,8 @@ import type {
 } from "@/types/agent/external-agent"
 import type { ExternalAgentConfigStamp } from "@/types/agent/external-agent-config-store"
 import type { ApprovalDecision } from "@cognia/agent-config-types"
+import type { ResourceChange } from "@/lib/task-workspace/types"
+import { externalAgentWorkspaceCaptureSupport } from "@/lib/task-workspace/capture-support"
 
 import { mountHostConfigAgent, resetHostConfigMountsForTests } from "../../config/host-config-mount"
 import { admitExternalAgentRun, releaseExternalAgentRun } from "../../policy/run-admission"
@@ -200,6 +202,26 @@ export interface RemoteRunFrame {
    * not handed. Like `operationResult`, its `event` is only a carrier.
    */
   attachmentsWithheld?: RemoteAttachmentsWithheldFrame
+  /** Bounded ledger identities only. File metadata and bodies remain on the owning Host. */
+  workspace?: RemoteRunWorkspace
+  workspaceUnavailable?:
+    "no-workspace" | "capture-failed" | "remote-filesystem" | "unsupported-runtime"
+}
+
+export interface RemoteRunWorkspace {
+  bundleTurnId?: string
+  runs: Array<{
+    runId: string
+    taskId: string
+    workspaceRoot: string
+    executionRoot: string
+    origin: { kind: "local" }
+  }>
+}
+
+interface RemoteRunWorkspaceLease extends RemoteRunWorkspace {
+  workingDirectory: string
+  settle: (state: "ready" | "failed" | "cancelled") => Promise<ResourceChange[]>
 }
 
 export type RemoteRunStart =
@@ -245,6 +267,10 @@ interface ActiveRun {
    * already passed — so an overtaken frame would be lost, not reordered.
    */
   publishing: Promise<void>
+  workspace?: RemoteRunWorkspaceLease
+  workspacePending?: boolean
+  execution?: Promise<void>
+  workspaceUnavailable?: RemoteRunFrame["workspaceUnavailable"]
 }
 
 const runs = new Map<string, ActiveRun>()
@@ -271,14 +297,34 @@ export interface RemoteRunDeps {
    * Where the turn runs on an always-on Host (ADR-0224 A8): the chat
    * session's project and working directory, placed in its runtime
    * environment before the agent starts. Answers the working directory the
-   * turn hands the agent; throws when the environment is refused. Called only
-   * on such a Host.
+   * turn hands the agent; throws when the environment is refused. Desktop
+   * Hosts resolve their own session/project cwd through the same boundary.
    */
   placeRun: (input: {
     agentId: string
     chatSessionId: string
     manager: ExternalRunManager
-  }) => Promise<{ workingDirectory?: string }>
+  }) => Promise<{
+    workingDirectory?: string
+    captureUnavailable?: RemoteRunFrame["workspaceUnavailable"]
+    observeInPlace?: boolean
+  }>
+  /** Host-local capture authority, independent of a renderer's selected remote Host. */
+  openWorkspace: (input: {
+    runId: string
+    chatSessionId: string
+    agentId: string
+    workingDirectory: string
+    observeInPlace?: boolean
+  }) => Promise<RemoteRunWorkspaceLease | null>
+  /** Mount/place the actual alias, after acquisition; report remote-only filesystems. */
+  prepareExecution: (input: {
+    agentId: string
+    chatSessionId: string
+    manager: ExternalRunManager
+    workingDirectory?: string
+    projectPath?: string
+  }) => Promise<{ captureAvailable: boolean }>
 }
 
 /** The slice of `ExternalAgentManager` this module uses. */
@@ -407,12 +453,10 @@ const defaultDeps: RemoteRunDeps = {
     await consumeAttachmentRefs(refs)
   },
   placeRun: async ({ agentId, chatSessionId, manager }) => {
-    const [{ getSession }, { resolveSessionWorkspaceRoot }, { ensureHostAgentPlacement }] =
-      await Promise.all([
-        import("@/lib/db/sessions"),
-        import("@/lib/task-workspace/session-execution-context"),
-        import("@/lib/sandbox/host-agent-placement"),
-      ])
+    const [{ getSession }, { resolveSessionWorkspaceRoot }] = await Promise.all([
+      import("@/lib/db/sessions"),
+      import("@/lib/task-workspace/session-execution-context"),
+    ])
     const session = await getSession(chatSessionId)
     const context = session?.executionContext
     const projectId = context?.projectId || session?.projectId
@@ -423,16 +467,38 @@ const defaultDeps: RemoteRunDeps = {
       import("@/lib/remote-host/code-supply/host-project-source"),
     ])
     const project = projectId ? await getDb().projects.get(projectId) : undefined
+    const { allRootPaths } = await import("@/lib/workspace/roots")
+    const agent = manager.getAgent(agentId) as { config?: ExternalAgentConfig } | undefined
     const cwd = await hostWorkingDirectory({
-      cwd: context ? resolveSessionWorkspaceRoot(context) : undefined,
+      cwd:
+        (context ? resolveSessionWorkspaceRoot(context) : undefined) ??
+        (project ? allRootPaths(project)[0] : undefined) ??
+        agent?.config?.process?.cwd,
       project,
     })
-    await ensureHostAgentPlacement(
+    const support = externalAgentWorkspaceCaptureSupport(agent?.config)
+    return {
+      ...(cwd ? { workingDirectory: cwd } : {}),
+      ...(!support.available ? { captureUnavailable: support.reason } : {}),
+      ...(context?.location === "local" ? { observeInPlace: true } : {}),
+    }
+  },
+  prepareExecution: async ({ agentId, chatSessionId, manager, workingDirectory, projectPath }) => {
+    if (!isHeadlessHost()) return { captureAvailable: true }
+    const [{ getSession }, { ensureHostAgentPlacement }] = await Promise.all([
+      import("@/lib/db/sessions"),
+      import("@/lib/sandbox/host-agent-placement"),
+    ])
+    const session = await getSession(chatSessionId)
+    const context = session?.executionContext
+    const projectId = context?.projectId || session?.projectId
+    const placement = await ensureHostAgentPlacement(
       {
         agentId,
         ...(projectId ? { projectId } : {}),
         ...(context?.environmentId ? { environmentId: context.environmentId } : {}),
-        ...(cwd ? { cwd } : {}),
+        ...(workingDirectory ? { cwd: workingDirectory } : {}),
+        ...(projectPath ? { projectPath } : {}),
       },
       {
         getAgent: (id) => manager.getAgent(id) as { connectionStatus?: string } | undefined,
@@ -442,7 +508,17 @@ const defaultDeps: RemoteRunDeps = {
         },
       }
     )
-    return cwd ? { workingDirectory: cwd } : {}
+    return {
+      captureAvailable: !(
+        placement.kind === "resolved" &&
+        placement.outcome.kind === "placed" &&
+        placement.outcome.target?.kind === "remote"
+      ),
+    }
+  },
+  openWorkspace: async (input) => {
+    const { openHostTaskWorkspaceTurn } = await import("@/lib/task-workspace/host-turn")
+    return openHostTaskWorkspaceTurn({ ...input, agentKind: "external" })
   },
 }
 
@@ -511,6 +587,17 @@ function emit(
     ...(error ? { error } : {}),
     ...(operationResult ? { operationResult } : {}),
     ...(attachmentsWithheld ? { attachmentsWithheld } : {}),
+    ...(terminal && run.workspace && !run.workspaceUnavailable
+      ? {
+          workspace: {
+            ...(run.workspace.bundleTurnId ? { bundleTurnId: run.workspace.bundleTurnId } : {}),
+            runs: run.workspace.runs,
+          },
+        }
+      : {}),
+    ...(terminal && run.workspaceUnavailable
+      ? { workspaceUnavailable: run.workspaceUnavailable }
+      : {}),
   }
   const published = run.publishing.then(() => deps.publish(EXTERNAL_RUN_EVENT_TOPIC, frame))
   run.publishing = published.catch(() => undefined)
@@ -610,6 +697,19 @@ async function settle(
   releaseDecisionsForRun(run.runId, "abandoned")
   runs.delete(run.runId)
   try {
+    let finalTerminal = terminal
+    let finalError = error
+    if (run.workspace) {
+      try {
+        await run.workspace.settle(
+          terminal === "completed" ? "ready" : terminal === "cancelled" ? "cancelled" : "failed"
+        )
+      } catch {
+        finalTerminal = "failed"
+        finalError = "Workspace changes could not be captured."
+        run.workspaceUnavailable = "capture-failed"
+      }
+    }
     // A synthesized `session_end` rather than whatever the adapter last said.
     // The adapter emits one only on the paths it knows about — a thrown
     // execute, an abort and a dropped connection all end the turn without it —
@@ -620,11 +720,11 @@ async function settle(
         type: "session_end",
         sessionId: run.externalSessionId,
         timestamp: new Date(deps.now()),
-        reason: TERMINAL_REASON[terminal],
-        ...(error ? { error } : {}),
+        reason: TERMINAL_REASON[finalTerminal],
+        ...(finalError ? { error: finalError } : {}),
       },
-      terminal,
-      error
+      finalTerminal,
+      finalError
     )
   } finally {
     await deps.release(run.runId)
@@ -864,6 +964,7 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
     cogniaBound: !!request.cogniaModel,
     cancel: () => controller.abort(),
     publishing: Promise.resolve(),
+    workspacePending: true,
   }
   runs.set(run.runId, run)
 
@@ -874,7 +975,7 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
   // bus that rejects one frame mid-turn would take the whole brain down
   // instead of costing that frame.
   const staged = request.attachments ?? []
-  void (async () => {
+  run.execution = (async () => {
     try {
       if (request.externalSessionId && !isGatewayTaskSessionId(request.externalSessionId))
         assertSessionOwner(
@@ -885,13 +986,40 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
         )
       // Placed before anything starts: a refused environment fails the turn
       // here instead of starting the agent where it must not run.
-      const placed = isHeadlessHost()
-        ? await deps.placeRun({ agentId, chatSessionId: request.chatSessionId, manager })
-        : {}
-      const images = await deliverableRunImages(run, manager, request, staged)
+      const placed = await deps.placeRun({ agentId, chatSessionId: request.chatSessionId, manager })
+      controller.signal.throwIfAborted()
+      if (placed.workingDirectory && !placed.captureUnavailable) {
+        run.workspace =
+          (await deps.openWorkspace({
+            runId: request.runId,
+            chatSessionId: request.chatSessionId,
+            agentId,
+            workingDirectory: placed.workingDirectory,
+            ...(placed.observeInPlace ? { observeInPlace: true } : {}),
+          })) ?? undefined
+      }
+      run.workspacePending = false
+      if (!run.workspace) run.workspaceUnavailable = placed.captureUnavailable ?? "no-workspace"
+      controller.signal.throwIfAborted()
+      const prepared =
+        run.workspace || placed.workingDirectory || isHeadlessHost()
+          ? await deps.prepareExecution({
+              agentId,
+              chatSessionId: request.chatSessionId,
+              manager,
+              workingDirectory: run.workspace?.workingDirectory ?? placed.workingDirectory,
+              projectPath: placed.workingDirectory,
+            })
+          : { captureAvailable: true }
+      if (!prepared.captureAvailable) run.workspaceUnavailable = "remote-filesystem"
+      controller.signal.throwIfAborted()
+      const images =
+        staged.length > 0 ? await deliverableRunImages(run, manager, request, staged) : []
       const result = await manager.execute(agentId, request.prompt, {
         sessionId: request.externalSessionId,
-        ...(placed.workingDirectory ? { workingDirectory: placed.workingDirectory } : {}),
+        ...((run.workspace?.workingDirectory ?? placed.workingDirectory)
+          ? { workingDirectory: run.workspace?.workingDirectory ?? placed.workingDirectory }
+          : {}),
         ...(images.length > 0 ? { attachments: images } : {}),
         // Omitted rather than passed as undefined so the manager's own
         // `if (options?.model)` gate reads the same on both lanes: an absent
@@ -947,6 +1075,10 @@ export async function startRemoteExternalRun(request: RemoteRunRequest): Promise
       // refused, crashed mid-turn) as a result, not a throw. Settling that as
       // completed handed the client an empty reply and no error at all.
       const verdict = result as { success?: boolean; error?: string; errorCode?: string } | null
+      if (controller.signal.aborted) {
+        await settle(run, "cancelled")
+        return
+      }
       if (verdict && verdict.success === false) {
         await settle(
           run,
@@ -994,7 +1126,8 @@ export async function cancelRemoteExternalRun(
   if (!run) return false
   if (run.deviceId && callerDeviceId !== run.deviceId) return false
   run.cancel?.()
-  await settle(run, "cancelled")
+  if (run.workspace || run.workspacePending) await run.execution
+  else await settle(run, "cancelled")
   return true
 }
 

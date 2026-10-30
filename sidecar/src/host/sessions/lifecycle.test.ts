@@ -698,6 +698,27 @@ test("each send refreshes or clears the verification deadline before the prompt"
   ])
 })
 
+test("each reused turn refreshes or clears semantic interceptors before accepting input", async () => {
+  const order: unknown[] = []
+  const loop = {
+    setNextTurnSemanticInterceptors: (stamp: unknown, ttl: unknown) =>
+      order.push(["semantic", stamp, ttl]),
+    pushUserMessage: (prompt: unknown) => order.push(["prompt", prompt]),
+  }
+  await routeSendIntoLiveLoop(
+    loop,
+    { semanticInterceptors: ["agent.turn.decide"], approvalTtlMs: 250 },
+    "guarded"
+  )
+  await routeSendIntoLiveLoop(loop, {}, "plain")
+  assert.deepEqual(order, [
+    ["semantic", ["agent.turn.decide"], 250],
+    ["prompt", "guarded"],
+    ["semantic", undefined, undefined],
+    ["prompt", "plain"],
+  ])
+})
+
 test("portable permission and subagent changes cannot reuse an older session policy", () => {
   const existing = { multiTurn: true, q: { active: false }, sendOptions: { provider: "anthropic" } }
   assert.equal(restartReason(existing, { subagentRuntime: { contextMode: "isolated" } }), null)

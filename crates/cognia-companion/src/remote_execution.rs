@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::{
     command_manifest::{
-        CommandApproval, CommandDescriptor, CommandIdempotency, CommandOperation, CommandReceiptPolicy, CommandTarget,
-        CommandTransport,
+        CommandApproval, CommandDescriptor, CommandIdempotency, CommandOperation,
+        CommandReceiptPolicy, CommandTarget, CommandTransport,
     },
     middleware::DeviceContext,
     security_store::{security_store, IdempotencyDecision, SecurityStore, SecurityStoreError},
@@ -376,40 +376,80 @@ async fn execute_inner(
 ) -> Result<ExecutionOutcome, Problem> {
     if request.principal.scope == "person-brain" {
         if request.transport != ExecutionTransport::Internal {
-            return Err(problem(&request.request_id, StatusCode::FORBIDDEN, "host_surface_forbidden", "host_surface_forbidden"));
+            return Err(problem(
+                &request.request_id,
+                StatusCode::FORBIDDEN,
+                "host_surface_forbidden",
+                "host_surface_forbidden",
+            ));
         }
         super::person_chat::person_caller(&request.principal, &request.command)?;
     }
     let descriptor = super::command_manifest::descriptor(&request.command)
         .ok_or_else(|| missing_command_problem(&request.request_id, &request.command))?;
     let admission = super::host_surface_gate::authorize_execution(
-        state, &descriptor.capability, &descriptor.arm, &request.principal, &request.args,
-    ).await?;
+        state,
+        &descriptor.capability,
+        &descriptor.arm,
+        &request.principal,
+        &request.args,
+    )
+    .await?;
     let org_authority = if descriptor.capability == super::org_policy::CAPABILITY {
         Some(super::org_policy::caller(&request.args, &request.principal).await?)
-    } else { None };
+    } else {
+        None
+    };
     let partition = super::host_surface_gate::person_partition(
-        &descriptor.capability, &descriptor.arm, &request.principal,
-    ).await?;
+        &descriptor.capability,
+        &descriptor.arm,
+        &request.principal,
+    )
+    .await?;
     let _person_request = if let Some(person) = partition.as_ref() {
-        let fleet = super::person_partition::fleet().ok_or_else(|| super::person_partition::unavailable("person_brain_unavailable"))?;
-        Some(fleet.acquire(person).await.map_err(super::person_partition::unavailable)?)
-    } else { None };
+        let fleet = super::person_partition::fleet()
+            .ok_or_else(|| super::person_partition::unavailable("person_brain_unavailable"))?;
+        Some(
+            fleet
+                .acquire(person)
+                .await
+                .map_err(super::person_partition::unavailable)?,
+        )
+    } else {
+        None
+    };
     let receipt_scope = _person_request.as_ref().map(|lease| lease.receipt_scope());
-    super::org_policy::scope(org_authority, super::person_partition::scope_receipts(receipt_scope, super::person_partition::scope(partition,
-        execute_with_admission(state, request, descriptor, admission),
-    ))).await
+    super::org_policy::scope(
+        org_authority,
+        super::person_partition::scope_receipts(
+            receipt_scope,
+            super::person_partition::scope(
+                partition,
+                execute_with_admission(state, request, descriptor, admission),
+            ),
+        ),
+    )
+    .await
 }
 
-async fn execute_with_admission(state: &SharedState, request: ExecutionRequest, descriptor: &CommandDescriptor,
-    admission: Option<cognia_external_agent::spawn_authority::ExecutionAdmission>) -> Result<ExecutionOutcome, Problem> {
+async fn execute_with_admission(
+    state: &SharedState,
+    request: ExecutionRequest,
+    descriptor: &CommandDescriptor,
+    admission: Option<cognia_external_agent::spawn_authority::ExecutionAdmission>,
+) -> Result<ExecutionOutcome, Problem> {
     cognia_external_agent::spawn_authority::with_execution_admission(
-        admission, execute_admitted(state, request, descriptor),
-    ).await
+        admission,
+        execute_admitted(state, request, descriptor),
+    )
+    .await
 }
 
-async fn execute_admitted(state: &SharedState, request: ExecutionRequest,
-    descriptor: &CommandDescriptor) -> Result<ExecutionOutcome, Problem> {
+async fn execute_admitted(
+    state: &SharedState,
+    request: ExecutionRequest,
+    descriptor: &CommandDescriptor,
+) -> Result<ExecutionOutcome, Problem> {
     authorize_transport(&request, descriptor)?;
     if let Err(error) = authorize_capability(&request, descriptor) {
         super::audit::record_async(
@@ -506,16 +546,35 @@ async fn execute_admitted(state: &SharedState, request: ExecutionRequest,
     // P6c ticket secrets must remain ephemeral: persist only the retry hash,
     // and remint against current credentials on a retry, never store a secret receipt.
     if descriptor.receipt_policy() == CommandReceiptPolicy::HostSemantic
-        || matches!(descriptor.arm.as_str(), "person_model_ticket_mint" | "person_agent_lease_prepare") {
+        || matches!(
+            descriptor.arm.as_str(),
+            "person_model_ticket_mint" | "person_agent_lease_prepare"
+        )
+    {
         return execute_host_semantic_request(
-            &store, &request, &request_hash, now, dispatch(state, &request),
-        ).await;
+            &store,
+            &request,
+            &request_hash,
+            now,
+            dispatch(state, &request),
+        )
+        .await;
     }
-    execute_receipted_request(&store, &request, &request_hash, now, dispatch(state, &request)).await
+    execute_receipted_request(
+        &store,
+        &request,
+        &request_hash,
+        now,
+        dispatch(state, &request),
+    )
+    .await
 }
 
 fn receipt_idempotency_key(request: &ExecutionRequest) -> Result<String, Problem> {
-    let key = request.idempotency_key.as_deref().expect("validated UUID key");
+    let key = request
+        .idempotency_key
+        .as_deref()
+        .expect("validated UUID key");
     if let Some((org, user)) = super::org_policy::current_authority() {
         return Ok(super::security_store::OrgReceiptScope::new(&org, &user).key(key));
     }
@@ -529,18 +588,21 @@ fn receipt_idempotency_key(request: &ExecutionRequest) -> Result<String, Problem
 }
 
 async fn execute_receipted_request(
-    store: &crate::security_store::SecurityStore, request: &ExecutionRequest,
-    request_hash: &str, now: i64,
+    store: &crate::security_store::SecurityStore,
+    request: &ExecutionRequest,
+    request_hash: &str,
+    now: i64,
     dispatch: impl std::future::Future<Output = Result<Value, Problem>>,
 ) -> Result<ExecutionOutcome, Problem> {
     let idempotency_key = receipt_idempotency_key(request)?;
     let operation_id = match store
-        .begin_idempotent_operation(
+        .begin_command_operation(
             &request.principal.tenant_id,
             &request.principal.device_id,
             &local_host_id(),
             &idempotency_key,
             request_hash,
+            &request.command,
             now,
         )
         .map_err(|error| map_store_error(&request.request_id, error))?
@@ -623,25 +685,44 @@ async fn execute_receipted_request(
 /// Every transport uses this hash-only path for private, Host-owned retries.
 /// A future is intentional: wire-key conflicts refuse before domain work starts.
 async fn execute_host_semantic_request(
-    store: &SecurityStore, request: &ExecutionRequest, request_hash: &str, now: i64,
+    store: &SecurityStore,
+    request: &ExecutionRequest,
+    request_hash: &str,
+    now: i64,
     dispatch: impl std::future::Future<Output = Result<Value, Problem>>,
 ) -> Result<ExecutionOutcome, Problem> {
-    let person_retry_key = if request.principal.scope == "person-brain" { Some(receipt_idempotency_key(request)?) } else { None };
-    store.bind_host_semantic_request(
-        &request.principal.tenant_id, &request.principal.device_id,
-        person_retry_key.as_deref().or(request.idempotency_key.as_deref()).expect("validated UUID key"), request_hash, now,
-    ).map_err(|error| map_store_error(&request.request_id, error))?;
+    let person_retry_key = if request.principal.scope == "person-brain" {
+        Some(receipt_idempotency_key(request)?)
+    } else {
+        None
+    };
+    store
+        .bind_host_semantic_request(
+            &request.principal.tenant_id,
+            &request.principal.device_id,
+            person_retry_key
+                .as_deref()
+                .or(request.idempotency_key.as_deref())
+                .expect("validated UUID key"),
+            request_hash,
+            now,
+        )
+        .map_err(|error| map_store_error(&request.request_id, error))?;
     // Always redispatch: current approval/source checks and evidence deletion
     // fences belong to the Host. Neither successes nor failures enter receipts.
     let result = dispatch.await?;
     validate_contract_value(
-        &request.request_id, &request.command, &result,
+        &request.request_id,
+        &request.command,
+        &result,
         cognia_headless_contract::ContractDirection::Output,
         contract_plane_for(&request.principal.scope),
     )?;
     Ok(ExecutionOutcome::Completed {
-        request_id: request.request_id.clone(), operation_id: None,
-        result, replayed: false,
+        request_id: request.request_id.clone(),
+        operation_id: None,
+        result,
+        replayed: false,
     })
 }
 
@@ -671,11 +752,16 @@ fn partition_unleased_input(
         map.remove("adminLease");
         map.remove("admin_lease");
     }
-    (Some(input), cognia_headless_contract::ContractPlane::Service)
+    (
+        Some(input),
+        cognia_headless_contract::ContractPlane::Service,
+    )
 }
 
 fn contract_plane_for(scope: &str) -> cognia_headless_contract::ContractPlane {
-    if scope == "person-brain" { return cognia_headless_contract::ContractPlane::Service; }
+    if scope == "person-brain" {
+        return cognia_headless_contract::ContractPlane::Service;
+    }
     if crate::jwt::is_service_scope(Some(scope.as_ref())) {
         cognia_headless_contract::ContractPlane::Service
     } else {
@@ -802,11 +888,22 @@ pub(super) fn command_admitted(
     descriptor: &CommandDescriptor,
     request_id: &str,
 ) -> Result<bool, Problem> {
-    command_admitted_in_mode(principal, transport, descriptor, request_id, super::deployment::deployment_mode())
+    command_admitted_in_mode(
+        principal,
+        transport,
+        descriptor,
+        request_id,
+        super::deployment::deployment_mode(),
+    )
 }
 
-fn command_admitted_in_mode(principal: &DeviceContext, transport: ExecutionTransport, descriptor: &CommandDescriptor,
-    request_id: &str, mode: super::deployment::DeploymentMode) -> Result<bool, Problem> {
+fn command_admitted_in_mode(
+    principal: &DeviceContext,
+    transport: ExecutionTransport,
+    descriptor: &CommandDescriptor,
+    request_id: &str,
+    mode: super::deployment::DeploymentMode,
+) -> Result<bool, Problem> {
     // The service catalog stays the whole remote set on every Host (the
     // Brain validates against it); single-user calls to the org commands are
     // refused at dispatch with org_scope_unavailable, and no single-user
@@ -818,7 +915,8 @@ fn command_admitted_in_mode(principal: &DeviceContext, transport: ExecutionTrans
     if service_principal {
         return Ok(true);
     }
-    let capability = org_policy_device_capability(descriptor, mode).unwrap_or(descriptor.capability.as_str());
+    let capability =
+        org_policy_device_capability(descriptor, mode).unwrap_or(descriptor.capability.as_str());
     capability_granted(principal, capability, request_id)
 }
 
@@ -829,8 +927,15 @@ fn authorize_transport(
 ) -> Result<(), Problem> {
     if request.principal.scope == "person-brain" {
         super::person_chat::person_caller(&request.principal, &descriptor.arm)?;
-        return if request.transport == ExecutionTransport::Internal { Ok(()) } else {
-            Err(problem(&request.request_id, StatusCode::FORBIDDEN, "host_surface_forbidden", "host_surface_forbidden"))
+        return if request.transport == ExecutionTransport::Internal {
+            Ok(())
+        } else {
+            Err(problem(
+                &request.request_id,
+                StatusCode::FORBIDDEN,
+                "host_surface_forbidden",
+                "host_surface_forbidden",
+            ))
         };
     }
     let allowed = transport_admits(
@@ -865,7 +970,8 @@ fn authorize_capability(
     // The Host gate already required live org.policy.manage. A tenant admin
     // needs ordinary device data access, never operator secret.manage/host.admin.
     let org_policy = org_policy_device_capability(descriptor, super::deployment::deployment_mode());
-    let payload = super::payload_capability::payload_required_capability(&request.command, &request.args);
+    let payload =
+        super::payload_capability::payload_required_capability(&request.command, &request.args);
     let required = [
         Some(org_policy.unwrap_or_else(|| partition.unwrap_or(descriptor.capability.as_str()))),
         // A control attach in a partition drives only its owner's own data:
@@ -891,17 +997,24 @@ fn authorize_capability(
     Ok(())
 }
 
-fn org_policy_device_capability(descriptor: &CommandDescriptor, mode: super::deployment::DeploymentMode) -> Option<&'static str> {
+fn org_policy_device_capability(
+    descriptor: &CommandDescriptor,
+    mode: super::deployment::DeploymentMode,
+) -> Option<&'static str> {
     (descriptor.capability == super::org_policy::CAPABILITY
         && super::org_policy::COMMANDS.contains(&descriptor.arm.as_str())
-        && mode == super::deployment::DeploymentMode::MultiTenant).then_some("client.read")
+        && mode == super::deployment::DeploymentMode::MultiTenant)
+        .then_some("client.read")
 }
 
 /// Only the gate's typed, admitted partition can select this capability.
 /// Request arguments (including callerPartition) cannot weaken device grants.
 fn partition_host_state_capability(arm: &str) -> Option<&'static str> {
     super::person_partition::current()?;
-    super::host_surface_policy::POLICY.as_ref().ok()?.person_host_state_capability(arm)
+    super::host_surface_policy::POLICY
+        .as_ref()
+        .ok()?
+        .person_host_state_capability(arm)
 }
 
 fn snapshot_capability_decision(principal: &DeviceContext, capability: &str) -> Option<bool> {
@@ -923,12 +1036,16 @@ fn authorize_approval(
     // The loopback-only service principal is the policy authority for the
     // internal Brain plane. Device transports must still present interactive
     // leases or signed host policies according to the manifest.
-    if crate::jwt::is_service_scope(Some(request.principal.scope.as_ref())) && request.transport == ExecutionTransport::Internal {
+    if crate::jwt::is_service_scope(Some(request.principal.scope.as_ref()))
+        && request.transport == ExecutionTransport::Internal
+    {
         return Ok(());
     }
     // P5d submits mutate only the partition owner's data. Dormant execution
     // intents are refused per action by that brain; no Host admin lease applies.
-    if partition_host_state_capability(&descriptor.arm).is_some() { return Ok(()); }
+    if partition_host_state_capability(&descriptor.arm).is_some() {
+        return Ok(());
+    }
     match descriptor.approval {
         CommandApproval::None => Ok(()),
         // The command that MINTS a lease cannot be asked to present one. Its
@@ -1007,9 +1124,10 @@ async fn dispatch(state: &SharedState, request: &ExecutionRequest) -> Result<Val
             // it becomes the one document, and the arm's own answer on whether a
             // retry can succeed must not be replaced by a guess from the status.
             let mut mapped = problem(&request.request_id, status, error.code, error.message);
-            if let Some(details) = error.details { mapped.details = details; }
-            mapped
-                .retryable(error.retryable)
+            if let Some(details) = error.details {
+                mapped.details = details;
+            }
+            mapped.retryable(error.retryable)
         })
 }
 
@@ -1072,6 +1190,16 @@ pub(super) fn json_subset_matches(expected: &Value, actual: &Value) -> bool {
 
 fn map_store_error(request_id: &str, error: SecurityStoreError) -> Problem {
     match error {
+        SecurityStoreError::ReceiptUnavailable => {
+            let mut error = problem(
+                request_id,
+                StatusCode::GONE,
+                "receipt_unavailable",
+                "the legacy result is unavailable; do not automatically repeat the side effect",
+            );
+            error.retryable = false;
+            error
+        }
         SecurityStoreError::IdempotencyConflict => problem(
             request_id,
             StatusCode::CONFLICT,
@@ -1117,21 +1245,68 @@ mod tests {
 
     #[test]
     fn p6a_org_static_grants_cannot_weaken_operator_credential_commands() {
-        let original = super::super::command_manifest::descriptor("host_provider_credential_set").unwrap();
-        assert!(org_policy_device_capability(original, super::super::deployment::DeploymentMode::MultiTenant).is_none());
+        let original =
+            super::super::command_manifest::descriptor("host_provider_credential_set").unwrap();
+        assert!(org_policy_device_capability(
+            original,
+            super::super::deployment::DeploymentMode::MultiTenant
+        )
+        .is_none());
         let mut org = original.clone();
         org.capability = super::super::org_policy::CAPABILITY.into();
         org.arm = "org_model_credential_set".into();
-        assert_eq!(org_policy_device_capability(&org, super::super::deployment::DeploymentMode::MultiTenant), Some("client.read"));
+        assert_eq!(
+            org_policy_device_capability(
+                &org,
+                super::super::deployment::DeploymentMode::MultiTenant
+            ),
+            Some("client.read")
+        );
         let admin_device = execution_request("device", Some(vec!["client.read".into()]));
-        assert!(command_admitted_in_mode(&admin_device.principal, ExecutionTransport::Http, &org, "p6a", super::super::deployment::DeploymentMode::MultiTenant).unwrap());
-        assert!(!command_admitted_in_mode(&admin_device.principal, ExecutionTransport::Http, original, "p6a", super::super::deployment::DeploymentMode::MultiTenant).unwrap());
-        assert!(!command_admitted_in_mode(&admin_device.principal, ExecutionTransport::Http, &org, "p6a", super::super::deployment::DeploymentMode::SingleUser).unwrap());
+        assert!(command_admitted_in_mode(
+            &admin_device.principal,
+            ExecutionTransport::Http,
+            &org,
+            "p6a",
+            super::super::deployment::DeploymentMode::MultiTenant
+        )
+        .unwrap());
+        assert!(!command_admitted_in_mode(
+            &admin_device.principal,
+            ExecutionTransport::Http,
+            original,
+            "p6a",
+            super::super::deployment::DeploymentMode::MultiTenant
+        )
+        .unwrap());
+        assert!(!command_admitted_in_mode(
+            &admin_device.principal,
+            ExecutionTransport::Http,
+            &org,
+            "p6a",
+            super::super::deployment::DeploymentMode::SingleUser
+        )
+        .unwrap());
         let no_grants = execution_request("device", Some(vec![]));
-        assert!(!command_admitted_in_mode(&no_grants.principal, ExecutionTransport::Http, &org, "p6a", super::super::deployment::DeploymentMode::MultiTenant).unwrap());
-        assert!(org_policy_device_capability(&org, super::super::deployment::DeploymentMode::SingleUser).is_none());
+        assert!(!command_admitted_in_mode(
+            &no_grants.principal,
+            ExecutionTransport::Http,
+            &org,
+            "p6a",
+            super::super::deployment::DeploymentMode::MultiTenant
+        )
+        .unwrap());
+        assert!(org_policy_device_capability(
+            &org,
+            super::super::deployment::DeploymentMode::SingleUser
+        )
+        .is_none());
         org.arm = "host_provider_credential_set".into();
-        assert!(org_policy_device_capability(&org, super::super::deployment::DeploymentMode::MultiTenant).is_none());
+        assert!(org_policy_device_capability(
+            &org,
+            super::super::deployment::DeploymentMode::MultiTenant
+        )
+        .is_none());
     }
 
     #[tokio::test]
@@ -1145,14 +1320,40 @@ mod tests {
         for secret in ["p6d-lease-secret-first", "p6d-lease-secret-reminted"] {
             let result = json!({"ticketId":"rt_p6d","secret":secret,"endpoint":"http://127.0.0.1:19384/v1",
                 "accountGeneration":1,"ownerAccountId":"pb_p6d","expiresAtMs":1});
-            let outcome = execute_host_semantic_request(&store,&request,"p6d-same",unix_time_secs(),async { Ok(result.clone()) }).await.unwrap();
-            let ExecutionOutcome::Completed { result:actual, operation_id, replayed, .. } = outcome else { panic!("completed"); };
-            assert_eq!(actual,result); assert!(operation_id.is_none()); assert!(!replayed);
+            let outcome = execute_host_semantic_request(
+                &store,
+                &request,
+                "p6d-same",
+                unix_time_secs(),
+                async { Ok(result.clone()) },
+            )
+            .await
+            .unwrap();
+            let ExecutionOutcome::Completed {
+                result: actual,
+                operation_id,
+                replayed,
+                ..
+            } = outcome
+            else {
+                panic!("completed");
+            };
+            assert_eq!(actual, result);
+            assert!(operation_id.is_none());
+            assert!(!replayed);
         }
-        let conflict = execute_host_semantic_request(&store,&request,"p6d-conflict",unix_time_secs(),async {
-            panic!("changed retry must not mint");
-        }).await.unwrap_err();
-        assert_eq!(conflict.status_code(),StatusCode::CONFLICT);
+        let conflict = execute_host_semantic_request(
+            &store,
+            &request,
+            "p6d-conflict",
+            unix_time_secs(),
+            async {
+                panic!("changed retry must not mint");
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(conflict.status_code(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -1164,13 +1365,37 @@ mod tests {
         for secret in ["sk-cognia-rt-first", "sk-cognia-rt-second"] {
             let result = json!({"ticketId":"rt_p6c","secret":secret,"endpoint":"http://127.0.0.1:19384/v1",
                 "gatewayPort":19384,"provider":"fixture","model":"fixture-model","expiresAt":1,"credentialFingerprint":"123456abcdef"});
-            let outcome = execute_host_semantic_request(&store, &request, "same-hash", unix_time_secs(), async { Ok(result.clone()) }).await.unwrap();
-            let ExecutionOutcome::Completed { result:actual, operation_id, replayed, .. } = outcome else { panic!("completed"); };
-            assert_eq!(actual, result); assert!(operation_id.is_none()); assert!(!replayed);
+            let outcome = execute_host_semantic_request(
+                &store,
+                &request,
+                "same-hash",
+                unix_time_secs(),
+                async { Ok(result.clone()) },
+            )
+            .await
+            .unwrap();
+            let ExecutionOutcome::Completed {
+                result: actual,
+                operation_id,
+                replayed,
+                ..
+            } = outcome
+            else {
+                panic!("completed");
+            };
+            assert_eq!(actual, result);
+            assert!(operation_id.is_none());
+            assert!(!replayed);
         }
-        let error = execute_host_semantic_request(&store, &request, "different-hash", unix_time_secs(), async {
-            panic!("conflicting retry must not redispatch")
-        }).await.unwrap_err();
+        let error = execute_host_semantic_request(
+            &store,
+            &request,
+            "different-hash",
+            unix_time_secs(),
+            async { panic!("conflicting retry must not redispatch") },
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.status_code(), StatusCode::CONFLICT);
     }
 
@@ -1178,14 +1403,19 @@ mod tests {
     async fn p6a_org_receipts_are_namespaced_by_verified_org_and_user() {
         let mut request = execution_request("device", None);
         request.idempotency_key = Some(Uuid::new_v4().to_string());
-        let key = |org: &str, user: &str| super::super::org_policy::scope(Some((org.into(), user.into())), async {
-            receipt_idempotency_key(&request).unwrap()
-        });
+        let key = |org: &str, user: &str| {
+            super::super::org_policy::scope(Some((org.into(), user.into())), async {
+                receipt_idempotency_key(&request).unwrap()
+            })
+        };
         let a = key("org_p6a_one", "usr_p6a_one").await;
         assert_eq!(a, key("org_p6a_one", "usr_p6a_one").await);
         assert_ne!(a, key("org_p6a_two", "usr_p6a_one").await);
         assert_ne!(a, key("org_p6a_one", "usr_p6a_two").await);
-        assert_eq!(receipt_idempotency_key(&request).unwrap(), request.idempotency_key.unwrap());
+        assert_eq!(
+            receipt_idempotency_key(&request).unwrap(),
+            request.idempotency_key.unwrap()
+        );
     }
 
     #[tokio::test]
@@ -1196,26 +1426,66 @@ mod tests {
         request.command = "register_push_token".into();
         request.idempotency_key = Some(Uuid::new_v4().to_string());
         let person = PersonPartition::new("org_a".into(), "usr_aaa".into());
-        let first = PersonReceiptScope { account_id: person.account_id.clone(), data_generation: Uuid::new_v4().to_string() };
+        let first = PersonReceiptScope {
+            account_id: person.account_id.clone(),
+            data_generation: Uuid::new_v4().to_string(),
+        };
         let executions = std::sync::atomic::AtomicUsize::new(0);
-        let run = |person, receipt| scope_receipts(Some(receipt), scope(Some(person), async {
-            execute_receipted_request(&store, &request, "same-hash", unix_time_secs(), async {
-                executions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(Value::Null)
-            }).await.unwrap()
-        }));
+        let run = |person, receipt| {
+            scope_receipts(
+                Some(receipt),
+                scope(Some(person), async {
+                    execute_receipted_request(
+                        &store,
+                        &request,
+                        "same-hash",
+                        unix_time_secs(),
+                        async {
+                            executions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            Ok(Value::Null)
+                        },
+                    )
+                    .await
+                    .unwrap()
+                }),
+            )
+        };
         let old_id = match run(person.clone(), first.clone()).await {
-            ExecutionOutcome::Completed { operation_id: Some(id), replayed: false, .. } => id,
+            ExecutionOutcome::Completed {
+                operation_id: Some(id),
+                replayed: false,
+                ..
+            } => id,
             other => panic!("unexpected {other:?}"),
         };
-        assert!(matches!(run(person.clone(), first.clone()).await, ExecutionOutcome::Completed { replayed: true, .. }));
+        assert!(matches!(
+            run(person.clone(), first.clone()).await,
+            ExecutionOutcome::Completed { replayed: true, .. }
+        ));
         let b = PersonPartition::new("org_a".into(), "usr_bbb".into());
-        let b_scope = PersonReceiptScope { account_id: b.account_id.clone(), data_generation: Uuid::new_v4().to_string() };
-        assert!(matches!(run(b, b_scope.clone()).await, ExecutionOutcome::Completed { replayed: false, .. }));
-        assert!(store.person_operation("tenant-a", "device-a", &old_id, &b_scope).unwrap().is_none());
+        let b_scope = PersonReceiptScope {
+            account_id: b.account_id.clone(),
+            data_generation: Uuid::new_v4().to_string(),
+        };
+        assert!(matches!(
+            run(b, b_scope.clone()).await,
+            ExecutionOutcome::Completed {
+                replayed: false,
+                ..
+            }
+        ));
+        assert!(store
+            .person_operation("tenant-a", "device-a", &old_id, &b_scope)
+            .unwrap()
+            .is_none());
         assert_eq!(store.purge_person_receipts(&person.account_id).unwrap(), 1);
-        let fresh = PersonReceiptScope { data_generation: Uuid::new_v4().to_string(), ..first };
-        assert!(matches!(run(person, fresh).await, ExecutionOutcome::Completed { operation_id: Some(id), replayed: false, .. } if id != old_id));
+        let fresh = PersonReceiptScope {
+            data_generation: Uuid::new_v4().to_string(),
+            ..first
+        };
+        assert!(
+            matches!(run(person, fresh).await, ExecutionOutcome::Completed { operation_id: Some(id), replayed: false, .. } if id != old_id)
+        );
         assert_eq!(executions.load(std::sync::atomic::Ordering::SeqCst), 3);
     }
 
@@ -1223,45 +1493,455 @@ mod tests {
     async fn p5_single_user_receipt_key_result_and_replay_remain_legacy() {
         let store = SecurityStore::in_memory().unwrap();
         let mut request = execution_request("device", None);
-        request.command = "register_push_token".into(); request.idempotency_key = Some(Uuid::new_v4().to_string());
-        assert_eq!(receipt_idempotency_key(&request).unwrap(), request.idempotency_key.clone().unwrap());
-        let first = execute_receipted_request(&store, &request, "hash", unix_time_secs(), async { Ok(Value::Null) }).await.unwrap();
-        let ExecutionOutcome::Completed { operation_id: Some(id), result, replayed: false, .. } = first else { panic!("first execution"); };
+        request.command = "register_push_token".into();
+        request.idempotency_key = Some(Uuid::new_v4().to_string());
+        assert_eq!(
+            receipt_idempotency_key(&request).unwrap(),
+            request.idempotency_key.clone().unwrap()
+        );
+        let first = execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+            Ok(Value::Null)
+        })
+        .await
+        .unwrap();
+        let ExecutionOutcome::Completed {
+            operation_id: Some(id),
+            result,
+            replayed: false,
+            ..
+        } = first
+        else {
+            panic!("first execution");
+        };
         assert_eq!(result, Value::Null);
-        let replay = execute_receipted_request(&store, &request, "hash", unix_time_secs(), async { panic!("legacy receipt must replay") }).await.unwrap();
-        assert!(matches!(replay, ExecutionOutcome::Completed { operation_id: Some(replayed_id), result: Value::Null, replayed: true, .. } if replayed_id == id));
-        assert!(store.operation_person_account("tenant-a", "device-a", &id).unwrap().is_none());
+        let replay = execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+            panic!("legacy receipt must replay")
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(replay, ExecutionOutcome::Completed { operation_id: Some(replayed_id), result: Value::Null, replayed: true, .. } if replayed_id == id)
+        );
+        assert!(store
+            .operation_person_account("tenant-a", "device-a", &id)
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn canonical_matrix_backup_never_persists_private_recovery_inputs_or_results() {
+        matrix_private_receipt("connectors_matrix_crypto_backup", json!({"action":"prepare","adapterId":"fixture","recoveryKey":"fixture-backup-input-secret"}), json!({"recoveryKey":"fixture-backup-recovery-secret", "version":null, "createPending":false, "backupInfo":{"algorithm":"m.megolm_backup.v1.curve25519-aes-sha2","auth_data":{"public_key":"fixture-public","signatures":{}}}}), vec![b"fixture-backup-input-secret".to_vec(),b"fixture-backup-recovery-secret".to_vec()]).await;
+    }
+
+    #[tokio::test]
+    async fn canonical_matrix_verification_never_persists_qr_shared_secrets() {
+        let input = b"fixture-qr-input-secret".to_vec();
+        let output = b"fixture-qr-output-secret".to_vec();
+        let secrets = vec![
+            serde_json::to_vec(&input).unwrap(),
+            serde_json::to_vec(&output).unwrap(),
+        ];
+        matrix_private_receipt("connectors_matrix_crypto_verification", json!({"action":"scanQr","adapterId":"fixture","userId":"@bob:example.org","flowId":"flow","qrBytes":input}), json!({"flowId":"flow","userId":"@bob:example.org","deviceId":"BOB","state":"qr","deviceVerified":false,"requests":[],"qrBytes":output}), secrets).await;
+    }
+
+    async fn matrix_private_receipt(
+        command: &'static str,
+        input: Value,
+        output: Value,
+        secrets: Vec<Vec<u8>>,
+    ) {
+        use crate::*;
+        use cognia_companion_security::security_store::{
+            install_security_store, security_store, test_guard,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _guard = test_guard();
+        struct Restore(Option<Arc<SecurityStore>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                install_security_store(self.0.take());
+            }
+        }
+        let _restore = Restore(security_store());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("security.sqlite");
+        let store = SecurityStore::open(&path).unwrap();
+        install_security_store(Some(store.clone()));
+        struct Runtime {
+            current: parking_lot::Mutex<Value>,
+            command: &'static str,
+            calls: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl crate::runtime::CompanionRuntime for Runtime {
+            fn ide_relay_routes(&self) -> axum::Router<SharedState> {
+                axum::Router::new()
+            }
+            fn can_dispatch(&self, _: &SharedState) -> bool {
+                true
+            }
+            async fn dispatch(
+                &self,
+                command: &str,
+                _: Value,
+                _: &SharedState,
+                _: &DeviceContext,
+                _: ExecutionPlane,
+            ) -> crate::runtime::DispatchResult {
+                assert_eq!(command, self.command);
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(self.current.lock().clone())
+            }
+        }
+        let runtime = Arc::new(Runtime {
+            current: parking_lot::Mutex::new(output),
+            command,
+            calls: AtomicUsize::new(0),
+        });
+        let state = Arc::new(CompanionState {
+            secret: parking_lot::RwLock::new(vec![0; 32]),
+            deny_list: Arc::new(deny_list::DenyList::new()),
+            renderer: None,
+            runtime: runtime.clone(),
+            idempotency: Arc::new(idempotency::IdempotencyCache::new()),
+            event_bus: event_bus::EventBus::new(),
+            sync_bridge: sync_bridge::SyncBridge::new(),
+            desktop_messages_bridge: desktop_messages_bridge::DesktopMessagesBridge::new(),
+            desktop_writes_bridge: desktop_writes_bridge::DesktopWritesBridge::new(),
+            sync_registry: sync_registry::SyncTableRegistry::with_defaults(),
+            rate_limiter: rate_limit::RateLimiter::with_defaults(),
+            push_tokens: push::PushTokenRegistry::new(),
+        });
+        let request = ExecutionRequest::new(
+            command,
+            json!({"req":input}),
+            execution_request("service", None).principal,
+            ExecutionTransport::Internal,
+            Some(Uuid::new_v4().to_string()),
+        );
+        for _ in 0..2 {
+            let outcome = execute(&state, request.clone()).await.unwrap();
+            assert!(matches!(
+                outcome,
+                ExecutionOutcome::Completed {
+                    operation_id: None,
+                    replayed: false,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 2);
+        let database = rusqlite::Connection::open(&path).unwrap();
+        let (status, receipt): (String, Option<String>) = database
+            .query_row(
+                "SELECT status,receipt_json FROM idempotency_records",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "host-semantic");
+        assert!(receipt.is_none());
+        let runs: i64 = database
+            .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(runs, 0);
+        let mut conflict = request.clone();
+        conflict.args["req"]["adapterId"] = json!("another");
+        assert_eq!(
+            execute(&state, conflict).await.unwrap_err().status_code(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 2);
+        for entry in std::fs::read_dir(directory.path()).unwrap() {
+            let file = entry.unwrap().path();
+            if file.is_file() {
+                let bytes = std::fs::read(file).unwrap();
+                for secret in &secrets {
+                    assert!(!bytes.windows(secret.len()).any(|value| value == secret));
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_lark_auth_rechecks_current_identity_without_persisting_secret_receipts() {
+        use crate::*;
+        use cognia_companion_security::security_store::{
+            install_security_store, security_store, test_guard,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let _guard = test_guard();
+        struct Restore(Option<Arc<SecurityStore>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                install_security_store(self.0.take());
+            }
+        }
+        let _restore = Restore(security_store());
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("security.sqlite");
+        let store = SecurityStore::open(&path).unwrap();
+        install_security_store(Some(store.clone()));
+        struct Runtime {
+            current: parking_lot::Mutex<Value>,
+            calls: AtomicUsize,
+        }
+        #[async_trait::async_trait]
+        impl crate::runtime::CompanionRuntime for Runtime {
+            fn ide_relay_routes(&self) -> axum::Router<SharedState> {
+                axum::Router::new()
+            }
+            fn can_dispatch(&self, _: &SharedState) -> bool {
+                true
+            }
+            async fn dispatch(
+                &self,
+                command: &str,
+                _: Value,
+                _: &SharedState,
+                _: &DeviceContext,
+                _: ExecutionPlane,
+            ) -> crate::runtime::DispatchResult {
+                assert_eq!(command, "connectors_lark_user_auth");
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(self.current.lock().clone())
+            }
+        }
+        let runtime = Arc::new(Runtime {
+            current: parking_lot::Mutex::new(json!({
+                "authorizationEpoch":"epoch-a", "configured":true, "accessToken":"fixture-access-secret",
+                "refreshToken":"fixture-refresh-secret", "refreshRevision":"revision-a", "accountLabel":"Fixture", "scopes":[]
+            })),
+            calls: AtomicUsize::new(0),
+        });
+        let state = Arc::new(CompanionState {
+            secret: parking_lot::RwLock::new(vec![0; 32]),
+            deny_list: Arc::new(deny_list::DenyList::new()),
+            renderer: None,
+            runtime: runtime.clone(),
+            idempotency: Arc::new(idempotency::IdempotencyCache::new()),
+            event_bus: event_bus::EventBus::new(),
+            sync_bridge: sync_bridge::SyncBridge::new(),
+            desktop_messages_bridge: desktop_messages_bridge::DesktopMessagesBridge::new(),
+            desktop_writes_bridge: desktop_writes_bridge::DesktopWritesBridge::new(),
+            sync_registry: sync_registry::SyncTableRegistry::with_defaults(),
+            rate_limiter: rate_limit::RateLimiter::with_defaults(),
+            push_tokens: push::PushTokenRegistry::new(),
+        });
+        let request = ExecutionRequest::new(
+            "connectors_lark_user_auth",
+            json!({"input":{"action":"snapshot","adapterId":"fixture"}}),
+            execution_request("service", None).principal,
+            ExecutionTransport::Internal,
+            Some(Uuid::new_v4().to_string()),
+        );
+        for expected_epoch in ["epoch-a", "revoked"] {
+            if expected_epoch == "revoked" {
+                *runtime.current.lock() = json!({"authorizationEpoch":"revoked", "configured":true,
+                    "accessToken":null, "refreshToken":null, "refreshRevision":null, "accountLabel":null, "scopes":[]});
+            }
+            let outcome = execute(&state, request.clone()).await.unwrap();
+            let ExecutionOutcome::Completed {
+                result,
+                operation_id,
+                replayed,
+                ..
+            } = outcome
+            else {
+                panic!("completed");
+            };
+            assert_eq!(result["authorizationEpoch"], expected_epoch);
+            assert!(operation_id.is_none());
+            assert!(!replayed);
+        }
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 2);
+        let database = rusqlite::Connection::open(&path).unwrap();
+        let (status, receipt): (String, Option<String>) = database
+            .query_row(
+                "SELECT status,receipt_json FROM idempotency_records",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "host-semantic");
+        assert!(receipt.is_none());
+        let runs: i64 = database
+            .query_row("SELECT count(*) FROM runs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(runs, 0);
+        let mut conflict = request.clone();
+        conflict.args["input"]["adapterId"] = json!("another-adapter");
+        assert_eq!(
+            execute(&state, conflict).await.unwrap_err().status_code(),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 2);
+        for legacy_status in ["failed", "running"] {
+            database
+                .execute(
+                    "UPDATE idempotency_records SET status=?1, receipt_json=?2",
+                    rusqlite::params![
+                        legacy_status,
+                        if legacy_status == "failed" {
+                            Some(r#"{"error":{"code":"unavailable"}}"#)
+                        } else {
+                            None
+                        }
+                    ],
+                )
+                .unwrap();
+            let outcome = execute(&state, request.clone()).await.unwrap();
+            assert!(
+                matches!(outcome, ExecutionOutcome::Completed { operation_id: None, replayed: false, result, .. }
+                if result["authorizationEpoch"] == "revoked")
+            );
+        }
+        let receipt: Option<String> = database
+            .query_row("SELECT receipt_json FROM idempotency_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(receipt.is_none());
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 4);
+
+        // An arbitrary plugin callback may legally return the exact auth DTO.
+        // Exercise the canonical request hash, migration, replay and operation lookup.
+        let callback = ExecutionRequest::new(
+            "plugin_invoke_js_callback",
+            json!({
+                "plugin_id":"fixture","plugin_path":"fixture","entry":"fixture",
+                "callback_id":"callback","args":null,"generation":"fixture"
+            }),
+            request.principal.clone(),
+            ExecutionTransport::Internal,
+            Some(Uuid::new_v4().to_string()),
+        );
+        let hash = hex::encode(Sha256::digest(
+            serde_json::to_vec(&json!({"command":callback.command,"args":callback.args})).unwrap(),
+        ));
+        let opaque = json!({"authorizationEpoch":"opaque","configured":false,"accessToken":"callback-value",
+            "refreshToken":null,"refreshRevision":null,"accountLabel":null,"scopes":[]});
+        database.execute("INSERT INTO idempotency_records
+            (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
+            VALUES (?1,?2,?3,?4,'legacy-callback','succeeded',?5,?6,?6)",rusqlite::params![
+            callback.principal.tenant_id,callback.principal.device_id,callback.idempotency_key,hash,
+            json!({"httpStatus":200,"result":opaque}).to_string(),unix_time_secs()]).unwrap();
+        database
+            .execute(
+                "DELETE FROM security_migrations WHERE key='connector-private-receipts-v2'",
+                [],
+            )
+            .unwrap();
+        let upgraded = SecurityStore::open(&path).unwrap();
+        install_security_store(Some(upgraded.clone()));
+        assert!(upgraded
+            .operation("tenant-a", "device-a", "legacy-callback")
+            .unwrap()
+            .is_none());
+        let outcome = execute(&state, callback.clone()).await.unwrap();
+        assert!(
+            matches!(outcome,ExecutionOutcome::Completed{replayed:true,result,..} if result==opaque)
+        );
+        assert!(upgraded
+            .operation("tenant-a", "device-a", "legacy-callback")
+            .unwrap()
+            .is_some());
+        let mut changed = callback.clone();
+        changed.args["entry"] = json!("changed");
+        assert_eq!(
+            execute(&state, changed).await.unwrap_err().status_code(),
+            StatusCode::CONFLICT
+        );
+        database.execute("UPDATE idempotency_records SET status='host-semantic',receipt_cipher=NULL,receipt_owner=NULL WHERE operation_id='legacy-callback'",[]).unwrap();
+        let error = execute(&state, callback).await.unwrap_err();
+        assert_eq!(error.status_code(), StatusCode::GONE);
+        assert_eq!(error.code, "receipt_unavailable");
+        assert!(
+            !error.retryable,
+            "lost historic receipts must not trigger automatic side-effect replay"
+        );
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 4);
     }
 
     #[tokio::test]
     async fn p4_runtime_dispatch_receives_typed_admission_and_clears_it_after_the_request() {
-        use cognia_external_agent::spawn_authority::{execution_admission, ExecutionAdmission, PlacementBinding};
         use crate::*;
-        struct Runtime { expected: Option<PlacementBinding> }
+        use cognia_external_agent::spawn_authority::{
+            execution_admission, ExecutionAdmission, PlacementBinding,
+        };
+        struct Runtime {
+            expected: Option<PlacementBinding>,
+        }
         #[async_trait::async_trait]
         impl crate::runtime::CompanionRuntime for Runtime {
-            fn ide_relay_routes(&self) -> axum::Router<SharedState> { axum::Router::new() }
-            fn can_dispatch(&self, _: &SharedState) -> bool { true }
-            async fn dispatch(&self, _: &str, args: Value, _: &SharedState, _: &DeviceContext, _: ExecutionPlane) -> crate::runtime::DispatchResult {
-                assert!(args.get("binding").is_none(), "authority must not be injected into request args");
-                assert_eq!(execution_admission().map(|decision| decision.binding), self.expected);
+            fn ide_relay_routes(&self) -> axum::Router<SharedState> {
+                axum::Router::new()
+            }
+            fn can_dispatch(&self, _: &SharedState) -> bool {
+                true
+            }
+            async fn dispatch(
+                &self,
+                _: &str,
+                args: Value,
+                _: &SharedState,
+                _: &DeviceContext,
+                _: ExecutionPlane,
+            ) -> crate::runtime::DispatchResult {
+                assert!(
+                    args.get("binding").is_none(),
+                    "authority must not be injected into request args"
+                );
+                assert_eq!(
+                    execution_admission().map(|decision| decision.binding),
+                    self.expected
+                );
                 Ok(Value::String("Running".into()))
             }
         }
-        let decision = ExecutionAdmission { binding: PlacementBinding { org_id: "org_a".into(), workspace_id: "w".into(), actor_user_id: "usr_a".into(), run_id: "host-run".into() }, actions: vec!["execution.request".into(), "workspace.read".into()] };
+        let decision = ExecutionAdmission {
+            binding: PlacementBinding {
+                org_id: "org_a".into(),
+                workspace_id: "w".into(),
+                actor_user_id: "usr_a".into(),
+                run_id: "host-run".into(),
+            },
+            actions: vec!["execution.request".into(), "workspace.read".into()],
+        };
         for admission in [None, Some(decision)] {
             let state = Arc::new(CompanionState {
-                secret: parking_lot::RwLock::new(vec![0; 32]), deny_list: Arc::new(deny_list::DenyList::new()), renderer: None,
-                runtime: Arc::new(Runtime { expected: admission.as_ref().map(|decision| decision.binding.clone()) }),
-                idempotency: Arc::new(idempotency::IdempotencyCache::new()), event_bus: event_bus::EventBus::new(),
-                sync_bridge: sync_bridge::SyncBridge::new(), desktop_messages_bridge: desktop_messages_bridge::DesktopMessagesBridge::new(),
-                desktop_writes_bridge: desktop_writes_bridge::DesktopWritesBridge::new(), sync_registry: sync_registry::SyncTableRegistry::with_defaults(),
-                rate_limiter: rate_limit::RateLimiter::with_defaults(), push_tokens: push::PushTokenRegistry::new(),
+                secret: parking_lot::RwLock::new(vec![0; 32]),
+                deny_list: Arc::new(deny_list::DenyList::new()),
+                renderer: None,
+                runtime: Arc::new(Runtime {
+                    expected: admission.as_ref().map(|decision| decision.binding.clone()),
+                }),
+                idempotency: Arc::new(idempotency::IdempotencyCache::new()),
+                event_bus: event_bus::EventBus::new(),
+                sync_bridge: sync_bridge::SyncBridge::new(),
+                desktop_messages_bridge: desktop_messages_bridge::DesktopMessagesBridge::new(),
+                desktop_writes_bridge: desktop_writes_bridge::DesktopWritesBridge::new(),
+                sync_registry: sync_registry::SyncTableRegistry::with_defaults(),
+                rate_limiter: rate_limit::RateLimiter::with_defaults(),
+                push_tokens: push::PushTokenRegistry::new(),
             });
-            let request = ExecutionRequest::new("get_external_agent_status", json!({"agent_id":"agent"}),
-                execution_request("service", None).principal, ExecutionTransport::Internal, None);
+            let request = ExecutionRequest::new(
+                "get_external_agent_status",
+                json!({"agent_id":"agent"}),
+                execution_request("service", None).principal,
+                ExecutionTransport::Internal,
+                None,
+            );
             let descriptor = command_manifest::descriptor(&request.command).unwrap();
-            assert!(matches!(execute_with_admission(&state, request, descriptor, admission).await.unwrap(), ExecutionOutcome::Completed { result: Value::String(_), .. }));
+            assert!(matches!(
+                execute_with_admission(&state, request, descriptor, admission)
+                    .await
+                    .unwrap(),
+                ExecutionOutcome::Completed {
+                    result: Value::String(_),
+                    ..
+                }
+            ));
             assert!(execution_admission().is_none());
         }
     }
@@ -1284,7 +1964,10 @@ mod tests {
 
     #[test]
     fn p6b_org_writes_pass_approval_without_consent_lease_or_host_policy() {
-        for command in super::super::org_policy::COMMANDS.iter().filter(|command| super::super::org_policy::is_write(command)) {
+        for command in super::super::org_policy::COMMANDS
+            .iter()
+            .filter(|command| super::super::org_policy::is_write(command))
+        {
             let descriptor = super::super::command_manifest::descriptor(command).unwrap();
             for scope in ["device", "owner"] {
                 let mut request = execution_request(scope, Some(vec!["org.policy.manage".into()]));
@@ -1302,23 +1985,64 @@ mod tests {
     fn p6b_org_contracts_drop_admin_leases_and_include_bundled_agents() {
         use cognia_headless_contract::{ContractDirection, ContractPlane};
         for (command, args) in [
-            ("org_model_credential_set", json!({"provider":"openai","apiKey":"p6b-contract-key"})),
+            (
+                "org_model_credential_set",
+                json!({"provider":"openai","apiKey":"p6b-contract-key"}),
+            ),
             ("org_model_credential_delete", json!({"provider":"openai"})),
-            ("org_agent_policy_set", json!({"allowedAgents":[],"defaultAgent":null})),
+            (
+                "org_agent_policy_set",
+                json!({"allowedAgents":[],"defaultAgent":null}),
+            ),
             ("org_usage_cap_set", json!({"defaultMonthlyTokens":null})),
-            ("org_member_usage_cap_set", json!({"userId":"usr_p6b_contract","monthlyTokens":"default"})),
+            (
+                "org_member_usage_cap_set",
+                json!({"userId":"usr_p6b_contract","monthlyTokens":"default"}),
+            ),
         ] {
             for plane in [ContractPlane::Device, ContractPlane::Service] {
-                assert!(validate_contract_value("p6b", command, &args, ContractDirection::Input, plane).is_ok(), "{command}");
-                let mut obsolete = args.clone(); obsolete["adminLease"] = "obsolete".into();
-                assert!(validate_contract_value("p6b", command, &obsolete, ContractDirection::Input, plane).is_err(), "{command}");
+                assert!(
+                    validate_contract_value("p6b", command, &args, ContractDirection::Input, plane)
+                        .is_ok(),
+                    "{command}"
+                );
+                let mut obsolete = args.clone();
+                obsolete["adminLease"] = "obsolete".into();
+                assert!(
+                    validate_contract_value(
+                        "p6b",
+                        command,
+                        &obsolete,
+                        ContractDirection::Input,
+                        plane
+                    )
+                    .is_err(),
+                    "{command}"
+                );
             }
         }
-        let output = serde_json::to_value(super::super::org_agent_policy::get("org_p6b_contract").unwrap()).unwrap();
+        let output =
+            serde_json::to_value(super::super::org_agent_policy::get("org_p6b_contract").unwrap())
+                .unwrap();
         for command in ["org_agent_policy_get", "org_agent_policy_set"] {
-            assert!(validate_contract_value("p6b", command, &output, ContractDirection::Output, ContractPlane::Device).is_ok());
-            let mut missing = output.clone(); missing.as_object_mut().unwrap().remove("bundledAgents");
-            assert!(validate_contract_value("p6b", command, &missing, ContractDirection::Output, ContractPlane::Device).is_err());
+            assert!(validate_contract_value(
+                "p6b",
+                command,
+                &output,
+                ContractDirection::Output,
+                ContractPlane::Device
+            )
+            .is_ok());
+            let mut missing = output.clone();
+            missing.as_object_mut().unwrap().remove("bundledAgents");
+            assert!(validate_contract_value(
+                "p6b",
+                command,
+                &missing,
+                ContractDirection::Output,
+                ContractPlane::Device
+            )
+            .is_err());
         }
     }
 
@@ -1500,36 +2224,68 @@ mod tests {
 
     #[tokio::test]
     async fn p5d_partition_capability_and_approval_do_not_change_legacy_calls() {
-        for arm in ["host_state_status", "host_state_snapshot", "host_state_submit", "host_feature_manifest", "session_attach", "session_detach", "session_mark_read", "session_mark_unread"] {
+        for arm in [
+            "host_state_status",
+            "host_state_snapshot",
+            "host_state_submit",
+            "host_feature_manifest",
+            "session_attach",
+            "session_detach",
+            "session_mark_read",
+            "session_mark_unread",
+        ] {
             let descriptor = super::super::command_manifest::descriptor(arm).unwrap();
-            let mut request = execution_request("device", Some(vec!["client.read".into(), "client.write".into()]));
+            let mut request = execution_request(
+                "device",
+                Some(vec!["client.read".into(), "client.write".into()]),
+            );
             request.command = arm.into();
             request.args = json!({"callerPartition":true});
-            assert_eq!(authorize_capability(&request, descriptor).unwrap_err().code, "missing_capability");
-            let partition = super::super::person_partition::PersonPartition::new("org".into(), "user".into());
+            assert_eq!(
+                authorize_capability(&request, descriptor).unwrap_err().code,
+                "missing_capability"
+            );
+            let partition =
+                super::super::person_partition::PersonPartition::new("org".into(), "user".into());
             super::super::person_partition::scope(Some(partition), async {
                 assert!(authorize_capability(&request, descriptor).is_ok());
                 assert!(authorize_approval(&request, descriptor).is_ok());
                 if arm == "session_attach" {
                     // A control attach (the absent mode) needs the owner's write grant.
                     request.principal.authorization_capabilities = Some(vec!["client.read".into()]);
-                    assert_eq!(authorize_capability(&request, descriptor).unwrap_err().code, "missing_capability");
+                    assert_eq!(
+                        authorize_capability(&request, descriptor).unwrap_err().code,
+                        "missing_capability"
+                    );
                     request.args = json!({"callerPartition":true, "mode":"observe"});
                     assert!(authorize_capability(&request, descriptor).is_ok());
                 }
                 if matches!(arm, "session_mark_read" | "session_mark_unread") {
                     request.principal.authorization_capabilities = Some(vec!["client.read".into()]);
-                    assert_eq!(authorize_capability(&request, descriptor).unwrap_err().code, "missing_capability");
+                    assert_eq!(
+                        authorize_capability(&request, descriptor).unwrap_err().code,
+                        "missing_capability"
+                    );
                 }
                 request.principal.authorization_capabilities = Some(vec![]);
-                assert_eq!(authorize_capability(&request, descriptor).unwrap_err().code, "missing_capability");
+                assert_eq!(
+                    authorize_capability(&request, descriptor).unwrap_err().code,
+                    "missing_capability"
+                );
                 assert!(partition_host_state_capability("shell_exec").is_none());
-            }).await;
-            request.principal.authorization_capabilities = Some(vec![descriptor.capability.clone()]);
+            })
+            .await;
+            request.principal.authorization_capabilities =
+                Some(vec![descriptor.capability.clone()]);
             assert!(authorize_capability(&request, descriptor).is_ok());
             if arm == "host_state_submit" {
-                assert_eq!(authorize_approval(&request, descriptor).unwrap_err().code, "interactive_approval_required");
-            } else { assert!(authorize_approval(&request, descriptor).is_ok()); }
+                assert_eq!(
+                    authorize_approval(&request, descriptor).unwrap_err().code,
+                    "interactive_approval_required"
+                );
+            } else {
+                assert!(authorize_approval(&request, descriptor).is_ok());
+            }
         }
     }
 
@@ -1542,7 +2298,8 @@ mod tests {
         let (input, plane) = partition_unleased_input(&request, descriptor);
         assert!(input.is_none());
         assert_eq!(plane, cognia_headless_contract::ContractPlane::Device);
-        let partition = super::super::person_partition::PersonPartition::new("org".into(), "user".into());
+        let partition =
+            super::super::person_partition::PersonPartition::new("org".into(), "user".into());
         super::super::person_partition::scope(Some(partition), async {
             let (input, plane) = partition_unleased_input(&request, descriptor);
             assert_eq!(input, Some(json!({"accountId":"a"})));
@@ -1550,7 +2307,8 @@ mod tests {
             // A non-interactive partition arm keeps its own plane.
             let status = super::super::command_manifest::descriptor("host_state_status").unwrap();
             assert!(partition_unleased_input(&request, status).0.is_none());
-        }).await;
+        })
+        .await;
     }
 
     #[test]
@@ -2664,15 +3422,30 @@ mod tests {
         request.command = "managed_desktop_results_commit_delete".into();
         request.idempotency_key = Some(Uuid::new_v4().to_string());
         let id = Uuid::new_v4().to_string();
-        for (index, transport) in [ExecutionTransport::Http, ExecutionTransport::WebSocket,
-            ExecutionTransport::WebRtc, ExecutionTransport::Internal].into_iter().enumerate() {
+        for (index, transport) in [
+            ExecutionTransport::Http,
+            ExecutionTransport::WebSocket,
+            ExecutionTransport::WebRtc,
+            ExecutionTransport::Internal,
+        ]
+        .into_iter()
+        .enumerate()
+        {
             request.transport = transport;
             let receipt = json!({"operationId":id,"state":"committed","cleanupPending":index == 0,
                 "taskIds":if index == 0 { vec![] } else { vec!["newly-discovered-task"] }});
-            let result = execute_host_semantic_request(&store, &request, "same-hash", 100,
-                async { Ok(receipt.clone()) }).await.unwrap();
+            let result = execute_host_semantic_request(&store, &request, "same-hash", 100, async {
+                Ok(receipt.clone())
+            })
+            .await
+            .unwrap();
             match result {
-                ExecutionOutcome::Completed { result, operation_id, replayed, .. } => {
+                ExecutionOutcome::Completed {
+                    result,
+                    operation_id,
+                    replayed,
+                    ..
+                } => {
                     assert_eq!(result, receipt);
                     assert!(operation_id.is_none());
                     assert!(!replayed);
@@ -2680,14 +3453,25 @@ mod tests {
                 _ => panic!("semantic retry must call the Host, never return a cached operation"),
             }
         }
-        let denied = execute_host_semantic_request(&store, &request, "same-hash", 101,
-            async { Err(problem("request", StatusCode::FORBIDDEN, "evidence_unavailable", "deleted or revoked")) }).await.unwrap_err();
+        let denied = execute_host_semantic_request(&store, &request, "same-hash", 101, async {
+            Err(problem(
+                "request",
+                StatusCode::FORBIDDEN,
+                "evidence_unavailable",
+                "deleted or revoked",
+            ))
+        })
+        .await
+        .unwrap_err();
         assert_eq!(denied.code, "evidence_unavailable");
         let dispatched = std::sync::atomic::AtomicBool::new(false);
-        let conflict = execute_host_semantic_request(&store, &request, "different-hash", 102, async {
-            dispatched.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(json!({}))
-        }).await.unwrap_err();
+        let conflict =
+            execute_host_semantic_request(&store, &request, "different-hash", 102, async {
+                dispatched.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(json!({}))
+            })
+            .await
+            .unwrap_err();
         assert_eq!(conflict.code, "idempotency_conflict");
         assert!(!dispatched.load(std::sync::atomic::Ordering::SeqCst));
     }

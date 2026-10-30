@@ -157,7 +157,7 @@ export function useRemoteDocSearch({
     } satisfies RemoteDocRef
   }, [provider, query])
 
-  const searchable = Boolean(provider?.search) && hostSupported
+  const searchable = Boolean(provider?.search) && hostSupported && account?.searchable !== false
   const trimmed = query.trim()
 
   useEffect(() => {

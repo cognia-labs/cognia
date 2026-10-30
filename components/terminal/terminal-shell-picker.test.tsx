@@ -204,6 +204,26 @@ describe("TerminalShellPicker", () => {
     expect(onNewProfile).toHaveBeenCalledWith("profile-1")
   })
 
+  it("opens extension profiles through their owned callback instead of the default shell", async () => {
+    const onNew = jest.fn()
+    const onNewProfile = jest.fn()
+    const onNewExtensionProfile = jest.fn()
+    await renderPicker(
+      <TerminalShellPicker
+        onNew={onNew}
+        onNewProfile={onNewProfile}
+        onNewExtensionProfile={onNewExtensionProfile}
+        extensionProfiles={[{ pluginId: "ext", id: "build", title: "Extension build" }]}
+        platform="macos"
+        detectShells={noDetect}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: /Extension build/ }))
+    expect(onNewExtensionProfile).toHaveBeenCalledWith("ext", "build")
+    expect(onNew).not.toHaveBeenCalled()
+    expect(onNewProfile).not.toHaveBeenCalled()
+  })
+
   it("lists saved SSH hosts and connects the chosen one", async () => {
     const onNewSshHost = jest.fn()
     await renderPicker(

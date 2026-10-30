@@ -42,6 +42,7 @@ import {
   PanelsTopLeftIcon,
   SearchCodeIcon,
   FileSearchIcon,
+  FileTextIcon,
   FolderKanbanIcon,
   FolderOpenIcon,
   InfoIcon,
@@ -81,6 +82,7 @@ import { ContextCommentsPanel } from "@/components/context-workbench/context-com
 import { ContextCapabilityUnavailable } from "@/components/context-workbench/context-capability-unavailable"
 import { SessionSourcesPanel } from "@/components/context-workbench/session-sources-panel"
 import { BrowserPreviewPane } from "@/components/browser/browser-preview-pane"
+import { DockDocumentPanel } from "./dock-document/document-panel"
 import { ArtifactPanelContent, type ArtifactPanelMode } from "./artifact-panel-content"
 import { ArtifactList } from "./artifact-list"
 import {
@@ -825,6 +827,12 @@ function SessionTeamMembersRenderer({ inputs }: Inputs<SessionPanelInputs>) {
   return <TeamMembersPanel teamSessionId={activeSessionId} teamId={teamId} />
 }
 
+/** The session's cloud-document tab in front: its snapshot and live views. */
+function SessionDocumentRenderer({ inputs }: { inputs: PanelInputs<SessionPanelInputs> }) {
+  const sessionId = usePanelInput(inputs, (input) => input.activeSessionId)
+  return <DockDocumentPanel sessionId={sessionId} />
+}
+
 /** The eight panels of the dock's session surface — no artifact is active. */
 export function useSessionSurfacePanels({
   activeSessionId,
@@ -878,6 +886,7 @@ export function useSessionSurfacePanels({
       browser: newTab
         ? () => <DockPageBrowserPanel key={key} inputs={inputs} />
         : () => <DockBrowserPanel key={key} inputs={inputs} />,
+      document: () => <SessionDocumentRenderer key={key} inputs={inputs} />,
       projectOverview: () => <DockProjectOverviewPanel key={key} inputs={inputs} />,
       workspace: () => <DockWorkspacePanel key={key} inputs={inputs} />,
       files: () => <SessionFilesRenderer key={key} inputs={inputs} />,
@@ -975,6 +984,19 @@ export function useSessionSurfacePanels({
         exclusiveSurface: true,
         preferredMode: "wide",
         renderer: renderers.browser,
+      },
+      {
+        id: "cloud-document",
+        activity: "preview-run",
+        labelKey: "cloudDocPreview.title",
+        icon: FileTextIcon,
+        order: 21,
+        appliesTo: (resource) => resource.kind === "session",
+        retention: "ephemeral",
+        scope: "session",
+        preferredMode: "wide",
+        exclusiveSurface: true,
+        renderer: renderers.document,
       },
       {
         id: SANDBOX_DESKTOP_PANEL_ID,

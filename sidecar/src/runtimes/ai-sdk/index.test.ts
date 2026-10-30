@@ -20,6 +20,341 @@ function makeFakeStream(
   })
 }
 
+test("a semantic denial cannot become a transport retry or later provider dispatch", async () => {
+  const { events, emit } = captureEmit()
+  let guardCalls = 0
+  let modelDispatches = 0
+  const session = startSession({
+    provider: "openai",
+    sessionId: "semantic-denial",
+    firstPrompt: "hello",
+    sendOptions: {
+      model: "gpt-x",
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      semanticInterceptors: ["agent.turn.decide"],
+    },
+    log: () => {},
+    emit: (frame) => {
+      emit(frame)
+      if (frame.type === "plugin_hook_exec") {
+        guardCalls++
+        queueMicrotask(() =>
+          session.pendingPluginHookCalls.get(String(frame.execId))?.resolve({
+            result:
+              guardCalls === 1
+                ? { decision: "deny", reason: "network timeout requires refusal" }
+                : { decision: "pass" },
+          })
+        )
+      }
+    },
+    streamText: (args) => ({
+      fullStream: (async function* () {
+        try {
+          await (args.prepareStep as (input: { stepNumber: number }) => Promise<unknown>)({
+            stepNumber: 0,
+          })
+        } catch (error) {
+          yield { type: "error", error }
+          return
+        }
+        modelDispatches++
+        yield { type: "text-delta", text: "must not happen" }
+        yield { type: "finish", finishReason: "stop" }
+      })(),
+    }),
+  })
+  await waitForEvent(events, () => events.some((frame) => frame.type === "session_ended"))
+  session.closeInput()
+  assert.equal(guardCalls, 1)
+  assert.equal(modelDispatches, 0)
+  assert.equal(
+    events.find((frame) => frame.type === "session_ended")?.code,
+    "PLUGIN_INTERCEPTOR_REFUSED"
+  )
+})
+
+test("strict stream refusal aborts the dispatched provider signal", async () => {
+  const { events, emit } = captureEmit()
+  let providerSignal: AbortSignal | undefined
+  const session = startSession({
+    provider: "openai",
+    sessionId: "semantic-projection-abort",
+    firstPrompt: "hello",
+    sendOptions: {
+      model: "gpt-x",
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      semanticInterceptors: ["model.stream.transform"],
+    },
+    log: () => {},
+    emit: (frame) => {
+      emit(frame)
+      if (frame.type === "plugin_hook_exec")
+        queueMicrotask(() =>
+          session.pendingPluginHookCalls
+            .get(String(frame.execId))
+            ?.resolve({ error: "strict projection refused" })
+        )
+    },
+    streamText: (args) => {
+      providerSignal = args.abortSignal as AbortSignal
+      return {
+        fullStream: (async function* () {
+          yield { type: "text-delta", text: "private" }
+        })(),
+      }
+    },
+  })
+  await waitForEvent(events, () => events.some((frame) => frame.type === "session_ended"))
+  session.closeInput()
+  assert.equal(providerSignal?.aborted, true)
+  assert.equal(
+    events.find((frame) => frame.type === "session_ended")?.code,
+    "PLUGIN_INTERCEPTOR_REFUSED"
+  )
+})
+
+test(
+  "retained turns enable and clear semantic consumers while snapshots consume projected text",
+  { timeout: 3000 },
+  async () => {
+    const { events, emit } = captureEmit()
+    let hooks = 0
+    const session: ReturnType<typeof startSession> = startSession({
+      provider: "openai",
+      sessionId: "semantic-session",
+      firstPrompt: "first",
+      sendOptions: { model: "gpt-x", providerCredentials: { apiKey: "k", protocol: "openai" } },
+      log: () => {},
+      emit: (frame) => {
+        emit(frame)
+        if (frame.type === "plugin_hook_exec") {
+          hooks++
+          const payload = frame.payload as { part: Record<string, unknown> }
+          const result =
+            frame.hookId === "interceptor:agent.turn.decide"
+              ? { decision: "pass" }
+              : { part: { ...payload.part, text: "projected" } }
+          queueMicrotask(() =>
+            session.pendingPluginHookCalls.get(String(frame.execId))?.resolve({ result })
+          )
+        }
+      },
+      streamText: (args) => ({
+        fullStream: (async function* () {
+          const prepare = args.prepareStep as
+            ((step: { stepNumber: number }) => Promise<unknown>) | undefined
+          await prepare?.({ stepNumber: 0 })
+          yield { type: "text-delta", id: "answer", text: "raw" }
+          yield { type: "finish", finishReason: "stop" }
+        })(),
+        usage: Promise.resolve({ promptTokens: 1, completionTokens: 1 }),
+      }),
+    })
+    const ended = () => events.filter((frame) => frame.type === "session_ended").length
+    await waitForEvent(events, () => ended() === 1)
+    assert.equal(hooks, 0)
+    session.setNextTurnSemanticInterceptors!(["agent.turn.decide", "model.stream.transform"])
+    session.pushUserMessage("second")
+    await waitForEvent(events, () => ended() === 2)
+    assert.equal(hooks, 2)
+    const snapshots = events.filter(
+      (frame) => frame.type === "event" && frame.event.type === "assistant"
+    )
+    assert.equal(snapshots.at(-1)!.event.message.content[0]?.text, "projected")
+    session.setNextTurnSemanticInterceptors!(undefined)
+    session.pushUserMessage("third")
+    await waitForEvent(events, () => ended() === 3)
+    assert.equal(hooks, 2)
+    session.closeInput()
+  }
+)
+
+for (const scopedAgent of [false, true]) {
+  test(`cached permission gates use each turn's caller context (scoped agent: ${scopedAgent})`, async (t) => {
+    const { events, emit } = captureEmit()
+    const firstContext = { originDeviceId: "device-a", generation: 1 }
+    const secondContext = { originDeviceId: "device-b", generation: 2 }
+    const toolMaps: TestStreamArgs["tools"][] = []
+    let builds = 0
+    const session = startSession({
+      provider: "openai",
+      sessionId: "permission-context-turns",
+      firstPrompt: "first",
+      sendOptions: {
+        model: "gpt-x",
+        providerCredentials: { apiKey: "k", protocol: "openai" },
+        remoteExecutionContext: firstContext,
+        mcpServers: { fixture: { type: "sse", url: "https://fixture.invalid/sse" } },
+        toolPermissionRules: [{ tool: "mcp__fixture__probe", decision: "ask" }],
+        ...(scopedAgent
+          ? {
+              agent: "reviewer",
+              agents: {
+                reviewer: {
+                  description: "Scoped test agent",
+                  prompt: "Review only",
+                  tools: ["mcp__fixture__probe"],
+                },
+              },
+            }
+          : {}),
+      },
+      emit: (frame) => {
+        emit(frame)
+        if (frame.type === "permission_request") {
+          queueMicrotask(() =>
+            session.pendingApprovals.get(String(frame.requestId))?.resolve({
+              behavior: "deny",
+              message: "test-only refusal",
+            })
+          )
+        }
+      },
+      log: () => {},
+      buildMcpTools: async ({ gate }) => {
+        assert.ok(gate)
+        builds++
+        return {
+          tools: { fixture_probe: { execute: (args) => gate("mcp__fixture__probe", args) } },
+          close: async () => {},
+        }
+      },
+      streamText: (args) => {
+        const tools = streamArgs(args).tools
+        toolMaps.push(tools)
+        return {
+          fullStream: (async function* () {
+            await assert.rejects(tools.fixture_probe!.execute({}), /test-only refusal/)
+            yield { type: "finish", finishReason: "stop" }
+          })(),
+          usage: Promise.resolve({ promptTokens: 1, completionTokens: 1 }),
+        }
+      },
+    })
+    t.after(() => session.closeInput())
+    const waitForTurns = waitForTurnsFactory(events)
+    await waitForTurns(1)
+    session.setNextTurnLedger(undefined, secondContext)
+    session.pushUserMessage("second")
+    await waitForTurns(2)
+    session.setNextTurnLedger(undefined)
+    session.pushUserMessage("host-origin third")
+    await waitForTurns(3)
+    const asks = events.filter((frame) => frame.type === "permission_request")
+    assert.deepEqual(
+      asks.map((frame) => frame.remoteExecutionContext),
+      [firstContext, secondContext, undefined],
+      "new and host-origin turns must not reuse a prior device context"
+    )
+    assert.equal(builds, 1, "context refresh must preserve the cached MCP connection")
+    assert.ok(
+      toolMaps.every((tools) => tools === toolMaps[0]),
+      "tool identity stays stable"
+    )
+  })
+}
+
+test("cached plugin execution and output review use each turn's caller context", async (t) => {
+  const { events, emit } = captureEmit()
+  const firstContext = { originDeviceId: "device-a", generation: 1 }
+  const secondContext = { originDeviceId: "device-b", generation: 2 }
+  const session = startSession({
+    provider: "openai",
+    sessionId: "plugin-context-turns",
+    firstPrompt: "first",
+    sendOptions: {
+      model: "gpt-x",
+      providerCredentials: { apiKey: "k", protocol: "openai" },
+      remoteExecutionContext: firstContext,
+      permissionMode: "bypassPermissions",
+      toolResultReviewEnabled: true,
+      pluginTools: [{ name: "context_probe", jsonSchema: { type: "object", properties: {} } }],
+    },
+    emit: (frame) => {
+      emit(frame)
+      if (frame.type === "plugin_tool_exec") {
+        queueMicrotask(() =>
+          session.pendingPluginToolCalls.get(String(frame.toolUseId))?.resolve({ result: "OK" })
+        )
+      } else if (frame.type === "tool_result_review") {
+        queueMicrotask(() =>
+          session.pendingToolResultReviews.get(String(frame.reviewId))?.resolve("OK")
+        )
+      }
+    },
+    log: () => {},
+    streamText: (args) => ({
+      fullStream: (async function* () {
+        assert.equal(await streamArgs(args).tools.context_probe!.execute({}), "OK")
+        yield { type: "finish", finishReason: "stop" }
+      })(),
+      usage: Promise.resolve({ promptTokens: 1, completionTokens: 1 }),
+    }),
+  })
+  t.after(() => session.closeInput())
+  const waitForTurns = waitForTurnsFactory(events)
+  await waitForTurns(1)
+  session.setNextTurnLedger(undefined, secondContext)
+  session.pushUserMessage("second")
+  await waitForTurns(2)
+  session.setNextTurnLedger(undefined)
+  session.pushUserMessage("host-origin third")
+  await waitForTurns(3)
+  for (const type of ["plugin_tool_exec", "tool_result_review"]) {
+    assert.deepEqual(
+      events.filter((frame) => frame.type === type).map((frame) => frame.remoteExecutionContext),
+      [firstContext, secondContext, undefined],
+      `${type} must follow the current turn instead of the cached tool's first caller`
+    )
+  }
+})
+
+test("retained code adapters dispatch with the current turn's caller context", async (t) => {
+  const { events, emit } = captureEmit()
+  const first = { originDeviceId: "device-a", generation: 1 }
+  const second = { originDeviceId: "device-b", generation: 2 }
+  const session = startSession({
+    provider: "fixture",
+    sessionId: "code-context-turns",
+    firstPrompt: "first",
+    sendOptions: {
+      model: "fixture-model",
+      providerCredentials: { apiKey: "test-only", protocol: "fixture:wire" },
+      protocolAdapterSpec: { kind: "code", pluginId: "fixture", adapterId: "fixture:wire" },
+      remoteExecutionContext: first,
+      compaction: { enabled: false },
+    },
+    emit: (frame) => {
+      emit(frame)
+      if (frame.type === "protocol_adapter_exec") {
+        queueMicrotask(() => {
+          const channel = session.pendingProtocolExecs.get(String(frame.execId))!
+          channel.push({ type: "text-delta", text: "OK" })
+          channel.push({ type: "finish", finishReason: "stop" })
+          channel.finish({ promptTokens: 1, completionTokens: 1 })
+        })
+      }
+    },
+    log: () => {},
+  })
+  t.after(() => session.closeInput())
+  const waitForTurns = waitForTurnsFactory(events)
+  await waitForTurns(1)
+  session.setNextTurnLedger(undefined, second)
+  session.pushUserMessage("second")
+  await waitForTurns(2)
+  session.setNextTurnLedger(undefined)
+  session.pushUserMessage("host-origin third")
+  await waitForTurns(3)
+  assert.deepEqual(
+    events
+      .filter((frame) => frame.type === "protocol_adapter_exec")
+      .map((frame) => frame.remoteExecutionContext),
+    [first, second, undefined]
+  )
+})
+
 test(
   "retained sessions exclude idle gaps and include every leg in the turn clock",
   { timeout: 10000 },
@@ -3227,6 +3562,185 @@ test("a failing external MCP setup degrades to built-in tools without breaking t
 // ── Manual agent loop (multi-leg continuation) ─────────────────────────────
 // The non-Anthropic channel must keep streaming across tool-call legs until the
 // model naturally stops, instead of silently ending after a single capped leg.
+
+test("manual legs sum cache reads, writes and TTL splits without counting step usage twice", async () => {
+  const { events, emit } = captureEmit()
+  let calls = 0
+  const session = startSession({
+    provider: "openai",
+    sessionId: "cache-legs",
+    firstPrompt: "hi",
+    sendOptions: { model: "gpt-x", providerCredentials: { apiKey: "k", protocol: "openai" } },
+    emit,
+    log: () => {},
+    streamText: () => {
+      const first = ++calls === 1
+      const usage = {
+        inputTokens: first ? 100 : 200,
+        outputTokens: 10,
+        inputTokenDetails: { cacheReadTokens: first ? 80 : 20, cacheWriteTokens: first ? 5 : 7 },
+        cache_creation: {
+          ephemeral_5m_input_tokens: first ? 2 : 3,
+          ephemeral_1h_input_tokens: first ? 3 : 4,
+        },
+      }
+      return makeFakeStream(
+        [
+          { type: "finish-step", usage },
+          { type: "finish", finishReason: first ? "tool-calls" : "stop" },
+        ],
+        usage
+      )()
+    },
+  })
+  await waitForEvent(events, (e) => e.type === "session_ended")
+  const result = events.find((e) => e.type === "event" && e.event.type === "result")!
+  assert.equal(calls, 2)
+  assert.equal(result.event.usage.input_tokens, 300)
+  assert.equal(result.event.usage.output_tokens, 20)
+  assert.equal(result.event.usage.cache_read_input_tokens, 100)
+  assert.equal(result.event.usage.cache_creation_input_tokens, 12)
+  assert.deepEqual(result.event.usage.cache_creation, {
+    ephemeral_5m_input_tokens: 5,
+    ephemeral_1h_input_tokens: 7,
+  })
+  session.closeInput()
+})
+
+test("partial final usage preserves step cache fields while explicit zeros stay authoritative", async () => {
+  const cases = [
+    { final: { inputTokens: 100, outputTokens: 10 }, read: 80, write: 5 },
+    { final: {}, read: 80, write: 5 },
+    {
+      final: { inputTokenDetails: { cacheReadTokens: 0, cacheWriteTokens: 0 } },
+      read: 0,
+      write: 0,
+    },
+    { final: { cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, read: 0, write: 0 },
+    {
+      final: { cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 } },
+      read: 80,
+      write: 0,
+    },
+    { final: { inputTokenDetails: { cacheReadTokens: 0 } }, read: 0, write: 5 },
+    {
+      final: { cache_creation: { ephemeral_5m_input_tokens: 0 } },
+      read: 80,
+      write: 3,
+      split: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 3 },
+    },
+    {
+      final: { cache_creation: { ephemeral_5m_input_tokens: 2 } },
+      read: 80,
+      write: 5,
+      split: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 3 },
+    },
+    {
+      final: { cache_creation: { ephemeral_1h_input_tokens: 0 } },
+      read: 80,
+      write: 2,
+      split: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 0 },
+    },
+  ]
+  for (const fixture of cases) {
+    const { events, emit } = captureEmit()
+    const session = startSession({
+      provider: "openai",
+      sessionId: "cache-partial",
+      firstPrompt: "hi",
+      sendOptions: { model: "gpt-x", providerCredentials: { apiKey: "k", protocol: "openai" } },
+      emit,
+      log: () => {},
+      streamText: makeFakeStream(
+        [
+          {
+            type: "finish-step",
+            usage: {
+              inputTokens: 100,
+              outputTokens: 10,
+              cachedInputTokens: 80,
+              cacheCreationInputTokens: 5,
+              cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 3 },
+            },
+          },
+          { type: "finish", finishReason: "stop" },
+        ],
+        fixture.final
+      ),
+    })
+    await waitForEvent(events, (e) => e.type === "session_ended")
+    const result = events.find((e) => e.type === "event" && e.event.type === "result")!.event.usage
+    assert.equal(result.input_tokens, 100)
+    assert.equal(result.output_tokens, 10)
+    assert.equal(result.cache_read_input_tokens, fixture.read)
+    assert.equal(result.cache_creation_input_tokens, fixture.write)
+    assert.deepEqual(
+      result.cache_creation,
+      "split" in fixture
+        ? fixture.split
+        : fixture.write
+          ? {
+              ephemeral_5m_input_tokens: 2,
+              ephemeral_1h_input_tokens: 3,
+            }
+          : undefined
+    )
+    session.closeInput()
+  }
+})
+
+test("interrupt adds current-step cache usage to prior completed legs", async () => {
+  const { events, emit } = captureEmit()
+  let ready!: () => void
+  const stepReady = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+  let calls = 0
+  const usage = (first: boolean) => ({
+    inputTokens: first ? 100 : 200,
+    outputTokens: 10,
+    cachedInputTokens: first ? 80 : 20,
+    cacheCreationInputTokens: first ? 5 : 7,
+    cache_creation: {
+      ephemeral_5m_input_tokens: first ? 2 : 3,
+      ephemeral_1h_input_tokens: first ? 3 : 4,
+    },
+  })
+  const session = startSession({
+    provider: "openai",
+    sessionId: "cache-interrupt-legs",
+    firstPrompt: "hi",
+    sendOptions: { model: "gpt-x", providerCredentials: { apiKey: "k", protocol: "openai" } },
+    emit,
+    log: () => {},
+    streamText: (args) =>
+      ++calls === 1
+        ? makeFakeStream([{ type: "finish", finishReason: "tool-calls" }], usage(true))()
+        : {
+            fullStream: (async function* () {
+              yield { type: "finish-step", usage: usage(false) }
+              ready()
+              while (!(args.abortSignal as AbortSignal).aborted) {
+                await new Promise<void>((resolve) => setTimeout(resolve, 5))
+              }
+              throw new DOMException("Aborted", "AbortError")
+            })(),
+            usage: Promise.resolve({}),
+          },
+  })
+  await stepReady
+  await session.q.interrupt()
+  await waitForEvent(events, (e) => e.type === "session_ended")
+  const result = events.find((e) => e.type === "event" && e.event.type === "result")!
+  assert.equal(result.event.usage.cache_read_input_tokens, 100)
+  assert.equal(result.event.usage.cache_creation_input_tokens, 12)
+  assert.deepEqual(result.event.usage.cache_creation, {
+    ephemeral_5m_input_tokens: 5,
+    ephemeral_1h_input_tokens: 7,
+  })
+  assert.equal(result.event.usage.input_tokens, 300)
+  session.closeInput()
+})
 
 test("agent loop continues into another leg when a leg finishes with 'tool-calls'", async () => {
   const { events, emit } = captureEmit()

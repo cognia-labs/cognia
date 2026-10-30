@@ -110,7 +110,13 @@ export function projectOverlayCharacter(
 }
 
 export async function listCharacters(): Promise<Character[]> {
+  // Start the Dexie read before awaiting a foreign promise so liveQuery
+  // records its table dependency inside the current observation zone.
   const dexie = await getDb().characters.orderBy("name").toArray()
+  const { listVscodeChatParticipantCharacters } =
+    await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+  const participants = await listVscodeChatParticipantCharacters()
+  const participantIds = new Set(participants.map((row) => row.id))
   const overlay = listAllPackCharacters().map(({ pack, character, pluginId }) =>
     projectOverlayCharacter(pack, character, pluginId)
   )
@@ -126,6 +132,7 @@ export async function listCharacters(): Promise<Character[]> {
   const byId = new Map<string, Character>()
   const hiddenOverlayIds = new Set<string>()
   for (const row of dexie) {
+    if (row.id.startsWith("vscode-chat:") && !participantIds.has(row.id)) continue
     byId.set(row.id, row)
     if (row.clonedFromPackCharacterId) {
       hiddenOverlayIds.add(row.clonedFromPackCharacterId)
@@ -136,6 +143,14 @@ export async function listCharacters(): Promise<Character[]> {
     if (hiddenOverlayIds.has(row.id)) continue
     byId.set(row.id, row)
   }
+  for (const row of participants)
+    byId.set(row.id, {
+      ...row,
+      ...byId.get(row.id),
+      id: row.id,
+      sourcePluginId: row.sourcePluginId,
+      availableOnPlatforms: row.availableOnPlatforms,
+    })
   return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -145,6 +160,21 @@ export async function getCharacter(id: string): Promise<Character | undefined> {
 
 /** The stored row for an id: a Dexie row, else a plugin-pack overlay projection. */
 async function loadCharacterRow(id: string): Promise<Character | undefined> {
+  if (id.startsWith("vscode-chat:")) {
+    const stored = await getCharacter(id)
+    const { listVscodeChatParticipantCharacters } =
+      await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+    const declared = (await listVscodeChatParticipantCharacters()).find((row) => row.id === id)
+    return declared
+      ? {
+          ...declared,
+          ...stored,
+          id,
+          sourcePluginId: declared.sourcePluginId,
+          availableOnPlatforms: declared.availableOnPlatforms,
+        }
+      : undefined
+  }
   const row = await getCharacter(id)
   if (row) return row
   if (!isOverlayCharacterId(id)) return undefined
@@ -355,7 +385,11 @@ export async function listCharactersByIds(ids: string[]): Promise<Character[]> {
   // Re-index by id so we can splice results back in caller order.
   const byId = new Map<string, Character>()
   for (const row of dexieRows) {
-    if (row) byId.set(row.id, row)
+    if (row && !row.id.startsWith("vscode-chat:")) byId.set(row.id, row)
+  }
+  for (const id of ids.filter((id) => id.startsWith("vscode-chat:"))) {
+    const participant = await loadCharacterRow(id)
+    if (participant) byId.set(id, participant)
   }
   for (const id of overlayIds) {
     const overlay = getPackCharacterByRuntimeId(id)

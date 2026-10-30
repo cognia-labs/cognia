@@ -1194,6 +1194,7 @@ describe("Composer — wallpaper-aware tonality", () => {
     renderComposer()
     const column = document.querySelector('[data-slot="composer-reading-column"]')
     expect(column).toHaveClass("mx-auto", "max-w-[52rem]")
+    expect(column?.className).toContain("--chat-native-scrollbar-inset")
   })
 
   // The composer box and the message text must share one content edge. That

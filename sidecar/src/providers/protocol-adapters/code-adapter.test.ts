@@ -55,6 +55,48 @@ test("finish after cancel is ignored", async () => {
   assert.equal(await channel.usage, null)
 })
 
+test("code adapter cancellation keeps the context captured by its own execution", async () => {
+  const emitted: Record<string, unknown>[] = []
+  const cancelled: unknown[][] = []
+  const pending = new Map()
+  const first = { originDeviceId: "device-a", generation: 1 }
+  const second = { originDeviceId: "device-b", generation: 2 }
+  let context: unknown = first
+  let sequence = 0
+  const adapter = makeCodeAdapter(
+    { kind: "code", pluginId: "fixture", adapterId: "fixture:wire" },
+    {
+      emit: (frame) => emitted.push(frame),
+      sessionId: "context-session",
+      pendingProtocolExecs: pending,
+      makeExecId: () => `exec-${++sequence}`,
+      get remoteExecutionContext() {
+        return context
+      },
+      onCancel: (...args) => cancelled.push(args),
+    }
+  )
+  const request = { model: "fixture", messages: [] }
+  await adapter.start(request)
+  context = second
+  await adapter.start(request)
+  context = undefined
+  await adapter.start(request)
+  context = { originDeviceId: "device-c", generation: 3 }
+  pending.get("exec-1").cancel("late cancellation")
+  pending.get("exec-2").cancel("second cancellation")
+  pending.get("exec-3").cancel("host cancellation")
+  assert.deepEqual(
+    emitted.map((frame) => frame.remoteExecutionContext),
+    [first, second, undefined]
+  )
+  assert.deepEqual(cancelled, [
+    ["exec-1", "late cancellation", first],
+    ["exec-2", "second cancellation", second],
+    ["exec-3", "host cancellation", undefined],
+  ])
+})
+
 test("makeCodeAdapter emits protocol_adapter_exec and returns the channel stream", async () => {
   const emitted: Record<string, unknown>[] = []
   const pending = new Map()

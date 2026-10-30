@@ -16,9 +16,8 @@
     "packages/agent-codebuff/src/node-bridge.ts": "213ccd40d7d1e6f4cf739d06435565419dd4b91e63c21ee466b56848b60fa927",
     "packages/agent-crush/src/node-bridge.ts": "be472e96954c6ae19daad4fb8abec91e58dc8a059ae7ef321ad5a8808cc7eff5",
     "packages/agent-crush/src/socket-bridge.ts": "d726b0127f294d50a1fadeefd118f5aba53e54576dd1dc20243b325aec768892",
-    "pnpm-lock.yaml": "0bdc068a9d6f9416194d8135eb196f44ddd310e8e51e91be9747cb11944e8f7a",
     "scripts/build/lib/copy-runtime-closure.mjs": "2d5f88c45671a4b61baa462f251825b662621ee6fc0b60fdcf2702d7790ec5af",
-    "scripts/build/lib/stage-native-agent-bridges.mjs": "1e20499d215e128b218ca4278a8e376d2044c5d78a977cd3f616bebe1d0cedb5"
+    "scripts/build/lib/stage-native-agent-bridges.mjs": "9d4f73371f6baa3b744963ab6507d6c3c3b6b6e7f94b91fb66012b77cca732ec"
   },
   "bridges": {
     "codebuff": {

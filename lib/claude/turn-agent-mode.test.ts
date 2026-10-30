@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 
-import { resolveTurnAgentMode, turnAgentStamp } from "./turn-agent-mode"
+import { resolveTurnAgentMode, resolveTurnAuthority, turnAgentStamp } from "./turn-agent-mode"
 import { useAgentRuntimeStore } from "@/stores/agent/agent-runtime-store"
 import { useCustomModeStore } from "@/stores/agent/custom-mode-store"
 import type { AgentModeConfig } from "@/types/agent/agent-mode"
@@ -181,4 +181,21 @@ describe("turnAgentStamp", () => {
       icon: "Bot",
     })
   })
+})
+
+it("resolves the same permission and sandbox ladder for every local extension surface", () => {
+  expect(
+    resolveTurnAuthority({
+      explicitMode: null,
+      appSettings: { permissionMode: "plan", sandboxDefaultEnabled: true },
+    })
+  ).toEqual({ permissionMode: "plan", sandboxEnabled: true })
+  expect(
+    resolveTurnAuthority({
+      explicitMode: null,
+      session: { id: "s", permissionMode: "default", sandboxEnabled: false },
+      character: { permissionMode: "plan", sandboxEnabled: true },
+      appSettings: { permissionMode: "plan", sandboxDefaultEnabled: true },
+    })
+  ).toEqual({ permissionMode: "default", sandboxEnabled: false })
 })

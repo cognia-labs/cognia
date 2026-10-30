@@ -19,6 +19,20 @@ class FakeRunAndCaptureError extends Error {
 }
 
 describe("toDispatchErrorEnvelope", () => {
+  it.each(["policy_refused", "InterceptorGuardDeniedError", "InterceptorFailClosedError"])(
+    "keeps %s non-retryable even when its reason sounds like a network failure",
+    (identity) => {
+      const error = new FakeRunAndCaptureError(
+        "network timeout",
+        identity === "policy_refused" ? identity : ""
+      )
+      if (identity !== "policy_refused") error.name = identity
+      expect(toDispatchErrorEnvelope(error)).toMatchObject({
+        code: "rejection-policy",
+        retryable: false,
+      })
+    }
+  )
   it.each([
     ["429 rate limit exceeded", "rate-limit", true],
     ["Provider overloaded_error: Overloaded", "server-error", true],

@@ -23,6 +23,8 @@ import type {
 
 /** Host-visible fields; rail-owned options remain additive on the wire. */
 export interface SendOptions {
+  semanticInterceptors?: Array<"model.stream.transform" | "agent.turn.decide">
+  approvalTtlMs?: number
   verificationBudget?: VerificationBudgetStamp
   turnId?: string
   cwd?: string

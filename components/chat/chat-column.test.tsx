@@ -23,8 +23,10 @@ describe("ChatColumn", () => {
       </ChatColumn>
     )
     const column = screen.getByText("notice").parentElement
-    expect(column).toHaveClass("mx-auto", "w-full", "max-w-[52rem]", "px-3", "sm:px-5")
+    expect(column).toHaveClass("mx-auto", "max-w-[52rem]", "px-3", "sm:px-5", "relative")
+    expect(column?.className).toContain("w-[calc(100%_-_var(--chat-native-scrollbar-inset,0px))]")
     expect(column).toHaveAttribute("data-slot", "chat-notice-column")
+    expect(column?.className).toContain("--chat-native-scrollbar-inset")
   })
 
   it("keeps caller spacing on top of the column classes", () => {

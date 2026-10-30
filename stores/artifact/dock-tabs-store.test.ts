@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 import {
+  documentTabKey,
   artifactTabKey,
   orderDockTabs,
   pageTabKey,
@@ -16,6 +17,17 @@ import {
   CONTEXT_WORKBENCH_LAYOUT_LIMIT,
   CONTEXT_WORKBENCH_LAYOUT_MAX_AGE_MS,
 } from "@/stores/context-workbench/context-workbench-store"
+
+it("parses document keys explicitly and preserves only present documents in stored order", () => {
+  const doc = documentTabKey("d1")
+  expect(parseDockTabKey(doc)).toEqual({ kind: "doc", docTabId: "d1" })
+  expect(
+    orderDockTabs(["panel:browser", doc, "artifact:a"], ["panel:browser", "artifact:a"])
+  ).toEqual(["panel:browser", "artifact:a"])
+  expect(
+    orderDockTabs(["panel:browser", doc, "artifact:a"], [doc, "artifact:a", "panel:browser"])
+  ).toEqual(["panel:browser", doc, "artifact:a"])
+})
 
 const A = artifactTabKey("a1")
 const B = artifactTabKey("a2")

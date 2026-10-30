@@ -90,7 +90,71 @@ async function resolveExecution(
   options: AgentExecutionTurnOptions | undefined,
   flags: Awaited<ReturnType<(typeof import("./feature-flags"))["getAgentExecutionFlags"]>>
 ) {
+  const session = config.sessionId
+    ? await (await import("@/lib/db/sessions")).getSession(config.sessionId)
+    : undefined
+  const characterId = config.characterId ?? session?.characterId
+  if (characterId?.startsWith("vscode-chat:")) {
+    const [{ getSettings }, { resolveCharacterById }, { resolveTurnAuthority }] = await Promise.all(
+      [
+        import("@/lib/db/settings"),
+        import("@/lib/db/characters"),
+        import("@/lib/claude/turn-agent-mode"),
+      ]
+    )
+    const [appSettings, character] = await Promise.all([
+      getSettings(),
+      resolveCharacterById(characterId),
+    ])
+    const authority = resolveTurnAuthority({ session, character, appSettings })
+    if (
+      (authority.permissionMode && authority.permissionMode !== "default") ||
+      authority.sandboxEnabled ||
+      character?.systemPrompt?.trim() ||
+      character?.allowedTools?.length ||
+      character?.skillIds?.length ||
+      character?.mcpServerIds?.length
+    ) {
+      throw new Error(
+        "Chat participant cannot satisfy the session's permission or sandbox contract"
+      )
+    }
+  }
+  const participant = characterId?.startsWith("vscode-chat:")
+    ? await (
+        await import("@/lib/plugin/vscode-shim/chat-participant-registry")
+      ).resolveVscodeChatParticipant(characterId)
+    : undefined
+  if (
+    participant &&
+    (config.tools?.length ||
+      config.allowedTools?.length ||
+      config.canUseTool ||
+      config.onPostToolUse ||
+      config.dispatchContext ||
+      config.isDispatchedSubagent ||
+      config.permissionCeiling ||
+      config.approvalRoute ||
+      config.cwd ||
+      options?.taskWorkspace?.enabled ||
+      config.systemPrompt ||
+      config.appendSystem ||
+      config.outputFormat)
+  ) {
+    throw new Error(
+      "Chat participant cannot satisfy the requested tools, workspace, prompt, or permission contract"
+    )
+  }
   const input = {
+    ...(participant
+      ? {
+          chatParticipant: {
+            pluginId: participant.pluginId,
+            participantId: participant.participantId,
+            generation: participant.generation,
+          },
+        }
+      : {}),
     surface: options?.surface ?? "agent-executor",
     environment: {
       ...environment,
@@ -200,6 +264,10 @@ export async function executeAgentTurn(
   const executeResolved = async (
     effectiveConfig: ExecuteAgentConfig
   ): Promise<AgentExecutionServiceResult> => {
+    if (spec.chatParticipant) {
+      const { runVscodeChatAgentTurn } = await import("@/lib/plugin/vscode-shim/chat-turn")
+      return stamp(await runVscodeChatAgentTurn(prompt, effectiveConfig, spec.chatParticipant))
+    }
     // Intentional completion (toolsEnabled false/absent, or explicit policy).
     if (spec.executionKind === "completion") {
       return stamp(await executor.runCompletionRail(prompt, effectiveConfig))
