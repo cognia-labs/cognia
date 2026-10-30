@@ -26,6 +26,10 @@ jest.mock("@/lib/tauri", () => ({
 
 import { transport } from "@/lib/tauri"
 import {
+  DOCUMENT_VIEWER_PROFILE,
+  DOCUMENT_VIEWER_OP_REFUSED,
+  DOCUMENT_VIEWER_WINDOW_MISMATCH,
+  clearDocumentViewerProfile,
   LOCAL_BROWSER_EVENTS,
   isUserChromeBrowser,
   localBrowser,
@@ -41,6 +45,23 @@ beforeEach(() => {
   mockInvoke.mockResolvedValue(undefined)
   channels.length = 0
   subscribers.clear()
+})
+
+it("creates a document viewer through the existing client and clears only its reserved profile", async () => {
+  call.mockResolvedValue({ running: true })
+  await localBrowser.createSession({ id: "viewer", kind: "local", purpose: "document-viewer" })
+  expect(call).toHaveBeenLastCalledWith("browser_local_rpc", {
+    op: "browser.session.create",
+    payload: { id: "viewer", kind: "local", purpose: "document-viewer" },
+  })
+  await clearDocumentViewerProfile()
+  expect(call).toHaveBeenLastCalledWith("browser_local_rpc", {
+    op: "browser.profile.delete",
+    payload: { profileId: DOCUMENT_VIEWER_PROFILE },
+  })
+  expect(DOCUMENT_VIEWER_PROFILE).toBe("cognia-document-viewer")
+  expect(DOCUMENT_VIEWER_OP_REFUSED).toBe("browser_document_viewer_op_refused")
+  expect(DOCUMENT_VIEWER_WINDOW_MISMATCH).toBe("browser_document_viewer_window_mismatch")
 })
 
 it("maps lifecycle calls onto the local runtime commands", async () => {

@@ -10,12 +10,74 @@ import {
   clearStorageInPage,
   detectLoginFormsInPage,
   fitPageToWidth,
+  findWithoutOverlay,
   readStorageInPage,
   resolveLoginRegistryEntry,
   writeStorageInPage,
 } from "./page-scripts.mjs"
 
 const FOLLOWING = 4
+
+test("document viewer find selects native matches and clears without overlay globals", () => {
+  let cursor = -1
+  let selected = null
+  const calls = []
+  const ranges = [0, 1, 2].map((id) => ({
+    id,
+    cloneRange() {
+      return this
+    },
+    compareBoundaryPoints(_how, other) {
+      return id - other.id
+    },
+    startContainer: { parentElement: { scrollIntoView() {} } },
+  }))
+  const selection = {
+    rangeCount: 1,
+    removeAllRanges() {
+      selected = null
+    },
+    collapse() {
+      cursor = -1
+    },
+    getRangeAt() {
+      return ranges[cursor]
+    },
+    addRange(range) {
+      selected = range
+    },
+  }
+  const context = vm.createContext({
+    window: {
+      getSelection: () => selection,
+      find: (...args) => {
+        calls.push(args)
+        cursor++
+        return cursor < ranges.length
+      },
+    },
+    document: { body: {} },
+  })
+  const find = (args) =>
+    JSON.parse(
+      JSON.stringify(
+        vm.runInContext(
+          `(${findWithoutOverlay.toString()})(args)`,
+          Object.assign(context, { args })
+        )
+      )
+    )
+  assert.deepEqual(find({ query: "hello", matchCase: true, index: -1 }), { matches: 3, index: 2 })
+  assert.equal(selected, ranges[2])
+  assert.ok(
+    calls.every((args) => JSON.stringify(args) === JSON.stringify(["hello", true, false, false]))
+  )
+  assert.deepEqual(find({ query: "hello", index: 3 }), { matches: 3, index: 0 })
+  assert.equal(selected, ranges[0])
+  assert.deepEqual(find({ query: "" }), { matches: 0, index: 0 })
+  assert.equal(selected, null)
+  assert.deepEqual(Object.keys(context.window), ["getSelection", "find"])
+})
 
 /**
  * A document whose metrics follow CSS zoom the way Chromium reports them on a

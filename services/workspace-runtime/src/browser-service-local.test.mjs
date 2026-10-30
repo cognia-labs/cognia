@@ -7,12 +7,14 @@ import test from "node:test"
 
 import {
   COOKIES_IMPORTED_MARKER,
+  DOCUMENT_VIEWER_OPS,
   LOCAL_SESSION_FIELDS,
   RemoteChromiumService,
   assertLoopbackCdpEndpoint,
   isLoopbackOrigin,
 } from "./browser-service.mjs"
 import { WorkspaceFileBridge } from "./file-bridge.mjs"
+import { createDispatcher, MediaLatestStore } from "./runtime-server.mjs"
 import {
   CREDENTIAL_BINDING,
   CREDENTIAL_CAPTURE_SCRIPT,
@@ -375,6 +377,10 @@ test("cloud mode refuses every local-only session option with a typed error", as
     allowFileUrls: true,
     viewport: { width: 800, height: 600 },
     deviceScaleFactor: 2,
+    purpose: "document-viewer",
+    disableExtensions: true,
+    captureCredentials: false,
+    injectOverlay: false,
   }
   assert.deepEqual(Object.keys(samples).sort(), [...LOCAL_SESSION_FIELDS].sort())
   for (const [field, value] of Object.entries(samples)) {
@@ -384,6 +390,176 @@ test("cloud mode refuses every local-only session option with a typed error", as
     )
   }
   await assert.doesNotReject(() => service.createSession({ id: "plain", grants: [] }))
+})
+
+test("document viewer keeps a persistent isolated profile without extensions or injected scripts", async (t) => {
+  const { service, chromium, root, events } = await fixture(t)
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  const launch = chromium.launches[0]
+  assert.equal(launch.profilePath, path.join(root, "profiles", "cognia-document-viewer"))
+  assert.deepEqual(launch.options.args, ["--no-first-run", "--no-default-browser-check"])
+  assert.equal(launch.options.ignoreDefaultArgs, undefined)
+  assert.deepEqual(launch.context.initScripts, [])
+  assert.equal(launch.context.bindings.size, 0)
+  const session = service.sessions.get("viewer")
+  assert.equal(session.disableExtensions, true)
+  assert.equal(session.captureCredentials, false)
+  assert.equal(session.injectOverlay, false)
+  const page = await launch.context.newPage()
+  await tick()
+  assert.deepEqual(page.initScripts, [])
+  assert.equal(page.bindings.size, 0)
+  service.onCredentialSubmitted(
+    session,
+    {
+      page,
+      frame: { url: () => "https://docs.google.com" },
+    },
+    { username: "user", password: "private" }
+  )
+  assert.equal(
+    events.some((event) => event.type === "credential.submitted"),
+    false
+  )
+  assert.equal(session.recentCredentials.size, 0)
+  await assert.rejects(
+    () => service.deleteProfile(session.profileId),
+    (error) => error.code === "browser_profile_in_use"
+  )
+  const marker = path.join(launch.profilePath, "sign-in-marker")
+  await fs.writeFile(marker, "signed in")
+  await service.closeSession("viewer")
+  await service.createSession({ id: "viewer-again", purpose: "document-viewer" })
+  assert.equal(await fs.readFile(marker, "utf8"), "signed in")
+  await service.closeSession("viewer-again")
+  assert.deepEqual(await service.deleteProfile("cognia-document-viewer"), { deleted: true })
+  await assert.rejects(() => fs.stat(marker), { code: "ENOENT" })
+})
+
+test("document viewer validates purpose, profile and host isolation options", async (t) => {
+  const { service } = await fixture(t)
+  for (const [options, code] of [
+    [{ profileId: "cognia-document-viewer" }, "browser_profile_reserved"],
+    [{ profileId: "COGNIA-DOCUMENT-VIEWER" }, "browser_profile_reserved"],
+    [{ profileId: "cognia-document-viewer." }, "browser_profile_reserved"],
+    [
+      { purpose: "document-viewer", profileId: "default" },
+      "browser_document_viewer_profile_mismatch",
+    ],
+    [{ purpose: "document-viewer", kind: "user-chrome" }, "browser_document_viewer_kind_refused"],
+    [{ purpose: "unknown" }, "browser_session_option_invalid"],
+    ...["disableExtensions", "captureCredentials", "injectOverlay"].map((field) => [
+      { [field]: "yes" },
+      "browser_session_option_invalid",
+    ]),
+    ...[
+      { disableExtensions: false },
+      { captureCredentials: true },
+      { injectOverlay: true },
+      { extensionPaths: ["/ext"] },
+    ].map((options) => [
+      { purpose: "document-viewer", ...options },
+      "browser_session_option_invalid",
+    ]),
+  ]) {
+    await assert.rejects(
+      () => service.createSession({ id: "bad-viewer", ...options }),
+      (error) => error.code === code,
+      JSON.stringify(options)
+    )
+  }
+  assert.equal(service.sessions.size, 0)
+})
+
+test("extension reload skips all extension-disabled sessions and preserves ordinary behavior", async (t) => {
+  const { service, chromium, events } = await fixture(t)
+  await service.createSession({ id: "ordinary", extensionPaths: ["/old"] })
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  await service.createSession({ id: "disabled", profileId: "disabled", disableExtensions: true })
+  const viewerContext = service.sessions.get("viewer").context
+  const disabledContext = service.sessions.get("disabled").context
+  assert.deepEqual(await service.reloadExtensions(["/new"]), { reloaded: ["ordinary"] })
+  assert.equal(service.sessions.get("viewer").context, viewerContext)
+  assert.equal(service.sessions.get("disabled").context, disabledContext)
+  assert.equal(viewerContext.closed, false)
+  assert.equal(disabledContext.closed, false)
+  assert.equal(chromium.launches.length, 4)
+  assert.ok(chromium.launches.at(-1).options.args.includes("--load-extension=/new"))
+  assert.deepEqual(chromium.launches.at(-1).options.ignoreDefaultArgs, ["--disable-extensions"])
+  assert.ok(service.sessions.get("ordinary").context.bindings.has(CREDENTIAL_BINDING))
+  assert.equal(
+    events.some((event) => event.type === "extensions.changed" && event.sessionId === "viewer"),
+    false
+  )
+})
+
+test("runtime refuses document-viewer inspection ops before page targeting or dispatch", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  const control = createDispatcher(service, null, new MediaLatestStore(), { publish() {} })
+  for (const type of [
+    "browser.evaluate",
+    "browser.screenshot",
+    "browser.cookies.list",
+    "browser.storage.get",
+    "browser.submission.configure",
+    "browser.forms.detect-login",
+  ]) {
+    await assert.rejects(
+      () => control(type, { sessionId: "viewer", pageId: "missing" }),
+      (error) => error.code === "browser_document_viewer_op_refused",
+      type
+    )
+  }
+  const result = await control("browser.pages", { sessionId: "viewer" })
+  assert.equal(result.length, 1)
+  // Consumer retirement stays within the viewer allowlist and retains the
+  // existing stream-id fence against stale unsubscriptions.
+  const frames = []
+  await service.startScreencast("viewer", (frame) => frames.push(frame), { streamId: "old" })
+  await service.startScreencast("viewer", (frame) => frames.push(frame), { streamId: "new" })
+  assert.equal(
+    await control("browser.screencast.ack", { sessionId: "viewer", retireStreamId: "old" }),
+    false
+  )
+  assert.equal(service.sessions.get("viewer").screencastRequest.streamId, "new")
+  assert.equal(
+    await control("browser.screencast.ack", { sessionId: "viewer", retireStreamId: "new" }),
+    true
+  )
+  assert.equal(service.sessions.get("viewer").screencast, null)
+})
+
+test("document-viewer runtime and crate allowlists stay identical", async () => {
+  const rust = await fs.readFile(
+    new URL("../../../crates/cognia-local-browser/src/document_viewer.rs", import.meta.url),
+    "utf8"
+  )
+  const list = rust.split("pub const DOCUMENT_VIEWER_OPS:")[1].split("];", 1)[0]
+  const ops = [...list.matchAll(/"(browser\.[^"]+)"/g)].map((match) => match[1])
+  assert.deepEqual(DOCUMENT_VIEWER_OPS, ops)
+})
+
+test("document viewer find does not depend on overlay functions", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "find-viewer", purpose: "document-viewer" })
+  const session = service.sessions.get("find-viewer")
+  const page = session.pages.get(session.activePageId).page
+  const calls = []
+  page.evaluate = async (fn, args) => {
+    assert.equal(fn.name, "findWithoutOverlay")
+    calls.push(args)
+    return { matches: 3, index: ((args.index ?? 0) + 3) % 3 }
+  }
+  assert.deepEqual(await service.find("find-viewer", "text"), { matches: 3, index: 0 })
+  assert.deepEqual(await service.find("find-viewer", "text"), { matches: 3, index: 1 })
+  assert.deepEqual(await service.find("find-viewer", "text", { forward: false }), {
+    matches: 3,
+    index: 0,
+  })
+  await service.findClear("find-viewer")
+  assert.equal(calls.at(-1).query, "")
+  assert.deepEqual(session.context.initScripts, [])
 })
 
 test("cloud mode refuses privileged and local-only operations", async (t) => {

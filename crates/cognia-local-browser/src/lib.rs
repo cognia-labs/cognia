@@ -9,6 +9,7 @@
 pub mod bridge;
 pub mod client;
 pub mod dev_servers;
+pub mod document_viewer;
 pub mod extensions;
 pub mod installer;
 pub mod local_files;

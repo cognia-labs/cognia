@@ -17,6 +17,7 @@ import {
   clearStorageInPage,
   detectLoginFormsInPage,
   fitPageToWidth,
+  findWithoutOverlay,
   readStorageInPage,
   resolveLoginRegistryEntry,
   writeStorageInPage,
@@ -52,6 +53,43 @@ export const LOCAL_SESSION_FIELDS = Object.freeze([
   "allowFileUrls",
   "viewport",
   "deviceScaleFactor",
+  "purpose",
+  "disableExtensions",
+  "captureCredentials",
+  "injectOverlay",
+])
+
+export const DOCUMENT_VIEWER_PROFILE = "cognia-document-viewer"
+export const DOCUMENT_VIEWER_OP_REFUSED = "browser_document_viewer_op_refused"
+function isDocumentViewerProfile(profileId) {
+  return (
+    typeof profileId === "string" &&
+    profileId.replace(/[. ]+$/, "").toLowerCase() === DOCUMENT_VIEWER_PROFILE
+  )
+}
+export const DOCUMENT_VIEWER_OPS = Object.freeze([
+  "browser.session.close",
+  "browser.navigate",
+  "browser.back",
+  "browser.forward",
+  "browser.reload",
+  "browser.stop",
+  "browser.page",
+  "browser.pages",
+  "browser.page.create",
+  "browser.page.activate",
+  "browser.page.close",
+  "browser.input",
+  "browser.press-key",
+  "browser.scroll",
+  "browser.set-zoom",
+  "browser.find",
+  "browser.find.clear",
+  "browser.dialog.handle",
+  "browser.screencast.start",
+  "browser.screencast.ack",
+  "browser.cancel",
+  "browser.wait.load",
 ])
 
 /**
@@ -595,6 +633,17 @@ export class RemoteChromiumService {
     }
   }
 
+  /** Defense in depth at the runtime control boundary, before page targeting. */
+  assertSessionOperation(sessionId, op) {
+    const session = this.sessions.get(sessionId)
+    if (session?.purpose === "document-viewer" && !DOCUMENT_VIEWER_OPS.includes(op)) {
+      throw new RemoteBrowserError(
+        DOCUMENT_VIEWER_OP_REFUSED,
+        `${op} is unavailable in a document viewer`
+      )
+    }
+  }
+
   /**
    * Validate the local-only `session.create` fields. Cloud mode refuses every
    * one of them with `browser_local_option_unsupported`: a shared cloud
@@ -614,6 +663,27 @@ export class RemoteChromiumService {
     }
     const kind = options.kind ?? "local"
     if (kind !== "local" && kind !== "user-chrome") throw invalidOption("kind is invalid")
+    const viewer = options.purpose === "document-viewer"
+    if (options.purpose !== undefined && !viewer) throw invalidOption("purpose is invalid")
+    if (viewer && kind !== "local") {
+      throw new RemoteBrowserError(
+        "browser_document_viewer_kind_refused",
+        "Document viewers require local Chromium"
+      )
+    }
+    for (const field of ["disableExtensions", "captureCredentials", "injectOverlay"]) {
+      if (options[field] !== undefined && typeof options[field] !== "boolean") {
+        throw invalidOption(`${field} must be a boolean`)
+      }
+    }
+    if (
+      viewer &&
+      (options.disableExtensions === false ||
+        options.captureCredentials === true ||
+        options.injectOverlay === true)
+    ) {
+      throw invalidOption("Document viewer isolation cannot be disabled")
+    }
     if (options.headless !== undefined && typeof options.headless !== "boolean") {
       throw invalidOption("headless must be a boolean")
     }
@@ -624,6 +694,10 @@ export class RemoteChromiumService {
       max: MAX_EXTENSIONS,
       forbidComma: true,
     })
+    const disableExtensions = options.disableExtensions ?? viewer
+    if (disableExtensions && extensionPaths.length > 0) {
+      throw invalidOption("Extension-disabled sessions cannot load extensions")
+    }
     if (kind === "user-chrome" && extensionPaths.length > 0) {
       throw new RemoteBrowserError(
         "extensions_unsupported_backend",
@@ -665,6 +739,10 @@ export class RemoteChromiumService {
     }
     return {
       kind,
+      purpose: options.purpose ?? null,
+      disableExtensions,
+      captureCredentials: options.captureCredentials ?? !viewer,
+      injectOverlay: options.injectOverlay ?? !viewer,
       headless: options.headless ?? true,
       extensionPaths,
       cdpEndpoint,
@@ -681,6 +759,12 @@ export class RemoteChromiumService {
     if (typeof id !== "string" || !id) throw invalidOption("Session id is required")
     this.assertNotShuttingDown()
     const local = this.parseLocalOptions(options)
+    if (isDocumentViewerProfile(profileId) && options.purpose !== "document-viewer") {
+      throw new RemoteBrowserError(
+        "browser_profile_reserved",
+        "The document viewer profile is reserved"
+      )
+    }
     if (local) return this.createLocalSession({ id, profileId, grants, ...local })
 
     await this.fileBridge.ready
@@ -780,12 +864,31 @@ export class RemoteChromiumService {
   }
 
   async createLocalSession({ id, profileId, grants, ...local }) {
+    const viewer = local.purpose === "document-viewer"
+    if (
+      viewer &&
+      profileId !== null &&
+      profileId !== undefined &&
+      profileId !== DOCUMENT_VIEWER_PROFILE
+    ) {
+      throw new RemoteBrowserError(
+        "browser_document_viewer_profile_mismatch",
+        "Document viewers require the reserved profile"
+      )
+    }
+    if (!viewer && isDocumentViewerProfile(profileId)) {
+      throw new RemoteBrowserError(
+        "browser_profile_reserved",
+        "The document viewer profile is reserved"
+      )
+    }
     if (this.sessions.has(id))
       throw new RemoteBrowserError("browser_session_exists", "Session exists")
     if (this.sessions.size >= this.maxSessions) {
       throw new RemoteBrowserError("browser_session_quota_exceeded", "Session quota exceeded")
     }
-    const effectiveProfile = local.kind === "local" ? (profileId ?? "default") : null
+    const effectiveProfile =
+      local.kind === "local" ? (viewer ? DOCUMENT_VIEWER_PROFILE : (profileId ?? "default")) : null
     if (effectiveProfile) {
       assertProfileId(effectiveProfile)
       if (this.profileOwners.has(effectiveProfile)) {
@@ -797,6 +900,10 @@ export class RemoteChromiumService {
       profileId: effectiveProfile,
       grants: Array.isArray(grants) ? [...grants] : [],
       kind: local.kind,
+      purpose: local.purpose,
+      disableExtensions: local.disableExtensions,
+      captureCredentials: local.captureCredentials,
+      injectOverlay: local.injectOverlay,
       headless: local.headless,
       extensionPaths: local.extensionPaths,
       downloadsDir: local.downloadsDir,
@@ -806,7 +913,7 @@ export class RemoteChromiumService {
       renderScale: local.renderScale,
       policy: this.localPolicyFactory({
         allowFileUrls: local.allowFileUrls,
-        allowExtensionUrls: local.kind === "local",
+        allowExtensionUrls: local.kind === "local" && !local.disableExtensions,
       }),
     })
     session.downloads = new LocalDownloadTracker({
@@ -876,7 +983,7 @@ export class RemoteChromiumService {
     await fs.mkdir(session.downloadsDir, { recursive: true })
     const args = ["--no-first-run", "--no-default-browser-check"]
     if (session.renderScale > 1) args.push(`--force-device-scale-factor=${session.renderScale}`)
-    if (session.extensionPaths.length > 0) {
+    if (!session.disableExtensions && session.extensionPaths.length > 0) {
       const list = session.extensionPaths.join(",")
       args.push(`--disable-extensions-except=${list}`, `--load-extension=${list}`)
     }
@@ -884,7 +991,7 @@ export class RemoteChromiumService {
       channel: "chromium",
       headless: session.headless,
       args,
-      ignoreDefaultArgs: ["--disable-extensions"],
+      ...(session.disableExtensions ? {} : { ignoreDefaultArgs: ["--disable-extensions"] }),
       acceptDownloads: true,
       downloadsPath: this.stagingRoot,
       viewport: session.viewport,
@@ -895,14 +1002,18 @@ export class RemoteChromiumService {
     // Shutdown began while Chromium was starting: bail out so the caller
     // closes this context instead of wiring it up.
     this.assertNotShuttingDown()
-    await context.addInitScript(this.overlayInitScript)
-    await context.exposeBinding(CREDENTIAL_BINDING, (source, payload) =>
-      this.onCredentialSubmitted(session, source, payload)
-    )
-    await context.exposeBinding(SELECTION_SIGNAL_BINDING, (source, payload) =>
-      this.onSelectionSignal(session, source, payload)
-    )
-    await context.addInitScript(CREDENTIAL_CAPTURE_SCRIPT)
+    if (session.injectOverlay) {
+      await context.addInitScript(this.overlayInitScript)
+      await context.exposeBinding(SELECTION_SIGNAL_BINDING, (source, payload) =>
+        this.onSelectionSignal(session, source, payload)
+      )
+    }
+    if (session.captureCredentials) {
+      await context.exposeBinding(CREDENTIAL_BINDING, (source, payload) =>
+        this.onCredentialSubmitted(session, source, payload)
+      )
+      await context.addInitScript(CREDENTIAL_CAPTURE_SCRIPT)
+    }
     context.on("page", (page) => this.onContextPage(session, page))
     context.on("close", () => {
       if (session.context !== context) return
@@ -1103,6 +1214,7 @@ export class RemoteChromiumService {
 
   onCredentialSubmitted(session, source, payload) {
     if (this.mode !== "local" || session.kind !== "local" || session.closing) return
+    if (session.captureCredentials === false || session.purpose === "document-viewer") return
     if (!payload || typeof payload.password !== "string" || !payload.password) return
     if (payload.password.length > 1024) return
     const username = typeof payload.username === "string" ? payload.username.slice(0, 512) : ""
@@ -1498,6 +1610,7 @@ export class RemoteChromiumService {
     })
     page.on("framenavigated", (frame) => {
       if (frame !== pageMainFrame(page)) return
+      record.viewerFind = null
       const url = page.url()
       const pending = record.pendingDocument
       if (
@@ -2291,7 +2404,19 @@ export class RemoteChromiumService {
   async find(sessionId, query, options = {}) {
     const session = this.requireSession(sessionId)
     this.assertNoPendingDialog(session)
-    const { page } = this.activeRecord(session)
+    const { page, record } = this.activeRecord(session)
+    if (session.injectOverlay === false) {
+      const text = String(query ?? "")
+      const matchCase = options?.matchCase === true
+      const previous = record.viewerFind
+      const index =
+        previous?.query === text && previous.matchCase === matchCase
+          ? previous.index + (options?.forward === false ? -1 : 1)
+          : 0
+      const result = await page.evaluate(findWithoutOverlay, { query: text, matchCase, index })
+      record.viewerFind = { query: text, matchCase, index: result.index }
+      return result
+    }
     return page.evaluate((args) => window.__cogniaFind(args.query, args.options || {}), {
       query: String(query ?? ""),
       options: options ?? {},
@@ -2301,8 +2426,13 @@ export class RemoteChromiumService {
   async findClear(sessionId) {
     const session = this.requireSession(sessionId)
     this.assertNoPendingDialog(session)
-    const { page } = this.activeRecord(session)
-    await page.evaluate(() => window.__cogniaFindClear())
+    const { page, record } = this.activeRecord(session)
+    if (session.injectOverlay === false) {
+      await page.evaluate(findWithoutOverlay, { query: "" })
+      record.viewerFind = null
+    } else {
+      await page.evaluate(() => window.__cogniaFindClear())
+    }
     return { ok: true }
   }
 
@@ -3188,7 +3318,7 @@ export class RemoteChromiumService {
     })
     const reloaded = []
     for (const session of [...this.sessions.values()]) {
-      if (session.kind !== "local" || session.closing) continue
+      if (session.kind !== "local" || session.closing || session.disableExtensions) continue
       await this.restartLocalSession(session, paths)
       reloaded.push(session.id)
     }

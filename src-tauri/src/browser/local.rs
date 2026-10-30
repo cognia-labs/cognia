@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use cognia_local_browser::bridge::{self, BridgeEvent, RuntimeTransport, StopHandle};
 use cognia_local_browser::client::RuntimeClient;
+use cognia_local_browser::document_viewer::{self, EventRoute, SessionPurpose};
 use cognia_local_browser::supervisor::{self, Supervisor, SupervisorConfig, SupervisorEvent};
 use cognia_local_browser::{installer, user_chrome};
 use parking_lot::Mutex;
@@ -88,7 +89,33 @@ pub struct LocalBrowserState {
     frame_starts: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
     frame_cleanup: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     events: Mutex<Option<StopHandle>>,
-    sessions: Mutex<HashMap<String, bridge::SessionKind>>,
+    sessions: Mutex<HashMap<String, LocalSession>>,
+}
+
+#[derive(Clone, Debug)]
+struct LocalSession {
+    kind: bridge::SessionKind,
+    purpose: Option<SessionPurpose>,
+    creator_window: String,
+    creation_identity: Arc<()>,
+}
+
+impl LocalSession {
+    fn authorize(&self, caller: &str, op: &str) -> Result<(), String> {
+        document_viewer::authorize_window(self.purpose, &self.creator_window, caller)
+            .and_then(|()| document_viewer::authorize_operation(self.purpose, op))
+            .map_err(|error| error.to_string())
+    }
+
+    fn event_route(&self, credential_submitted: bool) -> EventRoute<'_> {
+        document_viewer::event_route(self.purpose, &self.creator_window, credential_submitted)
+    }
+}
+
+// A late event after session.closed must not become a broadcast (or a vault
+// write) just because its creator record has already been removed.
+fn session_event_route(session: Option<&LocalSession>, credential: bool) -> EventRoute<'_> {
+    session.map_or(EventRoute::Drop, |session| session.event_route(credential))
 }
 
 /// Sets a flag for its lifetime; dropping it clears the flag.
@@ -140,8 +167,50 @@ impl LocalBrowserState {
         }
     }
 
-    fn take_sessions(&self) -> Vec<String> {
-        self.sessions.lock().drain().map(|(id, _)| id).collect()
+    fn take_sessions(&self) -> Vec<(String, LocalSession)> {
+        self.sessions.lock().drain().collect()
+    }
+
+    fn authorize_session(&self, session_id: &str, caller: &str, op: &str) -> Result<(), String> {
+        self.sessions
+            .lock()
+            .get(session_id)
+            .ok_or_else(|| "browser_session_not_found: session is not registered".to_string())?
+            .authorize(caller, op)
+    }
+
+    fn is_document_viewer(&self, session_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|session| session.purpose == Some(SessionPurpose::DocumentViewer))
+    }
+
+    fn session_create_failed(
+        &self,
+        session_id: &str,
+        identity: &Arc<()>,
+        error: &cognia_local_browser::client::ClientError,
+    ) {
+        let mut sessions = self.sessions.lock();
+        let Some(session) = sessions.get(session_id) else {
+            return;
+        };
+        if !Arc::ptr_eq(&session.creation_identity, identity) {
+            return;
+        }
+        // A transport failure can hide a successful create. Keep its creator
+        // binding until session.closed or runtime exit, so only that window
+        // can recover/close the potentially live viewer.
+        if session.purpose == Some(SessionPurpose::DocumentViewer)
+            && matches!(
+                error.code.as_str(),
+                "runtime_unreachable" | "runtime_protocol_error"
+            )
+        {
+            return;
+        }
+        sessions.remove(session_id);
     }
 }
 
@@ -214,14 +283,15 @@ fn on_supervisor_event(app: &AppHandle, event: SupervisorEvent) {
             log::warn!("local browser runtime: {event:?}");
             if let Some(state) = app.try_state::<LocalBrowserState>() {
                 state.stop_all_frames();
-                for session_id in state.take_sessions() {
-                    emit_local_event(
+                for (session_id, session) in state.take_sessions() {
+                    emit_routed_event(
                         app,
                         json!({
                             "type": "session.closed",
                             "sessionId": session_id,
                             "reason": "runtime_exited",
                         }),
+                        session.event_route(false),
                     );
                 }
             }
@@ -234,7 +304,31 @@ fn on_supervisor_event(app: &AppHandle, event: SupervisorEvent) {
 }
 
 pub(crate) fn emit_local_event(app: &AppHandle, payload: Value) {
-    if let Err(error) = app.emit(LOCAL_EVENT, payload) {
+    let session = payload
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .and_then(|id| {
+            app.try_state::<LocalBrowserState>()?
+                .sessions
+                .lock()
+                .get(id)
+                .cloned()
+        });
+    let route = if payload.get("sessionId").and_then(Value::as_str).is_some() {
+        session_event_route(session.as_ref(), false)
+    } else {
+        EventRoute::Broadcast
+    };
+    emit_routed_event(app, payload, route);
+}
+
+fn emit_routed_event(app: &AppHandle, payload: Value, route: EventRoute<'_>) {
+    let result = match route {
+        EventRoute::Broadcast => app.emit(LOCAL_EVENT, payload),
+        EventRoute::Window(window) => app.emit_to(window, LOCAL_EVENT, payload),
+        EventRoute::Drop => return,
+    };
+    if let Err(error) = result {
         log::debug!("emit {LOCAL_EVENT}: {error}");
     }
 }
@@ -257,6 +351,16 @@ fn reported_download_path(event: &Value) -> Option<PathBuf> {
 fn handle_bridge_event(app: &AppHandle, event: BridgeEvent) {
     match event {
         BridgeEvent::Forward(value) => {
+            let session = value
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .and_then(|id| {
+                    app.try_state::<LocalBrowserState>()?
+                        .sessions
+                        .lock()
+                        .get(id)
+                        .cloned()
+                });
             if value.get("type").and_then(Value::as_str) == Some("session.closed") {
                 if let (Some(state), Some(session_id)) = (
                     app.try_state::<LocalBrowserState>(),
@@ -269,7 +373,12 @@ fn handle_bridge_event(app: &AppHandle, event: BridgeEvent) {
             if let Some(path) = reported_download_path(&value) {
                 crate::browser::downloads::remember_reported_download(app, &path);
             }
-            emit_local_event(app, value);
+            let route = if value.get("sessionId").and_then(Value::as_str).is_some() {
+                session_event_route(session.as_ref(), false)
+            } else {
+                EventRoute::Broadcast
+            };
+            emit_routed_event(app, value, route);
         }
         BridgeEvent::CredentialSubmitted {
             session_id,
@@ -278,13 +387,24 @@ fn handle_bridge_event(app: &AppHandle, event: BridgeEvent) {
             username,
             password,
         } => {
+            let session = session_id.as_deref().and_then(|id| {
+                app.try_state::<LocalBrowserState>()?
+                    .sessions
+                    .lock()
+                    .get(id)
+                    .cloned()
+            });
+            let route = session_event_route(session.as_ref(), true);
+            if route == EventRoute::Drop {
+                return;
+            }
             let pending_id = crate::browser::passwords::stash_pending(
                 app,
                 origin.clone(),
                 username.clone(),
                 password,
             );
-            emit_local_event(
+            emit_routed_event(
                 app,
                 json!({
                     "type": "credential.submitted",
@@ -294,6 +414,7 @@ fn handle_bridge_event(app: &AppHandle, event: BridgeEvent) {
                     "username": username,
                     "pendingId": pending_id,
                 }),
+                route,
             );
         }
     }
@@ -337,10 +458,11 @@ async fn stop_runtime(app: &AppHandle, state: &LocalBrowserState) {
     if let Some(core) = core {
         core.supervisor.stop().await;
     }
-    for session_id in state.take_sessions() {
-        emit_local_event(
+    for (session_id, session) in state.take_sessions() {
+        emit_routed_event(
             app,
             json!({"type": "session.closed", "sessionId": session_id, "reason": "runtime_stopped"}),
+            session.event_route(false),
         );
     }
 }
@@ -434,6 +556,14 @@ pub(crate) async fn reload_extensions(app: &AppHandle, extension_paths: Vec<Stri
     let Some(state) = app.try_state::<LocalBrowserState>() else {
         return;
     };
+    if !state
+        .sessions
+        .lock()
+        .values()
+        .any(|session| session.kind == bridge::SessionKind::Local && session.purpose.is_none())
+    {
+        return;
+    }
     let core = state.core.lock().clone();
     let Some(core) = core.filter(|core| core.supervisor.is_running()) else {
         return;
@@ -595,12 +725,19 @@ fn session_context(
                         .into(),
                 );
             }
-            let extension_paths = crate::browser::extensions::extension_store(app)?
-                .enabled_paths()
+            let extension_paths = if document_viewer::session_purpose(payload)
                 .map_err(|error| error.to_string())?
-                .into_iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect();
+                == Some(SessionPurpose::DocumentViewer)
+            {
+                Vec::new()
+            } else {
+                crate::browser::extensions::extension_store(app)?
+                    .enabled_paths()
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect()
+            };
             Ok(bridge::SessionCreateContext {
                 downloads_dir,
                 extension_paths,
@@ -630,6 +767,7 @@ async fn call(
     state: &LocalBrowserState,
     op: &str,
     payload: Value,
+    creator_window: &str,
 ) -> Result<Value, String> {
     let core = ensure_started(app, state).await?;
     let (payload, kind) = if op == "browser.session.create" {
@@ -650,30 +788,69 @@ async fn call(
     } else {
         (payload, None)
     };
-    let result = core
-        .transport
-        .control(op, payload.clone())
-        .await
-        .map_err(|error| error.to_string())?;
-    if let Some(kind) = kind {
-        if let Some(session_id) = bridge::created_session_id(&payload, &result) {
-            state.sessions.lock().insert(session_id, kind);
+    // Register before control: page/lifecycle events can precede its response.
+    let creating_id = if let Some(kind) = kind {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "browser_session_option_invalid: session id is required".to_string())?
+            .to_owned();
+        let session = LocalSession {
+            kind,
+            purpose: document_viewer::session_purpose(&payload)
+                .map_err(|error| error.to_string())?,
+            creator_window: creator_window.to_owned(),
+            creation_identity: Arc::new(()),
+        };
+        let identity = Arc::clone(&session.creation_identity);
+        let mut sessions = state.sessions.lock();
+        if sessions.contains_key(&id) {
+            return Err("browser_session_exists: session exists".into());
+        }
+        sessions.insert(id.clone(), session);
+        Some((id, identity))
+    } else {
+        if let Some(id) = payload.get("sessionId").and_then(Value::as_str) {
+            state.authorize_session(id, creator_window, op)?;
+        }
+        None
+    };
+    let result = core.transport.control(op, payload.clone()).await;
+    if let Err(error) = &result {
+        if let Some((id, identity)) = creating_id {
+            state.session_create_failed(&id, &identity, error);
         }
     } else if op == "browser.session.close" {
         if let Some(session_id) = payload.get("sessionId").and_then(Value::as_str) {
-            state.sessions.lock().remove(session_id);
+            // The journal's session.closed consumes the creator record, so
+            // its notification retains the targeted route after this reply.
             state.stop_frames(session_id);
         }
     }
-    Ok(result)
+    result.map_err(|error| error.to_string())
 }
 
 /// Rust-only access for value-carrying ops (`browser.cookies.set`,
-/// `browser.credential.fill`). No allow-list: never expose to the renderer.
+/// `browser.credential.fill`). Document viewers remain creator-bound, and
+/// clearing their reserved profile is a renderer-only user action.
 pub async fn rpc_privileged(app: &AppHandle, op: &str, payload: Value) -> Result<Value, String> {
+    if op == "browser.profile.delete"
+        && payload
+            .get("profileId")
+            .and_then(Value::as_str)
+            .is_some_and(document_viewer::is_document_viewer_profile)
+    {
+        return Err(
+            "browser_profile_reserved: clear document browser data through the renderer".into(),
+        );
+    }
     let state = app
         .try_state::<LocalBrowserState>()
         .ok_or_else(|| "local_browser_unavailable: state is not managed".to_string())?;
+    if let Some(id) = payload.get("sessionId").and_then(Value::as_str) {
+        state.authorize_session(id, "", op)?;
+    }
     let core = ensure_started(app, state.inner()).await?;
     core.transport
         .control(op, payload)
@@ -774,14 +951,18 @@ pub async fn browser_local_stop(
 #[tauri::command]
 pub async fn browser_local_rpc(
     app: AppHandle,
+    window: tauri::Window,
     state: State<'_, LocalBrowserState>,
     op: String,
     payload: Value,
 ) -> Result<Value, String> {
+    if let Some(id) = payload.get("sessionId").and_then(Value::as_str) {
+        state.authorize_session(id, window.label(), &op)?;
+    }
     if !bridge::is_renderer_op(&op) {
         return Err(not_allowed(&op));
     }
-    call(&app, state.inner(), &op, payload).await
+    call(&app, state.inner(), &op, payload, window.label()).await
 }
 
 async fn begin_frame_subscription<T: RuntimeTransport + Clone + Send + Sync + 'static>(
@@ -790,6 +971,7 @@ async fn begin_frame_subscription<T: RuntimeTransport + Clone + Send + Sync + 's
     session_id: &str,
     stream_id: &str,
 ) -> Result<(u64, bridge::StopSignal), String> {
+    let document_viewer = state.is_document_viewer(session_id);
     let token = state.frame_tokens.fetch_add(1, Ordering::SeqCst);
     let (handle, mut stop) = bridge::stop_pair();
     state
@@ -824,7 +1006,7 @@ async fn begin_frame_subscription<T: RuntimeTransport + Clone + Send + Sync + 's
         let session_id = session_id.to_owned();
         let stream_id = stream_id.to_owned();
         let cleanup = tokio::spawn(async move {
-            bridge::retire_screencast(&transport, &session_id, &stream_id).await
+            retire_frame_consumer(&transport, &session_id, &stream_id, document_viewer).await
         });
         let mut jobs = state.frame_cleanup.lock();
         jobs.retain(|job| !job.is_finished());
@@ -834,15 +1016,31 @@ async fn begin_frame_subscription<T: RuntimeTransport + Clone + Send + Sync + 's
     Ok((token, stop))
 }
 
+async fn retire_frame_consumer<T: RuntimeTransport>(
+    transport: &T,
+    session_id: &str,
+    stream_id: &str,
+    document_viewer: bool,
+) {
+    if document_viewer {
+        bridge::retire_document_viewer_screencast(transport, session_id, stream_id).await;
+    } else {
+        bridge::retire_screencast(transport, session_id, stream_id).await;
+    }
+}
+
 #[tauri::command]
 pub async fn browser_local_frames_subscribe(
     app: AppHandle,
+    window: tauri::Window,
     state: State<'_, LocalBrowserState>,
     session_id: String,
     channel: Channel<InvokeResponseBody>,
     subscription_id: Option<String>,
 ) -> Result<(), String> {
+    state.authorize_session(&session_id, window.label(), "browser.screencast.start")?;
     let core = ensure_started(&app, state.inner()).await?;
+    state.authorize_session(&session_id, window.label(), "browser.screencast.start")?;
     let stream_id = subscription_id.unwrap_or_else(|| {
         format!(
             "legacy-{}",
@@ -861,6 +1059,7 @@ pub async fn browser_local_frames_subscribe(
     .await?;
     let transport = core.transport.clone();
     let poll_app = app.clone();
+    let document_viewer = state.is_document_viewer(&session_id);
     tauri::async_runtime::spawn(async move {
         let end = bridge::run_frame_poller(
             &transport,
@@ -888,17 +1087,19 @@ pub async fn browser_local_frames_subscribe(
         };
         let ended = json!({ "type": "ended", "subscriptionId": stream_id, "reason": reason });
         let _ = channel.send(InvokeResponseBody::Json(ended.to_string()));
-        bridge::retire_screencast(&transport, &session_id, &stream_id).await;
+        retire_frame_consumer(&transport, &session_id, &stream_id, document_viewer).await;
     });
     Ok(())
 }
 
 #[tauri::command]
 pub async fn browser_local_frames_unsubscribe(
+    window: tauri::Window,
     state: State<'_, LocalBrowserState>,
     session_id: String,
     subscription_id: Option<String>,
 ) -> Result<(), String> {
+    state.authorize_session(&session_id, window.label(), "browser.screencast.ack")?;
     state.stop_frame_subscription(&session_id, subscription_id.as_deref());
     Ok(())
 }
@@ -914,6 +1115,113 @@ pub async fn browser_user_chrome_discover() -> Result<Vec<user_chrome::UserChrom
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_session(purpose: Option<SessionPurpose>) -> LocalSession {
+        LocalSession {
+            kind: bridge::SessionKind::Local,
+            purpose,
+            creator_window: "document-dock".into(),
+            creation_identity: Arc::new(()),
+        }
+    }
+
+    #[test]
+    fn document_viewer_window_mismatch_refuses_rpc_and_frame_access() {
+        let state = LocalBrowserState::default();
+        state.sessions.lock().insert(
+            "viewer".into(),
+            test_session(Some(SessionPurpose::DocumentViewer)),
+        );
+        for op in [
+            "browser.navigate",
+            "browser.screencast.start",
+            "browser.screencast.ack",
+        ] {
+            assert!(state
+                .authorize_session("viewer", "document-dock", op)
+                .is_ok());
+            assert!(state
+                .authorize_session("viewer", "other-window", op)
+                .unwrap_err()
+                .starts_with(document_viewer::DOCUMENT_VIEWER_WINDOW_MISMATCH));
+        }
+        assert!(state
+            .authorize_session("viewer", "document-dock", "browser.evaluate")
+            .unwrap_err()
+            .starts_with(document_viewer::DOCUMENT_VIEWER_OP_REFUSED));
+        let ordinary = test_session(None);
+        assert!(ordinary
+            .authorize("other-window", "browser.evaluate")
+            .is_ok());
+        assert!(state
+            .authorize_session("unregistered", "other-window", "browser.screencast.start")
+            .unwrap_err()
+            .starts_with("browser_session_not_found"));
+    }
+
+    #[test]
+    fn document_viewer_targeted_routing_survives_session_removal_and_runtime_exit() {
+        let state = LocalBrowserState::default();
+        state.sessions.lock().insert(
+            "viewer".into(),
+            test_session(Some(SessionPurpose::DocumentViewer)),
+        );
+        // The normal closed-event path snapshots its route before removing it.
+        let record = state.sessions.lock().get("viewer").cloned();
+        state.sessions.lock().remove("viewer");
+        assert_eq!(
+            session_event_route(record.as_ref(), false),
+            EventRoute::Window("document-dock")
+        );
+        assert_eq!(session_event_route(record.as_ref(), true), EventRoute::Drop);
+        assert_eq!(session_event_route(None, false), EventRoute::Drop);
+        state
+            .sessions
+            .lock()
+            .insert("viewer".into(), record.unwrap());
+        let drained = state.take_sessions();
+        assert_eq!(
+            drained[0].1.event_route(false),
+            EventRoute::Window("document-dock")
+        );
+        assert!(state.sessions.lock().is_empty());
+        assert_eq!(test_session(None).event_route(false), EventRoute::Broadcast);
+    }
+
+    #[test]
+    fn document_viewer_create_error_keeps_ambiguous_binding() {
+        use cognia_local_browser::client::ClientError;
+        let state = LocalBrowserState::default();
+        let viewer = test_session(Some(SessionPurpose::DocumentViewer));
+        let identity = Arc::clone(&viewer.creation_identity);
+        state.sessions.lock().insert("viewer".into(), viewer);
+        for code in ["runtime_unreachable", "runtime_protocol_error"] {
+            state.session_create_failed("viewer", &identity, &ClientError::new(code, "lost reply"));
+            assert!(state
+                .authorize_session("viewer", "document-dock", "browser.session.close")
+                .is_ok());
+            assert!(state
+                .authorize_session("viewer", "other-window", "browser.navigate")
+                .is_err());
+        }
+        state.session_create_failed(
+            "viewer",
+            &identity,
+            &ClientError::new("browser_profile_in_use", "in use"),
+        );
+        assert!(state.sessions.lock().is_empty());
+        // A late failed create must not delete the replacement's binding.
+        state.sessions.lock().insert(
+            "viewer".into(),
+            test_session(Some(SessionPurpose::DocumentViewer)),
+        );
+        state.session_create_failed(
+            "viewer",
+            &identity,
+            &ClientError::new("browser_session_not_found", "closed"),
+        );
+        assert_eq!(state.sessions.lock().len(), 1);
+    }
 
     #[derive(Clone, Default)]
     struct FrameStartTransport {
@@ -1250,11 +1558,14 @@ mod tests {
         state
             .sessions
             .lock()
-            .insert("s1".into(), bridge::SessionKind::Local);
-        state
-            .sessions
-            .lock()
-            .insert("s2".into(), bridge::SessionKind::UserChrome);
+            .insert("s1".into(), test_session(None));
+        state.sessions.lock().insert(
+            "s2".into(),
+            LocalSession {
+                kind: bridge::SessionKind::UserChrome,
+                ..test_session(None)
+            },
+        );
         let (handle, stop) = bridge::stop_pair();
         state
             .frames
@@ -1267,7 +1578,11 @@ mod tests {
         );
         state.stop_frames("s1");
         assert!(stop.is_stopped(), "unsubscribing stops the poller");
-        let mut sessions = state.take_sessions();
+        let mut sessions: Vec<_> = state
+            .take_sessions()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
         sessions.sort();
         assert_eq!(sessions, vec!["s1", "s2"]);
         assert!(state.take_sessions().is_empty());

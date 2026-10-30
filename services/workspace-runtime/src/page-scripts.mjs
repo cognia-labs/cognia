@@ -21,6 +21,33 @@ export const OVERLAY_TRANSPORT_SCRIPT =
   "window.__cogniaSignalPush=function(){};"
 export const LOGIN_REGISTRY_KEY = "cognia.loginRegistry"
 
+/** Explicit human find: use Chromium's native text search without installing
+ * the overlay, globals, listeners, or credential hooks in a document viewer. */
+export function findWithoutOverlay({ query, matchCase, index = 0 }) {
+  const selection = window.getSelection()
+  if (!selection || !document.body) return { matches: 0, index: 0 }
+  selection.removeAllRanges()
+  if (!query) return { matches: 0, index: 0 }
+  selection.collapse(document.body, 0)
+  const ranges = []
+  while (window.find(query, matchCase === true, false, false)) {
+    if (!selection.rangeCount) break
+    const range = selection.getRangeAt(0).cloneRange()
+    // Guard against a native search that wraps despite wrapAround=false.
+    if (ranges.length && range.compareBoundaryPoints(0, ranges[0]) === 0) break
+    ranges.push(range)
+  }
+  selection.removeAllRanges()
+  if (!ranges.length) return { matches: 0, index: 0 }
+  const current = ((index % ranges.length) + ranges.length) % ranges.length
+  selection.addRange(ranges[current])
+  ranges[current].startContainer.parentElement?.scrollIntoView({
+    block: "center",
+    inline: "nearest",
+  })
+  return { matches: ranges.length, index: current }
+}
+
 /**
  * Find visible login forms in the current document. Elements are parked in a
  * page-side registry keyed `<formKey>`, `<formKey>:u`, `<formKey>:p` so the

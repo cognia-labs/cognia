@@ -118,8 +118,15 @@ pub fn is_renderer_op(op: &str) -> bool {
 }
 
 /// Session fields only the host may set.
-const HOST_OWNED_SESSION_FIELDS: &[&str] =
-    &["cdpEndpoint", "extensionPaths", "downloadsDir", "uploadRoots"];
+const HOST_OWNED_SESSION_FIELDS: &[&str] = &[
+    "cdpEndpoint",
+    "extensionPaths",
+    "downloadsDir",
+    "uploadRoots",
+    "disableExtensions",
+    "captureCredentials",
+    "injectOverlay",
+];
 
 /// The two local session kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +179,7 @@ pub fn prepare_session_create(
     context: &SessionCreateContext,
 ) -> Result<Value, ClientError> {
     let kind = session_kind(&payload)?;
+    let purpose = crate::document_viewer::session_purpose(&payload)?;
     let mut object: Map<String, Value> = match payload {
         Value::Object(object) => object,
         Value::Null => Map::new(),
@@ -185,6 +193,8 @@ pub fn prepare_session_create(
     for field in HOST_OWNED_SESSION_FIELDS {
         object.remove(*field);
     }
+    // Validate the renderer's profile before the ordinary local default is applied.
+    crate::document_viewer::prepare_fields(kind, purpose, &mut object)?;
     object.insert("kind".into(), Value::String(kind.as_str().into()));
     object.insert(
         "downloadsDir".into(),
@@ -216,6 +226,9 @@ pub fn prepare_session_create(
                     context
                         .extension_paths
                         .iter()
+                        .filter(|_| {
+                            purpose != Some(crate::document_viewer::SessionPurpose::DocumentViewer)
+                        })
                         .cloned()
                         .map(Value::String)
                         .collect(),
@@ -233,6 +246,78 @@ pub fn prepare_session_create(
         }
     }
     Ok(Value::Object(object))
+}
+
+#[cfg(test)]
+mod document_viewer_tests {
+    use super::*;
+
+    fn context() -> SessionCreateContext {
+        SessionCreateContext {
+            extension_paths: vec!["/extensions/enabled".into()],
+            cdp_endpoint: Some("http://localhost:9222".into()),
+            ..SessionCreateContext::default()
+        }
+    }
+
+    #[test]
+    fn document_viewer_create_forces_isolation() {
+        for profile in [None, Some("cognia-document-viewer")] {
+            let mut payload = json!({
+                "purpose": "document-viewer", "extensionPaths": ["/evil"],
+                "disableExtensions": false, "captureCredentials": true, "injectOverlay": true
+            });
+            if let Some(profile) = profile {
+                payload["profileId"] = json!(profile);
+            }
+            let prepared = prepare_session_create(payload, &context()).unwrap();
+            assert_eq!(prepared["profileId"], "cognia-document-viewer");
+            assert_eq!(prepared["extensionPaths"], json!([]));
+            assert_eq!(prepared["disableExtensions"], true);
+            assert_eq!(prepared["captureCredentials"], false);
+            assert_eq!(prepared["injectOverlay"], false);
+        }
+    }
+
+    #[test]
+    fn document_viewer_create_refuses_profile_and_kind_confusion() {
+        for payload in [
+            json!({"purpose": "document-viewer", "profileId": "default"}),
+            json!({"purpose": "document-viewer", "kind": "user-chrome"}),
+            json!({"purpose": "unknown"}),
+        ] {
+            assert!(prepare_session_create(payload, &context()).is_err());
+        }
+        for kind in ["local", "user-chrome"] {
+            for profile in [
+                "cognia-document-viewer",
+                "COGNIA-DOCUMENT-VIEWER",
+                "cognia-document-viewer.",
+            ] {
+                let error =
+                    prepare_session_create(json!({"profileId": profile, "kind": kind}), &context())
+                        .unwrap_err();
+                assert_eq!(error.code, "browser_profile_reserved");
+            }
+        }
+        assert!(is_renderer_op("browser.profile.delete"));
+    }
+
+    #[test]
+    fn document_viewer_host_owned_fields_cannot_change_ordinary_sessions() {
+        let prepared = prepare_session_create(
+            json!({
+                "disableExtensions": true, "captureCredentials": false, "injectOverlay": false
+            }),
+            &context(),
+        )
+        .unwrap();
+        for field in ["disableExtensions", "captureCredentials", "injectOverlay"] {
+            assert!(prepared.get(field).is_none(), "renderer supplied {field}");
+        }
+        assert_eq!(prepared["profileId"], "default");
+        assert_eq!(prepared["extensionPaths"], json!(["/extensions/enabled"]));
+    }
 }
 
 /// The session id a create call produced (the result's `id` / `sessionId`, or
@@ -408,19 +493,43 @@ pub async fn retire_screencast<T: RuntimeTransport>(
     session_id: &str,
     stream_id: &str,
 ) {
+    retire_screencast_control(transport, session_id, stream_id, false).await;
+}
+
+/// A viewer retires its consumer through the allowed ACK operation; it never
+/// needs the renderer-forbidden general screencast.stop operation.
+pub async fn retire_document_viewer_screencast<T: RuntimeTransport>(
+    transport: &T,
+    session_id: &str,
+    stream_id: &str,
+) {
+    retire_screencast_control(transport, session_id, stream_id, true).await;
+}
+
+async fn retire_screencast_control<T: RuntimeTransport>(
+    transport: &T,
+    session_id: &str,
+    stream_id: &str,
+    document_viewer: bool,
+) {
+    let (op, payload) = if document_viewer {
+        (
+            "browser.screencast.ack",
+            json!({"sessionId": session_id, "retireStreamId": stream_id}),
+        )
+    } else {
+        (
+            "browser.screencast.stop",
+            json!({"sessionId": session_id, "streamId": stream_id}),
+        )
+    };
     let generation = transport.generation();
     let mut delay = Duration::from_millis(100);
     loop {
         if generation.is_none() || transport.generation() != generation {
             return;
         }
-        match transport
-            .control(
-                "browser.screencast.stop",
-                json!({"sessionId":session_id,"streamId":stream_id}),
-            )
-            .await
-        {
+        match transport.control(op, payload.clone()).await {
             Ok(_) => return,
             Err(error) if error.code == "browser_session_not_found" => return,
             Err(error) => tracing::debug!(session_id, %error, "retrying stream retirement"),
@@ -1276,6 +1385,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn document_viewer_retirement_uses_the_allowed_ack_and_retries_same_consumer() {
+        let transport = FakeTransport::running(1);
+        transport.control_results.lock().unwrap().extend([
+            Err(ClientError::new("runtime_unreachable", "lost retirement")),
+            Ok(json!({"stopped":true})),
+        ]);
+        retire_document_viewer_screencast(&transport, "viewer", "old").await;
+        let calls = transport.controls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls
+            .iter()
+            .all(|(op, payload)| op == "browser.screencast.ack"
+                && payload == &json!({"sessionId":"viewer", "retireStreamId":"old"})));
+    }
+
+    #[tokio::test]
     async fn frame_poller_ends_on_stop_restart_and_errors() {
         let transport = FakeTransport::running(1);
         let (handle, stop) = stop_pair();
@@ -1304,9 +1429,11 @@ mod tests {
         assert_eq!(end, FramePollEnd::RuntimeRestarted);
 
         let transport = FakeTransport::running(1);
-        transport.media.lock().unwrap().extend(
-            (0..3).map(|_| Err(ClientError::new("runtime_unreachable", "down"))),
-        );
+        transport
+            .media
+            .lock()
+            .unwrap()
+            .extend((0..3).map(|_| Err(ClientError::new("runtime_unreachable", "down"))));
         let (_handle, stop) = stop_pair();
         let end = run_frame_poller(
             &transport,
@@ -1357,7 +1484,9 @@ mod tests {
                 json!({"sequence": 4, "type": "pages.changed", "sessionId": "s1"}),
                 json!({"sequence": 5, "kind": "runtime.operation"}),
             ]),
-            Ok(vec![json!({"sequence": 6, "type": "session.closed", "sessionId": "s1"})]),
+            Ok(vec![
+                json!({"sequence": 6, "type": "session.closed", "sessionId": "s1"}),
+            ]),
         ]);
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);

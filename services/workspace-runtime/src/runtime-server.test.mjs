@@ -5,7 +5,40 @@ import path from "node:path"
 import test from "node:test"
 
 import { RemoteChromiumService } from "./browser-service.mjs"
-import { createRuntimeServer } from "./runtime-server.mjs"
+import { createDispatcher, createRuntimeServer, MediaLatestStore } from "./runtime-server.mjs"
+
+test("document viewer policy runs before page targeting and ordinary handlers stay unchanged", async () => {
+  const browser = serviceStub()
+  browser.sessions = new Map([
+    ["viewer", { purpose: "document-viewer" }],
+    ["ordinary", { purpose: null }],
+  ])
+  browser.assertSessionOperation = RemoteChromiumService.prototype.assertSessionOperation
+  let targeted = false
+  browser.withPageTarget = () => {
+    targeted = true
+    throw new Error("must not target")
+  }
+  const dispatch = createDispatcher(browser, null, new MediaLatestStore(), { publish() {} })
+  for (const op of [
+    "browser.evaluate",
+    "browser.screenshot",
+    "browser.cookies.list",
+    "browser.screencast.stop",
+    "browser.future",
+  ]) {
+    await assert.rejects(
+      () => dispatch(op, { sessionId: "viewer", pageId: "bad" }),
+      (error) => error.code === "browser_document_viewer_op_refused"
+    )
+  }
+  assert.equal(targeted, false)
+  assert.deepEqual(await dispatch("browser.evaluate", { sessionId: "ordinary", expression: "1" }), {
+    ok: true,
+    value: null,
+  })
+  assert.deepEqual(await dispatch("browser.pages", { sessionId: "viewer" }), [])
+})
 
 function serviceStub() {
   return {

@@ -215,7 +215,7 @@ const PAGE_ADDRESSABLE_OPS = new Set([
   "browser.storage.clear",
 ])
 
-function createDispatcher(browser, supervisor, media, eventJournal) {
+export function createDispatcher(browser, supervisor, media, eventJournal) {
   const operations = {
     "browser.session.create": (payload) => browser.createSession(payload),
     "browser.session.close": ({ sessionId }) => {
@@ -323,8 +323,15 @@ function createDispatcher(browser, supervisor, media, eventJournal) {
       })
       return { stopped }
     },
-    "browser.screencast.ack": ({ sessionId, sequence }) =>
-      browser.ackScreencastFrame(sessionId, sequence),
+    "browser.screencast.ack": ({ sessionId, sequence, retireStreamId }) => {
+      if (retireStreamId !== undefined) {
+        const publish = media.sessions.get(sessionId)?.publish
+        return browser.stopScreencastConsumer(sessionId, retireStreamId, () => {
+          if (publish) media.release(sessionId, publish)
+        })
+      }
+      return browser.ackScreencastFrame(sessionId, sequence)
+    },
     "browser.input": ({ sessionId, input }) => browser.dispatchInput(sessionId, input),
     "browser.submission.configure": ({ sessionId, mode }) =>
       browser.configureSubmissionGuard(sessionId, mode),
@@ -345,10 +352,11 @@ function createDispatcher(browser, supervisor, media, eventJournal) {
       : {}),
   }
   return async (type, payload) => {
+    const safePayload = payload ?? {}
+    browser.assertSessionOperation?.(safePayload.sessionId, type)
     const operation = Object.hasOwn(operations, type) ? operations[type] : undefined
     if (!operation)
       throw Object.assign(new Error("unknown control operation"), { code: "unknown_operation" })
-    const safePayload = payload ?? {}
     // A submission drain runs after every agent action and long-polls in the
     // background: it would flood the journal, and it changes nothing.
     const shouldAudit =

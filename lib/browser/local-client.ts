@@ -16,6 +16,18 @@ import type { UnlistenFn } from "@tauri-apps/api/event"
 import type { BrowserDownloadSummary } from "@/lib/browser/session-types"
 import { transport } from "@/lib/tauri"
 
+export const DOCUMENT_VIEWER_PROFILE = "cognia-document-viewer"
+export const DOCUMENT_VIEWER_OP_REFUSED = "browser_document_viewer_op_refused"
+export const DOCUMENT_VIEWER_WINDOW_MISMATCH = "browser_document_viewer_window_mismatch"
+export const DOCUMENT_VIEWER_PROFILE_MISMATCH = "browser_document_viewer_profile_mismatch"
+export const DOCUMENT_VIEWER_KIND_REFUSED = "browser_document_viewer_kind_refused"
+export const BROWSER_PROFILE_RESERVED = "browser_profile_reserved"
+
+/** Clear document sign-ins explicitly; the runtime refuses while its profile is open. */
+export function clearDocumentViewerProfile(): Promise<{ deleted: boolean }> {
+  return localBrowser.rpc("browser.profile.delete", { profileId: DOCUMENT_VIEWER_PROFILE })
+}
+
 export const LOCAL_BROWSER_EVENTS = {
   /** Runtime journal events, re-emitted by Rust. */
   event: "browser-local://event",
@@ -121,6 +133,7 @@ export interface UserChromeCandidate {
 export interface LocalBrowserSessionCreate {
   id: string
   kind: "local" | "user-chrome"
+  purpose?: "document-viewer"
   headless?: boolean
   profileId?: string
   /** For `kind: "user-chrome"` (Rust defaults to "chrome" and resolves the endpoint itself). */
