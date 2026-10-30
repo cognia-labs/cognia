@@ -37,6 +37,7 @@ import {
   markFailed,
   markDeadlettered,
   markSent,
+  recordOutboundDeliveryStatus,
   listDueNow,
   STALE_SENDING_GRACE_MS,
 } from "@/lib/db/outbound-jobs"
@@ -78,6 +79,47 @@ jest.mock("@/lib/telemetry/events/track-event", () => ({
 /** Pseudo adapter id the runner uses for runner-level audit rows. */
 const RUNNER_AUDIT_ID = "__outbound_runner__"
 
+it("blocks a later conversation job until its pending provider head settles", async () => {
+  const first = await enqueue("fifo-audit", "telegram:fifo-audit:chat", "head")
+  const second = await enqueue("fifo-audit", first.conversationKey, "tail")
+  const adapter = makeAdapter("fifo-audit", async () => ({ ok: true }))
+  adapter.meta.capabilities = ["events.delivery-status"]
+  adapter.send = jest.fn(async (request, options) => {
+    if (request.metadata.idempotencyKey === "head") {
+      await options!.onPendingReceipt!({ id: "audit" })
+      return {
+        ok: false,
+        pendingReceipt: { id: "audit" },
+        error: { code: "delivery_pending", message: "Accepted", retryable: false },
+      }
+    }
+    return { ok: true, platformMessageId: "tail-message" }
+  })
+  const runner = createRunner(new Map([[adapter.id, adapter]]))
+  try {
+    for (let i = 0; i < 100 && !(await getDb().outboundQueue.get(first.id))?.pendingReceipt; i++)
+      await new Promise((r) => setTimeout(r, 5))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+    expect((await getDb().outboundQueue.get(second.id))?.status).toBe("pending")
+    await markFailed(first.id, "muted", "Late deferral", Date.now())
+    expect((await getDb().outboundQueue.get(first.id))?.status).toBe("delivery_unknown")
+    await recordOutboundDeliveryStatus({
+      adapterId: adapter.id,
+      conversationKey: first.conversationKey,
+      timestamp: Date.now(),
+      update: { receiptId: "audit", status: "delivered", platformMessageId: "head-message" },
+    })
+    for (let i = 0; i < 100 && (await getDb().outboundQueue.get(second.id))?.status !== "sent"; i++)
+      await new Promise((r) => setTimeout(r, 5))
+    expect((await getDb().outboundQueue.get(second.id))?.status).toBe("sent")
+    expect(adapter.send).toHaveBeenCalledTimes(2)
+  } finally {
+    runner.stop()
+    await runner.promise
+  }
+})
+
 function makeAdapter(id: string, send: () => Promise<OutboundResult>): PlatformAdapter {
   return {
     id,
@@ -95,6 +137,38 @@ function makeAdapter(id: string, send: () => Promise<OutboundResult>): PlatformA
     send: jest.fn(send),
   } as unknown as PlatformAdapter
 }
+
+it("persists a capable adapter's async receipt before send returns and never resends accepted work", async () => {
+  const row = await enqueue("async", "telegram:async:chat", "async-key")
+  const adapter = makeAdapter("async", async () => ({ ok: true }))
+  adapter.meta.capabilities = ["events.delivery-status"]
+  adapter.send = jest.fn(async (_request, options) => {
+    await options!.onPendingReceipt!({ id: "accepted" })
+    expect(await getDb().outboundQueue.get(row.id)).toMatchObject({
+      status: "delivery_unknown",
+      pendingReceipt: { id: "accepted" },
+    })
+    return {
+      ok: false,
+      pendingReceipt: { id: "accepted" },
+      error: { code: "delivery_pending", message: "Accepted", retryable: false },
+    }
+  })
+  const adapters = new Map([["async", adapter]])
+  await runOnce(adapters)
+  await runOnce(adapters)
+  expect(adapter.send).toHaveBeenCalledTimes(1)
+  await recordOutboundDeliveryStatus({
+    adapterId: "async",
+    conversationKey: row.conversationKey,
+    timestamp: Date.now(),
+    update: { receiptId: "accepted", status: "delivered", platformMessageId: "message" },
+  })
+  expect(await getDb().outboundQueue.get(row.id)).toMatchObject({
+    status: "sent",
+    platformMessageId: "message",
+  })
+})
 
 async function enqueue(adapterId: string, conversationKey: string, idempotencyKey?: string) {
   return enqueueOutbound({
@@ -345,6 +419,24 @@ describe("outbound-runner — identity boundary", () => {
 // ── Task 38 tests ─────────────────────────────────────────────────────────────
 
 describe("outbound-runner — successful delivery", () => {
+  it("refuses unsupported shared send intent at the final queued delivery boundary", async () => {
+    const a = makeAdapter("a1", async () => ({ ok: true }))
+    await enqueueOutbound({
+      adapterId: "a1",
+      conversationKey: "telegram:a1:chat",
+      source: "manual",
+      request: {
+        conversationRef: { platform: "telegram", adapterId: "a1", channelId: "chat" },
+        sendOptions: { mode: "proactive" },
+        segments: [{ type: "text", text: "Hello" }],
+        metadata: { idempotencyKey: "unsupported-proactive" },
+      },
+    })
+    await runOnce(new Map([["a1", a]]))
+    expect(a.send).not.toHaveBeenCalled()
+    const jobs = await getDb().outboundQueue.toArray()
+    expect(jobs[0]).toMatchObject({ status: "deadlettered", lastErrorCode: "unsupported_segment" })
+  })
   it("marks the job sent and writes delivery.success audit", async () => {
     const adapterId = "a_ok"
     const adapter = makeAdapter(adapterId, async () => ({
@@ -1185,6 +1277,22 @@ describe("outbound-runner — event-driven loop", () => {
       status: "delivery_unknown",
       lastErrorCode: "delivery_unknown",
     })
+    expect(adapter.send).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps an adapter-declared reconciliation result out of deadletter replay", async () => {
+    const adapter = makeAdapter("provider-review", async () => ({
+      ok: false,
+      error: {
+        code: "reconciliation_required",
+        message: "Only one part is confirmed",
+        retryable: false,
+      },
+    }))
+    const job = await enqueue(adapter.id, "telegram:provider-review:c1")
+    await runOnce(new Map([[adapter.id, adapter]]))
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({ status: "delivery_unknown" })
+    await runOnce(new Map([[adapter.id, adapter]]))
     expect(adapter.send).toHaveBeenCalledTimes(1)
   })
 

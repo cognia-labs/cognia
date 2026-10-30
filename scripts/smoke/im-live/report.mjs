@@ -22,6 +22,7 @@ export function createRunReport({ platform, runId, now = Date.now }) {
   let status = null
   let finishedAt = null
   let lock = null
+  let acceptanceScope = null
 
   return {
     platform,
@@ -39,18 +40,34 @@ export function createRunReport({ platform, runId, now = Date.now }) {
       lock = { file, stoleFrom: stoleFrom ?? null }
     },
 
+    recordAcceptanceScope(scope) {
+      acceptanceScope = scope
+    },
+
     /**
      * One conversational turn.
      *
      * `replies` come in with text so the marker can be checked here; only the
      * derived facts are kept.
      */
-    recordTurn({ turn, marker, probe, fixtureHit, replies = [], diagnosis }) {
+    recordTurn({
+      turn,
+      marker,
+      probe,
+      fixtureHit,
+      replies = [],
+      diagnosis,
+      modelRequestCount,
+      matchingModelRequestCount,
+    }) {
       turns.push({
         turn,
         marker,
         probeMessageId: probe?.messageId ?? null,
         sentAt: probe?.sentAt ?? null,
+        ...(probe?.action ? { action: probe.action } : {}),
+        modelRequestCount,
+        matchingModelRequestCount,
         fixture: fixtureHit
           ? {
               hit: true,
@@ -94,6 +111,7 @@ export function createRunReport({ platform, runId, now = Date.now }) {
         finishedAt: finishedAt ?? now(),
         durationMs: (finishedAt ?? now()) - startedAt,
         lock,
+        ...(acceptanceScope ? { acceptanceScope } : {}),
         phases,
         turns,
         cleanup,
@@ -140,6 +158,6 @@ export function summarize(results) {
   return {
     counts,
     line: parts.join(", ") || "nothing ran",
-    exitCode: results.some((result) => isFailing(result.status)) ? 1 : 0,
+    exitCode: !counts[STATUS.PASS] || results.some((result) => isFailing(result.status)) ? 1 : 0,
   }
 }

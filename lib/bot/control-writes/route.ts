@@ -155,3 +155,20 @@ export function resolveBotLifecycleWriteAvailability(): OperationAvailability {
 export function canWriteBotLifecycle(): boolean {
   return resolveBotLifecycleWriteAvailability().state === "available"
 }
+
+export function resolveBotAutomationAvailability(): OperationAvailability {
+  const availability = resolveBotLifecycleWriteAvailability()
+  if (
+    availability.state !== "available" ||
+    resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation) === "local"
+  )
+    return availability
+  const supported = deps.isRemoteHostActive()
+    ? supportsHostFeatureOperation(
+        deps.activeHostFeatureManifest(),
+        "bots.automation",
+        "bot_installation_mutate"
+      )
+    : deps.getRuntimeSnapshot().host?.botAutomation === true
+  return supported ? availability : { state: "unsupported", reason: "operation-unavailable" }
+}

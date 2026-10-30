@@ -3,6 +3,24 @@ import { A2UI_COMPONENT_KINDS } from "@/types/connectors/capability"
 
 describe("qq-official capability", () => {
   it("declares native Markdown, media and files and native button projection", () => {
+    expect(QQ_OFFICIAL_CAPS).toEqual(
+      expect.arrayContaining([
+        "links.create",
+        "events.interaction",
+        "events.delivery-status",
+        "assets.manage",
+        "menus.manage",
+        "commands.manage",
+        "chat.moderation",
+        "chat.join.requests",
+        "chat.join.policies",
+        "send.proactive",
+        "send.reengagement",
+        "send.image.verify",
+        "send.mention.all",
+        "send.button.policy",
+      ])
+    )
     expect(QQ_OFFICIAL_CAPS).toContain("send.text")
     expect(QQ_OFFICIAL_CAPS).toContain("send.reply")
     expect(QQ_OFFICIAL_CAPS).toContain("send.markdown")

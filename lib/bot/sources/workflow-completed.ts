@@ -10,6 +10,7 @@
 import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
 import { dispatchBotEvent, type DispatchBotEventResult } from "@/lib/bot/events/dispatch"
 import { externalProvenance } from "@/lib/bot/events/provenance"
+import type { BotEventProvenanceV1 } from "@/types/bot/event"
 
 /** Dotted type a `source: "workflow"` trigger matches. */
 export function workflowEventType(status: "succeeded" | "failed"): string {
@@ -22,6 +23,7 @@ export interface DispatchWorkflowCompletedToBotsInput {
   runId: string
   status: "succeeded" | "failed"
   output?: unknown
+  provenance?: BotEventProvenanceV1
 }
 
 /** Project one finished workflow run onto the Bot plane. */
@@ -50,7 +52,7 @@ export async function dispatchWorkflowCompletedToBots(
     // A workflow run is a machine, not a person. `externalProvenance` rather
     // than a Bot-output block: unless a Bot run produced it, this is not
     // something the loop guard should treat as an echo of its own work.
-    provenance: externalProvenance(),
+    provenance: input.provenance ?? externalProvenance(),
     actor: { kind: "system", id: input.workflowId, displayName: input.workflowName },
     resource: { kind: "workflow_run", id: input.runId, scope: input.workflowId },
   })

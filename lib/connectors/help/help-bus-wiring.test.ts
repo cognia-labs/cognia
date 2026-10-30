@@ -153,6 +153,81 @@ describe("bus help/welcome wiring", () => {
     expect(audit.filter((r) => r.kind === "inbound.welcome_sent")).toHaveLength(1)
   })
 
+  it("deduplicates concurrent first messages without dropping either admitted task", async () => {
+    const adapterId = await seedAdapter()
+    const bus = getBus()
+    bus.registerAdapter(makeAdapter(adapterId))
+    const routeHandler = jest.fn()
+    bus.routeHandler = routeHandler
+    await Promise.all([
+      bus.dispatchInboundFull(privateEvent(adapterId, "first-a", "Task A")),
+      bus.dispatchInboundFull(privateEvent(adapterId, "first-b", "Task B")),
+    ])
+    await bus.flushInboundTurns()
+    const jobs = await getDb().outboundQueue.toArray()
+    expect(
+      jobs.filter((job) => job.request.metadata.idempotencyKey.startsWith("welcome:"))
+    ).toHaveLength(1)
+    expect(routeHandler).toHaveBeenCalledTimes(2)
+    expect(routeHandler.mock.calls.map(([event]) => event.plainText).sort()).toEqual([
+      "Task A",
+      "Task B",
+    ])
+  })
+
+  it("continues the first task when welcome enqueue fails without auditing false success", async () => {
+    const adapterId = await seedAdapter()
+    const bus = getBus()
+    bus.registerAdapter(makeAdapter(adapterId))
+    const routeHandler = jest.fn()
+    bus.routeHandler = routeHandler
+    const rejectWelcome = (
+      _key: unknown,
+      row: { request?: { metadata?: { idempotencyKey?: string } } }
+    ) => {
+      if (row.request?.metadata?.idempotencyKey?.startsWith("welcome:"))
+        throw new Error("Synthetic welcome write failure")
+    }
+    getDb().outboundQueue.hook("creating", rejectWelcome)
+    try {
+      await bus.dispatchInboundFull(privateEvent(adapterId, "first-failure", "Keep this task"))
+      await bus.flushInboundTurns()
+      expect(routeHandler).toHaveBeenCalledTimes(1)
+      expect(routeHandler.mock.calls[0][0].plainText).toBe("Keep this task")
+      expect(await outboundCount()).toBe(0)
+      expect(
+        (await getDb().connectorAudit.toArray()).some((row) => row.kind === "inbound.welcome_sent")
+      ).toBe(false)
+    } finally {
+      getDb().outboundQueue.hook("creating").unsubscribe(rejectWelcome)
+    }
+  })
+
+  it("previews welcome through the common help command without invoking AI or consuming first welcome", async () => {
+    const adapterId = await seedAdapter()
+    const bus = getBus()
+    bus.registerAdapter(makeAdapter(adapterId))
+    const routeHandler = jest.fn()
+    bus.routeHandler = routeHandler
+    await bus.dispatchInboundFull(privateEvent(adapterId, "preview", "/help welcome"))
+    await bus.flushInboundTurns()
+    expect(routeHandler).not.toHaveBeenCalled()
+    let jobs = await getDb().outboundQueue.toArray()
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].request.segments[0]).toMatchObject({
+      type: "a2ui",
+      content: { title: "👋 开始一个新任务" },
+    })
+    await bus.dispatchInboundFull(privateEvent(adapterId, "first-real-task", "Task after preview"))
+    await bus.flushInboundTurns()
+    jobs = await getDb().outboundQueue.toArray()
+    expect(jobs).toHaveLength(2)
+    expect(routeHandler).toHaveBeenCalledTimes(1)
+    expect(
+      jobs.filter((job) => job.request.metadata.idempotencyKey.startsWith("welcome:"))
+    ).toHaveLength(1)
+  })
+
   it("does not welcome when welcomeCardEnabled is false", async () => {
     const adapterId = await seedAdapter({ welcomeCardEnabled: false })
     const bus = getBus()

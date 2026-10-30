@@ -49,6 +49,8 @@ export interface LarkOAuthPending {
   codeVerifier: string
   /** The exact redirect_uri sent to authorize — must be replayed at exchange. */
   redirectUri: string
+  /** Host authorization captured at begin; legacy records must restart Connect. */
+  authorizationEpoch?: string
   /** Wall-clock ms the record was written (for TTL expiry). */
   ts: number
 }

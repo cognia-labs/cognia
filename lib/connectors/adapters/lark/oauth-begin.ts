@@ -18,7 +18,7 @@
  * browser is reachable from where it runs.
  */
 
-import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { computeCodeChallenge, generateCodeVerifier } from "./pkce"
 import { buildLarkOAuthState } from "./oauth-handler"
 import { buildLarkOAuthUrl, LARK_SENDAS_SCOPES, mergeLarkScopes } from "./auth"
@@ -51,6 +51,7 @@ export interface BeginLarkOAuthResult {
 
 export interface BeginLarkOAuthDependencies {
   keyringGet: typeof connectorsKeyringGet
+  userAuth: typeof connectorsLarkUserAuth
   setPending: typeof setLarkOAuthPending
   makeVerifier: typeof generateCodeVerifier
   makeNonce: () => string
@@ -77,6 +78,7 @@ export async function beginLarkOAuth(
 ): Promise<BeginLarkOAuthResult> {
   const deps: BeginLarkOAuthDependencies = {
     keyringGet: connectorsKeyringGet,
+    userAuth: connectorsLarkUserAuth,
     setPending: setLarkOAuthPending,
     makeVerifier: generateCodeVerifier,
     makeNonce: () => crypto.randomUUID().replace(/-/g, "").slice(0, 16),
@@ -88,6 +90,7 @@ export async function beginLarkOAuth(
   const redirectUri = input.redirectUri.trim()
   if (!isUsableRedirect(redirectUri)) throw new Error("redirect_uri_invalid")
 
+  const captured = await deps.userAuth({ action: "snapshot", adapterId })
   const appId = ((await deps.keyringGet(adapterId, "appId")) ?? "").trim()
   if (!appId) throw new Error("app_id_missing")
 
@@ -97,7 +100,12 @@ export async function beginLarkOAuth(
 
   // Persist BEFORE handing out the URL. If the store write fails the caller
   // must not get an authorize link whose code can never be exchanged.
-  await deps.setPending(adapterId, { state, codeVerifier, redirectUri })
+  await deps.setPending(adapterId, {
+    state,
+    codeVerifier,
+    redirectUri,
+    authorizationEpoch: captured.authorizationEpoch,
+  })
 
   return {
     authorizeUrl: buildLarkOAuthUrl({

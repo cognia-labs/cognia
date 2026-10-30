@@ -1,3 +1,8 @@
+jest.mock("@/lib/db/project-scope", () => {
+  const actual = jest.requireActual("@/lib/db/project-scope")
+  return { ...actual, resolveScopeProjectId: jest.fn(actual.resolveScopeProjectId) }
+})
+
 // Mock plugin hook dispatcher (Tier 2 of ADR 0016) so we can verify the
 // orchestrator emits onWorkflowStart / onWorkflowStepComplete /
 // onWorkflowComplete / onWorkflowError without booting the plugin store.
@@ -62,6 +67,8 @@ async function flushFanout(): Promise<void> {
 }
 
 import { runWorkflow } from "./orchestrator"
+import * as projectScope from "@/lib/db/project-scope"
+import { cancelWorkflowRun } from "./cancel-run"
 import { getDb } from "@/lib/db/schema"
 import { listRecentGovernanceAuditGaps } from "@/lib/db/governance-ledger"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -1343,7 +1350,7 @@ describe("runWorkflow — concurrent scheduling", () => {
     )
   })
 
-  it("fails an in-flight run when the caller aborts its external signal", async () => {
+  it("cancels an in-flight run when the caller aborts its external signal", async () => {
     const controller = new AbortController()
     let markStarted!: () => void
     const started = new Promise<void>((resolve) => {
@@ -1374,8 +1381,7 @@ describe("runWorkflow — concurrent scheduling", () => {
 
     await expect(run).resolves.toEqual(
       expect.objectContaining({
-        status: "failed",
-        error: expect.objectContaining({ nodeId: "a" }),
+        status: "cancelled",
       })
     )
   })
@@ -1973,6 +1979,32 @@ describe("runWorkflow — risk gate", () => {
 })
 
 describe("runWorkflow — workflow-completed chain fanout (ADR-0081)", () => {
+  it("emits the persisted Bot provenance on completion", async () => {
+    const botProvenance = {
+      selfProduced: true,
+      depth: 1,
+      producedByInstallationId: "boti",
+      producedByRunId: "brun",
+    }
+    const workflow = buildWorkflow([setNode("n_a", "v")])
+    const result = await runWorkflow({
+      workflow,
+      trigger,
+      securityContext: {
+        botProvenance,
+        piiEgressRequired: true,
+        sourceTriggerKind: "trigger.manual",
+      },
+    })
+    await flushFanout()
+    expect((await getDb().workflowRuns.get(result.runId))?.securityContext?.botProvenance).toEqual(
+      botProvenance
+    )
+    expect(mockEmitCompletionFanout).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: result.runId, botProvenance })
+    )
+  })
+
   it("announces a succeeded run with its final output and the run's trigger", async () => {
     const wf = buildWorkflow([setNode("n_a", "v")])
     const r = await runWorkflow({ workflow: wf, trigger })
@@ -2149,4 +2181,71 @@ describe("runWorkflow — $nodes reaches loop-body steps", () => {
     const bodyDone = events.find((e) => e.stepId === "n_body" && e.type === "step_completed")
     expect(JSON.stringify(bodyDone?.payload ?? {})).toContain("saw=top-value")
   })
+})
+
+it("does not resurrect a workflow cancelled during asynchronous admission", async () => {
+  const workflow = buildWorkflow([], [])
+  const runId = "cancel-during-admission"
+  await getDb().workflowRuns.put({
+    id: runId,
+    workflowId: workflow.id,
+    status: "pending",
+    workflowSnapshot: workflow,
+    triggerKind: trigger.kind,
+    triggerPayload: trigger.payload,
+    triggerOriginAt: trigger.originAt,
+    startedAt: Date.now(),
+  } as never)
+  let entered!: () => void
+  let release!: () => void
+  const enteredPromise = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const scope = jest.mocked(projectScope.resolveScopeProjectId).mockImplementationOnce(async () => {
+    entered()
+    await barrier
+    return "default"
+  })
+  const running = runWorkflow({ workflow, trigger, runId })
+  try {
+    await enteredPromise
+    expect(await cancelWorkflowRun(runId, "Conversation automation cancelled")).toMatchObject({
+      cancelled: true,
+      mode: "soft-cancelled",
+    })
+    release()
+    expect(await running).toMatchObject({ runId, status: "cancelled" })
+    expect(await getDb().workflowRuns.get(runId)).toMatchObject({ status: "cancelled" })
+    expect(await listRunEvents(runId)).toEqual([])
+  } finally {
+    release()
+    scope.mockClear()
+    await running
+  }
+})
+
+it("honors a foreign executor cancellation fence after its lease expires", async () => {
+  const workflow = buildWorkflow([], [])
+  const runId = "foreign-cancel-recovery"
+  await getDb().workflowRuns.put({
+    id: runId,
+    workflowId: workflow.id,
+    status: "running",
+    workflowSnapshot: workflow,
+    triggerKind: trigger.kind,
+    triggerPayload: trigger.payload,
+    triggerOriginAt: trigger.originAt,
+    startedAt: 1,
+    cancelRequestedAt: 100,
+    lease: { ownerId: "dead-host", claimedAt: 0, expiresAt: 1 },
+  } as never)
+  expect(await runWorkflow({ workflow, trigger, runId })).toMatchObject({ status: "cancelled" })
+  expect(await getDb().workflowRuns.get(runId)).toMatchObject({
+    status: "cancelled",
+    cancelRequestedAt: 100,
+  })
+  expect(await listRunEvents(runId)).toEqual([])
 })

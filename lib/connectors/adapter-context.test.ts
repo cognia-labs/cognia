@@ -14,6 +14,15 @@ import type { NormalizedInboundEvent } from "@/types/connectors/event"
 const mockInvoke = invoke as jest.Mock
 
 describe("buildAdapterContext", () => {
+  it("lets any native receiver request strict acceptance without platform-specific dispatch", async () => {
+    const bus = makeBus(),
+      controller = new AbortController()
+    const ctx = buildAdapterContext({ adapterId: "a", signal: controller.signal, bus })
+    const event = makeEvent()
+    ;(bus.dispatchInboundFull as jest.Mock).mockRejectedValueOnce(new Error("capture failed"))
+    await expect(ctx.emit(event, { requireAcceptance: true })).rejects.toThrow("capture failed")
+    expect(bus.dispatchInboundFull).toHaveBeenCalledWith(event, { requireAcceptance: true })
+  })
   beforeEach(() => {
     mockInvoke.mockReset()
   })

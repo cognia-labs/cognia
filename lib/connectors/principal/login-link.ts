@@ -48,6 +48,7 @@ export async function logtoSubjectForUser(
 }
 
 export interface AttachSignInInput {
+  assertCurrent?: () => void
   /** The signed-in person. */
   userId: string
   /** Their Logto subject, from the user binding. */
@@ -73,37 +74,57 @@ export async function attachSignInToFeishuPrincipals(
   input: AttachSignInInput,
   deps: AttachSignInDeps = {}
 ): Promise<AttachSignInReport> {
-  const listByUnionId = deps.listByUnionId ?? listFeishuPrincipalsByUnionId
-  const rebind = deps.rebind ?? rebindFeishuPrincipal
   const report: AttachSignInReport = { attached: [], foreign: [] }
   const logtoSubject = input.logtoSubject.trim()
   if (!logtoSubject) return report
 
-  const seen = new Set<string>()
-  for (const identity of input.identities) {
-    if (identity.provider !== "lark" || identity.userId !== input.userId) continue
-    // A union id is filed under its tenant; an untenanted lark subject cannot
-    // be told apart from an open id and names no principal safely.
-    if (!identity.tenant) continue
-    const principals: FeishuPrincipalRow[] = await listByUnionId(identity.tenant, identity.subject)
-    for (const principal of principals) {
-      if (seen.has(principal.id)) continue
-      seen.add(principal.id)
-      if (principal.cogniaUserId !== input.userId) {
-        report.foreign.push(principal.id)
-        continue
-      }
-      // An existing subject stays: the same person holding a different one
-      // means a second deployment, and the first subject is not wrong.
-      if (principal.logtoSubject) continue
-      await rebind(principal.id, { logtoSubject }, input.now)
-      report.attached.push(principal.id)
+  const db = deps.listByUnionId || deps.rebind ? undefined : getDb()
+  const assertCurrent = () => {
+    input.assertCurrent?.()
+    if (db && (!db.isOpen() || getDb() !== db)) {
+      throw new Error("The local profile changed while attaching its principals.")
     }
   }
-  return report
+  const listByUnionId =
+    deps.listByUnionId ?? ((tenant, union) => listFeishuPrincipalsByUnionId(tenant, union, db))
+  const rebind = deps.rebind ?? ((id, patch, now) => rebindFeishuPrincipal(id, patch, now, db))
+  const attach = async () => {
+    assertCurrent()
+    const seen = new Set<string>()
+    for (const identity of input.identities) {
+      if (identity.provider !== "lark" || identity.userId !== input.userId) continue
+      // A union id is filed under its tenant; an untenanted lark subject cannot
+      // be told apart from an open id and names no principal safely.
+      if (!identity.tenant) continue
+      const principals: FeishuPrincipalRow[] = await listByUnionId(
+        identity.tenant,
+        identity.subject
+      )
+      assertCurrent()
+      for (const principal of principals) {
+        if (seen.has(principal.id)) continue
+        seen.add(principal.id)
+        if (principal.cogniaUserId !== input.userId) {
+          report.foreign.push(principal.id)
+          continue
+        }
+        // An existing subject stays: the same person holding a different one
+        // means a second deployment, and the first subject is not wrong.
+        if (principal.logtoSubject) continue
+        await rebind(principal.id, { logtoSubject }, input.now)
+        assertCurrent()
+        report.attached.push(principal.id)
+      }
+    }
+    return report
+  }
+  const settled = db ? await db.transaction("rw", db.feishuPrincipals, attach) : await attach()
+  assertCurrent()
+  return settled
 }
 
 export interface UnlinkSelfBoundInput {
+  assertCurrent?: () => void
   localAccountId: string
   /** The person the profile was bound to before the sign-out or takeover. */
   userId: string
@@ -121,20 +142,34 @@ export interface UnlinkSelfBoundInput {
  */
 export async function unlinkSelfBoundPrincipals(input: UnlinkSelfBoundInput): Promise<string[]> {
   const now = input.now ?? Date.now()
-  const rows = await getDb()
-    .feishuPrincipals.where("cogniaUserId")
-    .equals(input.userId)
-    .filter(
-      (row) =>
-        row.cogniaAccountId === input.localAccountId &&
-        row.selfBoundAt !== undefined &&
-        row.status === "active"
-    )
-    .toArray()
-  for (const row of rows) {
-    await setFeishuPrincipalStatus(row.id, "unlinked", now)
+  const db = getDb()
+  const assertCurrent = () => {
+    input.assertCurrent?.()
+    if (!db.isOpen() || getDb() !== db) {
+      throw new Error("The local profile changed while unlinking its principals.")
+    }
   }
-  return rows.map((row) => row.id)
+  const unlinked = await db.transaction("rw", db.feishuPrincipals, async () => {
+    assertCurrent()
+    const rows = await db.feishuPrincipals
+      .where("cogniaUserId")
+      .equals(input.userId)
+      .filter(
+        (row) =>
+          row.cogniaAccountId === input.localAccountId &&
+          row.selfBoundAt !== undefined &&
+          row.status === "active"
+      )
+      .toArray()
+    assertCurrent()
+    for (const row of rows) {
+      await setFeishuPrincipalStatus(row.id, "unlinked", now, db)
+      assertCurrent()
+    }
+    return rows.map((row) => row.id)
+  })
+  assertCurrent()
+  return unlinked
 }
 
 /** The person a profile is signed in as, in the shape the bind-request UI needs. */

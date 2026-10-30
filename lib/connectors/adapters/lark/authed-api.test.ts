@@ -3,6 +3,11 @@ jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
   connectorsKeyringGet: jest.fn(),
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    configured: true,
+    authorizationEpoch: "epoch-a",
+    accessToken: "user-a",
+  })),
 }))
 jest.mock("./auth", () => ({
   getUserAccessToken: jest.fn(),
@@ -13,10 +18,17 @@ jest.mock("./auth", () => ({
 
 import { isTauri } from "@/lib/tauri"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { connectorsKeyringGet, type TauriHttpRequest } from "@/lib/connectors/tauri/commands"
+import {
+  connectorsKeyringGet,
+  connectorsLarkUserAuth,
+  type TauriHttpRequest,
+} from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
 import { LarkApiError } from "./auth-retry"
 import { LARK_API_BASE, LarkAccessError, withLarkAuthedApi } from "./authed-api"
+import { readLarkSpreadsheet } from "@/lib/docs-providers/providers/lark/sheets"
+import { readLarkBitable } from "@/lib/docs-providers/providers/lark/bitable"
+import { inspect } from "node:util"
 
 const isTauriMock = isTauri as jest.Mock
 const getAdapterInstanceMock = getAdapterInstance as jest.Mock
@@ -50,6 +62,11 @@ function makeHttp(
 
 beforeEach(() => {
   jest.clearAllMocks()
+  ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => ({
+    configured: true,
+    authorizationEpoch: "epoch-a",
+    accessToken: await getUserAccessTokenMock(ADAPTER),
+  }))
   isTauriMock.mockReturnValue(true)
   getAdapterInstanceMock.mockResolvedValue({
     id: ADAPTER,
@@ -65,6 +82,215 @@ beforeEach(() => {
 })
 
 describe("withLarkAuthedApi — pre-flight", () => {
+  it("rejects cancellation before its public promise settles across final continuations", async () => {
+    let rejectedPending = 0
+    let completedBeforeAbort = 0
+    for (let depth = 0; depth <= 24; depth++) {
+      const controller = new AbortController()
+      let pendingAtAbort = false
+      const abortLater = (remaining: number) =>
+        queueMicrotask(() => {
+          if (remaining > 0) return abortLater(remaining - 1)
+          pendingAtAbort = inspect(reading).includes("<pending>")
+          controller.abort(new Error("cancel final result"))
+        })
+      const http = jest.fn(async () => {
+        abortLater(depth)
+        return ok({ content: "fixture" })
+      })
+      const reading = withLarkAuthedApi(
+        { adapterId: ADAPTER, signal: controller.signal, httpImpl: http },
+        (api) => api.get("/doc")
+      )
+      const outcome = await reading.then(
+        () => "published",
+        () => "cancelled"
+      )
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      if (pendingAtAbort) {
+        rejectedPending++
+        expect(outcome).toBe("cancelled")
+      } else {
+        completedBeforeAbort++
+        expect(outcome).toBe("published")
+      }
+    }
+    expect(rejectedPending).toBeGreaterThan(0)
+    expect(completedBeforeAbort).toBeGreaterThan(0)
+  })
+
+  it.each([undefined, "epoch-a"])(
+    "fences revocation during pagination even with expected epoch %s",
+    async (expectedAuthorizationEpoch) => {
+      getUserAccessTokenMock.mockResolvedValue("user-a")
+      let state = {
+        configured: true,
+        authorizationEpoch: "epoch-a",
+        accessToken: "user-a" as string | null,
+      }
+      ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => ({ ...state }))
+      const http = jest.fn(async () => {
+        state = { ...state, authorizationEpoch: "revoked", accessToken: null }
+        return ok({ page: 1 })
+      })
+      await expect(
+        withLarkAuthedApi(
+          { adapterId: ADAPTER, expectedAuthorizationEpoch, httpImpl: http },
+          async (api) => {
+            await api.get("/page-one")
+            return api.get("/page-two")
+          }
+        )
+      ).rejects.toMatchObject({ code: "notAuthorized" })
+      expect(http).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("does not dispatch after cancellation while the authorization promise unwinds", async () => {
+    const controller = new AbortController()
+    let snapshots = 0
+    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
+      if (++snapshots === 3) queueMicrotask(() => queueMicrotask(() => controller.abort()))
+      return { configured: true, authorizationEpoch: "epoch-a" }
+    })
+    const { impl } = makeHttp([ok({})])
+    await expect(
+      withLarkAuthedApi(
+        {
+          adapterId: ADAPTER,
+          expectedAuthorizationEpoch: "epoch-a",
+          signal: controller.signal,
+          httpImpl: impl,
+        },
+        (api) => api.get("/document")
+      )
+    ).rejects.toMatchObject({ name: "AbortError" })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(impl).not.toHaveBeenCalled()
+  })
+
+  it("does not start refresh after cancellation while the post-response authorization promise unwinds", async () => {
+    const controller = new AbortController()
+    let responseReceived = false
+    getUserAccessTokenMock.mockResolvedValue("user-a")
+    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
+      if (responseReceived) queueMicrotask(() => queueMicrotask(() => controller.abort()))
+      return { configured: true, authorizationEpoch: "epoch-a", accessToken: "user-a" }
+    })
+    const impl = jest.fn(async () => {
+      responseReceived = true
+      return { status: 401, headers: {}, body: JSON.stringify({ code: 99991677 }) }
+    })
+    await expect(
+      withLarkAuthedApi(
+        {
+          adapterId: ADAPTER,
+          expectedAuthorizationEpoch: "epoch-a",
+          signal: controller.signal,
+          httpImpl: impl,
+        },
+        (api) => api.get("/document")
+      )
+    ).rejects.toMatchObject({ name: "AbortError" })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    expect(refreshUserTokenMock).not.toHaveBeenCalled()
+    expect(impl).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(["sheet", "bitable"])(
+    "stops the real multi-section %s reader after caller cancellation",
+    async (kind) => {
+      getUserAccessTokenMock.mockResolvedValue("user-a")
+      const controller = new AbortController()
+      let finish!: (value: ReturnType<typeof ok>) => void
+      let markStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve
+      })
+      const impl = jest.fn(async (req: TauriHttpRequest) => {
+        if (req.url.includes("/values/") || req.method === "POST") {
+          markStarted()
+          return new Promise<ReturnType<typeof ok>>((resolve) => {
+            finish = resolve
+          })
+        }
+        if (req.url.includes("sheets/query"))
+          return ok({ sheets: [{ sheet_id: "s1" }, { sheet_id: "s2" }] })
+        if (req.url.includes("/tables?"))
+          return ok({ items: [{ table_id: "t1" }, { table_id: "t2" }] })
+        return ok({ spreadsheet: { title: "Grid" }, app: { name: "Base" } })
+      })
+      const reading = withLarkAuthedApi<unknown>(
+        { adapterId: ADAPTER, signal: controller.signal, httpImpl: impl },
+        async (api) =>
+          kind === "sheet" ? readLarkSpreadsheet(api, "grid") : readLarkBitable(api, "base")
+      )
+      await started
+      controller.abort(new Error("stop reader"))
+      await expect(reading).rejects.toThrow("stop reader")
+      finish({ status: 401, headers: {}, body: JSON.stringify({ code: 99991663 }) })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(impl).toHaveBeenCalledTimes(3)
+      expect(refreshUserTokenMock).not.toHaveBeenCalled()
+      expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
+    }
+  )
+
+  it("discards an in-flight response after reauthorization without refreshing or falling back to the bot", async () => {
+    getUserAccessTokenMock.mockResolvedValue("old-user")
+    const impl = jest.fn(async () => {
+      ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+        configured: true,
+        authorizationEpoch: "epoch-b",
+      })
+      return { status: 401, headers: {}, body: JSON.stringify({ code: 99991677 }) }
+    })
+    await expect(
+      withLarkAuthedApi(
+        { adapterId: ADAPTER, expectedAuthorizationEpoch: "epoch-a", httpImpl: impl },
+        (api) => api.get("/doc")
+      )
+    ).rejects.toMatchObject({ code: "notAuthorized" })
+    expect(refreshUserTokenMock).not.toHaveBeenCalled()
+    expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
+  })
+  it("rejects a pre-aborted caller before reading credentials or dispatching HTTP", async () => {
+    const controller = new AbortController()
+    controller.abort(new Error("stop"))
+    const { impl } = makeHttp([ok({})])
+    await expect(
+      withLarkAuthedApi({ adapterId: ADAPTER, httpImpl: impl, signal: controller.signal }, (api) =>
+        api.get("/x")
+      )
+    ).rejects.toThrow("stop")
+    expect(getAdapterInstanceMock).not.toHaveBeenCalled()
+    expect(impl).not.toHaveBeenCalled()
+  })
+
+  it("releases the caller and never starts another tab after an in-flight cancellation", async () => {
+    const controller = new AbortController()
+    let finish!: (value: ReturnType<typeof ok>) => void
+    const impl = jest.fn(
+      () =>
+        new Promise<ReturnType<typeof ok>>((resolve) => {
+          finish = resolve
+        })
+    )
+    const reading = withLarkAuthedApi(
+      { adapterId: ADAPTER, httpImpl: impl, signal: controller.signal },
+      async (api) => {
+        await api.get("/tab-one")
+        return api.get("/tab-two")
+      }
+    )
+    while (!finish) await Promise.resolve()
+    controller.abort(new Error("stop"))
+    await expect(reading).rejects.toThrow("stop")
+    finish(ok({}))
+    await Promise.resolve()
+    expect(impl).toHaveBeenCalledTimes(1)
+    expect(refreshUserTokenMock).not.toHaveBeenCalled()
+  })
   it("refuses outside Tauri when no transport is injected", async () => {
     isTauriMock.mockReturnValue(false)
     await expect(withLarkAuthedApi({ adapterId: ADAPTER }, async () => "x")).rejects.toMatchObject({

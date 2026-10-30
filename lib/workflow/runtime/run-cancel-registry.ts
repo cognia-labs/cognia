@@ -14,6 +14,13 @@
  * no React/Zustand coupling, safe to import from any runtime module.
  */
 
+export class WorkflowRunCancelledError extends Error {
+  constructor(reason: string) {
+    super(reason)
+    this.name = "WorkflowRunCancelledError"
+  }
+}
+
 const runControllers = new Map<string, AbortController>()
 
 /** Register a live run's abort controller. Called by the orchestrator. */
@@ -34,7 +41,7 @@ export function unregisterRun(runId: string): void {
 export function requestCancelRun(runId: string, reason?: string): boolean {
   const controller = runControllers.get(runId)
   if (!controller) return false
-  controller.abort(new Error(reason ?? "Workflow run cancelled by request"))
+  controller.abort(new WorkflowRunCancelledError(reason ?? "Workflow run cancelled by request"))
   runControllers.delete(runId)
   return true
 }

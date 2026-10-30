@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import { waitFor } from "@testing-library/dom"
 
 import {
   claimBotDelivery,
@@ -70,6 +71,27 @@ beforeEach(async () => {
 }, 15_000)
 
 describe("drainBotDeliveries", () => {
+  it("rechecks pause after asynchronous workspace resolution without losing accepted work", async () => {
+    const handler = jest.fn()
+    await seedInstallation(handler)
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await drainBotDeliveries({
+      owner: "host",
+      now,
+      resolveCwd: async () => {
+        await getDb().botInstallations.update("boti_1", { paused: true })
+        return undefined
+      },
+    })
+    expect(handler).not.toHaveBeenCalled()
+    expect(await getDb().botEventDeliveries.get("bdl_1")).toMatchObject({
+      status: "pending",
+      attempts: 0,
+    })
+    await getDb().botInstallations.update("boti_1", { paused: false })
+    expect((await drainBotDeliveries({ owner: "host", now }))[0].outcome.status).toBe("completed")
+  })
+
   it("cancels an owned claim if host shutdown happens during workspace resolution", async () => {
     const handler = jest.fn()
     await seedInstallation(handler)
@@ -253,14 +275,19 @@ describe("drainBotDeliveries", () => {
     expect((await getDb().botEventDeliveries.get("bdl_1"))?.status).toBe("dismissed")
   })
 
-  it("dismisses rather than retries when the installation is disabled", async () => {
+  it("retires accepted work immediately when the installation is disabled", async () => {
     await seedInstallation()
     await enqueueBotDelivery({ envelope: envelope(), now: NOW })
     await updateBotInstallation("boti_1", { status: "disabled" })
 
     // Waiting will not make a disabled installation runnable.
     const attempts = await drainBotDeliveries({ owner: "host-a", now })
-    expect(attempts[0].outcome).toEqual({ status: "skipped", reason: "not_runnable" })
+    expect(attempts).toEqual([])
+    expect(await getDb().botEventDeliveries.get("bdl_1")).toMatchObject({
+      status: "dismissed",
+      cancelledAt: expect.any(Number),
+      attempts: 0,
+    })
   })
 
   it("serialises deliveries that share a concurrency key", async () => {
@@ -565,7 +592,8 @@ describe("startBotDeliveryRunner", () => {
   })
 
   it("prunes settled deliveries hourly and survives a failed prune", async () => {
-    jest.useFakeTimers()
+    // IndexedDB completes on real macrotasks, so observe pruning rather than
+    // assuming that advancing a polling timer also finishes its transaction.
     let clock = NOW
     const prune = jest
       .spyOn(getDb().botEventDeliveries, "bulkDelete")
@@ -579,15 +607,12 @@ describe("startBotDeliveryRunner", () => {
     const handle = startBotDeliveryRunner({ owner: "host", intervalMs: 5, now: () => clock })
     try {
       clock += 60 * 60_000
-      await jest.advanceTimersByTimeAsync(5)
-      expect(prune).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(prune).toHaveBeenCalledTimes(1))
       clock += 60 * 60_000
-      await jest.advanceTimersByTimeAsync(5)
-      expect(prune).toHaveBeenCalledTimes(2)
+      await waitFor(() => expect(prune).toHaveBeenCalledTimes(2))
     } finally {
       handle.stop()
       prune.mockRestore()
-      jest.useRealTimers()
     }
   })
 
@@ -600,7 +625,7 @@ describe("startBotDeliveryRunner", () => {
   it("keeps looping after a pass throws", async () => {
     // A dead runner is a queue that silently stops draining, so a thrown pass
     // must not kill the loop.
-    jest.useFakeTimers()
+    jest.useFakeTimers({ doNotFake: ["setImmediate", "nextTick", "queueMicrotask"] })
     const failing = jest
       .spyOn(getDb().botEventDeliveries, "toArray")
       .mockRejectedValueOnce(new Error("transient"))

@@ -318,6 +318,8 @@
         "deadlettered": "已死信",
         "downgraded": "降级为文本",
         "error": "送达失败",
+        "pending": "等待平台结果",
+        "stream_authorized": "已授权流式更新",
         "success": "已送达"
       },
       "entry": {
@@ -338,8 +340,10 @@
         "deferred_muted": "已延后（已静音）",
         "deferred_quiet_hours": "已延后（免打扰时段）",
         "deleted": "消息已删除",
+        "delivery_status": "投递状态回执",
         "edited": "消息已编辑",
         "help_served": "已发送帮助卡片",
+        "interaction": "平台互动",
         "lifecycle": "机器人生命周期事件",
         "member_added": "成员加入",
         "member_removed": "成员退出",
@@ -1274,7 +1278,9 @@
         "optional": "验证所选功能：发送附件或点击菜单。启用话题免 @ 续聊前，先运行「准入」中的投递探测，在 10 分钟内发送不带 @ 的消息。首条消息仅存入历史，不会回复；请再发送后续消息验证回复。机器人互聊需先完成对应权限和准入配置。",
         "troubleshoot": "未收到消息：检查发布、订阅、可用范围、群成员及主机健康。收到但未回复：检查 Agent 绑定、准入及模型错误。卡片点击失败：检查回调订阅和操作人授权。"
       }
-    }
+    },
+    "authorizeDocumentReadHelp": "连接时增量申请文档、知识库、电子表格和多维表格的只读权限，并保留已有授权。",
+    "authorizeDocumentReadLabel": "读取云文档"
   },
   "matrix": {
     "accessTokenHelp": "粘贴机器人访问令牌，或在下方用密码登录以获取。",
@@ -1317,7 +1323,48 @@
     "testSucceededStatus": "已登录为 {userId}",
     "testSucceededToast": "已登录为 {userId}",
     "titleEdit": "编辑 Matrix 连接器",
-    "titleNew": "添加 Matrix 连接器"
+    "titleNew": "添加 Matrix 连接器",
+    "verification": {
+      "title": "验证 Matrix 设备",
+      "description": "请在两台设备上核对用户与设备身份，确认一致后再比对数字或扫描二维码。",
+      "peerUser": "对方 Matrix 用户",
+      "peerDevice": "对方设备 ID",
+      "peerPlaceholder": "@user:example.org",
+      "request": "请求验证",
+      "discover": "查找收到的请求",
+      "acceptRequest": "接受来自 {device} 的请求",
+      "startSas": "比对数字",
+      "showQr": "显示二维码",
+      "acceptSas": "接受数字比对",
+      "compareSas": "请与另一台设备逐一核对这三组数字。",
+      "sasCode": "验证数字",
+      "match": "数字一致",
+      "mismatch": "数字不一致",
+      "qrImage": "Matrix 设备验证二维码",
+      "uploadQr": "扫描二维码图片",
+      "camera": "使用摄像头扫描",
+      "cameraPreview": "二维码摄像头预览",
+      "stopCamera": "关闭摄像头",
+      "confirmScan": "确认对方设备已扫描此码",
+      "trusted": "设备已验证。",
+      "proofComplete": "验证已完成，请刷新设备密钥以检查交叉签名信任。",
+      "cancel": "取消验证",
+      "newFlow": "验证其他设备",
+      "unavailable": "请在桌面应用中启动此 Matrix 连接器后验证设备。",
+      "failed": "验证暂时无法继续，请检查连接器后重试。",
+      "invalidQr": "请选择有效的 Matrix 验证二维码图片（PNG、JPEG 或 WebP，不超过 8 MB 和 2048 像素）。",
+      "cameraFailed": "无法访问摄像头，可以改为上传二维码图片。",
+      "state": {
+        "requested": "等待对方设备响应",
+        "ready": "请选择验证方式",
+        "sas": "正在比对验证数字",
+        "qr": "等待扫描及确认",
+        "done": "验证完成",
+        "cancelled": "验证已取消"
+      },
+      "retry": "重试验证操作",
+      "refreshTrust": "刷新设备信任"
+    }
   },
   "onebot": {
     "adapterCreatedWithEndpoint": "适配器已创建。请把端点 URL 粘贴到 NapCat 配置中。",
@@ -1512,6 +1559,8 @@
     "quietHoursIncomplete": "免打扰时段需要开始、结束时间和时区。",
     "receiveGuildMessagesHelp": "仅适用于私域频道机器人：获得 GUILD_MESSAGES 权限后开启。网关模式会订阅该事件；Webhook 模式还需在 QQ 控制台订阅 MESSAGE_CREATE。群聊全量消息需另行在 QQ 平台开启，自动回复仍遵循会话规则。",
     "receiveGuildMessagesLabel": "接收全部频道消息",
+    "receiveMessageAuditHelp": "获得 QQ 的 MESSAGE_AUDIT 权限后开启。网关订阅频道审核结果；Webhook 还需在控制台订阅。已受理的发送会持续等待明确结果。",
+    "receiveMessageAuditLabel": "接收消息审核结果",
     "save": "保存",
     "sectionAdvanced": "高级",
     "sectionAdvancedDesc": "免打扰时段与静音。",
@@ -1526,6 +1575,7 @@
     "testGatewayUrl": "网关：{gatewayUrl}",
     "testSucceededLabel": "凭据有效",
     "testSucceededToast": "已获取网关地址：{gatewayUrl}。尚未验证事件投递。",
+    "testWebhookCredentialsSucceeded": "凭据验证成功。Webhook 消息投递仍需在 QQ 开放平台验证。",
     "titleEdit": "编辑 QQ 官方机器人",
     "titleNew": "添加 QQ 官方机器人",
     "transportGateway": "网关 WebSocket",
@@ -1542,8 +1592,7 @@
     "webhookUrlOriginMissingHelp": "当前部署尚未配置公网来源，因此无法生成回调地址。请让应用与伴生服务共用同一个前置入口，然后重新打开此对话框。",
     "webhookUrlTunnelLoading": "正在检查 Tunnel 状态…",
     "webhookUrlTunnelOffHelp": "尚未具备公网 HTTPS 入口。请先在 设置 → 平台连接 → 概览 中启动 Cloudflared Tunnel，然后回到此处。",
-    "webhookUrlUnsupportedHelp": "当前浏览器背后没有 Cognia 宿主，无法接收任何入站请求。请打开桌面应用，或先将此浏览器与宿主配对。",
-    "testWebhookCredentialsSucceeded": "凭据验证成功。Webhook 消息投递仍需在 QQ 开放平台验证。"
+    "webhookUrlUnsupportedHelp": "当前浏览器背后没有 Cognia 宿主，无法接收任何入站请求。请打开桌面应用，或先将此浏览器与宿主配对。"
   },
   "quickCommands": {
     "actionTypeLabel": "动作类型",

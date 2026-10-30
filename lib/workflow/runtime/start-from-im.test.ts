@@ -1,7 +1,8 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
-import { createWorkflow } from "@/lib/db/workflows"
+import { createWorkflow, updateWorkflow } from "@/lib/db/workflows"
+import { createPublishedWorkflowDependencyBinding } from "./execution-authority"
 import { startWorkflowFromIM } from "./start-from-im"
 import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
 
@@ -25,6 +26,38 @@ beforeEach(async () => {
 })
 
 describe("startWorkflowFromIM", () => {
+  it("keeps a pinned approval version and idempotency even with the deployment rollback flag off", async () => {
+    const wf = await createWorkflow({ name: "Approved publication" })
+    const first = await publishWorkflow(wf.id, 1)
+    const lockedDependency = await createPublishedWorkflowDependencyBinding(wf.id)
+    await updateWorkflow(wf.id, { name: "Unreviewed publication" })
+    await publishWorkflow(wf.id, 2)
+    const previous = process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+    process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = "0"
+    try {
+      const input = {
+        workflowId: wf.id,
+        lockedDependency,
+        idempotencyKey: "approved-once",
+        triggeredFrom: {
+          source: "im" as const,
+          adapterId: "ad",
+          conversationKey: "telegram:ad:room",
+        },
+      }
+      const a = await startWorkflowFromIM(input)
+      if (!a.ok) throw new Error("Expected admitted run")
+      await waitForTerminalRun(a.runId)
+      const b = await startWorkflowFromIM(input)
+      expect(b).toEqual(a)
+      expect(await getDb().workflowRuns.count()).toBe(1)
+      expect((await getDb().workflowRuns.get(a.runId))?.versionId).toBe(first.versionId)
+    } finally {
+      if (previous === undefined) delete process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+      else process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = previous
+    }
+  })
+
   it("rejects when the workflow id does not exist", async () => {
     const result = await startWorkflowFromIM({
       workflowId: "wf_missing",

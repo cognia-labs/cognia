@@ -15,6 +15,7 @@ export const WF_CANCEL_PREFIX = "wfcan:"
 export const WF_FANOUT_APPROVE_PREFIX = "wffanoutapp:"
 export const WF_FANOUT_CANCEL_PREFIX = "wffanoutcan:"
 export const SKILL_INVOKE_PREFIX = "skill_invoke:"
+export const SKILL_CANCEL_PREFIX = "skill_cancel:"
 
 const CALLBACK_ACTIONS = {
   [TOOL_APPROVE_PREFIX]: "approve",
@@ -31,6 +32,7 @@ const CALLBACK_ACTIONS = {
   [WF_FANOUT_APPROVE_PREFIX]: "approve",
   [WF_FANOUT_CANCEL_PREFIX]: "cancel",
   [SKILL_INVOKE_PREFIX]: "approve",
+  [SKILL_CANCEL_PREFIX]: "cancel",
 } as const
 
 export const CALLBACK_PREFIXES: readonly string[] = Object.keys(CALLBACK_ACTIONS)

@@ -47,9 +47,11 @@ export function assertBotEventPayloadSize(payload: unknown): void {
   }
 }
 
-/** A delivery id is per recipient, so a fan-out produces distinct rows. */
-export function botDeliveryId(eventId: string, installationId: string): string {
-  return `bdl_${installationId}_${eventId}`
+/** Each matching trigger is an independent recipient. Two-argument calls name legacy IDs. */
+export function botDeliveryId(eventId: string, installationId: string, triggerId?: string): string {
+  return triggerId === undefined
+    ? `bdl_${installationId}_${eventId}`
+    : `bdl_v2_${encodeURIComponent(JSON.stringify([installationId, triggerId, eventId]))}`
 }
 
 export interface BuildBotEventInput {
@@ -75,7 +77,7 @@ export function buildBotEventEnvelope(input: BuildBotEventInput): BotEventEnvelo
   const eventId = botEventId(input.source, input.sourceRecordId)
   return {
     eventId,
-    deliveryId: botDeliveryId(eventId, input.installationId),
+    deliveryId: botDeliveryId(eventId, input.installationId, input.triggerId),
     source: input.source,
     type: input.type,
     installationId: input.installationId,

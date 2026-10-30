@@ -83,6 +83,23 @@ beforeEach(() => {
 })
 
 describe("QQOfficialConfigDialog", () => {
+  it("keeps audit-event subscription opt-in and persists it with the other settings", async () => {
+    const user = userEvent.setup()
+    render(<QQOfficialConfigDialog open onOpenChange={jest.fn()} row={null} />)
+    const toggle = screen.getByRole("switch", { name: /receive message audit results/i })
+    expect(toggle).not.toBeChecked()
+    await user.click(toggle)
+    await user.type(screen.getByLabelText(/app id/i), "102000")
+    await user.type(screen.getByLabelText(/client secret/i), "secret")
+    await user.click(screen.getByRole("button", { name: /add connector/i }))
+    await waitFor(() =>
+      expect(mockCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          settings: { receiveGuildMessages: false, receiveMessageAudit: true },
+        })
+      )
+    )
+  })
   it("persists private-guild opt-in only when the operator enables it", async () => {
     const user = userEvent.setup()
     render(<QQOfficialConfigDialog open onOpenChange={jest.fn()} row={null} />)
@@ -95,7 +112,7 @@ describe("QQOfficialConfigDialog", () => {
     await waitFor(() =>
       expect(mockCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          settings: { receiveGuildMessages: true },
+          settings: { receiveGuildMessages: true, receiveMessageAudit: false },
         })
       )
     )

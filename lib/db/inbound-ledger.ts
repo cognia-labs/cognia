@@ -35,6 +35,8 @@ const DELIVERED_NAMESPACE: InboundLedgerNamespace = "outbound"
 const LANDED_NAMESPACE: InboundLedgerNamespace = "landed-chat"
 /** QQ aliases enforce their own bounded cap in the adapter's reference store. */
 const QQ_REFERENCE_NAMESPACE: InboundLedgerNamespace = "qq-reference"
+/** Stream checkpoints have their own lifetime; evicting a live intent can duplicate a send. */
+const QQ_STREAM_NAMESPACE: InboundLedgerNamespace = "qq-stream"
 
 /**
  * Compose the conversation-scoped dedup key stored in the row's
@@ -170,12 +172,21 @@ export async function pruneOldest(
     .where("namespace")
     .equals(QQ_REFERENCE_NAMESPACE)
     .count()
+  const streams = await db.inboundLedger.where("namespace").equals(QQ_STREAM_NAMESPACE).count()
+  const managed = await db.inboundLedger
+    .where("namespace")
+    .anyOf("connector-asset", "connector-delivery", "connector-status")
+    .count()
   await dropOldest(
-    total - delivered - landed - references - cap,
+    total - delivered - landed - references - streams - managed - cap,
     (row) =>
       row.namespace !== DELIVERED_NAMESPACE &&
       row.namespace !== LANDED_NAMESPACE &&
-      row.namespace !== QQ_REFERENCE_NAMESPACE
+      row.namespace !== QQ_REFERENCE_NAMESPACE &&
+      row.namespace !== QQ_STREAM_NAMESPACE &&
+      row.namespace !== "connector-asset" &&
+      row.namespace !== "connector-delivery" &&
+      row.namespace !== "connector-status"
   )
   await dropOldest(delivered - deliveredCap, (row) => row.namespace === DELIVERED_NAMESPACE)
 }

@@ -4,15 +4,25 @@ import {
   fetchLarkDocAsRawSource,
   mapLarkError,
   normalizeCliPayload,
+  resolveLarkWikiNode,
 } from "./lark-doc-fetcher"
 import { LarkApiError } from "@/lib/connectors/adapters/lark/auth-retry"
 import type { TauriHttpRequest } from "@/lib/connectors/tauri/commands"
+import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
+import { inspect } from "node:util"
+
+jest.mock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({ execLarkCli: jest.fn() }))
 
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
   connectorsKeyringGet: jest.fn(),
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    configured: true,
+    authorizationEpoch: "twin-fixture",
+    accessToken: "connected-user",
+  })),
 }))
 jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
   getUserAccessToken: jest.fn(),
@@ -23,7 +33,7 @@ jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
 
 import { isTauri } from "@/lib/tauri"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import {
   getTenantAccessToken,
   getUserAccessToken,
@@ -40,6 +50,107 @@ const refreshUserTokenMock = refreshUserToken as jest.Mock
 const DOCX_URL = "https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890"
 const WIKI_URL = "https://acme.feishu.cn/wiki/wikcnAbCdEfGh123456789"
 const ADAPTER = "cai_test1"
+
+it("never starts CLI execution when cancelled during its lazy import", async () => {
+  const { execLarkCli } = jest.requireMock("@/lib/skills/built-in/lark/exec-lark-cli")
+  execLarkCli.mockResolvedValue({ status: "ok", adapterId: ADAPTER, data: "fixture body" })
+  const controller = new AbortController()
+  const reading = fetchLarkDocAsRawSource(DOCX_URL, {
+    adapterId: ADAPTER,
+    channel: "cli",
+    signal: controller.signal,
+  })
+  expect(execLarkCli).not.toHaveBeenCalled()
+  controller.abort(new Error("cancel lazy CLI"))
+  await expect(reading).rejects.toThrow("cancel lazy CLI")
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  expect(execLarkCli).not.toHaveBeenCalled()
+})
+
+it.each(["api", "cli"] as const)(
+  "never publishes an aborted pending %s document",
+  async (channel) => {
+    let cancelled = 0
+    let settled = 0
+    for (let depth = 0; depth <= 32; depth++) {
+      const controller = new AbortController()
+      let pendingAtAbort = false
+      let started = false
+      const schedule = (remaining: number) =>
+        queueMicrotask(() => {
+          if (remaining > 0) return schedule(remaining - 1)
+          pendingAtAbort = inspect(reading).includes("<pending>")
+          controller.abort(new Error("cancel document"))
+        })
+      const begin = () => {
+        if (!started) {
+          started = true
+          schedule(depth)
+        }
+      }
+      const reading = fetchLarkDocAsRawSource(DOCX_URL, {
+        adapterId: ADAPTER,
+        channel,
+        signal: controller.signal,
+        execImpl: async () => {
+          begin()
+          return { status: "ok", adapterId: ADAPTER, data: "fixture body" }
+        },
+        httpImpl: async (request) => {
+          begin()
+          return ok(
+            request.url.includes("raw_content")
+              ? { content: "fixture body" }
+              : { document: { title: "Fixture" } }
+          )
+        },
+      })
+      const outcome = await reading.then(
+        () => "published",
+        () => "cancelled"
+      )
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      if (pendingAtAbort) {
+        cancelled++
+        expect(outcome).toBe("cancelled")
+      } else {
+        settled++
+        expect(outcome).toBe("published")
+      }
+    }
+    expect(cancelled).toBeGreaterThan(0)
+    expect(settled).toBeGreaterThan(0)
+  }
+)
+
+it("does not start a CLI read for an already cancelled ingestion", async () => {
+  const controller = new AbortController()
+  controller.abort(new Error("cancelled"))
+  const exec = jest.fn()
+  await expect(
+    fetchLarkDocAsRawSource(DOCX_URL, {
+      adapterId: ADAPTER,
+      channel: "cli",
+      signal: controller.signal,
+      execImpl: exec,
+    })
+  ).rejects.toThrow("cancelled")
+  expect(exec).not.toHaveBeenCalled()
+})
+
+it("resolves grid Wiki metadata without pretending it is a Twin document", async () => {
+  const get = jest.fn(async () => ({
+    node: { obj_token: "base-token", obj_type: "bitable", title: "Wiki base" },
+  }))
+  await expect(
+    resolveLarkWikiNode(
+      { get } as unknown as import("@/lib/connectors/adapters/lark/authed-api").LarkAuthedApi,
+      "wiki-token"
+    )
+  ).resolves.toEqual({ token: "base-token", objType: "bitable", title: "Wiki base" })
+  expect(get).toHaveBeenCalledTimes(1)
+  expect(get).toHaveBeenCalledWith("/open-apis/wiki/v2/spaces/get_node?token=wiki-token")
+})
 
 function ok(data: unknown) {
   return {
@@ -64,6 +175,11 @@ function makeHttp(routes: Array<[match: string, resp: unknown]>) {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async () => ({
+    configured: true,
+    authorizationEpoch: "twin-fixture",
+    accessToken: await getUserAccessTokenMock(ADAPTER),
+  }))
   isTauriMock.mockReturnValue(true)
   getAdapterInstanceMock.mockResolvedValue({
     id: ADAPTER,
@@ -83,6 +199,18 @@ async function expectCode(p: Promise<unknown>, code: string) {
 }
 
 describe("fetchLarkDocAsRawSource — api channel", () => {
+  it("bounds every document request when a Twin caller omits the byte budget", async () => {
+    const http = makeHttp([
+      ["/raw_content", ok({ content: "A real body" })],
+      ["/documents/", ok({ document: { title: "Bounded Twin doc" } })],
+    ])
+    await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
+    expect(http).toHaveBeenCalled()
+    for (const [request] of http.mock.calls) {
+      expect(request.maxResponseBytes).toBe(MAX_REMOTE_DOC_RESPONSE_BYTES)
+    }
+  })
+
   it("fetches opaque document ids with their preserved search-result kind", async () => {
     const token = "Z1FjAbCdEfGh1234567890"
     const http = makeHttp([
@@ -302,6 +430,11 @@ describe("fetchLarkDocAsRawSource — api channel edge branches", () => {
 
 describe("fetchLarkDocAsRawSource — cli channel", () => {
   it("resolves the default exec via dynamic import when none is injected", async () => {
+    jest.requireMock("@/lib/skills/built-in/lark/exec-lark-cli").execLarkCli.mockResolvedValue({
+      status: "ok",
+      adapterId: ADAPTER,
+      data: "cli markdown body",
+    })
     jest.doMock("@/lib/skills/built-in/lark/exec-lark-cli", () => ({
       execLarkCli: jest.fn(async () => ({
         status: "ok",

@@ -3,16 +3,13 @@
  * entry every remote surface shares (companion `workflow_cancel_run`,
  * remote-control `workflow.cancel`).
  *
- * Resolution ladder:
- *  1. **Local abort** — the run executes in THIS process
- *     (`run-cancel-registry`): abort it and let the orchestrator finalise.
- *  2. **Lease signal** — another live executor holds the run's lease:
- *     stamp `cancelRequestedAt`; the owner's lease heartbeat observes it
- *     and aborts on its side within one beat.
- *  3. **Soft cancel** — nobody is driving the run (stale mirror, crashed
- *     executor with an expired lease): mark the row cancelled and fan the
- *     terminal state out to companions. The orchestrator's pre-put
- *     terminal guard keeps a later resume replay from resurrecting it.
+ * Cancellation commits its fence before acknowledging or signalling:
+ *  1. A live foreign lease receives `cancelRequestedAt`; its heartbeat or
+ *     recovery driver honors the marker without starting more work.
+ *  2. A locally owned or unleased row becomes durably cancelled, then a live
+ *     local controller is aborted so the orchestrator releases its resources.
+ *  3. With no live controller, notify companions of the soft-cancelled row.
+ * Atomic admission and terminal outcome writes preserve either fence.
  */
 
 import { getDb } from "@/lib/db/schema"
@@ -33,31 +30,33 @@ export interface CancelRunResult {
 }
 
 export async function cancelWorkflowRun(runId: string, reason: string): Promise<CancelRunResult> {
-  // 1. Local abort.
-  if (requestCancelRun(runId, reason)) {
-    void trackEvent("workflow.run.cancelled", { runId })
-    return { cancelled: true, live: true, mode: "aborted" }
-  }
-
   const db = getDb()
-  const row = await db.workflowRuns.get(runId)
-  if (!row || TERMINAL_RUN_STATUSES.has(row.status)) {
-    return { cancelled: false, live: false, mode: "noop" }
-  }
-
-  // 2. Lease signal — a live executor elsewhere owns this run.
   const now = Date.now()
-  if (row.lease && row.lease.expiresAt > now && row.lease.ownerId !== getExecutorId()) {
-    await db.workflowRuns.update(runId, { cancelRequestedAt: now })
-    void trackEvent("workflow.run.cancelled", { runId })
-    return { cancelled: true, live: false, mode: "lease-signalled" }
-  }
-
-  // 3. Soft cancel.
-  await db.workflowRuns.update(runId, { status: "cancelled", completedAt: now })
+  // Commit the cancellation fence before acknowledging it. Outcome writes and
+  // startup admission share this table's transaction, so neither can revive it.
+  const selected = await db.transaction("rw", db.workflowRuns, async () => {
+    const row = await db.workflowRuns.get(runId)
+    if (!row || TERMINAL_RUN_STATUSES.has(row.status)) return undefined
+    const foreignLease = Boolean(
+      row.lease && row.lease.expiresAt > now && row.lease.ownerId !== getExecutorId()
+    )
+    await db.workflowRuns.update(
+      runId,
+      foreignLease
+        ? { cancelRequestedAt: now }
+        : { cancelRequestedAt: now, status: "cancelled", completedAt: now }
+    )
+    return { row, foreignLease }
+  })
+  if (!selected) return { cancelled: false, live: false, mode: "noop" }
+  const live = requestCancelRun(runId, reason)
   void trackEvent("workflow.run.cancelled", { runId })
-  // Fan the terminal state out (sync invalidate + status frame + push
-  // policy) — a direct Dexie write bypasses the persistRunState funnel.
-  void notifyCompanionsOfRunState({ runId, workflowId: row.workflowId, status: "cancelled" })
+  if (live) return { cancelled: true, live: true, mode: "aborted" }
+  if (selected.foreignLease) return { cancelled: true, live: false, mode: "lease-signalled" }
+  void notifyCompanionsOfRunState({
+    runId,
+    workflowId: selected.row.workflowId,
+    status: "cancelled",
+  })
   return { cancelled: true, live: false, mode: "soft-cancelled" }
 }

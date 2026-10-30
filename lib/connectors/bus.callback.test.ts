@@ -98,6 +98,11 @@ async function seedUnguardedAdapter(): Promise<void> {
   } as never)
 }
 
+async function pinApprovalWorkflow(workflowId: string) {
+  await publishWorkflow(workflowId, Date.now())
+  return createPublishedWorkflowDependencyBinding(workflowId)
+}
+
 beforeEach(async () => {
   await getDb().delete()
   __resetDbForTesting()
@@ -361,13 +366,27 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
       }),
     })
 
+    await getDb().sessions.put({
+      id: "skill-session",
+      title: "Skill",
+      kind: "direct",
+      createdAt: 1,
+      updatedAt: 1,
+      platformConversationKey: "telegram:adp_tg:c1",
+      platformBinding: {
+        platform: "telegram",
+        adapterId: "adp_tg",
+        conversationKey: "telegram:adp_tg:c1",
+        conversationRef: { platform: "telegram", adapterId: "adp_tg" },
+      },
+    } as never)
     await recordCallbackBinding({
       adapterId: "adp_tg",
       actionId: "trig_skill_confirm",
       kind: "skill_invoke",
       surfaceId: "sfc_t",
       conversationKey: "telegram:adp_tg:c1",
-      payload: { skillId: "test.skill", args: { x: "hi" } },
+      payload: { skillId: "test.skill", args: { x: "hi" }, sessionId: "skill-session" },
     })
 
     const bus = getBus()
@@ -466,6 +485,7 @@ describe("ConnectorBus.dispatchConnectorCallback — wf_approve / wf_cancel kind
       conversationKey,
       payload: {
         workflowId: wf.id,
+        lockedDependency: await pinApprovalWorkflow(wf.id),
         workflowName: "Daily Standup",
         runParams: {},
         triggeredFrom: {
@@ -507,6 +527,7 @@ describe("ConnectorBus.dispatchConnectorCallback — wf_approve / wf_cancel kind
       conversationKey,
       payload: {
         workflowId: wf.id,
+        lockedDependency: await pinApprovalWorkflow(wf.id),
         workflowName: "Daily Standup",
         runParams: {},
         triggeredFrom: {
@@ -792,6 +813,7 @@ describe("callback authorization guard (plan 2026-07-24 Phase 2)", () => {
       conversationKey,
       payload: {
         workflowId: wf.id,
+        lockedDependency: await pinApprovalWorkflow(wf.id),
         workflowName: wf.name,
         runParams: {},
         triggeredFrom: { source: "im", adapterId, conversationKey, sessionId: "s1" },
@@ -915,6 +937,7 @@ describe("callback authorization guard (plan 2026-07-24 Phase 2)", () => {
       conversationKey: CONVERSATION,
       payload: {
         workflowId: wf.id,
+        lockedDependency: await pinApprovalWorkflow(wf.id),
         workflowName: wf.name,
         runParams: {},
         triggeredFrom: {
@@ -977,6 +1000,7 @@ describe("callback authorization guard (plan 2026-07-24 Phase 2)", () => {
       conversationKey: CONVERSATION,
       payload: {
         workflowId: wf.id,
+        lockedDependency: await pinApprovalWorkflow(wf.id),
         workflowName: wf.name,
         runParams: {},
         triggeredFrom: {
@@ -1023,6 +1047,7 @@ describe("callback authorization guard (plan 2026-07-24 Phase 2)", () => {
       conversationKey: CONVERSATION,
       payload: {
         workflowId: wf.id,
+        lockedDependency: await pinApprovalWorkflow(wf.id),
         workflowName: wf.name,
         runParams: {},
         triggeredFrom: {
@@ -1478,3 +1503,6 @@ it("routes QQ quick-command callbacks with captured event_id and refreshes manua
   )
   inbound.mockRestore()
 })
+
+import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
+import { createPublishedWorkflowDependencyBinding } from "@/lib/workflow/runtime/execution-authority"

@@ -40,6 +40,7 @@ const COMMAND_HEADERS: Record<ControlCommandName, { title: string; icon: LarkIco
   new: { title: "新会话", icon: LARK_ICON.add },
   switch: { title: "切换会话", icon: LARK_ICON.switch },
   resume: { title: "恢复会话", icon: LARK_ICON.history },
+  automation: { title: "自动化订阅", icon: LARK_ICON.settings },
   mode: { title: "行为模式", icon: LARK_ICON.settings },
   model: { title: "模型", icon: LARK_ICON.bot },
   reasoning: { title: "思考强度", icon: LARK_ICON.settings },

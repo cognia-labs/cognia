@@ -27,8 +27,10 @@ const mockedIsTauri = isTauri as jest.MockedFunction<typeof isTauri>
 
 // ── Mock listEnabledAdapterInstances ─────────────────────────────────────────
 const mockListEnabled = jest.fn()
+const mockGetAdapterInstance = jest.fn()
 jest.mock("@/lib/db/adapter-instances", () => ({
   listEnabledAdapterInstances: (...args: unknown[]) => mockListEnabled(...args),
+  getAdapterInstance: (...args: unknown[]) => mockGetAdapterInstance(...args),
 }))
 
 // ── Mock installRuntime ───────────────────────────────────────────────────────
@@ -56,6 +58,11 @@ jest.mock("@/lib/connectors/ai-loop/safe-send-prompt", () => ({
 
 // ── Mock startOutboundRunner ─────────────────────────────────────────────────
 const mockStartOutboundRunner = jest.fn().mockResolvedValue(undefined)
+const mockStopApprovalRecovery = jest.fn()
+const mockStartApprovalRecovery = jest.fn((..._args: unknown[]) => mockStopApprovalRecovery)
+jest.mock("@/lib/a2ui/workflow-approval-handler", () => ({
+  startWorkflowApprovalRecovery: (...args: unknown[]) => mockStartApprovalRecovery(...args),
+}))
 jest.mock("@/lib/connectors/outbound-runner", () => ({
   startOutboundRunner: (...args: unknown[]) => mockStartOutboundRunner(...args),
 }))
@@ -71,10 +78,12 @@ const mockRecoverActiveConversationHistory = jest
   .fn()
   .mockResolvedValue({ conversations: 0, executed: 0, historyOnly: 0 })
 const mockBus = {
+  getAdapter: jest.fn(() => ({})),
   registerAdapter: mockRegisterAdapter,
   unregisterAdapter: mockUnregisterAdapterBus,
   listAdapters: mockListAdapters,
   resumeDurableInboundJobs: mockResumeDurableInboundJobs,
+  resumeAutomationFanOuts: jest.fn().mockResolvedValue(undefined),
   recoverActiveConversationHistory: mockRecoverActiveConversationHistory,
 }
 jest.mock("@/lib/connectors/bus", () => ({
@@ -309,6 +318,30 @@ afterEach(async () => {
 })
 
 describe("installConnectorRuntime", () => {
+  it("owns approval recovery only for live local adapters and stops it on disposal", async () => {
+    mockedIsTauri.mockReturnValue(true)
+    const row = makeTelegramRow("cai_approval_recovery")
+    mockListEnabled.mockResolvedValue([row])
+    mockGetAdapterInstance.mockResolvedValue(row)
+    mockBuildAdapterFromRow.mockResolvedValue(makeFakeAdapter(row.id))
+    const dispose = install()
+    await waitFor(() => expect(mockStartApprovalRecovery).toHaveBeenCalledTimes(1))
+    const options = mockStartApprovalRecovery.mock.calls[0][0] as unknown as {
+      ownsAdapter: (id: string) => Promise<boolean>
+      recoverObservers: () => Promise<void>
+      signal: AbortSignal
+    }
+    await options.recoverObservers()
+    expect(mockBus.resumeAutomationFanOuts).toHaveBeenCalledWith(expect.any(Function))
+    expect(await options.ownsAdapter(row.id)).toBe(true)
+    expect(await options.ownsAdapter("foreign")).toBe(false)
+    mockGetAdapterInstance.mockResolvedValue({ ...row, enabled: false })
+    expect(await options.ownsAdapter(row.id)).toBe(false)
+    await dispose()
+    expect(options.signal.aborted).toBe(true)
+    expect(mockStopApprovalRecovery).toHaveBeenCalledTimes(1)
+    expect(await options.ownsAdapter(row.id)).toBe(false)
+  })
   it("starts and disposes the execution bridge with the runtime", async () => {
     mockedIsTauri.mockReturnValue(true)
     mockListEnabled.mockResolvedValue([])

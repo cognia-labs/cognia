@@ -23,9 +23,13 @@ import { toast } from "sonner"
 import {
   BotControlTargetMissingError,
   BotDefinitionMissingError,
+  BotCredentialBindingError,
   BotLifecycleUnavailableError,
   BotNotInstallableError,
   bindBotCredential,
+  controlBotAutomation,
+  setBotInputSlot,
+  resolveBotAutomationAvailability,
   installBotFromCatalog,
   resolveBotLifecycleWriteAvailability,
   setBotExecutionRoute,
@@ -61,6 +65,7 @@ function subscribeRouteInputs(onChange: () => void): () => void {
 export interface BotLifecycleReadiness {
   availability: OperationAvailability
   can: boolean
+  canAutomation?: boolean
 }
 
 const SERVER_READINESS: BotLifecycleReadiness = {
@@ -73,7 +78,11 @@ export function useBotLifecycleReadiness(): BotLifecycleReadiness {
     const availability = resolveBotLifecycleWriteAvailability()
     // Serialised so `useSyncExternalStore` compares by value. A fresh object
     // per call would re-render on every store tick forever.
-    return JSON.stringify({ availability, can: availability.state === "available" })
+    return JSON.stringify({
+      availability,
+      can: availability.state === "available",
+      canAutomation: resolveBotAutomationAvailability().state === "available",
+    })
   }, [])
   const getServerSnapshot = useCallback(() => JSON.stringify(SERVER_READINESS), [])
   const serialised = useSyncExternalStore(subscribeRouteInputs, getSnapshot, getServerSnapshot)
@@ -102,6 +111,12 @@ export interface BotLifecycleActions {
     slotId: string,
     candidate: BotCredentialCandidate | null
   ) => Promise<void>
+  controlAutomation: (
+    installationId: string,
+    action: "pause" | "resume" | "cancel",
+    deliveryId?: string
+  ) => Promise<void>
+  setInputSlot: (installationId: string, triggerId: string, slotId: string | null) => Promise<void>
   setEnabled: (installationId: string, enabled: boolean) => Promise<void>
   uninstall: (installationId: string) => Promise<boolean>
 }
@@ -132,6 +147,10 @@ export function useBotLifecycleActions(): BotLifecycleActions {
    */
   const report = useCallback(
     (error: unknown) => {
+      if (error instanceof BotCredentialBindingError) {
+        toast.error(t(`automation.error.${error.reason}`))
+        return
+      }
       if (error instanceof BotLifecycleUnavailableError) {
         toast.error(t("lifecycle.unavailable"), {
           description: t(`write.reason.${error.availability.reason}`),
@@ -216,6 +235,33 @@ export function useBotLifecycleActions(): BotLifecycleActions {
     [report, t, withPending]
   )
 
+  const controlAutomation = useCallback(
+    async (installationId: string, action: "pause" | "resume" | "cancel", deliveryId?: string) => {
+      await withPending(`automation:${deliveryId ?? installationId}`, async () => {
+        try {
+          await controlBotAutomation(installationId, action, deliveryId)
+          toast.success(t(`automation.${action}Done`))
+        } catch (error) {
+          report(error)
+        }
+      })
+    },
+    [report, t, withPending]
+  )
+  const setInputSlot = useCallback(
+    async (installationId: string, triggerId: string, slotId: string | null) => {
+      await withPending(`input:${triggerId}`, async () => {
+        try {
+          await setBotInputSlot(installationId, triggerId, slotId)
+          toast.success(t("automation.inputSaved"))
+        } catch (error) {
+          report(error)
+        }
+      })
+    },
+    [report, t, withPending]
+  )
+
   const setEnabled = useCallback(
     async (installationId: string, enabled: boolean) => {
       await withPending(`enabled:${installationId}`, async () => {
@@ -287,6 +333,8 @@ export function useBotLifecycleActions(): BotLifecycleActions {
       saveOutboundRecipients,
       bindCredential,
       setEnabled,
+      controlAutomation,
+      setInputSlot,
       uninstall,
     }),
     [
@@ -297,6 +345,8 @@ export function useBotLifecycleActions(): BotLifecycleActions {
       saveOutboundRecipients,
       bindCredential,
       setEnabled,
+      controlAutomation,
+      setInputSlot,
       uninstall,
     ]
   )

@@ -1,3 +1,5 @@
+import { getDb } from "@/lib/db/schema"
+import { getRegisteredIntegration } from "@/lib/integrations/registry"
 /**
  * Installing, configuring, binding and uninstalling: the writes that create
  * and shape an installation rather than drive one.
@@ -30,6 +32,7 @@ import {
   getBotInstallation,
   persistBotInstallation,
   setBotInstallationExecutionRoute,
+  setBotInstallationPaused,
   setBotInstallationOutboundRecipients,
   uninstallBot,
   updateBotInstallation,
@@ -124,6 +127,19 @@ export const botOutboundRecipientsSchema = z
   )
   .max(500)
 
+export class BotCredentialBindingError extends Error {
+  readonly code = "bot_credential_binding_invalid"
+  constructor(
+    readonly reason:
+      "missingSlot" | "invalidBinding" | "wrongAccount" | "wrongStrategy" | "invalidInput",
+    message: string
+  ) {
+    // The desktop/companion bridge preserves only Error.message. Keep the
+    // bounded reason in it so the caller can reconstruct a localized error.
+    super(`[bot_credential_binding_invalid:${reason}] ${message}`)
+  }
+}
+
 export class BotLifecycleUnavailableError extends Error {
   readonly code = "bot_lifecycle_unavailable"
   constructor(readonly availability: OperationAvailability) {
@@ -195,12 +211,16 @@ async function requiredSlotsFor(
 
 export interface InstallBotFromCatalogInput {
   entry: BotCatalogEntry
+  /** Host operation receipt, persisted with the initial row before hooks settle. */
+  installOperationFingerprint?: string
   scope: BotInstallationScope
   config?: Record<string, unknown>
   credentialBindings?: Record<string, BotCredentialBinding>
   /** Install switched off. Absent means on (still `needs_setup` when a slot is unbound). */
   enabled?: boolean
   /** Which triggers are armed, when not each definition default. */
+  paused?: boolean
+  triggerInputSlots?: Record<string, string>
   triggerOverrides?: Record<string, boolean>
   policyGrant?: BotPolicyGrantInput
 }
@@ -219,6 +239,23 @@ export async function installBotFromCatalogLocally(
 ): Promise<BotInstallationRow> {
   assertAvailable()
   if (input.entry.unresolvedHandler) throw new BotNotInstallableError(input.entry.definitionId)
+  for (const [slotId, binding] of Object.entries(input.credentialBindings ?? {}))
+    await validateBotCredentialBinding(
+      input.entry.slots.find((slot) => slot.id === slotId),
+      binding
+    )
+  for (const [triggerId, slotId] of Object.entries(input.triggerInputSlots ?? {})) {
+    const trigger = input.entry.triggers.find((candidate) => candidate.id === triggerId)
+    if (
+      !trigger ||
+      !(
+        trigger.kind === "interaction" ||
+        (trigger.kind === "event" && ["connector", "integration"].includes(trigger.source))
+      ) ||
+      !input.entry.slots.some((slot) => slot.id === slotId)
+    )
+      throw new BotCredentialBindingError("invalidInput", "Bot input slot is not declared")
+  }
   const installInput: InstallBotInput = {
     ...(id ? { id } : {}),
     definitionId: input.entry.definitionId,
@@ -229,13 +266,20 @@ export async function installBotFromCatalogLocally(
     ...(input.config ? { config: input.config } : {}),
     ...(input.credentialBindings ? { credentialBindings: input.credentialBindings } : {}),
     ...(input.enabled === false ? { requestedStatus: "disabled" as const } : {}),
+    ...(input.triggerInputSlots ? { triggerInputSlots: input.triggerInputSlots } : {}),
+    ...(input.paused !== undefined ? { paused: input.paused } : {}),
     ...(input.triggerOverrides ? { triggerOverrides: input.triggerOverrides } : {}),
     ...(input.policyGrant ? { policyGrant: botPolicyGrantSchema.parse(input.policyGrant) } : {}),
   }
   // The hook sees the exact row about to be written — a hand-rolled
   // approximation would drift from `installBot`'s shape. Its throw lands
   // before `persistBotInstallation`, so a vetoed install leaves no row.
-  const provisional = buildBotInstallationRow(installInput)
+  const provisional = {
+    ...buildBotInstallationRow(installInput),
+    ...(input.installOperationFingerprint
+      ? { installOperationFingerprint: input.installOperationFingerprint }
+      : {}),
+  }
   const resolved = await resolveInstalledBot(provisional)
   if (resolved) {
     await runBotLifecycleHook({
@@ -388,6 +432,11 @@ export async function bindBotCredentialLocally(
   if (installation.syncedFromHost)
     throw new BotLifecycleUnavailableError({ state: "unsupported", reason: "requires-companion" })
 
+  const requiredCredentials = await requiredSlotsFor(installation)
+  await validateBotCredentialBinding(
+    requiredCredentials.find((slot) => slot.id === slotId),
+    binding
+  )
   const next = { ...installation.credentialBindings }
   if (binding && (binding.integrationAccountId || binding.adapterId)) {
     next[slotId] = {
@@ -403,13 +452,14 @@ export async function bindBotCredentialLocally(
     delete next[slotId]
   }
 
-  const requiredCredentials = await requiredSlotsFor(installation)
   const updated = await updateBotInstallation(
     installationId,
     { credentialBindings: next, requiredCredentials },
     { humanEdit: true }
   )
   if (!updated) throw new BotControlTargetMissingError("installation", installationId)
+  const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
+  await cancelAcceptedBotDeliveries(installationId)
   return updated
 }
 
@@ -456,6 +506,8 @@ export async function uninstallBotInstallationLocally(installationId: string): P
   // a still-armed Bot — and its failure is advisory, so removal proceeds
   // either way. An orphan (`resolved` null) is removable too: there is no
   // hook to run when there is no definition.
+  const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
+  await cancelAcceptedBotDeliveries(installationId)
   const resolved = await resolveInstalledBot(installation)
   try {
     const { removeBotTriggerSchedules } =
@@ -484,11 +536,25 @@ async function relayLifecycle(input: BotLifecycleMutation): Promise<BotInstallat
   const availability = resolveBotLifecycleWriteAvailability()
   if (availability.state !== "available") throw new BotLifecycleUnavailableError(availability)
   const command = BOT_WRITE_COMMANDS.mutateInstallation
-  return transport.call<BotInstallationRow>(
-    command,
-    await withInteractiveApproval(command, input as Record<string, unknown>),
-    { idempotencyKey: input.operationId }
-  )
+  try {
+    return await transport.call<BotInstallationRow>(
+      command,
+      await withInteractiveApproval(command, input as Record<string, unknown>),
+      { idempotencyKey: input.operationId }
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
+    const match =
+      /\[bot_credential_binding_invalid:(missingSlot|invalidBinding|wrongAccount|wrongStrategy|invalidInput)\]/.exec(
+        message
+      )
+    if (match)
+      throw new BotCredentialBindingError(
+        match[1] as BotCredentialBindingError["reason"],
+        message.replace(match[0], "").trim()
+      )
+    throw error
+  }
 }
 
 /**
@@ -516,11 +582,16 @@ export function botInstallMutation(
               return [slot, { integrationAccountId: binding.integrationAccountId }]
             if (binding.adapterId && !binding.integrationAccountId)
               return [slot, { adapterId: binding.adapterId }]
-            throw new Error("Bot credential binding must identify one account or adapter")
+            throw new BotCredentialBindingError(
+              "invalidBinding",
+              "Bot credential binding must identify one account or adapter"
+            )
           })
         )
       : undefined,
     ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.triggerInputSlots ? { triggerInputSlots: input.triggerInputSlots } : {}),
+    ...(input.paused !== undefined ? { paused: input.paused } : {}),
     ...(input.triggerOverrides ? { triggerOverrides: input.triggerOverrides } : {}),
     ...(input.policyGrant ? { policyGrant: botPolicyGrantSchema.parse(input.policyGrant) } : {}),
   }
@@ -531,6 +602,11 @@ export async function installBotFromCatalog(
 ): Promise<BotInstallationRow> {
   if (resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation) === "local")
     return installBotFromCatalogLocally(input)
+  if (input.paused !== undefined || input.triggerInputSlots !== undefined) {
+    const { resolveBotAutomationAvailability } = await import("./route")
+    const availability = resolveBotAutomationAvailability()
+    if (availability.state !== "available") throw new BotLifecycleUnavailableError(availability)
+  }
   return relayLifecycle(botInstallMutation(input, crypto.randomUUID()))
 }
 export async function updateBotConfig(
@@ -569,7 +645,10 @@ export async function bindBotCredential(
   if (resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation) === "local")
     return bindBotCredentialLocally(installationId, slotId, binding)
   if (binding?.integrationAccountId && binding.adapterId)
-    throw new Error("Bot credential binding must identify one account or adapter")
+    throw new BotCredentialBindingError(
+      "invalidBinding",
+      "Bot credential binding must identify one account or adapter"
+    )
   return relayLifecycle({
     operation: "bind",
     operationId: crypto.randomUUID(),
@@ -612,4 +691,145 @@ export async function uninstallBotInstallation(installationId: string): Promise<
   if (resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation) === "local")
     return uninstallBotInstallationLocally(installationId)
   await relayLifecycle({ operation: "uninstall", operationId: crypto.randomUUID(), installationId })
+}
+
+/** These operations require a distinct feature advertisement on older paired hosts. */
+export async function controlBotAutomationLocally(
+  installationId: string,
+  action: "pause" | "resume" | "cancel",
+  deliveryId?: string,
+  operationId: string = crypto.randomUUID()
+): Promise<BotInstallationRow> {
+  assertAvailable()
+  const installation = await getBotInstallation(installationId)
+  if (!installation || installation.syncedFromHost)
+    throw new BotControlTargetMissingError("installation", installationId)
+  if (action === "cancel") {
+    const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
+    await cancelAcceptedBotDeliveries(installationId, deliveryId, operationId)
+    return installation
+  }
+  const row = await setBotInstallationPaused(installationId, action === "pause")
+  if (!row) throw new BotControlTargetMissingError("installation", installationId)
+  return row
+}
+
+export async function controlBotAutomation(
+  installationId: string,
+  action: "pause" | "resume" | "cancel",
+  deliveryId?: string
+): Promise<BotInstallationRow> {
+  if (resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation) === "local")
+    return controlBotAutomationLocally(installationId, action, deliveryId)
+  const { resolveBotAutomationAvailability } = await import("./route")
+  const availability = resolveBotAutomationAvailability()
+  if (availability.state !== "available") throw new BotLifecycleUnavailableError(availability)
+  return relayLifecycle({
+    operation: "automation",
+    operationId: crypto.randomUUID(),
+    installationId,
+    action,
+    ...(deliveryId ? { deliveryId } : {}),
+  })
+}
+
+export async function validateBotCredentialBinding(
+  slot: PluginBotCredentialSlot | undefined,
+  value: Pick<BotCredentialBinding, "integrationAccountId" | "adapterId"> | null
+) {
+  if (!slot)
+    throw new BotCredentialBindingError("missingSlot", "Bot credential slot is not declared")
+  if (!value || (!value.integrationAccountId && !value.adapterId)) return
+  if (Boolean(value.integrationAccountId) === Boolean(value.adapterId))
+    throw new BotCredentialBindingError(
+      "invalidBinding",
+      "Bot credential binding must identify one account or adapter"
+    )
+  if (value.integrationAccountId) {
+    const account = await getDb().integrationAccounts.get(value.integrationAccountId)
+    if (
+      !account ||
+      (slot.integration && ![account.pluginId, account.integrationId].includes(slot.integration))
+    )
+      throw new BotCredentialBindingError(
+        "wrongAccount",
+        "Bot credential account does not match its slot"
+      )
+    const integration = getRegisteredIntegration(
+      account.pluginId,
+      account.integrationId
+    )?.definition
+    if (
+      !integration ||
+      (slot.strategy &&
+        !integration.authStrategies.some(
+          (strategy) => strategy.id === slot.strategy && strategy.providerId === account.providerId
+        ))
+    )
+      throw new BotCredentialBindingError(
+        "wrongStrategy",
+        "Bot credential strategy does not match its slot"
+      )
+  } else {
+    const adapter = await getDb().adapterInstances.get(value.adapterId!)
+    if (!adapter || (slot.integration && adapter.type !== slot.integration))
+      throw new BotCredentialBindingError(
+        "wrongAccount",
+        "Bot credential adapter does not match its slot"
+      )
+  }
+}
+
+export async function setBotInputSlotLocally(
+  installationId: string,
+  triggerId: string,
+  slotId: string | null
+): Promise<BotInstallationRow> {
+  assertAvailable()
+  const installation = await getBotInstallation(installationId)
+  if (!installation || installation.syncedFromHost)
+    throw new BotControlTargetMissingError("installation", installationId)
+  const resolved = await resolveInstalledBot(installation)
+  const trigger = resolved?.definition.triggers.find((item) => item.id === triggerId)
+  if (
+    !trigger ||
+    !(
+      trigger.kind === "interaction" ||
+      (trigger.kind === "event" && ["connector", "integration"].includes(trigger.source))
+    )
+  )
+    throw new BotControlTargetMissingError("trigger", triggerId)
+  if (slotId && !resolved?.definition.requires?.credentials?.some((slot) => slot.id === slotId))
+    throw new BotCredentialBindingError("invalidInput", "Bot input slot is not declared")
+  const triggerInputSlots = { ...installation.triggerInputSlots }
+  if (slotId) triggerInputSlots[triggerId] = slotId
+  else delete triggerInputSlots[triggerId]
+  const row = await updateBotInstallation(
+    installationId,
+    { triggerInputSlots },
+    { humanEdit: true }
+  )
+  if (!row) throw new BotControlTargetMissingError("installation", installationId)
+  const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
+  await cancelAcceptedBotDeliveries(installationId)
+  return row
+}
+
+export async function setBotInputSlot(
+  installationId: string,
+  triggerId: string,
+  slotId: string | null
+): Promise<BotInstallationRow> {
+  if (resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation) === "local")
+    return setBotInputSlotLocally(installationId, triggerId, slotId)
+  const { resolveBotAutomationAvailability } = await import("./route")
+  const availability = resolveBotAutomationAvailability()
+  if (availability.state !== "available") throw new BotLifecycleUnavailableError(availability)
+  return relayLifecycle({
+    operation: "input_slot",
+    operationId: crypto.randomUUID(),
+    installationId,
+    triggerId,
+    slotId,
+  })
 }

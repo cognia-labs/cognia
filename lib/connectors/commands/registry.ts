@@ -20,6 +20,7 @@ export type ControlCommandName =
   | "new"
   | "switch"
   | "resume"
+  | "automation"
   | "mode"
   | "model"
   | "reasoning"
@@ -52,6 +53,12 @@ export const CONTROL_COMMAND_SPECS: readonly ControlCommandSpec[] = [
   { name: "new", readonly: false, nativeExposed: true, usage: "/new [title]" },
   { name: "switch", readonly: false, nativeExposed: true, usage: "/switch <n|session-id>" },
   { name: "resume", readonly: false, nativeExposed: false, usage: "/resume [session-id]" },
+  {
+    name: "automation",
+    readonly: false,
+    nativeExposed: false,
+    usage: "/automation pause|resume|cancel|status",
+  },
   { name: "mode", readonly: false, nativeExposed: false, usage: "/mode <mode>" },
   { name: "model", readonly: false, nativeExposed: false, usage: "/model <model-id>" },
   { name: "reasoning", readonly: false, nativeExposed: false, usage: "/reasoning <level>" },

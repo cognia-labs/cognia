@@ -11,7 +11,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { createRequire } from "node:module"
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 
@@ -227,3 +227,123 @@ test("the lock is released, so a second run of the same conversation is not bloc
   const second = await runLoop("normal")
   assert.equal(second.exitCode, 0)
 })
+
+// This composes the actual CLI, observer, fixture and evidence writer. QQ and
+// its responding target are local stand-ins; this is not platform acceptance.
+for (const kind of ["group", "c2c"]) {
+  test(`QQ Official ${kind} text smoke composes both human turns and scoped evidence`, async () => {
+    mkdirSync(".cache", { recursive: true })
+    const outputDir = mkdtempSync(path.resolve(".cache/im-qq-loop-"))
+    const previousToken = process.env.E2E_ANTHROPIC_CONTROL_TOKEN
+    process.env.E2E_ANTHROPIC_CONTROL_TOKEN = "qq-loop-control-token"
+    const fixture = createMockAnthropicServer()
+    const messages = [],
+      pending = []
+    let failure
+    let messageId = 1
+    const message = (id, sender, text, segments = []) => ({
+      message_id: id,
+      user_id: sender,
+      self_id: 654321,
+      message_type: kind === "group" ? "group" : "private",
+      ...(kind === "group"
+        ? { group_id: 987654 }
+        : { target_id: sender === 654321 ? 123456 : 654321 }),
+      time: Math.floor(Date.now() / 1000),
+      message: [...segments, { type: "text", data: { text } }],
+    })
+    await fixture.start(0)
+    try {
+      await withFakePlatform(
+        {
+          "POST /get_login_info": () => ({
+            json: { status: "ok", retcode: 0, data: { user_id: 654321 } },
+          }),
+          [`POST /${kind === "group" ? "get_group_msg_history" : "get_friend_msg_history"}`]:
+            () => ({ json: { status: "ok", retcode: 0, data: { messages: [...messages] } } }),
+        },
+        async ({ baseUrl, calls }) => {
+          const code = await main({
+            argv: ["--platform", "qq-official"],
+            env: {
+              IM_LIVE_QQ_OFFICIAL_OBSERVER_API_BASE: baseUrl,
+              IM_LIVE_QQ_OFFICIAL_OBSERVER_BEARER_TOKEN: "qq-observer-secret",
+              IM_LIVE_QQ_OFFICIAL_TARGET_CONVERSATION_ID: kind === "group" ? "987654" : "123456",
+              IM_LIVE_QQ_OFFICIAL_TARGET_BOT_UIN: "123456",
+              IM_LIVE_QQ_OFFICIAL_DRIVER_USER_UIN: "654321",
+              IM_LIVE_QQ_OFFICIAL_CONVERSATION_KIND: kind,
+              IM_LIVE_OUTPUT_DIR: outputDir,
+              IM_LIVE_FIXTURE_URL: fixture.baseUrl,
+              IM_LIVE_FIXTURE_TOKEN: "qq-loop-control-token",
+              IM_LIVE_TURN_TIMEOUT_MS: "10000",
+              IM_LIVE_DUPLICATE_WINDOW_MS: "20",
+            },
+            loadEnv: () => ({ loaded: false }),
+            logError: (text) => {
+              failure = text
+            },
+            log: (text) => {
+              const marker = text.match(/cognia-e2e:qq-official:[a-f0-9]+:turn-\d+/)?.[0]
+              if (!marker) return
+              const second = marker.endsWith(":turn-2")
+              const segments = [
+                ...(kind === "group" ? [{ type: "at", data: { qq: "123456" } }] : []),
+                ...(second ? [{ type: "reply", data: { id: String(messageId - 1) } }] : []),
+              ]
+              messages.push(message(messageId++, 654321, marker, segments))
+              pending.push(
+                (async () => {
+                  const response = await fetch(`${fixture.baseUrl}/v1/messages`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                      model: "claude-opus-5",
+                      max_tokens: 64,
+                      messages: [{ role: "user", content: [{ type: "text", text: marker }] }],
+                    }),
+                  })
+                  const body = await response.json()
+                  messages.push(message(messageId++, 123456, body.content[0].text))
+                })().catch((error) => {
+                  failure = String(error)
+                })
+              )
+            },
+          })
+          await Promise.all(pending)
+          assert.equal(code, 0, failure)
+          const runDir = readdirSync(outputDir).find((entry) => /^[0-9a-f]{16}$/.test(entry))
+          const serialized = readFileSync(path.join(outputDir, runDir, "qq-official.json"), "utf8")
+          const report = JSON.parse(serialized)
+          assert.equal(report.status, STATUS.PASS)
+          assert.equal(report.acceptanceScope.conversationKind, kind)
+          assert.ok(report.acceptanceScope.excludes.includes("official-app-identity-mapping"))
+          assert.deepEqual(
+            report.turns.map((turn) => turn.action),
+            kind === "group"
+              ? ["group-mention", "group-quote-with-mention"]
+              : ["c2c-text", "c2c-quote"]
+          )
+          assert.ok(
+            report.turns.every(
+              (turn) =>
+                turn.modelRequestCount === 1 &&
+                turn.matchingModelRequestCount === 1 &&
+                turn.markerReplyCount === 1
+            )
+          )
+          assert.ok(!serialized.includes("qq-observer-secret"))
+          assert.ok(!serialized.includes("mock-anthropic-echo"))
+          assert.ok(calls.every((call) => !/send_|delete_/.test(call.pathname)))
+          assert.deepEqual(readdirSync(path.join(outputDir, ".locks")), [])
+        }
+      )
+    } finally {
+      await Promise.all(pending)
+      await fixture.stop()
+      rmSync(outputDir, { recursive: true, force: true })
+      if (previousToken === undefined) delete process.env.E2E_ANTHROPIC_CONTROL_TOKEN
+      else process.env.E2E_ANTHROPIC_CONTROL_TOKEN = previousToken
+    }
+  })
+}

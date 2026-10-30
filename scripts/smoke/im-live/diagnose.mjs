@@ -140,10 +140,32 @@ const OUTBOUND_FAILED = [
  * @param {{ fixtureHit: object|null, replies: Array<{ text?: string }>, marker: string }} input
  * @returns {{ status: string, summary: string, causes: Array<{code:string,detail:string,where:string}>, markerReplyCount: number, extraReplyCount: number }}
  */
-export function diagnoseTurn({ fixtureHit, replies = [], marker }) {
+export function diagnoseTurn({
+  fixtureHit,
+  replies = [],
+  marker,
+  modelRequestCount,
+  matchingModelRequestCount,
+  aborted = false,
+  replyNotBefore,
+}) {
   const markerReplies = replies.filter((reply) => containsMarker(reply?.text ?? "", marker))
   const extraReplyCount = replies.length - markerReplies.length
   const base = { markerReplyCount: markerReplies.length, extraReplyCount }
+
+  if (aborted)
+    return {
+      ...base,
+      status: STATUS.FAIL,
+      summary: "Observation was cancelled before acceptance completed.",
+      causes: [
+        {
+          code: "observation_cancelled",
+          detail: "The full observation window did not complete.",
+          where: "Re-run the complete scenario.",
+        },
+      ],
+    }
 
   if (!fixtureHit) {
     if (replies.length === 0) {
@@ -163,7 +185,7 @@ export function diagnoseTurn({ fixtureHit, replies = [], marker }) {
       status: STATUS.MODEL_NOT_INTERCEPTED,
       summary:
         "The target bot replied, but the model fixture never saw the prompt: this turn was " +
-        "answered by a REAL model and billed accordingly. Fix the routing before trusting any result.",
+        "not proven to use the fixture. Check routing and possible cached or automatic replies before trusting the result.",
       causes: MODEL_NOT_INTERCEPTED_CAUSES,
     }
   }
@@ -177,6 +199,24 @@ export function diagnoseTurn({ fixtureHit, replies = [], marker }) {
       causes: OUTBOUND_FAILED,
     }
   }
+
+  if (
+    replyNotBefore !== undefined &&
+    (!Number.isFinite(replyNotBefore) ||
+      replies.some((reply) => !Number.isFinite(reply.at) || reply.at < replyNotBefore))
+  )
+    return {
+      ...base,
+      status: STATUS.FAIL,
+      summary: "The observed QQ reply predates its human probe or has invalid timing.",
+      causes: [
+        {
+          code: "reply_before_probe",
+          detail: "History output must follow the current probe.",
+          where: "Inspect the observer's sender, peer and seconds-based message timestamps.",
+        },
+      ],
+    }
 
   if (markerReplies.length === 0) {
     return {
@@ -213,6 +253,38 @@ export function diagnoseTurn({ fixtureHit, replies = [], marker }) {
           code: "bot_interplay_loop",
           detail: "Two adapters in the chat are replying to each other.",
           where: "lib/connectors/bus.ts step 9.6 siblingBotPolicy / botInterplayBudget.",
+        },
+      ],
+    }
+  }
+
+  if (extraReplyCount > 0)
+    return {
+      ...base,
+      status: STATUS.FAIL,
+      summary: `The target sent ${extraReplyCount} unexpected reply/replies in the dedicated test conversation.`,
+      causes: [
+        {
+          code: "unexpected_reply",
+          detail: "A marked reply cannot hide additional uncorrelated output.",
+          where: "Inspect target message IDs and conversation isolation.",
+        },
+      ],
+    }
+
+  if (
+    modelRequestCount !== undefined &&
+    (modelRequestCount !== 1 || matchingModelRequestCount !== 1)
+  ) {
+    return {
+      ...base,
+      status: STATUS.FAIL,
+      summary: `Expected one correlated model request, observed ${modelRequestCount} total and ${matchingModelRequestCount} matching.`,
+      causes: [
+        {
+          code: "model_request_count",
+          detail: "The two-turn text smoke permits one model request per turn.",
+          where: "Inspect the fixture delta and duplicate consumers.",
         },
       ],
     }

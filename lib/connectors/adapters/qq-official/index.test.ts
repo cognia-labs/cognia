@@ -1,4 +1,9 @@
+jest.mock("@/lib/audio/transcode", () => ({
+  ...jest.requireActual("@/lib/audio/transcode"),
+  transcodeAudio: jest.fn(),
+}))
 import { invoke } from "@tauri-apps/api/core"
+import Dexie from "dexie"
 import { listen } from "@tauri-apps/api/event"
 import type { AdapterContext } from "@/types/connectors/adapter"
 import type { OutboundRequest } from "@/types/connectors/outbound"
@@ -21,6 +26,11 @@ import {
 import { inboundReplyLookupIds, resolveInboundReplyTo } from "@/lib/connectors/inbound-reply-to"
 import { evaluatePolicy } from "@/lib/connectors/policy-eval"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import { captureSystemDeliveryContext } from "@/lib/connectors/event-context"
+import { rememberConnectorAssets } from "@/lib/connectors/assets"
+import { resolveQQInteraction } from "./interactions"
+import { buildHelpSurface } from "@/lib/connectors/help/build-help-surface"
+import { buildA2UISegment } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 
 const quoteDbFixture = createDbTestFixture()
 beforeAll(quoteDbFixture.initialize)
@@ -35,6 +45,7 @@ jest.mock("./gateway-client", () => ({
 // The at-gate reads adapter rows from Dexie; the adapter tests only care that
 // the dispatch pipeline runs, so let every event through.
 jest.mock("@/lib/connectors/at-gate", () => ({
+  ...jest.requireActual("@/lib/connectors/at-gate"),
   gateInboundEvent: jest.fn(async () => true),
 }))
 
@@ -124,6 +135,1103 @@ beforeEach(() => {
 })
 
 describe("createQQOfficialAdapter", () => {
+  it("reports gateway starting until authenticated and stops reporting running on disconnect", async () => {
+    mockStartGateway.mockReturnValue({
+      selfId: "",
+      dispatches: fakeDispatches(() => new Promise(() => {})),
+    })
+    const a = adapter()
+    await a.start(fakeCtx())
+    try {
+      expect(a.health().state).toBe("starting")
+      const options = mockStartGateway.mock.calls[0][0]
+      options.onHealth?.({ state: "running" })
+      expect(a.health().state).toBe("running")
+      options.onHealth?.({ state: "degraded", reason: "QQ gateway closed (code 4009)" })
+      expect(a.health()).toMatchObject({
+        state: "degraded",
+        reason: "QQ gateway closed (code 4009)",
+      })
+      await a.stop()
+      options.onHealth?.({ state: "running" })
+      expect(a.health().state).toBe("down")
+    } finally {
+      await a.stop()
+    }
+  })
+
+  describe("native C2C recall delivery", () => {
+    it.each(["receipt", "checkpoint"])(
+      "does not resend after a successful frame whose %s ACK cannot be stored",
+      async (fault) => {
+        const a = adapter(),
+          request = recall()
+        await startWithDispatch(a, C2C_DISPATCH)
+        mockInvoke.mockResolvedValue(httpResp(200, { id: "known-recall" }))
+        const table = getDb().inboundLedger,
+          original = table.put.bind(table)
+        let failed = false
+        const spy = jest.spyOn(table, "put").mockImplementation((...args) => {
+          const row = args[0]
+          if (
+            !failed &&
+            (fault === "receipt"
+              ? row.deliveryReceipt?.phase === "sent"
+              : row.qqStream?.phase === "closed")
+          ) {
+            failed = true
+            return Dexie.Promise.reject(new Error("ACK write unavailable"))
+          }
+          return original(...args)
+        })
+        try {
+          expect(await a.send(request)).toMatchObject({
+            ok: false,
+            error: { code: "reconciliation_required" },
+          })
+        } finally {
+          spy.mockRestore()
+          await a.stop()
+        }
+        expect(failed).toBe(true)
+        expect(await adapter().send(request)).toMatchObject({
+          ok: false,
+          error: { code: "reconciliation_required" },
+        })
+        expect(httpCalls()).toHaveLength(1)
+      }
+    )
+    it.each(["cancelled", "uncertain"])(
+      "retains %s recall checkpoints during cleanup and refuses replay",
+      async (phase) => {
+        const a = adapter(),
+          request = recall()
+        await startWithDispatch(a, C2C_DISPATCH)
+        mockInvoke.mockResolvedValue(httpResp(200, { id: "recall" }))
+        const partial = {
+          conversationRef: request.conversationRef,
+          streamKey: request.metadata.streamKey,
+          sendOptions: request.sendOptions,
+          text: "Hello",
+        }
+        if (phase === "uncertain") mockInvoke.mockRejectedValueOnce(new Error("ACK lost"))
+        if (phase === "uncertain") await expect(a.streamReply!(partial)).rejects.toThrow()
+        else {
+          await a.streamReply!(partial)
+          await a.cancelStreamReply!({ ...partial, streamKey: request.metadata.streamKey! })
+        }
+        await a.stop()
+        const row = (await getDb().inboundLedger.where("namespace").equals("qq-stream").first())!
+        await getDb().inboundLedger.update(row.id, { receivedAt: Date.now() - 2 * 86400_000 })
+        const restored = adapter()
+        await startWithDispatch(restored, C2C_DISPATCH)
+        await restored.send({
+          ...request,
+          conversationRef: { ...request.conversationRef, sceneId: "other-user" },
+          metadata: { idempotencyKey: "other", streamKey: "other" },
+        })
+        const count = httpCalls().length
+        expect(await restored.send(request)).toMatchObject({
+          ok: false,
+          error: { code: phase === "uncertain" ? "reconciliation_required" : "validation" },
+        })
+        expect(httpCalls()).toHaveLength(count)
+        expect((await getDb().inboundLedger.get(row.id))?.qqStream?.phase).toBe(phase)
+        await restored.stop()
+      }
+    )
+    it("isolates the same capture key across recipients", async () => {
+      const a = adapter(),
+        request = recall()
+      await startWithDispatch(a, C2C_DISPATCH)
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "recall" }))
+      expect((await a.send(request)).ok).toBe(true)
+      expect(
+        (
+          await a.send({
+            ...request,
+            conversationRef: { ...request.conversationRef, sceneId: "other-user" },
+            metadata: { ...request.metadata, idempotencyKey: "other" },
+          })
+        ).ok
+      ).toBe(true)
+      expect(httpCalls()).toHaveLength(2)
+      expect(
+        await getDb().inboundLedger.where("namespace").equals("connector-delivery").count()
+      ).toBe(2)
+      await a.stop()
+    })
+    it.each([
+      [400, 40054005],
+      [200, 40054005],
+      [400, 304024],
+      [200, 304024],
+      [401, 304024],
+      [202, 0],
+    ])(
+      "keeps HTTP%s business %s ambiguous and preserves the recall allowance",
+      async (status, code) => {
+        const a = adapter()
+        await startWithDispatch(a, C2C_DISPATCH)
+        mockInvoke.mockResolvedValue(
+          httpResp(status, { err_code: code, data: { message_audit: { audit_id: "pending" } } })
+        )
+        const request = recall()
+        expect(await a.send(request)).toMatchObject({
+          ok: false,
+          error: { code: "reconciliation_required" },
+        })
+        expect(
+          await a.send({ ...request, metadata: { idempotencyKey: "second", streamKey: "second" } })
+        ).toMatchObject({ ok: false, error: { code: "validation" } })
+        expect(httpCalls()).toHaveLength(1)
+        await a.stop()
+      }
+    )
+    it("refuses a first frame whose recall and minute windows expired during token acquisition", async () => {
+      let clock = Date.UTC(2026, 9, 28, 12, 0, 59, 500)
+      const time = jest.spyOn(Date, "now").mockImplementation(() => clock)
+      let delay = true
+      const a = adapter({
+        accessToken: async () => {
+          if (delay) {
+            clock += 1000
+            delay = false
+          }
+          return "tok"
+        },
+      })
+      try {
+        await startWithDispatch(a, C2C_DISPATCH)
+        const request = recall()
+        request.conversationRef.receivedAt = clock - 86400_000 + 500
+        mockInvoke.mockResolvedValue(httpResp(200, { id: "recall" }))
+        expect(await a.send(request)).toMatchObject({ ok: false, error: { code: "validation" } })
+        expect(httpCalls()).toHaveLength(0)
+      } finally {
+        time.mockRestore()
+        await a.stop()
+      }
+    })
+    function recall() {
+      return sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "recall-user",
+          msgId: "source",
+          receivedAt: Date.now() - 2 * 86400_000,
+        },
+        segments: [{ type: "markdown", md: "Hello world" }],
+        sendOptions: { mode: "reengagement" },
+        metadata: { idempotencyKey: "recall-final", streamKey: "recall-turn" },
+      })
+    }
+    it("hands a growing recall to the governed queue and finalizes one native message with one quota", async () => {
+      const a = adapter(),
+        request = recall()
+      await startWithDispatch(a, C2C_DISPATCH)
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "native-recall" }))
+      await a.streamReply!({
+        conversationRef: request.conversationRef,
+        streamKey: request.metadata.streamKey,
+        sendOptions: request.sendOptions,
+        text: "Hello",
+      })
+      await a.streamReply!({
+        conversationRef: request.conversationRef,
+        streamKey: request.metadata.streamKey,
+        sendOptions: request.sendOptions,
+        text: "Hello w",
+      })
+      const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+      const { startOutboundRunner } = await import("@/lib/connectors/outbound-runner")
+      const row = await getConnectorDeliveryGateway().enqueue({
+        adapterId: a.id,
+        conversationKey: "qq-official:qq-1:recall-user",
+        request,
+        source: "manual",
+      })
+      const controller = new AbortController()
+      const running = startOutboundRunner({
+        adapters: new Map([[a.id, a]]),
+        signal: controller.signal,
+        pollIntervalMs: 10,
+      })
+      try {
+        for (
+          let i = 0;
+          i < 500 && (await getDb().outboundQueue.get(row.id))?.status !== "sent";
+          i++
+        )
+          await new Promise((r) => setTimeout(r, 3))
+        expect(await getDb().outboundQueue.get(row.id)).toMatchObject({
+          status: "sent",
+          platformMessageId: "c2c:recall-user:native-recall",
+        })
+        const calls = httpCalls()
+        expect(calls).toHaveLength(3)
+        expect(calls.every((c) => c.url.endsWith("/stream_messages"))).toBe(true)
+        expect(calls.map((c) => JSON.parse(c.body!))).toMatchObject([
+          { index: 0, input_state: 1, is_wakeup: true },
+          { index: 1, input_state: 1, is_wakeup: true },
+          { index: 2, input_state: 10, is_wakeup: true, stream_msg_id: "native-recall" },
+        ])
+        const receipts = await getDb()
+          .inboundLedger.where("namespace")
+          .equals("connector-delivery")
+          .toArray()
+        expect(receipts).toHaveLength(1)
+        expect(
+          receipts[0].deliveryReceipt!.quotas.filter((q) => q.key.startsWith("reengagement:"))
+        ).toMatchObject([{ cost: 1 }])
+        expect(qqPassiveReplyCount("source")).toBe(0)
+        expect(
+          await a.send({
+            ...request,
+            metadata: { idempotencyKey: "another", streamKey: "another" },
+          })
+        ).toMatchObject({ ok: false, error: { code: "validation" } })
+        expect(httpCalls()).toHaveLength(3)
+      } finally {
+        controller.abort()
+        await running
+        await a.stop()
+      }
+    })
+    it("retains completed and cancelled recall evidence beyond the ordinary 24-hour checkpoint lifetime", async () => {
+      const request = recall(),
+        a = adapter()
+      await startWithDispatch(a, C2C_DISPATCH)
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "recall" }))
+      expect((await a.send(request)).ok).toBe(true)
+      await a.stop()
+      const past = Date.now() - 2 * 86400_000
+      const rows = await getDb().inboundLedger.where("namespace").equals("qq-stream").toArray()
+      await getDb().inboundLedger.update(rows[0].id, { receivedAt: past })
+      const restored = adapter()
+      await startWithDispatch(restored, C2C_DISPATCH)
+      // Another conversation triggers checkpoint pruning without sharing this recipient's allowance.
+      expect(
+        (
+          await restored.send({
+            ...request,
+            conversationRef: { ...request.conversationRef, sceneId: "another-user" },
+            metadata: { idempotencyKey: "other", streamKey: "other" },
+          })
+        ).ok
+      ).toBe(true)
+      const count = httpCalls().length
+      expect((await restored.send(request)).ok).toBe(true)
+      expect(httpCalls()).toHaveLength(count)
+      expect(await getDb().inboundLedger.get(rows[0].id)).toBeDefined()
+      await restored.stop()
+    })
+    it.each(["ambiguous", "opt-out", "pii"])(
+      "blocks unsafe recall %s before another provider send",
+      async (kind) => {
+        const a = adapter(),
+          request = recall()
+        await startWithDispatch(a, C2C_DISPATCH)
+        mockInvoke.mockImplementation(async () => {
+          if (kind === "ambiguous") throw new Error("ack lost")
+          return httpResp(200, { id: "recall" })
+        })
+        if (kind === "opt-out") {
+          const { refreshConnectorConversationDeliveryTarget } =
+            await import("@/lib/db/connector-conversation-state")
+          const target = {
+            address: {
+              conversationKey: "qq-official:qq-1:recall-user",
+              platform: "qq-official" as const,
+              adapterId: "qq-1",
+              scopeKind: "private" as const,
+              containerId: "recall-user",
+            },
+            conversationRef: request.conversationRef,
+            refreshedAt: Date.now(),
+          }
+          await refreshConnectorConversationDeliveryTarget(target)
+          await getDb().connectorConversationStates.update(target.address.conversationKey, {
+            deliveryPermissions: { proactive: false, updatedAt: Date.now() },
+          })
+        }
+        const partial = {
+          conversationRef: request.conversationRef,
+          streamKey: request.metadata.streamKey,
+          sendOptions: request.sendOptions,
+          text: kind === "pii" ? "Contact private@example.com" : "Hello",
+        }
+        await expect(a.streamReply!(partial)).rejects.toThrow()
+        if (kind === "ambiguous") {
+          expect(await adapter().send(request)).toMatchObject({
+            ok: false,
+            error: { code: "reconciliation_required" },
+          })
+          expect(httpCalls()).toHaveLength(1)
+        } else expect(httpCalls()).toHaveLength(0)
+        await a.stop()
+      }
+    )
+  })
+  it("does not acknowledge a menu as accepted when production context capture fails", async () => {
+    const { buildAdapterContext } = await import("@/lib/connectors/adapter-context")
+    const bus = getBus(),
+      observed = jest.fn(),
+      controller = new AbortController()
+    bus.subscribeInbound(observed)
+    const a = adapter({ transportMode: "webhook" })
+    const ctx = buildAdapterContext({ adapterId: "qq-1", signal: controller.signal, bus })
+    await a.start(ctx)
+    const spy = jest
+      .spyOn(getDb().connectorAudit, "add")
+      .mockRejectedValueOnce(new Error("capture unavailable"))
+    try {
+      mockInvoke.mockResolvedValue(httpResp(204, ""))
+      const listener = (listen as jest.Mock).mock.calls
+        .filter(([name]) => name === "connectors://webhook/qq-1")
+        .at(-1)![1]
+      listener({
+        payload: {
+          op: 0,
+          t: "INTERACTION_CREATE",
+          d: {
+            id: "menu-failure",
+            type: 12,
+            scene: "c2c",
+            user_openid: "user",
+            timestamp: new Date().toISOString(),
+            data: { resolved: { feature_id: "help" } },
+          },
+        },
+      })
+      for (let i = 0; i < 200 && !httpCalls().length; i++)
+        await new Promise((r) => setTimeout(r, 2))
+      expect(httpCalls()).toHaveLength(1)
+      expect(JSON.parse(httpCalls()[0].body!)).toEqual({ code: 1 })
+      expect(observed).not.toHaveBeenCalled()
+      expect(await getDb().inboundLedger.where("namespace").equals("inbound").count()).toBe(0)
+    } finally {
+      spy.mockRestore()
+      await a.stop()
+    }
+  })
+  it("retains known audit correlation when the host's first persistence attempt fails", async () => {
+    const a = adapter()
+    mockInvoke.mockResolvedValue(
+      httpResp(202, { err_code: 304024, data: { message_audit: { audit_id: "audit" } } })
+    )
+    const persist = jest.fn(async () => {
+      throw new Error("disk temporarily unavailable")
+    })
+    const result = await a.send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "channel",
+          sceneId: "channel",
+          msgId: "in",
+          receivedAt: Date.now(),
+        },
+      }),
+      { onPendingReceipt: persist }
+    )
+    expect(result).toMatchObject({
+      ok: false,
+      pendingReceipt: { id: "audit" },
+      error: { retryable: false },
+    })
+    expect(persist).toHaveBeenCalledTimes(1)
+    expect(httpCalls()).toHaveLength(1)
+  })
+  it.each([false, true])(
+    "subscribes to channel audit events only when explicitly enabled: %s",
+    async (enabled) => {
+      const a = adapter({ receiveMessageAudit: enabled })
+      await startWithDispatch(a, C2C_DISPATCH)
+      expect(Boolean(mockStartGateway.mock.calls.at(-1)![0].intents & (1 << 27))).toBe(enabled)
+      await a.stop()
+    }
+  )
+  it.each(
+    (["webhook", "gateway"] as const).flatMap((transport) =>
+      [12, 13, 14, 15, 16, 18, 19, 20].map((type) => ({ transport, type }))
+    )
+  )(
+    "routes $transport native type$type through the common event bus, with ACK only for menus",
+    async ({ transport, type }) => {
+      const observed = jest.fn(),
+        bus = getBus()
+      bus.subscribeInbound(observed)
+      const a = adapter({ transportMode: transport })
+      mockInvoke.mockResolvedValue(httpResp(204, ""))
+      const resolved =
+        type === 12
+          ? { feature_id: "help" }
+          : type === 13
+            ? { message_id: "sent", feedback_opt: "UNLIKE", checked: 0 }
+            : type === 15
+              ? { action: "QUIT_STORY" }
+              : type === 18 || type === 19
+                ? { authorize_data: { scope: type === 19 ? "group_push" : "c2c_push" } }
+                : {}
+      const dispatch = {
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          id: `control-${type}`,
+          type,
+          scene: type === 19 ? "group" : "c2c",
+          user_openid: "user",
+          group_openid: "group",
+          group_member_openid: "operator",
+          timestamp: new Date().toISOString(),
+          data: { resolved },
+        },
+      }
+      let delivered = false
+      mockStartGateway.mockReturnValue({
+        selfId: "bot",
+        dispatches: fakeDispatches(() => {
+          if (!delivered) {
+            delivered = true
+            return Promise.resolve({ done: false, value: dispatch })
+          }
+          return new Promise(() => {})
+        }),
+      })
+      await a.start({
+        emit: (event, options) => bus.dispatchInboundFull(event, options),
+      } as AdapterContext)
+      try {
+        if (transport === "webhook") {
+          const listener = (listen as jest.Mock).mock.calls
+            .filter(([name]) => name === "connectors://webhook/qq-1")
+            .at(-1)![1]
+          listener({ payload: dispatch })
+        }
+        for (let i = 0; i < 200 && !observed.mock.calls.length; i++)
+          await new Promise((r) => setTimeout(r, 2))
+        expect(observed).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: "system",
+            systemKind: type === 13 ? "reaction_removed" : "interaction",
+            interaction: expect.any(Object),
+            conversationKey: `qq-official:qq-1:${type === 19 ? "group" : "user"}`,
+            conversationRef: expect.objectContaining({ scene: type === 19 ? "group" : "c2c" }),
+            sender: expect.objectContaining({ remoteUserId: type === 19 ? "operator" : "user" }),
+            ...(type === 13
+              ? { replacesMessageId: "c2c:user:sent", segments: [{ type: "emoji", code: "👎" }] }
+              : {}),
+          })
+        )
+        for (let i = 0; i < 100 && type === 12 && !httpCalls().length; i++)
+          await new Promise((r) => setTimeout(r, 2))
+        expect(httpCalls().map((call) => call.url)).toEqual(
+          type === 12 ? ["https://api.bot.qq.com/interactions/control-12"] : []
+        )
+        if (type === 12) expect(JSON.parse(httpCalls()[0].body!)).toEqual({ code: 0 })
+        expect(await getDb().messages.count()).toBe(0)
+        expect(await getDb().outboundQueue.count()).toBe(0)
+      } finally {
+        await a.stop()
+      }
+    }
+  )
+  it.each([0, 1])(
+    "does not settle a multipart channel job from part %s audit evidence or resend it",
+    async (pendingPart) => {
+      const { enqueueOutbound, listDueNow } = await import("@/lib/db/outbound-jobs")
+      const { startOutboundRunner } = await import("@/lib/connectors/outbound-runner")
+      const a = adapter({ transportMode: "webhook" })
+      await a.start({ emit: (event) => getBus().dispatchInboundFull(event) } as AdapterContext)
+      const send = jest.spyOn(a, "send")
+      if (pendingPart === 1) mockInvoke.mockResolvedValueOnce(httpResp(200, { id: "first-part" }))
+      mockInvoke.mockResolvedValueOnce(
+        httpResp(202, {
+          err_code: 304024,
+          data: { message_audit: { audit_id: "one-part-only" } },
+        })
+      )
+      const row = await enqueueOutbound({
+        adapterId: "qq-1",
+        conversationKey: "qq-official:qq-1:channel",
+        source: "manual",
+        request: sendReq({
+          conversationRef: {
+            platform: "qq-official",
+            adapterId: "qq-1",
+            scene: "channel",
+            sceneId: "channel",
+            msgId: "in",
+          },
+          segments: [
+            { type: "image", url: "https://cdn.example.org/first.png" },
+            { type: "image", url: "https://cdn.example.org/second.png" },
+          ],
+        }),
+      })
+      const controller = new AbortController()
+      const running = startOutboundRunner({
+        adapters: new Map([[a.id, a]]),
+        signal: controller.signal,
+        pollIntervalMs: 10,
+      })
+      try {
+        for (
+          let i = 0;
+          i < 500 && (await getDb().outboundQueue.get(row.id))?.status !== "delivery_unknown";
+          i++
+        )
+          await new Promise((r) => setTimeout(r, 2))
+        expect(await send.mock.results[0].value).toMatchObject({
+          ok: false,
+          error: { code: "reconciliation_required", retryable: false },
+        })
+        expect(await send.mock.results[0].value).not.toHaveProperty("pendingReceipt")
+        expect((await getDb().outboundQueue.get(row.id))?.pendingReceipt).toBeUndefined()
+        const listener = (listen as jest.Mock).mock.calls
+          .filter(([name]) => name === "connectors://webhook/qq-1")
+          .at(-1)![1]
+        listener({
+          payload: {
+            op: 0,
+            t: "MESSAGE_AUDIT_PASS",
+            id: "part-audit",
+            d: {
+              audit_id: "one-part-only",
+              guild_id: "guild",
+              channel_id: "channel",
+              message_id: "one-part",
+              audit_time: new Date().toISOString(),
+            },
+          },
+        })
+        for (
+          let i = 0;
+          i < 200 &&
+          !(await getDb().inboundLedger.where("namespace").equals("connector-status").count());
+          i++
+        )
+          await new Promise((r) => setTimeout(r, 2))
+        expect(
+          await getDb().inboundLedger.where("namespace").equals("connector-status").count()
+        ).toBe(1)
+        expect((await getDb().outboundQueue.get(row.id))?.status).toBe("delivery_unknown")
+        expect(await listDueNow()).toEqual([])
+        expect(
+          await wasDeliveredByUs("qq-1", row.conversationKey, "channel:channel:one-part")
+        ).toBe(false)
+        await new Promise((r) => setTimeout(r, 30))
+        expect(send).toHaveBeenCalledTimes(1)
+        expect(httpCalls()).toHaveLength(pendingPart + 1)
+      } finally {
+        controller.abort()
+        await running
+        await a.stop()
+      }
+    }
+  )
+  it.each(["early", "late", "restart"] as const)(
+    "reconciles an %s channel audit through the shared durable queue without another POST",
+    async (timing) => {
+      const { enqueueOutbound } = await import("@/lib/db/outbound-jobs")
+      const { startOutboundRunner } = await import("@/lib/connectors/outbound-runner")
+      const ctx = {
+        emit: (event: NormalizedInboundEvent) => getBus().dispatchInboundFull(event),
+      } as AdapterContext
+      let a = adapter({ transportMode: "webhook" })
+      await a.start(ctx)
+      const row = await enqueueOutbound({
+        adapterId: "qq-1",
+        conversationKey: "qq-official:qq-1:channel",
+        source: "manual",
+        request: sendReq({
+          conversationRef: {
+            platform: "qq-official",
+            adapterId: "qq-1",
+            scene: "channel",
+            sceneId: "channel",
+            msgId: "in",
+            receivedAt: Date.now(),
+          },
+        }),
+      })
+      const audit = {
+        op: 0,
+        t: "MESSAGE_AUDIT_PASS",
+        id: "audit-pass",
+        d: {
+          audit_id: "audit",
+          guild_id: "guild",
+          channel_id: "channel",
+          audit_time: new Date().toISOString(),
+          message_id: "delivered",
+        },
+      }
+      const deliver = () =>
+        (listen as jest.Mock).mock.calls
+          .filter(([name]) => name === "connectors://webhook/qq-1")
+          .at(-1)![1]({ payload: audit })
+      mockInvoke.mockImplementation(async (command) => {
+        if (command === "connectors_http_request") {
+          if (timing === "early") {
+            deliver()
+            for (
+              let i = 0;
+              i < 200 &&
+              !(await getDb().inboundLedger.where("namespace").equals("connector-status").count());
+              i++
+            )
+              await new Promise((r) => setTimeout(r, 2))
+          }
+          return httpResp(202, { err_code: 304024, data: { message_audit: { audit_id: "audit" } } })
+        }
+        return undefined
+      })
+      const controller = new AbortController()
+      const running = startOutboundRunner({
+        adapters: new Map([[a.id, a]]),
+        signal: controller.signal,
+        pollIntervalMs: 10,
+      })
+      try {
+        for (let i = 0; i < 500 && !(await getDb().outboundQueue.get(row.id))?.pendingReceipt; i++)
+          await new Promise((r) => setTimeout(r, 2))
+        expect((await getDb().outboundQueue.get(row.id))?.pendingReceipt?.id).toBe("audit")
+        if (timing === "restart") {
+          controller.abort()
+          await running
+          await a.stop()
+          a = adapter({ transportMode: "webhook" })
+          await a.start(ctx)
+        }
+        if (timing !== "early") deliver()
+        for (
+          let i = 0;
+          i < 500 && (await getDb().outboundQueue.get(row.id))?.status !== "sent";
+          i++
+        )
+          await new Promise((r) => setTimeout(r, 2))
+        expect(await getDb().outboundQueue.get(row.id)).toMatchObject({
+          status: "sent",
+          platformMessageId: "channel:channel:delivered",
+        })
+        expect(
+          await wasDeliveredByUs("qq-1", row.conversationKey, "channel:channel:delivered")
+        ).toBe(true)
+        expect(httpCalls()).toHaveLength(1)
+      } finally {
+        controller.abort()
+        await running
+        await a.stop()
+      }
+    }
+  )
+  it.each([
+    [200, { err_code: 10001, message: "secret-provider-detail" }],
+    [202, { data: { url: "https://qun.qq.com/qunpro/robot/qunshare" } }],
+  ])("does not return a link for HTTP%s nondefinitive/business failures", async (status, body) => {
+    const a = adapter({ transportMode: "webhook" })
+    await a.start(fakeCtx())
+    try {
+      mockInvoke.mockResolvedValueOnce(httpResp(status, body))
+      const { executeConnectorManagement } = await import("@/lib/connectors/management")
+      await expect(
+        executeConnectorManagement(a, {
+          operation: "links.create",
+          input: { purpose: "add-contact" },
+        })
+      ).rejects.toThrow(/^QQ management request failed(?: \(code \d+\))?$/)
+      expect(httpCalls()).toHaveLength(1)
+    } finally {
+      await a.stop()
+    }
+  })
+  it("generates a link through shared management and preserves verified-transport friend attribution through the bus", async () => {
+    const bus = getBus(),
+      observed = jest.fn()
+    bus.subscribeInbound(observed)
+    const friend = {
+      op: 0,
+      t: "FRIEND_ADD",
+      id: "friend-referral",
+      d: {
+        openid: "new-user",
+        timestamp: Math.floor(Date.now() / 1000),
+        scene: 2003,
+        scene_param: "campaign",
+        short_code: "short",
+        auth_token: "secret",
+      },
+    }
+    // The native verified Webhook seam is exercised by transport-webhook.test;
+    // this test drives its actual adapter consumer, parser, bus and durable audit.
+    mockStartGateway.mockReturnValue({
+      selfId: "bot",
+      dispatches: fakeDispatches(() => new Promise(() => {})),
+    })
+    const a = adapter({ transportMode: "webhook" })
+    const ctx = {
+      emit: (event: NormalizedInboundEvent) => bus.dispatchInboundFull(event),
+    } as AdapterContext
+    await a.start(ctx)
+    try {
+      mockInvoke.mockResolvedValueOnce(
+        httpResp(200, { data: { url: "https://qun.qq.com/qunpro/robot/qunshare?data=campaign" } })
+      )
+      const { executeConnectorManagement } = await import("@/lib/connectors/management")
+      await expect(
+        executeConnectorManagement(a, {
+          operation: "links.create",
+          input: { purpose: "add-contact", state: "campaign" },
+        } as never)
+      ).resolves.toMatchObject({ link: { purpose: "add-contact" } })
+      expect(httpCalls().map((call) => [call.method, call.url, JSON.parse(call.body!)])).toEqual([
+        ["POST", "https://api.bot.qq.com/v2/generate_url_link", { callback_data: "campaign" }],
+      ])
+      const callback = (listen as jest.Mock).mock.calls.find(
+        ([name]) => name === "connectors://webhook/qq-1"
+      )?.[1]
+      expect(callback).toBeDefined()
+      callback({ payload: friend })
+      for (let i = 0; i < 100 && !observed.mock.calls.length; i++)
+        await new Promise((r) => setTimeout(r, 1))
+      expect(observed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "system",
+          referral: { source: "2003", state: "campaign" },
+          segments: [],
+          plainText: "",
+        })
+      )
+      for (let i = 0; i < 100; i++) {
+        const audit = await getDb().connectorAudit.where("adapterId").equals("qq-1").toArray()
+        if (audit.some((row) => row.kind === "inbound.lifecycle")) break
+        await new Promise((r) => setTimeout(r, 1))
+      }
+      const audit = await getDb().connectorAudit.where("adapterId").equals("qq-1").toArray()
+      expect(audit).toContainEqual(
+        expect.objectContaining({
+          kind: "inbound.lifecycle",
+          fields: expect.objectContaining({ referral: { source: "2003", state: "campaign" } }),
+        })
+      )
+      expect(await getDb().messages.count()).toBe(0)
+      expect(await getDb().outboundQueue.count()).toBe(0)
+      expect(httpCalls()).toHaveLength(1)
+    } finally {
+      await a.stop()
+    }
+  })
+  it.each(["approve", "cancel"] as const)(
+    "routes shared skill confirmation %s through a queued native QQ card",
+    async (choice) => {
+      const { z } = await import("zod")
+      const { registerBuiltInSkill } = await import("@/lib/skills/built-in/registry")
+      const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
+      const { resolveBuiltInSkillContext } = await import("@/lib/skills/built-in/context")
+      const { registerImElicitationContext } =
+        await import("@/lib/connectors/hitl/im-elicitation-context")
+      const { buildConfirmSurface } = await import("@/lib/skills/built-in/_shared/confirm-surface")
+      const { upsertByConversationKey } = await import("@/lib/db/conversation-overrides")
+      const id = `im.g8_confirmation_${choice}`,
+        key = "qq-official:qq-1:UO",
+        sessionId = `skill-session-${choice}`
+      const execute = jest.fn(async () => ({ changed: true }))
+      registerBuiltInSkill({
+        id,
+        family: "im",
+        platforms: "any",
+        mcpToolName: id.replaceAll(".", "_"),
+        label: { en: "Manage resource", "zh-CN": "管理资源" },
+        description: { en: "Test mutation", "zh-CN": "测试变更" },
+        mutation: "destructive",
+        imAccess: "opt-in",
+        inputSchema: z.object({}),
+        execute,
+        hitlSurface: () =>
+          buildConfirmSurface({
+            surfaceId: `confirm-${choice}`,
+            title: "Manage resource",
+            summary: "Apply the requested change",
+          }),
+      })
+      const ref = {
+        platform: "qq-official" as const,
+        adapterId: "qq-1",
+        scene: "c2c",
+        sceneId: "UO",
+        msgId: "in-1",
+        receivedAt: Date.now(),
+      }
+      await getDb().sessions.put({
+        id: sessionId,
+        title: "Skill session",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        platformBinding: {
+          adapterId: "qq-1",
+          platform: "qq-official",
+          conversationKey: key,
+          conversationRef: ref,
+        },
+      } as never)
+      await upsertByConversationKey({
+        conversationKey: key,
+        sessionId,
+        allowedBuiltInSkillIds: [id],
+      })
+      const unregister = registerImElicitationContext({
+        sessionId,
+        adapterId: "qq-1",
+        conversationKey: key,
+        conversationRef: ref,
+        initiatorUserId: "human",
+      })
+      const a = adapter(),
+        bus = getBus()
+      bus.registerAdapter(a)
+      try {
+        expect(
+          await runBuiltInSkill(id, {}, await resolveBuiltInSkillContext(sessionId))
+        ).toMatchObject({ status: "pending_hitl" })
+        const [job] = await getDb().outboundQueue.toArray()
+        expect(job.request.segments[0]).toMatchObject({ type: "a2ui" })
+        mockInvoke.mockResolvedValue(httpResp(200, { id: "card" }))
+        expect((await a.send(job.request)).ok).toBe(true)
+        const payload = JSON.parse(httpCalls().at(-1)!.body!)
+        const button = payload.keyboard.content.rows[0].buttons[choice === "approve" ? 0 : 1]
+        const callback = await resolveQQInteraction("qq-1", "bot", {
+          id: `press-${choice}`,
+          scene: "c2c",
+          sceneId: "UO",
+          actorId: "human",
+          buttonData: button.action.data,
+          buttonId: button.id,
+          messageId: "card",
+          timestamp: Date.now(),
+        })
+        expect(callback).not.toBeNull()
+        await bus.dispatchConnectorCallback(callback!)
+        expect(execute).toHaveBeenCalledTimes(choice === "approve" ? 1 : 0)
+        expect(
+          await resolveQQInteraction("qq-1", "bot", {
+            id: `second-${choice}`,
+            scene: "c2c",
+            sceneId: "UO",
+            actorId: "human",
+            buttonData: button.action.data,
+            timestamp: Date.now(),
+          })
+        ).toBeNull()
+      } finally {
+        unregister()
+      }
+    }
+  )
+  it("stops a paced multipart proactive send when its adapter generation ends", async () => {
+    const a = adapter()
+    await startWithDispatch(a, C2C_DISPATCH)
+    let first!: () => void
+    const sentFirst = new Promise<void>((resolve) => {
+      first = resolve
+    })
+    let count = 0
+    mockInvoke.mockImplementation(async (_command, args) => {
+      const path = args.req.url as string
+      if (path.endsWith("/bot_state"))
+        return httpResp(200, { allow_proactive_msg: true, member_role: "admin" })
+      if (path.endsWith("/files")) return httpResp(200, { file_info: "image" })
+      if (path.endsWith("/messages")) {
+        count++
+        if (count === 1) first()
+        return httpResp(200, { id: `sent-${count}` })
+      }
+      throw new Error("Unexpected endpoint")
+    })
+    const pending = a.send(
+      sendReq({
+        sendOptions: { mode: "proactive" },
+        segments: [
+          { type: "markdown", md: "Hello" },
+          { type: "image", url: "https://example.org/image.png" },
+        ],
+      })
+    )
+    await sentFirst
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    await a.stop()
+    await startWithDispatch(a, C2C_DISPATCH)
+    expect(await pending).toMatchObject({
+      error: { code: "reconciliation_required", retryable: false },
+    })
+    expect(count).toBe(1)
+    await a.stop()
+  })
+  it.each([0, 1, 3, 7, 29.99, 30])(
+    "enforces the C2C reengagement interval at day %s",
+    async (days) => {
+      const a = adapter()
+      await startWithDispatch(a, C2C_DISPATCH)
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "reengagement" }))
+      const request = sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "UO",
+          msgId: "in-1",
+          receivedAt: Date.now() - days * 86400_000,
+        },
+        sendOptions: { mode: "reengagement" },
+      })
+      try {
+        expect((await a.send(request)).ok).toBe(days < 30)
+        if (days < 30) {
+          expect(JSON.parse(httpCalls()[0].body!)).toMatchObject({ is_wakeup: true })
+          expect(
+            await a.send({ ...request, metadata: { idempotencyKey: "second-wakeup" } })
+          ).toMatchObject({ error: { code: "validation" } })
+          expect(httpCalls()).toHaveLength(1)
+        } else expect(httpCalls()).toHaveLength(0)
+      } finally {
+        await a.stop()
+      }
+    }
+  )
+  it("counts only broadcast-bearing parts toward the group's daily mention allowance", async () => {
+    const a = adapter()
+    await startWithDispatch(a, C2C_DISPATCH)
+    mockInvoke.mockImplementation(async (_command, args) =>
+      args.req.url.endsWith("/bot_state")
+        ? httpResp(200, { member_role: "admin" })
+        : args.req.url.endsWith("/files")
+          ? httpResp(200, { file_info: "image" })
+          : httpResp(200, { id: `sent-${httpCalls().length}` })
+    )
+    const req = sendReq({
+      segments: [
+        { type: "mention", userId: "", audience: "all" },
+        { type: "markdown", md: "Announcement" },
+        { type: "image", url: "https://example.org/image.png" },
+      ],
+    })
+    expect((await a.send(req)).ok).toBe(true)
+    expect((await a.send(req)).ok).toBe(true)
+    expect(
+      await a.send({ ...req, metadata: { idempotencyKey: "second-broadcast" } })
+    ).toMatchObject({ error: { code: "validation", retryable: false } })
+    expect(httpCalls().filter((call) => call.url.endsWith("/messages"))).toHaveLength(2)
+    await a.stop()
+  })
+  it.each([true, false, undefined])(
+    "enforces captured C2C proactive consent %s before native POST",
+    async (allowed) => {
+      const a = adapter()
+      await startWithDispatch(a, C2C_DISPATCH)
+      if (allowed !== undefined) {
+        const event = parseQQDispatch("qq-1", "bot", {
+          op: 0,
+          id: "consent",
+          t: allowed ? "C2C_MSG_RECEIVE" : "C2C_MSG_REJECT",
+          d: { openid: "UO", timestamp: Math.floor(Date.now() / 1000) },
+        } as never)!
+        await captureSystemDeliveryContext(event)
+      }
+      mockInvoke.mockResolvedValue(httpResp(200, { id: "proactive" }))
+      const request = sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "UO",
+          msgId: "in-1",
+          receivedAt: Date.now(),
+        },
+        sendOptions: { mode: "proactive" },
+      })
+      const result = await a.send(request)
+      expect(result.ok).toBe(allowed === true)
+      if (allowed) {
+        expect(JSON.parse(httpCalls()[0].body!)).not.toHaveProperty("msg_id")
+        expect((await adapter().send(request)).ok).toBe(true)
+        expect(httpCalls()).toHaveLength(1)
+      } else expect(httpCalls()).toHaveLength(0)
+      await a.stop()
+    }
+  )
+  it("protects card and stream reusable media references, including padded tokens", async () => {
+    const a = adapter()
+    const reference = "qqbot-media://image/v1/token=="
+    await expect(
+      a.streamReply!({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "UO",
+          msgId: "in-1",
+          receivedAt: Date.now(),
+        },
+        streamKey: "unknown-asset",
+        text: `![image](${reference})`,
+      })
+    ).rejects.toThrow(/unknown|expired/)
+    expect(await getDb().inboundLedger.where("namespace").equals("qq-stream").count()).toBe(0)
+    const req = sendReq({
+      segments: [
+        {
+          type: "card",
+          card: {
+            kind: "qq-keyboard",
+            payload: {
+              markdown: { content: `![image](${reference})` },
+              keyboard: {
+                content: {
+                  rows: [
+                    {
+                      buttons: [
+                        {
+                          id: "link",
+                          render_data: { label: "Open", style: 1 },
+                          action: { type: 0, data: "https://example.org", permission: { type: 2 } },
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      ],
+    })
+    expect(await a.send(req)).toMatchObject({ error: { code: "validation" } })
+    expect(mockInvoke).not.toHaveBeenCalled()
+    await rememberConnectorAssets("qq-1", [
+      { adapterId: "qq-1", id: "image", reference, expiresAt: Date.now() + 60000 },
+    ])
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "sent" }))
+    expect((await a.send(req)).ok).toBe(true)
+  })
+  it("isolates passive plugin observers from the trusted event and each other", async () => {
+    const bus = getBus(),
+      observed = jest.fn(),
+      handler = jest.fn().mockResolvedValue(undefined)
+    bus.setInboundHandler(handler)
+    bus.subscribeInbound((event) => {
+      event.messageId = "forged"
+      event.deliveryPermissionChange = { proactive: true }
+    })
+    bus.subscribeInbound(observed)
+    const event = parseQQDispatch("qq-1", "bot", C2C_DISPATCH)!
+    await bus.dispatchInbound(event)
+    expect(observed.mock.calls[0][0].messageId).toBe("in-1")
+    expect(handler.mock.calls[0][0].deliveryPermissionChange).toBeUndefined()
+  })
   it.each(["group", "c2c"] as const)(
     "never turns arbitrary %s segment paths into privileged filesystem reads",
     async (scene) => {
@@ -660,7 +1768,8 @@ describe("createQQOfficialAdapter", () => {
       await startWithDispatch(a, C2C_DISPATCH)
       expect(mockStartGateway).toHaveBeenCalledWith(
         expect.objectContaining({
-          intents: (1 << 30) | (1 << 25) | (1 << 12) | (1 << 26) | (enabled ? 1 << 9 : 0),
+          intents:
+            (1 << 30) | (1 << 25) | (1 << 12) | (1 << 26) | (1 << 24) | (enabled ? 1 << 9 : 0),
         })
       )
       await a.stop()
@@ -802,6 +1911,8 @@ describe("createQQOfficialAdapter", () => {
       dispatches: fakeDispatches(() => new Promise(() => {})),
     })
     await a.start(current)
+    mockStartGateway.mock.calls[1][0].onHealth({ state: "running" })
+    mockStartGateway.mock.calls[0][0].onHealth({ state: "degraded", reason: "stale" })
     release(true)
     await new Promise((resolve) => setTimeout(resolve, 0))
     try {
@@ -1312,6 +2423,7 @@ describe("createQQOfficialAdapter — health reason", () => {
     })
     const a = adapter()
     await a.start(fakeCtx())
+    mockStartGateway.mock.calls[0][0].onHealth({ state: "running" })
     expect(a.health().state).toBe("running")
 
     mockInvoke.mockResolvedValue(httpResp(401, { message: "rotated" }))
@@ -1389,6 +2501,246 @@ const keyboardSurface = {
     },
   },
 }
+
+function welcomeSegment(commands = false, surfaceId = "welcome:qq-test") {
+  return buildA2UISegment(
+    surfaceId,
+    buildHelpSurface({
+      surfaceId,
+      mode: "welcome",
+      displayName: "Private adapter name",
+      welcomeText: "你好，直接描述任务即可。",
+      quickCommands: commands
+        ? [
+            {
+              triggerKey: "tasks",
+              label: "查看待办",
+              action: { type: "prompt", value: "列出待办" },
+            },
+          ]
+        : [],
+    })
+  )
+}
+
+it.each([
+  ["group", false],
+  ["group", true],
+  ["c2c", false],
+  ["c2c", true],
+] as const)(
+  "delivers the composed %s welcome with Markdown and confirmed bindings (%s)",
+  async (scene, commands) => {
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "welcome-message" }))
+    const result = await adapter().send(
+      sendReq({
+        conversationRef: {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene,
+          sceneId: "target",
+          msgId: "trigger",
+        },
+        segments: [welcomeSegment(commands)],
+      })
+    )
+    expect(result).toMatchObject({ ok: true, platformMessageId: `${scene}:target:welcome-message` })
+    expect(httpCalls()).toHaveLength(1)
+    const body = JSON.parse(httpCalls()[0]!.body!)
+    expect(body).toMatchObject({
+      msg_type: 2,
+      msg_id: "trigger",
+      markdown: { content: expect.stringContaining("## 👋 开始一个新任务") },
+    })
+    expect(body.markdown.content).toContain("\n\n你好，直接描述任务即可。\n\n**快捷指令**")
+    expect(body).not.toHaveProperty("content")
+    expect(body.markdown.content).not.toContain("Private adapter name")
+    const bindings = await getDb().connectorCallbackBindings.toArray()
+    expect(bindings).toHaveLength(commands ? 1 : 0)
+    if (commands) {
+      expect(body.markdown.content).not.toContain("查看待办")
+      expect(bindings[0]).toMatchObject({
+        kind: "help_quick_command",
+        conversationKey: "qq-official:qq-1:target",
+        payload: {
+          action: { type: "prompt", value: "列出待办" },
+          qqKeyboard: { messageId: "welcome-message", scene, sceneId: "target" },
+        },
+      })
+    }
+  }
+)
+
+it("does not authorize welcome buttons after an uncertain provider result", async () => {
+  mockInvoke.mockRejectedValue(new Error("Connection lost after POST"))
+  const result = await adapter().send(sendReq({ segments: [welcomeSegment(true)] }))
+  expect(result.ok).toBe(false)
+  expect(httpCalls()).toHaveLength(1)
+  expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+})
+
+it.each(["group", "c2c"] as const)(
+  "round-trips shared %s welcome commands once and keeps a fresh card clickable",
+  async (scene) => {
+    const { createAdapterInstance } = await import("@/lib/db/adapter-instances")
+    const row = await createAdapterInstance({
+      type: "qq-official",
+      displayName: "Command test",
+      enabled: true,
+      transportMode: "gateway",
+      settings: {},
+      credentialsRef: { keyringService: "test", accounts: [] },
+      mediaModelPolicy: "local_extract_only",
+      defaultMode: "auto",
+      welcomeCardEnabled: false,
+      trigger: {
+        rules: [{ kind: "private-default" }, { kind: "self-mention" }],
+        blockers: [],
+        storeUnmatchedInDraftMode: false,
+      },
+    })
+    const a = adapter({ id: row.id }),
+      bus = getBus(),
+      routeHandler = jest.fn()
+    bus.registerAdapter(a)
+    bus.routeHandler = routeHandler
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "command-card" }))
+    const tokens: string[] = []
+    try {
+      for (const ordinal of [0, 1]) {
+        expect(
+          (
+            await a.send(
+              sendReq({
+                conversationRef: {
+                  platform: "qq-official",
+                  adapterId: row.id,
+                  scene,
+                  sceneId: "target",
+                  msgId: `source-${ordinal}`,
+                },
+                segments: [welcomeSegment(true, `welcome:command-${ordinal}`)],
+                metadata: { idempotencyKey: `command-${ordinal}` },
+              })
+            )
+          ).ok
+        ).toBe(true)
+        const button = JSON.parse(httpCalls().at(-1)!.body!).keyboard.content.rows[0].buttons[0]
+        tokens.push(button.action.data)
+        const callback = await resolveQQInteraction(row.id, "bot", {
+          id: `press-${ordinal}`,
+          scene,
+          sceneId: "target",
+          actorId: scene === "c2c" ? "target" : "member",
+          buttonData: button.action.data,
+          buttonId: button.id,
+          messageId: "command-card",
+          timestamp: Date.now(),
+        })
+        expect(callback).not.toBeNull()
+        await bus.dispatchConnectorCallback(callback!)
+        await bus.dispatchConnectorCallback(callback!)
+        await bus.flushInboundTurns()
+        expect(routeHandler).toHaveBeenCalledTimes(ordinal + 1)
+      }
+      expect(new Set(tokens).size).toBe(2)
+      expect(routeHandler.mock.calls.every(([event]) => event.plainText === "列出待办")).toBe(true)
+      expect(
+        routeHandler.mock.calls.every(
+          ([event]) =>
+            event.conversationRef.scene === scene && event.conversationRef.sceneId === "target"
+        )
+      ).toBe(true)
+    } finally {
+      await a.stop()
+    }
+  }
+)
+
+it.each(["multipart", "stream-final"] as const)(
+  "keeps real QQ %s uncertainty non-replayable across an outbound runner restart",
+  async (kind) => {
+    const a = adapter()
+    let posts = 0
+    mockInvoke.mockImplementation(async (command: string) => {
+      if (command !== "connectors_http_request") return undefined
+      if (++posts === 1) return httpResp(200, { id: "known-first-part" })
+      throw new Error("Synthetic connection loss after POST")
+    })
+    const request = sendReq({
+      conversationRef: {
+        platform: "qq-official",
+        adapterId: "qq-1",
+        scene: "c2c",
+        sceneId: "target",
+        msgId: "trigger",
+        receivedAt: Date.now(),
+      },
+      metadata: { idempotencyKey: `unknown-${kind}`, streamKey: "complex-turn" },
+      segments:
+        kind === "multipart"
+          ? [{ type: "markdown", md: "Part one" }, keyboardSurface]
+          : [{ type: "markdown", md: "Partial complete" }],
+    })
+    if (kind === "stream-final")
+      await a.streamReply!({
+        conversationRef: request.conversationRef,
+        streamKey: "complex-turn",
+        text: "Partial",
+      })
+    const { getConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+    const { startOutboundRunner } = await import("@/lib/connectors/outbound-runner")
+    const { waitForOutboundTerminal } = await import("@/lib/db/outbound-jobs")
+    const job = await getConnectorDeliveryGateway().enqueue({
+      adapterId: a.id,
+      conversationKey: "qq-official:qq-1:target",
+      request,
+      source: "manual",
+    })
+    const controller = new AbortController()
+    const running = startOutboundRunner({
+      adapters: new Map([[a.id, a]]),
+      signal: controller.signal,
+      pollIntervalMs: 10,
+    })
+    try {
+      expect(await waitForOutboundTerminal(job.id, 3000)).toMatchObject({
+        status: "delivery_unknown",
+        lastErrorCode: "delivery_unknown",
+      })
+    } finally {
+      controller.abort()
+      await running
+      await a.stop()
+    }
+    const beforeRestart = httpCalls().length
+    expect(beforeRestart).toBe(2)
+    expect(await getDb().connectorCallbackBindings.count()).toBe(0)
+    if (kind === "multipart")
+      expect(
+        await wasDeliveredByUs("qq-1", "qq-official:qq-1:target", "c2c:target:known-first-part")
+      ).toBe(true)
+    else
+      expect(
+        (await getDb().inboundLedger.where("namespace").equals("qq-stream").first())?.qqStream
+      ).toMatchObject({ messageId: "known-first-part", phase: "uncertain" })
+    const restored = adapter()
+    const restartedController = new AbortController()
+    let observations = 0
+    await startOutboundRunner({
+      adapters: new Map([[restored.id, restored]]),
+      signal: restartedController.signal,
+      pollIntervalMs: 10,
+      onSchedulerState: () => {
+        if (++observations >= 3) restartedController.abort()
+      },
+    })
+    expect(observations).toBeGreaterThanOrEqual(3)
+    expect(httpCalls()).toHaveLength(beforeRestart)
+    expect(await getDb().outboundQueue.get(job.id)).toMatchObject({ status: "delivery_unknown" })
+    await restored.stop()
+  }
+)
 
 it.each(["group", "c2c"] as const)(
   "sends %s A2UI buttons as native keyboard content",
@@ -1638,7 +2990,9 @@ it.each(["group", "c2c"] as const)(
     const sends = httpCalls()
       .filter((call) => call.url.endsWith("/messages"))
       .map((call) => JSON.parse(call.body!))
-    expect(sends.map((call) => call.msg_type)).toEqual([2, 0, 7, 0])
+    expect(sends.map((call) => call.msg_type)).toEqual([2, 2, 7, 0])
+    expect(sends[1]!.markdown).toEqual({ content: "Choose" })
+    expect(sends[1]).not.toHaveProperty("content")
     expect(sends[1]!.keyboard).toBeDefined()
     expect(sends[0]!.keyboard).toBeUndefined()
     expect(sends[2]!.media).toEqual({ file_info: "uploaded" })
@@ -1703,3 +3057,326 @@ it("retains the confirmed platform ID if the keyboard receipt write fails", asyn
     write.mockRestore()
   }
 })
+
+it.each([
+  ["message", 1000],
+  ["interaction", 1000],
+  ["message", 0],
+  ["interaction", 0],
+  ["message", 1],
+] as const)(
+  "streams a native C2C %s reply with reported length %s and completes the same message through send",
+  async (source, remaining) => {
+    mockInvoke.mockResolvedValue(
+      httpResp(200, {
+        id: "server-stream",
+        remain_msg_len: remaining,
+        ext_info: { ref_idx: "REFIDX_stream==" },
+      })
+    )
+    const a = adapter()
+    const conversationRef = {
+      platform: "qq-official" as const,
+      adapterId: "qq-1",
+      scene: "c2c",
+      sceneId: "target",
+      receivedAt: Date.now(),
+      ...(source === "message" ? { msgId: "source" } : { eventId: "source" }),
+    }
+    expect(typeof a.streamReply).toBe("function")
+    await a.streamReply!({ conversationRef, streamKey: "turn-one", text: "Hello" })
+    const result = await a.send(
+      sendReq({
+        conversationRef,
+        metadata: { idempotencyKey: "final-one", streamKey: "turn-one" },
+        segments: [{ type: "markdown", md: "Hello world" }],
+      })
+    )
+    expect(result).toMatchObject({ ok: true, platformMessageId: "c2c:target:server-stream" })
+    const calls = httpCalls()
+    expect(calls).toHaveLength(2)
+    expect(calls.every((call) => call.url.endsWith("/v2/users/target/stream_messages"))).toBe(true)
+    const frames = calls.map((call) => JSON.parse(call.body!))
+    expect(frames.map((frame) => frame.index)).toEqual([0, 1])
+    expect(frames.map((frame) => frame.input_state)).toEqual([1, 10])
+    expect(frames[1]).toMatchObject({
+      input_mode: "replace",
+      content_raw: "Hello world",
+      stream_msg_id: "server-stream",
+      msg_seq: frames[0].msg_seq,
+    })
+    expect(frames[0]).toHaveProperty(source === "message" ? "msg_id" : "event_id", "source")
+    expect(frames[0]).not.toHaveProperty(source === "message" ? "event_id" : "msg_id")
+    expect(qqPassiveReplyCount(source === "message" ? "source" : "event:source")).toBe(1)
+  }
+)
+
+describe("native C2C stream adapter lifecycle regressions", () => {
+  const captured = () => ({
+    platform: "qq-official" as const,
+    adapterId: "qq-1",
+    scene: "c2c",
+    sceneId: "target",
+    msgId: "lifecycle-source",
+    receivedAt: Date.now(),
+  })
+  const finalFor = (conversationRef: ReturnType<typeof captured>) =>
+    sendReq({
+      conversationRef,
+      metadata: { idempotencyKey: "lifecycle-final", streamKey: "lifecycle-turn" },
+      segments: [{ type: "markdown", md: "Hello world" }],
+    })
+
+  it.each([200, 429])(
+    "cancels an in-flight ACK and retains the tombstone after close HTTP %s",
+    async (closeStatus) => {
+      let entered!: () => void, release!: () => void
+      const atHttp = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const a = adapter(),
+        conversationRef = captured()
+      mockInvoke
+        .mockImplementationOnce(async () => {
+          entered()
+          await gate
+          return httpResp(200, { id: "cancelled-server" })
+        })
+        .mockResolvedValue(httpResp(closeStatus, { id: "cancelled-server" }))
+      const partial = { conversationRef, streamKey: "lifecycle-turn", text: "Hello" }
+      const preview = a.streamReply!(partial)
+      try {
+        await atHttp
+        const cancelling = a.cancelStreamReply!(partial)
+        const outcome = cancelling.then(
+          () => null,
+          (error: unknown) => error
+        )
+        release()
+        await preview
+        if (closeStatus === 429) expect(await outcome).toBeInstanceOf(Error)
+        else expect(await outcome).toBeNull()
+        await a.streamReply!({ ...partial, text: "Hello unsafe late content" })
+        expect(await a.send(finalFor(conversationRef))).toMatchObject({
+          ok: false,
+          error: { code: "validation" },
+        })
+        await a.stop()
+        expect(await adapter().send(finalFor(conversationRef))).toMatchObject({
+          ok: false,
+          error: { code: "validation" },
+        })
+        const frames = httpCalls().map((call) => JSON.parse(call.body!))
+        expect(frames).toHaveLength(2)
+        expect(frames.map((frame) => [frame.index, frame.input_state])).toEqual([
+          [0, 1],
+          [1, 10],
+        ])
+        expect(frames[1]).toMatchObject({
+          stream_msg_id: "cancelled-server",
+          content_raw: "Hello",
+          msg_seq: frames[0].msg_seq,
+        })
+        expect(httpCalls().every((call) => call.url.endsWith("/stream_messages"))).toBe(true)
+        expect(
+          (await getDb().inboundLedger.where("namespace").equals("qq-stream").first())?.qqStream
+            ?.phase
+        ).toBe("cancelled")
+        expect(qqPassiveReplyCount("lifecycle-source")).toBe(1)
+      } finally {
+        release()
+        await a.stop()
+      }
+    }
+  )
+
+  it("continues the same acknowledged stream after adapter stop/start and replays final locally", async () => {
+    mockInvoke.mockResolvedValue(httpResp(200, { id: "restarted-server" }))
+    const a = adapter(),
+      conversationRef = captured()
+    await a.streamReply!({ conversationRef, streamKey: "lifecycle-turn", text: "Hello" })
+    await a.stop()
+    await expect(
+      a.streamReply!({ conversationRef, streamKey: "lifecycle-turn", text: "Hello stale" })
+    ).rejects.toThrow(/unavailable/)
+    expect(httpCalls()).toHaveLength(1)
+    await startWithDispatch(a, C2C_DISPATCH)
+    try {
+      expect(await a.send(finalFor(conversationRef))).toMatchObject({
+        ok: true,
+        platformMessageId: "c2c:target:restarted-server",
+      })
+      await a.stop()
+      expect(await adapter().send(finalFor(conversationRef))).toMatchObject({
+        ok: true,
+        platformMessageId: "c2c:target:restarted-server",
+      })
+      const frames = httpCalls().map((call) => JSON.parse(call.body!))
+      expect(frames).toHaveLength(2)
+      expect(frames[1]).toMatchObject({
+        index: 1,
+        input_state: 10,
+        stream_msg_id: "restarted-server",
+        msg_seq: frames[0].msg_seq,
+      })
+      expect(qqPassiveReplyCount("lifecycle-source")).toBe(1)
+    } finally {
+      await a.stop()
+    }
+  })
+
+  it.each(["pending", "missing-id", "changed-id", "timeout"])(
+    "does not resend an ambiguous %s final through a rebuilt adapter",
+    async (fault) => {
+      const a = adapter(),
+        conversationRef = captured()
+      mockInvoke.mockResolvedValueOnce(httpResp(200, { id: "known-server" }))
+      await a.streamReply!({ conversationRef, streamKey: "lifecycle-turn", text: "Hello" })
+      if (fault === "timeout") mockInvoke.mockRejectedValueOnce(new Error("ACK connection lost"))
+      else
+        mockInvoke.mockResolvedValueOnce(
+          httpResp(fault === "pending" ? 202 : 200, {
+            ...(fault === "missing-id"
+              ? {}
+              : { id: fault === "changed-id" ? "different-server" : "known-server" }),
+          })
+        )
+      try {
+        const request = finalFor(conversationRef)
+        expect(await a.send(request)).toMatchObject({
+          ok: false,
+          error: { code: "reconciliation_required", retryable: false },
+        })
+        await a.stop()
+        expect(await adapter().send(request)).toMatchObject({
+          ok: false,
+          error: { code: "reconciliation_required", retryable: false },
+        })
+        const calls = httpCalls()
+        expect(calls).toHaveLength(2)
+        expect(calls.every((call) => call.url.endsWith("/stream_messages"))).toBe(true)
+        expect(JSON.parse(calls[1].body!)).toMatchObject({
+          stream_msg_id: "known-server",
+          index: 1,
+          input_state: 10,
+        })
+        expect(
+          (await getDb().inboundLedger.where("namespace").equals("qq-stream").first())?.qqStream
+        ).toMatchObject({ phase: "uncertain", messageId: "known-server" })
+        expect(qqPassiveReplyCount("lifecycle-source")).toBe(1)
+      } finally {
+        await a.stop()
+      }
+    }
+  )
+})
+
+it.each([
+  ["mp3", "audio/mpeg"],
+  ["aac", "audio/aac"],
+  ["m4a", "audio/mp4"],
+  ["m4a_tail", "audio/x-m4a"],
+] as const)(
+  "turns buffered %s TTS into real SILK, queues bytes and retries C2C without resynthesis",
+  async (format, mimeType) => {
+    const { synthesizeConnectorVoice } = await import("@/lib/connectors/voice")
+    const { transcodeAudio } = await import("@/lib/audio/transcode")
+    const { ttsOrchestrator } = await import("@/lib/tts/tts-orchestrator")
+    const { ConnectorDeliveryGateway } = await import("@/lib/connectors/delivery-gateway")
+    const { enqueueOutbound } = await import("@/lib/db/outbound-jobs")
+    const { execFileSync } = await import("node:child_process")
+    const fixtures = await import("@/lib/audio/test-audio.json")
+    const synthesize = jest.spyOn(ttsOrchestrator, "synthesize").mockResolvedValue({
+      success: true,
+      audioData: new Uint8Array(Buffer.from(fixtures[format], "base64")).buffer,
+      mimeType,
+      provider: "openai",
+      billedCharacters: 5,
+      spokenText: "Hello",
+    })
+    jest.mocked(transcodeAudio).mockImplementation(async (request) => {
+      const script = `const {transcodeAudioBytes}=require("./lib/audio/transcode-core.ts");let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",async()=>{const x=JSON.parse(s);x.bytes=new Uint8Array(Buffer.from(x.bytes,"base64"));const r=await transcodeAudioBytes(x);console.log(JSON.stringify({...r,bytes:Buffer.from(r.bytes).toString("base64")}))})`
+      const result = JSON.parse(
+        execFileSync(process.execPath, ["--import", "tsx", "-e", script], {
+          input: JSON.stringify({
+            ...request,
+            bytes: Buffer.from(request.bytes).toString("base64"),
+          }),
+          timeout: 15000,
+        }).toString()
+      )
+      return { ...result, bytes: new Uint8Array(Buffer.from(result.bytes, "base64")) }
+    })
+    try {
+      const a = adapter(),
+        conversationRef = {
+          platform: "qq-official",
+          adapterId: "qq-1",
+          scene: "c2c",
+          sceneId: "target",
+          msgId: "voice-trigger",
+        }
+      const voice = await synthesizeConnectorVoice({
+        adapter: a,
+        target: conversationRef,
+        text: "Hello",
+      })
+      const gateway = new ConnectorDeliveryGateway({
+        planDelivery: async () => ({ action: "send" }),
+        persistOne: enqueueOutbound,
+        recordReceipt: async () => {},
+        appendAudit: async () => {},
+      })
+      const queued = await gateway.enqueueAuthorized({
+        adapterId: a.id,
+        conversationKey: "qq-official:qq-1:target",
+        source: "skill",
+        authorization: { kind: "human", actor: "connector-user" },
+        request: { conversationRef, segments: [voice], metadata: { idempotencyKey: "tts-c2c" } },
+      })
+      expect(queued.kind).toBe("queued")
+      if (queued.kind !== "queued") throw Error("Expected queued voice")
+      const stored = await getDb().outboundQueue.get(queued.job.id)
+      expect(stored?.request.segments).toEqual([voice])
+      let uploads = 0
+      mockInvoke.mockImplementation(
+        async (command: string, args: { req: { sourceUrl?: string } }) => {
+          if (command === "connectors_media_upload") {
+            uploads++
+            const bytes = Buffer.from(args.req.sourceUrl!.split(",")[1], "base64")
+            expect([...bytes.subarray(0, 10)]).toEqual([2, 35, 33, 83, 73, 76, 75, 95, 86, 51])
+            return JSON.stringify(
+              httpResp(
+                uploads === 1 ? 503 : 200,
+                uploads === 1 ? { message: "busy" } : { file_info: "tts-silk" }
+              )
+            )
+          }
+          return httpResp(200, { id: "voice-sent" })
+        }
+      )
+      expect((await a.send(stored!.request)).error?.retryable).toBe(true)
+      expect((await a.send(stored!.request)).ok).toBe(true)
+      expect(mockInvoke).toHaveBeenCalledWith("connectors_media_upload", {
+        req: expect.objectContaining({
+          uploadUrl: "https://api.bot.qq.com/v2/users/target/files",
+          qq: { fileType: 3, fileName: "voice.silk" },
+          sourceUrl: voice.url,
+        }),
+      })
+      expect(JSON.parse(httpCalls()[0].body!)).toMatchObject({
+        msg_type: 7,
+        msg_id: "voice-trigger",
+        media: { file_info: "tts-silk" },
+      })
+      expect(synthesize).toHaveBeenCalledTimes(1)
+      expect(transcodeAudio).toHaveBeenCalledTimes(1)
+    } finally {
+      synthesize.mockRestore()
+      jest.mocked(transcodeAudio).mockReset()
+    }
+  }
+)

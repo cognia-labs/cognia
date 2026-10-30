@@ -7,16 +7,90 @@ import {
   TAT_INVALIDATION_CODES,
   isLarkTatInvalidation,
   withTatRefresh,
+  withUserTokenRefresh,
 } from "./auth-retry"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { refreshUserToken } from "./auth"
 
 const mockClearTokenCache = jest.fn()
 
 jest.mock("./auth", () => ({
   clearTokenCache: (...args: unknown[]) => mockClearTokenCache(...args),
+  refreshUserToken: jest.fn(),
 }))
+jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsLarkUserAuth: jest.fn() }))
 
 beforeEach(() => {
   mockClearTokenCache.mockClear()
+  ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockResolvedValue({
+    configured: true,
+    authorizationEpoch: "request-epoch",
+    accessToken: "user-a",
+  })
+  ;(refreshUserToken as jest.Mock).mockReset()
+})
+
+describe("withUserTokenRefresh", () => {
+  const ctx = { adapterId: "fixture", appId: "app", appSecret: "secret" }
+  it("refreshes against the originating request epoch and retries once", async () => {
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(new LarkApiError({ status: 401, code: null, message: "expired" }))
+      .mockResolvedValueOnce("result")
+    await expect(withUserTokenRefresh(ctx, fn)).resolves.toBe("result")
+    expect(refreshUserToken).toHaveBeenCalledWith({
+      ...ctx,
+      expectedAuthorizationEpoch: "request-epoch",
+    })
+    expect(fn).toHaveBeenCalledTimes(2)
+  })
+  it("passes the captured identity and refuses a successful result after replacement", async () => {
+    const fn = jest.fn(async (token: string, epoch: string) => {
+      expect(token).toBe("user-a")
+      expect(epoch).toBe("request-epoch")
+      ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+        configured: true,
+        authorizationEpoch: "replacement",
+        accessToken: "user-b",
+      })
+      return "private user-a result"
+    })
+    await expect(withUserTokenRefresh(ctx, fn)).rejects.toThrow("lark_auth_stale")
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(refreshUserToken).not.toHaveBeenCalled()
+  })
+  it("retains the origin epoch and paired token after a valid refresh", async () => {
+    ;(refreshUserToken as jest.Mock).mockImplementation(async () => {
+      ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+        configured: true,
+        authorizationEpoch: "request-epoch",
+        accessToken: "user-a-rotated",
+      })
+    })
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(new LarkApiError({ status: 401, code: null, message: "expired" }))
+      .mockResolvedValueOnce("private result")
+    await expect(withUserTokenRefresh(ctx, fn)).resolves.toBe("private result")
+    expect(fn.mock.calls).toEqual([
+      ["user-a", "request-epoch"],
+      ["user-a-rotated", "request-epoch"],
+    ])
+  })
+  it("does not retry when cancellation arrives during an already-dispatched refresh", async () => {
+    const controller = new AbortController()
+    ;(refreshUserToken as jest.Mock).mockImplementation(async () => {
+      controller.abort()
+      return "rotated"
+    })
+    const fn = jest
+      .fn()
+      .mockRejectedValue(new LarkApiError({ status: 401, code: null, message: "expired" }))
+    await expect(
+      withUserTokenRefresh({ ...ctx, signal: controller.signal }, fn)
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("LarkApiError", () => {

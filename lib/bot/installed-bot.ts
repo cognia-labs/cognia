@@ -191,7 +191,7 @@ async function resolveLocalDefinition(
  * installation that moved to a paired host is refused (ADR-0224).
  */
 export function isRunnableBot(resolved: InstalledBot): boolean {
-  if (resolved.installation.status !== "enabled") return false
+  if (resolved.installation.status !== "enabled" || resolved.installation.paused) return false
   if (!runsHere(resolved.installation.owner)) return false
   return !resolved.problems.some((problem) => problem.kind === "handler_missing")
 }

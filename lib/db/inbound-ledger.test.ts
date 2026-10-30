@@ -13,6 +13,27 @@ beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
 describe("inbound-ledger", () => {
+  it("retains independently bounded asset ownership and proactive send receipts during pruning", async () => {
+    await recordInbound("qq", "asset", "connector-asset")
+    await recordInbound("qq", "receipt", "connector-delivery")
+    await recordInbound("qq", "async-status", "connector-status")
+    await recordInbound("qq", "old")
+    await recordInbound("qq", "new")
+    await pruneOldest(1, 1)
+    expect(await isInboundRecorded("qq", "asset", "connector-asset")).toBe(true)
+    expect(await isInboundRecorded("qq", "receipt", "connector-delivery")).toBe(true)
+    expect(await isInboundRecorded("qq", "async-status", "connector-status")).toBe(true)
+    expect(await getDb().inboundLedger.where("namespace").equals("inbound").count()).toBe(1)
+  })
+  it("keeps QQ stream recovery checkpoints outside inbound and delivery pruning", async () => {
+    await recordInbound("qq", "stream", "qq-stream")
+    await recordInbound("qq", "first")
+    await recordInbound("qq", "second")
+    await pruneOldest(1, 1)
+    expect(await isInboundRecorded("qq", "stream", "qq-stream")).toBe(true)
+    expect(await getDb().inboundLedger.where("namespace").equals("inbound").count()).toBe(1)
+  })
+
   it("keeps independently capped QQ aliases from evicting inbound dedup or delivery evidence", async () => {
     await recordInbound("qq", "alias-1", "qq-reference")
     await recordInbound("qq", "alias-2", "qq-reference")

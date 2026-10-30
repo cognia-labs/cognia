@@ -11,6 +11,7 @@ import {
   buildActionId,
   resolveButtonWireAction,
   generatePlainTextMirror,
+  generateMarkdownMirror,
   recordCallbackBinding,
   resolveCallbackBinding,
   truncateActionId,
@@ -208,6 +209,32 @@ describe("buildActionId / truncateActionId", () => {
 })
 
 describe("callback binding persistence", () => {
+  it("cannot resurrect or overwrite an accepted workflow decision during redraw", async () => {
+    const input = {
+      adapterId: "adp_1",
+      actionId: "approve",
+      surfaceId: "surface",
+      kind: "wf_approve" as const,
+      payload: { workflowId: "original" },
+    }
+    await recordCallbackBinding(input)
+    const workflowDispatch = {
+      status: "pending" as const,
+      decision: "approve" as const,
+      acceptedAt: 10,
+    }
+    await getDb().connectorCallbackBindings.update("adp_1:approve", {
+      consumedAt: 10,
+      workflowDispatch,
+    })
+    await recordCallbackBinding({ ...input, payload: { workflowId: "replacement" } })
+    expect(await getDb().connectorCallbackBindings.get("adp_1:approve")).toMatchObject({
+      consumedAt: 10,
+      workflowDispatch,
+      payload: { workflowId: "original" },
+    })
+  })
+
   it("recordCallbackBinding upserts by [adapterId+actionId]", async () => {
     await recordCallbackBinding({
       adapterId: "adp_1",
@@ -267,6 +294,53 @@ describe("callback binding persistence", () => {
       createdAt: Date.now() - 365 * 24 * 60 * 60 * 1000,
     })
     expect((await resolveCallbackBinding("adp_1", "act_legacy"))?.surfaceId).toBe("s_legacy")
+  })
+})
+
+describe("generateMarkdownMirror", () => {
+  it("renders semantic headings and paragraphs while preserving literal Unicode and markup", () => {
+    const surface: A2UISegmentContent = {
+      rootId: "root",
+      dataModel: { title: "你好 *世界*", text: "<qqbot-at-everyone />\n# literal heading" },
+      components: {
+        root: {
+          component: "Card",
+          title: { path: "/title" },
+          children: ["heading", "body", "btn"],
+        },
+        heading: { component: "Text", text: "开始 [任务]", variant: "heading3" },
+        body: { component: "Text", text: { path: "/text" } },
+        btn: { component: "Button", text: "开始", action: "private-action" },
+      },
+    }
+    const before = JSON.stringify(surface)
+    const markdown = generateMarkdownMirror(surface, { omitButtonIds: new Set(["btn"]) })
+    expect(markdown).toBe(
+      "## 你好 \\*世界\\*\n\n### 开始 \\[任务\\]\n\n\\<qqbot-at-everyone /\\>\n\\# literal heading"
+    )
+    expect(markdown).not.toContain("private-action")
+    expect(JSON.stringify(surface)).toBe(before)
+    expect(generatePlainTextMirror(surface)).toContain("# 你好 *世界*")
+    expect(generateMarkdownMirror(surface)).toContain("\\[开始\\]")
+    expect(generateMarkdownMirror(surface, { maxHeadingLevel: 2 })).toContain("**开始 \\[任务\\]**")
+    expect(generateMarkdownMirror(surface, { maxHeadingLevel: 1 })).toMatch(/^# 你好 /)
+  })
+
+  it("retains disabled controls and unsupported input labels without granting links or markup", () => {
+    const surface: A2UISegmentContent = {
+      rootId: "root",
+      dataModel: {},
+      components: {
+        root: { component: "Column", children: ["disabled", "field", "link"] },
+        disabled: { component: "Button", text: "Wait", disabled: true },
+        field: { component: "TextField", label: "*Name*" },
+        link: { component: "Link", text: "[Admin]", href: "javascript:alert(1)" },
+      },
+    }
+    expect(generateMarkdownMirror(surface)).toBe(
+      "\\[Wait\\]\n\n\\[\\*Name\\*: \\_\\_\\_\\_\\_\\_\\_\\_\\_\\_\\]\n\n\\[Admin\\]"
+    )
+    expect(generateMarkdownMirror(surface)).not.toContain("javascript:")
   })
 })
 

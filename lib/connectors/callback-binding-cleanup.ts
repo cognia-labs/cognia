@@ -76,6 +76,8 @@ export async function cleanupExpiredCallbackBindings(
   // `expiresAt` would force a Dexie upgrade, and the table is small enough
   // that an in-memory filter is faster than the migration cost.
   await db.connectorCallbackBindings.each((row) => {
+    // TTL limits unanswered cards, not already accepted durable work.
+    if (row.workflowDispatch && row.workflowDispatch.status !== "settled") return
     if (typeof row.expiresAt === "number") {
       if (row.expiresAt < now) {
         expiredCount++

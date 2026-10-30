@@ -19,7 +19,11 @@ import {
   narrowAutonomy,
   type AgentAuthority,
   type AutonomyLevel,
+  type AgentCompositionSelectionV1,
 } from "@cognia/agent-config-types/agent-composition"
+import { resolveComposition } from "@/lib/agent/composition/resolve-composition"
+import { appPresetCatalog } from "@/lib/agent/composition/app-preset-catalog"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import {
   narrowPermissionProfile,
   widenedPermissionClasses,
@@ -191,4 +195,32 @@ export function resolveBotPolicy(layers: readonly BotPolicyLayer[]): ResolvedBot
 /** Does the resolved ceiling permit a run this Bot's own activity produced? */
 export function allowsSelfTriggering(policy: PluginBotPolicyV1): boolean {
   return policy.allowSelfTriggering === true
+}
+
+/** The parent ceiling handed to another engine, using the same axis caps. */
+export function botPermissionCeiling(
+  selection: Partial<AgentCompositionSelectionV1>,
+  policy: PluginBotPolicyV1
+): AgentPermissionCeiling {
+  return {
+    permissionMode: resolveBotExecutionComposition(selection, policy).authority as AgentAuthority,
+  }
+}
+
+export function resolveBotExecutionComposition(
+  selection: Partial<AgentCompositionSelectionV1>,
+  policy: PluginBotPolicyV1
+) {
+  return resolveComposition({
+    selection: {
+      ...selection,
+      presetId: selection.presetId ?? "standard",
+      autonomy: selection.autonomy ?? "confirm",
+    },
+    presets: appPresetCatalog(),
+    ceiling: policy.maxAuthority,
+    autonomyCeiling: policy.maxAutonomy,
+    promptDigest: "",
+    toolDigest: "",
+  })
 }

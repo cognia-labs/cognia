@@ -419,7 +419,12 @@ export function createBotStepApi(input: {
 
     for (;;) {
       assertLive(signal, runId)
-      const delivery = await findBotDeliveryByCorrelation(waitInput.key)
+      const origin = await getDb().botEventDeliveries.where("runId").equals(runId).first()
+      const delivery = await findBotDeliveryByCorrelation(
+        waitInput.key,
+        origin?.envelope,
+        waitInput.triggerId
+      )
       if (delivery) {
         await completeBotRunStep(runId, name, delivery.envelope, now())
         await journal("step.completed", name, { eventId: delivery.eventId })

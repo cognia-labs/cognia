@@ -7,6 +7,8 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
 import type { PluginBotDef, PluginBotTriggerDef } from "@/types/plugin/plugin-bot"
 import type { IntegrationEventEnvelope } from "@/types/plugin/plugin-integration"
+import { enqueueBotDelivery } from "@/lib/db/bot-event-deliveries"
+import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
 
 import { dispatchIntegrationEventToBots } from "./integration-event"
 
@@ -96,6 +98,120 @@ describe("dispatchIntegrationEventToBots", () => {
     await dispatchIntegrationEventToBots(event({ id: "ie_2" }))
 
     expect(await getDb().botEventDeliveries.count()).toBe(1)
+  })
+
+  it("keeps the same provider delivery ID independent across two accounts", async () => {
+    await install("acct_a", "a")
+    await install("acct_b", "b")
+    const [first] = (await dispatchIntegrationEventToBots(event())).enqueued
+    const [second] = (
+      await dispatchIntegrationEventToBots(event({ id: "ie_2", accountId: "acct_b" }))
+    ).enqueued
+    expect(first.eventId).not.toBe(second.eventId)
+    await dispatchIntegrationEventToBots(event())
+    await dispatchIntegrationEventToBots(event({ id: "ie_2", accountId: "acct_b" }))
+    expect(await getDb().botEventDeliveries.count()).toBe(2)
+  })
+
+  it("admits the new account's colliding delivery after rebinding the same installation", async () => {
+    const installed = await install("acct_a")
+    const [first] = (await dispatchIntegrationEventToBots(event())).enqueued
+    await getDb().botInstallations.update(installed.id, {
+      credentialBindings: { repo: { integrationAccountId: "acct_b" } },
+    })
+    const [second] = (
+      await dispatchIntegrationEventToBots(event({ id: "ie_b", accountId: "acct_b" }))
+    ).enqueued
+    expect(second.id).not.toBe(first.id)
+    expect(second.envelope.binding?.integrationAccountId).toBe("acct_b")
+    expect(await getDb().botEventDeliveries.count()).toBe(2)
+  })
+
+  it("bounds source IDs so downstream run IDs fit the Host command contract", async () => {
+    await install("acct_a")
+    const [delivery] = (
+      await dispatchIntegrationEventToBots(event({ deliveryId: "x".repeat(256) }))
+    ).enqueued
+    expect(delivery.eventId.length).toBeLessThanOrEqual(100)
+  })
+
+  it("keeps the new identity namespace disjoint from valid legacy provider IDs", async () => {
+    await install("acct_a")
+    const original = event({ pluginId: "v2", integrationId: "integration", deliveryId: "new-id" })
+    const oldProviderId = JSON.stringify([
+      original.pluginId,
+      original.integrationId,
+      original.accountId,
+      original.deliveryId,
+    ])
+    const legacy = await enqueueBotDelivery({
+      envelope: buildBotEventEnvelope({
+        source: "integration",
+        sourceRecordId: `v2:${oldProviderId}`,
+        type: original.eventType,
+        installationId: "boti_1",
+        triggerId: "opened",
+        occurredAt: Date.parse(NOW),
+        payload: {},
+        binding: { integrationAccountId: "acct_a" },
+      }),
+    })
+    const [fresh] = (await dispatchIntegrationEventToBots(original)).enqueued
+    expect(fresh.id).not.toBe(legacy.id)
+    expect(await getDb().botEventDeliveries.count()).toBe(2)
+  })
+
+  it.each(["pending", "succeeded"] as const)(
+    "reuses a %s legacy delivery and its run identity on projection recovery",
+    async (status) => {
+      await install("acct_a")
+      const original = event()
+      const legacy = await enqueueBotDelivery({
+        envelope: buildBotEventEnvelope({
+          source: "integration",
+          sourceRecordId: `${original.pluginId}:${original.deliveryId}`,
+          type: original.eventType,
+          installationId: "boti_1",
+          triggerId: "opened",
+          occurredAt: Date.parse(NOW),
+          payload: original.payload,
+          binding: { integrationAccountId: "acct_a" },
+        }),
+      })
+      await getDb().botEventDeliveries.update(legacy.id, { status, runId: "existing-run" })
+      const [replayed] = (await dispatchIntegrationEventToBots(original)).enqueued
+      expect(replayed).toMatchObject({
+        id: legacy.id,
+        eventId: legacy.eventId,
+        runId: "existing-run",
+        status,
+      })
+      expect(await getDb().botEventDeliveries.count()).toBe(1)
+    }
+  )
+
+  it("does not borrow a legacy event identity belonging to another account", async () => {
+    await install("acct_a", "a")
+    await install("acct_b", "b")
+    const original = event()
+    const legacy = await enqueueBotDelivery({
+      envelope: buildBotEventEnvelope({
+        source: "integration",
+        sourceRecordId: `${original.pluginId}:${original.deliveryId}`,
+        type: original.eventType,
+        installationId: "b",
+        triggerId: "opened",
+        occurredAt: Date.parse(NOW),
+        payload: original.payload,
+        binding: { integrationAccountId: "acct_b" },
+      }),
+    })
+    const [newAccount] = (await dispatchIntegrationEventToBots(original)).enqueued
+    expect(newAccount.eventId).not.toBe(legacy.eventId)
+    const [replayed] = (await dispatchIntegrationEventToBots(event({ accountId: "acct_b" })))
+      .enqueued
+    expect(replayed.id).toBe(legacy.id)
+    expect(await getDb().botEventDeliveries.count()).toBe(2)
   })
 
   it("projects the actor without claiming a verified identity", async () => {

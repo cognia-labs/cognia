@@ -12,7 +12,7 @@ it("prefers a guild member portrait even without nested member.user", () => {
 it("uses exact snowflake bits for modern defaults and the legacy discriminator otherwise", () => {
   const id = "999999999999999999"
   expect(discordAvatarUrl({ id, avatar: null, discriminator: "0" })).toBe(
-    `https://cdn.discordapp.com/embed/avatars/${(BigInt(id) >> 22n) % 6n}.png`
+    `https://cdn.discordapp.com/embed/avatars/${(BigInt(id) >> BigInt(22)) % BigInt(6)}.png`
   )
   expect(discordAvatarUrl({ id, avatar: null, discriminator: "1337" })).toBe(
     "https://cdn.discordapp.com/embed/avatars/2.png"

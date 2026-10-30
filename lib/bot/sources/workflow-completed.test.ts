@@ -53,6 +53,31 @@ const run = {
 }
 
 describe("dispatchWorkflowCompletedToBots", () => {
+  it("rejects a completion produced by the receiving Bot instead of resetting its lineage", async () => {
+    await seed({ id: "done", kind: "event", source: "workflow", types: ["workflow.succeeded"] })
+    const result = await dispatchWorkflowCompletedToBots({
+      ...run,
+      provenance: {
+        selfProduced: true,
+        producedByInstallationId: "boti_1",
+        producedByRunId: "bot-run",
+        depth: 1,
+      },
+    })
+    expect(result.enqueued).toEqual([])
+    expect(result.rejected).toEqual([expect.objectContaining({ reason: "self_produced" })])
+  })
+
+  it("retains the depth ceiling across a completion from a different Bot", async () => {
+    await seed({ id: "done", kind: "event", source: "workflow", types: ["workflow.succeeded"] })
+    const result = await dispatchWorkflowCompletedToBots({
+      ...run,
+      provenance: { selfProduced: true, producedByInstallationId: "other", depth: 3 },
+    })
+    expect(result.enqueued).toEqual([])
+    expect(result.rejected).toEqual([expect.objectContaining({ reason: "depth_exceeded" })])
+  })
+
   it("delivers to a trigger watching the matching terminal state", async () => {
     await seed({ id: "done", kind: "event", source: "workflow", types: ["workflow.succeeded"] })
 

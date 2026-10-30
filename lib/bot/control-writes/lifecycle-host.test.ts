@@ -59,6 +59,29 @@ beforeEach(async () => {
 })
 afterEach(() => restore())
 
+it("pins the original install intent across enabled changes and subsequent edits", async () => {
+  const installed = await mutateBotInstallationOnHost({ ...input, enabled: true })
+  await expect(mutateBotInstallationOnHost({ ...input, enabled: false })).rejects.toThrow(
+    /already belongs/
+  )
+  await getDb().botInstallations.update(installed.id, { paused: true })
+  await expect(mutateBotInstallationOnHost({ ...input, enabled: true })).resolves.toMatchObject({
+    id: installed.id,
+  })
+})
+
+it("preserves legacy replay checks for rows without an installation fingerprint", async () => {
+  const installed = await mutateBotInstallationOnHost(input)
+  await getDb().botInstallations.update(installed.id, { installOperationFingerprint: undefined })
+  await expect(mutateBotInstallationOnHost(input)).resolves.toMatchObject({ id: installed.id })
+  await expect(mutateBotInstallationOnHost({ ...input, paused: true })).rejects.toThrow(
+    /already belongs/
+  )
+  await expect(
+    mutateBotInstallationOnHost({ ...input, triggerInputSlots: { manual: "github" } })
+  ).rejects.toThrow(/already belongs/)
+})
+
 it("requires an explicit valid host grant and preserves unrelated installation ceilings", async () => {
   const installed = await mutateBotInstallationOnHost(input)
   await getDb().botInstallations.update(installed.id, {
@@ -491,4 +514,86 @@ it("sets an installation's outbound recipients through the host mutation", async
       recipients: [{ ...grant, addedBy: "agent" }],
     })
   ).rejects.toThrow()
+})
+
+it("routes host pause/resume/cancel and input-slot operations through the owning installation", async () => {
+  const installed = await mutateBotInstallationOnHost({ ...input, paused: true })
+  expect(installed).toMatchObject({ paused: true })
+  expect(
+    await mutateBotInstallationOnHost({
+      operation: "automation",
+      operationId,
+      installationId: installed.id,
+      action: "resume",
+    })
+  ).toMatchObject({ paused: false })
+  expect(
+    await mutateBotInstallationOnHost({
+      operation: "automation",
+      operationId,
+      installationId: installed.id,
+      action: "cancel",
+    })
+  ).toHaveProperty("id", installed.id)
+  await expect(
+    mutateBotInstallationOnHost({
+      operation: "input_slot",
+      operationId,
+      installationId: installed.id,
+      triggerId: "manual",
+      slotId: "github",
+    })
+  ).rejects.toThrow()
+  await getDb().botInstallations.update(installed.id, { syncedFromHost: true })
+  await expect(
+    mutateBotInstallationOnHost({
+      operation: "automation",
+      operationId,
+      installationId: installed.id,
+      action: "pause",
+    })
+  ).rejects.toThrow(/own/)
+})
+
+it("rejects reuse of an install operation with changed pause or input mapping", async () => {
+  await mutateBotInstallationOnHost({ ...input, paused: false })
+  await expect(mutateBotInstallationOnHost({ ...input, paused: true })).rejects.toThrow(
+    /already belongs/
+  )
+  await expect(
+    mutateBotInstallationOnHost({ ...input, triggerInputSlots: { in: "github" } })
+  ).rejects.toThrow(/already belongs/)
+})
+
+it("sets and clears a declared input slot through the host route", async () => {
+  registerBot(
+    "mapped",
+    {
+      id: "bot:mapped",
+      handler: async () => ({}),
+      definition: {
+        id: "mapped",
+        name: "Mapped",
+        version: "1.0.0",
+        executor: "handler",
+        triggers: [{ id: "in", kind: "event", source: "integration", types: ["issue"] }],
+        requires: { credentials: [{ id: "github", label: "GitHub", optional: true }] },
+      },
+    },
+    { pluginId: "bot" }
+  )
+  const installed = await mutateBotInstallationOnHost({ ...input, definitionId: "bot:mapped" })
+  const mapping = {
+    operation: "input_slot",
+    operationId,
+    installationId: installed.id,
+    triggerId: "in",
+    slotId: "github",
+  }
+  expect(await mutateBotInstallationOnHost(mapping)).toMatchObject({
+    triggerInputSlots: { in: "github" },
+  })
+  expect(await mutateBotInstallationOnHost({ ...mapping, slotId: null })).toMatchObject({
+    triggerInputSlots: {},
+  })
 })

@@ -9,6 +9,14 @@ import {
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import type { PlanEventKind, PlanStatus } from "@/types/agent/plan"
 
+it("admits common interaction and receipt filters without inventing provider kinds", () => {
+  const schema = paramsSchemaFor("trigger.connector.system")!
+  expect(
+    schema.safeParse({ adapterId: "a", kinds: ["interaction", "delivery_status"] }).success
+  ).toBe(true)
+  expect(schema.safeParse({ adapterId: "a", kinds: ["qq-private-command"] }).success).toBe(false)
+})
+
 // Exhaustive at compile time: a status or trail kind added to the plan types
 // fails type-checking here until it is listed — and the runtime assertions
 // below then prove the workflow lists picked it up.

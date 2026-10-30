@@ -148,6 +148,7 @@ export async function* startSocketMode(
     let wssUrl: string
     try {
       const token = await opts.appToken()
+      if (opts.signal.aborted) return
       wssUrl = await openConnection(connectionsOpenUrl, token)
     } catch {
       if (opts.signal.aborted) return
@@ -160,6 +161,8 @@ export async function* startSocketMode(
       }
       continue
     }
+
+    if (opts.signal.aborted) return
 
     // Connect to the WSS URL
     let handleId: string
@@ -177,39 +180,56 @@ export async function* startSocketMode(
       continue
     }
 
-    if (opts.signal.aborted) return
+    if (opts.signal.aborted) {
+      await connectorsWsClose(handleId).catch(() => {})
+      return
+    }
 
     // Queue + wake pattern
     const queue: string[] = []
     let wakeResolve: (() => void) | null = null
     let wsEnded = false
 
-    const unlisten = await connectorListen<string>(
-      `connectors://ws/${handleId}/message`,
-      (event) => {
-        queue.push(event.payload)
-        wakeResolve?.()
-        wakeResolve = null
-      }
-    )
-
-    const unlistenClose = await connectorListen<void>(`connectors://ws/${handleId}/close`, () => {
-      wsEnded = true
-      wakeResolve?.()
-      wakeResolve = null
-    })
+    let unlisten: (() => void) | undefined
+    let unlistenClose: (() => void) | undefined
+    let closePromise: Promise<void> | undefined
+    const closeSocket = () => (closePromise ??= connectorsWsClose(handleId).catch(() => {}))
+    const disposeListeners = () => {
+      unlisten?.()
+      unlisten = undefined
+      unlistenClose?.()
+      unlistenClose = undefined
+    }
 
     const abortHandler = () => {
       wsEnded = true
       wakeResolve?.()
       wakeResolve = null
-      void connectorsWsClose(handleId).catch(() => {})
+      void closeSocket()
+      disposeListeners()
     }
     opts.signal.addEventListener("abort", abortHandler)
 
     let shouldReconnect = false
 
     try {
+      if (opts.signal.aborted) {
+        abortHandler()
+        return
+      }
+      unlisten = await connectorListen<string>(`connectors://ws/${handleId}/message`, (event) => {
+        queue.push(event.payload)
+        wakeResolve?.()
+        wakeResolve = null
+      })
+      if (opts.signal.aborted) return
+      unlistenClose = await connectorListen<void>(`connectors://ws/${handleId}/close`, () => {
+        wsEnded = true
+        wakeResolve?.()
+        wakeResolve = null
+      })
+      if (opts.signal.aborted) return
+
       outer: while (!wsEnded && !opts.signal.aborted) {
         if (queue.length === 0) {
           await new Promise<void>((r) => {
@@ -288,11 +308,8 @@ export async function* startSocketMode(
       }
     } finally {
       opts.signal.removeEventListener("abort", abortHandler)
-      unlisten()
-      unlistenClose()
-      if (!opts.signal.aborted) {
-        void connectorsWsClose(handleId).catch(() => {})
-      }
+      disposeListeners()
+      await closeSocket()
     }
 
     if (opts.signal.aborted) return

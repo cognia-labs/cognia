@@ -22,6 +22,7 @@
 
 import type { RunStatus, TriggerEvent, WorkflowRunError } from "@/types/workflow/visual"
 import { loggers } from "@cognia/logging"
+import type { BotEventProvenanceV1 } from "@/types/bot/event"
 
 const log = loggers.scheduler
 
@@ -53,6 +54,8 @@ export interface WorkflowCompletedPayload {
   error?: WorkflowRunError
   /** Depth of THIS link in the trigger chain (1 = first chained hop). */
   chainDepth: number
+  botProvenance?: BotEventProvenanceV1
+  securityContext?: import("@/types/workflow/visual").WorkflowRunSecurityContext
 }
 
 export interface EmitWorkflowCompletedInput {
@@ -63,6 +66,8 @@ export interface EmitWorkflowCompletedInput {
   error?: WorkflowRunError
   /** The finished run's own trigger — source of the inherited chain depth. */
   trigger: TriggerEvent
+  botProvenance?: BotEventProvenanceV1
+  securityContext?: import("@/types/workflow/visual").WorkflowRunSecurityContext
 }
 
 /**
@@ -75,6 +80,18 @@ export async function emitWorkflowCompletedFanout(
   input: EmitWorkflowCompletedInput
 ): Promise<void> {
   try {
+    // Ordinary workflow chains carry the same host-produced lineage as their
+    // Bot-started ancestor; only the known completion payload is a carrier.
+    const inherited =
+      input.trigger.kind === "trigger.workflow.completed"
+        ? (input.trigger.payload as Partial<WorkflowCompletedPayload> | undefined)?.botProvenance
+        : undefined
+    const botProvenance = input.botProvenance ?? inherited
+    const securityContext =
+      input.securityContext ??
+      (input.trigger.kind === "trigger.workflow.completed"
+        ? (input.trigger.payload as Partial<WorkflowCompletedPayload> | undefined)?.securityContext
+        : undefined)
     const depth = chainDepthOf(input.trigger) + 1
     if (depth > MAX_WORKFLOW_CHAIN_DEPTH) {
       log.warn?.("workflow-completion-fanout: chain depth cap reached; not fanning out", {
@@ -98,6 +115,7 @@ export async function emitWorkflowCompletedFanout(
         runId: input.runId,
         status: input.status,
         ...(input.output !== undefined ? { output: input.output } : {}),
+        ...(botProvenance ? { provenance: botProvenance } : {}),
       })
     })().catch(() => undefined)
 
@@ -120,6 +138,8 @@ export async function emitWorkflowCompletedFanout(
       ...(input.output !== undefined ? { output: input.output } : {}),
       ...(input.error ? { error: input.error } : {}),
       chainDepth: depth,
+      ...(botProvenance ? { botProvenance } : {}),
+      ...(securityContext ? { securityContext } : {}),
     }
 
     const originAt = Date.now()

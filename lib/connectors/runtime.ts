@@ -51,9 +51,11 @@ import { inboundReplyLookupIds, resolveInboundReplyTo } from "@/lib/connectors/i
 import type { RouteDecision } from "./mode-router"
 import type { LiveSteerHandler } from "./bus"
 import { resolveInboxSuppression, type ResolvedBinding } from "./policy-resolve"
+import { isInQuietHours } from "./outbound-runner"
 import { matchDispatchRule } from "./dispatch-rules"
 import type { AgentCompositionSelectionV1 } from "@cognia/agent-config-types/agent-composition"
 import { resolveImEffectiveConfig } from "./effective-config"
+import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
 import type {
   SendContent,
   StoredMessage,
@@ -90,6 +92,11 @@ import {
 import { larkReplyLocale } from "@/lib/connectors/adapters/lark/card-kit"
 import { buildSteerPayload, steerBlocksOf } from "@/lib/claude/steer"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
+import {
+  createReplyStream,
+  discloseReplyStreamText,
+  discloseReplyStreamSegments,
+} from "./reply-stream"
 import { hasNoLeakingPii, redactText } from "@cognia/redact"
 import { appendAudit } from "./audit"
 import { getBus } from "./bus"
@@ -1587,6 +1594,31 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // `/status` reports a model this turn will not use.
           session: { model: session.model, providerOverride: session.providerOverride },
         })
+        const suppression = resolveInboxSuppression(adapterRow, override)
+        const quiet = suppression.quietHours
+        const suppressedReason =
+          effectiveConfig.autonomy.effective === "observe" ||
+          effectiveConfig.engagement.effective === "human"
+            ? "manual_mode_override"
+            : suppression.muted
+              ? "muted"
+              : quiet && isInQuietHours(now, quiet.from, quiet.to, quiet.tz)
+                ? "quiet_hours"
+                : undefined
+        if (suppressedReason) {
+          await appendAudit({
+            adapterId: event.adapterId,
+            kind: suppressedReasonToAuditKind(suppressedReason),
+            at: now,
+            conversationKey: event.conversationKey,
+            reason: suppressedReason,
+            fields: {
+              sourceMessageId: storedMsg.id,
+              ...(suppression.mutedScope ? { mutedScope: suppression.mutedScope } : {}),
+            },
+          })
+          break
+        }
         const routing = effectiveConfig.routing
         const effectiveTeamId = routing.teamId
         const effectiveWorkflowId = routing.workflowId
@@ -1635,13 +1667,41 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         }
 
         const target = effectiveTeamId ? "team" : effectiveWorkflowId ? "workflow" : "direct"
-        const permissionCeiling = await buildImPermissionCeiling({
+        let permissionCeiling = await buildImPermissionCeiling({
           adapter: adapterRow,
           override,
           character: effectiveCharacter,
           platform: event.platform,
           target,
+          composition: effectiveConfig,
         })
+        const accepted = routeContext?.acceptedPolicy
+        if (accepted) {
+          const acceptedComposition = resolveImEffectiveConfig({
+            adapter: accepted.adapter,
+            override: accepted.override,
+            rule: null,
+            system: {
+              mode: accepted.resolved.mode,
+              characterId: accepted.resolved.characterId,
+              modeSource:
+                accepted.resolved.modeSource === "conversation-override"
+                  ? undefined
+                  : accepted.resolved.modeSource,
+            },
+          })
+          permissionCeiling = deriveExternalSessionPermission(
+            await buildImPermissionCeiling({
+              adapter: accepted.adapter,
+              override: accepted.override,
+              character: effectiveCharacter,
+              platform: event.platform,
+              target,
+              composition: acceptedComposition,
+            }),
+            permissionCeiling
+          )
+        }
 
         // One-shot `dispatch.rule_matched` audit writer — appended only when
         // the matched rule's action actually decided the routing (i.e. was
@@ -2098,7 +2158,6 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         // A drafted turn has no live conversational surface: nobody has agreed
         // to see it yet, so a progress card would announce a reply the operator
         // may never approve.
-        const liveActivityEnabled = override?.liveActivity !== false && !requireAcceptance
         // ── Respond-via bot (multi-bot cross-account send) ──
         // A matched dispatch rule may ask for the reply to be delivered
         // through ANOTHER of our own bot instances. Validate the target at
@@ -2119,6 +2178,15 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           !requireAcceptance &&
           outboundTarget.adapterId === event.adapterId &&
           outboundTarget.conversationKey === event.conversationKey
+        const liveActivityEnabled =
+          override?.liveActivity !== false &&
+          !requireAcceptance &&
+          !(
+            streamsThroughReceiver &&
+            targetAdapter?.meta.type === "qq-official" &&
+            event.conversationRef.scene === "c2c" &&
+            typeof targetAdapter.streamReply === "function"
+          )
         // Persist one locale for the complete turn, including replay without
         // an IM binding and the terminal result card.
         const runLocale =
@@ -2210,6 +2278,13 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         const captureSignal = adapterSignal
           ? AbortSignal.any([adapterSignal, runController.signal])
           : runController.signal
+        const replyStream = createReplyStream({
+          adapter: targetAdapter,
+          conversationRef: event.conversationRef,
+          streamKey: executionRunId,
+          enabled: streamsThroughReceiver,
+          signal: captureSignal,
+        })
         const envelope = createEnvelopeSequencer({
           sessionId: session.id,
           runId: executionRunId,
@@ -2330,15 +2405,20 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             void runProducer.onCaptureEvent(ev, Date.now()).catch(() => undefined)
             if (canonical) void persistCanonicalEvent(canonical).catch(() => undefined)
           },
-          ...(streamsThroughReceiver && typeof targetAdapter?.streamReply === "function"
+          ...(streamsThroughReceiver &&
+          typeof targetAdapter?.streamReply === "function" &&
+          (targetAdapter.meta.type !== "qq-official" || Boolean(replyStream))
             ? {
                 onPartial: (text: string) => {
-                  const safeText = twinId
-                    ? (
-                        discloseTwinOutboundSegments([{ type: "text", text }], twinId)
-                          .segments[0] as { type: "text"; text: string }
-                      ).text
-                    : text
+                  if (captureSignal.aborted) return
+                  const safeText = replyStream
+                    ? discloseReplyStreamText(text, twinId)
+                    : twinId
+                      ? (
+                          discloseTwinOutboundSegments([{ type: "text", text }], twinId)
+                            .segments[0] as { type: "text"; text: string }
+                        ).text
+                      : text
                   if (!hasNoLeakingPii(safeText)) {
                     void appendAudit({
                       adapterId: event.adapterId,
@@ -2347,6 +2427,10 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
                       conversationKey: event.conversationKey,
                       reason: "partial_pii_blocked",
                     }).catch(() => undefined)
+                    return
+                  }
+                  if (replyStream) {
+                    replyStream.onPartial(safeText)
                     return
                   }
                   void targetAdapter.streamReply!({
@@ -2426,6 +2510,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             recoveryMetadataTail.catch(() => undefined),
           ])
         } catch (err) {
+          await replyStream?.cancel()
           await Promise.all([
             canonicalTail.catch(() => undefined),
             recoveryMetadataTail.catch(() => undefined),
@@ -2526,6 +2611,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           if (recoveryMarkFailure !== undefined) throw err
           break
         } finally {
+          replyStream?.captured()
           approvalController.abort()
           unregisterImElicitation()
         }
@@ -2533,6 +2619,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
         unregisterLiveSteer?.()
 
         if (canonicalFailure) {
+          await replyStream?.cancel()
           await markConnectorInboundJobRecoveryRequired(
             routeContext.inboundJobId,
             "canonical_log_write_failed",
@@ -2647,7 +2734,9 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           },
         })
         const twinDisclosure = twinId
-          ? discloseTwinOutboundSegments(outboundSegments, twinId)
+          ? replyStream
+            ? discloseReplyStreamSegments(outboundSegments, twinId)
+            : discloseTwinOutboundSegments(outboundSegments, twinId)
           : undefined
         if (twinDisclosure) outboundSegments = twinDisclosure.segments
         const idempotencyKey = `airun:${captured.messageId}`
@@ -2675,6 +2764,7 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           ...(quoteReply ? { replyTo: { messageId: event.messageId } } : {}),
           metadata: {
             idempotencyKey,
+            ...(replyStream ? { streamKey: replyStream.streamKey } : {}),
             sourceMessageId: storedMsg.id,
             ...(twinDisclosure ? { provenance: twinDisclosure.provenance } : {}),
           },
@@ -2801,14 +2891,23 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             })
           }
         } else {
-          await enqueueOutbound({
-            adapterId: outboundTarget.adapterId,
-            conversationKey: outboundTarget.conversationKey,
-            request: outboundRequest,
-            source: "ai-run",
-            // The respond-via target is the same chat through a sibling bot.
-            authorization: { kind: "origin-reply", inboundConversationKey: event.conversationKey },
-          })
+          try {
+            await enqueueOutbound({
+              adapterId: outboundTarget.adapterId,
+              conversationKey: outboundTarget.conversationKey,
+              request: outboundRequest,
+              source: "ai-run",
+              // The respond-via target is the same chat through a sibling bot.
+              authorization: {
+                kind: "origin-reply",
+                inboundConversationKey: event.conversationKey,
+              },
+            })
+            replyStream?.handoff()
+          } catch (error) {
+            await replyStream?.cancel()
+            throw error
+          }
         }
 
         await appendAudit({

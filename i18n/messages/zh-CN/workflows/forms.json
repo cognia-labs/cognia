@@ -928,6 +928,8 @@
       "hint": "仅在选中的事件类型触发；不选表示全部。",
       "label": "事件类型（可选）",
       "options": {
+        "delivery_status": "投递状态回执",
+        "interaction": "平台互动",
         "lifecycle": "机器人生命周期",
         "poke": "戳一戳",
         "reaction_added": "添加表情回应",

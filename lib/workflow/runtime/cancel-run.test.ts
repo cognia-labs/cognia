@@ -54,6 +54,10 @@ describe("cancelWorkflowRun", () => {
     const result = await cancelWorkflowRun("run_c", "test")
     expect(result).toEqual({ cancelled: true, live: true, mode: "aborted" })
     expect(ac.signal.aborted).toBe(true)
+    expect(await getDb().workflowRuns.get("run_c")).toMatchObject({
+      status: "cancelled",
+      cancelRequestedAt: expect.any(Number),
+    })
     expect(mockTrackEvent).toHaveBeenCalledWith("workflow.run.cancelled", { runId: "run_c" })
     unregisterRun("run_c")
   })

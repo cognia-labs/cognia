@@ -5,6 +5,15 @@ import {
   splitMarkdownCode,
 } from "./inbound-markdown"
 
+it("escapes literal setext headings and thematic rules without changing line breaks", () => {
+  expect(escapeMarkdown("-- -- --\n--- ---\n--\t--\nliteral\r\n---\r\n")).toBe(
+    "\\-- -- --\n\\--- ---\n\\--\t--\nliteral\r\n\\---\r\n"
+  )
+  expect(escapeMarkdown("literal\n---\n\nliteral\n===\n\nliteral\n-\n\nliteral\n=\n\n   ---")).toBe(
+    "literal\n\\---\n\nliteral\n\\===\n\nliteral\n\\-\n\nliteral\n\\=\n\n   \\---"
+  )
+})
+
 describe("preserveLineBreaks", () => {
   it("hard-breaks single newlines and keeps paragraph breaks", () => {
     expect(preserveLineBreaks("a\nb\n\nc")).toBe("a  \nb\n\nc")

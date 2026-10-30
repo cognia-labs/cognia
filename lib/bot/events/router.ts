@@ -20,7 +20,7 @@ import type {
   PluginBotTriggerDef,
 } from "@/types/plugin/plugin-bot"
 
-import { interpolateEnvelopeTemplate } from "./envelope"
+import { botDeliveryId, interpolateEnvelopeTemplate } from "./envelope"
 import { evaluateBotLoopGuard, type BotLoopVerdict } from "./provenance"
 import { botConditionMismatch } from "./conditions"
 
@@ -68,8 +68,13 @@ export interface BotRouteQuery {
 export function triggerMatches(binding: BotTriggerBinding, query: BotRouteQuery): boolean {
   const trigger = binding.trigger
 
-  if (binding.adapterId && binding.adapterId !== query.adapterId) return false
-  if (binding.integrationAccountId && binding.integrationAccountId !== query.integrationAccountId) {
+  if (query.source === "connector" && binding.adapterId && binding.adapterId !== query.adapterId)
+    return false
+  if (
+    query.source === "integration" &&
+    binding.integrationAccountId &&
+    binding.integrationAccountId !== query.integrationAccountId
+  ) {
     return false
   }
 
@@ -102,6 +107,34 @@ export interface RoutedBotDelivery {
   notBefore?: number
   /** The trigger's declared retry policy, snapshotted onto the row at enqueue. */
   retry?: PluginBotRetryPolicy
+  coalesce?: "latest" | "all"
+}
+
+/** Shared projection for event, manual and timed trigger producers. */
+export function projectBotDeliveryPolicy(
+  trigger: PluginBotTriggerDef,
+  envelope: BotEventEnvelopeV1,
+  now: number
+): Pick<
+  RoutedBotDelivery,
+  "concurrencyKey" | "holdConcurrencyWhileWaiting" | "notBefore" | "retry" | "coalesce"
+> {
+  const prefix = `${envelope.installationId}::`
+  if (trigger.correlationKey)
+    envelope.correlation = prefix + interpolateEnvelopeTemplate(trigger.correlationKey, envelope)
+  return {
+    ...(trigger.concurrencyKey
+      ? { concurrencyKey: prefix + interpolateEnvelopeTemplate(trigger.concurrencyKey, envelope) }
+      : {}),
+    ...(trigger.holdConcurrencyWhileWaiting !== undefined
+      ? { holdConcurrencyWhileWaiting: trigger.holdConcurrencyWhileWaiting }
+      : {}),
+    ...(trigger.debounceMs && trigger.debounceMs > 0
+      ? { notBefore: now + trigger.debounceMs }
+      : {}),
+    ...(trigger.retry ? { retry: trigger.retry } : {}),
+    ...(trigger.coalesce ? { coalesce: trigger.coalesce } : {}),
+  }
 }
 
 /** A binding the event reached but that refused it, and why. */
@@ -146,7 +179,7 @@ export function routeBotEvent(input: RouteBotEventInput): BotRouteResult {
       ...input.envelope,
       installationId: binding.installationId,
       triggerId: binding.trigger.id,
-      deliveryId: `bdl_${binding.installationId}_${input.envelope.eventId}`,
+      deliveryId: botDeliveryId(input.envelope.eventId, binding.installationId, binding.trigger.id),
     }
 
     const verdict = evaluateBotLoopGuard({
@@ -173,32 +206,11 @@ export function routeBotEvent(input: RouteBotEventInput): BotRouteResult {
       continue
     }
 
-    const rawKey = binding.trigger.concurrencyKey
-    const concurrencyKey = rawKey
-      ? `${binding.installationId}::${interpolateEnvelopeTemplate(rawKey, envelope)}`
-      : undefined
-
-    // Interpolated exactly where `concurrencyKey` is, because they are twins:
-    // one says "do not run these two at once", the other says "this run is
-    // waiting for that event". Both are per-installation, so a second Bot
-    // watching the same resource cannot consume the first one's answer.
-    const rawCorrelation = binding.trigger.correlationKey
-    if (rawCorrelation) {
-      envelope.correlation = `${binding.installationId}::${interpolateEnvelopeTemplate(rawCorrelation, envelope)}`
-    }
-
-    const debounce = binding.trigger.debounceMs
-
     deliveries.push({
       installationId: binding.installationId,
       triggerId: binding.trigger.id,
       envelope,
-      ...(concurrencyKey ? { concurrencyKey } : {}),
-      ...(binding.trigger.holdConcurrencyWhileWaiting !== undefined
-        ? { holdConcurrencyWhileWaiting: binding.trigger.holdConcurrencyWhileWaiting }
-        : {}),
-      ...(debounce && debounce > 0 ? { notBefore: now + debounce } : {}),
-      ...(binding.trigger.retry ? { retry: binding.trigger.retry } : {}),
+      ...projectBotDeliveryPolicy(binding.trigger, envelope, now),
     })
   }
 

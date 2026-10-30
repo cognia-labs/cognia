@@ -58,7 +58,10 @@ async function updateTerminalJob(
       if (options.allowedStatuses && !options.allowedStatuses.has(current.status)) return
       await db.connectorInboundJobs.update(id, {
         ...changes,
-        event: compactTerminalEvent(current.event, options),
+        event:
+          current.automationFanOut?.state === "pending"
+            ? current.event
+            : compactTerminalEvent(current.event, options),
         pendingEdit: current.pendingEdit
           ? compactTerminalEvent(current.pendingEdit, options)
           : undefined,
@@ -733,6 +736,7 @@ export async function sweepTerminalConnectorInboundJobs(
       ...(await db.connectorInboundJobs
         .where("[status+updatedAt]")
         .between([status, -Infinity], [status, cutoff], true, true)
+        .filter((row) => row.automationFanOut?.state !== "pending")
         .limit(batchLimit - candidates.length)
         .toArray())
     )
@@ -785,4 +789,91 @@ export async function sweepTerminalConnectorInboundJobs(
     })
   }
   return victims.length
+}
+
+/** Commit observer intake separately from the main responder's durable lifecycle. */
+export async function acceptConnectorAutomationFanOut(
+  id: string,
+  options: { completeJobOnSettle?: boolean } = {}
+): Promise<boolean> {
+  const db = getDb()
+  return db.transaction("rw", db.connectorInboundJobs, db.conversationOverrides, async () => {
+    const job = await db.connectorInboundJobs.get(id)
+    if (!job || job.recalledAt !== undefined) return false
+    if (job.automationFanOut) return job.automationFanOut.state === "pending"
+    const control = await db.conversationOverrides
+      .where("conversationKey")
+      .equals(job.conversationKey)
+      .first()
+    if (
+      control?.automationPaused ||
+      (control?.automationCancelledBefore !== undefined &&
+        job.createdAt <= control.automationCancelledBefore)
+    ) {
+      // Replaying the responder after resume must not reopen rejected intake.
+      await db.connectorInboundJobs.update(id, {
+        automationFanOut: { state: "settled", acceptedAt: job.createdAt },
+      })
+      return false
+    }
+    await db.connectorInboundJobs.update(id, {
+      automationFanOut: {
+        state: "pending",
+        acceptedAt: job.createdAt,
+        ...(options.completeJobOnSettle ? { completeJobOnSettle: true as const } : {}),
+      },
+    })
+    return true
+  })
+}
+
+export async function settleConnectorAutomationFanOut(id: string): Promise<void> {
+  const db = getDb()
+  await db.transaction("rw", db.connectorInboundJobs, async () => {
+    const row = await db.connectorInboundJobs.get(id)
+    if (!row?.automationFanOut) return
+    const completeJob =
+      row.automationFanOut.completeJobOnSettle && COMPLETABLE_STATUSES.has(row.status)
+    const terminal =
+      completeJob ||
+      ["completed", "history_only", "dismissed", "failed", "recovery_required"].includes(row.status)
+    await db.connectorInboundJobs.update(id, {
+      automationFanOut: { ...row.automationFanOut, state: "settled" },
+      ...(completeJob
+        ? {
+            status: "completed",
+            leaseOwner: undefined,
+            leaseExpiresAt: undefined,
+            pendingEdit: row.pendingEdit ? compactTerminalEvent(row.pendingEdit) : undefined,
+            pendingEditsBySender: row.pendingEditsBySender
+              ? Object.fromEntries(
+                  Object.entries(row.pendingEditsBySender).map(([sender, edit]) => [
+                    sender,
+                    compactTerminalEvent(edit),
+                  ])
+                )
+              : undefined,
+          }
+        : {}),
+      ...(terminal ? { event: compactTerminalEvent(row.event) } : {}),
+      updatedAt: Date.now(),
+    })
+  })
+}
+
+export async function listPendingConnectorAutomationFanOuts(
+  limit = 100,
+  excludeIds: ReadonlySet<string> = new Set(),
+  ready: (row: ConnectorInboundJobRow) => boolean = () => true
+): Promise<ConnectorInboundJobRow[]> {
+  return getDb()
+    .connectorInboundJobs.filter(
+      (row) =>
+        row.automationFanOut?.state === "pending" &&
+        row.recalledAt === undefined &&
+        !excludeIds.has(row.id) &&
+        ready(row)
+    )
+    .limit(limit)
+    .toArray()
 }

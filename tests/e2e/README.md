@@ -95,3 +95,9 @@ timeouts.
 
 The current module coverage ledger and prioritized gaps live in
 `docs/plans/2026-07-18-e2e-module-coverage.md`.
+
+Bot execution and crash recovery use the separate API-only
+[Bot process E2E project](../bot-e2e/README.md): `pnpm test:e2e:bots:prepare`
+followed by `pnpm test:e2e:bots`. It launches real isolated Host/Brain
+processes without a browser export. Paired UI contracts remain in this
+directory; real external IM acceptance keeps its own credentialed lane.

@@ -623,6 +623,7 @@
     "workflowTooltip": "Sent by workflow node {nodeId} — click to open the run"
   },
   "outboundStatus": {
+    "awaitingProvider": "Awaiting provider result",
     "retry": "Retry",
     "status": {
       "deadlettered": "Dead-lettered",

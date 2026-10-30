@@ -52,6 +52,9 @@ function payloadOf(event: NormalizedInboundEvent) {
 
 export interface DispatchConnectorInboundToBotsInput {
   event: NormalizedInboundEvent
+  now?: number
+  /** Original durable IM acceptance, distinct from this delivery attempt. */
+  acceptedAt?: number
   /** The workspace the conversation belongs to, when it has one. */
   projectId?: string
 }
@@ -67,7 +70,7 @@ export interface DispatchConnectorInboundToBotsInput {
 export async function dispatchConnectorInboundToBots(
   input: DispatchConnectorInboundToBotsInput
 ): Promise<DispatchBotEventResult> {
-  const now = Date.now()
+  const now = input.now ?? Date.now()
   const event = input.event
   const envelope = buildBotEventEnvelope({
     source: "connector",
@@ -79,7 +82,7 @@ export async function dispatchConnectorInboundToBots(
     installationId: "",
     triggerId: "",
     occurredAt: event.timestamp,
-    receivedAt: now,
+    receivedAt: input.acceptedAt ?? now,
     payload: payloadOf(event),
     binding: {
       adapterId: event.adapterId,
@@ -117,5 +120,6 @@ export async function dispatchConnectorInboundToBots(
     },
     ...(input.projectId ? { scope: { projectId: input.projectId } } : {}),
     now,
+    ...(input.acceptedAt !== undefined ? { installedBefore: input.acceptedAt } : {}),
   })
 }

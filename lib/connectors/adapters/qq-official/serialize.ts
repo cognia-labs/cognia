@@ -37,6 +37,7 @@ import { fnv1a32 } from "../_shared/fnv1a"
 import { isPublicHttpUrl } from "../_shared/inbound-media"
 import { escapeMarkdown } from "../_shared/inbound-markdown"
 import { qqReferenceIndex, type QQScene } from "./parse"
+export { encodeQQMessageId } from "./parse"
 
 export interface QQSendCall {
   downgrades?: SegmentDowngrade[]
@@ -65,7 +66,11 @@ function qqBinarySource(
         ? "image.png"
         : resource.type === "video"
           ? "video.mp4"
-          : "voice.silk"
+          : resource.mimeType && ["audio/mpeg", "audio/mp3"].includes(resource.mimeType)
+            ? "voice.mp3"
+            : resource.mimeType && ["audio/wav", "audio/x-wav"].includes(resource.mimeType)
+              ? "voice.wav"
+              : "voice.silk"
   if (
     !fileName ||
     fileName === "." ||
@@ -240,6 +245,10 @@ export function buildQQContent(
         parts.push(seg.code)
         break
       case "mention":
+        if (seg.audience === "all") {
+          parts.push("<qqbot-at-everyone />")
+          break
+        }
         parts.push(`@${seg.displayName ?? seg.userId}`)
         downgrades.push({ from: "mention", to: "text", reason: "qq_mention_text_alternative" })
         break
@@ -299,6 +308,8 @@ function passiveReplyFields(
 }
 
 export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendCall | null {
+  if (JSON.stringify(req.segments).includes("<qqbot-at-everyone"))
+    throw new QQValidationError("QQ broadcast mentions require a structured mention segment")
   const ref = req.conversationRef as {
     scene?: QQScene
     sceneId?: string
@@ -373,7 +384,11 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
     if (
       resource.type === "voice" &&
       resource.mimeType &&
-      !["audio/silk", "audio/x-silk"].includes(resource.mimeType)
+      !(
+        scene === "group"
+          ? ["audio/silk", "audio/x-silk", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"]
+          : ["audio/silk", "audio/x-silk"]
+      ).includes(resource.mimeType)
     )
       throw new QQValidationError("QQ voice resources must use SILK encoding")
   }
@@ -394,7 +409,9 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
           .map((segment) =>
             segment.type === "markdown"
               ? segment.md
-              : escapeMarkdown(buildQQContent([segment], downgrades))
+              : segment.type === "mention" && segment.audience === "all"
+                ? "<qqbot-at-everyone />"
+                : escapeMarkdown(buildQQContent([segment], downgrades))
           )
           .join("\n")
       : buildQQContent(
@@ -412,17 +429,34 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         })
     }
   }
+  if (
+    req.segments.some((segment) => segment.type === "mention" && segment.audience) &&
+    scene !== "group"
+  )
+    throw new QQValidationError("QQ broadcast mentions require a group")
+  if (req.segments.some((segment) => segment.type === "mention" && segment.audience === "online"))
+    throw new QQValidationError("QQ online-only mentions are unsupported")
+  if (req.sendOptions?.imagePolicy === "require-complete" && !useMarkdown)
+    throw new QQValidationError("QQ strict image verification requires native Markdown")
+  const explicitPush =
+    req.sendOptions?.mode === "proactive" || req.sendOptions?.mode === "reengagement"
+  if (explicitPush && !nativeQuoteScene)
+    throw new QQValidationError("QQ proactive delivery requires group or C2C")
+  if (req.sendOptions?.mode === "reengagement" && scene !== "c2c")
+    throw new QQValidationError("QQ reengagement requires C2C")
   const idempotencyKey = req.metadata?.idempotencyKey ?? ""
   if (ref.eventId && ref.msgId)
     throw new QQValidationError("QQ event_id and msg_id are mutually exclusive")
   if (ref.eventId && !nativeQuoteScene)
     throw new QQValidationError("QQ event replies require group/C2C")
-  const msgId = nativeQuoteScene
-    ? ref.eventId
-      ? `event:${ref.eventId}`
-      : ref.msgId
-    : (req.replyTo?.messageId ?? ref.msgId)
-  if (!msgId)
+  const msgId = explicitPush
+    ? undefined
+    : nativeQuoteScene
+      ? ref.eventId
+        ? `event:${ref.eventId}`
+        : ref.msgId
+      : (req.replyTo?.messageId ?? ref.msgId)
+  if (!msgId && !explicitPush)
     throw new QQValidationError("QQ requires passive reply context; proactive push is unavailable")
 
   // Never remove an expired reply context: proactive push is unavailable.
@@ -431,7 +465,7 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
     msgId &&
     (nativeQuoteScene || !req.replyTo?.messageId || req.replyTo.messageId === ref.msgId) &&
     typeof ref.receivedAt === "number" &&
-    Date.now() - ref.receivedAt > QQ_PASSIVE_WINDOW_MS[scene]
+    Date.now() - ref.receivedAt > (ref.eventId ? 5 * 60_000 : QQ_PASSIVE_WINDOW_MS[scene])
   ) {
     throw new QQValidationError(
       "QQ passive reply window has expired; proactive push is unavailable"
@@ -448,9 +482,22 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         path: `/v2/groups/${encodeURIComponent(sceneId)}/messages`,
         payload: {
           ...(useMarkdown
-            ? { msg_type: 2, markdown: { content } }
+            ? {
+                msg_type: 2,
+                markdown: {
+                  content,
+                  ...(req.sendOptions?.imagePolicy === "require-complete"
+                    ? { force_verify_image_resource: true }
+                    : {}),
+                },
+              }
             : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
-          ...passiveReplyFields(scene, msgId, idempotencyKey, reserve, ref.eventId),
+          ...(explicitPush
+            ? {
+                msg_seq: qqPassiveMsgSeq(idempotencyKey),
+                ...(req.sendOptions?.mode === "reengagement" ? { is_wakeup: true } : {}),
+              }
+            : passiveReplyFields(scene, msgId!, idempotencyKey, reserve, ref.eventId)),
           ...(keyboard ? { keyboard } : {}),
           ...quoteFields,
         },
@@ -482,9 +529,22 @@ export function serializeOutbound(req: OutboundRequest, reserve = true): QQSendC
         path: `/v2/users/${encodeURIComponent(sceneId)}/messages`,
         payload: {
           ...(useMarkdown
-            ? { msg_type: 2, markdown: { content } }
+            ? {
+                msg_type: 2,
+                markdown: {
+                  content,
+                  ...(req.sendOptions?.imagePolicy === "require-complete"
+                    ? { force_verify_image_resource: true }
+                    : {}),
+                },
+              }
             : { content: resource ? content || " " : content, msg_type: resource ? 7 : 0 }),
-          ...passiveReplyFields(scene, msgId, idempotencyKey, reserve, ref.eventId),
+          ...(explicitPush
+            ? {
+                msg_seq: qqPassiveMsgSeq(idempotencyKey),
+                ...(req.sendOptions?.mode === "reengagement" ? { is_wakeup: true } : {}),
+              }
+            : passiveReplyFields(scene, msgId!, idempotencyKey, reserve, ref.eventId)),
           ...(keyboard ? { keyboard } : {}),
           ...quoteFields,
         },
@@ -597,7 +657,11 @@ export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQ
       ? `event:${ref.eventId}`
       : ref.msgId
     : (req.replyTo?.messageId ?? ref.msgId)
-  if (msgId && (ref.scene === "group" || ref.scene === "c2c")) {
+  if (
+    (!req.sendOptions?.mode || req.sendOptions.mode === "reply") &&
+    msgId &&
+    (ref.scene === "group" || ref.scene === "c2c")
+  ) {
     const newKeys = requests.filter(
       (part) => !passiveKeysByMsgId.get(msgId)?.has(part.metadata.idempotencyKey)
     ).length
@@ -618,10 +682,6 @@ export function serializeOutboundParts(req: OutboundRequest, reserve = true): QQ
  * endpoint (delete / reaction) is scene-scoped: the bare `id` QQ returns is
  * useless without the scene and the addressing id it was posted under.
  */
-export function encodeQQMessageId(scene: QQScene, sceneId: string, id: string): string {
-  return `${scene}:${sceneId}:${id}`
-}
-
 export interface DecodedQQMessageId {
   scene: QQScene
   sceneId: string

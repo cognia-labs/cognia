@@ -256,7 +256,8 @@ async function callHandler(
   event: NormalizedInboundEvent,
   decision: RouteDecision,
   resolved: ResolvedBinding = RESOLVED,
-  inboundJobId: string = `test:${event.messageId}`
+  inboundJobId: string = `test:${event.messageId}`,
+  acceptedPolicy?: import("./bus").RouteHandlerContext["acceptedPolicy"]
 ): Promise<void> {
   const bus = getBus()
   if (!bus.routeHandler) throw new Error("routeHandler not installed")
@@ -271,6 +272,7 @@ async function callHandler(
   await bus.routeHandler(event, decision, resolved, override, adapterRow, {
     inboundJobId,
     bindExecutionRun: mockBindExecutionRun,
+    acceptedPolicy,
   })
 }
 
@@ -1904,6 +1906,105 @@ describe("installRuntime — ai-run (happy path)", () => {
 })
 
 describe("installRuntime — ai-run (streamReply weaving)", () => {
+  function qqStreamHarness(capturing: RunAndCaptureFn) {
+    __resetBusForTesting()
+    const bus = getBus()
+    installRuntime(bus, { runAndCapture: capturing })
+    const streamReply = jest.fn(async (_req: { streamKey?: string }) => undefined)
+    const cancelStreamReply = jest.fn(async () => undefined)
+    bus.registerAdapter({
+      id: "adapter_1",
+      meta: {
+        type: "qq-official",
+        displayName: "QQ",
+        version: "0",
+        capabilities: [],
+        transportModes: ["stub"],
+        configSchema: {},
+      },
+      start: async () => undefined,
+      stop: async () => undefined,
+      health: () => ({ state: "running" }),
+      send: async () => ({ ok: true }),
+      streamReply,
+      cancelStreamReply,
+      a2uiCapability: () => ({}) as never,
+    })
+    return { streamReply, cancelStreamReply }
+  }
+
+  function qqEvent(scene = "c2c") {
+    return makeEvent({
+      platform: "qq-official",
+      conversationKey: `qq-official:adapter_1:${scene}:user`,
+      conversationRef: {
+        platform: "qq-official",
+        adapterId: "adapter_1",
+        scene,
+        sceneId: "user",
+        msgId: "source",
+        receivedAt: Date.now(),
+      },
+    })
+  }
+
+  it("correlates QQ C2C previews with the queued final and avoids a second progress reply", async () => {
+    let late: ((text: string) => unknown) | undefined
+    const h = qqStreamHarness(async (_sid, _content, _opts, cap) => {
+      late = cap?.onPartial
+      await cap?.onPartial?.("Hello")
+      await cap?.onPartial?.("Contact private@example.com")
+      return { text: "Hello world", messageId: "qq-stream-final" }
+    })
+    const event = qqEvent()
+    await callHandler(event, "ai-run")
+    late?.("Hello late")
+    expect(h.streamReply).toHaveBeenCalledTimes(1)
+    const jobs = await getDb().outboundQueue.toArray()
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].request).toMatchObject({
+      conversationRef: event.conversationRef,
+      metadata: {
+        streamKey: h.streamReply.mock.calls[0]?.[0]?.streamKey,
+        idempotencyKey: "airun:qq-stream-final",
+      },
+    })
+    expect(jobs[0].request.metadata.streamKey).toEqual(expect.any(String))
+    expect(await getDb().executionRunBindings.count()).toBe(0)
+    expect(h.cancelStreamReply).not.toHaveBeenCalled()
+  })
+
+  it.each(["draft", "group"])("keeps QQ %s captures final-only", async (kind) => {
+    const h = qqStreamHarness(async (_sid, _content, _opts, cap) => {
+      expect(cap?.onPartial).toBeUndefined()
+      return { text: "Held or group answer", messageId: `qq-${kind}` }
+    })
+    await callHandler(
+      qqEvent(kind === "group" ? "group" : "c2c"),
+      kind === "draft" ? "draft-prepare" : "ai-run"
+    )
+    expect(h.streamReply).not.toHaveBeenCalled()
+  })
+
+  it("cancels a QQ preview when capture fails and rejects late partials", async () => {
+    let late: ((text: string) => unknown) | undefined
+    const h = qqStreamHarness(async (_sid, _content, _opts, cap) => {
+      late = cap?.onPartial
+      await cap?.onPartial?.("Hello")
+      throw new Error("capture failed")
+    })
+    await callHandler(qqEvent(), "ai-run")
+    late?.("Hello late")
+    expect(h.streamReply).toHaveBeenCalledTimes(1)
+    expect(h.cancelStreamReply).toHaveBeenCalledWith(
+      expect.objectContaining({ streamKey: h.streamReply.mock.calls[0]?.[0]?.streamKey })
+    )
+    const failureJobs = await getDb().outboundQueue.toArray()
+    expect(failureJobs).toHaveLength(1)
+    expect(failureJobs[0].idempotencyKey).toMatch(/^im-failure:/)
+    expect(failureJobs[0].request.metadata).not.toHaveProperty("streamKey")
+  })
+
   it("passes onPartial to runAndCapture when the target adapter implements streamReply", async () => {
     const streamReply = jest.fn(async () => undefined)
     // A capture mock that drives two partial chunks through cap.onPartial,
@@ -2539,7 +2640,115 @@ describe("installRuntime — ai-run (PII embed gate covers the fallback legs)", 
   })
 })
 
+it.each(["direct", "team", "workflow"] as const)(
+  "retains accepted policy in the actual %s executor after queued grants widen",
+  async (target) => {
+    await seedAdapter("adapter_1")
+    const key = `telegram:adapter_1:ceiling_${target}`
+    const adapter = (await getAdapterInstance("adapter_1"))!
+    const acceptedAdapter = {
+      ...adapter,
+      defaultAuthority: "plan" as const,
+      hostCapabilityCeiling: [],
+      builtInSkillCeiling: [],
+    }
+    await getDb().adapterInstances.update(adapter.id, {
+      defaultAuthority: "bypassPermissions",
+      defaultAutonomy: "autopilot",
+    })
+    await upsertByConversationKey({
+      conversationKey: key,
+      sessionId: "s",
+      authority: "bypassPermissions",
+      autonomy: "autopilot",
+      allowScheduleTools: true,
+      ...(target === "team"
+        ? { teamId: "team" }
+        : target === "workflow"
+          ? { workflowId: "wf" }
+          : {}),
+    })
+    const currentOverride = (await readForResolution(key))!
+    mockStartTeamRunFromIM.mockClear()
+    mockStartWorkflowFromIM.mockClear()
+    const { getResolvedPermissionCeiling } =
+      await import("@/lib/claude/agents/dispatch-context-registry")
+    await callHandler(makeEvent({ conversationKey: key }), "ai-run", RESOLVED, "queued-ceiling", {
+      adapter: acceptedAdapter,
+      override: { ...currentOverride, authority: "plan", allowScheduleTools: false },
+      resolved: RESOLVED,
+    })
+    const ceiling =
+      target === "team"
+        ? (
+            mockStartTeamRunFromIM.mock.calls[0]?.[0] as
+              | {
+                  permissionCeiling?: import("@/types/agent/permission-ceiling").AgentPermissionCeiling
+                }
+              | undefined
+          )?.permissionCeiling
+        : target === "workflow"
+          ? (
+              mockStartWorkflowFromIM.mock.calls[0]?.[0] as
+                | {
+                    permissionCeiling?: import("@/types/agent/permission-ceiling").AgentPermissionCeiling
+                  }
+                | undefined
+            )?.permissionCeiling
+          : getResolvedPermissionCeiling((DEFAULT_RUN_AND_CAPTURE as jest.Mock).mock.calls[0]?.[0])
+    expect(ceiling?.permissionMode).toBe("plan")
+    expect(ceiling?.disallowedTools).toContain("mcp__cognia__schedule_task")
+  }
+)
+
 describe("installRuntime — ai-run (suppression gate)", () => {
+  it.each(["team", "workflow"] as const)(
+    "applies conversation mute and quiet hours before launching %s",
+    async (target) => {
+      const now = jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-28T12:00:00Z"))
+      try {
+        await seedAdapter("adapter_1")
+        for (const suppression of [
+          { muted: true },
+          { quietHours: { from: "11:00", to: "13:00", tz: "UTC" } },
+        ]) {
+          mockStartTeamRunFromIM.mockClear()
+          mockStartWorkflowFromIM.mockClear()
+          const key = `telegram:adapter_1:blocked_${target}_${"muted" in suppression ? "mute" : "quiet"}`
+          await upsertByConversationKey({
+            conversationKey: key,
+            sessionId: "s",
+            ...suppression,
+            ...(target === "team" ? { teamId: "team" } : { workflowId: "workflow" }),
+          })
+          await callHandler(makeEvent({ conversationKey: key }), "ai-run")
+          expect(mockStartTeamRunFromIM).not.toHaveBeenCalled()
+          expect(mockStartWorkflowFromIM).not.toHaveBeenCalled()
+        }
+      } finally {
+        now.mockRestore()
+      }
+    }
+  )
+
+  it.each(["team", "workflow"] as const)("does not launch a muted %s target", async (target) => {
+    mockStartTeamRunFromIM.mockClear()
+    mockStartWorkflowFromIM.mockClear()
+    await seedAdapter("adapter_1", { muted: true })
+    const key = `telegram:adapter_1:muted_${target}`
+    await upsertByConversationKey({
+      conversationKey: key,
+      sessionId: "s",
+      ...(target === "team" ? { teamId: "team" } : { workflowId: "workflow" }),
+    })
+    await callHandler(makeEvent({ conversationKey: key }), "ai-run")
+    expect(mockStartTeamRunFromIM).not.toHaveBeenCalled()
+    expect(mockStartWorkflowFromIM).not.toHaveBeenCalled()
+    expect(
+      (await getDb().connectorAudit.toArray()).some((row) => row.kind === "inbound.deferred_muted")
+    ).toBe(true)
+  })
+
   it("skips capture + enqueue and writes inbound.deferred_muted when adapter is muted", async () => {
     await seedAdapter("adapter_muted", { muted: true })
     const event = makeEvent({
@@ -2832,6 +3041,10 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     // The third shape of acceptance. A workflow has no plan gate and ships its
     // product through its own nodes, so the only moment "a human signs off
     // before it acts" is still true is before the run starts.
+    const { createWorkflow } = await import("@/lib/db/workflows")
+    const { publishWorkflow } = await import("@/lib/workflow/publish/publish-workflow")
+    const published = await createWorkflow({ name: "Approved workflow" })
+    await publishWorkflow(published.id, Date.now())
     const key = "telegram:adapter_1:chat_wf_draft"
     await seedAdapter("adapter_1")
     await getDb().sessions.add({
@@ -2846,7 +3059,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     await upsertByConversationKey({
       conversationKey: key,
       sessionId: "s_wf_draft",
-      workflowId: "wf_n",
+      workflowId: published.id,
     })
 
     await callHandler(makeEvent({ conversationKey: key }), "draft-prepare")
@@ -2862,7 +3075,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
     // One surface — the dispatcher deletes siblings by surfaceId.
     expect(new Set(bindings.map((row) => row.surfaceId)).size).toBe(1)
     expect(bindings[0].payload).toMatchObject({
-      workflowId: "wf_n",
+      workflowId: published.id,
       runParams: { message: "hello runtime" },
       triggeredFrom: { source: "im", conversationKey: key },
     })
@@ -2871,7 +3084,7 @@ describe("installRuntime — ai-run (team dispatch branch)", () => {
 
     const audit = await getDb().connectorAudit.toArray()
     expect(audit.find((row) => row.kind === "workflow.dispatch_held")?.fields).toMatchObject({
-      workflowId: "wf_n",
+      workflowId: published.id,
       acceptance: "run-approval",
     })
     expect(audit.some((row) => row.kind === "workflow.dispatched")).toBe(false)

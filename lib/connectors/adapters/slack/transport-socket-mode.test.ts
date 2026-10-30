@@ -66,6 +66,46 @@ function createFakeWsSession() {
   }
 }
 
+function createReconnectSessions() {
+  type Handler = (event: { payload: string }) => void
+  const listeners = new Map<string, Handler>()
+  const waiters = new Map<string, () => void>()
+  mockListen.mockImplementation(async (topic: string, handler: Handler) => {
+    listeners.set(topic, handler)
+    waiters.get(topic)?.()
+    return () => listeners.delete(topic)
+  })
+  return {
+    listeners,
+    async ready(handle: string) {
+      const topic = `connectors://ws/${handle}/close`
+      if (listeners.has(topic)) return
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        await new Promise<void>((resolve, reject) => {
+          waiters.set(topic, resolve)
+          timeout = setTimeout(() => reject(new Error(`No listeners for ${handle}`)), 2000)
+        })
+      } finally {
+        clearTimeout(timeout)
+        waiters.delete(topic)
+      }
+    },
+    push(handle: string, payload: unknown) {
+      listeners.get(`connectors://ws/${handle}/message`)?.({ payload: JSON.stringify(payload) })
+    },
+    close(handle: string) {
+      listeners.get(`connectors://ws/${handle}/close`)?.({ payload: "" })
+    },
+  }
+}
+
+const eventFrame = (id: string) => ({
+  type: "events_api",
+  envelope_id: id,
+  payload: { type: "event_callback", event: { type: "message", text: id } },
+})
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -323,4 +363,231 @@ describe("startSocketMode", () => {
 
     expect(collected).toHaveLength(0)
   })
+
+  it.each(["disconnect", "ws-close"])(
+    "%s reconnects with a fresh URL/token and ACKs only on the current handle",
+    async (reason) => {
+      const sessions = createReconnectSessions()
+      mockWsOpen.mockResolvedValueOnce("first").mockResolvedValueOnce("second")
+      let token = 0
+      mockHttp.mockImplementation(async () => ({
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ ok: true, url: `wss://socket-${token}` }),
+      }))
+      const ctrl = new AbortController()
+      const onHello = jest.fn()
+      const stream = startSocketMode({
+        appToken: async () => `xapp-${++token}`,
+        signal: ctrl.signal,
+        _backoffBaseMs: 1,
+        onHello,
+      })
+      try {
+        const first = stream.next()
+        await sessions.ready("first")
+        sessions.push("first", { type: "hello" })
+        sessions.push("first", eventFrame("before"))
+        expect((await first).value).toMatchObject({
+          kind: "event",
+          envelope: { event_id: "before" },
+        })
+        const next = stream.next()
+        if (reason === "disconnect")
+          sessions.push("first", { type: "disconnect", reason: "refresh_requested" })
+        else sessions.close("first")
+        await sessions.ready("second")
+        expect(sessions.listeners.has("connectors://ws/first/message")).toBe(false)
+        sessions.push("first", eventFrame("stale"))
+        sessions.push("second", { type: "hello" })
+        sessions.push("second", eventFrame("after"))
+        expect((await next).value).toMatchObject({ kind: "event", envelope: { event_id: "after" } })
+        expect(onHello).toHaveBeenCalledTimes(2)
+        expect(mockWsOpen.mock.calls).toEqual([["wss://socket-1"], ["wss://socket-2"]])
+        expect(mockHttp.mock.calls.map(([request]) => request.headers.Authorization)).toEqual([
+          "Bearer xapp-1",
+          "Bearer xapp-2",
+        ])
+        expect(mockWsSend.mock.calls).toEqual([
+          ["first", JSON.stringify({ envelope_id: "before" })],
+          ["second", JSON.stringify({ envelope_id: "after" })],
+        ])
+      } finally {
+        ctrl.abort()
+        await stream.return(undefined)
+      }
+      expect(mockWsClose.mock.calls).toEqual([["first"], ["second"]])
+      expect(sessions.listeners.size).toBe(0)
+    }
+  )
+
+  it("abort during disconnect backoff prevents another connection", async () => {
+    jest.useFakeTimers()
+    const sessions = createReconnectSessions()
+    const ctrl = new AbortController()
+    const stream = startSocketMode({
+      appToken: async () => "xapp-token",
+      signal: ctrl.signal,
+      _backoffBaseMs: 1,
+    })
+    const result = stream.next()
+    try {
+      await jest.advanceTimersByTimeAsync(0)
+      expect(sessions.listeners.has("connectors://ws/sm-handle-id/message")).toBe(true)
+      sessions.push("sm-handle-id", { type: "disconnect" })
+      await jest.advanceTimersByTimeAsync(499)
+      expect(mockWsOpen).toHaveBeenCalledTimes(1)
+      ctrl.abort()
+      expect((await result).done).toBe(true)
+      await jest.advanceTimersByTimeAsync(10_000)
+      expect(mockHttp).toHaveBeenCalledTimes(1)
+      expect(sessions.listeners.size).toBe(0)
+    } finally {
+      ctrl.abort()
+      await stream.return(undefined)
+      jest.useRealTimers()
+    }
+  })
+
+  it("abort while WebSocket opening closes the handle that arrives late", async () => {
+    let resolveOpen!: (handle: string) => void
+    let opening!: () => void
+    const started = new Promise<void>((resolve) => {
+      opening = resolve
+    })
+    mockWsOpen.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveOpen = resolve
+          opening()
+        })
+    )
+    const ctrl = new AbortController()
+    const stream = startSocketMode({ appToken: async () => "xapp-token", signal: ctrl.signal })
+    const result = stream.next()
+    await started
+    ctrl.abort()
+    resolveOpen("late-handle")
+    expect((await result).done).toBe(true)
+    expect(mockWsClose).toHaveBeenCalledWith("late-handle")
+    expect(mockListen).not.toHaveBeenCalled()
+    expect(mockHttp).toHaveBeenCalledTimes(1)
+  })
+
+  it("abort while token resolution is pending never opens a connection", async () => {
+    let release!: (token: string) => void
+    const token = new Promise<string>((resolve) => {
+      release = resolve
+    })
+    const ctrl = new AbortController()
+    const stream = startSocketMode({ appToken: () => token, signal: ctrl.signal })
+    const result = stream.next()
+    ctrl.abort()
+    release("xapp-late")
+    expect((await result).done).toBe(true)
+    expect(mockHttp).not.toHaveBeenCalled()
+    expect(mockWsOpen).not.toHaveBeenCalled()
+  })
+
+  it("abort while connections.open is pending never opens the returned WebSocket URL", async () => {
+    let release!: (response: unknown) => void
+    let requested!: () => void
+    const started = new Promise<void>((resolve) => {
+      requested = resolve
+    })
+    mockHttp.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+          requested()
+        })
+    )
+    const ctrl = new AbortController()
+    const stream = startSocketMode({ appToken: async () => "xapp-token", signal: ctrl.signal })
+    const result = stream.next()
+    await started
+    ctrl.abort()
+    release({ status: 200, headers: {}, body: JSON.stringify({ ok: true, url: "wss://late" }) })
+    expect((await result).done).toBe(true)
+    expect(mockWsOpen).not.toHaveBeenCalled()
+    expect(mockListen).not.toHaveBeenCalled()
+  })
+
+  it("abort during listener registration closes the socket and removes both listeners", async () => {
+    const ctrl = new AbortController()
+    const unlisten = jest.fn()
+    mockListen.mockImplementation(async (topic: string) => {
+      if (topic.endsWith("/close")) ctrl.abort()
+      return unlisten
+    })
+    const stream = startSocketMode({ appToken: async () => "xapp-token", signal: ctrl.signal })
+    expect((await stream.next()).done).toBe(true)
+    expect(mockWsClose).toHaveBeenCalledWith("sm-handle-id")
+    expect(unlisten).toHaveBeenCalledTimes(2)
+    expect(mockHttp).toHaveBeenCalledTimes(1)
+  })
+
+  it("a message listener arriving after abort is disposed without registering a close listener", async () => {
+    let release!: (unlisten: () => void) => void
+    let registering!: () => void
+    const started = new Promise<void>((resolve) => {
+      registering = resolve
+    })
+    const unlisten = jest.fn()
+    mockListen.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+          registering()
+        })
+    )
+    const ctrl = new AbortController()
+    const stream = startSocketMode({ appToken: async () => "xapp-token", signal: ctrl.signal })
+    const result = stream.next()
+    await started
+    ctrl.abort()
+    const closedAtAbort = mockWsClose.mock.calls.length
+    release(unlisten)
+    expect((await result).done).toBe(true)
+    expect(closedAtAbort).toBe(1)
+    expect(unlisten).toHaveBeenCalledTimes(1)
+    expect(mockListen).toHaveBeenCalledTimes(1)
+    expect(mockWsClose).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([false, true])(
+    "listener registration rejection releases partial resources (abort=%s)",
+    async (abort) => {
+      const unlisten = jest.fn()
+      let fail!: (error: Error) => void
+      let registering!: () => void
+      const started = new Promise<void>((resolve) => {
+        registering = resolve
+      })
+      mockListen.mockImplementation(async (topic: string) => {
+        if (topic.endsWith("/message")) return unlisten
+        return new Promise((_resolve, reject) => {
+          fail = reject
+          registering()
+        })
+      })
+      const ctrl = new AbortController()
+      const stream = startSocketMode({ appToken: async () => "xapp-token", signal: ctrl.signal })
+      const result = stream.next()
+      await started
+      if (abort) ctrl.abort()
+      const closedAtAbort = mockWsClose.mock.calls.length
+      const disposedAtAbort = unlisten.mock.calls.length
+      fail(new Error("listener registration failed"))
+      await expect(result).rejects.toThrow("listener registration failed")
+      if (abort) {
+        expect(closedAtAbort).toBe(1)
+        expect(disposedAtAbort).toBe(1)
+      }
+      expect(mockWsClose).toHaveBeenCalledTimes(1)
+      expect(unlisten).toHaveBeenCalledTimes(1)
+      ctrl.abort()
+      expect(mockWsClose).toHaveBeenCalledTimes(1)
+    }
+  )
 })

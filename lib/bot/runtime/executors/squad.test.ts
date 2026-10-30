@@ -4,6 +4,10 @@ import { BotRunParkedError } from "../step"
 import { BotExecutorUnavailableError, type BotExecutorContext } from "./types"
 import { createSquadBotExecutor, squadObjective } from "./squad"
 
+jest.mock("@/lib/ai/agent/team/squad/squad-control", () => ({
+  controlSquadRun: jest.fn().mockResolvedValue({ accepted: true }),
+}))
+
 function envelope(overrides: Partial<BotEventEnvelopeV1> = {}): BotEventEnvelopeV1 {
   return {
     eventId: "bev_1",
@@ -77,6 +81,25 @@ describe("squadObjective", () => {
 })
 
 describe("createSquadBotExecutor", () => {
+  it("inherits the Bot authority and autonomy cap instead of the Squad's wider mode", async () => {
+    const start = jest.fn().mockResolvedValue({ started: true, runId: "sq_1" })
+    await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(
+      ctx({
+        policy: { maxAuthority: "plan" },
+        composition: {
+          selection: { presetId: "standard", authority: "plan", autonomy: "suggest" },
+          provenance: {},
+        } as never,
+      })
+    )
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        permissionCeiling: { permissionMode: "plan" },
+        requirePlanApprovalFloor: true,
+      })
+    )
+  })
+
   it("starts the Squad with a bot origin", async () => {
     const start = jest.fn().mockResolvedValue({ started: true, runId: "sq_1" })
     const result = await createSquadBotExecutor({ start, isSquadRunSettled: () => true })(ctx())
@@ -211,4 +234,18 @@ describe("createSquadBotExecutor", () => {
       BotExecutorUnavailableError
     )
   })
+})
+
+it("stops a child that finishes admission after the Bot was cancelled", async () => {
+  const controller = new AbortController()
+  const context = ctx({ signal: controller.signal })
+  const start = jest.fn(async () => {
+    controller.abort()
+    return { started: true, runId: "child" }
+  })
+  await expect(
+    createSquadBotExecutor({ start, isSquadRunSettled: () => false })(context)
+  ).rejects.toThrow(/cancelled/)
+  const { controlSquadRun } = await import("@/lib/ai/agent/team/squad/squad-control")
+  expect(controlSquadRun).toHaveBeenCalledWith("child", "stop")
 })

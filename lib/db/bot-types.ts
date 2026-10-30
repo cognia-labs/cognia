@@ -152,6 +152,8 @@ export type BotInstallationStatus = "enabled" | "disabled" | "needs_setup"
 
 export interface BotInstallationRow {
   id: string
+  /** Immutable original Host installation intent; optional for older rows. */
+  installOperationFingerprint?: string
   activatedAt?: number
   monitor?: import("@/types/bot/api").BotMonitorState
   /** Namespaced plugin id (`<pluginId>:<botId>`) or a `botDefinitions` id. */
@@ -183,6 +185,12 @@ export interface BotInstallationRow {
    */
   syncedFromHost?: true
   /** Trigger id to armed. A trigger absent here uses the definition's default. */
+  /** Pause intake and new attempts; accepted work is retained and active attempts drain. */
+  paused?: boolean
+  /** Durable cancellation receipts, keyed by control-plane operation UUID. */
+  automationCancellations?: Record<string, string[]>
+  /** Per-trigger input slot selected by the installation owner. */
+  triggerInputSlots?: Record<string, string>
   triggerOverrides?: Record<string, boolean>
   triggerState?: Record<string, BotTriggerRuntimeState>
   /**
@@ -251,6 +259,10 @@ export type BotDeliveryStatus =
   "pending" | "leased" | "running" | "parked" | "succeeded" | "failed" | "deadletter" | "dismissed"
 
 export interface BotEventDeliveryRow {
+  /** Explicit cancellation cannot be replayed or revived by a late engine. */
+  cancelledAt?: number
+  /** Resume grants retained work a fresh unsettled-retention window. */
+  retentionExtendedAt?: number
   /**
    * Mirrored from a Host, not owned here.
    *
@@ -297,6 +309,9 @@ export interface BotEventDeliveryRow {
   correlation?: string
   /** Held until this instant by the trigger's debounce. */
   notBefore?: number
+  /** Only open latest debounce windows may replace one another. */
+  coalesce?: "latest" | "all"
+  coalesceKey?: string
   /** The full envelope, so a delivery is independently replayable. */
   envelope: BotEventEnvelopeV1
   /**

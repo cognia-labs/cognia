@@ -33,6 +33,7 @@ import type { A2UISegmentContent } from "@/types/connectors/segment"
 import type { A2UIComponent } from "@/types/a2ui/schema"
 import { getComponentChildReferences } from "@/lib/a2ui/component-tree"
 import { getValueByPath } from "@/lib/a2ui/data-model"
+import { escapeMarkdown } from "./inbound-markdown"
 
 /**
  * A component node as the mapper sees it. We accept the unknown-typed
@@ -382,7 +383,13 @@ export async function recordCallbackBinding(input: {
     actorScope: input.actorScope,
     allowedActions: input.allowedActions,
   }
-  await getDb().connectorCallbackBindings.put(row)
+  const db = getDb()
+  await db.transaction("rw", db.connectorCallbackBindings, async () => {
+    const existing = await db.connectorCallbackBindings.get(row.id)
+    // A redraw must never resurrect a used decision or erase its recovery receipt.
+    if (existing?.consumedAt !== undefined || existing?.workflowDispatch) return
+    await db.connectorCallbackBindings.put(row)
+  })
 }
 
 /**
@@ -438,33 +445,58 @@ export async function resolveCallbackBinding(
  * (Telegram, OneBot, raw email body, etc.).
  */
 export function generatePlainTextMirror(surface: A2UISegmentContent): string {
+  return generateTextMirror(surface, false)
+}
+
+/** Semantic Markdown for channels with rich text; plain node values stay literal. */
+export function generateMarkdownMirror(
+  surface: A2UISegmentContent,
+  options: { omitButtonIds?: ReadonlySet<string>; maxHeadingLevel?: 1 | 2 | 3 | 4 | 5 | 6 } = {}
+): string {
+  return generateTextMirror(surface, true, options.omitButtonIds, options.maxHeadingLevel)
+}
+
+function generateTextMirror(
+  surface: A2UISegmentContent,
+  markdown: boolean,
+  omitButtonIds?: ReadonlySet<string>,
+  maxHeadingLevel = 6
+): string {
   // Plain-text mirror is content-driven, not layout-driven — we don't
   // indent based on tree depth because pure layout containers (Column /
   // Row / Card body) are invisible in a chat channel. Visual hierarchy
   // is conveyed by semantic markers (`#` for Card titles, `[Button]` for
   // interactive verbs, `[!]` for Alerts, etc.) rather than whitespace.
   const lines: string[] = []
+  const literal = markdown ? escapeMarkdown : (value: string) => value
   walkA2UISurface(surface, (node) => {
     switch (node.component) {
       case "Text": {
         const text = stringValue(node.raw.text)
-        if (text) lines.push(text)
+        const heading = markdown && /^heading([1-6])$/.exec(stringValue(node.raw.variant))
+        if (text)
+          lines.push(
+            heading && Number(heading[1]) > maxHeadingLevel
+              ? `**${literal(text)}**`
+              : `${heading ? "#".repeat(Number(heading[1])) + " " : ""}${literal(text)}`
+          )
         break
       }
       case "Button": {
+        if (omitButtonIds?.has(node.id)) break
         const text = stringValue(node.raw.text)
         const action = stringValue(node.raw.action)
-        if (text || action) lines.push(`[${text || action}]`)
+        if (text || action) lines.push(literal(`[${text || action}]`))
         break
       }
       case "Link": {
         const text = stringValue(node.raw.text) || stringValue(node.raw.href)
-        if (text) lines.push(text)
+        if (text) lines.push(literal(text))
         break
       }
       case "Image": {
         const alt = stringValue(node.raw.alt) || "image"
-        lines.push(`[${alt}]`)
+        lines.push(literal(`[${alt}]`))
         break
       }
       case "Divider":
@@ -473,18 +505,23 @@ export function generatePlainTextMirror(surface: A2UISegmentContent): string {
       case "Alert": {
         const title = stringValue(node.raw.title)
         const text = stringValue(node.raw.message) || stringValue(node.raw.text)
-        if (title || text) lines.push(`[!] ${title || ""}${title && text ? ": " : ""}${text || ""}`)
+        if (title || text)
+          lines.push(literal(`[!] ${title || ""}${title && text ? ": " : ""}${text || ""}`))
         break
       }
       case "Card": {
         const title = stringValue(node.raw.title)
-        if (title) lines.push(`# ${title}`)
+        if (title)
+          lines.push(
+            `${markdown ? "#".repeat(Math.min(2, maxHeadingLevel)) : "#"} ${literal(title)}`
+          )
         const description = stringValue(node.raw.description)
-        if (description) lines.push(description)
+        if (description) lines.push(literal(description))
         break
       }
       case "Row":
       case "Column":
+      case "ButtonGroup":
       case "List":
       case "Tabs":
       case "Accordion":
@@ -497,12 +534,12 @@ export function generatePlainTextMirror(surface: A2UISegmentContent): string {
       case "TextField":
       case "TextArea": {
         const label = stringValue(node.raw.label) || stringValue(node.raw.placeholder) || "input"
-        lines.push(`[${label}: __________]`)
+        lines.push(literal(`[${label}: __________]`))
         break
       }
       case "Checkbox": {
         const label = stringValue(node.raw.label) || "checkbox"
-        lines.push(`[ ] ${label}`)
+        lines.push(literal(`[ ] ${label}`))
         break
       }
       case "Select":
@@ -513,17 +550,17 @@ export function generatePlainTextMirror(surface: A2UISegmentContent): string {
               (o) => stringValue(o.label) || stringValue(o.value) || ""
             )
           : []
-        lines.push(`${label}: ${options.filter(Boolean).join(" / ")}`)
+        lines.push(literal(`${label}: ${options.filter(Boolean).join(" / ")}`))
         break
       }
       default: {
         // Unknown / specialised kinds — emit a best-effort placeholder so
         // the user can see something happened.
-        lines.push(`[${node.component}]`)
+        lines.push(literal(`[${node.component}]`))
       }
     }
   })
-  return lines.join("\n")
+  return lines.join(markdown ? "\n\n" : "\n")
 }
 
 function stringValue(v: unknown): string {

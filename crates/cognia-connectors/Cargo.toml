@@ -24,6 +24,18 @@ path = "src/lib.rs"
 # enables it.
 default = []
 tauri-host = ["dep:tauri"]
+# Opt-in process fixture; never part of normal Host or desktop builds.
+native-test-fixture = []
+
+[[bin]]
+name = "connector-native-fixture"
+path = "../../tests/bot-e2e/native-bridge.rs"
+required-features = ["native-test-fixture"]
+
+[[bin]]
+name = "connector-tauri-fixture"
+path = "../../tests/bot-e2e/tauri-bridge.rs"
+required-features = ["native-test-fixture", "tauri-host"]
 
 [dependencies]
 cognia-secrets = { path = "../cognia-secrets" }
@@ -65,7 +77,8 @@ cbc = { version = "0.2", features = ["alloc"] }
 aes-gcm = { workspace = true, features = ["aes"] }
 prost = "0.14"
 # Matrix E2EE stack — the heavy dependency this crate isolates.
-matrix-sdk-crypto = { version = "0.19.1", default-features = false }
+vodozemac = "0.11"
+matrix-sdk-crypto = { version = "0.19.1", default-features = false, features = ["qrcode"] }
 matrix-sdk-sqlite = { version = "0.19.1", default-features = false, features = ["crypto-store", "bundled"] }
 ruma = { version = "0.17.0", features = ["client-api-c", "events", "rand"] }
 

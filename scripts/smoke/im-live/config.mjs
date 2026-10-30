@@ -69,6 +69,18 @@ export const PLATFORM_FIELDS = {
     targetBotUin: { env: "IM_LIVE_ONEBOT_TARGET_BOT_UIN" },
     driverUserUin: { env: "IM_LIVE_ONEBOT_DRIVER_USER_UIN" },
   },
+  "qq-official": {
+    apiBase: { env: "IM_LIVE_QQ_OFFICIAL_OBSERVER_API_BASE" },
+    bearerToken: { env: "IM_LIVE_QQ_OFFICIAL_OBSERVER_BEARER_TOKEN", secret: true },
+    targetConversationId: { env: "IM_LIVE_QQ_OFFICIAL_TARGET_CONVERSATION_ID" },
+    targetBotUin: { env: "IM_LIVE_QQ_OFFICIAL_TARGET_BOT_UIN" },
+    driverUserUin: { env: "IM_LIVE_QQ_OFFICIAL_DRIVER_USER_UIN" },
+    conversationKind: {
+      env: "IM_LIVE_QQ_OFFICIAL_CONVERSATION_KIND",
+      optional: true,
+      default: "group",
+    },
+  },
   matrix: {
     homeserver: { env: "IM_LIVE_MATRIX_HOMESERVER" },
     driverAccessToken: { env: "IM_LIVE_MATRIX_DRIVER_ACCESS_TOKEN", secret: true },

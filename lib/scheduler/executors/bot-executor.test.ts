@@ -8,6 +8,9 @@ import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-
 import type { PluginBotDef, PluginBotTriggerDef } from "@/types/plugin/plugin-bot"
 import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
 
+import { dispatchBotEvent } from "@/lib/bot/events/dispatch"
+import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
+import { claimBotDelivery } from "@/lib/db/bot-event-deliveries"
 import { executeBotTask } from "./bot-executor"
 
 const NOW = 1_700_000_000_000
@@ -47,6 +50,49 @@ beforeEach(async () => {
 }, 15_000)
 
 describe("executeBotTask", () => {
+  it("shares declared concurrency across poll and event triggers", async () => {
+    await seed([
+      {
+        id: "poll",
+        kind: "poll",
+        everyMs: 60000,
+        concurrencyKey: "monitor",
+        holdConcurrencyWhileWaiting: false,
+      },
+      {
+        id: "event",
+        kind: "event",
+        source: "integration",
+        types: ["push"],
+        concurrencyKey: "monitor",
+      },
+    ])
+    await executeBotTask(task({ installationId: "boti_1", triggerId: "poll" }), execution, live)
+    const {
+      installationId: _i,
+      triggerId: _t,
+      deliveryId: _d,
+      ...envelope
+    } = buildBotEventEnvelope({
+      source: "integration",
+      sourceRecordId: "push",
+      type: "push",
+      installationId: "",
+      triggerId: "",
+      occurredAt: NOW,
+      receivedAt: NOW,
+      payload: {},
+    })
+    await dispatchBotEvent({ envelope, query: { source: "integration", type: "push" }, now: NOW })
+    const rows = await getDb().botEventDeliveries.toArray()
+    expect(rows.map((row) => row.concurrencyKey)).toEqual(["boti_1::monitor", "boti_1::monitor"])
+    expect(rows.find((row) => row.triggerId === "poll")?.holdConcurrencyWhileWaiting).toBe(false)
+    const claims = await Promise.all(
+      rows.map((row) => claimBotDelivery(row.id, "runner", Date.now()))
+    )
+    expect(claims.filter(Boolean)).toHaveLength(1)
+  })
+
   it("refuses a payload that names no installation or trigger", async () => {
     const result = await executeBotTask(task({}), execution, live)
     expect(result.success).toBe(false)

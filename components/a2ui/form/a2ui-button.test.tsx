@@ -4,6 +4,7 @@
 
 import React from "react"
 import { render, screen, fireEvent } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { A2UIButton } from "./a2ui-button"
 import type { A2UIButtonComponent, A2UIComponentProps } from "@/types/a2ui/schema"
 
@@ -51,6 +52,50 @@ describe("A2UIButton", () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+  })
+
+  it("requires confirmation before dispatching and cancelling leaves the action untouched", async () => {
+    const user = userEvent.setup()
+    render(
+      <A2UIButton
+        {...createProps({
+          id: "confirm",
+          component: "Button",
+          text: "Remove",
+          action: "remove",
+          confirmation: {
+            message: "Confirm this action",
+            confirmLabel: "Proceed",
+            cancelLabel: "Back",
+          },
+        })}
+      />
+    )
+    await user.click(screen.getByRole("button", { name: "Remove" }))
+    expect(screen.getByRole("alertdialog")).toBeVisible()
+    expect(mockOnAction).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Back" }))
+    expect(mockOnAction).not.toHaveBeenCalled()
+    await user.click(screen.getByRole("button", { name: "Remove" }))
+    await user.click(screen.getByRole("button", { name: "Proceed" }))
+    expect(mockOnAction).toHaveBeenCalledTimes(1)
+  })
+
+  it("records a confirmed exclusive choice in shared surface data", () => {
+    render(
+      <A2UIButton
+        {...createProps({
+          id: "first",
+          component: "Button",
+          text: "First",
+          action: "choose",
+          exclusiveGroup: "decision",
+        })}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: "First" }))
+    expect(mockOnDataChange).toHaveBeenCalledWith("/__a2uiExclusiveGroups/group:decision", "first")
+    expect(mockOnAction).toHaveBeenCalledWith("choose", { text: "First" })
   })
 
   it("renders the configured icon after its text", () => {

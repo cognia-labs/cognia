@@ -1,7 +1,20 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
-import { __resetDbForTesting, getDb } from "@/lib/db/schema"
+import type { Collection } from "dexie"
+import { encryptedAccountDatabaseName } from "@/lib/accounts/account-db"
+import {
+  AccountContentCipher,
+  activateAccountContentCipher,
+  lockAccountContentCipher,
+} from "@/lib/accounts/content-cipher"
+import {
+  __resetDbForTesting,
+  activateAccountDatabase,
+  clearAccountDatabaseSelection,
+  CogniaDB,
+  getDb,
+} from "@/lib/db/schema"
 import {
   createFeishuPrincipal,
   getFeishuPrincipalById,
@@ -137,6 +150,21 @@ describe("login-link", () => {
       expect((await getFeishuPrincipalById(own.id))?.logtoSubject).toBeUndefined()
     })
 
+    it("preserves the injected principal adapter contract", async () => {
+      const own = await principal({ openId: "ou_injected", unionId: "on_ada" })
+      const listByUnionId = jest.fn(async () => [own])
+      const rebind = jest.fn(async () => ({ ...own, logtoSubject: "sub_ada" }))
+      expect(
+        await attachSignInToFeishuPrincipals(
+          { userId: "usr_ada", logtoSubject: "sub_ada", identities: [larkIdentity()], now: T0 + 1 },
+          { listByUnionId, rebind }
+        )
+      ).toEqual({ attached: [own.id], foreign: [] })
+      expect(listByUnionId).toHaveBeenCalledWith("tk_a", "on_ada")
+      expect(rebind).toHaveBeenCalledWith(own.id, { logtoSubject: "sub_ada" }, T0 + 1)
+      expect((await getFeishuPrincipalById(own.id))?.logtoSubject).toBeUndefined()
+    })
+
     it("does nothing for a blank subject", async () => {
       await principal({ openId: "ou_1", unionId: "on_ada" })
       const report = await attachSignInToFeishuPrincipals({
@@ -147,6 +175,66 @@ describe("login-link", () => {
       expect(report).toEqual({ attached: [], foreign: [] })
     })
   })
+
+  it.each(["attach", "unlink"] as const)(
+    "rejects a profile switch after the real %s lookup without mutating a matching row in the new profile",
+    async (operation) => {
+      const own = await createFeishuPrincipal({
+        tenantKey: "tk_a",
+        appId: "cli_1",
+        openId: "ou_1",
+        unionId: "on_ada",
+        cogniaAccountId: "acct_a",
+        cogniaUserId: "usr_ada",
+        selfBoundAt: T0,
+        now: T0,
+      })
+      const otherId = `acct_${operation}_other`
+      const otherDb = new CogniaDB(encryptedAccountDatabaseName(otherId))
+      activateAccountContentCipher(
+        await AccountContentCipher.createForTesting(otherId, otherDb.name)
+      )
+      await otherDb.open()
+      const other = { ...own, cogniaAccountId: otherId, cogniaUserId: "usr_profile_b" }
+      await otherDb.feishuPrincipals.put(other)
+      const collectionPrototype = Object.getPrototypeOf(
+        getDb().feishuPrincipals.toCollection()
+      ) as Collection
+      const toArray = collectionPrototype.toArray
+      const intercepted = jest
+        .spyOn(collectionPrototype, "toArray")
+        .mockImplementationOnce(function (this: Collection) {
+          return toArray
+            .call(this, (rows) => rows)
+            .then((rows) => {
+              activateAccountDatabase(otherId)
+              return rows
+            })
+        })
+      try {
+        const settling =
+          operation === "attach"
+            ? attachSignInToFeishuPrincipals({
+                userId: "usr_ada",
+                logtoSubject: "sub_ada",
+                identities: [larkIdentity()],
+                now: T0 + 1,
+              })
+            : unlinkSelfBoundPrincipals({
+                localAccountId: "acct_a",
+                userId: "usr_ada",
+                now: T0 + 1,
+              })
+        await expect(settling).rejects.toThrow()
+        expect(await getDb().feishuPrincipals.get(own.id)).toEqual(other)
+      } finally {
+        intercepted.mockRestore()
+        clearAccountDatabaseSelection()
+        await otherDb.delete()
+        lockAccountContentCipher()
+      }
+    }
+  )
 
   describe("logtoSubjectForUser", () => {
     it("returns the single Logto subject a person signed in with", async () => {

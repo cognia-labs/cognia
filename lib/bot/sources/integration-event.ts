@@ -14,7 +14,9 @@
  * per installation and event).
  */
 
-import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
+import { buildBotEventEnvelope, botEventId } from "@/lib/bot/events/envelope"
+import { getDb } from "@/lib/db/schema"
+import { sha256Hex } from "@/lib/share/hash"
 import { dispatchBotEvent, type DispatchBotEventResult } from "@/lib/bot/events/dispatch"
 import { externalProvenance } from "@/lib/bot/events/provenance"
 import type { IntegrationEventEnvelope } from "@/types/plugin/plugin-integration"
@@ -49,11 +51,27 @@ export async function dispatchIntegrationEventToBots(
   options: DispatchIntegrationEventToBotsOptions = {}
 ): Promise<DispatchBotEventResult> {
   const now = Date.now()
+  const legacySourceId = `${event.pluginId}:${event.deliveryId}`
+  const legacy = await getDb()
+    .botEventDeliveries.where("eventId")
+    .equals(botEventId("integration", legacySourceId))
+    .toArray()
+  // An unfinished projection may have already admitted work before the
+  // identity upgrade. Keep those run/step identities for this exact account.
+  const hasLegacy = legacy.some(
+    (row) =>
+      row.source === "integration" &&
+      row.type === event.eventType &&
+      row.envelope.binding?.integrationAccountId === event.accountId
+  )
   const envelope = buildBotEventEnvelope({
     source: "integration",
-    // The provider's own delivery id, which is what makes a redelivery the
-    // same event rather than a new one.
-    sourceRecordId: `${event.pluginId}:${event.deliveryId}`,
+    // Provider IDs are scoped to an integration account, not the whole plugin.
+    // A slash cannot start a valid legacy plugin ID. The fixed-size digest
+    // also keeps derived delivery/run IDs within the public RPC contract.
+    sourceRecordId: hasLegacy
+      ? legacySourceId
+      : `/v2/${await sha256Hex(JSON.stringify([event.pluginId, event.integrationId, event.accountId, event.deliveryId]))}`,
     type: event.eventType,
     // Routing decides the real values. These are placeholders the router
     // overwrites per recipient.

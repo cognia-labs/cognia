@@ -120,6 +120,72 @@ describe("MatrixE2EERuntime", () => {
     await e2ee.close()
   })
 
+  it("joins pending initialization before closing exactly once", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "connectors_matrix_crypto_init") {
+        await gate
+        return
+      }
+      if (name === "connectors_matrix_crypto_outgoing_requests") return []
+    })
+    const e2ee = runtime()
+    const starting = e2ee.initialize()
+    let finished = false
+    const closing = e2ee.close().then(() => {
+      finished = true
+    })
+    await Promise.resolve()
+    expect(finished).toBe(false)
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "connectors_matrix_crypto_close")
+    ).toHaveLength(0)
+    release()
+    await Promise.all([starting, closing])
+    await e2ee.close()
+    expect(
+      invoke.mock.calls.filter(([name]) => name === "connectors_matrix_crypto_close")
+    ).toHaveLength(1)
+    await expect(e2ee.initialize()).rejects.toThrow("closed")
+  })
+
+  it("does not delete pending input when cancellation overtakes decrypt", async () => {
+    const e2ee = runtime()
+    await e2ee.initialize()
+    await actualPendingEvents.persistMatrixPendingEncryptedEvent({
+      adapterId: "mx-1",
+      roomId: "!room:example.org",
+      event: encryptedEvent(),
+    })
+    let entered!: () => void
+    let release!: () => void
+    const enteredPromise = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    invoke.mockImplementation(async (name: string) => {
+      if (name === "connectors_matrix_crypto_decrypt_event") {
+        entered()
+        await gate
+        return decryptedEnvelope()
+      }
+      if (name === "connectors_matrix_crypto_outgoing_requests") return []
+    })
+    const retry = e2ee.retryPending(true)
+    await enteredPromise
+    const closing = e2ee.close()
+    release()
+    await Promise.all([retry, closing])
+    expect(
+      await getDb().matrixPendingEncryptedEvents.where("adapterId").equals("mx-1").count()
+    ).toBe(1)
+  })
+
   it("honors Matrix retry_after_ms before marking a crypto request sent", async () => {
     const outgoing: MatrixCryptoOutgoingRequest = {
       requestId: "request-rate-limit",

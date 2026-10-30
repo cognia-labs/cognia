@@ -35,6 +35,7 @@ export async function runTurn({
   sleepImpl,
 }) {
   const observedBefore = lease.observed.length
+  const before = await fixture.requests()
   const probe = await send()
 
   const [fixtureHit] = await Promise.all([
@@ -55,7 +56,28 @@ export async function runTurn({
   }
 
   const replies = lease.observed.slice(observedBefore)
-  return { probe, fixtureHit, replies, diagnosis: diagnoseTurn({ fixtureHit, replies, marker }) }
+  const after = await fixture.requests()
+  const modelRequestCount = after.count - before.count
+  const hits = (after.hits ?? []).slice(before.count)
+  const matchingModelRequestCount = hits.filter((hit) =>
+    (hit.markers ?? []).includes(marker)
+  ).length
+  return {
+    probe,
+    fixtureHit,
+    replies,
+    modelRequestCount,
+    matchingModelRequestCount,
+    diagnosis: diagnoseTurn({
+      fixtureHit,
+      replies,
+      marker,
+      modelRequestCount,
+      matchingModelRequestCount,
+      aborted: signal?.aborted,
+      ...(driver.enforceReplyTiming ? { replyNotBefore: probe?.sentAt ?? NaN } : {}),
+    }),
+  }
 }
 
 /**

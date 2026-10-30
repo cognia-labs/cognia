@@ -18,6 +18,288 @@ describe("stripChannelMention", () => {
 })
 
 describe("parseQQDispatch", () => {
+  it.each([
+    [12, { feature_id: "help" }, { kind: "menu", featureId: "help" }],
+    [
+      13,
+      { message_id: "reply", feedback_opt: "LIKE", checked: 1 },
+      { kind: "feedback", vote: "positive", selected: true, messageId: "c2c:user:reply" },
+    ],
+    [14, {}, { kind: "session_reset" }],
+    [15, { action: "ENTER_STORY" }, { kind: "story", action: "enter" }],
+    [16, { action: "model-1" }, { kind: "model_change", action: "model-1" }],
+    [
+      18,
+      { authorize_data: { scope: "c2c_push", opt_scene: "dialog" } },
+      { kind: "authorization", scope: "proactive", source: "dialog", state: "unknown" },
+    ],
+    [20, {}, { kind: "authorization", state: "unknown" }],
+  ])(
+    "normalizes native type%s as shared non-message interaction metadata",
+    (type, resolved, interaction) => {
+      const out = parseQQDispatch(ADAPTER, SELF, {
+        op: 0,
+        t: "INTERACTION_CREATE",
+        id: "outer",
+        d: {
+          id: "press",
+          type,
+          scene: "c2c",
+          chat_type: 2,
+          user_openid: "user",
+          timestamp: new Date().toISOString(),
+          data: { type, resolved: { ...resolved, auth_token: "never-retain" } },
+        },
+      } as never)!
+      expect(out).toMatchObject({
+        kind: "system",
+        interaction,
+        segments: type === 13 ? [{ type: "emoji", code: "👍" }] : [],
+        plainText: "",
+        canReplyToMessage: false,
+      })
+      expect(out).not.toHaveProperty("deliveryPermissionChange")
+      expect(out.conversationRef).not.toHaveProperty("msgId")
+      expect(JSON.stringify(out)).not.toContain("never-retain")
+      if (type === 13)
+        expect(out).toMatchObject({
+          systemKind: "reaction_added",
+          replacesMessageId: "c2c:user:reply",
+        })
+      if (type === 12) expect(out.passiveEvent).toMatchObject({ id: "press" })
+      else expect(out).not.toHaveProperty("passiveEvent")
+    }
+  )
+  it("routes a deselected negative feedback through the existing reaction removal contract", () => {
+    expect(
+      parseQQDispatch(ADAPTER, SELF, {
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          id: "unlike",
+          type: 13,
+          scene: "c2c",
+          user_openid: "user",
+          timestamp: new Date().toISOString(),
+          data: { resolved: { message_id: "reply", feedback_opt: "UNLIKE", checked: 0 } },
+        },
+      } as never)
+    ).toMatchObject({
+      systemKind: "reaction_removed",
+      replacesMessageId: "c2c:user:reply",
+      segments: [{ type: "emoji", code: "👎" }],
+      interaction: { kind: "feedback", vote: "negative", selected: false },
+    })
+  })
+  it("parses group authorization without turning a scope observation into consent", () => {
+    const out = parseQQDispatch(ADAPTER, SELF, {
+      op: 0,
+      t: "INTERACTION_CREATE",
+      d: {
+        id: "group-grant",
+        type: 19,
+        scene: "group",
+        group_openid: "group",
+        group_member_openid: "operator",
+        timestamp: new Date().toISOString(),
+        data: { resolved: { authorize_data: { scope: "group_push", opt_scene: "setting" } } },
+      },
+    } as never)!
+    expect(out).toMatchObject({
+      systemKind: "interaction",
+      interaction: {
+        kind: "authorization",
+        state: "unknown",
+        scope: "proactive",
+        source: "settings",
+      },
+    })
+    expect(out).not.toHaveProperty("deliveryPermissionChange")
+  })
+  it.each([
+    {
+      type: 12,
+      scene: "group",
+      group_openid: "g",
+      group_member_openid: "u",
+      data: { resolved: { feature_id: "x" } },
+    },
+    { type: 13, data: { resolved: { message_id: "x", feedback_opt: "LIKE", checked: 2 } } },
+    { type: 18, data: { resolved: { authorize_data: { scope: "group_push" } } } },
+    { type: 15, data: { resolved: { action: "arbitrary" } } },
+    { type: 14, data: { type: 16 } },
+  ])("rejects malformed or contradictory interactions: %j", (fields) => {
+    expect(
+      parseQQDispatch(ADAPTER, SELF, {
+        op: 0,
+        t: "INTERACTION_CREATE",
+        d: {
+          id: "press",
+          scene: "c2c",
+          user_openid: "user",
+          timestamp: new Date().toISOString(),
+          ...fields,
+        },
+      } as never)
+    ).toBeNull()
+  })
+  it.each(["MESSAGE_AUDIT_PASS", "MESSAGE_AUDIT_REJECT"])(
+    "normalizes %s to a scoped common delivery status",
+    (t) => {
+      const out = parseQQDispatch(ADAPTER, SELF, {
+        op: 0,
+        t,
+        id: "audit-event",
+        d: {
+          audit_id: "audit",
+          guild_id: "guild",
+          channel_id: "channel",
+          create_time: new Date(Date.now() - 1000).toISOString(),
+          audit_time: new Date().toISOString(),
+          ...(t.endsWith("PASS") ? { message_id: "delivered" } : {}),
+          auth_token: "never-retain",
+        },
+      } as never)!
+      expect(out).toMatchObject({
+        kind: "system",
+        systemKind: "delivery_status",
+        deliveryStatus: {
+          receiptId: "audit",
+          status: t.endsWith("PASS") ? "delivered" : "rejected",
+          ...(t.endsWith("PASS") ? { platformMessageId: "channel:channel:delivered" } : {}),
+        },
+      })
+      expect(out).not.toHaveProperty("passiveEvent")
+      expect(out).not.toHaveProperty("deliveryPermissionChange")
+      expect(JSON.stringify(out)).not.toContain("never-retain")
+    }
+  )
+  it("preserves bounded friend-add referral metadata separately from delivery authority", () => {
+    const out = parseQQDispatch(ADAPTER, SELF, {
+      op: 0,
+      t: "FRIEND_ADD",
+      id: "friend-event",
+      d: {
+        openid: "user",
+        timestamp: 1784570600,
+        scene: 2003,
+        scene_param: "campaign_123",
+        short_code: "short",
+        author: { union_openid: "cross-app-secret" },
+        auth_token: "token-secret",
+      },
+    } as never)!
+    expect(out).toMatchObject({
+      kind: "system",
+      systemKind: "lifecycle",
+      referral: { source: "2003", state: "campaign_123" },
+      channelData: { friendAdd: { scene: 2003, shortCode: "short" } },
+      plainText: "",
+      segments: [],
+      passiveEvent: { id: "friend-event" },
+    })
+    expect(out.conversationRef).not.toHaveProperty("msgId")
+    expect(out).not.toHaveProperty("deliveryPermissionChange")
+    expect(JSON.stringify(out)).not.toMatch(/cross-app-secret|token-secret/)
+  })
+  it.each(["x".repeat(33), "bad\nstate", { callback_data: "forged" }])(
+    "does not expose malformed attribution or reinterpret it as authority: %j",
+    (state) => {
+      const out = parseQQDispatch(ADAPTER, SELF, {
+        op: 0,
+        t: "FRIEND_ADD",
+        d: {
+          openid: "user",
+          timestamp: 1784570600,
+          scene: 2004,
+          scene_param: state,
+          short_code: "x".repeat(513),
+        },
+      } as never)!
+      expect(out).toMatchObject({ referral: { source: "2004" } })
+      expect(out.referral).not.toHaveProperty("state")
+      expect(out.channelData?.friendAdd).not.toHaveProperty("shortCode")
+      expect(out).not.toHaveProperty("passiveEvent")
+      expect(out).not.toHaveProperty("deliveryPermissionChange")
+    }
+  )
+  it("ignores friend-only attribution fields on other lifecycle events", () => {
+    const out = parseQQDispatch(ADAPTER, SELF, {
+      op: 0,
+      t: "C2C_MSG_RECEIVE",
+      id: "event",
+      d: { openid: "user", timestamp: 1784570600, scene: 2003, scene_param: "campaign" },
+    } as never)!
+    expect(out).not.toHaveProperty("referral")
+  })
+  it("preserves native event authority and consent without fabricating a message or AI turn", () => {
+    const time = Math.floor(Date.now() / 1000)
+    const out = parseQQDispatch(ADAPTER, SELF, {
+      op: 0,
+      t: "C2C_MSG_RECEIVE",
+      id: "event",
+      d: { openid: "user", timestamp: time, auth_token: "secret" },
+    } as never)!
+    expect(out).toMatchObject({
+      kind: "system",
+      systemKind: "lifecycle",
+      originEventId: "event",
+      canReplyToMessage: false,
+      deliveryPermissionChange: { proactive: true },
+      conversationRef: { scene: "c2c", sceneId: "user", eventId: "event", receivedAt: time * 1000 },
+    })
+    expect(out.conversationRef).not.toHaveProperty("msgId")
+    expect(JSON.stringify(out)).not.toContain("secret")
+    const join = parseQQDispatch(ADAPTER, SELF, {
+      op: 0,
+      t: "GROUP_JOIN_REQUEST",
+      id: "join",
+      d: {
+        group_openid: "group",
+        member_openid: "member",
+        join_request_id: "request",
+        apply_at: new Date().toISOString(),
+        auto_approved: { strategy_id: "policy" },
+      },
+    } as never)!
+    expect(join).toMatchObject({
+      kind: "system",
+      systemKind: "lifecycle",
+      channelData: { joinRequest: { id: "request", autoApproved: true } },
+    })
+    expect(join).not.toHaveProperty("passiveEvent")
+    expect(join.conversationRef).not.toHaveProperty("eventId")
+  })
+  it("preserves ASR and prefers a checked converted WAV source without losing the original", () => {
+    const event = parseQQDispatch(
+      ADAPTER,
+      SELF,
+      dispatch("C2C_MESSAGE_CREATE", {
+        id: "voice",
+        author: { user_openid: "user" },
+        attachments: [
+          {
+            url: "https://gchat.qpic.cn/original.silk",
+            content_type: "voice",
+            voice_wav_url: "https://gchat.qpic.cn/converted.wav",
+            asr_refer_text: "Turn left",
+          },
+        ],
+      } as never)
+    )!
+    expect(event.segments).toEqual(
+      expect.arrayContaining([
+        {
+          type: "voice",
+          url: "https://gchat.qpic.cn/converted.wav",
+          rawUrl: "https://gchat.qpic.cn/original.silk",
+          mimeType: "audio/wav",
+          transcript: "Turn left",
+        },
+      ])
+    )
+    expect(event.plainText).toContain("Turn left")
+  })
   it("bounds element count and total structured text without deduplicating legitimate repeated content", () => {
     const event = parseQQDispatch(
       ADAPTER,
@@ -493,4 +775,23 @@ it("does not promote arbitrary group message fields or ARK content into an autho
   )
   expect(result?.sender.avatarUrl).toBeUndefined()
   expect(result?.sender.remoteIdType).toBe("group_openid")
+})
+it("normalizes messages without loading the media enrichment runtime", () => {
+  try {
+    jest.isolateModules(() => {
+      jest.doMock("../_shared/inbound-media", () => {
+        throw new Error("pure parser loaded media runtime")
+      })
+      const { parseQQDispatch } = jest.requireActual("./parse")
+      expect(
+        parseQQDispatch("qq-test", "bot", {
+          op: 0,
+          t: "C2C_MESSAGE_CREATE",
+          d: { id: "message", content: "test", author: { user_openid: "user" } },
+        })
+      ).toMatchObject({ plainText: "test" })
+    })
+  } finally {
+    jest.dontMock("../_shared/inbound-media")
+  }
 })

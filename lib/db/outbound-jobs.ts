@@ -23,6 +23,9 @@ import type {
 } from "./connector-types"
 import type { OutboundJobAuthorization } from "@cognia/plugin-contract/lib/db/connector-types"
 import type { OutboundRequest } from "@/types/connectors/outbound"
+import type { ConnectorDeliveryStatus } from "@/types/connectors/event"
+import { recordInbound } from "./inbound-ledger"
+import { markResponded } from "./conversation-overrides"
 import { getDb } from "./schema"
 import { recordTombstones } from "@/lib/sync/tombstones"
 import { append as appendConnectorAudit } from "./connector-audit"
@@ -189,8 +192,11 @@ export interface EnqueueInput {
   authorizedBy?: OutboundJobAuthorization
 }
 
-export async function enqueueOutbound(input: EnqueueInput): Promise<OutboundJobRow> {
-  return (await enqueueOutboundMany([input]))[0]
+export async function enqueueOutbound(
+  input: EnqueueInput,
+  options?: { signal?: AbortSignal }
+): Promise<OutboundJobRow> {
+  return (await enqueueOutboundMany([input], options))[0]
 }
 
 /**
@@ -200,8 +206,9 @@ export async function enqueueOutbound(input: EnqueueInput): Promise<OutboundJobR
  */
 export async function enqueueOutboundMany(
   inputs: readonly EnqueueInput[],
-  options: { now?: number } = {}
+  options: { now?: number; signal?: AbortSignal } = {}
 ): Promise<OutboundJobRow[]> {
+  options.signal?.throwIfAborted()
   if (inputs.length === 0) return []
   // AI/workflow callers may inherit a Dexie zone whose transaction completed
   // while awaiting model or plugin work. Keep every scope read and the write
@@ -219,66 +226,84 @@ export async function enqueueOutboundMany(
       overrides.map((override) => [override.conversationKey, override.projectId])
     )
     const fallbackProjectId = await resolveScopeProjectId()
+    options.signal?.throwIfAborted()
 
     const tables: Table[] = [db.outboundQueue]
     if (inputs.some((input) => input.localMessage)) tables.push(db.messages)
-    const rows = await db.transaction("rw", tables, () =>
-      Dexie.Promise.all(
-        conversationKeys.map((conversationKey) =>
-          db.outboundQueue
-            .where("[conversationKey+orderSeq]")
-            .between([conversationKey, -Infinity], [conversationKey, Infinity])
-            .last()
-        )
-      ).then((newestRows) => {
-        const nextSequence = new Map(
-          conversationKeys.map((conversationKey, index) => [
-            conversationKey,
-            newestRows[index]?.orderSeq ?? 0,
-          ])
-        )
-        const created = inputs.map((input) => {
-          const orderSeq = (nextSequence.get(input.conversationKey) ?? 0) + 1
-          nextSequence.set(input.conversationKey, orderSeq)
-          return {
-            id: newId(),
-            adapterId: input.adapterId,
-            projectId: projectByConversation.get(input.conversationKey) ?? fallbackProjectId,
-            conversationKey: input.conversationKey,
-            request: input.request,
-            status: "pending" as const,
-            attempts: 0,
-            createdAt: now,
-            updatedAt: now,
-            orderSeq,
-            nextAttemptAt: input.nextAttemptAt ?? now,
-            idempotencyKey: input.request.metadata.idempotencyKey,
-            source: input.source,
-            ...(input.source === "workflow" && input.sourceWorkflow
-              ? { sourceWorkflow: input.sourceWorkflow }
-              : {}),
-            ...(input.authorizedBy ? { authorizedBy: input.authorizedBy } : {}),
-          } satisfies OutboundJobRow
-        })
-        return db.outboundQueue.bulkAdd(created).then(async () => {
-          const messages = inputs.flatMap((input, index) =>
-            input.localMessage
-              ? [
-                  {
-                    ...input.localMessage,
-                    metadata: {
-                      ...input.localMessage.metadata,
-                      outboundJobId: created[index].id,
-                    },
-                  },
-                ]
-              : []
+    let abortTransaction: (() => void) | undefined
+    const rows = await db
+      .transaction("rw", tables, () => {
+        const transaction = Dexie.currentTransaction!
+        abortTransaction = () => transaction.abort()
+        options.signal?.addEventListener("abort", abortTransaction, { once: true })
+        options.signal?.throwIfAborted()
+        return Dexie.Promise.all(
+          conversationKeys.map((conversationKey) =>
+            db.outboundQueue
+              .where("[conversationKey+orderSeq]")
+              .between([conversationKey, -Infinity], [conversationKey, Infinity])
+              .last()
           )
-          if (messages.length) await db.messages.bulkPut(messages)
-          return created
+        ).then((newestRows) => {
+          options.signal?.throwIfAborted()
+          const nextSequence = new Map(
+            conversationKeys.map((conversationKey, index) => [
+              conversationKey,
+              newestRows[index]?.orderSeq ?? 0,
+            ])
+          )
+          const created = inputs.map((input) => {
+            const orderSeq = (nextSequence.get(input.conversationKey) ?? 0) + 1
+            nextSequence.set(input.conversationKey, orderSeq)
+            return {
+              id: newId(),
+              adapterId: input.adapterId,
+              projectId: projectByConversation.get(input.conversationKey) ?? fallbackProjectId,
+              conversationKey: input.conversationKey,
+              request: input.request,
+              status: "pending" as const,
+              attempts: 0,
+              createdAt: now,
+              updatedAt: now,
+              orderSeq,
+              nextAttemptAt: input.nextAttemptAt ?? now,
+              idempotencyKey: input.request.metadata.idempotencyKey,
+              source: input.source,
+              ...(input.source === "workflow" && input.sourceWorkflow
+                ? { sourceWorkflow: input.sourceWorkflow }
+                : {}),
+              ...(input.authorizedBy ? { authorizedBy: input.authorizedBy } : {}),
+            } satisfies OutboundJobRow
+          })
+          return db.outboundQueue.bulkAdd(created).then(async () => {
+            options.signal?.throwIfAborted()
+            const messages = inputs.flatMap((input, index) =>
+              input.localMessage
+                ? [
+                    {
+                      ...input.localMessage,
+                      metadata: {
+                        ...input.localMessage.metadata,
+                        outboundJobId: created[index].id,
+                      },
+                    },
+                  ]
+                : []
+            )
+            if (messages.length) await db.messages.bulkPut(messages)
+            return created
+          })
         })
       })
-    )
+      .catch((error) => {
+        // An abort during IndexedDB request construction may surface as
+        // InvalidStateError; preserve the host-owned cancellation reason.
+        options.signal?.throwIfAborted()
+        throw error
+      })
+      .finally(() => {
+        if (abortTransaction) options.signal?.removeEventListener("abort", abortTransaction)
+      })
 
     await enforceQueueSoftCap(now)
     emitOutboundEnqueued()
@@ -288,7 +313,12 @@ export async function enqueueOutboundMany(
 }
 
 /** Terminal outbound statuses — the job will never transition again. */
-export function isOutboundTerminal(status: OutboundJobRow["status"]): boolean {
+export function isOutboundTerminal(
+  status: OutboundJobRow["status"],
+  pendingReceipt?: OutboundJobRow["pendingReceipt"]
+): boolean {
+  if (status === "delivery_unknown" && pendingReceipt && pendingReceipt.resolvedAt === undefined)
+    return false
   return status === "sent" || status === "deadlettered" || status === "delivery_unknown"
 }
 
@@ -350,7 +380,7 @@ async function waitForTerminalRaw(
 ): Promise<OutboundJobRow | undefined> {
   const initial = await getDb().outboundQueue.get(jobId)
   if (!initial) return undefined
-  if (isOutboundTerminal(initial.status)) return initial
+  if (isOutboundTerminal(initial.status, initial.pendingReceipt)) return initial
   return new Promise<OutboundJobRow>((resolve) => {
     let latest = initial
     // `Dexie.liveQuery`, not a named `liveQuery` import. Dexie's CJS build (what
@@ -368,7 +398,7 @@ async function waitForTerminalRaw(
       next: (row) => {
         if (!row) return
         latest = row
-        if (isOutboundTerminal(row.status)) {
+        if (isOutboundTerminal(row.status, row.pendingReceipt)) {
           cleanup()
           resolve(row)
         }
@@ -469,7 +499,7 @@ export async function sweepTerminalOutboundRows(opts?: {
   const victims = await db.outboundQueue
     .where("createdAt")
     .below(now - retentionMs)
-    .filter((r) => isOutboundTerminal(r.status))
+    .filter((r) => isOutboundTerminal(r.status, r.pendingReceipt))
     .limit(batchLimit)
     .toArray()
   if (victims.length === 0) return 0
@@ -583,6 +613,17 @@ export async function findDeliveredByIdempotencyKey(
  * (deliver or dead-letter) before a newer sibling may go out. Bounded
  * index range on `[conversationKey+orderSeq]`, with a legacy createdAt fallback.
  */
+function isActiveOutboundRow(row: OutboundJobRow): boolean {
+  return (
+    row.status === "pending" ||
+    row.status === "failed" ||
+    row.status === "sending" ||
+    (row.status === "delivery_unknown" &&
+      Boolean(row.pendingReceipt) &&
+      row.pendingReceipt?.resolvedAt === undefined)
+  )
+}
+
 export async function findOlderActiveOutboundSibling(
   job: Pick<OutboundJobRow, "id" | "conversationKey" | "createdAt" | "orderSeq">
 ): Promise<OutboundJobRow | undefined> {
@@ -590,21 +631,13 @@ export async function findOlderActiveOutboundSibling(
     return getDb()
       .outboundQueue.where("[conversationKey+createdAt]")
       .between([job.conversationKey, -Infinity], [job.conversationKey, job.createdAt], true, false)
-      .filter(
-        (row) =>
-          row.id !== job.id &&
-          (row.status === "pending" || row.status === "failed" || row.status === "sending")
-      )
+      .filter((row) => row.id !== job.id && isActiveOutboundRow(row))
       .first()
   }
   return getDb()
     .outboundQueue.where("[conversationKey+orderSeq]")
     .between([job.conversationKey, -Infinity], [job.conversationKey, job.orderSeq], true, false)
-    .filter(
-      (row) =>
-        row.id !== job.id &&
-        (row.status === "pending" || row.status === "failed" || row.status === "sending")
-    )
+    .filter((row) => row.id !== job.id && isActiveOutboundRow(row))
     .first()
 }
 
@@ -612,8 +645,7 @@ export async function findOlderActiveOutboundSibling(
 export async function findNextActiveOutboundSibling(
   job: Pick<OutboundJobRow, "conversationKey" | "createdAt" | "orderSeq">
 ): Promise<OutboundJobRow | undefined> {
-  const active = (row: OutboundJobRow) =>
-    row.status === "pending" || row.status === "failed" || row.status === "sending"
+  const active = isActiveOutboundRow
   if (job.orderSeq === undefined) {
     return getDb()
       .outboundQueue.where("[conversationKey+createdAt]")
@@ -844,12 +876,15 @@ export async function markFailed(
   message: string,
   nextAttemptAt: number
 ): Promise<void> {
-  await getDb().outboundQueue.update(jobId, {
-    status: "failed",
-    lastErrorCode: errorCode,
-    lastError: message,
-    nextAttemptAt,
-    updatedAt: Date.now(),
+  await getDb().transaction("rw", getDb().outboundQueue, async () => {
+    if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
+    await getDb().outboundQueue.update(jobId, {
+      status: "failed",
+      lastErrorCode: errorCode,
+      lastError: message,
+      nextAttemptAt,
+      updatedAt: Date.now(),
+    })
   })
   invalidate()
 }
@@ -860,13 +895,260 @@ export async function markDeliveryUnknown(
   errorCode: string,
   message: string
 ): Promise<void> {
-  await getDb().outboundQueue.update(jobId, {
-    status: "delivery_unknown",
-    lastErrorCode: errorCode,
-    lastError: message,
-    updatedAt: Date.now(),
+  await getDb().transaction("rw", getDb().outboundQueue, async () => {
+    if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
+    await getDb().outboundQueue.update(jobId, {
+      status: "delivery_unknown",
+      lastErrorCode: errorCode,
+      lastError: message,
+      updatedAt: Date.now(),
+    })
   })
   invalidate()
+}
+
+const RECEIPT_CAPACITY = 10_000
+type DeliveryStatusInput = {
+  adapterId: string
+  conversationKey: string
+  timestamp: number
+  update: ConnectorDeliveryStatus
+}
+function statusReceiptKey(adapterId: string, conversationKey: string, receiptId: string) {
+  return `connector-status:${JSON.stringify([adapterId, conversationKey, receiptId])}`
+}
+function validReceiptId(value: unknown, max = 512): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= max &&
+    !/[\u0000-\u0020\u007f-\u009f]/.test(value)
+  )
+}
+
+/** Caller holds queue/ledger/audit/SLA tables in one transaction. Never creates a send. */
+async function settleStatusReceipt(
+  adapterId: string,
+  conversationKey: string,
+  receiptId: string
+): Promise<OutboundJobRow | undefined> {
+  const db = getDb()
+  const evidence = (
+    await db.inboundLedger.get(statusReceiptKey(adapterId, conversationKey, receiptId))
+  )?.deliveryStatus
+  if (!evidence) return undefined
+  const matches = await db.outboundQueue
+    .where("conversationKey")
+    .equals(conversationKey)
+    .filter(
+      (row) =>
+        row.adapterId === adapterId &&
+        row.syncedFromHost !== true &&
+        row.pendingReceipt?.id === receiptId
+    )
+    .toArray()
+  if (matches.length !== 1 || evidence.conflict) {
+    for (const row of matches)
+      if (row.status === "delivery_unknown")
+        await db.outboundQueue.update(row.id, {
+          lastErrorCode: "receipt_conflict",
+          lastError: "Conflicting provider receipt; operator reconciliation required",
+          pendingReceipt: { ...row.pendingReceipt!, resolvedAt: Date.now() },
+          updatedAt: Date.now(),
+        })
+    return undefined
+  }
+  const row = matches[0]
+  if (
+    row.pendingReceipt?.resolvedAt !== undefined &&
+    (row.status === "sent" || row.status === "deadlettered")
+  ) {
+    const canonical = {
+      receiptId,
+      status: row.status === "sent" ? ("delivered" as const) : ("rejected" as const),
+      ...(row.status === "sent" && row.platformMessageId
+        ? { platformMessageId: row.platformMessageId }
+        : {}),
+    }
+    const conflict =
+      evidence.conflict ||
+      canonical.status !== evidence.update.status ||
+      canonical.platformMessageId !== evidence.update.platformMessageId
+    await db.inboundLedger.update(statusReceiptKey(adapterId, conversationKey, receiptId), {
+      deliveryStatus: {
+        ...evidence,
+        update: canonical,
+        resolvedAt: row.pendingReceipt.resolvedAt,
+        ...(conflict ? { conflict: true } : {}),
+      },
+    })
+    return undefined
+  }
+  if (
+    row.status !== "delivery_unknown" ||
+    !row.pendingReceipt ||
+    row.pendingReceipt.resolvedAt !== undefined ||
+    evidence.timestamp < row.pendingReceipt.acceptedAt - 60000
+  )
+    return undefined
+  const delivered = evidence.update.status === "delivered",
+    messageId = evidence.update.platformMessageId
+  if (delivered && !messageId) return row
+  const now = Date.now()
+  await db.outboundQueue.update(row.id, {
+    status: delivered ? "sent" : "deadlettered",
+    ...(delivered
+      ? { platformMessageId: messageId, lastError: undefined, lastErrorCode: undefined }
+      : {
+          lastError: "Provider rejected the accepted message",
+          lastErrorCode: "provider_rejected",
+        }),
+    pendingReceipt: { ...row.pendingReceipt, resolvedAt: now },
+    updatedAt: now,
+  })
+  await db.inboundLedger.update(statusReceiptKey(adapterId, conversationKey, receiptId), {
+    deliveryStatus: { ...evidence, resolvedAt: now },
+  })
+  // Reuse the same durable delivery ledger and SLA projection as ordinary sends.
+  if (delivered) {
+    await recordInbound(adapterId, messageId!, "outbound", conversationKey)
+    await markResponded(conversationKey, now)
+  }
+  const quotaKey = `${adapterId}:connector-delivery:${row.idempotencyKey}`
+  const quota = await db.inboundLedger.get(quotaKey)
+  if (quota?.deliveryReceipt)
+    await db.inboundLedger.put({
+      ...quota,
+      deliveryReceipt: {
+        ...quota.deliveryReceipt,
+        phase: delivered ? "sent" : "rejected",
+        reconciled: true,
+        ...(delivered ? { platformMessageId: messageId } : {}),
+      },
+    })
+  await appendConnectorAudit({
+    adapterId,
+    projectId: row.projectId,
+    conversationKey,
+    idempotencyKey: row.idempotencyKey,
+    at: now,
+    kind: delivered ? "delivery.success" : "delivery.deadlettered",
+    reason: delivered ? "provider_receipt" : "provider_rejected",
+    fields: { jobId: row.id, receiptId },
+  })
+  return db.outboundQueue.get(row.id)
+}
+
+/** Hold an accepted queue job. An early callback is reconciled in this same transaction. */
+export async function markAwaitingDeliveryReceipt(
+  jobId: string,
+  receipt: { id: string }
+): Promise<OutboundJobRow | undefined> {
+  if (!validReceiptId(receipt?.id)) throw new TypeError("Invalid provider receipt identifier")
+  const db = getDb()
+  const result = await db.transaction(
+    "rw",
+    db.outboundQueue,
+    db.inboundLedger,
+    db.connectorAudit,
+    db.conversationOverrides,
+    async () => {
+      const row = await db.outboundQueue.get(jobId)
+      if (!row || row.syncedFromHost)
+        throw new Error("Provider receipt requires a locally sending job")
+      if (row.pendingReceipt && row.pendingReceipt.id !== receipt.id)
+        throw new Error("Provider receipt changed after acceptance")
+      if (!row.pendingReceipt) {
+        if (row.status !== "sending") throw new Error("Provider receipt requires a sending job")
+        await db.outboundQueue.update(row.id, {
+          status: "delivery_unknown",
+          pendingReceipt: { id: receipt.id, acceptedAt: row.claimedAt ?? Date.now() },
+          lastErrorCode: "delivery_pending",
+          lastError: "Provider accepted the message; awaiting a definitive receipt",
+          updatedAt: Date.now(),
+        })
+      }
+      await settleStatusReceipt(row.adapterId, row.conversationKey, receipt.id)
+      return db.outboundQueue.get(jobId)
+    }
+  )
+  invalidate(result?.conversationKey)
+  return result
+}
+
+/** Persist unmatched evidence too, so callback-before-HTTP and restart cannot lose it. */
+export async function recordOutboundDeliveryStatus(
+  input: DeliveryStatusInput
+): Promise<OutboundJobRow | undefined> {
+  const { adapterId, conversationKey, timestamp, update } = input
+  if (
+    !validReceiptId(adapterId) ||
+    !validReceiptId(conversationKey, 2048) ||
+    !validReceiptId(update?.receiptId) ||
+    !["delivered", "rejected"].includes(update.status) ||
+    !Number.isFinite(timestamp) ||
+    timestamp > Date.now() + 60000 ||
+    (update.platformMessageId !== undefined && !validReceiptId(update.platformMessageId, 2048)) ||
+    (update.status === "delivered" && !update.platformMessageId)
+  )
+    throw new TypeError("Invalid provider delivery receipt")
+  const db = getDb(),
+    key = statusReceiptKey(adapterId, conversationKey, update.receiptId)
+  const result = await db.transaction(
+    "rw",
+    db.outboundQueue,
+    db.inboundLedger,
+    db.connectorAudit,
+    db.conversationOverrides,
+    async () => {
+      const prior = await db.inboundLedger.get(key)
+      if (
+        !prior &&
+        (await db.inboundLedger.where("namespace").equals("connector-status").count()) >=
+          RECEIPT_CAPACITY
+      ) {
+        const terminal = await db.inboundLedger
+          .where("namespace")
+          .equals("connector-status")
+          .filter((row) => row.deliveryStatus?.resolvedAt !== undefined)
+          .limit(500)
+          .toArray()
+        if (!terminal.length)
+          throw new Error(
+            "Provider receipt capacity reached; unresolved reconciliation evidence retained"
+          )
+        await db.inboundLedger.bulkDelete(terminal.map((row) => row.id))
+      }
+      const old = prior?.deliveryStatus
+      const conflict =
+        old?.conflict ||
+        (old &&
+          (old.update.status !== update.status ||
+            old.update.platformMessageId !== update.platformMessageId))
+      await db.inboundLedger.put({
+        id: key,
+        adapterId,
+        namespace: "connector-status",
+        platformMessageId: update.receiptId,
+        receivedAt: prior?.receivedAt ?? Date.now(),
+        deliveryStatus: {
+          conversationKey,
+          update: old?.update ?? {
+            receiptId: update.receiptId,
+            status: update.status,
+            ...(update.platformMessageId ? { platformMessageId: update.platformMessageId } : {}),
+          },
+          timestamp: old?.timestamp ?? timestamp,
+          ...(old?.resolvedAt !== undefined ? { resolvedAt: old.resolvedAt } : {}),
+          ...(conflict ? { conflict: true } : {}),
+        },
+      })
+      return settleStatusReceipt(adapterId, conversationKey, update.receiptId)
+    }
+  )
+  invalidate(conversationKey)
+  if (result) emitOutboundEnqueued()
+  return result
 }
 
 /**
@@ -883,12 +1165,17 @@ export async function markDeadlettered(
   message: string,
   reroute?: { toJobId: string; mechanism: "failover" | "balanced" }
 ): Promise<void> {
-  await getDb().outboundQueue.update(jobId, {
-    status: "deadlettered",
-    lastErrorCode: errorCode,
-    lastError: message,
-    updatedAt: Date.now(),
-    ...(reroute ? { reroutedToJobId: reroute.toJobId, reroutedMechanism: reroute.mechanism } : {}),
+  await getDb().transaction("rw", getDb().outboundQueue, async () => {
+    if ((await getDb().outboundQueue.get(jobId))?.pendingReceipt) return
+    await getDb().outboundQueue.update(jobId, {
+      status: "deadlettered",
+      lastErrorCode: errorCode,
+      lastError: message,
+      updatedAt: Date.now(),
+      ...(reroute
+        ? { reroutedToJobId: reroute.toJobId, reroutedMechanism: reroute.mechanism }
+        : {}),
+    })
   })
   invalidate()
 }
@@ -909,6 +1196,10 @@ export async function replayDeadlettered(jobId: string): Promise<OutboundJobRow 
   const db = getDb()
   const row = await db.outboundQueue.get(jobId)
   if (!row || row.status !== "deadlettered") return undefined
+  if (row.pendingReceipt)
+    throw new Error(
+      "A provider-reviewed send cannot be replayed; create and authorize a new message"
+    )
   const now = Date.now()
   const updated: Partial<OutboundJobRow> = {
     status: "pending",

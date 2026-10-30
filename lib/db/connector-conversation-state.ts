@@ -34,6 +34,7 @@ export async function refreshConnectorConversationDeliveryTarget(
     dispatchMode: existing?.dispatchMode,
     deliveryReadiness: readiness,
     deliveryTarget,
+    deliveryPermissions: existing?.deliveryPermissions,
     historyCursor: existing?.historyCursor,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -59,6 +60,7 @@ export async function activateConnectorConversation(
     dispatchMode: existing?.dispatchMode,
     deliveryReadiness: existing?.deliveryReadiness ?? "unknown",
     deliveryTarget,
+    deliveryPermissions: existing?.deliveryPermissions,
     historyCursor:
       options.sourceTimestamp !== undefined
         ? { afterTimestamp: options.sourceTimestamp }

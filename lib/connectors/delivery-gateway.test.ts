@@ -147,6 +147,43 @@ describe("ConnectorDeliveryGateway", () => {
     )
   })
 
+  it("passes explicit delivery intent to the shared planner", async () => {
+    const { gateway, deps } = gatewayWith()
+    const base = input("manual")
+    base.request.sendOptions = { mode: "proactive" }
+    await gateway.enqueue({ ...base, source: "manual", authorization: undefined })
+    expect(deps.planDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ deliveryMode: "proactive" })
+    )
+  })
+
+  it("freezes delivery intent while the planner is awaiting approval", async () => {
+    let resolve!: (decision: DeliveryDecision) => void
+    const { gateway, deps } = gatewayWith({
+      planDelivery: jest.fn(
+        () =>
+          new Promise<DeliveryDecision>((done) => {
+            resolve = done
+          })
+      ),
+    })
+    const value = input("plugin", { kind: "plugin", pluginId: "p" })
+    value.request.sendOptions = { mode: "reply" }
+    const pending = gateway.enqueueAuthorized(value)
+    value.request.sendOptions.mode = "proactive"
+    value.request.segments = [{ type: "text", text: "changed" }]
+    resolve({ action: "send" })
+    await pending
+    expect(deps.persistOne).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          sendOptions: { mode: "reply" },
+          segments: [{ type: "text", text: "hello" }],
+        }),
+      })
+    )
+  })
+
   it("persists what authorized a queued delivery and audits it", async () => {
     const { gateway, deps } = gatewayWith({
       planDelivery: jest.fn(async () => ({
@@ -735,5 +772,26 @@ describe("ConnectorDeliveryGateway.urgent (ADR-0239)", () => {
         fields: expect.objectContaining({ outcome: "failed" }),
       })
     )
+  })
+})
+
+it("cancels a voice delivery while planning and keeps the signal outside the durable payload", async () => {
+  const controller = new AbortController()
+  const { gateway, deps } = gatewayWith({
+    planDelivery: jest.fn(async () => {
+      controller.abort()
+      return { action: "send" as const }
+    }),
+  })
+  await expect(
+    gateway.enqueueAuthorized(input("skill"), { signal: controller.signal })
+  ).rejects.toMatchObject({ name: "AbortError" })
+  expect(deps.persistOne).not.toHaveBeenCalled()
+  expect(deps.createDraft).not.toHaveBeenCalled()
+  const next = gatewayWith()
+  const signal = new AbortController().signal
+  await next.gateway.enqueueAuthorized(input("skill"), { signal })
+  expect(next.deps.persistOne).toHaveBeenCalledWith(expect.not.objectContaining({ signal }), {
+    signal,
   })
 })

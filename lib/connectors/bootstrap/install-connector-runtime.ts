@@ -67,7 +67,7 @@ import {
   CONNECTORS_SERVER_PORT,
   adapterNeedsInboundServer,
 } from "@/lib/connectors/server-transport"
-import { listEnabledAdapterInstances } from "@/lib/db/adapter-instances"
+import { getAdapterInstance, listEnabledAdapterInstances } from "@/lib/db/adapter-instances"
 import { buildAdapterFromRow } from "@/lib/connectors/adapter-registry"
 import { buildAdapterContext } from "@/lib/connectors/adapter-context"
 import { appendAudit } from "@/lib/connectors/audit"
@@ -107,6 +107,7 @@ import { useSettingsStore } from "@/stores/settings"
 import { installExecutionControlPlane } from "@/lib/execution/install-execution-control"
 import { installDelegationBridge } from "@/lib/execution/delegation-bridge"
 import { recoverPendingRunInterrupts } from "@/lib/execution/run-control"
+import { startWorkflowApprovalRecovery } from "@/lib/a2ui/workflow-approval-handler"
 import {
   startResumeReconnect,
   type ResumeReconnectHandle,
@@ -354,6 +355,7 @@ export function installConnectorRuntime(
   let stopDelegationBridge: (() => void) | null = null
   let stopExecutionRunPresentationRunner: (() => void) | null = null
   let stopNotificationWorker: (() => void) | null = null
+  let stopWorkflowApprovalRecovery: (() => void) | null = null
   let disposeExecutionRunControlHandlers: (() => void) | null = null
   let teardownPromise: Promise<void> | null = null
 
@@ -491,6 +493,8 @@ export function installConnectorRuntime(
     teardownPromise = (async () => {
       cancelled = true
       ac.abort()
+      stopWorkflowApprovalRecovery?.()
+      stopWorkflowApprovalRecovery = null
       larkSurfaceSweep?.dispose()
       larkSurfaceSweep = null
       larkBindRequestSweep?.dispose()
@@ -793,6 +797,24 @@ export function installConnectorRuntime(
         adapters,
         signal: ac.signal,
         onDelivered: (conversationKey) => bus.recordBotReply(conversationKey),
+      })
+      const ownsAutomationAdapter = async (adapterId: string) => {
+        if (
+          !ownsRuntime ||
+          cancelled ||
+          !managedAdapterIds.has(adapterId) ||
+          !bus.getAdapter(adapterId)
+        )
+          return false
+        const row = await getAdapterInstance(adapterId)
+        return !!row?.enabled && runsOnThisHost(row) && ownsRuntime && !cancelled
+      }
+      stopWorkflowApprovalRecovery = startWorkflowApprovalRecovery({
+        recoverObservers: () => bus.resumeAutomationFanOuts(ownsAutomationAdapter),
+        signal: ac.signal,
+        ownsAdapter: ownsAutomationAdapter,
+        onError: (error) =>
+          log("warn", `[connector-bus] workflow approval recovery failed: ${String(error)}`),
       })
     }
 

@@ -31,7 +31,7 @@ import type {
   ConnectorCallbackBindingRow,
   ConnectorCallbackEvent,
 } from "@/types/connectors/interaction"
-import { parseConversationKey } from "@/types/connectors/event"
+import { parseConversationKey, type ConversationDeliveryTarget } from "@/types/connectors/event"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
 import { getDb } from "@/lib/db/schema"
 import { getLarkStrictCallbackAuthorizationMode } from "./feature-flags"
@@ -70,7 +70,7 @@ export type AuthorizeCallbackDecision =
       allowed: true
       mode: CallbackAuthorizationMode
       /** Present for consume-once kinds in enforce mode; call before dispatch. */
-      consume?: () => Promise<void>
+      consume?: (receipt?: { deliveryTarget?: ConversationDeliveryTarget }) => Promise<void>
     }
   | {
       allowed: false
@@ -136,7 +136,8 @@ function bindingSecuritySnapshot(binding: ConnectorCallbackBindingRow): string {
 
 export async function consumeCallbackBindingAtomically(
   binding: ConnectorCallbackBindingRow,
-  now: number
+  now: number,
+  workflowDecision?: { decision: "approve" | "cancel"; deliveryTarget?: ConversationDeliveryTarget }
 ): Promise<void> {
   const db = getDb()
   await db.transaction("rw", db.connectorCallbackBindings, async () => {
@@ -149,7 +150,24 @@ export async function consumeCallbackBindingAtomically(
     ) {
       throw new Error("CALLBACK_BINDING_ALREADY_CONSUMED_OR_CHANGED")
     }
-    const updated = await db.connectorCallbackBindings.update(binding.id, { consumedAt: now })
+    const isWorkflow = binding.kind === "wf_approve" || binding.kind === "wf_cancel"
+    const updated = await db.connectorCallbackBindings.update(binding.id, {
+      consumedAt: now,
+      ...(isWorkflow
+        ? {
+            workflowDispatch: {
+              status: "pending" as const,
+              decision:
+                workflowDecision?.decision ??
+                (binding.kind === "wf_cancel" ? ("cancel" as const) : ("approve" as const)),
+              acceptedAt: now,
+              ...(workflowDecision?.deliveryTarget
+                ? { deliveryTarget: workflowDecision.deliveryTarget }
+                : {}),
+            },
+          }
+        : {}),
+    })
     if (updated !== 1) throw new Error("CALLBACK_BINDING_ALREADY_CONSUMED_OR_CHANGED")
     // All choices on one approval card represent the same single decision.
     await db.connectorCallbackBindings
@@ -369,8 +387,14 @@ export async function authorizeConnectorCallback(
 
   const decision: AuthorizeCallbackDecision = { allowed: true, mode }
   if (mode === "enforce" && binding && CONSUME_ONCE_KINDS.has(binding.kind)) {
-    decision.consume = async () => {
-      await consumeCallbackBindingAtomically(binding, now)
+    decision.consume = async (receipt) => {
+      await consumeCallbackBindingAtomically(binding, now, {
+        decision:
+          binding.kind === "wf_cancel" || normalizeRequestedAction(event) === "cancel"
+            ? "cancel"
+            : "approve",
+        ...(receipt?.deliveryTarget ? { deliveryTarget: receipt.deliveryTarget } : {}),
+      })
     }
   }
   return decision

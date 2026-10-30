@@ -11,6 +11,7 @@ import {
   grantSessionBypass,
   clearSessionBypass,
   pendingApprovalCount,
+  hasPendingApproval,
   pendingApprovalCountForSession,
   subscribePendingApprovals,
   __resetApprovalRegistryForTesting,
@@ -22,6 +23,14 @@ beforeEach(() => {
 })
 
 describe("approval-registry", () => {
+  it("checks the exact owner of a pending response", async () => {
+    const waiting = awaitApproval("owned", "request")
+    expect(hasPendingApproval("owned", "request")).toBe(true)
+    expect(hasPendingApproval("other", "request")).toBe(false)
+    resolveApproval("owned", "request", { decision: "deny" })
+    await waiting
+    expect(hasPendingApproval("owned", "request")).toBe(false)
+  })
   it("resolveApproval settles the awaited promise with the decision", async () => {
     const p = awaitApproval("s1", "r1", { ttlMs: 0 })
     expect(pendingApprovalCount()).toBe(1)

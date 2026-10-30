@@ -24,6 +24,33 @@ const adapter: AdapterInstanceRow = {
 }
 
 describe("deriveImPermissionCeiling", () => {
+  it.each([
+    [{ authority: "plan" }, {}, "plan"],
+    [{}, { defaultAuthority: "plan" }, "plan"],
+    [{ autonomy: "confirm", authority: "bypassPermissions" }, {}, "default"],
+    [{ autonomy: "act", authority: "bypassPermissions" }, {}, "acceptEdits"],
+    [{ autonomy: "autopilot", authority: "bypassPermissions" }, {}, "bypassPermissions"],
+  ] as const)(
+    "caps nested execution from the resolved IM axes (%j)",
+    (axes, defaults, expected) => {
+      const result = deriveImPermissionCeiling({
+        adapter: { ...adapter, ...defaults },
+        override: {
+          id: "o",
+          sessionId: "s",
+          conversationKey: "c",
+          createdAt: 1,
+          updatedAt: 1,
+          ...axes,
+        },
+        target: "team",
+        allBuiltInSkills: [],
+        allowedBuiltInToolNames: new Set(),
+      })
+      expect(result.permissionMode).toBe(expected)
+    }
+  )
+
   it("denies skills removed by any IM manifest gate, including nested aliases", () => {
     const result = deriveImPermissionCeiling({
       adapter,

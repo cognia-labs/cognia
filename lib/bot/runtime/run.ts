@@ -1,3 +1,4 @@
+import { botInputStillMatches } from "@/lib/bot/events/input-binding"
 /**
  * Drive one delivery to a settled Bot run.
  *
@@ -26,7 +27,7 @@ import {
 } from "@/lib/db/bot-event-deliveries"
 import type { BotEventDeliveryRow } from "@/lib/db/bot-types"
 import {
-  createExecutionRun,
+  appendRunEventInsideTransaction,
   getExecutionRun,
   runEventJournal,
   semanticRunEvent,
@@ -37,6 +38,7 @@ import { BOT_RUN_POLICY_STEP } from "@/lib/bot/policy/run-authority"
 import { NEEDS_APPROVAL_STATUS } from "@/lib/claude/unattended-permission-responder"
 import { expireRunInterruptFromSource } from "@/lib/execution/run-control"
 import { writeBotTriggerState } from "@/lib/db/bot-installations"
+import { resolveBotExecutionComposition, resolveBotPolicy } from "@/lib/bot/policy/ceilings"
 import { projectBotComposition } from "@/lib/bot/composition/project-bot-composition"
 import { defaultsFromConfigSchema, resolveBotConfig } from "@/lib/bot/config/resolve-effective"
 import type { InstalledBot } from "@/lib/bot/installed-bot"
@@ -109,26 +111,146 @@ export function cancelLiveBotRun(runId: string): boolean {
   return true
 }
 
-/** Cancel either executing or parked local work without discarding its artifacts. */
-export async function cancelBotRun(runId: string): Promise<boolean> {
+/** Cancel a fixed accepted set first; late engine writes cannot undo the durable fence. */
+export async function cancelAcceptedBotDeliveries(
+  installationId: string,
+  deliveryId?: string,
+  operationId?: string
+): Promise<number> {
   const db = getDb()
-  const run = await getExecutionRun(runId)
-  if (!run || run.kind !== "bot" || ["completed", "cancelled"].includes(run.status)) return false
-  const deliveries = await db.botEventDeliveries.where("runId").equals(runId).toArray()
-  const owned = deliveries.filter((row) => !row.syncedFromHost)
-  if (owned.length === 0) return false
+  const rows = await db.transaction(
+    "rw",
+    [
+      db.botEventDeliveries,
+      db.botInstallations,
+      db.executionRuns,
+      db.executionRunEvents,
+      db.executionRunInterrupts,
+      db.notificationProjectionWork,
+    ],
+    async () => {
+      const installation = await db.botInstallations.get(installationId)
+      if (installation?.syncedFromHost || installation?.owner?.kind === "remote-host")
+        throw new Error("Bot cancellation must execute on its owning host")
+      const candidates = await db.botEventDeliveries
+        .where("installationId")
+        .equals(installationId)
+        .toArray()
+      const previous = operationId && installation?.automationCancellations?.[operationId]
+      if (previous) return candidates.filter((row) => previous.includes(row.id))
+      const accepted = candidates.filter(
+        (row) =>
+          !row.syncedFromHost &&
+          (!deliveryId || row.id === deliveryId) &&
+          !["succeeded", "dismissed"].includes(row.status)
+      )
+      const now = Date.now()
+      for (const row of accepted) {
+        const next = {
+          ...row,
+          status: "dismissed" as const,
+          cancelledAt: now,
+          settledAt: now,
+          updatedAt: now,
+          lastError: "cancelled",
+        }
+        delete next.leaseOwner
+        delete next.leaseExpiresAt
+        await db.botEventDeliveries.put(next)
+        const run = await db.executionRuns.get(row.runId ?? botRunId(row.id))
+        if (run && !["completed", "cancelled"].includes(run.status)) {
+          const interrupts = await db.executionRunInterrupts.where("runId").equals(run.id).toArray()
+          for (const interrupt of interrupts)
+            if (interrupt.status === "pending") {
+              await db.executionRunInterrupts.update(interrupt.id, {
+                status: "expired",
+                resolvedAt: now,
+              })
+              if (run.status !== "failed")
+                await appendRunEventInsideTransaction(
+                  db,
+                  run.id,
+                  semanticRunEvent(
+                    "interrupt.expired",
+                    { interruptId: interrupt.id },
+                    { ts: now, sourceEventId: `interrupt:${interrupt.id}:expired` }
+                  )
+                )
+            }
+          if (run.status !== "failed")
+            await appendRunEventInsideTransaction(
+              db,
+              run.id,
+              semanticRunEvent("run.cancelled", {}, { ts: now, sourceEventId: `cancel:${run.id}` })
+            )
+          else
+            await db.executionRuns.put({
+              ...run,
+              status: "cancelled",
+              updatedAt: now,
+              endedAt: now,
+            })
+        }
+      }
+      if (operationId && installation)
+        await db.botInstallations.put({
+          ...installation,
+          automationCancellations: {
+            ...installation.automationCancellations,
+            [operationId]: accepted.map((row) => row.id),
+          },
+        })
+      return accepted
+    }
+  )
+  for (const delivery of rows) await stopBotExecution(delivery.runId ?? botRunId(delivery.id))
+  return rows.length
+}
+
+async function stopBotExecution(runId: string): Promise<void> {
+  const db = getDb()
   cancelLiveBotRun(runId)
-  for (const delivery of owned) await dismissBotDelivery(delivery.id, "cancelled")
+  // Admission records survive a crashed/parked parent. Do not rely on a live controller.
+  const workflows = await db.workflowInvocations
+    .filter((row) => row.idempotencyKey === runId)
+    .toArray()
+  const legacy = await db.workflowRuns
+    .filter((row) => row.executionBinding?.idempotencyKey === runId)
+    .toArray()
+  const workflowIds = new Set([
+    ...workflows.flatMap((row) => (row.runId ? [row.runId] : [])),
+    ...legacy.map((row) => row.id),
+  ])
+  if (workflowIds.size > 0) {
+    const { cancelWorkflowRun } = await import("@/lib/workflow/runtime/cancel-run")
+    for (const id of workflowIds) await cancelWorkflowRun(id, "Bot cancelled")
+  }
+  const squad = await getBotRunStep(runId, "squad-start")
+  if (squad) {
+    const { controlSquadRun } = await import("@/lib/ai/agent/team/squad/squad-control")
+    await controlSquadRun(runId, "stop")
+  }
   const interrupts = await db.executionRunInterrupts.where("runId").equals(runId).toArray()
   for (const interrupt of interrupts) await expireRunInterruptFromSource(runId, interrupt.id)
-  if (run.status !== "failed") {
+  const run = await getExecutionRun(runId)
+  if (run && !["completed", "cancelled"].includes(run.status)) {
     await runEventJournal.append(
       runId,
       semanticRunEvent("run.cancelled", {}, { ts: Date.now(), sourceEventId: `cancel:${runId}` })
     )
+    await settleRun(runId, "cancelled", Date.now())
   }
-  await settleRun(runId, "cancelled", Date.now())
-  return true
+}
+
+/** Cancel executing or parked work using the same delivery boundary as the console. */
+export async function cancelBotRun(runId: string): Promise<boolean> {
+  const run = await getExecutionRun(runId)
+  if (!run || run.kind !== "bot" || ["completed", "cancelled"].includes(run.status)) return false
+  const rows = await getDb().botEventDeliveries.where("runId").equals(runId).toArray()
+  let cancelled = false
+  for (const row of rows.filter((item) => !item.syncedFromHost))
+    cancelled = (await cancelAcceptedBotDeliveries(row.installationId, row.id)) > 0 || cancelled
+  return cancelled
 }
 
 /** Test-only: drop every live registration. */
@@ -159,9 +281,11 @@ export interface RunBotDeliveryInput {
 
 async function settleRun(runId: string, status: ExecutionRunStatus, ts: number): Promise<void> {
   const db = getDb()
-  const run = await db.executionRuns.get(runId)
-  if (!run) return
-  await db.executionRuns.put({ ...run, status, updatedAt: ts, endedAt: ts })
+  await db.transaction("rw", db.executionRuns, async () => {
+    const run = await db.executionRuns.get(runId)
+    if (!run || run.status === "cancelled") return
+    await db.executionRuns.put({ ...run, status, updatedAt: ts, endedAt: ts })
+  })
 }
 
 /**
@@ -173,9 +297,11 @@ async function settleRun(runId: string, status: ExecutionRunStatus, ts: number):
  */
 async function markRunWaiting(runId: string, ts: number): Promise<void> {
   const db = getDb()
-  const run = await db.executionRuns.get(runId)
-  if (!run) return
-  await db.executionRuns.put({ ...run, status: "waiting", updatedAt: ts })
+  await db.transaction("rw", db.executionRuns, async () => {
+    const run = await db.executionRuns.get(runId)
+    if (!run || ["completed", "failed", "cancelled"].includes(run.status)) return
+    await db.executionRuns.put({ ...run, status: "waiting", updatedAt: ts })
+  })
 }
 
 /**
@@ -208,7 +334,8 @@ async function persistTimedTriggerState(
 
 export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRunOutcome> {
   const now = input.now ?? Date.now
-  const { delivery, resolved } = input
+  const { delivery } = input
+  let resolved = input.resolved
   const runId = botRunId(delivery.id)
   const ts = now()
 
@@ -218,51 +345,92 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
     await dismissBotDelivery(delivery.id, error, ts)
     return { status: "unavailable", runId, error }
   }
+  const latest = await getDb().botInstallations.get(delivery.installationId)
+  if (latest && !botInputStillMatches(latest, resolved.definition, delivery.envelope)) {
+    await cancelAcceptedBotDeliveries(delivery.installationId, delivery.id)
+    return { status: "unavailable", runId, error: "Input account binding changed" }
+  }
+  const admitted = await getDb().transaction(
+    "rw",
+    [
+      getDb().botEventDeliveries,
+      getDb().botInstallations,
+      getDb().conversationOverrides,
+      getDb().executionRuns,
+    ],
+    async () => {
+      if (!(await markBotDeliveryRunning(delivery.id, runId, ts, delivery.leaseOwner))) {
+        return false
+      }
+      const currentRun = await getDb().executionRuns.get(runId)
+      if (currentRun && ["completed", "failed", "cancelled"].includes(currentRun.status))
+        return false
+      if (!currentRun) {
+        await getDb().executionRuns.add({
+          id: runId,
+          kind: "bot",
+          sourceId: resolved.installation.id,
+          title: resolved.definition.name,
+          status: "running",
+          currentRevision: 0,
+          startedAt: ts,
+          updatedAt: ts,
+          ...(resolved.installation.projectId
+            ? { projectId: resolved.installation.projectId }
+            : {}),
+          ...(delivery.envelope.actor?.principalId || delivery.envelope.actor?.id
+            ? {
+                initiator: {
+                  ...(delivery.envelope.actor.id
+                    ? { platformIdentityId: delivery.envelope.actor.id }
+                    : {}),
+                  ...(delivery.envelope.actor.displayName
+                    ? { displayName: delivery.envelope.actor.displayName }
+                    : {}),
+                  ...(delivery.envelope.actor.principalId
+                    ? { principalId: delivery.envelope.actor.principalId }
+                    : {}),
+                  ...(delivery.envelope.actor.accountId
+                    ? { accountId: delivery.envelope.actor.accountId }
+                    : {}),
+                },
+              }
+            : {}),
+        })
+      } else
+        await getDb().executionRuns.update(runId, {
+          status: "running",
+          updatedAt: ts,
+          endedAt: undefined,
+        })
+      return true
+    }
+  )
+  if (!admitted) return { status: "parked", runId, resumeAt: ts }
   if (!existing) {
     // Preserve all original host ceilings across retries and future grant edits.
     // Legacy runs are not upgraded into unattended authority on re-entry.
     if (!(await getBotRunStep(runId, BOT_RUN_POLICY_STEP))) {
       await completeBotRunStep(runId, BOT_RUN_POLICY_STEP, structuredClone(resolved.policy), ts)
     }
-    await createExecutionRun({
-      id: runId,
-      kind: "bot",
-      sourceId: resolved.installation.id,
-      title: resolved.definition.name,
-      status: "running",
-      currentRevision: 0,
-      startedAt: ts,
-      updatedAt: ts,
-      ...(resolved.installation.projectId ? { projectId: resolved.installation.projectId } : {}),
-      ...(delivery.envelope.actor?.principalId || delivery.envelope.actor?.id
-        ? {
-            initiator: {
-              ...(delivery.envelope.actor.id
-                ? { platformIdentityId: delivery.envelope.actor.id }
-                : {}),
-              ...(delivery.envelope.actor.displayName
-                ? { displayName: delivery.envelope.actor.displayName }
-                : {}),
-              ...(delivery.envelope.actor.principalId
-                ? { principalId: delivery.envelope.actor.principalId }
-                : {}),
-              ...(delivery.envelope.actor.accountId
-                ? { accountId: delivery.envelope.actor.accountId }
-                : {}),
-            },
-          }
-        : {}),
-    })
   }
 
-  if (existing) {
-    await getDb().executionRuns.update(runId, {
-      status: "running",
-      updatedAt: ts,
-      endedAt: undefined,
-    })
+  const checkpoint = await getBotRunStep(runId, BOT_RUN_POLICY_STEP)
+  if (
+    checkpoint?.status === "completed" &&
+    checkpoint.output &&
+    typeof checkpoint.output === "object" &&
+    !Array.isArray(checkpoint.output)
+  ) {
+    resolved = {
+      ...resolved,
+      policy: resolveBotPolicy([
+        { name: "organization", policy: checkpoint.output },
+        { name: "installation", policy: resolved.policy },
+      ]).policy,
+    }
   }
-  await markBotDeliveryRunning(delivery.id, runId, ts)
+
   // An IM-originated delivery carries its conversation's delivery target in
   // the envelope payload; binding it here hands the run the generic
   // presentation plane (progress card, COT, approval controls) with no
@@ -349,13 +517,34 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
   }
 
   try {
-    if (controller.signal.aborted) throw new BotRunCancelledError(runId)
+    if (controller.signal.aborted || !(await stillOwnsDelivery()))
+      throw new BotRunCancelledError(runId)
+    const executionComposition = resolveBotExecutionComposition(
+      composition.selection,
+      resolved.policy
+    )
+    if (
+      executionComposition.autonomy === "observe" ||
+      executionComposition.engagement === "human"
+    ) {
+      throw new BotExecutorUnavailableError(
+        resolved.definition.executor,
+        "Bot composition does not permit automated execution"
+      )
+    }
+    const currentInstallation = await getDb().botInstallations.get(delivery.installationId)
+    if (
+      !currentInstallation ||
+      currentInstallation.status !== "enabled" ||
+      !botInputStillMatches(currentInstallation, resolved.definition, delivery.envelope) ||
+      controller.signal.aborted
+    )
+      throw new BotRunCancelledError(runId)
     const result = await runWithOutboundRecipients(runId, resolved, () => executor(ctx))
     if (controller.signal.aborted || !(await stillOwnsDelivery()))
       throw new BotRunCancelledError(runId)
     const endedAt = now()
     if (result) await completeBotRunStep(runId, "__host:result", result, endedAt)
-    await persistTimedTriggerState(resolved, delivery.triggerId, result, endedAt)
     // Not done, and not worth replaying: `blocked` waits on the author, and
     // `needs_approval` on a person to allow a tool the unattended turn was
     // denied. A re-run stops in the same place, so the delivery is dismissed
@@ -371,18 +560,32 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
       await dismissBotDelivery(delivery.id, error, endedAt)
       return { status: "unavailable", runId, error }
     }
-    await runEventJournal
-      .append(
-        runId,
-        semanticRunEvent(
-          "run.completed",
-          { summary: result?.summary },
-          { ts: endedAt, sourceEventId: `run.completed:${delivery.id}` }
+    const completed = await getDb().transaction(
+      "rw",
+      [
+        getDb().botEventDeliveries,
+        getDb().executionRuns,
+        getDb().executionRunEvents,
+        getDb().notificationProjectionWork,
+        getDb().botInstallations,
+      ],
+      async () => {
+        if (!(await stillOwnsDelivery())) return false
+        await persistTimedTriggerState(resolved, delivery.triggerId, result, endedAt)
+        await appendRunEventInsideTransaction(
+          getDb(),
+          runId,
+          semanticRunEvent(
+            "run.completed",
+            { summary: result?.summary },
+            { ts: endedAt, sourceEventId: `run.completed:${delivery.id}` }
+          )
         )
-      )
-      .catch(() => undefined)
-    await settleRun(runId, "completed", endedAt)
-    await completeBotDelivery(delivery.id, endedAt)
+        await completeBotDelivery(delivery.id, endedAt, delivery.leaseOwner)
+        return true
+      }
+    )
+    if (!completed) return { status: "cancelled", runId }
 
     // A settled run is itself an event. Off by default at the router: the loop
     // guard refuses a self-produced envelope unless the receiving
@@ -415,7 +618,7 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
         )
         .catch(() => undefined)
       await settleRun(runId, "cancelled", endedAt)
-      await dismissBotDelivery(delivery.id, "cancelled", endedAt)
+      await dismissBotDelivery(delivery.id, "cancelled", endedAt, delivery.leaseOwner)
       return { status: "cancelled", runId }
     }
 
@@ -440,7 +643,13 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
           )
         )
         .catch(() => undefined)
-      await parkBotDelivery(delivery.id, error.resumeAt, error.waitingFor, endedAt)
+      await parkBotDelivery(
+        delivery.id,
+        error.resumeAt,
+        error.waitingFor,
+        endedAt,
+        delivery.leaseOwner
+      )
       return {
         status: "parked",
         runId,
@@ -451,7 +660,13 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
 
     const message = error instanceof Error ? error.message : String(error)
     if (!(error instanceof BotExecutorUnavailableError)) {
-      const next = await failBotDelivery(delivery.id, error, endedAt)
+      const next = await failBotDelivery(
+        delivery.id,
+        error,
+        endedAt,
+        undefined,
+        delivery.leaseOwner
+      )
       if (next?.status === "pending") {
         // The attempt failed, but its durable task still owns a scheduled
         // retry. A terminal run event is immutable and cannot be resumed.

@@ -35,6 +35,13 @@ function input(over: Partial<Parameters<typeof holdWorkflowDispatchForApproval>[
     recordBinding: jest.fn(async () => undefined) as never,
     audit: jest.fn(async () => undefined) as never,
     readWorkflow: jest.fn(async () => ({ name: "Release notes", description: "Publishes notes" })),
+    resolveDependency: jest.fn(async () => ({
+      workflowId: "wf_1",
+      versionId: "v1",
+      deploymentId: "d1",
+      deploymentRevision: 1,
+      dependencyLock: { workflows: {}, indexes: {} },
+    })),
     ...over,
   }
 }
@@ -65,6 +72,14 @@ describe("buildWorkflowHoldSummary", () => {
 })
 
 describe("holdWorkflowDispatchForApproval", () => {
+  it("looks up the card description from the pinned version, not the editable workflow", async () => {
+    const args = input()
+    await holdWorkflowDispatchForApproval(args)
+    expect(args.readWorkflow).toHaveBeenCalledWith("v1")
+    const record = args.recordBinding as unknown as jest.Mock
+    expect(record.mock.calls[0][0].payload.lockedDependency.versionId).toBe("v1")
+  })
+
   it("records an Approve/Cancel pair on one surface and delivers the card", async () => {
     const args = input()
     const result = await holdWorkflowDispatchForApproval(args)
@@ -74,7 +89,7 @@ describe("holdWorkflowDispatchForApproval", () => {
     expect(record).toHaveBeenCalledTimes(2)
     const kinds = record.mock.calls.map((call) => call[0].kind)
     expect(kinds).toEqual(["wf_approve", "wf_cancel"])
-    // One surface, two buttons — the dispatcher deletes siblings by surfaceId,
+    // One surface, two buttons — the guard consumes siblings by surfaceId,
     // so a split surface would leave a live half after the decision.
     const surfaces = new Set(record.mock.calls.map((call) => call[0].surfaceId))
     expect(surfaces.size).toBe(1)

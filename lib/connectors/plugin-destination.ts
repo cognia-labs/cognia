@@ -124,11 +124,7 @@ export async function pluginDestination(
   // below await: check and return one copy of it, so what is placed is what
   // is queued (Codex review). The message pointers are the fields that
   // decide where it lands; `metadata` is rebuilt below.
-  const own: OutboundRequest = {
-    ...request,
-    metadata: { ...request.metadata },
-    ...(request.replyTo ? { replyTo: { ...request.replyTo } } : {}),
-  }
+  const own: OutboundRequest = structuredClone(request)
   let keyAdapter: string
   try {
     keyAdapter = parseConversationKey(conversationKey).adapterId

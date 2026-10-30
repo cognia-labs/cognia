@@ -140,12 +140,16 @@ export function buildAdapterContext(input: BuildAdapterContextInput): AdapterCon
   return {
     adapterId,
     signal,
-    emit: async (event: NormalizedInboundEvent) => {
+    emit: async (event: NormalizedInboundEvent, options?: { requireAcceptance?: boolean }) => {
       // Route every inbound event through the bus's full pipeline:
       // dedup → adapter lookup → override → policy → route → handler.
       // The runtime's installed route handler is what eventually turns
       // the event into a ChatSession + StoredMessage + ai-run.
-      if (event.platform === "wechat-personal" || event.platform === "wechat-oa") {
+      if (
+        options?.requireAcceptance ||
+        event.platform === "wechat-personal" ||
+        event.platform === "wechat-oa"
+      ) {
         if (signal.aborted) throw new DOMException("Adapter stopped", "AbortError")
         await bus.dispatchInboundFull(event, { requireAcceptance: true })
       } else {

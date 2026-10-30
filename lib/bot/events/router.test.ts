@@ -37,6 +37,38 @@ const OPENED: PluginBotTriggerDef = {
 }
 
 describe("triggerMatches", () => {
+  it("applies credential narrowing only to the event's own source", () => {
+    const mixed = { adapterId: "slack", integrationAccountId: "github" }
+    expect(
+      triggerMatches(binding(OPENED, mixed), {
+        source: "integration",
+        type: "pull_request.opened",
+        integrationAccountId: "github",
+      })
+    ).toBe(true)
+    expect(
+      triggerMatches(binding({ id: "ask", kind: "interaction" }, mixed), {
+        source: "connector",
+        type: "message",
+        adapterId: "slack",
+      })
+    ).toBe(true)
+    expect(
+      triggerMatches(binding(OPENED, mixed), {
+        source: "integration",
+        type: "pull_request.opened",
+        integrationAccountId: "wrong",
+      })
+    ).toBe(false)
+    expect(
+      triggerMatches(binding({ id: "ask", kind: "interaction" }, mixed), {
+        source: "connector",
+        type: "message",
+        adapterId: "wrong",
+      })
+    ).toBe(false)
+  })
+
   it("matches an event trigger on source and type", () => {
     expect(
       triggerMatches(binding(OPENED), { source: "integration", type: "pull_request.opened" })

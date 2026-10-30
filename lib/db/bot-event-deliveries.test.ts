@@ -73,6 +73,168 @@ describe("botEventDeliveries", () => {
     await getDb().botEventDeliveries.clear()
   }, 15_000)
 
+  it("rolls back new admission when in-memory readiness is revoked at insertion", async () => {
+    await expect(
+      enqueueBotDelivery({
+        envelope: envelope(),
+        assertReady: () => {
+          throw new Error("registration revoked")
+        },
+      })
+    ).rejects.toThrow("registration revoked")
+    expect(await getDb().botEventDeliveries.count()).toBe(0)
+  })
+
+  it("returns an existing receipt without requiring its registration to remain active", async () => {
+    const original = await enqueueBotDelivery({ envelope: envelope() })
+    const assertReady = jest.fn(() => {
+      throw new Error("registration revoked")
+    })
+    expect((await enqueueBotDelivery({ envelope: envelope(), assertReady })).id).toBe(original.id)
+    expect(assertReady).not.toHaveBeenCalled()
+  })
+
+  it("does not age paused accepted work out and grants it a fresh window on resume", async () => {
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await getDb().botInstallations.put({ id: "boti_1", status: "enabled", paused: true } as never)
+    await pruneSettledBotDeliveries(NOW + BOT_DELIVERY_RETENTION_MS * 2)
+    expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("pending")
+    const { setBotInstallationPaused } = await import("./bot-installations")
+    await setBotInstallationPaused("boti_1", false)
+    await pruneSettledBotDeliveries(NOW + BOT_DELIVERY_RETENTION_MS * 2)
+    expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("pending")
+  })
+
+  it("retains paused work, fences intake and claims, and does not starve other installations", async () => {
+    const db = getDb()
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await db.botInstallations.put({ id: "boti_1", status: "enabled", paused: true } as never)
+    expect(await claimBotDelivery("del_1", "host", NOW)).toBeUndefined()
+    await expect(
+      enqueueBotDelivery({ envelope: envelope({ eventId: "late", deliveryId: "late" }), now: NOW })
+    ).rejects.toMatchObject({ code: "bot_intake_paused" })
+    await enqueueBotDelivery({
+      envelope: envelope({ installationId: "other", eventId: "other", deliveryId: "other" }),
+      now: NOW,
+    })
+    expect((await listDueBotDeliveries(1, NOW, true)).map((row) => row.id)).toEqual(["other"])
+    expect((await db.botEventDeliveries.get("del_1"))?.status).toBe("pending")
+    await db.botInstallations.update("boti_1", { paused: false } as never)
+    expect(await claimBotDelivery("del_1", "host", NOW)).toBeDefined()
+  })
+
+  it("does not revive cancelled work through late start, completion, failure, park or replay", async () => {
+    await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await claimBotDelivery("del_1", "host", NOW)
+    await dismissBotDelivery("del_1", "cancelled", NOW + 1)
+    await markBotDeliveryRunning("del_1", "run", NOW + 2)
+    await completeBotDelivery("del_1", NOW + 2)
+    await failBotDelivery("del_1", new Error("late"), NOW + 2)
+    await parkBotDelivery("del_1", NOW + 100, undefined, NOW + 2)
+    expect(await replayBotDelivery("del_1", NOW + 2)).toBeUndefined()
+    expect((await getDb().botEventDeliveries.get("del_1"))?.status).toBe("dismissed")
+  })
+
+  it("keeps unrelated resources and accounts even with a shared serialization key", async () => {
+    for (const [id, resource, account] of [
+      ["one", "42", "a"],
+      ["two", "43", "a"],
+      ["three", "42", "b"],
+    ]) {
+      await enqueueBotDelivery({
+        envelope: envelope({
+          eventId: id,
+          deliveryId: id,
+          resource: { kind: "incident", id: resource },
+          binding: { integrationAccountId: account },
+        }),
+        concurrencyKey: "serial",
+        coalesce: "latest",
+        notBefore: NOW + 5000,
+        now: NOW,
+      })
+    }
+    expect((await listDueBotDeliveries(10, NOW + 6000)).map((row) => row.id).sort()).toEqual([
+      "one",
+      "three",
+      "two",
+    ])
+  })
+
+  it("does not let a delayed older dispatch supersede the newer arrival", async () => {
+    const enqueue = (id: string, at: number) =>
+      enqueueBotDelivery({
+        envelope: envelope({ eventId: id, deliveryId: id }),
+        concurrencyKey: "same",
+        coalesce: "latest",
+        notBefore: at + 5000,
+        now: at,
+      })
+    await enqueue("newer", NOW + 2)
+    expect((await enqueue("older", NOW + 1)).status).toBe("dismissed")
+    expect((await listDueBotDeliveries(10, NOW + 6000)).map((row) => row.id)).toEqual(["newer"])
+  })
+
+  it("coalesces latest events atomically within the same resource debounce window", async () => {
+    const enqueue = (n: number, overrides: Partial<BotEventEnvelopeV1> = {}) =>
+      enqueueBotDelivery({
+        envelope: envelope({
+          eventId: `latest_${n}`,
+          deliveryId: `latest_${n}`,
+          resource: { kind: "incident", id: "42" },
+          ...overrides,
+        }),
+        coalesce: "latest",
+        notBefore: NOW + 5000 + n,
+        now: NOW + n,
+      })
+    await Promise.all([enqueue(1), enqueue(2), enqueue(3)])
+    const rows = await getDb().botEventDeliveries.toArray()
+    expect(rows.filter((row) => row.status === "pending").map((row) => row.id)).toEqual([
+      "latest_3",
+    ])
+    expect(rows.filter((row) => row.status === "dismissed")).toHaveLength(2)
+    await enqueue(1)
+    expect((await listDueBotDeliveries(10, NOW + 6000)).map((row) => row.id)).toEqual(["latest_3"])
+    await enqueue(4, { resource: { kind: "incident", id: "other" } })
+    await enqueue(5, { triggerId: "another" })
+    expect((await listDueBotDeliveries(10, NOW + 6000)).map((row) => row.id).sort()).toEqual([
+      "latest_3",
+      "latest_4",
+      "latest_5",
+    ])
+  })
+
+  it("does not coalesce all-policy, started, retried, mirrored or closed-window deliveries", async () => {
+    for (const [n, patch] of [
+      [1, { coalesce: "all" }],
+      [2, { status: "running", runId: "run" }],
+      [3, { status: "parked" }],
+      [4, { attempts: 1 }],
+      [5, { syncedFromHost: true }],
+      [6, { notBefore: NOW - 1 }],
+    ] as const) {
+      const row = await enqueueBotDelivery({
+        envelope: envelope({ eventId: `keep_${n}`, deliveryId: `keep_${n}` }),
+        concurrencyKey: "shared",
+        coalesce: "latest",
+        notBefore: NOW + 5000,
+        now: NOW,
+      })
+      await getDb().botEventDeliveries.update(row.id, patch)
+    }
+    await enqueueBotDelivery({
+      envelope: envelope({ eventId: "new", deliveryId: "new" }),
+      concurrencyKey: "shared",
+      coalesce: "latest",
+      notBefore: NOW + 6000,
+      now: NOW + 1,
+    })
+    expect(
+      (await getDb().botEventDeliveries.toArray()).filter((row) => row.status === "dismissed")
+    ).toHaveLength(0)
+  })
+
   it("enqueues a pending delivery carrying its whole envelope", async () => {
     const row = await enqueueBotDelivery({ envelope: envelope(), now: NOW })
 
@@ -93,6 +255,26 @@ describe("botEventDeliveries", () => {
 
     expect(second.id).toBe(first.id)
     expect(await getDb().botEventDeliveries.count()).toBe(1)
+  })
+
+  it("deduplicates legacy receipts for their original trigger while delivering another trigger", async () => {
+    const legacy = await enqueueBotDelivery({ envelope: envelope(), now: NOW })
+    await getDb().botEventDeliveries.update(legacy.id, {
+      dedupKey: botDeliveryDedupKey("boti_1", "evt_1"),
+      status: "succeeded",
+    })
+    const retry = await enqueueBotDelivery({
+      envelope: envelope({ deliveryId: "new-format" }),
+      now: NOW + 1,
+    })
+    expect(retry.id).toBe(legacy.id)
+    expect(retry.status).toBe("succeeded")
+    const sibling = await enqueueBotDelivery({
+      envelope: envelope({ triggerId: "another", deliveryId: "another-trigger" }),
+      now: NOW + 1,
+    })
+    expect(sibling.triggerId).toBe("another")
+    expect(await getDb().botEventDeliveries.count()).toBe(2)
   })
 
   it("fans the same event out to two installations", async () => {

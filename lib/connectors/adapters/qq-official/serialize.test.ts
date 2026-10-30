@@ -62,6 +62,79 @@ describe("buildQQContent", () => {
 })
 
 describe("serializeOutbound", () => {
+  it("rejects raw broadcast tags and keeps C2C event authority within five minutes", () => {
+    for (const segments of [
+      [{ type: "text", text: "<qqbot-at-everyone />" }],
+      [{ type: "markdown", md: "<qqbot-at-everyone />" }],
+    ] as MessageSegment[][])
+      expect(() => serializeOutbound(req("group", "g", segments, {}, "m"), false)).toThrow(
+        /structured mention/
+      )
+    const request = req("c2c", "u", HI)
+    request.conversationRef = {
+      ...request.conversationRef,
+      eventId: "event",
+      receivedAt: Date.now() - 6 * 60_000,
+    }
+    expect(() => serializeOutbound(request, false)).toThrow(/expired/)
+    request.conversationRef.receivedAt = Date.now()
+    expect(serializeOutbound(request, false)?.payload).toMatchObject({ event_id: "event" })
+  })
+  it("uses explicit proactive intent without reusing a stale passive id", () => {
+    const call = serializeOutbound(
+      req(
+        "c2c",
+        "user",
+        HI,
+        { sendOptions: { mode: "proactive" } },
+        "stale",
+        Date.now() - 86400_000
+      ),
+      false
+    )!
+    expect(call.payload).not.toHaveProperty("msg_id")
+    expect(call.payload).not.toHaveProperty("event_id")
+    expect(call.payload).not.toHaveProperty("is_wakeup")
+    const recall = serializeOutbound(
+      req("c2c", "user", HI, { sendOptions: { mode: "reengagement" } }),
+      false
+    )!
+    expect(recall.payload).toMatchObject({ is_wakeup: true })
+    expect(() =>
+      serializeOutbound(req("group", "group", HI, { sendOptions: { mode: "reengagement" } }), false)
+    ).toThrow(/C2C/)
+  })
+  it("maps shared strict-image and broadcast-mention intent without escaping the native mention", () => {
+    const call = serializeOutbound(
+      req(
+        "group",
+        "group",
+        [
+          { type: "markdown", md: "**Notice**" },
+          { type: "mention", userId: "*", audience: "all" },
+        ],
+        { sendOptions: { imagePolicy: "require-complete" } },
+        "source"
+      ),
+      false
+    )!
+    expect(call.payload).toMatchObject({
+      markdown: { content: "**Notice**\n<qqbot-at-everyone />", force_verify_image_resource: true },
+    })
+  })
+  it.each(["audio/mpeg", "audio/wav"])(
+    "accepts group %s audio while retaining C2C bounds",
+    (mimeType) => {
+      const voice = [{ type: "voice" as const, url: "https://cdn.example.org/voice", mimeType }]
+      expect(
+        serializeOutbound(req("group", "group", voice, {}, "source"), false)?.upload?.payload
+          .file_type
+      ).toBe(3)
+      expect(() => serializeOutbound(req("c2c", "user", voice, {}, "source"), false)).toThrow(
+        /SILK/
+      )
+    }
+  )
   it.each(["group", "c2c"] as const)(
     "prepares native %s URL and explicit inline file uploads",
     (scene) => {
@@ -358,7 +431,7 @@ describe("serializeOutbound", () => {
     expect(() => serializeOutboundParts(input)).toThrow("5-reply")
     expect(qqPassiveReplyCount("m1")).toBe(0)
   })
-  it("rejects non-public URLs, non-SILK voice, unsupported channel video, and empty input", () => {
+  it("rejects non-public URLs, unsupported voice, unsupported channel video, and empty input", () => {
     expect(() =>
       serializeOutboundParts(
         req("group", "GO", [{ type: "image", url: "http://127.0.0.1/x" }], {}, "m1")
@@ -369,7 +442,7 @@ describe("serializeOutbound", () => {
         req(
           "group",
           "GO",
-          [{ type: "voice", url: "https://cdn.example.org/x", mimeType: "audio/mpeg" }],
+          [{ type: "voice", url: "https://cdn.example.org/x", mimeType: "audio/ogg" }],
           {},
           "m1"
         )

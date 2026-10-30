@@ -130,7 +130,9 @@ export async function hostStateSessionIntentAvailable(sessionId: string): Promis
  *
  * Returns null when the active target did not negotiate HostState or its
  * snapshot has not arrived yet, allowing the compatibility caller to keep its
- * legacy path. Once eligible, queue capacity, client sequence allocation and
+ * legacy path. A device-bound approval also uses its original authenticated
+ * RPC: a HostState worker has a different caller identity. Once eligible,
+ * queue capacity, client sequence allocation and
  * row insertion happen in one transaction so two tabs cannot allocate the
  * same sequence or show optimism before durable storage succeeds.
  *
@@ -153,6 +155,14 @@ export async function enqueueHostStateIntentIfAvailable(
   const negotiated = await hostStateSubmitNegotiated()
   assertActive()
   if (!negotiated) return null
+  if (input.action.kind === "approval.respond" && input.sessionId) {
+    const { peekRemoteApprovalContext } = await import("@/lib/claude/ipc")
+    assertActive()
+    // The Host bound this pending ask to its original authenticated caller.
+    // Enqueueing it lets Brain's service caller answer with that caller's
+    // context, which the Host correctly refuses as a different identity.
+    if (peekRemoteApprovalContext(input.sessionId, input.action.requestId)) return null
+  }
   const turnFence = isLiveControlIntent(input.action) && (await hostStateTurnFenceNegotiated())
   assertActive()
   // Host-state is addressed in the HOST's namespace. `local` is what this

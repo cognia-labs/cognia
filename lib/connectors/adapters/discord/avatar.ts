@@ -18,6 +18,6 @@ export function discordAvatarUrl(
   const index =
     user.discriminator && user.discriminator !== "0" && /^\d{1,4}$/.test(user.discriminator)
       ? Number(user.discriminator) % 5
-      : Number((BigInt(user.id) >> 22n) % 6n)
+      : Number((BigInt(user.id) >> BigInt(22)) % BigInt(6))
   return `${base}/embed/avatars/${index}.png`
 }

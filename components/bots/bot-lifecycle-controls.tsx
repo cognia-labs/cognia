@@ -82,6 +82,26 @@ export function BotLifecycleControls({ row, onUninstalled }: BotLifecycleControl
 
       <Button
         size="sm"
+        variant="outline"
+        disabled={!readiness.canAutomation || actions.pending.has(`automation:${row.id}`)}
+        onClick={() => void actions.controlAutomation(row.id, row.paused ? "resume" : "pause")}
+      >
+        {t(row.paused ? "automation.resume" : "automation.pause")}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={!readiness.canAutomation || actions.pending.has(`automation:${row.id}`)}
+        onClick={() => void actions.controlAutomation(row.id, "cancel")}
+      >
+        {t("automation.cancel")}
+      </Button>
+      {row.paused ? (
+        <p className="text-xs text-muted-foreground">{t("automation.pausedBody")}</p>
+      ) : null}
+
+      <Button
+        size="sm"
         variant="ghost"
         className="text-destructive hover:text-destructive"
         disabled={!readiness.can}

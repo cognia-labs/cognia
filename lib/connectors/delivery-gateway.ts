@@ -107,6 +107,7 @@ export type InThreadEnqueueInput =
  * drafted, since there is no draft to hold it in.
  */
 export interface ImmediateDeliveryInput {
+  deliveryMode?: "reply" | "proactive" | "reengagement"
   adapterId: string
   /** The conversation it reaches; absent when the request names only a platform reference. */
   conversationKey?: string
@@ -125,7 +126,11 @@ export interface ImmediateDeliveryInput {
   source: OutboundJobSource
   authorization: OutboundAuthorization
   /** The audit row the send leaves. */
-  auditKind: "delivery.legacy_direct" | "delivery.forward_direct" | "delivery.urgent_direct"
+  auditKind:
+    | "delivery.legacy_direct"
+    | "delivery.forward_direct"
+    | "delivery.urgent_direct"
+    | "delivery.stream_authorized"
   auditFields?: Record<string, unknown>
 }
 
@@ -162,8 +167,11 @@ interface WithheldSubject {
 }
 
 export interface ConnectorDeliveryGatewayDependencies {
-  persistOne(input: EnqueueInput): Promise<OutboundJobRow>
-  persistMany(inputs: readonly EnqueueInput[]): Promise<OutboundJobRow[]>
+  persistOne(input: EnqueueInput, options?: { signal?: AbortSignal }): Promise<OutboundJobRow>
+  persistMany(
+    inputs: readonly EnqueueInput[],
+    options?: { signal?: AbortSignal }
+  ): Promise<OutboundJobRow[]>
   getAdapter(adapterId: string): PlatformAdapter | undefined | Promise<PlatformAdapter | undefined>
   piiGate(value: unknown): boolean
   appendAudit(entry: AuditEntryInput): Promise<unknown>
@@ -274,6 +282,7 @@ function toPlanInput(input: GovernedEnqueueInput): DeliveryPlanInput {
     adapterId: input.adapterId,
     conversationKey: input.conversationKey,
     source: input.source,
+    ...(input.request.sendOptions?.mode ? { deliveryMode: input.request.sendOptions.mode } : {}),
     ...(input.authorization ? { authorization: input.authorization } : {}),
   }
 }
@@ -312,8 +321,11 @@ export class ConnectorDeliveryGateway {
    * Queue a delivery that is never drafted (see {@link InThreadEnqueueInput}).
    * Throws {@link ConnectorDeliveryDeniedError} when the policy refuses it.
    */
-  async enqueue(input: InThreadEnqueueInput): Promise<OutboundJobInfo> {
-    const [result] = await this.deliver([input as GovernedEnqueueInput])
+  async enqueue(
+    input: InThreadEnqueueInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<OutboundJobInfo> {
+    const [result] = await this.deliver([input as GovernedEnqueueInput], options)
     // `planDelivery` only queues or refuses these; a draft here is a bug.
     if (result.kind !== "queued") {
       throw new Error("connector delivery gateway: an in-thread delivery was held as a draft")
@@ -325,8 +337,11 @@ export class ConnectorDeliveryGateway {
    * Queue an automated delivery the policy may hold as a draft for a person
    * to approve. Throws {@link ConnectorDeliveryDeniedError} when it refuses it.
    */
-  async enqueueAuthorized(input: GovernedEnqueueInput): Promise<EnqueueGovernedResult> {
-    const [result] = await this.deliver([input])
+  async enqueueAuthorized(
+    input: GovernedEnqueueInput,
+    options?: { signal?: AbortSignal }
+  ): Promise<EnqueueGovernedResult> {
+    const [result] = await this.deliver([input], options)
     return result
   }
 
@@ -498,12 +513,14 @@ export class ConnectorDeliveryGateway {
     input: ImmediateDeliveryInput,
     send: () => Promise<OutboundResult>
   ): Promise<OutboundResult> {
+    input = structuredClone(input)
     const decision = await this.dependencies.planDelivery({
       adapterId: input.adapterId,
       conversationKey: input.conversationKey ?? "",
       source: input.source,
       authorization: input.authorization,
       immediate: true,
+      ...(input.deliveryMode ? { deliveryMode: input.deliveryMode } : {}),
       ...(input.recipients ? { recipients: input.recipients } : {}),
     })
     const subject = {
@@ -558,11 +575,17 @@ export class ConnectorDeliveryGateway {
     return result
   }
 
-  private async deliver(inputs: readonly GovernedEnqueueInput[]): Promise<EnqueueGovernedResult[]> {
+  private async deliver(
+    inputs: readonly GovernedEnqueueInput[],
+    options?: { signal?: AbortSignal }
+  ): Promise<EnqueueGovernedResult[]> {
+    options?.signal?.throwIfAborted()
     if (inputs.length === 0) return []
+    inputs = structuredClone(inputs)
     const decisions = await Promise.all(
       inputs.map((input) => this.dependencies.planDelivery(toPlanInput(input)))
     )
+    options?.signal?.throwIfAborted()
 
     const refused = decisions.findIndex((decision) => decision.action === "deny")
     if (refused >= 0) {
@@ -590,8 +613,8 @@ export class ConnectorDeliveryGateway {
       })
       const rows =
         inputs.length === 1
-          ? [await this.dependencies.persistOne(persisted[0])]
-          : await this.dependencies.persistMany(persisted)
+          ? [await this.dependencies.persistOne(persisted[0], ...(options ? [options] : []))]
+          : await this.dependencies.persistMany(persisted, ...(options ? [options] : []))
       sends.forEach((index, position) => {
         results[index] = { kind: "queued", job: rows[position] }
       })
@@ -605,6 +628,7 @@ export class ConnectorDeliveryGateway {
     for (const [index, decision] of decisions.entries()) {
       if (decision.action !== "draft") continue
       const input = inputs[index]
+      options?.signal?.throwIfAborted()
       const draft = await this.dependencies.createDraft({
         conversationKey: input.conversationKey,
         sessionId: decision.draftSessionId,
@@ -702,8 +726,11 @@ export function getConnectorDeliveryGateway(): ConnectorDeliveryGateway {
  * Function seam for a delivery that is queued or refused, never drafted: a
  * person's own send, a reply or notice into its own conversation, a reroute.
  */
-export function enqueueGoverned(input: InThreadEnqueueInput): Promise<OutboundJobInfo> {
-  return getConnectorDeliveryGateway().enqueue(input)
+export function enqueueGoverned(
+  input: InThreadEnqueueInput,
+  options?: { signal?: AbortSignal }
+): Promise<OutboundJobInfo> {
+  return getConnectorDeliveryGateway().enqueue(input, options)
 }
 
 /** Function seam for an automated forward ({@link ConnectorDeliveryGateway.forward}). */
@@ -717,8 +744,11 @@ export function urgentGoverned(input: GovernedUrgentInput): Promise<OutboundResu
   return getConnectorDeliveryGateway().urgent(input)
 }
 
-export function enqueueAuthorized(input: GovernedEnqueueInput): Promise<EnqueueGovernedResult> {
-  return getConnectorDeliveryGateway().enqueueAuthorized(input)
+export function enqueueAuthorized(
+  input: GovernedEnqueueInput,
+  options?: { signal?: AbortSignal }
+): Promise<EnqueueGovernedResult> {
+  return getConnectorDeliveryGateway().enqueueAuthorized(input, options)
 }
 
 /** Batch variant used by fan-out paths to share one persistence transaction and wake. */

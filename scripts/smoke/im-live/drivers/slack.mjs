@@ -37,6 +37,40 @@ export function createSlackDriver({ values, fetchImpl = fetch, timeoutMs, now = 
     String(message?.user ?? "") === String(targetBotUserId) ||
     String(message?.bot_id ?? "") === String(targetBotUserId)
 
+  async function readMessages(method, body) {
+    const messages = []
+    const cursors = new Set()
+    let cursor
+    for (let page = 0; page < 100; page++) {
+      let result
+      try {
+        result = await call(method, { ...body, ...(cursor ? { cursor } : {}) })
+      } catch (error) {
+        // Only an absent initial thread is normal. A later-page failure must
+        // not turn a partially readable thread into a successful observation.
+        if (
+          method === "conversations.replies" &&
+          page === 0 &&
+          /thread_not_found/.test(error.message)
+        ) {
+          return []
+        }
+        throw error
+      }
+      if (!Array.isArray(result.messages))
+        throw new Error(`slack ${method} returned no message page`)
+      messages.push(...result.messages)
+      const next = result.response_metadata?.next_cursor
+      if ((next === undefined || next === null || next === "") && !result.has_more) return messages
+      if (typeof next !== "string" || !next.trim() || cursors.has(next)) {
+        throw new Error(`slack ${method} pagination returned a missing or repeated cursor`)
+      }
+      cursors.add(next)
+      cursor = next
+    }
+    throw new Error(`slack ${method} pagination exceeded the 100-page observation limit`)
+  }
+
   return {
     platform: "slack",
     conversationId: String(targetChannelId),
@@ -121,29 +155,26 @@ export function createSlackDriver({ values, fetchImpl = fetch, timeoutMs, now = 
 
     async pollTargetMessages(lease) {
       const candidates = []
-      const history = await call("conversations.history", {
+      const history = await readMessages("conversations.history", {
         channel: targetChannelId,
         oldest: lease.oldest,
         inclusive: false,
         limit: 100,
       })
-      candidates.push(...(history.messages ?? []))
+      candidates.push(...history)
 
       // Thread replies never appear in history — page each probe's thread too.
       for (const ts of lease.sentMessageIds) {
-        try {
-          const thread = await call("conversations.replies", {
+        candidates.push(
+          ...(await readMessages("conversations.replies", {
             channel: targetChannelId,
             ts,
             limit: 100,
-          })
-          candidates.push(...(thread.messages ?? []))
-        } catch (error) {
-          // `thread_not_found` just means nothing threaded under that probe yet.
-          if (!/thread_not_found/.test(error.message)) throw error
-        }
+          }))
+        )
       }
 
+      // Do not consume any IDs until all history and thread pages succeeded.
       const fresh = []
       for (const message of candidates) {
         if (!isTarget(message)) continue

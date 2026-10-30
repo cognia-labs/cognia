@@ -20,6 +20,8 @@
  */
 
 import { clearTokenCache, refreshUserToken } from "./auth"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 
 /** Lark error codes signalling the tenant access token is no longer valid. */
 export const TAT_INVALIDATION_CODES: ReadonlySet<number> = new Set([
@@ -141,6 +143,8 @@ export interface UserTokenRefreshContext {
   adapterId: string
   appId: string
   appSecret: string
+  expectedAuthorizationEpoch?: string
+  signal?: AbortSignal
 }
 
 /**
@@ -151,13 +155,40 @@ export interface UserTokenRefreshContext {
  */
 export async function withUserTokenRefresh<T>(
   ctx: UserTokenRefreshContext,
-  fn: () => Promise<T>
+  fn: (accessToken: string, authorizationEpoch: string) => Promise<T>
 ): Promise<T> {
+  const capture = async (expectedEpoch?: string) => {
+    const current = await withRequestAbort(ctx.signal, () =>
+      connectorsLarkUserAuth({ action: "snapshot", adapterId: ctx.adapterId })
+    )
+    throwIfRequestAborted(ctx.signal)
+    if (
+      !current.configured ||
+      !current.accessToken ||
+      (expectedEpoch !== undefined && current.authorizationEpoch !== expectedEpoch)
+    ) {
+      throw new Error("lark_auth_stale")
+    }
+    return { authorizationEpoch: current.authorizationEpoch, accessToken: current.accessToken }
+  }
+  const captured = await capture(ctx.expectedAuthorizationEpoch)
+  throwIfRequestAborted(ctx.signal)
+  const invoke = async (current: typeof captured) => {
+    const result = await fn(current.accessToken, current.authorizationEpoch)
+    await capture(current.authorizationEpoch)
+    throwIfRequestAborted(ctx.signal)
+    return result
+  }
   try {
-    return await fn()
+    return await invoke(captured)
   } catch (err) {
+    throwIfRequestAborted(ctx.signal)
     if (!isLarkUserTokenInvalidation(err)) throw err
-    await refreshUserToken(ctx)
-    return await fn()
+    await refreshUserToken({ ...ctx, expectedAuthorizationEpoch: captured.authorizationEpoch })
+    const current = await capture(captured.authorizationEpoch)
+    throwIfRequestAborted(ctx.signal)
+    // Pass the atomically captured token with its epoch; callbacks must not
+    // reread a token belonging to a replacement authorization.
+    return await invoke(current)
   }
 }

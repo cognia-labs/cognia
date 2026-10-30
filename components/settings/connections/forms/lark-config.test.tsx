@@ -28,6 +28,7 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 }))
 
 jest.mock("@/lib/connectors/tauri/commands", () => ({
+  connectorsLarkUserAuth: jest.fn(async () => ({ authorizationEpoch: "begin-epoch" })),
   connectorsKeyringSet: (...args: unknown[]) => mockConnectorsKeyringSet(...args),
   connectorsKeyringGet: (...args: unknown[]) => mockConnectorsKeyringGet(...args),
   connectorsKeyringDelete: (...args: unknown[]) => mockConnectorsKeyringDelete(...args),
@@ -541,6 +542,50 @@ describe("LarkConfigDialog — send as user", () => {
     expect(pending.codeVerifier).toHaveLength(43)
     expect(url.searchParams.get("code_challenge")).not.toBe(pending.codeVerifier)
     expect(JSON.stringify(Object.entries(localStorage))).not.toContain(pending.codeVerifier)
+  })
+
+  it("requests read-only document permissions only after an explicit choice", async () => {
+    render(<LarkConfigDialog open={true} onOpenChange={jest.fn()} row={baseRow} />)
+    fireEvent.click(screen.getByText("Send as me"))
+    fireEvent.click(screen.getByRole("switch", { name: "Read cloud documents" }))
+    fireEvent.click(screen.getByRole("button", { name: /connect account/i }))
+    await waitFor(() => expect(mockOpenUrl).toHaveBeenCalledTimes(1))
+    const scopes = new URL(mockOpenUrl.mock.calls[0][0]).searchParams.get("scope")!.split(" ")
+    expect(scopes).toEqual(
+      expect.arrayContaining([
+        "search:docs:read",
+        "drive:drive:readonly",
+        "docx:document:readonly",
+        "sheets:spreadsheet:readonly",
+        "bitable:app:readonly",
+        "wiki:wiki:readonly",
+      ])
+    )
+    for (const scope of ["drive:drive", "bitable:app", "docx:document"])
+      expect(scopes).not.toContain(scope)
+  })
+
+  it("preserves existing grants when adding read-only document consent", async () => {
+    render(
+      <LarkConfigDialog
+        open={true}
+        onOpenChange={jest.fn()}
+        row={{
+          ...baseRow,
+          settings: {
+            ...baseRow.settings,
+            connectedScopes: { scopes: ["task:task:read"], grantedAtMs: 1 },
+          },
+        }}
+      />
+    )
+    fireEvent.click(screen.getByText("Send as me"))
+    fireEvent.click(screen.getByRole("switch", { name: "Read cloud documents" }))
+    fireEvent.click(screen.getByRole("button", { name: /connect account/i }))
+    await waitFor(() => expect(mockOpenUrl).toHaveBeenCalledTimes(1))
+    const scopes = new URL(mockOpenUrl.mock.calls[0][0]).searchParams.get("scope")!.split(" ")
+    expect(scopes).toContain("task:task:read")
+    expect(scopes).toContain("docx:document:readonly")
   })
 
   it("offers the tunnel CTA when the desktop has no reachable ingress", async () => {

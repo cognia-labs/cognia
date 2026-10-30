@@ -1,3 +1,15 @@
+import { getConnectorConversationState } from "@/lib/db/connector-conversation-state"
+import {
+  deliverWithReceipt,
+  ConnectorDeliveryNotStartedError,
+  type ConnectorDeliveryQuota,
+} from "@/lib/connectors/delivery-receipts"
+import { createQQManagement } from "./management"
+import {
+  collectConnectorAssetReferences,
+  verifyConnectorAssetReferences,
+  renewConnectorAssetReferences,
+} from "@/lib/connectors/assets"
 /**
  * QQ Official Bot adapter factory.
  *
@@ -14,6 +26,7 @@
  * Outbound always uses QQ REST with captured message/event reply authority.
  */
 
+import { createQQStreamManager, QQStreamReconciliationError, type QQStreamResponse } from "./stream"
 import { QQKeyboardValidationError } from "./keyboard"
 import { getBus } from "@/lib/connectors/bus"
 import {
@@ -25,6 +38,7 @@ import {
 import type { ConnectorCallbackDecision } from "@/types/connectors/interaction"
 import type {
   AdapterContext,
+  AdapterSendOptions,
   AdapterHealth,
   AdapterHealthState,
   PlatformAdapter,
@@ -95,6 +109,8 @@ export interface QQOfficialAdapterOptions {
   transportMode?: TransportMode
   /** Opt in only after the app has the private-guild GUILD_MESSAGES permission. */
   receiveGuildMessages?: boolean
+  /** Subscribe only after the app has QQ's MESSAGE_AUDIT grant. */
+  receiveMessageAudit?: boolean
   /** Resolve the current confirmed identity; startup probes can finish after start(). */
   selfId?: () => Promise<string>
 }
@@ -117,6 +133,11 @@ const QQ_CONFIG_SCHEMA = {
     receiveGuildMessages: {
       type: "boolean",
       description: "Receive all private-guild channel messages; requires GUILD_MESSAGES permission",
+      default: false,
+    },
+    receiveMessageAudit: {
+      type: "boolean",
+      description: "Subscribe to channel MESSAGE_AUDIT results after platform approval",
       default: false,
     },
   },
@@ -143,7 +164,8 @@ class QQApiError extends Error {
     message: string,
     readonly status: number,
     readonly platformCode?: number,
-    readonly reconciliationRequired = false
+    readonly reconciliationRequired = false,
+    readonly pendingReceiptId?: string
   ) {
     super(message)
     this.name = "QQApiError"
@@ -183,12 +205,28 @@ function parseQQBody(raw: string): {
   file_info?: string
   traceId?: string
   referenceIndex?: string
+  remaining?: number
+  auditId?: string
+  data?: Record<string, unknown>
 } {
   try {
     const value: unknown = JSON.parse(raw)
     if (!value || typeof value !== "object" || Array.isArray(value)) return {}
     const body = value as Record<string, unknown>
     return {
+      data: body,
+      auditId: (() => {
+        const data =
+          body.data && typeof body.data === "object"
+            ? (body.data as Record<string, unknown>)
+            : undefined
+        const audit =
+          data?.message_audit && typeof data.message_audit === "object"
+            ? (data.message_audit as Record<string, unknown>)
+            : undefined
+        const id = qqReferenceIndex(audit?.audit_id)
+        return id && id.length <= 512 ? id : undefined
+      })(),
       id: typeof body.id === "string" ? body.id : undefined,
       file_info: typeof body.file_info === "string" ? body.file_info : undefined,
       message: typeof body.message === "string" ? body.message : undefined,
@@ -198,6 +236,10 @@ function parseQQBody(raw: string): {
           : typeof body.code === "number"
             ? body.code
             : undefined,
+      remaining:
+        Number.isSafeInteger(body.remain_msg_len) && Number(body.remain_msg_len) >= 0
+          ? Number(body.remain_msg_len)
+          : undefined,
       traceId: typeof body.trace_id === "string" ? body.trace_id : undefined,
       referenceIndex:
         body.ext_info && typeof body.ext_info === "object" && !Array.isArray(body.ext_info)
@@ -221,7 +263,12 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
   const acknowledgedInteractions = new Set<string>()
   const interactionTimers = new Set<ReturnType<typeof setTimeout>>()
 
-  function handleInteraction(selfId: string, dispatch: QQDispatch, active: () => boolean): void {
+  function handleInteraction(
+    ctx: AdapterContext,
+    selfId: string,
+    dispatch: QQDispatch,
+    active: () => boolean
+  ): void {
     const interactionId = qqInteractionAckId(dispatch)
     if (!interactionId || interactionTasks.has(interactionId)) return
     let terminal = false
@@ -247,6 +294,23 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       const timer = setTimeout(() => respond({ status: "failed" }), 3_000)
       interactionTimers.add(timer)
       try {
+        const system = parseQQDispatch(opts.id, selfId, dispatch)
+        if (system?.interaction?.kind === "menu") {
+          if (
+            Date.now() - system.timestamp > 300000 ||
+            !(await gateInboundEvent(opts.id, system)) ||
+            !active()
+          ) {
+            terminal = true
+            respond({ status: "denied", reason: "chat_policy" })
+            return
+          }
+          await ctx.emit(system, { requireAcceptance: true })
+          if (!active()) return
+          terminal = true
+          respond({ status: "accepted", kind: "generic" })
+          return
+        }
         const interaction = parseQQInteraction(dispatch)
         const callback = interaction
           ? await resolveQQInteraction(opts.id, selfId, interaction)
@@ -296,6 +360,153 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
     if (interactionTasks.size > 500) interactionTasks.delete(interactionTasks.keys().next().value!)
   }
 
+  const streams = createQQStreamManager({
+    adapterId: opts.id,
+    request: async (path, payload, delivery) => {
+      const references = collectConnectorAssetReferences(
+        payload,
+        /qqbot-media:\/\/image\/v1\/[A-Za-z0-9_=+-]+/g
+      )
+      await verifyConnectorAssetReferences(opts.id, references)
+      const preflight = async () => {
+        try {
+          return delivery ? await prepareExplicitDelivery(delivery) : undefined
+        } catch (error) {
+          if (error instanceof QQValidationError) throw error
+          throw new ConnectorDeliveryNotStartedError(
+            "QQ stream admission storage unavailable",
+            true
+          )
+        }
+      }
+      if (delivery && payload.index === 0) await paceProactive()
+      const wire = (beforePost?: () => Promise<void>) =>
+        qqRequest("POST", path, payload, undefined, beforePost)
+      let result: QQStreamResponse
+      if (delivery) {
+        const { quotas } = (await preflight())!
+        let response: QQStreamResponse | undefined
+        let wireError: unknown
+        const outcome = await deliverWithReceipt(
+          opts.id,
+          delivery,
+          quotas,
+          async (assertQuotaActive) => {
+            try {
+              response = await wire(async () => {
+                await preflight()
+                assertQuotaActive()
+              })
+              return response.body.id && response.status !== 202
+                ? {
+                    ok: true,
+                    platformMessageId: encodeQQMessageId(
+                      "c2c",
+                      String(delivery.conversationRef.sceneId),
+                      response.body.id
+                    ),
+                  }
+                : {
+                    ok: false,
+                    error: {
+                      code: "reconciliation_required",
+                      message: "QQ stream acknowledgement is uncertain",
+                      retryable: false,
+                    },
+                  }
+            } catch (error) {
+              if (error instanceof ConnectorDeliveryNotStartedError) throw error
+              wireError = error
+              const status = (error as { status?: number })?.status
+              return {
+                ok: false,
+                error: {
+                  code:
+                    error instanceof QQValidationError
+                      ? "validation"
+                      : error instanceof QQApiError && error.reconciliationRequired
+                        ? "reconciliation_required"
+                        : typeof status === "number" &&
+                            status >= 400 &&
+                            status < 500 &&
+                            status !== 408
+                          ? "platform_4xx"
+                          : "network",
+                  message: "QQ stream frame failed",
+                  retryable: false,
+                },
+              }
+            }
+          },
+          {
+            stream: {
+              key: delivery.metadata.streamKey!,
+              index: Number(payload.index),
+              ...(typeof payload.stream_msg_id === "string"
+                ? {
+                    previousMessageId: encodeQQMessageId(
+                      "c2c",
+                      String(delivery.conversationRef.sceneId),
+                      payload.stream_msg_id
+                    ),
+                  }
+                : {}),
+              retainUntil: Number(delivery.conversationRef.receivedAt) + 30 * 86400_000,
+            },
+          }
+        )
+        if (wireError) throw wireError
+        if (!outcome.ok) {
+          if (outcome.error?.code === "validation")
+            throw new QQValidationError(outcome.error.message)
+          if (outcome.error?.code === "temporary_unavailable")
+            throw new ConnectorDeliveryNotStartedError(outcome.error.message, true)
+          throw new QQStreamReconciliationError(
+            response?.body.id ??
+              (typeof payload.stream_msg_id === "string" ? payload.stream_msg_id : undefined)
+          )
+        }
+        result = response!
+      } else result = await wire()
+      if (result.body.id)
+        await renewConnectorAssetReferences(opts.id, references, Date.now() + 90 * 86400_000).catch(
+          () => undefined
+        )
+      return result
+    },
+    confirmed: async (scope, response) => {
+      if (!response.id) return
+      await recordDeliveredMessage(
+        opts.id,
+        buildConversationKey("qq-official", opts.id, scope.sceneId),
+        encodeQQMessageId("c2c", scope.sceneId, response.id)
+      )
+      if (response.referenceIndex)
+        await recordQQReference(
+          { adapterId: opts.id, scene: "c2c", sceneId: scope.sceneId },
+          response.id,
+          response.referenceIndex
+        ).catch(() => undefined)
+    },
+  })
+
+  const management = createQQManagement({
+    adapterId: opts.id,
+    active: () => healthState === "running",
+    signal: () => abortController?.signal,
+    request: async (method, path, body) => (await qqRequest(method, path, body)).body.data ?? {},
+    uploadAsset: async (input) =>
+      (
+        await qqRequest("POST", "/v2/media-images/prepare", undefined, {
+          fileType: 1,
+          fileName: input.name,
+          contentType: input.mimeType,
+          reusableAsset: true,
+          sourceUrl: input.source.url ?? `data:${input.mimeType};base64,${input.source.dataBase64}`,
+        })
+      ).body.data ?? {},
+  })
+
   /** Shared per-dispatch pipeline: parse → at-gate → bus emit. */
   async function handleDispatch(
     ctx: AdapterContext,
@@ -312,13 +523,13 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       }
       if (!active()) return
     }
-    if (dispatch.t === "INTERACTION_CREATE") {
-      handleInteraction(selfId, dispatch, active)
+    if (dispatch.t === "INTERACTION_CREATE" && qqInteractionAckId(dispatch)) {
+      handleInteraction(ctx, selfId, dispatch, active)
       return
     }
     const event = parseQQDispatch(opts.id, selfId, dispatch)
     if (!event) return
-    if (event.kind === "delete" || event.kind === "edit") {
+    if (event.kind === "delete" || event.kind === "edit" || event.deliveryStatus) {
       await ctx.emit(event)
       return
     }
@@ -369,11 +580,12 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
 
   async function start(ctx: AdapterContext): Promise<void> {
     if (abortController) return
+    streams.start()
     abortController = new AbortController()
     const signal = abortController.signal
     const active = () =>
       !signal.aborted && abortController?.signal === signal && !ctx.signal?.aborted
-    healthState = "running"
+    healthState = opts.transportMode === "webhook" ? "running" : "starting"
     healthReason = undefined
 
     // Webhook mode: verified DISPATCH envelopes arrive from the Rust callback
@@ -403,7 +615,15 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       accessToken: opts.accessToken,
       gatewayUrl: async () => getQQGatewayUrl(await opts.accessToken(), apiBase),
       signal,
-      intents: DEFAULT_QQ_INTENTS | (opts.receiveGuildMessages ? 1 << 9 : 0),
+      onHealth: (health) => {
+        if (!active()) return
+        healthState = health.state
+        healthReason = health.reason
+      },
+      intents:
+        DEFAULT_QQ_INTENTS |
+        (opts.receiveGuildMessages ? 1 << 9 : 0) |
+        (opts.receiveMessageAudit ? 1 << 27 : 0),
       // OP 9 INVALID_SESSION: the platform rejected our IDENTIFY/RESUME —
       // evict the cached token so the reconnect re-mints instead of looping
       // on the same rejected credential.
@@ -430,6 +650,7 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
   }
 
   async function stop(): Promise<void> {
+    streams.stop()
     interactionTimers.forEach(clearTimeout)
     interactionTimers.clear()
     interactionTasks.clear()
@@ -462,15 +683,17 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
    * by HTTP-success responses and legacy `code` envelopes.
    */
   async function qqRequest(
-    method: "GET" | "POST" | "PUT" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
     body?: Record<string, unknown>,
-    binary?: QQBinarySource & { fileType: number }
+    binary?: QQBinarySource & { fileType: number; reusableAsset?: boolean; contentType?: string },
+    beforePost?: () => Promise<void>
   ): Promise<{
     status: number
     body: ReturnType<typeof parseQQBody>
   }> {
     const doCall = async (token: string): Promise<TauriHttpResponse> => {
+      await beforePost?.()
       if (binary) {
         let raw: string
         try {
@@ -478,7 +701,12 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
             uploadUrl: `${apiBase}${path}`,
             headers: qqAuthHeaders(token),
             sourceUrl: binary.sourceUrl,
-            qq: { fileType: binary.fileType, fileName: binary.fileName },
+            qq: {
+              fileType: binary.fileType,
+              fileName: binary.fileName,
+              ...(binary.reusableAsset ? { reusableAsset: true } : {}),
+            },
+            ...(binary.contentType ? { contentType: binary.contentType } : {}),
             responseMode: "http",
           })
         } catch (error) {
@@ -511,6 +739,7 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
       return connectorsHttpRequest({
         url: `${apiBase}${path}`,
         method,
+        ...(path.endsWith("/stream_messages") ? { timeoutMs: 10_000 } : {}),
         headers: qqAuthHeaders(token),
         body: body !== undefined ? JSON.stringify(body) : undefined,
       })
@@ -518,7 +747,14 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
     let token = await opts.accessToken()
     let resp = await doCall(token)
     let parsed = parseQQBody(resp.body)
-    if (resp.status === 401 || resp.status === 403 || parsed.code === 11243) {
+    const ambiguousBusiness =
+      (parsed.code !== undefined && QQ_PENDING_AUDIT_CODES.has(parsed.code)) ||
+      parsed.code === 40054005 ||
+      resp.status === 202
+    if (
+      !ambiguousBusiness &&
+      (resp.status === 401 || resp.status === 403 || parsed.code === 11243)
+    ) {
       clearQQTokenCacheByToken(token)
       await opts.clearTokenCache?.()
       token = await opts.accessToken()
@@ -544,18 +780,222 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         `QQ ${method} ${path} failed: ${detail}`,
         resp.status,
         parsed.code,
-        pending
+        pending || parsed.code === 40054005,
+        pending ? parsed.auditId : undefined
       )
     }
     return { status: resp.status, body: parsed }
   }
 
-  async function send(req: OutboundRequest): Promise<OutboundResult> {
+  let nextProactiveAt = 0
+  let proactiveTail: Promise<void> = Promise.resolve()
+  async function paceProactive() {
+    const signal = abortController?.signal
+    if (!signal || signal.aborted) throw new QQValidationError("QQ adapter stopped")
+    const work = proactiveTail
+      .catch(() => undefined)
+      .then(async () => {
+        const delay = nextProactiveAt - Date.now()
+        if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
+        if (signal.aborted || signal !== abortController?.signal)
+          throw new QQValidationError("QQ adapter stopped")
+        nextProactiveAt = Date.now() + 2100
+      })
+    proactiveTail = work
+    return work
+  }
+
+  async function send(req: OutboundRequest, options?: AdapterSendOptions): Promise<OutboundResult> {
+    try {
+      await verifyConnectorAssetReferences(
+        opts.id,
+        collectConnectorAssetReferences(
+          req.segments,
+          /qqbot-media:\/\/image\/v1\/[A-Za-z0-9_=+-]+/g
+        )
+      )
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: "validation",
+          message: "QQ reusable image is unknown or expired for this adapter",
+          retryable: false,
+        },
+      }
+    }
+    const explicitPush = req.sendOptions?.mode && req.sendOptions.mode !== "reply"
+    const mentionsAll = req.segments.some(
+      (segment) => segment.type === "mention" && segment.audience === "all"
+    )
+    if (
+      req.sendOptions?.mode === "reengagement" &&
+      req.conversationRef.scene === "c2c" &&
+      (req.metadata.streamKey ||
+        (!req.replyTo &&
+          req.sendOptions.imagePolicy !== "require-complete" &&
+          req.segments.length > 0 &&
+          req.segments.every((segment) => segment.type === "text" || segment.type === "markdown")))
+    )
+      return streams.finish(
+        {
+          ...req,
+          metadata: {
+            ...req.metadata,
+            streamKey: req.metadata.streamKey ?? `send:${req.metadata.idempotencyKey}`,
+          },
+        },
+        (request) => sendExplicit(request, options)
+      )
+    if (explicitPush || mentionsAll) return sendExplicit(req, options)
+    if (req.metadata.streamKey && req.conversationRef.scene === "c2c")
+      return streams.finish(req, (request) => sendNormal(request, undefined, options))
+    return sendNormal(req, undefined, options)
+  }
+
+  async function prepareExplicitDelivery(req: OutboundRequest) {
+    const explicitPush = req.sendOptions?.mode && req.sendOptions.mode !== "reply"
+    const mentionsAll = req.segments.some(
+      (segment) => segment.type === "mention" && segment.audience === "all"
+    )
+    const ref = req.conversationRef
+    if ((ref.scene !== "c2c" && ref.scene !== "group") || typeof ref.sceneId !== "string")
+      throw new QQValidationError("QQ explicit delivery requires a captured group/C2C destination")
+    const prepared = await prepareQQKeyboards(req)
+    const preview = serializeOutboundParts(prepared.request, false)
+    const cost = preview.length
+    const now = Date.now(),
+      minute = Math.floor(now / 60_000) * 60_000
+    const day = Math.floor((now + 8 * 3600_000) / 86400_000) * 86400_000 - 8 * 3600_000
+    const target = `${ref.scene}:${ref.sceneId}`
+    const quotas: ConnectorDeliveryQuota[] = []
+    if (ref.scene === "group") {
+      const state =
+        (await qqRequest("GET", `/v2/groups/${encodeURIComponent(ref.sceneId)}/bot_state`)).body
+          .data ?? {}
+      if (explicitPush && state.allow_proactive_msg !== true)
+        throw new QQValidationError("QQ group has not enabled proactive messages")
+      if (mentionsAll && !["admin", "owner"].includes(String(state.member_role)))
+        throw new QQValidationError("QQ broadcast mention requires group administrator role")
+    } else if (mentionsAll) throw new QQValidationError("QQ broadcast mention requires a group")
+    if (explicitPush && ref.scene === "c2c") {
+      const permission = (
+        await getConnectorConversationState(
+          buildConversationKey("qq-official", opts.id, ref.sceneId)
+        )
+      )?.deliveryPermissions
+      if (
+        permission?.proactive === false ||
+        (req.sendOptions?.mode === "proactive" && permission?.proactive !== true)
+      )
+        throw new QQValidationError("QQ C2C proactive delivery requires a recorded user opt-in")
+    }
+    if (explicitPush) {
+      quotas.push(
+        { key: "proactive:bot", start: minute, end: minute + 60_000, maximum: 30, cost },
+        {
+          key: `proactive:${target}:minute`,
+          start: minute,
+          end: minute + 60_000,
+          maximum: 20,
+          cost,
+        },
+        {
+          key: `proactive:${target}:day`,
+          start: day,
+          end: day + 86400_000,
+          maximum: 1000,
+          cost,
+        }
+      )
+      if (req.sendOptions?.mode === "reengagement") {
+        if (
+          ref.scene !== "c2c" ||
+          !ref.msgId ||
+          typeof ref.receivedAt !== "number" ||
+          ref.receivedAt > now
+        )
+          throw new QQValidationError("QQ reengagement requires a captured user message")
+        const age = (now - ref.receivedAt) / 86400_000
+        const range =
+          age < 1 ? [0, 1] : age < 3 ? [1, 3] : age < 7 ? [3, 7] : age < 30 ? [7, 30] : undefined
+        if (!range) throw new QQValidationError("QQ reengagement window expired")
+        quotas.push({
+          key: `reengagement:${target}`,
+          start: ref.receivedAt + range[0] * 86400_000,
+          end: ref.receivedAt + range[1] * 86400_000,
+          maximum: 1,
+          cost,
+        })
+      }
+    }
+    if (mentionsAll)
+      quotas.push({
+        key: `mention-all:${target}`,
+        start: day,
+        end: day + 86400_000,
+        maximum: 1,
+        cost: preview.filter((call) => JSON.stringify(call.payload).includes("<qqbot-at-everyone"))
+          .length,
+      })
+    return { prepared, quotas }
+  }
+
+  async function sendExplicit(
+    req: OutboundRequest,
+    options?: AdapterSendOptions
+  ): Promise<OutboundResult> {
+    try {
+      const { prepared, quotas } = await prepareExplicitDelivery(req)
+      return deliverWithReceipt(opts.id, req, quotas, (assertQuotaActive) =>
+        sendNormal(prepared.request, prepared, options, async () => {
+          await prepareExplicitDelivery(req)
+          assertQuotaActive()
+        })
+      )
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: error instanceof QQValidationError ? "validation" : "temporary_unavailable",
+          message:
+            error instanceof QQValidationError
+              ? error.message
+              : "QQ explicit delivery preflight failed",
+          retryable: !(error instanceof QQValidationError),
+        },
+      }
+    }
+  }
+
+  async function sendNormal(
+    req: OutboundRequest,
+    prepared?: PreparedQQKeyboards,
+    options?: AdapterSendOptions,
+    beforePost?: () => Promise<void>
+  ): Promise<OutboundResult> {
+    const mediaRefs = collectConnectorAssetReferences(
+      req.segments,
+      /qqbot-media:\/\/image\/v1\/[A-Za-z0-9_=+-]+/g
+    )
+    try {
+      await verifyConnectorAssetReferences(opts.id, mediaRefs)
+    } catch {
+      return {
+        ok: false,
+        error: {
+          code: "validation",
+          message:
+            "QQ reusable image is unknown or expired for this adapter; query its inventory first",
+          retryable: false,
+        },
+      }
+    }
     let calls: ReturnType<typeof serializeOutboundParts>
     let keyboards: PreparedQQKeyboards
     try {
       try {
-        keyboards = await prepareQQKeyboards(req)
+        keyboards = prepared ?? (await prepareQQKeyboards(req))
         req = keyboards.request
       } catch (error) {
         if (error instanceof QQKeyboardValidationError) throw new QQValidationError(error.message)
@@ -638,7 +1078,8 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
         const payload = fileInfo
           ? { ...call.payload, media: { file_info: fileInfo } }
           : call.payload
-        const { body, status } = await qqRequest("POST", call.path, payload)
+        if (req.sendOptions?.mode && req.sendOptions.mode !== "reply") await paceProactive()
+        const { body, status } = await qqRequest("POST", call.path, payload, undefined, beforePost)
         if (!body.id || status === 202) {
           throw new QQApiError(
             `QQ send delivery is unconfirmed (status ${status}); reconcile before resending${body.traceId ? ` [trace ${body.traceId}]` : ""}`,
@@ -648,6 +1089,11 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
           )
         }
         delivered += 1
+        await renewConnectorAssetReferences(
+          opts.id,
+          collectConnectorAssetReferences(payload, /qqbot-media:\/\/image\/v1\/[A-Za-z0-9_=+-]+/g),
+          Date.now() + 90 * 86400_000
+        ).catch(() => undefined)
         platformMessageId =
           body.id && ref.scene && ref.sceneId
             ? encodeQQMessageId(ref.scene, ref.sceneId, body.id)
@@ -688,9 +1134,28 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
             message: `QQ delivered ${delivered}/${calls.length} parts before failure; retrying the whole message could duplicate delivery. ${err instanceof Error ? err.message : String(err)}`,
           },
         }
-      if (err instanceof QQValidationError)
+      if (err instanceof QQValidationError || err instanceof ConnectorDeliveryNotStartedError)
         return { ok: false, error: { code: "validation", message: err.message, retryable: false } }
       if (err instanceof QQApiError) {
+        if (err.pendingReceiptId && calls.length === 1 && ref.scene === "channel") {
+          const pendingReceipt = { id: err.pendingReceiptId }
+          // Retain the known correlation even if the host's first write fails;
+          // the runner retries local registration without another provider POST.
+          try {
+            await options?.onPendingReceipt?.(pendingReceipt)
+          } catch {
+            /* caller persists result.pendingReceipt */
+          }
+          return {
+            ok: false,
+            pendingReceipt,
+            error: {
+              code: "delivery_pending",
+              message: "QQ accepted the channel message for audit",
+              retryable: false,
+            },
+          }
+        }
         if (err.reconciliationRequired || err.platformCode === 40054005)
           return {
             ok: false,
@@ -839,6 +1304,21 @@ export function createQQOfficialAdapter(opts: QQOfficialAdapterOptions): Platfor
     stop,
     health,
     send,
+    voiceFormats: (ref) =>
+      ref.scene === "group"
+        ? ["audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/silk"]
+        : ref.scene === "c2c"
+          ? ["audio/silk"]
+          : [],
+    management,
+    streamReply: async (req) => {
+      await verifyConnectorAssetReferences(
+        opts.id,
+        collectConnectorAssetReferences(req.text, /qqbot-media:\/\/image\/v1\/[A-Za-z0-9_=+-]+/g)
+      )
+      await streams.preview(req)
+    },
+    cancelStreamReply: streams.cancel,
     // Every delivery goes to the reference's chat: a reply's message id never
     // moves it, and there is no edit (ADR-0239).
     messageRoute: conversationBoundRoute,

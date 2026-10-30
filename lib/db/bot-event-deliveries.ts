@@ -11,8 +11,6 @@
  * them quietly stops matching the timeouts it was tuned against.
  */
 
-import Dexie from "dexie"
-
 import { getDb } from "@/lib/db/schema"
 import { recordTombstones } from "@/lib/sync/tombstones"
 import type { BotDeliveryStatus, BotEventDeliveryRow } from "@/lib/db/bot-types"
@@ -124,19 +122,57 @@ function chargeAbandonedAttempt(
  * out to several installations, and a global key would let the first recipient
  * swallow everyone else's copy.
  */
-export function botDeliveryDedupKey(installationId: string, eventId: string): string {
-  return `${installationId}::${eventId}`
+export function botDeliveryDedupKey(
+  installationId: string,
+  eventId: string,
+  triggerId?: string
+): string {
+  return triggerId === undefined
+    ? `${installationId}::${eventId}`
+    : `v2:${JSON.stringify([installationId, triggerId, eventId])}`
+}
+
+export class BotIntakePausedError extends Error {
+  readonly code = "bot_intake_paused"
+  constructor(readonly reason: "installation" | "conversation" | "cancelled" = "installation") {
+    super("Bot intake is paused")
+  }
 }
 
 export interface EnqueueBotDeliveryInput {
   envelope: BotEventEnvelopeV1
+  /** Synchronous in-memory readiness fence immediately before a new insert. */
+  assertReady?: () => undefined
   /** Hold the delivery until this instant, for a debounced trigger. */
   notBefore?: number
   concurrencyKey?: string
   holdConcurrencyWhileWaiting?: boolean
   /** The trigger's declared retry policy, snapshotted onto the row. */
   retry?: PluginBotRetryPolicy
+  coalesce?: "latest" | "all"
   now?: number
+}
+
+function coalesceGroup(envelope: BotEventEnvelopeV1, concurrencyKey?: string): string {
+  const source = [
+    concurrencyKey,
+    envelope.source,
+    envelope.binding?.integrationAccountId,
+    envelope.binding?.adapterId,
+  ]
+  if (envelope.resource)
+    return JSON.stringify([
+      ...source,
+      "resource",
+      envelope.resource.kind,
+      envelope.resource.scope,
+      envelope.resource.id,
+    ])
+  if (envelope.binding?.conversationKey)
+    return JSON.stringify([...source, "conversation", envelope.binding.conversationKey])
+  if (concurrencyKey) return JSON.stringify([...source, "concurrency"])
+  // Without resource identity, never discard an unrelated event.
+  return JSON.stringify([...source, "event", envelope.eventId])
 }
 
 /**
@@ -152,10 +188,11 @@ export async function enqueueBotDelivery(
   const db = getDb()
   const now = input.now ?? Date.now()
   const envelope = input.envelope
-  const dedupKey = botDeliveryDedupKey(envelope.installationId, envelope.eventId)
-
-  const existing = await db.botEventDeliveries.where("dedupKey").equals(dedupKey).first()
-  if (existing) return existing
+  const dedupKey = botDeliveryDedupKey(
+    envelope.installationId,
+    envelope.eventId,
+    envelope.triggerId
+  )
 
   const row: BotEventDeliveryRow = {
     id: envelope.deliveryId,
@@ -178,17 +215,75 @@ export async function enqueueBotDelivery(
       : {}),
     ...(envelope.correlation ? { correlation: envelope.correlation } : {}),
     ...(input.retry ? { retry: input.retry } : {}),
+    ...(input.coalesce
+      ? { coalesce: input.coalesce, coalesceKey: coalesceGroup(envelope, input.concurrencyKey) }
+      : {}),
   }
 
-  try {
-    await db.botEventDeliveries.add(row)
-    return row
-  } catch (error) {
-    if (!(error instanceof Dexie.ConstraintError)) throw error
-    const winner = await db.botEventDeliveries.where("dedupKey").equals(dedupKey).first()
-    if (!winner) throw error
-    return winner
-  }
+  return db.transaction(
+    "rw",
+    db.botEventDeliveries,
+    db.botInstallations,
+    db.conversationOverrides,
+    async () => {
+      const existing = await db.botEventDeliveries.where("dedupKey").equals(dedupKey).first()
+      if (existing) return existing
+      // Existing run IDs and step journals must survive the identity upgrade.
+      const legacy = await db.botEventDeliveries
+        .where("dedupKey")
+        .equals(botDeliveryDedupKey(envelope.installationId, envelope.eventId))
+        .first()
+      if (legacy?.triggerId === envelope.triggerId) return legacy
+      const conversation = envelope.binding?.conversationKey
+        ? await db.conversationOverrides
+            .where("conversationKey")
+            .equals(envelope.binding.conversationKey)
+            .first()
+        : undefined
+      if ((await db.botInstallations.get(row.installationId))?.paused)
+        throw new BotIntakePausedError("installation")
+      if (conversation?.automationPaused) throw new BotIntakePausedError("conversation")
+      if (
+        conversation?.automationCancelledBefore !== undefined &&
+        (row.envelope.receivedAt ?? row.receivedAt) <= conversation.automationCancelledBefore
+      )
+        throw new BotIntakePausedError("cancelled")
+      input.assertReady?.()
+      await db.botEventDeliveries.add(row)
+      if (row.coalesce === "latest" && (row.notBefore ?? 0) > now) {
+        const candidates = await db.botEventDeliveries
+          .where("[installationId+status]")
+          .equals([row.installationId, "pending"])
+          .toArray()
+        const eligible = candidates.filter(
+          (previous) =>
+            isLocallyOwned(previous) &&
+            previous.attempts === 0 &&
+            !previous.runId &&
+            previous.triggerId === row.triggerId &&
+            previous.coalesce === "latest" &&
+            previous.coalesceKey === row.coalesceKey &&
+            (previous.notBefore ?? 0) > now
+        )
+        const winner = eligible.reduce(
+          (latest, candidate) => (candidate.receivedAt > latest.receivedAt ? candidate : latest),
+          row
+        )
+        for (const previous of eligible) {
+          if (previous.id === winner.id) continue
+          const dismissed = {
+            status: "dismissed" as const,
+            settledAt: now,
+            updatedAt: now,
+            lastError: "Superseded by a newer event in the debounce window",
+          }
+          await db.botEventDeliveries.update(previous.id, dismissed)
+          if (previous.id === row.id) Object.assign(row, dismissed)
+        }
+      }
+      return row
+    }
+  )
 }
 
 /**
@@ -203,7 +298,20 @@ export async function listDueBotDeliveries(
   now = Date.now(),
   runnableOnly = false
 ): Promise<BotEventDeliveryRow[]> {
-  const rows = await getDb().botEventDeliveries.toArray()
+  const db = getDb()
+  const rows = await db.botEventDeliveries.toArray()
+  const paused = new Set(
+    runnableOnly
+      ? (await db.botInstallations.toArray()).filter((row) => row.paused).map((row) => row.id)
+      : []
+  )
+  const pausedConversations = new Set(
+    runnableOnly
+      ? (await db.conversationOverrides.toArray())
+          .filter((row) => row.automationPaused)
+          .map((row) => row.conversationKey)
+      : []
+  )
   const heldKeys = new Map<string, Set<string>>()
   if (runnableOnly) {
     for (const row of rows) {
@@ -216,7 +324,12 @@ export async function listDueBotDeliveries(
   const selectedKeys = new Set<string>()
   return rows
     .filter((row) => {
-      if (!isLocallyOwned(row)) return false
+      if (
+        !isLocallyOwned(row) ||
+        paused.has(row.installationId) ||
+        pausedConversations.has(row.envelope.binding?.conversationKey ?? "")
+      )
+        return false
       // A parked row is due on its own clock. It can never strand: whichever
       // host reaches it next re-enters the handler, which replays its completed
       // steps and asks the same question again.
@@ -257,41 +370,59 @@ export async function claimBotDelivery(
   limits: ClaimBotDeliveryLimits = {}
 ): Promise<BotEventDeliveryRow | undefined> {
   const db = getDb()
-  return db.transaction("rw", db.botEventDeliveries, async () => {
-    const row = await db.botEventDeliveries.get(id)
-    if (!row) return undefined
-    if (!isLocallyOwned(row)) return undefined
-    if (isTerminalBotDelivery(row.status)) return undefined
-    // `running` counts here too. A live lease is a live lease whichever half of
-    // the attempt its holder had reached, and letting a second runner take a
-    // row somebody is executing is the same double-run the lease exists to stop.
-    const heldByOther =
-      (row.status === "leased" || row.status === "running") && (row.leaseExpiresAt ?? 0) > now
-    if (heldByOther) return undefined
-    if (
-      row.concurrencyKey &&
-      (await countActiveBotDeliveriesForKey(row.concurrencyKey, now, row.id)) > 0
-    ) {
-      return undefined
-    }
-    if (
-      limits.maxConcurrentRuns !== undefined &&
-      (await countRunningBotDeliveriesForInstallation(row.installationId, now, row.id)) >=
-        limits.maxConcurrentRuns
-    ) {
-      return undefined
-    }
+  return db.transaction(
+    "rw",
+    db.botEventDeliveries,
+    db.botInstallations,
+    db.conversationOverrides,
+    async () => {
+      const row = await db.botEventDeliveries.get(id)
+      if (!row || (await db.botInstallations.get(row.installationId))?.paused) return undefined
+      const conversation = row.envelope.binding?.conversationKey
+        ? await db.conversationOverrides
+            .where("conversationKey")
+            .equals(row.envelope.binding.conversationKey)
+            .first()
+        : undefined
+      if (
+        conversation?.automationPaused ||
+        (conversation?.automationCancelledBefore !== undefined &&
+          (row.envelope.receivedAt ?? row.receivedAt) <= conversation.automationCancelledBefore)
+      )
+        return undefined
+      if (!isLocallyOwned(row)) return undefined
+      if (isTerminalBotDelivery(row.status)) return undefined
+      // `running` counts here too. A live lease is a live lease whichever half of
+      // the attempt its holder had reached, and letting a second runner take a
+      // row somebody is executing is the same double-run the lease exists to stop.
+      const heldByOther =
+        (row.status === "leased" || row.status === "running") && (row.leaseExpiresAt ?? 0) > now
+      if (heldByOther) return undefined
+      if (
+        row.concurrencyKey &&
+        (await countActiveBotDeliveriesForKey(row.concurrencyKey, now, row.id)) > 0
+      ) {
+        return undefined
+      }
+      if (
+        limits.maxConcurrentRuns !== undefined &&
+        (await countRunningBotDeliveriesForInstallation(row.installationId, now, row.id)) >=
+          limits.maxConcurrentRuns
+      ) {
+        return undefined
+      }
 
-    const claimed: BotEventDeliveryRow = {
-      ...row,
-      status: "leased",
-      leaseOwner: owner,
-      leaseExpiresAt: now + BOT_DELIVERY_LEASE_MS,
-      updatedAt: now,
+      const claimed: BotEventDeliveryRow = {
+        ...row,
+        status: "leased",
+        leaseOwner: owner,
+        leaseExpiresAt: now + BOT_DELIVERY_LEASE_MS,
+        updatedAt: now,
+      }
+      await db.botEventDeliveries.put(claimed)
+      return claimed
     }
-    await db.botEventDeliveries.put(claimed)
-    return claimed
-  })
+  )
 }
 
 /** Extend a live lease. Returns false when the lease is no longer this owner's. */
@@ -317,27 +448,78 @@ export async function renewBotDeliveryLease(
 export async function markBotDeliveryRunning(
   id: string,
   runId: string,
-  now = Date.now()
-): Promise<void> {
+  now = Date.now(),
+  owner?: string
+): Promise<boolean> {
   const db = getDb()
-  const row = await db.botEventDeliveries.get(id)
-  if (!row) return
-  await db.botEventDeliveries.put({ ...row, status: "running", runId, updatedAt: now })
+  return db.transaction(
+    "rw",
+    db.botEventDeliveries,
+    db.botInstallations,
+    db.conversationOverrides,
+    async () => {
+      const row = await db.botEventDeliveries.get(id)
+      if (
+        !row ||
+        isTerminalBotDelivery(row.status) ||
+        (owner !== undefined && row.leaseOwner !== owner)
+      )
+        return false
+      const conversation = row.envelope.binding?.conversationKey
+        ? await db.conversationOverrides
+            .where("conversationKey")
+            .equals(row.envelope.binding.conversationKey)
+            .first()
+        : undefined
+      if (
+        (await db.botInstallations.get(row.installationId))?.paused ||
+        conversation?.automationPaused
+      ) {
+        const pending = {
+          ...row,
+          status: row.waitingFor || row.runId ? ("parked" as const) : ("pending" as const),
+          updatedAt: now,
+        }
+        delete pending.leaseOwner
+        delete pending.leaseExpiresAt
+        await db.botEventDeliveries.put(pending)
+        return false
+      }
+      if (
+        conversation?.automationCancelledBefore !== undefined &&
+        (row.envelope.receivedAt ?? row.receivedAt) <= conversation.automationCancelledBefore
+      )
+        return false
+      await db.botEventDeliveries.put({ ...row, status: "running", runId, updatedAt: now })
+      return true
+    }
+  )
 }
 
-export async function completeBotDelivery(id: string, now = Date.now()): Promise<void> {
+export async function completeBotDelivery(
+  id: string,
+  now = Date.now(),
+  owner?: string
+): Promise<void> {
   const db = getDb()
-  const row = await db.botEventDeliveries.get(id)
-  if (!row) return
-  const settled: BotEventDeliveryRow = {
-    ...row,
-    status: "succeeded",
-    updatedAt: now,
-    settledAt: now,
-  }
-  delete settled.leaseOwner
-  delete settled.leaseExpiresAt
-  await db.botEventDeliveries.put(settled)
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.get(id)
+    if (
+      !row ||
+      isTerminalBotDelivery(row.status) ||
+      (owner !== undefined && row.leaseOwner !== owner)
+    )
+      return
+    const settled: BotEventDeliveryRow = {
+      ...row,
+      status: "succeeded",
+      updatedAt: now,
+      settledAt: now,
+    }
+    delete settled.leaseOwner
+    delete settled.leaseExpiresAt
+    await db.botEventDeliveries.put(settled)
+  })
 }
 
 /**
@@ -351,33 +533,41 @@ export async function failBotDelivery(
   id: string,
   error: unknown,
   now = Date.now(),
-  random?: () => number
+  random?: () => number,
+  owner?: string
 ): Promise<BotEventDeliveryRow | undefined> {
   const db = getDb()
-  const row = await db.botEventDeliveries.get(id)
-  if (!row) return undefined
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.get(id)
+    if (
+      !row ||
+      isTerminalBotDelivery(row.status) ||
+      (owner !== undefined && row.leaseOwner !== owner)
+    )
+      return undefined
 
-  const decision = decideNextAttempt({
-    attempts: row.attempts,
-    error,
-    nowMs: now,
-    random,
-    ...(row.retry ? { policy: row.retry } : {}),
+    const decision = decideNextAttempt({
+      attempts: row.attempts,
+      error,
+      nowMs: now,
+      random,
+      ...(row.retry ? { policy: row.retry } : {}),
+    })
+    const deadlettered = decision.status === "deadlettered"
+    const next: BotEventDeliveryRow = {
+      ...row,
+      status: deadlettered ? "deadletter" : "pending",
+      attempts: decision.attempts,
+      nextAttemptAt: decision.nextAttemptAt,
+      lastError: decision.lastError,
+      updatedAt: now,
+      ...(deadlettered ? { settledAt: now } : {}),
+    }
+    delete next.leaseOwner
+    delete next.leaseExpiresAt
+    await db.botEventDeliveries.put(next)
+    return next
   })
-  const deadlettered = decision.status === "deadlettered"
-  const next: BotEventDeliveryRow = {
-    ...row,
-    status: deadlettered ? "deadletter" : "pending",
-    attempts: decision.attempts,
-    nextAttemptAt: decision.nextAttemptAt,
-    lastError: decision.lastError,
-    updatedAt: now,
-    ...(deadlettered ? { settledAt: now } : {}),
-  }
-  delete next.leaseOwner
-  delete next.leaseExpiresAt
-  await db.botEventDeliveries.put(next)
-  return next
 }
 
 /**
@@ -391,33 +581,47 @@ export async function parkBotDelivery(
   id: string,
   resumeAt: number,
   waitingFor?: string,
-  now = Date.now()
+  now = Date.now(),
+  owner?: string
 ): Promise<void> {
   const db = getDb()
-  const row = await db.botEventDeliveries.get(id)
-  if (!row) return
-  const next: BotEventDeliveryRow = {
-    ...row,
-    status: "parked",
-    nextAttemptAt: resumeAt,
-    updatedAt: now,
-    ...(waitingFor ? { waitingFor } : {}),
-  }
-  delete next.leaseOwner
-  delete next.leaseExpiresAt
-  await db.botEventDeliveries.put(next)
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.get(id)
+    if (
+      !row ||
+      isTerminalBotDelivery(row.status) ||
+      (owner !== undefined && row.leaseOwner !== owner)
+    )
+      return
+    const next: BotEventDeliveryRow = {
+      ...row,
+      status: "parked",
+      nextAttemptAt: resumeAt,
+      updatedAt: now,
+      ...(waitingFor ? { waitingFor } : {}),
+    }
+    delete next.leaseOwner
+    delete next.leaseExpiresAt
+    await db.botEventDeliveries.put(next)
+  })
 }
 
 /** A run parked on this correlation key, if one is already waiting for it. */
 export async function findParkedBotDeliveryWaitingFor(
   installationId: string,
-  waitingFor: string
+  waitingFor: string,
+  incoming?: BotEventEnvelopeV1
 ): Promise<BotEventDeliveryRow | undefined> {
   const rows = await getDb()
     .botEventDeliveries.where("installationId")
     .equals(installationId)
     .toArray()
-  return rows.find((row) => row.status === "parked" && row.waitingFor === waitingFor)
+  return rows.find(
+    (row) =>
+      row.status === "parked" &&
+      row.waitingFor === waitingFor &&
+      (!incoming || correlatedBotEvents(row.envelope, incoming))
+  )
 }
 
 /**
@@ -429,21 +633,29 @@ export async function findParkedBotDeliveryWaitingFor(
 export async function dismissBotDelivery(
   id: string,
   reason: string,
-  now = Date.now()
+  now = Date.now(),
+  owner?: string
 ): Promise<void> {
   const db = getDb()
-  const row = await db.botEventDeliveries.get(id)
-  if (!row) return
-  const next: BotEventDeliveryRow = {
-    ...row,
-    status: "dismissed",
-    lastError: reason,
-    updatedAt: now,
-    settledAt: now,
-  }
-  delete next.leaseOwner
-  delete next.leaseExpiresAt
-  await db.botEventDeliveries.put(next)
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.get(id)
+    if (
+      !row ||
+      isTerminalBotDelivery(row.status) ||
+      (owner !== undefined && row.leaseOwner !== owner)
+    )
+      return
+    const next: BotEventDeliveryRow = {
+      ...row,
+      status: "dismissed",
+      lastError: reason,
+      updatedAt: now,
+      settledAt: now,
+    }
+    delete next.leaseOwner
+    delete next.leaseExpiresAt
+    await db.botEventDeliveries.put(next)
+  })
 }
 
 /** Put a dead letter back in the queue for one more attempt. */
@@ -452,21 +664,23 @@ export async function replayBotDelivery(
   now = Date.now()
 ): Promise<BotEventDeliveryRow | undefined> {
   const db = getDb()
-  const row = await db.botEventDeliveries.get(id)
-  if (!row) return undefined
-  const next: BotEventDeliveryRow = {
-    ...row,
-    status: "pending",
-    attempts: 0,
-    nextAttemptAt: now,
-    updatedAt: now,
-  }
-  delete next.settledAt
-  delete next.leaseOwner
-  delete next.leaseExpiresAt
-  delete next.lastError
-  await db.botEventDeliveries.put(next)
-  return next
+  return db.transaction("rw", db.botEventDeliveries, async () => {
+    const row = await db.botEventDeliveries.get(id)
+    if (!row || row.status !== "deadletter" || !isLocallyOwned(row)) return undefined
+    const next: BotEventDeliveryRow = {
+      ...row,
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: now,
+      updatedAt: now,
+    }
+    delete next.settledAt
+    delete next.leaseOwner
+    delete next.leaseExpiresAt
+    delete next.lastError
+    await db.botEventDeliveries.put(next)
+    return next
+  })
 }
 
 /** What became of a delivery whose attempt was abandoned. */
@@ -594,10 +808,33 @@ export async function listBotDeliveries(query: {
 }
 
 /** Deliveries waiting on a correlation key, for a run parked in `waitForEvent`. */
+export function correlatedBotEvents(
+  origin: BotEventEnvelopeV1,
+  reply: BotEventEnvelopeV1
+): boolean {
+  if (origin.installationId !== reply.installationId || origin.eventId === reply.eventId)
+    return false
+  if (origin.source !== reply.source) return true
+  return (
+    origin.binding?.integrationAccountId === reply.binding?.integrationAccountId &&
+    origin.binding?.adapterId === reply.binding?.adapterId &&
+    origin.binding?.conversationKey === reply.binding?.conversationKey
+  )
+}
+
 export async function findBotDeliveryByCorrelation(
-  correlation: string
+  correlation: string,
+  origin?: BotEventEnvelopeV1,
+  triggerId?: string
 ): Promise<BotEventDeliveryRow | undefined> {
-  return getDb().botEventDeliveries.where("correlation").equals(correlation).first()
+  const rows = await getDb().botEventDeliveries.where("correlation").equals(correlation).toArray()
+  return rows.find(
+    (row) =>
+      !row.syncedFromHost &&
+      row.cancelledAt === undefined &&
+      (!origin || correlatedBotEvents(origin, row.envelope)) &&
+      (!triggerId || row.triggerId === triggerId)
+  )
 }
 
 /**
@@ -615,8 +852,21 @@ export async function pruneSettledBotDeliveries(now = Date.now()): Promise<numbe
   const cutoff = now - BOT_DELIVERY_RETENTION_MS
   const rows = await db.botEventDeliveries.toArray()
 
+  const paused = new Set(
+    (await db.botInstallations.toArray()).filter((row) => row.paused).map((row) => row.id)
+  )
+  const pausedConversations = new Set(
+    (await db.conversationOverrides.toArray())
+      .filter((row) => row.automationPaused)
+      .map((row) => row.conversationKey)
+  )
   const expired = rows.filter(
-    (row) => isLocallyOwned(row) && !isTerminalBotDelivery(row.status) && row.receivedAt <= cutoff
+    (row) =>
+      isLocallyOwned(row) &&
+      !isTerminalBotDelivery(row.status) &&
+      Math.max(row.receivedAt, row.retentionExtendedAt ?? 0) <= cutoff &&
+      !paused.has(row.installationId) &&
+      !pausedConversations.has(row.envelope.binding?.conversationKey ?? "")
   )
   for (const row of expired) {
     await dismissBotDelivery(row.id, "unsettled past the retention window", now)

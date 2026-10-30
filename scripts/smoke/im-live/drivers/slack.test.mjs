@@ -311,3 +311,157 @@ test("cleanup reports a message it may not delete rather than failing the run", 
     }
   )
 })
+
+for (const method of ["conversations.history", "conversations.replies"]) {
+  test(`${method} accepts absent, null and empty terminal cursors`, async () => {
+    for (const cursor of [undefined, null, ""]) {
+      await withFakePlatform(
+        routes({
+          [`POST /${method}`]: () => ({
+            json: {
+              ok: true,
+              messages: [targetMessage("1700000005.000500", MARKER)],
+              response_metadata: { next_cursor: cursor },
+            },
+          }),
+        }),
+        async ({ baseUrl, callsTo }) => {
+          const driver = driverFor(baseUrl)
+          const lease = await driver.prepare()
+          if (method.endsWith("replies")) lease.sentMessageIds.push("1700000001.000100")
+          assert.equal((await driver.pollTargetMessages(lease)).length, 1)
+          assert.equal(callsTo(`POST /${method}`).length, 1)
+        }
+      )
+    }
+  })
+  for (const cursor of [false, 0]) {
+    test(`${method} rejects malformed falsy cursor ${cursor} without consuming replies`, async () => {
+      await withFakePlatform(
+        routes({
+          [`POST /${method}`]: () => ({
+            json: {
+              ok: true,
+              messages: [targetMessage("1700000005.000500", MARKER)],
+              response_metadata: { next_cursor: cursor },
+            },
+          }),
+        }),
+        async ({ baseUrl }) => {
+          const driver = driverFor(baseUrl)
+          const lease = await driver.prepare()
+          if (method.endsWith("replies")) lease.sentMessageIds.push("1700000001.000100")
+          await assert.rejects(driver.pollTargetMessages(lease), /pagination/i)
+          assert.equal(lease.seen.size, 0)
+        }
+      )
+    })
+  }
+
+  test(`${method} follows cursors and deduplicates replies from every page`, async () => {
+    await withFakePlatform(
+      routes({
+        [`POST /${method}`]: ({ body }) => ({
+          json: body.cursor
+            ? { ok: true, messages: [targetMessage("1700000005.000500", MARKER)] }
+            : {
+                ok: true,
+                messages: [targetMessage("1700000005.000500", MARKER)],
+                has_more: true,
+                response_metadata: { next_cursor: "next" },
+              },
+        }),
+      }),
+      async ({ baseUrl, callsTo }) => {
+        const driver = driverFor(baseUrl)
+        const lease = await driver.prepare()
+        if (method.endsWith("replies")) lease.sentMessageIds.push("1700000001.000100")
+        assert.equal((await driver.pollTargetMessages(lease)).length, 1)
+        const pages = callsTo(`POST /${method}`)
+        assert.equal(pages.length, 2)
+        assert.equal(pages[1].body.cursor, "next")
+        assert.equal(pages[1].body.channel, CHANNEL)
+        assert.deepEqual(await driver.pollTargetMessages(lease), [])
+      }
+    )
+  })
+
+  for (const cursor of [undefined, "repeat"]) {
+    test(`${method} rejects ${cursor ? "repeated" : "missing"} continuation instead of partial success`, async () => {
+      await withFakePlatform(
+        routes({
+          [`POST /${method}`]: () => ({
+            json: {
+              ok: true,
+              messages: [targetMessage("1700000005.000500", MARKER)],
+              has_more: true,
+              response_metadata: { next_cursor: cursor },
+            },
+          }),
+        }),
+        async ({ baseUrl }) => {
+          const driver = driverFor(baseUrl)
+          const lease = await driver.prepare()
+          if (method.endsWith("replies")) lease.sentMessageIds.push("1700000001.000100")
+          await assert.rejects(driver.pollTargetMessages(lease), /pagination/i)
+          assert.equal(lease.seen.size, 0)
+        }
+      )
+    })
+  }
+
+  test(`${method} retries a failed later page without losing already fetched replies`, async () => {
+    let fail = true
+    await withFakePlatform(
+      routes({
+        [`POST /${method}`]: ({ body }) => ({
+          json: body.cursor
+            ? fail
+              ? { ok: false, error: "missing_scope" }
+              : { ok: true, messages: [targetMessage("1700000006.000600", "second")] }
+            : {
+                ok: true,
+                messages: [targetMessage("1700000005.000500", "first")],
+                has_more: true,
+                response_metadata: { next_cursor: "next" },
+              },
+        }),
+      }),
+      async ({ baseUrl }) => {
+        const driver = driverFor(baseUrl)
+        const lease = await driver.prepare()
+        if (method.endsWith("replies")) lease.sentMessageIds.push("1700000001.000100")
+        await assert.rejects(driver.pollTargetMessages(lease), /missing_scope/)
+        assert.equal(lease.seen.size, 0)
+        fail = false
+        assert.deepEqual(
+          (await driver.pollTargetMessages(lease)).map((message) => message.text),
+          ["first", "second"]
+        )
+      }
+    )
+  })
+}
+
+test("a thread disappearing on a later page is not swallowed as an empty thread", async () => {
+  await withFakePlatform(
+    routes({
+      "POST /conversations.replies": ({ body }) => ({
+        json: body.cursor
+          ? { ok: false, error: "thread_not_found" }
+          : {
+              ok: true,
+              messages: [targetMessage("1700000005.000500", MARKER)],
+              response_metadata: { next_cursor: "next" },
+            },
+      }),
+    }),
+    async ({ baseUrl }) => {
+      const driver = driverFor(baseUrl)
+      const lease = await driver.prepare()
+      lease.sentMessageIds.push("1700000001.000100")
+      await assert.rejects(driver.pollTargetMessages(lease), /thread_not_found/)
+      assert.equal(lease.seen.size, 0)
+    }
+  )
+})

@@ -3,6 +3,7 @@ import {
   canEnqueueBotWrite,
   canWriteBotLifecycle,
   resolveBotLifecycleWriteAvailability,
+  resolveBotAutomationAvailability,
   resolveBotWriteAvailability,
   resolveBotWriteRoute,
   __setBotWriteRouteDepsForTests,
@@ -192,4 +193,31 @@ it("permits lifecycle writes when the paired host advertises the new operation",
   })
   expect(resolveBotWriteRoute(BOT_WRITE_COMMANDS.mutateInstallation)).toBe("remote")
   expect(canWriteBotLifecycle()).toBe(true)
+})
+
+it("requires explicit automation support from companion hosts", () => {
+  const host = {
+    compatible: true,
+    operations: ["bot_installation_mutate"],
+    grants: ["workspace.write"],
+  }
+  setup({
+    getRuntimeSnapshot: (() => ({
+      target: { kind: "companion" },
+      host,
+      connectionState: "online",
+      vaultState: "unlocked",
+    })) as never,
+  })
+  expect(resolveBotLifecycleWriteAvailability().state).toBe("available")
+  expect(resolveBotAutomationAvailability().state).toBe("unsupported")
+  setup({
+    getRuntimeSnapshot: (() => ({
+      target: { kind: "companion" },
+      host: { ...host, botAutomation: true },
+      connectionState: "online",
+      vaultState: "unlocked",
+    })) as never,
+  })
+  expect(resolveBotAutomationAvailability().state).toBe("available")
 })

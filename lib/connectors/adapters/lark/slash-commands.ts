@@ -40,6 +40,7 @@ const ICONS: Record<ControlCommandName, string> = {
   new: "add-chat-ai_outlined",
   switch: "ai-trans-switch_outlined",
   resume: "waiting_outlined",
+  automation: "ai-style_outlined",
   mode: "ai-style_outlined",
   model: "ai-agent_outlined",
   reasoning: "ai-deepthink_outlined",

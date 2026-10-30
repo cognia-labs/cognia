@@ -15,6 +15,11 @@ jest.mock("./trigger-bridge", () => ({
   dispatchTrigger: (...args: unknown[]) => mockDispatchTrigger(...args),
 }))
 
+const mockBotCompletion = jest.fn().mockResolvedValue({ enqueued: [], rejected: [] })
+jest.mock("@/lib/bot/sources/workflow-completed", () => ({
+  dispatchWorkflowCompletedToBots: (...args: unknown[]) => mockBotCompletion(...args),
+}))
+
 function manualTrigger(): TriggerEvent {
   return {
     workflowId: "wf_a",
@@ -34,6 +39,7 @@ function chainedTrigger(chainDepth: number): TriggerEvent {
 }
 
 beforeEach(() => {
+  mockBotCompletion.mockClear()
   mockFindMatching.mockReset().mockReturnValue([])
   mockDispatchTrigger.mockReset().mockResolvedValue(undefined)
 })
@@ -64,6 +70,42 @@ describe("emitWorkflowCompletedFanout", () => {
     output: { summary: "done" },
     trigger: manualTrigger(),
   }
+
+  it("preserves Bot lineage through an ordinary workflow completion chain", async () => {
+    const botProvenance = {
+      selfProduced: true,
+      depth: 2,
+      producedByInstallationId: "boti",
+      producedByRunId: "brun",
+    }
+    mockFindMatching.mockReturnValue([{ workflowId: "wf_b", nodeId: "start", params: {} }])
+    await emitWorkflowCompletedFanout({
+      ...base,
+      botProvenance,
+      securityContext: {
+        sourceTriggerKind: "trigger.manual",
+        piiEgressRequired: true,
+        permissionCeiling: { permissionMode: "plan" },
+        botProvenance,
+      },
+    })
+    const chained = mockDispatchTrigger.mock.calls[0][0] as TriggerEvent
+    expect(chained.payload).toMatchObject({
+      botProvenance,
+      securityContext: { permissionCeiling: { permissionMode: "plan" } },
+    })
+    mockFindMatching.mockReturnValue([])
+    await emitWorkflowCompletedFanout({
+      ...base,
+      workflow: { id: "wf_b", name: "B" },
+      runId: "r2",
+      trigger: chained,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(mockBotCompletion).toHaveBeenLastCalledWith(
+      expect.objectContaining({ workflowId: "wf_b", provenance: botProvenance })
+    )
+  })
 
   it("dispatches each matching workflow with the typed payload at depth 1", async () => {
     mockFindMatching.mockReturnValue([

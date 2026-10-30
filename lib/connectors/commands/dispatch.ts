@@ -89,6 +89,9 @@ const LEGACY_MODE_ALIASES: Readonly<Record<ConnectorMode, ImModePresetId>> = {
 const REASONING_LEVELS: ReadonlySet<string> = new Set(["low", "medium", "high", "xhigh", "max"])
 
 export interface ControlCommandDeps {
+  cancelAutomations?: (adapterId: string, conversationKey: string, cutoff: number) => Promise<void>
+  retainAutomations?: (conversationKey: string) => Promise<void>
+  resumeAutomations?: () => Promise<void>
   enqueue?: typeof enqueueOutbound
   audit?: typeof appendAudit
   now?: () => number
@@ -322,6 +325,48 @@ export async function maybeHandleControlCommand(
   }
 
   switch (name) {
+    case "automation": {
+      if (!["pause", "resume", "cancel", "status"].includes(arg)) {
+        await reply(R.renderUsage("automation"), "applied")
+        return true
+      }
+      if (arg === "status") {
+        await reply(R.renderAutomation("status", override?.automationPaused === true), "applied")
+        return true
+      }
+      if (arg === "cancel") {
+        const cutoff = (deps.now ?? Date.now)()
+        await persist({ automationCancelledBefore: cutoff })
+        const { cancelConversationAutomations } = await import("../automation-control")
+        await (deps.cancelAutomations ?? cancelConversationAutomations)(
+          event.adapterId,
+          event.conversationKey,
+          cutoff
+        )
+      } else {
+        if (arg === "resume") {
+          const { retainConversationAutomationsOnResume } = await import("../automation-control")
+          await (deps.retainAutomations ?? retainConversationAutomationsOnResume)(
+            event.conversationKey
+          )
+        }
+        await persist({ automationPaused: arg === "pause" })
+        if (arg === "resume") {
+          const { getBus } = await import("../bus")
+          if (deps.resumeAutomations) await deps.resumeAutomations()
+          else await getBus().resumeAutomationFanOuts()
+        }
+      }
+      await reply(
+        R.renderAutomation(
+          arg as "pause" | "resume" | "cancel",
+          arg === "pause" || (arg === "cancel" && override?.automationPaused === true)
+        ),
+        "applied"
+      )
+      return true
+    }
+
     case "help":
       // `/help` belongs to the existing rich help-card dispatcher. Return
       // false (un-handled) so the bus falls through to `maybeHandleHelpCommand`

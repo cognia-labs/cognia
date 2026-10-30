@@ -52,6 +52,107 @@ const mockGate = gateInboundEvent as jest.Mock
 const mockGetInstance = getAdapterInstance as jest.Mock
 const mockUpdateInstance = updateAdapterInstance as jest.Mock
 
+it("does not initialize crypto for a pre-aborted runtime", async () => {
+  const adapter = createMatrixAdapter({
+    id: "mx-aborted",
+    displayName: "Native",
+    homeserver: "https://matrix.example.org",
+    accessToken: async () => "token",
+    selfId: "@bot:example.org",
+    deviceId: "DEVICE",
+  })
+  const { ctx } = makeCtx()
+  const controller = new AbortController()
+  controller.abort()
+  mockE2EEInitialize.mockClear()
+  try {
+    await adapter.start({ ...ctx, signal: controller.signal })
+    expect(mockE2EEInitialize).not.toHaveBeenCalled()
+    expect(adapter.health().state).toBe("down")
+  } finally {
+    await adapter.stop()
+  }
+})
+
+it("cleans up after failed native close and can restart", async () => {
+  mockInvoke.mockImplementation(() => new Promise(() => {}))
+  const bot = createMatrixAdapter({
+    id: "mx-close-failure",
+    displayName: "Native",
+    homeserver: "https://matrix.example.org",
+    accessToken: async () => "token",
+    selfId: "@bot:example.org",
+    deviceId: "DEVICE",
+  })
+  const { ctx } = makeCtx()
+  try {
+    await bot.start(ctx)
+    mockE2EEClose.mockRejectedValueOnce(new Error("native bridge died"))
+    await expect(bot.stop()).rejects.toThrow("native bridge died")
+    expect(bot.health().state).toBe("down")
+    mockE2EEInitialize.mockClear()
+    await bot.start(ctx)
+    expect(mockE2EEInitialize).toHaveBeenCalledTimes(1)
+  } finally {
+    await bot.stop()
+  }
+})
+
+it("exposes explicit cross-signing but refuses it before start", async () => {
+  const bot = createMatrixAdapter({
+    id: "mx-cross-signing",
+    displayName: "Native",
+    homeserver: "https://matrix.example.org",
+    accessToken: async () => "token",
+    selfId: "@bot:example.org",
+    deviceId: "DEVICE",
+  })
+  await expect(bot.crossSigning!.bootstrap()).rejects.toThrow("not active")
+  await expect(bot.crossSigning!.status()).rejects.toThrow("not active")
+  await expect(
+    bot.verification!.interact({ action: "request", userId: "@peer:example.org", deviceId: "PEER" })
+  ).rejects.toThrow("not active")
+})
+
+it("fences a stopped cursor read before assigning a sync task and allows restart", async () => {
+  let release!: (value: unknown) => void
+  const held = new Promise((resolve) => {
+    release = resolve
+  })
+  mockGetInstance.mockImplementationOnce(() => held)
+  mockInvoke.mockImplementation(() => new Promise(() => {}))
+  const bot = createMatrixAdapter({
+    id: "mx-cursor-race",
+    displayName: "Native",
+    homeserver: "https://matrix.example.org",
+    accessToken: async () => "token",
+    selfId: "@bot:example.org",
+    deviceId: "DEVICE",
+  })
+  const { ctx } = makeCtx()
+  const starting = bot.start(ctx)
+  await until(() => mockGetInstance.mock.calls.length > 0)
+  await bot.stop()
+  release({ settings: { syncSinceToken: "old" } })
+  await starting
+  mockGetInstance.mockResolvedValue({ settings: { syncSinceToken: "restart" } })
+  try {
+    await bot.start(ctx)
+    await until(() =>
+      mockInvoke.mock.calls.some(
+        ([name, args]) => name === "connectors_http_request" && args.req.url.includes("/sync")
+      )
+    )
+    const request = mockInvoke.mock.calls.find(([name]) => name === "connectors_http_request")![1]
+      .req
+    expect(new URL(request.url).searchParams.get("since")).toBe("restart")
+  } finally {
+    await bot.stop()
+    mockInvoke.mockReset()
+    mockGetInstance.mockReset()
+  }
+})
+
 function httpResp(status: number, body: unknown) {
   return { status, headers: {}, body: typeof body === "string" ? body : JSON.stringify(body) }
 }

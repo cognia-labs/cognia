@@ -59,11 +59,15 @@ fn endpoint(req: &ConnectorMediaUploadRequest) -> Result<url::Url, String> {
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
-        || parts.len() != 4
-        || parts[0] != "files"
-        || parts[1].is_empty()
-        || !matches!(parts[2], "users" | "groups")
-        || parts[3] != "v2"
+        || (if options.reusable_asset {
+            url.path() != "/v2/media-images/prepare" || options.file_type != 1
+        } else {
+            parts.len() != 4
+                || parts[0] != "files"
+                || parts[1].is_empty()
+                || !matches!(parts[2], "users" | "groups")
+                || parts[3] != "v2"
+        })
     {
         return Err(validation("invalid QQ scene endpoint"));
     }
@@ -236,11 +240,14 @@ fn plan(body: &str, size: usize) -> Result<(String, Vec<Part>), String> {
 }
 
 async fn put(url: String, bytes: Bytes) -> Result<(), String> {
+    put_with_type(url, bytes, "application/octet-stream").await
+}
+async fn put_with_type(url: String, bytes: Bytes, content_type: &str) -> Result<(), String> {
     let timeout = Duration::from_secs(120);
     tokio::time::timeout(timeout, async {
         let request = reqwest::Client::new()
             .put(url)
-            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(bytes);
         let response = guarded_http::send_pinned_public_upload(
             request,
@@ -353,13 +360,105 @@ where
     serde_json::to_string(&api(req, &url, body).await?).map_err(|_| protocol())
 }
 
+async fn asset_snapshot<F, Fut>(
+    req: &ConnectorMediaUploadRequest,
+    bytes: Bytes,
+    put: F,
+) -> Result<String, String>
+where
+    F: Fn(String, Bytes, String) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    let url = endpoint(req)?;
+    let options = req.qq.as_ref().ok_or_else(protocol)?;
+    let mime = req.content_type.as_deref().unwrap_or("");
+    let ext = options
+        .file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let matched = matches!(
+        (mime, ext.as_str()),
+        ("image/png", "png")
+            | ("image/jpeg", "jpg" | "jpeg")
+            | ("image/gif", "gif")
+            | ("image/webp", "webp")
+    );
+    let valid_image = match mime {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
+        _ => false,
+    };
+    if bytes.is_empty() || bytes.len() > 10_000_000 || !matched || !valid_image {
+        return Err(validation(
+            "invalid reusable image format, filename or size",
+        ));
+    }
+    let md5 = hex::encode(Md5::digest(&bytes));
+    let sha1 = hex::encode(Sha1::digest(&bytes));
+    let prepared = api(req, &url, json!({"file_name":options.file_name,"file_size":bytes.len(),"content_type":mime,"md5":md5,"sha1":sha1})).await?;
+    if !accepted(&prepared, false) {
+        return serde_json::to_string(&prepared).map_err(|_| protocol());
+    }
+    let body: Value = serde_json::from_str(&prepared.body).map_err(|_| protocol())?;
+    let upload_id = body
+        .get("upload_id")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty() && s.len() <= 2048)
+        .ok_or_else(protocol)?;
+    let storage = body
+        .get("presigned_url")
+        .and_then(Value::as_str)
+        .ok_or_else(protocol)?;
+    let parsed = url::Url::parse(storage).map_err(|_| protocol())?;
+    if parsed.scheme() != "https"
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(protocol());
+    }
+    put(storage.to_string(), bytes, mime.to_string()).await?;
+    let mut complete = url.clone();
+    complete.set_path("/v2/media-images/complete");
+    serde_json::to_string(&api(req, &complete, json!({"upload_id":upload_id,"md5":md5})).await?)
+        .map_err(|_| protocol())
+}
+
 pub(crate) async fn upload(req: &ConnectorMediaUploadRequest) -> Result<String, String> {
     endpoint(req)?;
     tokio::time::timeout(UPLOAD_TIMEOUT, async {
-        let bytes = crate::media_upload::read_source_bytes(req, MAX_BYTES)
+        let limit = if req
+            .qq
+            .as_ref()
+            .is_some_and(|options| options.reusable_asset)
+        {
+            10_000_000
+        } else {
+            MAX_BYTES
+        };
+        let bytes = crate::media_upload::read_source_bytes(req, limit)
             .await
-            .map_err(|_| validation("source unavailable, invalid or exceeds 200000000 bytes"))?;
-        snapshot(req, bytes, put).await
+            .map_err(|_| {
+                validation(&format!(
+                    "source unavailable, invalid or exceeds {limit} bytes"
+                ))
+            })?;
+        if req
+            .qq
+            .as_ref()
+            .is_some_and(|options| options.reusable_asset)
+        {
+            asset_snapshot(req, bytes, |url, bytes, mime| async move {
+                put_with_type(url, bytes, &mime).await
+            })
+            .await
+        } else {
+            snapshot(req, bytes, put).await
+        }
     })
     .await
     .map_err(|_| "QQ upload deadline exceeded".to_string())?
@@ -368,6 +467,87 @@ pub(crate) async fn upload(req: &ConnectorMediaUploadRequest) -> Result<String, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn reusable_images_preserve_hashes_mime_bytes_and_only_return_complete_receipts() {
+        use wiremock::{
+            matchers::{body_partial_json, method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let bytes = Bytes::from_static(b"\x89PNG\r\n\x1a\nimage-bytes");
+        let md5 = hex::encode(Md5::digest(&bytes));
+        let sha1 = hex::encode(Sha1::digest(&bytes));
+        let mut req = request(&server, "users");
+        req.upload_url = format!("{}/v2/media-images/prepare", server.uri());
+        req.qq.as_mut().unwrap().reusable_asset = true;
+        req.qq.as_mut().unwrap().file_type = 1;
+        req.qq.as_mut().unwrap().file_name = "image.png".into();
+        req.content_type = Some("image/png".into());
+        Mock::given(method("POST")).and(path("/v2/media-images/prepare"))
+            .and(body_partial_json(json!({"file_name":"image.png","file_size":bytes.len(),"content_type":"image/png","md5":md5,"sha1":sha1})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"upload_id":"prepared","presigned_url":"https://storage.example.org/image?signature=SECRET"}))).expect(1).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/v2/media-images/complete"))
+            .and(body_partial_json(json!({"upload_id":"prepared","md5":md5})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"image_id":"image","url":"qqbot-media://image/v1/token","ttl":7776000}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let expected = bytes.clone();
+        let output = asset_snapshot(&req, bytes, move |url, uploaded, mime| {
+            assert_eq!(url, "https://storage.example.org/image?signature=SECRET");
+            assert_eq!(uploaded, expected);
+            assert_eq!(mime, "image/png");
+            async { Ok(()) }
+        })
+        .await
+        .unwrap();
+        assert!(output.contains("qqbot-media://image/v1/token"));
+        assert!(!output.contains("SECRET"));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|r| r.headers.get("authorization").unwrap() == "QQBot API_SECRET"));
+    }
+
+    #[tokio::test]
+    async fn reusable_images_validate_format_before_prepare_and_stop_before_complete_on_put_failure(
+    ) {
+        let server = MockServer::start().await;
+        let mut req = request(&server, "groups");
+        req.upload_url = format!("{}/v2/media-images/prepare", server.uri());
+        req.qq.as_mut().unwrap().reusable_asset = true;
+        req.qq.as_mut().unwrap().file_type = 1;
+        req.qq.as_mut().unwrap().file_name = "image.png".into();
+        req.content_type = Some("image/png".into());
+        assert!(
+            asset_snapshot(&req, Bytes::from_static(b"not png"), |_, _, _| async {
+                panic!("invalid source must not upload")
+            })
+            .await
+            .is_err()
+        );
+        assert!(server.received_requests().await.unwrap().is_empty());
+        Mock::given(method("POST"))
+            .and(path("/v2/media-images/prepare"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"upload_id":"id","presigned_url":"https://storage.example.org/image"}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(asset_snapshot(
+            &req,
+            Bytes::from_static(b"\x89PNG\r\n\x1a\ncontent"),
+            |_, _, _| async { Err("storage rejected".into()) }
+        )
+        .await
+        .is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
     #[tokio::test]
     async fn native_api_pacing_stays_below_ten_requests_per_second() {
         let limiter = tokio::sync::Mutex::new(tokio::time::Instant::now());

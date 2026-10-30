@@ -109,10 +109,9 @@ export async function larkUserRequest(
 ): Promise<unknown | null> {
   const userToken = await getUserAccessToken(adapterId).catch(() => null)
   if (!userToken) return null
-  return withUserTokenRefresh({ adapterId, ...creds }, async () => {
-    const tok = (await getUserAccessToken(adapterId)) ?? userToken
-    return rawRequest(method, urlPath, body, tok)
-  })
+  return withUserTokenRefresh({ adapterId, ...creds }, (token) =>
+    rawRequest(method, urlPath, body, token)
+  )
 }
 
 /**

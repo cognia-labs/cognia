@@ -12,6 +12,10 @@
  * execution, while a dead letter with a resumable run retains its checkpoints.
  */
 
+import {
+  useBotLifecycleActions,
+  useBotLifecycleReadiness,
+} from "@/hooks/bots/use-bot-lifecycle-actions"
 import { useTranslations } from "next-intl"
 import Link from "next/link"
 import { botEventId } from "@/lib/bot/events/envelope"
@@ -56,6 +60,8 @@ function DeliveryRow({
   onReplay,
   successor,
   previousRunId,
+  onCancel,
+  canCancel,
 }: {
   delivery: BotEventDeliveryRow
   canReplay: boolean
@@ -63,10 +69,13 @@ function DeliveryRow({
   onReplay: () => void
   successor?: BotEventDeliveryRow
   previousRunId?: string
+  onCancel: () => void
+  canCancel: boolean
 }) {
   const t = useTranslations("bots")
   const relative = useBotRelativeTime()
   const replayable =
+    delivery.cancelledAt === undefined &&
     !successor &&
     (delivery.status === "deadletter" ||
       ((delivery.status === "dismissed" || delivery.status === "failed") &&
@@ -132,6 +141,11 @@ function DeliveryRow({
           ) : null}
         </div>
       </div>
+      {!["succeeded", "dismissed"].includes(delivery.status) ? (
+        <Button size="sm" variant="ghost" disabled={!canCancel} onClick={onCancel}>
+          {t("automation.cancelDelivery")}
+        </Button>
+      ) : null}
       {replayable ? (
         <Button
           size="sm"
@@ -154,6 +168,8 @@ export function BotDeliveriesSection({ row }: { row: BotConsoleRow }) {
   const { rows, loading } = useBotDeliveries(row.id)
   const readiness = useBotWriteReadiness(BOT_WRITE_COMMANDS.replayDelivery)
   const actions = useBotControlActions()
+  const lifecycle = useBotLifecycleActions()
+  const automation = useBotLifecycleReadiness()
 
   if (loading) {
     return (
@@ -195,6 +211,11 @@ export function BotDeliveriesSection({ row }: { row: BotConsoleRow }) {
             key={delivery.id}
             delivery={delivery}
             canReplay={readiness.can}
+            canCancel={
+              Boolean(automation.canAutomation) &&
+              !lifecycle.pending.has(`automation:${delivery.id}`)
+            }
+            onCancel={() => void lifecycle.controlAutomation(row.id, "cancel", delivery.id)}
             busy={actions.pending.has(`delivery:${delivery.id}`)}
             onReplay={() => void actions.replayDelivery(delivery.id)}
             successor={successorFor(delivery)}

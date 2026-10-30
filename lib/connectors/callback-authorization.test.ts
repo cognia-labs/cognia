@@ -305,6 +305,18 @@ describe("authorizeConnectorCallback", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1)
   })
 
+  it("persists a recoverable workflow dispatch in the same transaction as approval consumption", async () => {
+    const row = binding({ kind: "wf_approve" })
+    await getDb().connectorCallbackBindings.put(row)
+    const decision = await authorize({ binding: row })
+    if (!decision.allowed || !decision.consume) throw new Error("expected authorized approval")
+    await decision.consume()
+    expect(await getDb().connectorCallbackBindings.get(row.id)).toMatchObject({
+      consumedAt: T0 + 1,
+      workflowDispatch: { status: "pending", decision: "approve", acceptedAt: T0 + 1 },
+    })
+  })
+
   it("audit-mode allow never consumes (shadow mode must not change behavior)", async () => {
     const decision = await authorize({
       adapterRow: adapterRow({ larkStrictCallbackAuthorization: "audit" }),
@@ -398,8 +410,8 @@ describe("high-privilege binding writers", () => {
   const CONSUME_ONCE_SOURCES: Array<{ kind: string; file: string }> = [
     { kind: "tool_approve", file: "lib/connectors/hitl/tool-approval.ts" },
     { kind: "skill_invoke", file: "lib/skills/built-in/dispatcher.ts" },
-    { kind: "wf_approve", file: "plugins/workflow-ai/src/tools/run-by-name-tools.ts" },
-    { kind: "wf_cancel", file: "plugins/workflow-ai/src/tools/run-by-name-tools.ts" },
+    { kind: "wf_approve", file: "lib/connectors/hitl/workflow-run-approval.ts" },
+    { kind: "wf_cancel", file: "lib/connectors/hitl/workflow-run-approval.ts" },
     { kind: "wf_fanout_approve", file: "plugins/workflow-ai/src/tools/run-by-name-tools.ts" },
     { kind: "wf_fanout_cancel", file: "plugins/workflow-ai/src/tools/run-by-name-tools.ts" },
   ]
@@ -414,6 +426,15 @@ describe("high-privilege binding writers", () => {
       // The `kind: "…"` literal and an `actorScope` must both appear in the
       // same binding-record argument object. Call sites spell the function
       // either directly or through an injected `recordBinding` dep.
+      if (file.endsWith("workflow-run-approval.ts")) {
+        expect(source).toContain(`"${kind}"`)
+        const start = source.indexOf("recordBinding({")
+        expect(start).toBeGreaterThan(-1)
+        const object = source.slice(start, source.indexOf("})", start))
+        expect(object).toContain("kind,")
+        expect(object).toContain("actorScope")
+        return
+      }
       const kindIndex = source.indexOf(`kind: "${kind}"`)
       expect(kindIndex).toBeGreaterThan(-1)
       const objectEnd = source.indexOf("})", kindIndex)

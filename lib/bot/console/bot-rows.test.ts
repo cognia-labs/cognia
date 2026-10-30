@@ -447,3 +447,18 @@ describe("buildBotStats", () => {
     expect(buildBotStats({ ...base, orphaned: true, triggers: [], requiredSlots: [] })).toEqual([])
   })
 })
+
+it("shows the selected input slot while paused rows do not count as armed", () => {
+  const inst = installation({ paused: true, triggerInputSlots: { in: "second" } })
+  const row = buildBotRow({
+    installation: inst,
+    resolved: resolved(inst, {
+      triggers: [{ id: "in", kind: "interaction", inputCredentialSlot: "first" }],
+    }),
+  })
+  expect(row).toMatchObject({
+    paused: true,
+    triggers: [{ inputCredentialSlot: "second", acceptsAccount: true }],
+  })
+  expect(summarizeBotRows([row]).armed).toBe(0)
+})

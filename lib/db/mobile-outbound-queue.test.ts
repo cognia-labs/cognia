@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import { forgetRemoteApprovalContext, rememberRemoteApprovalContext } from "@/lib/claude/ipc"
 
 import { AccountContentCipher, activateAccountContentCipher } from "@/lib/accounts/content-cipher"
 import { LEGACY_MIXED_TARGET_ID } from "@/lib/runtime/target-registry"
@@ -72,6 +73,64 @@ describe("mobile outbound queue target isolation", () => {
     __resetDbForTesting()
     __resetRuntimeSnapshotForTesting()
   })
+
+  it.each([
+    { bound: "matching", offered: true, direct: true },
+    { bound: "matching", offered: false, direct: true },
+    { bound: "other-session", offered: true, direct: false },
+    { bound: "other-request", offered: true, direct: false },
+    { bound: "none", offered: true, direct: false },
+  ])(
+    "keeps device-bound approvals on their original RPC ($bound, offered=$offered)",
+    async ({ bound, offered, direct }) => {
+      await getDb().hostStateChannels.put({
+        channel: sessionStateChannel(scope.targetId, "s1"),
+        hostId: "host-authority",
+        hostGeneration: 7,
+        hostSeq: 11,
+        revision: 3,
+        digest: "digest",
+        state: createEmptyHostStateSession(scope.targetId, "s1"),
+        updatedAt: 100,
+      })
+      setRuntimeSnapshot({
+        target: { id: scope.targetId, kind: "companion", platform: "web", hostKind: "desktop" },
+        vaultState: "unlocked",
+        connectionState: "online",
+        host: { compatible: true, operations: ["host_state_submit"], grants: [] },
+      })
+      publishOfferedHostStateActions(scope.targetId, offered ? ["approval.respond"] : [])
+      const sessionId = bound === "other-session" ? "s2" : "s1"
+      const requestId = bound === "other-request" ? "other-approval" : "approval-a"
+      if (bound !== "none") {
+        rememberRemoteApprovalContext(sessionId, requestId, {
+          hostId: "host-authority",
+          originDeviceId: "device-owner",
+          sessionId,
+          generation: 7,
+          requestId: "turn-1",
+          issuedAt: 100,
+          expiresAt: 100000,
+        })
+      }
+      try {
+        const row = await enqueueHostStateIntentIfAvailable({
+          sessionId: "s1",
+          action: { kind: "approval.respond", requestId: "approval-a", decision: "allow" },
+        })
+        if (direct) {
+          expect(row).toBeNull()
+          expect(await getDb().mobileOutboundQueue.count()).toBe(0)
+        } else {
+          expect(row).toMatchObject({ protocol: "host-state", status: "pending" })
+          expect(await getDb().mobileOutboundQueue.count()).toBe(1)
+        }
+      } finally {
+        forgetRemoteApprovalContext(sessionId, requestId)
+        retractOfferedHostStateActions(scope.targetId)
+      }
+    }
+  )
 
   it("rejects an eligibility check overtaken by a routing generation instead of falling back", async () => {
     const pending = enqueueHostStateIntentIfAvailable({

@@ -17,6 +17,7 @@
 
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
+import type { WorkflowDependencyBinding } from "@/types/workflow/deployment"
 import Dexie from "dexie"
 import { executeDeployedWorkflow, WorkflowAdmissionError } from "./execution-authority"
 
@@ -30,6 +31,8 @@ export interface StartWorkflowFromIMInput {
   signal?: AbortSignal
   /** Parent IM ceiling inherited by dynamic agent nodes and nested runs. */
   permissionCeiling?: AgentPermissionCeiling
+  lockedDependency?: WorkflowDependencyBinding
+  idempotencyKey?: string
 }
 
 export type StartWorkflowFromIMResult =
@@ -55,6 +58,8 @@ export async function startWorkflowFromIM(
       workflowId: input.workflowId,
       entrypoint: "skill",
       caller: input.triggeredFrom.initiator?.principalId ?? "im",
+      ...(input.lockedDependency ? { lockedDependency: input.lockedDependency } : {}),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
       triggerKind: "trigger.manual",
       payload: input.runParams ?? {},
       triggerBinding: {
@@ -78,6 +83,7 @@ export async function startWorkflowFromIM(
       triggeredBy: input.triggeredFrom,
       onAdmitted: (runId) => {
         admittedRunId = runId
+        markPersisted()
       },
       onPersisted: markPersisted,
     })

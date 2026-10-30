@@ -229,6 +229,11 @@ export function pendingApprovalCount(): number {
   return pending.size
 }
 
+/** Test or route a single response against its exact owning session. */
+export function hasPendingApproval(sessionId: string, requestId: string): boolean {
+  return pending.has(key(sessionId, requestId))
+}
+
 /**
  * Number of approvals awaiting a decision for one session. Drives the
  * per-conversation "N pending approvals" chip in the Inbox header.

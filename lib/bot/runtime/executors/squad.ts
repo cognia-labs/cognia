@@ -13,6 +13,8 @@
 
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
 import type { BotStepApiV1 } from "@/types/bot/run"
+import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
+import { botPermissionCeiling } from "@/lib/bot/policy/ceilings"
 
 import { BotRunParkedError, BOT_PARK_INTERVAL_MS } from "../step"
 import { botTriggeredFrom } from "./workflow"
@@ -38,6 +40,8 @@ export interface SquadStartInput {
    */
   runId?: string
   characterId?: string
+  permissionCeiling?: AgentPermissionCeiling
+  requirePlanApprovalFloor?: boolean
   planApprovalDelegate?: (request: {
     planText: string
     revision: number
@@ -158,6 +162,10 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
         // previous attempt started instead of forking a second one.
         runId: ctx.runId,
         triggeredFrom: botTriggeredFrom(ctx),
+        permissionCeiling: botPermissionCeiling(ctx.composition.selection, ctx.policy),
+        ...(ctx.composition.selection.autonomy === "suggest" || ctx.policy.requireApprovalForWrites
+          ? { requirePlanApprovalFloor: true }
+          : {}),
         ...(ctx.definition.character ? { characterId: ctx.definition.character } : {}),
         planApprovalDelegate: async (request) => {
           const decision = await blockingStep(ctx).waitForApproval("squad-plan", {
@@ -173,6 +181,11 @@ export function createSquadBotExecutor(deps: SquadExecutorDeps = {}): BotExecuto
       })
     )
 
+    if (ctx.signal.aborted) {
+      const { controlSquadRun } = await import("@/lib/ai/agent/team/squad/squad-control")
+      await controlSquadRun(result.runId ?? ctx.runId, "stop")
+      throw new Error("Bot cancelled")
+    }
     if (!result.started) {
       throw new Error(`Squad ${squadId} did not start (${result.reason ?? "unknown"})`)
     }

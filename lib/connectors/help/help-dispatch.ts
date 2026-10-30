@@ -129,7 +129,13 @@ export async function maybeHandleHelpCommand(
   if (event.kind && event.kind !== "create") return false
   const text = event.plainText.trim().toLowerCase()
   if (text.length === 0) return false
-  if (!resolveTriggers(row).includes(text)) return false
+  const triggers = resolveTriggers(row)
+  const mode: HelpSurfaceMode | undefined = triggers.includes(text)
+    ? "help"
+    : triggers.some((trigger) => text === `${trigger} welcome`)
+      ? "welcome"
+      : undefined
+  if (!mode) return false
 
   const enqueue = deps.enqueue ?? enqueueOutbound
   const audit = deps.audit ?? appendAudit
@@ -140,7 +146,9 @@ export async function maybeHandleHelpCommand(
     event.conversationKey,
     deps.readOverride ?? readForResolution
   )
-  const { segment } = buildSurfaceForRow(event, row, "help", behaviour)
+  // An explicit welcome preview is an on-demand notice. It never touches
+  // first-contact dedup or changes whether a future first welcome is sent.
+  const { segment } = buildSurfaceForRow(event, row, mode, behaviour)
   await enqueue({
     adapterId: event.adapterId,
     conversationKey: event.conversationKey,

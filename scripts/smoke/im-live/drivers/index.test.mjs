@@ -11,7 +11,13 @@ function valuesFor(platform) {
   for (const spec of Object.values(PLATFORM_FIELDS[platform])) {
     if (spec.optional) continue
     // Homeserver and API bases must parse as URLs for the driver to build one.
-    env[spec.env] = /HOMESERVER|API_BASE/.test(spec.env) ? "http://127.0.0.1:1" : `x-${spec.env}`
+    env[spec.env] = /HOMESERVER|API_BASE/.test(spec.env)
+      ? "http://127.0.0.1:1"
+      : /UIN$|GROUP_ID$|CONVERSATION_ID$/.test(spec.env)
+        ? /DRIVER/.test(spec.env)
+          ? "654321"
+          : "123456"
+        : `x-${spec.env}`
   }
   return readConfig(env).platforms[platform].values
 }
@@ -43,11 +49,13 @@ test("each driver's conversationId is the platform's own conversation field", ()
     lark: "targetChatId",
     matrix: "targetRoomId",
     onebot: "targetGroupId",
+    "qq-official": "targetConversationId",
   }
   for (const platform of PLATFORMS) {
     const values = valuesFor(platform)
     const driver = createDriver(platform, { values })
-    assert.equal(driver.conversationId, String(values[expected[platform]]), platform)
+    const id = String(values[expected[platform]])
+    assert.equal(driver.conversationId, platform === "qq-official" ? `group:${id}` : id, platform)
   }
 })
 

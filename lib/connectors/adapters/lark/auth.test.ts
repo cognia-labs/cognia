@@ -2,9 +2,12 @@ import {
   connectorsHttpRequest,
   connectorsKeyringGet,
   connectorsKeyringSet,
+  connectorsLarkUserAuth,
 } from "@/lib/connectors/tauri/commands"
 import {
   LARK_SENDAS_SCOPES,
+  LARK_DOC_READ_SCOPES,
+  hasLarkDocumentSearchScope,
   mergeLarkScopes,
   getTenantAccessToken,
   clearTokenCache,
@@ -14,17 +17,29 @@ import {
   fetchLarkUserInfo,
   getUserAccessToken,
   refreshUserToken,
-  clearUserTokenCache,
 } from "./auth"
+import { LarkApiError, withUserTokenRefresh } from "./auth-retry"
 
 const mockHttp = connectorsHttpRequest as jest.Mock
 const mockKeyringGet = connectorsKeyringGet as jest.Mock
 const mockKeyringSet = connectorsKeyringSet as jest.Mock
 
+it("requests read-only document scopes and distinguishes search grants from IM-only grants", () => {
+  expect(LARK_DOC_READ_SCOPES.split(" ").every((scope) => /:read(?:only)?$/.test(scope))).toBe(true)
+  expect(LARK_DOC_READ_SCOPES.split(" ")).toContain("search:docs:read")
+  expect(hasLarkDocumentSearchScope(["drive:drive:readonly"])).toBe(false)
+  expect(hasLarkDocumentSearchScope(["drive:drive.search:readonly"])).toBe(true)
+  expect(hasLarkDocumentSearchScope(LARK_SENDAS_SCOPES.split(" "))).toBe(false)
+  expect(hasLarkDocumentSearchScope(LARK_DOC_READ_SCOPES.split(" "))).toBe(true)
+  expect(hasLarkDocumentSearchScope(["search:docs:read"])).toBe(true)
+  expect(hasLarkDocumentSearchScope(["drive:drive"])).toBe(true)
+})
+
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
   connectorsKeyringGet: jest.fn(),
   connectorsKeyringSet: jest.fn(),
+  connectorsLarkUserAuth: jest.fn(),
 }))
 
 function makeTokenResponse(token = "t-test-tat-123", expire = 7200, code = 0) {
@@ -418,8 +433,18 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
     mockHttp.mockReset()
     mockKeyringGet.mockReset()
     mockKeyringSet.mockReset()
+    ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async (input) =>
+      input.action === "snapshot"
+        ? {
+            configured: true,
+            accessToken: "user-a",
+            authorizationEpoch: "auth-a",
+            refreshToken: await mockKeyringGet(input.adapterId, "user_refresh_token"),
+            refreshRevision: "refresh-a",
+          }
+        : { authorizationEpoch: "auth-a", accessToken: input.accessToken }
+    )
     clearTokenCache("cli_app", "secret")
-    clearUserTokenCache("lark-u")
   })
 
   it("returns null when no user token is stored", async () => {
@@ -427,12 +452,11 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
     expect(await getUserAccessToken("lark-u")).toBeNull()
   })
 
-  it("reads the keyring once then serves the cached token", async () => {
+  it("rechecks the host token so another window can replace the authorization", async () => {
     mockKeyringGet.mockResolvedValue("u-stored")
     expect(await getUserAccessToken("lark-u")).toBe("u-stored")
     expect(await getUserAccessToken("lark-u")).toBe("u-stored")
-    // Only one keyring read — the second call is served from the cache.
-    expect(mockKeyringGet).toHaveBeenCalledTimes(1)
+    expect(mockKeyringGet).toHaveBeenCalledTimes(2)
   })
 
   it("refreshes via the refresh token (v2) and persists the rotated pair", async () => {
@@ -452,12 +476,21 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
 
     expect(token).toBe("u-new-access")
     // Rotated tokens persisted back to the keyring.
-    expect(mockKeyringSet).toHaveBeenCalledWith("lark-u", "user_token", "u-new-access")
-    expect(mockKeyringSet).toHaveBeenCalledWith("lark-u", "user_refresh_token", "u-new-refresh")
-    // The refreshed token is now cached (no keyring read needed).
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "refresh",
+        expectedAuthorizationEpoch: "auth-a",
+        expectedRefreshRevision: "refresh-a",
+        accessToken: "u-new-access",
+        refreshToken: "u-new-refresh",
+      })
+    )
+    expect(mockKeyringSet).not.toHaveBeenCalled()
+    // A subsequent read uses the authoritative host value.
+    mockKeyringGet.mockResolvedValue("u-new-access")
     mockKeyringGet.mockClear()
     expect(await getUserAccessToken("lark-u")).toBe("u-new-access")
-    expect(mockKeyringGet).not.toHaveBeenCalled()
+    expect(mockKeyringGet).toHaveBeenCalledWith("lark-u", "user_token")
   })
 
   it("throws when there is no refresh token to use", async () => {
@@ -466,4 +499,68 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
       refreshUserToken({ adapterId: "lark-u", appId: "cli_app", appSecret: "secret" })
     ).rejects.toThrow(/no refresh token/)
   })
+
+  it("does not refresh a revoked access identity even if its refresh token remains", async () => {
+    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValue({
+      configured: true,
+      authorizationEpoch: "revoked",
+      accessToken: null,
+      refreshToken: "still-stored",
+      refreshRevision: "revision-a",
+    })
+    await expect(
+      refreshUserToken({ adapterId: "lark-u", appId: "app", appSecret: "secret" })
+    ).rejects.toThrow("lark_auth_stale")
+    expect(mockHttp).not.toHaveBeenCalled()
+  })
+
+  it("saves an already-dispatched refresh pair even if its caller aborts", async () => {
+    const controller = new AbortController()
+    mockKeyringGet.mockResolvedValue("old-refresh")
+    mockHttp.mockImplementation(async () => {
+      controller.abort()
+      return makeTokenV2Response({ accessToken: "rotated-access", refreshToken: "rotated-refresh" })
+    })
+    await expect(
+      refreshUserToken({
+        adapterId: "lark-u",
+        appId: "app",
+        appSecret: "secret",
+        signal: controller.signal,
+      })
+    ).resolves.toBe("rotated-access")
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "refresh",
+        accessToken: "rotated-access",
+        refreshToken: "rotated-refresh",
+      })
+    )
+  })
+
+  it.each([null, "user-b"])(
+    "pins the request identity before an old 401 arrives (%s)",
+    async (accessToken) => {
+      let state = {
+        configured: true,
+        authorizationEpoch: "auth-a",
+        accessToken: "user-a" as string | null,
+        refreshToken: "refresh-a",
+        refreshRevision: "revision-a",
+      }
+      ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => state)
+      const request = jest.fn(async () => {
+        state = { ...state, authorizationEpoch: "auth-replaced", accessToken }
+        throw new LarkApiError({ status: 401, code: 99991677, message: "old request rejected" })
+      })
+      await expect(
+        withUserTokenRefresh({ adapterId: "lark-u", appId: "app", appSecret: "secret" }, request)
+      ).rejects.toThrow("lark_auth_stale")
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(mockHttp).not.toHaveBeenCalled()
+      expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: "refresh" })
+      )
+    }
+  )
 })

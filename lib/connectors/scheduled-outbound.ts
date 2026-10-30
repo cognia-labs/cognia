@@ -22,6 +22,14 @@
  * `connection:*` scheduler task can fire.
  */
 
+import {
+  createReplyStream,
+  discloseReplyStreamText,
+  discloseReplyStreamSegments,
+} from "./reply-stream"
+import { getBus } from "./bus"
+import { resolveBinding } from "./policy-resolve"
+import { resolveImEffectiveConfig } from "./effective-config"
 import { registerTaskExecutor } from "@/lib/scheduler/task-scheduler"
 import { enqueueAuthorized, type OutboundAuthorization } from "@/lib/connectors/delivery-gateway"
 import {
@@ -437,12 +445,13 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
   // All best-effort. Missing rows degrade gracefully — resolveSendOptions
   // tolerates absent character/appSettings and the inbox policy reads
   // optional fields.
+  const effectiveCharacterId = characterId ?? session.characterId
   const [adapterRow, overrideRow, appSettings, character] = await Promise.all([
     getAdapterInstance(adapterId).catch(() => undefined),
     readForResolution(conversationKey).catch(() => undefined),
     getSettings().catch(() => undefined),
-    characterId
-      ? resolveCharacterById(characterId).catch(() => undefined)
+    effectiveCharacterId
+      ? resolveCharacterById(effectiveCharacterId).catch(() => undefined)
       : Promise.resolve(undefined),
   ])
 
@@ -558,12 +567,53 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         signal: elicitationController.signal,
       })
     : undefined
+  const binding = adapterRow
+    ? resolveBinding({
+        adapter: adapterRow,
+        character: character ?? null,
+        override: overrideRow ?? null,
+      })
+    : undefined
+  const axes =
+    adapterRow && binding
+      ? resolveImEffectiveConfig({
+          adapter: adapterRow,
+          override: overrideRow ?? null,
+          rule: null,
+          system: { mode: binding.mode, characterId: binding.characterId },
+        })
+      : undefined
+  const replyStream = createReplyStream({
+    adapter: getBus().getAdapter(adapterId),
+    conversationRef: digestDeliveryTarget?.conversationRef ?? {
+      platform: "qq-official",
+      adapterId,
+    },
+    streamKey: `digest:${crypto.randomUUID()}`,
+    signal: input.signal,
+    enabled: Boolean(
+      input.deliveryTarget &&
+      input.authorization?.kind === "origin-reply" &&
+      input.authorization.inboundConversationKey === conversationKey &&
+      input.sourceTaskId?.startsWith("cb:") &&
+      axes?.autonomy.effective === "act" &&
+      axes.engagement.effective !== "human"
+    ),
+  })
   let captured: Awaited<ReturnType<DigestSendPromptFn>>
   try {
     captured = await injectedDigestSender(session.id, prompt, sendOptions, {
       adapterId,
       conversationKey,
       ...(input.signal ? { signal: input.signal } : {}),
+      ...(replyStream
+        ? {
+            onPartial: (text: string) => {
+              const safeText = discloseReplyStreamText(text, character?.twinId)
+              replyStream.onPartial(safeText)
+            },
+          }
+        : {}),
       onPermissionRequest: permissions.onPermissionRequest,
       outboundPolicy: permissions.outboundPolicy,
       ...(permissions.pauseTimeoutWhileAwaitingPermission
@@ -571,6 +621,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         : {}),
     })
   } catch (err) {
+    await replyStream?.cancel()
     await permissions.finish(input.signal?.aborted ? "cancelled" : "failed")
     const reason = err instanceof PiiGateBlocked ? "pii_blocked" : "ai_run_capture_failed"
     const msg = err instanceof Error ? err.message : String(err)
@@ -584,6 +635,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
     })
     return { success: false, error: msg }
   } finally {
+    replyStream?.captured()
     // The context dies with the turn — abort settles a prompt still pending
     // (defensive; a suspended ask_user blocks the capture above) and hides
     // the registration from any late plugin_tool_exec event.
@@ -624,12 +676,17 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         formatScheduledSlot(lateForSlot, locale)
       )}\n\n${captured.text}`
     : captured.text
-  const outboundSegments: MessageSegment[] = assistantReplyToSegments({
+  let outboundSegments: MessageSegment[] = assistantReplyToSegments({
     text: deliveredText,
     a2uiSurfaces: captured.a2uiSurfaces,
     a2uiSurfaceOrder: captured.a2uiSurfaceOrder,
     telemetry: { adapterId, platform },
   })
+  const twinDisclosure =
+    replyStream && character?.twinId
+      ? discloseReplyStreamSegments(outboundSegments, character.twinId)
+      : undefined
+  if (twinDisclosure) outboundSegments = twinDisclosure.segments
   const idempotencyKey = `airun:${captured.messageId}`
 
   // Re-derive the platform from the conversationKey rather than trusting
@@ -645,6 +702,8 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         segments: outboundSegments,
         metadata: {
           idempotencyKey,
+          ...(replyStream ? { streamKey: replyStream.streamKey } : {}),
+          ...(twinDisclosure ? { provenance: twinDisclosure.provenance } : {}),
           scheduledTaskId: sourceTaskId,
         },
       },
@@ -656,6 +715,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
       },
     })
     if (delivered.kind === "drafted") {
+      await replyStream?.cancel()
       return settle({
         success: true,
         output: {
@@ -665,6 +725,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
         },
       })
     }
+    replyStream?.handoff()
     const job = delivered.job
 
     await appendAudit({
@@ -689,6 +750,7 @@ export async function runConnectorDigestTurn(input: RunDigestInput): Promise<Run
       },
     })
   } catch (err) {
+    await replyStream?.cancel()
     const msg = err instanceof Error ? err.message : String(err)
     return { success: false, error: msg }
   }

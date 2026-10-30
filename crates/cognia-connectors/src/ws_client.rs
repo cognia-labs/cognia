@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{Notify, mpsc};
 use tokio_tungstenite::{client_async_tls, tungstenite::Message};
 use uuid::Uuid;
 
@@ -109,22 +109,29 @@ pub async fn open_ws_with_handle(
 
     // Both branches produce the same erased `ProxyStream` type so the
     // downstream split() / send / recv plumbing has a single concrete type.
-    let raw_stream: ProxyStream = if use_proxy {
-        log::info!("WS connecting via {route:?} → {target_host}:{target_port}");
-        proxy_config::wsproxy::connect_via_proxy(&proxy_cfg, &target_host, target_port)
-            .await
-            .map_err(|e| format!("WS proxy tunnel failed: {e}"))?
-    } else {
-        let tcp = TcpStream::connect((target_host.as_str(), target_port))
-            .await
-            .map_err(|e| format!("WS connect failed: {e}"))?;
-        let boxed: Box<dyn AsyncReadWrite + Send + Unpin> = Box::new(tcp);
-        boxed
-    };
+    let connect = async {
+        let raw_stream: ProxyStream = if use_proxy {
+            log::info!("WS connecting via {route:?} → {target_host}:{target_port}");
+            proxy_config::wsproxy::connect_via_proxy(&proxy_cfg, &target_host, target_port)
+                .await
+                .map_err(|e| format!("WS proxy tunnel failed: {e}"))?
+        } else {
+            let tcp = TcpStream::connect((target_host.as_str(), target_port))
+                .await
+                .map_err(|e| format!("WS connect failed: {e}"))?;
+            let boxed: Box<dyn AsyncReadWrite + Send + Unpin> = Box::new(tcp);
+            boxed
+        };
 
-    let (ws_stream, _) = client_async_tls(request, raw_stream)
+        client_async_tls(request, raw_stream)
+            .await
+            .map_err(|e| format!("WS handshake failed: {e}"))
+    };
+    // Bound DNS/TCP, proxy and TLS/HTTP upgrade together. Dropping the timed-out
+    // future releases its socket before a handle or event pump can be retained.
+    let (ws_stream, _) = tokio::time::timeout(Duration::from_secs(10), connect)
         .await
-        .map_err(|e| format!("WS handshake failed: {e}"))?;
+        .map_err(|_| "WS connection timed out".to_string())??;
     let (mut sink, mut stream) = ws_stream.split();
     let (tx, mut rx) = mpsc::channel::<Message>(64);
 
@@ -320,6 +327,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stalled_handshake_times_out_without_retaining_a_handle() {
+        proxy_config::apply_current(Default::default()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let id = Uuid::new_v4().to_string();
+        let result = tokio::time::timeout(
+            Duration::from_secs(12),
+            open_ws_with_handle(
+                Arc::new(RecordingEmitter::default()),
+                format!("ws://{address}"),
+                None,
+                id.clone(),
+            ),
+        )
+        .await;
+        server.abort();
+        let _ = server.await;
+        assert!(
+            result.is_ok(),
+            "native handshake did not honor its own deadline"
+        );
+        let error = result.unwrap().unwrap_err();
+        assert!(error.contains("timed out"), "unexpected error: {error}");
+        assert!(!handles().lock().unwrap().contains_key(&id));
+    }
+
+    #[tokio::test]
     async fn ws_send_and_receive_via_mock_server() {
         use futures_util::SinkExt;
         use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -336,8 +374,8 @@ mod tests {
     async fn open_ws_preserves_event_topics_and_payload_shapes() {
         use futures_util::SinkExt;
         use tokio_tungstenite::tungstenite::{
-            protocol::{frame::coding::CloseCode, CloseFrame},
             Message,
+            protocol::{CloseFrame, frame::coding::CloseCode},
         };
 
         proxy_config::apply_current(Default::default()).unwrap();
@@ -448,8 +486,8 @@ mod tests {
 
     #[test]
     fn close_event_payload_carries_code_and_reason() {
-        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
         use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+        use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
         let frame = CloseFrame {
             code: CloseCode::Normal,

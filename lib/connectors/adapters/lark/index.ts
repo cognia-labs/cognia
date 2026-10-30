@@ -35,6 +35,9 @@ import { builtInConnectorRuntimeCapabilities } from "@/types/connectors/runtime-
 import {
   connectorsHttpRequest,
   connectorsLarkCallbackRespond,
+  connectorsLarkUserAuth,
+  connectorsLarkUploadFile,
+  connectorsLarkUploadImage,
 } from "@/lib/connectors/tauri/commands"
 import { larkCallbackToast } from "./callback-toast"
 import { extractLarkCode, LARK_PERMISSION_CODES } from "./http"
@@ -305,7 +308,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   async function requireUserSendIdentity(creds: {
     appId: string
     appSecret: string
-  }): Promise<void> {
+  }): Promise<string | undefined> {
     if (opts.sendAsUser !== true) return
     const token = await getUserAccessToken(opts.id).catch(() => null)
     if (!token) {
@@ -314,10 +317,13 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       )
     }
     try {
-      await withUserTokenRefresh({ adapterId: opts.id, ...creds }, async () => {
-        const current = (await getUserAccessToken(opts.id)) ?? token
-        await fetchLarkUserInfo(current)
-      })
+      return await withUserTokenRefresh(
+        { adapterId: opts.id, ...creds },
+        async (current, epoch) => {
+          await fetchLarkUserInfo(current)
+          return epoch
+        }
+      )
     } catch {
       throw new LarkUserIdentityUnavailableError(
         "Lark send-as-user authorization expired; reconnect before sending"
@@ -369,7 +375,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     urlPath: string,
     body?: unknown,
-    reqOpts?: { asUser?: boolean }
+    reqOpts?: { asUser?: boolean; expectedAuthorizationEpoch?: string }
   ): Promise<unknown> {
     const creds = await resolveCredentials()
 
@@ -384,10 +390,16 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
         )
       }
       try {
-        return await withUserTokenRefresh({ adapterId: opts.id, ...creds }, async () => {
-          const tok = (await getUserAccessToken(opts.id)) ?? userToken
-          return sendHttp(method, urlPath, body, tok)
-        })
+        return await withUserTokenRefresh(
+          {
+            adapterId: opts.id,
+            ...creds,
+            expectedAuthorizationEpoch: reqOpts.expectedAuthorizationEpoch,
+          },
+          async (tok) => {
+            return sendHttp(method, urlPath, body, tok)
+          }
+        )
       } catch (err) {
         loggers.network.warn("[lark] user-token send failed; delivery stopped", {
           id: opts.id,
@@ -820,7 +832,28 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     // before media upload so an expired user binding cannot upload bytes
     // under the bot and only then fail the user-authored message send.
     const creds = await resolveCredentials()
-    if (!editMessageId) await requireUserSendIdentity(creds)
+    const expectedAuthorizationEpoch = !editMessageId
+      ? await requireUserSendIdentity(creds)
+      : undefined
+    const assertSendIdentity = async () => {
+      if (expectedAuthorizationEpoch === undefined) return
+      const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.id })
+      if (
+        !current.configured ||
+        !current.accessToken ||
+        current.authorizationEpoch !== expectedAuthorizationEpoch
+      ) {
+        throw new LarkUserIdentityUnavailableError(
+          "Lark send-as-user identity changed during media preparation"
+        )
+      }
+    }
+    const guardedMedia = async <T>(operation: () => Promise<T>): Promise<T> => {
+      await assertSendIdentity()
+      const result = await operation()
+      await assertSendIdentity()
+      return result
+    }
     const hasTemplate = req.segments.some(
       (segment) => segment.type === "card" && isLarkResultTemplatePayload(segment.card.payload)
     )
@@ -843,7 +876,18 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       // those by substring and retries with a fresh token.
       const resolvedSegments = await withTatRefresh(creds, () =>
         resolveLarkMediaKeys(segments, {
-          getAccessToken: getTat,
+          getAccessToken:
+            expectedAuthorizationEpoch === undefined
+              ? getTat
+              : () => guardedMedia(() => getTenantAccessToken(creds)),
+          uploadFile:
+            expectedAuthorizationEpoch === undefined
+              ? undefined
+              : (args) => guardedMedia(() => connectorsLarkUploadFile(args)),
+          uploadImage:
+            expectedAuthorizationEpoch === undefined
+              ? undefined
+              : (args) => guardedMedia(() => connectorsLarkUploadImage(args)),
           uploadCache,
         })
       )
@@ -860,7 +904,10 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       // points (a person's open id: the bot's single chat with them); a reply
       // lands in its parent's chat, and a user-sent one in the user's chat.
       botCreated = !asUser && urlPath.startsWith("/im/v1/messages?receive_id_type=")
-      return (await doRequest(call.method, urlPath, call.payload, { asUser })) as {
+      return (await doRequest(call.method, urlPath, call.payload, {
+        asUser,
+        expectedAuthorizationEpoch,
+      })) as {
         data?: { message_id?: string; chat_id?: string }
       } | null
     }
@@ -1412,14 +1459,9 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     let transportFailure: unknown
     try {
       const creds = await resolveCredentials()
-      const resp = await withUserTokenRefresh({ adapterId: opts.id, ...creds }, async () => {
+      const resp = await withUserTokenRefresh({ adapterId: opts.id, ...creds }, async (current) => {
         try {
-          return await sendHttp(
-            "GET",
-            path,
-            undefined,
-            (await getUserAccessToken(opts.id)) ?? token
-          )
+          return await sendHttp("GET", path, undefined, current)
         } catch (err) {
           if (!(err instanceof LarkApiError)) transportFailure = err
           throw err

@@ -75,6 +75,42 @@ beforeEach(async () => {
 }, 15_000)
 
 describe("bindingsForInstalledBot", () => {
+  it("routes each trigger through its input slot and refuses ambiguous or unbound input", async () => {
+    const installation = await install(
+      "digest",
+      def({
+        triggers: [
+          { ...OPENED, inputCredentialSlot: "in" },
+          { ...OPENED, id: "other", inputCredentialSlot: "other" },
+        ],
+        requires: {
+          credentials: [
+            { id: "in", label: "Input" },
+            { id: "out", label: "Output" },
+            { id: "other", label: "Other" },
+          ],
+        },
+      }),
+      {
+        credentialBindings: {
+          in: { integrationAccountId: "a" },
+          out: { integrationAccountId: "b" },
+        },
+      }
+    )
+    const resolved = await resolveInstalledBot(installation)
+    const bindings = bindingsForInstalledBot(resolved!)
+    expect(bindings).toHaveLength(1)
+    expect(bindings[0]).toMatchObject({ integrationAccountId: "a", trigger: { id: "opened" } })
+    const ambiguous = await install("legacy", def(), {
+      credentialBindings: {
+        one: { integrationAccountId: "a" },
+        two: { integrationAccountId: "b" },
+      },
+    })
+    expect(bindingsForInstalledBot((await resolveInstalledBot(ambiguous))!)).toEqual([])
+  })
+
   it("skips a disarmed trigger rather than letting the router reject it", async () => {
     const installation = await install(
       "digest",
@@ -106,15 +142,84 @@ describe("bindingsForInstalledBot", () => {
   })
 
   it("carries a connector adapter binding", async () => {
-    const installation = await install("digest", def(), {
-      credentialBindings: { chat: { adapterId: "lark_1" } },
-    })
+    const installation = await install(
+      "digest",
+      def({ triggers: [{ id: "chat", kind: "interaction" }] }),
+      {
+        credentialBindings: { chat: { adapterId: "lark_1" } },
+      }
+    )
     const resolved = await resolveInstalledBot(installation)
     expect(bindingsForInstalledBot(resolved!)[0].adapterId).toBe("lark_1")
   })
 })
 
 describe("dispatchBotEvent", () => {
+  it("routes both ingress sources for a mixed integration and IM installation", async () => {
+    await install("mixed", def({ triggers: [OPENED, { id: "chat", kind: "interaction" }] }), {
+      credentialBindings: {
+        repo: { integrationAccountId: "github" },
+        chat: { adapterId: "slack" },
+      },
+    })
+    expect(
+      (
+        await dispatchBotEvent({
+          envelope: envelope(),
+          query: { ...QUERY, integrationAccountId: "github" },
+        })
+      ).enqueued
+    ).toHaveLength(1)
+    expect(
+      (
+        await dispatchBotEvent({
+          envelope: envelope({ source: "connector", sourceRecordId: "chat", type: "message" }),
+          query: { source: "connector", type: "message", adapterId: "slack" },
+        })
+      ).enqueued
+    ).toHaveLength(1)
+    expect(
+      (
+        await dispatchBotEvent({
+          envelope: envelope({ sourceRecordId: "wrong" }),
+          query: { ...QUERY, integrationAccountId: "other" },
+        })
+      ).enqueued
+    ).toHaveLength(0)
+  })
+
+  it("persists latest policy through routing and keeps only the newest resource event runnable", async () => {
+    await install(
+      "latest",
+      def({ triggers: [{ ...OPENED, debounceMs: 5000, coalesce: "latest" }] })
+    )
+    await dispatchBotEvent({
+      envelope: envelope({ sourceRecordId: "old" }),
+      query: QUERY,
+      now: NOW,
+    })
+    const latest = await dispatchBotEvent({
+      envelope: envelope({ sourceRecordId: "new" }),
+      query: QUERY,
+      now: NOW + 1,
+    })
+    const rows = await getDb().botEventDeliveries.toArray()
+    expect(rows.filter((row) => row.status === "pending").map((row) => row.id)).toEqual([
+      latest.enqueued[0].id,
+    ])
+    expect(rows.find((row) => row.status === "dismissed")).toBeDefined()
+  })
+
+  it("delivers once to each matching trigger and redelivers neither", async () => {
+    await install("multi", def({ triggers: [OPENED, { ...OPENED, id: "also-opened" }] }))
+    const first = await dispatchBotEvent({ envelope: envelope(), query: QUERY, now: NOW })
+    expect(first.enqueued.map((row) => row.triggerId)).toEqual(["opened", "also-opened"])
+    expect(new Set(first.enqueued.map((row) => row.id)).size).toBe(2)
+    const retry = await dispatchBotEvent({ envelope: envelope(), query: QUERY, now: NOW + 1 })
+    expect(retry.enqueued.map((row) => row.id)).toEqual(first.enqueued.map((row) => row.id))
+    expect(await getDb().botEventDeliveries.count()).toBe(2)
+  })
+
   it("enqueues one delivery per matching installation", async () => {
     await install("a", def({ id: "a" }))
     await install("b", def({ id: "b" }))

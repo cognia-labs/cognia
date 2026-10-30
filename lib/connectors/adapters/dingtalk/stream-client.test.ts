@@ -78,6 +78,10 @@ beforeEach(() => {
 })
 
 describe("registerDingTalkConnection", () => {
+  it("rejects an HTTP failure even if the body contains an endpoint and ticket", async () => {
+    mockHttp.mockResolvedValueOnce({ ...registerOk(), status: 503 })
+    await expect(registerDingTalkConnection("ak", "as", [])).rejects.toMatchObject({ status: 503 })
+  })
   it("posts credentials + subscriptions and returns endpoint+ticket", async () => {
     mockHttp.mockResolvedValueOnce(registerOk())
     const res = await registerDingTalkConnection("ak", "as", [
@@ -94,6 +98,111 @@ describe("registerDingTalkConnection", () => {
     mockHttp.mockResolvedValueOnce({ status: 400, headers: {}, body: JSON.stringify({}) })
     await expect(registerDingTalkConnection("ak", "as", [])).rejects.toThrow(/register failed/)
   })
+})
+
+describe("DingTalk acquisition cancellation", () => {
+  beforeEach(() => jest.useFakeTimers())
+  afterEach(() => {
+    jest.clearAllTimers()
+    jest.useRealTimers()
+  })
+  it.each(["clientId", "clientSecret", "register"])(
+    "does not acquire the next resource after abort during %s",
+    async (stage) => {
+      let release!: (value: never) => void
+      let entered!: () => void
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const held = () =>
+        new Promise<never>((resolve) => {
+          release = resolve
+          entered()
+        })
+      const clientId = jest.fn(async () => (stage === "clientId" ? held() : "ak"))
+      const clientSecret = jest.fn(async () => (stage === "clientSecret" ? held() : "as"))
+      mockHttp.mockImplementation(async () => (stage === "register" ? held() : registerOk()))
+      const ctrl = new AbortController()
+      const stream = startDingTalkStream({ clientId, clientSecret, signal: ctrl.signal }).frames
+      const result = stream.next()
+      await ready
+      ctrl.abort()
+      release((stage === "register" ? registerOk() : "secret") as never)
+      expect((await result).done).toBe(true)
+      expect(mockWsOpen).not.toHaveBeenCalled()
+      if (stage === "clientId") expect(clientSecret).not.toHaveBeenCalled()
+      if (stage !== "register") expect(mockHttp).not.toHaveBeenCalled()
+    }
+  )
+
+  it("closes a WebSocket handle returned after abort", async () => {
+    let release!: (handle: string) => void
+    let entered!: () => void
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    mockHttp.mockResolvedValue(registerOk())
+    mockWsOpen.mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve
+          entered()
+        })
+    )
+    const ctrl = new AbortController()
+    const stream = startDingTalkStream({
+      clientId: async () => "ak",
+      clientSecret: async () => "as",
+      signal: ctrl.signal,
+    }).frames
+    const result = stream.next()
+    await ready
+    ctrl.abort()
+    release("late-handle")
+    expect((await result).done).toBe(true)
+    expect(mockWsClose).toHaveBeenCalledWith("late-handle")
+    expect(mockListen).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])(
+    "releases a partial listener registration on rejection (abort=%s)",
+    async (abort) => {
+      const remove = jest.fn()
+      let reject!: (error: Error) => void
+      let entered!: () => void
+      const ready = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      mockHttp.mockResolvedValue(registerOk())
+      mockListen.mockImplementation(async (topic: string) => {
+        if (topic.endsWith("/message")) return remove
+        return new Promise((_resolve, fail) => {
+          reject = fail
+          entered()
+        })
+      })
+      const ctrl = new AbortController()
+      const stream = startDingTalkStream({
+        clientId: async () => "ak",
+        clientSecret: async () => "as",
+        signal: ctrl.signal,
+      }).frames
+      const result = stream.next()
+      await ready
+      if (abort) ctrl.abort()
+      const closedAtAbort = mockWsClose.mock.calls.length,
+        removedAtAbort = remove.mock.calls.length
+      reject(new Error("listener registration failed"))
+      await expect(result).rejects.toThrow("listener registration failed")
+      expect(mockWsClose).toHaveBeenCalledWith("dt-ws-1")
+      expect(remove).toHaveBeenCalledTimes(1)
+      if (abort) {
+        expect(closedAtAbort).toBe(1)
+        expect(removedAtAbort).toBe(1)
+      }
+      ctrl.abort()
+    }
+  )
 })
 
 describe("startDingTalkStream", () => {

@@ -20,7 +20,9 @@ import { builtInConnectorRuntimeCapabilities } from "@/types/connectors/runtime-
 import { compositeEditRoute } from "@/lib/connectors/adapters/_shared/message-route"
 import {
   connectorsHttpRequest,
+  connectorsBoundedHttpRequest,
   connectorsMatrixEncryptedMediaUpload,
+  connectorsMatrixCryptoReceiveSyncChanges,
   connectorsMediaUpload,
   type MatrixEncryptedMediaUploadResponse,
 } from "@/lib/connectors/tauri/commands"
@@ -51,6 +53,9 @@ import {
 import { MatrixSyncAuthError, startMatrixSync } from "./transport-sync"
 import { rotateMatrixAccessToken } from "./token-rotation"
 import { MatrixE2EERuntime } from "./e2ee"
+import { MatrixKeyBackup, MatrixRequestNotDispatchedError } from "./key-backup"
+import { MatrixCrossSigning, matrixAuthChallenge, type MatrixAuthChallenge } from "./cross-signing"
+import { MatrixVerification } from "./verification"
 
 export interface MatrixAdapterOptions {
   id: string
@@ -82,7 +87,8 @@ class MatrixApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly retryAfterMs: number | undefined
+    readonly retryAfterMs: number | undefined,
+    readonly authChallenge?: MatrixAuthChallenge
   ) {
     super(message)
     this.name = "MatrixApiError"
@@ -158,9 +164,11 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
   let healthState: AdapterHealthState = "starting"
   let healthReason: string | undefined
   let lastActivityAt: number | undefined
+  let removeRuntimeAbort: (() => void) | undefined
   let stopCalled = false
   let generation = 0
   let syncTask: Promise<void> | null = null
+  let stopTask: Promise<void> | null = null
   let e2ee: MatrixE2EERuntime | null = null
   // `next_batch` persistence state — throttled writes + flush on stop().
   let pendingSyncToken: string | null = null
@@ -213,10 +221,19 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
   async function matrixRequest(
     method: "GET" | "POST" | "PUT",
     path: string,
-    payload?: unknown
+    payload?: unknown,
+    options?: { maxResponseBytes: number }
   ): Promise<Record<string, unknown>> {
-    const token = await opts.accessToken()
-    const resp = await connectorsHttpRequest({
+    const requestGeneration = generation
+    let token: string
+    try {
+      token = await opts.accessToken()
+    } catch {
+      throw new MatrixRequestNotDispatchedError("Matrix token unavailable before dispatch")
+    }
+    if (requestGeneration !== generation || abortController?.signal.aborted)
+      throw new MatrixRequestNotDispatchedError("Matrix request owner stopped before dispatch")
+    const request = {
       url: `${base}${path}`,
       method,
       headers: {
@@ -224,7 +241,10 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
         ...(payload !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: payload !== undefined ? JSON.stringify(payload) : undefined,
-    })
+    }
+    const resp = options
+      ? await connectorsBoundedHttpRequest(request, options.maxResponseBytes)
+      : await connectorsHttpRequest(request)
     let body: Record<string, unknown>
     try {
       body = JSON.parse(resp.body) as Record<string, unknown>
@@ -247,7 +267,8 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
       throw new MatrixApiError(
         `Matrix ${method} ${path} failed: ${error}`,
         resp.status,
-        retryAfterMs
+        retryAfterMs,
+        resp.status === 401 ? matrixAuthChallenge(body) : undefined
       )
     }
     return body
@@ -363,6 +384,7 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
       })
     }
 
+    let dispatching = false
     try {
       const normalized = parseMatrixEvent(opts.id, opts.selfId, roomId, event, {
         homeserver: base,
@@ -375,8 +397,11 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
       })
       if (runGeneration !== generation) return
       lastActivityAt = Date.now()
+      dispatching = true
       await ctx.emit(normalized)
     } catch (err) {
+      // A failed durable admission must stop this batch before next_batch.
+      if (dispatching) throw err
       ctx.logger.warn("matrix:event parse/dispatch failed", {
         reason: err instanceof Error ? err.message : String(err),
       })
@@ -384,7 +409,11 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
   }
 
   async function start(ctx: AdapterContext): Promise<void> {
-    if (abortController || syncTask) return
+    if (abortController || syncTask || stopTask) return
+    if (ctx.signal?.aborted) {
+      healthState = "down"
+      return
+    }
     stopCalled = false
     if (!opts.selfId || !opts.deviceId) {
       healthState = "degraded"
@@ -399,6 +428,11 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
     const runGeneration = ++generation
     abortController = new AbortController()
     const signal = abortController.signal
+    const onRuntimeAbort = () => {
+      if (runGeneration === generation) void stop()
+    }
+    ctx.signal?.addEventListener("abort", onRuntimeAbort, { once: true })
+    removeRuntimeAbort = () => ctx.signal?.removeEventListener("abort", onRuntimeAbort)
     healthState = "starting"
     healthReason = undefined
 
@@ -427,8 +461,12 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
           reason: err instanceof Error ? err.message : String(err),
         })
       }
-      abortController = null
-      e2ee = null
+      if (runGeneration === generation) {
+        removeRuntimeAbort?.()
+        removeRuntimeAbort = undefined
+        abortController = null
+        e2ee = null
+      }
       return
     }
     if (runGeneration !== generation) {
@@ -447,6 +485,8 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
     } catch {
       // No row / storage unavailable — fall back to prime-and-discard.
     }
+
+    if (runGeneration !== generation || signal.aborted) return
 
     const feed = startMatrixSync({
       homeserver: base,
@@ -498,20 +538,32 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
     })()
   }
 
-  async function stop(): Promise<void> {
+  function stop(): Promise<void> {
+    return (stopTask ??= finishStop().finally(() => {
+      stopTask = null
+    }))
+  }
+
+  async function finishStop(): Promise<void> {
+    verification.clear()
+    removeRuntimeAbort?.()
+    removeRuntimeAbort = undefined
     stopCalled = true
     generation += 1
     abortController?.abort()
     const crypto = e2ee
     e2ee = null
-    await crypto?.close()
-    await syncTask?.catch(() => undefined)
-    syncTask = null
-    abortController = null
-    // Flush the pending sync cursor so the next start resumes cleanly.
-    await flushSyncToken()
-    healthState = "down"
-    healthReason = undefined
+    try {
+      await crypto?.close()
+    } finally {
+      await syncTask?.catch(() => undefined)
+      syncTask = null
+      abortController = null
+      // Flush the pending sync cursor so the next start resumes cleanly.
+      await flushSyncToken()
+      healthState = "down"
+      healthReason = undefined
+    }
   }
 
   function health(): AdapterHealth {
@@ -747,6 +799,75 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
     // No-op: accessToken is a resolver called fresh on each request.
   }
 
+  const keyBackup = new MatrixKeyBackup({
+    adapterId: opts.id,
+    request: matrixRequest,
+    capture: () => {
+      const owner = generation
+      return () =>
+        owner === generation &&
+        abortController !== null &&
+        !abortController.signal.aborted &&
+        e2ee !== null &&
+        healthState !== "starting"
+    },
+    flush: async () => {
+      await e2ee?.wakePump(true)
+    },
+  })
+
+  const crossSigning = new MatrixCrossSigning({
+    adapterId: opts.id,
+    userId: opts.selfId ?? "",
+    deviceId: opts.deviceId ?? "",
+    request: matrixRequest,
+    capture: () => {
+      const owner = generation
+      return () =>
+        owner === generation &&
+        abortController !== null &&
+        !abortController.signal.aborted &&
+        e2ee !== null &&
+        healthState !== "starting"
+    },
+    refresh: async (check) => {
+      const runtime = e2ee
+      check()
+      await connectorsMatrixCryptoReceiveSyncChanges({
+        adapterId: opts.id,
+        changedDevices: [opts.selfId!],
+      })
+      check()
+      await runtime?.wakePump()
+    },
+  })
+
+  const verification = new MatrixVerification({
+    adapterId: opts.id,
+    request: matrixRequest,
+    capture: () => {
+      const owner = generation
+      return () =>
+        owner === generation &&
+        abortController !== null &&
+        !abortController.signal.aborted &&
+        e2ee !== null &&
+        healthState !== "starting"
+    },
+    flush: async () => {
+      await e2ee?.wakePump()
+    },
+    refresh: async (userId, check) => {
+      const runtime = e2ee
+      await connectorsMatrixCryptoReceiveSyncChanges({
+        adapterId: opts.id,
+        changedDevices: [opts.selfId!, userId],
+      })
+      check()
+      await runtime?.wakePump()
+    },
+  })
+
   return {
     get meta() {
       return {
@@ -759,6 +880,9 @@ export function createMatrixAdapter(opts: MatrixAdapterOptions): PlatformAdapter
       }
     },
     id: opts.id,
+    keyBackup,
+    crossSigning,
+    verification,
     start,
     stop,
     health,

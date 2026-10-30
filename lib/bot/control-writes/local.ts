@@ -10,7 +10,7 @@
  */
 
 import { dispatchManualBotRun } from "@/lib/bot/events/dispatch"
-import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
+import { buildBotEventEnvelope, botEventId } from "@/lib/bot/events/envelope"
 import { isRunnableBot, resolveInstalledBot } from "@/lib/bot/installed-bot"
 import {
   getBotInstallation,
@@ -22,6 +22,7 @@ import { getExecutionRun } from "@/lib/db/execution-runs"
 import type { BotInstallationRow } from "@/lib/db/bot-types"
 import { getDb } from "@/lib/db/schema"
 import { runBotLifecycleHook } from "./lifecycle-hooks"
+import { getBot } from "@/lib/plugin/registries/bot-registry"
 
 /** The event type a manual run carries. Named so a handler can branch on it. */
 export const MANUAL_RUN_EVENT_TYPE = "manual.run"
@@ -44,6 +45,16 @@ export class BotDeliveryReplayUnavailableError extends Error {
       "Bot retry requires an enabled, locally owned installation with its current definition and original execution available"
     )
     this.name = "BotDeliveryReplayUnavailableError"
+  }
+}
+
+export class BotManualRunUnavailableError extends Error {
+  readonly code = "bot_manual_run_unavailable"
+  constructor(readonly installationId: string) {
+    super(
+      "Bot manual run requires an enabled, locally owned installation with its current definition and handler available"
+    )
+    this.name = "BotManualRunUnavailableError"
   }
 }
 
@@ -141,38 +152,85 @@ export interface RunBotManuallyResult {
 export async function runBotManuallyLocally(
   input: RunBotManuallyInput
 ): Promise<RunBotManuallyResult> {
-  const installation = await getBotInstallation(input.installationId)
-  if (!installation) {
-    throw new BotControlTargetMissingError("installation", input.installationId)
-  }
-  const resolved = await resolveInstalledBot(installation)
-  if (!resolved) throw new BotControlTargetMissingError("installation", input.installationId)
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    [db.botEventDeliveries, db.botInstallations, db.botDefinitions, db.conversationOverrides],
+    async () => {
+      const installation = await getBotInstallation(input.installationId)
+      if (!installation) {
+        throw new BotControlTargetMissingError("installation", input.installationId)
+      }
+      // A receipt belongs to the accepted gesture, even if the plugin unloaded or
+      // its default manual trigger changed. Explicit triggers remain independent.
+      const existing = await db.botEventDeliveries
+        .where("installationId")
+        .equals(installation.id)
+        .filter(
+          (row) =>
+            row.source === "bot" &&
+            row.type === MANUAL_RUN_EVENT_TYPE &&
+            row.eventId === botEventId("bot", input.idempotencyKey) &&
+            (!input.triggerId || row.triggerId === input.triggerId)
+        )
+        .first()
+      if (existing) return { deliveryId: existing.id, created: false }
+      const registration =
+        installation.definitionSource === "plugin" ? getBot(installation.definitionId) : undefined
+      const registeredDefinition = registration
+        ? JSON.stringify(registration.definition)
+        : undefined
+      const registeredHandler = registration?.handler
+      const resolved = await resolveInstalledBot(installation)
+      if (!resolved) throw new BotControlTargetMissingError("installation", input.installationId)
+      if (installation.syncedFromHost || !isRunnableBot(resolved) || resolved.problems.length)
+        throw new BotManualRunUnavailableError(installation.id)
 
-  // The named trigger, or the definition's own manual one. Falling back to
-  // "the first trigger of any kind" would start a schedule's work under a
-  // payload it was never written to read.
-  const trigger = input.triggerId
-    ? resolved.definition.triggers.find((t) => t.id === input.triggerId)
-    : resolved.definition.triggers.find((t) => t.kind === "manual")
-  if (!trigger) throw new BotControlTargetMissingError("trigger", input.triggerId ?? "manual")
+      // The named trigger, or the definition's own manual one. Falling back to
+      // "the first trigger of any kind" would start a schedule's work under a
+      // payload it was never written to read.
+      const trigger = input.triggerId
+        ? resolved.definition.triggers.find((t) => t.id === input.triggerId)
+        : resolved.definition.triggers.find((t) => t.kind === "manual")
+      if (!trigger) throw new BotControlTargetMissingError("trigger", input.triggerId ?? "manual")
 
-  const envelope = buildBotEventEnvelope({
-    source: "bot",
-    sourceRecordId: input.idempotencyKey,
-    type: MANUAL_RUN_EVENT_TYPE,
-    installationId: installation.id,
-    triggerId: trigger.id,
-    occurredAt: Date.now(),
-    payload: input.input ?? {},
-    actor: { kind: "human" },
-    // A person pressing Run is not the Bot answering itself. The source is
-    // `bot` because the control plane produced the record, and leaving
-    // `selfProduced` true would have the loop guard refuse every manual run.
-    provenance: { selfProduced: false, depth: 0 },
-  })
+      const envelope = buildBotEventEnvelope({
+        source: "bot",
+        sourceRecordId: input.idempotencyKey,
+        type: MANUAL_RUN_EVENT_TYPE,
+        installationId: installation.id,
+        triggerId: trigger.id,
+        occurredAt: Date.now(),
+        payload: input.input ?? {},
+        actor: { kind: "human" },
+        // A person pressing Run is not the Bot answering itself. The source is
+        // `bot` because the control plane produced the record, and leaving
+        // `selfProduced` true would have the loop guard refuse every manual run.
+        provenance: { selfProduced: false, depth: 0 },
+      })
 
-  const row = await dispatchManualBotRun({ resolved, triggerId: trigger.id, envelope })
-  return { deliveryId: row.id, created: row.eventId === envelope.eventId && row.attempts === 0 }
+      const row = await dispatchManualBotRun({
+        resolved,
+        triggerId: trigger.id,
+        envelope,
+        ...(installation.definitionSource === "plugin"
+          ? {
+              assertReady: () => {
+                if (
+                  !registration ||
+                  getBot(installation.definitionId) !== registration ||
+                  registration.handler !== registeredHandler ||
+                  JSON.stringify(registration.definition) !== registeredDefinition
+                )
+                  throw new BotManualRunUnavailableError(installation.id)
+                return undefined
+              },
+            }
+          : {}),
+      })
+      return { deliveryId: row.id, created: true }
+    }
+  )
 }
 
 /**
@@ -185,10 +243,17 @@ export async function replayBotDeliveryLocally(deliveryId: string): Promise<bool
   const db = getDb()
   return db.transaction(
     "rw",
-    [db.botEventDeliveries, db.botInstallations, db.botDefinitions, db.executionRuns],
+    [
+      db.botEventDeliveries,
+      db.botInstallations,
+      db.botDefinitions,
+      db.executionRuns,
+      db.conversationOverrides,
+    ],
     async () => {
       const row = await getBotDelivery(deliveryId)
       if (!row) throw new BotControlTargetMissingError("delivery", deliveryId)
+      if (row.cancelledAt !== undefined) return false
       if (row.syncedFromHost) throw new BotDeliveryReplayUnavailableError(deliveryId)
       if (!["deadletter", "dismissed", "failed"].includes(row.status)) return false
       const installation = await getBotInstallation(row.installationId)

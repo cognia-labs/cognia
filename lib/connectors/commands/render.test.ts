@@ -154,3 +154,11 @@ describe("assignment provenance (slice 1A)", () => {
     expect(lines[lines.indexOf("• 模式 / mode: manual") + 1]).toBe("• 分配 / assignee: 人工 / me")
   })
 })
+
+it("explains independent automation pause, resume and cancel semantics", () => {
+  expect(R.renderAutomation("pause", true)).toContain("queued work retained")
+  expect(R.renderAutomation("resume", false)).toContain("Subscriptions active")
+  expect(R.renderAutomation("cancel", false)).toContain("future messages may trigger")
+  expect(R.renderAutomation("status", true)).toContain("Subscriptions paused")
+  expect(R.renderHelp()).toContain("/automation pause|resume|cancel|status")
+})

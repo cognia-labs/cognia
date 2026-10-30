@@ -25,6 +25,10 @@ export const COMMAND_DESCRIPTIONS: Record<ControlCommandName, { zh: string; en: 
   new: { zh: "新建并切换到新会话", en: "start a new session" },
   switch: { zh: "切换到指定会话", en: "switch session" },
   resume: { zh: "恢复之前的会话", en: "resume an earlier session" },
+  automation: {
+    zh: "暂停、恢复或取消本会话的 Workflow/Bot 订阅",
+    en: "pause, resume or cancel this conversation’s Workflow/Bot subscriptions",
+  },
   mode: { zh: "切换行为/审批模式", en: "behaviour or approval mode" },
   model: { zh: "切换模型", en: "switch model" },
   reasoning: { zh: "思考强度", en: "effort" },
@@ -50,6 +54,7 @@ const COMMAND_HELP: Array<{ name: ControlCommandName; usage: string }> = [
   { name: "new", usage: "/new" },
   { name: "switch", usage: "/switch <id|标题>" },
   { name: "model", usage: "/model <名称>" },
+  { name: "automation", usage: "/automation pause|resume|cancel|status" },
   { name: "mode", usage: "/mode assistant|delegate|draft|silent|yolo|prompt" },
   { name: "reasoning", usage: "/reasoning low|medium|high|xhigh|max" },
   { name: "character", usage: "/character <id|名称>" },
@@ -387,4 +392,15 @@ export function denyAmbiguousModelArg(
     `· 切换服务商 / Switch provider: /model ${provider}:${model}\n` +
     `· 保持服务商，仅设模型 / Keep provider, set model only: /model ${currentProvider}:${arg}`
   )
+}
+
+export function renderAutomation(
+  action: "pause" | "resume" | "cancel" | "status",
+  paused: boolean
+): string {
+  if (action === "cancel")
+    return "已取消本会话已接受的自动化任务；新消息仍可触发 / Accepted automation work cancelled; future messages may trigger new work."
+  return paused
+    ? "本会话自动化订阅已暂停：保留待处理任务，运行中的任务继续完成 / Subscriptions paused: queued work retained; running work may finish."
+    : "本会话自动化订阅已恢复 / Subscriptions active."
 }

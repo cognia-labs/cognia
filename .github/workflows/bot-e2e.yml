@@ -1,0 +1,159 @@
+name: Bot process E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - "crates/**"
+      - "protocol/**"
+      - "sidecar/native-agents/pins.json"
+      - "packages/plugin-contract/**"
+      - "packages/plugin-sdk/**"
+      - "scripts/build/**"
+      - "scripts/plugin/**"
+      - "sidecar/**"
+      - "lib/bot/**"
+      - "lib/connectors/adapters/**"
+      - "lib/connectors/reply-stream*"
+      - "lib/connectors/delivery-receipts*"
+      - "lib/db/**"
+      - "lib/accounts/**"
+      - "lib/runtime/browser-vault*"
+      - "lib/runtime/account-runtime-target*"
+      - "lib/runtime/target-*"
+      - "components/account/**"
+      - "components/settings/connections/forms/matrix-*"
+      - "i18n/messages/en/settings/connections.json"
+      - "i18n/messages/zh-CN/settings/connections.json"
+      - "components/providers/initializers/account-store-initializer*"
+      - "stores/account/**"
+      - "i18n/messages/en/account.json"
+      - "i18n/messages/en/loading.json"
+      - "lib/data-governance/**"
+      - "lib/connectors/tauri/**"
+      - "lib/companion/**"
+      - "lib/integrations/**"
+      - "lib/execution/**"
+      - "lib/headless/**"
+      - "lib/plugin/**"
+      - "lib/queue/**"
+      - "lib/tauri/**"
+      - "lib/policy/**"
+      - "lib/sync/**"
+      - "lib/platform/**"
+      - "packages/companion-client/**"
+      - "cli/src/plugin/**"
+      - "cli/src/serve/**"
+      - "cli/src/test-support/connector-loopback*"
+      - "cli/src/test-support/connector-native*"
+      - "cli/src/test-support/matrix-*"
+      - "tests/bot-e2e/**"
+      - "scripts/smoke/im-live/**"
+      - "scripts/smoke/cli-api-host*"
+      - "playwright.bots.config.ts"
+      - "playwright.matrix.config.ts"
+      - ".github/workflows/bot-e2e.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bot-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix-tauri-ipc:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: matrix-wry-ipc
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install chromium
+      - name: Real system webview IPC and Matrix operator UI
+        run: |
+          pnpm im:test:tauri
+          pnpm im:test:tauri:ui
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: matrix-tauri-ipc-evidence
+          path: |
+            .cache/test-results/im-tauri-native/*.json
+            .cache/test-results/im-tauri-browser/*.json
+            .cache/test-results/matrix-browser/
+          retention-days: 7
+  bot-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bot-headless-e2e
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libssl-dev pkg-config libasound2-dev libclang-dev cmake protobuf-compiler \
+            libpipewire-0.3-dev libgbm-dev libegl-dev libwayland-dev libxkbcommon-dev
+      - run: pnpm install --frozen-lockfile
+      - name: Harness and platform observer regressions
+        run: |
+          pnpm test:e2e:bots:harness
+          pnpm im:test:unit
+          pnpm im:test:contract --runInBand
+          pnpm im:test:loopback
+          pnpm im:test:qq
+          pnpm test -- --runInBand 'lib/connectors/adapters/matrix/.*\.test\.ts$|lib/connectors/tauri/commands.test.ts$'
+          pnpm test -- --runInBand lib/runtime/browser-vault.test.ts lib/runtime/browser-vault-quick-unlock.test.ts
+          pnpm test -- --runInBand components/account/account-gate.test.tsx stores/account/account-store.test.ts
+      - name: Real Rust bridge, enterprise adapters and durable ingress
+        run: |
+          cargo test --locked -p cognia-connectors --lib
+          pnpm im:test:native
+      - name: Real AccountGate UI, browser disk persistence and Matrix native recovery
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          pnpm im:test:browser
+      - name: Build current Host and isolated production Brain
+        run: pnpm test:e2e:bots:prepare
+      - name: Real Bot processes and crash recovery
+        run: pnpm test:e2e:bots
+      - name: Retain redacted reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bot-e2e-reports
+          path: |
+            .cache/test-results/bots
+            .cache/test-results/im-observers
+            .cache/test-results/im-loopback
+            .cache/test-results/im-native/*.json
+            .cache/test-results/im-browser-native/*.json
+            .cache/test-results/matrix-browser/results.json
+            .cache/playwright-report/bots
+          if-no-files-found: warn
+          retention-days: 7

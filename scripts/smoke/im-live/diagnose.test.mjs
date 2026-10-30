@@ -9,6 +9,17 @@ const HIT = { model: "claude-opus-5", stream: true, messageCount: 1, markers: [M
 
 const reply = (text) => ({ messageId: "m1", text })
 
+test("QQ reply timing rejects output that precedes the human probe", () => {
+  const diagnosis = diagnoseTurn({
+    fixtureHit: HIT,
+    replies: [{ ...reply(MARKER), at: 1000 }],
+    marker: MARKER,
+    replyNotBefore: 5000,
+  })
+  assert.equal(diagnosis.status, STATUS.FAIL)
+  assert.ok(diagnosis.causes.some((cause) => cause.code === "reply_before_probe"))
+})
+
 test("fixture hit + exactly one marked reply is a pass with no causes", () => {
   const d = diagnoseTurn({ fixtureHit: HIT, replies: [reply(`echo ${MARKER}`)], marker: MARKER })
   assert.equal(d.status, STATUS.PASS)
@@ -33,7 +44,7 @@ test("a reply WITHOUT a fixture hit means a real model answered", () => {
     marker: MARKER,
   })
   assert.equal(d.status, STATUS.MODEL_NOT_INTERCEPTED)
-  assert.match(d.summary, /REAL model/)
+  assert.match(d.summary, /not proven to use the fixture/)
   const codes = d.causes.map((c) => c.code)
   assert.ok(codes.includes("vault_provider_overrides_base_url"))
   assert.ok(codes.includes("frozen_execution_spec_rebuilds_env"))
@@ -82,14 +93,37 @@ test("two marked replies is a duplicate-consumption failure", () => {
   )
 })
 
-test("one marked reply alongside an unrelated one still passes, and counts the extra", () => {
+test("one marked reply alongside an unexpected reply fails the dedicated-chat contract", () => {
   const d = diagnoseTurn({
     fixtureHit: HIT,
     replies: [reply(`mine ${MARKER}`), reply("answering someone else")],
     marker: MARKER,
   })
-  assert.equal(d.status, STATUS.PASS)
+  assert.equal(d.status, STATUS.FAIL)
   assert.equal(d.extraReplyCount, 1)
+  assert.equal(d.causes[0].code, "unexpected_reply")
+})
+
+test("two model requests cannot pass behind one marked platform reply", () => {
+  const d = diagnoseTurn({
+    fixtureHit: HIT,
+    replies: [reply(MARKER)],
+    marker: MARKER,
+    modelRequestCount: 2,
+    matchingModelRequestCount: 2,
+  })
+  assert.equal(d.status, STATUS.FAIL)
+  assert.equal(d.causes[0].code, "model_request_count")
+})
+
+test("a cancelled observation cannot report PASS", () => {
+  const d = diagnoseTurn({
+    fixtureHit: HIT,
+    replies: [reply(MARKER)],
+    marker: MARKER,
+    aborted: true,
+  })
+  assert.equal(d.status, STATUS.FAIL)
 })
 
 test("replies with no text never crash the classifier", () => {

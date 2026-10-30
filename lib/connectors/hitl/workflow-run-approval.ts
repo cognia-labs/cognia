@@ -37,6 +37,8 @@
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
 import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
+import type { WorkflowDependencyBinding } from "@/types/workflow/deployment"
+import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { appendAudit } from "@/lib/connectors/audit"
 import { buildA2UISegment } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 import {
@@ -81,6 +83,8 @@ export interface HoldWorkflowDispatchInput {
   requestText?: string
   ttlMs?: number
   now?: number
+  /** Plugin tools return the prepared surface through their existing reply path. */
+  deliverCard?: boolean
   // Injectable for tests.
   enqueue?: typeof enqueueOutbound
   recordBinding?: typeof recordCallbackBinding
@@ -88,16 +92,17 @@ export interface HoldWorkflowDispatchInput {
   readWorkflow?: (
     workflowId: string
   ) => Promise<{ name?: string; description?: string } | undefined>
+  resolveDependency?: (workflowId: string) => Promise<WorkflowDependencyBinding>
 }
 
 export type HoldWorkflowDispatchResult =
-  | { held: true; surfaceId: string; workflowName: string }
+  | { held: true; surfaceId: string; workflowName: string; surface: A2UISegmentContent }
   | { held: false; reason: "card_delivery_failed"; message: string }
 
 async function readWorkflowRow(
   workflowId: string
 ): Promise<{ name?: string; description?: string } | undefined> {
-  return getDb().workflows.get(workflowId)
+  return getDb().workflowVersions.get(workflowId)
 }
 
 function excerpt(raw: string | undefined): string {
@@ -144,7 +149,31 @@ export async function holdWorkflowDispatchForApproval(
   const readWorkflow = input.readWorkflow ?? readWorkflowRow
   const now = input.now ?? Date.now()
 
-  const row = await readWorkflow(input.workflowId).catch(() => undefined)
+  let lockedDependency: WorkflowDependencyBinding
+  try {
+    const resolveDependency =
+      input.resolveDependency ??
+      (async (workflowId: string) => {
+        const { createPublishedWorkflowDependencyBinding } =
+          await import("@/lib/workflow/runtime/execution-authority")
+        return createPublishedWorkflowDependencyBinding(workflowId)
+      })
+    lockedDependency = await resolveDependency(input.workflowId)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    await audit({
+      adapterId: input.adapterId,
+      kind: "adapter.error",
+      at: now,
+      conversationKey: input.conversationKey,
+      reason: "workflow_hold_version_unavailable",
+      message,
+    }).catch(() => undefined)
+    return { held: false, reason: "card_delivery_failed", message }
+  }
+  // The card describes the immutable publication it will execute, including
+  // when the editable draft has already changed since the last publication.
+  const row = await readWorkflow(lockedDependency.versionId).catch(() => undefined)
   const workflowName = row?.name?.trim() || input.workflowId
   const bindingId = newIdempotencyKey().slice(0, 8)
   const surfaceId = WORKFLOW_HOLD_SURFACE_PREFIX + bindingId
@@ -168,6 +197,7 @@ export async function holdWorkflowDispatchForApproval(
   // cannot redirect the run that was actually approved.
   const payload = {
     workflowId: input.workflowId,
+    lockedDependency,
     workflowName,
     runParams: input.runParams,
     triggeredFrom: input.triggeredFrom,
@@ -199,18 +229,19 @@ export async function holdWorkflowDispatchForApproval(
         })
       )
     )
-    await enqueue({
-      adapterId: input.adapterId,
-      conversationKey: input.conversationKey,
-      request: {
-        conversationRef: input.conversationRef,
-        ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
-        segments: [buildA2UISegment(surfaceId, surface)],
-        metadata: { idempotencyKey: newIdempotencyKey() },
-      },
-      source: "ai-run",
-      authorization: { kind: "system-notice", inboundConversationKey: input.conversationKey },
-    })
+    if (input.deliverCard !== false)
+      await enqueue({
+        adapterId: input.adapterId,
+        conversationKey: input.conversationKey,
+        request: {
+          conversationRef: input.conversationRef,
+          ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+          segments: [buildA2UISegment(surfaceId, surface)],
+          metadata: { idempotencyKey: newIdempotencyKey() },
+        },
+        source: "ai-run",
+        authorization: { kind: "system-notice", inboundConversationKey: input.conversationKey },
+      })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     await audit({
@@ -225,5 +256,5 @@ export async function holdWorkflowDispatchForApproval(
     return { held: false, reason: "card_delivery_failed", message }
   }
 
-  return { held: true, surfaceId, workflowName }
+  return { held: true, surfaceId, workflowName, surface }
 }

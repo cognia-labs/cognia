@@ -29,6 +29,15 @@ jest.mock("@/hooks/bots/use-bot-control-writes", () => ({
   }),
 }))
 
+const setInputSlot = jest.fn()
+jest.mock("@/hooks/bots/use-bot-lifecycle-actions", () => ({
+  useBotLifecycleReadiness: () => ({ canAutomation: true }),
+  useBotLifecycleActions: () => ({
+    pending: new Set(),
+    setInputSlot: (...args: unknown[]) => setInputSlot(...args),
+  }),
+}))
+
 import { BotTriggersSection } from "./triggers-section"
 
 beforeEach(() => {
@@ -277,4 +286,20 @@ it("wraps long trigger details while keeping the switch available", () => {
   )
   expect(screen.getByText(`Event · ${detail}`)).toHaveClass("break-words")
   expect(screen.getByRole("switch")).toBeEnabled()
+})
+
+it("binds input slots independently for each trigger", () => {
+  render(
+    <BotTriggersSection
+      row={row({
+        requiredSlots: [
+          { id: "one", label: "One" },
+          { id: "two", label: "Two" },
+        ],
+        triggers: [{ id: "input", kind: "event", armed: true, acceptsAccount: true }],
+      })}
+    />
+  )
+  fireEvent.change(screen.getByRole("combobox"), { target: { value: "two" } })
+  expect(setInputSlot).toHaveBeenCalledWith("boti_1", "input", "two")
 })

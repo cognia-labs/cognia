@@ -41,6 +41,8 @@ import { Switch } from "@/components/ui/switch"
 import { openUrl } from "@/lib/native/opener"
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { beginLarkOAuth } from "@/lib/connectors/adapters/lark/oauth-begin"
+import { LARK_DOC_READ_SCOPES, mergeLarkScopes } from "@/lib/connectors/adapters/lark/auth"
+import type { ConnectedScopes } from "@/lib/connectors/oauth-scope-audit"
 import type { LarkConnectedUser } from "@/lib/connectors/adapters/lark/oauth-handler"
 import { CONNECTOR_OAUTH_STATE_KEY } from "@/lib/connectors/oauth-registry"
 import { emitCredentialsRotated } from "@/lib/connectors/credentials-events"
@@ -86,6 +88,7 @@ interface TatTestResult {
 type TransportMode = "long-connection" | "webhook"
 
 interface LarkPersistedSettings {
+  connectedScopes?: ConnectedScopes
   transport?: TransportMode
   /** Cached at adapter start by `buildLarkAdapter`; refreshed via the UI affordance. */
   selfBotOpenId?: string
@@ -220,6 +223,7 @@ export function LarkConfigDialog({ open, onOpenChange, row, onCreated }: LarkCon
   const [testResult, setTestResult] = useState<TatTestResult | null>(null)
   const [refreshingOpenId, setRefreshingOpenId] = useState(false)
   const [authorizing, setAuthorizing] = useState(false)
+  const [authorizeDocumentRead, setAuthorizeDocumentRead] = useState(false)
   const [saving, setSaving] = useState(false)
   const credentialTestGeneration = useRef(0)
   const [validationInputs, setValidationInputs] = useState({
@@ -339,7 +343,15 @@ export function LarkConfigDialog({ open, onOpenChange, row, onCreated }: LarkCon
       // brain is what spends it when the relay hands the code back. On the
       // desktop that is this same process; a headless install drives the very
       // same function through the `oauth-begin` operator intent.
-      const begun = await beginLarkOAuth({ adapterId: row.id, redirectUri: effectiveRedirect })
+      const extraScopes = mergeLarkScopes(
+        persistedSettings.connectedScopes?.scopes.join(" "),
+        authorizeDocumentRead ? LARK_DOC_READ_SCOPES : undefined
+      )
+      const begun = await beginLarkOAuth({
+        adapterId: row.id,
+        redirectUri: effectiveRedirect,
+        ...(extraScopes ? { extraScopes } : {}),
+      })
       // The deep-link router validates the redirect's `state`. sessionStorage
       // covers the live path; a localStorage mirror survives a cold restart.
       // This is a pre-check only — the authoritative one is against the
@@ -612,6 +624,8 @@ export function LarkConfigDialog({ open, onOpenChange, row, onCreated }: LarkCon
             sendAsUser={sendAsUser}
             onSendAsUserChange={setSendAsUser}
             onAuthorize={handleAuthorize}
+            authorizeDocumentRead={authorizeDocumentRead}
+            onAuthorizeDocumentReadChange={setAuthorizeDocumentRead}
             authorizing={authorizing}
             saving={saving}
             reach={reach}
@@ -689,6 +703,8 @@ export function LarkConfigDialog({ open, onOpenChange, row, onCreated }: LarkCon
 // ---------------------------------------------------------------------------
 
 interface SendAsUserFieldsProps {
+  authorizeDocumentRead: boolean
+  onAuthorizeDocumentReadChange: (value: boolean) => void
   connectedUser?: LarkConnectedUser
   sendAsUser: boolean
   onSendAsUserChange: (v: boolean) => void
@@ -798,6 +814,19 @@ function SendAsUserFields(p: SendAsUserFieldsProps) {
             t("authorizeButton")
           )}
         </Button>
+      </div>
+
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-0.5">
+          <Label className="text-xs font-medium">{t("authorizeDocumentReadLabel")}</Label>
+          <p className="text-xs text-muted-foreground">{t("authorizeDocumentReadHelp")}</p>
+        </div>
+        <Switch
+          aria-label={t("authorizeDocumentReadLabel")}
+          checked={p.authorizeDocumentRead}
+          onCheckedChange={p.onAuthorizeDocumentReadChange}
+          disabled={p.authorizing || p.saving || !p.reach.available}
+        />
       </div>
 
       <div className="flex items-start justify-between gap-4">

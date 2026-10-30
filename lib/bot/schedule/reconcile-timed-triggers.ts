@@ -157,7 +157,7 @@ export async function syncBotTriggerSchedules(resolved: InstalledBot): Promise<v
   // "turned off" and "deleted": the rows go, the installation stays. A
   // placeholder for one that moved to a paired host wants none either: the
   // host arms its own (ADR-0224).
-  if (installation.status === "enabled" && runsHere(installation.owner)) {
+  if (installation.status === "enabled" && !installation.paused && runsHere(installation.owner)) {
     const config = resolveBotConfig({
       installation: installation.config,
       definitionDefaults: defaultsFromConfigSchema(resolved.definition.configSchema),

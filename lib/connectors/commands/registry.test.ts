@@ -6,6 +6,7 @@ describe("control command registry", () => {
     expect(CONTROL_COMMAND_SPECS.map((s) => s.name).sort()).toEqual(
       [
         "agent",
+        "automation",
         "character",
         "commands",
         "delegate",

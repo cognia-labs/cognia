@@ -27,9 +27,10 @@
 import {
   connectorsHttpRequest,
   connectorsKeyringGet,
-  connectorsKeyringSet,
+  connectorsLarkUserAuth,
 } from "@/lib/connectors/tauri/commands"
 import { CODE_CHALLENGE_METHOD } from "./pkce"
+import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 
 const LARK_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 
@@ -50,6 +51,23 @@ const LARK_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info
  * granted scopes must cover these.
  */
 export const LARK_SENDAS_SCOPES = "offline_access im:message im:message.send_as_user"
+
+/** Read-only cloud-document consent, requested explicitly from the connection UI. */
+export const LARK_DOC_READ_SCOPES = [
+  "search:docs:read",
+  "drive:drive:readonly",
+  "docs:doc:readonly",
+  "docx:document:readonly",
+  "sheets:spreadsheet:readonly",
+  "bitable:app:readonly",
+  "wiki:wiki:readonly",
+].join(" ")
+
+export function hasLarkDocumentSearchScope(scopes: readonly string[]): boolean {
+  return scopes.some((scope) =>
+    ["drive:drive.search:readonly", "drive:drive", "search:docs:read"].includes(scope)
+  )
+}
 
 /**
  * Scopes the issue tracker's Lark Task sync needs on the USER identity
@@ -380,67 +398,68 @@ export async function fetchLarkUserInfo(accessToken: string): Promise<LarkUserIn
 // can act on behalf of the connected user (opt-in via `settings.sendAsUser`).
 // ---------------------------------------------------------------------------
 
-interface UserTokenCacheEntry {
-  token: string
-  /**
-   * Wall-clock ms the token expires, when known (only after an in-process
-   * refresh). Undefined on a cold keyring read — we can't know the persisted
-   * token's remaining TTL, so we serve it optimistically and let the 401 /
-   * invalid-code refresh path (`withUserTokenRefresh`) recover on expiry.
-   */
-  expiresAtMs?: number
-}
-
-const userTokenCache = new Map<string, UserTokenCacheEntry>()
-
 /**
- * Resolve the current user access token for `adapterId`. Returns the cached
- * in-memory token when fresh, else reads the persisted `user_token` from the
- * keyring. Returns null when the adapter has no connected user.
+ * Read the host-owned token on every call. A renderer-local cold-read cache
+ * cannot observe another window's reauthorization or credential revocation.
  */
 export async function getUserAccessToken(adapterId: string): Promise<string | null> {
-  const now = Date.now()
-  const cached = userTokenCache.get(adapterId)
-  if (cached && (cached.expiresAtMs === undefined || cached.expiresAtMs - now > 60_000)) {
-    return cached.token
-  }
-  const stored = await connectorsKeyringGet(adapterId, "user_token")
-  if (!stored) return null
-  userTokenCache.set(adapterId, { token: stored })
-  return stored
+  return connectorsKeyringGet(adapterId, "user_token")
 }
 
 /**
  * Refresh the user access token for `adapterId` using the persisted
  * `user_refresh_token` via the v2 token endpoint (`client_id` + `client_secret`
- * in the body — no tenant token needed). Persists the rotated pair back to the
- * keyring (Lark may rotate the refresh token) and updates the in-memory cache.
+ * in the body — no tenant token needed). Conditionally publishes the rotated
+ * pair through the existing host keyring authority.
  * Throws when no refresh token is stored or Lark rejects it.
  */
 export async function refreshUserToken(opts: {
   adapterId: string
   appId: string
   appSecret: string
+  expectedAuthorizationEpoch?: string
+  signal?: AbortSignal
 }): Promise<string> {
-  const refreshToken = await connectorsKeyringGet(opts.adapterId, "user_refresh_token")
-  if (!refreshToken) {
+  const captured = await withRequestAbort(opts.signal, () =>
+    connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.adapterId })
+  )
+  throwIfRequestAborted(opts.signal)
+  if (
+    !captured.configured ||
+    !captured.accessToken ||
+    (opts.expectedAuthorizationEpoch !== undefined &&
+      captured.authorizationEpoch !== opts.expectedAuthorizationEpoch)
+  ) {
+    throw new Error("lark_auth_stale")
+  }
+  if (!captured.refreshToken || !captured.refreshRevision) {
     throw new Error(`Lark user token refresh: no refresh token stored for ${opts.adapterId}`)
   }
   const tokens = await refreshUserAccessToken({
-    refreshToken,
+    refreshToken: captured.refreshToken,
     appId: opts.appId,
     appSecret: opts.appSecret,
   })
-  await connectorsKeyringSet(opts.adapterId, "user_token", tokens.accessToken)
-  await connectorsKeyringSet(opts.adapterId, "user_refresh_token", tokens.refreshToken)
-  userTokenCache.set(opts.adapterId, {
-    token: tokens.accessToken,
-    expiresAtMs: Date.now() + tokens.expiresInSec * 1000,
-  })
-  return tokens.accessToken
-}
-
-/** Clear the in-memory user-token cache for an adapter (tests / disconnect). */
-export function clearUserTokenCache(adapterId: string): void {
-  userTokenCache.delete(adapterId)
+  // Once dispatched, finish conditional publication even if this caller aborts:
+  // dropping a rotated refresh token would break the still-connected account.
+  try {
+    const committed = await connectorsLarkUserAuth({
+      action: "refresh",
+      adapterId: opts.adapterId,
+      expectedAuthorizationEpoch: captured.authorizationEpoch,
+      expectedRefreshRevision: captured.refreshRevision,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    })
+    if (!committed.accessToken) throw new Error("lark_auth_stale")
+    return committed.accessToken
+  } catch (error) {
+    if (!String(error).includes("lark_auth_stale")) throw error
+    const current = await connectorsLarkUserAuth({ action: "snapshot", adapterId: opts.adapterId })
+    // A concurrent refresh of the same authorization may have won. A changed
+    // account/authorization must never be silently substituted or overwritten.
+    if (current.authorizationEpoch === captured.authorizationEpoch && current.accessToken)
+      return current.accessToken
+    throw new Error("lark_auth_stale")
+  }
 }

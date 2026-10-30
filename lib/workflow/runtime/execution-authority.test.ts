@@ -1,7 +1,9 @@
+import "../nodes/triggers"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import { getDb } from "@/lib/db/schema"
 import { createWorkflow, updateWorkflow } from "@/lib/db/workflows"
 import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
+import { cancelWorkflowRun } from "./cancel-run"
 import {
   __resetTeamWorkflowNodesForTesting,
   installTeamWorkflowNodes,
@@ -21,7 +23,256 @@ beforeEach(dbFixture.restore)
 afterEach(__resetTeamWorkflowNodesForTesting)
 afterAll(dbFixture.dispose)
 
+async function pausedConnectorInput() {
+  const workflow = await createWorkflow({
+    name: "Cancelled paused observer",
+    nodes: [
+      {
+        id: "in",
+        type: "trigger.connector.inbound",
+        typeVersion: 1,
+        position: { x: 0, y: 0 },
+        data: { label: "Inbound", params: { adapterId: "adapter" } },
+      },
+    ],
+    edges: [],
+  })
+  await publishWorkflow(workflow.id, 10)
+  await getDb().conversationOverrides.put({
+    id: "cancel-control",
+    conversationKey: "cancel-chat",
+    sessionId: "s",
+    automationPaused: true,
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  return {
+    workflowId: workflow.id,
+    entrypoint: "trigger" as const,
+    caller: "im",
+    triggerKind: "trigger.connector.inbound" as const,
+    triggerId: "in",
+    triggerBinding: { conversationKey: "cancel-chat", adapterId: "adapter" },
+    triggerOriginAt: 10,
+    payload: {},
+    idempotencyKey: "cancel-paused",
+  }
+}
+
+async function withinWaitDeadline<T>(promise: Promise<T>): Promise<T> {
+  let deadline: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new Error("Paused wait did not settle")), 1_000)
+      }),
+    ])
+  } finally {
+    if (deadline) clearTimeout(deadline)
+  }
+}
+
+function observeWaitListener(signal: AbortSignal) {
+  let markListening!: () => void
+  const ready = new Promise<void>((resolve) => {
+    markListening = resolve
+  })
+  const original = signal.addEventListener.bind(signal)
+  const added = jest
+    .spyOn(signal, "addEventListener")
+    .mockImplementation((type, listener, options) => {
+      original(type, listener, options)
+      if (type === "abort") markListening()
+    })
+  return { ready, restore: () => added.mockRestore() }
+}
+
 describe("ExecutionAuthority", () => {
+  it.each(["caller", "run"])(
+    "settles paused admission on %s cancellation without starting an executor",
+    async (kind) => {
+      const input = await pausedConnectorInput()
+      const controller = new AbortController()
+      const execution = executeDeployedWorkflow({ ...input, signal: controller.signal })
+      const observed = execution.then(
+        () => ({ kind: "resolved" }),
+        (error: Error) => ({ kind: "rejected", message: error.message })
+      )
+      for (let n = 0; n < 100 && (await getDb().workflowRuns.count()) === 0; n++)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      const [pending] = await getDb().workflowRuns.toArray()
+      expect(pending?.status).toBe("pending")
+      if (kind === "caller") controller.abort(new Error("caller stopped"))
+      else await cancelWorkflowRun(pending.id, "explicit cancellation")
+      let deadline: ReturnType<typeof setTimeout> | undefined
+      try {
+        const outcome = await Promise.race([
+          observed,
+          new Promise((resolve) => {
+            deadline = setTimeout(() => resolve({ kind: "timeout" }), 1_000)
+          }),
+        ])
+        expect(outcome).toMatchObject({
+          kind: "rejected",
+          message: expect.stringMatching(kind === "caller" ? /caller stopped/ : /cancelled/),
+        })
+        expect(await getDb().workflowRunEvents.count()).toBe(0)
+      } finally {
+        if (deadline) clearTimeout(deadline)
+        await getDb().conversationOverrides.update("cancel-control", { automationPaused: false })
+        await observed
+      }
+      const retry = await executeDeployedWorkflow(input)
+      expect(retry.runId).toBe(pending.id)
+      expect(retry.result.status).toBe(kind === "caller" ? "succeeded" : "cancelled")
+      expect(await getDb().workflowRuns.count()).toBe(1)
+    }
+  )
+
+  it.each(["caller", "run"])("settles paused orphan recovery on %s cancellation", async (kind) => {
+    const input = await pausedConnectorInput()
+    const owner = new AbortController()
+    const ownerListener = observeWaitListener(owner.signal)
+    const first = executeDeployedWorkflow({ ...input, signal: owner.signal })
+    const firstResult = first.catch((error: Error) => error)
+    await withinWaitDeadline(ownerListener.ready)
+    owner.abort(new Error("driver stopped"))
+    expect(await withinWaitDeadline(firstResult)).toMatchObject({ message: "driver stopped" })
+    ownerListener.restore()
+    const [pending] = await getDb().workflowRuns.toArray()
+    expect(pending.status).toBe("pending")
+    const recovery = new AbortController()
+    const listener = observeWaitListener(recovery.signal)
+    const next = executeDeployedWorkflow({ ...input, signal: recovery.signal })
+    const result = next.catch((error: Error) => error)
+    try {
+      await withinWaitDeadline(listener.ready)
+      if (kind === "caller") recovery.abort(new Error("recovery stopped"))
+      else await cancelWorkflowRun(pending.id, "stop recovered run")
+      expect(await withinWaitDeadline(result)).toMatchObject({
+        message: expect.stringMatching(kind === "caller" ? /recovery stopped/ : /cancelled/),
+      })
+      expect(await getDb().workflowRunEvents.count()).toBe(0)
+      expect(await getDb().workflowRuns.count()).toBe(1)
+    } finally {
+      recovery.abort()
+      listener.restore()
+      await getDb().conversationOverrides.update("cancel-control", { automationPaused: false })
+      await result
+    }
+    const resumed = await executeDeployedWorkflow(input)
+    expect(resumed.runId).toBe(pending.id)
+    expect(resumed.result.status).toBe(kind === "caller" ? "succeeded" : "cancelled")
+  })
+
+  it("aborts a paused legacy connector before any executor starts", async () => {
+    const input = await pausedConnectorInput()
+    const previous = process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+    process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = "0"
+    const caller = new AbortController()
+    const listener = observeWaitListener(caller.signal)
+    const execution = executeDeployedWorkflow({ ...input, signal: caller.signal })
+    const result = execution.catch((error: Error) => error)
+    try {
+      await withinWaitDeadline(listener.ready)
+      caller.abort(new Error("legacy caller stopped"))
+      expect(await withinWaitDeadline(result)).toMatchObject({ message: "legacy caller stopped" })
+      expect(await getDb().workflowRuns.count()).toBe(0)
+      expect(await getDb().workflowRunEvents.count()).toBe(0)
+      await getDb().conversationOverrides.update("cancel-control", { automationPaused: false })
+      expect(await executeDeployedWorkflow(input)).toMatchObject({
+        result: { status: "succeeded" },
+      })
+    } finally {
+      caller.abort()
+      listener.restore()
+      if (previous === undefined) delete process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+      else process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = previous
+      await getDb().conversationOverrides.update("cancel-control", { automationPaused: false })
+      await result
+    }
+  })
+
+  it("keeps concurrent reuse behind the conversation pause gate", async () => {
+    const workflow = await createWorkflow({
+      name: "Paused observer",
+      nodes: [
+        {
+          id: "in",
+          type: "trigger.connector.inbound",
+          typeVersion: 1,
+          position: { x: 0, y: 0 },
+          data: { label: "Inbound", params: { adapterId: "adapter" } },
+        },
+      ],
+      edges: [],
+    })
+    await publishWorkflow(workflow.id, 10)
+    await getDb().conversationOverrides.put({
+      id: "control",
+      conversationKey: "chat",
+      sessionId: "s",
+      automationPaused: true,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const input = {
+      workflowId: workflow.id,
+      entrypoint: "trigger" as const,
+      caller: "im",
+      triggerKind: "trigger.connector.inbound" as const,
+      triggerId: "in",
+      triggerBinding: { conversationKey: "chat", adapterId: "adapter" },
+      triggerOriginAt: 10,
+      payload: {},
+      idempotencyKey: "paused-event",
+    }
+    const first = executeDeployedWorkflow(input)
+    for (let n = 0; n < 100 && (await getDb().workflowRuns.count()) === 0; n++)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    const second = executeDeployedWorkflow(input)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect((await getDb().workflowRuns.toArray()).map((row) => row.status)).toEqual(["pending"])
+    await getDb().conversationOverrides.update("control", { automationPaused: false })
+    const results = await Promise.all([first, second])
+    expect(results[0].runId).toBe(results[1].runId)
+    expect(results[0].result.error).toBeUndefined()
+    expect(results[0].result).toMatchObject({ status: "succeeded" })
+  })
+
+  it("deduplicates concurrent version-bound approvals when the rollback flag is disabled", async () => {
+    const workflow = await createWorkflow({ name: "Approved" })
+    const first = await publishWorkflow(workflow.id, 10)
+    const lockedDependency = await createPublishedWorkflowDependencyBinding(workflow.id)
+    await updateWorkflow(workflow.id, { name: "Changed" })
+    await publishWorkflow(workflow.id, 20)
+    const previous = process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+    process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = "0"
+    try {
+      const input = {
+        workflowId: workflow.id,
+        entrypoint: "skill" as const,
+        caller: "im",
+        triggerKind: "trigger.manual" as const,
+        payload: {},
+        idempotencyKey: "concurrent-approval",
+        lockedDependency,
+      }
+      const results = await Promise.all([
+        executeDeployedWorkflow(input),
+        executeDeployedWorkflow(input),
+      ])
+      expect(results[0].runId).toBe(results[1].runId)
+      expect(await getDb().workflowInvocations.count()).toBe(1)
+      expect(await getDb().workflowRuns.count()).toBe(1)
+      expect((await getDb().workflowRuns.get(results[0].runId))?.versionId).toBe(first.versionId)
+    } finally {
+      if (previous === undefined) delete process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS
+      else process.env.NEXT_PUBLIC_WORKFLOW_VERSIONED_DEPLOYMENTS = previous
+    }
+  })
+
   it("rejects a published admission when another active run owns the workflow capacity", async () => {
     const workflow = await createWorkflow({
       name: "Capacity guarded",
@@ -507,6 +758,17 @@ describe("ExecutionAuthority", () => {
         lease: undefined,
       })
     })
+
+    const ownership = new AbortController()
+    await expect(
+      executeDeployedWorkflow({
+        ...request,
+        signal: ownership.signal,
+        onAdmitted: () => ownership.abort(),
+      })
+    ).rejects.toThrow("aborted")
+    expect((await getDb().workflowRuns.get(first.runId))?.status).toBe("pending")
+    expect(await getDb().workflowInvocations.count()).toBe(1)
 
     const recovered = await executeDeployedWorkflow(request)
 

@@ -55,3 +55,30 @@ it("keeps automatic command send and image-picker anchors C2C-only", () => {
     anchor: 1,
   })
 })
+
+it("preserves native confirmation and callback exclusivity from shared interaction semantics", () => {
+  const out = validateQQKeyboard(
+    keyboard({
+      ...button(),
+      group_id: "decision",
+      action: {
+        ...button().action,
+        modal: { content: "Continue?", confirm_text: "Yes", cancel_text: "No" },
+      },
+    }),
+    "c2c"
+  )
+  expect(out.content?.rows[0].buttons[0]).toMatchObject({
+    group_id: "decision",
+    action: { modal: { content: "Continue?", confirm_text: "Yes", cancel_text: "No" } },
+  })
+  expect(() =>
+    validateQQKeyboard(
+      keyboard({
+        ...button(),
+        action: { ...button().action, modal: { content: "Open https://example.org" } },
+      }),
+      "group"
+    )
+  ).toThrow(/URLs/)
+})

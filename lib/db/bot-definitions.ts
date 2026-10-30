@@ -47,7 +47,12 @@ const REQUIRED_TARGET_FIELD: Record<LocalBotExecutor, "workflow" | "team" | "pro
 
 export class BotDefinitionError extends Error {
   constructor(
-    readonly code: "target_missing" | "target_conflict" | "no_trigger" | "still_installed",
+    readonly code:
+      | "target_missing"
+      | "target_conflict"
+      | "no_trigger"
+      | "still_installed"
+      | "invalid_input_slot",
     message: string
   ) {
     super(message)
@@ -68,7 +73,29 @@ export function assertBotDefinitionShape(input: {
   team?: string
   prompt?: string
   triggers: readonly PluginBotTriggerDef[]
+  requires?: PluginBotRequirementsV1
 }): void {
+  const triggerIds = new Set<string>()
+  const slots = input.requires?.credentials ?? []
+  if (new Set(slots.map((slot) => slot.id)).size !== slots.length)
+    throw new BotDefinitionError("invalid_input_slot", "Credential slot IDs must be unique")
+  for (const trigger of input.triggers) {
+    if (!trigger.id.trim() || triggerIds.has(trigger.id))
+      throw new BotDefinitionError("invalid_input_slot", "Trigger IDs must be non-empty and unique")
+    triggerIds.add(trigger.id)
+    if (
+      trigger.inputCredentialSlot !== undefined &&
+      (!slots.some((slot) => slot.id === trigger.inputCredentialSlot) ||
+        !(
+          trigger.kind === "interaction" ||
+          (trigger.kind === "event" && ["connector", "integration"].includes(trigger.source))
+        ))
+    )
+      throw new BotDefinitionError(
+        "invalid_input_slot",
+        "Input credential slot must be declared on an account-bound trigger"
+      )
+  }
   const required = REQUIRED_TARGET_FIELD[input.executor]
   const values = { workflow: input.workflow, team: input.team, prompt: input.prompt }
   if (!values[required]) {

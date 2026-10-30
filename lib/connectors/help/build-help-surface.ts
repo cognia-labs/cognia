@@ -4,7 +4,7 @@
  * Produces a platform-agnostic `A2UISegmentContent` that every IM adapter
  * renders through its own A2UI → native mapper (Lark interactive card,
  * Slack Block Kit, Discord embed, …) or degrades to `plainTextMirror` on
- * text-only platforms (QQ official, WeChat OA). It is the single source of
+ * text-only scenes. QQ group/C2C uses native Markdown and keyboards. It is the single source of
  * truth for what a Cognia bot tells a user about itself — invoked by the
  * bus-level help/welcome dispatcher (`lib/connectors/help/help-dispatch.ts`)
  * on a `/help` text trigger or a member-added / first-inbound welcome.

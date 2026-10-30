@@ -16,6 +16,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 
 let framesImpl: () => AsyncGenerator<{ topic: string; data: Record<string, unknown> }>
 interface CapturedStreamOpts {
+  signal: AbortSignal
   onTransportState?: (state: { kind: "connected" } | { kind: "failure"; reason: string }) => void
 }
 let capturedStreamOpts: CapturedStreamOpts | null = null
@@ -89,6 +90,40 @@ beforeEach(() => {
 })
 
 describe("createDingTalkAdapter — meta + capability", () => {
+  it("does not start a transport for a pre-aborted runtime", async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    const a = makeAdapter()
+    try {
+      await a.start({ ...makeCtx(), signal: ctrl.signal })
+      expect(capturedStreamOpts).toBeNull()
+      expect(a.health().state).toBe("down")
+    } finally {
+      await a.stop()
+    }
+  })
+
+  it("forwards runtime abort to the currently owned transport signal", async () => {
+    let finish!: () => void
+    framesImpl = async function* () {
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+    }
+    const ctrl = new AbortController()
+    const a = makeAdapter()
+    try {
+      await a.start({ ...makeCtx(), signal: ctrl.signal })
+      const signal = capturedStreamOpts!.signal
+      ctrl.abort()
+      expect(signal.aborted).toBe(true)
+      expect(a.health().state).toBe("down")
+    } finally {
+      finish?.()
+      await a.stop()
+    }
+  })
+
   it("ignores a stopped run's delayed admission and transport health after restart", async () => {
     let entered!: () => void
     const ready = new Promise<void>((resolve) => {

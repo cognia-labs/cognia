@@ -505,3 +505,13 @@ describe("the mirror fence", () => {
     expect(schedulerApi.createTask).not.toHaveBeenCalled()
   })
 })
+
+it("removes paused trigger schedules and restores them on resume", async () => {
+  const trigger: PluginBotTriggerDef = { id: "daily", kind: "schedule", cron: "0 9 * * *" }
+  await syncBotTriggerSchedules(resolved([trigger]))
+  expect(tasks.size).toBe(1)
+  await syncBotTriggerSchedules(resolved([trigger], { paused: true }))
+  expect(tasks.size).toBe(0)
+  await syncBotTriggerSchedules(resolved([trigger], { paused: false }))
+  expect(tasks.size).toBe(1)
+})

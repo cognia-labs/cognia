@@ -1,9 +1,11 @@
 import type { Character } from "@cognia/agent-config-types"
 import Dexie from "dexie"
+import { autonomyAuthorityCap, narrowAuthority } from "@cognia/agent-config-types/agent-composition"
 
 import { COMPUTER_USE_PLUGIN_TOOL_NAMES } from "@/lib/claude/computer-use-tools"
 import { effectiveCapabilitiesForRow } from "@/lib/connectors/effective-capabilities"
 import { resolveImHostCapabilities } from "@/lib/connectors/permission-resolve"
+import { resolveImEffectiveConfig } from "@/lib/connectors/effective-config"
 import type { AdapterInstanceRow, ConversationOverrideRow } from "@/lib/db/connector-types"
 import type { BuiltInSkill } from "@/lib/skills/built-in/types"
 import type { AgentPermissionCeiling } from "@/types/agent/permission-ceiling"
@@ -30,6 +32,7 @@ export function deriveImPermissionCeiling(input: {
   allowedBuiltInToolNames: ReadonlySet<string>
   /** Team/Workflow targets own their Computer Use ability; Character does not modify it. */
   target: "direct" | "team" | "workflow"
+  composition?: Pick<ReturnType<typeof resolveImEffectiveConfig>, "authority" | "autonomy">
 }): AgentPermissionCeiling {
   const host = resolveImHostCapabilities({
     adapter: input.adapter,
@@ -54,7 +57,23 @@ export function deriveImPermissionCeiling(input: {
     for (const name of IM_SCHEDULER_TOOL_NAMES) denied.add(name)
   }
 
-  return denied.size > 0 ? { disallowedTools: Array.from(denied) } : {}
+  const composition =
+    input.composition ??
+    resolveImEffectiveConfig({
+      adapter: input.adapter,
+      override: input.override,
+      rule: null,
+      system: { mode: input.adapter.defaultMode },
+    })
+  const cap = autonomyAuthorityCap(composition.autonomy.effective)
+  const authority = composition.authority.effective
+  const permissionMode = cap ? narrowAuthority(cap, authority) : authority
+  return {
+    ...(permissionMode
+      ? { permissionMode: permissionMode as NonNullable<AgentPermissionCeiling["permissionMode"]> }
+      : {}),
+    ...(denied.size > 0 ? { disallowedTools: Array.from(denied) } : {}),
+  }
 }
 
 /**
@@ -67,6 +86,7 @@ export async function buildImPermissionCeiling(input: {
   character?: Pick<Character, "enableComputerUse"> | null
   platform: PlatformKind
   target: "direct" | "team" | "workflow"
+  composition?: Pick<ReturnType<typeof resolveImEffectiveConfig>, "authority" | "autonomy">
 }): Promise<AgentPermissionCeiling> {
   const [{ buildBuiltInSkillManifest }, { getSharedBuiltInSkillRegistry }] =
     await Dexie.ignoreTransaction(async () => {

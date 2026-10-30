@@ -5,6 +5,9 @@ import {
   claimConnectorInboundJob,
   claimNextConnectorInboundJob,
   completeConnectorInboundJob,
+  acceptConnectorAutomationFanOut,
+  settleConnectorAutomationFanOut,
+  listPendingConnectorAutomationFanOuts,
   countPendingConnectorInboundJobs,
   continueConnectorInboundJobSafely,
   dismissConnectorInboundJobRecovery,
@@ -726,3 +729,67 @@ describe("connector inbound jobs", () => {
     )
   })
 })
+
+it("retains accepted observers through responder completion, long pause and recovery", async () => {
+  const create = event("observer", 1)
+  const job = await enqueueConnectorInboundJob(create, "queue")
+  expect(await acceptConnectorAutomationFanOut(job.id)).toBe(true)
+  await getDb().conversationOverrides.put({
+    id: "control",
+    conversationKey: create.conversationKey,
+    sessionId: "s",
+    automationPaused: true,
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  await completeConnectorInboundJob(job.id)
+  expect(await acceptConnectorAutomationFanOut(job.id)).toBe(true)
+  await sweepTerminalConnectorInboundJobs({ now: Date.now() + INBOUND_RECOVERY_RETENTION_MS * 2 })
+  expect((await listPendingConnectorAutomationFanOuts()).map((row) => row.id)).toEqual([job.id])
+  const later = await enqueueConnectorInboundJob(event("while-paused", 2), "queue")
+  expect(await acceptConnectorAutomationFanOut(later.id)).toBe(false)
+  await settleConnectorAutomationFanOut(job.id)
+  expect(await listPendingConnectorAutomationFanOuts()).toEqual([])
+})
+
+it("persists a rejected observer intake decision across resume and recovery", async () => {
+  const incoming = event("rejected-during-pause", 1)
+  const job = await enqueueConnectorInboundJob(incoming, "queue")
+  await getDb().conversationOverrides.put({
+    id: "paused-intake",
+    conversationKey: incoming.conversationKey,
+    sessionId: "s",
+    automationPaused: true,
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  expect(await acceptConnectorAutomationFanOut(job.id)).toBe(false)
+  await getDb().conversationOverrides.update("paused-intake", { automationPaused: false })
+  expect(await acceptConnectorAutomationFanOut(job.id)).toBe(false)
+  expect(await listPendingConnectorAutomationFanOuts()).toEqual([])
+})
+
+it.each([
+  { observerOwned: true, status: "queued" as const },
+  { observerOwned: false, status: "queued" as const },
+  { observerOwned: false, status: "running" as const },
+  { observerOwned: true, status: "recovery_required" as const },
+])(
+  "settles observer ownership without overwriting another consumer: $observerOwned/$status",
+  async ({ observerOwned, status }) => {
+    const job = await enqueueConnectorInboundJob(
+      event(`completion-owner-${observerOwned}-${status}`, 1),
+      "queue"
+    )
+    await acceptConnectorAutomationFanOut(job.id, { completeJobOnSettle: observerOwned })
+    await getDb().connectorInboundJobs.update(job.id, { status })
+    await settleConnectorAutomationFanOut(job.id)
+    const settled = await getDb().connectorInboundJobs.get(job.id)
+    expect(settled).toMatchObject({
+      status: observerOwned && status === "queued" ? "completed" : status,
+      automationFanOut: { state: "settled" },
+    })
+    if (observerOwned) expect(settled?.event).not.toHaveProperty("raw")
+    else expect(settled?.event).toHaveProperty("raw")
+  }
+)

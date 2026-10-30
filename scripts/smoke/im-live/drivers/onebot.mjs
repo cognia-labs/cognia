@@ -5,14 +5,33 @@ import { pollUntil, requestJson, sleep } from "./http.mjs"
 import { createLease, observedReply } from "./observe.mjs"
 
 const PAGE_SIZE = 100
+const validClientId = (value) =>
+  (typeof value === "string" && /^[1-9]\d*$/.test(value)) ||
+  (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+const validMessageId = (value) =>
+  (typeof value === "string" &&
+    /^-?[1-9]\d*$/.test(value) &&
+    Number.isSafeInteger(Number(value))) ||
+  (typeof value === "number" && Number.isSafeInteger(value) && value !== 0)
 const textOf = (message) =>
   message.message
     .filter((s) => s.type === "text")
     .map((s) => s.data?.text ?? "")
     .join("")
 
-export function createOneBotDriver({
+export function createOneBotDriver({ values, ...options }) {
+  return createQQHistoryDriver({ ...options, values })
+}
+
+// Shared client-side observer, independent of Cognia's target adapter. The
+// Official Bot lane uses a human observer; OneBot observes its target account.
+export function createQQHistoryDriver({
   values,
+  platform = "onebot",
+  observerUin = values.targetBotUin,
+  conversationKind = "group",
+  conversationId = values.targetGroupId,
+  quoteNeedsMention = false,
   fetchImpl = fetch,
   timeoutMs = 30000,
   humanTimeoutMs = 120000,
@@ -20,7 +39,12 @@ export function createOneBotDriver({
   sleepImpl = sleep,
   log = console.log,
 }) {
-  const { apiBase, bearerToken, targetGroupId, targetBotUin, driverUserUin } = values
+  const { apiBase, bearerToken, targetBotUin, driverUserUin } = values
+  if (![targetBotUin, driverUserUin, observerUin, conversationId].every(validClientId))
+    throw new Error("QQ client conversation ID and UIN values must be positive decimal integers")
+  const group = conversationKind === "group"
+  const leaseConversationId =
+    platform === "onebot" ? String(conversationId) : `${conversationKind}:${conversationId}`
   const root = new URL(apiBase)
   // The extra observer API is local to the Mac. Never put bearer credentials
   // in URLs (which are included in HTTP diagnostics).
@@ -49,8 +73,8 @@ export function createOneBotDriver({
     return payload.data
   }
   const page = async (cursor) => {
-    const data = await call("get_group_msg_history", {
-      group_id: String(targetGroupId),
+    const data = await call(group ? "get_group_msg_history" : "get_friend_msg_history", {
+      [group ? "group_id" : "user_id"]: String(conversationId),
       count: PAGE_SIZE,
       ...(cursor ? { message_seq: cursor } : {}),
     })
@@ -58,8 +82,45 @@ export function createOneBotDriver({
     for (const item of data.messages) {
       if (!Array.isArray(item.message))
         throw new Error("Set NapCat HTTP messagePostFormat to array")
-      if (item.message_id === undefined || !Number.isFinite(Number(item.time)))
-        throw new Error("OneBot history returned a message without id/time")
+      const sender = item.user_id ?? item.sender?.user_id
+      if (
+        !validMessageId(item.message_id) ||
+        !validClientId(sender) ||
+        !["number", "string"].includes(typeof item.time) ||
+        String(item.time).trim() === "" ||
+        !Number.isSafeInteger(Number(item.time)) ||
+        Number(item.time) <= 0 ||
+        Number(item.time) > Math.floor(now() / 1000) + 30
+      )
+        throw new Error("OneBot history returned a message without valid id/time/sender")
+      if (group && item.group_id !== undefined && String(item.group_id) !== String(conversationId))
+        throw new Error("OneBot history returned a different conversation")
+      if (!group && item.group_id !== undefined && String(item.group_id) !== "0")
+        throw new Error("OneBot C2C history returned a group conversation")
+      if (
+        (item.self_id !== undefined && String(item.self_id) !== String(observerUin)) ||
+        (item.user_id !== undefined &&
+          item.sender?.user_id !== undefined &&
+          String(item.user_id) !== String(item.sender.user_id))
+      )
+        throw new Error("OneBot history returned conflicting observer or sender identity")
+      if (
+        (item.message_type !== undefined && item.message_type !== (group ? "group" : "private")) ||
+        (item.post_type !== undefined && !["message", "message_sent"].includes(item.post_type)) ||
+        (item.post_type === "message_sent" && String(sender) !== String(observerUin))
+      )
+        throw new Error("OneBot history returned a conflicting message type")
+      if (!group) {
+        const actors = [String(observerUin), String(targetBotUin)]
+        const recipient =
+          String(sender) === String(observerUin) ? String(targetBotUin) : String(observerUin)
+        if (
+          !actors.includes(String(sender)) ||
+          (item.peer_id !== undefined && String(item.peer_id) !== String(conversationId)) ||
+          (item.target_id !== undefined && String(item.target_id) !== recipient)
+        )
+          throw new Error("OneBot C2C history returned a different peer conversation")
+      }
     }
     return data.messages
   }
@@ -71,16 +132,31 @@ export function createOneBotDriver({
     for (;;) {
       const messages = await page(cursor)
       for (const item of messages) all.set(String(item.message_id), item)
-      const oldest = messages.reduce(
-        (a, b) => (!a || Number(b.time) < Number(a.time) ? b : a),
-        null
-      )
+      const oldestTime = Math.min(...messages.map((m) => Number(m.time)))
       if (
         messages.length < PAGE_SIZE ||
         messages.some((m) => lease.baseline.has(String(m.message_id))) ||
-        Number(oldest?.time) < lease.startTimeSec
+        oldestTime < lease.startTimeSec
       )
         break
+      const boundary = messages.filter((m) => Number(m.time) === oldestTime)
+      // Native group sequences are chronological. Short OneBot message IDs
+      // are hashes; C2C sequences are sender-local and cannot break a tie.
+      if (
+        boundary.length > 1 &&
+        (!group || !boundary.every((m) => /^\d+$/.test(String(m.real_seq))))
+      )
+        throw new Error(
+          "OneBot history pagination has an ambiguous same-second boundary; use a quiet test conversation"
+        )
+      const oldest = boundary.reduce((a, b) =>
+        group &&
+        b.real_seq !== undefined &&
+        a.real_seq !== undefined &&
+        BigInt(b.real_seq) < BigInt(a.real_seq)
+          ? b
+          : a
+      )
       // NapCat resolves message_seq through its short message-id map.
       cursor = String(oldest.message_id)
       if (cursors.has(cursor) || now() >= deadline)
@@ -96,10 +172,22 @@ export function createOneBotDriver({
       .sort((a, b) => Number(a.time) - Number(b.time))
   }
   const waitHuman = async (lease, marker, replyId) => {
+    const action = group
+      ? replyId
+        ? quoteNeedsMention
+          ? "group-quote-with-mention"
+          : "group-quote"
+        : "group-mention"
+      : replyId
+        ? "c2c-quote"
+        : "c2c-text"
+    const address = group
+      ? `group ${conversationId}`
+      : `the private conversation with ${targetBotUin}`
     log(
       replyId
-        ? `[im-live] onebot: as QQ ${driverUserUin}, quote reply ${replyId} in group ${targetGroupId} with: ${marker}`
-        : `[im-live] onebot: as QQ ${driverUserUin}, select @${targetBotUin} from QQ's mention picker in group ${targetGroupId} and send: ${marker}`
+        ? `[im-live] ${platform}: as QQ ${driverUserUin}, quote reply ${replyId}${quoteNeedsMention ? ` and select @${targetBotUin}` : group ? " without mentioning the target" : ""} in ${address} with: ${marker}`
+        : `[im-live] ${platform}: as QQ ${driverUserUin}, ${group ? `select @${targetBotUin} from QQ's mention picker in ${address} and send` : `send in ${address}`}: ${marker}`
     )
     const found = await pollUntil(
       async () => {
@@ -109,11 +197,14 @@ export function createOneBotDriver({
             (m) =>
               String(m.user_id ?? m.sender?.user_id) === String(driverUserUin) &&
               textOf(m).includes(marker) &&
-              m.message.some((s) =>
-                replyId
-                  ? s.type === "reply" && String(s.data?.id) === String(replyId)
-                  : s.type === "at" && String(s.data?.qq) === String(targetBotUin)
-              )
+              (!replyId ||
+                m.message.some(
+                  (s) => s.type === "reply" && String(s.data?.id) === String(replyId)
+                )) &&
+              (!group ||
+                m.message.some(
+                  (s) => s.type === "at" && String(s.data?.qq) === String(targetBotUin)
+                ) === (!replyId || quoteNeedsMention))
           ) ?? null
         )
       },
@@ -123,39 +214,44 @@ export function createOneBotDriver({
       throw new Error(
         "OneBot human mention/quote timed out; no matching message from the configured driver user"
       )
-    return { messageId: String(found.message_id), sentAt: Number(found.time) * 1000 }
+    return { messageId: String(found.message_id), sentAt: Number(found.time) * 1000, action }
   }
   return {
-    platform: "onebot",
-    conversationId: String(targetGroupId),
+    platform,
+    conversationId: leaseConversationId,
+    enforceReplyTiming: true,
     async doctor() {
       const checks = [
         {
           name: "human differs from target",
-          ok: driverUserUin !== targetBotUin,
+          ok: String(driverUserUin) !== String(targetBotUin),
           detail: "Use a second QQ account for mentions and quoted replies.",
         },
       ]
       try {
         const info = await call("get_login_info")
         checks.push({
-          name: "target identity",
-          ok: String(info?.user_id) === String(targetBotUin),
-          detail: `NapCat account ${info?.user_id}, expected ${targetBotUin}`,
+          name: "observer identity",
+          ok: validClientId(info?.user_id) && String(info.user_id) === String(observerUin),
+          detail: `NapCat account ${info?.user_id}, expected ${observerUin}`,
         })
       } catch (error) {
-        checks.push({ name: "target identity", ok: false, detail: error.message })
+        checks.push({ name: "observer identity", ok: false, detail: error.message })
       }
       try {
         await page()
         checks.push({
-          name: "group history readable",
+          name: `${conversationKind} history readable`,
           ok: true,
           detail:
-            "HTTP observer ready; the live turns verify Cognia's WebSocket delivery separately.",
+            "HTTP observer ready; live turns verify client-visible text delivery, not stream completion or Host control.",
         })
       } catch (error) {
-        checks.push({ name: "group history readable", ok: false, detail: error.message })
+        checks.push({
+          name: `${conversationKind} history readable`,
+          ok: false,
+          detail: error.message,
+        })
       }
       return checks
     },
@@ -163,8 +259,8 @@ export function createOneBotDriver({
       const startTimeSec = Math.floor(now() / 1000)
       const existing = await page()
       return createLease({
-        platform: "onebot",
-        conversationId: String(targetGroupId),
+        platform,
+        conversationId: leaseConversationId,
         extra: {
           startTimeSec,
           baseline: new Set(existing.map((m) => String(m.message_id))),

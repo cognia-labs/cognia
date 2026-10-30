@@ -359,6 +359,19 @@ describe("stageUrl", () => {
 })
 
 describe("stageLarkDoc", () => {
+  it("does not stage a fetched document after its caller aborts", async () => {
+    const controller = new AbortController()
+    mockFetchLark.mockImplementation(async () => {
+      controller.abort(new Error("cancel stage"))
+      return { title: "Fixture", text: "must not stage" }
+    })
+    await expect(
+      stageLarkDoc("https://fixture.feishu.cn/docx/fixture", {
+        adapterId: "fixture",
+        signal: controller.signal,
+      })
+    ).rejects.toThrow("cancel stage")
+  })
   const DOCX_URL = "https://acme.feishu.cn/docx/doxcnAbCdEfGh1234567890"
 
   it("stages a fetched Lark doc with lark tags", async () => {

@@ -315,26 +315,40 @@ describe("ConnectorBus — sendOutbound", () => {
     expect(result.error?.code).toBe("adapter_not_found")
   })
 
-  it("records a successful direct-wire send in the delivered-message ledger", async () => {
-    const bus = getBus()
-    bus.registerAdapter(makeAdapter("a1"))
-    const req: OutboundRequest = {
-      ...makeRequest(),
-      deliveryTarget: {
-        address: {
-          conversationKey: "telegram:a1:42",
-          platform: "telegram",
-          adapterId: "a1",
-          scopeKind: "group",
-          containerId: "42",
+  it.each([undefined, "platform-chat-1"])(
+    "records a successful direct-wire send and its platform chat %s in the delivery ledger",
+    async (platformChatId) => {
+      const bus = getBus()
+      const adapter = makeAdapter("a1")
+      jest.mocked(adapter.send).mockResolvedValue({
+        ok: true,
+        platformMessageId: "pm_1",
+        ...(platformChatId ? { platformChatId } : {}),
+      })
+      bus.registerAdapter(adapter)
+      const req: OutboundRequest = {
+        ...makeRequest(),
+        deliveryTarget: {
+          address: {
+            conversationKey: "telegram:a1:42",
+            platform: "telegram",
+            adapterId: "a1",
+            scopeKind: "group",
+            containerId: "42",
+          },
+          conversationRef: { platform: "telegram", adapterId: "a1" },
+          refreshedAt: Date.now(),
         },
-        conversationRef: { platform: "telegram", adapterId: "a1" },
-        refreshedAt: Date.now(),
-      },
+      }
+      await bus.sendOutbound("a1", req)
+      expect(mockRecordDelivered).toHaveBeenCalledWith(
+        "a1",
+        "telegram:a1:42",
+        "pm_1",
+        platformChatId
+      )
     }
-    await bus.sendOutbound("a1", req)
-    expect(mockRecordDelivered).toHaveBeenCalledWith("a1", "telegram:a1:42", "pm_1")
-  })
+  )
 
   it("does not record when the send has no delivery target or no platform id", async () => {
     const bus = getBus()
@@ -360,6 +374,24 @@ describe("ConnectorBus — singleton + reset", () => {
 })
 
 describe("ConnectorBus — passive inbound observers", () => {
+  it("isolates observer mutations from routing and other observers", async () => {
+    const bus = getBus()
+    const event = makeEvent("a1", "authentic")
+    const handler = jest.fn().mockResolvedValue(undefined)
+    const observer = jest.fn()
+    bus.setInboundHandler(handler)
+    bus.subscribeInbound((copy) => {
+      copy.messageId = "forged"
+      copy.deliveryPermissionChange = { proactive: true }
+      copy.conversationRef.channelId = "elsewhere"
+    })
+    bus.subscribeInbound(observer)
+    await bus.dispatchInbound(event)
+    expect(handler).toHaveBeenCalledWith(event)
+    expect(event.messageId).toBe("authentic")
+    expect(event.deliveryPermissionChange).toBeUndefined()
+    expect(observer.mock.calls[0][0].messageId).toBe("authentic")
+  })
   beforeEach(() => __resetBusForTesting())
 
   it("notifies subscribers for every dispatched event and disposes", async () => {

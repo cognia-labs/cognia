@@ -51,12 +51,14 @@ export async function executeBotTask(
     { getBotInstallation, readBotTriggerState },
     { buildBotEventEnvelope, oneOffSourceRecordId },
     { externalProvenance },
+    { projectBotDeliveryPolicy },
     { isRunnableBot, resolveInstalledBot },
   ] = await Promise.all([
     import("@/lib/db/bot-event-deliveries"),
     import("@/lib/db/bot-installations"),
     import("@/lib/bot/events/envelope"),
     import("@/lib/bot/events/provenance"),
+    import("@/lib/bot/events/router"),
     import("@/lib/bot/installed-bot"),
   ])
 
@@ -125,8 +127,7 @@ export async function executeBotTask(
   const delivery = await enqueueBotDelivery({
     envelope,
     now,
-    ...(trigger.concurrencyKey ? { concurrencyKey: `${installationId}::${trigger.id}` } : {}),
-    ...(trigger.retry ? { retry: trigger.retry } : {}),
+    ...projectBotDeliveryPolicy(trigger, envelope, now),
   })
 
   return {

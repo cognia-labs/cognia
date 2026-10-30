@@ -623,6 +623,7 @@
     "workflowTooltip": "由工作流节点 {nodeId} 发送 — 点击打开运行记录"
   },
   "outboundStatus": {
+    "awaitingProvider": "等待平台结果",
     "retry": "重试",
     "status": {
       "deadlettered": "已死信",

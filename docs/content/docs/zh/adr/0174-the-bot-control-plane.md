@@ -126,6 +126,16 @@ Bot 平面此前只能从控制台触达，插件代码够不着——这意味�
 
 `BOT_EVENT_PAYLOAD_MAX_BYTES`（64 KiB）在 `lib/bot/events/envelope.ts` 的 `enqueue` 与 `emit` 内部断言，按 JSON 的 UTF-8 字节数计量，`undefined` 记为零，于是每条生产路径以同一方式拒绝超大载荷，而不是各自长出自己的估算。
 
+## 2026-10-28 修正：交付身份、自动化控制与输入账户
+
+交付身份使用 `(installation, trigger, event)` 三元组。同一个事件命中同一安装的多个 trigger 时，各自得到独立的队列行和 durable run。兼容旧的二元 receipt 时，只复用它原来所属 trigger 的记录，避免升级重复执行或吞掉另一个 trigger。
+
+Disarm 改变未来的 trigger intake。安装暂停使用独立的 `paused` 字段：停止接收、定时调度和新 attempt，保留已接受的 pending/parked 工作，让正在执行的 attempt 收尾。恢复刷新保留队列的期限，但不延长人工审批的过期时间。显式 cancel 终止固定的已接受集合，使审批失效，通知运行中和已脱离父任务的 Workflow/Squad 子任务，并阻止迟到写入和 replay 复活。重试同一个 cancel operation 只处理原集合，不波及后来新到达的事件。
+
+IM `/automation pause|resume|cancel|status` 控制当前 conversation 的独立 Workflow/Bot 订阅；主 responder 的 `manual`、mute 保持原语义。Observer 的接收或拒绝决定都会持久化；responder 完成不会丢失已接受的 observer，重启也不会补接暂停期间拒绝的消息。恢复只转交 observer，不重跑 responder；先排除不可用 adapter 和已满 conversation，再应用批量上限。延迟转交 Bot 时重新开始队列保留窗口，同时保留原始接受时间供 cancel 判断。
+
+账户型 trigger 声明 `inputCredentialSlot`，安装可以用 `triggerInputSlots` 覆盖。路由和执行都会将当前选定绑定与保存的来源身份核对；显式绑定缺失、来源错误或存在歧义时拒绝 intake。旧安装仅在输入账户唯一时推断；已经使用显式映射的定义不会从无关输出槽位推断输入。更换凭据或输入槽位会取消已接受工作，避免恢复后换账户执行。Host 和 companion 控制要求明确声明 `bots.automation` feature，并保持 owner/mirror 边界。这些字段均为可选字段，无需新增 Dexie schema 或索引。
+
 ## 已知限制
 
 这些记在这里，而不是留给下一个人去发现。

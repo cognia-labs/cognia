@@ -36,6 +36,8 @@ export interface InstallBotInput {
   id?: string
   config?: Record<string, unknown>
   credentialBindings?: Record<string, BotCredentialBinding>
+  paused?: boolean
+  triggerInputSlots?: Record<string, string>
   triggerOverrides?: Record<string, boolean>
   policyGrant?: PluginBotPolicyV1
   /** `disabled` installs it switched off. Default: enabled, if its slots allow. */
@@ -141,6 +143,8 @@ export function buildBotInstallationRow(input: InstallBotInput): BotInstallation
     updatedAt: now,
     ...(input.scope.workspaceId ? { workspaceId: input.scope.workspaceId } : {}),
     ...(input.scope.projectId ? { projectId: input.scope.projectId } : {}),
+    ...(input.triggerInputSlots ? { triggerInputSlots: input.triggerInputSlots } : {}),
+    ...(input.paused !== undefined ? { paused: input.paused } : {}),
     ...(input.triggerOverrides ? { triggerOverrides: input.triggerOverrides } : {}),
     ...(input.policyGrant ? { policyGrant: input.policyGrant } : {}),
   }
@@ -236,11 +240,44 @@ export async function updateBotInstallation(
   }
   await db.botInstallations.put(merged)
   if (merged.status !== "enabled") {
-    const { cancelLiveBotInstallation } = await import("@/lib/bot/runtime/run")
-    cancelLiveBotInstallation(id)
+    const { cancelAcceptedBotDeliveries } = await import("@/lib/bot/runtime/run")
+    await cancelAcceptedBotDeliveries(id)
   }
   await syncSchedules(merged)
   return merged
+}
+
+/** Pause preserves accepted work and lets active attempts finish. */
+export async function setBotInstallationPaused(
+  id: string,
+  paused: boolean
+): Promise<BotInstallationRow | undefined> {
+  const db = getDb()
+  const row = await db.transaction("rw", db.botInstallations, db.botEventDeliveries, async () => {
+    const existing = await db.botInstallations.get(id)
+    if (!existing) return undefined
+    assertRunsHere("bot-installation", existing.owner)
+    if (existing.syncedFromHost) throw new Error("Bot pause must execute on its owning host")
+    const next = {
+      ...existing,
+      paused,
+      updatedAt: Date.now(),
+      humanRevision: (existing.humanRevision ?? 0) + 1,
+    }
+    if (existing.paused && !paused) {
+      const accepted = await db.botEventDeliveries.where("installationId").equals(id).toArray()
+      for (const delivery of accepted)
+        if (
+          !delivery.syncedFromHost &&
+          ["pending", "parked", "leased", "running", "failed"].includes(delivery.status)
+        )
+          await db.botEventDeliveries.update(delivery.id, { retentionExtendedAt: Date.now() })
+    }
+    await db.botInstallations.put(next)
+    return next
+  })
+  if (row) await syncSchedules(row)
+  return row
 }
 
 /**

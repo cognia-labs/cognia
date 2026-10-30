@@ -1,6 +1,24 @@
 import type { PluginBotPolicyV1 } from "@/types/plugin/plugin-bot"
 
-import { BOT_POLICY_LAYERS, allowsSelfTriggering, resolveBotPolicy } from "./ceilings"
+import {
+  BOT_POLICY_LAYERS,
+  allowsSelfTriggering,
+  resolveBotPolicy,
+  botPermissionCeiling,
+} from "./ceilings"
+
+it("never widens an engine handoff beyond policy or the selected autonomy", () => {
+  expect(
+    botPermissionCeiling(
+      { authority: "bypassPermissions", autonomy: "act" },
+      { maxAuthority: "plan" }
+    )
+  ).toEqual({ permissionMode: "plan" })
+  expect(botPermissionCeiling({ authority: "bypassPermissions", autonomy: "confirm" }, {})).toEqual(
+    { permissionMode: "default" }
+  )
+  expect(botPermissionCeiling({ autonomy: "suggest" }, {})).toEqual({ permissionMode: "plan" })
+})
 
 function layers(...entries: Array<[(typeof BOT_POLICY_LAYERS)[number], PluginBotPolicyV1]>) {
   return entries.map(([name, policy]) => ({ name, policy }))
@@ -176,4 +194,13 @@ describe("resolveBotPolicy", () => {
     )
     expect(forward.policy).toEqual(reversed.policy)
   })
+})
+
+it("applies forced preset authority before handing work to another engine", () => {
+  expect(
+    botPermissionCeiling(
+      { presetId: "minimal", authority: "bypassPermissions", autonomy: "autopilot" },
+      {}
+    )
+  ).toEqual({ permissionMode: "plan" })
 })

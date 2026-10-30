@@ -63,6 +63,10 @@ flowchart TD
 
 `buildA2UISegment`（`a2ui-to-segments.ts:84`）烤制 `plainTextMirror`：模型提供的 `widget.fallbackText` 优先于自动生成的 `generatePlainTextMirror`。同一构造器被 `scheduled-outbound.ts` 以及运行呈现 runner 的后备路径（`run-presentation/runner.ts:411`）直接复用，用于正常助手回复路径之外发出的 surface。运行时在 `runtime.ts:437` 调用 `assistantReplyToSegments`。
 
+同一个通用 mapper 工具集提供 `generateMarkdownMirror`：按 Card/Text 语义输出标题和段落，转义字面文本，可限制标题层级，并从正文中排除已原生渲染的按钮 ID。QQ 群聊和 C2C 用它呈现欢迎／帮助消息，保留键盘回执及不支持控件／频道场景的明确降级。无按钮 A2UI 与媒体混发时仍保留文字说明降级，避免仅升级排版就多消耗一个被动回复名额。
+
+现有帮助分派器支持 `<帮助触发词> welcome`（通常为 `/help welcome`）预览当前欢迎消息。它复用帮助消息的受治理队列和回调授权，不调用模型，也不改变首次欢迎去重记录。
+
 ## 入站投影：projectInboundToA2UI
 
 `projectInboundToA2UI`（`inbound-a2ui-dispatch.ts:26`）是总线侧的入站投影。总线对每条入站 `create` 事件调用它一次，传入平台 kind 与原始平台负载（来自 Slack rich_text / 飞书互动卡片 / Telegram 标题 + 内联键盘 / Discord embed + components）；它派发到匹配的各平台 mapper（`../<platform>/inbound-to-a2ui.ts`），返回一个 `InboundA2UIBlock`（`inbound-a2ui-types.ts:50`）或 `null`。该 block 会被持久化到 `StoredMessage.metadata.inboundA2UI`，并由 `components/chat/message-parts/inbound-a2ui-renderer.tsx` 遍历，使 Inbox 展示平台原生的富结构。mapper 尽力而为：nullish 负载、未映射的平台，或抛异常的 mapper 都归结为 `null`，总线随即回退到纯文本渲染。
@@ -266,3 +270,21 @@ if (existing && !isExpired(existing, now)) {
   <Card title="内置适配器" href="./built-in-adapters" description="消费 buildActionId / 能力矩阵并发出原生富内容的各平台映射器。" />
   <Card title="适配器模型" href="./adapter-model" description="这些投影所面向的适配器接口 —— edit()、能力矩阵、parse.ts。" />
 </Cards>
+
+## QQ C2C 原生回复流
+
+`reply-stream.ts` 将符合发送策略的主对话及显式 origin-reply 回调绑定至每次捕获的 `streamKey`。待审批内容、群聊、定时摘要及 respond-via 目标仅发送最终结果。辅助模块检查累计文本的 PII，并在捕获结束后拒绝迟到片段；`qq-official/stream.ts` 串行合并快照，在每次 HTTP 请求前持久化发送意图，最终结果仍经现有持久出站队列完成。已确认的流可恢复；投递不确定时停止自动重试并要求核对。混合或改写的被动回复仍保留完整普通发送；显式召回流复用通用发送意图、主机保存的插件目标、即时授权和持久配额回执，整条流共用一次逻辑消息额度。已接收的召回预览不能降级为第二条消息；检查点条件写入保证跨管理器取消不被覆盖。窗口、被动预算、有界恢复和真实验收见 [QQ 接入](../../connectors/qq-official-setup)。
+
+## 通用资源、发送意图与语音
+
+可选资源由 `types/connectors/management.ts` 和 `PlatformAdapter.management` 定义，经 `lib/connectors/management.ts` 发现及校验。插件 read/manage 权限与需显式启用的 `im.query_resource`／`im.manage_resource` 共用此入口，平台路径只留在各自适配器中。具名操作覆盖添加联系人邀请链接、素材、全局菜单、指令面板、成员／黑名单、成员禁言、入群审批及策略。不支持的适配器会在副作用前拒绝，能力声明不等于平台批准。[QQ 接入文档](../../connectors/qq-official-setup)列出当前定制实现和边界。
+
+共享 dispatcher 将 IM 审批卡真正放入受治理队列，使用标准 Text／Button 字段、独立确认／取消绑定及捕获的目标。回调重新读取原会话、当前技能权限上限和允许列表；卡片创建保留操作者限制及取消状态，入队失败时清理本次绑定。插件只读观察者收到隔离的事件副本，不能修改后续路由所用事件。
+
+`OutboundRequest.sendOptions` 表达显式 `mode` 和 `imagePolicy`；治理器区分回复与主动／召回发送，直接及持久队列出口均拒绝适配器未声明的功能。异步授权前复制请求，非被动消息在平台发送前持久化额度与意图，结果不确定时要求核对。原生素材凭据按适配器隔离，不保存上传凭据和临时预览。共享 A2UI 按钮支持二次确认与互斥组，原生适配器需明确声明策略能力。
+
+`im.send_voice` 调用 `lib/connectors/voice.ts`，复用 `ttsOrchestrator.synthesize` 的 provider／音色设置、可选角色音色、发音字典、缓存／重试及原生凭据桥。它返回一个编码音频文件，不改变播放状态；原文及实际朗读文本都在导出前校验，本地／缓存路径也适用，新云端合成计入用量。`lib/audio/transcode.ts` 提供平台无关的字节转换入口，按 `adapter.voiceFormats(conversationRef)` 协商目标格式；MIME 已匹配也必须解码校验，不兼容的缓冲音频转换为目标接受的 WAV／SILK，QQ C2C 使用真实 Tencent SILK。本地 Worker 限制为 20 MB、300 秒、累计解码样本 64 MB、同时一个任务、30 秒，支持 PCM16、PCM／浮点 WAV、MP3、AAC／ADTS、M4A／MP4 AAC、原生 FLAC、Ogg Opus 和 Tencent SILK；不支持 Vorbis、WebM 和 ADPCM WAV。`lib/audio/aac.ts` 在本地 AAC WASM 解码前校验完整 ADTS 或有界自包含 MP4 表，保留支持的 priming／edit 时间线，拒绝加密、外部引用、不支持的 edit、布局变化及帧时长不一致。AAC-LC／HE-AAC 输入继续复用同一 TTS 设置、隐私、缓存和计量链路，再为 C2C 生成 SILK；输出编解码类型仍为 WAV／SILK。工具／插件调用的取消信号贯穿 TTS、转换及未提交的队列事务，不写入持久化负载；队列保存最终音频字节，发送重试不重新合成。不新增自动语音回复开关或连接器云端 STT 循环；平台提供的 WAV／转写辅助字段继续经过既有媒体／模型策略。
+
+### 通用系统控制及异步回执
+
+`NormalizedInboundEvent.interaction`、`deliveryStatus` 扩展既有系统事件 bus，不另建平台 callback runtime；规范事件目录同时驱动工作流筛选。原生接收方可用 `AdapterContext.emit(event, { requireAcceptance: true })` 请求严格接受结果，类型化互动的审计与 occurrence 原子提交。反馈复用 reaction，平台控制仅作为观察。支持异步回执的适配器接收仅主机持有的 `onPendingReceipt` 发送回调，精确平台证据结算既有队列，保持 FIFO、等待器、投递账本、SLA、审计及配对客户端状态投影。频道审核范围与授权要求见 [QQ 指南](../../connectors/qq-official-setup)。

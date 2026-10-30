@@ -21,6 +21,8 @@ import {
 } from "./bot-installations"
 import { __resetDbForTesting, getDb } from "./schema"
 
+import { setBotInstallationPaused } from "./bot-installations"
+
 const NOW = 1_700_000_000_000
 
 const REPO_SLOT: PluginBotCredentialSlot = { id: "repo", label: "Repository" }
@@ -395,4 +397,19 @@ describe("bot trigger runtime state", () => {
     expect(await writeBotTriggerState("boti_missing", "a", { cursor: "x" })).toBeUndefined()
     expect(await readBotTriggerState("boti_missing", "a")).toBeUndefined()
   })
+})
+
+it("preserves initial pause and input slots and refuses pause writes on a mirror", async () => {
+  const row = await installBot({
+    definitionId: "bot",
+    definitionSource: "plugin",
+    pinnedVersion: "1",
+    scope: { kind: "account" },
+    paused: true,
+    triggerInputSlots: { in: "chat" },
+  })
+  expect(row).toMatchObject({ paused: true, triggerInputSlots: { in: "chat" } })
+  expect(await setBotInstallationPaused(row.id, false)).toMatchObject({ paused: false })
+  await getDb().botInstallations.update(row.id, { syncedFromHost: true })
+  await expect(setBotInstallationPaused(row.id, true)).rejects.toThrow(/own/)
 })

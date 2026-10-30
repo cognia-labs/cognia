@@ -98,6 +98,7 @@ export interface ConnectorsHealth {
 }
 
 export interface TauriHttpRequest {
+  maxResponseBytes?: number
   url: string
   method: string
   headers?: Record<string, string>
@@ -164,7 +165,7 @@ export interface AttachmentCleanupReport {
 
 export interface ConnectorMediaUploadRequest {
   /** QQ-only native binary/chunked protocol; always uploads without sending. */
-  qq?: { fileType: number; fileName: string }
+  qq?: { fileType: number; fileName: string; reusableAsset?: boolean }
   /** Optional multipart file part; contentType applies to that part. */
   multipart?: { fieldName: string; filename: string; fields: Record<string, string> }
   /** http returns a serialized {status, headers, body}; default extracts content_uri. */
@@ -393,6 +394,38 @@ export interface ConnectorCredentialSnapshot {
   revision: string
 }
 
+export interface LarkUserAuthState {
+  authorizationEpoch: string
+  configured: boolean
+  accessToken: string | null
+  refreshToken: string | null
+  refreshRevision: string | null
+  accountLabel: string | null
+  scopes: string[]
+}
+
+interface LarkUserAuthCommit {
+  adapterId: string
+  expectedAuthorizationEpoch: string
+  accessToken: string
+  refreshToken: string
+}
+
+export type LarkUserAuthInput =
+  | { action: "snapshot"; adapterId: string }
+  | (LarkUserAuthCommit & {
+      action: "authorize"
+      pendingState: string
+      accountLabel?: string
+      scopes?: string
+    })
+  | (LarkUserAuthCommit & { action: "refresh"; expectedRefreshRevision: string })
+
+/** Host-owned conditional token-pair publication; unsupported hosts fail closed. */
+export async function connectorsLarkUserAuth(input: LarkUserAuthInput): Promise<LarkUserAuthState> {
+  return invoker("connectors_lark_user_auth", { input })
+}
+
 /** Runtime-only atomic value/revision read; never cached as an idempotent result. */
 export async function connectorsKeyringGetSnapshot(
   adapterId: string,
@@ -451,6 +484,10 @@ export async function connectorsWechatOaInboundAck(adapterId: string, id: string
 // ---------------------------------------------------------------------------
 
 export async function connectorsHttpRequest(req: TauriHttpRequest): Promise<TauriHttpResponse> {
+  if (req.maxResponseBytes !== undefined) {
+    const { maxResponseBytes, ...request } = req
+    return invoker("connectors_bounded_http_request", { req: request, maxResponseBytes })
+  }
   return invoker<TauriHttpResponse>("connectors_http_request", { req })
 }
 
@@ -638,6 +675,112 @@ export async function connectorsMediaUpload(req: ConnectorMediaUploadRequest): P
  */
 export async function connectorsDiscordUpload(req: ConnectorDiscordUploadRequest): Promise<string> {
   return invoker<string>("connectors_discord_upload", { req })
+}
+
+export interface MatrixCryptoBackupRequest {
+  adapterId: string
+  action: "prepare" | "beginCreate" | "cancelCreate" | "enable" | "restore" | "status"
+  version?: string
+  backupInfo?: Record<string, unknown>
+  recoveryKey?: string
+  createClaim?: string
+  rooms?: Record<string, unknown>
+}
+export interface MatrixCryptoBackupResult {
+  createClaim?: string
+  cancelled?: boolean
+  createPending?: boolean
+  recoveryKey?: string
+  backupInfo?: Record<string, unknown>
+  version?: string | null
+  enabled?: boolean
+  imported?: number
+  total?: number
+  backedUp?: number
+}
+export interface MatrixCrossSigningStatus {
+  hasMaster: boolean
+  hasSelfSigning: boolean
+  hasUserSigning: boolean
+  masterKey: string | null
+  identityVerified: boolean
+  deviceCrossSigned: boolean
+  deviceTrusted: boolean
+}
+
+export interface MatrixVerificationInput {
+  action:
+    | "request"
+    | "status"
+    | "accept"
+    | "startSas"
+    | "acceptSas"
+    | "confirmSas"
+    | "generateQr"
+    | "scanQr"
+    | "confirmQr"
+    | "cancel"
+  userId: string
+  deviceId?: string
+  flowId?: string
+  qrBytes?: number[]
+}
+export interface MatrixVerificationState {
+  flowId: string
+  userId: string
+  deviceId: string | null
+  state: "requested" | "ready" | "sas" | "qr" | "done" | "cancelled"
+  deviceVerified: boolean
+  decimals?: [number, number, number] | null
+  emojiIndices?: number[] | null
+  confirmed?: boolean
+  scanned?: boolean
+  qrBytes?: number[]
+  requests: MatrixCryptoOutgoingRequest[]
+  qrImage?: { size: number; modules: boolean[] }
+  sasStartedByUs?: boolean
+}
+
+export function connectorsMatrixCryptoVerification(req: {
+  adapterId: string
+  action: "list"
+  userId: string
+}): Promise<{ flows: MatrixVerificationState[] }>
+export function connectorsMatrixCryptoVerification(
+  req: MatrixVerificationInput & { adapterId: string }
+): Promise<MatrixVerificationState>
+export function connectorsMatrixCryptoVerification(
+  req:
+    | (MatrixVerificationInput & { adapterId: string })
+    | { adapterId: string; action: "list"; userId: string }
+) {
+  return invoker("connectors_matrix_crypto_verification", { req })
+}
+
+export type MatrixCryptoCrossSigningRequest =
+  | { adapterId: string; action: "prepare"; serverMasterKey: string | null }
+  | { adapterId: string; action: "status"; userId?: string; deviceId?: string }
+
+export function connectorsMatrixCryptoCrossSigning(
+  req: MatrixCryptoCrossSigningRequest & { action: "prepare" }
+): Promise<{ requests: MatrixCryptoOutgoingRequest[] }>
+export function connectorsMatrixCryptoCrossSigning(
+  req: MatrixCryptoCrossSigningRequest & { action: "status" }
+): Promise<MatrixCrossSigningStatus>
+export function connectorsMatrixCryptoCrossSigning(req: MatrixCryptoCrossSigningRequest) {
+  return invoker("connectors_matrix_crypto_cross_signing", { req })
+}
+
+export async function connectorsMatrixCryptoBackup(
+  req: MatrixCryptoBackupRequest
+): Promise<MatrixCryptoBackupResult> {
+  return invoker("connectors_matrix_crypto_backup", { req })
+}
+export async function connectorsBoundedHttpRequest(
+  req: TauriHttpRequest,
+  maxResponseBytes: number
+): Promise<TauriHttpResponse> {
+  return invoker("connectors_bounded_http_request", { req, maxResponseBytes })
 }
 
 export async function connectorsMatrixCryptoInit(req: MatrixCryptoInitRequest): Promise<void> {

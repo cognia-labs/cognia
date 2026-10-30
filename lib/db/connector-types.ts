@@ -111,7 +111,37 @@ export interface PlatformIdentityRow extends PlatformIdentity {
  * are never pruned.
  */
 export type InboundLedgerNamespace =
-  "inbound" | "callback" | "welcome" | "outbound" | "landed-chat" | "qq-reference"
+  | "inbound"
+  | "callback"
+  | "welcome"
+  | "outbound"
+  | "landed-chat"
+  | "qq-reference"
+  | "qq-stream"
+  | "connector-asset"
+  | "connector-delivery"
+  | "connector-status"
+
+export interface QQStreamCheckpoint {
+  /** Omitted for legacy passive streams. */
+  mode?: "reengagement"
+  streamKey: string
+  sceneId: string
+  msgId?: string
+  eventId?: string
+  receivedAt: number
+  phase: "open" | "sending" | "uncertain" | "rejected" | "closed" | "cancelled"
+  index: number
+  text: string
+  messageId?: string
+  referenceIndex?: string
+  /** QQ remain_msg_len observation; never a local writable-character quota. */
+  remaining?: number
+  finalizing?: boolean
+  finalKey?: string
+  finalFingerprint?: string
+  finalMessageId?: string
+}
 
 export interface InboundLedgerRow {
   /** `${adapterId}:${namespace}:${platformMessageId}` (or legacy form). */
@@ -123,6 +153,17 @@ export interface InboundLedgerRow {
   receivedAt: number
   /** Non-indexed QQ alias data; null is a conflicting, unusable mapping. */
   qqReference?: { messageId: string; referenceIndex: string } | null
+  /** Non-indexed native stream checkpoint; persisted before each external write. */
+  qqStream?: QQStreamCheckpoint
+  asset?: import("@/types/connectors/management").ConnectorAsset
+  deliveryReceipt?: import("@/lib/connectors/delivery-receipts").ConnectorDeliveryReceipt
+  deliveryStatus?: {
+    conversationKey: string
+    update: import("@/types/connectors/event").ConnectorDeliveryStatus
+    timestamp: number
+    conflict?: true
+    resolvedAt?: number
+  }
 }
 
 /**
@@ -438,6 +479,10 @@ export interface ConversationOverrideRow {
    * this flag. Non-indexed additive — no Dexie bump.
    */
   muted?: boolean
+  /** Independent subscriptions: pause intake/starts; active work drains. */
+  automationPaused?: boolean
+  /** Accepted observer work at/before this host timestamp is cancelled. */
+  automationCancelledBefore?: number
   /**
    * Conversation lifecycle status (CRM maturation, schema v83). Chatwoot-style:
    * absent / "open" (active) | "pending" (waiting on someone) | "snoozed"
@@ -533,6 +578,7 @@ export type ConnectorConversationActivationStatus = "inactive" | "active"
 
 /** Durable runtime state for one platform conversation scope (Dexie v120). */
 export interface ConnectorConversationStateRow {
+  deliveryPermissions?: { proactive: boolean; updatedAt: number }
   /** Same value as the stable opaque conversation key. */
   conversationKey: string
   adapterId: string
@@ -573,6 +619,13 @@ export type ConnectorInboundJobStatus =
 
 /** Durable inbound execution unit, unique per adapter/platform message (Dexie v120). */
 export interface ConnectorInboundJobRow {
+  /** Independent observer receipt survives responder completion and restart. */
+  automationFanOut?: {
+    state: "pending" | "settled"
+    acceptedAt: number
+    /** This observer was the source job's only consumer when intake was accepted. */
+    completeJobOnSettle?: true
+  }
   id: string
   adapterId: string
   /** Conversation-scoped platform identity used by the unique Dexie index. */

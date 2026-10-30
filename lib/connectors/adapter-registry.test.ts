@@ -181,13 +181,14 @@ describe("buildQQOfficialAdapter", () => {
   it("forwards the private-guild opt-in and confirmed bot identity", async () => {
     const row = makeRow({
       type: "qq-official",
-      settings: { receiveGuildMessages: true },
+      settings: { receiveGuildMessages: true, receiveMessageAudit: true },
       selfIdentity: { platformAccountId: "bot-openid", source: "whoami", confirmedAt: 1 },
     })
     await buildQQOfficialAdapter(row)
     expect(mockCreateQQOfficialAdapter).toHaveBeenCalledWith(
       expect.objectContaining({
         receiveGuildMessages: true,
+        receiveMessageAudit: true,
         selfId: expect.any(Function),
       })
     )
@@ -688,13 +689,18 @@ describe("buildSlackAdapter", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildLarkAdapter", () => {
-  it("passes normalized persisted appearance into the running adapter", async () => {
+  it.each([
+    ["invalid", "fill"],
+    ["default", "default"],
+    ["compact", "compact"],
+    ["fill", "fill"],
+  ])("passes normalized persisted %s width into the running adapter", async (width, expected) => {
     await buildLarkAdapter(
       makeRow({
         type: "lark",
         settings: {
           selfBotOpenId: "ou_cached",
-          cardPresentation: { theme: "purple", showElapsed: false, width: "invalid" },
+          cardPresentation: { theme: "purple", showElapsed: false, width },
         },
       })
     )
@@ -703,7 +709,7 @@ describe("buildLarkAdapter", () => {
         cardPresentation: expect.objectContaining({
           theme: "purple",
           showElapsed: false,
-          width: "default",
+          width: expected,
         }),
       })
     )

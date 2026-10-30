@@ -5,15 +5,21 @@ import userEvent from "@testing-library/user-event"
 
 import type { BotConsoleRow } from "@/lib/bot/console/bot-rows"
 
+const controlAutomation = jest.fn()
 const setEnabled = jest.fn(async (_id: string, _enabled: boolean) => undefined)
 const uninstall = jest.fn(async (_id: string) => true)
-let readiness = { availability: { state: "available", reason: "local-host" }, can: true }
+let readiness: {
+  availability: { state: string; reason: string }
+  can: boolean
+  canAutomation?: boolean
+} = { availability: { state: "available", reason: "local-host" }, can: true }
 let pending = new Set<string>()
 
 jest.mock("@/hooks/bots/use-bot-lifecycle-actions", () => ({
   useBotLifecycleReadiness: () => readiness,
   useBotLifecycleActions: () => ({
     pending,
+    controlAutomation: (...args: unknown[]) => controlAutomation(...args),
     setEnabled: (id: string, enabled: boolean) => setEnabled(id, enabled),
     uninstall: (id: string) => uninstall(id),
   }),
@@ -45,6 +51,7 @@ function row(over: Partial<BotConsoleRow> = {}): BotConsoleRow {
 }
 
 beforeEach(() => {
+  controlAutomation.mockClear()
   setEnabled.mockClear()
   uninstall.mockClear().mockResolvedValue(true)
   readiness = { availability: { state: "available", reason: "local-host" }, can: true }
@@ -52,6 +59,20 @@ beforeEach(() => {
 })
 
 describe("BotLifecycleControls", () => {
+  it("routes pause, resume and cancellation as distinct gestures", async () => {
+    readiness.canAutomation = true
+    const user = userEvent.setup()
+    const { rerender } = render(<BotLifecycleControls row={row()} />)
+    await user.click(screen.getByRole("button", { name: "Pause intake" }))
+    expect(controlAutomation).toHaveBeenLastCalledWith("boti_1", "pause")
+    rerender(<BotLifecycleControls row={row({ paused: true })} />)
+    expect(screen.getByText(/queued work is retained/i)).toBeVisible()
+    await user.click(screen.getByRole("button", { name: "Resume intake" }))
+    expect(controlAutomation).toHaveBeenLastCalledWith("boti_1", "resume")
+    await user.click(screen.getByRole("button", { name: "Cancel accepted work" }))
+    expect(controlAutomation).toHaveBeenLastCalledWith("boti_1", "cancel")
+  })
+
   it("derives the switch from the row's status, never from local state", () => {
     // Asking to enable a Bot with an unbound slot answers `needs_setup`, and a
     // locally held switch would show an on state the row denies.

@@ -37,6 +37,7 @@ import {
 } from "@/lib/twin/importers"
 import { BINARY_TWIN_FORMATS, detectSourceFormat } from "@/lib/twin/ingest"
 import { fetchUrlAsRawSource } from "@/lib/twin/ingest/url-fetcher"
+import { throwIfRequestAborted } from "@/lib/network/request-abort"
 import {
   fetchLarkDocAsRawSource,
   LarkIngestError,
@@ -438,6 +439,7 @@ export async function stageLarkDoc(
 ): Promise<StageResult> {
   try {
     const fetched = await fetchLarkDocAsRawSource(urlOrToken, opts)
+    throwIfRequestAborted(opts.signal)
     const ref = parseLarkDocUrl(urlOrToken)
     const tags = ["lark", ref?.kind === "wiki" ? "lark-wiki" : "lark-doc"]
     if (ref?.host) tags.push(ref.host)
@@ -456,8 +458,10 @@ export async function stageLarkDoc(
     }
   } catch (err) {
     if (err instanceof LarkIngestError) {
+      throwIfRequestAborted(opts.signal)
       return fail(err.code, err.params)
     }
+    throwIfRequestAborted(opts.signal)
     return fail("larkNetwork", { reason: err instanceof Error ? err.message : String(err) })
   }
 }

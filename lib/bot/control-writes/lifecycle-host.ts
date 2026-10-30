@@ -1,5 +1,6 @@
 /** Authenticated host lifecycle boundary; definitions and credentials are resolved locally. */
 import { canonicalIntegrationValue } from "@/lib/plugin/api/bot-integration-binding"
+import { sha256Hex } from "@/lib/share/hash"
 import { BOT_WRITE_COMMANDS, resolveBotWriteRoute } from "./route"
 import { z } from "zod"
 import { buildBotRows, countDeadLettersByInstallation } from "@/lib/bot/console/bot-rows"
@@ -14,12 +15,13 @@ import { getBotInstallation, listBotInstallations } from "@/lib/db/bot-installat
 import { getDb } from "@/lib/db/schema"
 import { resolveInstalledBot } from "@/lib/bot/installed-bot"
 import { listBotEntries } from "@/lib/plugin/registries/bot-registry"
-import { getRegisteredIntegration } from "@/lib/integrations/registry"
 import { validateAgainstJsonSchema } from "@/lib/workflow/nodes/ai/schema-validate"
 import { projectBotInstallationRow } from "@/lib/sync/desktop-sync-source"
-import type { PluginBotCredentialSlot } from "@/types/plugin/plugin-bot"
 import {
   installBotFromCatalogLocally,
+  validateBotCredentialBinding,
+  setBotInputSlotLocally,
+  controlBotAutomationLocally,
   updateBotConfigLocally,
   bindBotCredentialLocally,
   setBotInstallationEnabledLocally,
@@ -42,6 +44,24 @@ export const botLifecycleMutationSchema = z.discriminatedUnion("operation", [
   z
     .object({
       ...common,
+      operation: z.literal("input_slot"),
+      installationId: id,
+      triggerId: id,
+      slotId: id.nullable(),
+    })
+    .strict(),
+  z
+    .object({
+      ...common,
+      operation: z.literal("automation"),
+      installationId: id,
+      action: z.enum(["pause", "resume", "cancel"]),
+      deliveryId: z.string().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...common,
       operation: z.literal("install"),
       definitionId: id,
       version: id,
@@ -59,6 +79,8 @@ export const botLifecycleMutationSchema = z.discriminatedUnion("operation", [
       // that could stop halfway. `enabled` is a request: missing credentials
       // still answer `needs_setup`.
       enabled: z.boolean().optional(),
+      paused: z.boolean().optional(),
+      triggerInputSlots: z.record(z.string(), id).optional(),
       triggerOverrides: z.record(z.string(), z.boolean()).optional(),
       policyGrant: botPolicyGrantSchema.optional(),
     })
@@ -126,38 +148,6 @@ function validateConfig(
   return effective
 }
 
-async function validateBinding(
-  slot: PluginBotCredentialSlot | undefined,
-  value: z.infer<typeof binding> | null
-) {
-  if (!slot) throw new Error("Bot credential slot is not declared")
-  if (!value) return
-  if ("integrationAccountId" in value) {
-    const account = await getDb().integrationAccounts.get(value.integrationAccountId)
-    if (
-      !account ||
-      (slot.integration && ![account.pluginId, account.integrationId].includes(slot.integration))
-    )
-      throw new Error("Bot credential account does not match its slot")
-    const integration = getRegisteredIntegration(
-      account.pluginId,
-      account.integrationId
-    )?.definition
-    if (
-      !integration ||
-      (slot.strategy &&
-        !integration.authStrategies.some(
-          (strategy) => strategy.id === slot.strategy && strategy.providerId === account.providerId
-        ))
-    )
-      throw new Error("Bot credential strategy does not match its slot")
-  } else {
-    const adapter = await getDb().adapterInstances.get(value.adapterId)
-    if (!adapter || (slot.integration && adapter.type !== slot.integration))
-      throw new Error("Bot credential adapter does not match its slot")
-  }
-}
-
 /**
  * The mutation without its approval token. `bot_installation_mutate` is
  * `approval: interactive` (ADR-0224 A6), so a paired device sends an
@@ -193,17 +183,39 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     if (scopedId && !(await getDb().projects.get(scopedId)))
       throw new Error("Bot installation scope does not exist on this host")
     const config = validateConfig(entry.configSchema, input.config ?? {})
+    const installOperationFingerprint = await sha256Hex(
+      canonicalIntegrationValue({
+        definitionId: input.definitionId,
+        version: input.version,
+        scope: input.scope,
+        config,
+        credentialBindings: input.credentialBindings ?? {},
+        enabled: input.enabled ?? true,
+        paused: input.paused ?? false,
+        triggerInputSlots: input.triggerInputSlots ?? {},
+        triggerOverrides: input.triggerOverrides ?? {},
+        policyGrant: input.policyGrant ?? null,
+      })
+    )
     for (const [slotId, value] of Object.entries(input.credentialBindings ?? {}))
-      await validateBinding(
+      await validateBotCredentialBinding(
         entry.slots.find((slot) => slot.id === slotId),
         value
       )
     const installationId = `boti_${input.operationId}`
     const existing = await getBotInstallation(installationId)
     if (existing) {
+      if (existing.installOperationFingerprint) {
+        if (existing.installOperationFingerprint !== installOperationFingerprint)
+          throw new Error("Bot installation operation already belongs to another definition")
+        return projectBotInstallationRow(existing)
+      }
       if (
         existing.definitionId !== entry.definitionId ||
         existing.pinnedVersion !== entry.version ||
+        (existing.paused ?? false) !== (input.paused ?? false) ||
+        canonicalIntegrationValue(existing.triggerInputSlots ?? {}) !==
+          canonicalIntegrationValue(input.triggerInputSlots ?? {}) ||
         canonicalIntegrationValue(existing.config) !== canonicalIntegrationValue(config) ||
         canonicalIntegrationValue(existing.scope) !== canonicalIntegrationValue(input.scope) ||
         canonicalIntegrationValue(existing.credentialBindings) !==
@@ -219,9 +231,12 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     const row = await installBotFromCatalogLocally(
       {
         entry,
+        installOperationFingerprint,
         scope: input.scope,
         config,
         credentialBindings: input.credentialBindings,
+        ...(input.triggerInputSlots ? { triggerInputSlots: input.triggerInputSlots } : {}),
+        ...(input.paused !== undefined ? { paused: input.paused } : {}),
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
         ...(input.triggerOverrides ? { triggerOverrides: input.triggerOverrides } : {}),
         ...(input.policyGrant ? { policyGrant: input.policyGrant } : {}),
@@ -235,6 +250,19 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     return { id: input.installationId, removed: true }
   if (!installation || installation.syncedFromHost)
     throw new Error("Bot installation is not owned by this host")
+  if (input.operation === "input_slot")
+    return projectBotInstallationRow(
+      await setBotInputSlotLocally(input.installationId, input.triggerId, input.slotId)
+    )
+  if (input.operation === "automation")
+    return projectBotInstallationRow(
+      await controlBotAutomationLocally(
+        input.installationId,
+        input.action,
+        input.deliveryId,
+        input.operationId
+      )
+    )
   if (input.operation === "uninstall") {
     await uninstallBotInstallationLocally(input.installationId)
     return projectBotInstallationRow(installation)
@@ -256,7 +284,7 @@ export async function mutateBotInstallationOnHost(raw: unknown) {
     )
   }
   if (input.operation === "bind") {
-    await validateBinding(
+    await validateBotCredentialBinding(
       resolved.definition.requires?.credentials?.find((slot) => slot.id === input.slotId),
       input.binding
     )

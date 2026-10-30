@@ -115,9 +115,12 @@ export { botWriteIdempotencyKey } from "./remote"
  */
 export {
   BotDefinitionMissingError,
+  BotCredentialBindingError,
   BotLifecycleUnavailableError,
   BotNotInstallableError,
   bindBotCredential,
+  controlBotAutomation,
+  setBotInputSlot,
   installBotFromCatalog,
   setBotExecutionRoute,
   setBotInstallationEnabled,
@@ -127,3 +130,5 @@ export {
 } from "./lifecycle"
 export type { BotExecutionRouteInput, InstallBotFromCatalogInput } from "./lifecycle"
 export { canWriteBotLifecycle, resolveBotLifecycleWriteAvailability } from "./route"
+
+export { resolveBotAutomationAvailability } from "./route"

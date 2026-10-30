@@ -52,6 +52,8 @@ export interface BotTriggerSummary {
   /** Present for `poll` and `derivedState`. The caller formats it. */
   everyMs?: number
   inputSchema?: Record<string, unknown>
+  acceptsAccount?: boolean
+  inputCredentialSlot?: string
   /**
    * Why the schedule this row describes fell back to the definition's value.
    * A code (`"missing"`, `"invalid-cron"`, `"invalid-timezone"`,
@@ -95,6 +97,7 @@ export interface BotConsoleRow {
   description?: string
   /** Absent exactly when {@link orphaned} is true. */
   executor?: PluginBotExecutor
+  paused?: boolean
   status: BotInstallationStatus
   scope: BotInstallationScope
   /**
@@ -180,7 +183,7 @@ export function triggerDetail(trigger: PluginBotTriggerDef): string | undefined 
 }
 
 export function summarizeTrigger(
-  installation: Pick<BotInstallationRow, "triggerOverrides" | "triggerState">,
+  installation: Pick<BotInstallationRow, "triggerOverrides" | "triggerState" | "triggerInputSlots">,
   trigger: PluginBotTriggerDef
 ): BotTriggerSummary {
   const everyMs =
@@ -190,6 +193,16 @@ export function summarizeTrigger(
     id: trigger.id,
     kind: trigger.kind,
     armed: isBotTriggerArmed(installation, trigger),
+    ...(trigger.kind === "interaction" ||
+    (trigger.kind === "event" && ["connector", "integration"].includes(trigger.source))
+      ? { acceptsAccount: true }
+      : {}),
+    ...((installation.triggerInputSlots?.[trigger.id] ?? trigger.inputCredentialSlot) !== undefined
+      ? {
+          inputCredentialSlot:
+            installation.triggerInputSlots?.[trigger.id] ?? trigger.inputCredentialSlot,
+        }
+      : {}),
     ...(trigger.label ? { label: trigger.label } : {}),
     ...(trigger.labelKey ? { labelKey: trigger.labelKey } : {}),
     ...(detail ? { detail } : {}),
@@ -221,6 +234,7 @@ export function buildBotRow(input: BotRowInput): BotConsoleRow {
     ...(definition?.description ? { description: definition.description } : {}),
     ...(definition ? { executor: definition.executor } : {}),
     status: installation.status,
+    ...(installation.paused !== undefined ? { paused: installation.paused } : {}),
     scope: installation.scope,
     orphaned: !resolved,
     problems: resolved?.problems ?? [],
@@ -313,7 +327,7 @@ export function botRowNeedsAttention(row: BotConsoleRow): boolean {
 
 /** Can this row actually take work, as opposed to merely existing? */
 export function botRowIsArmed(row: BotConsoleRow): boolean {
-  if (row.orphaned || row.status !== "enabled") return false
+  if (row.orphaned || row.status !== "enabled" || row.paused) return false
   if (row.problems.some((problem) => problem.kind === "handler_missing")) return false
   return row.armedTriggers > 0
 }

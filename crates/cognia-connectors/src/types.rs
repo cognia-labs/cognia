@@ -74,6 +74,8 @@ pub struct ConnectorMediaUploadRequest {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QQMediaUploadOptions {
+    #[serde(default)]
+    pub reusable_asset: bool,
     pub file_type: u8,
     pub file_name: String,
 }

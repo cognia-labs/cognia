@@ -1,6 +1,10 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import {
+  registerIntegrationDefinitions,
+  __resetIntegrationRegistryForTesting,
+} from "@/lib/integrations/registry"
 
 import type { PluginBotDef } from "@/types/plugin/plugin-bot"
 
@@ -14,6 +18,9 @@ import {
   BotLifecycleUnavailableError,
   BotNotInstallableError,
   bindBotCredential,
+  controlBotAutomation,
+  controlBotAutomationLocally,
+  setBotInputSlot,
   botInstallMutation,
   installBotFromCatalog,
   setBotExecutionRoute,
@@ -99,6 +106,19 @@ beforeEach(async () => {
   __resetBotsForTesting()
   await __resetDbForTesting()
   allowLocal()
+  __resetIntegrationRegistryForTesting()
+  registerIntegrationDefinitions({
+    pluginId: "acme",
+    definitions: [{ id: "github", authStrategies: [], actions: [] } as never],
+    handlers: {},
+  })
+  await getDb().integrationAccounts.put({
+    id: "iacc_1",
+    pluginId: "acme",
+    integrationId: "github",
+    enabled: true,
+  } as never)
+  await getDb().adapterInstances.put({ id: "adp_1", type: "slack" } as never)
 })
 
 afterEach(() => {
@@ -974,3 +994,130 @@ describe("plugin lifecycle hooks", () => {
     expect(row.definitionSource).toBe("local")
   })
 })
+
+it("preserves the caller's operation ID when cancelling accepted automation", async () => {
+  register()
+  const installed = await installBot({
+    definitionId: "acme:digest",
+    definitionSource: "plugin",
+    pinnedVersion: "1.0.0",
+    scope: { kind: "account" },
+  })
+  const operationId: string = crypto.randomUUID()
+  await controlBotAutomationLocally(installed.id, "cancel", undefined, operationId)
+  expect((await getBotInstallation(installed.id))?.automationCancellations?.[operationId]).toEqual(
+    []
+  )
+})
+
+it("pauses intake without disabling and persists a per-trigger input choice", async () => {
+  register(
+    definition({
+      triggers: [{ id: "in", kind: "interaction" }],
+      requires: { credentials: [{ id: "chat", label: "Chat", optional: true }] },
+    })
+  )
+  const installed = await installBot({
+    definitionId: "acme:digest",
+    definitionSource: "plugin",
+    pinnedVersion: "1.0.0",
+    scope: { kind: "account" },
+  })
+  expect(await controlBotAutomation(installed.id, "pause")).toMatchObject({
+    paused: true,
+    status: "enabled",
+  })
+  expect(await controlBotAutomation(installed.id, "resume")).toMatchObject({
+    paused: false,
+    status: "enabled",
+  })
+  expect(await setBotInputSlot(installed.id, "in", "chat")).toMatchObject({
+    triggerInputSlots: { in: "chat" },
+  })
+  await expect(setBotInputSlot(installed.id, "in", "unknown")).rejects.toMatchObject({
+    code: "bot_credential_binding_invalid",
+  })
+  await expect(
+    bindBotCredential(installed.id, "chat", { adapterId: "missing" })
+  ).rejects.toMatchObject({ code: "bot_credential_binding_invalid" })
+})
+
+it.each(["remote", "companion"])(
+  "relays automation and input-slot controls only with advertised support: %s",
+  async (kind) => {
+    restoreRoute?.()
+    let supported = false
+    restoreRoute = __setBotWriteRouteDepsForTests({
+      isRemoteHostActive: () => kind === "remote",
+      hasLocalDatabase: () => false,
+      activeHostFeatureManifest: () =>
+        ({
+          schemaVersion: 2,
+          features: {
+            "bots.control": { version: 1, operations: ["bot_installation_mutate"] },
+            ...(supported
+              ? { "bots.automation": { version: 1, operations: ["bot_installation_mutate"] } }
+              : {}),
+          },
+          operations: [{ name: "bot_installation_mutate", healthy: true }],
+        }) as never,
+      getRuntimeSnapshot: (() => ({
+        target: { kind: "companion" },
+        connectionState: "online",
+        vaultState: "unlocked",
+        host: {
+          compatible: true,
+          operations: ["bot_installation_mutate"],
+          grants: ["workspace.write"],
+          ...(supported ? { botAutomation: true } : {}),
+        },
+      })) as never,
+    })
+    mockRelay.mockClear()
+    for (const call of [
+      () => controlBotAutomation("host", "pause"),
+      () => setBotInputSlot("host", "in", "github"),
+    ])
+      await expect(call()).rejects.toMatchObject({ code: "bot_lifecycle_unavailable" })
+    expect(mockRelay).not.toHaveBeenCalled()
+    supported = true
+    mockRelay.mockRejectedValueOnce(
+      new Error(
+        "Host: [bot_credential_binding_invalid:wrongAccount] Bot credential account does not match its slot"
+      )
+    )
+    await expect(
+      bindBotCredential("host", "github", { integrationAccountId: "wrong" })
+    ).rejects.toMatchObject({ code: "bot_credential_binding_invalid", reason: "wrongAccount" })
+    mockRelay.mockResolvedValue({ id: "host", status: "enabled", credentialBindings: {} })
+    await controlBotAutomation("host", "cancel", "delivery")
+    expect(mockRelay).toHaveBeenLastCalledWith(
+      "bot_installation_mutate",
+      expect.objectContaining({
+        operation: "automation",
+        installationId: "host",
+        action: "cancel",
+        deliveryId: "delivery",
+        operationId: expect.any(String),
+      }),
+      expect.any(Object)
+    )
+    await setBotInputSlot("host", "in", "github")
+    expect(mockRelay).toHaveBeenLastCalledWith(
+      "bot_installation_mutate",
+      expect.objectContaining({
+        operation: "input_slot",
+        installationId: "host",
+        triggerId: "in",
+        slotId: "github",
+      }),
+      expect.any(Object)
+    )
+    await setBotInputSlot("host", "in", null)
+    expect(mockRelay).toHaveBeenLastCalledWith(
+      "bot_installation_mutate",
+      expect.objectContaining({ operation: "input_slot", slotId: null }),
+      expect.any(Object)
+    )
+  }
+)

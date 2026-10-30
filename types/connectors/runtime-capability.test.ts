@@ -123,3 +123,9 @@ it("advertises QQ native group/C2C controls without message editing or global me
     staticMenus: false,
   })
 })
+
+it("advertises QQ native text streaming only in private scope", () => {
+  expect(connectorRuntimeCapabilitiesForScope("qq-official", "private").textStreaming).toBe(true)
+  for (const scope of ["group", "channel", "thread"] as const)
+    expect(connectorRuntimeCapabilitiesForScope("qq-official", scope).textStreaming).toBe(false)
+})

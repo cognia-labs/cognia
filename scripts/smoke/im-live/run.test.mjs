@@ -13,14 +13,22 @@ const M2 = buildMarker("telegram", RUN_ID, 2)
 const noSleep = async () => {}
 
 /** A fixture whose log is driven by the scripted driver below. */
-function fakeFixture({ hitFor = new Set() } = {}) {
+function fakeFixture({ hitFor = new Set(), duplicateCount = 1 } = {}) {
+  const hits = []
   return {
     resets: 0,
     async reset() {
       this.resets++
+      hits.length = 0
+    },
+    async requests() {
+      return { count: hits.length, hits: [...hits] }
     },
     async waitForMarker(marker) {
-      return hitFor.has(marker) ? { model: "claude-opus-5", stream: true, markers: [marker] } : null
+      if (!hitFor.has(marker)) return null
+      const hit = { model: "claude-opus-5", stream: true, markers: [marker] }
+      for (let i = 0; i < duplicateCount; i++) hits.push(hit)
+      return hit
     },
   }
 }
@@ -85,6 +93,23 @@ const turnArgs = (extra) => ({
   ...extra,
 })
 
+test("QQ timing enforcement reaches the turn verdict rather than only the driver", async () => {
+  const driver = fakeDriver({ answers: { [M1]: [M1] } })
+  driver.enforceReplyTiming = true
+  const lease = await driver.prepare()
+  const result = await runTurn(
+    turnArgs({
+      driver,
+      lease,
+      fixture: fakeFixture({ hitFor: new Set([M1]) }),
+      marker: M1,
+      send: async () => ({ ...(await driver.injectMention(lease, M1)), sentAt: 50 }),
+    })
+  )
+  assert.equal(result.diagnosis.status, STATUS.FAIL)
+  assert.ok(result.diagnosis.causes.some((cause) => cause.code === "reply_before_probe"))
+})
+
 test("a turn passes when the fixture is hit and exactly one marked reply lands", async () => {
   const driver = fakeDriver({ answers: { [M1]: [`echo ${M1}`] } })
   const lease = await driver.prepare()
@@ -100,6 +125,22 @@ test("a turn passes when the fixture is hit and exactly one marked reply lands",
   assert.equal(result.diagnosis.status, STATUS.PASS)
   assert.equal(result.replies.length, 1)
   assert.ok(result.fixtureHit)
+})
+
+test("one platform reply cannot hide repeated model execution", async () => {
+  const driver = fakeDriver({ answers: { [M1]: [M1] } })
+  const lease = await driver.prepare()
+  const result = await runTurn(
+    turnArgs({
+      driver,
+      lease,
+      marker: M1,
+      fixture: fakeFixture({ hitFor: new Set([M1]), duplicateCount: 2 }),
+      send: () => driver.injectMention(lease, M1),
+    })
+  )
+  assert.equal(result.modelRequestCount, 2)
+  assert.equal(result.diagnosis.status, STATUS.FAIL)
 })
 
 test("a turn only counts the replies that arrived during it", async () => {

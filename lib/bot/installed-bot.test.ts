@@ -200,3 +200,12 @@ describe("isRunnableBot", () => {
     expect(isRunnableBot(resolved!)).toBe(true)
   })
 })
+
+it("keeps paused enabled installations resolved but does not admit a new run", async () => {
+  const installation = await installPluginBot(pluginDef(), { paused: true }, jest.fn())
+  const resolved = (await resolveInstalledBot(installation))!
+  expect(isRunnableBot(resolved)).toBe(false)
+  expect(isRunnableBot({ ...resolved, installation: { ...installation, paused: false } })).toBe(
+    true
+  )
+})

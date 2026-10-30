@@ -1,4 +1,5 @@
 import { createDbTestFixture } from "./test-fixture"
+import { getDb } from "./schema"
 import {
   activateConnectorConversation,
   closeConnectorConversation,
@@ -36,6 +37,25 @@ beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
 describe("connector conversation state", () => {
+  it("preserves provider delivery consent through target refresh and activation", async () => {
+    const state = await refreshConnectorConversationDeliveryTarget(TARGET, { now: 1000 })
+    await getDb().connectorConversationStates.put({
+      ...state,
+      deliveryPermissions: { proactive: false, updatedAt: 1000 },
+    })
+    await refreshConnectorConversationDeliveryTarget(
+      { ...TARGET, refreshedAt: 2000 },
+      { now: 2000 }
+    )
+    await activateConnectorConversation(TARGET, {
+      activatedBy: "user",
+      now: 3000,
+      expiresAt: 10000,
+    })
+    expect(
+      (await getConnectorConversationState(TARGET.address.conversationKey))?.deliveryPermissions
+    ).toEqual({ proactive: false, updatedAt: 1000 })
+  })
   it("persists activation, refreshes the latest target, and closes explicitly", async () => {
     await activateConnectorConversation(TARGET, {
       activatedBy: "ou-1",

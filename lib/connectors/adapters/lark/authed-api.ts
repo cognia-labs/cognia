@@ -25,7 +25,12 @@
 
 import { isTauri } from "@/lib/tauri"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { connectorsHttpRequest, connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import {
+  connectorsHttpRequest,
+  connectorsKeyringGet,
+  connectorsLarkUserAuth,
+} from "@/lib/connectors/tauri/commands"
+import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
 import { getTenantAccessToken, getUserAccessToken } from "./auth"
 import {
   LarkApiError,
@@ -84,6 +89,9 @@ export interface LarkAuthedApiAccount {
 export interface WithLarkAuthedApiOptions {
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
   adapterId: string
+  expectedAuthorizationEpoch?: string
+  signal?: AbortSignal
+  maxResponseBytes?: number
   /** Test seam — overrides the `connectorsHttpRequest` transport. */
   httpImpl?: HttpImpl
   /**
@@ -111,97 +119,148 @@ export async function withLarkAuthedApi<T>(
   opts: WithLarkAuthedApiOptions,
   fn: (api: LarkAuthedApi, account: LarkAuthedApiAccount) => Promise<T>
 ): Promise<T> {
-  const http = opts.httpImpl
-  if (!http && !isTauri()) {
-    // open.feishu.cn sends no CORS headers — a browser fetch can never work.
-    throw new LarkAccessError("browserUnsupported")
-  }
-  const httpImpl = http ?? connectorsHttpRequest
-
-  const row = await getAdapterInstance(opts.adapterId)
-  if (!row || row.type !== "lark" || !row.enabled) {
-    throw new LarkAccessError("noAccount")
-  }
-  const [appId, appSecret] = await Promise.all([
-    connectorsKeyringGet(opts.adapterId, "appId"),
-    connectorsKeyringGet(opts.adapterId, "appSecret"),
-  ])
-  if (!appId || !appSecret) {
-    throw new LarkAccessError("notAuthorized", row.displayName)
-  }
-
-  const call = async <R>(
-    path: string,
-    authHeader: string,
-    init?: { method: LarkWriteMethod; body?: unknown }
-  ): Promise<R> => {
-    const resp = await httpImpl({
-      url: `${LARK_API_BASE}${path}`,
-      method: init?.method ?? "GET",
-      headers: {
-        Authorization: authHeader,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-      ...(init && init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-    })
-    let parsed: LarkEnvelope<R> | null = null
-    try {
-      parsed = resp.body ? (JSON.parse(resp.body) as LarkEnvelope<R>) : null
-    } catch {
-      // Non-JSON body — fall through to the status check below.
-    }
-    if (resp.status >= 400 || !parsed || parsed.code !== 0) {
-      throw new LarkApiError({
-        status: resp.status,
-        headers: resp.headers,
-        code: parsed?.code ?? null,
-        message: `Lark ${path} failed: code=${parsed?.code ?? "?"}, msg=${parsed?.msg ?? resp.body?.slice(0, 200) ?? "unknown"}`,
+  throwIfRequestAborted(opts.signal)
+  const result = await withRequestAbort(opts.signal, async () => {
+    let authorizationEpoch = opts.expectedAuthorizationEpoch
+    const assertCurrent = async () => {
+      throwIfRequestAborted(opts.signal)
+      const current = await connectorsLarkUserAuth({
+        action: "snapshot",
+        adapterId: opts.adapterId,
       })
+      if (
+        !current.configured ||
+        (authorizationEpoch !== undefined && current.authorizationEpoch !== authorizationEpoch)
+      )
+        throw new LarkAccessError("notAuthorized")
+      authorizationEpoch ??= current.authorizationEpoch
+      throwIfRequestAborted(opts.signal)
     }
-    return parsed.data as R
-  }
+    const http = opts.httpImpl
+    if (!http && !isTauri()) {
+      // open.feishu.cn sends no CORS headers — a browser fetch can never work.
+      throw new LarkAccessError("browserUnsupported")
+    }
+    const httpImpl = http ?? connectorsHttpRequest
 
-  const bindApi = (authHeader: string): LarkAuthedApi => ({
-    get: <R>(path: string) => call<R>(path, authHeader),
-    post: <R>(path: string, body: unknown) => call<R>(path, authHeader, { method: "POST", body }),
-    patch: <R>(path: string, body: unknown) => call<R>(path, authHeader, { method: "PATCH", body }),
-    put: <R>(path: string, body: unknown) => call<R>(path, authHeader, { method: "PUT", body }),
-    delete: <R>(path: string) => call<R>(path, authHeader, { method: "DELETE" }),
-  })
+    const row = await getAdapterInstance(opts.adapterId)
+    throwIfRequestAborted(opts.signal)
+    if (!row || row.type !== "lark" || !row.enabled) {
+      throw new LarkAccessError("noAccount")
+    }
+    await assertCurrent()
+    throwIfRequestAborted(opts.signal)
+    const [appId, appSecret] = await Promise.all([
+      connectorsKeyringGet(opts.adapterId, "appId"),
+      connectorsKeyringGet(opts.adapterId, "appSecret"),
+    ])
+    throwIfRequestAborted(opts.signal)
+    if (!appId || !appSecret) {
+      throw new LarkAccessError("notAuthorized", row.displayName)
+    }
+    await assertCurrent()
+    throwIfRequestAborted(opts.signal)
 
-  const account: LarkAuthedApiAccount = { adapterId: opts.adapterId, displayName: row.displayName }
-  const rethrow = (err: unknown): never => {
-    throw opts.mapError ? opts.mapError(err, row.displayName) : err
-  }
+    const call = async <R>(
+      path: string,
+      authHeader: string,
+      init?: { method: LarkWriteMethod; body?: unknown }
+    ): Promise<R> => {
+      await assertCurrent()
+      throwIfRequestAborted(opts.signal)
+      const resp = await httpImpl({
+        url: `${LARK_API_BASE}${path}`,
+        method: init?.method ?? "GET",
+        headers: {
+          Authorization: authHeader,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        ...(init && init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        ...(opts.maxResponseBytes !== undefined ? { maxResponseBytes: opts.maxResponseBytes } : {}),
+      })
+      await assertCurrent()
+      throwIfRequestAborted(opts.signal)
+      let parsed: LarkEnvelope<R> | null = null
+      try {
+        parsed = resp.body ? (JSON.parse(resp.body) as LarkEnvelope<R>) : null
+      } catch {
+        // Non-JSON body — fall through to the status check below.
+      }
+      if (resp.status >= 400 || !parsed || parsed.code !== 0) {
+        throw new LarkApiError({
+          status: resp.status,
+          headers: resp.headers,
+          code: parsed?.code ?? null,
+          message: `Lark ${path} failed: code=${parsed?.code ?? "?"}, msg=${parsed?.msg ?? resp.body?.slice(0, 200) ?? "unknown"}`,
+        })
+      }
+      return parsed.data as R
+    }
 
-  const ctx = { adapterId: opts.adapterId, appId, appSecret }
-  const userToken = await getUserAccessToken(opts.adapterId)
-  if (opts.requireUserIdentity && !userToken) {
-    throw new LarkAccessError("notAuthorized", row.displayName)
-  }
-  if (userToken) {
+    const bindApi = (authHeader: string): LarkAuthedApi => ({
+      get: <R>(path: string) => call<R>(path, authHeader),
+      post: <R>(path: string, body: unknown) => call<R>(path, authHeader, { method: "POST", body }),
+      patch: <R>(path: string, body: unknown) =>
+        call<R>(path, authHeader, { method: "PATCH", body }),
+      put: <R>(path: string, body: unknown) => call<R>(path, authHeader, { method: "PUT", body }),
+      delete: <R>(path: string) => call<R>(path, authHeader, { method: "DELETE" }),
+    })
+
+    const account: LarkAuthedApiAccount = {
+      adapterId: opts.adapterId,
+      displayName: row.displayName,
+    }
+    const rethrow = (err: unknown): never => {
+      throw opts.mapError ? opts.mapError(err, row.displayName) : err
+    }
+
+    const ctx = {
+      adapterId: opts.adapterId,
+      appId,
+      appSecret,
+      expectedAuthorizationEpoch: authorizationEpoch,
+      signal: opts.signal,
+    }
+    const userToken = await getUserAccessToken(opts.adapterId)
+    throwIfRequestAborted(opts.signal)
+    if (opts.requireUserIdentity && !userToken) {
+      throw new LarkAccessError("notAuthorized", row.displayName)
+    }
+    if (userToken) {
+      try {
+        return await withUserTokenRefresh(ctx, async (token) => {
+          await assertCurrent()
+          throwIfRequestAborted(opts.signal)
+          return fn(bindApi(`Bearer ${token}`), account)
+        })
+      } catch (err) {
+        await assertCurrent()
+        throwIfRequestAborted(opts.signal)
+        // Fall back to the bot identity only when the user identity is
+        // unrecoverable: the token stayed invalid after the retry, or the
+        // refresh itself failed (e.g. no refresh token in the keyring).
+        const refreshFailed = err instanceof Error && err.message.includes("user token refresh")
+        if (!isLarkUserTokenInvalidation(err) && !refreshFailed) {
+          rethrow(err)
+        }
+        if (opts.requireUserIdentity) rethrow(err)
+      }
+    }
     try {
-      return await withUserTokenRefresh(ctx, async () => {
-        const token = (await getUserAccessToken(opts.adapterId)) ?? userToken
-        return fn(bindApi(`Bearer ${token}`), account)
+      return await withTatRefresh(ctx, async () => {
+        await assertCurrent()
+        throwIfRequestAborted(opts.signal)
+        const tat = await getTenantAccessToken({ appId, appSecret })
+        throwIfRequestAborted(opts.signal)
+        const value = await fn(bindApi(`Bearer ${tat}`), account)
+        await assertCurrent()
+        throwIfRequestAborted(opts.signal)
+        return value
       })
     } catch (err) {
-      // Fall back to the bot identity only when the user identity is
-      // unrecoverable: the token stayed invalid after the retry, or the
-      // refresh itself failed (e.g. no refresh token in the keyring).
-      const refreshFailed = err instanceof Error && err.message.includes("user token refresh")
-      if (!isLarkUserTokenInvalidation(err) && !refreshFailed) {
-        rethrow(err)
-      }
-      if (opts.requireUserIdentity) rethrow(err)
+      return rethrow(err)
     }
-  }
-  try {
-    return await withTatRefresh(ctx, async () => {
-      const tat = await getTenantAccessToken({ appId, appSecret })
-      return fn(bindApi(`Bearer ${tat}`), account)
-    })
-  } catch (err) {
-    return rethrow(err)
-  }
+  })
+  throwIfRequestAborted(opts.signal)
+  return result
 }

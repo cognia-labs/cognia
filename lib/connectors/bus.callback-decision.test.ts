@@ -21,6 +21,12 @@ import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
 import { handleIssueActionCallback } from "@/lib/issues/im/callback-handler"
 import { handleNotificationActionCallback } from "@/lib/notifications/im-callback-handler"
 
+jest.mock("@/lib/skills/built-in/context", () => ({
+  resolveBuiltInSkillContext: jest.fn(async () => ({
+    imBinding: { adapterId: "lark-bot", conversationKey: "lark:lark-bot:chat" },
+  })),
+}))
+
 jest.mock("./dedup", () => ({
   isRecordedInbound: jest.fn(),
   recordAndCheckInbound: jest.fn(),
@@ -350,7 +356,9 @@ describe("ConnectorBus callback decisions", () => {
       const finish = deferred()
       const onDecision = jest.fn()
       const action = kind === "wf_cancel" ? "cancel" : "approve"
-      jest.mocked(resolveCallbackBinding).mockResolvedValue(binding(kind, { skillId: "skill" }))
+      jest
+        .mocked(resolveCallbackBinding)
+        .mockResolvedValue(binding(kind, { skillId: "skill", sessionId: "skill-session" }))
       const handler = async () => {
         entered.resolve()
         await finish.promise

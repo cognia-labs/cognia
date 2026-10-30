@@ -266,6 +266,41 @@ inside `lib/bot/events/envelope.ts`, measured as UTF-8 bytes of the JSON with
 `undefined` counting as zero, so every producer path rejects an oversized
 payload the same way instead of each growing its own estimate.
 
+## 2026-10-28 amendment: delivery identity, automation control and input accounts
+
+A delivery identifies an `(installation, trigger, event)` tuple. One event can
+match several triggers on the same installation; each receives its own queue
+row and durable run. Legacy two-part receipts are reused only by their original
+trigger, so upgrades neither repeat its effects nor consume another trigger's
+intake.
+
+Disarm changes future trigger intake. Installation pause is an independent
+`paused` flag: it stops intake, timed scheduling and new attempts, preserves
+accepted pending/parked work, and lets an active attempt finish. Resume refreshes
+retained queue deadlines; it does not extend a human approval's expiry. Explicit
+cancel retires the accepted set, expires its approvals, signals live and detached
+Workflow/Squad children, and fences late writes and replay. A retried cancel
+operation uses the same accepted set, rather than including later arrivals.
+
+IM `/automation pause|resume|cancel|status` controls independent Workflow/Bot
+subscriptions for that conversation. Responder `manual`/mute settings keep their
+existing meaning. Observer admission and rejection are durable decisions;
+responder completion cannot lose accepted observer work, and restart cannot
+backfill messages rejected during pause. Recovery transfers observers without
+replaying the responder, skips unavailable adapters/full conversations before
+its batch limit, and gives delayed Bot transfers a fresh retention window while
+preserving their original acceptance time for cancellation.
+
+An account-backed trigger declares `inputCredentialSlot`; an installation can
+override it with `triggerInputSlots`. Routing and execution verify the selected
+binding against the saved source identity. An explicit missing, ambiguous or
+wrong-source binding rejects intake. Legacy installs may infer one unambiguous
+input account; definitions using explicit mappings do not infer input from
+unrelated output slots. Changing a credential or input slot cancels accepted work
+before it can resume under the new account. Host and companion controls require
+an explicit `bots.automation` feature advertisement and keep owner/mirror fences.
+No new Dexie schema or indexes are required for these optional fields.
+
 ## Known limitations
 
 These are recorded here rather than left for the next person to discover.

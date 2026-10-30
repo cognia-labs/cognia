@@ -1,3 +1,4 @@
+import { normalizeInboundVoice } from "../_shared/voice"
 /**
  * QQ Official Bot gateway dispatch → NormalizedInboundEvent.
  *
@@ -20,9 +21,14 @@ import { buildConversationKey } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
 import { segmentsToPlainText } from "@/types/connectors/segment"
 import type { InboundA2UINode } from "../_shared/inbound-a2ui-types"
-import { isPublicHttpUrl } from "../_shared/inbound-media"
+import { evaluateFetchTarget } from "@cognia/network-guard"
 
 export type QQScene = "group" | "c2c" | "channel" | "direct"
+
+/** Shared wire identity used by inbound status/reactions and outbound receipts. */
+export function encodeQQMessageId(scene: QQScene, sceneId: string, id: string): string {
+  return `${scene}:${sceneId}:${id}`
+}
 
 export interface QQAuthor {
   id?: string
@@ -33,6 +39,8 @@ export interface QQAuthor {
 }
 
 export interface QQAttachmentData {
+  voice_wav_url?: string
+  asr_refer_text?: string
   url?: string
   content_type?: string
   filename?: string
@@ -76,6 +84,7 @@ export interface QQMessageData extends QQMsgElement {
 }
 
 export interface QQDispatch {
+  id?: string
   t: string
   s?: number
   op: number
@@ -142,11 +151,14 @@ export function qqAttachmentSegments(attachments: unknown): MessageSegment[] {
         height: typeof att.height === "number" ? att.height : undefined,
       })
     } else if (contentType === "voice" || contentType.startsWith("audio/")) {
-      segments.push({
-        type: "voice",
-        url,
-        mimeType: contentType === "voice" ? undefined : contentType,
-      })
+      segments.push(
+        normalizeInboundVoice({
+          url,
+          mimeType: contentType === "voice" ? undefined : contentType,
+          convertedWavUrl: att.voice_wav_url,
+          transcript: att.asr_refer_text,
+        })
+      )
     } else if (contentType.startsWith("video/")) {
       segments.push({ type: "video", url, mimeType: contentType })
     } else {
@@ -198,7 +210,9 @@ function safeQQUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 4096) return undefined
   try {
     const parsed = new URL(value)
-    return !parsed.username && !parsed.password && isPublicHttpUrl(value) ? value : undefined
+    return !parsed.username && !parsed.password && evaluateFetchTarget(value).allowed
+      ? value
+      : undefined
   } catch {
     return undefined
   }
@@ -251,7 +265,14 @@ function safeQQData(data: QQMessageData): QQMessageData {
         if (!segment || !("url" in segment)) return []
         return [
           {
-            url: segment.url,
+            url: segment.type === "voice" ? (segment.rawUrl ?? segment.url) : segment.url,
+            ...(segment.type === "voice"
+              ? {
+                  voice_wav_url:
+                    segment.mimeType === "audio/wav" && segment.rawUrl ? segment.url : undefined,
+                  asr_refer_text: text(segment.transcript, 16_384),
+                }
+              : {}),
             content_type: text(attachment.content_type, 128),
             filename: text(attachment.filename, 256),
             ...Object.fromEntries(
@@ -462,6 +483,10 @@ export function parseQQDispatch(
   dispatch: QQDispatch
 ): NormalizedInboundEvent | null {
   if (!dispatch || typeof dispatch !== "object") return null
+  if (dispatch.t === "INTERACTION_CREATE")
+    return parseQQSystemInteraction(adapterId, selfId, dispatch)
+  if (QQ_AUDIT_EVENTS.includes(dispatch.t)) return parseQQAuditEvent(adapterId, selfId, dispatch)
+  if (QQ_SYSTEM_EVENTS.includes(dispatch.t)) return parseQQSystemEvent(adapterId, selfId, dispatch)
   const deletion = DELETE_SCENE_BY_EVENT[dispatch.t]
   const scene = SCENE_BY_EVENT[dispatch.t] ?? deletion
   const d = deletion ? dispatch.d?.message : dispatch.d
@@ -563,5 +588,367 @@ export function parseQQDispatch(
     raw: projection.raw,
     kind: deletion ? "delete" : "create",
     ...(deletion ? { replacesMessageId: d.id } : {}),
+  }
+}
+
+export const QQ_SYSTEM_EVENTS = [
+  "FRIEND_ADD",
+  "FRIEND_DEL",
+  "C2C_MSG_RECEIVE",
+  "C2C_MSG_REJECT",
+  "GROUP_ADD_ROBOT",
+  "GROUP_DEL_ROBOT",
+  "GROUP_MSG_RECEIVE",
+  "GROUP_MSG_REJECT",
+  "GROUP_JOIN_REQUEST",
+  "GROUP_MEMBER_ADD",
+  "GROUP_MEMBER_REMOVE",
+]
+export const QQ_AUDIT_EVENTS = ["MESSAGE_AUDIT_PASS", "MESSAGE_AUDIT_REJECT"]
+
+function qqRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {}
+}
+function qqEventId(value: unknown, max = 512): string | undefined {
+  return typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= max &&
+    !/[\u0000-\u0020\u007f-\u009f]/.test(value)
+    ? value
+    : undefined
+}
+
+function parseQQSystemInteraction(
+  adapterId: string,
+  selfId: string,
+  dispatch: QQDispatch
+): NormalizedInboundEvent | null {
+  const d = qqRecord(dispatch.d),
+    data = qqRecord(d.data),
+    resolved = qqRecord(data.resolved)
+  const type = d.type ?? data.type,
+    eventId = qqEventId(d.id)
+  if (
+    ![12, 13, 14, 15, 16, 18, 19, 20].includes(type as number) ||
+    !eventId ||
+    (d.type !== undefined && data.type !== undefined && d.type !== data.type)
+  )
+    return null
+  const nativeScene =
+    d.scene ??
+    (d.chat_type === 1
+      ? "group"
+      : d.chat_type === 2
+        ? "c2c"
+        : d.chat_type === 0
+          ? "guild"
+          : undefined)
+  const scene = nativeScene === "guild" ? "channel" : nativeScene
+  if (scene !== "c2c" && scene !== "group" && scene !== "channel") return null
+  const chatType = scene === "c2c" ? 2 : scene === "group" ? 1 : 0
+  if (d.chat_type !== undefined && d.chat_type !== chatType) return null
+  const sceneId = qqEventId(
+    scene === "c2c" ? d.user_openid : scene === "group" ? d.group_openid : d.channel_id
+  )
+  const actor = qqEventId(
+    scene === "c2c" ? d.user_openid : scene === "group" ? d.group_member_openid : resolved.user_id
+  )
+  const timestamp = typeof d.timestamp === "string" ? Date.parse(d.timestamp) : NaN
+  if (
+    !sceneId ||
+    (!actor && type !== 20) ||
+    !Number.isFinite(timestamp) ||
+    timestamp > Date.now() + 60000
+  )
+    return null
+  let interaction: NonNullable<NormalizedInboundEvent["interaction"]>
+  let systemKind: NormalizedInboundEvent["systemKind"] = "interaction"
+  const segments: MessageSegment[] = []
+  if (type === 12) {
+    const featureId = qqEventId(resolved.feature_id)
+    if (scene !== "c2c" || !featureId) return null
+    interaction = { kind: "menu", featureId }
+  } else if (type === 13) {
+    const messageId = qqEventId(resolved.message_id, 1024)
+    if (
+      !messageId ||
+      !["LIKE", "UNLIKE"].includes(resolved.feedback_opt as string) ||
+      (resolved.checked !== 0 && resolved.checked !== 1)
+    )
+      return null
+    interaction = {
+      kind: "feedback",
+      messageId: encodeQQMessageId(scene, sceneId, messageId),
+      vote: resolved.feedback_opt === "LIKE" ? "positive" : "negative",
+      selected: resolved.checked === 1,
+    }
+    systemKind = interaction.selected ? "reaction_added" : "reaction_removed"
+    segments.push({ type: "emoji", code: interaction.vote === "positive" ? "👍" : "👎" })
+  } else if (type === 14) interaction = { kind: "session_reset" }
+  else if (type === 15) {
+    if (resolved.action !== "ENTER_STORY" && resolved.action !== "QUIT_STORY") return null
+    interaction = { kind: "story", action: resolved.action === "ENTER_STORY" ? "enter" : "exit" }
+  } else if (type === 16) {
+    const action = qqEventId(resolved.action, 256)
+    if (resolved.action !== undefined && !action) return null
+    interaction = { kind: "model_change", ...(action ? { action } : {}) }
+  } else {
+    const auth = qqRecord(resolved.authorize_data)
+    if ((type === 18 && scene !== "c2c") || (type === 19 && scene !== "group")) return null
+    const expectedScope =
+      scene === "c2c" ? "c2c_push" : scene === "group" ? "group_push" : undefined
+    if (auth.scope !== undefined && auth.scope !== expectedScope) return null
+    if (auth.opt_scene !== undefined && auth.opt_scene !== "setting" && auth.opt_scene !== "dialog")
+      return null
+    // The documented scope carries no explicit grant/revoke result. Never infer consent.
+    interaction = {
+      kind: "authorization",
+      state: "unknown",
+      ...(auth.scope ? { scope: "proactive" as const } : {}),
+      ...(auth.opt_scene
+        ? { source: auth.opt_scene === "setting" ? ("settings" as const) : ("dialog" as const) }
+        : {}),
+    }
+  }
+  const remoteUserId = (actor ?? selfId) || "qq-system"
+  const safe = { type, interaction }
+  return {
+    platform: "qq-official",
+    adapterId,
+    selfId,
+    originEventId: `interaction:${eventId}`,
+    messageId: eventId,
+    kind: "system",
+    systemKind,
+    interaction,
+    canReplyToMessage: false,
+    ...(type === 12 ? { passiveEvent: { id: eventId, expiresAt: timestamp + 300000 } } : {}),
+    ...(interaction.kind === "feedback" ? { replacesMessageId: interaction.messageId } : {}),
+    conversationKey: buildConversationKey("qq-official", adapterId, sceneId),
+    conversationRef: {
+      platform: "qq-official",
+      adapterId,
+      scene,
+      sceneId,
+      ...(type === 12 ? { eventId } : {}),
+      receivedAt: timestamp,
+    },
+    sender: {
+      id: `qq:${sceneId}:${remoteUserId}`,
+      platform: "qq-official",
+      adapterId,
+      remoteUserId,
+      ...(actor ? {} : { kind: "system" as const }),
+    },
+    channel: {
+      id: sceneId,
+      platformChannelId: sceneId,
+      kind: scene === "c2c" ? "private" : scene === "group" ? "group" : "channel",
+    },
+    segments,
+    plainText: "",
+    mentions: { selfMentioned: false, users: [] },
+    timestamp,
+    channelData: { eventType: dispatch.t, interactionType: type },
+    raw: { op: 0, t: dispatch.t, d: safe },
+  }
+}
+
+function parseQQAuditEvent(
+  adapterId: string,
+  selfId: string,
+  dispatch: QQDispatch
+): NormalizedInboundEvent | null {
+  const d = qqRecord(dispatch.d),
+    receiptId = qqEventId(d.audit_id),
+    sceneId = qqEventId(d.channel_id),
+    guildId = qqEventId(d.guild_id)
+  const delivered = dispatch.t === "MESSAGE_AUDIT_PASS",
+    messageId = qqEventId(d.message_id, 1024)
+  const timestamp = typeof d.audit_time === "string" ? Date.parse(d.audit_time) : NaN
+  if (
+    !receiptId ||
+    !sceneId ||
+    !guildId ||
+    !Number.isFinite(timestamp) ||
+    timestamp > Date.now() + 60000 ||
+    (delivered && !messageId)
+  )
+    return null
+  const deliveryStatus = {
+    receiptId,
+    status: delivered ? ("delivered" as const) : ("rejected" as const),
+    ...(messageId ? { platformMessageId: encodeQQMessageId("channel", sceneId, messageId) } : {}),
+  }
+  const occurrence = qqEventId(dispatch.id) ?? `audit:${receiptId}:${deliveryStatus.status}`
+  return {
+    platform: "qq-official",
+    adapterId,
+    selfId,
+    kind: "system",
+    systemKind: "delivery_status",
+    deliveryStatus,
+    originEventId: occurrence,
+    messageId: occurrence,
+    canReplyToMessage: false,
+    conversationKey: buildConversationKey("qq-official", adapterId, sceneId),
+    conversationRef: {
+      platform: "qq-official",
+      adapterId,
+      scene: "channel",
+      sceneId,
+      guildId,
+      receivedAt: timestamp,
+    },
+    sender: {
+      id: `qq:${selfId || adapterId}:system`,
+      platform: "qq-official",
+      adapterId,
+      remoteUserId: selfId || adapterId,
+      kind: "system",
+    },
+    channel: { id: sceneId, platformChannelId: sceneId, kind: "channel" },
+    segments: [],
+    plainText: "",
+    mentions: { selfMentioned: false, users: [] },
+    timestamp,
+    raw: { op: 0, t: dispatch.t, d: { deliveryStatus } },
+  }
+}
+function parseQQSystemEvent(
+  adapterId: string,
+  selfId: string,
+  dispatch: QQDispatch
+): NormalizedInboundEvent | null {
+  const raw = dispatch.d as unknown as Record<string, unknown> | undefined
+  if (!raw || typeof raw !== "object") return null
+  const group = dispatch.t.startsWith("GROUP_"),
+    scene = group ? "group" : "c2c"
+  const text = (value: unknown, max = 512) =>
+    typeof value === "string" && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
+      ? value
+      : undefined
+  const sceneId = text(group ? raw.group_openid : raw.openid)
+  const actorId = text(raw.member_openid ?? raw.op_member_openid ?? raw.openid) ?? sceneId
+  const eventId = text(dispatch.id),
+    requestId = text(raw.join_request_id)
+  if (!sceneId || !actorId) return null
+  const timestamp =
+    typeof raw.timestamp === "number"
+      ? raw.timestamp * 1000
+      : typeof raw.apply_at === "string"
+        ? Date.parse(raw.apply_at)
+        : NaN
+  if (!Number.isFinite(timestamp)) return null
+  const mayReply =
+    ["FRIEND_ADD", "C2C_MSG_RECEIVE", "GROUP_ADD_ROBOT", "GROUP_MSG_RECEIVE"].includes(
+      dispatch.t
+    ) && Boolean(eventId)
+  const occurrence =
+    eventId ??
+    (requestId
+      ? `join:${requestId}:${raw.auto_approved ? "approved" : "pending"}`
+      : `${dispatch.t}:${actorId}:${timestamp}`)
+  const consent = /_MSG_RECEIVE$/.test(dispatch.t)
+    ? true
+    : /_MSG_REJECT$|FRIEND_DEL|GROUP_DEL_ROBOT/.test(dispatch.t)
+      ? false
+      : undefined
+  const verify =
+    raw.verify_info && typeof raw.verify_info === "object"
+      ? (raw.verify_info as Record<string, unknown>)
+      : {}
+  // Attribution is carried as data only. Neither it nor a share short code
+  // can supply a passive event id, message id, identity or proactive consent.
+  const friendAdd = dispatch.t === "FRIEND_ADD"
+  const referralSource =
+    friendAdd && Number.isSafeInteger(raw.scene) && Number(raw.scene) >= 0
+      ? String(raw.scene)
+      : undefined
+  const referralState =
+    friendAdd &&
+    typeof raw.scene_param === "string" &&
+    raw.scene_param.length <= 128 &&
+    [...raw.scene_param].length <= 32 &&
+    !/[\u0000-\u001f\u007f-\u009f]/.test(raw.scene_param)
+      ? raw.scene_param
+      : undefined
+  const referral =
+    friendAdd && (referralSource !== undefined || referralState !== undefined)
+      ? {
+          ...(referralSource !== undefined ? { source: referralSource } : {}),
+          ...(referralState !== undefined ? { state: referralState } : {}),
+        }
+      : undefined
+  const shortCode = friendAdd ? text(raw.short_code) : undefined
+  const safeData = {
+    eventType: dispatch.t,
+    ...(friendAdd
+      ? {
+          friendAdd: {
+            ...(referralSource !== undefined ? { scene: Number(raw.scene) } : {}),
+            ...(shortCode ? { shortCode } : {}),
+          },
+        }
+      : {}),
+    ...(referral ? { referral } : {}),
+    ...(requestId
+      ? {
+          joinRequest: {
+            id: requestId,
+            memberId: actorId,
+            autoApproved: Boolean(raw.auto_approved),
+            riskTips: text(raw.risk_tips, 4096),
+            verification: {
+              method: text(verify.method),
+              message: text(verify.verify_message, 4096),
+              questions: Array.isArray(verify.review_qa_list)
+                ? verify.review_qa_list.slice(0, 20).map((q) => ({
+                    question: text(q?.question, 4096),
+                    answer: text(q?.answer, 4096),
+                  }))
+                : [],
+            },
+          },
+        }
+      : {}),
+  }
+  return {
+    platform: "qq-official",
+    adapterId,
+    selfId,
+    messageId: occurrence,
+    originEventId: occurrence,
+    kind: "system",
+    ...(referral ? { referral } : {}),
+    systemKind: dispatch.t === "GROUP_JOIN_REQUEST" && !raw.auto_approved ? "request" : "lifecycle",
+    canReplyToMessage: false,
+    ...(mayReply ? { passiveEvent: { id: eventId!, expiresAt: timestamp + 300000 } } : {}),
+    ...(consent !== undefined ? { deliveryPermissionChange: { proactive: consent } } : {}),
+    conversationKey: buildConversationKey("qq-official", adapterId, sceneId),
+    conversationRef: {
+      platform: "qq-official",
+      adapterId,
+      scene,
+      sceneId,
+      ...(mayReply ? { eventId } : {}),
+      receivedAt: timestamp,
+    },
+    sender: {
+      id: `qq:${sceneId}:${actorId}`,
+      platform: "qq-official",
+      adapterId,
+      remoteUserId: actorId,
+      displayName: text(raw.username, 256),
+    },
+    channel: { id: sceneId, platformChannelId: sceneId, kind: group ? "group" : "private" },
+    segments: [],
+    plainText: "",
+    mentions: { selfMentioned: false, users: [] },
+    timestamp,
+    channelData: safeData,
+    raw: { op: 0, t: dispatch.t, ...(eventId ? { id: eventId } : {}), d: safeData },
   }
 }

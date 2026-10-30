@@ -258,7 +258,7 @@ describe("QQ Official adapter contract suite", () => {
       expect(adapter.edit).toBeUndefined()
       expect(adapter.fetchHistory).toBeUndefined()
       expect(adapter.fetchHistoryPage).toBeUndefined()
-      expect(adapter.streamReply).toBeUndefined()
+      expect(typeof adapter.streamReply).toBe("function")
     })
   })
 })

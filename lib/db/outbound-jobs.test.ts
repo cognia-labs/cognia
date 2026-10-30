@@ -14,6 +14,8 @@ import {
   markSent,
   markFailed,
   markDeliveryUnknown,
+  markAwaitingDeliveryReceipt,
+  recordOutboundDeliveryStatus,
   markDeadlettered,
   replayDeadlettered,
   waitForOutboundTerminal,
@@ -58,6 +60,238 @@ function enqueue(input: Omit<EnqueueInput, "source"> & { source?: EnqueueInput["
 }
 
 describe("outbound-jobs", () => {
+  describe("shared asynchronous delivery receipts", () => {
+    it("keeps a provider-reviewed rejection out of replay and preserves its evidence", async () => {
+      const row = await sending()
+      await markAwaitingDeliveryReceipt(row.id, { id: "reviewed" })
+      await recordOutboundDeliveryStatus({
+        adapterId: "a",
+        conversationKey: row.conversationKey,
+        timestamp: Date.now(),
+        update: { receiptId: "reviewed", status: "rejected" },
+      })
+      await expect(replayDeadlettered(row.id)).rejects.toThrow(/authorize a new message/)
+      expect((await getDb().outboundQueue.get(row.id))?.status).toBe("deadlettered")
+    })
+    it("keeps waiting receipts as FIFO heads across drain passes", async () => {
+      const first = await sending()
+      await markAwaitingDeliveryReceipt(first.id, { id: "audit" })
+      const second = await enqueue({
+        adapterId: "a",
+        conversationKey: first.conversationKey,
+        request: makeRequest(),
+      })
+      expect((await findOlderActiveOutboundSibling(second))?.id).toBe(first.id)
+    })
+    it("reclaims completed receipt capacity and keeps duplicate terminal evidence evictable", async () => {
+      const row = await sending()
+      await markAwaitingDeliveryReceipt(row.id, { id: "done" })
+      const scope = {
+        adapterId: "a",
+        conversationKey: row.conversationKey,
+        timestamp: Date.now(),
+        update: { receiptId: "done", status: "delivered" as const, platformMessageId: "message" },
+      }
+      await recordOutboundDeliveryStatus(scope)
+      await recordOutboundDeliveryStatus(scope)
+      const old = await getDb().inboundLedger.where("namespace").equals("connector-status").first()
+      expect(old?.deliveryStatus?.resolvedAt).toEqual(expect.any(Number))
+      await getDb().inboundLedger.bulkPut(
+        Array.from({ length: 9999 }, (_, index) => ({
+          id: `terminal-${index}`,
+          adapterId: "a",
+          namespace: "connector-status" as const,
+          platformMessageId: `terminal-${index}`,
+          receivedAt: 1,
+          deliveryStatus: {
+            conversationKey: row.conversationKey,
+            update: { receiptId: `terminal-${index}`, status: "rejected" as const },
+            timestamp: 1,
+            resolvedAt: 2,
+          },
+        }))
+      )
+      await expect(
+        recordOutboundDeliveryStatus({ ...scope, update: { receiptId: "new", status: "rejected" } })
+      ).resolves.toBeUndefined()
+      expect(
+        await getDb().inboundLedger.where("namespace").equals("connector-status").count()
+      ).toBeLessThanOrEqual(10000)
+      await getDb().inboundLedger.delete(old!.id)
+      await recordOutboundDeliveryStatus(scope)
+      const restored = await getDb()
+        .inboundLedger.where("namespace")
+        .equals("connector-status")
+        .filter((item) => item.platformMessageId === "done")
+        .first()
+      expect(restored?.deliveryStatus?.resolvedAt).toEqual(expect.any(Number))
+    }, 60_000)
+    async function sending(adapterId = "a", chat = "chat") {
+      const row = await enqueue({
+        adapterId,
+        conversationKey: `matrix:${adapterId}:${chat}`,
+        request: makeRequest(),
+      })
+      await markSending(row.id)
+      return row
+    }
+    it.each(["delivered", "rejected"] as const)(
+      "settles exact pending receipt as %s, including callbacks before registration",
+      async (status) => {
+        const row = await sending()
+        await recordOutboundDeliveryStatus({
+          adapterId: "a",
+          conversationKey: row.conversationKey,
+          timestamp: Date.now(),
+          update: {
+            receiptId: "audit",
+            status,
+            ...(status === "delivered" ? { platformMessageId: "message" } : {}),
+          },
+        })
+        await markAwaitingDeliveryReceipt(row.id, { id: "audit" })
+        expect(await getDb().outboundQueue.get(row.id)).toMatchObject({
+          status: status === "delivered" ? "sent" : "deadlettered",
+          pendingReceipt: { id: "audit", resolvedAt: expect.any(Number) },
+          ...(status === "delivered"
+            ? { platformMessageId: "message" }
+            : { lastErrorCode: "provider_rejected" }),
+        })
+      }
+    )
+    it("rolls back queue, receipt, delivered ledger and SLA when settlement audit fails", async () => {
+      const row = await sending()
+      await markAwaitingDeliveryReceipt(row.id, { id: "atomic" })
+      const db = getDb()
+      const sla = {
+        id: "receipt-sla",
+        conversationKey: row.conversationKey,
+        sessionId: "session",
+        nextResponseDueAt: Date.now() + 60_000,
+        createdAt: 1,
+        updatedAt: 1,
+      }
+      await db.conversationOverrides.put(sla)
+      const before = await db.outboundQueue.get(row.id)
+      const evidence = {
+        adapterId: "a",
+        conversationKey: row.conversationKey,
+        timestamp: Date.now(),
+        update: { receiptId: "atomic", status: "delivered" as const, platformMessageId: "message" },
+      }
+      const failure = jest
+        .spyOn(db.connectorAudit, "add")
+        .mockRejectedValueOnce(new Error("audit unavailable"))
+      try {
+        await expect(recordOutboundDeliveryStatus(evidence)).rejects.toThrow("audit unavailable")
+      } finally {
+        failure.mockRestore()
+      }
+      expect(await db.outboundQueue.get(row.id)).toEqual(before)
+      expect(await db.inboundLedger.where("namespace").equals("connector-status").count()).toBe(0)
+      expect(await db.inboundLedger.where("namespace").equals("outbound").count()).toBe(0)
+      expect(await db.conversationOverrides.get(sla.id)).toEqual(sla)
+      expect(await db.connectorAudit.count()).toBe(0)
+
+      await recordOutboundDeliveryStatus(evidence)
+      await recordOutboundDeliveryStatus(evidence)
+      expect(await db.outboundQueue.get(row.id)).toMatchObject({
+        status: "sent",
+        platformMessageId: "message",
+      })
+      expect(await db.inboundLedger.where("namespace").equals("outbound").count()).toBe(1)
+      expect(await db.conversationOverrides.get(sla.id)).toMatchObject({
+        firstRespondedAt: expect.any(Number),
+      })
+      expect((await db.conversationOverrides.get(sla.id))?.nextResponseDueAt).toBeUndefined()
+      expect(await db.connectorAudit.count()).toBe(1)
+    })
+    it("holds accepted work out of retry, terminal wait and retention until a definitive receipt", async () => {
+      const row = await sending()
+      await markAwaitingDeliveryReceipt(row.id, { id: "audit" })
+      expect(await listDueNow({ now: Date.now() + 30 * 86400_000 })).toEqual([])
+      expect(await sweepTerminalOutboundRows({ now: Date.now() + 30 * 86400_000 })).toBe(0)
+      let settled = false
+      const waiting = waitForOutboundTerminal(row.id, 2000).then((value) => {
+        settled = true
+        return value
+      })
+      await new Promise((r) => setTimeout(r, 10))
+      expect(settled).toBe(false)
+      await recordOutboundDeliveryStatus({
+        adapterId: "a",
+        conversationKey: row.conversationKey,
+        timestamp: Date.now(),
+        update: { receiptId: "audit", status: "delivered", platformMessageId: "message" },
+      })
+      expect(await waiting).toMatchObject({ status: "sent", platformMessageId: "message" })
+    })
+    it("cannot settle a different adapter, conversation, unsent or mirrored job", async () => {
+      const row = await sending(),
+        other = await sending("other")
+      await markAwaitingDeliveryReceipt(row.id, { id: "audit" })
+      await markAwaitingDeliveryReceipt(other.id, { id: "audit" })
+      for (const [adapterId, conversationKey] of [
+        ["a", "matrix:a:elsewhere"],
+        ["unknown", row.conversationKey],
+      ])
+        await recordOutboundDeliveryStatus({
+          adapterId,
+          conversationKey,
+          timestamp: Date.now(),
+          update: { receiptId: "audit", status: "delivered", platformMessageId: "forged" },
+        })
+      expect((await getDb().outboundQueue.get(row.id))?.status).toBe("delivery_unknown")
+      expect((await getDb().outboundQueue.get(other.id))?.status).toBe("delivery_unknown")
+      const unsent = await enqueue({
+        adapterId: "a",
+        conversationKey: row.conversationKey,
+        request: makeRequest(),
+      })
+      await expect(markAwaitingDeliveryReceipt(unsent.id, { id: "other" })).rejects.toThrow(
+        /sending/
+      )
+      await getDb().outboundQueue.update(row.id, { syncedFromHost: true })
+      await recordOutboundDeliveryStatus({
+        adapterId: "a",
+        conversationKey: row.conversationKey,
+        timestamp: Date.now(),
+        update: { receiptId: "audit", status: "delivered", platformMessageId: "message" },
+      })
+      expect((await getDb().outboundQueue.get(row.id))?.status).toBe("delivery_unknown")
+    })
+    it("fails conflicting early receipts closed and preserves an already confirmed outcome", async () => {
+      const row = await sending()
+      const scope = { adapterId: "a", conversationKey: row.conversationKey, timestamp: Date.now() }
+      await recordOutboundDeliveryStatus({
+        ...scope,
+        update: { receiptId: "audit", status: "rejected" },
+      })
+      await recordOutboundDeliveryStatus({
+        ...scope,
+        update: { receiptId: "audit", status: "delivered", platformMessageId: "message" },
+      })
+      await markAwaitingDeliveryReceipt(row.id, { id: "audit" })
+      expect((await getDb().outboundQueue.get(row.id))?.status).toBe("delivery_unknown")
+      const second = await sending()
+      await markAwaitingDeliveryReceipt(second.id, { id: "second" })
+      await recordOutboundDeliveryStatus({
+        ...scope,
+        update: { receiptId: "second", status: "delivered", platformMessageId: "message" },
+      })
+      await recordOutboundDeliveryStatus({
+        ...scope,
+        update: { receiptId: "second", status: "rejected" },
+      })
+      expect(await getDb().outboundQueue.get(second.id)).toMatchObject({
+        status: "sent",
+        platformMessageId: "message",
+      })
+      await markDeliveryUnknown(second.id, "network", "late network error")
+      await markDeadlettered(second.id, "network", "late network error")
+      expect((await getDb().outboundQueue.get(second.id))?.status).toBe("sent")
+    })
+  })
   it("enqueueOutbound creates a pending row with correct defaults", async () => {
     const row = await enqueue({
       adapterId: "adp_1",
@@ -1220,5 +1454,34 @@ it("keeps durable acceptance when an enqueue wake subscriber throws", async () =
   } finally {
     unsubscribe()
     diagnostic.mockRestore()
+  }
+})
+
+it("rolls back a voice enqueue cancelled inside the write transaction without waking the runner", async () => {
+  const controller = new AbortController()
+  const wake = jest.fn(),
+    unsubscribe = subscribeOutboundEnqueued(wake)
+  const table = getDb().outboundQueue
+  const cancel = () => {
+    controller.abort()
+  }
+  table.hook("creating", cancel)
+  try {
+    await expect(
+      enqueueOutbound(
+        {
+          adapterId: "adp_1",
+          conversationKey: "cancel_voice",
+          request: makeRequest("cancel_voice"),
+          source: "skill",
+        },
+        { signal: controller.signal }
+      )
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(await table.where("conversationKey").equals("cancel_voice").count()).toBe(0)
+    expect(wake).not.toHaveBeenCalled()
+  } finally {
+    table.hook("creating").unsubscribe(cancel)
+    unsubscribe()
   }
 })

@@ -8,6 +8,7 @@ export class QQKeyboardValidationError extends Error {
 
 export interface QQKeyboardButton {
   id: string
+  group_id?: string
   render_data: { label: string; visited_label?: string; style?: number }
   action: {
     type: 0 | 1 | 2
@@ -17,6 +18,7 @@ export interface QQKeyboardButton {
     enter?: boolean
     reply?: boolean
     anchor?: 1
+    modal?: { content: string; confirm_text?: string; cancel_text?: string }
   }
 }
 
@@ -117,16 +119,24 @@ export function validateQQKeyboard(value: unknown, scene: "group" | "c2c"): QQKe
                 throw new QQKeyboardValidationError("QQ specified-user permission requires users")
               users = permission.specify_user_ids.map((id) => text(id, 256))
             }
-            if (
-              permission.specify_role_ids !== undefined ||
-              action.modal !== undefined ||
-              action.click_limit !== undefined
-            )
+            if (permission.specify_role_ids !== undefined || action.click_limit !== undefined)
               throw new QQKeyboardValidationError(
                 "QQ keyboard field is not supported by this adapter"
               )
             return {
               id,
+              ...(button.group_id !== undefined
+                ? {
+                    group_id:
+                      action.type === 1
+                        ? text(button.group_id, 64)
+                        : (() => {
+                            throw new QQKeyboardValidationError(
+                              "QQ exclusive groups require callback buttons"
+                            )
+                          })(),
+                  }
+                : {}),
               render_data: {
                 label: text(render.label, 10),
                 ...(render.visited_label !== undefined
@@ -147,6 +157,27 @@ export function validateQQKeyboard(value: unknown, scene: "group" | "c2c"): QQKe
                 ...(action.enter !== undefined ? { enter: action.enter as boolean } : {}),
                 ...(action.reply !== undefined ? { reply: action.reply as boolean } : {}),
                 ...(action.anchor === 1 ? { anchor: 1 as const } : {}),
+                ...(action.modal !== undefined
+                  ? {
+                      modal: (() => {
+                        const modal = object(action.modal)
+                        const content = text(modal.content, 40)
+                        if (/(?:https?:\/\/|www\.)/i.test(content))
+                          throw new QQKeyboardValidationError(
+                            "QQ confirmation text cannot contain URLs"
+                          )
+                        return {
+                          content,
+                          ...(modal.confirm_text !== undefined
+                            ? { confirm_text: text(modal.confirm_text, 4) }
+                            : {}),
+                          ...(modal.cancel_text !== undefined
+                            ? { cancel_text: text(modal.cancel_text, 4) }
+                            : {}),
+                        }
+                      })(),
+                    }
+                  : {}),
               },
             }
           }),

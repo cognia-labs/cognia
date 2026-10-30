@@ -95,6 +95,44 @@ describe("maybeHandleHelpCommand — behaviour disclosure", () => {
 })
 
 describe("maybeHandleHelpCommand", () => {
+  it("previews the current welcome through the help entry without resetting welcome dedup", async () => {
+    const d = deps()
+    const recordWelcome = jest.fn()
+    expect(
+      await maybeHandleHelpCommand(
+        makeEvent({ plainText: "/help welcome" }),
+        makeRow({ welcomeText: "欢迎测试" }),
+        { ...d, recordWelcome }
+      )
+    ).toBe(true)
+    expect(cardText(d.enqueue)).toContain("# 👋 开始一个新任务")
+    expect(cardText(d.enqueue)).toContain("欢迎测试")
+    expect(recordWelcome).not.toHaveBeenCalled()
+    expect(d.audit).toHaveBeenCalledWith(expect.objectContaining({ kind: "inbound.help_served" }))
+    expect(d.audit).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "inbound.welcome_sent" })
+    )
+    expect(d.enqueue.mock.calls[0][0].authorization).toEqual({
+      kind: "system-notice",
+      inboundConversationKey: "lark:ad1:oc_1",
+    })
+  })
+
+  it("uses configured help aliases for welcome preview and keeps unrelated prompts out", async () => {
+    const d = deps()
+    const row = makeRow({ helpTriggers: ["menu"] })
+    expect(await maybeHandleHelpCommand(makeEvent({ plainText: "MENU WELCOME" }), row, d)).toBe(
+      true
+    )
+    expect(await maybeHandleHelpCommand(makeEvent({ plainText: "/help welcome" }), row, d)).toBe(
+      false
+    )
+    expect(
+      await maybeHandleHelpCommand(makeEvent({ plainText: "menu welcome later" }), row, d)
+    ).toBe(false)
+    expect(d.enqueue).toHaveBeenCalledTimes(1)
+  })
+
   it("serves a help card and returns true on a default trigger", async () => {
     const d = deps()
     const handled = await maybeHandleHelpCommand(makeEvent({ plainText: " /HELP " }), makeRow(), d)

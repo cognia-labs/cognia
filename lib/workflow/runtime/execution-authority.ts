@@ -36,6 +36,8 @@ import { runWorkflow, type RunWorkflowResult } from "./orchestrator"
 import { getRunStepOutputs } from "./run-from-step"
 import { isWorkflowDeploymentControlPlaneEnabled } from "./feature-flags"
 import { resolveTeamWorkflowKnowledgeBaseIds } from "../nodes/teams/team-runtime-port"
+import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
+import type { WorkflowCompletedPayload } from "./workflow-completion-fanout"
 import { assertWorkflowRunCapacity, WorkflowRunCapacityError } from "./run-admission"
 
 export class WorkflowAdmissionError extends Error {
@@ -79,11 +81,11 @@ export interface ExecuteDeployedWorkflowInput {
   /** Exact child artifact selected by an already-admitted parent run. */
   lockedDependency?: WorkflowDependencyBinding
   /** Called after the admission ledger has durably reserved the run id. */
-  onAdmitted?: (runId: string) => void
+  onAdmitted?: (runId: string) => unknown
   /** Runs inside the same write transaction as the invocation reservation. */
   admissionCheck?: (context: { accountId: string; now: number }) => Promise<void>
   /** Called after the orchestrator has persisted the WorkflowRun row. */
-  onPersisted?: (runId: string) => void
+  onPersisted?: (runId: string) => unknown
 }
 
 export interface ExecuteDeployedWorkflowResult {
@@ -243,7 +245,32 @@ export async function executeDeployedWorkflow(
   input: ExecuteDeployedWorkflowInput
 ): Promise<ExecuteDeployedWorkflowResult> {
   assertScope(input.authorizedScopes)
-  if (!isWorkflowDeploymentControlPlaneEnabled()) {
+  const inheritedSecurityContext =
+    input.triggerKind === "trigger.workflow.completed"
+      ? (input.payload as Partial<WorkflowCompletedPayload> | undefined)?.securityContext
+      : undefined
+  const securityContext: WorkflowRunSecurityContext = {
+    ...inheritedSecurityContext,
+    ...input.securityContext,
+    piiEgressRequired:
+      input.securityContext?.piiEgressRequired === true ||
+      inheritedSecurityContext?.piiEgressRequired === true ||
+      input.triggerKind === "trigger.connector.inbound" ||
+      input.triggerKind === "trigger.connector.system",
+    sourceTriggerKind: input.triggerKind,
+    ...(inheritedSecurityContext?.permissionCeiling || input.securityContext?.permissionCeiling
+      ? {
+          permissionCeiling: deriveExternalSessionPermission(
+            inheritedSecurityContext?.permissionCeiling ?? {},
+            input.securityContext?.permissionCeiling
+          ),
+        }
+      : {}),
+  }
+  input = { ...input, securityContext }
+  // A version-bound approval cannot degrade to the compatibility path, which
+  // resolves the latest publication and has no durable admission identity.
+  if (!isWorkflowDeploymentControlPlaneEnabled() && !input.lockedDependency) {
     return executeLegacyPublishedWorkflow(input)
   }
   const provenance = {
@@ -283,12 +310,6 @@ export async function executeDeployedWorkflow(
       ? { retryOfRunId: input.retry.retryOfRunId, retryMode: input.retry.retryMode }
       : {}),
   }
-  const securityContext: WorkflowRunSecurityContext = input.securityContext ?? {
-    piiEgressRequired:
-      input.triggerKind === "trigger.connector.inbound" ||
-      input.triggerKind === "trigger.connector.system",
-    sourceTriggerKind: input.triggerKind,
-  }
 
   // Idempotency precedes schema validation. A retry belongs to the original
   // admission even when the deployment pointer has since moved to a version
@@ -297,7 +318,7 @@ export async function executeDeployedWorkflow(
     ? await getDb().workflowInvocations.get(id)
     : undefined
   if (existingInvocation) {
-    return reuseInvocation(existingInvocation, input.onAdmitted)
+    return reuseInvocation(existingInvocation, input.onAdmitted, input.signal)
   }
 
   assertTriggerBinding(resolved.workflow, input.triggerId, input.triggerKind)
@@ -386,24 +407,53 @@ export async function executeDeployedWorkflow(
   try {
     const db = getDb()
     await Dexie.ignoreTransaction(() =>
-      db.transaction("rw", db.workflowInvocations, db.workflowRuns, db.sessionUsage, async () => {
-        if (input.admissionCheck) {
-          try {
-            await input.admissionCheck({ accountId: resolved.deployment.accountId, now })
-          } catch (error) {
+      db.transaction(
+        "rw",
+        db.workflowInvocations,
+        db.workflowRuns,
+        db.sessionUsage,
+        db.workflowDeployments,
+        async () => {
+          if (input.signal?.aborted) {
+            const error = new Error("Workflow admission aborted")
             admissionCheckError = error
             throw error
           }
+          if (input.lockedDependency && input.entrypoint !== "subworkflow") {
+            const deployment = await db.workflowDeployments.get(input.lockedDependency.deploymentId)
+            if (
+              deployment?.status !== "active" ||
+              deployment.accountId !== resolved.deployment.accountId
+            ) {
+              const error = new WorkflowAdmissionError(
+                "deployment-not-found",
+                "The approved workflow deployment is no longer active"
+              )
+              admissionCheckError = error
+              throw error
+            }
+          }
+          if (input.admissionCheck) {
+            try {
+              await input.admissionCheck({ accountId: resolved.deployment.accountId, now })
+            } catch (error) {
+              admissionCheckError = error
+              throw error
+            }
+          }
+          // The admission ledger and its externally visible pending run are one
+          // durability unit. A process crash can no longer leave an invocation
+          // that points at a run id absent from status/events APIs.
+          await assertWorkflowRunCapacity(
+            resolved.workflow.id,
+            resolved.workflow.settings.concurrency
+          )
+          await Promise.all([
+            db.workflowInvocations.add(invocation),
+            db.workflowRuns.add(pendingRun),
+          ])
         }
-        // The admission ledger and its externally visible pending run are one
-        // durability unit. A process crash can no longer leave an invocation
-        // that points at a run id absent from status/events APIs.
-        await assertWorkflowRunCapacity(
-          resolved.workflow.id,
-          resolved.workflow.settings.concurrency
-        )
-        await Promise.all([db.workflowInvocations.add(invocation), db.workflowRuns.add(pendingRun)])
-      })
+      )
     )
     admission = { invocation, reused: false }
   } catch (error) {
@@ -427,26 +477,43 @@ export async function executeDeployedWorkflow(
 
   const runId = admission.invocation.runId!
   if (admission.reused) {
-    return reuseInvocation(admission.invocation, input.onAdmitted)
+    return reuseInvocation(admission.invocation, input.onAdmitted, input.signal)
   }
-  // Notify surfaces before starting the driver. Plugin hooks may open their
-  // own Dexie transactions; running them concurrently with the first driver
-  // update leaks fake-indexeddb's transaction zone and can abort admission.
-  input.onAdmitted?.(runId)
-  const driving = driveInvocation({
-    invocation: admission.invocation,
-    version: resolved.version,
-    workflow: resolved.workflow,
-    trigger,
-    executionBinding,
-    signal: input.signal,
-    triggeredBy: input.triggeredBy,
-    traceId,
-    lineage,
-    securityContext,
-    startStepId: input.retry?.startStepId,
-    seedRunId: input.retry?.seedRunId,
-    onPersisted: input.onPersisted,
+  // Reserve the in-process driver before any asynchronous admission hook waits.
+  const driving = Promise.resolve().then(async () => {
+    if (
+      input.triggerKind.startsWith("trigger.connector.") &&
+      input.triggerBinding?.conversationKey
+    ) {
+      const { waitForConversationAutomation } = await import("@/lib/connectors/automation-control")
+      if (
+        !(await waitForConversationAutomation(
+          input.triggerBinding.conversationKey,
+          input.triggerOriginAt ?? Date.now(),
+          { signal: input.signal, runId }
+        ))
+      ) {
+        const { cancelWorkflowRun } = await import("./cancel-run")
+        await cancelWorkflowRun(runId, "Conversation automation cancelled")
+        throw new Error("Conversation automation cancelled")
+      }
+    }
+    await input.onAdmitted?.(runId)
+    return driveInvocation({
+      invocation: admission.invocation,
+      version: resolved.version,
+      workflow: resolved.workflow,
+      trigger,
+      executionBinding,
+      signal: input.signal,
+      triggeredBy: input.triggeredBy,
+      traceId,
+      lineage,
+      securityContext,
+      startStepId: input.retry?.startStepId,
+      seedRunId: input.retry?.seedRunId,
+      onPersisted: input.onPersisted,
+    })
   })
   activeInvocations.set(admission.invocation.id, driving)
   try {
@@ -505,6 +572,21 @@ async function executeLegacyPublishedWorkflow(
   const seedOutputs = input.retry?.seedRunId
     ? await getRunStepOutputs(input.retry.seedRunId)
     : undefined
+  if (input.triggerKind.startsWith("trigger.connector.") && input.triggerBinding?.conversationKey) {
+    const { waitForConversationAutomation } = await import("@/lib/connectors/automation-control")
+    if (
+      !(await waitForConversationAutomation(
+        input.triggerBinding.conversationKey,
+        input.triggerOriginAt ?? Date.now(),
+        { signal: input.signal, runId }
+      ))
+    ) {
+      const { cancelWorkflowRun } = await import("./cancel-run")
+      await cancelWorkflowRun(runId, "Conversation automation cancelled")
+      throw new Error("Conversation automation cancelled")
+    }
+  }
+  await input.onAdmitted?.(runId)
   const result = await runWorkflow({
     workflow: immutableWorkflow,
     runId,
@@ -525,7 +607,6 @@ async function executeLegacyPublishedWorkflow(
     signal: input.signal,
     triggeredBy: input.triggeredBy,
     onPersisted: (persistedRunId) => {
-      input.onAdmitted?.(persistedRunId)
       input.onPersisted?.(persistedRunId)
     },
   })
@@ -552,7 +633,7 @@ interface DriveInvocationInput {
   securityContext?: WorkflowRunSecurityContext
   startStepId?: string
   seedRunId?: string
-  onPersisted?: (runId: string) => void
+  onPersisted?: (runId: string) => unknown
 }
 
 async function driveInvocation(
@@ -602,7 +683,8 @@ async function driveInvocation(
 
 async function reuseInvocation(
   invocation: WorkflowInvocation,
-  onAdmitted?: (runId: string) => void
+  onAdmitted?: (runId: string) => unknown,
+  signal?: AbortSignal
 ): Promise<ExecuteDeployedWorkflowResult> {
   const runId = invocation.runId
   if (!runId) {
@@ -618,13 +700,25 @@ async function reuseInvocation(
       `Workflow invocation ${invocation.id} references missing version ${invocation.versionId}`
     )
   }
-  onAdmitted?.(runId)
+  await onAdmitted?.(runId)
   const existingRun = await getDb().workflowRuns.get(runId)
   const active = activeInvocations.get(invocation.id)
   if (active) {
-    return { ...(await active), reused: true }
+    const cancel = () => {
+      void import("./cancel-run").then(({ cancelWorkflowRun }) =>
+        cancelWorkflowRun(runId, "Caller cancelled")
+      )
+    }
+    signal?.addEventListener("abort", cancel, { once: true })
+    if (signal?.aborted) cancel()
+    try {
+      return { ...(await active), reused: true }
+    } finally {
+      signal?.removeEventListener("abort", cancel)
+    }
   }
   if (existingRun?.status === "pending") {
+    if (signal?.aborted) throw new Error("Workflow admission aborted")
     // No in-process driver owns this durable admission. This is the recovery
     // path after a process crash between admission and orchestrator startup.
     const executionBinding: WorkflowExecutionBinding = {
@@ -645,18 +739,39 @@ async function reuseInvocation(
       payload: existingRun.triggerPayload,
       originAt: existingRun.startedAt,
     }
-    const recovery = driveInvocation({
-      invocation,
-      version,
-      workflow: version.definition,
-      trigger,
-      executionBinding,
-      triggeredBy: existingRun.triggeredBy,
-      traceId: existingRun.traceId,
-      lineage: existingRun.lineage,
-      securityContext: existingRun.securityContext,
-      startStepId: invocation.startStepId,
-      seedRunId: invocation.seedRunId,
+    const recovery = Promise.resolve().then(async () => {
+      if (
+        existingRun.triggerKind.startsWith("trigger.connector.") &&
+        existingRun.triggerBinding?.conversationKey
+      ) {
+        const { waitForConversationAutomation } =
+          await import("@/lib/connectors/automation-control")
+        if (
+          !(await waitForConversationAutomation(
+            existingRun.triggerBinding.conversationKey,
+            existingRun.triggerOriginAt ?? existingRun.startedAt,
+            { signal, runId }
+          ))
+        ) {
+          const { cancelWorkflowRun } = await import("./cancel-run")
+          await cancelWorkflowRun(runId, "Conversation automation cancelled")
+          throw new Error("Conversation automation cancelled")
+        }
+      }
+      return driveInvocation({
+        invocation,
+        version,
+        workflow: version.definition,
+        trigger,
+        executionBinding,
+        triggeredBy: existingRun.triggeredBy,
+        traceId: existingRun.traceId,
+        lineage: existingRun.lineage,
+        securityContext: existingRun.securityContext,
+        signal,
+        startStepId: invocation.startStepId,
+        seedRunId: invocation.seedRunId,
+      })
     })
     activeInvocations.set(invocation.id, recovery)
     try {
@@ -738,9 +853,9 @@ export interface RetryWorkflowRunInput {
    */
   triggeredBy?: WorkflowTriggeredFrom
   /** Called after the admission ledger has durably reserved the run id. */
-  onAdmitted?: (runId: string) => void
+  onAdmitted?: (runId: string) => unknown
   /** Called after the orchestrator has persisted the WorkflowRun row. */
-  onPersisted?: (runId: string) => void
+  onPersisted?: (runId: string) => unknown
 }
 
 /**

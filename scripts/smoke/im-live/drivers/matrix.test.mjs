@@ -164,6 +164,11 @@ test("replyToTarget builds an m.in_reply_to relation", async () => {
     await driver.replyToTarget(lease, { messageId: "$botEvent" }, MARKER)
     const send = calls.find((c) => c.method === "PUT" && c.pathname.includes("/send/"))
     assert.deepEqual(send.body["m.relates_to"], { "m.in_reply_to": { event_id: "$botEvent" } })
+    assert.deepEqual(
+      send.body["m.mentions"],
+      { user_ids: [] },
+      "quote admission must work without a mention"
+    )
   })
 })
 
@@ -269,6 +274,95 @@ test("cleanup redacts probes and replies, and reports a refusal", async () => {
       assert.deepEqual(result.deleted, ["$probe1"])
       assert.equal(result.ok, false)
       assert.match(result.retained[0].reason, /cannot redact/)
+    }
+  )
+})
+
+test("history crosses empty pages and older origin timestamps until the end token is absent", async () => {
+  await withFakePlatform(
+    routes({
+      [`GET ${V3}/rooms/${ROOM_PATH}/messages`]: ({ query }) => ({
+        json:
+          query.from === "last"
+            ? { chunk: [targetEvent("$answer", MARKER)] }
+            : query.from === "empty"
+              ? { chunk: [], end: "last" }
+              : {
+                  chunk: [targetEvent("$old", "old", { origin_server_ts: NOW - 1000 })],
+                  end: "empty",
+                },
+      }),
+    }),
+    async ({ baseUrl, callsTo }) => {
+      const driver = driverFor(baseUrl)
+      const lease = await driver.prepare()
+      assert.deepEqual(
+        (await driver.pollTargetMessages(lease)).map((message) => message.messageId),
+        ["$answer"]
+      )
+      assert.equal(callsTo(`GET ${V3}/rooms/${ROOM_PATH}/messages`).length, 3)
+      assert.deepEqual(await driver.pollTargetMessages(lease), [])
+    }
+  )
+})
+
+test("history deduplicates overlapping pages and returns their chronological order", async () => {
+  await withFakePlatform(
+    routes({
+      [`GET ${V3}/rooms/${ROOM_PATH}/messages`]: ({ query }) => ({
+        json: query.from
+          ? { chunk: [targetEvent("$second", "second"), targetEvent("$first", "first")] }
+          : { chunk: [targetEvent("$second", "second")], end: "older" },
+      }),
+    }),
+    async ({ baseUrl }) => {
+      const driver = driverFor(baseUrl)
+      const lease = await driver.prepare()
+      assert.deepEqual(
+        (await driver.pollTargetMessages(lease)).map((message) => message.messageId),
+        ["$first", "$second"]
+      )
+    }
+  )
+})
+
+test("repeated history end tokens fail before committing dedup", async () => {
+  await withFakePlatform(
+    routes({
+      [`GET ${V3}/rooms/${ROOM_PATH}/messages`]: () => ({
+        json: { chunk: [targetEvent("$answer", MARKER)], end: "repeat" },
+      }),
+    }),
+    async ({ baseUrl }) => {
+      const driver = driverFor(baseUrl)
+      const lease = await driver.prepare()
+      await assert.rejects(driver.pollTargetMessages(lease), /pagination/i)
+      assert.equal(lease.seen.size, 0)
+    }
+  )
+})
+
+test("failure on a later history page cannot consume earlier replies", async () => {
+  let fail = true
+  await withFakePlatform(
+    routes({
+      [`GET ${V3}/rooms/${ROOM_PATH}/messages`]: ({ query }) =>
+        query.from
+          ? fail
+            ? { status: 403, json: { errcode: "M_FORBIDDEN", error: "history revoked" } }
+            : { json: { chunk: [targetEvent("$first", "first")] } }
+          : { json: { chunk: [targetEvent("$second", "second")], end: "older" } },
+    }),
+    async ({ baseUrl }) => {
+      const driver = driverFor(baseUrl)
+      const lease = await driver.prepare()
+      await assert.rejects(driver.pollTargetMessages(lease), /history revoked/)
+      assert.equal(lease.seen.size, 0)
+      fail = false
+      assert.deepEqual(
+        (await driver.pollTargetMessages(lease)).map((message) => message.text),
+        ["first", "second"]
+      )
     }
   )
 })

@@ -65,6 +65,15 @@ import { OutboundStatusPill } from "./outbound-status-pill"
 // ---------------------------------------------------------------------------
 
 describe("OutboundStatusPill", () => {
+  it("shows accepted asynchronous work as awaiting the provider, with no retry action", () => {
+    mockJob = {
+      ...makeJob("audit", "delivery_unknown"),
+      pendingReceipt: { id: "receipt", acceptedAt: Date.now() },
+    }
+    render(<OutboundStatusPill jobId="audit" />)
+    expect(screen.getAllByText("Awaiting provider result")).toHaveLength(2)
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument()
+  })
   beforeEach(() => {
     mockJob = undefined
     mockLatestJob = null

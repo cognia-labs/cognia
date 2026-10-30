@@ -78,6 +78,9 @@ export function QQOfficialConfigDialog({
   const [receiveGuildMessages, setReceiveGuildMessages] = useState(
     row?.settings.receiveGuildMessages === true
   )
+  const [receiveMessageAudit, setReceiveMessageAudit] = useState(
+    row?.settings.receiveMessageAudit === true
+  )
   const [muted, setMuted] = useState<boolean>(row?.muted ?? false)
   const [quietHours, setQuietHours] = useState<QuietHoursValue | null>(row?.quietHours ?? null)
   const [testing, setTesting] = useState(false)
@@ -107,6 +110,7 @@ export function QQOfficialConfigDialog({
     credentials.dirty ||
     transportMode !== (row?.transportMode === "webhook" ? "webhook" : "gateway") ||
     receiveGuildMessages !== (row?.settings.receiveGuildMessages === true) ||
+    receiveMessageAudit !== (row?.settings.receiveMessageAudit === true) ||
     muted !== (row?.muted ?? false) ||
     quietHours !== (row?.quietHours ?? null)
 
@@ -158,7 +162,7 @@ export function QQOfficialConfigDialog({
           displayName: displayName.trim(),
           enabled: true,
           transportMode,
-          settings: { receiveGuildMessages },
+          settings: { receiveGuildMessages, receiveMessageAudit },
           credentialsRef: {
             keyringService: "com.cognia.platforms",
             accounts: [...QQ_CREDENTIALS],
@@ -175,7 +179,7 @@ export function QQOfficialConfigDialog({
         await updateAdapterInstance(adapterId, {
           displayName: displayName.trim(),
           transportMode,
-          settings: { ...row.settings, receiveGuildMessages },
+          settings: { ...row.settings, receiveGuildMessages, receiveMessageAudit },
           muted,
           quietHours: quietHours ?? undefined,
         })
@@ -355,6 +359,21 @@ export function QQOfficialConfigDialog({
           </div>
         </div>
 
+        <div className="flex items-start gap-3 py-2">
+          <Switch
+            id="qq-receive-message-audit"
+            checked={receiveMessageAudit}
+            onCheckedChange={setReceiveMessageAudit}
+            disabled={saving || testing}
+            aria-describedby="qq-receive-message-audit-help"
+          />
+          <div className="space-y-0.5">
+            <Label htmlFor="qq-receive-message-audit">{t("receiveMessageAuditLabel")}</Label>
+            <p id="qq-receive-message-audit-help" className="text-xs text-muted-foreground">
+              {t("receiveMessageAuditHelp")}
+            </p>
+          </div>
+        </div>
         {transportMode === "webhook" && (
           <WebhookUrlCard
             ingress={ingress}

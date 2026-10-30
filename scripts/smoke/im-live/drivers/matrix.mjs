@@ -83,8 +83,8 @@ export function createMatrixDriver({ values, fetchImpl = fetch, timeoutMs, now =
       return createLease({
         platform: "matrix",
         conversationId: String(targetRoomId),
-        // Backward pagination plus a timestamp floor: simpler and more robust
-        // than threading a /sync token, and it cannot skip an event.
+        // The floor excludes old events; backward pagination still follows
+        // every token because origin timestamps need not match room ordering.
         extra: { sinceTs: now(), seen: new Set() },
       })
     },
@@ -109,7 +109,7 @@ export function createMatrixDriver({ values, fetchImpl = fetch, timeoutMs, now =
         body: {
           msgtype: "m.text",
           body: marker,
-          "m.mentions": { user_ids: [targetUserId] },
+          "m.mentions": { user_ids: [] },
           "m.relates_to": { "m.in_reply_to": { event_id: targetMessage.messageId } },
         },
       })
@@ -119,10 +119,26 @@ export function createMatrixDriver({ values, fetchImpl = fetch, timeoutMs, now =
 
     async pollTargetMessages(lease) {
       const query = new URLSearchParams({ dir: "b", limit: "50" })
-      const page = await call(`/rooms/${room}/messages?${query}`)
+      const events = []
+      const tokens = new Set()
+      for (let index = 0; ; index++) {
+        if (index === 100)
+          throw new Error("matrix history pagination exceeded the 100-page observation limit")
+        const page = await call(`/rooms/${room}/messages?${query}`)
+        if (!Array.isArray(page?.chunk)) throw new Error("matrix history returned no event page")
+        events.push(...page.chunk)
+        // Empty chunks may have a continuation token. Only its absence ends
+        // the traversal; no partial page may commit the observation's dedup.
+        if (page.end === undefined) break
+        if (typeof page.end !== "string" || !page.end || tokens.has(page.end)) {
+          throw new Error("matrix history pagination returned an invalid or repeated end token")
+        }
+        tokens.add(page.end)
+        query.set("from", page.end)
+      }
       const fresh = []
       // Backward pagination yields newest-first; reverse so `observed` is ordered.
-      for (const event of [...(page.chunk ?? [])].reverse()) {
+      for (const event of events.reverse()) {
         if (event.type !== "m.room.message") continue
         if (lease.seen.has(event.event_id)) continue
         if (Number(event.origin_server_ts) < lease.sinceTs) continue

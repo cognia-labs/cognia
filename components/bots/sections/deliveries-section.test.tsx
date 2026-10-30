@@ -29,6 +29,15 @@ jest.mock("@/hooks/bots/use-bot-control-writes", () => ({
   }),
 }))
 
+const cancelAutomation = jest.fn()
+jest.mock("@/hooks/bots/use-bot-lifecycle-actions", () => ({
+  useBotLifecycleReadiness: () => ({ canAutomation: true }),
+  useBotLifecycleActions: () => ({
+    pending: new Set(),
+    controlAutomation: (...args: unknown[]) => cancelAutomation(...args),
+  }),
+}))
+
 import { BotDeliveriesSection } from "./deliveries-section"
 
 function row(): BotConsoleRow {
@@ -223,4 +232,11 @@ it("allows delivery metadata and run links to wrap in narrow cards", () => {
   expect(screen.getByText("pull_request.opened").parentElement).toHaveClass("flex-wrap")
   expect(screen.getByRole("link").parentElement).toHaveClass("flex-wrap")
   expect(screen.getByTestId("bot-delivery-replay-bdl_1")).toBeEnabled()
+})
+
+it("cancels an accepted delivery before an execution run exists", async () => {
+  deliveries = { rows: [delivery({ status: "pending", runId: undefined })], loading: false }
+  render(<BotDeliveriesSection row={row()} />)
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  expect(cancelAutomation).toHaveBeenCalledWith("boti_1", "cancel", "bdl_1")
 })

@@ -57,6 +57,7 @@ describe("setLarkOAuthPending / getLarkOAuthPending", () => {
         state: "lark:lk-1:nonce",
         codeVerifier: "verifier-123",
         redirectUri: "https://tunnel.example/oauth/lark/callback",
+        authorizationEpoch: "begin-epoch",
       },
       T0
     )
@@ -65,6 +66,7 @@ describe("setLarkOAuthPending / getLarkOAuthPending", () => {
       state: "lark:lk-1:nonce",
       codeVerifier: "verifier-123",
       redirectUri: "https://tunnel.example/oauth/lark/callback",
+      authorizationEpoch: "begin-epoch",
       ts: T0,
     })
   })

@@ -20,8 +20,22 @@
  */
 
 import "fake-indexeddb/auto"
+import { waitFor } from "@testing-library/react"
+import { dispatchConnectorInboundToBots } from "@/lib/bot/sources/connector-inbound"
+import {
+  enqueueConnectorInboundJob,
+  acceptConnectorAutomationFanOut,
+  completeConnectorInboundJob,
+  listPendingConnectorAutomationFanOuts,
+} from "@/lib/db/connector-inbound-jobs"
+
+jest.mock("@/lib/bot/sources/connector-inbound", () => ({
+  dispatchConnectorInboundToBots: jest.fn().mockResolvedValue({}),
+}))
+
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import { createAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
+import { upsertByConversationKey } from "@/lib/db/conversation-overrides"
 import { listRecent } from "@/lib/db/connector-audit"
 import { markConnectorInboundJobRecoveryRequired } from "@/lib/db/connector-inbound-jobs"
 import { getBus, __resetBusForTesting } from "./bus"
@@ -108,6 +122,10 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } 
 }
 
 beforeEach(async () => {
+  jest
+    .mocked(dispatchConnectorInboundToBots)
+    .mockReset()
+    .mockResolvedValue({} as never)
   await getDb().delete()
   __resetDbForTesting()
   __resetBusForTesting()
@@ -415,4 +433,194 @@ describe("ConnectorBus turn queue — overflow backpressure", () => {
     await bus.flushInboundTurns()
     expect(handler).toHaveBeenCalledTimes(101)
   })
+})
+
+it("queued automatic work honors a switch to silent before dispatch", async () => {
+  const adapterId = await seedAdapter()
+  const bus = getBus()
+  const gate = deferred()
+  const seen: Array<{ id: string; decision: string; authority?: string }> = []
+  bus.routeHandler = async (event, decision, _resolved, override) => {
+    seen.push({ id: event.messageId, decision, authority: override?.authority })
+    if (event.messageId === "audit_first") await gate.promise
+  }
+  await bus.dispatchInboundFull(privateEvent(adapterId, "audit_first"))
+  await bus.dispatchInboundFull(privateEvent(adapterId, "audit_queued"))
+  await upsertByConversationKey({
+    conversationKey: `telegram:${adapterId}:chatA`,
+    sessionId: "audit_session",
+    mode: "manual",
+    autonomy: "observe",
+    engagement: "human",
+    authority: "plan",
+  })
+  await bus.dispatchInboundFull(privateEvent(adapterId, "audit_after_switch"))
+  gate.resolve()
+  await bus.flushInboundTurns()
+  expect(seen[2]).toMatchObject({
+    id: "audit_after_switch",
+    decision: "manual-store",
+    authority: "plan",
+  })
+  expect(seen[1]).toMatchObject({ id: "audit_queued", decision: "manual-store", authority: "plan" })
+})
+
+it("rechecks queued authority, mute and skill revocation at execution time", async () => {
+  const adapterId = await seedAdapter()
+  const bus = getBus()
+  const gate = deferred()
+  const seen: Array<unknown> = []
+  bus.routeHandler = async (event, decision, _resolved, override, adapter) => {
+    if (event.messageId === "first") await gate.promise
+    else
+      seen.push({
+        decision,
+        authority: override?.authority,
+        muted: adapter.muted,
+        skills: adapter.builtInSkillCeiling,
+      })
+  }
+  await bus.dispatchInboundFull(privateEvent(adapterId, "first"))
+  await bus.dispatchInboundFull(privateEvent(adapterId, "queued"))
+  await updateAdapterInstance(adapterId, {
+    defaultAuthority: "plan",
+    muted: true,
+    builtInSkillCeiling: [],
+  })
+  gate.resolve()
+  await bus.flushInboundTurns()
+  expect(seen).toEqual([{ decision: "ai-run", authority: "plan", muted: true, skills: [] }])
+})
+
+it("pins a queued source to its accepted session before a later /new", async () => {
+  const adapterId = await seedAdapter()
+  const key = `telegram:${adapterId}:chatA`
+  await getDb().sessions.put({
+    id: "old",
+    title: "Old",
+    kind: "direct",
+    platformConversationKey: key,
+    createdAt: 1,
+    updatedAt: 1,
+  } as never)
+  const bus = getBus(),
+    gate = deferred(),
+    sessions: Array<string | undefined> = []
+  bus.routeHandler = async (event, _decision, _resolved, override) => {
+    if (event.messageId === "first") await gate.promise
+    else sessions.push(override?.activeSessionId)
+  }
+  await bus.dispatchInboundFull(privateEvent(adapterId, "first"))
+  await bus.dispatchInboundFull(privateEvent(adapterId, "queued"))
+  await getDb().sessions.put({
+    id: "new",
+    title: "New",
+    kind: "direct",
+    platformConversationKey: key,
+    createdAt: 2,
+    updatedAt: 2,
+  } as never)
+  await upsertByConversationKey({ conversationKey: key, sessionId: "new", activeSessionId: "new" })
+  gate.resolve()
+  await bus.flushInboundTurns()
+  expect(sessions).toEqual(["old"])
+})
+
+it("retains observer transfer when pause wins at the Bot handoff", async () => {
+  const adapterId = await seedAdapter(),
+    bus = getBus()
+  const event = privateEvent(adapterId, "pause-transfer")
+  const control = await upsertByConversationKey({
+    conversationKey: event.conversationKey,
+    sessionId: "s",
+  })
+  const paused = deferred()
+  bus.routeHandler = jest.fn()
+  jest.mocked(dispatchConnectorInboundToBots).mockImplementationOnce(async () => {
+    await getDb().conversationOverrides.update(control.id, { automationPaused: true })
+    paused.resolve()
+    return { deferred: true } as never
+  })
+  await bus.dispatchInboundFull(event)
+  await paused.promise
+  expect(
+    (await listPendingConnectorAutomationFanOuts()).map((job) => job.sourceMessageId)
+  ).toContain(event.messageId)
+  await getDb().conversationOverrides.update(control.id, { automationPaused: false })
+  await bus.flushInboundTurns()
+  expect(dispatchConnectorInboundToBots).toHaveBeenCalledTimes(2)
+  expect(bus.routeHandler).toHaveBeenCalledTimes(1)
+  expect(await listPendingConnectorAutomationFanOuts()).toEqual([])
+})
+
+it("recovers observers after responder completion without replaying the responder", async () => {
+  const adapterId = await seedAdapter()
+  const event = privateEvent(adapterId, "observer-restart")
+  const job = await enqueueConnectorInboundJob(event, "queue")
+  await acceptConnectorAutomationFanOut(job.id)
+  await completeConnectorInboundJob(job.id)
+  __resetBusForTesting()
+  const bus = getBus()
+  bus.registerAdapter(makeAdapter(adapterId))
+  bus.routeHandler = jest.fn()
+  await Promise.all([bus.resumeAutomationFanOuts(), bus.resumeAutomationFanOuts()])
+  await bus.flushInboundTurns()
+  expect(dispatchConnectorInboundToBots).toHaveBeenCalledTimes(1)
+  expect(bus.routeHandler).not.toHaveBeenCalled()
+  expect(await listPendingConnectorAutomationFanOuts()).toEqual([])
+})
+
+it("drains durable observer backlog beyond the in-memory queue limit", async () => {
+  const adapterId = await seedAdapter(),
+    bus = getBus(),
+    gate = deferred()
+  for (let index = 0; index < 102; index++) {
+    const job = await enqueueConnectorInboundJob(
+      privateEvent(adapterId, `backlog-${index}`),
+      "queue"
+    )
+    await acceptConnectorAutomationFanOut(job.id)
+    await completeConnectorInboundJob(job.id)
+  }
+  jest.mocked(dispatchConnectorInboundToBots).mockImplementationOnce(async () => {
+    await gate.promise
+    return {} as never
+  })
+  await bus.resumeAutomationFanOuts()
+  gate.resolve()
+  await waitFor(async () => expect(await listPendingConnectorAutomationFanOuts()).toEqual([]), {
+    timeout: 20_000,
+  })
+  await bus.flushInboundTurns()
+  expect(dispatchConnectorInboundToBots).toHaveBeenCalledTimes(102)
+})
+
+it("recovers a runnable observer behind an unavailable adapter prefix", async () => {
+  const adapterId = await seedAdapter(),
+    bus = getBus()
+  const template = await enqueueConnectorInboundJob(privateEvent("missing", "unavailable"), "queue")
+  await getDb().connectorInboundJobs.delete(template.id)
+  await getDb().connectorInboundJobs.bulkPut(
+    Array.from({ length: 101 }, (_, index) => ({
+      ...template,
+      id: `a-unavailable-${index}`,
+      platformMessageId: `unavailable-${index}`,
+      automationFanOut: { state: "pending" as const, acceptedAt: template.createdAt },
+    }))
+  )
+  const ready = await enqueueConnectorInboundJob(privateEvent(adapterId, "ready"), "queue")
+  await getDb().connectorInboundJobs.delete(ready.id)
+  await getDb().connectorInboundJobs.put({
+    ...ready,
+    id: "z-ready",
+    automationFanOut: { state: "pending", acceptedAt: ready.createdAt },
+  })
+  await bus.resumeAutomationFanOuts()
+  await bus.flushInboundTurns()
+  expect(dispatchConnectorInboundToBots).toHaveBeenCalledWith(
+    expect.objectContaining({ event: expect.objectContaining({ messageId: "ready" }) })
+  )
+  expect((await getDb().connectorInboundJobs.get("z-ready"))?.automationFanOut?.state).toBe(
+    "settled"
+  )
 })

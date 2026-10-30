@@ -1,6 +1,6 @@
 ---
 title: "Local Live Testing"
-description: "Drive a real Telegram, Slack, Discord, Lark, Matrix or OneBot conversation against your configured Cognia bot, with the model swapped for a deterministic fixture."
+description: "Drive real IM conversations, including separate QQ Official and OneBot lanes, against your configured Cognia bot with a deterministic model fixture."
 ---
 
 # Local Live Testing
@@ -55,7 +55,7 @@ pnpm im:test:live -- --platform telegram
 ```
 
 The P0 scenario. Use `--platform all` for every platform (it refuses to start
-unless all six are configured; add `--allow-unconfigured` to run what you have
+unless every listed platform is configured; add `--allow-unconfigured` to run what you have
 and report the rest as `NOT_CONFIGURED`).
 
 Two more commands need no credentials and no running app:
@@ -68,11 +68,82 @@ pnpm im:test:unit
 pnpm im:test:contract
 ```
 
-`im:test:unit` covers the harness itself. `im:test:contract` aggregates the
-existing connector transport, contract, dedup and rate-limit suites. Note one
-gap it does **not** close: `slack/transport-socket-mode.test.ts` has no
-disconnect/reconnect case, where Discord and Matrix both do — a green contract
-run is not proof of full protocol coverage. The Rust half (signature
+`im:test:unit` covers the harness itself. Lark, Slack, Discord and Matrix each
+have composed CLI/HTTP/model-fixture/report cases for two turns, duplicate
+replies, model bypass, failed doctor checks and cleanup refusals. These run
+against local platform and target stand-ins. They verify the acceptance tool,
+not a deployed Cognia target or the platform service. Reports are retained in
+`.cache/test-results/im-observers/`.
+
+`pnpm im:test:loopback` is a separate production-adapter protocol layer for
+WeCom, DingTalk, WeChat Personal and WeChat OA. It drives the actual adapters
+and transports against real loopback HTTP/WebSocket servers, using the existing
+Host command/event seams as a native substitute. The admission gate, native
+journal and checkpoint stores are fixtures; Rust signatures, durable native
+storage, models and vendor/client acceptance are outside its scope. It covers
+real wire requests/ACKs, peer and stream isolation, cancellation, checkpoint
+ownership and claim/accept/ACK ordering. Reports under
+`.cache/test-results/im-loopback/` contain classified traffic and cleanup counts,
+with `realPlatform:false`; they omit payloads and credentials. The dedicated
+CI lane runs it without platform credentials.
+
+`pnpm im:test:native` builds a feature-gated Rust process from current source
+and runs the same enterprise adapters through real Rust HTTP/WS commands and
+events. Dedicated native cases cover Telegram/Slack/Discord/Lark/QQ webhook
+verification, OneBot reverse WS, and OA encrypted signatures/appId, exact ACK,
+held/rejected admission and encrypted-journal recovery across two process
+SIGKILL/restarts. The reused JS admission gates/Personal checkpoint stores are
+still fixtures; dedicated OA cases use the actual native store. This stdio
+test transport is not Tauri GUI/IPC or real platform acceptance, and does not
+prove every native protocol or power-loss durability.
+
+Run `cargo test --locked -p cognia-connectors --lib` for native unit tests;
+their in-memory store is separate from the native process's actual encrypted
+disk profile. Both commands are wired into Bot E2E CI. Source/binary identity,
+run IDs and lifecycle/error receipts are under
+`.cache/test-results/im-native/*.json`. Private generated key/profile
+directories are removed and never uploaded; intentional failure cases must
+have failed receipts. The process trusts the fixture's owned fixed-header
+peer; its initial URL check is not a sandbox for arbitrary redirecting servers.
+
+The native lane also runs two real Matrix OlmMachines with encrypted SQLite.
+It exchanges signed device/one-time keys and encrypted room keys through a
+local homeserver relay, tests cross-device Megolm, tampered ciphertext and
+account/room isolation, and verifies device public keys plus decryptability
+after SIGKILL/restart. Wrong store passwords must fail before a normal reopen.
+Only the homeserver delivery is a stand-in; cryptography is not mocked.
+Composed native suites also run the production Matrix adapter through sync,
+encrypted replies, cursor resume, late-key recovery, rejected admission and
+stop/restart races. Production DB APIs use Node `fake-indexeddb` in this lane;
+browser disk persistence is not established. Media cases verify actual SDK
+attachment encryption, ciphertext integrity, exact decrypted bytes, account/size
+isolation and encrypted cache recovery after SIGKILL.
+
+The running adapter exposes `keyBackup.create()` and
+`keyBackup.restore(recoveryKey, version?)`. Creation persists the native recovery
+key before contacting the server; encrypted session upload is counted only after
+server ACK. Independent UUID claims, unresolved-create reconciliation and
+pre-dispatch cancellation prevent duplicate creation or loss of an unresolved
+key. Fresh-device restore checks the key, version and derived session IDs before
+importing at most 500 sessions / 8 MiB; version metadata is capped at 64 KiB.
+A canonical Host execution regression verifies recovery inputs/results are not
+saved in SQLite operation receipts. These are internal APIs without a settings
+UI. The native suites use a controlled local homeserver relay; real homeserver,
+client, cross-signing and Tauri GUI/IPC acceptance remain separate.
+
+Slack history/thread cursors and Matrix history tokens are followed across
+pages before committing observation dedup. Invalid continuations, later-page
+failures and the 100-page safety limit fail explicitly; partial history never
+counts as success. Matrix empty chunks can continue and origin timestamps do
+not terminate pagination.
+
+`im:test:contract` aggregates connector transport, contract, dedup and
+rate-limit suites, including WeCom, DingTalk, WeChat Personal and WeChat OA.
+Slack Socket Mode now covers protocol disconnect/WS-close reconnection, fresh
+connection identities and ACKs, abort during backoff/acquisition, and cleanup
+after listener registration failure. These tests drive production code with
+the native boundary mocked. A green contract run does not prove complete
+protocol or native transport coverage. The Rust half (signature
 verification and webhook replay protection under
 `crates/cognia-connectors/src/sigverify/` and `replay_guard.rs`) runs under
 `cargo test`, not these scripts.
@@ -86,13 +157,13 @@ verification and webhook replay protection under
    `cognia-e2e:<platform>:<runId>:turn-1`.
 5. Waits concurrently for the fixture to capture that marker **and** for the
    bot's reply to appear in the conversation.
-6. **Turn 2** — replies to the bot's own message. Turn 1 and turn 2 are not the
-   same test: `lib/connectors/conversation-admission.ts` admits a group message
-   on either `selfMentioned` **or** `isReplyToSelf`, so running both proves both
-   paths.
+6. **Turn 2** — replies to the bot's own message. General group scenarios
+   exercise `selfMentioned` and `isReplyToSelf` separately. QQ Official group
+   turn 2 also includes an explicit @ and therefore does not prove quote-only
+   admission; its C2C turn 1 is private text.
 7. Keeps watching for a further 10 seconds. A second answer to the same turn is
    a duplicate-consumption failure.
-8. Deletes test messages where supported (set `IM_LIVE_KEEP=1` to keep them). OneBot retains messages for manual cleanup.
+8. Deletes test messages where supported (set `IM_LIVE_KEEP=1` to keep them). Both QQ observers retain messages for manual cleanup.
 9. Writes redacted evidence to `test-results/im-live/<runId>/<platform>.json` —
    ids, timings, marker facts, and the fixture hit. Never message text.
 
@@ -132,6 +203,15 @@ IM_LIVE_ONEBOT_BEARER_TOKEN=
 IM_LIVE_ONEBOT_TARGET_GROUP_ID=
 IM_LIVE_ONEBOT_TARGET_BOT_UIN=
 IM_LIVE_ONEBOT_DRIVER_USER_UIN=
+
+# QQ Official target; separate human-client observer credentials
+IM_LIVE_QQ_OFFICIAL_OBSERVER_API_BASE=http://127.0.0.1:3002
+IM_LIVE_QQ_OFFICIAL_OBSERVER_BEARER_TOKEN=
+IM_LIVE_QQ_OFFICIAL_TARGET_CONVERSATION_ID=
+IM_LIVE_QQ_OFFICIAL_TARGET_BOT_UIN=
+IM_LIVE_QQ_OFFICIAL_DRIVER_USER_UIN=
+# group (default) or c2c
+# IM_LIVE_QQ_OFFICIAL_CONVERSATION_KIND=group
 
 # Matrix
 IM_LIVE_MATRIX_HOMESERVER=
@@ -231,9 +311,10 @@ platform message ids, so you can go find the message even after a failure.
 
 ## Scope
 
-Covered: text round-trips over each platform's primary transport (Telegram long
+The live scenario is designed for text round-trips over each platform's primary transport (Telegram long
 polling, Slack Socket Mode, Discord Gateway, Lark long connection, Matrix
-`/sync`).
+`/sync`). Only a run against configured dedicated accounts establishes real
+platform acceptance; local harness tests do not establish this result.
 
 Not covered here: secondary transports (webhooks and Discord's interaction HTTP
 endpoint stay in the contract tests), media and attachments, buttons, cards and
@@ -247,6 +328,27 @@ faked here.
 Configure Cognia’s forward or reverse WS connection first. Add a separate **HTTP server** in NapCat WebUI for the observer: bind `127.0.0.1`, choose an unused port (the example `3000` may already be used by Next.js), set `messagePostFormat=array`, enable a `token`, and save as enabled. `IM_LIVE_ONEBOT_API_BASE` points to this HTTP port, not the WebUI or WebSocket port. The bearer token is that HTTP entry’s token. Both accounts must belong to the target group; post an initial test message so history exists.
 
 Run `pnpm im:test:doctor -- --platform onebot`, then `pnpm im:test:live -- --platform onebot` with the fixture target running. Doctor reads `get_login_info` and NapCat’s `get_group_msg_history` extension; failure of either is not a passed live test. The runner prints a marker for a **different human QQ account** to send using QQ’s actual @ picker. It then asks that user to quote the first bot reply with the second marker. Each human step has `IM_LIVE_TURN_TIMEOUT_MS` to complete. The observer verifies the configured sender and real `at`/`reply` segments, polls paginated history, deduplicates by message ID, and feeds the existing fixture/duplicate-window/report checks. It does not call send/delete APIs; messages remain for manual inspection and cleanup. Run in a quiet, dedicated group.
+
+## QQ Official client-observation lane
+
+This is a separate `qq-official` target, using a **human account's** read-only NapCat HTTP observer. It does not configure Cognia's OneBot adapter, request the Official Bot AppSecret, or send/delete through the observer. The observer must log in as `IM_LIVE_QQ_OFFICIAL_DRIVER_USER_UIN`, which must differ from the target bot's **client-visible UIN**. AppID, OpenID and display names are not UINs. Confirm the target adapter and identity mapping in the dedicated Host before claiming Official Bot acceptance.
+
+```bash
+pnpm im:test:unit
+pnpm im:test:qq
+pnpm im:test:target
+# Another terminal, after configuring .env.im-live.local:
+pnpm im:test:doctor -- --platform qq-official
+pnpm im:test:live -- --platform qq-official
+```
+
+For `group`, the conversation ID is the client-visible QQ group number. Both turns use the real @ picker; the second also quotes the first target reply. Reports distinguish `group-quote-with-mention` from OneBot's **quote-only, without @** action. Pure quotes require separately confirmed Official full-group delivery; the group-at subscription alone does not establish it. See the [Official group-at event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_at_message_create.html) and [full-group event](https://bot.q.qq.com/wiki/develop/api-v2/autogen/event/group_message_create.html).
+
+For `c2c`, set the conversation ID equal to the target's client UIN. The first turn is plain private text; the second quotes the reply. This requires the deployed observer's `get_friend_msg_history` to actually expose that Official Bot conversation. Some client/protocol combinations may not; a failed or malformed history response stops the test, without falling back to group history or passing a manual assertion. First calibrate a controlled target message against the Host's send receipt and client history; retain only IDs, marker and identity facts. C2C stream rendering and completion are **not** established by this text smoke.
+
+The observer checks login identity, numeric client IDs, seconds-based timestamps, explicit sender/peer/conversation consistency, and that replies do not precede probes. It follows [NapCat history APIs](https://napneko.github.io/develop/api/doc), with native `real_seq` for same-second group boundaries. A full C2C page whose oldest timestamp is ambiguous fails closed; sender-local sequences cannot order both participants. Use a quiet dedicated conversation. Unsupported text projections, Markdown or card-only history must remain unverified rather than fabricated as text.
+
+The JSON report carries `acceptanceScope.kind=client-visible-text-smoke`; exclusions include Official app identity mapping, stream completion, Host control and provider receipt recovery. A smoke PASS covers two observed text turns and their model-fixture correlation only. It is not a full QQ acceptance result. Missing configuration is nonzero, and retained human messages require manual cleanup. The repository's extended QQ matrix is in `docs/reports/2026-10-28-bot-e2e-acceptance-plan.md`.
 
 ### Feishu identities, scopes and doctor limits
 
@@ -270,3 +372,59 @@ The automated PASS covers mention, quote, fixture interception and duplicate rep
 OneBot card text is read-only; a numeric reply is not a native card click. Use Cognia’s linked conversation/run controls for supported approvals. Feishu card acceptance requires an actual authorized client click, including rejection and repeated-click checks.
 
 Sources checked 2026-10-01: [Feishu history](https://open.feishu.cn/document/server-docs/im-v1/message/list), [receive scopes](https://open.feishu.cn/document/server-docs/im-v1/message/events/receive), [NapCat configuration](https://doc.napneko.icu/config/basic), [NapCat history implementation](https://github.com/NapNeko/NapCatQQ/blob/main/packages/napcat-onebot/action/go-cqhttp/GetGroupMsgHistory.ts).
+
+
+### Cross-signing and browser disk integration
+
+`pnpm im:test:native` also covers explicit Matrix cross-signing bootstrap/status,
+actual signature validation, signed-but-untrusted devices, foreign identity
+protection, UIA/signature rejection, cancellation and live SIGKILL persistence
+of all three public key maps. Private signing seeds stay in native storage.
+The running adapter exposes `crossSigning.bootstrap(auth?)` and
+`crossSigning.status(userId?, deviceId?)`; bootstrap errors can carry a bounded
+public `authChallenge` for explicit UIA retry. No identity-reset or settings UI
+is added.
+
+`pnpm im:test:browser` builds the native fixture and a current-source browser
+integration bundle, then uses actual Chromium disk profiles and production
+Dexie/encryption/Matrix modules. It verifies pending rows and sync cursors after
+full browser close/relaunch, concurrent-tab deduplication, wrong-key/account
+isolation, raw encrypted IndexedDB rows, late-key recovery and actual rejected
+admission before successful delivery. A listen-failure case verifies cleanup.
+
+Homeserver delivery, admission policy, interactive callback bus, built-in seed
+data and the unused default Host transport remain fixture seams. There is no
+fake-indexeddb in this lane. This does not establish full app UI/static-export,
+Tauri IPC, real homeserver/client interoperability or cross-device interactive
+verification. Private profiles are removed and excluded from CI uploads.
+
+
+The browser lane also uses actual Browser Vault provision/password unlock,
+rotation and account-bound recovery with production Argon2id parameters. It
+reopens existing Matrix content and encrypted credentials after browser process
+restart without supplying a raw DEK. Wrong password/recovery attempts and
+valid-encoding wrap tampering must leave stored ciphertext unchanged. A held
+real WebCrypto decrypt verifies locking cannot release a late credential or
+start a new native HTTP request. These are Vault/storage APIs, not AccountGate
+UI or account-store boot acceptance.
+
+Native sync adds non-empty multi-page encrypted backfill, later-page failure
+with no partial delivery/checkpoint, and stop/restart with actual `since`/`to`
+request checks. Existing CI entries select all of these cases automatically.
+
+AccountGate has a separate rendered browser entry using the actual singleton
+store/initializer, registry, Vault, runtime targets and database boot (including
+seeders). Tests drive creation, recovery acknowledgement, password/recovery
+failure, password reset, account switching and browser restart through the
+production controls. The surrounding workspace, navigation and unused execution
+broker remain fixture seams; this does not establish the full exported app.
+
+Matrix `adapter.verification.pending(userId)` discovers incoming to-device
+requests. `interact` exposes explicit request/accept, SAS start/accept/confirm,
+QR generate/scan/confirm, status and cancellation. Native tests use two actual
+SDK crypto machines and owned loopback delivery. They verify cryptographic
+comparison, tampered MAC/QR refusal, transaction-preserving retry and durable
+trust after process restart. QR payloads are real; cameras/optical decoding,
+secret-sharing and real homeserver/independent-client interoperability remain
+separate acceptance boundaries. Ephemeral QR material uses private HostSemantic
+receipt handling and is not a recovery key.

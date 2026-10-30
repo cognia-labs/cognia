@@ -84,12 +84,27 @@ import {
 } from "./schedule-provenance"
 import type { LeaderAwareTimingDriver, SchedulerTimingDriver } from "@/types/scheduler"
 import { loggers } from "@cognia/logging"
-import { getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
+import { getPluginEventHooks, getPluginLifecycleHooks } from "@/lib/plugin/messaging/hooks-system"
 import { normalizeTaskTrigger } from "./trigger-normalizer"
 
 export interface CreateTaskOptions {
   /** The IM origin, from the host-side `/schedule` handler only. */
   imScheduleProvenance?: ImScheduleProvenance
+}
+
+function scheduledTaskHookSummary(task: ScheduledTask) {
+  return {
+    id: task.id,
+    name: task.name,
+    type: task.type,
+    trigger: task.trigger,
+    ...(task.type === "plugin" && typeof task.payload?.pluginId === "string"
+      ? { pluginId: task.payload.pluginId }
+      : {}),
+    ...(task.type === "plugin" && typeof task.payload?.handler === "string"
+      ? { handler: task.payload.handler }
+      : {}),
+  }
 }
 
 export interface UpdateTaskOptions {
@@ -1580,6 +1595,7 @@ class TaskSchedulerImpl {
 
     // Save to database
     await schedulerDb.createTask(task)
+    void getPluginEventHooks().dispatchScheduledTaskCreate(scheduledTaskHookSummary(task))
     log.info(`Created task: ${task.name} (${task.id})`)
 
     // Schedule if active
@@ -1608,6 +1624,11 @@ class TaskSchedulerImpl {
     if (
       input.trigger ||
       input.config ||
+      input.payload ||
+      input.notification ||
+      input.projectId !== undefined ||
+      input.onSuccessTaskIds !== undefined ||
+      input.onFailureTaskIds !== undefined ||
       input.endAt !== undefined ||
       (input.status !== undefined && input.status !== "active")
     ) {
@@ -1696,6 +1717,9 @@ class TaskSchedulerImpl {
 
     // Save to database
     await schedulerDb.updateTask(updatedTask)
+    void getPluginEventHooks().dispatchScheduledTaskUpdate(scheduledTaskHookSummary(updatedTask), {
+      ...input,
+    })
     if (version !== this.lifecycleVersion) return updatedTask
     log.info(`Updated task: ${updatedTask.name} (${taskId})`)
 
@@ -1727,6 +1751,7 @@ class TaskSchedulerImpl {
     const existing = await schedulerDb.getTask(taskId)
     const deleted = await schedulerDb.deleteTask(taskId)
     if (deleted) {
+      void getPluginEventHooks().dispatchScheduledTaskDelete(taskId)
       log.info(`Deleted task: ${taskId}`)
       if (existing?.promotion) {
         // Best effort: an orphaned OS timer would keep waking the app for a
@@ -2032,6 +2057,7 @@ class TaskSchedulerImpl {
     if (isRetiredMaintenanceTask(task)) return false
 
     await schedulerDb.updateTask({ ...task, status: "paused", updatedAt: new Date() })
+    if (task.status !== "paused") void getPluginEventHooks().dispatchScheduledTaskPause(taskId)
     log.info(`Paused task: ${task.name} (${taskId})`)
     // Mirror the pause onto the OS timer so a promoted task stops waking the app.
     if (task.promotion) await this.syncPromotedOsTaskEnabled(task, false)
@@ -2073,6 +2099,7 @@ class TaskSchedulerImpl {
     }
     await schedulerDb.updateTask(updatedTask)
     await this.scheduleTask(updatedTask)
+    void getPluginEventHooks().dispatchScheduledTaskResume(taskId)
     if (task.promotion) await this.syncPromotedOsTaskEnabled(task, true)
     log.info(`Resumed task: ${task.name} (${taskId})`)
     return true
@@ -2125,6 +2152,10 @@ class TaskSchedulerImpl {
         updatedAt: now,
       }
       await schedulerDb.updateTask(fenced)
+      void getPluginEventHooks().dispatchScheduledTaskUpdate(scheduledTaskHookSummary(fenced), {
+        owner,
+        status: fenced.status,
+      })
       log.info(`Task ${task.name} now runs on ${owner.hostLabel}`)
       return fenced
     }
@@ -2147,6 +2178,10 @@ class TaskSchedulerImpl {
       this.queues.delete(taskId)
     }
     await schedulerDb.updateTask(next)
+    void getPluginEventHooks().dispatchScheduledTaskUpdate(scheduledTaskHookSummary(next), {
+      owner,
+      status,
+    })
     if (status === "active") await this.scheduleTask(next)
     return next
   }
@@ -2720,13 +2755,15 @@ class TaskSchedulerImpl {
       })
     }
 
-    // Create execution record
+    const hooks = getPluginEventHooks()
+    const hasPreRunGate = hooks.hasAnyHook("onScheduledTaskBeforeRun")
+    // Reserve the host/task slot while a bounded plugin pre-run gate is pending.
     const execution: TaskExecution = {
       id: executionId,
       taskId: task.id,
       taskName: task.name,
       taskType: task.type,
-      status: "running",
+      status: hasPreRunGate ? "pending" : "running",
       input: task.payload,
       retryAttempt,
       scheduledFor: context.scheduledFor,
@@ -2744,25 +2781,48 @@ class TaskSchedulerImpl {
     const controller = new AbortController()
     this.executionControllers.set(executionId, controller)
     this.trackRunning(execution)
-    await schedulerDb.createExecution(execution)
-    this.broadcastExecutionStatus(task, execution)
-    context.onAccepted?.(execution)
-
-    // Notify start
-    if (task.notification.onStart) {
-      await notifyTaskEvent(task, execution, "start")
-    }
-
-    // Dispatch plugin hook for task start
     try {
-      getPluginLifecycleHooks().dispatchOnScheduledTaskStart(task.id, executionId)
-    } catch {
-      /* plugin system may not be initialized */
-    }
+      await schedulerDb.createExecution(execution)
+      const allowed =
+        !hasPreRunGate || (await hooks.dispatchScheduledTaskBeforeRun(task.id, executionId))
+      const stale =
+        controller.signal.aborted ||
+        executionLifecycleVersion !== this.lifecycleVersion ||
+        taskLifecycleVersion !== this.getTaskLifecycleVersion(task.id)
+      if (!allowed || stale) {
+        execution.status = stale ? "cancelled" : "skipped"
+        execution.terminalReason = stale ? "user-cancelled" : "plugin-vetoed"
+        execution.completedAt = new Date()
+        execution.duration = execution.completedAt.getTime() - startTime.getTime()
+        execution.logs.push(
+          this.createLog(
+            "info",
+            stale
+              ? "Task changed or was cancelled while plugin approval was pending"
+              : "A plugin denied the scheduled task before execution"
+          )
+        )
+        return execution
+      }
+      execution.status = "running"
+      if (hasPreRunGate) await schedulerDb.updateExecution(execution)
+      this.broadcastExecutionStatus(task, execution)
+      context.onAccepted?.(execution)
 
-    log.info(`Executing task: ${task.name} (execution: ${executionId})`)
+      // Notify start
+      if (task.notification.onStart) {
+        await notifyTaskEvent(task, execution, "start")
+      }
 
-    try {
+      // Dispatch plugin hook for task start
+      try {
+        getPluginLifecycleHooks().dispatchOnScheduledTaskStart(task.id, executionId)
+      } catch {
+        /* plugin system may not be initialized */
+      }
+
+      log.info(`Executing task: ${task.name} (execution: ${executionId})`)
+
       // Get executor. Subsystems register their executors from their own boot
       // chunk, so shortly after scheduler start a persisted task can come due
       // before its executor exists — wait (bounded) instead of failing.
@@ -2821,7 +2881,15 @@ class TaskSchedulerImpl {
       const result =
         refusedByHost ??
         (await this.executeWithTimeout(
-          (signal) => executor(task, execution, signal),
+          (signal) => {
+            if (
+              executionLifecycleVersion !== this.lifecycleVersion ||
+              taskLifecycleVersion !== this.getTaskLifecycleVersion(task.id)
+            ) {
+              throw SchedulerError.executionCancelled(task.id, "user-cancelled")
+            }
+            return executor(task, execution, signal)
+          },
           task.config.timeout,
           controller
         ))
@@ -3949,8 +4017,7 @@ class TaskSchedulerImpl {
     if (mode === "replace") {
       const existingTasks = await schedulerDb.getAllTasks()
       for (const task of existingTasks) {
-        this.unscheduleTask(task.id)
-        await schedulerDb.deleteTask(task.id)
+        await this.deleteTask(task.id)
       }
     }
 
@@ -4047,6 +4114,9 @@ class TaskSchedulerImpl {
             ? this.calculateNextRunTime(importedTask, { fromDate: new Date() })
             : undefined
         await schedulerDb.createTask(importedTask)
+        void getPluginEventHooks().dispatchScheduledTaskCreate(
+          scheduledTaskHookSummary(importedTask)
+        )
 
         if (importedTask.status === "active" && this.isTimingAuthorityFor(importedTask)) {
           await this.scheduleTask(importedTask)

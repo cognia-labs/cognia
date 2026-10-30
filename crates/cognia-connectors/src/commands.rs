@@ -352,6 +352,14 @@ pub async fn connectors_http_request(req: TauriHttpRequest) -> Result<TauriHttpR
     super::http_client::http_request(req).await
 }
 
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub async fn connectors_bounded_http_request(
+    req: TauriHttpRequest,
+    max_response_bytes: usize,
+) -> Result<TauriHttpResponse, String> {
+    super::http_client::http_request_with_limit(req, Some(max_response_bytes)).await
+}
+
 // ---------------------------------------------------------------------------
 // Task 23 — WebSocket client commands
 // ---------------------------------------------------------------------------
@@ -547,6 +555,27 @@ pub async fn connectors_discord_upload(
 }
 
 #[cfg_attr(feature = "tauri-host", tauri::command)]
+pub async fn connectors_matrix_crypto_verification(
+    req: super::matrix_crypto::MatrixCryptoVerificationRequest,
+) -> Result<serde_json::Value, String> {
+    super::matrix_crypto::matrix_crypto_verification(req).await
+}
+
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub async fn connectors_matrix_crypto_cross_signing(
+    req: super::matrix_crypto::MatrixCryptoCrossSigningRequest,
+) -> Result<serde_json::Value, String> {
+    super::matrix_crypto::matrix_crypto_cross_signing(req).await
+}
+
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub async fn connectors_matrix_crypto_backup(
+    req: super::matrix_crypto::MatrixCryptoBackupRequest,
+) -> Result<serde_json::Value, String> {
+    super::matrix_crypto::matrix_crypto_backup(req).await
+}
+
+#[cfg_attr(feature = "tauri-host", tauri::command)]
 pub async fn connectors_matrix_crypto_init(
     req: super::matrix_crypto::MatrixCryptoInitRequest,
 ) -> Result<(), String> {
@@ -649,6 +678,24 @@ pub async fn connectors_lark_upload_image(
     super::lark_upload::upload_image(&access_token, &source_url, image_type.as_deref()).await
 }
 
+/// Lark user credentials are owned by this host, shared by every WebView.
+#[cfg(feature = "tauri-host")]
+#[tauri::command]
+pub async fn connectors_lark_user_auth(
+    app: tauri::AppHandle,
+    input: super::keyring::LarkUserAuthInput,
+) -> Result<super::keyring::LarkUserAuthState, String> {
+    use tauri::Emitter;
+    let notify = matches!(&input, super::keyring::LarkUserAuthInput::Authorize { .. });
+    let state = tokio::task::spawn_blocking(move || super::keyring::lark_user_auth(input))
+        .await
+        .map_err(|_| "Lark credential task failed".to_string())??;
+    if notify {
+        let _ = app.emit("lark-user-authorization-changed", ());
+    }
+    Ok(state)
+}
+
 /// Google document credentials are owned by this host, shared by every WebView.
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
@@ -666,6 +713,23 @@ pub async fn connectors_google_docs_auth(
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn bounded_http_rejects_invalid_budgets_before_network_dispatch() {
+        let req = super::TauriHttpRequest {
+            url: "not-a-url".into(),
+            method: "GET".into(),
+            headers: None,
+            body: None,
+            timeout_ms: None,
+            allow_invalid_certificates: None,
+        };
+        assert_eq!(
+            super::connectors_bounded_http_request(req, 0)
+                .await
+                .unwrap_err(),
+            "invalid_response_byte_limit"
+        );
+    }
     #[tokio::test]
     async fn avatar_metadata_requests_use_the_avatar_network_boundary() {
         let req = serde_json::from_value(serde_json::json!({

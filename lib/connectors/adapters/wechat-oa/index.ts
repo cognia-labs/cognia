@@ -98,14 +98,25 @@ type SendAttempt =
 export function createWechatOaAdapter(opts: WechatOaAdapterOptions): PlatformAdapter {
   const apiBase = opts.apiBase ?? WECHAT_API_BASE
   let abortController: AbortController | null = null
+  let removeRuntimeAbort: (() => void) | undefined
   let healthState: AdapterHealthState = "starting"
   let healthReason: string | undefined
   let lastActivityAt: number | undefined
 
   async function start(ctx: AdapterContext): Promise<void> {
     if (abortController) return
-    abortController = new AbortController()
-    const signal = abortController.signal
+    if (ctx.signal?.aborted) {
+      healthState = "down"
+      return
+    }
+    const controller = new AbortController()
+    abortController = controller
+    const signal = controller.signal
+    const onRuntimeAbort = () => {
+      if (abortController === controller) void stop()
+    }
+    ctx.signal?.addEventListener("abort", onRuntimeAbort, { once: true })
+    removeRuntimeAbort = () => ctx.signal?.removeEventListener("abort", onRuntimeAbort)
     const active = () => !signal.aborted && abortController?.signal === signal
     healthState = "running"
 
@@ -206,6 +217,8 @@ export function createWechatOaAdapter(opts: WechatOaAdapterOptions): PlatformAda
   }
 
   async function stop(): Promise<void> {
+    removeRuntimeAbort?.()
+    removeRuntimeAbort = undefined
     abortController?.abort()
     abortController = null
     healthState = "down"

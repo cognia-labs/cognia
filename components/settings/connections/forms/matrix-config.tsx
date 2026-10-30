@@ -11,6 +11,7 @@
  * the `settings` blob.
  */
 
+import { MatrixVerificationPanel } from "./matrix-verification-panel"
 import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -401,7 +402,26 @@ export function MatrixConfigDialog({
 
         <div className="-mx-6 flex-1 overflow-y-auto px-6">
           <AdapterFormSections
-            sections={[identitySection, advancedSection]}
+            sections={[
+              identitySection,
+              ...(row && open
+                ? [
+                    {
+                      id: "verification",
+                      label: t("verification.title"),
+                      description: t("verification.description"),
+                      children: (
+                        <MatrixVerificationPanel
+                          key={row.id}
+                          adapterId={row.id}
+                          available={shellReach.available}
+                        />
+                      ),
+                    },
+                  ]
+                : []),
+              advancedSection,
+            ]}
             onSubmit={handleSave}
             onCancel={() => onOpenChange(false)}
             submitting={saving}

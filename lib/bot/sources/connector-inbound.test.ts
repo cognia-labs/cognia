@@ -3,7 +3,7 @@
 import "fake-indexeddb/auto"
 
 import { installBot } from "@/lib/db/bot-installations"
-import { listBotDeliveries } from "@/lib/db/bot-event-deliveries"
+import { listBotDeliveries, pruneSettledBotDeliveries } from "@/lib/db/bot-event-deliveries"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
@@ -199,4 +199,32 @@ describe("dispatchConnectorInboundToBots", () => {
 
     expect((await dispatchConnectorInboundToBots({ event: inbound() })).enqueued).toHaveLength(2)
   })
+})
+
+it("starts a fresh retention window after delayed observer transfer while preserving acceptance", async () => {
+  await seedInstallation({ id: "ask", kind: "interaction" })
+  const acceptedAt = NOW + 1
+  const resumedAt = NOW + 15 * 24 * 60 * 60 * 1000
+  await dispatchConnectorInboundToBots({ event: inbound(), acceptedAt, now: resumedAt })
+  await pruneSettledBotDeliveries(resumedAt + 1)
+  const [delivery] = await listBotDeliveries({ installationId: "boti_1" })
+  expect(delivery).toMatchObject({
+    status: "pending",
+    receivedAt: resumedAt,
+    envelope: { receivedAt: acceptedAt },
+  })
+  await getDb().conversationOverrides.put({
+    id: "cancel",
+    sessionId: "s",
+    conversationKey: inbound().conversationKey,
+    automationCancelledBefore: acceptedAt + 1,
+    createdAt: NOW,
+    updatedAt: resumedAt,
+  })
+  const cancelled = await dispatchConnectorInboundToBots({
+    event: inbound({ messageId: "old-acceptance" }),
+    acceptedAt,
+    now: resumedAt,
+  })
+  expect(cancelled.enqueued).toEqual([])
 })

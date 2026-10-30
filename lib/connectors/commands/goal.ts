@@ -32,9 +32,9 @@ import { isTerminalGoalStatus } from "@/types/goal"
 import { deliveryTargetFromEvent } from "@/types/connectors/event"
 import { getGoalRuntime, GoalImBlocked } from "@/lib/goal/runtime"
 import { dispatchGoalSubcommand, type GoalCommandResult } from "@/lib/slash-commands/actions/goal"
-import {
+import type {
   runGoalLoopHeadless,
-  type GoalPermissionResponder,
+  GoalPermissionResponder,
 } from "@/lib/scheduler/executors/goal-headless-runner"
 import { safeSendPrompt } from "@/lib/connectors/ai-loop/safe-send-prompt"
 import { enqueueGoverned as enqueueOutbound } from "@/lib/connectors/delivery-gateway"
@@ -178,7 +178,6 @@ export function startConnectorGoalDriver(
   if (runningDrivers.has(args.goalId)) return
   runningDrivers.add(args.goalId)
 
-  const run = deps.run ?? runGoalLoopHeadless
   const enqueue = deps.enqueue ?? enqueueOutbound
   const makeResponder = deps.makeResponder ?? makeImPermissionResponder
   const readOverride = deps.readOverride ?? readForResolution
@@ -232,6 +231,11 @@ export function startConnectorGoalDriver(
 
   void (async () => {
     try {
+      // The runner initializes model and workflow execution. Load it only
+      // when a goal is actually driven, not while the connector bus starts.
+      const run =
+        deps.run ??
+        (await import("@/lib/scheduler/executors/goal-headless-runner")).runGoalLoopHeadless
       const result = await run({
         sessionId: args.sessionId,
         goalId: args.goalId,

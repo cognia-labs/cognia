@@ -30,6 +30,23 @@ function input(overrides: Record<string, unknown> = {}) {
 }
 
 describe("assertBotDefinitionShape", () => {
+  it("refuses duplicate triggers and input slots outside declared credentials", () => {
+    expect(() =>
+      assertBotDefinitionShape({
+        executor: "workflow",
+        workflow: "wf",
+        triggers: [...manual, ...manual],
+      })
+    ).toThrow(/unique/)
+    expect(() =>
+      assertBotDefinitionShape({
+        executor: "workflow",
+        workflow: "wf",
+        triggers: [{ id: "in", kind: "interaction", inputCredentialSlot: "missing" }],
+      })
+    ).toThrow(/declared/)
+  })
+
   it("requires the executor's own target", () => {
     expect(() => assertBotDefinitionShape({ executor: "squad", triggers: manual })).toThrow(
       BotDefinitionError

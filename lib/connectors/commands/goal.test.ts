@@ -220,6 +220,10 @@ describe("handleGoalCommand", () => {
     expect(dispatchGoalSubcommand).toHaveBeenCalled()
     expect(reply).toHaveBeenCalledWith("🎯 active", "applied")
     expect(openGoal).toHaveBeenCalledWith("s1")
+    await tick()
+    expect(runGoalLoopHeadless).toHaveBeenCalledWith(
+      expect.objectContaining({ goalId: "g1", sessionId: "s1", workspace: "none" })
+    )
     // Default startDriver = real startConnectorGoalDriver → registered.
     expect(__isConnectorGoalDriverRunningForTesting("g1")).toBe(true)
   })

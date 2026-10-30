@@ -80,8 +80,48 @@ describe("botTriggeredFrom", () => {
 })
 
 describe("createWorkflowBotExecutor", () => {
+  it.each(["pending", "running", "waiting", "paused"])(
+    "keeps a detached %s child cancellable by parking its parent",
+    async (status) => {
+      await expect(
+        createWorkflowBotExecutor({
+          execute: jest.fn().mockResolvedValue({ runId: "child", result: { status } }),
+        })(ctx())
+      ).rejects.toMatchObject({ stepName: "workflow-settle", waitingFor: "workflow:child" })
+    }
+  )
+  it.each(["failed", "cancelled"])("does not report a %s child as success", async (status) => {
+    await expect(
+      createWorkflowBotExecutor({
+        execute: jest.fn().mockResolvedValue({ runId: "child", result: { status } }),
+      })(ctx())
+    ).rejects.toThrow()
+  })
+
+  it("carries the Bot authority cap into workflow agent execution", async () => {
+    const execute = jest.fn().mockResolvedValue({ runId: "wfr_1", result: { status: "succeeded" } })
+    await createWorkflowBotExecutor({ execute })(
+      ctx({
+        policy: { maxAuthority: "plan" },
+        composition: {
+          selection: { presetId: "standard", authority: "plan", autonomy: "act" },
+          provenance: {},
+        } as never,
+      })
+    )
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        securityContext: expect.objectContaining({
+          piiEgressRequired: true,
+          sourceTriggerKind: "trigger.integration.event",
+          permissionCeiling: { permissionMode: "plan" },
+        }),
+      })
+    )
+  })
+
   it("runs the published deployment with the run id as the idempotency key", async () => {
-    const execute = jest.fn().mockResolvedValue({ runId: "wfr_1" })
+    const execute = jest.fn().mockResolvedValue({ runId: "wfr_1", result: { status: "succeeded" } })
     const result = await createWorkflowBotExecutor({ execute })(ctx())
 
     expect(execute).toHaveBeenCalledWith(
@@ -97,7 +137,7 @@ describe("createWorkflowBotExecutor", () => {
   })
 
   it("hands the workflow the event and the config as its payload", async () => {
-    const execute = jest.fn().mockResolvedValue({})
+    const execute = jest.fn().mockResolvedValue({ runId: "wfr_1", result: { status: "succeeded" } })
     await createWorkflowBotExecutor({ execute })(ctx())
 
     expect(execute.mock.calls[0][0].payload).toEqual({

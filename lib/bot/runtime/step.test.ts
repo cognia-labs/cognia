@@ -742,3 +742,36 @@ it("authorizes a real installed Bot through the owner and policy stores inside t
     unregisterBotsByPlugin("policy-plugin")
   }
 })
+
+it("resolves correlated replies across triggers while excluding other accounts and installations", async () => {
+  const origin = {
+    ...envelope("shared"),
+    eventId: "origin",
+    deliveryId: "origin",
+    triggerId: "start",
+    binding: { integrationAccountId: "a" },
+  }
+  await enqueueBotDelivery({ envelope: origin, now: NOW })
+  await getDb().botEventDeliveries.update("origin", { runId: RUN_ID })
+  for (const [id, installationId, account, triggerId] of [
+    ["other-install", "other", "a", "answer"],
+    ["other-account", "boti_1", "b", "answer"],
+    ["other-trigger", "boti_1", "a", "extra"],
+    ["answer", "boti_1", "a", "answer"],
+  ])
+    await enqueueBotDelivery({
+      envelope: {
+        ...envelope("shared"),
+        eventId: id,
+        deliveryId: id,
+        installationId,
+        triggerId,
+        binding: { integrationAccountId: account },
+      },
+      now: NOW,
+    })
+  expect(
+    (await api().waitForEvent("answer", { key: "shared", triggerId: "answer", timeoutMs: 1000 }))
+      ?.eventId
+  ).toBe("answer")
+})

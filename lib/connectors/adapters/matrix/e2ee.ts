@@ -24,7 +24,8 @@ type MatrixMethod = "GET" | "POST" | "PUT"
 export type MatrixRequest = (
   method: MatrixMethod,
   path: string,
-  payload?: unknown
+  payload?: unknown,
+  options?: { maxResponseBytes: number }
 ) => Promise<Record<string, unknown>>
 
 type RoomEncryptionState = "encrypted" | "unencrypted" | "unknown"
@@ -142,6 +143,8 @@ export class MatrixE2EERuntime {
   private stopped = false
   private readonly cursorBlockedEventIds = new Set<string>()
   private initialized = false
+  private initializationTask: Promise<void> | null = null
+  private closingTask: Promise<void> | null = null
 
   constructor(private readonly options: MatrixE2EERuntimeOptions) {}
 
@@ -153,7 +156,12 @@ export class MatrixE2EERuntime {
     return abortable(this.options.request(method, path, payload), this.abortController.signal)
   }
 
-  async initialize(): Promise<void> {
+  initialize(): Promise<void> {
+    if (this.stopped) return Promise.reject(new Error("Matrix crypto runtime is closed"))
+    return (this.initializationTask ??= this.initializeOnce())
+  }
+
+  private async initializeOnce(): Promise<void> {
     try {
       await connectorsMatrixCryptoInit({
         adapterId: this.options.adapterId,
@@ -168,9 +176,14 @@ export class MatrixE2EERuntime {
     }
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    return (this.closingTask ??= this.finishClose())
+  }
+
+  private async finishClose(): Promise<void> {
     this.stopped = true
     this.abortController.abort()
+    await this.initializationTask?.catch(() => undefined)
     await this.pumpTask?.catch(() => undefined)
     if (this.initialized) await connectorsMatrixCryptoClose(this.options.adapterId)
     this.initialized = false
@@ -348,7 +361,9 @@ export class MatrixE2EERuntime {
       if (this.stopped) return
       try {
         const decrypted = await this.decrypt(row.roomId, row.rawEvent)
+        if (this.stopped) return
         await this.options.onRecoveredEvent(row.roomId, decrypted)
+        if (this.stopped) return
         await deleteMatrixPendingEvent(row.id)
       } catch (error) {
         await markMatrixPendingEventFailed(row.id, errorMessage(error))

@@ -5,6 +5,8 @@ import { act, renderHook } from "@testing-library/react"
 import type { BotCatalogEntry } from "@/lib/bot/console/catalog"
 import type { BotCredentialCandidate } from "@/lib/bot/console/credential-candidates"
 
+const controlBotAutomation = jest.fn(async (..._args: unknown[]) => ({}))
+const setBotInputSlot = jest.fn(async (..._args: unknown[]) => ({}))
 const installBotFromCatalog = jest.fn(async (_input: unknown) => ({ id: "boti_new" }))
 const updateBotConfig = jest.fn(
   async (_id: string, _config: Record<string, unknown>, _grant?: unknown) => ({})
@@ -27,12 +29,19 @@ jest.mock("@/lib/bot/control-writes", () => {
     readonly availability = { state: "unsupported", reason: "requires-companion" }
   }
   class BotNotInstallableError extends Error {}
+  class BotCredentialBindingError extends Error {
+    readonly reason = "wrongAccount"
+  }
   class BotDefinitionMissingError extends Error {}
   class BotControlTargetMissingError extends Error {
     readonly what = "installation"
   }
   return {
     BotLifecycleUnavailableError,
+    BotCredentialBindingError,
+    controlBotAutomation: (...args: unknown[]) => controlBotAutomation(...args),
+    setBotInputSlot: (...args: unknown[]) => setBotInputSlot(...args),
+    resolveBotAutomationAvailability: () => availability,
     BotNotInstallableError,
     BotDefinitionMissingError,
     BotControlTargetMissingError,
@@ -127,7 +136,7 @@ beforeEach(() => {
 describe("useBotLifecycleReadiness", () => {
   it("reports whether the lifecycle may be driven from here", () => {
     const { result } = renderHook(() => useBotLifecycleReadiness())
-    expect(result.current).toEqual({ availability, can: true })
+    expect(result.current).toEqual({ availability, can: true, canAutomation: true })
   })
 
   it("re-reads when the runtime changes under it", () => {
@@ -284,4 +293,23 @@ describe("useBotLifecycleActions", () => {
     await act(() => result.current.saveConfig("boti_1", {}))
     expect(result.current.pending.has("config:boti_1")).toBe(false)
   })
+})
+
+it("routes pause/cancel and trigger input choices through their human control writes", async () => {
+  controlBotAutomation.mockClear()
+  setBotInputSlot.mockClear()
+  const { result } = renderHook(() => useBotLifecycleActions())
+  await act(async () => {
+    await result.current.controlAutomation("bot", "pause")
+  })
+  expect(controlBotAutomation).toHaveBeenCalledWith("bot", "pause", undefined)
+  await act(async () => {
+    await result.current.controlAutomation("bot", "cancel", "delivery")
+  })
+  expect(controlBotAutomation).toHaveBeenCalledWith("bot", "cancel", "delivery")
+  await act(async () => {
+    await result.current.setInputSlot("bot", "input", "account-two")
+  })
+  expect(setBotInputSlot).toHaveBeenCalledWith("bot", "input", "account-two")
+  expect(result.current.pending.size).toBe(0)
 })

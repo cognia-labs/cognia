@@ -38,6 +38,14 @@ describe("botEventId", () => {
 })
 
 describe("botDeliveryId", () => {
+  it("separates matching triggers and delimiter-bearing tuples while preserving legacy IDs", () => {
+    expect(botDeliveryId("event", "installation", "one")).not.toBe(
+      botDeliveryId("event", "installation", "two")
+    )
+    expect(botDeliveryId("a_b", "c", "d")).not.toBe(botDeliveryId("b", "c_a", "d"))
+    expect(botDeliveryId("event", "installation")).toBe("bdl_installation_event")
+  })
+
   it("is per recipient, so a fan-out produces distinct rows", () => {
     expect(botDeliveryId("bev_1", "boti_1")).not.toBe(botDeliveryId("bev_1", "boti_2"))
   })

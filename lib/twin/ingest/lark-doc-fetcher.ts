@@ -28,6 +28,8 @@ import {
   type LarkAuthedApi,
 } from "@/lib/connectors/adapters/lark/authed-api"
 import { parseLarkDocUrl, type LarkDocRef, type LarkDocRefKind } from "./lark-url"
+import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
+import { MAX_REMOTE_DOC_RESPONSE_BYTES } from "@/lib/docs-providers/limits"
 
 export type LarkFetchChannel = "api" | "cli"
 
@@ -120,6 +122,9 @@ interface ExecLarkCliLike {
 export interface FetchLarkDocOptions {
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
   adapterId: string
+  expectedAuthorizationEpoch?: string
+  signal?: AbortSignal
+  maxResponseBytes?: number
   /** Resource kind supplied by search; opaque bare tokens do not encode it. */
   kind?: LarkDocRefKind
   /** Fetch channel; defaults to the native OpenAPI channel. */
@@ -138,13 +143,21 @@ export async function fetchLarkDocAsRawSource(
   urlOrToken: string,
   opts: FetchLarkDocOptions
 ): Promise<LarkFetchedDoc> {
+  throwIfRequestAborted(opts.signal)
   const ref = parseLarkDocUrl(urlOrToken, opts.kind)
   if (!ref) throw new LarkIngestError("larkInvalidUrl")
 
-  if ((opts.channel ?? "api") === "cli") {
-    return fetchViaCli(urlOrToken, ref, opts)
+  try {
+    const result =
+      (opts.channel ?? "api") === "cli"
+        ? await withRequestAbort(opts.signal, () => fetchViaCli(urlOrToken, ref, opts))
+        : await fetchViaApi(urlOrToken, ref, opts)
+    throwIfRequestAborted(opts.signal)
+    return result
+  } catch (error) {
+    throwIfRequestAborted(opts.signal)
+    throw error
   }
-  return fetchViaApi(urlOrToken, ref, opts)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +171,14 @@ async function fetchViaApi(
 ): Promise<LarkFetchedDoc> {
   try {
     return await withLarkAuthedApi(
-      { adapterId: opts.adapterId, httpImpl: opts.httpImpl, mapError: mapLarkError },
+      {
+        adapterId: opts.adapterId,
+        httpImpl: opts.httpImpl,
+        mapError: mapLarkError,
+        signal: opts.signal,
+        expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
+        maxResponseBytes: opts.maxResponseBytes ?? MAX_REMOTE_DOC_RESPONSE_BYTES,
+      },
       (api) => readDoc(api, input, ref, opts.adapterId)
     )
   } catch (err) {
@@ -179,6 +199,24 @@ function mapAccessError(err: unknown): unknown {
   }
 }
 
+/** Resolve a Wiki resource without widening the Twin document-only contract. */
+export async function resolveLarkWikiNode(
+  api: LarkAuthedApi,
+  token: string
+): Promise<{
+  token: string
+  objType: string
+  title: string
+}> {
+  const result = await api.get<{
+    node?: { obj_token?: string; obj_type?: string; title?: string }
+  }>(`/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(token)}`)
+  const node = result.node
+  if (!node?.obj_token || !node.obj_type)
+    throw new LarkIngestError("larkUnsupportedType", { type: node?.obj_type ?? "unknown" })
+  return { token: node.obj_token, objType: node.obj_type, title: node.title ?? "" }
+}
+
 /** Resolve a wiki node if needed, then pull the body. Runs under one identity. */
 async function readDoc(
   api: LarkAuthedApi,
@@ -193,17 +231,13 @@ async function readDoc(
 
   if (ref.kind === "wiki") {
     wikiToken = ref.token
-    const node = await api.get<{
-      node?: { obj_token?: string; obj_type?: string; title?: string }
-    }>(`/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(ref.token)}`)
-    const objTokenRaw = node.node?.obj_token
-    const objTypeRaw = node.node?.obj_type
-    if (!objTokenRaw || (objTypeRaw !== "docx" && objTypeRaw !== "doc")) {
-      throw new LarkIngestError("larkUnsupportedType", { type: objTypeRaw ?? "unknown" })
+    const node = await resolveLarkWikiNode(api, ref.token)
+    if (node.objType !== "docx" && node.objType !== "doc") {
+      throw new LarkIngestError("larkUnsupportedType", { type: node.objType })
     }
-    docToken = objTokenRaw
-    objType = objTypeRaw
-    title = node.node?.title ?? ""
+    docToken = node.token
+    objType = node.objType
+    title = node.title
   }
 
   let text: string
@@ -293,6 +327,7 @@ async function fetchViaCli(
   // lark-cli's `docs +fetch` resolves wiki tokens to the underlying doc
   // itself, so every ref kind goes through the same subcommand.
   let result: Awaited<ReturnType<ExecLarkCliLike>>
+  throwIfRequestAborted(opts.signal)
   try {
     result = await exec({
       args: ["docs", "+fetch", "--doc", ref.token, "--doc-format", "markdown"],

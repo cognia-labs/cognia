@@ -9,7 +9,7 @@
 //   pnpm im:test:live   -- --platform telegram # terminal 2 — the P0 scenario
 //
 // Flags:
-//   --platform <telegram|slack|discord|lark|matrix|onebot|all>   default: all
+//   --platform <telegram|slack|discord|lark|matrix|onebot|qq-official|all>   default: all
 //   --allow-unconfigured   report missing platforms as NOT_CONFIGURED instead
 //                          of refusing to start
 //   --doctor               run the preflight only, post nothing
@@ -149,6 +149,7 @@ export async function main({
     }
 
     const report = createRunReport({ platform, runId })
+    if (driver.acceptanceScope) report.recordAcceptanceScope(driver.acceptanceScope)
     report.recordLock({ file: lock.file, stoleFrom: lock.stoleFrom })
     if (lock.stoleFrom)
       say(`[im-live] ${platform}: took over a stale lock from pid ${lock.stoleFrom}`)

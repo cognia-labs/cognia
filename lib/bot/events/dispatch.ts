@@ -10,7 +10,7 @@
  * enough to read in one go.
  */
 
-import { enqueueBotDelivery } from "@/lib/db/bot-event-deliveries"
+import { enqueueBotDelivery, BotIntakePausedError } from "@/lib/db/bot-event-deliveries"
 import { defaultsFromConfigSchema } from "@/lib/bot/config/resolve-effective"
 import { isBotTriggerArmed, listBotInstallations } from "@/lib/db/bot-installations"
 import type { BotEventDeliveryRow } from "@/lib/db/bot-types"
@@ -18,9 +18,11 @@ import { resolveInstalledBot, isRunnableBot, type InstalledBot } from "@/lib/bot
 import type { BotEventEnvelopeV1 } from "@/types/bot/event"
 import type { PluginBotPolicyV1 } from "@/types/plugin/plugin-bot"
 
-import { botDeliveryId, interpolateEnvelopeTemplate } from "./envelope"
+import { resolveBotInputBinding } from "./input-binding"
+import { botDeliveryId } from "./envelope"
 import {
   routeBotEvent,
+  projectBotDeliveryPolicy,
   type BotRouteQuery,
   type BotTriggerBinding,
   type RejectedBotDelivery,
@@ -49,6 +51,8 @@ export interface DispatchBotEventInput {
 }
 
 export interface DispatchBotEventResult {
+  /** Observer transfer lost a race to conversation pause; retain its receipt. */
+  deferred?: true
   enqueued: BotEventDeliveryRow[]
   rejected: RejectedBotDelivery[]
   /** Installations whose definition or handler could not be resolved. */
@@ -69,43 +73,26 @@ export interface DispatchBotEventResult {
  * list, where it would read as a loop guard firing.
  */
 export function bindingsForInstalledBot(resolved: InstalledBot): BotTriggerBinding[] {
-  const adapterId = firstBoundAdapterId(resolved)
-  const integrationAccountId = firstBoundIntegrationAccountId(resolved)
   return resolved.definition.triggers
     .filter((trigger) => isBotTriggerArmed(resolved.installation, trigger))
-    .map((trigger) => ({
-      installationId: resolved.installation.id,
-      config: {
-        ...defaultsFromConfigSchema(resolved.definition.configSchema),
-        ...resolved.installation.config,
-      },
-      trigger,
-      policy: resolved.policy,
-      ...(adapterId ? { adapterId } : {}),
-      ...(integrationAccountId ? { integrationAccountId } : {}),
-    }))
-}
-
-/**
- * The connector adapter this installation is bound to, if any.
- *
- * An installation binds at most one IM account today, so the first slot that
- * names an adapter is the answer. When a Bot needs several, the binding this
- * narrows on becomes per-trigger and this function is what changes.
- */
-function firstBoundAdapterId(resolved: InstalledBot): string | undefined {
-  for (const binding of Object.values(resolved.installation.credentialBindings)) {
-    if (binding.adapterId) return binding.adapterId
-  }
-  return undefined
-}
-
-/** The integration account this installation is bound to, if any. */
-function firstBoundIntegrationAccountId(resolved: InstalledBot): string | undefined {
-  for (const binding of Object.values(resolved.installation.credentialBindings)) {
-    if (binding.integrationAccountId) return binding.integrationAccountId
-  }
-  return undefined
+    .flatMap((trigger) => {
+      const input = resolveBotInputBinding(resolved.installation, resolved.definition, trigger)
+      if (input.kind === "invalid") return []
+      return [
+        {
+          installationId: resolved.installation.id,
+          config: {
+            ...defaultsFromConfigSchema(resolved.definition.configSchema),
+            ...resolved.installation.config,
+          },
+          trigger,
+          policy: resolved.policy,
+          ...(input.kind === "bound"
+            ? { adapterId: input.adapterId, integrationAccountId: input.integrationAccountId }
+            : {}),
+        },
+      ]
+    })
 }
 
 export async function dispatchBotEvent(
@@ -148,23 +135,36 @@ export async function dispatchBotEvent(
 
   const routed = routeBotEvent({ envelope: input.envelope, bindings, query: input.query, now })
 
+  let deferred = false
   const enqueued: BotEventDeliveryRow[] = []
   for (const delivery of routed.deliveries) {
-    enqueued.push(
-      await enqueueBotDelivery({
-        envelope: delivery.envelope,
-        now,
-        ...(delivery.notBefore ? { notBefore: delivery.notBefore } : {}),
-        ...(delivery.concurrencyKey ? { concurrencyKey: delivery.concurrencyKey } : {}),
-        ...(delivery.holdConcurrencyWhileWaiting !== undefined
-          ? { holdConcurrencyWhileWaiting: delivery.holdConcurrencyWhileWaiting }
-          : {}),
-        ...(delivery.retry ? { retry: delivery.retry } : {}),
-      })
-    )
+    try {
+      enqueued.push(
+        await enqueueBotDelivery({
+          envelope: delivery.envelope,
+          now,
+          ...(delivery.notBefore ? { notBefore: delivery.notBefore } : {}),
+          ...(delivery.concurrencyKey ? { concurrencyKey: delivery.concurrencyKey } : {}),
+          ...(delivery.holdConcurrencyWhileWaiting !== undefined
+            ? { holdConcurrencyWhileWaiting: delivery.holdConcurrencyWhileWaiting }
+            : {}),
+          ...(delivery.retry ? { retry: delivery.retry } : {}),
+          ...(delivery.coalesce ? { coalesce: delivery.coalesce } : {}),
+        })
+      )
+    } catch (error) {
+      if (!(error instanceof BotIntakePausedError)) throw error
+      if (error.reason === "conversation") deferred = true
+    }
   }
 
-  return { enqueued, rejected: routed.rejected, unresolved, retryable }
+  return {
+    enqueued,
+    rejected: routed.rejected,
+    unresolved,
+    retryable,
+    ...(deferred ? { deferred: true as const } : {}),
+  }
 }
 
 /**
@@ -192,6 +192,8 @@ export interface DispatchManualBotRunInput {
   triggerId: string
   envelope: Omit<BotEventEnvelopeV1, "installationId" | "triggerId" | "deliveryId">
   now?: number
+  /** Check mutable plugin registration at the actual admission boundary. */
+  assertReady?: () => undefined
 }
 
 export async function dispatchManualBotRun(
@@ -207,24 +209,16 @@ export async function dispatchManualBotRun(
     ...input.envelope,
     installationId,
     triggerId: trigger.id,
-    deliveryId: botDeliveryId(input.envelope.eventId, installationId),
+    deliveryId: botDeliveryId(input.envelope.eventId, installationId, trigger.id),
   }
 
   // Interpolated the same way the router does it, and scoped per installation
   // for the same reason: a manual run that ignored the key would run beside
   // the very delivery the key exists to serialise it against.
-  const rawKey = trigger.concurrencyKey
-  const concurrencyKey = rawKey
-    ? `${installationId}::${interpolateEnvelopeTemplate(rawKey, envelope)}`
-    : undefined
-
   return enqueueBotDelivery({
     envelope,
-    ...(concurrencyKey ? { concurrencyKey } : {}),
-    ...(trigger.holdConcurrencyWhileWaiting !== undefined
-      ? { holdConcurrencyWhileWaiting: trigger.holdConcurrencyWhileWaiting }
-      : {}),
-    ...(trigger.retry ? { retry: trigger.retry } : {}),
+    ...(input.assertReady ? { assertReady: input.assertReady } : {}),
+    ...projectBotDeliveryPolicy(trigger, envelope, input.now ?? Date.now()),
     ...(input.now !== undefined ? { now: input.now } : {}),
   })
 }

@@ -1,3 +1,4 @@
+import { botInputStillMatches } from "@/lib/bot/events/input-binding"
 /**
  * The loop that drains the Bot delivery queue.
  *
@@ -122,7 +123,8 @@ async function attemptDelivery(
   if (delivery.correlation) {
     const waiting = await findParkedBotDeliveryWaitingFor(
       delivery.installationId,
-      delivery.correlation
+      delivery.correlation,
+      delivery.envelope
     )
     if (waiting && waiting.id !== delivery.id) {
       await dismissBotDelivery(delivery.id, "consumed by a waiting run", now())
@@ -181,13 +183,18 @@ async function attemptDelivery(
   const resolved = await resolveInstalledBot(installation, {
     ...(options.organizationPolicy ? { organizationPolicy: options.organizationPolicy } : {}),
   })
-  if (!resolved || !isRunnableBot(resolved)) {
+  if (!resolved || (!isRunnableBot(resolved) && !installation.paused)) {
     // Dismissed rather than retried: a disabled installation or an unloaded
     // plugin will not become runnable by waiting.
     await dismissBotDelivery(claimed.id, "installation is not runnable", now())
     return { status: "skipped", reason: "not_runnable" }
   }
 
+  if (!botInputStillMatches(installation, resolved.definition, claimed.envelope)) {
+    const { cancelAcceptedBotDeliveries } = await import("./run")
+    await cancelAcceptedBotDeliveries(installation.id, claimed.id)
+    return { status: "skipped", reason: "not_runnable" }
+  }
   const cwd = await (options.resolveCwd ?? resolveBotInstallationCwd)(installation.id)
   // The run driver settles an already-owned claim even if shutdown happened
   // during workspace resolution; skipping here would strand the live lease.

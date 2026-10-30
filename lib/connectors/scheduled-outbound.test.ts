@@ -19,6 +19,7 @@ import {
 } from "./scheduled-outbound"
 import { PiiGateBlocked } from "@/lib/connectors/ai-loop/safe-send-prompt"
 import { getConnectorDeliveryGateway } from "./delivery-gateway"
+import { getBus, __resetBusForTesting } from "./bus"
 
 // ── module mocks (hoisted) ──────────────────────────────────────────────────
 
@@ -208,6 +209,7 @@ async function callExecutorAborted(type: string, task: unknown, execution: unkno
 // ── lifecycle ────────────────────────────────────────────────────────────────
 
 beforeEach(async () => {
+  __resetBusForTesting()
   // fake-indexeddb persists across tests when the singleton isn't dropped;
   // delete the active DB so Dexie reopens at v38 and every test starts
   // with empty outboundQueue / connectorAudit tables.
@@ -231,6 +233,159 @@ beforeEach(async () => {
   tryBuildMemoryDepsImpl = jest.fn(async () => undefined)
   enqueueFailure = null
   __setDigestSendPromptForTesting(null)
+})
+
+describe("QQ C2C callback stream ownership", () => {
+  async function run(
+    options: {
+      callback?: boolean
+      held?: boolean
+      fail?: boolean
+      twin?: boolean
+      characterMode?: "draft" | "manual"
+    } = {}
+  ) {
+    const conversationKey = "qq-official:adp_discord:user"
+    const ref = {
+      platform: "qq-official" as const,
+      adapterId: "adp_discord",
+      scene: "c2c",
+      sceneId: "user",
+      eventId: "click",
+      receivedAt: Date.now(),
+    }
+    const target = {
+      address: {
+        platform: "qq-official" as const,
+        adapterId: "adp_discord",
+        conversationKey,
+        scopeKind: "private" as const,
+        containerId: "user",
+      },
+      conversationRef: ref,
+      refreshedAt: Date.now(),
+    }
+    getAdapterImpl = jest.fn(async () => ({
+      id: "adp_discord",
+      type: "qq-official",
+      defaultMode: options.held ? "draft" : "auto",
+    }))
+    sessionLookup = jest.fn(async () => ({
+      ...mockSession,
+      platformBinding: {
+        ...mockSession.platformBinding,
+        platform: "qq-official",
+        conversationKey,
+        conversationRef: ref,
+        deliveryTarget: target,
+      },
+    }))
+    if (options.twin)
+      getCharacterImpl = jest.fn(async () => ({ id: "char_001", twinId: "twin_42" }))
+    if (options.characterMode)
+      getCharacterImpl = jest.fn(async () => ({
+        id: "char_001",
+        platformDefaults: { mode: options.characterMode },
+      }))
+    const streamReply = jest.fn(async (_req: { streamKey?: string }) => undefined)
+    const cancelStreamReply = jest.fn(async () => undefined)
+    getBus().registerAdapter({
+      id: "adp_discord",
+      meta: {
+        type: "qq-official",
+        displayName: "QQ",
+        version: "0",
+        capabilities: [],
+        transportModes: ["stub"],
+        configSchema: {},
+      },
+      start: async () => undefined,
+      stop: async () => undefined,
+      health: () => ({ state: "running" }),
+      send: async () => ({ ok: true }),
+      streamReply,
+      cancelStreamReply,
+      a2uiCapability: () => ({}) as never,
+    })
+    let late: ((text: string) => unknown) | undefined
+    __setDigestSendPromptForTesting(async (_sid, _prompt, _opts, cap) => {
+      late = cap?.onPartial
+      await cap?.onPartial?.("Hello")
+      await cap?.onPartial?.("Contact private@example.com")
+      if (options.fail) throw new Error("capture failed")
+      return {
+        text: "Hello world",
+        messageId: "stream-final",
+        a2uiSurfaces: {},
+        a2uiSurfaceOrder: [],
+      }
+    })
+    const result = await runConnectorDigestTurn({
+      adapterId: "adp_discord",
+      conversationKey,
+      prompt: "Answer click",
+      deliveryTarget: target,
+      sourceTaskId: options.callback === false ? "scheduler:daily" : "cb:press",
+      authorization: { kind: "origin-reply", inboundConversationKey: conversationKey },
+    })
+    late?.("Hello late")
+    return { result, streamReply, cancelStreamReply, ref }
+  }
+
+  it("streams an authorized callback using its captured event and correlates the durable final", async () => {
+    const h = await run()
+    expect(h.result.success).toBe(true)
+    expect(h.streamReply).toHaveBeenCalledTimes(1)
+    expect(h.streamReply).toHaveBeenCalledWith({
+      conversationRef: h.ref,
+      streamKey: expect.any(String),
+      text: "Hello",
+    })
+    const jobs = await getDb().outboundQueue.toArray()
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].request.metadata.streamKey).toBe(h.streamReply.mock.calls[0]?.[0].streamKey)
+    expect(h.cancelStreamReply).not.toHaveBeenCalled()
+  })
+
+  it("uses the session character to disclose twin callback previews and the final", async () => {
+    const h = await run({ twin: true })
+    expect(getCharacterImpl).toHaveBeenCalledWith("char_001")
+    expect(h.streamReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("[AI-generated · Digital Twin]") })
+    )
+    const jobs = await getDb().outboundQueue.toArray()
+    expect(jobs[0].request.segments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ md: expect.stringContaining("[AI-generated · Digital Twin]") }),
+      ])
+    )
+    expect(jobs[0].request.metadata.provenance).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "digital-twin", sourceId: "twin_42" }),
+      ])
+    )
+  })
+
+  it.each([
+    { callback: false },
+    { held: true },
+    { characterMode: "draft" as const },
+    { characterMode: "manual" as const },
+  ])("keeps unattended and held digests final-only: %j", async (options) => {
+    const h = await run(options)
+    expect(h.streamReply).not.toHaveBeenCalled()
+    expect(h.cancelStreamReply).not.toHaveBeenCalled()
+    for (const job of await getDb().outboundQueue.toArray())
+      expect(job.request.metadata).not.toHaveProperty("streamKey")
+  })
+
+  it("cancels a failed callback and never queues its final", async () => {
+    const h = await run({ fail: true })
+    expect(h.result.success).toBe(false)
+    expect(h.cancelStreamReply).toHaveBeenCalledTimes(1)
+    expect(h.streamReply).toHaveBeenCalledTimes(1)
+    expect(await getDb().outboundQueue.count()).toBe(0)
+  })
 })
 
 // ── tests ─────────────────────────────────────────────────────────────────────

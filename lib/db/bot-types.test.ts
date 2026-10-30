@@ -1,3 +1,9 @@
+/** @jest-environment jsdom */
+import "fake-indexeddb/auto"
+import { installBot, getBotInstallation } from "./bot-installations"
+import { __resetDbForTesting, getDb } from "./schema"
+import { projectBotInstallationRow } from "@/lib/sync/desktop-sync-source"
+
 /**
  * The closed unions this module declares, pinned as values.
  *
@@ -24,6 +30,7 @@ import type {
   BotDefinitionSource,
   BotDeliveryStatus,
   BotInstallationStatus,
+  BotInstallationRow,
   BotScopeKind,
   LocalBotExecutor,
 } from "./bot-types"
@@ -137,4 +144,20 @@ describe("plugin API union mirrors", () => {
     expect(apiScopeKindParity).toBe(true)
     expect(definitionRowHasNoLifecycle).toBe(true)
   })
+})
+
+test("installation intent metadata persists locally and stays outside the companion projection", async () => {
+  await __resetDbForTesting()
+  const installed = await installBot({
+    definitionId: "fixture:handler",
+    definitionSource: "plugin",
+    pinnedVersion: "1.0.0",
+    scope: { kind: "account" },
+  })
+  const row: BotInstallationRow = { ...installed, installOperationFingerprint: "original-intent" }
+  await getDb().botInstallations.put(row)
+  expect((await getBotInstallation(row.id))?.installOperationFingerprint).toBe("original-intent")
+  const projection = projectBotInstallationRow(row)
+  expect(projection).toMatchObject({ id: row.id, syncedFromHost: true })
+  expect(projection).not.toHaveProperty("installOperationFingerprint")
 })

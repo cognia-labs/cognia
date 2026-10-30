@@ -53,6 +53,41 @@ beforeEach(() => {
 })
 
 describe("createWechatOaAdapter", () => {
+  it("does not subscribe for a pre-aborted runtime", async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    mockWebhook.mockImplementation(async function* () {})
+    const a = adapter()
+    try {
+      await a.start({ signal: ctrl.signal, emit: jest.fn() } as unknown as AdapterContext)
+      expect(mockWebhook).not.toHaveBeenCalled()
+      expect(a.health().state).toBe("down")
+    } finally {
+      await a.stop()
+    }
+  })
+
+  it("forwards runtime abort to the current webhook feed", async () => {
+    let finish!: () => void
+    mockWebhook.mockImplementation(async function* () {
+      await new Promise<void>((resolve) => {
+        finish = resolve
+      })
+    })
+    const ctrl = new AbortController()
+    const a = adapter()
+    try {
+      await a.start({ signal: ctrl.signal, emit: jest.fn() } as unknown as AdapterContext)
+      const signal = mockWebhook.mock.calls[0][0].signal as AbortSignal
+      ctrl.abort()
+      expect(signal.aborted).toBe(true)
+      expect(a.health().state).toBe("down")
+    } finally {
+      finish?.()
+      await a.stop()
+    }
+  })
+
   it.each(["image", "voice", "video"])(
     "resolves %s media in the active headless receive loop through its injected native bridge",
     async (type) => {

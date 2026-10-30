@@ -5,6 +5,7 @@ import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction
 import { buildConversationKey } from "@/types/connectors/event"
 import {
   bindingHintFields,
+  generateMarkdownMirror,
   generatePlainTextMirror,
   resolveButtonWireAction,
   resolveCallbackBinding,
@@ -12,6 +13,7 @@ import {
 } from "../_shared/a2ui-mapper"
 import { namespacedCallbackAction } from "@/lib/connectors/hitl/callback-prefixes"
 import { getDb } from "@/lib/db/schema"
+import { escapeMarkdown } from "../_shared/inbound-markdown"
 import { QQKeyboardValidationError, validateQQKeyboard, type QQKeyboardButton } from "./keyboard"
 
 export interface QQKeyboardReceipt {
@@ -34,6 +36,9 @@ export async function prepareQQKeyboards(req: OutboundRequest): Promise<Prepared
   if ((scene !== "group" && scene !== "c2c") || typeof sceneId !== "string")
     return { request: req, bindings }
   const conversationKey = buildConversationKey("qq-official", adapterId, sceneId)
+  const hasMedia = req.segments.some((segment) =>
+    ["image", "video", "voice", "file"].includes(segment.type)
+  )
   const segments: MessageSegment[] = []
   const bind = async (
     button: QQKeyboardButton,
@@ -115,6 +120,7 @@ export async function prepareQQKeyboards(req: OutboundRequest): Promise<Prepared
     )
       throw new QQKeyboardValidationError("QQ A2UI surface requires a root and components")
     const buttons: QQKeyboardButton[] = []
+    const nativeButtonIds = new Set<string>()
     const nodes: Parameters<Parameters<typeof walkA2UISurface>[1]>[0][] = []
     walkA2UISurface(segment.content, (node) => {
       nodes.push(node)
@@ -137,6 +143,21 @@ export async function prepareQQKeyboards(req: OutboundRequest): Promise<Prepared
           permission: { type: 2 },
         },
       }
+      if (node.raw.confirmation !== undefined) {
+        const confirmation = node.raw.confirmation as Record<string, unknown>
+        if (!confirmation || typeof confirmation !== "object")
+          throw new QQKeyboardValidationError("Invalid button confirmation")
+        button.action.modal = {
+          content: confirmation.message as string,
+          ...(confirmation.confirmLabel !== undefined
+            ? { confirm_text: confirmation.confirmLabel as string }
+            : {}),
+          ...(confirmation.cancelLabel !== undefined
+            ? { cancel_text: confirmation.cancelLabel as string }
+            : {}),
+        }
+      }
+      if (node.raw.exclusiveGroup !== undefined) button.group_id = node.raw.exclusiveGroup as string
       if (button.action.type === 1)
         await bind(button, {
           surfaceId: segment.surfaceId,
@@ -147,9 +168,21 @@ export async function prepareQQKeyboards(req: OutboundRequest): Promise<Prepared
           hints: bindingHintFields(node.raw),
         })
       buttons.push(button)
+      nativeButtonIds.add(node.id)
     }
+    const fallback = nodes.some(
+      (node) => !["Button", "ButtonGroup", "Text", "Row", "Column", "Card"].includes(node.component)
+    )
+    const markdown = generateMarkdownMirror(segment.content, {
+      omitButtonIds: nativeButtonIds,
+      maxHeadingLevel: 2,
+    })
     if (!buttons.length) {
-      segments.push(segment)
+      // QQ cannot combine native Markdown with media. Keep existing text
+      // captions coalesced so a format upgrade cannot spend another reply.
+      segments.push(
+        !fallback && !hasMedia && markdown ? { type: "markdown", md: markdown } : segment
+      )
       continue
     }
     const rows = Array.from({ length: Math.ceil(buttons.length / 5) }, (_, i) => ({
@@ -161,11 +194,13 @@ export async function prepareQQKeyboards(req: OutboundRequest): Promise<Prepared
       card: {
         kind: "qq-keyboard",
         payload: {
-          content: generatePlainTextMirror(segment.content) || segment.plainTextMirror,
-          fallback: nodes.some(
-            (node) =>
-              !["Button", "ButtonGroup", "Text", "Row", "Column", "Card"].includes(node.component)
-          ),
+          markdown: {
+            content:
+              markdown ||
+              generateMarkdownMirror(segment.content, { maxHeadingLevel: 2 }) ||
+              escapeMarkdown(segment.plainTextMirror || generatePlainTextMirror(segment.content)),
+          },
+          fallback,
           keyboard,
         },
       },

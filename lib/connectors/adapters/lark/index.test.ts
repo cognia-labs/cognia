@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { createLarkAdapter } from "./index"
 import { normalizeLarkCardPresentation } from "./card-presentation"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import type { AdapterContext, NormalizedInboundEvent } from "@/types/connectors"
 import type { ConnectorCallbackDecision } from "@/types/connectors/interaction"
 
@@ -18,6 +19,17 @@ const mockDispatchCallback = jest.fn()
 
 const mockInvoke = invoke as jest.Mock
 const mockListen = listen as jest.Mock
+
+// The native auth owner is covered by keyring/RPC fixtures. Adapter tests keep
+// their existing HTTP/keyring ports and supply its current lineage projection.
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  ...jest.requireActual("@/lib/connectors/tauri/commands"),
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    configured: true,
+    authorizationEpoch: "adapter-fixture",
+    accessToken: "connected-user",
+  })),
+}))
 
 // Inbound rich-media enrichment is exercised in its own suite
 // (inbound-media.test.ts). Here we only assert the adapter WIRES it into the
@@ -226,6 +238,14 @@ describe("createLarkAdapter", () => {
     expect(JSON.parse(JSON.parse(create.body!).data).header.template).toBe("purple")
   })
   beforeEach(() => {
+    ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async (input) => ({
+      configured: true,
+      authorizationEpoch: "adapter-fixture",
+      accessToken: await mockInvoke("connectors_keyring_get", {
+        adapterId: input.adapterId,
+        credential: "user_token",
+      }),
+    }))
     mockDispatchCallback.mockReset().mockResolvedValue("terminal")
     mockInvoke.mockReset()
     mockListen.mockReset()
@@ -1139,6 +1159,64 @@ describe("createLarkAdapter", () => {
     expect(sendHeaders(findSend())["Authorization"]).toBe("Bearer u-access-tok")
   })
 
+  it.each(["tenant-token", "first-upload"])(
+    "fences each upload when reauthorized during %s",
+    async (boundary) => {
+      let state = { configured: true, authorizationEpoch: "sender-a", accessToken: "access-a" }
+      ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => ({ ...state }))
+      const adapter = createLarkAdapter({
+        id: `lark-origin-send-${boundary}`,
+        displayName: "Origin",
+        appId: async () => `cli_origin_send_${boundary}`,
+        appSecret: async () => "secret-origin",
+        verificationToken: async () => "verify",
+        selfBotOpenId: "bot",
+        sendAsUser: true,
+        transport: "webhook",
+      })
+      mockInvoke.mockImplementation(async (command: string, args?: unknown) => {
+        if (command === "connectors_keyring_get") return state.accessToken
+        if (command === "connectors_lark_upload_image") {
+          state = { ...state, authorizationEpoch: "sender-b", accessToken: "access-b" }
+          return "fixture-image-key"
+        }
+        if (command === "connectors_http_request") {
+          const { req } = args as { req: { url: string } }
+          if (req.url.includes("tenant_access_token")) {
+            if (boundary === "tenant-token")
+              state = { ...state, authorizationEpoch: "sender-b", accessToken: "access-b" }
+            return makeTatOkResp("origin-bot")
+          }
+          if (req.url.includes("user_info"))
+            return {
+              status: 200,
+              headers: {},
+              body: JSON.stringify({ code: 0, data: { open_id: "user-a" } }),
+            }
+          return makeSendOkResp()
+        }
+      })
+      const result = await adapter.send({
+        conversationRef: {
+          platform: "lark",
+          adapterId: "lark-origin-send",
+          channelId: "oc_origin",
+        },
+        segments: [
+          { type: "image", url: "https://fixture.invalid/image.png" },
+          { type: "image", url: "https://fixture.invalid/image2.png" },
+        ],
+        metadata: { idempotencyKey: "origin-send" },
+      })
+      const uploads = mockInvoke.mock.calls.filter(
+        ([command]) => command === "connectors_lark_upload_image"
+      )
+      expect(uploads).toHaveLength(boundary === "tenant-token" ? 0 : 1)
+      expect(result.ok).toBe(false)
+      expect(findSend()).toBeUndefined()
+    }
+  )
+
   it("send() refuses instead of changing identity when sendAsUser has no user token", async () => {
     const adapter = createLarkAdapter({
       id: "lark-nouser",
@@ -1191,10 +1269,25 @@ describe("createLarkAdapter", () => {
     })
 
     let sendAttempts = 0
+    let currentUserToken = "u-old"
+    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation((input) =>
+      mockInvoke("connectors_lark_user_auth", { input })
+    )
     mockInvoke.mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "connectors_lark_user_auth") {
+        const input = (args as { input: { action: string; accessToken?: string } }).input
+        if (input.action === "refresh") currentUserToken = input.accessToken!
+        return {
+          authorizationEpoch: "same-user",
+          configured: true,
+          accessToken: currentUserToken,
+          refreshToken: "u-refresh-old",
+          refreshRevision: "refresh-1",
+        }
+      }
       if (cmd === "connectors_keyring_get") {
         const cred = (args as { credential: string }).credential
-        if (cred === "user_token") return "u-old"
+        if (cred === "user_token") return currentUserToken
         if (cred === "user_refresh_token") return "u-refresh-old"
         return null
       }

@@ -11,6 +11,7 @@
  */
 
 import { z } from "zod"
+import { CONNECTOR_SYSTEM_EVENT_KINDS } from "@/types/connectors/event"
 import {
   DELEGATE_DELIVERY_CHOICES,
   FUSION_ACTION_CHOICES,
@@ -84,13 +85,7 @@ const CronParams = z.object({
   timezone: optionalString,
 })
 
-export const CONNECTOR_SYSTEM_EVENT_KINDS = [
-  "reaction_added",
-  "reaction_removed",
-  "poke",
-  "request",
-  "lifecycle",
-] as const
+export { CONNECTOR_SYSTEM_EVENT_KINDS } from "@/types/connectors/event"
 
 const ConnectorSystemTriggerParams = z.object({
   adapterId: requiredString("required"),

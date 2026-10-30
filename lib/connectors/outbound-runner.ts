@@ -1,3 +1,5 @@
+import { validateOutboundFeatures } from "./outbound-features"
+
 /**
  * Outbound delivery runner — Tasks 38 & 39.
  *
@@ -44,6 +46,7 @@ import {
   subscribeOutboundEnqueued,
   markSending,
   markSent,
+  markAwaitingDeliveryReceipt,
   markFailed,
   markDeliveryUnknown,
   markDeadlettered,
@@ -721,6 +724,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
     // incremented by a prior lane execution for this same job).
     const job = await getDb().outboundQueue.get(jobId)
     if (!job) return // already processed or deleted
+    if (job.status !== "pending" && job.status !== "failed") return
 
     const { conversationKey } = job
     const request = job.request.deliveryTarget
@@ -1213,6 +1217,25 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       request.metadata.provenance
     )
 
+    const unsupportedFeature = validateOutboundFeatures(adapter, request)
+    if (unsupportedFeature?.error) {
+      await markDeadlettered(
+        job.id,
+        unsupportedFeature.error.code,
+        unsupportedFeature.error.message
+      )
+      await appendAudit({
+        adapterId,
+        kind: "delivery.deadlettered",
+        at: now,
+        conversationKey,
+        idempotencyKey,
+        reason: unsupportedFeature.error.code,
+        message: unsupportedFeature.error.message,
+      })
+      return
+    }
+
     // Edit-vs-send dispatch. When the request carries an
     // `editTargetMessageId`, route to `adapter.edit()` so the platform
     // updates the existing message in place. Adapters that don't
@@ -1236,7 +1259,15 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             message: `${adapterId} adapter has no edit() — falling back to send()`,
           })
         }
-        result = await sendSemaphore.run(() => adapter.send(request))
+        result = await sendSemaphore.run(() =>
+          adapter.meta.capabilities.includes("events.delivery-status")
+            ? adapter.send(request, {
+                onPendingReceipt: async (receipt) => {
+                  await markAwaitingDeliveryReceipt(job.id, receipt)
+                },
+              })
+            : adapter.send(request)
+        )
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -1285,6 +1316,27 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       return
     }
 
+    if (!result.ok && result.pendingReceipt) {
+      const settled = await markAwaitingDeliveryReceipt(job.id, result.pendingReceipt)
+      if (settled?.status === "sent") {
+        try {
+          opts.onDelivered?.(conversationKey)
+        } catch {
+          /* best effort */
+        }
+        breaker.recordSuccess()
+      } else if (settled?.status === "delivery_unknown") {
+        await appendAudit({
+          adapterId,
+          kind: "delivery.pending",
+          at: now,
+          conversationKey,
+          idempotencyKey,
+          fields: { receiptId: result.pendingReceipt.id, jobId: job.id },
+        })
+      }
+      return
+    }
     if (result.ok) {
       const platformMsgId = result.platformMessageId ?? idempotencyKey
       await markSent(job.id, platformMsgId)
@@ -1388,6 +1440,7 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
       }
       const ambiguousRemoteFailure =
         err.code === "delivery_unknown" ||
+        err.code === "reconciliation_required" ||
         ((ephemeral ||
           adapter.runtimeCapabilities?.ambiguousDelivery === "reconciliation_required") &&
           (err.code === "network" || err.code === "platform_5xx"))
@@ -1591,7 +1644,12 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
             if ((lanes.get(candidate.conversationKey)?.pendingCount() ?? 0) > 0) return undefined
             const older = await findOlderActiveOutboundSibling(candidate)
             if (!older) return candidate
-            if (older.status === "sending" || older.nextAttemptAt > drainNow) return undefined
+            if (
+              older.status === "sending" ||
+              older.status === "delivery_unknown" ||
+              older.nextAttemptAt > drainNow
+            )
+              return undefined
             return older
           })
         )
@@ -1612,13 +1670,14 @@ export async function startOutboundRunner(opts: OutboundRunnerOptions): Promise<
 
                 const settled: OutboundJobRow | undefined =
                   await getDb().outboundQueue.get(currentId)
-                if (!settled || !isOutboundTerminal(settled.status)) break
+                if (!settled || !isOutboundTerminal(settled.status, settled.pendingReceipt)) break
                 const next: OutboundJobRow | undefined = await findNextActiveOutboundSibling(
                   settled
                 ).catch(() => undefined)
                 if (
                   !next ||
                   next.status === "sending" ||
+                  next.status === "delivery_unknown" ||
                   next.nextAttemptAt > clock() ||
                   inFlight.has(next.id)
                 ) {

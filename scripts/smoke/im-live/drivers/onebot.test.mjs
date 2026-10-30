@@ -124,9 +124,37 @@ test("history rejects string messages rather than reporting a false pass", async
   )
 })
 
+test("OneBot quote-only cannot pass using a quote that also mentions the target", async () => {
+  let messages = []
+  let clock = 1700000000000
+  await withFakePlatform(
+    routes(() => messages),
+    async ({ baseUrl }) => {
+      const driver = driverFor(baseUrl, {
+        humanTimeoutMs: 1,
+        now: () => clock++,
+        sleepImpl: async () => {},
+        log: () => {
+          messages = [
+            item(3, 654321, "marker", [
+              { type: "reply", data: { id: "2" } },
+              { type: "at", data: { qq: "123456" } },
+            ]),
+          ]
+        },
+      })
+      const lease = await driver.prepare()
+      await assert.rejects(driver.replyToTarget(lease, { messageId: "2" }, "marker"), /timed out/)
+    }
+  )
+})
+
 test("history walks older pages and does not silently truncate a busy group", async () => {
   let active = false
-  const recent = Array.from({ length: 100 }, (_, i) => item(i + 100, 123456, "reply"))
+  const recent = Array.from({ length: 100 }, (_, i) => ({
+    ...item(i + 100, 123456, "reply"),
+    real_seq: String(i + 100),
+  }))
   await withFakePlatform(
     {
       ...routes(),
@@ -163,6 +191,34 @@ test("repeated history pages fail without consuming replies", async () => {
       assert.equal(lease.seen.size, 0)
       fixed = true
       assert.equal((await driver.pollTargetMessages(lease)).length, 1)
+    }
+  )
+})
+
+test("history uses the group's native sequence for a newest-first same-second full page", async () => {
+  let active = false
+  const recent = Array.from({ length: 100 }, (_, i) => ({
+    ...item(199 - i, 123456, "reply"),
+    real_seq: String(199 - i),
+  }))
+  await withFakePlatform(
+    {
+      ...routes(),
+      "POST /get_group_msg_history": ({ body }) =>
+        ok({
+          messages: !active
+            ? []
+            : body.message_seq === "100"
+              ? [item(99, 123456, "older")]
+              : recent,
+        }),
+    },
+    async ({ baseUrl, callsTo }) => {
+      const driver = driverFor(baseUrl),
+        lease = await driver.prepare()
+      active = true
+      assert.equal((await driver.pollTargetMessages(lease)).length, 101)
+      assert.equal(callsTo("POST /get_group_msg_history").at(-1).body.message_seq, "100")
     }
   )
 })

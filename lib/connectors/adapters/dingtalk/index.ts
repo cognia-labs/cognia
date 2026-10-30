@@ -85,6 +85,7 @@ function toSessionWebhookPayload(serialized: DingTalkSerialized): Record<string,
 
 export function createDingTalkAdapter(opts: DingTalkAdapterOptions): PlatformAdapter {
   let abortController: AbortController | null = null
+  let removeRuntimeAbort: (() => void) | undefined
   let healthState: AdapterHealthState = "starting"
   // Stable machine code for a non-running state; localized in the renderer
   // by `healthReasonLabel` (see the Lark adapter for the shared pattern).
@@ -162,8 +163,18 @@ export function createDingTalkAdapter(opts: DingTalkAdapterOptions): PlatformAda
 
   async function start(ctx: AdapterContext): Promise<void> {
     if (abortController) return
-    abortController = new AbortController()
-    const signal = abortController.signal
+    if (ctx.signal?.aborted) {
+      healthState = "down"
+      return
+    }
+    const controller = new AbortController()
+    abortController = controller
+    const signal = controller.signal
+    const onRuntimeAbort = () => {
+      if (abortController === controller) void stop()
+    }
+    ctx.signal?.addEventListener("abort", onRuntimeAbort, { once: true })
+    removeRuntimeAbort = () => ctx.signal?.removeEventListener("abort", onRuntimeAbort)
     const active = () =>
       !signal.aborted && abortController?.signal === signal && !ctx.signal?.aborted
     healthState = "running"
@@ -293,6 +304,8 @@ export function createDingTalkAdapter(opts: DingTalkAdapterOptions): PlatformAda
   }
 
   async function stop(): Promise<void> {
+    removeRuntimeAbort?.()
+    removeRuntimeAbort = undefined
     abortController?.abort()
     abortController = null
     healthState = "down"

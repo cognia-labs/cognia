@@ -79,6 +79,22 @@ test("a clean single-platform run exits zero and names the evidence file", async
   assert.ok(out.log.some((l) => l.includes("1 PASS")))
 })
 
+test("QQ Official text smoke preserves its limited acceptance scope in the report", async () => {
+  const written = []
+  const scope = { kind: "client-visible-text-smoke", excludes: ["stream-completion"] }
+  const { args } = deps({
+    argv: ["--platform", "qq-official"],
+    env: envFor("qq-official"),
+    makeDriver: () => ({ conversationId: "group:1", acceptanceScope: scope }),
+    writeReport: async ({ report }) => {
+      written.push(report.toJSON())
+      return "f.json"
+    },
+  })
+  assert.equal(await main(args), 0)
+  assert.deepEqual(written[0].acceptanceScope, scope)
+})
+
 test("an unreachable fixture stops before any platform is touched", async () => {
   let madeDriver = false
   const { out, args } = deps({
@@ -111,7 +127,7 @@ test("--allow-unconfigured runs the rest and reports the others as NOT_CONFIGURE
   assert.equal(await main(args), 0, "an absent platform must not fail the run")
   assert.ok(out.log.some((l) => l.includes("slack: NOT_CONFIGURED")))
   assert.ok(out.log.some((l) => l.includes("IM_LIVE_SLACK_DRIVER_USER_TOKEN")))
-  assert.ok(out.log.some((l) => l.includes("1 PASS, 5 NOT_CONFIGURED")))
+  assert.ok(out.log.some((l) => l.includes("1 PASS, 6 NOT_CONFIGURED")))
 })
 
 test("--doctor prints the checks and never posts anything", async () => {

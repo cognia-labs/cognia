@@ -1,5 +1,10 @@
 "use client"
 
+import {
+  useBotLifecycleActions,
+  useBotLifecycleReadiness,
+} from "@/hooks/bots/use-bot-lifecycle-actions"
+
 /**
  * What wakes this Bot up, and which of those are armed.
  *
@@ -36,15 +41,25 @@ import { BotTriggerIcon, useBotIntervalText } from "../bot-visuals"
 interface TriggerRowProps {
   trigger: BotTriggerSummary
   pluginId?: string
+  installation: BotConsoleRow
   canArm: boolean
   busy: boolean
   onArmedChange: (armed: boolean) => void
 }
 
-function TriggerRow({ trigger, pluginId, canArm, busy, onArmedChange }: TriggerRowProps) {
+function TriggerRow({
+  trigger,
+  pluginId,
+  canArm,
+  busy,
+  onArmedChange,
+  installation,
+}: TriggerRowProps) {
   const t = useTranslations("bots")
   const tRoot = useTranslations()
   const interval = useBotIntervalText()
+  const lifecycle = useBotLifecycleActions()
+  const automation = useBotLifecycleReadiness()
 
   const fallback = trigger.label ?? t(`trigger.kind.${trigger.kind}`)
   const title = pluginId
@@ -85,6 +100,26 @@ function TriggerRow({ trigger, pluginId, canArm, busy, onArmedChange }: TriggerR
           {t(`trigger.kind.${trigger.kind}`)}
           {detail ? ` · ${detail}` : ""}
         </p>
+        {trigger.acceptsAccount && installation.requiredSlots.length > 0 ? (
+          <label className="mt-1 flex items-center gap-2 text-xs">
+            {t("automation.inputSlot")}
+            <select
+              aria-label={t("automation.inputSlotAria", { name: title })}
+              value={trigger.inputCredentialSlot ?? ""}
+              disabled={!automation.canAutomation || lifecycle.pending.has(`input:${trigger.id}`)}
+              onChange={(event) =>
+                void lifecycle.setInputSlot(installation.id, trigger.id, event.target.value || null)
+              }
+            >
+              <option value="">{t("automation.inputDefault")}</option>
+              {installation.requiredSlots.map((slot) => (
+                <option key={slot.id} value={slot.id}>
+                  {slot.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {trigger.configFallback ? (
           <Badge
             variant="outline"
@@ -127,11 +162,13 @@ export function BotTriggersSection({ row }: { row: BotConsoleRow }) {
 
   return (
     <div className="flex flex-col gap-2">
+      <p className="text-xs text-muted-foreground">{t("automation.bindingHelp")}</p>
       <ul className="divide-y" data-testid="bot-triggers">
         {row.triggers.map((trigger) => (
           <TriggerRow
             key={trigger.id}
             trigger={trigger}
+            installation={row}
             pluginId={pluginId}
             canArm={canArm}
             busy={actions.pending.has(`trigger:${trigger.id}`)}

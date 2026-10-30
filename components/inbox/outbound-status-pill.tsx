@@ -72,7 +72,11 @@ export function OutboundStatusPill(props: OutboundStatusPillProps) {
 
   const config = STATUS_CONFIG[job.status]
   const Icon = config.icon
-  const statusLabel = t(`status.${job.status}`)
+  const awaitingProvider =
+    job.status === "delivery_unknown" &&
+    job.pendingReceipt &&
+    job.pendingReceipt.resolvedAt === undefined
+  const statusLabel = awaitingProvider ? t("awaitingProvider") : t(`status.${job.status}`)
 
   const handleRetry = async () => {
     await getDb().outboundQueue.update(job.id, {

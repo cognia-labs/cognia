@@ -10,7 +10,10 @@
  * two apart afterwards.
  */
 
-import type { WorkflowTriggeredFrom } from "@/types/workflow/visual"
+import type { WorkflowTriggeredFrom, WorkflowRunSecurityContext } from "@/types/workflow/visual"
+import { botPermissionCeiling } from "@/lib/bot/policy/ceilings"
+import { BotRunParkedError, BotRunCancelledError, BOT_PARK_INTERVAL_MS } from "../step"
+import { provenanceForBotOutput } from "@/lib/bot/events/provenance"
 
 import { BotExecutorUnavailableError, type BotExecutorContext, type BotExecutorFn } from "./types"
 
@@ -25,8 +28,10 @@ export interface WorkflowExecutorDeps {
     payload: unknown
     signal?: AbortSignal
     triggeredBy: WorkflowTriggeredFrom
+    onAdmitted?: (runId: string) => Promise<void>
     traceId?: string
-  }) => Promise<{ runId?: string }>
+    securityContext: WorkflowRunSecurityContext
+  }) => Promise<{ runId: string; result: { status: string; error?: unknown } }>
 }
 
 /** The origin a Bot-driven workflow run records. */
@@ -82,10 +87,38 @@ export function createWorkflowBotExecutor(deps: WorkflowExecutorDeps = {}): BotE
       triggerId: ctx.event.triggerId,
       payload: { event: ctx.event, config: ctx.config },
       signal: ctx.signal,
+      onAdmitted: async (runId) => {
+        const { getDb } = await import("@/lib/db/schema")
+        const delivery = await getDb().botEventDeliveries.get(ctx.event.deliveryId)
+        if (ctx.signal.aborted || delivery?.cancelledAt !== undefined) {
+          const { cancelWorkflowRun } = await import("@/lib/workflow/runtime/cancel-run")
+          await cancelWorkflowRun(runId, "Bot cancelled")
+          throw new Error("Bot cancelled")
+        }
+      },
       triggeredBy: botTriggeredFrom(ctx),
+      securityContext: {
+        piiEgressRequired: true,
+        sourceTriggerKind: "trigger.integration.event",
+        permissionCeiling: botPermissionCeiling(ctx.composition.selection, ctx.policy),
+        botProvenance: provenanceForBotOutput({
+          runId: ctx.runId,
+          installationId: ctx.installationId,
+          cause: ctx.event,
+        }),
+      },
       ...(ctx.event.traceId ? { traceId: ctx.event.traceId } : {}),
     })
 
+    if (result.result.status === "cancelled") throw new BotRunCancelledError(ctx.runId)
+    if (result.result.status === "failed") throw new Error(`Workflow ${workflowId} failed`)
+    if (result.result.status !== "succeeded")
+      throw new BotRunParkedError(
+        ctx.runId,
+        "workflow-settle",
+        Date.now() + BOT_PARK_INTERVAL_MS,
+        `workflow:${result.runId}`
+      )
     return {
       summary: `Workflow ${workflowId} started`,
       output: { workflowRunId: result.runId },

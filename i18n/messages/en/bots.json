@@ -356,5 +356,27 @@
   "recipients": {
     "title": "Recipients",
     "description": "Who this Bot's runs may message with nobody watching. Anyone else gets a draft or waits for approval."
+  },
+  "automation": {
+    "pause": "Pause intake",
+    "resume": "Resume intake",
+    "cancel": "Cancel accepted work",
+    "cancelDelivery": "Cancel",
+    "pausedBody": "Paused: queued work is retained. Running attempts may finish.",
+    "pauseDone": "Automation intake paused",
+    "resumeDone": "Automation intake resumed",
+    "cancelDone": "Accepted work cancelled",
+    "inputSlot": "Input account slot",
+    "inputSlotAria": "Input account slot for {name}",
+    "inputDefault": "Definition default / automatic",
+    "inputSaved": "Input slot saved",
+    "error": {
+      "missingSlot": "This credential slot is no longer available.",
+      "invalidBinding": "Choose one account for this slot.",
+      "wrongAccount": "Choose an account that matches this slot.",
+      "wrongStrategy": "Choose an account with the required sign-in method.",
+      "invalidInput": "Choose a declared credential slot for this trigger."
+    },
+    "bindingHelp": "Changing an account or input slot cancels accepted work."
   }
 }

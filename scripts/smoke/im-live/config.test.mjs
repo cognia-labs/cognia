@@ -129,6 +129,7 @@ test("registerConfigSecrets hands every secret to the redactor", () => {
   assert.ok(redactor.labels.includes("lark.driverAppSecret"))
   assert.ok(redactor.labels.includes("matrix.driverAccessToken"))
   assert.ok(redactor.labels.includes("onebot.bearerToken"))
+  assert.ok(redactor.labels.includes("qq-official.bearerToken"))
   assert.ok(redactor.labels.includes("fixtureToken"))
   assert.equal(
     redactor.redactString("boom: value-for-IM_LIVE_MATRIX_DRIVER_ACCESS_TOKEN"),
@@ -141,7 +142,14 @@ test("selectPlatforms refuses a partial `all` run unless it is opted into", () =
   assert.throws(() => selectPlatforms(config, { platform: "all" }), /not configured/)
   const relaxed = selectPlatforms(config, { platform: "all", allowUnconfigured: true })
   assert.deepEqual(relaxed.requested, PLATFORMS)
-  assert.deepEqual(relaxed.unconfigured, ["slack", "discord", "lark", "matrix", "onebot"])
+  assert.deepEqual(relaxed.unconfigured, [
+    "slack",
+    "discord",
+    "lark",
+    "matrix",
+    "onebot",
+    "qq-official",
+  ])
 })
 
 test("selectPlatforms names the missing variables in its error", () => {
@@ -187,4 +195,18 @@ test("Feishu requires separate target App ID and mention Open ID", () => {
   const env = envFor("lark")
   delete env.IM_LIVE_LARK_TARGET_APP_ID
   assert.deepEqual(readConfig(env).platforms.lark.missing, ["IM_LIVE_LARK_TARGET_APP_ID"])
+})
+
+test("QQ Official observer credentials cannot be borrowed from OneBot", () => {
+  const config = readConfig(envFor("onebot"))
+  assert.equal(config.platforms["qq-official"].status, "not_configured")
+  const official = readConfig(envFor("qq-official"))
+  assert.equal(official.platforms["qq-official"].status, "configured")
+  assert.equal(official.platforms["qq-official"].values.conversationKind, "group")
+  assert.equal(official.platforms.onebot.status, "not_configured")
+  const redactor = registerConfigSecrets(official, createRedactor())
+  assert.equal(
+    redactor.redactString("value-for-IM_LIVE_QQ_OFFICIAL_OBSERVER_BEARER_TOKEN"),
+    "«qq-official.bearerToken»"
+  )
 })

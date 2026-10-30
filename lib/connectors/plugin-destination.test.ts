@@ -63,6 +63,24 @@ async function problemOf(promise: Promise<unknown>): Promise<string | undefined>
 }
 
 describe("pluginDestination (ADR-0239)", () => {
+  it("snapshots nested intent before waiting for a stored target", async () => {
+    let resolve!: (target: ConversationDeliveryTarget) => void
+    const req = request({ sendOptions: { mode: "reply" } })
+    const pending = pluginDestination(
+      "bot-a",
+      KEY,
+      req,
+      deps({
+        storedTarget: () =>
+          new Promise((done) => {
+            resolve = done
+          }),
+      })
+    )
+    req.sendOptions!.mode = "proactive"
+    resolve(STORED)
+    expect((await pending).sendOptions).toEqual({ mode: "reply" })
+  })
   it("sends to the stored target, never to the plugin's own reference", async () => {
     await expect(pluginDestination("bot-a", KEY, request(), deps())).resolves.toEqual({
       ...request(),

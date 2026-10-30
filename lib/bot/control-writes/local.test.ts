@@ -11,16 +11,21 @@ import {
   getBotDelivery,
   listBotDeliveries,
 } from "@/lib/db/bot-event-deliveries"
-import { runBotDelivery } from "@/lib/bot/runtime/run"
+import { runBotDelivery, cancelAcceptedBotDeliveries } from "@/lib/bot/runtime/run"
 import { resolveInstalledBot } from "@/lib/bot/installed-bot"
 import { buildBotEventEnvelope } from "@/lib/bot/events/envelope"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createExecutionRun, getExecutionRun } from "@/lib/db/execution-runs"
 import { completeBotRunStep, getBotRunStep } from "@/lib/db/bot-run-steps"
-import { __resetBotsForTesting, registerBot } from "@/lib/plugin/registries/bot-registry"
+import {
+  __resetBotsForTesting,
+  registerBot,
+  unregisterBotsByPlugin,
+} from "@/lib/plugin/registries/bot-registry"
 
 import {
   BotControlTargetMissingError,
+  BotManualRunUnavailableError,
   replayBotDeliveryLocally,
   runBotManuallyLocally,
   setBotTriggerArmedLocally,
@@ -57,6 +62,97 @@ async function install(definition: PluginBotDef = def(), overrides: Record<strin
 beforeEach(async () => {
   __resetBotsForTesting()
   await __resetDbForTesting()
+})
+
+it("manual admission reports creation once across concurrent redelivery and completed work", async () => {
+  const installed = await install()
+  const input = { installationId: installed.id, triggerId: "run", idempotencyKey: "same-gesture" }
+  const results = await Promise.all([runBotManuallyLocally(input), runBotManuallyLocally(input)])
+  expect(results.map((result) => result.created).sort()).toEqual([false, true])
+  expect(results[0].deliveryId).toBe(results[1].deliveryId)
+  await getDb().botEventDeliveries.update(results[0].deliveryId, {
+    status: "succeeded",
+    attempts: 0,
+  })
+  expect((await runBotManuallyLocally(input)).created).toBe(false)
+})
+
+it.each(["disabled", "paused", "mirrored"])(
+  "refuses new manual admission when an installation is %s",
+  async (state) => {
+    const installed = await install()
+    await getDb().botInstallations.update(
+      installed.id,
+      state === "disabled"
+        ? { status: "disabled" }
+        : state === "paused"
+          ? { paused: true }
+          : { syncedFromHost: true }
+    )
+    await expect(
+      runBotManuallyLocally({ installationId: installed.id, idempotencyKey: "new-gesture" })
+    ).rejects.toBeInstanceOf(BotManualRunUnavailableError)
+    expect(await listBotDeliveries({ installationId: installed.id })).toEqual([])
+  }
+)
+
+it("retains a prior manual creation receipt after disable while refusing a new gesture", async () => {
+  const installed = await install()
+  const input = { installationId: installed.id, idempotencyKey: "original" }
+  const original = await runBotManuallyLocally(input)
+  await getDb().botInstallations.update(installed.id, { status: "disabled" })
+  expect(await runBotManuallyLocally(input)).toEqual({
+    deliveryId: original.deliveryId,
+    created: false,
+  })
+  await expect(runBotManuallyLocally({ ...input, idempotencyKey: "new" })).rejects.toBeInstanceOf(
+    BotManualRunUnavailableError
+  )
+  expect(await listBotDeliveries({ installationId: installed.id })).toHaveLength(1)
+})
+
+it("returns an accepted gesture receipt after its plugin unloads", async () => {
+  const installed = await install()
+  const input = { installationId: installed.id, idempotencyKey: "accepted" }
+  const original = await runBotManuallyLocally(input)
+  unregisterBotsByPlugin("acme")
+  expect(await runBotManuallyLocally(input)).toEqual({
+    deliveryId: original.deliveryId,
+    created: false,
+  })
+  expect(await listBotDeliveries({ installationId: installed.id })).toHaveLength(1)
+})
+
+it("does not move an implicit gesture to a changed default manual trigger", async () => {
+  const installed = await install()
+  const input = { installationId: installed.id, idempotencyKey: "accepted" }
+  const original = await runBotManuallyLocally(input)
+  unregisterBotsByPlugin("acme")
+  const definition = def({ triggers: [{ id: "changed", kind: "manual" }] })
+  registerBot("digest", { id: "acme:digest", definition, handler: jest.fn() }, { pluginId: "acme" })
+  expect(await runBotManuallyLocally(input)).toEqual({
+    deliveryId: original.deliveryId,
+    created: false,
+  })
+  expect(await listBotDeliveries({ installationId: installed.id })).toHaveLength(1)
+})
+
+it("re-resolves plugin readiness at the admission transaction boundary", async () => {
+  const installed = await install(),
+    db = getDb()
+  const original = db.transaction.bind(db) as (...args: unknown[]) => Promise<unknown>
+  const tx = jest.spyOn(db, "transaction").mockImplementation(((...args: unknown[]) => {
+    if (args.includes(db.botEventDeliveries)) unregisterBotsByPlugin("acme")
+    return original(...args)
+  }) as typeof db.transaction)
+  try {
+    await expect(
+      runBotManuallyLocally({ installationId: installed.id, idempotencyKey: "new" })
+    ).rejects.toThrow()
+    expect(await listBotDeliveries({ installationId: installed.id })).toEqual([])
+  } finally {
+    tx.mockRestore()
+  }
 })
 
 describe("setBotTriggerArmedLocally", () => {
@@ -374,6 +470,7 @@ describe("replayBotDeliveryLocally", () => {
   it("executes a new run after a blocked result and lets a later failed successor retry independently", async () => {
     const installation = await install()
     const id = await deadLetter(installation.id)
+    expect(await replayBotDeliveryLocally(id)).toBe(true)
     const original = (await getBotDelivery(id))!
     const resolved = (await resolveInstalledBot(installation))!
     const blocked = await runBotDelivery({
@@ -503,4 +600,45 @@ describe("setBotTriggerArmedLocally lifecycle hook", () => {
     ).rejects.toMatchObject({ name: "BotLifecycleHookError", phase: "onArm" })
     expect((await getBotInstallation(row.id))?.triggerOverrides).toBeUndefined()
   })
+})
+
+it("refuses public replay of explicitly cancelled accepted work without creating successors", async () => {
+  const installation = await install()
+  const admitted = await runBotManuallyLocally({
+    installationId: installation.id,
+    idempotencyKey: "cancel-replay",
+  })
+  const [delivery] = await listBotDeliveries({ installationId: installation.id })
+  const runId = `run_bot_${delivery.id}`
+  await createExecutionRun({
+    id: runId,
+    kind: "bot",
+    sourceId: installation.id,
+    title: "Cancelled",
+    status: "waiting",
+    currentRevision: 0,
+    startedAt: NOW,
+    updatedAt: NOW,
+  })
+  await getDb().botEventDeliveries.update(delivery.id, { status: "parked", runId })
+  await cancelAcceptedBotDeliveries(installation.id, delivery.id)
+  const before = await Promise.all([
+    getDb().botEventDeliveries.count(),
+    getDb().executionRuns.count(),
+    getDb().executionRunInterrupts.count(),
+  ])
+  expect(admitted.created).toBe(true)
+  expect(await replayBotDeliveryLocally(delivery.id)).toBe(false)
+  expect(
+    await Promise.all([
+      getDb().botEventDeliveries.count(),
+      getDb().executionRuns.count(),
+      getDb().executionRunInterrupts.count(),
+    ])
+  ).toEqual(before)
+  expect(await getBotDelivery(delivery.id)).toMatchObject({
+    status: "dismissed",
+    cancelledAt: expect.any(Number),
+  })
+  expect(await getExecutionRun(runId)).toMatchObject({ status: "cancelled" })
 })

@@ -58,7 +58,7 @@ import { buildErrorOutput, resolveNodeFailure } from "./node-failure"
 import { isJoinCancel, JoinCancelError, losingBranchScope } from "./branch-scope"
 import { getDefaultSecretResolver } from "./secret-resolver-keyring"
 import { ackRunCompleted, persistRunState } from "./tauri-bridge"
-import { registerRun, unregisterRun } from "./run-cancel-registry"
+import { registerRun, unregisterRun, WorkflowRunCancelledError } from "./run-cancel-registry"
 import {
   claimRunLease,
   getExecutorId,
@@ -125,6 +125,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   const { workflow, trigger } = input
   const runId = input.runId ?? "run_" + nanoid(12)
   const logger = createRunLogger(runId)
+  let completionBotProvenance = input.securityContext?.botProvenance
+  let completionSecurityContext = input.securityContext
 
   // Chained triggers (ADR-0081): announce terminal states to any
   // `trigger.workflow.completed` subscription. Fire-and-forget — a chained
@@ -145,6 +147,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           status,
           ...detail,
           trigger,
+          ...(completionBotProvenance ? { botProvenance: completionBotProvenance } : {}),
+          ...(completionSecurityContext ? { securityContext: completionSecurityContext } : {}),
         })
       )
       .catch(() => {
@@ -170,8 +174,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // any step executes). Fires once per run() invocation.
   getPluginEventHooks().dispatchWorkflowStart(workflow.id, workflow.name)
 
-  // 2a. Ownership guards (ADR 0061 P4) — BEFORE the unconditional `put`
-  // below, which would otherwise clobber another executor's row.
+  // 2a. Ownership guards (ADR 0061 P4), repeated atomically at admission.
   //   - A terminal row (soft-cancelled from a companion, or already
   //     finished) must never be resurrected by a resume replay: ack the
   //     mirror so Rust stops offering it, and report the terminal state.
@@ -188,6 +191,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           trigger.kind === "trigger.connector.system"),
       sourceTriggerKind: trigger.kind,
     }
+  completionBotProvenance = securityContext.botProvenance
+  completionSecurityContext = securityContext
   if (existingRow && TERMINAL_RUN_STATUSES.has(existingRow.status)) {
     await ackRunCompleted(runId)
     return { runId, status: existingRow.status, error: existingRow.error }
@@ -241,13 +246,31 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // Admission and insertion share one write transaction so parallel editor
   // tools cannot all observe the same free slot. Existing pending/resumed rows
   // already own capacity and must not count themselves as new admissions.
+  let blockedAdmission: WorkflowRunRow | undefined
   try {
     const db = getDb()
-    await Dexie.ignoreTransaction(() =>
+    blockedAdmission = await Dexie.ignoreTransaction(() =>
       db.transaction("rw", db.workflowRuns, async () => {
         const current = await db.workflowRuns.get(runId)
+        if (
+          current?.cancelRequestedAt !== undefined &&
+          !TERMINAL_RUN_STATUSES.has(current.status)
+        ) {
+          const cancelled = { ...current, status: "cancelled" as const, completedAt: Date.now() }
+          await db.workflowRuns.put(cancelled)
+          return cancelled
+        }
+        if (
+          current &&
+          (TERMINAL_RUN_STATUSES.has(current.status) ||
+            (current.lease &&
+              current.lease.expiresAt > Date.now() &&
+              current.lease.ownerId !== getExecutorId()))
+        )
+          return current
         if (!current) await assertWorkflowRunCapacity(workflow.id, validated.settings.concurrency)
         await db.workflowRuns.put(runRow)
+        return undefined
       })
     )
   } catch (error) {
@@ -265,6 +288,52 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     getPluginEventHooks().dispatchWorkflowComplete(workflow.id, false)
     return { runId, status: "failed", error: detail }
   }
+  if (blockedAdmission) {
+    if (TERMINAL_RUN_STATUSES.has(blockedAdmission.status)) await ackRunCompleted(runId)
+    return { runId, status: blockedAdmission.status, error: blockedAdmission.error }
+  }
+  // Register before any asynchronous startup work. A cancellation between the
+  // admission commit and registration is caught by the durable re-read below.
+  const ac = new AbortController()
+  registerRun(runId, ac)
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const externalAbort = () => ac.abort(new WorkflowRunCancelledError("Workflow run aborted"))
+  if (input.signal) {
+    if (input.signal.aborted) externalAbort()
+    else input.signal.addEventListener("abort", externalAbort, { once: true })
+  }
+  const finishExistingTerminal = async (row: WorkflowRunRow): Promise<RunWorkflowResult> => {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    if (input.signal) input.signal.removeEventListener("abort", externalAbort)
+    await persistRunState({ runId, workflowId: workflow.id, status: row.status })
+    await ackRunCompleted(runId)
+    await releaseRunResources(runId)
+    return { runId, status: row.status, error: row.error, output: row.output }
+  }
+  const commitOutcome = async (candidate: WorkflowRunRow): Promise<WorkflowRunRow> => {
+    const db = getDb()
+    return db.transaction("rw", db.workflowRuns, async () => {
+      const current = await db.workflowRuns.get(runId)
+      if (current && TERMINAL_RUN_STATUSES.has(current.status)) return current
+      const outcome =
+        current?.cancelRequestedAt !== undefined ||
+        ac.signal.reason instanceof WorkflowRunCancelledError
+          ? {
+              ...candidate,
+              status: "cancelled" as const,
+              completedAt: Date.now(),
+              output: undefined,
+              error: undefined,
+            }
+          : candidate
+      await db.workflowRuns.put(outcome)
+      return outcome
+    })
+  }
+  const admitted = await getDb().workflowRuns.get(runId)
+  if (admitted && TERMINAL_RUN_STATUSES.has(admitted.status)) {
+    return finishExistingTerminal(admitted)
+  }
   input.onPersisted?.(runId)
 
   // 2a′. Claim the execution lease (ADR 0061 P4). The transaction serialises
@@ -273,7 +342,9 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // pre-put guard. Renewed by the heartbeat below, released with the run's
   // resources on every terminal path.
   const claim = await claimRunLease(runId)
-  if (claim === "held") {
+  if (claim !== "claimed") {
+    if (input.signal) input.signal.removeEventListener("abort", externalAbort)
+    unregisterRun(runId)
     return { runId, status: "running" }
   }
 
@@ -297,7 +368,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     // the mobile proxy executors own run-time reachability failures.
     remoteCapabilities: await remoteCapabilityUnion(),
   })
-  if (preflightFailures.length > 0) {
+  if (preflightFailures.length > 0 && !ac.signal.aborted) {
     const message = formatPreflightFailures(preflightFailures)
     const code = CAPABILITY_MISSING_CODE_PREFIX + preflightFailures[0].missing[0]
     const nodeId = preflightFailures[0].nodeId
@@ -308,7 +379,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
       completedAt: Date.now(),
       error: { message, nodeId, code },
     }
-    await getDb().workflowRuns.put(runRow)
+    runRow = await commitOutcome(runRow)
+    if (runRow.status !== "failed") return finishExistingTerminal(runRow)
     await persistRunState({ runId, workflowId: workflow.id, status: "failed" })
     getPluginEventHooks().dispatchWorkflowError(workflow.id, new Error(message))
     getPluginEventHooks().dispatchWorkflowComplete(workflow.id, false)
@@ -317,12 +389,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     return { runId, status: "failed", error: { message, nodeId, code } }
   }
 
-  // 3. Set up the abort + idempotency machinery.
-  const ac = new AbortController()
-  // Expose this run to the out-of-band cancel registry so a remote
-  // `workflow_cancel_run` RPC can abort it. Unregistered on every terminal
-  // path below.
-  registerRun(runId, ac)
+  // 3. Start the cancellation heartbeat and idempotency machinery.
   // Lease heartbeat (ADR 0061 P4): keeps the claim fresh and observes
   // cross-executor cancel requests (`cancelRequestedAt` stamped by a
   // surface whose local abort couldn't reach this process).
@@ -330,17 +397,13 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   // past the TTL): stop driving it at once and leave its row to the new owner.
   let leaseLost = false
   startLeaseHeartbeat(runId, {
-    onCancelRequested: () => ac.abort(new Error("Workflow run cancelled by another device")),
+    onCancelRequested: () =>
+      ac.abort(new WorkflowRunCancelledError("Workflow run cancelled by another device")),
     onLeaseLost: () => {
       leaseLost = true
       ac.abort(new Error("Workflow run lease was taken over by another executor"))
     },
   })
-  const externalAbort = () => ac.abort(new Error("Workflow run aborted"))
-  if (input.signal) {
-    if (input.signal.aborted) ac.abort(new Error("Workflow run aborted"))
-    else input.signal.addEventListener("abort", externalAbort, { once: true })
-  }
   // Wall-clock timeout for the whole run. Step-level timeouts already exist;
   // this guards against scenarios where many short steps + retries collectively
   // run past the user's expectation. Set to 0 to disable.
@@ -348,7 +411,6 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     typeof validated.settings.timeoutMs === "number" && validated.settings.timeoutMs > 0
       ? validated.settings.timeoutMs
       : 0
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
   let wallClockExpired = false
   if (wallClockTimeoutMs > 0) {
     timeoutHandle = setTimeout(() => {
@@ -402,7 +464,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     const message = err instanceof Error ? err.message : String(err)
     await logger.runFailed({ message })
     runRow = { ...runRow, status: "failed", completedAt: Date.now(), error: { message } }
-    await getDb().workflowRuns.put(runRow)
+    runRow = await commitOutcome(runRow)
+    if (runRow.status !== "failed") return finishExistingTerminal(runRow)
     await persistRunState({ runId, workflowId: workflow.id, status: "failed" })
     // Plugin host hook: cycle / sort failure during run preparation.
     const sortError = err instanceof Error ? err : new Error(message)
@@ -474,7 +537,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
       const message = `startStepId ${input.startStepId} not present in workflow`
       await logger.runFailed({ message })
       runRow = { ...runRow, status: "failed", completedAt: Date.now(), error: { message } }
-      await getDb().workflowRuns.put(runRow)
+      runRow = await commitOutcome(runRow)
+      if (runRow.status !== "failed") return finishExistingTerminal(runRow)
       await persistRunState({ runId, workflowId: workflow.id, status: "failed" })
       getPluginEventHooks().dispatchWorkflowError(workflow.id, new Error(message))
       getPluginEventHooks().dispatchWorkflowComplete(workflow.id, false)
@@ -953,6 +1017,12 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     return { runId, status: "running" }
   }
 
+  if (ac.signal.reason instanceof WorkflowRunCancelledError && !wallClockExpired) {
+    return finishExistingTerminal(
+      await commitOutcome({ ...runRow, status: "cancelled", completedAt: Date.now() })
+    )
+  }
+
   if (firstFailure) {
     if (timeoutHandle) clearTimeout(timeoutHandle)
     const { stepId, err, code } = firstFailure
@@ -971,7 +1041,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
       completedAt: Date.now(),
       error: { message, nodeId: stepId, code: errorCode },
     }
-    await getDb().workflowRuns.put(runRow)
+    runRow = await commitOutcome(runRow)
+    if (runRow.status !== "failed") return finishExistingTerminal(runRow)
     // Small-model "work content" title for this run — fire-and-forget. A failed
     // run still describes real work, so it gets a title too.
     void generateWorkflowRunTitle(runId)
@@ -1040,7 +1111,8 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     completedAt: Date.now(),
     output: finalOutput,
   }
-  await getDb().workflowRuns.put(runRow)
+  runRow = await commitOutcome(runRow)
+  if (runRow.status !== "succeeded") return finishExistingTerminal(runRow)
   await logger.runCompleted(finalOutput)
   await persistRunState({ runId, workflowId: workflow.id, status: "succeeded" })
   await ackRunCompleted(runId)

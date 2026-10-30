@@ -12,6 +12,7 @@ function makeDeps(overrides: Partial<BeginLarkOAuthDependencies> = {}) {
       keyringGet: jest.fn(async (_a: string, credential: string) =>
         credential === "appId" ? "cli_1" : null
       ),
+      userAuth: jest.fn(async () => ({ authorizationEpoch: "begin-epoch" })),
       setPending: jest.fn(async (adapterId: string, record: Record<string, unknown>) => {
         pending.push([adapterId, record])
       }),
@@ -50,6 +51,7 @@ describe("beginLarkOAuth", () => {
           state: "lark:lk-1:nonce123",
           codeVerifier: "verifier-fixed-value-0123456789",
           redirectUri: REDIRECT,
+          authorizationEpoch: "begin-epoch",
         },
       ],
     ])
@@ -158,6 +160,7 @@ describe("beginLarkOAuth", () => {
       { adapterId: "lk-1", redirectUri: REDIRECT },
       {
         keyringGet: (async () => "cli_1") as never,
+        userAuth: (async () => ({ authorizationEpoch: "begin-epoch" })) as never,
         setPending: (async (_id: string, record: Record<string, string>) => {
           pending.push(record)
         }) as never,

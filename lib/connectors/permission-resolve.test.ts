@@ -3,6 +3,7 @@ import {
   adapterAllowsHostCapability,
   resolveImHostCapabilities,
   resolveRequireHitlForWrites,
+  restrictQueuedImPermissions,
 } from "./permission-resolve"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 
@@ -44,4 +45,38 @@ describe("IM permission resolution", () => {
       schedule_tools: false,
     })
   })
+})
+
+it("keeps queued host and skill grants within both accepted and current policy", () => {
+  const acceptedAdapter = {
+    hostCapabilityCeiling: [],
+    builtInSkillCeiling: ["lark.calendar.*"],
+  } as unknown as AdapterInstanceRow
+  const currentAdapter = {
+    hostCapabilityCeiling: ["computer_use", "schedule_tools"],
+    builtInSkillCeiling: ["lark.calendar.list", "lark.drive.*"],
+  } as unknown as AdapterInstanceRow
+  const old = { allowComputerUse: false, allowScheduleTools: false, allowOcr: false } as never
+  const current = {
+    allowComputerUse: true,
+    allowScheduleTools: true,
+    allowOcr: true,
+    requireHitlForWrites: false,
+  } as never
+  const result = restrictQueuedImPermissions(acceptedAdapter, old, currentAdapter, current)
+  expect(result.adapter.hostCapabilityCeiling).toEqual([])
+  expect(result.adapter.builtInSkillCeiling).toEqual(["lark.calendar.list"])
+  expect(result.override).toMatchObject({
+    allowComputerUse: false,
+    allowScheduleTools: false,
+    allowOcr: false,
+    requireHitlForWrites: true,
+  })
+  const revoked = restrictQueuedImPermissions(
+    currentAdapter,
+    current,
+    { ...currentAdapter, builtInSkillCeiling: [] },
+    current
+  )
+  expect(revoked.adapter.builtInSkillCeiling).toEqual([])
 })

@@ -5,6 +5,64 @@
  * __mocks__/tauri-api.js, which exports `invoke: jest.fn()`.
  */
 import { invoke } from "@tauri-apps/api/core"
+import requestSchemas from "@/protocol/companion-request-schemas.json"
+import Ajv from "ajv"
+
+it("publishes a finite backup request schema including standard version metadata", () => {
+  const validate = new Ajv({ strict: false, validateFormats: false }).compile(
+    requestSchemas.commands.connectors_matrix_crypto_backup
+  )
+  const req = {
+    adapterId: "A",
+    action: "restore",
+    version: "v1",
+    recoveryKey: "synthetic",
+    backupInfo: {
+      algorithm: "m.megolm_backup.v1.curve25519-aes-sha2",
+      version: "v1",
+      count: 1,
+      etag: "e",
+      auth_data: { public_key: "public" },
+    },
+    rooms: {
+      "!r:fixture": {
+        sessions: {
+          s: {
+            first_message_index: 0,
+            forwarded_count: 0,
+            is_verified: false,
+            session_data: { ciphertext: "c", mac: "m", ephemeral: "p" },
+          },
+        },
+      },
+    },
+  }
+  expect(validate({ req })).toBe(true)
+  expect(validate({ req: { ...req, recoveryKey: 1 } })).toBe(false)
+  expect(validate({ req: { ...req, unexpected: "field" } })).toBe(false)
+  expect(validate({ req: { adapterId: "A", action: "beginCreate" } })).toBe(false)
+})
+
+it("accepts reusable QQ assets through the published Host upload request schema", () => {
+  const validate = new Ajv({ strict: false }).compile(
+    requestSchemas.commands.connectors_media_upload
+  )
+  const request = {
+    req: {
+      uploadUrl: "https://api.sgroup.qq.com/v2/media-images/prepare",
+      sourceUrl: "data:image/png;base64,AQID",
+      contentType: "image/png",
+      responseMode: "http",
+      qq: { fileType: 1, fileName: "image.png", reusableAsset: true },
+    },
+  }
+  expect(validate(request)).toBe(true)
+  expect(
+    validate({
+      req: { ...request.req, qq: { ...request.req.qq, arbitraryUploadUrl: "https://example.org" } },
+    })
+  ).toBe(false)
+})
 
 jest.mock("@/lib/platform/capabilities", () => ({
   ...jest.requireActual("@/lib/platform/capabilities"),
@@ -15,6 +73,8 @@ import { detectHostProfile } from "@/lib/platform/capabilities"
 import { setConnectorDeviceLease } from "@/lib/connectors/device-plane"
 import {
   setConnectorCommandInvoker,
+  connectorsMatrixCryptoBackup,
+  connectorsBoundedHttpRequest,
   connectorsRegisterAdapter,
   connectorsUnregisterAdapter,
   connectorsHealth,
@@ -23,6 +83,7 @@ import {
   connectorsKeyringSet,
   connectorsKeyringGet,
   connectorsKeyringGetSnapshot,
+  connectorsLarkUserAuth,
   connectorsKeyringDelete,
   connectorsKeyringList,
   connectorsWechatOaInboundList,
@@ -66,6 +127,29 @@ import {
 
 const mockInvoke = invoke as jest.Mock
 const mockProfile = detectHostProfile as jest.Mock
+
+it("routes Lark authorization transitions to the owning native host", async () => {
+  const input = { action: "snapshot" as const, adapterId: "lark-a" }
+  mockInvoke.mockResolvedValueOnce({ authorizationEpoch: "epoch-a", configured: true })
+  await expect(connectorsLarkUserAuth(input)).resolves.toMatchObject({
+    authorizationEpoch: "epoch-a",
+  })
+  expect(mockInvoke).toHaveBeenCalledWith("connectors_lark_user_auth", { input })
+})
+
+it("uses the explicit bounded native command so older hosts cannot ignore the budget", async () => {
+  mockInvoke.mockResolvedValueOnce({ status: 200, headers: {}, body: "ok" })
+  await connectorsHttpRequest({
+    url: "https://example.com",
+    method: "POST",
+    body: "{}",
+    maxResponseBytes: 1024,
+  } as TauriHttpRequest)
+  expect(mockInvoke).toHaveBeenCalledWith("connectors_bounded_http_request", {
+    req: { url: "https://example.com", method: "POST", body: "{}" },
+    maxResponseBytes: 1024,
+  })
+})
 
 it("reads current credential revisions through the runtime invoker", async () => {
   const snapshot = { value: "test-token", revision: "revision-2" }
@@ -893,4 +977,60 @@ describe("runtime lease wrappers", () => {
       setConnectorCommandInvoker(previous)
     }
   })
+})
+
+it("routes Matrix backup and bounded restore requests through the configured native invoker", async () => {
+  const native = jest.fn(async (_name: string, _args?: Record<string, unknown>) => ({
+    enabled: true,
+  }))
+  const previous = setConnectorCommandInvoker(
+    async <T>(name: string, args?: Record<string, unknown>) => (await native(name, args)) as T
+  )
+  try {
+    await connectorsMatrixCryptoBackup({ adapterId: "A", action: "status" })
+    expect(native).toHaveBeenLastCalledWith("connectors_matrix_crypto_backup", {
+      req: { adapterId: "A", action: "status" },
+    })
+    await connectorsBoundedHttpRequest({ url: "http://fixture/keys", method: "GET" }, 1024)
+    expect(native).toHaveBeenLastCalledWith("connectors_bounded_http_request", {
+      req: { url: "http://fixture/keys", method: "GET" },
+      maxResponseBytes: 1024,
+    })
+  } finally {
+    setConnectorCommandInvoker(previous)
+  }
+})
+
+it("routes public cross-signing status through the native owner", async () => {
+  const { connectorsMatrixCryptoCrossSigning } = await import("./commands")
+  await connectorsMatrixCryptoCrossSigning({ adapterId: "A", action: "status" })
+  expect(invoke).toHaveBeenLastCalledWith("connectors_matrix_crypto_cross_signing", {
+    req: { adapterId: "A", action: "status" },
+  })
+  const validate = new Ajv({ strict: false }).compile(
+    requestSchemas.commands.connectors_matrix_crypto_cross_signing
+  )
+  expect(validate({ req: { adapterId: "A", action: "prepare", serverMasterKey: null } })).toBe(true)
+  expect(validate({ req: { adapterId: "A", action: "prepare" } })).toBe(false)
+  expect(validate({ req: { adapterId: "A", action: "reset" } })).toBe(false)
+})
+
+it("routes interactive verification and rejects oversized QR protocol input", async () => {
+  const { connectorsMatrixCryptoVerification } = await import("./commands")
+  const req = {
+    adapterId: "A",
+    action: "confirmSas" as const,
+    userId: "@peer:test",
+    flowId: "flow",
+  }
+  await connectorsMatrixCryptoVerification(req)
+  expect(invoke).toHaveBeenLastCalledWith("connectors_matrix_crypto_verification", { req })
+  const validate = new Ajv({ strict: false }).compile(
+    requestSchemas.commands.connectors_matrix_crypto_verification
+  )
+  expect(validate({ req })).toBe(true)
+  expect(validate({ req: { ...req, action: "autoTrust" } })).toBe(false)
+  expect(validate({ req: { ...req, action: "scanQr", qrBytes: new Array(4097).fill(0) } })).toBe(
+    false
+  )
 })

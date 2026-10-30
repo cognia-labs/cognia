@@ -1339,3 +1339,29 @@ describe("session rotation drops HITL session bypasses", () => {
     expect(hasSessionBypass("abc12345", "Bash")).toBe(true)
   })
 })
+
+describe("conversation automation commands", () => {
+  it.each(["pause", "resume", "cancel"])(
+    "applies %s independently of responder mode",
+    async (action) => {
+      const h = harness({ active: session("s") })
+      h.deps.cancelAutomations = jest.fn().mockResolvedValue(undefined)
+      h.deps.retainAutomations = jest.fn().mockResolvedValue(undefined)
+      h.deps.resumeAutomations = jest.fn().mockResolvedValue(undefined)
+      await maybeHandleControlCommand(
+        makeEvent({ plainText: `/automation ${action}` }),
+        makeAdapter(),
+        undefined,
+        RESOLVED,
+        h.deps
+      )
+      const patch = h.patches[0]?.patch
+      expect(patch).not.toHaveProperty("mode")
+      if (action === "cancel") {
+        expect(patch).toEqual({ automationCancelledBefore: 1000 })
+        expect(h.deps.cancelAutomations).toHaveBeenCalledWith("tg-1", "telegram:tg-1:42", 1000)
+      } else expect(patch).toEqual({ automationPaused: action === "pause" })
+      if (action === "resume") expect(h.deps.resumeAutomations).toHaveBeenCalled()
+    }
+  )
+})

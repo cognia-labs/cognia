@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 
@@ -46,6 +47,10 @@ jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn() } }))
 import { toast } from "sonner"
 const mockToastSuccess = toast.success as jest.Mock
 const mockToastError = toast.error as jest.Mock
+
+jest.mock("./matrix-verification-panel", () => ({
+  MatrixVerificationPanel: () => <div>Matrix verification panel</div>,
+}))
 
 import { MatrixConfigDialog } from "./matrix-config"
 
@@ -397,6 +402,13 @@ describe("MatrixConfigDialog — credential prefill", () => {
   function openExisting() {
     return render(<MatrixConfigDialog open onOpenChange={jest.fn()} row={prefillRow} />)
   }
+
+  it("mounts device verification in the existing connector settings", async () => {
+    openExisting()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: /Verify a Matrix device/i }))
+    expect(screen.getByText("Matrix verification panel")).toBeVisible()
+  })
 
   function storedCredentials() {
     mockKeyringGet.mockImplementation(async (_id: string, name: string) => {

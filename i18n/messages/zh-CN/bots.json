@@ -356,5 +356,27 @@
   "recipients": {
     "title": "收件人",
     "description": "此 Bot 的运行在无人值守时可直接发消息的对象。其他人会得到草稿或等待批准。"
+  },
+  "automation": {
+    "pause": "暂停接收",
+    "resume": "恢复接收",
+    "cancel": "取消已接受任务",
+    "cancelDelivery": "取消",
+    "pausedBody": "已暂停：保留待处理任务，运行中的尝试可继续完成。",
+    "pauseDone": "已暂停自动化接收",
+    "resumeDone": "已恢复自动化接收",
+    "cancelDone": "已取消已接受任务",
+    "inputSlot": "输入账户槽位",
+    "inputSlotAria": "{name} 的输入账户槽位",
+    "inputDefault": "定义默认值／自动选择",
+    "inputSaved": "已保存输入槽位",
+    "error": {
+      "missingSlot": "此凭据槽位已不可用。",
+      "invalidBinding": "请为此槽位选择一个账户。",
+      "wrongAccount": "请选择与此槽位匹配的账户。",
+      "wrongStrategy": "请选择使用所需登录方式的账户。",
+      "invalidInput": "请为此触发器选择已声明的凭据槽位。"
+    },
+    "bindingHelp": "更改账户或输入槽位会取消已接受任务。"
   }
 }

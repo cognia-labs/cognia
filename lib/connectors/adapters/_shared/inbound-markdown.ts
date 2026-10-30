@@ -160,6 +160,9 @@ export function escapeMarkdown(text: string): string {
       .replace(/^(\s*)([#>+-])(?=\s)/gm, "$1\\$2")
       // A digit is not escapable; an ordered-list marker is broken at its dot.
       .replace(/^(\s*\d+)([.)])(?=\s)/gm, "$1\\$2")
+      // Setext underlines and thematic rules also create markup without a
+      // space after their first character. Preserve Windows line endings.
+      .replace(/^([ \t]*)([-=][-= \t]*)(?=\r?$)/gm, "$1\\$2")
   )
 }
 

@@ -4,7 +4,7 @@ import "fake-indexeddb/auto"
 
 import { enqueueBotDelivery, listBotDeliveries } from "@/lib/db/bot-event-deliveries"
 import { installBot } from "@/lib/db/bot-installations"
-import { getBotRunStep } from "@/lib/db/bot-run-steps"
+import { getBotRunStep, completeBotRunStep } from "@/lib/db/bot-run-steps"
 import type { BotEventDeliveryRow, BotInstallationRow } from "@/lib/db/bot-types"
 import { getExecutionRun, runEventJournal } from "@/lib/db/execution-runs"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
@@ -20,11 +20,28 @@ import {
   __resetLiveBotRunsForTesting,
   botRunId,
   cancelBotRun,
+  cancelAcceptedBotDeliveries,
   cancelLiveBotInstallation,
   cancelLiveBotRun,
   getLiveBotRunSignal,
   runBotDelivery,
 } from "./run"
+
+jest.mock("@/lib/db/bot-run-steps", () => {
+  const actual = jest.requireActual("@/lib/db/bot-run-steps")
+  return {
+    ...actual,
+    getBotRunStep: jest.fn(actual.getBotRunStep),
+    completeBotRunStep: jest.fn(actual.completeBotRunStep),
+  }
+})
+jest.mock("@/lib/bot/sources/bot-run", () => ({ dispatchBotRunToBots: jest.fn() }))
+jest.mock("@/lib/workflow/runtime/cancel-run", () => ({
+  cancelWorkflowRun: jest.fn().mockResolvedValue({ cancelled: true }),
+}))
+jest.mock("@/lib/ai/agent/team/squad/squad-control", () => ({
+  controlSquadRun: jest.fn().mockResolvedValue({ accepted: true }),
+}))
 
 const NOW = 1_700_000_000_000
 const now = () => NOW
@@ -78,6 +95,14 @@ async function seed(): Promise<{ delivery: BotEventDeliveryRow; resolved: Instal
 }
 
 beforeEach(async () => {
+  jest
+    .mocked(getBotRunStep)
+    .mockReset()
+    .mockImplementation(jest.requireActual("@/lib/db/bot-run-steps").getBotRunStep)
+  jest
+    .mocked(completeBotRunStep)
+    .mockReset()
+    .mockImplementation(jest.requireActual("@/lib/db/bot-run-steps").completeBotRunStep)
   __resetDbForTesting()
   __resetLiveBotRunsForTesting()
   const db = getDb()
@@ -97,6 +122,145 @@ describe("botRunId", () => {
 })
 
 describe("runBotDelivery", () => {
+  it("keeps cancellation terminal when startup resumes after a checkpoint barrier", async () => {
+    const { delivery, resolved } = await seed()
+    let release!: () => void
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let entered!: () => void
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    jest.mocked(getBotRunStep).mockImplementationOnce(async (...args) => {
+      entered()
+      await blocker
+      return jest.requireActual("@/lib/db/bot-run-steps").getBotRunStep(...args)
+    })
+    const handler = jest.fn()
+    const running = runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    await ready
+    await cancelAcceptedBotDeliveries(delivery.installationId)
+    release()
+    expect((await running).status).toBe("cancelled")
+    expect(handler).not.toHaveBeenCalled()
+    expect(await getExecutionRun(botRunId(delivery.id))).toMatchObject({
+      status: "cancelled",
+      latestSnapshot: { status: "cancelled" },
+    })
+  })
+
+  it("does not publish a completed event when cancellation wins before completion commits", async () => {
+    const { delivery, resolved } = await seed()
+    const source = await import("@/lib/bot/sources/bot-run")
+    jest.mocked(source.dispatchBotRunToBots).mockClear()
+    let release!: () => void
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let entered!: () => void
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    jest.mocked(completeBotRunStep).mockImplementation(async (...args) => {
+      if (args[1] === "__host:result") {
+        entered()
+        await blocker
+      }
+      return jest.requireActual("@/lib/db/bot-run-steps").completeBotRunStep(...args)
+    })
+    const running = runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: { handler: async () => ({ summary: "late" }) },
+    })
+    await ready
+    await cancelAcceptedBotDeliveries(delivery.installationId)
+    release()
+    expect((await running).status).toBe("cancelled")
+    expect(source.dispatchBotRunToBots).not.toHaveBeenCalled()
+    expect((await getExecutionRun(botRunId(delivery.id)))?.status).toBe("cancelled")
+  })
+
+  it("stops durable Workflow and parked Squad children and does not recancel new work on an operation retry", async () => {
+    const { delivery } = await seed()
+    const runId = botRunId(delivery.id)
+    await getDb().workflowInvocations.put({
+      id: "inv",
+      runId: "workflow-child",
+      idempotencyKey: runId,
+    } as never)
+    await completeBotRunStep(runId, "squad-start", { started: true, runId }, NOW)
+    await cancelAcceptedBotDeliveries(delivery.installationId, undefined, "same-gesture")
+    const workflow = await import("@/lib/workflow/runtime/cancel-run")
+    const squad = await import("@/lib/ai/agent/team/squad/squad-control")
+    expect(workflow.cancelWorkflowRun).toHaveBeenCalledWith("workflow-child", "Bot cancelled")
+    expect(squad.controlSquadRun).toHaveBeenCalledWith(runId, "stop")
+    await enqueueBotDelivery({
+      envelope: { ...envelope(), eventId: "new", deliveryId: "new" },
+      now: NOW,
+    })
+    await cancelAcceptedBotDeliveries(delivery.installationId, undefined, "same-gesture")
+    expect((await getDb().botEventDeliveries.get("new"))?.status).toBe("pending")
+  })
+
+  it("cancels accepted work before a run exists and refuses later execution", async () => {
+    const { delivery, resolved } = await seed()
+    expect(await cancelAcceptedBotDeliveries(delivery.installationId)).toBe(1)
+    const handler = jest.fn()
+    await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(handler).not.toHaveBeenCalled()
+    expect(await getDb().botEventDeliveries.get(delivery.id)).toMatchObject({
+      status: "dismissed",
+      cancelledAt: expect.any(Number),
+    })
+  })
+
+  it("lets a running attempt finish during pause and keeps the next accepted attempt pending", async () => {
+    const { delivery, resolved } = await seed()
+    let release!: () => void
+    const blocker = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const handler = jest.fn(async () => {
+      started()
+      await blocker
+      return { summary: "done" }
+    })
+    const running = runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    await ready
+    const next = await enqueueBotDelivery({
+      envelope: { ...envelope(), eventId: "next", deliveryId: "next" },
+      now: NOW,
+    })
+    const { setBotInstallationPaused } = await import("@/lib/db/bot-installations")
+    await setBotInstallationPaused(delivery.installationId, true)
+    release()
+    expect((await running).status).toBe("completed")
+    await runBotDelivery({ delivery: next, resolved, now, executors: { handler } })
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect((await getDb().botEventDeliveries.get("next"))?.status).toBe("pending")
+    await setBotInstallationPaused(delivery.installationId, false)
+    expect(
+      (await runBotDelivery({ delivery: next, resolved, now, executors: { handler } })).status
+    ).toBe("completed")
+  })
+
+  it.each(["observe", "human"] as const)("does not run automated work under %s", async (mode) => {
+    const { delivery, resolved } = await seed()
+    resolved.definition.composition =
+      mode === "observe" ? { autonomy: "observe" } : { engagement: "human" }
+    const handler = jest.fn()
+    const outcome = await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+    expect(handler).not.toHaveBeenCalled()
+    expect(outcome.status).toBe("unavailable")
+  })
+
   it("does not dispatch work after its host has stopped", async () => {
     const { delivery, resolved } = await seed()
     const host = new AbortController()
@@ -707,7 +871,9 @@ describe("runBotDelivery when a handler parks", () => {
 it("persists the original policy ceiling before dispatch and never widens it on resumed runs", async () => {
   const { delivery, resolved } = await seed()
   resolved.policy = { requireApprovalForWrites: true, maxAutonomy: "confirm" }
-  const handler = async () => {
+  const policies: Array<BotExecutorContext["policy"]> = []
+  const handler = async (ctx: BotExecutorContext) => {
+    policies.push(ctx.policy)
     throw new BotRunParkedError(botRunId(delivery.id), "wait", NOW + 100)
   }
   await runBotDelivery({ delivery, resolved, now, executors: { handler } })
@@ -716,6 +882,7 @@ it("persists the original policy ceiling before dispatch and never widens it on 
   )
   resolved.policy = { requireApprovalForWrites: false, maxAutonomy: "autopilot" }
   await runBotDelivery({ delivery, resolved, now, executors: { handler } })
+  expect(policies[1]).toMatchObject({ maxAutonomy: "confirm", requireApprovalForWrites: true })
   expect((await getBotRunStep(botRunId(delivery.id), "__host:policy"))?.output).toEqual({
     requireApprovalForWrites: true,
     maxAutonomy: "confirm",

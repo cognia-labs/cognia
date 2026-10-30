@@ -318,6 +318,8 @@
         "deadlettered": "Dead-lettered",
         "downgraded": "Downgraded to text",
         "error": "Delivery failed",
+        "pending": "Awaiting provider result",
+        "stream_authorized": "Authorized stream update",
         "success": "Delivered"
       },
       "entry": {
@@ -338,8 +340,10 @@
         "deferred_muted": "Deferred (muted)",
         "deferred_quiet_hours": "Deferred (quiet hours)",
         "deleted": "Message deleted",
+        "delivery_status": "Delivery status receipt",
         "edited": "Message edited",
         "help_served": "Help card sent",
+        "interaction": "Platform interaction",
         "lifecycle": "Bot lifecycle event",
         "member_added": "Member added",
         "member_removed": "Member removed",
@@ -1274,7 +1278,9 @@
         "optional": "Verify the optional features you selected: send an attachment or use a menu. Before enabling no-@ topic follow-ups, start Admission’s delivery probe and send an unmentioned message within 10 minutes. That first message is stored as history only, with no reply; use a subsequent message to verify replies. Test bot-to-bot traffic only when its permissions and admission rules are configured.",
         "troubleshoot": "No inbound message: inspect publication, subscriptions, availability, group membership and host health. Inbound but no reply: inspect Agent binding, admission and model errors. Card click fails: inspect callback subscription and actor authorization."
       }
-    }
+    },
+    "authorizeDocumentReadHelp": "Add read-only access to Docs, Wiki, Sheets and Base when you connect. Existing granted permissions are preserved.",
+    "authorizeDocumentReadLabel": "Read cloud documents"
   },
   "matrix": {
     "accessTokenHelp": "Paste a bot access token, or sign in with a password below to fetch one.",
@@ -1317,7 +1323,48 @@
     "testSucceededStatus": "Signed in as {userId}",
     "testSucceededToast": "Signed in as {userId}",
     "titleEdit": "Edit Matrix connector",
-    "titleNew": "Add Matrix connector"
+    "titleNew": "Add Matrix connector",
+    "verification": {
+      "title": "Verify a Matrix device",
+      "description": "Compare the codes with the other device. Only confirm after checking the same user and device on both sides.",
+      "peerUser": "Peer Matrix user",
+      "peerDevice": "Peer device ID",
+      "peerPlaceholder": "@user:example.org",
+      "request": "Request verification",
+      "discover": "Find incoming requests",
+      "acceptRequest": "Accept request from {device}",
+      "startSas": "Compare numbers",
+      "showQr": "Show QR code",
+      "acceptSas": "Accept number comparison",
+      "compareSas": "Compare all three numbers with the other device.",
+      "sasCode": "Verification numbers",
+      "match": "The numbers match",
+      "mismatch": "The numbers do not match",
+      "qrImage": "Matrix verification QR code",
+      "uploadQr": "Scan a QR image",
+      "camera": "Scan with camera",
+      "cameraPreview": "QR camera preview",
+      "stopCamera": "Stop camera",
+      "confirmScan": "Confirm the other device scanned this code",
+      "trusted": "Device verified.",
+      "proofComplete": "Verification completed. Refresh device keys to check cross-signing trust.",
+      "cancel": "Cancel verification",
+      "newFlow": "Verify another device",
+      "unavailable": "Start this Matrix connector in the desktop app to verify devices.",
+      "failed": "Verification could not continue. Check the connector and retry.",
+      "invalidQr": "Choose a valid Matrix verification QR image (PNG, JPEG or WebP, up to 8 MB and 2048 pixels).",
+      "cameraFailed": "Camera access failed. You can upload a QR image instead.",
+      "state": {
+        "requested": "Waiting for the other device",
+        "ready": "Choose a verification method",
+        "sas": "Comparing verification numbers",
+        "qr": "Waiting for the QR scan and confirmation",
+        "done": "Verification complete",
+        "cancelled": "Verification cancelled"
+      },
+      "retry": "Retry verification action",
+      "refreshTrust": "Refresh device trust"
+    }
   },
   "onebot": {
     "adapterCreatedWithEndpoint": "Adapter created. Paste the endpoint URL into NapCat config.",
@@ -1512,6 +1559,8 @@
     "quietHoursIncomplete": "Quiet hours need a start, end, and timezone.",
     "receiveGuildMessagesHelp": "Private-guild bots only: enable after QQ grants GUILD_MESSAGES. Gateway mode subscribes to this intent; webhook mode also requires MESSAGE_CREATE in the QQ console. Group full-message delivery is configured separately in QQ. Response rules still apply.",
     "receiveGuildMessagesLabel": "Receive all channel messages",
+    "receiveMessageAuditHelp": "Enable only after QQ grants MESSAGE_AUDIT. Gateway subscribes to channel audit results; Webhook also requires the matching console subscription. Accepted sends remain held until a definitive result.",
+    "receiveMessageAuditLabel": "Receive message audit results",
     "save": "Save",
     "sectionAdvanced": "Advanced",
     "sectionAdvancedDesc": "Quiet hours and mute.",
@@ -1526,6 +1575,7 @@
     "testGatewayUrl": "Gateway: {gatewayUrl}",
     "testSucceededLabel": "Credentials valid",
     "testSucceededToast": "Gateway URL resolved: {gatewayUrl}. Event delivery is not verified.",
+    "testWebhookCredentialsSucceeded": "Credentials verified. Webhook delivery still needs validation in the QQ console.",
     "titleEdit": "Edit QQ Official Bot",
     "titleNew": "Add QQ Official Bot",
     "transportGateway": "Gateway WebSocket",
@@ -1542,8 +1592,7 @@
     "webhookUrlOriginMissingHelp": "This deployment has no public origin yet, so the callback URL cannot be built. Serve the app behind the same front door as the companion, then reopen this dialog.",
     "webhookUrlTunnelLoading": "Checking tunnel status…",
     "webhookUrlTunnelOffHelp": "No publicly-reachable HTTPS endpoint yet. Start the Cloudflared tunnel under Settings → Connections → Overview, then return here.",
-    "webhookUrlUnsupportedHelp": "This browser has no Cognia host behind it, so nothing can receive an inbound request. Open the desktop app, or pair this browser with a host first.",
-    "testWebhookCredentialsSucceeded": "Credentials verified. Webhook delivery still needs validation in the QQ console."
+    "webhookUrlUnsupportedHelp": "This browser has no Cognia host behind it, so nothing can receive an inbound request. Open the desktop app, or pair this browser with a host first."
   },
   "quickCommands": {
     "actionTypeLabel": "Action type",

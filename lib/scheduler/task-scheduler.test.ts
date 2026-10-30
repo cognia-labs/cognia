@@ -46,7 +46,17 @@ import type {
 const mockDispatchOnScheduledTaskStart = jest.fn()
 const mockDispatchOnScheduledTaskComplete = jest.fn()
 const mockDispatchOnScheduledTaskError = jest.fn()
+const mockScheduledTaskHooks = {
+  hasAnyHook: jest.fn(() => false),
+  dispatchScheduledTaskBeforeRun: jest.fn(async () => true),
+  dispatchScheduledTaskCreate: jest.fn((_task: unknown) => {}),
+  dispatchScheduledTaskUpdate: jest.fn((_task: unknown, _changes: unknown) => {}),
+  dispatchScheduledTaskDelete: jest.fn(),
+  dispatchScheduledTaskPause: jest.fn(),
+  dispatchScheduledTaskResume: jest.fn(),
+}
 jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
+  getPluginEventHooks: () => mockScheduledTaskHooks,
   getPluginLifecycleHooks: () => ({
     dispatchOnScheduledTaskStart: mockDispatchOnScheduledTaskStart,
     dispatchOnScheduledTaskComplete: mockDispatchOnScheduledTaskComplete,
@@ -226,6 +236,8 @@ function mockTaskStorage(initial: ScheduledTask): void {
 describe("TaskScheduler", () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockScheduledTaskHooks.hasAnyHook.mockReturnValue(false)
+    mockScheduledTaskHooks.dispatchScheduledTaskBeforeRun.mockResolvedValue(true)
     mockSchedulerDb.setTaskPromotion.mockImplementation(async (id, promotion, accepts) => {
       const current = await mockSchedulerDb.getTask(id)
       if (!current || !accepts(current)) return null
@@ -352,6 +364,157 @@ describe("TaskScheduler", () => {
     beforeEach(async () => {
       scheduler = getTaskScheduler() as TaskSchedulerImpl
       await scheduler.initialize()
+    })
+
+    describe("plugin scheduler hooks", () => {
+      it("emits committed CRUD transitions without fabricating a plugin owner", async () => {
+        const task = await scheduler.createTask({
+          name: "Ordinary task",
+          type: "test",
+          trigger: { type: "interval", intervalMs: 60_000 },
+        })
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ id: task.id, name: task.name, type: "test" })
+        )
+        expect(
+          mockScheduledTaskHooks.dispatchScheduledTaskCreate.mock.calls[0][0]
+        ).not.toHaveProperty("pluginId")
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+        await scheduler.updateTask(task.id, { name: "Updated" })
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ id: task.id, name: "Updated" }),
+          { name: "Updated" }
+        )
+        await scheduler.pauseTask(task.id)
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskPause).toHaveBeenCalledWith(task.id)
+        mockSchedulerDb.getTask.mockResolvedValue({ ...task, status: "paused" })
+        await scheduler.resumeTask(task.id)
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskResume).toHaveBeenCalledWith(task.id)
+        await scheduler.deleteTask(task.id)
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskDelete).toHaveBeenCalledWith(task.id)
+      })
+
+      it("includes import/replace and ownership transitions in the same hook path", async () => {
+        const existing = ownedTask("replaced")
+        const imported = { ...ownedTask("imported"), status: "paused" as const }
+        mockSchedulerDb.getAllTasks.mockResolvedValueOnce([existing])
+        mockSchedulerDb.getTask.mockResolvedValue(null)
+        const outcome = await scheduler.importTasks({ version: 1, tasks: [imported] }, "replace")
+        expect(outcome.imported).toBe(1)
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskDelete).toHaveBeenCalledWith(existing.id)
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskCreate).toHaveBeenCalledWith(
+          expect.objectContaining({ id: imported.id })
+        )
+        mockSchedulerDb.getTask.mockResolvedValue(existing)
+        await scheduler.setTaskOwner(existing.id, {
+          kind: "remote-host",
+          hostId: "other",
+          hostLabel: "Other host",
+          remoteItemId: "remote-task",
+          operationId: "move-task",
+          movedAt: Date.now(),
+        })
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ id: existing.id }),
+          expect.objectContaining({ status: "disabled" })
+        )
+      })
+
+      it("does not announce a failed persistence or missing mutation", async () => {
+        mockSchedulerDb.createTask.mockRejectedValueOnce(new Error("write failed"))
+        await expect(
+          scheduler.createTask({
+            name: "Failed",
+            type: "test",
+            trigger: { type: "interval", intervalMs: 60_000 },
+          })
+        ).rejects.toThrow("write failed")
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskCreate).not.toHaveBeenCalled()
+        mockSchedulerDb.getTask.mockResolvedValue(null)
+        mockSchedulerDb.deleteTask.mockResolvedValueOnce(false)
+        await scheduler.updateTask("missing", { name: "Changed" })
+        await scheduler.pauseTask("missing")
+        await scheduler.resumeTask("missing")
+        await scheduler.deleteTask("missing")
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskUpdate).not.toHaveBeenCalled()
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskPause).not.toHaveBeenCalled()
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskResume).not.toHaveBeenCalled()
+        expect(mockScheduledTaskHooks.dispatchScheduledTaskDelete).not.toHaveBeenCalled()
+      })
+
+      it("records a veto and never starts or invokes the executor", async () => {
+        const task = ownedTask("vetoed")
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+        mockScheduledTaskHooks.hasAnyHook.mockReturnValue(true)
+        mockScheduledTaskHooks.dispatchScheduledTaskBeforeRun.mockResolvedValue(false)
+        const executor = jest.fn(async () => ({ success: true }))
+        registerTaskExecutor("test", executor)
+        try {
+          const execution = await scheduler.runTaskNow(task.id)
+          expect(execution?.status).toBe("skipped")
+          expect(execution?.terminalReason).toBe("plugin-vetoed")
+          expect(executor).not.toHaveBeenCalled()
+          expect(mockDispatchOnScheduledTaskStart).not.toHaveBeenCalled()
+        } finally {
+          unregisterTaskExecutor("test")
+        }
+      })
+
+      it("cannot execute stale instructions edited while the pre-run gate is pending", async () => {
+        const task = { ...ownedTask("edited-during-gate"), payload: { prompt: "old instruction" } }
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+        mockScheduledTaskHooks.hasAnyHook.mockReturnValue(true)
+        let release!: (allowed: boolean) => void
+        mockScheduledTaskHooks.dispatchScheduledTaskBeforeRun.mockImplementationOnce(
+          () =>
+            new Promise<boolean>((resolve) => {
+              release = resolve
+            })
+        )
+        const executor = jest.fn(async () => ({ success: true }))
+        registerTaskExecutor("test", executor)
+        try {
+          const running = scheduler.runTaskNow(task.id)
+          for (let i = 0; i < 20 && !release; i++) await Promise.resolve()
+          expect(release).toBeDefined()
+          await scheduler.updateTask(
+            task.id,
+            { payload: { prompt: "new instruction" } },
+            { source: "user" }
+          )
+          release(true)
+          expect((await running)?.status).toBe("cancelled")
+          expect(executor).not.toHaveBeenCalled()
+        } finally {
+          unregisterTaskExecutor("test")
+        }
+      })
+
+      it("cannot run a deleted task after an asynchronous gate allows it", async () => {
+        const task = ownedTask("deleted-during-gate")
+        mockSchedulerDb.getTask.mockResolvedValue(task)
+        mockScheduledTaskHooks.hasAnyHook.mockReturnValue(true)
+        let release!: (allowed: boolean) => void
+        mockScheduledTaskHooks.dispatchScheduledTaskBeforeRun.mockImplementationOnce(
+          () =>
+            new Promise<boolean>((resolve) => {
+              release = resolve
+            })
+        )
+        const executor = jest.fn(async () => ({ success: true }))
+        registerTaskExecutor("test", executor)
+        try {
+          const running = scheduler.runTaskNow(task.id)
+          for (let i = 0; i < 20 && !release; i++) await Promise.resolve()
+          expect(release).toBeDefined()
+          await scheduler.deleteTask(task.id)
+          release(true)
+          expect((await running)?.status).toBe("cancelled")
+          expect(executor).not.toHaveBeenCalled()
+        } finally {
+          unregisterTaskExecutor("test")
+        }
+      })
     })
 
     describe("createTask", () => {

@@ -42,6 +42,26 @@ beforeEach(async () => {
 })
 
 describe("cleanupExpiredCallbackBindings", () => {
+  it("retains accepted pending/started work after card expiry, and reaps settled receipts", async () => {
+    await seed(
+      ["pending", "started", "settled"].map((status) =>
+        makeRow(status, {
+          kind: "wf_approve",
+          consumedAt: NOW - 100,
+          expiresAt: NOW - 1,
+          workflowDispatch: {
+            status: status as "pending" | "started" | "settled",
+            decision: "approve",
+            acceptedAt: NOW - 100,
+          },
+        })
+      )
+    )
+    expect((await cleanupExpiredCallbackBindings({ now: NOW })).total).toBe(1)
+    expect((await getDb().connectorCallbackBindings.toArray()).map((row) => row.id).sort()).toEqual(
+      ["pending", "started"]
+    )
+  })
   it("deletes rows whose expiresAt has passed", async () => {
     await seed([
       makeRow("a", { expiresAt: NOW - 1 }),

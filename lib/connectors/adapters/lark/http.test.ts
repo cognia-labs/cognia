@@ -1,5 +1,10 @@
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
+  connectorsLarkUserAuth: jest.fn(async () => ({
+    configured: true,
+    authorizationEpoch: "http-fixture",
+    accessToken: "connected-user",
+  })),
 }))
 
 jest.mock("./auth", () => ({
@@ -9,8 +14,8 @@ jest.mock("./auth", () => ({
   refreshUserToken: jest.fn(),
 }))
 
-import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
-import { clearTokenCache, getTenantAccessToken, getUserAccessToken } from "./auth"
+import { connectorsHttpRequest, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { clearTokenCache, getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
 import { LarkApiError } from "./auth-retry"
 import { classifyScopeError, larkTenantRequest, larkUserRequest } from "./http"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
@@ -24,6 +29,11 @@ const CREDS = { appId: "cli_x", appSecret: "sec" }
 
 beforeEach(() => {
   jest.clearAllMocks()
+  ;(connectorsLarkUserAuth as jest.Mock).mockReset().mockImplementation(async () => ({
+    configured: true,
+    authorizationEpoch: "http-fixture",
+    accessToken: await mUserToken("fixture"),
+  }))
   mTat.mockResolvedValue("tat-1")
   mHttp.mockResolvedValue({ status: 200, body: JSON.stringify({ code: 0, data: { ok: true } }) })
 })
@@ -107,6 +117,50 @@ describe("larkTenantRequest — body/parse edges", () => {
 })
 
 describe("larkUserRequest", () => {
+  it("does not retry a write as a replacement identity after refresh commits", async () => {
+    let state = { configured: true, authorizationEpoch: "auth-a", accessToken: "user-a" }
+    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => state)
+    mUserToken.mockImplementation(async () => state.accessToken)
+    ;(refreshUserToken as jest.Mock).mockImplementation(async () => {
+      state = { ...state, authorizationEpoch: "auth-b", accessToken: "user-b" }
+      return "refreshed-a"
+    })
+    mHttp.mockResolvedValueOnce({ status: 401, body: JSON.stringify({ code: 99991677 }) })
+    await expect(
+      larkUserRequest("fixture", CREDS, "POST", "/im/v1/messages", { text: "fixture" })
+    ).rejects.toThrow("lark_auth_stale")
+    expect(mHttp).toHaveBeenCalledTimes(1)
+  })
+
+  it("uses the token captured with the retry epoch even when another native continuation replaces the account", async () => {
+    let state = { configured: true, authorizationEpoch: "auth-a", accessToken: "user-a" }
+    let refreshFinished = false
+    ;(connectorsLarkUserAuth as jest.Mock).mockImplementation(async () => {
+      const captured = state
+      if (refreshFinished)
+        queueMicrotask(() => {
+          state = { ...state, authorizationEpoch: "auth-b", accessToken: "user-b" }
+        })
+      return captured
+    })
+    mUserToken.mockImplementation(async () => state.accessToken)
+    ;(refreshUserToken as jest.Mock).mockImplementation(async () => {
+      state = { ...state, accessToken: "refreshed-a" }
+      refreshFinished = true
+      return "refreshed-a"
+    })
+    mHttp
+      .mockResolvedValueOnce({ status: 401, body: JSON.stringify({ code: 99991677 }) })
+      .mockResolvedValueOnce({ status: 200, body: JSON.stringify({ code: 0, data: {} }) })
+    await expect(
+      larkUserRequest("fixture", CREDS, "POST", "/im/v1/messages", { text: "fixture" })
+    ).rejects.toThrow("lark_auth_stale")
+    expect(state.authorizationEpoch).toBe("auth-b")
+    expect(mHttp.mock.calls.map(([request]) => request.headers.Authorization)).toEqual([
+      "Bearer user-a",
+      "Bearer refreshed-a",
+    ])
+  })
   it("returns null when the adapter has no stored user token", async () => {
     mUserToken.mockResolvedValue(null)
     expect(await larkUserRequest("a1", CREDS, "GET", "/search/v1/user?query=x")).toBeNull()

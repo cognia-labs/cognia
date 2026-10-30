@@ -29,10 +29,11 @@
  */
 
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
-import { connectorsKeyringGet, connectorsKeyringSet } from "@/lib/connectors/tauri/commands"
+import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { emitCredentialsRotated } from "@/lib/connectors/credentials-events"
 import { recordGrantedScopes, type ConnectedScopes } from "@/lib/connectors/oauth-scope-audit"
-import { clearUserTokenCache, exchangeCodeForUserAccessToken, fetchLarkUserInfo } from "./auth"
-import { clearLarkOAuthPending, getLarkOAuthPending } from "./oauth-pending"
+import { exchangeCodeForUserAccessToken, fetchLarkUserInfo } from "./auth"
+import { getLarkOAuthPending } from "./oauth-pending"
 
 // ---------------------------------------------------------------------------
 // State encoding: `lark:<adapterId>:<nonce>`
@@ -120,6 +121,8 @@ export async function handleLarkOAuth(
     throw new Error(`Lark OAuth: adapter ${adapterId} is not a Lark adapter (type=${adapter.type})`)
   }
 
+  const captured = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
+
   // ── Step 2: pull credentials from keyring (appId + appSecret both live in
   // the OS keyring — settings never carries them; the adapter runtime resolves
   // them the same way) ───────────────────────────────────────────────────
@@ -144,6 +147,9 @@ export async function handleLarkOAuth(
     )
   }
 
+  if (pending.authorizationEpoch !== captured.authorizationEpoch) {
+    throw new Error("lark_auth_stale")
+  }
   // ── Step 4: exchange the code for a user token (v2), then resolve identity
   const tokens = await exchangeCodeForUserAccessToken({
     code,
@@ -155,14 +161,16 @@ export async function handleLarkOAuth(
   const userInfo = await fetchLarkUserInfo(tokens.accessToken)
 
   // ── Step 5: persist tokens in keyring ──────────────────────────────────
-  await connectorsKeyringSet(adapterId, "user_token", tokens.accessToken)
-  await connectorsKeyringSet(adapterId, "user_refresh_token", tokens.refreshToken)
-  // The in-memory cache in `auth.ts` holds a cold keyring read with no known
-  // expiry, and `getUserAccessToken` serves such an entry indefinitely. Without
-  // this eviction a re-authorization (new scopes, a different user) kept
-  // sending as the PREVIOUS token for the rest of the process lifetime —
-  // visible only as "the new scope still isn't working" until a restart.
-  clearUserTokenCache(adapterId)
+  await connectorsLarkUserAuth({
+    action: "authorize",
+    adapterId,
+    expectedAuthorizationEpoch: pending.authorizationEpoch,
+    pendingState: deps.state,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    accountLabel: userInfo.name || userInfo.openId,
+    scopes: tokens.scope,
+  })
 
   // ── Step 6: stamp connected-user metadata ─────────────────────────────
   const now = Date.now()
@@ -201,8 +209,9 @@ export async function handleLarkOAuth(
     },
   })
 
-  // Clear-on-use: the pending authorization (PKCE verifier + redirect) is spent.
-  await clearLarkOAuthPending(adapterId)
+  // Native publication consumed the exact pending state atomically with the
+  // authorization fence. Reload display metadata after its separate DB write.
+  emitCredentialsRotated(adapterId)
 
   return connectedUser
 }

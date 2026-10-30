@@ -18,6 +18,11 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: (input: unknown) => mockHttp(input),
   connectorsKeyringGet: (adapterId: string, credential: string) =>
     mockKeyringGet(adapterId, credential),
+  connectorsLarkUserAuth: jest.fn(async (input) =>
+    input.action === "snapshot"
+      ? { authorizationEpoch: "auth-a" }
+      : { authorizationEpoch: "auth-b", accessToken: input.accessToken }
+  ),
   connectorsKeyringSet: (adapterId: string, credential: string, value: string) =>
     mockKeyringSet(adapterId, credential, value),
 }))
@@ -30,7 +35,8 @@ jest.mock("./oauth-pending", () => ({
 }))
 
 import { buildLarkOAuthState, parseLarkOAuthState, handleLarkOAuth } from "./oauth-handler"
-import { clearUserTokenCache, getUserAccessToken } from "./auth"
+import { getUserAccessToken } from "./auth"
+import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
 
 const mockGetAdapter = getAdapterInstance as jest.Mock
@@ -60,6 +66,7 @@ function primePending(state: string) {
     codeVerifier: "verifier-1",
     redirectUri: REDIRECT,
     ts: Date.now(),
+    authorizationEpoch: "auth-a",
   })
 }
 
@@ -156,8 +163,17 @@ describe("handleLarkOAuth — happy path", () => {
     expect(result.expiresAtMs).toBeLessThanOrEqual(after + 7200 * 1000)
 
     // Tokens persisted in keyring.
-    expect(mockKeyringSet).toHaveBeenCalledWith("lk-1", "user_token", "u-access-789")
-    expect(mockKeyringSet).toHaveBeenCalledWith("lk-1", "user_refresh_token", "u-refresh-abc")
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "authorize",
+        adapterId: "lk-1",
+        expectedAuthorizationEpoch: "auth-a",
+        pendingState: state,
+        accessToken: "u-access-789",
+        refreshToken: "u-refresh-abc",
+      })
+    )
+    expect(mockKeyringSet).not.toHaveBeenCalled()
 
     // Adapter row stamped with connectedUser and the credentials ref
     // gained the two new account names.
@@ -170,8 +186,8 @@ describe("handleLarkOAuth — happy path", () => {
       expect.arrayContaining(["appSecret", "user_token", "user_refresh_token"])
     )
 
-    // Pending authorization is cleared on success.
-    expect(mockClearPending).toHaveBeenCalledWith("lk-1")
+    // Native publication consumes the checked pending state; no delayed renderer delete.
+    expect(mockClearPending).not.toHaveBeenCalled()
   })
 
   it("v2 token endpoint gets client creds + PKCE verifier + the pending redirect_uri", async () => {
@@ -273,14 +289,22 @@ describe("handleLarkOAuth — error paths", () => {
   })
 })
 
-describe("handleLarkOAuth — in-memory user-token cache", () => {
-  // `auth.ts` caches a cold keyring read with no known expiry, and
-  // `getUserAccessToken` serves such an entry for the whole process lifetime.
-  // Re-authorizing therefore has to evict it, or every later send keeps using
-  // the token from before the re-authorization.
-  afterEach(() => clearUserTokenCache("lk-1"))
+describe("handleLarkOAuth — cross-window token reads", () => {
+  it("cannot revive a pending authorization begun before revocation", async () => {
+    const state = buildLarkOAuthState("lk-1", "pre-revoke")
+    primePending(state)
+    mockGetAdapter.mockResolvedValue(makeAdapterRow())
+    ;(connectorsLarkUserAuth as jest.Mock).mockResolvedValueOnce({
+      authorizationEpoch: "revoked-epoch",
+    })
+    await expect(handleLarkOAuth("old-code", { state })).rejects.toThrow("lark_auth_stale")
+    expect(mockHttp).not.toHaveBeenCalled()
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalledWith(
+      expect.objectContaining({ action: "authorize" })
+    )
+  })
 
-  it("evicts the previous token so a re-authorization takes effect immediately", async () => {
+  it("reads the host token again after another authorization", async () => {
     mockKeyringGet.mockImplementation(async (_id: string, cred: string) =>
       cred === "appId"
         ? "cli_test123"
@@ -290,7 +314,7 @@ describe("handleLarkOAuth — in-memory user-token cache", () => {
             ? "u-access-OLD"
             : null
     )
-    // Warm the cache the way a live send would.
+    // Read once before the authorization, as another window may have done.
     await expect(getUserAccessToken("lk-1")).resolves.toBe("u-access-OLD")
 
     const state = buildLarkOAuthState("lk-1", "nonce-1")
@@ -301,7 +325,9 @@ describe("handleLarkOAuth — in-memory user-token cache", () => {
     await handleLarkOAuth("code-1", { state })
 
     // The keyring now holds what the exchange wrote.
-    expect(mockKeyringSet).toHaveBeenCalledWith("lk-1", "user_token", "u-access-789")
+    expect(connectorsLarkUserAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "authorize", accessToken: "u-access-789" })
+    )
     mockKeyringGet.mockImplementation(async (_id: string, cred: string) =>
       cred === "user_token" ? "u-access-789" : null
     )

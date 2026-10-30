@@ -130,7 +130,7 @@ export async function registerDingTalkConnection(
       resp.status
     )
   }
-  if (!parsed.endpoint || !parsed.ticket) {
+  if (resp.status < 200 || resp.status >= 300 || !parsed.endpoint || !parsed.ticket) {
     throw new DingTalkRegisterError(
       `DingTalk gateway register failed: ${parsed.message ?? resp.body.slice(0, 200)}`,
       resp.status
@@ -169,7 +169,9 @@ export function startDingTalkStream(opts: DingTalkStreamOptions): DingTalkStream
       let url: string
       try {
         const clientId = await opts.clientId()
+        if (opts.signal.aborted) return
         const clientSecret = await opts.clientSecret()
+        if (opts.signal.aborted) return
         const { endpoint, ticket } = await registerDingTalkConnection(
           clientId,
           clientSecret,
@@ -193,6 +195,7 @@ export function startDingTalkStream(opts: DingTalkStreamOptions): DingTalkStream
         continue
       }
 
+      if (opts.signal.aborted) return
       let handleId: string
       try {
         handleId = await connectorsWsOpen(url)
@@ -208,13 +211,26 @@ export function startDingTalkStream(opts: DingTalkStreamOptions): DingTalkStream
         continue
       }
 
-      if (opts.signal.aborted) return
+      if (opts.signal.aborted) {
+        await connectorsWsClose(handleId).catch(() => {})
+        return
+      }
       attempts = 0
       opts.onTransportState?.({ kind: "connected" })
 
       const queue: string[] = []
       let wakeResolve: (() => void) | null = null
       let wsEnded = false
+      let unlisten: (() => void) | undefined
+      let unlistenClose: (() => void) | undefined
+      let closePromise: Promise<void> | undefined
+      const closeSocket = () => (closePromise ??= connectorsWsClose(handleId).catch(() => {}))
+      const disposeListeners = () => {
+        unlisten?.()
+        unlisten = undefined
+        unlistenClose?.()
+        unlistenClose = undefined
+      }
 
       // Liveness watchdog: DingTalk pushes SYSTEM pings regularly, so a socket
       // with zero inbound traffic for the timeout window is half-open — close
@@ -228,34 +244,38 @@ export function startDingTalkStream(opts: DingTalkStreamOptions): DingTalkStream
           wsEnded = true
           wakeResolve?.()
           wakeResolve = null
-          void connectorsWsClose(handleId).catch(() => {})
+          void closeSocket()
         }, pingTimeoutMs)
       }
-      armWatchdog()
-
-      const unlisten = await connectorListen<string>(
-        `connectors://ws/${handleId}/message`,
-        (event) => {
-          armWatchdog()
-          queue.push(event.payload)
-          wakeResolve?.()
-          wakeResolve = null
-        }
-      )
-      const unlistenClose = await connectorListen<void>(`connectors://ws/${handleId}/close`, () => {
-        wsEnded = true
-        wakeResolve?.()
-        wakeResolve = null
-      })
       const abortHandler = () => {
         wsEnded = true
+        if (watchdog) clearTimeout(watchdog)
         wakeResolve?.()
         wakeResolve = null
-        void connectorsWsClose(handleId).catch(() => {})
+        void closeSocket()
+        disposeListeners()
       }
       opts.signal.addEventListener("abort", abortHandler)
 
       try {
+        if (opts.signal.aborted) {
+          abortHandler()
+          return
+        }
+        unlisten = await connectorListen<string>(`connectors://ws/${handleId}/message`, (event) => {
+          armWatchdog()
+          queue.push(event.payload)
+          wakeResolve?.()
+          wakeResolve = null
+        })
+        if (opts.signal.aborted) return
+        unlistenClose = await connectorListen<void>(`connectors://ws/${handleId}/close`, () => {
+          wsEnded = true
+          wakeResolve?.()
+          wakeResolve = null
+        })
+        if (opts.signal.aborted) return
+        armWatchdog()
         while (!wsEnded && !opts.signal.aborted) {
           if (queue.length === 0) {
             await new Promise<void>((r) => {
@@ -325,9 +345,8 @@ export function startDingTalkStream(opts: DingTalkStreamOptions): DingTalkStream
       } finally {
         if (watchdog) clearTimeout(watchdog)
         opts.signal.removeEventListener("abort", abortHandler)
-        unlisten()
-        unlistenClose()
-        if (!opts.signal.aborted) void connectorsWsClose(handleId).catch(() => {})
+        disposeListeners()
+        await closeSocket()
       }
 
       if (opts.signal.aborted) return

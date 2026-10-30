@@ -1,3 +1,10 @@
+import { conversationAutomationState, waitForConversationAutomation } from "./automation-control"
+import {
+  captureSystemDeliveryContext,
+  systemEventAuditFields,
+  capturedSystemAuditKind,
+} from "./event-context"
+import { validateOutboundFeatures } from "./outbound-features"
 import { settleApprovalCard, type ApprovalCardState } from "./hitl/approval-card-state"
 /**
  * ConnectorBus singleton — Tasks 25 & 28.
@@ -42,7 +49,8 @@ import type {
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { readForResolution, setStatus, setSlaDue } from "@/lib/db/conversation-overrides"
 import { computeDueAt } from "@/lib/connectors/sla"
-import { findSessionByConversationKey } from "./session-bindings"
+import { findSessionByConversationKey, findActiveSessionForConversation } from "./session-bindings"
+import { restrictQueuedImPermissions } from "./permission-resolve"
 import { upsertIdentity } from "@/lib/db/platform-identities"
 import { getCharacter } from "@/lib/db/characters"
 import { getDb } from "@/lib/db/schema"
@@ -80,6 +88,7 @@ import {
 import { resolveBinding, type ResolvedBinding } from "./policy-resolve"
 import { routeInboundFromComposition, toRouteDecision, type RouteDecision } from "./mode-router"
 import { resolveImEffectiveConfig } from "./effective-config"
+import { narrowAuthority, narrowAutonomy } from "@cognia/agent-config-types/agent-composition"
 import { recordConnectorRouteGovernance } from "@/lib/governance/producers/connector"
 import { findMatchingWorkflows } from "@/lib/workflow/runtime/trigger-subscriptions"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
@@ -99,6 +108,9 @@ import {
   claimConnectorInboundJob,
   bindConnectorInboundJobExecutionRun,
   completeConnectorInboundJob,
+  acceptConnectorAutomationFanOut,
+  settleConnectorAutomationFanOut,
+  listPendingConnectorAutomationFanOuts,
   ensureConnectorInboundJob,
   listRecoverableConnectorInboundJobs,
   markConnectorInboundJobHistoryOnly,
@@ -117,7 +129,11 @@ import { classifySiblingSender, type SiblingClassification } from "./sibling-bot
 import { applyMediaModelGate, resolveMediaModelPolicy } from "./media-model-gate"
 import { consumeSiblingInterplayBudget, DEFAULT_BOT_INTERPLAY_BUDGET } from "./at-gate"
 import { observeUnmentionedDeliveryProbe } from "./at-gate"
-import { connectorOccurrenceKey, deliveryTargetFromEvent } from "@/types/connectors/event"
+import {
+  connectorOccurrenceKey,
+  deliveryTargetFromEvent,
+  isConnectorSystemEventKind,
+} from "@/types/connectors/event"
 import {
   refreshConnectorConversationDeliveryTarget,
   stampConnectorConversationPrincipal,
@@ -146,6 +162,11 @@ export interface BusInboundHandler {
 
 export interface RouteHandlerContext {
   inboundJobId: string
+  acceptedPolicy?: {
+    adapter: AdapterInstanceRow
+    override: ConversationOverrideRow | null
+    resolved: ResolvedBinding
+  }
   bindExecutionRun(executionRunId: string): Promise<void>
 }
 
@@ -285,6 +306,8 @@ export class ConnectorBus {
    * mistake — the two are independent consumers of the same event, so they get
    * independent lanes and keep only per-conversation ordering.
    */
+  private automationFanOutInFlight = new Set<string>()
+  private automationPumpBusy = false
   private fanOutQueues = new Map<string, { tail: Promise<void>; depth: number }>()
 
   /**
@@ -345,7 +368,7 @@ export class ConnectorBus {
   private notifyInboundObservers(event: NormalizedInboundEvent): void {
     for (const observer of this.inboundObservers) {
       try {
-        observer(event)
+        observer(structuredClone(event))
       } catch {
         // A throwing plugin observer must never break inbound routing.
       }
@@ -375,7 +398,7 @@ export class ConnectorBus {
   ): void {
     for (const observer of this.callbackObservers) {
       try {
-        observer(event, boundConversationKey)
+        observer(structuredClone(event), boundConversationKey)
       } catch {
         // A throwing plugin observer must never break callback routing.
       }
@@ -511,7 +534,42 @@ export class ConnectorBus {
         }).catch(() => undefined)
       }
     }
+    await this.resumeAutomationFanOuts()
     return { resumed: jobs.length, recoveryRequired }
+  }
+
+  /** Replay only observers; a completed responder must never be run again. */
+  async resumeAutomationFanOuts(
+    ownsAdapter?: (id: string) => boolean | Promise<boolean>
+  ): Promise<void> {
+    if (this.automationPumpBusy) return
+    this.automationPumpBusy = true
+    try {
+      const owned = new Set<string>()
+      for (const adapterId of this.adapters.keys()) {
+        if (!ownsAdapter || (await ownsAdapter(adapterId))) owned.add(adapterId)
+      }
+      const reserved = new Map<string, number>()
+      const jobs = await listPendingConnectorAutomationFanOuts(
+        MAX_TURN_QUEUE_DEPTH,
+        this.automationFanOutInFlight,
+        (job) => {
+          if (!owned.has(job.adapterId)) return false
+          const depth =
+            reserved.get(job.conversationKey) ??
+            this.fanOutQueues.get(job.conversationKey)?.depth ??
+            0
+          if (depth >= MAX_TURN_QUEUE_DEPTH) return false
+          reserved.set(job.conversationKey, depth + 1)
+          return true
+        }
+      )
+      for (const job of jobs) {
+        this.enqueueWorkflowFanOut(job.event, null, job.automationFanOut!.acceptedAt, job.id)
+      }
+    } finally {
+      this.automationPumpBusy = false
+    }
   }
 
   /**
@@ -582,7 +640,15 @@ export class ConnectorBus {
   ): Promise<void> {
     const now = Date.now()
 
-    // Passive plugin observers see every event up front (read-only tap).
+    // Capture provider authority before untrusted observers run. Each observer
+    // receives an isolated copy and cannot change another consumer's event.
+    if (
+      event.kind === "system" &&
+      !(await captureSystemDeliveryContext(event, {
+        onDeliveryConfirmed: (key) => this.recordBotReply(key),
+      }))
+    )
+      return
     this.notifyInboundObservers(event)
 
     // ── Edit / Delete / System short-circuit ─────────────────────────────────
@@ -1316,7 +1382,23 @@ export class ConnectorBus {
     // FIFO preserves same-conversation ordering, lets other conversations run
     // in parallel, and frees the loop so `dispatchConnectorCallback` (approval
     // clicks) executes while a turn is suspended.
-    if (this.routeHandler && decision !== "drop") {
+    // Preserve the accepted consumer across restart, even if a responder was
+    // installed after an observer-only job entered the durable queue.
+    let responderOwnsJob =
+      Boolean(this.routeHandler) && !inboundJob.automationFanOut?.completeJobOnSettle
+    const automationAccepted =
+      !evalResult.blocked &&
+      decision !== "drop" &&
+      (await acceptConnectorAutomationFanOut(inboundJob.id, {
+        completeJobOnSettle: !responderOwnsJob,
+      }))
+    if (responderOwnsJob) {
+      // Recovery may have collected its snapshot before another pipeline
+      // committed observer-only intake. The durable owner wins that race.
+      const committed = await getDb().connectorInboundJobs.get(inboundJob.id)
+      responderOwnsJob = Boolean(committed && !committed.automationFanOut?.completeJobOnSettle)
+    }
+    if (responderOwnsJob && decision !== "drop") {
       await this.enqueueRouteHandlerTurn(
         inboundJob.id,
         event,
@@ -1341,29 +1423,15 @@ export class ConnectorBus {
     // When no route handler owns this job, the fan-out is its only consumer, so
     // the durable completion rides the same chain — a crash mid-workflow must
     // still leave the job resumable by `resumeDurableInboundJobs`.
-    if (!evalResult.blocked && decision !== "drop") {
-      const fanOutQueued = this.enqueueWorkflowFanOut(
+    if (automationAccepted) {
+      this.enqueueWorkflowFanOut(
         event,
-        this.routeHandler ? null : inboundJob.id
+        responderOwnsJob ? null : inboundJob.id,
+        inboundJob.createdAt,
+        inboundJob.id
       )
-      if (!fanOutQueued && !this.routeHandler) {
-        await markConnectorInboundJobHistoryOnly(inboundJob.id, "pending_limit_exceeded")
-      }
-
-      // Step 11.5 — Bot fan-out.
-      //
-      // A sibling of the workflow fan-out, not of the route handler: step 10
-      // decides who RUNS this turn, and an `interaction`-trigger Bot is an
-      // observer of a turn that has already been routed.
-      //
-      // It has to sit below the sibling-bot guard (step 9.6), which returns
-      // outright when it suppresses. Dispatching above it would let a bot the
-      // guard just refused drive a Bot loop, and would spend the per-chat
-      // interplay budget on a path the guard had already closed.
-      //
-      // Best-effort and never awaited into the caller's failure path, the same
-      // contract `lib/integrations/events.ts` gives the same plane.
-      void this.dispatchBotFanOut(event)
+    } else if (!responderOwnsJob) {
+      await completeConnectorInboundJob(inboundJob.id, { now: Date.now() })
     }
   }
 
@@ -1374,19 +1442,24 @@ export class ConnectorBus {
    * control plane's module graph on every message, and swallowed entirely: the
    * conversation already has its answer by the time this runs.
    */
-  private async dispatchBotFanOut(event: NormalizedInboundEvent): Promise<void> {
+  private async dispatchBotFanOut(
+    event: NormalizedInboundEvent,
+    acceptedAt: number
+  ): Promise<boolean> {
     try {
       const { dispatchConnectorInboundToBots } = await import("@/lib/bot/sources/connector-inbound")
-      await dispatchConnectorInboundToBots({ event })
+      const result = await dispatchConnectorInboundToBots({ event, acceptedAt })
+      return !result?.deferred
     } catch {
-      // A Bot that cannot be routed must not take the conversation down.
+      // The durable observer receipt retries this transfer after recovery.
+      return false
     }
   }
 
   /**
    * Chain a workflow fan-out onto the conversation's fan-out FIFO and return
    * immediately. Depth is capped at {@link MAX_TURN_QUEUE_DEPTH} (the same bound
-   * the turn queue uses); beyond it the fan-out is dropped with an audit rather
+   * the turn queue uses); beyond it the durable receipt waits with an audit rather
    * than growing without limit. Entries are deleted once their tail settles.
    *
    * `completeJobId` is the inbound job to mark processed after the fan-out
@@ -1394,8 +1467,11 @@ export class ConnectorBus {
    */
   private enqueueWorkflowFanOut(
     event: NormalizedInboundEvent,
-    completeJobId: string | null
+    completeJobId: string | null,
+    acceptedAt: number,
+    jobId: string
   ): boolean {
+    if (this.automationFanOutInFlight.has(jobId)) return true
     const key = event.conversationKey
     let queue = this.fanOutQueues.get(key)
     if (!queue) {
@@ -1409,13 +1485,30 @@ export class ConnectorBus {
         at: Date.now(),
         conversationKey: key,
         reason: "workflow_fanout_queue_overflow",
-        message: `dropped workflow fan-out for message ${event.messageId} (${queue.depth} fan-outs queued)`,
+        message: `deferred workflow fan-out for message ${event.messageId} (${queue.depth} fan-outs queued)`,
       }).catch(() => undefined)
       return false
     }
     queue.depth += 1
+    this.automationFanOutInFlight.add(jobId)
+    let settled = false
     const step: Promise<void> = queue.tail
-      .then(() => this.fanOutWorkflowTriggers(event))
+      .then(async () => {
+        while (await waitForConversationAutomation(event.conversationKey, acceptedAt)) {
+          const [workflows, bots] = await Promise.allSettled([
+            this.fanOutWorkflowTriggers(event, acceptedAt),
+            this.dispatchBotFanOut(event, acceptedAt),
+          ])
+          if (workflows.status === "rejected") throw workflows.reason
+          if (bots.status === "rejected") throw bots.reason
+          if (bots.value) break
+          const state = await conversationAutomationState(event.conversationKey, acceptedAt)
+          if (!state.paused && !state.cancelled)
+            throw new Error("Bot observer transfer needs recovery")
+        }
+        await settleConnectorAutomationFanOut(jobId)
+        settled = true
+      })
       .then(() =>
         completeJobId ? completeConnectorInboundJob(completeJobId, { now: Date.now() }) : undefined
       )
@@ -1426,9 +1519,11 @@ export class ConnectorBus {
         console.error("[connector-bus] workflow fan-out chain failed", err)
       })
       .then(() => {
+        this.automationFanOutInFlight.delete(jobId)
         if (this.fanOutQueues.get(key) !== queue) return
         queue.depth -= 1
         if (queue.depth === 0 && queue.tail === step) this.fanOutQueues.delete(key)
+        if (settled && queue.depth === 0) void this.resumeAutomationFanOuts().catch(() => undefined)
       })
     queue.tail = step
     return true
@@ -1515,6 +1610,19 @@ export class ConnectorBus {
       await updateConnectorInboundJobPayload(inboundJobId, event, "steer")
     }
     const isFirst = queue.depth === 0
+    if (!isFirst && !override?.activeSessionId) {
+      const session = await findActiveSessionForConversation(key, override ?? undefined)
+      if (session)
+        override = {
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          id: override?.id ?? `queued:${inboundJobId}`,
+          conversationKey: key,
+          sessionId: session.id,
+          ...override,
+          activeSessionId: session.id,
+        }
+    }
     queue.depth += 1
     const previousTail = queue.tail
     const started = isFirst
@@ -1548,7 +1656,8 @@ export class ConnectorBus {
     decision: RouteDecision,
     resolved: ResolvedBinding,
     override: ConversationOverrideRow | null,
-    adapterRow: AdapterInstanceRow
+    adapterRow: AdapterInstanceRow,
+    acceptedPolicy?: RouteHandlerContext["acceptedPolicy"]
   ): Promise<{ completion: Promise<void> }> {
     const claimed = await claimConnectorInboundJob(inboundJobId, {
       leaseOwner: `connector-bus:${crypto.randomUUID()}`,
@@ -1559,6 +1668,7 @@ export class ConnectorBus {
     try {
       const context: RouteHandlerContext = {
         inboundJobId,
+        ...(acceptedPolicy ? { acceptedPolicy } : {}),
         bindExecutionRun: async (executionRunId) => {
           const bound = await bindConnectorInboundJobExecutionRun(inboundJobId, executionRunId)
           if (!bound) throw new Error(`Inbound job ${inboundJobId} is no longer running`)
@@ -1594,13 +1704,108 @@ export class ConnectorBus {
     override: ConversationOverrideRow | null,
     adapterRow: AdapterInstanceRow
   ): Promise<void> {
+    const acceptedPolicy = { adapter: adapterRow, override, resolved }
+    try {
+      const currentAdapter = await getAdapterInstance(event.adapterId)
+      if (!currentAdapter?.enabled) {
+        await markConnectorInboundJobHistoryOnly(inboundJobId, "adapter_disabled", {
+          now: Date.now(),
+        })
+        return
+      }
+      const currentOverride = (await readForResolution(event.conversationKey)) ?? null
+      const character = resolved.characterId
+        ? ((await getCharacter(resolved.characterId)) ?? null)
+        : null
+      const currentBinding = resolveBinding({
+        adapter: currentAdapter,
+        character,
+        override: currentOverride,
+      })
+      const axes = (
+        adapter: AdapterInstanceRow,
+        conv: ConversationOverrideRow | null,
+        binding: ResolvedBinding
+      ) =>
+        resolveImEffectiveConfig({
+          adapter,
+          override: conv,
+          rule: null,
+          system: {
+            mode: binding.mode,
+            characterId: resolved.characterId,
+            modeSource:
+              binding.modeSource === "conversation-override" ? undefined : binding.modeSource,
+          },
+        })
+      const accepted = axes(adapterRow, override, resolved)
+      const current = axes(currentAdapter, currentOverride, currentBinding)
+      // Dequeue is a new execution boundary. Honor revocations without widening
+      // the authority/autonomy accepted for this source or moving its session.
+      const refreshedOverride: ConversationOverrideRow = {
+        id: currentOverride?.id ?? override?.id ?? `queued:${inboundJobId}`,
+        conversationKey: event.conversationKey,
+        sessionId: currentOverride?.sessionId ?? override?.sessionId ?? "",
+        createdAt: override?.createdAt ?? Date.now(),
+        updatedAt: currentOverride?.updatedAt ?? Date.now(),
+        ...currentOverride,
+        activeSessionId: override?.activeSessionId,
+        autonomy: narrowAutonomy(accepted.autonomy.effective, current.autonomy.effective),
+        authority: (accepted.authority.effective
+          ? narrowAuthority(accepted.authority.effective, current.authority.effective)
+          : current.authority.effective) as ConversationOverrideRow["authority"],
+        engagement:
+          accepted.engagement.effective === "human" || current.engagement.effective === "human"
+            ? "human"
+            : current.engagement.effective,
+      }
+      const evalResult =
+        JSON.stringify(resolved.trigger) === JSON.stringify(currentBinding.trigger)
+          ? { matched: decision === "ai-run" || decision === "draft-prepare", blocked: false }
+          : evaluatePolicy(currentBinding.trigger, event, this.policyState, Date.now())
+      const latestDecision = toRouteDecision(
+        routeInboundFromComposition({
+          engagement: refreshedOverride.engagement!,
+          autonomy: refreshedOverride.autonomy!,
+          evalResult,
+          storeUnmatchedInDraftMode: currentBinding.trigger.storeUnmatchedInDraftMode,
+        })
+      )
+      if (decision === "ai-run" || decision === "draft-prepare") {
+        decision =
+          decision === "draft-prepare" && latestDecision === "ai-run" ? decision : latestDecision
+      }
+      const restricted = restrictQueuedImPermissions(
+        adapterRow,
+        override,
+        currentAdapter,
+        refreshedOverride
+      )
+      adapterRow = restricted.adapter
+      override = restricted.override
+      resolved = { ...currentBinding, characterId: resolved.characterId }
+      // A media grant can be revoked while the event is queued as well.
+      applyMediaModelGate(
+        event,
+        resolveMediaModelPolicy({
+          adapter: adapterRow,
+          override,
+          adapterDefaultProvider: adapterRow.defaultProvider,
+          now: Date.now(),
+        })
+      )
+    } catch (error) {
+      await this.handleRouteHandlerFailure(inboundJobId, event, error)
+      return
+    }
     const { completion } = await this.startRouteHandlerTurn(
       inboundJobId,
       event,
       decision,
       resolved,
       override,
-      adapterRow
+      adapterRow,
+      acceptedPolicy
     )
     await completion
   }
@@ -2151,13 +2356,7 @@ export class ConnectorBus {
     if (sk === "read_indicator") kind = "inbound.read_indicator"
     else if (sk === "member_added") kind = "inbound.member_added"
     else if (sk === "member_removed") kind = "inbound.member_removed"
-    else if (
-      sk === "reaction_added" ||
-      sk === "reaction_removed" ||
-      sk === "poke" ||
-      sk === "request" ||
-      sk === "lifecycle"
-    ) {
+    else if (isConnectorSystemEventKind(sk)) {
       // Gesture-class system events (a reaction on every emoji, a poke, a
       // join request, a bot lifecycle change). They carry no message body and
       // never enter the AI turn; they get their own audit kind and fan out to
@@ -2170,21 +2369,14 @@ export class ConnectorBus {
           : undefined
       const emojiSeg = event.segments.find((seg) => seg.type === "emoji")
       const emoji = emojiSeg && emojiSeg.type === "emoji" ? emojiSeg.code : undefined
-      await appendAudit({
-        adapterId: event.adapterId,
-        kind: `inbound.${sk}`,
-        at: now,
-        conversationKey: event.conversationKey,
-        fields: {
-          systemKind: sk,
-          actorOpenId: event.sender.remoteUserId,
-          ...(targetMessageId ? { targetMessageId } : {}),
-          ...(targetDeliveredByUs !== undefined ? { targetDeliveredByUs } : {}),
-          ...(emoji ? { emoji } : {}),
-          rawType: (event.raw as { header?: { event_type?: string } } | undefined)?.header
-            ?.event_type,
-        },
-      })
+      if (!capturedSystemAuditKind(event))
+        await appendAudit({
+          adapterId: event.adapterId,
+          kind: `inbound.${sk}`,
+          at: now,
+          conversationKey: event.conversationKey,
+          fields: systemEventAuditFields(event, targetDeliveredByUs),
+        })
       // A reaction on a message we hold lands on that row too (ADR-0177
       // batch 2), so the renderer and the room transcript see it. Best-effort:
       // the audit row above is already the record of the event itself.
@@ -2260,6 +2452,9 @@ export class ConnectorBus {
     systemKind: NonNullable<NormalizedInboundEvent["systemKind"]>,
     targetDeliveredByUs: boolean | undefined
   ): Promise<void> {
+    const acceptedAt = Date.now()
+    const state = await conversationAutomationState(event.conversationKey, acceptedAt)
+    if (state.paused || state.cancelled) return
     let matches: Array<{ workflowId: string; nodeId: string; params: Record<string, unknown> }> = []
     try {
       matches = findMatchingWorkflows("trigger.connector.system", {
@@ -2281,7 +2476,7 @@ export class ConnectorBus {
       return
     }
     if (matches.length === 0) return
-    const originAt = Date.now()
+    const originAt = acceptedAt
     // No occurrence key: a gesture's id is the adapter's own construction, not
     // a platform message id, and nothing deduplicates on it, so a second
     // identical reaction can share it. Keyed, it would be folded into the
@@ -2318,7 +2513,10 @@ export class ConnectorBus {
    * workflow. Failures in one workflow don't break the others or the
    * bus — we collect rejections and log them once.
    */
-  private async fanOutWorkflowTriggers(event: NormalizedInboundEvent): Promise<void> {
+  private async fanOutWorkflowTriggers(
+    event: NormalizedInboundEvent,
+    acceptedAt: number
+  ): Promise<void> {
     let matches: Array<{ workflowId: string; nodeId: string; params: Record<string, unknown> }> = []
     try {
       matches = findMatchingWorkflows("trigger.connector.inbound", {
@@ -2343,11 +2541,11 @@ export class ConnectorBus {
         reason: "workflow_match_failed",
         message: err instanceof Error ? err.message : String(err),
       }).catch(() => undefined)
-      return
+      throw err
     }
     if (matches.length === 0) return
 
-    const originAt = Date.now()
+    const originAt = acceptedAt
     // Keyed on the platform's message, not on the second it arrived in: two
     // messages in one second are two runs, and a message replayed after a
     // restart is still one (ADR-0224 A9).
@@ -2379,9 +2577,14 @@ export class ConnectorBus {
           message: err instanceof Error ? err.message : String(err),
           fields: { workflowId: m.workflowId, nodeId: m.nodeId },
         })
+        throw err
       }
     })
-    await Promise.all(dispatches)
+    // Wait for every sibling before advancing this conversation's FIFO. A
+    // failed transfer keeps the durable observer receipt available to retry.
+    const results = await Promise.allSettled(dispatches)
+    const failed = results.find((result) => result.status === "rejected")
+    if (failed?.status === "rejected") throw failed.reason
   }
 
   async sendOutbound(adapterId: string, req: OutboundRequest): Promise<OutboundResult> {
@@ -2399,6 +2602,8 @@ export class ConnectorBus {
       })
       return result
     }
+    const unsupportedFeature = validateOutboundFeatures(a, req)
+    if (unsupportedFeature) return unsupportedFeature
     if (
       req.metadata.larkEphemeral !== undefined &&
       (a.meta.type !== "lark" ||
@@ -2759,6 +2964,15 @@ export class ConnectorBus {
   async streamReplyOutbound(adapterId: string, req: StreamReplyRequest): Promise<boolean> {
     const a = this.adapters.get(adapterId)
     if (!a || !a.streamReply) return false
+    if (
+      validateOutboundFeatures(a, {
+        conversationRef: req.conversationRef,
+        segments: [{ type: "markdown", md: req.text }],
+        sendOptions: req.sendOptions,
+        metadata: { idempotencyKey: req.streamKey ?? "stream" },
+      })
+    )
+      return false
     await a.streamReply(req)
     return true
   }
@@ -3074,7 +3288,7 @@ export class ConnectorBus {
     }
 
     if (authDecision.allowed && authDecision.consume) {
-      await authDecision.consume()
+      await authDecision.consume({ deliveryTarget: event.deliveryTarget })
     }
 
     if (isRunControl) {
@@ -3252,6 +3466,7 @@ export class ConnectorBus {
         const { handleWorkflowApprovalCallback } =
           await import("@/lib/a2ui/workflow-approval-handler")
         await handleWorkflowApprovalCallback({
+          authorizationMode: authDecision.mode,
           binding: resolvedBinding,
           cancelled,
           adapterId: event.adapterId,
@@ -3662,13 +3877,18 @@ export class ConnectorBus {
         // Lazy import to avoid pulling the skill registry into adapter
         // bundles that don't need it (mobile lite shells, for instance).
         const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
+        const { resolveBuiltInSkillContext } = await import("@/lib/skills/built-in/context")
+        const sessionId = resolvedBinding.payload?.["sessionId"]
+        if (typeof sessionId !== "string")
+          throw new Error("Skill confirmation is missing its session")
+        const hydrated = await resolveBuiltInSkillContext(sessionId)
+        if (
+          hydrated.imBinding?.adapterId !== event.adapterId ||
+          hydrated.imBinding.conversationKey !== resolvedConversationKey
+        )
+          throw new Error("Skill confirmation no longer belongs to this session")
         await runBuiltInSkill(skillId, skillArgs, {
-          sessionId: resolvedConversationKey ?? "",
-          imBinding: {
-            adapterId: event.adapterId,
-            platform: event.platform,
-            conversationKey: resolvedConversationKey ?? event.adapterId,
-          },
+          ...hydrated,
           hitlBypass: true,
           // The person in the chat confirmed this very invocation (ADR-0239).
           outboundAuthorization: { kind: "human", actor: "connector-user" },

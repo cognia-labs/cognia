@@ -928,6 +928,8 @@
       "hint": "Fires only for the selected event kinds; none selected means all.",
       "label": "Event kinds (optional)",
       "options": {
+        "delivery_status": "Delivery status receipt",
+        "interaction": "Platform interaction",
         "lifecycle": "Bot lifecycle",
         "poke": "Poke / nudge",
         "reaction_added": "Reaction added",

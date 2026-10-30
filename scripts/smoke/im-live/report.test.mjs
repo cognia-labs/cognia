@@ -44,6 +44,8 @@ test("a recorded turn keeps ids and marker facts but never message text", () => 
     marker: MARKER,
     probe: { messageId: "1699.0001", sentAt: 1699 },
     fixtureHit: HIT,
+    modelRequestCount: 1,
+    matchingModelRequestCount: 1,
     replies,
     diagnosis: diagnoseTurn({ fixtureHit: HIT, replies, marker: MARKER }),
   })
@@ -55,6 +57,8 @@ test("a recorded turn keeps ids and marker facts but never message text", () => 
   assert.equal(json.turns[0].replies[0].matchedMarker, true)
   assert.equal(json.turns[0].probeMessageId, "1699.0001")
   assert.equal(json.turns[0].fixture.hit, true)
+  assert.equal(json.turns[0].modelRequestCount, 1)
+  assert.equal(json.turns[0].matchingModelRequestCount, 1)
   assert.equal(json.turns[0].status, STATUS.PASS)
 })
 
@@ -69,6 +73,17 @@ test("a missed fixture is recorded as hit:false rather than omitted", () => {
     diagnosis: diagnoseTurn({ fixtureHit: null, replies: [], marker: MARKER }),
   })
   assert.deepEqual(report.toJSON().turns[0].fixture, { hit: false })
+})
+
+test("QQ quote-with-mention evidence is distinguished from quote-only", () => {
+  const report = createRunReport({ platform: "qq-official", runId: "abcd" })
+  report.recordTurn({
+    turn: 2,
+    marker: MARKER,
+    probe: { messageId: "p", action: "group-quote-with-mention" },
+    diagnosis: { status: STATUS.FAIL },
+  })
+  assert.equal(report.toJSON().turns[0].action, "group-quote-with-mention")
 })
 
 test("the lock and its theft are part of the evidence", () => {
@@ -139,7 +154,8 @@ test("summarize counts statuses and picks the exit code", () => {
   assert.equal(mixed.line, "1 PASS, 1 MODEL_NOT_INTERCEPTED, 1 NOT_CONFIGURED")
 })
 
-test("an all-NOT_CONFIGURED run exits zero — nothing was proven, nothing broke", () => {
-  assert.equal(summarize([{ status: STATUS.NOT_CONFIGURED }]).exitCode, 0)
+test("an all-NOT_CONFIGURED run fails because no acceptance case ran", () => {
+  assert.equal(summarize([{ status: STATUS.NOT_CONFIGURED }]).exitCode, 1)
+  assert.equal(summarize([]).exitCode, 1)
   assert.equal(summarize([]).line, "nothing ran")
 })
