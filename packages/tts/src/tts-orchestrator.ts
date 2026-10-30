@@ -78,6 +78,20 @@ export interface TTSOrchestratorSpeakOptions {
   splitterOptions?: StreamSplitterOptions
 }
 
+export interface TTSSynthesisOptions extends Pick<
+  TTSOrchestratorSpeakOptions,
+  "provider" | "speechSettings" | "providerSettings"
+> {
+  signal?: AbortSignal
+  /** Additional sink policy, including local/cached audio exported elsewhere. */
+  approveText?: (text: string) => boolean
+}
+export type TTSSynthesisResult = TTSResponse & {
+  provider: TTSProvider
+  billedCharacters: number
+  spokenText?: string
+}
+
 type Subscriber = (state: TTSOrchestratorState) => void
 
 const DEFAULT_STATE: TTSOrchestratorState = {
@@ -112,6 +126,39 @@ export class TTSOrchestrator {
 
   getState(): TTSOrchestratorState {
     return this.state
+  }
+
+  /** Generate one encoded audio file without taking ownership of playback. */
+  async synthesize(text: string, options: TTSSynthesisOptions = {}): Promise<TTSSynthesisResult> {
+    const speechSettings = options.speechSettings ?? DEFAULT_SPEECH_SETTINGS
+    const provider = normalizeTTSProvider(options.provider ?? speechSettings.ttsProvider)
+    const failure = (response: TTSResponse): TTSSynthesisResult => ({
+      ...response,
+      provider,
+      billedCharacters: 0,
+    })
+    if (getAdapter(provider).kind !== "http") return failure(ttsFailure("not-supported"))
+    if (!allowsOutboundText(provider, text)) return failure(ttsFailure("pii-blocked"))
+    let chunk = preprocessTextForProvider(text, provider)
+    if (speechSettings.ttsPronunciationDictionary)
+      chunk = applyPronunciationDictionary(chunk, speechSettings.ttsPronunciationDictionary)
+    if (options.approveText && !options.approveText(chunk))
+      return failure(ttsFailure("pii-blocked"))
+    if (!chunk.trim() || chunk.length > TTS_PROVIDERS[provider].maxTextLength)
+      return failure(ttsFailure("text-too-long"))
+    let billedCharacters = 0
+    const response = await this.generateChunkAudio({
+      provider,
+      chunk,
+      speechSettings,
+      providerSettings: options.providerSettings,
+      signal: options.signal ?? new AbortController().signal,
+      requestId: crypto.randomUUID(),
+      onGenerated: () => {
+        billedCharacters = chunk.length
+      },
+    })
+    return { ...response, provider, billedCharacters, spokenText: chunk }
   }
 
   async speak(text: string, options: TTSOrchestratorSpeakOptions = {}): Promise<void> {
@@ -632,21 +679,29 @@ export class TTSOrchestrator {
     providerSettings: ProviderSettingsMap
     signal: AbortSignal
     requestId: string
+    onGenerated?: () => void
   }): Promise<TTSResponse> {
     const { provider, chunk, speechSettings, providerSettings, signal, requestId } = params
     const apiKey = this.getApiKey(provider, providerSettings)
     const ttsSettings = toTTSSettings(speechSettings)
     const runtimeOptions = getProviderRuntimeOptions(speechSettings, provider)
+    if (
+      !allowsOutboundText(provider, chunk) ||
+      !allowsOutboundText(provider, JSON.stringify(runtimeOptions))
+    )
+      return ttsFailure("pii-blocked")
 
     const cacheKey = await generateCacheKey(chunk, provider, ttsSettings)
     return getCachedTtsResponseOrGenerate(
       cacheKey,
       async () => {
         // Retry transient network/api failures before giving up on this chunk.
-        return withTtsRetry(
+        const generated = await withTtsRetry(
           () => this.generateUncached(provider, chunk, runtimeOptions, apiKey, signal, requestId),
           { signal }
         )
+        if (generated.success) params.onGenerated?.()
+        return generated
       },
       provider,
       chunk,
@@ -664,6 +719,10 @@ export class TTSOrchestrator {
     requestId: string
   ): Promise<TTSResponse> {
     const info = TTS_PROVIDERS[provider]
+    if (apiKey === "host-key" && !getTtsHost().isNativeShell?.())
+      return ttsFailure("not-supported", {
+        providerMessage: "Native TTS credential bridge is unavailable",
+      })
     if (info.requiresApiKey && !apiKey) {
       return {
         success: false,

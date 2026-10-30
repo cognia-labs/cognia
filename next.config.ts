@@ -177,6 +177,12 @@ const osShimStubAbs = path.resolve(process.cwd(), "lib/browser-stubs/os-shim.js"
 const PIXI_PREBUNDLED_REL = "./node_modules/pixi.js/dist/pixi.mjs"
 const PIXI_PREBUNDLED_ABS = path.resolve(process.cwd(), "node_modules/pixi.js/dist/pixi.mjs")
 
+// Audio decoder barrels export worker classes during SSR as well as in browsers.
+// The transitive package's Node entry contains an unbundleable dynamic import;
+// its browser entry eagerly reads Worker, which is absent during SSR.
+const WEB_WORKER_SHIM_REL = "./lib/browser-stubs/web-worker.ts"
+const WEB_WORKER_SHIM_ABS = path.resolve(process.cwd(), WEB_WORKER_SHIM_REL)
+
 // `@huggingface/transformers` exports a Node build whenever webpack evaluates
 // the worker import from the server compilation. That build pulls native
 // `onnxruntime-node` binaries into the static export and webpack tries to parse
@@ -453,6 +459,7 @@ const nextConfig: NextConfig = {
       // Collapse pixi.js to its pre-bundled single file (see above). Applies
       // in every context on purpose — the barrel is the problem everywhere.
       "pixi.js": PIXI_PREBUNDLED_REL,
+      "@eshaz/web-worker": WEB_WORKER_SHIM_REL,
       // See MONACO_API_SHIM_REL above. Keyed on the literal request string,
       // which is what Turbopack matches against.
       [MONACO_API_LEGACY_SPECIFIER]: MONACO_API_SHIM_REL,
@@ -500,6 +507,7 @@ const nextConfig: NextConfig = {
     config.resolve.alias = {
       ...config.resolve.alias,
       "pixi.js$": PIXI_PREBUNDLED_ABS,
+      "@eshaz/web-worker$": WEB_WORKER_SHIM_ABS,
       "@huggingface/transformers$": TRANSFORMERS_WEB_ABS,
       // Exact-match (`$`): only y-monaco's own specifier is redirected, never
       // some other `monaco-editor/...` subpath that resolves correctly.

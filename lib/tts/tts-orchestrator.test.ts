@@ -2,6 +2,7 @@
 const speakMock = jest.fn<Promise<void>, [string, unknown]>()
 const speakStreamMock = jest.fn<Promise<void>, [AsyncIterable<string>, unknown]>()
 const stopMock = jest.fn()
+const synthesizeMock = jest.fn()
 const state = { currentProvider: "elevenlabs" as string }
 const recordSurfaceUsageMock = jest.fn<Promise<null>, [Record<string, unknown>]>()
 
@@ -14,6 +15,7 @@ jest.mock("@cognia/tts/tts-orchestrator", () => ({
     speakStream: (tokens: AsyncIterable<string>, options: unknown) =>
       speakStreamMock(tokens, options),
     stop: () => stopMock(),
+    synthesize: (...args: unknown[]) => synthesizeMock(...args),
     subscribe: jest.fn(() => () => {}),
     pause: jest.fn(),
     resume: jest.fn(),
@@ -39,6 +41,7 @@ function lastUsage(): Record<string, unknown> {
 }
 
 beforeEach(() => {
+  synthesizeMock.mockReset()
   speakMock.mockReset().mockResolvedValue(undefined)
   speakStreamMock.mockReset().mockImplementation(async (stream) => {
     // The real orchestrator consumes the stream; the counting tap only sees
@@ -48,6 +51,22 @@ beforeEach(() => {
   stopMock.mockReset()
   recordSurfaceUsageMock.mockReset().mockResolvedValue(null)
   state.currentProvider = "elevenlabs"
+})
+
+it("meters generated files once and skips cache hits and local synthesis", async () => {
+  synthesizeMock
+    .mockResolvedValueOnce({ success: true, provider: "openai", billedCharacters: 5 })
+    .mockResolvedValueOnce({ success: true, provider: "openai", billedCharacters: 0 })
+    .mockResolvedValueOnce({
+      success: true,
+      provider: "local-openai-compatible",
+      billedCharacters: 5,
+    })
+  await ttsOrchestrator.synthesize("Hello")
+  await ttsOrchestrator.synthesize("Hello")
+  await ttsOrchestrator.synthesize("Hello")
+  expect(recordSurfaceUsageMock).toHaveBeenCalledTimes(1)
+  expect(lastUsage()).toMatchObject({ unitBreakdown: { characters: 5 } })
 })
 
 describe("speak", () => {

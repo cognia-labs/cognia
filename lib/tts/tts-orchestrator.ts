@@ -90,6 +90,12 @@ const facade = {
     meterUtterance(text.length, coreOrchestrator.getState().currentProvider)
     return result
   },
+  async synthesize(...args: Parameters<TTSOrchestrator["synthesize"]>) {
+    const result = await coreOrchestrator.synthesize(...args)
+    if (result.provider !== "local-openai-compatible")
+      meterUtterance(result.billedCharacters, result.provider)
+    return result
+  },
   async speakStream(...[tokens, options]: Parameters<TTSOrchestrator["speakStream"]>) {
     const counter = { characters: 0 }
     const result = await coreOrchestrator.speakStream(countingTokens(tokens, counter), options)

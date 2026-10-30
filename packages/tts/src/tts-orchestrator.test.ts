@@ -77,6 +77,82 @@ import { setTtsHost } from "./host"
 
 const mockCache = getCachedOrGenerate as jest.Mock
 
+describe("buffered synthesis without playback", () => {
+  it("never forwards a native key-presence marker through a browser/headless provider request", async () => {
+    mockCache.mockImplementation(async (_key, generate) => generate())
+    setTtsHost({ allowCloudText: () => true, isNativeShell: () => false })
+    expect(
+      await new TTSOrchestrator().synthesize("Hello", {
+        provider: "openai",
+        providerSettings: { openai: { apiKey: "host-key" } },
+      })
+    ).toMatchObject({ success: false, errorType: "not-supported" })
+    expect(generateOpenAITTS).not.toHaveBeenCalled()
+  })
+  it("applies the export sink's privacy gate after local pronunciation substitutions and before cache", async () => {
+    const result = await new TTSOrchestrator().synthesize("Hello", {
+      provider: "local-openai-compatible",
+      speechSettings: {
+        ...DEFAULT_SPEECH_SETTINGS,
+        ttsPronunciationDictionary: { Hello: "private@example.com" },
+      },
+      approveText: (text) => !text.includes("@"),
+    })
+    expect(result).toMatchObject({ success: false, errorType: "pii-blocked" })
+    expect(mockCache).not.toHaveBeenCalled()
+    expect(generateLocalOpenAICompatibleTTS).not.toHaveBeenCalled()
+  })
+  it("reuses cache/retry/provider settings and leaves playback state untouched", async () => {
+    const engine = new TTSOrchestrator()
+    const before = engine.getState()
+    mockCache.mockImplementation(async (_key, generate) => generate())
+    jest
+      .mocked(generateOpenAITTS)
+      .mockResolvedValue({ success: true, audioData: new ArrayBuffer(4), mimeType: "audio/mpeg" })
+    expect(
+      await engine.synthesize("**Hello**", {
+        speechSettings: { ...DEFAULT_SPEECH_SETTINGS, ttsProvider: "openai", openaiVoice: "nova" },
+        providerSettings: { openai: { apiKey: "key" } },
+      })
+    ).toMatchObject({
+      success: true,
+      mimeType: "audio/mpeg",
+      provider: "openai",
+      billedCharacters: 5,
+    })
+    expect(generateOpenAITTS).toHaveBeenCalledWith(
+      "Hello",
+      expect.objectContaining({ apiKey: "key", voice: "nova" })
+    )
+    expect(engine.getState()).toBe(before)
+    expect(lastAudio).toBeNull()
+  })
+  it("rejects playback-only providers and checks privacy before cache lookup", async () => {
+    const engine = new TTSOrchestrator()
+    expect(await engine.synthesize("Hello")).toMatchObject({
+      success: false,
+      errorType: "not-supported",
+    })
+    setTtsHost({ allowCloudText: () => false })
+    expect(await engine.synthesize("blocked", { provider: "openai" })).toMatchObject({
+      success: false,
+      errorType: "pii-blocked",
+    })
+    expect(mockCache).not.toHaveBeenCalled()
+  })
+  it("does not meter synthesis for a cache hit", async () => {
+    mockCache.mockResolvedValue({
+      success: true,
+      audioData: new ArrayBuffer(4),
+      mimeType: "audio/mpeg",
+    })
+    expect(await new TTSOrchestrator().synthesize("Hello", { provider: "openai" })).toMatchObject({
+      success: true,
+      billedCharacters: 0,
+    })
+  })
+})
+
 interface MockAudio {
   src: string
   volume: number
