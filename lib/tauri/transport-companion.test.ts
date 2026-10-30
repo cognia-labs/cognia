@@ -2303,6 +2303,69 @@ describe("subscribe() — subscribe control frames", () => {
     expect(settled).toBe(true)
   })
 
+  it("reports delivery readiness only after accepted current-socket acknowledgements", async () => {
+    transport = new CompanionTransport()
+    transport.subscribe("workflow:trigger", jest.fn())
+    transport.subscribe("bogus:*", jest.fn())
+    const ws = MockWebSocket.lastInstance!
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+    ws.triggerOpen()
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+    ws.triggerMessage(
+      JSON.stringify({
+        type: "subscribed",
+        channels: ["workflow:trigger"],
+        rejected: [{ channel: "bogus:*", reason: "unknown_channel" }],
+      })
+    )
+    await transport.whenSubscribed(["workflow:trigger", "bogus:*"])
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(true)
+    expect(transport.hasSubscribedChannels(["bogus:*"])).toBe(false)
+    ws.triggerMessage(JSON.stringify({ type: "subscribe_error", message: "refused" }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+  })
+
+  it("does not reuse an accepted ack while remove and re-add frames are pending", () => {
+    transport = new CompanionTransport()
+    const stop = transport.subscribe("workflow:trigger", jest.fn())
+    const ws = MockWebSocket.lastInstance!
+    ws.triggerOpen()
+    ws.triggerMessage(JSON.stringify({ type: "subscribed", channels: ["workflow:trigger"] }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(true)
+    stop()
+    transport.subscribe("workflow:trigger", jest.fn())
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+    ws.triggerMessage(JSON.stringify({ type: "subscribed", channels: [] }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+    ws.triggerMessage(JSON.stringify({ type: "subscribed", channels: ["workflow:trigger"] }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(true)
+  })
+
+  it("forgets accepted readiness on disconnect and requires the new socket's ack", async () => {
+    jest.useFakeTimers()
+    __setBackoffRandomForTests(() => 1)
+    transport = new CompanionTransport()
+    transport.subscribe("workflow:trigger", jest.fn())
+    const first = MockWebSocket.lastInstance!
+    first.triggerOpen()
+    first.triggerMessage(JSON.stringify({ type: "subscribed", channels: ["workflow:trigger"] }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(true)
+    first.triggerClose()
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+    await jest.advanceTimersByTimeAsync(1_149)
+    expect(MockWebSocket.lastInstance).toBe(first)
+    await jest.advanceTimersByTimeAsync(1)
+    const second = MockWebSocket.lastInstance!
+    expect(second).not.toBe(first)
+    second.triggerOpen()
+    first.triggerMessage(JSON.stringify({ type: "subscribed", channels: ["workflow:trigger"] }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(false)
+    second.triggerMessage(JSON.stringify({ type: "subscribed", channels: ["workflow:trigger"] }))
+    expect(transport.hasSubscribedChannels(["workflow:trigger"])).toBe(true)
+    transport.destroy()
+    jest.useRealTimers()
+  })
+
   it("does not answer from a previous socket's acknowledgement after a re-subscribe", async () => {
     // The Pi version probe subscribes, reads, and unsubscribes in its
     // `finally`. The second probe has to be acknowledged on its own add frame,

@@ -65,6 +65,8 @@ export interface Transport {
    * readiness after registration failure, cancellation or a remote timeout.
    */
   whenSubscribed?(channels: readonly string[], timeoutMs?: number): Promise<void>
+  /** True only for accepted subscriptions on the current connected event socket. */
+  hasSubscribedChannels?(channels: readonly string[]): boolean
   /**
    * Invoke a named command on the underlying runtime and wait for its result.
    *

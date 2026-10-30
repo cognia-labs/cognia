@@ -2973,3 +2973,54 @@ describe("TransportRtc data-channel liveness and orphaned ICE restarts", () => {
     rtc.close()
   })
 })
+
+describe("non-TUI observation hooks", () => {
+  it("delivers complete event metadata from an explicit resume cursor", () => {
+    const observer = jest.fn()
+    const { rtc } = makeRtc({
+      initialEventCursor: 10,
+      eventObserver: observer,
+      persistEventCursor: false,
+    })
+    const internal = rtc as unknown as {
+      deliverRtcEvent: (event: {
+        kind: string
+        event: string
+        seq: number
+        payload: unknown
+      }) => void
+    }
+    internal.deliverRtcEvent({ kind: "event", event: "a", seq: 10, payload: 0 })
+    internal.deliverRtcEvent({ kind: "event", event: "a", seq: 11, payload: 1 })
+    expect(observer).toHaveBeenCalledTimes(1)
+    expect(observer).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "a", seq: 11, payload: 1 })
+    )
+  })
+})
+
+describe("atomic CLI event replay", () => {
+  it("drops pre-barrier live frames without dropping the older requested replay", () => {
+    const observer = jest.fn()
+    const { rtc } = makeRtc({
+      initialEventCursor: 5,
+      atomicEventWatch: true,
+      eventObserver: observer,
+      persistEventCursor: false,
+    })
+    const internal = rtc as unknown as {
+      acceptRtcEvent: (frame: {
+        kind: string
+        event: string
+        seq: number
+        payload: unknown
+      }) => void
+      acceptWatchReady: (frame: { cursor: number; channels: string[] }) => void
+    }
+    internal.acceptRtcEvent({ kind: "event", event: "a", seq: 20, payload: "early live" })
+    internal.acceptWatchReady({ cursor: 5, channels: ["a"] })
+    internal.acceptRtcEvent({ kind: "event", event: "a", seq: 6, payload: "replay" })
+    internal.acceptRtcEvent({ kind: "event", event: "a", seq: 20, payload: "live" })
+    expect(observer.mock.calls.map(([frame]) => frame.seq)).toEqual([6, 20])
+  })
+})

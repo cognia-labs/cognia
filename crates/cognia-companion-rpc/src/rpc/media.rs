@@ -2,8 +2,8 @@
 //! this boundary owns caller-scoped source handles, workspace authorization,
 //! and bounded binary transfers for HTTP and WebRTC alike.
 use super::*;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use cognia_media::{service, MediaSourceRegistry, VideoError};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use cognia_media::{MediaSourceRegistry, VideoError, service};
 use parking_lot::Mutex;
 use std::{
     collections::HashMap,
@@ -269,7 +269,7 @@ pub(super) async fn dispatch(
                 _ => {
                     return Err(RpcError::malformed(
                         "frame format must be rgba or png".to_string(),
-                    ))
+                    ));
                 }
             }
             .map_err(media_error)?;
@@ -401,7 +401,7 @@ pub(super) async fn dispatch(
                 Some(_) => {
                     return Err(RpcError::malformed(
                         "unsupported media chunk encoding".to_string(),
-                    ))
+                    ));
                 }
             };
             caller.chunk(
@@ -491,39 +491,47 @@ mod tests {
             .unwrap();
         assert_eq!(info["width"], 64);
         let token = info["sourceToken"].as_str().unwrap();
-        assert!(dispatch(
-            "plugin_media_get_video_frame",
-            json!({"sourceToken":token,"time":0}),
-            &state,
-            &host,
-            "device-b",
-            Some("account-a"),
-            Some("service")
-        )
-        .await
-        .is_err());
-        assert!(dispatch(
-            "plugin_media_get_video_frame",
-            json!({"sourceToken":token,"time":0}),
-            &state,
-            &host,
-            "device-a",
-            Some("account-b"),
-            Some("service")
-        )
-        .await
-        .is_err());
-        let outside = tempfile::NamedTempFile::new().unwrap();
-        assert!(call("video_get_info", json!({"filePath":outside.path()}))
+        assert!(
+            dispatch(
+                "plugin_media_get_video_frame",
+                json!({"sourceToken":token,"time":0}),
+                &state,
+                &host,
+                "device-b",
+                Some("account-a"),
+                Some("service")
+            )
             .await
-            .is_err());
+            .is_err()
+        );
+        assert!(
+            dispatch(
+                "plugin_media_get_video_frame",
+                json!({"sourceToken":token,"time":0}),
+                &state,
+                &host,
+                "device-a",
+                Some("account-b"),
+                Some("service")
+            )
+            .await
+            .is_err()
+        );
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        assert!(
+            call("video_get_info", json!({"filePath":outside.path()}))
+                .await
+                .is_err()
+        );
         #[cfg(unix)]
         {
             let link = workspace.path().join("escape.mp4");
             std::os::unix::fs::symlink(outside.path(), &link).unwrap();
-            assert!(call("video_get_info", json!({"filePath":link}))
-                .await
-                .is_err());
+            assert!(
+                call("video_get_info", json!({"filePath":link}))
+                    .await
+                    .is_err()
+            );
         }
         for format in ["rgba", "png"] {
             let transfer = call(
@@ -550,12 +558,14 @@ mod tests {
             call("plugin_media_close_transfer", json!({"transferId":id}))
                 .await
                 .unwrap();
-            assert!(call(
-                "plugin_media_read_chunk",
-                json!({"transferId":id,"offset":0})
-            )
-            .await
-            .is_err());
+            assert!(
+                call(
+                    "plugin_media_read_chunk",
+                    json!({"transferId":id,"offset":0})
+                )
+                .await
+                .is_err()
+            );
         }
         let trimmed = call(
             "video_trim",
@@ -564,20 +574,24 @@ mod tests {
         .await
         .unwrap();
         let generated = trimmed["outputPath"].as_str().unwrap();
-        assert!(call("video_get_info", json!({"filePath":generated}))
+        assert!(
+            call("video_get_info", json!({"filePath":generated}))
+                .await
+                .is_ok()
+        );
+        assert!(
+            dispatch(
+                "video_get_info",
+                json!({"filePath":generated}),
+                &state,
+                &host,
+                "device-b",
+                Some("account-a"),
+                Some("service")
+            )
             .await
-            .is_ok());
-        assert!(dispatch(
-            "video_get_info",
-            json!({"filePath":generated}),
-            &state,
-            &host,
-            "device-b",
-            Some("account-a"),
-            Some("service")
-        )
-        .await
-        .is_err());
+            .is_err()
+        );
         let clip = json!({"sourceToken":token,"startTime":0,"endTime":0.5,"volume":1,"playbackSpeed":1,"effects":[]});
         call(
             "plugin_media_apply_video_effect",
@@ -603,17 +617,19 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(dispatch(
-            "video_cleanup_analysis",
-            json!({"outputDirectory":analysis["outputDirectory"]}),
-            &state,
-            &host,
-            "device-b",
-            Some("account-a"),
-            Some("service")
-        )
-        .await
-        .is_err());
+        assert!(
+            dispatch(
+                "video_cleanup_analysis",
+                json!({"outputDirectory":analysis["outputDirectory"]}),
+                &state,
+                &host,
+                "device-b",
+                Some("account-a"),
+                Some("service")
+            )
+            .await
+            .is_err()
+        );
         let frame = call("plugin_media_read_analysis_frame", json!({"outputDirectory":analysis["outputDirectory"],"path":analysis["frames"][0]["path"]})).await.unwrap();
         let frame_id = frame["transferId"].as_str().unwrap();
         let data: Vec<u8> = serde_json::from_value(
@@ -725,7 +741,7 @@ mod tests {
                 message: "bad range".into()
             })
             .1
-             .0
+            .0
             .retryable
         );
     }

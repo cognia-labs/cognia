@@ -4,13 +4,13 @@
 #![cfg(test)]
 
 use super::*;
-use cognia_companion::{
-    deny_list::DenyList, idempotency::IdempotencyCache, jwt::issue_device_jwt, CompanionState,
-};
 use axum::{
     body::Body,
     http::{Request, StatusCode},
     Router,
+};
+use cognia_companion::{
+    deny_list::DenyList, idempotency::IdempotencyCache, jwt::issue_device_jwt, CompanionState,
 };
 use parking_lot::RwLock;
 use serde_json::json;
@@ -252,8 +252,7 @@ pub(crate) fn test_state() -> cognia_companion::SharedState {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -261,8 +260,8 @@ pub(crate) fn test_state() -> cognia_companion::SharedState {
 }
 
 fn build_router(state: cognia_companion::SharedState) -> Router {
-    use cognia_companion::middleware;
     use axum::{middleware::from_fn_with_state, routing::post};
+    use cognia_companion::middleware;
 
     Router::new()
         .route("/internal/_rpc/{name}", post(rpc_handler))
@@ -612,7 +611,9 @@ fn headless_host() -> std::sync::Arc<crate::headless::HeadlessServices> {
     crate::headless::HeadlessServices::stub_for_tests()
 }
 
-fn headless_host_for_account(local_account_id: &str) -> std::sync::Arc<crate::headless::HeadlessServices> {
+fn headless_host_for_account(
+    local_account_id: &str,
+) -> std::sync::Arc<crate::headless::HeadlessServices> {
     let services = crate::headless::HeadlessServices::stub_for_tests();
     services
         .plugin_runtime
@@ -718,9 +719,7 @@ async fn headless_dispatch_serves_the_data_plane_from_the_store() {
     let _guard = cognia_companion::ws_bridge::test_support::lock_slot().await;
     cognia_companion::ws_bridge::test_support::clear_socket_for_testing();
     let store = cognia_companion::store::sqlite::SqliteAppStore::in_memory().expect("open");
-    cognia_companion::data_plane::install_headless_store(Some(
-        store.clone() as Arc<dyn AppStore>
-    ));
+    cognia_companion::data_plane::install_headless_store(Some(store.clone() as Arc<dyn AppStore>));
 
     let state = test_state();
     let result = dispatch(
@@ -1039,8 +1038,7 @@ fn agent_control_commands_are_their_own_tier() {
 #[test]
 fn attaching_needs_no_step_up_lease() {
     for name in ["session_attach", "session_detach"] {
-        let descriptor =
-            cognia_companion::command_manifest::descriptor(name).expect("registered");
+        let descriptor = cognia_companion::command_manifest::descriptor(name).expect("registered");
         assert_eq!(
             descriptor.approval,
             cognia_companion::command_manifest::CommandApproval::None,
@@ -1065,8 +1063,7 @@ fn attachment_upload_carries_remote_control_without_a_step_up_lease() {
         "session_attachment_upload_commit",
         "session_attachment_upload_abort",
     ] {
-        let descriptor =
-            cognia_companion::command_manifest::descriptor(name).expect("registered");
+        let descriptor = cognia_companion::command_manifest::descriptor(name).expect("registered");
         assert_eq!(
             descriptor.capability, "workspace.write",
             "{name} moves bytes the Host will hand to a model"
@@ -1483,6 +1480,9 @@ fn service_only_commands_are_known_and_not_control_gated() {
         "connectors_attachment_evict_adapter",
         "connectors_attachment_enforce_budget",
         "connectors_media_upload",
+        "connectors_matrix_crypto_verification",
+        "connectors_matrix_crypto_cross_signing",
+        "connectors_matrix_crypto_backup",
         "connectors_matrix_crypto_init",
         "connectors_matrix_crypto_close",
         "connectors_matrix_crypto_outgoing_requests",
@@ -1552,17 +1552,31 @@ fn connector_keyring_arms_are_step_up_not_service_only() {
 #[test]
 fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
     for name in crate::managed_desktops::COMMANDS {
-        let mutation = matches!(*name,
-            "managed_desktop_config_save" | "managed_desktop_config_delete" |
-            "managed_desktop_config_set_credential" | "managed_desktop_config_rotate_credential" |
-            "managed_desktop_template_delete" |
-            "managed_desktop_qualify_start" | "managed_desktop_qualify_approve" |
-            "managed_desktop_qualify_cancel" |
-            "managed_desktop_delegate" | "managed_desktop_delegation_revoke" |
-            "managed_desktop_authorize" | "managed_desktop_prepare_template" |
-            "managed_desktop_create" | "managed_desktop_connect" | "managed_desktop_delete" |
-            "managed_desktop_control_acquire" | "managed_desktop_control_renew" |
-            "managed_desktop_control_release" | "managed_desktop_control_input");
+        let mutation = matches!(
+            *name,
+            "managed_desktop_config_save"
+                | "managed_desktop_config_delete"
+                | "managed_desktop_config_set_credential"
+                | "managed_desktop_config_rotate_credential"
+                | "managed_desktop_template_delete"
+                | "managed_desktop_qualify_start"
+                | "managed_desktop_qualify_approve"
+                | "managed_desktop_qualify_cancel"
+                | "managed_desktop_delegate"
+                | "managed_desktop_delegation_revoke"
+                | "managed_desktop_acceptance_start"
+                | "managed_desktop_acceptance_attach"
+                | "managed_desktop_acceptance_cancel"
+                | "managed_desktop_authorize"
+                | "managed_desktop_prepare_template"
+                | "managed_desktop_create"
+                | "managed_desktop_connect"
+                | "managed_desktop_delete"
+                | "managed_desktop_control_acquire"
+                | "managed_desktop_control_renew"
+                | "managed_desktop_control_release"
+                | "managed_desktop_control_input"
+        );
         assert_eq!(STEP_UP_COMMANDS.contains(name), mutation, "{name}");
         assert!(KNOWN_COMMANDS.contains(name), "{name}");
         let descriptor = cognia_companion::command_manifest::descriptor(name).unwrap();
@@ -1596,12 +1610,20 @@ fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
 fn remote_desktop_commands_split_observe_from_admin() {
     use cognia_companion::command_manifest::{descriptor, CommandApproval, CommandTarget};
     for name in crate::remote_desktops::COMMANDS {
-        let admin = matches!(*name,
-            "remote_desktop_target_save" | "remote_desktop_target_delete" |
-            "remote_desktop_credential_set" | "remote_desktop_target_probe");
+        let admin = matches!(
+            *name,
+            "remote_desktop_target_save"
+                | "remote_desktop_target_delete"
+                | "remote_desktop_credential_set"
+                | "remote_desktop_target_probe"
+        );
         let descriptor = descriptor(name).expect("registered");
         assert_eq!(descriptor.target, CommandTarget::Execution, "{name}");
-        assert_eq!(descriptor.capability, if admin { "host.admin" } else { "host.observe" }, "{name}");
+        assert_eq!(
+            descriptor.capability,
+            if admin { "host.admin" } else { "host.observe" },
+            "{name}"
+        );
         assert_eq!(
             descriptor.approval == CommandApproval::Interactive,
             admin,
@@ -1624,15 +1646,31 @@ async fn managed_desktop_dispatch_refuses_missing_invalid_and_revoked_leases() {
     let state = test_state();
     let host = headless_host();
     let device = "managed-desktop-lease-test";
-    let lease = cognia_companion::admin_lease::issue(device,
-        vec!["managed_desktop_create".into()], Some(600), true).unwrap();
+    let lease = cognia_companion::admin_lease::issue(
+        device,
+        vec!["managed_desktop_create".into()],
+        Some(600),
+        true,
+    )
+    .unwrap();
     cognia_companion::admin_lease::revoke_device(device);
     for token in [None, Some("invalid"), Some(lease.token.as_str())] {
         let mut args = json!({"providerConfigId":"p","quoteId":"q","authorizationId":"a","idempotencyKey":"once"});
-        if let Some(token) = token { args["adminLease"] = json!(token); }
-        let error = dispatch("managed_desktop_create", args, &state, &host, device,
-            Some("tenant"), Some("device")).await.unwrap_err();
-        assert!(error.1.0.message.contains("admin lease"));
+        if let Some(token) = token {
+            args["adminLease"] = json!(token);
+        }
+        let error = dispatch(
+            "managed_desktop_create",
+            args,
+            &state,
+            &host,
+            device,
+            Some("tenant"),
+            Some("device"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.1 .0.message.contains("admin lease"));
     }
 }
 
@@ -2150,7 +2188,16 @@ async fn host_secret_arms_seal_attribute_and_never_return_values() {
         let state = &state;
         let host = &host;
         async move {
-            dispatch(name, args, state, host, "hs-phone", Some(ACCOUNT_ID), Some("device")).await
+            dispatch(
+                name,
+                args,
+                state,
+                host,
+                "hs-phone",
+                Some(ACCOUNT_ID),
+                Some("device"),
+            )
+            .await
         }
     };
 
@@ -2171,7 +2218,10 @@ async fn host_secret_arms_seal_attribute_and_never_return_values() {
 
     let listed = device("host_secret_list", json!({})).await.expect("list");
     let text = listed.to_string();
-    assert!(!text.contains("sk-hs-secret") && !text.contains("ghp_hs"), "{text}");
+    assert!(
+        !text.contains("sk-hs-secret") && !text.contains("ghp_hs"),
+        "{text}"
+    );
     let provider = listed["items"]
         .as_array()
         .unwrap()
@@ -2186,14 +2236,19 @@ async fn host_secret_arms_seal_attribute_and_never_return_values() {
     // second and stops, and every entry of the whole list is on some page.
     let total = listed["items"].as_array().unwrap().len();
     assert!(total >= 2, "{listed}");
-    let first = device("host_secret_list", json!({ "pageSize": 1 })).await.expect("page 1");
+    let first = device("host_secret_list", json!({ "pageSize": 1 }))
+        .await
+        .expect("page 1");
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
     let mut walked = first["items"].as_array().unwrap().clone();
     let mut token = first["nextPageToken"].as_str().map(str::to_owned);
     while let Some(next) = token {
-        let page = device("host_secret_list", json!({ "pageSize": 1, "pageToken": next }))
-            .await
-            .expect("next page");
+        let page = device(
+            "host_secret_list",
+            json!({ "pageSize": 1, "pageToken": next }),
+        )
+        .await
+        .expect("next page");
         walked.extend(page["items"].as_array().unwrap().iter().cloned());
         token = page["nextPageToken"].as_str().map(str::to_owned);
     }
@@ -2221,9 +2276,12 @@ async fn host_secret_arms_seal_attribute_and_never_return_values() {
     )
     .await
     .expect("delete");
-    device("host_git_credential_delete", json!({ "host": "hs.example.com", "adminLease": "lease" }))
-        .await
-        .expect("delete git");
+    device(
+        "host_git_credential_delete",
+        json!({ "host": "hs.example.com", "adminLease": "lease" }),
+    )
+    .await
+    .expect("delete git");
     let after = device("host_secret_list", json!({})).await.expect("list");
     assert!(!after.to_string().contains("hs-deepseek"));
     assert!(!after.to_string().contains("hs.example.com"));
@@ -2302,8 +2360,15 @@ fn host_secret_and_host_configuration_approval_classes_are_pinned() {
         "host_git_credential_set",
         "host_git_credential_delete",
     ] {
-        assert_eq!(descriptor(name).unwrap().capability, "secret.manage", "{name}");
-        assert!(!is_service_only_command(name), "{name} is for paired devices");
+        assert_eq!(
+            descriptor(name).unwrap().capability,
+            "secret.manage",
+            "{name}"
+        );
+        assert!(
+            !is_service_only_command(name),
+            "{name} is for paired devices"
+        );
     }
     assert_eq!(
         descriptor("host_secret_list").unwrap().approval,
@@ -3658,8 +3723,7 @@ async fn idempotency_cache_hit_returns_cached_body() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -3705,8 +3769,7 @@ async fn different_idempotency_keys_run_independently() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -3747,8 +3810,7 @@ async fn read_only_commands_skip_cache() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -3808,8 +3870,7 @@ async fn expired_idempotency_key_causes_re_execution() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -4252,8 +4313,7 @@ async fn session_list_skips_idempotency_cache() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -5021,8 +5081,7 @@ async fn app_settings_update_rejects_unknown_key() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -5075,8 +5134,7 @@ async fn app_settings_update_accepts_color_theme_key() {
         sync_bridge: cognia_companion::sync_bridge::SyncBridge::new(),
         desktop_messages_bridge:
             cognia_companion::desktop_messages_bridge::DesktopMessagesBridge::new(),
-        desktop_writes_bridge:
-            cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
+        desktop_writes_bridge: cognia_companion::desktop_writes_bridge::DesktopWritesBridge::new(),
         sync_registry: cognia_companion::sync_registry::SyncTableRegistry::with_defaults(),
         rate_limiter: cognia_companion::rate_limit::RateLimiter::with_defaults(),
         push_tokens: cognia_companion::push::PushTokenRegistry::new(),
@@ -5392,13 +5450,24 @@ fn pet_remote_care_commands_are_bridged_and_bind_the_caller() {
         assert!(READ_ONLY_COMMANDS_SET.contains(command), "{command} reads");
         let descriptor = cognia_companion::command_manifest::descriptor(command).unwrap();
         assert_eq!(descriptor.capability, "client.read");
-        assert_eq!(descriptor.operation, CommandOperation::Read, "{command} reads");
+        assert_eq!(
+            descriptor.operation,
+            CommandOperation::Read,
+            "{command} reads"
+        );
     }
     for command in writes {
-        assert!(!READ_ONLY_COMMANDS_SET.contains(command), "{command} writes");
+        assert!(
+            !READ_ONLY_COMMANDS_SET.contains(command),
+            "{command} writes"
+        );
         let descriptor = cognia_companion::command_manifest::descriptor(command).unwrap();
         assert_eq!(descriptor.capability, "client.write");
-        assert_ne!(descriptor.operation, CommandOperation::Read, "{command} writes");
+        assert_ne!(
+            descriptor.operation,
+            CommandOperation::Read,
+            "{command} writes"
+        );
         // A retried care action must replay its first answer, never run twice.
         assert_eq!(
             descriptor.idempotency,
@@ -5445,7 +5514,10 @@ fn files_library_commands_are_bridged_and_bind_the_caller() {
     use cognia_companion::command_manifest::{CommandIdempotency, CommandOperation};
     for command in reads.iter().chain(writes.iter()) {
         assert!(KNOWN_COMMANDS.contains(command), "{command} is known");
-        assert!(data_sync::COMMANDS.contains(command), "{command} is bridged");
+        assert!(
+            data_sync::COMMANDS.contains(command),
+            "{command} is bridged"
+        );
         assert!(
             !is_control_command(command),
             "{command} is the device's own client surface, not remote control"
@@ -5469,16 +5541,30 @@ fn files_library_commands_are_bridged_and_bind_the_caller() {
     }
     for command in reads {
         assert!(READ_ONLY_COMMANDS_SET.contains(command), "{command} reads");
-        assert!(READ_ONLY_COMMANDS.contains(&command), "{command} skips the cache");
+        assert!(
+            READ_ONLY_COMMANDS.contains(&command),
+            "{command} skips the cache"
+        );
         let descriptor = cognia_companion::command_manifest::descriptor(command).unwrap();
         assert_eq!(descriptor.capability, "client.read");
-        assert_eq!(descriptor.operation, CommandOperation::Read, "{command} reads");
+        assert_eq!(
+            descriptor.operation,
+            CommandOperation::Read,
+            "{command} reads"
+        );
     }
     for command in writes {
-        assert!(!READ_ONLY_COMMANDS_SET.contains(command), "{command} writes");
+        assert!(
+            !READ_ONLY_COMMANDS_SET.contains(command),
+            "{command} writes"
+        );
         let descriptor = cognia_companion::command_manifest::descriptor(command).unwrap();
         assert_eq!(descriptor.capability, "client.write");
-        assert_ne!(descriptor.operation, CommandOperation::Read, "{command} writes");
+        assert_ne!(
+            descriptor.operation,
+            CommandOperation::Read,
+            "{command} writes"
+        );
         // A retried move, Trash or upload must replay its first answer.
         assert_eq!(
             descriptor.idempotency,
@@ -5563,9 +5649,18 @@ fn goal_lifecycle_commands_are_bridged_and_control_gated_like_goal_pause() {
     ];
     for command in writes {
         assert!(KNOWN_COMMANDS_SET.contains(command), "{command} is known");
-        assert!(data_sync::COMMANDS.contains(&command), "{command} is bridged");
-        assert!(is_control_command(command), "{command} needs remote control");
-        assert!(!READ_ONLY_COMMANDS_SET.contains(command), "{command} mutates");
+        assert!(
+            data_sync::COMMANDS.contains(&command),
+            "{command} is bridged"
+        );
+        assert!(
+            is_control_command(command),
+            "{command} needs remote control"
+        );
+        assert!(
+            !READ_ONLY_COMMANDS_SET.contains(command),
+            "{command} mutates"
+        );
     }
     assert!(is_control_command("goal_pause"));
 
@@ -5573,13 +5668,19 @@ fn goal_lifecycle_commands_are_bridged_and_control_gated_like_goal_pause() {
     assert!(KNOWN_COMMANDS_SET.contains(read));
     assert!(data_sync::COMMANDS.contains(&read));
     assert!(READ_ONLY_COMMANDS_SET.contains(read));
-    assert!(!is_control_command(read), "a catalog read is not remote control");
+    assert!(
+        !is_control_command(read),
+        "a catalog read is not remote control"
+    );
 }
 
 #[test]
 fn google_docs_auth_is_registered_as_internal_service_state() {
     let descriptor = cognia_companion::command_manifest::descriptor("connectors_google_docs_auth");
-    assert!(descriptor.is_some(), "generated admission table must include Google auth");
+    assert!(
+        descriptor.is_some(),
+        "generated admission table must include Google auth"
+    );
     assert!(is_service_only_command("connectors_google_docs_auth"));
     assert!(super::service_plane::COMMANDS.contains(&"connectors_google_docs_auth"));
 }
@@ -5588,13 +5689,39 @@ fn google_docs_auth_is_registered_as_internal_service_state() {
 async fn google_docs_auth_service_dispatch_emits_a_signal_without_secret_payload() {
     let state = test_state();
     let host = headless_host();
-    let before = dispatch("connectors_google_docs_auth", json!({"input":{"action":"snapshot"}}), &state, &host, "brain-local", Some(ACCOUNT_ID), Some("service")).await.expect("actual host snapshot");
+    let before = dispatch(
+        "connectors_google_docs_auth",
+        json!({"input":{"action":"snapshot"}}),
+        &state,
+        &host,
+        "brain-local",
+        Some(ACCOUNT_ID),
+        Some("service"),
+    )
+    .await
+    .expect("actual host snapshot");
     assert!(before.is_object());
     assert_eq!(before["state"]["version"], 1);
-    let refused = dispatch("connectors_google_docs_auth", json!({"input":{"action":"claim","state":"google:deliberate-mismatch","now":0}}), &state, &host, "brain-local", Some(ACCOUNT_ID), Some("service")).await;
+    let refused = dispatch(
+        "connectors_google_docs_auth",
+        json!({"input":{"action":"claim","state":"google:deliberate-mismatch","now":0}}),
+        &state,
+        &host,
+        "brain-local",
+        Some(ACCOUNT_ID),
+        Some("service"),
+    )
+    .await;
     assert!(refused.is_err());
-    let cognia_companion::event_bus::SubscribeResult::Ok { replay, .. } = host.event_bus.subscribe(Some(0), 0) else { panic!("signal retained") };
-    let signals: Vec<_> = replay.iter().filter(|event| event.event_type == "google-docs-connection-changed").collect();
+    let cognia_companion::event_bus::SubscribeResult::Ok { replay, .. } =
+        host.event_bus.subscribe(Some(0), 0)
+    else {
+        panic!("signal retained")
+    };
+    let signals: Vec<_> = replay
+        .iter()
+        .filter(|event| event.event_type == "google-docs-connection-changed")
+        .collect();
     assert_eq!(signals.len(), 1);
     assert_eq!(signals[0].payload, Value::Null);
 }

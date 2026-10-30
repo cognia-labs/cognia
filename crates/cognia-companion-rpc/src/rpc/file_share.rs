@@ -33,7 +33,10 @@ fn status_of(code: &str) -> StatusCode {
 }
 
 fn to_rpc_error(error: cognia_file_share::FileShareError) -> (StatusCode, Json<RpcError>) {
-    (status_of(error.code), Json(RpcError::new(error.code, error.message)))
+    (
+        status_of(error.code),
+        Json(RpcError::new(error.code, error.message)),
+    )
 }
 
 /// The principal the audit names for this caller.
@@ -59,7 +62,9 @@ pub(super) async fn dispatch(
     // `dispatch` already refused these to a device token through the
     // manifest's service target; checked again so the arm cannot be reached
     // around that table.
-    if cognia_file_share::rpc::HOST_ONLY_COMMANDS.contains(&name) && !cognia_companion::jwt::is_service_scope(scope) {
+    if cognia_file_share::rpc::HOST_ONLY_COMMANDS.contains(&name)
+        && !cognia_companion::jwt::is_service_scope(scope)
+    {
         return Err(RpcError::forbidden(
             "this command requires the headless service token",
         ));
@@ -78,13 +83,25 @@ mod tests {
     fn each_refusal_reaches_the_status_its_situation_deserves() {
         assert_eq!(status_of("invalid_request"), StatusCode::BAD_REQUEST);
         assert_eq!(status_of("not_found"), StatusCode::NOT_FOUND);
-        assert_eq!(status_of("file_share_locked"), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            status_of("file_share_locked"),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         assert_eq!(status_of("provider_failed"), StatusCode::BAD_GATEWAY);
         assert_eq!(status_of("collab_unreachable"), StatusCode::BAD_GATEWAY);
-        assert_eq!(status_of("collab_host_unregistered"), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            status_of("collab_host_unregistered"),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
         assert_eq!(status_of("store_failed"), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(status_of("policy_exceeded"), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(status_of("mount_not_synced"), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            status_of("policy_exceeded"),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            status_of("mount_not_synced"),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
         let (status, Json(body)) = to_rpc_error(cognia_file_share::FileShareError::new(
             "ttl_exceeds_policy",
             "too long",
@@ -109,10 +126,16 @@ mod tests {
             );
         }
         for name in cognia_file_share::rpc::STEP_UP_COMMANDS {
-            assert!(super::super::STEP_UP_COMMANDS.contains(name), "{name} needs an admin lease");
+            assert!(
+                super::super::STEP_UP_COMMANDS.contains(name),
+                "{name} needs an admin lease"
+            );
         }
         for name in COMMANDS {
-            assert!(super::super::known_commands().contains(name), "{name} is not in the manifest");
+            assert!(
+                super::super::known_commands().contains(name),
+                "{name} is not in the manifest"
+            );
         }
     }
 
@@ -121,9 +144,17 @@ mod tests {
         let state = super::super::tests::test_state();
         let host = crate::headless::HeadlessServices::stub_for_tests();
         for name in cognia_file_share::rpc::HOST_ONLY_COMMANDS {
-            let error = dispatch(name, serde_json::json!({}), &state, &host, "dev-1", None, None)
-                .await
-                .unwrap_err();
+            let error = dispatch(
+                name,
+                serde_json::json!({}),
+                &state,
+                &host,
+                "dev-1",
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
             assert_eq!(error.0, StatusCode::FORBIDDEN, "{name}");
         }
     }

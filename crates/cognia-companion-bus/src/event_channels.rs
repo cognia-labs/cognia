@@ -83,6 +83,9 @@ pub enum ChannelAudience {
     /// than observations: the brain is the party that answers them, and a
     /// paired phone receiving them would be reading someone else's mail.
     ServiceOnly,
+    /// The Host brain or a verified person brain, with partition filtering.
+    /// This admits observations only, never Host routing/control requests.
+    ServiceOrPersonBrain,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,12 +95,14 @@ pub enum ChannelAudience {
 /// The authenticated scope of one event-stream connection.
 ///
 /// Mirrors the JWT `scope` claim: the public `/ws/events` route is always
-/// [`Device`](ConnectionScope::Device), the loopback `/internal/events` route
-/// is always [`Service`](ConnectionScope::Service).
+/// [`Device`](ConnectionScope::Device). The loopback `/internal/events` route
+/// also verifies service or person-brain credentials before selecting a scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionScope {
     Device,
     Service,
+    /// Selected only after the internal route verifies a live person fleet.
+    PersonBrain,
 }
 
 impl ConnectionScope {
@@ -159,6 +164,9 @@ impl EventChannelSpec {
         match self.audience {
             ChannelAudience::Any => true,
             ChannelAudience::ServiceOnly => scope == ConnectionScope::Service,
+            ChannelAudience::ServiceOrPersonBrain => {
+                matches!(scope, ConnectionScope::Service | ConnectionScope::PersonBrain)
+            }
         }
     }
 }
@@ -274,6 +282,15 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
         note: "ADR-0233 A5: a managed desktop delegation was created, revoked or \
                ended. Empty payload; clients refetch the caller-scoped \
                `managed_desktop_delegation_list`.",
+    },
+    EventChannelSpec {
+        pattern: "managed-desktop://acceptance-changed",
+        audience: ChannelAudience::Any,
+        default_on: false,
+        tauri_forwarded: true,
+        note: "ADR-0233 A6: an acceptance run changed state (provisioning, \
+               awaiting its session, running, ended). Empty payload; clients \
+               refetch the caller-scoped `managed_desktop_acceptance_list`.",
     },
     EventChannelSpec {
         pattern: "ocr://download-progress",
@@ -720,20 +737,21 @@ pub static EVENT_CHANNELS: &[EventChannelSpec] = &[
         note: "host-driven external agent turn; carries agent output, permission and \
                elicitation requests for the run's own client",
     },
-    // Provider gateway — brain-only: these carry prompt and routing detail.
+    // Provider gateway observations. Person brains receive only their own
+    // partition's stamped frames; devices cannot subscribe to either channel.
     EventChannelSpec {
         pattern: "gateway://request-log",
-        audience: ChannelAudience::ServiceOnly,
+        audience: ChannelAudience::ServiceOrPersonBrain,
         default_on: false,
         tauri_forwarded: true,
-        note: "provider request log; carries prompt and routing metadata, brain-only",
+        note: "provider request log; carries routing metadata, Host brain or owning person brain only",
     },
     EventChannelSpec {
         pattern: "gateway://request-outcome",
-        audience: ChannelAudience::ServiceOnly,
+        audience: ChannelAudience::ServiceOrPersonBrain,
         default_on: false,
         tauri_forwarded: true,
-        note: "provider request outcome; brain-only for the same reason",
+        note: "provider request outcome; Host brain or owning person brain only, never a paired device",
     },
     EventChannelSpec {
         pattern: "gateway://decide",
@@ -1075,6 +1093,45 @@ mod tests {
     fn p5_person_brain_never_receives_service_event_visibility() {
         assert_eq!(ConnectionScope::from_claim("person-brain"), ConnectionScope::Device);
         assert_eq!(ConnectionScope::from_claim("service"), ConnectionScope::Service);
+    }
+
+    #[test]
+    fn verified_person_brain_adds_only_partition_gateway_observations() {
+        let mut person = EventSubscription::defaults_for(ConnectionScope::PersonBrain);
+        let mut device = EventSubscription::defaults_for(ConnectionScope::Device);
+        let channels = ["gateway://request-log", "gateway://request-outcome"];
+        assert!(
+            person
+                .apply(&request(SubscribeMode::Add, &channels))
+                .rejected
+                .is_empty()
+        );
+        assert_eq!(
+            device
+                .apply(&request(SubscribeMode::Add, &channels))
+                .rejected
+                .len(),
+            2
+        );
+        for spec in EVENT_CHANNELS {
+            if spec.permits(ConnectionScope::PersonBrain) && !spec.permits(ConnectionScope::Device) {
+                assert!(
+                    channels.contains(&spec.pattern),
+                    "unexpected member capability: {}",
+                    spec.pattern
+                );
+            }
+        }
+        for channel in ["gateway://decide", "gateway://translation-loss"] {
+            assert_eq!(
+                person
+                    .apply(&request(SubscribeMode::Add, &[channel]))
+                    .rejected[0]
+                    .reason,
+                reject_reason::SCOPE_FORBIDDEN
+            );
+            assert!(!person.allows(channel));
+        }
     }
 
     #[test]

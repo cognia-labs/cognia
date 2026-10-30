@@ -184,7 +184,7 @@ fn authorize_host_task_spawn(
         _ => {
             return Err(RpcError::validation_failed(
                 "invalid gateway task device".into(),
-            ))
+            ));
         }
     };
     let secret = config
@@ -382,7 +382,7 @@ pub(super) async fn dispatch(
                 gateway.status().account_generation
             })?;
             request.upstream_client = Some(
-                cognia_gateway::task_lease::validate_public_upstream(&request.provider.base_url)
+                cognia_gateway::task_lease::validate_public_upstreams(&std::iter::once(request.provider.base_url.clone()).chain(request.provider_overrides.iter().map(|provider| provider.base_url.clone())).collect::<Vec<_>>())
                     .await
                     .map_err(RpcError::validation_failed)?,
             );
@@ -488,7 +488,7 @@ pub(super) async fn dispatch(
                 None | Some(Value::Null) => None,
                 Some(Value::String(origin)) => Some(origin.clone()),
                 Some(_) => {
-                    return Err(RpcError::validation_failed("invalid originDeviceId".into()))
+                    return Err(RpcError::validation_failed("invalid originDeviceId".into()));
                 }
             };
             with_gateway(state, host, |gateway, _| {

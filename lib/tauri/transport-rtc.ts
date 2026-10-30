@@ -120,6 +120,7 @@ export const RECONNECT_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 8_0
 export const RECONNECT_NOW_MIN_SPACING_MS = 5_000
 
 export interface RtcMessage {
+  kind?: "operation-get"
   id: string
   method: string
   params?: Record<string, unknown>
@@ -160,6 +161,7 @@ export function parseRelayQuotaRetryAfterMs(message: string): number | null {
 const RELAY_QUOTA_DEFAULT_BACKOFF_MS = 15 * 60 * 1000
 
 export interface RtcCallOptions {
+  controlKind?: "operation-get"
   idempotencyKey?: string
   deadlineAt?: number
 }
@@ -203,6 +205,11 @@ export interface RtcEventBatch {
 // ---------------------------------------------------------------------------
 
 export interface TransportRtcOptions {
+  atomicEventWatch?: boolean
+  initialEventCursor?: number
+  eventObserver?: (event: RtcEvent) => void
+  subscriptionObserver?: (reply: { channels?: unknown; rejected?: unknown }) => void
+  resyncObserver?: (notice: { domains?: string[]; cursor?: number }) => void
   /** Public signaling endpoint URL (e.g. `wss://signaling.cognia.cn/signaling`). */
   signalingUrl: string
   /** Rendezvous id minted at pair time, baked into CompanionConfig. */
@@ -415,6 +422,8 @@ export class TransportRtc {
       relayHandshakeTimeoutMs: number
     }
 
+  private watchReady = false
+  private watchHasCursor = false
   private signaling: SignalingClient | null = null
   private signalingGeneration = 0
   /**
@@ -526,6 +535,11 @@ export class TransportRtc {
       throw new Error("TransportRtc: rendezvousId does not match the room descriptor")
     }
     this.opts = {
+      atomicEventWatch: opts.atomicEventWatch ?? false,
+      initialEventCursor: opts.initialEventCursor ?? 0,
+      eventObserver: opts.eventObserver ?? (() => {}),
+      subscriptionObserver: opts.subscriptionObserver ?? (() => {}),
+      resyncObserver: opts.resyncObserver ?? (() => {}),
       signalingUrl: opts.signalingUrl,
       rendezvousId: opts.rendezvousId,
       signalingRoomDescriptor: opts.signalingRoomDescriptor,
@@ -551,7 +565,8 @@ export class TransportRtc {
       persistEventCursor: opts.persistEventCursor ?? true,
       relayHandshakeTimeoutMs: opts.relayHandshakeTimeoutMs ?? 8_000,
     }
-    this.eventCursor = this.loadEventCursor()
+    this.eventCursor = opts.initialEventCursor ?? this.loadEventCursor()
+    this.watchHasCursor = opts.initialEventCursor !== undefined
   }
 
   // ── Public surface ─────────────────────────────────────────────────────
@@ -1052,8 +1067,7 @@ export class TransportRtc {
     }
     if (this.state !== "open") {
       // Subscribe before resuming, so the replay already covers our channels.
-      this.resendSubscriptions()
-      this.sendRawFrame(JSON.stringify({ kind: "event-resume", since: this.eventCursor }))
+      this.beginEventObservation()
       this.setState("open")
       this.settleOpen()
     } else {
@@ -1203,6 +1217,7 @@ export class TransportRtc {
       id,
       method,
       params,
+      ...(options.controlKind ? { kind: options.controlKind } : {}),
       idempotencyKey: options.idempotencyKey,
       protocolVersion: 2,
     }
@@ -1332,6 +1347,39 @@ export class TransportRtc {
   }
 
   /** A lane just opened: whatever the last one was told is not this one's. */
+  private beginEventObservation(): void {
+    if (this.opts.atomicEventWatch) {
+      this.watchReady = false
+      this.sendRawFrame(
+        JSON.stringify({
+          kind: "watch",
+          channels: [...this.channels.keys()],
+          ...(this.watchHasCursor ? { since: this.eventCursor } : {}),
+        })
+      )
+    } else {
+      this.resendSubscriptions()
+      this.sendRawFrame(JSON.stringify({ kind: "event-resume", since: this.eventCursor }))
+    }
+  }
+
+  private acceptWatchReady(frame: {
+    cursor?: unknown
+    channels?: unknown
+    rejected?: unknown
+  }): void {
+    if (
+      !this.opts.atomicEventWatch ||
+      !Number.isSafeInteger(frame.cursor) ||
+      (frame.cursor as number) < 0
+    )
+      return
+    this.eventCursor = frame.cursor as number
+    this.watchHasCursor = true
+    this.watchReady = true
+    this.opts.subscriptionObserver(frame)
+  }
+
   private resendSubscriptions(): void {
     this.acknowledgedChannels.clear()
     const channels = Array.from(this.channels.keys())
@@ -1349,6 +1397,7 @@ export class TransportRtc {
    * they name; a refusal parked forever would turn into a hang.
    */
   private acceptSubscribed(frame: { channels?: unknown; rejected?: unknown }): void {
+    this.opts.subscriptionObserver(frame)
     if (Array.isArray(frame.channels)) {
       for (const channel of frame.channels) {
         if (typeof channel === "string") this.acknowledgedChannels.add(channel)
@@ -1742,8 +1791,7 @@ export class TransportRtc {
       if (this.dc !== dc) return
       // `sendRawFrame` prefers this channel now that it is open, so the
       // subscription lands on the dispatcher the resume does.
-      this.resendSubscriptions()
-      dc.send(JSON.stringify({ kind: "event-resume", since: this.eventCursor }))
+      this.beginEventObservation()
       this.cancelP2pRetry()
       this.p2pRetryAttempt = 0
       if (this.negotiationTimer) {
@@ -2078,8 +2126,7 @@ export class TransportRtc {
     if (this.state === "open" && this.relayUsable()) {
       // Events the Host pushed into the dead channel were lost with it; the
       // relay dispatcher replays them from our cursor.
-      this.resendSubscriptions()
-      this.sendRawFrame(JSON.stringify({ kind: "event-resume", since: this.eventCursor }))
+      this.beginEventObservation()
     }
   }
 
@@ -2278,6 +2325,11 @@ export class TransportRtc {
       return
     }
 
+    if ("kind" in frame && (frame as { kind: string }).kind === "event-watch-ready") {
+      this.acceptWatchReady(frame as { cursor?: unknown; channels?: unknown; rejected?: unknown })
+      return
+    }
+
     if ("kind" in frame && (frame as { kind: string }).kind === "event-subscribed") {
       this.acceptSubscribed(frame as { channels?: unknown; rejected?: unknown })
       return
@@ -2382,6 +2434,8 @@ export class TransportRtc {
   }
 
   private startAuthoritativeResync(notice: { domains?: string[]; cursor?: number }): void {
+    this.opts.resyncObserver(notice)
+    if (this.opts.atomicEventWatch) return
     if (this.resyncInFlight) return
     const domains = notice.domains?.length ? notice.domains : ["*"]
     this.resyncInFlight = remoteEventResyncCoordinator
@@ -2430,6 +2484,7 @@ export class TransportRtc {
 
   /** One plain event: queued while an authoritative resync is in flight, else delivered. */
   private acceptRtcEvent(ev: RtcEvent): void {
+    if (this.opts.atomicEventWatch && !this.watchReady) return
     if (this.resyncInFlight) {
       if (this.pendingEventsDuringResync.length >= 128) {
         this.fail(new Error("TransportRtc: event queue overflow during resync"))
@@ -2447,6 +2502,7 @@ export class TransportRtc {
     this.highestSeq.set(ev.event, ev.seq)
     this.eventCursor = ev.seq
     this.saveEventCursor()
+    this.opts.eventObserver(ev)
     const handlers = this.channels.get(ev.event)
     if (handlers) {
       for (const handler of handlers) {

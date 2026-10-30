@@ -1281,6 +1281,11 @@ function commandCatalogSchemas() {
           pattern: "^[0-9a-f]{64}$",
           description: "sha256 of the Headless command catalog this host embeds. The strong ETag is derived from it.",
         },
+        schemas: {
+          type: "object",
+          description: "Admitted commands' complete per-plane input and domain output JSON schemas.",
+          additionalProperties: { type: "object", required: ["input", "output"], properties: { input: { type: "object" }, output: { type: "object" } }, additionalProperties: false },
+        },
         plane: enumeration(["device", "service"]),
         commands: {
           type: "array",

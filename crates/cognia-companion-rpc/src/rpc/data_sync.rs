@@ -267,8 +267,11 @@ fn waitpoint_command_needs_ts_authority(name: &str, headless: bool) -> bool {
     headless && matches!(name, "workflow_approval_list" | "workflow_approval_respond")
 }
 
-fn person_push_registry(state: &SharedState) -> std::sync::Arc<cognia_companion::push::PushTokenRegistry> {
-    cognia_companion::person_partition::current().map(|person| state.push_tokens.for_account(&person.account_id))
+fn person_push_registry(
+    state: &SharedState,
+) -> std::sync::Arc<cognia_companion::push::PushTokenRegistry> {
+    cognia_companion::person_partition::current()
+        .map(|person| state.push_tokens.for_account(&person.account_id))
         .unwrap_or_else(|| state.push_tokens.clone())
 }
 
@@ -1622,7 +1625,10 @@ mod tests {
         )
         .unwrap();
         assert!(paging.is_none());
-        assert_eq!(args, serde_json::json!({ "pageSize": 5, "pageToken": "opaque" }));
+        assert_eq!(
+            args,
+            serde_json::json!({ "pageSize": 5, "pageToken": "opaque" })
+        );
         // So do the Files library's two pages (ADR-0223 §9).
         for command in ["files_library_list", "files_library_folder_list"] {
             let (args, paging) = bridged_page_args(
@@ -1631,7 +1637,10 @@ mod tests {
             )
             .unwrap();
             assert!(paging.is_none(), "{command} pages natively");
-            assert_eq!(args, serde_json::json!({ "pageSize": 7, "pageToken": "o200" }));
+            assert_eq!(
+                args,
+                serde_json::json!({ "pageSize": 7, "pageToken": "o200" })
+            );
         }
         // Other bridged commands are untouched.
         let (args, paging) =
@@ -1722,24 +1731,39 @@ mod tests {
 #[cfg(test)]
 mod p5_tests {
     use super::*;
-    use cognia_companion::{person_partition::{scope, PersonPartition}, sync_registry::SyncTableDescriptor};
+    use cognia_companion::{
+        person_partition::{PersonPartition, scope},
+        sync_registry::SyncTableDescriptor,
+    };
     #[tokio::test]
     async fn p5d_dispatch_binds_partition_manifest_and_attach_without_changing_legacy() {
         use cognia_companion::ws_bridge::{self, test_support};
         let _slot = test_support::lock_slot().await;
         test_support::clear_socket_for_testing();
         struct Cleanup;
-        impl Drop for Cleanup { fn drop(&mut self) { test_support::clear_socket_for_testing(); } }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                test_support::clear_socket_for_testing();
+            }
+        }
         let _cleanup = Cleanup;
         let state = super::super::tests::test_state();
         let host = crate::headless::HeadlessServices::stub_for_tests();
         let person = PersonPartition::new("org-p5d".into(), "user-p5d".into());
         let mut operator = test_support::install_socket_for_testing(&state);
-        let mut personal = test_support::install_person_socket_for_testing(&state, &person.account_id);
+        let mut personal =
+            test_support::install_person_socket_for_testing(&state, &person.account_id);
         let other = PersonPartition::new("org-p5d".into(), "other-user-p5d".into());
-        let mut other_personal = test_support::install_person_socket_for_testing(&state, &other.account_id);
+        let mut other_personal =
+            test_support::install_person_socket_for_testing(&state, &other.account_id);
         for partitioned in [false, true] {
-            for command in ["host_feature_manifest", "session_attach", "session_detach", "session_mark_read", "session_mark_unread"] {
+            for command in [
+                "host_feature_manifest",
+                "session_attach",
+                "session_detach",
+                "session_mark_read",
+                "session_mark_unread",
+            ] {
                 scope(partitioned.then_some(person.clone()), async {
                     let args = json!({"sessionId":"s-p5d", "readThrough":20, "callerDeviceId":"spoofed-device",
                         "callerDeviceGrants":["host.admin"], "callerEventStreams":[{"leaseId":"spoofed-stream"}]});
@@ -1776,7 +1800,10 @@ mod p5_tests {
         }
         assert!(personal.try_recv().is_err());
         assert!(operator.try_recv().is_err());
-        assert!(other_personal.try_recv().is_err(), "unread writes never reach another person's brain");
+        assert!(
+            other_personal.try_recv().is_err(),
+            "unread writes never reach another person's brain"
+        );
     }
 
     #[tokio::test]
@@ -1784,20 +1811,71 @@ mod p5_tests {
         let state = super::super::tests::test_state();
         let services = crate::headless::HeadlessServices::stub_for_tests();
         let host = services;
-        state.sync_registry.register(SyncTableDescriptor { name: "operator-only".into(), description: "operator table".into(), has_tombstones: false });
+        state.sync_registry.register(SyncTableDescriptor {
+            name: "operator-only".into(),
+            description: "operator table".into(),
+            has_tombstones: false,
+        });
         let a = PersonPartition::new("org".into(), "a".into());
         let b = PersonPartition::new("org".into(), "b".into());
         for (person, token) in [(a.clone(), "a-token"), (b.clone(), "b-token")] {
             scope(Some(person), async {
-                dispatch("register_push_token", json!({"provider":"fcm", "token":token}), &state, &host, "same-device", Some("org"), Some("device")).await.unwrap();
-                let tables = dispatch("sync_list_tables", json!({}), &state, &host, "same-device", Some("org"), Some("device")).await.unwrap();
+                dispatch(
+                    "register_push_token",
+                    json!({"provider":"fcm", "token":token}),
+                    &state,
+                    &host,
+                    "same-device",
+                    Some("org"),
+                    Some("device"),
+                )
+                .await
+                .unwrap();
+                let tables = dispatch(
+                    "sync_list_tables",
+                    json!({}),
+                    &state,
+                    &host,
+                    "same-device",
+                    Some("org"),
+                    Some("device"),
+                )
+                .await
+                .unwrap();
                 assert!(!tables.to_string().contains("operator-only"));
-            }).await;
+            })
+            .await;
         }
-        assert_eq!(state.push_tokens.for_account(&a.account_id).get("same-device").unwrap().token, "a-token");
-        assert_eq!(state.push_tokens.for_account(&b.account_id).get("same-device").unwrap().token, "b-token");
+        assert_eq!(
+            state
+                .push_tokens
+                .for_account(&a.account_id)
+                .get("same-device")
+                .unwrap()
+                .token,
+            "a-token"
+        );
+        assert_eq!(
+            state
+                .push_tokens
+                .for_account(&b.account_id)
+                .get("same-device")
+                .unwrap()
+                .token,
+            "b-token"
+        );
         assert!(state.push_tokens.get("same-device").is_none());
-        let legacy = dispatch("sync_list_tables", json!({}), &state, &host, "device", Some("org"), Some("device")).await.unwrap();
+        let legacy = dispatch(
+            "sync_list_tables",
+            json!({}),
+            &state,
+            &host,
+            "device",
+            Some("org"),
+            Some("device"),
+        )
+        .await
+        .unwrap();
         assert!(legacy.to_string().contains("operator-only"));
     }
 }

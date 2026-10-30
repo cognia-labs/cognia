@@ -686,6 +686,10 @@ export class CompanionTransport implements Transport {
    * it was sent on and a reconnect starts again from the catalog defaults.
    */
   private acknowledgedChannels: Set<string> = new Set()
+  /** Accepted delivery state, distinct from answered/rejected waiters above. */
+  private acceptedSocketChannels: Set<string> = new Set()
+  /** Do not treat an earlier ack as readiness while newer edits are pending. */
+  private pendingSubscribeFrames = 0
   /**
    * Callers parked in {@link whenSubscribed}, each with the channels it is
    * waiting on.
@@ -1283,6 +1287,7 @@ export class CompanionTransport implements Transport {
           // entry made `whenSubscribed` answer instantly for a channel the
           // host had just been told to drop.
           this.acknowledgedChannels.delete(event)
+          this.acceptedSocketChannels.delete(event)
           this.sendSubscribeFrame("remove", [event])
         }
       }
@@ -1307,6 +1312,7 @@ export class CompanionTransport implements Transport {
     if (!this.ws || this.ws.readyState !== 1) return
     try {
       this.ws.send(JSON.stringify({ type: "subscribe", mode, channels }))
+      this.pendingSubscribeFrames += 1
     } catch {
       // A send failure surfaces through onclose → reconnect → onopen re-send.
     }
@@ -1351,6 +1357,16 @@ export class CompanionTransport implements Transport {
       const timer = setTimeout(waiter.done, timeoutMs)
       this.subscribeWaiters.add(waiter)
     })
+  }
+
+  hasSubscribedChannels(channels: readonly string[]): boolean {
+    return (
+      this.wsState === "connected" &&
+      this.pendingSubscribeFrames === 0 &&
+      channels.every(
+        (channel) => this.channelHandlers.has(channel) && this.acceptedSocketChannels.has(channel)
+      )
+    )
   }
 
   /**
@@ -2347,6 +2363,8 @@ export class CompanionTransport implements Transport {
       if (this.ws !== ws) return // stale reference
       // A new socket carries none of the old one's subscriptions.
       this.acknowledgedChannels.clear()
+      this.acceptedSocketChannels.clear()
+      this.pendingSubscribeFrames = 0
       this.wsState = "connected"
       this.setPlaneHealth({ events: "replaying" })
       this.setConnectionState("connected")
@@ -2412,6 +2430,7 @@ export class CompanionTransport implements Transport {
     }
 
     if (type === "subscribed" || type === "subscribe_error") {
+      this.pendingSubscribeFrames = Math.max(0, this.pendingSubscribeFrames - 1)
       // Acknowledgement of a subscribe control frame. Rejected channels are
       // surfaced for diagnostics; nothing else to do — delivery of accepted
       // channels starts with the next event frame.
@@ -2425,6 +2444,7 @@ export class CompanionTransport implements Transport {
         this.lastRejectedChannels = rejectedChannels
       }
       if (type === "subscribe_error") {
+        this.acceptedSocketChannels.clear()
         this.lastSubscribeError =
           typeof frame["message"] === "string" ? (frame["message"] as string) : "subscribe_error"
         // The host refused to act on the frame at all, so nothing it did not
@@ -2443,6 +2463,14 @@ export class CompanionTransport implements Transport {
       // arrive from `subscriptionDiagnostics`, and parking it forever would
       // turn a rejection into a hang.
       const accepted = frame["channels"]
+      this.acceptedSocketChannels = new Set(
+        Array.isArray(accepted)
+          ? accepted.filter(
+              (channel): channel is string =>
+                typeof channel === "string" && !rejectedChannels.includes(channel)
+            )
+          : []
+      )
       if (Array.isArray(accepted)) {
         for (const channel of accepted) {
           if (typeof channel === "string") this.acknowledgedChannels.add(channel)
@@ -2617,6 +2645,8 @@ export class CompanionTransport implements Transport {
    */
   private forgetSocketAcknowledgements(): void {
     this.acknowledgedChannels.clear()
+    this.acceptedSocketChannels.clear()
+    this.pendingSubscribeFrames = 0
   }
 
   private closeWebSocket(): void {

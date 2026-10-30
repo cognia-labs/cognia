@@ -945,6 +945,16 @@ async fn authorized_org_operation(
     ledger.org_operation(&context.tenant_id, &context.device_id, operation_id, &scope).map_err(store_error)
 }
 
+/// The receipt lookup shared by HTTP and the authenticated relay control lane.
+/// Never read the bare ledger here: person/org receipt scopes are part of ownership.
+pub(crate) async fn operation_document(context: &DeviceContext, operation_id: &str) -> Result<Value, Problem> {
+    match authorized_operation(store(), context, operation_id).await? {
+        Some(operation) => serde_json::to_value(super::operations::Operation::from(operation))
+            .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "operation_encode_failed", "could not encode operation")),
+        None => Err(api_error(StatusCode::NOT_FOUND, "operation_not_found", "the requested operation does not exist for this device")),
+    }
+}
+
 pub(crate) async fn operation_handler(
     Path(operation_id): Path<String>,
     Extension(context): Extension<DeviceContext>,
@@ -2731,6 +2741,11 @@ fn store_error(error: SecurityStoreError) -> Problem {
             "idempotency_conflict",
             "the idempotency key was already used with a different request",
         ),
+        SecurityStoreError::ReceiptUnavailable => api_error(
+            StatusCode::GONE,
+            "receipt_unavailable",
+            "the historical receipt is unavailable; do not automatically repeat the side effect",
+        ),
         SecurityStoreError::InvalidPolicy => api_error(
             StatusCode::PRECONDITION_REQUIRED,
             "signed_policy_required",
@@ -2789,6 +2804,14 @@ fn unix_time_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unavailable_historical_receipt_is_terminal_at_the_operation_api() {
+        let error = super::store_error(super::SecurityStoreError::ReceiptUnavailable);
+        assert_eq!(error.status_code(), axum::http::StatusCode::GONE);
+        assert_eq!(error.code, "receipt_unavailable");
+        assert!(!error.retryable);
+    }
+
     use super::super::server::TransportPlane;
     use super::*;
     use parking_lot::RwLock;
@@ -3605,6 +3628,87 @@ mod tests {
         assert_eq!(hidden_body["code"], "operation_not_found");
         assert_eq!(hidden_body["requestId"], "request-hidden");
         assert_eq!(hidden_body["operationId"], operation_id);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn relay_operation_document_keeps_receipts_and_rejects_foreign_principals() {
+        use crate::security_store::{
+            install_security_store, security_store, test_guard, IdempotencyDecision,
+        };
+        let _guard = test_guard();
+        struct RestoreStore(Option<Arc<SecurityStore>>);
+        impl Drop for RestoreStore {
+            fn drop(&mut self) {
+                install_security_store(self.0.take());
+            }
+        }
+        let _restore = RestoreStore(security_store());
+        let ledger = SecurityStore::in_memory().unwrap();
+        install_security_store(Some(ledger.clone()));
+        let IdempotencyDecision::Started { operation_id } = ledger
+            .begin_idempotent_operation(
+                "relay-document-tenant",
+                "relay-document-device",
+                "host",
+                "relay-document-key",
+                "hash",
+                100,
+            )
+            .unwrap()
+        else {
+            panic!("new operation");
+        };
+        ledger
+            .mark_operation_running("relay-document-tenant", &operation_id, 101)
+            .unwrap();
+        ledger
+            .complete_idempotent_operation(
+                "relay-document-tenant",
+                "relay-document-device",
+                "relay-document-key",
+                &json!({"httpStatus": 503, "error": {
+                    "code": "operation_interrupted", "detail": "host restarted", "retryable": true,
+                    "details": {"phase": "dispatch"},
+                }})
+                .to_string(),
+                false,
+                102,
+            )
+            .unwrap();
+        let context = DeviceContext {
+            device_id: "relay-document-device".into(),
+            tenant_id: "relay-document-tenant".into(),
+            scope: "device".into(),
+            granted_scopes: vec![],
+            authorization_capabilities: None,
+        };
+        let document = operation_document(&context, &operation_id).await.unwrap();
+        assert_eq!(document["id"], operation_id);
+        assert_eq!(document["done"], true);
+        assert_eq!(document["error"]["code"], "operation_interrupted");
+        assert_eq!(document["error"]["operationId"], operation_id);
+        assert_eq!(document["error"]["retryable"], true);
+        assert_eq!(document["error"]["details"]["phase"], "dispatch");
+        assert!(document.get("result").is_none());
+        assert_eq!(document["metadata"]["createdAt"], 100);
+        assert_eq!(document["metadata"]["updatedAt"], 102);
+        for foreign in [
+            DeviceContext {
+                device_id: "another-device".into(),
+                ..context.clone()
+            },
+            DeviceContext {
+                tenant_id: "another-tenant".into(),
+                ..context.clone()
+            },
+        ] {
+            let refused = operation_document(&foreign, &operation_id)
+                .await
+                .unwrap_err();
+            assert_eq!(refused.status_code(), StatusCode::NOT_FOUND);
+            assert_eq!(refused.code, "operation_not_found");
+        }
     }
 
     #[tokio::test]

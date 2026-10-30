@@ -1752,10 +1752,13 @@ dependencies = [
 name = "cognia-agents"
 version = "0.1.0"
 dependencies = [
+ "cognia-core",
  "dirs 7.0.0",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tauri",
+ "tempfile",
  "toml_edit 0.25.16+spec-1.1.0",
 ]
 
@@ -2326,6 +2329,7 @@ dependencies = [
  "tower",
  "url",
  "uuid",
+ "vodozemac",
  "wiremock",
 ]
 
@@ -2608,10 +2612,13 @@ dependencies = [
  "axum",
  "bytes",
  "chrono",
+ "cognia-agents",
+ "cognia-core",
  "cognia-instrument",
  "cognia-net",
  "cognia-secrets",
  "futures-util",
+ "hex",
  "log",
  "parking_lot",
  "rand 0.10.3",
@@ -2619,8 +2626,10 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "subtle",
  "tauri",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "toml_edit 0.25.16+spec-1.1.0",
@@ -8686,6 +8695,7 @@ dependencies = [
  "itertools 0.15.0",
  "js_option",
  "matrix-sdk-common",
+ "matrix-sdk-qrcode",
  "pbkdf2",
  "rand 0.10.3",
  "rmp-serde",
@@ -8703,6 +8713,19 @@ dependencies = [
  "url",
  "vodozemac",
  "zeroize",
+]
+
+[[package]]
+name = "matrix-sdk-qrcode"
+version = "0.19.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a806faaba375c3da09d9e7a97d99a6c9b11c5cbcfd4992694acba7a3f682262"
+dependencies = [
+ "byteorder",
+ "qrcode",
+ "ruma",
+ "thiserror 2.0.21",
+ "vodozemac",
 ]
 
 [[package]]

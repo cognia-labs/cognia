@@ -1340,22 +1340,26 @@ mod tests {
             Value::String(root.path().join("nested").to_string_lossy().to_string())
         );
         assert_eq!(target.unwrap().workspace.workspace_id, "workspace-a");
-        assert!(prepare_remote_args(
-            &GitWorkspaceSource::DesktopRegistry,
-            "git_repo_state",
-            json!({ "workspaceId": "workspace-a", "relativePath": "../escape" }),
-            Some("acct-source-a"),
-            None,
-        )
-        .is_err());
-        assert!(prepare_remote_args(
-            &GitWorkspaceSource::DesktopRegistry,
-            "git_repo_state",
-            json!({ "workspaceId": "workspace-a" }),
-            Some("acct-source-b"),
-            None,
-        )
-        .is_err());
+        assert!(
+            prepare_remote_args(
+                &GitWorkspaceSource::DesktopRegistry,
+                "git_repo_state",
+                json!({ "workspaceId": "workspace-a", "relativePath": "../escape" }),
+                Some("acct-source-a"),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            prepare_remote_args(
+                &GitWorkspaceSource::DesktopRegistry,
+                "git_repo_state",
+                json!({ "workspaceId": "workspace-a" }),
+                Some("acct-source-b"),
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1372,28 +1376,32 @@ mod tests {
         std::fs::create_dir_all(&granted_child).unwrap();
         register_workspace("acct-upward", "workspace-upward", &granted_child);
 
-        assert!(prepare_remote_args(
-            &GitWorkspaceSource::DesktopRegistry,
-            "git_status",
-            json!({ "workspaceId": "workspace-upward" }),
-            Some("acct-upward"),
-            None,
-        )
-        .is_err());
+        assert!(
+            prepare_remote_args(
+                &GitWorkspaceSource::DesktopRegistry,
+                "git_status",
+                json!({ "workspaceId": "workspace-upward" }),
+                Some("acct-upward"),
+                None,
+            )
+            .is_err()
+        );
 
         let nested = granted_child.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         cognia_git::repo::init(&nested.to_string_lossy())
             .await
             .unwrap();
-        assert!(prepare_remote_args(
-            &GitWorkspaceSource::DesktopRegistry,
-            "git_status",
-            json!({ "workspaceId": "workspace-upward", "relativePath": "nested" }),
-            Some("acct-upward"),
-            None,
-        )
-        .is_ok());
+        assert!(
+            prepare_remote_args(
+                &GitWorkspaceSource::DesktopRegistry,
+                "git_status",
+                json!({ "workspaceId": "workspace-upward", "relativePath": "nested" }),
+                Some("acct-upward"),
+                None,
+            )
+            .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1539,14 +1547,16 @@ mod tests {
         assert_eq!(target.unwrap().workspace.display_name, "alpha");
 
         // The desktop registry never sees headless ids, and vice versa.
-        assert!(prepare_remote_args(
-            &GitWorkspaceSource::DesktopRegistry,
-            "git_repo_state",
-            json!({ "workspaceId": "alpha", "relativePath": "" }),
-            Some("acct"),
-            None,
-        )
-        .is_err());
+        assert!(
+            prepare_remote_args(
+                &GitWorkspaceSource::DesktopRegistry,
+                "git_repo_state",
+                json!({ "workspaceId": "alpha", "relativePath": "" }),
+                Some("acct"),
+                None,
+            )
+            .is_err()
+        );
     }
 
     #[test]

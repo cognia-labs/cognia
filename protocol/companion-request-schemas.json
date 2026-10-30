@@ -1519,6 +1519,15 @@
                 "requireApprovalForWrites"
               ],
               "additionalProperties": false
+            },
+            "paused": {
+              "type": "boolean"
+            },
+            "triggerInputSlots": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           },
           "required": [
@@ -1899,6 +1908,79 @@
             "operation",
             "installationId",
             "recipients"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "automation"
+            },
+            "operationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "installationId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "action": {
+              "enum": [
+                "pause",
+                "resume",
+                "cancel"
+              ]
+            },
+            "deliveryId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "adminLease": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "operationId",
+            "installationId",
+            "action"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "const": "input_slot"
+            },
+            "operationId": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "installationId": {
+              "type": "string"
+            },
+            "triggerId": {
+              "type": "string"
+            },
+            "slotId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "adminLease": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "operationId",
+            "installationId",
+            "triggerId",
+            "slotId"
           ],
           "additionalProperties": false
         }
@@ -5275,6 +5357,49 @@
       },
       "additionalProperties": false
     },
+    "connectors_bounded_http_request": {
+      "type": "object",
+      "properties": {
+        "req": {
+          "type": "object",
+          "required": [
+            "url",
+            "method"
+          ],
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "method": {
+              "type": "string"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "body": {
+              "type": "string"
+            },
+            "timeoutMs": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": false
+        },
+        "maxResponseBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20971520
+        }
+      },
+      "required": [
+        "req",
+        "maxResponseBytes"
+      ],
+      "additionalProperties": false
+    },
     "connectors_discord_upload": {
       "type": "object",
       "required": [
@@ -5751,6 +5876,105 @@
       },
       "additionalProperties": false
     },
+    "connectors_lark_user_auth": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "snapshot"
+                },
+                "adapterId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "adapterId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "authorize"
+                },
+                "adapterId": {
+                  "type": "string"
+                },
+                "expectedAuthorizationEpoch": {
+                  "type": "string"
+                },
+                "accessToken": {
+                  "type": "string"
+                },
+                "refreshToken": {
+                  "type": "string"
+                },
+                "pendingState": {
+                  "type": "string"
+                },
+                "accountLabel": {
+                  "type": "string"
+                },
+                "scopes": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "adapterId",
+                "expectedAuthorizationEpoch",
+                "accessToken",
+                "refreshToken",
+                "pendingState"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "const": "refresh"
+                },
+                "adapterId": {
+                  "type": "string"
+                },
+                "expectedAuthorizationEpoch": {
+                  "type": "string"
+                },
+                "accessToken": {
+                  "type": "string"
+                },
+                "refreshToken": {
+                  "type": "string"
+                },
+                "expectedRefreshRevision": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "adapterId",
+                "expectedAuthorizationEpoch",
+                "accessToken",
+                "refreshToken",
+                "expectedRefreshRevision"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "additionalProperties": false
+    },
     "connectors_lark_ws_close": {
       "type": "object",
       "required": [
@@ -5778,6 +6002,219 @@
     "connectors_list_adapters": {
       "type": "object"
     },
+    "connectors_matrix_crypto_backup": {
+      "type": "object",
+      "required": [
+        "req"
+      ],
+      "properties": {
+        "req": {
+          "type": "object",
+          "required": [
+            "adapterId",
+            "action"
+          ],
+          "properties": {
+            "adapterId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "prepare",
+                "beginCreate",
+                "cancelCreate",
+                "enable",
+                "restore",
+                "status"
+              ]
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "backupInfo": {
+              "type": "object",
+              "required": [
+                "algorithm",
+                "auth_data"
+              ],
+              "properties": {
+                "algorithm": {
+                  "type": "string",
+                  "const": "m.megolm_backup.v1.curve25519-aes-sha2"
+                },
+                "auth_data": {
+                  "type": "object",
+                  "required": [
+                    "public_key"
+                  ],
+                  "properties": {
+                    "public_key": {
+                      "type": "string"
+                    },
+                    "signatures": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "etag": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "recoveryKey": {
+              "type": "string",
+              "writeOnly": true,
+              "maxLength": 256
+            },
+            "createClaim": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "rooms": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "sessions"
+                ],
+                "properties": {
+                  "sessions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "required": [
+                        "session_data"
+                      ],
+                      "properties": {
+                        "first_message_index": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "forwarded_count": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "is_verified": {
+                          "type": "boolean"
+                        },
+                        "session_data": {
+                          "type": "object",
+                          "required": [
+                            "ciphertext",
+                            "mac",
+                            "ephemeral"
+                          ],
+                          "properties": {
+                            "ciphertext": {
+                              "type": "string"
+                            },
+                            "mac": {
+                              "type": "string"
+                            },
+                            "ephemeral": {
+                              "type": "string"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "action": {
+                    "const": "beginCreate"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "backupInfo",
+                  "createClaim"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "action": {
+                    "const": "cancelCreate"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "createClaim"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "action": {
+                    "const": "enable"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "version",
+                  "backupInfo"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "action": {
+                    "const": "restore"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "version",
+                  "backupInfo",
+                  "recoveryKey",
+                  "rooms"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "connectors_matrix_crypto_close": {
       "type": "object",
       "required": [
@@ -5788,6 +6225,65 @@
           "type": "string",
           "example": "",
           "description": "Also accepted as `adapterId`."
+        }
+      },
+      "additionalProperties": false
+    },
+    "connectors_matrix_crypto_cross_signing": {
+      "type": "object",
+      "required": [
+        "req"
+      ],
+      "properties": {
+        "req": {
+          "type": "object",
+          "required": [
+            "adapterId",
+            "action"
+          ],
+          "properties": {
+            "adapterId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "enum": [
+                "prepare",
+                "status"
+              ]
+            },
+            "serverMasterKey": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "userId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "action": {
+                    "const": "prepare"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "serverMasterKey"
+                ]
+              }
+            }
+          ],
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -5918,6 +6414,67 @@
       },
       "additionalProperties": false
     },
+    "connectors_matrix_crypto_verification": {
+      "type": "object",
+      "required": [
+        "req"
+      ],
+      "properties": {
+        "req": {
+          "type": "object",
+          "required": [
+            "adapterId",
+            "action",
+            "userId"
+          ],
+          "properties": {
+            "adapterId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "action": {
+              "enum": [
+                "request",
+                "status",
+                "accept",
+                "startSas",
+                "acceptSas",
+                "confirmSas",
+                "generateQr",
+                "scanQr",
+                "confirmQr",
+                "cancel",
+                "list"
+              ]
+            },
+            "userId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "deviceId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "flowId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "qrBytes": {
+              "type": "array",
+              "maxItems": 4096,
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
     "connectors_matrix_encrypted_media_fetch": {
       "type": "object",
       "required": [
@@ -5975,6 +6532,58 @@
             },
             "contentType": {
               "type": "string"
+            },
+            "qq": {
+              "type": "object",
+              "required": [
+                "fileType",
+                "fileName"
+              ],
+              "properties": {
+                "fileType": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4
+                },
+                "fileName": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reusableAsset": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "responseMode": {
+              "type": "string",
+              "enum": [
+                "contentUri",
+                "http"
+              ]
+            },
+            "multipart": {
+              "type": "object",
+              "required": [
+                "fieldName",
+                "filename",
+                "fields"
+              ],
+              "properties": {
+                "fieldName": {
+                  "type": "string"
+                },
+                "filename": {
+                  "type": "string"
+                },
+                "fields": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
@@ -12862,6 +13471,295 @@
       },
       "additionalProperties": false
     },
+    "managed_desktop_acceptance_attach": {
+      "type": "object",
+      "properties": {
+        "acceptanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sessionKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "acceptanceId",
+        "sessionKey"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_cancel": {
+      "type": "object",
+      "properties": {
+        "acceptanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "acceptanceId"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_checkpoint": {
+      "type": "object",
+      "properties": {
+        "acceptanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sessionKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "criterionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "acceptanceId",
+        "sessionKey",
+        "criterionId",
+        "idempotencyKey"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_complete": {
+      "type": "object",
+      "properties": {
+        "acceptanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sessionKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "passed",
+            "failed",
+            "inconclusive",
+            "cancelled"
+          ]
+        },
+        "criteria": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "criterionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "passed",
+                  "failed",
+                  "incomplete"
+                ]
+              },
+              "artifactIds": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            },
+            "required": [
+              "criterionId",
+              "outcome",
+              "artifactIds"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "acceptanceId",
+        "sessionKey",
+        "idempotencyKey",
+        "outcome",
+        "criteria",
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_list": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_start": {
+      "type": "object",
+      "properties": {
+        "deliveryId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "deliveryRevision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "commit",
+            "bundle"
+          ]
+        },
+        "providerConfigId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "lifetimeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "criteria": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "screenshotRequired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "description",
+              "screenshotRequired"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "acceptanceFiles": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "argv": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "string",
+            "maxLength": 128
+          }
+        },
+        "quoteId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "deliveryId",
+        "deliveryRevision",
+        "mode",
+        "providerConfigId",
+        "lifetimeSeconds",
+        "criteria",
+        "acceptanceFiles",
+        "argv",
+        "quoteId",
+        "idempotencyKey"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_status": {
+      "type": "object",
+      "properties": {
+        "acceptanceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "acceptanceId"
+      ],
+      "additionalProperties": false
+    },
     "managed_desktop_authorize": {
       "type": "object",
       "properties": {
@@ -13918,9 +14816,22 @@
           "minItems": 1,
           "maxItems": 50,
           "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 1024
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1024
+              },
+              "screenshotRequired": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "description",
+              "screenshotRequired"
+            ],
+            "additionalProperties": false
           }
         },
         "acceptanceFiles": {

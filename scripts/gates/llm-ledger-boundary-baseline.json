@@ -51,6 +51,12 @@
       "entries": ["ai:generateText", "ai:streamText"],
       "note": "Canvas AI actions (canvas UI and the plugin API): generateText/streamText, no ledger."
     },
+    "lib/ai/generation/template-assist.ts": {
+      "reason": "ledgered-entry",
+      "entries": ["ai:generateObject", "ai:generateText"],
+      "seam": "lib/ai/ledgered-generation-seam.ts",
+      "note": "All three template operations use generateThroughSeam. hooks/chat/use-template-assist.ts binds ledgeredGenerationSeam to the actually resolved provider (including Anthropic fallback); PII checks precede reservation, SDK calls retain schema and abort with the reserved output bound and no hidden retries."
+    },
     "lib/ai/operations/handlers/ai-sdk-surface.ts": {
       "reason": "unwrapped",
       "entries": ["ai:generateObject", "ai:generateText", "ai:streamText"],
@@ -70,6 +76,12 @@
       "reason": "ledgered-entry",
       "entries": ["llm-client:createLlmClient"],
       "note": "buildRendererLlmClient wraps every client with ledgerUtilityCalls (utilityLedger by default): titles, timeline labels, the /goal judge, utility and agent-role clients, AI commit messages, the room primary router."
+    },
+    "lib/gateway/runtime-bridge.ts": {
+      "reason": "ledgered-entry",
+      "entries": ["ai:generateText"],
+      "seam": "lib/ai/ledgered-model-call.ts",
+      "note": "Internal native gateway search synthesis and inline-image understanding use the pinned authorized provider/model and beginLedgeredGeneration; returned usage is settled before the response is published, with deterministic gateway session usage attribution."
     },
     "lib/plugin/runtime/renderer-host-runtime.ts": {
       "reason": "unwrapped",
@@ -181,7 +193,7 @@
       "reason": "ledgered-entry",
       "entries": ["ai:generateText"],
       "seam": "lib/ai/ledgered-generation-seam.ts",
-      "note": "Self-reflective RAG grounding judge. The call takes the host's `generate` seam (WP-L2); no app path reaches it today \u2014 nothing builds a RAGPipeline and the app's grounding is heuristic \u2014 and a host that runs it takes the seam from `lib/ai/ledgered-generation-seam.ts`."
+      "note": "Self-reflective RAG grounding judge. The call takes the host's `generate` seam (WP-L2); no app path reaches it today — nothing builds a RAGPipeline and the app's grounding is heuristic — and a host that runs it takes the seam from `lib/ai/ledgered-generation-seam.ts`."
     },
     "packages/rag/src/contextual-retrieval.ts": {
       "reason": "ledgered-entry",
@@ -239,30 +251,15 @@
       "seam": "lib/ai/ledgered-generation-seam.ts",
       "note": "Standalone (BYOK) cited web answer. The synthesis takes the host's `resolveGenerate` seam; the app binding `lib/search/standalone-answer.ts` returns the ledgered seam from `lib/ai/ledgered-generation-seam.ts`, bound to the provider it resolved."
     },
-    "sidecar/src/runtimes/claude-agent-sdk/index.ts": {
-      "reason": "ledgered-entry",
-      "entries": ["agent-sdk:query"],
-      "note": "Agent SDK turns: an envelope ledger stamp engages createCallLedgerGate (tracked attempts, PreToolUse budget hooks, CLAUDE_CODE_MAX_RETRIES=0, no fallbackModel). A send without the stamp (anything but a routed Tauri chat turn) runs unledgered."
-    },
-    "sidecar/src/host/feature-call/index.ts": {
-      "reason": "unwrapped",
-      "entries": ["language-model:doGenerate", "language-model:doStream"],
-      "note": "Sidecar feature calls for providers the renderer cannot execute (Bedrock, plugin protocols): model.doGenerate/doStream and adapter streams, with no ledger stamp on this path."
-    },
     "sidecar/src/hooks/native-executor.ts": {
       "reason": "unwrapped",
       "entries": ["agent-sdk:query"],
       "note": "Native prompt/agent hooks: an Agent SDK query under the hook's own $0.25 budget governor, not the CallLedger."
     },
-    "sidecar/test-support/live-harness.ts": {
-      "reason": "not-a-provider-call",
-      "entries": ["endpoint:anthropic-messages"],
-      "note": "Helper for the *.live.test.* suites and the conformance suite: an in-process mock of the Anthropic Messages API; it never reaches a provider."
-    },
-    "sidecar/src/runtimes/claude-agent-sdk/warm-pool.ts": {
-      "reason": "not-a-provider-call",
-      "entries": ["agent-sdk:startup"],
-      "note": "startup() spawns and initializes a Claude Code subprocess with no prompt; the model call is the query anthropic.mjs sends on the claimed warm process."
+    "sidecar/src/host/feature-call/index.ts": {
+      "reason": "unwrapped",
+      "entries": ["language-model:doGenerate", "language-model:doStream"],
+      "note": "Sidecar feature calls for providers the renderer cannot execute (Bedrock, plugin protocols): model.doGenerate/doStream and adapter streams, with no ledger stamp on this path."
     },
     "sidecar/src/providers/protocol-adapters/ai-sdk-adapter.ts": {
       "reason": "ledgered-entry",
@@ -270,11 +267,20 @@
       "seam": "sidecar/src/runtimes/ai-sdk/index.ts",
       "note": "streamText for every sidecar AI SDK leg; for a stamped send ai-sdk.mjs reserves each leg (and compaction/optical summaries) through call-ledger-gate and passes maxRetries: 0. Unstamped sends and feature-call.mjs (its own row) are unledgered."
     },
-    "lib/ai/generation/template-assist.ts": {
+    "sidecar/src/runtimes/claude-agent-sdk/index.ts": {
       "reason": "ledgered-entry",
-      "entries": ["ai:generateObject", "ai:generateText"],
-      "seam": "lib/ai/ledgered-generation-seam.ts",
-      "note": "All three template operations use generateThroughSeam. hooks/chat/use-template-assist.ts binds ledgeredGenerationSeam to the actually resolved provider (including Anthropic fallback); PII checks precede reservation, SDK calls retain schema and abort with the reserved output bound and no hidden retries."
+      "entries": ["agent-sdk:query"],
+      "note": "Agent SDK turns: an envelope ledger stamp engages createCallLedgerGate (tracked attempts, PreToolUse budget hooks, CLAUDE_CODE_MAX_RETRIES=0, no fallbackModel). A send without the stamp (anything but a routed Tauri chat turn) runs unledgered."
+    },
+    "sidecar/src/runtimes/claude-agent-sdk/warm-pool.ts": {
+      "reason": "not-a-provider-call",
+      "entries": ["agent-sdk:startup"],
+      "note": "startup() spawns and initializes a Claude Code subprocess with no prompt; the model call is the query anthropic.mjs sends on the claimed warm process."
+    },
+    "sidecar/test-support/live-harness.ts": {
+      "reason": "not-a-provider-call",
+      "entries": ["endpoint:anthropic-messages"],
+      "note": "Helper for the *.live.test.* suites and the conformance suite: an in-process mock of the Anthropic Messages API; it never reaches a provider."
     }
   }
 }

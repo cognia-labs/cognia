@@ -47,6 +47,47 @@ curl --insecure \
 
 如需在图形化客户端中调试，请使用 [Apifox 本地调试](./apifox-debugging) 中的导入、证书和环境配置。
 
+## 无前端 LLM 网关
+
+LLM 网关与端口 `27890` 的 Companion 服务使用独立监听器。它可以在同一 `cognia-server` 进程中运行，无需打开 Cognia 窗口。提供商 Profile 及其凭据引用会在启动和 Profile 更新后投影到网关快照。
+
+服务器与管理命令必须使用同一个 `COGNIA_DATA_DIR`。通过离线 CLI 命令修改凭据或密钥前，先停止服务器，修改后再启动。导入 Profile 文档前先检查已安装版本的命令帮助：
+
+```bash
+export COGNIA_DATA_DIR=/absolute/path/to/cognia-data
+cognia-server profiles --help
+cognia-server profiles credential-set --id upstream-main < /path/to/private-key-file
+cognia-server gateway key-create --name local-tools
+cognia-server gateway key-list
+```
+
+凭据值从 stdin 读取，并加密保存在服务器 Secret Store。部署 Profile 必须引用同一个 `secretId`；仅保存凭据不会自动配置模型和端点。`profiles import` 会替换 Profile 集合，因此应用准备好的替换文档前，应检查导出内容及其版本。`gateway key-create` 仅显示一次网关密钥，请保存在本地密钥管理工具中。管理命令 `gateway status` 在独立进程中读取持久化状态，不能证明正在运行的监听器健康。
+
+监听器从该数据目录下的 `.cognia/gateway-config.json` 读取配置。最小回环配置为：
+
+```json
+{
+  "enabled": true,
+  "port": 47823,
+  "bindInterface": "loopback",
+  "allowlist": ["127.0.0.1/32"]
+}
+```
+
+修改已有安装时保留文件中的其他设置。也可以设置 `COGNIA_GATEWAY=1`，让 `serve` 使用已保存或默认配置启动监听器：
+
+```bash
+COGNIA_GATEWAY=1 cognia-server serve
+curl http://127.0.0.1:47823/healthz
+curl -H "Authorization: Bearer $GATEWAY_KEY" http://127.0.0.1:47823/v1/models
+```
+
+可复用监听器需要可用的网关密钥。健康接口可访问、模型目录非空，只能证明监听器与 Profile 已接通，不能证明提供商计费或生成成功。普通密钥受网关曝光、配额及速率策略约束。Host 托管任务使用短期任务私有 ticket，为每个授权角色解析独立提供商部署，不能回退到全局密钥。Host Profile 使用自身配置的凭据，不提供 renderer vault 账号选择。远程委派上游必须使用公共 HTTPS、经过校验的 DNS 目标及禁止重定向的客户端；桌面本机端点不会自动成为远程任务服务桥接。
+
+协议端点、媒体支持及转换限制见 [Provider 系统](../../chat/provider-system#cognia-内置网关)。
+
+Headless brain 通过已认证的 `/internal/events` 传输安装共享网关遥测 runtime，启动时要求请求结果与请求日志的订阅已被接受。写入会话用量和日志前，会检查当前账号受众与原生 generation。已验证的 person brain 只能订阅这两个网关观察通道，Host 只向它交付自身分区的事件；路由和翻译控制通道仍只对 service 开放。成员通过 `person_agent_policy_get` 的安全 `gatewayTelemetry` 视图获取 generation 校验依据，无权读取 operator 的 `gateway_status`。遥测启动和该视图均不要求网关监听器已运行。脱敏、中间件及搜索/视觉执行使用独立的内部 brain 请求桥接。独立 Host profile 不会静默导入桌面的订阅凭据库。
+
 ## 用浏览器驱动它
 
 `pnpm dev:web-headless` 就是同一个 headless server，旁边再起一个 Next 开发服务器——当你要改的是界面、而真正要跑这一轮的是原生宿主时，用的就是这个拓扑。它等于 `:3000` 上的 `pnpm dev` 加 `:27890` 上的 `pnpm dev:headless`，由同一个进程组统一管理。

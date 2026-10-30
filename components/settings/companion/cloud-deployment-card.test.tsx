@@ -8,6 +8,8 @@ import { CLOUD_OFFLINE_KEY_PREFIX } from "@/components/account/cloud-sign-in-gat
 import type { DeploymentDiscovery, ReadyDeployment } from "@/lib/identity/deployment-discovery"
 import type { CloudSessionState } from "@/lib/identity/cloud-session"
 import { officialDeployment } from "@/lib/identity/official-deployment"
+import { completeSignOut } from "@/lib/identity/complete-sign-in"
+import { signOutFromLogto } from "@/lib/logto/app-session"
 
 import { CloudDeploymentCard, type CloudDeploymentCardDeps } from "./cloud-deployment-card"
 
@@ -204,6 +206,51 @@ describe("CloudDeploymentCard", () => {
     await waitFor(() => expect(d.signOut).toHaveBeenCalledWith("acct_a"))
     expect(toast.success).toHaveBeenCalled()
     expect(d.readState).toHaveBeenCalledTimes(2)
+  })
+
+  it("deactivates identity inside the default logout commit before it returns", async () => {
+    const local = memory()
+    local.setItem(
+      "cognia.cloud.deployment.acct_a",
+      JSON.stringify({ baseUrl: "https://cloud.example" })
+    )
+    const order: string[] = []
+    const context = { assertCurrent: jest.fn() }
+    jest.mocked(completeSignOut).mockImplementation(async () => {
+      order.push("identity")
+    })
+    jest.mocked(signOutFromLogto).mockImplementation(async (options) => {
+      order.push("clear")
+      await options?.afterClear?.(context)
+      order.push("return")
+      return {
+        hadSession: true,
+        cleared: true,
+        endSessionUrl: null,
+        refreshTokenRevocation: null,
+        accessTokenRevocation: null,
+      }
+    })
+    const { signOut: _unused, ...options } = deps({
+      storage: { local },
+      readState: async () => ({
+        status: "active",
+        session: {} as never,
+        identity: { userId: "usr_ada", logtoSubject: "s", displayName: "Ada" },
+      }),
+    })
+    render(<CloudDeploymentCard deps={options} />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "account.cloud.deployment.signOut" }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    expect(signOutFromLogto).toHaveBeenCalledWith({
+      localAccountId: "acct_a",
+      afterClear: expect.any(Function),
+    })
+    expect(completeSignOut).toHaveBeenCalledTimes(1)
+    expect(completeSignOut).toHaveBeenCalledWith({ localAccountId: "acct_a", ...context })
+    expect(order).toEqual(["clear", "identity", "return"])
   })
 
   it("lets a signed-out profile sign in by withdrawing the offline choice and reloading", async () => {

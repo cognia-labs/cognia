@@ -139,8 +139,13 @@ pub enum CommandReceiptPolicy {
 
 impl CommandDescriptor {
     pub fn receipt_policy(&self) -> CommandReceiptPolicy {
-        if self.resource == "sandbox.managed_desktop.result"
-            && self.idempotency == CommandIdempotency::Required
+        if (matches!(
+            self.resource.as_str(),
+            "sandbox.managed_desktop.result" | "connector.lark.auth"
+        ) || matches!(
+            self.arm.as_str(),
+            "connectors_matrix_crypto_backup" | "connectors_matrix_crypto_verification"
+        )) && self.idempotency == CommandIdempotency::Required
         {
             CommandReceiptPolicy::HostSemantic
         } else {
@@ -393,17 +398,57 @@ mod tests {
     }
 
     #[test]
+    fn matrix_backup_private_results_never_enter_generic_operation_receipts() {
+        let command = descriptor("connectors_matrix_crypto_backup").unwrap();
+        assert_eq!(command.receipt_policy(), CommandReceiptPolicy::HostSemantic);
+        assert_eq!(command.idempotency, CommandIdempotency::Required);
+        assert_eq!(command.transports, vec![CommandTransport::Internal]);
+    }
+
+    #[test]
+    fn matrix_verification_qr_shared_secrets_never_enter_generic_receipts() {
+        let command = descriptor("connectors_matrix_crypto_verification").unwrap();
+        assert_eq!(command.receipt_policy(), CommandReceiptPolicy::HostSemantic);
+        assert_eq!(command.transports, vec![CommandTransport::Internal]);
+    }
+
+    #[test]
+    fn lark_auth_results_require_current_host_semantics_without_secret_receipts() {
+        let command = descriptor("connectors_lark_user_auth").unwrap();
+        assert_eq!(command.receipt_policy(), CommandReceiptPolicy::HostSemantic);
+        assert_eq!(command.idempotency, CommandIdempotency::Required);
+        assert_eq!(command.transports, vec![CommandTransport::Internal]);
+        assert_eq!(
+            descriptor("claude_send").unwrap().receipt_policy(),
+            CommandReceiptPolicy::Replay
+        );
+    }
+
+    #[test]
     fn private_result_mutations_require_keys_but_never_replay_generic_receipts() {
-        let semantic: Vec<_> = commands().iter().filter(|c|
-            c.receipt_policy() == CommandReceiptPolicy::HostSemantic).collect();
+        let semantic: Vec<_> = commands()
+            .iter()
+            .filter(|c| {
+                c.receipt_policy() == CommandReceiptPolicy::HostSemantic
+                    && c.resource == "sandbox.managed_desktop.result"
+            })
+            .collect();
         assert_eq!(semantic.len(), 6);
         for descriptor in semantic {
             assert!(descriptor.name.starts_with("managed_desktop_results_"));
             assert_eq!(descriptor.idempotency, CommandIdempotency::Required);
             assert_ne!(descriptor.operation, CommandOperation::Read);
         }
-        assert_eq!(descriptor("managed_desktop_results_get_result").unwrap().receipt_policy(), CommandReceiptPolicy::Replay);
-        assert_eq!(descriptor("claude_send").unwrap().receipt_policy(), CommandReceiptPolicy::Replay);
+        assert_eq!(
+            descriptor("managed_desktop_results_get_result")
+                .unwrap()
+                .receipt_policy(),
+            CommandReceiptPolicy::Replay
+        );
+        assert_eq!(
+            descriptor("claude_send").unwrap().receipt_policy(),
+            CommandReceiptPolicy::Replay
+        );
     }
 
     #[test]

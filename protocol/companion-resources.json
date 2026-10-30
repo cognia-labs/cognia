@@ -633,6 +633,7 @@
     },
     "gateway": {
       "children": {
+        "client": {},
         "config": {},
         "cooldown": {},
         "decision": {},

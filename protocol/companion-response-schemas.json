@@ -6,16 +6,28 @@
         {
           "type": "object",
           "properties": {
-            "kind": { "const": "fixed" },
-            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "kind": {
+              "const": "fixed"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
           },
           "required": ["kind", "port"]
         },
         {
           "type": "object",
           "properties": {
-            "kind": { "const": "workspace-lease-offset" },
-            "offset": { "type": "integer", "minimum": 0, "maximum": 65535 }
+            "kind": {
+              "const": "workspace-lease-offset"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            }
           },
           "required": ["kind", "offset"]
         }
@@ -26,12 +38,23 @@
       "oneOf": [
         {
           "type": "object",
-          "properties": { "kind": { "const": "localOwner" } },
+          "properties": {
+            "kind": {
+              "const": "localOwner"
+            }
+          },
           "required": ["kind"]
         },
         {
           "type": "object",
-          "properties": { "kind": { "const": "pairedDevice" }, "deviceId": { "type": "string" } },
+          "properties": {
+            "kind": {
+              "const": "pairedDevice"
+            },
+            "deviceId": {
+              "type": "string"
+            }
+          },
           "required": ["kind", "deviceId"]
         }
       ]
@@ -41,22 +64,66 @@
       "additionalProperties": false,
       "description": "Local-owner grant metadata. Capability and session hashes and plaintext tokens are never exposed by list/revoke.",
       "properties": {
-        "version": { "const": 1 },
-        "id": { "type": "string" },
-        "projectId": { "type": "string" },
-        "workspaceId": { "type": "string" },
-        "provider": { "type": "string" },
-        "containerId": { "type": "string" },
-        "runtimeGeneration": { "type": "string" },
-        "port": { "$ref": "#/$defs/PreviewPort" },
-        "resolvedPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "portLease": { "anyOf": [{ "$ref": "#/$defs/WorkspacePortLease" }, { "type": "null" }] },
-        "audience": { "$ref": "#/$defs/PreviewAudience" },
-        "createdAt": { "type": "integer", "format": "int64" },
-        "expiresAt": { "type": "integer", "format": "int64" },
-        "revision": { "type": "integer", "minimum": 1 },
-        "revoked": { "type": "boolean" },
-        "origin": { "type": "string" }
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "runtimeGeneration": {
+          "type": "string"
+        },
+        "port": {
+          "$ref": "#/$defs/PreviewPort"
+        },
+        "resolvedPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "portLease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspacePortLease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audience": {
+          "$ref": "#/$defs/PreviewAudience"
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "revoked": {
+          "type": "boolean"
+        },
+        "origin": {
+          "type": "string"
+        }
       },
       "required": [
         "version",
@@ -81,9 +148,20 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "targets": { "type": "array", "items": { "$ref": "#/$defs/SandboxPreviewTarget" } },
-        "snapshotUsageBytes": { "type": "integer", "minimum": 0 },
-        "sandboxSnapshotBudgetBytes": { "type": "integer", "minimum": 0 }
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandboxPreviewTarget"
+          }
+        },
+        "snapshotUsageBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sandboxSnapshotBudgetBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
       },
       "required": ["targets", "snapshotUsageBytes", "sandboxSnapshotBudgetBytes"]
     },
@@ -91,22 +169,53 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "workspaceId": { "type": "string" },
-        "provider": { "type": "string" },
-        "containerId": { "type": "string" },
-        "executionRoot": { "type": "string" },
-        "workspaceState": { "$ref": "#/$defs/WorkspaceState" },
-        "portLease": { "anyOf": [{ "$ref": "#/$defs/WorkspacePortLease" }, { "type": "null" }] },
+        "workspaceId": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "executionRoot": {
+          "type": "string"
+        },
+        "workspaceState": {
+          "$ref": "#/$defs/WorkspaceState"
+        },
+        "portLease": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspacePortLease"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "ports": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "containerId": { "type": "string" },
-              "projectId": { "type": "string" },
-              "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-              "label": { "type": "string" },
-              "path": { "type": "string" }
+              "containerId": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "label": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
             },
             "required": ["containerId", "projectId", "port", "path"]
           }
@@ -126,7 +235,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "grant": { "$ref": "#/$defs/PreviewGrantV1" },
+        "grant": {
+          "$ref": "#/$defs/PreviewGrantV1"
+        },
         "bootstrapUrl": {
           "type": "string",
           "description": "Ephemeral one-shot 60-second URL with the capability in its fragment. Never persist or log it."
@@ -138,20 +249,53 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "snapshotId": { "type": "string" },
-        "deploymentId": { "type": "string" },
-        "projectId": { "type": "string" },
-        "taskId": { "type": "string" },
-        "workspaceRoot": { "type": "string" },
+        "snapshotId": {
+          "type": "string"
+        },
+        "deploymentId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "taskId": {
+          "type": "string"
+        },
+        "workspaceRoot": {
+          "type": "string"
+        },
         "runtime": {},
-        "exclusions": { "type": "array", "items": { "type": "string" } },
-        "checkpointId": { "type": ["string", "null"] },
-        "imageId": { "type": ["string", "null"] },
-        "imageBytes": { "type": "integer", "format": "uint64", "minimum": 0 },
-        "phase": { "$ref": "#/$defs/SnapshotOperationPhase" },
-        "createdAt": { "type": "integer", "format": "int64" },
-        "expiresAt": { "type": "integer", "format": "int64" },
-        "pinned": { "type": "boolean" }
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "checkpointId": {
+          "type": ["string", "null"]
+        },
+        "imageId": {
+          "type": ["string", "null"]
+        },
+        "imageBytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "phase": {
+          "$ref": "#/$defs/SnapshotOperationPhase"
+        },
+        "createdAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "pinned": {
+          "type": "boolean"
+        }
       },
       "required": [
         "snapshotId",
@@ -178,10 +322,18 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "task": { "$ref": "#/$defs/TaskWorkspace" },
-        "workspaceId": { "type": "string" },
-        "executionRoot": { "type": "string" },
-        "portLease": { "$ref": "#/$defs/WorkspacePortLease" }
+        "task": {
+          "$ref": "#/$defs/TaskWorkspace"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "executionRoot": {
+          "type": "string"
+        },
+        "portLease": {
+          "$ref": "#/$defs/WorkspacePortLease"
+        }
       },
       "required": ["task", "workspaceId", "executionRoot", "portLease"]
     },
@@ -189,49 +341,101 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "workspace": { "$ref": "#/$defs/ForkedCheckpointWorkspace" },
-        "provider": { "type": "string" },
-        "containerId": { "type": "string" },
-        "restoredInPlace": { "type": "boolean" }
+        "workspace": {
+          "$ref": "#/$defs/ForkedCheckpointWorkspace"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "restoredInPlace": {
+          "type": "boolean"
+        }
       },
       "required": ["workspace", "provider", "containerId", "restoredInPlace"]
     },
     "SnapshotCapabilities": {
       "type": "object",
       "properties": {
-        "filesystemCheckpoint": { "type": "boolean" },
-        "forkFromCheckpoint": { "type": "boolean" },
-        "pauseResume": { "type": "boolean" },
-        "memoryResume": { "type": "boolean" }
+        "filesystemCheckpoint": {
+          "type": "boolean"
+        },
+        "forkFromCheckpoint": {
+          "type": "boolean"
+        },
+        "pauseResume": {
+          "type": "boolean"
+        },
+        "memoryResume": {
+          "type": "boolean"
+        }
       },
       "required": ["filesystemCheckpoint", "forkFromCheckpoint", "pauseResume", "memoryResume"]
     },
     "SnapshotProviderView": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "driver": { "type": "string" },
-        "label": { "type": "string" },
-        "remote": { "type": "boolean" },
-        "isDefault": { "type": "boolean" },
-        "reachable": { "type": "boolean" },
-        "availableTiers": { "type": "array", "items": { "$ref": "#/$defs/IsolationTier" } },
-        "capabilities": { "$ref": "#/$defs/SnapshotCapabilities" },
-        "unavailableCode": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "remote": {
+          "type": "boolean"
+        },
+        "isDefault": {
+          "type": "boolean"
+        },
+        "reachable": {
+          "type": "boolean"
+        },
+        "availableTiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IsolationTier"
+          }
+        },
+        "capabilities": {
+          "$ref": "#/$defs/SnapshotCapabilities"
+        },
+        "unavailableCode": {
+          "type": "string"
+        },
         "limits": {
           "type": "object",
           "properties": {
-            "maxConcurrent": { "type": "integer", "minimum": 0 },
-            "maxLifetimeSecs": { "type": "integer", "minimum": 0 },
-            "idleTimeoutSecs": { "type": "integer", "minimum": 0 }
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxLifetimeSecs": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "idleTimeoutSecs": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
           "required": ["maxConcurrent", "maxLifetimeSecs", "idleTimeoutSecs"]
         },
         "usage": {
           "type": "object",
           "properties": {
-            "instances": { "type": "integer", "minimum": 0 },
-            "sessions": { "type": "integer", "minimum": 0 }
+            "instances": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sessions": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
           "required": ["instances", "sessions"]
         }
@@ -548,7 +752,8 @@
           "type": "integer"
         },
         "sourceId": {
-          "type": "string"
+          "description": "Missing on legacy records: those records cannot authorize handoff.",
+          "type": ["string", "null"]
         }
       },
       "required": [
@@ -1586,7 +1791,7 @@
     },
     "AgentReadResult": {
       "type": "object",
-      "x-cognia-wire-source": "crate::agents::commands::AgentReadResult. NOTE: no rename_all — the fields stay snake_case on the wire, and only parse_error is renamed (to parseError) alongside skip_serializing_if.",
+      "x-cognia-wire-source": "crate::agents::commands::AgentReadResult. NOTE: no rename_all \u2014 the fields stay snake_case on the wire, and only parse_error is renamed (to parseError) alongside skip_serializing_if.",
       "required": ["path", "exists", "writable", "format", "raw", "parsed"],
       "properties": {
         "path": {
@@ -1605,7 +1810,7 @@
           "type": "string"
         },
         "parsed": {
-          "x-cognia-opaque-reason": "serde_json::Value — the agent's own config tree, whose shape is owned by that vendor's format, not by this contract. Deliberately unconstrained; the envelope around it is not."
+          "x-cognia-opaque-reason": "serde_json::Value \u2014 the agent's own config tree, whose shape is owned by that vendor's format, not by this contract. Deliberately unconstrained; the envelope around it is not."
         },
         "parseError": {
           "type": "string"
@@ -3458,7 +3663,7 @@
     },
     "FleetSnapshot": {
       "type": "object",
-      "x-cognia-wire-source": "crate::fleet::registry::FleetSnapshot (rename_all = camelCase), via rpc/diagnostics.rs `to_json(runtime().snapshot_for_tenant(..))`. hosts and runtimeCapabilities carry skip_serializing_if = Vec::is_empty, so both are absent — not empty arrays — on a quiet host.",
+      "x-cognia-wire-source": "crate::fleet::registry::FleetSnapshot (rename_all = camelCase), via rpc/diagnostics.rs `to_json(runtime().snapshot_for_tenant(..))`. hosts and runtimeCapabilities carry skip_serializing_if = Vec::is_empty, so both are absent \u2014 not empty arrays \u2014 on a quiet host.",
       "x-cognia-fixes": "Previously LegacyList, which requires an ARRAY. FleetSnapshot is a struct and always serializes as an object, so the enforced output contract rejected every fleet_get_snapshot response with contract_output_violation. The helper directly above the dispatch arm (fleet_event_payload) already asserted 'fleet snapshot must serialize as an object'.",
       "required": ["sessions", "liveness", "generatedAt"],
       "properties": {
@@ -4109,7 +4314,7 @@
     },
     "GitStackBranchPairList": {
       "type": "array",
-      "x-cognia-wire-source": "Vec<(String, String)> — a Rust tuple serialises as a two-element JSON array, not an object.",
+      "x-cognia-wire-source": "Vec<(String, String)> \u2014 a Rust tuple serialises as a two-element JSON array, not an object.",
       "items": {
         "type": "array",
         "items": {
@@ -4749,7 +4954,9 @@
         "supportedActions": {
           "type": "array",
           "description": "P5d/P6c: on a person partition, exactly the intents this Host accepts from that person (personPartitionIntentDecision); absent elsewhere.",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         }
       },
       "additionalProperties": false
@@ -4893,7 +5100,7 @@
     },
     "LarkEntryToken": {
       "type": "object",
-      "x-cognia-wire-source": "lark_entry::rpc_entry_issue. Two branches: kind=entry returns token+jti+expiresAt, kind=surface returns token alone — so only `token` is guaranteed.",
+      "x-cognia-wire-source": "lark_entry::rpc_entry_issue. Two branches: kind=entry returns token+jti+expiresAt, kind=surface returns token alone \u2014 so only `token` is guaranteed.",
       "required": ["token"],
       "properties": {
         "token": {
@@ -4910,7 +5117,7 @@
     },
     "LarkMetricAck": {
       "type": "object",
-      "x-cognia-wire-source": "lark_entry::rpc_metrics_record — json!({ \"ok\": true }). An unknown metric name is an Err, so `ok` is only ever literal true.",
+      "x-cognia-wire-source": "lark_entry::rpc_metrics_record \u2014 json!({ \"ok\": true }). An unknown metric name is an Err, so `ok` is only ever literal true.",
       "required": ["ok"],
       "properties": {
         "ok": {
@@ -4921,7 +5128,7 @@
     },
     "LarkResultAck": {
       "type": "object",
-      "x-cognia-wire-source": "lark_entry::rpc_result_complete — json!({ \"accepted\": bool }).",
+      "x-cognia-wire-source": "lark_entry::rpc_result_complete \u2014 json!({ \"accepted\": bool }).",
       "required": ["accepted"],
       "properties": {
         "accepted": {
@@ -5377,7 +5584,7 @@
                 "type": "string"
               },
               "fields": {
-                "x-cognia-opaque-reason": "serde_json::Value — arbitrary structured fields captured at the log call site."
+                "x-cognia-opaque-reason": "serde_json::Value \u2014 arbitrary structured fields captured at the log call site."
               }
             },
             "additionalProperties": false
@@ -5677,7 +5884,7 @@
     },
     "NullableStringResult": {
       "type": ["string", "null"],
-      "x-cognia-wire-source": "Option<String> — null means absent-at-that-ref or binary, which is an ordinary answer rather than an error."
+      "x-cognia-wire-source": "Option<String> \u2014 null means absent-at-that-ref or binary, which is an ordinary answer rather than an error."
     },
     "OcrModelFileStatus": {
       "type": "object",
@@ -6202,7 +6409,7 @@
     },
     "PluginRuntimeSnapshot": {
       "type": "object",
-      "x-cognia-wire-source": "crates/cognia-plugin-runtime/src/lib.rs PluginRuntimeSnapshot. NOTE: no rename_all — the fields stay snake_case on the wire. The two Option fields carry no skip_serializing_if, so they are always present as null.",
+      "x-cognia-wire-source": "crates/cognia-plugin-runtime/src/lib.rs PluginRuntimeSnapshot. NOTE: no rename_all \u2014 the fields stay snake_case on the wire. The two Option fields carry no skip_serializing_if, so they are always present as null.",
       "required": ["plugin_id", "version", "status", "last_error", "loaded_at", "install_path"],
       "properties": {
         "plugin_id": {
@@ -6329,7 +6536,7 @@
     "RawWorkspaceEntry": {
       "type": "object",
       "x-cognia-wire-source": "lib/files/types.ts RawWorkspaceEntry",
-      "description": "snake_case on the wire — the Rust side does not rename these; the client maps them via fromRawWorkspaceEntry.",
+      "description": "snake_case on the wire \u2014 the Rust side does not rename these; the client maps them via fromRawWorkspaceEntry.",
       "required": ["rel_path", "absolute_path", "is_dir", "size"],
       "properties": {
         "rel_path": {
@@ -6633,7 +6840,7 @@
     },
     "SecretValue": {
       "type": ["string", "null"],
-      "x-cognia-wire-source": "Option<String> from cognia_secrets::keyring_secrets::get, via rpc/chat.rs `to_json(value)`. null means the key is absent — a successful read, not an error.",
+      "x-cognia-wire-source": "Option<String> from cognia_secrets::keyring_secrets::get, via rpc/chat.rs `to_json(value)`. null means the key is absent \u2014 a successful read, not an error.",
       "x-cognia-fixes": "Previously LegacyRecord, which requires an object. Every successful secret_store_get / keyring_secret_get response is a bare string or null, so the enforced output contract rejected all of them with contract_output_violation."
     },
     "SessionAttachmentUploadChunk": {
@@ -6811,7 +7018,7 @@
     },
     "SidecarStatus": {
       "type": "object",
-      "x-cognia-wire-source": "crate::claude::commands::SidecarStatus — derives Serialize with NO rename_all, and has exactly one field.",
+      "x-cognia-wire-source": "crate::claude::commands::SidecarStatus \u2014 derives Serialize with NO rename_all, and has exactly one field.",
       "required": ["ready"],
       "properties": {
         "ready": {
@@ -7267,7 +7474,7 @@
     },
     "TerminalHostStatus": {
       "type": "object",
-      "x-cognia-wire-source": "crate::terminal_host_bridge::TerminalHostStatus (serde rename_all = camelCase). `descriptor` is skipped for the remote arms — provisioning a device descriptor has no remote path.",
+      "x-cognia-wire-source": "crate::terminal_host_bridge::TerminalHostStatus (serde rename_all = camelCase). `descriptor` is skipped for the remote arms \u2014 provisioning a device descriptor has no remote path.",
       "required": ["running", "endpoint", "settings"],
       "properties": {
         "running": {
@@ -7284,7 +7491,7 @@
     },
     "TerminalKilledPidList": {
       "type": "array",
-      "x-cognia-wire-source": "Vec<u32> from cognia_terminal::commands::terminal_kill_port — the PIDs actually signalled, possibly empty when nothing was listening.",
+      "x-cognia-wire-source": "Vec<u32> from cognia_terminal::commands::terminal_kill_port \u2014 the PIDs actually signalled, possibly empty when nothing was listening.",
       "items": {
         "type": "integer",
         "minimum": 0
@@ -7310,7 +7517,7 @@
     "TerminalPathExecutableList": {
       "type": "object",
       "description": "One page of executable names found on PATH (ADR-0175 B3).",
-      "x-cognia-wire-source": "Vec<String> — cognia_terminal::path_scan::list_path_executables_inner, paged by companion_api::paging::Page::slice_all.",
+      "x-cognia-wire-source": "Vec<String> \u2014 cognia_terminal::path_scan::list_path_executables_inner, paged by companion_api::paging::Page::slice_all.",
       "required": ["items"],
       "properties": {
         "items": {
@@ -7327,7 +7534,7 @@
     },
     "TerminalProfileSyncResult": {
       "type": "object",
-      "x-cognia-wire-source": "rpc/terminal.rs `terminal_host_sync_profiles` — how many profiles the device now owns on the host.",
+      "x-cognia-wire-source": "rpc/terminal.rs `terminal_host_sync_profiles` \u2014 how many profiles the device now owns on the host.",
       "required": ["installed"],
       "properties": {
         "installed": {
@@ -7339,7 +7546,7 @@
     },
     "TerminalSession": {
       "type": "object",
-      "x-cognia-wire-source": "cognia_terminal::host::HostSessionInfo (serde rename_all = camelCase), returned by rpc/terminal.rs via DispatchHost::terminal_list_all. Option fields carry no skip_serializing_if, so they are always present as null — process_id and the two ssh_host_key_* fields are the exceptions and do skip.",
+      "x-cognia-wire-source": "cognia_terminal::host::HostSessionInfo (serde rename_all = camelCase), returned by rpc/terminal.rs via DispatchHost::terminal_list_all. Option fields carry no skip_serializing_if, so they are always present as null \u2014 process_id and the two ssh_host_key_* fields are the exceptions and do skip.",
       "required": [
         "id",
         "hostId",
@@ -9064,7 +9271,7 @@
       "type": "object"
     },
     "IsolationKind": {
-      "enum": ["gitWorktree", "shadow"],
+      "enum": ["gitWorktree", "shadow", "observed"],
       "type": "string"
     },
     "Page_of_ResourceEvent": {
@@ -9150,6 +9357,11 @@
         "oldPath": {
           "type": ["string", "null"]
         },
+        "origin": {
+          "$ref": "#/$defs/ContributionOrigin",
+          "default": "unknown",
+          "description": "The recorded contribution owner, so a review can disclose the complete\napply/undo scope without mistaking a user upload for an agent edit."
+        },
         "path": {
           "type": "string"
         },
@@ -9166,6 +9378,7 @@
         "hunks",
         "kind",
         "oldPath",
+        "origin",
         "path",
         "resourceKind"
       ],
@@ -9333,7 +9546,7 @@
       "description": "Outcome of one reconcile pass. Callers persist the changes; the\nplanner itself does not mutate.",
       "properties": {
         "imported": {
-          "description": "Worktrees on disk that Registry did not create. Callers store these\nas `Imported` — they must never be auto-pruned.",
+          "description": "Worktrees on disk that Registry did not create. Callers store these\nas `Imported` \u2014 they must never be auto-pruned.",
           "items": {
             "$ref": "#/$defs/ImportedWorkspaceHint"
           },
@@ -9825,6 +10038,10 @@
         "executionRunId": {
           "default": null,
           "type": ["string", "null"]
+        },
+        "executorStopUnconfirmed": {
+          "default": false,
+          "type": "boolean"
         },
         "isolationKind": {
           "$ref": "#/$defs/IsolationKind"
@@ -10628,7 +10845,7 @@
       "type": "object"
     },
     "WorkspaceOwnerType": {
-      "description": "Who created this managed workspace. Ownership determines whether the\nRegistry may prune or unlock the workspace during reconciliation.\n\n`Imported` is reserved for worktrees discovered on disk that the Registry\ncannot verify as its own — those rows never participate in auto-prune.",
+      "description": "Who created this managed workspace. Ownership determines whether the\nRegistry may prune or unlock the workspace during reconciliation.\n\n`Imported` is reserved for worktrees discovered on disk that the Registry\ncannot verify as its own \u2014 those rows never participate in auto-prune.",
       "enum": ["user", "imported", "session", "team", "scheduled"],
       "type": "string"
     },
@@ -10689,7 +10906,7 @@
           ]
         },
         "projectId": {
-          "description": "Owning Workspace (the frontend `Project.id`), when it is known.\n\nThe crate addresses rows by path and `(owner_type, owner_ref)`, neither\nof which can answer \"which execution slots does this project own\" —\nseveral worktrees of one repository share a `git_common_dir`, and an\nowner ref is a session or a team, never a project. Without it, deleting\na workspace cannot find the directories it produced and the inventory\ncan only be shown machine-wide.\n\nOptional because the frontend owns the Project table: rows created\nbefore this column, or found on disk with no matching project, stay\n`None` and are classified `imported` — never auto-pruned (ADR-0111).",
+          "description": "Owning Workspace (the frontend `Project.id`), when it is known.\n\nThe crate addresses rows by path and `(owner_type, owner_ref)`, neither\nof which can answer \"which execution slots does this project own\" \u2014\nseveral worktrees of one repository share a `git_common_dir`, and an\nowner ref is a session or a team, never a project. Without it, deleting\na workspace cannot find the directories it produced and the inventory\ncan only be shown machine-wide.\n\nOptional because the frontend owns the Project table: rows created\nbefore this column, or found on disk with no matching project, stay\n`None` and are classified `imported` \u2014 never auto-pruned (ADR-0111).",
           "type": ["string", "null"]
         },
         "sizeBytes": {
@@ -10726,7 +10943,7 @@
     },
     "WorkspaceRootLease": {
       "additionalProperties": false,
-      "description": "One logical root inside a Bundle, resolved to its physical execution\nlocation.\n\n`alias_path` is the path executors see. Multiple leases may point at the\nsame physical worktree when they share a Git common dir — the Bundle\ncomposer collapses roots by `git_common_dir` before creating worktrees.",
+      "description": "One logical root inside a Bundle, resolved to its physical execution\nlocation.\n\n`alias_path` is the path executors see. Multiple leases may point at the\nsame physical worktree when they share a Git common dir \u2014 the Bundle\ncomposer collapses roots by `git_common_dir` before creating worktrees.",
       "properties": {
         "aliasPath": {
           "type": "string"
@@ -10753,7 +10970,7 @@
       "type": "string"
     },
     "WorkspaceState": {
-      "description": "Managed workspace lifecycle state. Transitions outside the Registry's\ncontrolled paths are rejected fail-closed.\n\nLegal transitions (all others error):\n\n- `Provisioning → Active | Removing`\n- `Active → Archived | Conflict | Removing`\n- `Archived → Restorable | Removing`\n- `Restorable → Active | Removing`\n- `Conflict → Active | Removing`   (via `ConflictResolution`)\n- `Removing → Removed`\n\n`Removed` is terminal.",
+      "description": "Managed workspace lifecycle state. Transitions outside the Registry's\ncontrolled paths are rejected fail-closed.\n\nLegal transitions (all others error):\n\n- `Provisioning \u2192 Active | Removing`\n- `Active \u2192 Archived | Conflict | Removing`\n- `Archived \u2192 Restorable | Removing`\n- `Restorable \u2192 Active | Removing`\n- `Conflict \u2192 Active | Removing`   (via `ConflictResolution`)\n- `Removing \u2192 Removed`\n\n`Removed` is terminal.",
       "enum": [
         "provisioning",
         "active",
@@ -11000,7 +11217,7 @@
         },
         "effectiveFloor": {
           "$ref": "#/$defs/IsolationTier",
-          "description": "`max(entry floor, baseline floor, tenant floor)` — never lower than\nwhat the entry itself declares."
+          "description": "`max(entry floor, baseline floor, tenant floor)` \u2014 never lower than\nwhat the entry itself declares."
         },
         "entry": {
           "$ref": "#/$defs/CatalogEntry"
@@ -11146,7 +11363,7 @@
       "type": "object"
     },
     "DeclarationRead": {
-      "description": "One declaration file, as bytes plus the digest of those bytes.\n\nDeliberately *not* parsed here. The devcontainer and workspace-config\ngrammars, their closed-world refusals and the RFC 8785 declaration digest\nlive in one place — `lib/project-environment` — and a second\nimplementation in Rust would be a parity liability with nothing to gain:\nthis Host's job on this path is access to a checkout the approver's\nbrowser cannot reach. The digest over the raw bytes is what makes \"the\nfile changed since you looked at it\" answerable without parsing either\ngrammar.",
+      "description": "One declaration file, as bytes plus the digest of those bytes.\n\nDeliberately *not* parsed here. The devcontainer and workspace-config\ngrammars, their closed-world refusals and the RFC 8785 declaration digest\nlive in one place \u2014 `lib/project-environment` \u2014 and a second\nimplementation in Rust would be a parity liability with nothing to gain:\nthis Host's job on this path is access to a checkout the approver's\nbrowser cannot reach. The digest over the raw bytes is what makes \"the\nfile changed since you looked at it\" answerable without parsing either\ngrammar.",
       "properties": {
         "bytesSha256": {
           "description": "SHA-256 (lowercase hex) of the exact bytes above.",
@@ -11662,7 +11879,7 @@
       "type": "object"
     },
     "CreatedBy": {
-      "description": "Who created a grant. `Agent` is an agent's `filespace_share` /\n`filespace_enable_webdav` call the person approved (ADR-0222 §9): the\npolicy's `allow_agent_sharing` gates it at creation and while it lives.",
+      "description": "Who created a grant. `Agent` is an agent's `filespace_share` /\n`filespace_enable_webdav` call the person approved (ADR-0222 \u00a79): the\npolicy's `allow_agent_sharing` gates it at creation and while it lives.",
       "enum": ["user", "agent"],
       "type": "string"
     },
@@ -11714,7 +11931,7 @@
           "type": "array"
         },
         "sftpHostKeyFingerprint": {
-          "description": "`SHA256:…` of the SFTP host key, for the client to verify.",
+          "description": "`SHA256:\u2026` of the SFTP host key, for the client to verify.",
           "type": ["string", "null"]
         },
         "tlsFingerprint": {
@@ -12368,7 +12585,7 @@
         },
         "workspace": {
           "type": "object",
-          "description": "Set on a workspace file (ADR-0223 §8): where it lives on the host's disk and what the agent did to it last.",
+          "description": "Set on a workspace file (ADR-0223 \u00a78): where it lives on the host's disk and what the agent did to it last.",
           "required": ["sessionId", "workspaceRoot", "executionRoot", "relPath"],
           "properties": {
             "sessionId": {
@@ -14115,14 +14332,24 @@
         "guiQualified": {
           "type": "boolean"
         },
-        "qualificationEvidenceVersion": { "type": ["integer", "null"] },
-        "workloadIsolationRevision": { "type": ["integer", "null"] },
+        "qualificationEvidenceVersion": {
+          "type": ["integer", "null"]
+        },
+        "workloadIsolationRevision": {
+          "type": ["integer", "null"]
+        },
         "enablement": {
           "type": "object",
           "properties": {
-            "manualGui": { "type": "boolean" },
-            "agentControl": { "type": "boolean" },
-            "acceptance": { "type": "boolean" }
+            "manualGui": {
+              "type": "boolean"
+            },
+            "agentControl": {
+              "type": "boolean"
+            },
+            "acceptance": {
+              "type": "boolean"
+            }
           },
           "required": ["manualGui", "agentControl", "acceptance"],
           "additionalProperties": false
@@ -14136,8 +14363,12 @@
                 "type": "string",
                 "enum": ["lifecycle", "control", "authority", "workload", "commit", "bundle"]
               },
-              "current": { "type": "boolean" },
-              "observedAt": { "type": ["integer", "null"] }
+              "current": {
+                "type": "boolean"
+              },
+              "observedAt": {
+                "type": ["integer", "null"]
+              }
             },
             "required": ["category", "current", "observedAt"],
             "additionalProperties": false
@@ -14315,8 +14546,12 @@
     "ManagedDesktopTemplateSummary": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "providerConfigId": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "providerConfigId": {
+          "type": "string"
+        },
         "state": {
           "type": "string",
           "enum": [
@@ -14329,13 +14564,36 @@
             "deleting"
           ]
         },
-        "identity": { "anyOf": [{ "$ref": "#/$defs/ManagedDesktopTemplate" }, { "type": "null" }] },
-        "desktopsInUse": { "type": "integer", "minimum": 0 },
-        "createdAt": { "type": "integer" },
-        "updatedAt": { "type": "integer" },
-        "errorCode": { "type": ["string", "null"] },
-        "cleanupAttempts": { "type": "integer", "minimum": 0 },
-        "nextRetryAt": { "type": ["integer", "null"] }
+        "identity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManagedDesktopTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "desktopsInUse": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "createdAt": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "integer"
+        },
+        "errorCode": {
+          "type": ["string", "null"]
+        },
+        "cleanupAttempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nextRetryAt": {
+          "type": ["integer", "null"]
+        }
       },
       "required": [
         "id",
@@ -14359,9 +14617,15 @@
           "type": "string",
           "enum": ["pastDeadline", "cleanupStalled", "templateCleanupStalled"]
         },
-        "subjectId": { "type": "string" },
-        "providerConfigId": { "type": "string" },
-        "since": { "type": "integer" }
+        "subjectId": {
+          "type": "string"
+        },
+        "providerConfigId": {
+          "type": "string"
+        },
+        "since": {
+          "type": "integer"
+        }
       },
       "required": ["kind", "subjectId", "providerConfigId", "since"],
       "additionalProperties": false,
@@ -14370,15 +14634,32 @@
     "ManagedDesktopMonitor": {
       "type": "object",
       "properties": {
-        "observedAt": { "type": "integer" },
-        "billedDesktops": { "type": "integer", "minimum": 0 },
+        "observedAt": {
+          "type": "integer"
+        },
+        "billedDesktops": {
+          "type": "integer",
+          "minimum": 0
+        },
         "maximumExposureMicros": {
           "type": "object",
-          "additionalProperties": { "type": "integer", "minimum": 0 }
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
         },
-        "oldestPendingCreateAt": { "type": ["integer", "null"] },
-        "oldestPendingDeleteAt": { "type": ["integer", "null"] },
-        "alerts": { "type": "array", "items": { "$ref": "#/$defs/ManagedDesktopAlert" } }
+        "oldestPendingCreateAt": {
+          "type": ["integer", "null"]
+        },
+        "oldestPendingDeleteAt": {
+          "type": ["integer", "null"]
+        },
+        "alerts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ManagedDesktopAlert"
+          }
+        }
       },
       "required": [
         "observedAt",
@@ -14394,10 +14675,20 @@
     "ManagedDesktopQualificationRun": {
       "type": "object",
       "properties": {
-        "runId": { "type": "string" },
-        "providerConfigId": { "type": "string" },
-        "configRevision": { "type": "integer", "minimum": 1 },
-        "scope": { "type": "string", "enum": ["gui", "acceptance"] },
+        "runId": {
+          "type": "string"
+        },
+        "providerConfigId": {
+          "type": "string"
+        },
+        "configRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["gui", "acceptance"]
+        },
         "state": {
           "type": "string",
           "enum": ["running", "awaitingApproval", "passed", "failed", "cancelled", "interrupted"]
@@ -14411,14 +14702,23 @@
             {
               "type": "object",
               "properties": {
-                "quote": { "$ref": "#/$defs/ManagedDesktopQuote" },
-                "purpose": { "type": "string", "enum": ["prepareTemplate", "smoke"] },
-                "templateBuildCharges": { "type": "boolean" }
+                "quote": {
+                  "$ref": "#/$defs/ManagedDesktopQuote"
+                },
+                "purpose": {
+                  "type": "string",
+                  "enum": ["prepareTemplate", "smoke"]
+                },
+                "templateBuildCharges": {
+                  "type": "boolean"
+                }
               },
               "required": ["quote", "purpose", "templateBuildCharges"],
               "additionalProperties": false
             },
-            { "type": "null" }
+            {
+              "type": "null"
+            }
           ]
         },
         "categories": {
@@ -14434,7 +14734,9 @@
                 "type": "string",
                 "enum": ["pending", "running", "passed", "failed", "skipped"]
               },
-              "errorCode": { "type": ["string", "null"] }
+              "errorCode": {
+                "type": ["string", "null"]
+              }
             },
             "required": ["category", "state", "errorCode"],
             "additionalProperties": false
@@ -14444,17 +14746,34 @@
           "anyOf": [
             {
               "type": "object",
-              "properties": { "deliveryId": { "type": "string" }, "script": { "type": "string" } },
+              "properties": {
+                "deliveryId": {
+                  "type": "string"
+                },
+                "script": {
+                  "type": "string"
+                }
+              },
               "required": ["deliveryId", "script"],
               "additionalProperties": false
             },
-            { "type": "null" }
+            {
+              "type": "null"
+            }
           ]
         },
-        "errorCode": { "type": ["string", "null"] },
-        "startedAt": { "type": "integer" },
-        "updatedAt": { "type": "integer" },
-        "finishedAt": { "type": ["integer", "null"] }
+        "errorCode": {
+          "type": ["string", "null"]
+        },
+        "startedAt": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "integer"
+        },
+        "finishedAt": {
+          "type": ["integer", "null"]
+        }
       },
       "required": [
         "runId",
@@ -14477,23 +14796,43 @@
     "ManagedDesktopDelegation": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "desktopId": { "type": "string" },
-        "desktopGeneration": { "type": "integer", "minimum": 1 },
-        "providerConfigId": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "desktopId": {
+          "type": "string"
+        },
+        "desktopGeneration": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "providerConfigId": {
+          "type": "string"
+        },
         "grantee": {
           "oneOf": [
             {
               "type": "object",
-              "properties": { "kind": { "const": "session" }, "sessionKey": { "type": "string" } },
+              "properties": {
+                "kind": {
+                  "const": "session"
+                },
+                "sessionKey": {
+                  "type": "string"
+                }
+              },
               "required": ["kind", "sessionKey"],
               "additionalProperties": false
             },
             {
               "type": "object",
               "properties": {
-                "kind": { "const": "character" },
-                "characterId": { "type": "string" }
+                "kind": {
+                  "const": "character"
+                },
+                "characterId": {
+                  "type": "string"
+                }
               },
               "required": ["kind", "characterId"],
               "additionalProperties": false
@@ -14501,24 +14840,51 @@
             {
               "type": "object",
               "properties": {
-                "kind": { "const": "acceptance" },
-                "acceptanceId": { "type": "string" }
+                "kind": {
+                  "const": "acceptance"
+                },
+                "acceptanceId": {
+                  "type": "string"
+                }
               },
               "required": ["kind", "acceptanceId"],
               "additionalProperties": false
             }
           ]
         },
-        "mode": { "type": "string", "enum": ["computerUse", "acceptance"] },
-        "state": { "type": "string", "enum": ["live", "ended"] },
+        "mode": {
+          "type": "string",
+          "enum": ["computerUse", "acceptance"]
+        },
+        "state": {
+          "type": "string",
+          "enum": ["live", "ended"]
+        },
         "endReason": {
           "type": ["string", "null"],
-          "enum": ["revoked", "expired", "destroyed", "generationChanged", "accountChanged", null]
+          "enum": [
+            "revoked",
+            "expired",
+            "destroyed",
+            "generationChanged",
+            "accountChanged",
+            "completed",
+            null
+          ]
         },
-        "expiresAt": { "type": "integer" },
-        "revision": { "type": "integer", "minimum": 1 },
-        "createdAt": { "type": "integer" },
-        "endedAt": { "type": ["integer", "null"] }
+        "expiresAt": {
+          "type": "integer"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "integer"
+        },
+        "endedAt": {
+          "type": ["integer", "null"]
+        }
       },
       "required": [
         "id",
@@ -14536,6 +14902,94 @@
       ],
       "additionalProperties": false,
       "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/delegation.rs"
+    },
+    "ManagedDesktopAcceptanceRun": {
+      "type": "object",
+      "properties": {
+        "acceptanceId": {
+          "type": "string"
+        },
+        "providerConfigId": {
+          "type": "string"
+        },
+        "deliveryId": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["commit", "bundle"]
+        },
+        "state": {
+          "type": "string",
+          "enum": ["provisioning", "awaitingSession", "running", "completed", "cancelled", "failed"]
+        },
+        "desktopId": {
+          "type": ["string", "null"]
+        },
+        "desktopGeneration": {
+          "type": ["integer", "null"]
+        },
+        "deadlineAt": {
+          "type": ["integer", "null"]
+        },
+        "delegationId": {
+          "type": ["string", "null"]
+        },
+        "childSessionKey": {
+          "type": ["string", "null"]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "taskId": {
+              "type": ["string", "null"]
+            },
+            "parentRunId": {
+              "type": ["string", "null"]
+            }
+          },
+          "required": ["sessionId", "taskId", "parentRunId"],
+          "additionalProperties": false
+        },
+        "errorCode": {
+          "type": ["string", "null"]
+        },
+        "createdAt": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "integer"
+        },
+        "endedAt": {
+          "type": ["integer", "null"]
+        }
+      },
+      "required": [
+        "acceptanceId",
+        "providerConfigId",
+        "deliveryId",
+        "commit",
+        "mode",
+        "state",
+        "desktopId",
+        "desktopGeneration",
+        "deadlineAt",
+        "delegationId",
+        "childSessionKey",
+        "source",
+        "errorCode",
+        "createdAt",
+        "updatedAt",
+        "endedAt"
+      ],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/acceptance.rs"
     },
     "ManagedDesktopTemplate": {
       "type": "object",
@@ -14715,11 +15169,26 @@
     "RemoteDesktopEndpoint": {
       "type": "object",
       "properties": {
-        "host": { "type": "string", "minLength": 1 },
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "pinnedIp": { "type": "string", "minLength": 1 },
-        "class": { "type": "string", "enum": ["private", "public"] },
-        "confirmedAt": { "type": "integer" }
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "pinnedIp": {
+          "type": "string",
+          "minLength": 1
+        },
+        "class": {
+          "type": "string",
+          "enum": ["private", "public"]
+        },
+        "confirmedAt": {
+          "type": "integer"
+        }
       },
       "required": ["host", "port", "pinnedIp", "class", "confirmedAt"],
       "additionalProperties": false
@@ -14728,18 +15197,50 @@
       "description": "ADR-0234: a provider binding the Host reaches, a web console or an external app. Credentials are write-only; only whether one is stored is reported. A caller that may only view gets console and launch without the link or peer.",
       "type": "object",
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "providerId": { "type": "string", "minLength": 1 },
-        "access": { "type": "string", "enum": ["bridge", "web-console", "external-app"] },
-        "adapter": { "type": "string", "enum": ["vnc", "none"] },
-        "priority": { "type": "integer", "minimum": 0 },
-        "enabled": { "type": "boolean" },
-        "endpoint": { "anyOf": [{ "$ref": "#/$defs/RemoteDesktopEndpoint" }, { "type": "null" }] },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "access": {
+          "type": "string",
+          "enum": ["bridge", "web-console", "external-app"]
+        },
+        "adapter": {
+          "type": "string",
+          "enum": ["vnc", "none"]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RemoteDesktopEndpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "console": {
           "type": "object",
           "properties": {
-            "url": { "type": "string", "minLength": 1 },
-            "profile": { "type": "string", "enum": ["guacamole", "meshcentral", "generic"] }
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "profile": {
+              "type": "string",
+              "enum": ["guacamole", "meshcentral", "generic"]
+            }
           },
           "required": ["profile"],
           "additionalProperties": false
@@ -14747,18 +15248,38 @@
         "launch": {
           "type": "object",
           "properties": {
-            "launcher": { "type": "string", "enum": ["rustdesk"] },
-            "peerId": { "type": "string", "minLength": 1 },
-            "server": { "type": "string", "minLength": 1 },
-            "key": { "type": "string", "minLength": 1 }
+            "launcher": {
+              "type": "string",
+              "enum": ["rustdesk"]
+            },
+            "peerId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "server": {
+              "type": "string",
+              "minLength": 1
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "required": ["launcher"],
           "additionalProperties": false
         },
-        "viewOnly": { "type": "boolean" },
-        "config": { "type": ["object", "null"] },
-        "hasControlCredential": { "type": "boolean" },
-        "hasViewCredential": { "type": "boolean" }
+        "viewOnly": {
+          "type": "boolean"
+        },
+        "config": {
+          "type": ["object", "null"]
+        },
+        "hasControlCredential": {
+          "type": "boolean"
+        },
+        "hasViewCredential": {
+          "type": "boolean"
+        }
       },
       "required": [
         "id",
@@ -14778,11 +15299,26 @@
     "RemoteDesktopTarget": {
       "type": "object",
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
-        "name": { "type": "string", "minLength": 1 },
-        "bindings": { "type": "array", "items": { "$ref": "#/$defs/RemoteDesktopBinding" } },
-        "createdAt": { "type": "integer" },
-        "updatedAt": { "type": "integer" }
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteDesktopBinding"
+          }
+        },
+        "createdAt": {
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "integer"
+        }
       },
       "required": ["id", "name", "bindings", "createdAt", "updatedAt"],
       "additionalProperties": false
@@ -14790,8 +15326,16 @@
     "RemoteDesktopTargetPage": {
       "type": "object",
       "properties": {
-        "items": { "type": "array", "items": { "$ref": "#/$defs/RemoteDesktopTarget" } },
-        "nextPageToken": { "type": "string", "minLength": 1 }
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RemoteDesktopTarget"
+          }
+        },
+        "nextPageToken": {
+          "type": "string",
+          "minLength": 1
+        }
       },
       "required": ["items"],
       "additionalProperties": false
@@ -14799,19 +15343,37 @@
     "RemoteDesktopProbeOutcome": {
       "type": "object",
       "properties": {
-        "pinnedIp": { "type": "string", "minLength": 1 },
-        "class": { "type": "string", "enum": ["private", "public"] },
-        "connected": { "type": "boolean" },
+        "pinnedIp": {
+          "type": "string",
+          "minLength": 1
+        },
+        "class": {
+          "type": "string",
+          "enum": ["private", "public"]
+        },
+        "connected": {
+          "type": "boolean"
+        },
         "rfb": {
           "type": "object",
           "properties": {
-            "protocolVersion": { "type": "string" },
+            "protocolVersion": {
+              "type": "string"
+            },
             "securityTypes": {
               "type": "array",
-              "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              }
             },
-            "supported": { "type": "boolean" },
-            "requiresPassword": { "type": "boolean" }
+            "supported": {
+              "type": "boolean"
+            },
+            "requiresPassword": {
+              "type": "boolean"
+            }
           },
           "required": ["protocolVersion", "securityTypes", "supported", "requiresPassword"],
           "additionalProperties": false
@@ -14823,9 +15385,17 @@
     "RemoteDesktopControlLease": {
       "type": "object",
       "properties": {
-        "token": { "type": "string", "minLength": 1 },
-        "fence": { "type": "integer", "minimum": 1 },
-        "expiresAt": { "type": "integer" }
+        "token": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "expiresAt": {
+          "type": "integer"
+        }
       },
       "required": ["token", "fence", "expiresAt"],
       "additionalProperties": false
@@ -14834,12 +15404,28 @@
       "description": "A paired device always gets transport companion and no url: it attaches over /ws/remote-desktop/{sessionId} or a cognia.rfb channel.",
       "type": "object",
       "properties": {
-        "sessionId": { "type": "string", "minLength": 1 },
-        "transport": { "type": "string", "enum": ["loopback", "companion"] },
-        "url": { "type": "string", "minLength": 1 },
-        "mode": { "type": "string", "enum": ["view", "control"] },
-        "expiresAt": { "type": "integer" },
-        "lease": { "$ref": "#/$defs/RemoteDesktopControlLease" }
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["loopback", "companion"]
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["view", "control"]
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "lease": {
+          "$ref": "#/$defs/RemoteDesktopControlLease"
+        }
       },
       "required": ["sessionId", "transport", "mode", "expiresAt"],
       "additionalProperties": false
@@ -14847,8 +15433,12 @@
     "RemoteDesktopSessionRenewed": {
       "type": "object",
       "properties": {
-        "expiresAt": { "type": "integer" },
-        "lease": { "$ref": "#/$defs/RemoteDesktopControlLease" }
+        "expiresAt": {
+          "type": "integer"
+        },
+        "lease": {
+          "$ref": "#/$defs/RemoteDesktopControlLease"
+        }
       },
       "required": ["expiresAt"],
       "additionalProperties": false
@@ -14859,9 +15449,17 @@
         {
           "type": "object",
           "properties": {
-            "kind": { "const": "web-console" },
-            "url": { "type": "string", "minLength": 1 },
-            "profile": { "type": "string", "enum": ["guacamole", "meshcentral", "generic"] }
+            "kind": {
+              "const": "web-console"
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "profile": {
+              "type": "string",
+              "enum": ["guacamole", "meshcentral", "generic"]
+            }
           },
           "required": ["kind", "url", "profile"],
           "additionalProperties": false
@@ -14869,9 +15467,17 @@
         {
           "type": "object",
           "properties": {
-            "kind": { "const": "external-app" },
-            "launcher": { "type": "string", "enum": ["rustdesk"] },
-            "uri": { "type": "string", "minLength": 1 }
+            "kind": {
+              "const": "external-app"
+            },
+            "launcher": {
+              "type": "string",
+              "enum": ["rustdesk"]
+            },
+            "uri": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "required": ["kind", "launcher", "uri"],
           "additionalProperties": false
@@ -14880,43 +15486,95 @@
     }
   },
   "commands": {
-    "remote_desktop_target_list": { "$ref": "#/$defs/RemoteDesktopTargetPage" },
-    "remote_desktop_target_save": { "$ref": "#/$defs/RemoteDesktopTarget" },
-    "remote_desktop_target_delete": { "type": "null" },
-    "remote_desktop_credential_set": { "$ref": "#/$defs/RemoteDesktopTarget" },
-    "remote_desktop_target_probe": { "$ref": "#/$defs/RemoteDesktopProbeOutcome" },
-    "remote_desktop_session_open": { "$ref": "#/$defs/RemoteDesktopSessionOpened" },
-    "remote_desktop_session_renew": { "$ref": "#/$defs/RemoteDesktopSessionRenewed" },
-    "remote_desktop_session_close": { "type": "null" },
-    "remote_desktop_binding_launch": { "$ref": "#/$defs/RemoteDesktopLaunched" },
-    "sandbox_preview_context": { "$ref": "#/$defs/SandboxPreviewContext" },
-    "sandbox_preview_create": { "$ref": "#/$defs/CreatedSandboxPreview" },
-    "sandbox_preview_open": { "$ref": "#/$defs/CreatedSandboxPreview" },
+    "remote_desktop_target_list": {
+      "$ref": "#/$defs/RemoteDesktopTargetPage"
+    },
+    "remote_desktop_target_save": {
+      "$ref": "#/$defs/RemoteDesktopTarget"
+    },
+    "remote_desktop_target_delete": {
+      "type": "null"
+    },
+    "remote_desktop_credential_set": {
+      "$ref": "#/$defs/RemoteDesktopTarget"
+    },
+    "remote_desktop_target_probe": {
+      "$ref": "#/$defs/RemoteDesktopProbeOutcome"
+    },
+    "remote_desktop_session_open": {
+      "$ref": "#/$defs/RemoteDesktopSessionOpened"
+    },
+    "remote_desktop_session_renew": {
+      "$ref": "#/$defs/RemoteDesktopSessionRenewed"
+    },
+    "remote_desktop_session_close": {
+      "type": "null"
+    },
+    "remote_desktop_binding_launch": {
+      "$ref": "#/$defs/RemoteDesktopLaunched"
+    },
+    "sandbox_preview_context": {
+      "$ref": "#/$defs/SandboxPreviewContext"
+    },
+    "sandbox_preview_create": {
+      "$ref": "#/$defs/CreatedSandboxPreview"
+    },
+    "sandbox_preview_open": {
+      "$ref": "#/$defs/CreatedSandboxPreview"
+    },
     "sandbox_preview_list": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "items": { "type": "array", "items": { "$ref": "#/$defs/PreviewGrantV1" } },
-        "nextPageToken": { "type": "string" }
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreviewGrantV1"
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
       },
       "required": ["items"]
     },
-    "sandbox_preview_revoke": { "$ref": "#/$defs/PreviewGrantV1" },
-    "sandbox_snapshot_create": { "$ref": "#/$defs/SandboxSnapshotRecord" },
+    "sandbox_preview_revoke": {
+      "$ref": "#/$defs/PreviewGrantV1"
+    },
+    "sandbox_snapshot_create": {
+      "$ref": "#/$defs/SandboxSnapshotRecord"
+    },
     "sandbox_snapshot_list": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "items": { "type": "array", "items": { "$ref": "#/$defs/SandboxSnapshotRecord" } },
-        "nextPageToken": { "type": "string" }
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SandboxSnapshotRecord"
+          }
+        },
+        "nextPageToken": {
+          "type": "string"
+        }
       },
       "required": ["items"]
     },
-    "sandbox_snapshot_get": { "$ref": "#/$defs/SandboxSnapshotRecord" },
-    "sandbox_snapshot_delete": { "$ref": "#/$defs/SandboxSnapshotRecord" },
-    "sandbox_snapshot_pin": { "$ref": "#/$defs/SandboxSnapshotRecord" },
-    "sandbox_snapshot_fork": { "$ref": "#/$defs/ForkedSandboxSnapshot" },
-    "sandbox_snapshot_restore": { "$ref": "#/$defs/ForkedSandboxSnapshot" },
+    "sandbox_snapshot_get": {
+      "$ref": "#/$defs/SandboxSnapshotRecord"
+    },
+    "sandbox_snapshot_delete": {
+      "$ref": "#/$defs/SandboxSnapshotRecord"
+    },
+    "sandbox_snapshot_pin": {
+      "$ref": "#/$defs/SandboxSnapshotRecord"
+    },
+    "sandbox_snapshot_fork": {
+      "$ref": "#/$defs/ForkedSandboxSnapshot"
+    },
+    "sandbox_snapshot_restore": {
+      "$ref": "#/$defs/ForkedSandboxSnapshot"
+    },
     "best_of_n_start": {
       "$ref": "#/$defs/BestOfNGroup"
     },
@@ -15630,7 +16288,7 @@
     },
     "connector_enqueue_outbound": {
       "type": "object",
-      "description": "What the host did with the relayed reply (ADR-0131). `reused` is true when the idempotency key matched an existing job — i.e. this was a retry replay, not a second send.",
+      "description": "What the host did with the relayed reply (ADR-0131). `reused` is true when the idempotency key matched an existing job \u2014 i.e. this was a retry replay, not a second send.",
       "required": ["jobId", "messageId", "reused"],
       "properties": {
         "jobId": {
@@ -15698,7 +16356,9 @@
         "additionalProperties": false
       }
     },
-    "connectors_wechat_oa_inbound_claim": { "type": "boolean" },
+    "connectors_wechat_oa_inbound_claim": {
+      "type": "boolean"
+    },
     "connectors_wechat_oa_inbound_ack": {
       "$ref": "#/$defs/NullResult"
     },
@@ -15717,8 +16377,12 @@
     "connectors_keyring_get_snapshot": {
       "type": ["object", "null"],
       "properties": {
-        "value": { "type": "string" },
-        "revision": { "type": "string" }
+        "value": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        }
       },
       "required": ["value", "revision"],
       "additionalProperties": false
@@ -16854,6 +17518,25 @@
       "additionalProperties": false,
       "required": ["allowedAgents", "defaultAgent", "execution"],
       "properties": {
+        "gatewayTelemetry": {
+          "description": "Only the authenticated member's log audience and current Gateway epoch; null without a Gateway. Never operator status, routing or credentials.",
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["ownerAccountId", "accountGeneration", "accountRequired"],
+          "properties": {
+            "ownerAccountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "accountGeneration": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "accountRequired": {
+              "const": true
+            }
+          }
+        },
         "allowedAgents": {
           "type": "array",
           "items": {
@@ -16886,14 +17569,23 @@
         "models": {
           "description": "P6g: per provider, the model ids the Host's deployment serves. Every provider an allowed agent can use, then every other provider the org holds a key for (tool-less chat); never a provider without an org key.",
           "type": "object",
-          "additionalProperties": { "type": "array", "items": { "type": "string" } }
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
         "modelNames": {
           "description": "P6 follow-up: per provider, the display name its deployment gives a served model, keyed by model id; only names that differ from the id. A model absent here is shown by its id.",
           "type": "object",
           "additionalProperties": {
             "type": "object",
-            "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 200 }
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
           }
         },
         "usage": {
@@ -16902,10 +17594,21 @@
           "additionalProperties": false,
           "required": ["month", "spentTokens", "reservedTokens", "monthlyTokens"],
           "properties": {
-            "month": { "type": "string" },
-            "spentTokens": { "type": "integer", "minimum": 0 },
-            "reservedTokens": { "type": "integer", "minimum": 0 },
-            "monthlyTokens": { "type": ["integer", "null"], "minimum": 0 }
+            "month": {
+              "type": "string"
+            },
+            "spentTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reservedTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "monthlyTokens": {
+              "type": ["integer", "null"],
+              "minimum": 0
+            }
           }
         }
       }
@@ -16922,12 +17625,25 @@
         "endpoint"
       ],
       "properties": {
-        "ticketId": { "type": "string" },
-        "secret": { "type": "string" },
-        "accountGeneration": { "type": "integer", "minimum": 0 },
-        "ownerAccountId": { "type": "string" },
-        "expiresAtMs": { "type": "integer" },
-        "endpoint": { "type": "string" }
+        "ticketId": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "accountGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ownerAccountId": {
+          "type": "string"
+        },
+        "expiresAtMs": {
+          "type": "integer"
+        },
+        "endpoint": {
+          "type": "string"
+        }
       }
     },
     "person_model_ticket_mint": {
@@ -16944,14 +17660,33 @@
         "credentialFingerprint"
       ],
       "properties": {
-        "ticketId": { "type": "string" },
-        "secret": { "type": "string" },
-        "endpoint": { "type": "string" },
-        "gatewayPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "provider": { "type": "string" },
-        "model": { "type": "string" },
-        "expiresAt": { "type": "integer" },
-        "credentialFingerprint": { "type": "string", "pattern": "^[0-9a-f]{12}$" }
+        "ticketId": {
+          "type": "string"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "gatewayPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "integer"
+        },
+        "credentialFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{12}$"
+        }
       }
     },
     "org_model_credential_list": {
@@ -17004,7 +17739,10 @@
       "type": "object",
       "required": ["month", "defaultMonthlyTokens", "members"],
       "properties": {
-        "month": { "type": "string", "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$" },
+        "month": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$"
+        },
         "defaultMonthlyTokens": {
           "type": ["integer", "null"],
           "minimum": 0,
@@ -17016,21 +17754,39 @@
             "type": "object",
             "required": ["userId", "spentTokens", "reservedTokens", "monthlyTokens", "capSource"],
             "properties": {
-              "userId": { "type": "string" },
-              "spentTokens": { "type": "integer", "minimum": 0 },
-              "reservedTokens": { "type": "integer", "minimum": 0 },
+              "userId": {
+                "type": "string"
+              },
+              "spentTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "reservedTokens": {
+                "type": "integer",
+                "minimum": 0
+              },
               "monthlyTokens": {
                 "type": ["integer", "null"],
                 "minimum": 0,
                 "maximum": 1000000000000
               },
-              "capSource": { "type": "string", "enum": ["default", "override"] },
-              "displayName": { "type": "string", "minLength": 1, "maxLength": 200 }
+              "capSource": {
+                "type": "string",
+                "enum": ["default", "override"]
+              },
+              "displayName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
             },
             "additionalProperties": false
           }
         },
-        "membersIncomplete": { "type": "boolean", "const": true }
+        "membersIncomplete": {
+          "type": "boolean",
+          "const": true
+        }
       },
       "additionalProperties": false
     },
@@ -17467,32 +18223,92 @@
       }
     },
     "managed_desktop_template_delete": {
-      "anyOf": [{ "$ref": "#/$defs/ManagedDesktopTemplateSummary" }, { "type": "null" }]
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManagedDesktopTemplateSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "managed_desktop_monitor": {
       "$ref": "#/$defs/ManagedDesktopMonitor"
     },
-    "managed_desktop_qualify_start": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
-    "managed_desktop_qualify_status": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
+    "managed_desktop_qualify_start": {
+      "$ref": "#/$defs/ManagedDesktopQualificationRun"
+    },
+    "managed_desktop_qualify_status": {
+      "$ref": "#/$defs/ManagedDesktopQualificationRun"
+    },
     "managed_desktop_qualify_list": {
       "type": "object",
       "properties": {
-        "runs": { "type": "array", "items": { "$ref": "#/$defs/ManagedDesktopQualificationRun" } }
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ManagedDesktopQualificationRun"
+          }
+        }
       },
       "required": ["runs"],
       "additionalProperties": false
     },
-    "managed_desktop_qualify_approve": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
-    "managed_desktop_qualify_cancel": { "$ref": "#/$defs/ManagedDesktopQualificationRun" },
-    "managed_desktop_delegate": { "$ref": "#/$defs/ManagedDesktopDelegation" },
-    "managed_desktop_delegation_revoke": { "$ref": "#/$defs/ManagedDesktopDelegation" },
+    "managed_desktop_qualify_approve": {
+      "$ref": "#/$defs/ManagedDesktopQualificationRun"
+    },
+    "managed_desktop_qualify_cancel": {
+      "$ref": "#/$defs/ManagedDesktopQualificationRun"
+    },
+    "managed_desktop_delegate": {
+      "$ref": "#/$defs/ManagedDesktopDelegation"
+    },
+    "managed_desktop_delegation_revoke": {
+      "$ref": "#/$defs/ManagedDesktopDelegation"
+    },
     "managed_desktop_delegation_list": {
       "type": "object",
       "properties": {
-        "delegations": { "type": "array", "items": { "$ref": "#/$defs/ManagedDesktopDelegation" } }
+        "delegations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ManagedDesktopDelegation"
+          }
+        }
       },
       "required": ["delegations"],
       "additionalProperties": false
+    },
+    "managed_desktop_acceptance_start": {
+      "$ref": "#/$defs/ManagedDesktopAcceptanceRun"
+    },
+    "managed_desktop_acceptance_attach": {
+      "$ref": "#/$defs/ManagedDesktopAcceptanceRun"
+    },
+    "managed_desktop_acceptance_cancel": {
+      "$ref": "#/$defs/ManagedDesktopAcceptanceRun"
+    },
+    "managed_desktop_acceptance_status": {
+      "$ref": "#/$defs/ManagedDesktopAcceptanceRun"
+    },
+    "managed_desktop_acceptance_list": {
+      "type": "object",
+      "properties": {
+        "runs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ManagedDesktopAcceptanceRun"
+          }
+        }
+      },
+      "required": ["runs"],
+      "additionalProperties": false
+    },
+    "managed_desktop_acceptance_checkpoint": {
+      "$ref": "#/$defs/ManagedDesktopEvidenceArtifact"
+    },
+    "managed_desktop_acceptance_complete": {
+      "$ref": "#/$defs/ManagedDesktopAcceptanceResult"
     },
     "managed_desktop_list_configs": {
       "type": "array",
@@ -17547,7 +18363,9 @@
         "expiresAt": {
           "type": "integer"
         },
-        "executionEnabled": { "type": "boolean" },
+        "executionEnabled": {
+          "type": "boolean"
+        },
         "dormantReason": {
           "type": ["string", "null"],
           "enum": ["managed_desktop_handoff_requires_results_qualification", null]
@@ -20452,7 +21270,7 @@
       "required": ["removed"]
     },
     "environment_declaration_read": {
-      "description": "Every declaration file a repository has, plus where the Host looked.\n\n**All** of them, not the first one that matched. Precedence between\n`.cognia/workspace.json` and a devcontainer file is decided by\n`lib/project-environment/read-environment-declaration.ts`, together with\nthe trust gate and the parse — and a Host that returned only its own first\nmatch would be a second, silent answer to the same question. Returning the\nset keeps that rule in one place and still costs one round trip.",
+      "description": "Every declaration file a repository has, plus where the Host looked.\n\n**All** of them, not the first one that matched. Precedence between\n`.cognia/workspace.json` and a devcontainer file is decided by\n`lib/project-environment/read-environment-declaration.ts`, together with\nthe trust gate and the parse \u2014 and a Host that returned only its own first\nmatch would be a second, silent answer to the same question. Returning the\nset keeps that rule in one place and still costs one round trip.",
       "properties": {
         "files": {
           "description": "In `DECLARATION_FILES` order; empty when the repository declares nothing,\nwhich is the common case and not an error.",
@@ -20476,10 +21294,14 @@
     "environment_driver_status": {
       "description": "The driver's own answer about itself.",
       "properties": {
-        "snapshotCapabilities": { "$ref": "#/$defs/SnapshotCapabilities" },
+        "snapshotCapabilities": {
+          "$ref": "#/$defs/SnapshotCapabilities"
+        },
         "providers": {
           "type": "array",
-          "items": { "$ref": "#/$defs/SnapshotProviderView" }
+          "items": {
+            "$ref": "#/$defs/SnapshotProviderView"
+          }
         },
         "availableTiers": {
           "description": "Empty with `reachable: false`. An unreachable daemon attests no tier,\nwhich is not the same claim as attesting none.",
@@ -21769,6 +22591,445 @@
     },
     "browser_recording_ref": {
       "type": "string"
+    },
+    "connectors_lark_user_auth": {
+      "type": "object",
+      "properties": {
+        "authorizationEpoch": {
+          "type": "string"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "accessToken": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refreshToken": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refreshRevision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "accountLabel": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "authorizationEpoch",
+        "configured",
+        "accessToken",
+        "refreshToken",
+        "refreshRevision",
+        "accountLabel",
+        "scopes"
+      ],
+      "additionalProperties": false
+    },
+    "connectors_bounded_http_request": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "integer"
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "body": {
+          "type": "string"
+        }
+      },
+      "required": ["status", "headers", "body"],
+      "additionalProperties": false
+    },
+    "connectors_matrix_crypto_backup": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["recoveryKey", "backupInfo", "version", "createPending"],
+          "properties": {
+            "recoveryKey": {
+              "type": "string"
+            },
+            "backupInfo": {
+              "type": "object",
+              "required": ["algorithm", "auth_data"],
+              "properties": {
+                "algorithm": {
+                  "type": "string",
+                  "const": "m.megolm_backup.v1.curve25519-aes-sha2"
+                },
+                "auth_data": {
+                  "type": "object",
+                  "required": ["public_key"],
+                  "properties": {
+                    "public_key": {
+                      "type": "string"
+                    },
+                    "signatures": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "etag": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "version": {
+              "type": ["string", "null"]
+            },
+            "createPending": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["createPending", "createClaim"],
+          "properties": {
+            "createPending": {
+              "const": true
+            },
+            "createClaim": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["cancelled"],
+          "properties": {
+            "cancelled": {
+              "const": true
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["version", "enabled", "imported", "total"],
+          "properties": {
+            "version": {
+              "type": "string"
+            },
+            "enabled": {
+              "const": true
+            },
+            "imported": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["enabled", "version", "total", "backedUp"],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "version": {
+              "type": ["string", "null"]
+            },
+            "total": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "backedUp": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "connectors_matrix_crypto_cross_signing": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["requests"],
+          "properties": {
+            "requests": {
+              "$ref": "#/$defs/MatrixCryptoOutgoingRequestList"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "hasMaster",
+            "hasSelfSigning",
+            "hasUserSigning",
+            "identityVerified",
+            "deviceCrossSigned",
+            "deviceTrusted",
+            "masterKey"
+          ],
+          "properties": {
+            "hasMaster": {
+              "type": "boolean"
+            },
+            "hasSelfSigning": {
+              "type": "boolean"
+            },
+            "hasUserSigning": {
+              "type": "boolean"
+            },
+            "identityVerified": {
+              "type": "boolean"
+            },
+            "deviceCrossSigned": {
+              "type": "boolean"
+            },
+            "deviceTrusted": {
+              "type": "boolean"
+            },
+            "masterKey": {
+              "type": ["string", "null"]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "connectors_matrix_crypto_verification": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["flowId", "userId", "deviceId", "state", "deviceVerified", "requests"],
+          "properties": {
+            "flowId": {
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            },
+            "deviceId": {
+              "type": ["string", "null"]
+            },
+            "state": {
+              "enum": ["requested", "ready", "sas", "qr", "done", "cancelled"]
+            },
+            "deviceVerified": {
+              "type": "boolean"
+            },
+            "requests": {
+              "$ref": "#/$defs/MatrixCryptoOutgoingRequestList"
+            },
+            "decimals": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "integer"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            "emojiIndices": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 63
+              },
+              "minItems": 7,
+              "maxItems": 7
+            },
+            "confirmed": {
+              "type": "boolean"
+            },
+            "scanned": {
+              "type": "boolean"
+            },
+            "qrBytes": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "maxItems": 4096
+            },
+            "sasStartedByUs": {
+              "type": "boolean"
+            },
+            "qrImage": {
+              "type": "object",
+              "required": ["size", "modules"],
+              "properties": {
+                "size": {
+                  "type": "integer",
+                  "minimum": 21,
+                  "maximum": 177
+                },
+                "modules": {
+                  "type": "array",
+                  "maxItems": 31329,
+                  "items": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["flows"],
+          "properties": {
+            "flows": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "type": "object",
+                "required": ["flowId", "userId", "deviceId", "state", "deviceVerified", "requests"],
+                "properties": {
+                  "flowId": {
+                    "type": "string"
+                  },
+                  "userId": {
+                    "type": "string"
+                  },
+                  "deviceId": {
+                    "type": ["string", "null"]
+                  },
+                  "state": {
+                    "enum": ["requested", "ready", "sas", "qr", "done", "cancelled"]
+                  },
+                  "deviceVerified": {
+                    "type": "boolean"
+                  },
+                  "requests": {
+                    "$ref": "#/$defs/MatrixCryptoOutgoingRequestList"
+                  },
+                  "decimals": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "integer"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                  },
+                  "emojiIndices": {
+                    "type": ["array", "null"],
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 63
+                    },
+                    "minItems": 7,
+                    "maxItems": 7
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  },
+                  "scanned": {
+                    "type": "boolean"
+                  },
+                  "qrBytes": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 255
+                    },
+                    "maxItems": 4096
+                  },
+                  "sasStartedByUs": {
+                    "type": "boolean"
+                  },
+                  "qrImage": {
+                    "type": "object",
+                    "required": ["size", "modules"],
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "minimum": 21,
+                        "maximum": 177
+                      },
+                      "modules": {
+                        "type": "array",
+                        "maxItems": 31329,
+                        "items": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

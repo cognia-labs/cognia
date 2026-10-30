@@ -11,7 +11,7 @@ import {
 import type { CompanionConfig } from "@/lib/tauri/companion-storage"
 import { createRelayPairFetcher, type RelayPairFetcher } from "@/lib/tauri/relay-pair-fetch"
 import { choosePairPath, type PairPath, type PairPathOptions } from "@/lib/companion/pair-path"
-import { getActiveLogtoSession, signInToLogto } from "@/lib/logto/app-session"
+import { getActiveLogtoSession, signInToLogto, updateLogtoSession } from "@/lib/logto/app-session"
 import { createLogtoWebPopupDrivers } from "@/lib/logto/web-popup"
 import { createLogtoCapacitorDrivers } from "@/lib/logto/capacitor-drivers"
 import {
@@ -22,6 +22,9 @@ import {
 } from "@/lib/logto/client"
 import { isCapacitor } from "@/lib/platform/detect"
 import { getLocalDeviceConsoleLabel } from "@/lib/device/device-identity"
+import { captureAccountScope, getActiveAccountId } from "@/lib/accounts/active-account-id"
+import { completeSignIn } from "@/lib/identity/complete-sign-in"
+import { assertSignedInIdentityOwner } from "@/lib/identity/sign-in"
 
 // The direct-first path choice is shared with `cognia-agent host login`.
 export { DIRECT_PAIR_PROBE_TIMEOUT_MS, type PairPath } from "@/lib/companion/pair-path"
@@ -124,8 +127,30 @@ async function resolveOidcSession(
   payload: PairPayload,
   fetcher?: AuthFetcher
 ): Promise<PairOidcSession> {
-  const existing = await getActiveLogtoSession()
-  if (existing) return existing
+  const localAccountId = getActiveAccountId()
+  const assertCurrent = captureAccountScope(localAccountId)
+  const existing = await getActiveLogtoSession({ localAccountId })
+  if (existing) {
+    return updateLogtoSession(existing, async () => existing, {
+      localAccountId,
+      beforeCommit: async (candidate) => {
+        assertCurrent()
+        await assertSignedInIdentityOwner(candidate, { localAccountId })
+        assertCurrent()
+      },
+      afterCommit: async (candidate, context) => {
+        assertCurrent()
+        await completeSignIn(candidate, {
+          localAccountId,
+          ...context,
+          assertCurrent: () => {
+            assertCurrent()
+            context.assertCurrent()
+          },
+        })
+      },
+    })
+  }
   if (typeof window === "undefined") throw new Error("an active OIDC session is required")
   const config = await fetchCompanionAuthConfig(
     payload.baseUrl,
@@ -155,7 +180,26 @@ async function resolveOidcSession(
       organizationId: payload.tenantId,
       issuerKind,
     },
-    drivers
+    drivers,
+    {
+      localAccountId,
+      beforeCommit: async (candidate) => {
+        assertCurrent()
+        await assertSignedInIdentityOwner(candidate, { localAccountId })
+        assertCurrent()
+      },
+      afterCommit: async (candidate, context) => {
+        assertCurrent()
+        await completeSignIn(candidate, {
+          localAccountId,
+          ...context,
+          assertCurrent: () => {
+            assertCurrent()
+            context.assertCurrent()
+          },
+        })
+      },
+    }
   )
 }
 

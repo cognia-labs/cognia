@@ -41,6 +41,7 @@ pub struct CommandCatalog {
     pub catalog_hash: &'static str,
     pub plane: &'static str,
     pub commands: Vec<&'static CommandDescriptor>,
+    pub schemas: serde_json::Value,
 }
 
 /// `GET /api/catalog`. Authenticated by `require_device_access`, like `whoami`.
@@ -115,6 +116,22 @@ fn presented_etags(headers: &HeaderMap) -> Vec<String> {
         .collect()
 }
 
+fn discovery_schemas(commands: &[&CommandDescriptor], plane: &str) -> Result<serde_json::Value, Problem> {
+    use serde_json::{json, Value};
+    let catalog: Value = serde_json::from_slice(cognia_headless_contract::EMBEDDED_CATALOG_BYTES)
+        .map_err(|_| Problem::new(500, "catalog_unavailable", "host contract is unavailable"))?;
+    let overrides: Value = serde_json::from_slice(cognia_headless_contract::EMBEDDED_DEVICE_PLANE_OVERRIDES_BYTES)
+        .map_err(|_| Problem::new(500, "catalog_unavailable", "device contract is unavailable"))?;
+    let wanted: std::collections::HashSet<&str> = commands.iter().map(|command| command.name.as_str()).collect();
+    let mut schemas = serde_json::Map::new();
+    for command in catalog.get("commands").and_then(Value::as_array).into_iter().flatten() {
+        let Some(name) = command.get("name").and_then(Value::as_str).filter(|name| wanted.contains(name)) else { continue; };
+        let input = if plane == "device" { overrides.get("commands").and_then(|all| all.get(name)).and_then(|row| row.get("inputSchema")).unwrap_or(&command["inputSchema"]) } else { &command["inputSchema"] };
+        schemas.insert(name.to_string(), json!({"input":input,"output":command["outputSchema"]}));
+    }
+    Ok(Value::Object(schemas))
+}
+
 fn respond(
     headers: &HeaderMap,
     plane: &'static str,
@@ -139,11 +156,16 @@ fn respond(
     {
         return (StatusCode::NOT_MODIFIED, cache_headers).into_response();
     }
+    let schemas = match discovery_schemas(&commands, plane) {
+        Ok(schemas) => schemas,
+        Err(problem) => return problem.into_response(),
+    };
     let document = CommandCatalog {
         contract_version: CONTRACT_VERSION,
         catalog_hash: CATALOG_HASH,
         plane,
         commands,
+        schemas,
     };
     (StatusCode::OK, cache_headers, Json(document)).into_response()
 }
@@ -398,5 +420,13 @@ mod tests {
                 .and_then(|v| v.to_str().ok()),
             Some(cognia_problem::CONTENT_TYPE)
         );
+    }
+
+    #[test]
+    fn discovery_schema_is_filtered_and_plane_specific() {
+        let descriptor = command_manifest::descriptor("git_status").expect("git status");
+        let value = discovery_schemas(&[descriptor], "device").expect("schema");
+        assert_eq!(value["git_status"]["input"]["required"], serde_json::json!(["workspaceId"]));
+        assert_eq!(value.as_object().unwrap().len(), 1);
     }
 }

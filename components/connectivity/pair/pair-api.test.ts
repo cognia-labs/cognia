@@ -2,7 +2,10 @@
 
 import { encodePairPayload } from "@/lib/qr/pair-payload"
 import { fetchCompanionAuthConfig, registerCompanionDevice } from "@/lib/tauri/companion-auth"
-import { getActiveLogtoSession, signInToLogto } from "@/lib/logto/app-session"
+import { getActiveLogtoSession, signInToLogto, updateLogtoSession } from "@/lib/logto/app-session"
+import { captureAccountScope, getActiveAccountId } from "@/lib/accounts/active-account-id"
+import { completeSignIn } from "@/lib/identity/complete-sign-in"
+import { assertSignedInIdentityOwner } from "@/lib/identity/sign-in"
 
 import { registerDecodedPairPayload, registerPairPayload } from "./pair-api"
 
@@ -14,7 +17,14 @@ jest.mock("@/lib/tauri/companion-auth", () => ({
 jest.mock("@/lib/logto/app-session", () => ({
   getActiveLogtoSession: jest.fn(),
   signInToLogto: jest.fn(),
+  updateLogtoSession: jest.fn(),
 }))
+jest.mock("@/lib/accounts/active-account-id", () => ({
+  getActiveAccountId: jest.fn(),
+  captureAccountScope: jest.fn(),
+}))
+jest.mock("@/lib/identity/complete-sign-in", () => ({ completeSignIn: jest.fn() }))
+jest.mock("@/lib/identity/sign-in", () => ({ assertSignedInIdentityOwner: jest.fn() }))
 jest.mock("@/lib/logto/web-popup", () => ({
   createLogtoWebPopupDrivers: () => ({ flavour: "popup" }),
 }))
@@ -31,6 +41,12 @@ const register = registerCompanionDevice as jest.MockedFunction<typeof registerC
 const activeSession = getActiveLogtoSession as jest.MockedFunction<typeof getActiveLogtoSession>
 const authConfig = fetchCompanionAuthConfig as jest.MockedFunction<typeof fetchCompanionAuthConfig>
 const signIn = signInToLogto as jest.MockedFunction<typeof signInToLogto>
+const updateSession = jest.mocked(updateLogtoSession)
+const activeProfile = jest.mocked(getActiveAccountId)
+const captureScope = jest.mocked(captureAccountScope)
+const assertScope = jest.fn<void, []>()
+const complete = jest.mocked(completeSignIn)
+const validateOwner = jest.mocked(assertSignedInIdentityOwner)
 const payload = {
   baseUrl: "https://host.local:27890",
   mode: "owner-invitation" as const,
@@ -55,6 +71,17 @@ beforeEach(() => {
   activeSession.mockReset()
   authConfig.mockReset()
   signIn.mockReset()
+  activeProfile.mockReturnValue("acct_pair")
+  assertScope.mockReset()
+  captureScope.mockReset().mockReturnValue(assertScope)
+  complete.mockReset().mockResolvedValue({} as never)
+  validateOwner.mockReset().mockResolvedValue(undefined)
+  updateSession.mockReset().mockImplementation(async (_previous, update, options) => {
+    const candidate = await update()
+    await options?.beforeCommit?.(candidate)
+    await options?.afterCommit?.(candidate, { assertCurrent: () => {} })
+    return candidate
+  })
 })
 
 it("registers the invitation through the canonical device-key flow", async () => {
@@ -79,6 +106,148 @@ it("registers the invitation through the canonical device-key flow", async () =>
   )
 })
 
+it("refuses pairing when a reused session belongs to another profile owner", async () => {
+  register.mockResolvedValue(config)
+  activeSession.mockResolvedValue({
+    issuer: "https://id.example/oidc",
+    clientId: "web-client",
+    resource: "https://host.example/api",
+    accessToken: "oidc-access",
+    scopes: ["openid"],
+  })
+  validateOwner.mockRejectedValue(new Error("profile belongs to another person"))
+
+  await expect(
+    registerDecodedPairPayload({ ...payload, mode: "oidc", invitation: undefined })
+  ).resolves.toMatchObject({
+    kind: "registration_error",
+    message: "profile belongs to another person",
+  })
+  expect(register).not.toHaveBeenCalled()
+  expect(complete).not.toHaveBeenCalled()
+})
+
+it("does not bind or register a reused session superseded by logout", async () => {
+  const session = {
+    issuer: "https://id.example/oidc",
+    clientId: "web-client",
+    resource: "https://host.example/api",
+    accessToken: "oidc-access",
+    scopes: ["openid"],
+  }
+  activeSession.mockResolvedValue(session)
+  register.mockResolvedValue(config)
+  updateSession.mockRejectedValue(new Error("authentication operation superseded"))
+
+  await expect(
+    registerDecodedPairPayload({ ...payload, mode: "oidc", invitation: undefined })
+  ).resolves.toMatchObject({
+    kind: "registration_error",
+    message: "authentication operation superseded",
+  })
+  expect(updateSession).toHaveBeenCalledWith(session, expect.any(Function), {
+    localAccountId: "acct_pair",
+    beforeCommit: expect.any(Function),
+    afterCommit: expect.any(Function),
+  })
+  expect(validateOwner).not.toHaveBeenCalled()
+  expect(complete).not.toHaveBeenCalled()
+  expect(register).not.toHaveBeenCalled()
+})
+
+it.each(["before validation", "during validation", "before binding"])(
+  "rejects reused pairing credentials when local scope expires %s",
+  async (changeAt) => {
+    const session = {
+      issuer: "https://id.example/oidc",
+      clientId: "web-client",
+      resource: "https://host.example/api",
+      accessToken: "oidc-access",
+      scopes: ["openid"],
+    }
+    const invalidate = () => {
+      assertScope.mockImplementation(() => {
+        throw new Error("local account scope changed")
+      })
+    }
+    activeSession.mockResolvedValue(session)
+    register.mockResolvedValue(config)
+    if (changeAt === "before validation") invalidate()
+    if (changeAt === "during validation") validateOwner.mockImplementation(async () => invalidate())
+    if (changeAt === "before binding") {
+      updateSession.mockImplementation(async (_previous, update, options) => {
+        const candidate = await update()
+        await options?.beforeCommit?.(candidate)
+        invalidate()
+        await options?.afterCommit?.(candidate, { assertCurrent: () => {} })
+        return candidate
+      })
+    }
+
+    await expect(
+      registerDecodedPairPayload({ ...payload, mode: "oidc", invitation: undefined })
+    ).resolves.toMatchObject({
+      kind: "registration_error",
+      message: "local account scope changed",
+    })
+    expect(captureScope).toHaveBeenCalledWith("acct_pair")
+    if (changeAt === "before validation") expect(validateOwner).not.toHaveBeenCalled()
+    else expect(validateOwner).toHaveBeenCalledTimes(1)
+    expect(complete).not.toHaveBeenCalled()
+    expect(register).not.toHaveBeenCalled()
+  }
+)
+
+it("validates a fresh session before commit using the profile captured before asynchronous work", async () => {
+  const session = {
+    issuer: "https://id.example/oidc",
+    clientId: "web-client",
+    resource: "https://host.example/api",
+    accessToken: "oidc-access",
+    scopes: ["openid"],
+  }
+  activeSession.mockImplementation(async () => {
+    activeProfile.mockReturnValue("acct_other")
+    return null
+  })
+  authConfig.mockResolvedValue({
+    deploymentMode: "multi-tenant",
+    hostId: payload.hostId,
+    oidc: {
+      issuer: session.issuer,
+      audience: session.resource,
+      webClientId: session.clientId,
+      scopes: ["openid"],
+    },
+    signaling: { url: "wss://host.example/signaling", iceServers: [] },
+  })
+  signIn.mockImplementation(async (_config, _drivers, deps) => {
+    await deps?.beforeCommit?.(session)
+    await deps?.afterCommit?.(session, { assertCurrent: () => {} })
+    return session
+  })
+  register.mockResolvedValue(config)
+
+  await expect(
+    registerDecodedPairPayload({ ...payload, mode: "oidc", invitation: undefined })
+  ).resolves.toMatchObject({ kind: "ok" })
+
+  expect(signIn.mock.calls[0][2]).toEqual({
+    localAccountId: "acct_pair",
+    beforeCommit: expect.any(Function),
+    afterCommit: expect.any(Function),
+  })
+  expect(validateOwner).toHaveBeenCalledWith(session, { localAccountId: "acct_pair" })
+  expect(complete).toHaveBeenCalledWith(session, {
+    localAccountId: "acct_pair",
+    assertCurrent: expect.any(Function),
+  })
+  expect(validateOwner.mock.invocationCallOrder[0]).toBeLessThan(
+    complete.mock.invocationCallOrder[0]
+  )
+  expect(complete.mock.invocationCallOrder[0]).toBeLessThan(register.mock.invocationCallOrder[0])
+})
+
 it("reuses the active OIDC session for an oidc pairing", async () => {
   const session = {
     issuer: "https://id.example/oidc",
@@ -96,6 +265,15 @@ it("reuses the active OIDC session for an oidc pairing", async () => {
   expect(register).toHaveBeenCalledWith(
     expect.objectContaining({ mode: "oidc", invitation: undefined, oidc: session }),
     undefined
+  )
+  expect(activeSession).toHaveBeenCalledWith({ localAccountId: "acct_pair" })
+  expect(complete).toHaveBeenCalledWith(session, {
+    localAccountId: "acct_pair",
+    assertCurrent: expect.any(Function),
+  })
+  expect(validateOwner).toHaveBeenCalledWith(session, { localAccountId: "acct_pair" })
+  expect(validateOwner.mock.invocationCallOrder[0]).toBeLessThan(
+    complete.mock.invocationCallOrder[0]
   )
 })
 
@@ -136,7 +314,12 @@ it("starts canonical Logto PKCE when an oidc pairing has no active session", asy
       // Logto only honours that for a session that asked for the scope.
       scopes: ["openid", "offline_access", "urn:logto:scope:organizations"],
     }),
-    { flavour: "popup" }
+    { flavour: "popup" },
+    {
+      localAccountId: "acct_pair",
+      beforeCommit: expect.any(Function),
+      afterCommit: expect.any(Function),
+    }
   )
   expect(register).toHaveBeenCalledWith(expect.objectContaining({ oidc: session }), undefined)
 })
@@ -173,7 +356,12 @@ it("signs in through the in-app browser and the native application on Capacitor"
         clientId: "native-client",
         redirectUri: "cognia://logto/callback",
       }),
-      { flavour: "capacitor" }
+      { flavour: "capacitor" },
+      {
+        localAccountId: "acct_pair",
+        beforeCommit: expect.any(Function),
+        afterCommit: expect.any(Function),
+      }
     )
   } finally {
     capacitorShell = false
@@ -215,7 +403,12 @@ it("gives a generic OIDC issuer the reverse-domain callback and no organizations
         scopes: ["openid"],
         issuerKind: "oidc",
       }),
-      { flavour: "capacitor" }
+      { flavour: "capacitor" },
+      {
+        localAccountId: "acct_pair",
+        beforeCommit: expect.any(Function),
+        afterCommit: expect.any(Function),
+      }
     )
   } finally {
     capacitorShell = false

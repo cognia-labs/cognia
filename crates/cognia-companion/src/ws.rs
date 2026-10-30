@@ -53,11 +53,13 @@ const IDLE_TIMEOUT_SECS: u64 = 90;
 pub struct WsParams {
     pub ticket: String,
     pub since: Option<u64>,
+    pub channels: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct InternalWsParams {
     pub since: Option<u64>,
+    pub channels: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +108,7 @@ pub async fn ws_handler(
         ConnectionScope::Device,
         state,
         None,
+        params.channels,
     )
 }
 
@@ -148,15 +151,33 @@ pub async fn internal_ws_handler(
         crate::person_partition::fleet().is_some_and(|fleet| fleet.accepts_bridge(account, generation))) {
         return super::api::public_error_response(StatusCode::FORBIDDEN, "host_surface_forbidden", "host_surface_forbidden", false, json!({}));
     }
+    let scope = if person_generation.is_some() {
+        ConnectionScope::PersonBrain
+    } else {
+        ConnectionScope::from_claim(&context.scope)
+    };
     upgrade_events_ws(
         ws,
         params.since,
         Some(context.tenant_id),
         context.device_id,
-        ConnectionScope::from_claim(&context.scope),
+        scope,
         state,
         person_generation,
+        params.channels,
     )
+}
+
+fn initial_subscription(scope: ConnectionScope, channels: Option<&str>) -> Result<EventSubscription, String> {
+    let mut subscription = EventSubscription::defaults_for(scope);
+    if let Some(channels) = channels {
+        let names: Vec<&str> = channels.split(',').filter(|name| !name.is_empty()).collect();
+        if names.is_empty() || names.len() > 32 || names.iter().any(|name| name.len() > 256) { return Err("channels must name 1 to 32 bounded event channels".into()); }
+        let request: SubscribeRequest = serde_json::from_value(json!({"mode":"replace","channels":names})).map_err(|_| "invalid channels".to_string())?;
+        let reply = subscription.apply(&request);
+        if !reply.rejected.is_empty() { return Err("one or more channels are unknown or forbidden for this principal".into()); }
+    }
+    Ok(subscription)
 }
 
 fn upgrade_events_ws(
@@ -167,7 +188,12 @@ fn upgrade_events_ws(
     scope: ConnectionScope,
     state: SharedState,
     person_generation: Option<(String, String)>,
+    channels: Option<String>,
 ) -> Response {
+    let subscription = match initial_subscription(scope, channels.as_deref()) {
+        Ok(subscription) => subscription,
+        Err(message) => return super::api::public_error_response(StatusCode::BAD_REQUEST, "invalid_event_subscription", message, false, json!({})),
+    };
     // Bound inbound frame allocation (DoS guard). The events channel only ever
     // receives tiny client frames (pongs / keep-alive text), so a small cap is
     // generous; this route is intentionally outside `RequestBodyLimitLayer`
@@ -175,7 +201,7 @@ fn upgrade_events_ws(
     const MAX_WS_FRAME_BYTES: usize = 64 * 1024;
     ws.max_message_size(MAX_WS_FRAME_BYTES)
         .max_frame_size(MAX_WS_FRAME_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, since, tenant_id, device_id, scope, state, person_generation))
+        .on_upgrade(move |socket| handle_socket(socket, since, tenant_id, device_id, scope, state, person_generation, subscription))
 }
 
 // ---------------------------------------------------------------------------
@@ -327,6 +353,7 @@ async fn handle_socket(
     scope: ConnectionScope,
     state: SharedState,
     person_generation: Option<(String, String)>,
+    mut subscription: EventSubscription,
 ) {
     let person_live = || person_generation.as_ref().is_none_or(|(account, generation)|
         crate::person_partition::fleet().is_some_and(|fleet| fleet.accepts_bridge(account, generation)));
@@ -357,7 +384,7 @@ async fn handle_socket(
     // set — i.e. exactly what reached clients before subscriptions existed, so
     // a client that never sends a `subscribe` frame sees no change — and is
     // widened or narrowed by `subscribe` frames from here on.
-    let mut subscription = EventSubscription::defaults_for(scope);
+
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -900,6 +927,106 @@ mod tests {
         assert!(server.await.unwrap_err().is_cancelled());
     }
 
+    #[tokio::test]
+    async fn person_internal_socket_receives_only_its_own_gateway_telemetry() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message as WsMessage;
+
+        let _guard = crate::security_store::test_guard();
+        let person =
+            crate::person_partition::PersonPartition::new("org".into(), "gateway-events".into());
+        let (_installed, fleet) =
+            crate::person_partition::person_test_support::Installed::new(vec![person.clone()]);
+        let (state, bus) = test_state_with_bus();
+        let (token, _) = crate::jwt::issue_person_brain_jwt(
+            &state.secret.read(),
+            &person.account_id,
+            &fleet.generation,
+        )
+        .unwrap();
+        let router = axum::Router::new()
+            .route("/internal/events", axum::routing::any(internal_ws_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::middleware::require_device_jwt,
+            ))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://{addr}/internal/events?token={token}"))
+                .await
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(socket.next().await.unwrap().unwrap().to_text().unwrap())
+                .unwrap()["type"],
+            "stream_ready"
+        );
+        socket.send(WsMessage::Text(json!({"type":"subscribe","mode":"replace","channels":[
+            "gateway://request-log","gateway://request-outcome","gateway://decide","gateway://translation-loss"
+        ]}).to_string().into())).await.unwrap();
+        let subscribed: Value =
+            serde_json::from_str(socket.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        assert_eq!(
+            subscribed["channels"],
+            json!(["gateway://request-log", "gateway://request-outcome"])
+        );
+        assert_eq!(subscribed["rejected"].as_array().unwrap().len(), 2);
+
+        // The member's authenticated queue and delivery filter both reject
+        // unpartitioned Host events and every other member's partition.
+        bus.publish("gateway://request-log".into(), json!({"id":"operator"}));
+        bus.publish_person(
+            "gateway://request-log".into(),
+            json!({"id":"foreign"}),
+            "pb_other".into(),
+        );
+        bus.publish_person(
+            "gateway://decide".into(),
+            json!({"id":"routing"}),
+            person.account_id.clone(),
+        );
+        for (channel, id) in [
+            ("gateway://request-log", "own-log"),
+            ("gateway://request-outcome", "own-outcome"),
+        ] {
+            bus.publish_person(
+                channel.into(),
+                json!({"id":id,"ownerAccountId":person.account_id,"accountGeneration":3}),
+                person.account_id.clone(),
+            );
+        }
+        let mut ids = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while ids.len() < 2 {
+                let message = socket.next().await.unwrap().unwrap();
+                let value: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                let frames = if value["type"] == "event_batch" {
+                    value["frames"].as_array().unwrap().clone()
+                } else {
+                    vec![value]
+                };
+                for frame in frames {
+                    ids.push(frame["payload"]["id"].as_str().unwrap().to_string());
+                }
+            }
+        })
+        .await
+        .expect("member telemetry arrives");
+        assert_eq!(ids, ["own-log", "own-outcome"]);
+        socket.close(None).await.unwrap();
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+    }
+
     #[test]
     fn a_device_keeps_its_admin_lease_until_its_last_event_stream_closes() {
         use crate::event_leases::{EventStreamLeaseGuard, EventStreamTransport};
@@ -1254,5 +1381,12 @@ mod tests {
         }
         let err = rx.try_recv().expect_err("should have lagged");
         assert!(matches!(err, TryRecvError::Lagged(_)));
+    }
+
+    #[test]
+    fn initial_event_channels_are_checked_before_replay() {
+        assert!(initial_subscription(ConnectionScope::Device, Some("not-a-real-channel")).is_err());
+        assert!(initial_subscription(ConnectionScope::Device, Some("")).is_err());
+        assert!(initial_subscription(ConnectionScope::Device, None).is_ok());
     }
 }

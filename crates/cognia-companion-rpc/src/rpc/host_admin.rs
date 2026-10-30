@@ -446,7 +446,7 @@ mod tests {
         .await
         .expect_err("no headless runtime in tests");
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(err.1 .0.code, "headless_host_required");
+        assert_eq!(err.1.0.code, "headless_host_required");
 
         for (code, status) in [
             ("invalid_argument", StatusCode::BAD_REQUEST),
@@ -476,7 +476,7 @@ mod tests {
             .err()
             .expect("no hub in tests");
         assert_eq!(err.0, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(err.1 .0.code, "signaling_unavailable");
+        assert_eq!(err.1.0.code, "signaling_unavailable");
     }
 
     /// The headless binary publishes the browser plane's bound port through a

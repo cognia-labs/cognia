@@ -58,6 +58,47 @@ running server must use the same `--data-dir`, or they will use different signin
 For graphical API debugging, follow [Local debugging with Apifox](./apifox-debugging) for import,
 certificate, and environment setup.
 
+## LLM gateway without a frontend
+
+The LLM gateway uses a separate listener from the Companion service at port `27890`. It can run from the same `cognia-server` process without an open Cognia window. Provider profiles and their credential references are projected into the gateway snapshot on startup and after profile updates.
+
+Use one `COGNIA_DATA_DIR` for the server and its administrative commands. Stop the server before changing credentials or keys through offline CLI commands, then restart it. Inspect the installed command help before importing a profile document:
+
+```bash
+export COGNIA_DATA_DIR=/absolute/path/to/cognia-data
+cognia-server profiles --help
+cognia-server profiles credential-set --id upstream-main < /path/to/private-key-file
+cognia-server gateway key-create --name local-tools
+cognia-server gateway key-list
+```
+
+The credential value is read from stdin and encrypted in the server's secret store. A deployment profile must reference the same `secretId`; storing a credential alone does not configure a model or endpoint. `profiles import` replaces the profile set, so review the exported document and its version before applying a prepared replacement. `gateway key-create` prints the gateway secret once; keep it in a local secret manager. The administrative `gateway status` command inspects persisted state in a separate process and does not prove that the running listener is healthy.
+
+The listener reads `.cognia/gateway-config.json` under that data directory. A minimal loopback configuration is:
+
+```json
+{
+  "enabled": true,
+  "port": 47823,
+  "bindInterface": "loopback",
+  "allowlist": ["127.0.0.1/32"]
+}
+```
+
+Keep the existing file's other settings when editing a configured installation. Alternatively, `COGNIA_GATEWAY=1` asks `serve` to start the listener using its persisted/default configuration:
+
+```bash
+COGNIA_GATEWAY=1 cognia-server serve
+curl http://127.0.0.1:47823/healthz
+curl -H "Authorization: Bearer $GATEWAY_KEY" http://127.0.0.1:47823/v1/models
+```
+
+A usable gateway key is required for a reusable listener. A running health endpoint and nonempty model catalog verify listener/profile wiring; they do not verify provider billing or generation. Ordinary keys use the gateway's exposure, quota and rate policies. Host-managed tasks instead mint short-lived task-private tickets, resolve each authorized role to its own provider deployment, and cannot fall back to a global key. Host profile providers expose their own configured credentials rather than selectable renderer vault accounts. Remote delegated providers require public HTTPS, validated DNS destinations and redirect-free clients; a desktop-local endpoint is not a remote task service bridge.
+
+See [Provider System](../../chat/provider-system#cognias-built-in-gateway) for the protocol endpoints, media support and conversion limits.
+
+The headless brain installs the shared gateway telemetry runtime over the authenticated `/internal/events` transport. Startup requires accepted subscriptions for request outcomes and request logs. Events are checked against the current account audience and native generation before writing the session ledger or log. A verified person brain may subscribe only to these two Gateway observation channels, and the Host delivers only its own partition's frames; routing and translation control channels remain service-only. Its generation fence comes from the member-safe `gatewayTelemetry` view on `person_agent_policy_get`, without granting access to operator `gateway_status`. Neither telemetry startup nor this view requires a running Gateway listener. Privacy, middleware and search/vision execution use the separate internal brain request bridge. No desktop subscription vault is silently imported into standalone Host profiles.
+
 ## Driving it from a browser
 
 `pnpm dev:web-headless` is the same headless server with a Next dev server beside it — the

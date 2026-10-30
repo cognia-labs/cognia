@@ -422,8 +422,10 @@ mod tests {
 
         // An ordinary device is unaffected.
         set_worker_grant(&store, "tenant-a", "owner-a", "owner-a", true, 103).unwrap();
-        assert!(store
-            .has_capability("tenant-a", "owner-a", "agent.worker")
-            .unwrap());
+        assert!(
+            store
+                .has_capability("tenant-a", "owner-a", "agent.worker")
+                .unwrap()
+        );
     }
 }

@@ -10,6 +10,8 @@
  */
 
 import { transport } from "@/lib/tauri"
+import { notifyGatewaySnapshotChanged } from "@/lib/gateway/snapshot-events"
+import { isHeadlessHost } from "@/lib/platform/detect"
 import type {
   GatewayApiKey,
   GatewayApiKeyPatch,
@@ -23,12 +25,31 @@ import type {
   GatewayRoutingSnapshot,
   GatewaySnapshotEntry,
   GatewayStatus,
+  GatewayClientConnectionReport,
+  GatewayClientConnectionRequest,
+  GatewayClientRollbackRequest,
   GatewayUpstreamProbeResult,
 } from "@/types/gateway"
 import { isAgentExecutionFlagEnabled } from "@/lib/ai/agent/execution/feature-flags"
 
 export async function gatewayGetStatus(): Promise<GatewayStatus> {
-  return transport.call<GatewayStatus>("gateway_get_status")
+  return transport.call<GatewayStatus>(isHeadlessHost() ? "gateway_status" : "gateway_get_status")
+}
+
+export async function gatewayClientStatus(): Promise<GatewayClientConnectionReport> {
+  return transport.call<GatewayClientConnectionReport>("gateway_client_status")
+}
+
+export async function gatewayClientConnect(
+  request: GatewayClientConnectionRequest
+): Promise<GatewayClientConnectionReport> {
+  return transport.call<GatewayClientConnectionReport>("gateway_client_connect", { request })
+}
+
+export async function gatewayClientRollback(
+  request: GatewayClientRollbackRequest
+): Promise<GatewayClientConnectionReport> {
+  return transport.call<GatewayClientConnectionReport>("gateway_client_rollback", { request })
 }
 
 /** Read the persisted config so the settings UI hydrates from saved values. */
@@ -38,6 +59,7 @@ export async function gatewayGetConfig(): Promise<GatewayConfig> {
 
 export async function gatewayUpdateConfig(config: GatewayConfig): Promise<void> {
   await transport.call<void>("gateway_update_config", { config })
+  notifyGatewaySnapshotChanged()
 }
 
 /** Start the listener using the persisted config. */

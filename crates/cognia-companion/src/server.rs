@@ -74,6 +74,10 @@ async fn limit_public_request_body(request: Request, next: Next) -> Response {
     // existing 64 KiB cap; the transfer handler still validates the decoded
     // chunk size and hash.
     let limit = match (request.method() == Method::POST, request.uri().path()) {
+        // A turn includes system prompts, tool schemas and inline content.
+        // Give the two send aliases the same bounded budget as internal RPC;
+        // authentication and command validation still apply normally.
+        (true, "/api/_rpc/agent_send" | "/api/_rpc/claude_send") => INTERNAL_BODY_LIMIT_BYTES,
         (
             true,
             "/api/_rpc/task_resource_upload_write_chunk"
@@ -92,8 +96,10 @@ async fn limit_public_request_body(request: Request, next: Next) -> Response {
             }
         },
     );
+    // Json's default 2 MiB extractor limit must match the transport budget,
+    // or an admitted agent turn would still fail inside the handler.
     match RequestBodyLimitLayer::new(limit)
-        .layer(service)
+        .layer(axum::extract::DefaultBodyLimit::max(limit).layer(service))
         .oneshot(request)
         .await
     {
@@ -2065,6 +2071,59 @@ mod tests {
     #[test]
     fn body_limit_is_64_kib() {
         assert_eq!(BODY_LIMIT_BYTES, 64 * 1024);
+    }
+
+    #[tokio::test]
+    async fn public_agent_send_body_budget_accepts_turns_and_bounds_other_routes() {
+        use tower::ServiceExt as _;
+        let router = Router::new()
+            .route(
+                "/api/_rpc/{name}",
+                post(|axum::Json(_): axum::Json<serde_json::Value>| async { StatusCode::OK }),
+            )
+            .layer(from_fn(limit_public_request_body));
+
+        for (command, bytes, expected) in [
+            ("agent_send", 3 * 1024 * 1024, StatusCode::OK),
+            ("claude_send", 3 * 1024 * 1024, StatusCode::OK),
+            (
+                "agent_send",
+                INTERNAL_BODY_LIMIT_BYTES + 1,
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+            (
+                "claude_send",
+                INTERNAL_BODY_LIMIT_BYTES + 1,
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+            ("write_text_file", 70 * 1024, StatusCode::PAYLOAD_TOO_LARGE),
+            ("agent_send_extra", 70 * 1024, StatusCode::PAYLOAD_TOO_LARGE),
+        ] {
+            let payload = serde_json::json!({ "prompt": "x".repeat(bytes) }).to_string();
+            for with_length in [true, false] {
+                let mut request = axum::http::Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/_rpc/{command}"))
+                    .header("content-type", "application/json");
+                if with_length {
+                    request = request.header("content-length", payload.len());
+                }
+                let response = router
+                    .clone()
+                    .oneshot(
+                        request
+                            .body(axum::body::Body::from(payload.clone()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    expected,
+                    "{command}, content-length={with_length}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

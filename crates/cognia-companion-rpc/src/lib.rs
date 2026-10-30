@@ -24,6 +24,7 @@ pub mod managed_desktops;
 pub mod delivery_admission;
 
 pub mod managed_desktop_handoff;
+pub mod managed_desktop_acceptance;
 pub mod managed_desktop_results;
 
 pub mod managed_desktop_handoff_operator;

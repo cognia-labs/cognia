@@ -179,11 +179,11 @@
     "background_job_read": {
       "to": "background.job.read"
     },
-    "background_job_spawn_scheduled": {
-      "to": "background.job.spawn_scheduled"
-    },
     "background_job_spawn_bridge": {
       "to": "background.job.spawn_bridge"
+    },
+    "background_job_spawn_scheduled": {
+      "to": "background.job.spawn_scheduled"
     },
     "background_job_spawn_session": {
       "to": "background.job.spawn_session"
@@ -205,6 +205,39 @@
     },
     "backup_import": {
       "to": "backup.import"
+    },
+    "best_of_n_archive": {
+      "to": "task.workspace.best_of_n.archive"
+    },
+    "best_of_n_cancel": {
+      "to": "task.workspace.best_of_n.cancel"
+    },
+    "best_of_n_candidate_progress": {
+      "to": "task.workspace.best_of_n.report_candidate"
+    },
+    "best_of_n_get": {
+      "to": "task.workspace.best_of_n.get"
+    },
+    "best_of_n_list": {
+      "to": "task.workspace.best_of_n.query"
+    },
+    "best_of_n_recover": {
+      "to": "task.workspace.best_of_n.restore"
+    },
+    "best_of_n_select": {
+      "to": "task.workspace.best_of_n.decide"
+    },
+    "best_of_n_start": {
+      "to": "task.workspace.best_of_n.start"
+    },
+    "bot_delivery_replay": {
+      "to": "bot.delivery.replay"
+    },
+    "bot_run_manual": {
+      "to": "bot.run.start"
+    },
+    "bot_trigger_set_armed": {
+      "to": "bot.trigger.armed.set"
     },
     "browser_act": {
       "to": "browser.act"
@@ -392,6 +425,9 @@
     "browser_press_key": {
       "to": "browser.key.press"
     },
+    "browser_profile_delete": {
+      "to": "browser.profile.delete"
+    },
     "browser_read_console": {
       "to": "browser.console.read"
     },
@@ -409,9 +445,6 @@
     },
     "browser_scroll": {
       "to": "browser.scroll"
-    },
-    "browser_profile_delete": {
-      "to": "browser.profile.delete"
     },
     "browser_session_close": {
       "to": "browser.session.close"
@@ -850,6 +883,9 @@
     "companion_media_response": {
       "to": "companion.media.respond"
     },
+    "companion_mesh_status": {
+      "to": "companion.mesh.status"
+    },
     "companion_message_response": {
       "to": "companion.message.respond"
     },
@@ -862,6 +898,9 @@
     "companion_push_clear_fcm": {
       "to": "companion.push.fcm.clear"
     },
+    "companion_push_clear_hms": {
+      "to": "companion.push.hms.clear"
+    },
     "companion_push_configure_apns": {
       "to": "companion.push.apns.configure"
     },
@@ -870,9 +909,6 @@
     },
     "companion_push_configure_hms": {
       "to": "companion.push.hms.configure"
-    },
-    "companion_push_clear_hms": {
-      "to": "companion.push.hms.clear"
     },
     "companion_push_notification": {
       "to": "companion.push.notify"
@@ -961,6 +997,9 @@
     "companion_tunnel_get_config": {
       "to": "companion.tunnel.config.get"
     },
+    "companion_tunnel_probe": {
+      "to": "companion.tunnel.probe"
+    },
     "companion_tunnel_save_named_config": {
       "to": "companion.tunnel.named_config.save"
     },
@@ -972,12 +1011,6 @@
     },
     "companion_tunnel_stop": {
       "to": "companion.tunnel.stop"
-    },
-    "companion_tunnel_probe": {
-      "to": "companion.tunnel.probe"
-    },
-    "companion_mesh_status": {
-      "to": "companion.mesh.status"
     },
     "companion_unrevoke_device": {
       "to": "companion.device.unrevoke"
@@ -1051,14 +1084,14 @@
     "connectors_keyring_set": {
       "to": "connector.keyring.set"
     },
+    "connectors_lark_callback_respond": {
+      "to": "connector.lark.callback.respond"
+    },
     "connectors_lark_upload_file": {
       "to": "connector.lark.file.upload"
     },
     "connectors_lark_upload_image": {
       "to": "connector.lark.image.upload"
-    },
-    "connectors_lark_callback_respond": {
-      "to": "connector.lark.callback.respond"
     },
     "connectors_lark_ws_close": {
       "to": "connector.lark.ws.close"
@@ -1411,6 +1444,12 @@
     "external_agent_config_update": {
       "to": "external_agent.config.update"
     },
+    "external_agent_delete_gateway_task": {
+      "to": "external_agent.gateway_task.delete"
+    },
+    "external_agent_detect_runtimes": {
+      "to": "external_agent.runtime.detect"
+    },
     "external_agent_list": {
       "to": "external_agent.list"
     },
@@ -1612,17 +1651,20 @@
     "fs_walk_workspace": {
       "to": "fs.workspace.walk"
     },
-    "external_agent_delete_gateway_task": {
-      "to": "external_agent.gateway_task.delete"
-    },
-    "external_agent_detect_runtimes": {
-      "to": "external_agent.runtime.detect"
-    },
     "fs_workspace_roots": {
       "to": "fs.workspace_root.list"
     },
     "fs_write_workspace_file": {
       "to": "fs.workspace_file.write"
+    },
+    "gateway_client_connect": {
+      "to": "gateway.client.connect"
+    },
+    "gateway_client_rollback": {
+      "to": "gateway.client.restore"
+    },
+    "gateway_client_status": {
+      "to": "gateway.client.status"
     },
     "gateway_create_key": {
       "to": "gateway.key.create"
@@ -1645,23 +1687,20 @@
     "gateway_list_keys": {
       "to": "gateway.key.list"
     },
-    "gateway_list_route_tickets": {
-      "to": "gateway.route_ticket.list"
-    },
     "gateway_list_models": {
       "to": "gateway.model.list"
     },
-    "gateway_provider_capabilities": {
-      "to": "gateway.provider.capabilities.get"
-    },
-    "gateway_status": {
-      "to": "gateway.status"
+    "gateway_list_route_tickets": {
+      "to": "gateway.route_ticket.list"
     },
     "gateway_mint_route_ticket": {
       "to": "gateway.route_ticket.mint"
     },
     "gateway_probe_upstream": {
       "to": "gateway.upstream.probe"
+    },
+    "gateway_provider_capabilities": {
+      "to": "gateway.provider.capabilities.get"
     },
     "gateway_push_snapshot": {
       "to": "gateway.snapshot.push"
@@ -1680,6 +1719,9 @@
     },
     "gateway_start": {
       "to": "gateway.start"
+    },
+    "gateway_status": {
+      "to": "gateway.status"
     },
     "gateway_stop": {
       "to": "gateway.stop"
@@ -1933,8 +1975,8 @@
     "git_worktree_remove": {
       "to": "git.worktree.delete"
     },
-    "github_runner_preflight": {
-      "to": "github.runner.probe"
+    "github_runner_cancel": {
+      "to": "github.runner.cancel"
     },
     "github_runner_create": {
       "to": "github.runner.create"
@@ -1942,14 +1984,14 @@
     "github_runner_list": {
       "to": "github.runner.get_all"
     },
-    "github_runner_refresh": {
-      "to": "github.runner.refresh"
-    },
-    "github_runner_cancel": {
-      "to": "github.runner.cancel"
-    },
     "github_runner_pairing": {
       "to": "github.runner.get_pairing"
+    },
+    "github_runner_preflight": {
+      "to": "github.runner.probe"
+    },
+    "github_runner_refresh": {
+      "to": "github.runner.refresh"
     },
     "github_workspace_clone": {
       "to": "github.workspace.clone"
@@ -1966,11 +2008,11 @@
     "goal_accept": {
       "to": "goal.acceptance.decide"
     },
-    "goal_create": {
-      "to": "goal.create"
-    },
     "goal_continue": {
       "to": "goal.continue"
+    },
+    "goal_create": {
+      "to": "goal.create"
     },
     "goal_delete": {
       "to": "goal.delete"
@@ -2026,11 +2068,29 @@
     "host_feature_manifest": {
       "to": "host.feature_manifest.get"
     },
+    "host_git_credential_delete": {
+      "to": "host.secret.git.delete"
+    },
+    "host_git_credential_set": {
+      "to": "host.secret.git.set"
+    },
     "host_mode_get": {
       "to": "app.host_mode.get"
     },
     "host_mode_set": {
       "to": "app.host_mode.set"
+    },
+    "host_provider_credential_delete": {
+      "to": "host.secret.provider.delete"
+    },
+    "host_provider_credential_set": {
+      "to": "host.secret.provider.set"
+    },
+    "host_provider_credentials_load": {
+      "to": "host.secret.provider.load"
+    },
+    "host_secret_list": {
+      "to": "host.secret.list"
     },
     "host_state_snapshot": {
       "to": "host.state.snapshot"
@@ -2431,6 +2491,9 @@
     "plugin_cogpack_upload_write": {
       "to": "plugin.cogpack.upload.write"
     },
+    "plugin_cogset_activate": {
+      "to": "plugin.cogset.activate"
+    },
     "plugin_commit_staged_update": {
       "to": "plugin.staged_update.commit"
     },
@@ -2509,6 +2572,9 @@
     "plugin_install_from_github": {
       "to": "plugin.install_from_github"
     },
+    "plugin_install_origin_record": {
+      "to": "plugin.install_origin.record"
+    },
     "plugin_invalidate_cache": {
       "to": "plugin.cache.invalidate"
     },
@@ -2557,6 +2623,9 @@
     "plugin_media_apply_video_effect": {
       "to": "media.video_effect.apply"
     },
+    "plugin_media_close_transfer": {
+      "to": "media.transfer.close"
+    },
     "plugin_media_concatenate_videos": {
       "to": "media.video.concatenate"
     },
@@ -2565,6 +2634,12 @@
     },
     "plugin_media_get_video_frame": {
       "to": "media.video_frame.get"
+    },
+    "plugin_media_read_analysis_frame": {
+      "to": "media.analysis_frame.read"
+    },
+    "plugin_media_read_chunk": {
+      "to": "media.read_chunk"
     },
     "plugin_permission_grant": {
       "to": "plugin.permission.grant"
@@ -2704,9 +2779,6 @@
     "plugin_unload_vscode": {
       "to": "plugin.vscode.unload"
     },
-    "plugin_vscode_uninstall": {
-      "to": "plugin.vscode.uninstall"
-    },
     "plugin_verify_detached_signature": {
       "to": "plugin.detached_signature.verify"
     },
@@ -2727,6 +2799,9 @@
     },
     "plugin_vscode_send_response": {
       "to": "plugin.vscode.respond"
+    },
+    "plugin_vscode_uninstall": {
+      "to": "plugin.vscode.uninstall"
     },
     "plugin_wasm_activate": {
       "to": "plugin.wasm.activate"
@@ -3392,11 +3467,11 @@
     "subscription_get_account_detail": {
       "to": "subscription.account_detail.get"
     },
-    "subscription_get_active": {
-      "to": "subscription.active.get"
-    },
     "subscription_get_account_env": {
       "to": "subscription.account_env.get"
+    },
+    "subscription_get_active": {
+      "to": "subscription.active.get"
     },
     "subscription_get_preset": {
       "to": "subscription.preset.get"
@@ -3404,14 +3479,14 @@
     "subscription_init": {
       "to": "subscription.init"
     },
-    "subscription_list_provider_ids": {
-      "to": "subscription.provider.discover"
-    },
     "subscription_list_accounts": {
       "to": "subscription.account.list"
     },
     "subscription_list_presets": {
       "to": "subscription.preset.list"
+    },
+    "subscription_list_provider_ids": {
+      "to": "subscription.provider.discover"
     },
     "subscription_reauthenticate_codex_account": {
       "to": "subscription.codex_account.reauthenticate"
@@ -3521,6 +3596,9 @@
     "task_workspace_bundle_turn_settle": {
       "to": "task.workspace.bundle.turn.settle"
     },
+    "task_workspace_canonical_root": {
+      "to": "task.workspace.resolve_root"
+    },
     "task_workspace_changeset_abandon": {
       "to": "task.workspace.changeset.cancel"
     },
@@ -3590,33 +3668,6 @@
     "task_workspace_integration_list": {
       "to": "task.workspace.integration.query"
     },
-    "task_workspace_canonical_root": {
-      "to": "task.workspace.resolve_root"
-    },
-    "best_of_n_start": {
-      "to": "task.workspace.best_of_n.start"
-    },
-    "best_of_n_get": {
-      "to": "task.workspace.best_of_n.get"
-    },
-    "best_of_n_list": {
-      "to": "task.workspace.best_of_n.query"
-    },
-    "best_of_n_cancel": {
-      "to": "task.workspace.best_of_n.cancel"
-    },
-    "best_of_n_select": {
-      "to": "task.workspace.best_of_n.decide"
-    },
-    "best_of_n_archive": {
-      "to": "task.workspace.best_of_n.archive"
-    },
-    "best_of_n_candidate_progress": {
-      "to": "task.workspace.best_of_n.report_candidate"
-    },
-    "best_of_n_recover": {
-      "to": "task.workspace.best_of_n.restore"
-    },
     "task_workspace_integration_prepare": {
       "to": "task.workspace.integration.prepare"
     },
@@ -3682,6 +3733,33 @@
     },
     "task_workspace_policy_set": {
       "to": "task.workspace.policy.set"
+    },
+    "task_workspace_port_lease_ensure": {
+      "to": "task.workspace.port_lease.ensure"
+    },
+    "task_workspace_port_lease_get": {
+      "to": "task.workspace.port_lease.get"
+    },
+    "task_workspace_port_lease_list": {
+      "to": "task.workspace.port_lease.snapshot"
+    },
+    "task_workspace_port_lease_release": {
+      "to": "task.workspace.port_lease.release"
+    },
+    "task_workspace_port_lease_resolve": {
+      "to": "task.workspace.port_lease.resolve"
+    },
+    "task_workspace_port_lease_resolve_ensure": {
+      "to": "task.workspace.port_lease.resolve_ensure"
+    },
+    "task_workspace_port_lease_subject_ensure": {
+      "to": "task.workspace.port_lease.subject.ensure"
+    },
+    "task_workspace_port_lease_subject_get": {
+      "to": "task.workspace.port_lease.subject.get"
+    },
+    "task_workspace_port_lease_subject_release": {
+      "to": "task.workspace.port_lease.subject.release"
     },
     "task_workspace_prune": {
       "to": "task.workspace.prune"
@@ -4244,15 +4322,6 @@
     "workflow_step_result": {
       "to": "workflow.step.result.submit"
     },
-    "bot_delivery_replay": {
-      "to": "bot.delivery.replay"
-    },
-    "bot_run_manual": {
-      "to": "bot.run.start"
-    },
-    "bot_trigger_set_armed": {
-      "to": "bot.trigger.armed.set"
-    },
     "workflow_trigger_manual": {
       "to": "workflow.trigger.fire"
     },
@@ -4316,65 +4385,14 @@
     "write_text_file_confined": {
       "to": "fs.text_file.write_confined"
     },
-    "plugin_media_close_transfer": {
-      "to": "media.transfer.close"
+    "connectors_matrix_crypto_backup": {
+      "to": "connector.matrix.crypto.backup"
     },
-    "plugin_media_read_analysis_frame": {
-      "to": "media.analysis_frame.read"
+    "connectors_matrix_crypto_cross_signing": {
+      "to": "connector.matrix.crypto.cross_signing"
     },
-    "plugin_media_read_chunk": {
-      "to": "media.read_chunk"
-    },
-    "plugin_cogset_activate": {
-      "to": "plugin.cogset.activate"
-    },
-    "plugin_install_origin_record": {
-      "to": "plugin.install_origin.record"
-    },
-    "host_secret_list": {
-      "to": "host.secret.list"
-    },
-    "host_provider_credential_set": {
-      "to": "host.secret.provider.set"
-    },
-    "host_provider_credential_delete": {
-      "to": "host.secret.provider.delete"
-    },
-    "host_git_credential_set": {
-      "to": "host.secret.git.set"
-    },
-    "host_git_credential_delete": {
-      "to": "host.secret.git.delete"
-    },
-    "host_provider_credentials_load": {
-      "to": "host.secret.provider.load"
-    },
-    "task_workspace_port_lease_ensure": {
-      "to": "task.workspace.port_lease.ensure"
-    },
-    "task_workspace_port_lease_get": {
-      "to": "task.workspace.port_lease.get"
-    },
-    "task_workspace_port_lease_list": {
-      "to": "task.workspace.port_lease.snapshot"
-    },
-    "task_workspace_port_lease_release": {
-      "to": "task.workspace.port_lease.release"
-    },
-    "task_workspace_port_lease_resolve": {
-      "to": "task.workspace.port_lease.resolve"
-    },
-    "task_workspace_port_lease_resolve_ensure": {
-      "to": "task.workspace.port_lease.resolve_ensure"
-    },
-    "task_workspace_port_lease_subject_ensure": {
-      "to": "task.workspace.port_lease.subject.ensure"
-    },
-    "task_workspace_port_lease_subject_get": {
-      "to": "task.workspace.port_lease.subject.get"
-    },
-    "task_workspace_port_lease_subject_release": {
-      "to": "task.workspace.port_lease.subject.release"
+    "connectors_matrix_crypto_verification": {
+      "to": "connector.matrix.crypto.verification"
     }
   }
 }

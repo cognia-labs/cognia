@@ -5,6 +5,45 @@ import Ajv2020 from "ajv/dist/2020.js"
 import { parse as parseYaml } from "yaml"
 import { buildCompanionRequestSchemaContracts } from "./companion-request-schema-contracts.mjs"
 
+test("member Gateway telemetry authority is a closed member-safe policy observation", () => {
+  const response = JSON.parse(readFileSync(new URL("../../protocol/companion-response-schemas.json", import.meta.url), "utf8"))
+  const validate = new Ajv2020({ strict: false }).compile(response.commands.person_agent_policy_get)
+  const policy = { allowedAgents: [], defaultAgent: null, execution: "none" }
+  const authority = { ownerAccountId: "pb_member", accountGeneration: 3, accountRequired: true }
+  assert.equal(validate(policy), true, "older Hosts may omit the view")
+  assert.equal(validate({ ...policy, gatewayTelemetry: null }), true)
+  assert.equal(validate({ ...policy, gatewayTelemetry: authority }), true)
+  for (const extra of [
+    { ownerAccountId: "" }, { accountGeneration: -1 }, { accountRequired: false },
+    { running: true }, { routeTickets: 4 }, { providerId: "operator" }, { secret: "private" },
+  ]) assert.equal(validate({ ...policy, gatewayTelemetry: { ...authority, ...extra } }), false)
+})
+
+test("Lark authorization and bounded document HTTP remain closed internal host contracts", () => {
+  const request = JSON.parse(readFileSync(new URL("../../protocol/companion-request-schemas.json", import.meta.url), "utf8"))
+  const response = JSON.parse(readFileSync(new URL("../../protocol/companion-response-schemas.json", import.meta.url), "utf8"))
+  const commands = JSON.parse(readFileSync(new URL("../../protocol/companion-commands.json", import.meta.url), "utf8")).commands
+  for (const name of ["connectors_lark_user_auth", "connectors_bounded_http_request"]) {
+    const command = commands.find((command) => command.name === name)
+    assert.equal(command.target, "service")
+    assert.equal(command.capability, "service.internal")
+    assert.deepEqual(command.transports, ["internal"])
+  }
+  const ajv = new Ajv2020({ strict: false })
+  const auth = ajv.compile(request.commands.connectors_lark_user_auth)
+  assert.equal(auth({ input: { action: "snapshot", adapterId: "lark" } }), true)
+  assert.equal(auth({ input: { action: "authorize", adapterId: "lark", accessToken: "a", refreshToken: "r" } }), false)
+  assert.equal(auth({ input: { action: "snapshot", adapterId: "lark", accessFingerprint: "private" } }), false)
+  const body = ajv.compile(request.commands.connectors_bounded_http_request)
+  assert.equal(body({ req: { url: "https://example.com", method: "POST", body: "{}" }, maxResponseBytes: 1024 }), true)
+  assert.equal(body({ req: { url: "https://example.com", method: "GET" }, maxResponseBytes: 0 }), false)
+  assert.equal(body({ req: { url: "https://example.com", method: "GET" }, maxResponseBytes: 20 * 1024 * 1024 + 1 }), false)
+  const state = ajv.compile(response.commands.connectors_lark_user_auth)
+  const snapshot = { authorizationEpoch: "epoch", configured: true, accessToken: null, refreshToken: null, refreshRevision: null, accountLabel: null, scopes: [] }
+  assert.equal(state(snapshot), true)
+  assert.equal(state({ ...snapshot, accessFingerprint: "private" }), false)
+})
+
 test("managed desktops keep human leases and closed payloads on the device plane", () => {
   const request = JSON.parse(readFileSync(new URL("../../protocol/companion-request-schemas.json", import.meta.url), "utf8"))
   const commands = JSON.parse(readFileSync(new URL("../../protocol/companion-commands.json", import.meta.url), "utf8")).commands
@@ -149,7 +188,7 @@ test("IM relay admits transcript provenance on both protocol planes", () => {
 })
 
 test("scheduler response contracts admit every persisted task type", () => {
-  const source = readFileSync(new URL("../../types/scheduler/index.ts", import.meta.url), "utf8")
+  const source = readFileSync(new URL("../../packages/plugin-contract/src/types/scheduler/index.ts", import.meta.url), "utf8")
   const union = source.split("export type ScheduledTaskType =")[1].split(/\nexport /)[0]
   const types = [...union.matchAll(/^\s*\| "([^"]+)"/gm)].map((match) => match[1])
   const catalog = JSON.parse(
@@ -1609,24 +1648,56 @@ test("Git fetch admits credentialed branch and PR-head targets only on the servi
   }
 })
 
-test("managed desktop handoff accepts only immutable source selectors and stays dormant", () => {
+test("managed desktop handoff admits immutable selectors and qualified readiness", () => {
   const requests = JSON.parse(readFileSync(new URL("../../protocol/companion-request-schemas.json", import.meta.url), "utf8"))
   const responses = JSON.parse(readFileSync(new URL("../../protocol/companion-response-schemas.json", import.meta.url), "utf8"))
   const commands = JSON.parse(readFileSync(new URL("../../protocol/companion-commands.json", import.meta.url), "utf8")).commands
   const ajv = new Ajv2020({ strict: false })
   const validate = ajv.compile(requests.commands.managed_desktop_handoff_prepare)
-  const body = { deliveryId: "delivery", deliveryRevision: 1, mode: "commit", providerConfigId: "e2b", lifetimeSeconds: 60, criteria: ["Page loads"], acceptanceFiles: [], argv: [] }
-  assert.equal(validate(body), true)
-  assert.equal(validate({ ...body, mode: "bundle" }), true)
+  const criterion = { description: "Page loads", screenshotRequired: true }
+  const body = { deliveryId: "delivery", deliveryRevision: 1, mode: "commit", providerConfigId: "e2b", lifetimeSeconds: 60, criteria: [criterion], acceptanceFiles: [], argv: [] }
+  assert.equal(validate(body), true, JSON.stringify(validate.errors))
+  assert.equal(validate({ ...body, mode: "bundle" }), true, JSON.stringify(validate.errors))
+  assert.equal(validate({ ...body, criteria: [{ ...criterion, screenshotRequired: false }] }), true, JSON.stringify(validate.errors))
+  for (const invalidCriterion of [
+    "Page loads",
+    { description: criterion.description },
+    { ...criterion, screenshotRequired: "true" },
+    { ...criterion, description: "" },
+    { ...criterion, description: "x".repeat(1025) },
+    { ...criterion, principalId: "forged" },
+  ]) {
+    assert.equal(validate({ ...body, criteria: [invalidCriterion] }), false, JSON.stringify(invalidCriterion))
+  }
   for (const extra of [{ ownerAccountId: "foreign" }, { sourceId: "forged" }, { mode: "livePreview" }, { lifetimeSeconds: 3601 }, { criteria: [] }, { argv: ["npm", "run", "test", "extra"] }]) {
     assert.equal(validate({ ...body, ...extra }), false)
   }
-  const proposal = responses.commands.managed_desktop_handoff_prepare
-  assert.equal(proposal.properties.executionEnabled.const, false)
-  assert.equal(proposal.properties.dormantReason.const, "managed_desktop_handoff_requires_results_qualification")
+  const validateProposal = ajv.compile({ ...responses.commands.managed_desktop_handoff_prepare, $defs: responses.$defs })
+  const proposal = {
+    id: "proposal", deliveryId: "delivery", deliveryRevision: 1, mode: "commit",
+    commit: "a".repeat(40), expiresAt: 100,
+    quote: {
+      id: "quote", providerConfigId: "e2b", configRevision: 1, lifetimeSeconds: 60,
+      expiresAt: 100, currency: "USD", hourlyRateMicros: 1, maximumComputeCostMicros: 1,
+      priceObservedAt: 1, region: null, cpuCount: 2, memoryMb: 4096,
+      bindingDigest: "digest", ownerPrincipalId: "owner",
+    },
+    executionEnabled: false,
+    dormantReason: "managed_desktop_handoff_requires_results_qualification",
+  }
+  assert.equal(validateProposal(proposal), true, JSON.stringify(validateProposal.errors))
+  assert.equal(validateProposal({ ...proposal, executionEnabled: true, dormantReason: null }), true, JSON.stringify(validateProposal.errors))
+  for (const extra of [{ executionEnabled: "true" }, { dormantReason: "unknown" }, { confirmed: true }]) {
+    assert.equal(validateProposal({ ...proposal, ...extra }), false)
+  }
+  for (const field of ["executionEnabled", "dormantReason"]) {
+    const missing = { ...proposal }
+    delete missing[field]
+    assert.equal(validateProposal(missing), false, field)
+  }
   assert.equal(commands.some((command) => /managed_desktop_handoff_(execute|create|smoke)$/.test(command.name)), false)
   assert.equal(commands.find((c) => c.name === "managed_desktop_handoff_revoke_source").idempotency, "required")
-  assert.equal(responses.$defs.TaskDeliveryRecord.properties.sourceId.type, "string")
+  assert.deepEqual(responses.$defs.TaskDeliveryRecord.properties.sourceId.type, ["string", "null"])
   assert.equal(responses.$defs.TaskDeliveryRecord.required.includes("sourceId"), false, "legacy records remain readable but ineligible")
 })
 test("WeChat runtime schemas preserve admitted replay and atomic credential revisions", () => {

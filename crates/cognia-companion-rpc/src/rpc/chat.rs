@@ -58,14 +58,26 @@ pub(super) async fn dispatch(
     scope: Option<&str>,
 ) -> Result<Value, (StatusCode, Json<RpcError>)> {
     let _ = (state, host, device_id, tenant_id, scope);
-    if scope != Some("person-brain") && !matches!(name, "person_model_ticket_mint" | "person_agent_lease_prepare" | "person_agent_policy_get") {
+    if scope != Some("person-brain")
+        && !matches!(
+            name,
+            "person_model_ticket_mint" | "person_agent_lease_prepare" | "person_agent_policy_get"
+        )
+    {
         cognia_companion::person_chat::person_claim_operator_control_args(&args)
             .map_err(|_| crate::person_model::person_forbidden())?;
     }
     let result = match name {
-        "person_agent_policy_get" => crate::person_execution::person_agent_policy_get(args, scope, tenant_id, host).await,
-        "person_agent_lease_prepare" => crate::person_execution::person_agent_lease_prepare(args, scope, tenant_id, state, host).await,
-        "person_model_ticket_mint" => crate::person_model::person_model_ticket_mint(args, scope, tenant_id, state, host).await,
+        "person_agent_policy_get" => {
+            crate::person_execution::person_agent_policy_get(args, scope, tenant_id, host).await
+        }
+        "person_agent_lease_prepare" => {
+            crate::person_execution::person_agent_lease_prepare(args, scope, tenant_id, state, host)
+                .await
+        }
+        "person_model_ticket_mint" => {
+            crate::person_model::person_model_ticket_mint(args, scope, tenant_id, state, host).await
+        }
         // ── Chat session ─────────────────────────────────────────────────────
 
         // The chat-session arms are host-generic (ADR-0059 R7): the sidecar
@@ -101,7 +113,11 @@ pub(super) async fn dispatch(
             // The client's id for the user message this turn sends, so the
             // Host's copy of the transcript keeps the row the client shows.
             let message_id: Option<String> = optional_aliased(&args, "message_id", "messageId")?;
-            if let Some(execution) = options.as_ref().filter(|_| scope != Some("person-brain")).and_then(|o| o.extra.get("execution")) {
+            if let Some(execution) = options
+                .as_ref()
+                .filter(|_| scope != Some("person-brain"))
+                .and_then(|o| o.extra.get("execution"))
+            {
                 if !claude_commands::execution_spec_is_acceptable(execution) {
                     return Err(RpcError::malformed(
                         "agent_send: malformed execution spec (specVersion/runtimeAdapter)".into(),
@@ -130,11 +146,16 @@ pub(super) async fn dispatch(
         "agent_interrupt" => {
             let session_id: String = required_aliased(&args, "session_id", "sessionId")?;
             let person = if scope == Some("person-brain") {
-                Some(cognia_companion::person_partition::current()
-                    .filter(|person| Some(person.account_id.as_str()) == tenant_id)
-                    .ok_or_else(crate::person_model::person_forbidden)?)
-            } else { None };
-            cognia_companion::person_chat::PERSON_SESSIONS.check(&session_id, person.as_ref())
+                Some(
+                    cognia_companion::person_partition::current()
+                        .filter(|person| Some(person.account_id.as_str()) == tenant_id)
+                        .ok_or_else(crate::person_model::person_forbidden)?,
+                )
+            } else {
+                None
+            };
+            cognia_companion::person_chat::PERSON_SESSIONS
+                .check(&session_id, person.as_ref())
                 .map_err(|_| crate::person_model::person_forbidden())?;
             let command_id: Option<String> = optional_aliased(&args, "command_id", "commandId")?;
             claude_commands::claude_interrupt_impl_with_id(
@@ -627,8 +648,16 @@ pub(super) async fn dispatch(
 
 fn require_non_org_namespace(namespace: &str) -> Result<(), (StatusCode, Json<RpcError>)> {
     if cognia_companion::org_credentials::reserved_namespace(namespace) {
-        Err((StatusCode::FORBIDDEN, Json(RpcError::new("host_surface_forbidden", "organization secrets require the dedicated organization commands"))))
-    } else { Ok(()) }
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(RpcError::new(
+                "host_surface_forbidden",
+                "organization secrets require the dedicated organization commands",
+            )),
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// The body both send arms share.
@@ -768,7 +797,9 @@ async fn abandon_paired_turn(state: &SharedState, submission_id: &str, error_cod
 /// secrets runs on them: a member device granted chat must not spend the
 /// owner's key. The Host's own service principal already resolved its keys.
 fn fill_host_provider_key(options: &mut claude_commands::SendOptions, caller: SendCaller<'_>) {
-    if caller.scope == Some("person-brain") { return; }
+    if caller.scope == Some("person-brain") {
+        return;
+    }
     options.fill_missing_provider_key(|provider| {
         if cognia_companion::jwt::is_service_scope(caller.scope)
             || !super::canonical_device_has_capability(caller.device_id, "secret.manage")
@@ -803,12 +834,21 @@ async fn send_arm(
         let person = cognia_companion::person_partition::current()
             .filter(|person| Some(person.account_id.as_str()) == caller.tenant_id)
             .ok_or_else(crate::person_model::person_forbidden)?;
-        let gateway = host.gateway().ok_or_else(crate::person_model::person_forbidden)?;
+        let gateway = host
+            .gateway()
+            .ok_or_else(crate::person_model::person_forbidden)?;
         let status = gateway.status();
-        let port = status.bound_port.filter(|_| status.running).ok_or_else(crate::person_model::person_forbidden)?;
-        return crate::person_model::person_send_turn(host, &person, port, session_id, prompt, options, command_id).await;
+        let port = status
+            .bound_port
+            .filter(|_| status.running)
+            .ok_or_else(crate::person_model::person_forbidden)?;
+        return crate::person_model::person_send_turn(
+            host, &person, port, session_id, prompt, options, command_id,
+        )
+        .await;
     }
-    cognia_companion::person_chat::PERSON_SESSIONS.bind(&session_id, None)
+    cognia_companion::person_chat::PERSON_SESSIONS
+        .bind(&session_id, None)
         .map_err(|_| crate::person_model::person_forbidden())?;
     let device_id = caller.device_id;
     let mut options = options;
@@ -883,15 +923,42 @@ mod tests {
     async fn p6c_dispatcher_person_allowlist_and_mint_are_not_service_authority() {
         let state = super::super::tests::test_state();
         let host = crate::headless::HeadlessServices::stub_for_tests();
-        for command in ["host_provider_credential_set", "sync_pull", "agent_start", "claude_send"] {
-            let (status, body) = super::super::dispatch(command, serde_json::json!({}), &state, &host,
-                "brain-person", Some("pb_person"), Some("person-brain"), cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext).await.unwrap_err();
-            assert_eq!(status, StatusCode::FORBIDDEN); assert_eq!(body.0.code, "host_surface_forbidden");
+        for command in [
+            "host_provider_credential_set",
+            "sync_pull",
+            "agent_start",
+            "claude_send",
+        ] {
+            let (status, body) = super::super::dispatch(
+                command,
+                serde_json::json!({}),
+                &state,
+                &host,
+                "brain-person",
+                Some("pb_person"),
+                Some("person-brain"),
+                cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(body.0.code, "host_surface_forbidden");
         }
         for scope in ["service", "owner", "device", "person-brain"] {
-            let (status, body) = super::super::dispatch("person_model_ticket_mint", serde_json::json!({}), &state, &host,
-                "caller", Some("pb_person"), Some(scope), cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext).await.unwrap_err();
-            assert_eq!(status, StatusCode::FORBIDDEN); assert_eq!(body.0.code, "host_surface_forbidden");
+            let (status, body) = super::super::dispatch(
+                "person_model_ticket_mint",
+                serde_json::json!({}),
+                &state,
+                &host,
+                "caller",
+                Some("pb_person"),
+                Some(scope),
+                cognia_companion::remote_execution::ExecutionPlane::LoopbackPlaintext,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(body.0.code, "host_surface_forbidden");
         }
     }
 
@@ -901,17 +968,38 @@ mod tests {
         let host = crate::headless::HeadlessServices::stub_for_tests();
         let org = "org_p6a_generic";
         let key = "org-key-not-exportable";
-        cognia_companion::org_credentials::OrgCredentials::set(org, "openai", key, "operator", 1).unwrap();
-        for namespace in ["host-org-provider-credentials", "host-org-provider-index", "host-org-agent-policy"] {
-            for command in ["secret_store_get", "keyring_secret_get", "secret_store_set", "keyring_secret_set", "secret_store_delete", "keyring_secret_clear"] {
+        cognia_companion::org_credentials::OrgCredentials::set(org, "openai", key, "operator", 1)
+            .unwrap();
+        for namespace in [
+            "host-org-provider-credentials",
+            "host-org-provider-index",
+            "host-org-agent-policy",
+        ] {
+            for command in [
+                "secret_store_get",
+                "keyring_secret_get",
+                "secret_store_set",
+                "keyring_secret_set",
+                "secret_store_delete",
+                "keyring_secret_clear",
+            ] {
                 let (status, error) = super::dispatch(command, serde_json::json!({"input":{"namespace":namespace,"key":format!("{org}/openai"),"value":key}}),
                     &state, &host, "operator", Some("tenant"), Some("service")).await.unwrap_err();
                 assert_eq!(status, StatusCode::FORBIDDEN);
                 assert!(!serde_json::to_string(&error.0).unwrap().contains(key));
             }
         }
-        assert_eq!(cognia_companion::org_credentials::OrgCredentials::list(org).unwrap().len(), 1);
-        for (command, expected) in [("secret_store_set", Value::Null), ("secret_store_get", serde_json::json!("legacy-value")), ("secret_store_delete", Value::Null)] {
+        assert_eq!(
+            cognia_companion::org_credentials::OrgCredentials::list(org)
+                .unwrap()
+                .len(),
+            1
+        );
+        for (command, expected) in [
+            ("secret_store_set", Value::Null),
+            ("secret_store_get", serde_json::json!("legacy-value")),
+            ("secret_store_delete", Value::Null),
+        ] {
             let result = super::dispatch(command, serde_json::json!({"input":{"namespace":"p6a-legacy","key":"key","value":"legacy-value"}}),
                 &state, &host, "operator", Some("tenant"), Some("service")).await.unwrap();
             assert_eq!(result, expected);
@@ -1033,7 +1121,7 @@ mod tests {
         let err = authorize_approval(None, "phone-b", Some("service"), &session, "req-1")
             .expect_err("remote-scoped request must refuse the grant path");
         assert_eq!(err.0, StatusCode::FORBIDDEN);
-        assert_eq!(err.1 .0.code, "REMOTE_SCOPE_DENIED");
+        assert_eq!(err.1.0.code, "REMOTE_SCOPE_DENIED");
 
         // The origin device, with its context, is still the one that answers.
         assert!(authorize_approval(Some(&context), "phone-a", None, &session, "req-1").is_ok());

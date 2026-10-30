@@ -19,9 +19,17 @@ import {
   gatewayDecisionResponse,
   gatewayRevealKey,
   gatewayUpdateKey,
+  gatewayClientConnect,
+  gatewayClientRollback,
+  gatewayClientStatus,
 } from "./gateway"
 import { DEFAULT_GATEWAY_CONFIG, type GatewayMintRouteTicketRequest } from "@/types/gateway"
 import * as flags from "@/lib/ai/agent/execution/feature-flags"
+import { isHeadlessHost } from "@/lib/platform/detect"
+jest.mock("@/lib/platform/detect", () => ({
+  ...jest.requireActual("@/lib/platform/detect"),
+  isHeadlessHost: jest.fn(() => false),
+}))
 jest.mock("@/lib/ai/agent/execution/feature-flags", () => ({
   isAgentExecutionFlagEnabled: jest.fn(() => false),
 }))
@@ -44,6 +52,33 @@ describe("lib/tauri/gateway", () => {
       ["gateway_start"],
       ["gateway_stop"],
       ["gateway_probe_upstream", { model: "fast" }],
+    ])
+  })
+
+  it("uses the existing headless host status route for account-generation checks", async () => {
+    jest.mocked(isHeadlessHost).mockReturnValueOnce(true)
+    const call = jest.spyOn(transport, "call").mockResolvedValue({ accountGeneration: 7 })
+    await expect(gatewayGetStatus()).resolves.toEqual({ accountGeneration: 7 })
+    expect(call).toHaveBeenCalledWith("gateway_status")
+  })
+
+  it("keeps client configuration on the internal native command surface", async () => {
+    const call = jest.spyOn(transport, "call").mockResolvedValue(undefined)
+    const request = {
+      client: "claude-code" as const,
+      modelAlias: "fast",
+      expectedRevision: "reviewed",
+      ownerAccountId: "owner",
+      accountGeneration: 3,
+    }
+    await gatewayClientStatus()
+    await gatewayClientConnect(request)
+    const { modelAlias: _model, ...rollback } = request
+    await gatewayClientRollback(rollback)
+    expect(call.mock.calls).toEqual([
+      ["gateway_client_status"],
+      ["gateway_client_connect", { request }],
+      ["gateway_client_rollback", { request: rollback }],
     ])
   })
 

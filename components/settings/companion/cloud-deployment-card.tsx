@@ -86,8 +86,10 @@ export interface CloudDeploymentCardProps {
 }
 
 async function defaultSignOut(localAccountId: string) {
-  const report = await signOutFromLogto({ localAccountId })
-  await completeSignOut({ localAccountId })
+  const report = await signOutFromLogto({
+    localAccountId,
+    afterClear: (context) => completeSignOut({ localAccountId, ...context }),
+  })
   return { endSessionUrl: report.endSessionUrl ?? null, tokensLive: signOutLeftTokensLive(report) }
 }
 

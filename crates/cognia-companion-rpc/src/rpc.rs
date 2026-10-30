@@ -212,6 +212,13 @@ const KNOWN_COMMANDS: &[&str] = &[
     "managed_desktop_delegate",
     "managed_desktop_delegation_revoke",
     "managed_desktop_delegation_list",
+    "managed_desktop_acceptance_start",
+    "managed_desktop_acceptance_attach",
+    "managed_desktop_acceptance_cancel",
+    "managed_desktop_acceptance_status",
+    "managed_desktop_acceptance_list",
+    "managed_desktop_acceptance_checkpoint",
+    "managed_desktop_acceptance_complete",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -227,7 +234,6 @@ const KNOWN_COMMANDS: &[&str] = &[
     "managed_desktop_control_renew",
     "managed_desktop_control_release",
     "managed_desktop_control_input",
-
     // External remote desktop targets and sessions (ADR-0234 Phases 3 and 5).
     "remote_desktop_target_list",
     "remote_desktop_target_save",
@@ -238,7 +244,6 @@ const KNOWN_COMMANDS: &[&str] = &[
     "remote_desktop_session_renew",
     "remote_desktop_session_close",
     "remote_desktop_binding_launch",
-
     // Shared media engine, with caller-owned binary transfers.
     "video_get_info",
     "plugin_media_get_video_frame",
@@ -368,6 +373,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "secret_store_get",
     "secret_store_set",
     "connectors_google_docs_auth",
+    "connectors_lark_user_auth",
+    "connectors_bounded_http_request",
     "secret_store_delete",
     "keyring_secret_get",
     "keyring_secret_set",
@@ -579,9 +586,9 @@ const KNOWN_COMMANDS: &[&str] = &[
     // ADR-0224 A6 — secrets a paired device keeps on this host. The writes
     // are `approval: interactive` in the manifest; the load is service-only.
     "host_secret_list",
-    "person_agent_policy_get", // P6e member-safe policy read.
+    "person_agent_policy_get",    // P6e member-safe policy read.
     "person_agent_lease_prepare", // P6d partition-owned brokered task.
-    "person_model_ticket_mint", // P6c person-only; service catalog still lists it.
+    "person_model_ticket_mint",   // P6c person-only; service catalog still lists it.
     "org_model_credential_list",
     "org_model_credential_set",
     "org_model_credential_delete",
@@ -611,6 +618,9 @@ const KNOWN_COMMANDS: &[&str] = &[
     "connectors_attachment_evict_adapter",
     "connectors_attachment_enforce_budget",
     "connectors_media_upload",
+    "connectors_matrix_crypto_verification",
+    "connectors_matrix_crypto_cross_signing",
+    "connectors_matrix_crypto_backup",
     "connectors_matrix_crypto_init",
     "connectors_matrix_crypto_close",
     "connectors_matrix_crypto_outgoing_requests",
@@ -2246,7 +2256,9 @@ static READ_ONLY_COMMANDS_SET: once_cell::sync::Lazy<HashSet<&'static str>> =
     once_cell::sync::Lazy::new(|| {
         cognia_companion::command_manifest::commands()
             .iter()
-            .filter(|command| command.operation == cognia_companion::command_manifest::CommandOperation::Read)
+            .filter(|command| {
+                command.operation == cognia_companion::command_manifest::CommandOperation::Read
+            })
             .map(|command| command.name.as_str())
             .collect()
     });
@@ -2271,6 +2283,10 @@ const STEP_UP_COMMANDS: &[&str] = &[
     // Delegation (amendment A5) hands an agent control of a billed desktop.
     "managed_desktop_delegate",
     "managed_desktop_delegation_revoke",
+    // An acceptance run (amendment A6) bills a desktop and hands it to an agent.
+    "managed_desktop_acceptance_start",
+    "managed_desktop_acceptance_attach",
+    "managed_desktop_acceptance_cancel",
     "managed_desktop_authorize",
     "managed_desktop_prepare_template",
     "managed_desktop_create",
@@ -2676,14 +2692,13 @@ fn inject_caller_device_grants(
 const SERVICE_ONLY_COMMANDS: &[&str] = &[
     // P6c internal descriptor; dedicated arm permits only person-brain.
     "person_model_ticket_mint",
-    "person_agent_policy_get", // P6e member-safe policy read.
+    "person_agent_policy_get",    // P6e member-safe policy read.
     "person_agent_lease_prepare", // P6d person-only task lease.
     "sandbox_preview_context",
     "sandbox_preview_create",
     "sandbox_preview_list",
     "sandbox_preview_revoke",
     "sandbox_preview_open",
-
     "best_of_n_candidate_progress",
     "best_of_n_recover",
     // ADR-0059 R12 — the brain manages the public webhook ingress registry.
@@ -2760,6 +2775,9 @@ const SERVICE_ONLY_COMMANDS: &[&str] = &[
     "connectors_attachment_evict_adapter",
     "connectors_attachment_enforce_budget",
     "connectors_media_upload",
+    "connectors_matrix_crypto_verification",
+    "connectors_matrix_crypto_cross_signing",
+    "connectors_matrix_crypto_backup",
     "connectors_matrix_crypto_init",
     "connectors_matrix_crypto_close",
     "connectors_matrix_crypto_outgoing_requests",
@@ -2779,6 +2797,8 @@ const SERVICE_ONLY_COMMANDS: &[&str] = &[
     "secret_store_get",
     "secret_store_set",
     "connectors_google_docs_auth",
+    "connectors_lark_user_auth",
+    "connectors_bounded_http_request",
     "secret_store_delete",
     "keyring_secret_get",
     "keyring_secret_set",
@@ -2890,7 +2910,7 @@ const SERVICE_ONLY_COMMANDS: &[&str] = &[
     // ADR-0224 A5 — the brain's half of a plugin transfer it accepted. A
     // device reaches the install only through `plugin_cogpack_transfer_install`,
     // which runs the host's own signature and policy checks first.
-    "plugin_cogpack_install_staged",    // ADR-0224 A6 — the provider keys sealed on this host, for its own
+    "plugin_cogpack_install_staged", // ADR-0224 A6 — the provider keys sealed on this host, for its own
     // runtime. The only host-secret command that returns values, so no
     // device plane may reach it; devices see names via `host_secret_list`.
     "host_provider_credentials_load",
@@ -2906,7 +2926,9 @@ static SERVICE_ONLY_COMMANDS_SET: once_cell::sync::Lazy<HashSet<&'static str>> =
     once_cell::sync::Lazy::new(|| {
         cognia_companion::command_manifest::commands()
             .iter()
-            .filter(|command| command.target == cognia_companion::command_manifest::CommandTarget::Service)
+            .filter(|command| {
+                command.target == cognia_companion::command_manifest::CommandTarget::Service
+            })
             .map(|command| command.name.as_str())
             .collect()
     });
@@ -3190,7 +3212,10 @@ pub async fn rpc_handler(
 ) -> Result<(HeaderMap, Json<Value>), (StatusCode, Json<RpcError>)> {
     let mut response_headers = HeaderMap::new();
     if name.starts_with("managed_desktop_results_") {
-        response_headers.insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static("no-store"));
+        response_headers.insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
     }
     let idem_key = headers
         .get("idempotency-key")
@@ -3218,7 +3243,9 @@ pub async fn rpc_handler(
     // SERVICE_ONLY_COMMANDS", which stopped being true two waves ago and is
     // exactly the kind of stale claim a reader trusts. The `signaling::dispatch`
     // path threads the scope and carries the mirrored gate.
-    if is_service_only_command(&name) && !cognia_companion::jwt::is_service_scope(Some(ctx.scope.as_ref())) {
+    if is_service_only_command(&name)
+        && !cognia_companion::jwt::is_service_scope(Some(ctx.scope.as_ref()))
+    {
         return Err(RpcError::forbidden(
             "this command requires the headless service token",
         ));
@@ -3487,7 +3514,8 @@ fn authorize_workspace_root(
 /// remote control (`workspace.write`), which could reach the same bytes
 /// through a terminal or a write anyway. A chat-only paired device cannot.
 fn sensitive_reads_allowed(device_id: &str, scope: Option<&str>) -> bool {
-    cognia_companion::jwt::is_service_scope(scope) || canonical_device_has_capability(device_id, "workspace.write")
+    cognia_companion::jwt::is_service_scope(scope)
+        || canonical_device_has_capability(device_id, "workspace.write")
 }
 
 fn authorize_sensitive_resource(
@@ -3533,7 +3561,9 @@ fn authorize_workspace_read(
 /// `serde_json::to_value(x).map_err(...)` boilerplate across the native arms.
 /// The paging half of a request (ADR-0175 B3). A legacy spelling or a token
 /// this host did not issue is a 400 that names the parameter.
-fn page_request(args: &Value) -> Result<cognia_companion::paging::PageRequest, (StatusCode, Json<RpcError>)> {
+fn page_request(
+    args: &Value,
+) -> Result<cognia_companion::paging::PageRequest, (StatusCode, Json<RpcError>)> {
     cognia_companion::paging::PageRequest::from_args(args).map_err(paging_error)
 }
 
@@ -3791,19 +3821,27 @@ pub(super) async fn dispatch(
     plane: cognia_companion::remote_execution::ExecutionPlane,
 ) -> Result<Value, (StatusCode, Json<RpcError>)> {
     // P6c defence at the shared dispatcher, before every service-only arm.
-    if scope == Some("person-brain") && !cognia_companion::person_chat::person_command_allowed(name) {
+    if scope == Some("person-brain") && !cognia_companion::person_chat::person_command_allowed(name)
+    {
         return Err(crate::person_model::person_forbidden());
     }
     // The service catalog includes this internal command, but its dedicated
     // arm owns person-only authority and explicitly refuses service callers.
-    if matches!(name, "person_agent_lease_prepare" | "person_agent_policy_get") {
+    if matches!(
+        name,
+        "person_agent_lease_prepare" | "person_agent_policy_get"
+    ) {
         return chat::dispatch(name, args, state, host, device_id, tenant_id, scope).await;
     }
     if name == "person_model_ticket_mint" {
         return chat::dispatch(name, args, state, host, device_id, tenant_id, scope).await;
     }
     if scope != Some("person-brain") {
-        let person_partition = if cognia_companion::jwt::is_service_scope(scope) { None } else { cognia_companion::person_partition::current() };
+        let person_partition = if cognia_companion::jwt::is_service_scope(scope) {
+            None
+        } else {
+            cognia_companion::person_partition::current()
+        };
         cognia_companion::person_chat::person_check_session_args(&args, person_partition.as_ref())
             .map_err(|_| crate::person_model::person_forbidden())?;
     }
@@ -3846,22 +3884,24 @@ pub(super) async fn dispatch(
         let tenant_id = tenant_id.ok_or_else(|| {
             RpcError::forbidden("browser RPC requires an account-bound device token")
         })?;
-        return cognia_companion::browser_gateway::dispatch_browser_rpc(name, args, tenant_id, device_id)
-            .await
-            .map_err(|error| {
-                let status = match error.code.as_str() {
-                    "browser_disabled"
-                    | "browser_runtime_unavailable"
-                    | "browser_runtime_unhealthy" => StatusCode::SERVICE_UNAVAILABLE,
-                    "browser_session_forbidden" | "browser_control_held_by_human" => {
-                        StatusCode::FORBIDDEN
-                    }
-                    "browser_session_quota_exceeded" => StatusCode::TOO_MANY_REQUESTS,
-                    "browser_session_not_found" => StatusCode::NOT_FOUND,
-                    _ => StatusCode::BAD_REQUEST,
-                };
-                (status, Json(RpcError::new(error.code, error.message)))
-            });
+        return cognia_companion::browser_gateway::dispatch_browser_rpc(
+            name, args, tenant_id, device_id,
+        )
+        .await
+        .map_err(|error| {
+            let status = match error.code.as_str() {
+                "browser_disabled"
+                | "browser_runtime_unavailable"
+                | "browser_runtime_unhealthy" => StatusCode::SERVICE_UNAVAILABLE,
+                "browser_session_forbidden" | "browser_control_held_by_human" => {
+                    StatusCode::FORBIDDEN
+                }
+                "browser_session_quota_exceeded" => StatusCode::TOO_MANY_REQUESTS,
+                "browser_session_not_found" => StatusCode::NOT_FOUND,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (status, Json(RpcError::new(error.code, error.message)))
+        });
     }
 
     if chat::COMMANDS.contains(&name) {
@@ -3913,14 +3953,25 @@ pub(super) async fn dispatch(
         // The envelope was authenticated above; the domain DTO deliberately
         // rejects unknown fields and never accepts caller-supplied identity.
         let admin_check = if STEP_UP_COMMANDS.contains(&name) {
-            let token = args.get("adminLease").or_else(|| args.get("admin_lease")).and_then(Value::as_str).map(str::to_owned);
+            let token = args
+                .get("adminLease")
+                .or_else(|| args.get("admin_lease"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             let device = device_id.to_owned();
             let operation = name.to_owned();
             Some(std::sync::Arc::new(move || {
                 cognia_companion::admin_lease::validate(&device, &operation, token.as_deref())
-                    .map_err(|_| cognia_automation::cua_sandbox::managed::refused("managed_desktop_control_admin_lease_expired"))
-            }) as crate::managed_desktops::AdminAuthorityCheck)
-        } else { None };
+                    .map_err(|_| {
+                        cognia_automation::cua_sandbox::managed::refused(
+                            "managed_desktop_control_admin_lease_expired",
+                        )
+                    })
+            })
+                as crate::managed_desktops::AdminAuthorityCheck)
+        } else {
+            None
+        };
         let mut args = args;
         if let Some(args) = args.as_object_mut() {
             args.remove("adminLease");
@@ -3929,7 +3980,9 @@ pub(super) async fn dispatch(
         let runtime = if name == "managed_desktop_control_input" {
             let event_host = host.to_shared();
             let events: crate::managed_desktops::HostEventSink =
-                std::sync::Arc::new(move |topic, value| event_host.publish_host_event(topic, value));
+                std::sync::Arc::new(move |topic, value| {
+                    event_host.publish_host_event(topic, value)
+                });
             Some(match host.automation() {
                 Some(automation) => crate::managed_desktops::ManagedControlRuntime {
                     enforcement: cognia_automation::automation::dispatcher::Enforcement::from_state(
@@ -3938,20 +3991,37 @@ pub(super) async fn dispatch(
                     events,
                     refresh_persisted: false,
                 },
-                None => {
-                    crate::managed_desktops::headless_control_runtime(events).await
-                        .map_err(|error| (StatusCode::BAD_REQUEST, Json(RpcError::new(error.code.clone(), error.to_string()))))?
-                }
+                None => crate::managed_desktops::headless_control_runtime(events)
+                    .await
+                    .map_err(|error| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(RpcError::new(error.code.clone(), error.to_string())),
+                        )
+                    })?,
             })
-        } else { None };
+        } else {
+            None
+        };
         return crate::managed_desktops::dispatch(
-            name, args, crate::managed_desktops::Caller {
-                device_id, tenant_id, scope, local: false,
-            }, runtime, admin_check,
-        ).await.map_err(|error| (
-            StatusCode::BAD_REQUEST,
-            Json(RpcError::new(error.code.clone(), error.to_string())),
-        ));
+            name,
+            args,
+            crate::managed_desktops::Caller {
+                device_id,
+                tenant_id,
+                scope,
+                local: false,
+            },
+            runtime,
+            admin_check,
+        )
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(RpcError::new(error.code.clone(), error.to_string())),
+            )
+        });
     }
 
     if crate::remote_desktops::COMMANDS.contains(&name) {
@@ -3961,7 +4031,11 @@ pub(super) async fn dispatch(
         return crate::remote_desktops::dispatch(
             name,
             args,
-            crate::remote_desktops::Caller { device_id, tenant_id, scope },
+            crate::remote_desktops::Caller {
+                device_id,
+                tenant_id,
+                scope,
+            },
         )
         .await
         .map_err(|error| {
@@ -4011,8 +4085,14 @@ fn p6e_person_policy_is_read_only_without_idempotency() {
     assert!(READ_ONLY_COMMANDS_SET.contains(command));
     assert!(is_service_only_command(command));
     assert!(chat::COMMANDS.contains(&command));
-    let descriptor = cognia_companion::command_manifest::commands().iter().find(|entry| entry.name == command).unwrap();
-    assert_eq!(descriptor.idempotency, cognia_companion::command_manifest::CommandIdempotency::Forbidden);
+    let descriptor = cognia_companion::command_manifest::commands()
+        .iter()
+        .find(|entry| entry.name == command)
+        .unwrap();
+    assert_eq!(
+        descriptor.idempotency,
+        cognia_companion::command_manifest::CommandIdempotency::Forbidden
+    );
 }
 
 #[cfg(test)]
@@ -4027,7 +4107,11 @@ fn scratch_ensure_is_registered_only_on_the_service_plane() {
 #[cfg(test)]
 #[test]
 fn best_of_n_commands_keep_progress_internal_and_reads_non_mutating() {
-    for command in ["best_of_n_get", "best_of_n_list", "task_workspace_canonical_root"] {
+    for command in [
+        "best_of_n_get",
+        "best_of_n_list",
+        "task_workspace_canonical_root",
+    ] {
         assert!(known_commands().contains(&command));
         assert!(READ_ONLY_COMMANDS_SET.contains(command));
         assert!(!is_control_command(command));
@@ -4038,7 +4122,12 @@ fn best_of_n_commands_keep_progress_internal_and_reads_non_mutating() {
         assert!(is_control_command(command));
         assert!(filesystem::COMMANDS.contains(&command));
     }
-    for command in ["best_of_n_start", "best_of_n_cancel", "best_of_n_archive", "best_of_n_select"] {
+    for command in [
+        "best_of_n_start",
+        "best_of_n_cancel",
+        "best_of_n_archive",
+        "best_of_n_select",
+    ] {
         assert!(known_commands().contains(&command));
         assert!(is_control_command(command));
         assert!(!READ_ONLY_COMMANDS_SET.contains(command));
@@ -4086,6 +4175,8 @@ fn changeset_and_integration_commands_have_matching_remote_control_classificatio
 #[test]
 fn wechat_oa_ingress_commands_stay_service_only_and_only_list_is_read_only() {
     for (command, read_only) in [
+        ("connectors_lark_user_auth", false),
+        ("connectors_bounded_http_request", false),
         ("connectors_wechat_oa_inbound_list", true),
         ("connectors_keyring_get_snapshot", true),
         ("connectors_wechat_oa_inbound_claim", false),
@@ -4103,29 +4194,51 @@ fn wechat_oa_ingress_commands_stay_service_only_and_only_list_is_read_only() {
 fn p6a_org_commands_have_matching_generated_and_service_dispatch_descriptors() {
     for command in cognia_companion::org_policy::COMMANDS {
         assert!(KNOWN_COMMANDS.contains(command));
-        assert!(known_commands().contains(command), "regenerate the companion API contract for {command}");
+        assert!(
+            known_commands().contains(command),
+            "regenerate the companion API contract for {command}"
+        );
         assert!(service_plane::COMMANDS.contains(command));
         assert!(!is_service_only_command(command));
         let descriptor = cognia_companion::command_manifest::descriptor(command).unwrap();
-        assert_eq!(descriptor.capability, cognia_companion::org_policy::CAPABILITY);
+        assert_eq!(
+            descriptor.capability,
+            cognia_companion::org_policy::CAPABILITY
+        );
         // Org writes rest on live owner/admin standing and the signed request
         // alone (P6b): no command asks for Host consent or an admin lease.
-        assert_eq!(descriptor.approval, cognia_companion::command_manifest::CommandApproval::None);
-        assert_eq!(READ_ONLY_COMMANDS_SET.contains(command), !cognia_companion::org_policy::is_write(command));
+        assert_eq!(
+            descriptor.approval,
+            cognia_companion::command_manifest::CommandApproval::None
+        );
+        assert_eq!(
+            READ_ONLY_COMMANDS_SET.contains(command),
+            !cognia_companion::org_policy::is_write(command)
+        );
     }
 }
 
 #[cfg(test)]
 #[test]
 fn p6b_usage_commands_are_catalogued_on_both_planes() {
-    for command in ["org_member_usage_get", "org_usage_cap_set", "org_member_usage_cap_set"] {
+    for command in [
+        "org_member_usage_get",
+        "org_usage_cap_set",
+        "org_member_usage_cap_set",
+    ] {
         assert!(KNOWN_COMMANDS.contains(&command));
         assert!(known_commands().contains(&command));
         assert!(service_plane::COMMANDS.contains(&command));
         assert!(!is_service_only_command(command));
         let descriptor = cognia_companion::command_manifest::descriptor(command).unwrap();
         assert_eq!(descriptor.capability, "org.policy.manage");
-        assert_eq!(descriptor.approval, cognia_companion::command_manifest::CommandApproval::None);
-        assert_eq!(READ_ONLY_COMMANDS_SET.contains(command), command == "org_member_usage_get");
+        assert_eq!(
+            descriptor.approval,
+            cognia_companion::command_manifest::CommandApproval::None
+        );
+        assert_eq!(
+            READ_ONLY_COMMANDS_SET.contains(command),
+            command == "org_member_usage_get"
+        );
     }
 }

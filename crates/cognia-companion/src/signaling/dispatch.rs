@@ -165,6 +165,7 @@ pub struct EventOutbound {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum EventControl {
+    Watch { channels: Vec<String>, since: Option<u64> },
     #[serde(rename = "event-resume")]
     Resume { since: u64 },
     #[serde(rename = "event-ack")]
@@ -256,7 +257,7 @@ fn inbound_is_read_only(bytes: &[u8]) -> bool {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return false;
     };
-    if value.get("kind").and_then(Value::as_str) == Some("binary-resource") {
+    if matches!(value.get("kind").and_then(Value::as_str), Some("binary-resource" | "operation-get")) {
         return true;
     }
     value
@@ -424,6 +425,34 @@ async fn run(
                         }
                         if let Ok(control) = serde_json::from_slice::<EventControl>(&bytes) {
                             match control {
+                                EventControl::Watch { channels, since } => {
+                                    let Ok(request) = serde_json::from_value(json!({"mode":"replace","channels":channels})) else { continue; };
+                                    let outcome = subscription.apply(&request);
+                                    if !outcome.rejected.is_empty() {
+                                        let _ = peer.send_bytes(serde_json::to_vec(&json!({"kind":"event-subscribed","channels":outcome.channels,"rejected":outcome.rejected})).unwrap_or_default()).await;
+                                        continue;
+                                    }
+                                    // Discard pre-barrier live batches. The atomic bus subscription
+                                    // supplies every retained frame after the caller's cursor instead.
+                                    let _ = batcher.drain();
+                                    match state.event_bus.subscribe(since, crate::signaling::envelope::now_ms()) {
+                                        SubscribeResult::Ok { receiver, replay, replay_cursor } => {
+                                            event_rx = crate::event_bus::LiveReceiver::new(state.event_bus.clone(), receiver, replay_cursor);
+                                            let _ = peer.send_bytes(serde_json::to_vec(&json!({"kind":"event-watch-ready","cursor":since.unwrap_or(replay_cursor),"channels":outcome.channels,"rejected":[]})).unwrap_or_default()).await;
+                                            let visible: Vec<EventFrame> = replay.into_iter().filter(|frame| frame.visible_to(&device_id)
+                                                && crate::person_chat::person_connection_visible(frame, &device_id, None)
+                                                && crate::person_partition::event_visible(frame, &device_id, None)
+                                                && audience.as_ref().is_some_and(|audience| audience.allows(frame))
+                                                && subscription.allows(&frame.event_type)).collect();
+                                            for batch in chunk_replay(visible) {
+                                                if let Some(outbound) = outbound_for_batch(batch) { if send_outbound(&peer, &outbound).await.is_err() { break; } }
+                                            }
+                                        }
+                                        SubscribeResult::ResyncRequired => {
+                                            let _ = peer.send_bytes(serde_json::to_vec(&json!({"kind":"resync_required","domains":["*"],"cursor":state.event_bus.high_water_seq()})).unwrap_or_default()).await;
+                                        }
+                                    }
+                                }
                                 EventControl::Resume { since } => {
                                     match state.event_bus.subscribe(
                                         Some(since),
@@ -640,6 +669,7 @@ async fn handle_inbound(
         };
         return handle_binary_resource(peer, request, state, device_id).await;
     }
+    let operation_lookup = envelope.get("kind").and_then(Value::as_str) == Some("operation-get");
     let rpc: InboundRpc =
         serde_json::from_value(envelope).map_err(|e| format!("malformed inbound rpc: {e}"))?;
     log::debug!("signaling::dispatch: inbound rpc method={}", rpc.method);
@@ -669,6 +699,19 @@ async fn handle_inbound(
         granted_scopes: Vec::new(),
         authorization_capabilities: None,
     };
+    if operation_lookup {
+        let operation_id = rpc.params.get("operationId").and_then(Value::as_str).unwrap_or_default();
+        let result = if rpc.method != "host.operation.get" || uuid::Uuid::parse_str(operation_id).is_err() {
+            Err(cognia_problem::Problem::new(400, "invalid_operation_id", "operation-get requires an operation UUID"))
+        } else {
+            crate::api::operation_document(&principal, operation_id).await
+        };
+        let frame = match result {
+            Ok(value) => ResponseFrame { id: request_id, ok: true, result: Some(value), error: None },
+            Err(error) => ResponseFrame { id: request_id, ok: false, result: None, error: Some(ErrorBody { code: error.code, message: error.detail }) },
+        };
+        return send_outbound(peer, &OutboundFrame::Response(frame)).await.map_err(|error| error.to_string());
+    }
     let mut execution_request = ExecutionRequest::new(
         rpc.method,
         rpc.params,
@@ -924,6 +967,284 @@ async fn rtc_events_audience(device_id: &str) -> Result<crate::host_surface_gate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn watch_test_state() -> SharedState {
+        Arc::new(crate::CompanionState {
+            secret: parking_lot::RwLock::new(vec![0; 32]),
+            deny_list: Arc::new(crate::deny_list::DenyList::new()),
+            renderer: None,
+            runtime: crate::runtime::unwired(),
+            idempotency: Arc::new(crate::idempotency::IdempotencyCache::new()),
+            event_bus: crate::event_bus::EventBus::new(),
+            sync_bridge: crate::sync_bridge::SyncBridge::new(),
+            desktop_messages_bridge: crate::desktop_messages_bridge::DesktopMessagesBridge::new(),
+            desktop_writes_bridge: crate::desktop_writes_bridge::DesktopWritesBridge::new(),
+            sync_registry: crate::sync_registry::SyncTableRegistry::with_defaults(),
+            rate_limiter: crate::rate_limit::RateLimiter::with_defaults(),
+            push_tokens: crate::push::PushTokenRegistry::new(),
+        })
+    }
+
+    struct RestoreSecurityStore(Option<Arc<crate::security_store::SecurityStore>>);
+
+    impl Drop for RestoreSecurityStore {
+        fn drop(&mut self) {
+            crate::security_store::install_security_store(self.0.take());
+        }
+    }
+
+    async fn relay_json(receiver: &mut mpsc::Receiver<super::super::carrier::RelayFrame>) -> Value {
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+            .await
+            .expect("dispatcher must answer before the test deadline")
+            .expect("relay remains open");
+        let super::super::carrier::RelayFrame::Text(bytes) = frame else {
+            panic!("control and event frames must use text");
+        };
+        serde_json::from_slice(&bytes).expect("small relay frames are unchunked JSON")
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn event_watch_barrier_replays_then_delivers_live_wildcards_once() {
+        let _guard = crate::security_store::test_guard();
+        let _restore = RestoreSecurityStore(security_store());
+        crate::security_store::install_security_store(None);
+        let state = watch_test_state();
+        let bus = state.event_bus.clone();
+        let cursor = bus
+            .publish("claude://message".into(), json!({"old": true}))
+            .seq;
+        let first = bus.publish(
+            "connectors://onebot/alpha/event".into(),
+            json!({"index": 1}),
+        );
+        bus.publish("claude://message".into(), json!({"excluded": "replay"}));
+        let second = bus.publish("connectors://onebot/beta/event".into(), json!({"index": 2}));
+        // A one-frame carrier queue holds replay behind the ready marker, so
+        // live publication below interleaves with replay transmission.
+        let (outbound, mut received) = mpsc::channel(1);
+        let carrier = DataCarrier::with_relay(outbound);
+        let (inbound, commands) = mpsc::channel(8);
+        inbound
+            .send(
+                serde_json::to_vec(&json!({
+                    "kind": "watch",
+                    "channels": ["connectors://*"],
+                    "since": cursor,
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let dispatcher = tokio::spawn(run(carrier, commands, state, "watch-device".into()));
+        let ready = relay_json(&mut received).await;
+        assert_eq!(ready["kind"], "event-watch-ready");
+        assert_eq!(ready["cursor"], cursor);
+        assert_eq!(ready["channels"], json!(["connectors://*"]));
+        assert_eq!(ready["rejected"], json!([]));
+        let third = bus.publish(
+            "connectors://onebot/alpha/event".into(),
+            json!({"index": 3}),
+        );
+        bus.publish("claude://message".into(), json!({"excluded": "live"}));
+        bus.publish(
+            "connectors://lark-oauth/callback".into(),
+            json!({"secret": "service-only"}),
+        );
+        bus.publish(
+            "connectors://onebot/alpha/event".into(),
+            json!({
+                "remoteExecutionContext": {"originDeviceId": "another-device"},
+            }),
+        );
+        let fourth = bus.publish("connectors://onebot/done/event".into(), json!({"index": 4}));
+        let mut events = Vec::new();
+        while events
+            .last()
+            .and_then(|frame: &Value| frame["seq"].as_u64())
+            != Some(fourth.seq)
+        {
+            let frame = relay_json(&mut received).await;
+            match frame["kind"].as_str() {
+                Some("event") => events.push(frame),
+                Some("event-batch") => {
+                    events.extend(frame["frames"].as_array().unwrap().iter().cloned())
+                }
+                other => panic!("unexpected post-barrier frame: {other:?}"),
+            }
+        }
+        assert_eq!(
+            events
+                .iter()
+                .map(|frame| frame["seq"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![first.seq, second.seq, third.seq, fourth.seq]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|frame| frame["payload"]["index"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), received.recv())
+                .await
+                .is_err(),
+            "excluded, duplicate, and foreign-device frames must not follow the stream"
+        );
+        drop(inbound);
+        tokio::time::timeout(std::time::Duration::from_secs(2), dispatcher)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    fn register_operation_device(store: &crate::security_store::SecurityStore, device: &str) {
+        let challenge = store.issue_challenge("relay-tenant", 100, 60).unwrap();
+        let invitation = store
+            .create_owner_invitation("relay-tenant", "local-trust-root", 100, 60)
+            .unwrap();
+        store
+            .register_owner_device(
+                "relay-tenant",
+                &invitation,
+                &challenge.id,
+                &challenge.nonce,
+                device,
+                "Relay test",
+                "pem",
+                &format!("thumb-{device}"),
+                101,
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn operation_get_handler_returns_owned_receipts_and_rejects_invalid_or_foreign_reads() {
+        use crate::security_store::{IdempotencyDecision, OrgReceiptScope, SecurityStore};
+        let _guard = crate::security_store::test_guard();
+        let _restore = RestoreSecurityStore(security_store());
+        let ledger = SecurityStore::in_memory().unwrap();
+        register_operation_device(&ledger, "relay-owner");
+        register_operation_device(&ledger, "relay-other");
+        crate::security_store::install_security_store(Some(ledger.clone()));
+        let begin = |key: &str| {
+            let IdempotencyDecision::Started { operation_id } = ledger
+                .begin_idempotent_operation("relay-tenant", "relay-owner", "host", key, "hash", 100)
+                .unwrap()
+            else {
+                panic!("new operation");
+            };
+            ledger
+                .mark_operation_running("relay-tenant", &operation_id, 101)
+                .unwrap();
+            operation_id
+        };
+        let operation = begin("owned-key");
+        let state = watch_test_state();
+        let (outbound, mut received) = mpsc::channel(8);
+        let carrier = DataCarrier::with_relay(outbound);
+        let request = |method: &str, operation_id: &str| {
+            serde_json::to_vec(&json!({
+                "kind": "operation-get", "id": "relay-request", "method": method,
+                "params": {"operationId": operation_id}, "protocolVersion": PROTOCOL_VERSION,
+            }))
+            .unwrap()
+        };
+        handle_inbound(
+            &carrier,
+            request("host.operation.get", &operation),
+            &state,
+            "relay-owner",
+        )
+        .await
+        .unwrap();
+        let running = relay_json(&mut received).await;
+        assert_eq!(running["id"], "relay-request");
+        assert_eq!(running["ok"], true);
+        assert_eq!(running["result"]["id"], operation);
+        assert_eq!(running["result"]["done"], false);
+        ledger
+            .complete_idempotent_operation(
+                "relay-tenant",
+                "relay-owner",
+                "owned-key",
+                r#"{"result":{"answer":42}}"#,
+                true,
+                102,
+            )
+            .unwrap();
+        handle_inbound(
+            &carrier,
+            request("host.operation.get", &operation),
+            &state,
+            "relay-owner",
+        )
+        .await
+        .unwrap();
+        let completed = relay_json(&mut received).await;
+        assert_eq!(completed["ok"], true);
+        assert_eq!(completed["result"]["done"], true);
+        assert_eq!(completed["result"]["result"], json!({"answer": 42}));
+        for (method, id, device, code) in [
+            (
+                "host.operation.get",
+                "not-a-uuid",
+                "relay-owner",
+                "invalid_operation_id",
+            ),
+            (
+                "session_delete",
+                operation.as_str(),
+                "relay-owner",
+                "invalid_operation_id",
+            ),
+            (
+                "host.operation.get",
+                operation.as_str(),
+                "relay-other",
+                "operation_not_found",
+            ),
+        ] {
+            handle_inbound(&carrier, request(method, id), &state, device)
+                .await
+                .unwrap();
+            let refused = relay_json(&mut received).await;
+            assert_eq!(refused["id"], "relay-request");
+            assert_eq!(refused["ok"], false);
+            assert_eq!(refused["error"]["code"], code);
+            assert!(refused.get("result").is_none());
+        }
+        let person = crate::person_partition::PersonReceiptScope {
+            account_id: crate::person_partition::PersonPartition::new(
+                "org_relay".into(),
+                "usr_relay".into(),
+            )
+            .account_id,
+            data_generation: uuid::Uuid::new_v4().to_string(),
+        };
+        let person_operation = begin(&person.key("person-key"));
+        let org_operation = begin(&OrgReceiptScope::new("org_relay", "usr_relay").key("org-key"));
+        for id in [person_operation, org_operation] {
+            handle_inbound(
+                &carrier,
+                request("host.operation.get", &id),
+                &state,
+                "relay-owner",
+            )
+            .await
+            .unwrap();
+            let refused = relay_json(&mut received).await;
+            assert_eq!(
+                refused["ok"], false,
+                "a device must not inherit historical person/org authority"
+            );
+            assert!(refused.get("result").is_none());
+        }
+    }
 
     #[test]
     fn main_and_relay_dispatcher_gate_before_starting_the_event_or_rpc_pump() {
@@ -1181,5 +1502,10 @@ mod tests {
         assert!(text.contains(r#""id":"req-2""#));
         assert!(text.contains(r#""ok":false"#));
         assert!(text.contains(r#""code":"device_revoked""#));
+    }
+
+    #[test]
+    fn operation_observation_is_a_read_control_frame() {
+        assert!(inbound_is_read_only(br#"{"kind":"operation-get","method":"host.operation.get","params":{"operationId":"00000000-0000-4000-8000-000000000001"}}"#));
     }
 }
