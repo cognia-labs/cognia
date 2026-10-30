@@ -237,6 +237,7 @@
     "0239-an-outbound-action-is-authorized-by-the-request",
     "0240-a-generated-surface-streams-answers-and-computes",
     "0241-a-shared-run-streams-to-its-members",
-    "0242-the-browser-companion-names-the-capabilities-it-adds"
+    "0242-the-browser-companion-names-the-capabilities-it-adds",
+    "0243-a-run-acts-for-someone-and-says-who"
   ]
 }
