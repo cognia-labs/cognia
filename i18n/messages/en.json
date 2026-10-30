@@ -53505,7 +53505,6 @@
         "delivery": "Immutable source delivery",
         "deliveryOption": "{id} · revision {revision} · {commit}",
         "description": "Choose a delivery owned by this account on the selected Host. Preparation only validates source metadata and estimates cost; it does not create a desktop or run commands.",
-        "dormant": "Acceptance execution is dormant until linked evidence and deletion are complete and authorized real-provider smoke passes. Agent suggestions cannot authorize spending.",
         "empty": "No eligible deliveries with trusted source provenance are available to this account on this Host.",
         "expires": "Proposal expires: {at}",
         "files": "Selected acceptance files (one repository-relative path per line)",
@@ -53519,7 +53518,6 @@
         "prepared": "Prepared exact commit {commit} from delivery revision {revision}. No desktop has been created.",
         "sourceScope": "Commit and bundle reconstruction transfers repository history. Selected acceptance files are additional copies; selecting them does not filter or sanitize source history.",
         "sourceUnavailable": "This delivery is missing trusted provenance, changed or is no longer available. Refresh the eligible deliveries.",
-        "start": "Start acceptance (dormant)",
         "title": "Prepare GUI acceptance",
         "unsupported": "Live preview, transfer between Hosts and automatic project acceptance remain unavailable."
       },

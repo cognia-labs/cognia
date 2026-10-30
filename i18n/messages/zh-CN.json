@@ -53505,7 +53505,6 @@
         "delivery": "不可变来源交付记录",
         "deliveryOption": "{id} · 修订 {revision} · {commit}",
         "description": "选择当前账户在所选 Host 上拥有的交付记录。准备操作仅校验来源元数据并估算费用，不会创建桌面或运行命令。",
-        "dormant": "验收执行保持 dormant，直到结果证据关联和删除机制完成，且获明确授权的真实 provider smoke 通过。Agent 的建议不能授权付费操作。",
         "empty": "当前账户在此 Host 上没有包含可信来源绑定的可用交付记录。",
         "expires": "提案到期时间：{at}",
         "files": "选定验收文件（每行一个仓库相对路径）",
@@ -53519,7 +53518,6 @@
         "prepared": "已准备交付修订 {revision} 的固定 commit {commit}。尚未创建桌面。",
         "sourceScope": "固定 commit 重建和 bundle 导入会传输仓库历史。选定验收文件是额外复制的文件，选择这些文件不会筛选或清理源码历史。",
         "sourceUnavailable": "该交付记录缺少可信来源绑定、已变更或已不可用。请刷新可验收的交付记录。",
-        "start": "开始验收（dormant）",
         "title": "准备 GUI 验收",
         "unsupported": "实时预览、跨 Host 传输和按项目自动发起验收仍不可用。"
       },
