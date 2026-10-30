@@ -18,7 +18,7 @@ pub const COMMANDS: &[&str] = &[
 // publication, then reads the same artifact without capturing another frame.
 static CAPTURE_PUBLICATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-async fn disk<T: Send + 'static>(directory: &Path,
+pub(crate) async fn disk<T: Send + 'static>(directory: &Path,
     operation: impl FnOnce(EvidenceStore) -> std::result::Result<T, String> + Send + 'static) -> Result<T> {
     let directory = directory.to_owned();
     tokio::task::spawn_blocking(move || operation(EvidenceStore::new(&directory)))
@@ -48,11 +48,11 @@ struct Read { acceptance_id: String, artifact_id: String }
 struct Approval { acceptance_id: String, expected_revision: u64, decision: ApprovalDecision, idempotency_key: String }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Capture { acceptance_id: String, artifact_id: String, criterion_id: String, kind: CaptureKind }
+pub(crate) struct Capture { pub acceptance_id: String, pub artifact_id: String, pub criterion_id: String, pub kind: CaptureKind }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Complete { acceptance_id: String, idempotency_key: String, outcome: AcceptanceOutcome,
-    criteria: Vec<CriterionResult>, summary: String }
+pub(crate) struct Complete { pub acceptance_id: String, pub idempotency_key: String, pub outcome: AcceptanceOutcome,
+    pub criteria: Vec<CriterionResult>, pub summary: String }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PrepareDelete { operation_id: String, #[serde(default)] conversation_ids: Vec<String>,
@@ -123,56 +123,10 @@ pub async fn dispatch(directory: &Path, service: &ManagedDesktopService,
             encode(guarded_disk(directory, authority.input_admission(p), move |s| s.approve(&owner, &host, &a.acceptance_id, input)).await?)?
         }
         "managed_desktop_results_capture" => {
-            let a: Capture = decode(args)?;
-            let _capture = CAPTURE_PUBLICATION.lock().await;
-            authority.revalidate(p).await?;
-            let id = a.acceptance_id.clone(); let read_owner = owner.clone(); let read_host = host.clone();
-            let row = disk(directory, move |s| s.get(&read_owner, &read_host, &id)).await?;
-            if p.authority == ManagedDesktopAuthority::Agent {
-                require_current_agent(service, p, &row).await?;
-            } else {
-                p.require_human()?;
-            }
-            current_source(directory, p, &row).await?;
-            let input = CaptureInput { artifact_id:a.artifact_id, criterion_id:a.criterion_id, kind:a.kind,
-                explicitly_requested:p.authority != ManagedDesktopAuthority::Agent, sensitive_human_input:false };
-            let retry_owner = owner.clone(); let retry_host = host.clone();
-            let retry_id = a.acceptance_id.clone(); let retry_input = input.clone();
-            let admission = if p.authority == ManagedDesktopAuthority::Agent {
-                service.runtime_admission(
-                    p, &row.binding.desktop_id, row.binding.desktop_generation,
-                    ManagedDesktopRuntimeGate::Acceptance, authority.input_admission(p),
-                ).await?
-            } else {
-                authority.input_admission(p)
-            };
-            let previous = guarded_disk(directory, admission.clone(), move |s|
-                s.captured(&retry_owner, &retry_host, &retry_id, &retry_input)).await?;
-            if let Some(previous) = previous {
-                authority.revalidate(p).await?;
-                return encode(previous);
-            }
-            // Capture comes from the bound desktop, never caller-supplied pixels.
-            let frame = service.control_frame(p, &row.binding.desktop_id, row.binding.desktop_generation, authority).await?;
-            authority.revalidate(p).await?;
-            current_source(directory, p, &row).await?;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(&frame.screenshot.bytes)
-                .map_err(|_| refused("managed_desktop_evidence_invalid_image"))?;
-            encode(guarded_disk(directory, admission, move |s| s.capture(&owner, &host, &a.acceptance_id, input, &bytes)).await?)?
+            capture(directory, service, p, authority, decode(args)?).await?
         }
         "managed_desktop_results_complete" => {
-            let a: Complete = decode(args)?;
-            let id = a.acceptance_id.clone(); let read_owner = owner.clone(); let read_host = host.clone();
-            let row = disk(directory, move |s| s.get(&read_owner, &read_host, &id)).await?;
-            require_current_agent(service, p, &row).await?;
-            current_source(directory, p, &row).await?;
-            let input = AgentVerdictInput { idempotency_key:a.idempotency_key, principal_id:p.principal_id.clone(),
-                outcome:a.outcome, criteria:a.criteria, summary:a.summary };
-            let admission = service.runtime_admission(
-                p, &row.binding.desktop_id, row.binding.desktop_generation,
-                ManagedDesktopRuntimeGate::Acceptance, authority.input_admission(p),
-            ).await?;
-            encode(guarded_disk(directory, admission, move |s| s.complete(&owner, &host, &a.acceptance_id, input)).await?)?
+            complete(directory, service, p, authority, decode(args)?).await?
         }
         "managed_desktop_results_prepare_delete" => {
             p.require_human()?;
@@ -194,6 +148,63 @@ pub async fn dispatch(directory: &Path, service: &ManagedDesktopService,
     };
     authority.revalidate(p).await?;
     Ok(value)
+}
+
+pub(crate) async fn capture(directory: &Path, service: &ManagedDesktopService,
+    p: &ManagedDesktopPrincipal, authority: &dyn ManagedControlAuthority, a: Capture) -> Result<Value> {
+    let owner = p.owner_principal_id.clone(); let host = p.host_id.clone();
+    let _capture = CAPTURE_PUBLICATION.lock().await;
+    authority.revalidate(p).await?;
+    let id = a.acceptance_id.clone(); let read_owner = owner.clone(); let read_host = host.clone();
+    let row = disk(directory, move |s| s.get(&read_owner, &read_host, &id)).await?;
+    if p.authority == ManagedDesktopAuthority::Agent {
+        require_current_agent(service, p, &row).await?;
+    } else {
+        p.require_human()?;
+    }
+    current_source(directory, p, &row).await?;
+    let input = CaptureInput { artifact_id:a.artifact_id, criterion_id:a.criterion_id, kind:a.kind,
+        explicitly_requested:p.authority != ManagedDesktopAuthority::Agent, sensitive_human_input:false };
+    let retry_owner = owner.clone(); let retry_host = host.clone();
+    let retry_id = a.acceptance_id.clone(); let retry_input = input.clone();
+    let admission = if p.authority == ManagedDesktopAuthority::Agent {
+        service.runtime_admission(
+            p, &row.binding.desktop_id, row.binding.desktop_generation,
+            ManagedDesktopRuntimeGate::Acceptance, authority.input_admission(p),
+        ).await?
+    } else {
+        authority.input_admission(p)
+    };
+    let previous = guarded_disk(directory, admission.clone(), move |s|
+        s.captured(&retry_owner, &retry_host, &retry_id, &retry_input)).await?;
+    if let Some(previous) = previous {
+        authority.revalidate(p).await?;
+        return encode(previous);
+    }
+    // Capture comes from the bound desktop, never caller-supplied pixels.
+    let frame = service.control_frame(p, &row.binding.desktop_id, row.binding.desktop_generation, authority).await?;
+    authority.revalidate(p).await?;
+    current_source(directory, p, &row).await?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&frame.screenshot.bytes)
+        .map_err(|_| refused("managed_desktop_evidence_invalid_image"))?;
+    encode(guarded_disk(directory, admission, move |s| s.capture(&owner, &host, &a.acceptance_id, input, &bytes)).await?)
+
+}
+pub(crate) async fn complete(directory: &Path, service: &ManagedDesktopService,
+    p: &ManagedDesktopPrincipal, authority: &dyn ManagedControlAuthority, a: Complete) -> Result<Value> {
+    let owner = p.owner_principal_id.clone(); let host = p.host_id.clone();
+    let id = a.acceptance_id.clone(); let read_owner = owner.clone(); let read_host = host.clone();
+    let row = disk(directory, move |s| s.get(&read_owner, &read_host, &id)).await?;
+    require_current_agent(service, p, &row).await?;
+    current_source(directory, p, &row).await?;
+    let input = AgentVerdictInput { idempotency_key:a.idempotency_key, principal_id:p.principal_id.clone(),
+        outcome:a.outcome, criteria:a.criteria, summary:a.summary };
+    let admission = service.runtime_admission(
+        p, &row.binding.desktop_id, row.binding.desktop_generation,
+        ManagedDesktopRuntimeGate::Acceptance, authority.input_admission(p),
+    ).await?;
+    encode(guarded_disk(directory, admission, move |s| s.complete(&owner, &host, &a.acceptance_id, input)).await?)
+
 }
 
 static TASK_BACKEND: once_cell::sync::Lazy<parking_lot::RwLock<Option<std::sync::Arc<dyn cognia_external_agent::exec_backend::ExecBackend>>>> = once_cell::sync::Lazy::new(Default::default);

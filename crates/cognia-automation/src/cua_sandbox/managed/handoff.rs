@@ -25,6 +25,22 @@ pub const MAX_ACCEPTANCE_FILES: usize = 100;
 const MAX_STAGING_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 type Result<T> = std::result::Result<T, String>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AcceptanceCriterionInput {
+    pub description: String,
+    pub screenshot_required: bool,
+}
+impl AcceptanceCriterionInput {
+    pub fn validate(&self) -> Result<()> {
+        if self.description.trim().is_empty() || self.description.len() > 1024
+            || self.description.contains('\0') {
+            return Err("managed_desktop_handoff_invalid_request".into());
+        }
+        Ok(())
+    }
+}
+
 /// Constructed only after a durable delivery/revision/source authorization.
 /// Deliberately not Deserialize: client payloads cannot assert this authority.
 pub struct TrustedHandoffSource {
@@ -751,6 +767,18 @@ pub fn validate_acceptance_paths(paths: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn criterion_input_is_closed_and_bounds_utf8_bytes() {
+        use super::AcceptanceCriterionInput;
+        let input = |description: String| AcceptanceCriterionInput { description, screenshot_required:false };
+        assert!(input("a".into()).validate().is_ok());
+        assert!(input("a".repeat(1024)).validate().is_ok());
+        for value in [String::new(), " ".into(), "\0".into(), "a".repeat(1025), "测".repeat(342)] {
+            assert!(input(value).validate().is_err());
+        }
+        assert!(serde_json::from_value::<AcceptanceCriterionInput>(serde_json::json!({"description":"Page loads","screenshotRequired":true,"principalId":"forged"})).is_err());
+        assert!(serde_json::from_value::<AcceptanceCriterionInput>(serde_json::json!({"description":"Page loads"})).is_err());
+    }
     use super::*;
     #[test]
     fn transfer_diagnostics_do_not_emit_untrusted_errors() {

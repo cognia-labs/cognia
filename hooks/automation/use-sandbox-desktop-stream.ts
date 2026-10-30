@@ -181,14 +181,16 @@ export function useSandboxDesktopStream(
       return () => frame.removeEventListener("error", frameError)
     }
     const origin = new URL(grant.url).origin
-    const nonce = crypto.randomUUID()
+    let nonce = crypto.randomUUID()
     let startedAt = Date.now()
     let heartbeatAt = startedAt
     let ready = false
     const observe = () => {
+      nonce = crypto.randomUUID()
       startedAt = Date.now()
       heartbeatAt = startedAt
       ready = false
+      setStatus("connecting")
       target.postMessage({ type: "cognia-sandbox-stream-observe", version: 1, nonce }, origin)
     }
     const receive = (event: MessageEvent) => {

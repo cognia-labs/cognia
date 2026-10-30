@@ -1,5 +1,4 @@
-//! Native-only handoff diagnostic into a freshly authorized smoke desktop.
-//! No production create/control API calls this before P4 qualification.
+//! Shared diagnostic and production handoff into an explicitly authorized desktop.
 use super::*;
 use crate::cua_sandbox::managed::handoff::{self, HandoffBudget, HandoffLaunch, InstalledHandoff, PreparedHandoff};
 
@@ -33,6 +32,16 @@ impl ManagedDesktopService {
         &self, p: &ManagedDesktopPrincipal, desktop: &ManagedDesktop,
         transfer: HandoffTransfer<'_>,
     ) -> Result<InstalledHandoff> {
+        if !self.scoped(p, &desktop.id, desktop.generation).await?.smoke {
+            return Err(refused("managed_desktop_handoff_desktop_not_authorized"));
+        }
+        self.install_handoff(p, desktop, transfer).await
+    }
+
+    pub async fn install_handoff(
+        &self, p: &ManagedDesktopPrincipal, desktop: &ManagedDesktop,
+        transfer: HandoffTransfer<'_>,
+    ) -> Result<InstalledHandoff> {
         let row = self.handoff_target(p, desktop, transfer.operation_id).await?;
         self.validate_live_boundary(p, desktop).await?;
         let check = transfer.source_current.clone();
@@ -46,10 +55,13 @@ impl ManagedDesktopService {
     async fn handoff_target(&self, p: &ManagedDesktopPrincipal, desktop: &ManagedDesktop, operation_id: &str) -> Result<DesktopRecord> {
         p.require_admin()?;
         let row = self.scoped(p, &desktop.id, desktop.generation).await?;
-        let expected_source = format!("handoff:{operation_id}");
-        if !row.smoke || row.source_id.as_deref() != Some(expected_source.as_str())
+        let expected_source = if row.smoke { format!("handoff:{operation_id}") } else { format!("acceptance:{operation_id}") };
+        if row.source_id.as_deref() != Some(expected_source.as_str())
             || row.desktop.state != ManagedDesktopState::Running || row.expired(self.now().await) {
             return Err(refused("managed_desktop_handoff_desktop_not_authorized"));
+        }
+        if !row.smoke && !self.desktop_enablement(p, &desktop.id, desktop.generation).await?.acceptance {
+            return Err(refused("managed_desktop_acceptance_unqualified"));
         }
         Ok(row)
     }
@@ -66,7 +78,7 @@ impl ManagedDesktopService {
                 _ = tick.tick() => {
                     let check = source_current.clone();
                     let allowed = tokio::task::spawn_blocking(move || check()).await.unwrap_or(false);
-                    let current = self.scoped(p, &desktop.id, desktop.generation).await;
+                    let current = self.handoff_target(p, desktop, operation_id).await;
                     if !allowed || current.is_err() || current.as_ref().is_ok_and(|r| r.delete_requested || r.expired((self.clock)())) {
                         break Err(refused("managed_desktop_handoff_source_unavailable"));
                     }

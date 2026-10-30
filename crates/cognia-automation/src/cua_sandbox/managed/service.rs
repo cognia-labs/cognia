@@ -1,6 +1,8 @@
 //! Host authority and crash-safe paid-operation state machine (ADR-0233).
 #[path = "admission.rs"]
 mod admission;
+#[path = "acceptance.rs"]
+pub mod acceptance;
 #[path = "handoff_service.rs"]
 mod handoff_service;
 pub use handoff_service::HandoffTransfer;
@@ -202,8 +204,11 @@ impl ManagedDesktopService {
                 runtime.prepare(next.desktops.values().map(|r| r.config.owner_principal_id.as_str())
                     .chain(next.delegations.values()
                         .filter(|g| g.state == delegation::ManagedDesktopDelegationState::Live)
-                        .map(|g| g.owner_principal_id.as_str())));
+                        .map(|g| g.owner_principal_id.as_str()))
+                    .chain(next.acceptance_runs.values().filter(|r| r.run.state.active()).map(|r| r.owner_principal_id.as_str())));
             }
+            delegation::settle(&mut next, now, runtime.as_ref());
+            acceptance::settle(&mut next, now, runtime.as_ref());
             delegation::settle(&mut next, now, runtime.as_ref());
             let delegation_changed = next.delegations != guard.delegations;
             let ended = Self::newly_ended(&guard, &next);
@@ -851,6 +856,10 @@ impl ManagedDesktopService {
                     &operation,
                     now,
                 )?;
+                if auth.source_id.as_deref().is_some_and(|source| source.starts_with("acceptance:"))
+                    && !enabled.acceptance {
+                    return Err(refused("managed_desktop_acceptance_unqualified"));
+                }
                 let row = DesktopRecord {
                     desktop: ManagedDesktop {
                         id: Uuid::new_v4().to_string(),
@@ -1206,13 +1215,14 @@ impl ManagedDesktopService {
             Ok(key) => key,
             Err(e) => return self.reconcile_error(id, &e, row.delete_requested).await,
         };
+        let cleanup_record = self.acceptance_cleanup_record(&row).await;
         let result = if let Some(resource) = &row.resource_id {
             self.provider
                 .inspect(&row.config, &key, resource)
                 .await
                 .map(|v| v.into_iter().collect::<Vec<_>>())
         } else {
-            self.provider.list(&row.config, &key, &row.metadata()).await
+            self.provider.list(&row.config, &key, &cleanup_record.metadata()).await
         };
         let resources = match result {
             Ok(v) => v,
@@ -1232,7 +1242,7 @@ impl ManagedDesktopService {
                 )
                 .await;
         }
-        if resources.iter().any(|r| !owns(&row, r)) {
+        if resources.iter().any(|r| !owns(&row, r) && !owns(&cleanup_record, r)) {
             return self
                 .reconcile_error(
                     id,

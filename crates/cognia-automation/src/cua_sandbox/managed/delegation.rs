@@ -21,6 +21,9 @@ pub enum ManagedDesktopGrantee {
     Acceptance {
         #[serde(rename = "acceptanceId")]
         acceptance_id: String,
+        /// Host-only attachment. RPC projections omit this persisted field.
+        #[serde(rename = "childSessionKey", default)]
+        child_session_key: Option<String>,
     },
 }
 impl ManagedDesktopGrantee {
@@ -28,7 +31,7 @@ impl ManagedDesktopGrantee {
         let value = match self {
             Self::Session { session_key } => session_key,
             Self::Character { character_id } => character_id,
-            Self::Acceptance { acceptance_id } => acceptance_id,
+            Self::Acceptance { acceptance_id, .. } => acceptance_id,
         };
         if value.trim().is_empty() || value.len() > 512 {
             return Err(refused("managed_desktop_invalid_request"));
@@ -39,7 +42,7 @@ impl ManagedDesktopGrantee {
         match self {
             Self::Session { session_key } => session == Some(session_key.as_str()),
             Self::Character { character_id } => character == Some(character_id.as_str()),
-            Self::Acceptance { .. } => false,
+            Self::Acceptance { child_session_key, .. } => child_session_key.as_deref().is_some_and(|key| Some(key) == session),
         }
     }
 }
@@ -58,6 +61,7 @@ pub enum ManagedDesktopDelegationState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ManagedDesktopDelegationEndReason {
+    Completed,
     Revoked,
     Expired,
     Destroyed,
@@ -94,12 +98,19 @@ pub struct ManagedDesktopDelegation {
     pub ended_at: Option<i64>,
 }
 impl ManagedDesktopDelegation {
-    fn end(&mut self, reason: ManagedDesktopDelegationEndReason, now: i64) {
+    pub(super) fn end(&mut self, reason: ManagedDesktopDelegationEndReason, now: i64) {
         if self.state == ManagedDesktopDelegationState::Live {
             self.state = ManagedDesktopDelegationState::Ended;
             self.end_reason = Some(reason);
             self.ended_at = Some(now);
             self.revision = self.revision.saturating_add(1);
+        }
+    }
+    pub(super) fn matches(&self, session: Option<&str>, character: Option<&str>) -> bool {
+        match &self.grantee {
+            ManagedDesktopGrantee::Acceptance { .. } => self.mode == ManagedDesktopDelegationMode::Acceptance
+                && self.grantee.matches(session, character),
+            _ => self.mode == ManagedDesktopDelegationMode::ComputerUse && self.grantee.matches(session, character),
         }
     }
 }
@@ -150,7 +161,7 @@ impl DelegationRuntime {
             cache.1.extend(checked);
         }
     }
-    fn binding(&self, owner: &str) -> Option<DelegationBinding> {
+    pub(super) fn binding(&self, owner: &str) -> Option<DelegationBinding> {
         let epoch = (self.epoch)();
         let cache = self.bindings.lock();
         (cache.0 == epoch && cache.1.get(owner) == Some(&true)).then(|| DelegationBinding {
@@ -257,6 +268,18 @@ impl ManagedDesktopService {
         if matches!(grantee, ManagedDesktopGrantee::Acceptance { .. }) {
             return Err(refused("managed_desktop_invalid_request"));
         }
+        self.delegate_inner(p, id, generation, grantee, expires_at, authority).await
+    }
+    pub(super) async fn delegate_acceptance(&self, p: &ManagedDesktopPrincipal, id: &str, generation: u64,
+        acceptance: &str, authority: &dyn ManagedControlAuthority) -> Result<ManagedDesktopDelegation> {
+        p.require_admin()?;
+        self.delegate_inner(p,id,generation,ManagedDesktopGrantee::Acceptance { acceptance_id:acceptance.into(), child_session_key:None },None,authority).await
+    }
+    async fn delegate_inner(&self, p: &ManagedDesktopPrincipal, id: &str, generation: u64,
+        grantee: ManagedDesktopGrantee, expires_at: Option<i64>, authority: &dyn ManagedControlAuthority) -> Result<ManagedDesktopDelegation> {
+        let acceptance = matches!(grantee, ManagedDesktopGrantee::Acceptance { .. });
+        let mode = if acceptance { ManagedDesktopDelegationMode::Acceptance } else { ManagedDesktopDelegationMode::ComputerUse };
+        let gate = if acceptance { ManagedDesktopRuntimeGate::Acceptance } else { ManagedDesktopRuntimeGate::AgentControl };
         authority.revalidate(p).await?;
         self.reconcile_delegations().await?;
         let row = self.scoped(p, id, generation).await?;
@@ -277,7 +300,7 @@ impl ManagedDesktopService {
             authority() && service.delegation_binding(&owner) == Some(expected.clone())
         });
         let admission =
-            self.runtime_admission_for_record(&row, ManagedDesktopRuntimeGate::AgentControl, live);
+            self.runtime_admission_for_record(&row, gate, live);
         if !admission() {
             return Err(refused("managed_desktop_agent_control_unqualified"));
         }
@@ -290,6 +313,15 @@ impl ManagedDesktopService {
                 }
             }),
             |s, now| {
+                if let ManagedDesktopGrantee::Acceptance { acceptance_id, .. } = &grantee {
+                    let expected = format!("acceptance:{acceptance_id}");
+                    if !s.acceptance_runs.get(acceptance_id).is_some_and(|r| r.owner_principal_id == p.owner_principal_id
+                        && r.host_id == p.host_id && r.run.state == acceptance::AcceptanceRunState::Provisioning
+                        && r.run.desktop_id.as_deref() == Some(id))
+                        || !s.desktops.get(id).is_some_and(|r| !r.smoke && r.source_id.as_deref() == Some(expected.as_str())) {
+                        return Err(refused("managed_desktop_acceptance_delegation_required"));
+                    }
+                }
                 let row = s
                     .desktops
                     .get(id)
@@ -318,7 +350,7 @@ impl ManagedDesktopService {
                         && g.account_binding_epoch == Some(binding.epoch)
                         && g.account_binding_instance_id.as_deref()
                             == Some(binding.instance_id.as_str())
-                        && g.mode == ManagedDesktopDelegationMode::ComputerUse
+                        && g.mode == mode
                         && g.state == ManagedDesktopDelegationState::Live
                         && g.expires_at > now
                 }) {
@@ -341,7 +373,7 @@ impl ManagedDesktopService {
                     desktop_generation: generation,
                     provider_config_id: row.config.id.clone(),
                     grantee,
-                    mode: ManagedDesktopDelegationMode::ComputerUse,
+                    mode,
                     state: ManagedDesktopDelegationState::Live,
                     end_reason: None,
                     expires_at: expiry,
@@ -631,7 +663,8 @@ pub(crate) mod tests {
                 &row.id,
                 row.generation,
                 ManagedDesktopGrantee::Acceptance {
-                    acceptance_id: "run".into()
+                    acceptance_id: "run".into(),
+                    child_session_key: None,
                 },
                 None,
                 &Authority
@@ -1891,6 +1924,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn held_buttons_are_released_when_the_grant_ends_and_uncertain_cleanup_quarantines() {
         for reason in [
+            ManagedDesktopDelegationEndReason::Completed,
             ManagedDesktopDelegationEndReason::Revoked,
             ManagedDesktopDelegationEndReason::Expired,
             ManagedDesktopDelegationEndReason::AccountChanged,
@@ -1947,6 +1981,12 @@ pub(crate) mod tests {
                     .await
                     .unwrap();
                 match reason {
+                    ManagedDesktopDelegationEndReason::Completed => {
+                        f.service.transaction(|s, now| {
+                            s.delegations.get_mut(&grant.id).unwrap().end(reason, now);
+                            Ok(())
+                        }).await.unwrap();
+                    }
                     ManagedDesktopDelegationEndReason::Revoked => {
                         f.service
                             .delegation_revoke(&f.p, &grant.id, grant.revision, &Authority)

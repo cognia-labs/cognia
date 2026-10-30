@@ -14,6 +14,8 @@ const MAX_STATE_BYTES: u64 = 32 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct ManagedDesktopJournal {
     #[serde(default)]
+    pub acceptance_runs: BTreeMap<String, super::service::acceptance::AcceptanceRunRecord>,
+    #[serde(default)]
     pub qualification_runs: BTreeMap<String, super::service::qualification_runs::QualificationRunRecord>,
     #[serde(default)]
     pub delegations: BTreeMap<String, super::service::delegation::ManagedDesktopDelegation>,
@@ -131,6 +133,7 @@ impl JournalStore {
             }
         }
         let now = chrono::Utc::now().timestamp_millis().max(journal.last_observed_at);
+        super::service::acceptance::recover(&mut journal, now);
         for record in journal.qualification_runs.values_mut() {
             if record.run.state.active() {
                 use super::service::qualification_runs::*;

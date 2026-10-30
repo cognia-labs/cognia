@@ -10,7 +10,7 @@ use cognia_automation::cua_sandbox::managed::{
 use cognia_sandbox_pool::git_proxy::{GitProxy, GitProxyConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use crate::managed_desktop_handoff::{resolve_transfer, PrepareHandoff, TransferMode};
+use crate::managed_desktop_handoff::{resolve_transfer, AcceptanceCriterionInput, PrepareHandoff, TransferMode};
 
 // Keep the owned guard inside each blocking job. Aborting its async caller
 // cannot let finalization overtake a report or evidence registration write.
@@ -38,7 +38,7 @@ struct ChildAcceptanceRun {
     version: u32, id: String, parent_run_id: String, origin_run_ref: String,
     session_id: String, task_id: String, source_id: String,
     owner_account_id: String, host_id: String, delivery_id: String, delivery_revision: u64,
-    commit: String, mode: TransferMode, criteria: Vec<String>,
+    commit: String, mode: TransferMode, criteria: Vec<AcceptanceCriterionInput>,
     desktop_id: Option<String>, desktop_generation: Option<u64>,
     manifest_digest: Option<String>, transfer_manifest_digest: Option<String>,
     launch_argv: Vec<String>, acceptance_files: Vec<String>, deadline_at: Option<i64>,
@@ -103,6 +103,23 @@ pub(crate) async fn claim_operation(directory: &Path, operation_id: &str) -> Res
 struct SourceWatcher { task: tokio::task::JoinHandle<()> }
 impl Drop for SourceWatcher { fn drop(&mut self) { self.task.abort(); } }
 
+pub(crate) async fn source_proxy(source: &cognia_external_agent::spawn_authority::DeliverySource) -> Result<GitProxy> {
+    let upstream = url::Url::parse(&source.repository_url).map_err(|_| refused("managed_desktop_handoff_source_unavailable"))?;
+    let credential = if let Some(reference) = source.credential_ref.clone().filter(|value| value.starts_with("git-helper:")) {
+        if reference != format!("git-helper:{}", hex::encode(Sha256::digest(source.repository_url.as_bytes()))) {
+            return Err(refused("managed_desktop_handoff_source_unavailable"));
+        }
+        cognia_sandbox_pool::git_proxy::host_credential(&upstream).await
+    } else if let Some(reference) = source.credential_ref.clone() {
+        tokio::task::spawn_blocking(move || cognia_secrets::secret_store::get("cognia-delivery-sources", &reference))
+            .await.map_err(|_| refused("managed_desktop_secret_unavailable"))?
+            .map_err(|_| refused("managed_desktop_secret_unavailable"))?
+            .ok_or_else(|| refused("managed_desktop_secret_unavailable"))?.into()
+    } else { None };
+    GitProxy::start_read_only(GitProxyConfig { upstream, credential, branch:source.branch.clone() }).await
+        .map_err(|_| refused("managed_desktop_handoff_source_unavailable"))
+}
+
 pub async fn run(
     host: &dyn ManagedDesktopSmokeHost, p: &ManagedDesktopPrincipal,
     directory: &Path, config_id: &str, request_path: PathBuf,
@@ -160,20 +177,7 @@ pub(crate) async fn run_request(
     let budget = HandoffBudget { deadline_at_ms: chrono::Utc::now().timestamp_millis().saturating_add(10 * 60 * 1000), cancel:cancelled };
     let mut native_receipt = None;
     let outcome: Result<()> = async {
-        let upstream = url::Url::parse(&source.repository_url).map_err(|_| refused("managed_desktop_handoff_source_unavailable"))?;
-        let credential = if let Some(reference) = source.credential_ref.clone().filter(|value| value.starts_with("git-helper:")) {
-            if reference != format!("git-helper:{}", hex::encode(Sha256::digest(source.repository_url.as_bytes()))) {
-                return Err(refused("managed_desktop_handoff_source_unavailable"));
-            }
-            cognia_sandbox_pool::git_proxy::host_credential(&upstream).await
-        } else if let Some(reference) = source.credential_ref.clone() {
-            tokio::task::spawn_blocking(move || cognia_secrets::secret_store::get("cognia-delivery-sources", &reference))
-                .await.map_err(|_| refused("managed_desktop_secret_unavailable"))?
-                .map_err(|_| refused("managed_desktop_secret_unavailable"))?
-                .ok_or_else(|| refused("managed_desktop_secret_unavailable"))?.into()
-        } else { None };
-        let proxy = GitProxy::start_read_only(GitProxyConfig { upstream, credential, branch:source.branch.clone() }).await
-            .map_err(|_| refused("managed_desktop_handoff_source_unavailable"))?;
+        let proxy = source_proxy(&source).await?;
         let delivery_bundle = delivery.publish["recovery"]["bundle"].as_str().is_some();
         let recovery = if input.request.mode == TransferMode::Bundle && (!qualification || delivery_bundle) {
             Some(RecoverySource { path:PathBuf::from(delivery.publish["recovery"]["bundle"].as_str()
@@ -231,7 +235,7 @@ pub(crate) async fn run_request(
             manifest_digest:row.manifest_digest.clone().ok_or_else(|| refused("managed_desktop_handoff_invalid_request"))?,
             agent_principal_id:None,
             criteria:row.criteria.iter().enumerate().map(|(i,text)| AcceptanceCriterion {
-                id:format!("criterion-{i}"), text:text.clone(), required_evidence:true,
+                id:format!("criterion-{i}"), text:text.description.clone(), required_evidence:text.screenshot_required,
             }).collect(),
         };
         evidence_write(&directory, p, move |s,owner,host| s.register(owner,host,binding).map(|_| ())).await?;
@@ -387,7 +391,7 @@ mod tests {
         ChildAcceptanceRun { version:1, id:uuid::Uuid::new_v4().to_string(), parent_run_id:"parent".into(),
             origin_run_ref:"origin".into(), session_id:"chat".into(), task_id:"task".into(), source_id:"source".into(),
             owner_account_id:"owner".into(), host_id:"host".into(), delivery_id:"delivery".into(), delivery_revision:1,
-            commit:"a".repeat(40), mode:TransferMode::Commit, criteria:vec!["loads".into()], desktop_id:Some("desktop".into()),
+            commit:"a".repeat(40), mode:TransferMode::Commit, criteria:vec![AcceptanceCriterionInput { description:"loads".into(), screenshot_required:true }], desktop_id:Some("desktop".into()),
             desktop_generation:Some(1), manifest_digest:None, transfer_manifest_digest:Some("digest".into()),
             launch_argv:vec![], acceptance_files:vec![], deadline_at:Some(1234), state:"transferring".into(), cleanup_pending:true }
     }
@@ -415,7 +419,9 @@ mod tests {
     #[test]
     fn manifest_binds_source_criteria_launch_deadline_and_transfer_content() {
         let child = row(); let original = manifest_digest(&child).unwrap();
-        let mut changed = child.clone(); changed.criteria.push("another criterion".into());
+        let mut changed = child.clone(); changed.criteria[0].screenshot_required = false;
+        assert_ne!(original, manifest_digest(&changed).unwrap());
+        let mut changed = child.clone(); changed.criteria.push(AcceptanceCriterionInput { description:"another criterion".into(), screenshot_required:true });
         assert_ne!(original, manifest_digest(&changed).unwrap());
         let mut changed = child.clone(); changed.parent_run_id = "other".into();
         assert_ne!(original, manifest_digest(&changed).unwrap());

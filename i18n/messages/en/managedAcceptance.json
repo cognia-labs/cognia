@@ -1,0 +1,48 @@
+{
+  "start": "Start acceptance",
+  "confirmCost": "I confirm the quoted desktop cost and deadline.",
+  "executionDisabled": "Acceptance is unavailable until this configuration's qualification and acceptance switch are effective.",
+  "localOnly": "Start acceptance on the owning desktop Host. Remote-Host child bindings are unavailable.",
+  "quoteExpired": "The estimate expired. Prepare a new proposal and confirm its cost.",
+  "childTitle": "Acceptance: {branch}",
+  "childPrompt": "Accept immutable commit {commit} in managed acceptance {acceptanceId}. Use only this session's bound desktop. Criteria:\n{criteria}\nRead the handoff criteria if none are listed. Record explicit checkpoints with acceptance_checkpoint and finish with acceptance_complete. Never merge code or complete the source task.",
+  "screenshotRequired": "screenshot required",
+  "runState": "Acceptance {id}: {state}",
+  "deadline": "Hard deadline: {at}",
+  "cancel": "Cancel acceptance",
+  "cancelTitle": "Cancel this acceptance?",
+  "cancelDescription": "The Host will end the delegation and destroy the desktop. Saved evidence remains in the results.",
+  "sourceMissing": "The source conversation is no longer available locally. This acceptance was cancelled.",
+  "runFailed": "The acceptance could not be started or attached. Any known started run was cancelled; refresh status before retrying.",
+  "cancelFailed": "Cancellation could not be confirmed. Refresh this run and cancel again to confirm desktop cleanup.",
+  "statusFailed": "Acceptance status could not be refreshed. Check the owning Host.",
+  "proposalUnavailable": "The proposed delivery could not be loaded. Refresh eligible deliveries.",
+  "state": {
+    "provisioning": "Provisioning",
+    "awaitingSession": "Waiting for child session",
+    "running": "Running",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+    "failed": "Failed"
+  },
+  "criteria": {
+    "title": "Acceptance criteria",
+    "help": "Add 1–50 criteria. Each description must contain 1–1024 UTF-8 bytes.",
+    "description": "Criterion {number}",
+    "screenshot": "Screenshot required for criterion {number}",
+    "add": "Add criterion",
+    "remove": "Remove criterion {number}",
+    "invalid": "Enter 1–50 non-empty criteria, each no longer than 1024 UTF-8 bytes."
+  },
+  "proposal": {
+    "title": "Proposed GUI acceptance",
+    "delivery": "Delivery {id} · {branch} · {commit}",
+    "cost": "Starting costs money and requires your confirmation of a fresh quote in the acceptance panel.",
+    "estimate": "Indicative desktop compute: {cost}/hour. Other charges may apply.",
+    "estimateUnavailable": "No current price estimate is available. Review a fresh quote in the panel.",
+    "required": "Screenshot required",
+    "optional": "Screenshot optional",
+    "open": "Open acceptance panel",
+    "openFailed": "The acceptance panel could not be opened. Unlock the source account and try again."
+  }
+}

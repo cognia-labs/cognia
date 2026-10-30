@@ -620,10 +620,10 @@ impl ManagedDesktopService {
         gate: ManagedDesktopRuntimeGate,
         live: Arc<dyn Fn() -> bool + Send + Sync>,
     ) -> Arc<dyn Fn() -> bool + Send + Sync> {
-        if matches!(gate, ManagedDesktopRuntimeGate::AgentControl) {
+        if matches!(gate, ManagedDesktopRuntimeGate::AgentControl | ManagedDesktopRuntimeGate::Acceptance) {
             let service = self.clone();
             let row = row.clone();
-            return Arc::new(move || live() && service.agent_enabled(&row));
+            return Arc::new(move || live() && service.agent_enabled(&row, gate));
         }
         let row = row.clone();
         let store = self.store.clone();

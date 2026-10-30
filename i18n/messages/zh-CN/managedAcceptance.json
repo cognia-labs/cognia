@@ -1,0 +1,48 @@
+{
+  "start": "开始验收",
+  "confirmCost": "我确认报价中的桌面费用和截止时间。",
+  "executionDisabled": "此配置的资格验证和验收开关生效后才能开始验收。",
+  "localOnly": "请在所属桌面 Host 上开始验收。远程 Host 子会话绑定尚不可用。",
+  "quoteExpired": "报价已过期。请重新准备方案并确认费用。",
+  "childTitle": "验收：{branch}",
+  "childPrompt": "在托管验收 {acceptanceId} 中验收不可变提交 {commit}。仅使用此会话绑定的桌面。验收标准：\n{criteria}\n若未列出标准，请读取交接清单中的标准。通过 acceptance_checkpoint 记录明确的检查点，通过 acceptance_complete 完成验收。不要合并代码或完成来源任务。",
+  "screenshotRequired": "必须截图",
+  "runState": "验收 {id}：{state}",
+  "deadline": "硬性截止时间：{at}",
+  "cancel": "取消验收",
+  "cancelTitle": "取消此次验收？",
+  "cancelDescription": "Host 将结束委派并销毁桌面。已保存的证据仍保留在结果中。",
+  "sourceMissing": "本地已找不到来源会话，此次验收已取消。",
+  "runFailed": "无法开始验收或连接子会话。已知已启动的验收已取消；重试前请刷新状态。",
+  "cancelFailed": "无法确认取消成功。请刷新此验收并再次取消，以确认桌面清理完成。",
+  "statusFailed": "无法刷新验收状态，请检查所属 Host。",
+  "proposalUnavailable": "无法加载建议的交付记录，请刷新可用交付记录。",
+  "state": {
+    "provisioning": "正在创建",
+    "awaitingSession": "等待子会话",
+    "running": "运行中",
+    "completed": "已完成",
+    "cancelled": "已取消",
+    "failed": "失败"
+  },
+  "criteria": {
+    "title": "验收标准",
+    "help": "添加 1–50 条标准，每条描述须为 1–1024 个 UTF-8 字节。",
+    "description": "标准 {number}",
+    "screenshot": "标准 {number} 必须截图",
+    "add": "添加标准",
+    "remove": "移除标准 {number}",
+    "invalid": "请输入 1–50 条非空标准，每条不得超过 1024 个 UTF-8 字节。"
+  },
+  "proposal": {
+    "title": "建议的 GUI 验收",
+    "delivery": "交付 {id} · {branch} · {commit}",
+    "cost": "开始验收会产生费用，必须由你在验收面板中确认最新报价。",
+    "estimate": "桌面计算参考费用：{cost}/小时，可能另有其他费用。",
+    "estimateUnavailable": "暂无有效费用估算，请在面板中查看最新报价。",
+    "required": "必须截图",
+    "optional": "截图可选",
+    "open": "打开验收面板",
+    "openFailed": "无法打开验收面板，请解锁来源账号后重试。"
+  }
+}

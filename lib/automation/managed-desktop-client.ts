@@ -330,6 +330,9 @@ const ADMIN_OPERATIONS = [
   "managed_desktop_qualify_cancel",
   "managed_desktop_delegate",
   "managed_desktop_delegation_revoke",
+  "managed_desktop_acceptance_start",
+  "managed_desktop_acceptance_attach",
+  "managed_desktop_acceptance_cancel",
 ]
 
 /** Public pairing projection shared by lifecycle and the settings identity boundary. */
@@ -488,6 +491,14 @@ async function call<T>(
   }
 }
 
+/**
+ * One Host managed-desktop RPC under the caller's identity scope. Writes in
+ * `ADMIN_OPERATIONS` carry a short admin lease on a remote Host; the local
+ * shell needs none. Other managed-desktop clients reuse this instead of
+ * opening their own channel.
+ */
+export const callManagedDesktop = call
+
 export const managedDesktopClient = {
   list: (target: ManagedDesktopTarget) =>
     call<ManagedDesktopResource[]>(target, "managed_desktop_list", {}),
@@ -601,7 +612,7 @@ export const managedDesktopClient = {
  * long as the watch lives. Responses that arrive after a newer read, after
  * `stop`, or across an account or Host change are dropped.
  */
-function watchHostTopic<T>(
+export function watchHostTopic<T>(
   target: ManagedDesktopTarget,
   topic: string,
   read: () => Promise<T>,

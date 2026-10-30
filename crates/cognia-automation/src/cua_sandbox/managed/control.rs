@@ -1273,6 +1273,7 @@ impl ManagedDesktopService {
             .ok_or_else(|| deny(refused("managed_desktop_not_found")))?;
         let service = self.clone();
         let target = id.to_owned();
+        let gate = self.agent_gate(id, generation, session.as_deref());
         let live = Arc::new(move || {
             service.agent_live(&target, generation, session.as_deref(), character.as_deref())
         });
@@ -1280,7 +1281,7 @@ impl ManagedDesktopService {
             return Err(deny(refused("managed_desktop_delegation_required")));
         }
         let admission =
-            self.runtime_admission_for_record(&row, ManagedDesktopRuntimeGate::AgentControl, live);
+            self.runtime_admission_for_record(&row, gate, live);
         if !admission() {
             return Err(deny(refused("managed_desktop_agent_control_unqualified")));
         }
@@ -1478,7 +1479,9 @@ impl ManagedDesktopService {
         }
         if !(smoke && row.smoke && p.authority == ManagedDesktopAuthority::Administrator)
             && (!self.control_qualified(&row).await
-                || !self.effective_enablement(p, &current.id).await?.manual_gui)
+                || !(if p.authority == ManagedDesktopAuthority::Agent {
+                    self.effective_enablement(p, &current.id).await?.acceptance
+                } else { self.effective_enablement(p, &current.id).await?.manual_gui }))
         {
             return Err(refused("managed_desktop_control_unqualified"));
         }

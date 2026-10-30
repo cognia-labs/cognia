@@ -1,5 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeDevCommand": "pnpm terminal-host:prepare:dev && pnpm external-agent-launcher:prepare:dev && pnpm bootstrap-agent:prepare:dev && pnpm plugin-node:prepare && pnpm sidecar:codeserver-agent:build && node scripts/dev/free-port.mjs 3000 && pnpm dev --webpack"
+  },
   "bundle": {
     "resources": [
       "resources/terminal/shell-integration.bash",

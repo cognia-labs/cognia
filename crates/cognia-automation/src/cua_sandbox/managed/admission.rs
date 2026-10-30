@@ -5,9 +5,37 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
 pub(super) struct AgentAdmissionSnapshot {
+    pub(super) acceptances: BTreeMap<String, (acceptance::AcceptanceRunState, String, Option<u64>, Option<String>)>,
     pub(super) desktops: BTreeMap<String, AgentDesktopAdmission>,
     pub(super) grants: Vec<delegation::ManagedDesktopDelegation>,
     pub(super) observed_at: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use delegation::*;
+    #[test]
+    fn acceptance_snapshot_selects_its_own_gate_and_child_session_without_io() {
+        let f = super::super::tests::Fixture::new();
+        f.service.set_delegation_runtime(Arc::new(|_| true),Arc::new(|| 1),"process".into(),Arc::new(|| {}));
+        f.service.delegation_runtime.read().as_ref().unwrap().prepare(std::iter::once("owner"));
+        let grant = ManagedDesktopDelegation { id:"grant".into(),owner_principal_id:"owner".into(),host_id:"host".into(),
+            account_binding_epoch:Some(1),account_binding_instance_id:Some("process".into()),desktop_id:"desktop".into(),desktop_generation:1,
+            provider_config_id:"e2b".into(),grantee:ManagedDesktopGrantee::Acceptance { acceptance_id:"run".into(), child_session_key:Some("child".into()) },
+            mode:ManagedDesktopDelegationMode::Acceptance,state:ManagedDesktopDelegationState::Live,end_reason:None,expires_at:2000,revision:1,
+            created_at:1000,created_by_principal_id:"human".into(),ended_at:None };
+        let mut snapshot = AgentAdmissionSnapshot { observed_at:1000,grants:vec![grant.clone()],..Default::default() };
+        snapshot.desktops.insert("desktop".into(),AgentDesktopAdmission { generation:1,owner:"owner".into(),running:true,deadline:2000,
+            config:f.config.clone(),template:TemplateIdentity { template_id:"t".into(),build_id:"b".into(),image_digest:f.config.release.image_digest.clone(),
+                recipe_revision:f.config.release.recipe_revision.clone(),protocol:f.config.release.protocol.clone() },agent_control:false,acceptance:true });
+        assert!(f.service.agent_live_from_snapshot(&snapshot,&grant,ManagedDesktopRuntimeGate::Acceptance));
+        assert!(!f.service.agent_live_from_snapshot(&snapshot,&grant,ManagedDesktopRuntimeGate::AgentControl));
+        *f.service.agent_admission.write() = snapshot;
+        assert!(matches!(f.service.agent_gate("desktop",1,Some("child")),ManagedDesktopRuntimeGate::Acceptance));
+        assert!(matches!(f.service.agent_gate("desktop",1,Some("other")),ManagedDesktopRuntimeGate::AgentControl));
+        assert!(!grant.matches(Some("other"),None));
+    }
 }
 pub(super) struct AgentDesktopAdmission {
     pub(super) generation: u64,
@@ -17,6 +45,7 @@ pub(super) struct AgentDesktopAdmission {
     pub(super) config: ManagedDesktopConfig,
     pub(super) template: TemplateIdentity,
     pub(super) agent_control: bool,
+    pub(super) acceptance: bool,
 }
 
 /// Activity is current in memory, but is checkpointed at most every 30 seconds.
@@ -118,8 +147,8 @@ impl ManagedDesktopService {
                         && latest_template(state, &config.binding_digest())
                             .and_then(|t| t.identity.as_ref())
                             == Some(&row.template)
-                        && qualification::effective_enablement(state, config, now).agent_control
                 });
+                let effective = current.map(|config| qualification::effective_enablement(state, config, now)).unwrap_or_default();
                 (
                     id.clone(),
                     AgentDesktopAdmission {
@@ -133,12 +162,15 @@ impl ManagedDesktopService {
                         ),
                         config: current.unwrap_or(&row.config).clone(),
                         template: row.template.clone(),
-                        agent_control: enabled,
+                        agent_control: enabled && effective.agent_control,
+                        acceptance: enabled && effective.acceptance,
                     },
                 )
             })
             .collect();
         *self.agent_admission.write() = AgentAdmissionSnapshot {
+            acceptances: state.acceptance_runs.iter().map(|(id, row)| (id.clone(), (row.run.state,
+                row.owner_principal_id.clone(), row.account_binding_epoch, row.account_binding_instance_id.clone()))).collect(),
             desktops,
             grants: state
                 .delegations
@@ -194,13 +226,12 @@ impl ManagedDesktopService {
                         == Some(binding.instance_id.as_str())
                     && grant.desktop_id == id
                     && grant.desktop_generation == generation
-                    && grant.mode == delegation::ManagedDesktopDelegationMode::ComputerUse
                     && now < grant.expires_at
-                    && grant.grantee.matches(session, character)
+                    && grant.matches(session, character)
             })
     }
 
-    pub(super) fn agent_enabled(&self, row: &DesktopRecord) -> bool {
+    pub(super) fn agent_enabled(&self, row: &DesktopRecord, gate: ManagedDesktopRuntimeGate) -> bool {
         let snapshot = self.agent_admission.read();
         let now = (self.clock)().max(snapshot.observed_at);
         snapshot
@@ -208,11 +239,34 @@ impl ManagedDesktopService {
             .get(&row.desktop.id)
             .is_some_and(|current| {
                 current.generation == row.desktop.generation
-                    && current.agent_control
+                    && match gate { ManagedDesktopRuntimeGate::Acceptance => current.acceptance, _ => current.agent_control }
                     && current.config.binding_digest() == row.config.binding_digest()
                     && current.template == row.template
                     && current.config.validate(now).is_ok()
             })
+    }
+
+    pub(super) fn agent_gate(&self, id: &str, generation: u64, session: Option<&str>) -> ManagedDesktopRuntimeGate {
+        if self.agent_admission.read().grants.iter().any(|g| g.desktop_id == id && g.desktop_generation == generation
+            && g.mode == delegation::ManagedDesktopDelegationMode::Acceptance && g.matches(session,None)) {
+            ManagedDesktopRuntimeGate::Acceptance
+        } else { ManagedDesktopRuntimeGate::AgentControl }
+    }
+
+    pub(super) fn agent_live_from_snapshot(&self, snapshot: &AgentAdmissionSnapshot,
+        grant: &delegation::ManagedDesktopDelegation, gate: ManagedDesktopRuntimeGate) -> bool {
+        let now = (self.clock)().max(snapshot.observed_at);
+        let Some(row) = snapshot.desktops.get(&grant.desktop_id) else { return false; };
+        let Some(binding) = self.delegation_binding(&row.owner) else { return false; };
+        !self.pending_agent_cleanup.lock().contains(&grant.desktop_id)
+            && grant.state == delegation::ManagedDesktopDelegationState::Live
+            && grant.host_id == self.host_id && grant.owner_principal_id == row.owner
+            && grant.account_binding_epoch == Some(binding.epoch)
+            && grant.account_binding_instance_id.as_deref() == Some(binding.instance_id.as_str())
+            && grant.desktop_generation == row.generation && row.running
+            && now < row.deadline && now < grant.expires_at
+            && row.config.validate(now).is_ok()
+            && match gate { ManagedDesktopRuntimeGate::Acceptance => row.acceptance, _ => row.agent_control }
     }
 
     pub(super) fn newly_ended(

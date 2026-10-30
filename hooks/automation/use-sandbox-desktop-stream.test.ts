@@ -226,6 +226,26 @@ describe("stream media liveness and recovery", () => {
     expect(model.result.current.status).toBe("open")
   })
 
+  it.each(["load", "visibility"])(
+    "invalidates public health and rotates the nonce on %s revalidation",
+    async (reason) => {
+      const model = await mounted()
+      await model.health()
+      const oldNonce = model.hello().nonce
+      await act(async () => {
+        if (reason === "load") model.iframe.dispatchEvent(new Event("load"))
+        else document.dispatchEvent(new Event("visibilitychange"))
+      })
+      expect(model.result.current.status).toBe("connecting")
+      expect(model.hello().nonce).not.toBe(oldNonce)
+      await model.health({ nonce: oldNonce })
+      expect(model.result.current.status).toBe("connecting")
+      await model.health()
+      expect(model.result.current.status).toBe("open")
+      expect(model.beforeRecover).not.toHaveBeenCalled()
+    }
+  )
+
   it("times out before first output and retries view-only without claiming control", async () => {
     const model = await mounted()
     await model.health({ presented: false })

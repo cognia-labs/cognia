@@ -20,6 +20,8 @@ const MAX_FRAME_AGE_MS = 5_000
 export interface SandboxDesktopOptions {
   /** A Selkies stream is on screen (ADR-0234 Phase 4); poll snapshots slowly. */
   streaming?: boolean
+  /** Media liveness is verified. Only unmanaged, view-only sessions may idle. */
+  streamHealthy?: boolean
   /**
    * The lease after acquisition, and `null` once it is released or lost. The
    * `null` comes after the Host answered the release, which revokes any stream
@@ -64,21 +66,27 @@ export function useSandboxDesktop(
   // Read through refs: toggling the stream must not restart the session and
   // drop the lease.
   const streaming = useRef(Boolean(options.streaming))
+  const streamHealthy = useRef(Boolean(options.streamHealthy))
+  const presentation = useRef([Boolean(options.streaming), Boolean(options.streamHealthy)])
   const leaseChange = useRef(options.onLeaseChange)
   useLayoutEffect(() => {
     streaming.current = Boolean(options.streaming)
+    streamHealthy.current = Boolean(options.streamHealthy)
     leaseChange.current = options.onLeaseChange
   })
   const session = useRef<{
     acquire: (takeover?: boolean) => Promise<void>
-    release: () => Promise<void>
+    release: (expectedLease?: SandboxControlLease) => Promise<void>
     refresh: () => Promise<void>
+    presentationChanged: () => void
     input: (action: UiAction, point: Point | null, capturedAt: number) => Promise<boolean>
   } | null>(null)
 
   useEffect(() => {
     let alive = true
     let lease: SandboxControlLease | null = null
+    let publishedLease: SandboxControlLease | null = null
+    let releaseNotificationPending = false
     let acquiringLease = false
     let generation = 0
     let capturing = false
@@ -122,7 +130,38 @@ export function useSandboxDesktop(
     const visible = () =>
       enabled && !invalidated && !document.hidden && (!openDesktop || navigator.onLine)
 
-    const release = async () => {
+    const healthyObserver = () =>
+      streaming.current &&
+      streamHealthy.current &&
+      desktop?.managed === false &&
+      currentFrame !== null &&
+      !lease &&
+      !acquiringLease
+    const scheduleRefresh = () => {
+      clearTimeout(poll)
+      if (alive && visible() && (refreshPending || !healthyObserver()))
+        poll = setTimeout(
+          () => void refresh(),
+          refreshPending ? 0 : streaming.current ? STREAM_POLL_MS : POLL_MS
+        )
+    }
+
+    const publishReleased = () => {
+      if (alive && releaseNotificationPending && !lease && !acquiringLease) {
+        releaseNotificationPending = false
+        publishedLease = null
+        leaseChange.current?.(null)
+      }
+    }
+    const published = (current: SandboxControlLease) =>
+      publishedLease?.token === current.token && publishedLease.fence === current.fence
+
+    const release = async (expectedLease?: SandboxControlLease) => {
+      if (
+        expectedLease &&
+        (!lease || lease.token !== expectedLease.token || lease.fence !== expectedLease.fence)
+      )
+        return
       generation += 1
       const previous = lease
       lease = null
@@ -138,10 +177,14 @@ export function useSandboxDesktop(
         } catch {
           // The backend lease also expires, so a disconnected viewer cannot
           // retain control indefinitely. Never reuse a locally released token.
-          if (alive) setError("release")
+          if (alive && published(previous) && !lease && !acquiringLease) setError("release")
         }
-        leaseChange.current?.(null)
+        // A delayed release response belongs to its original lease/session,
+        // never to control acquired while that response was in flight.
+        if (published(previous)) releaseNotificationPending = true
       }
+      publishReleased()
+      scheduleRefresh()
     }
 
     const scheduleRenewal = () => {
@@ -239,11 +282,7 @@ export function useSandboxDesktop(
         if (alive) setError("capture")
       } finally {
         capturing = false
-        if (alive && visible())
-          poll = setTimeout(
-            () => void refresh(),
-            refreshPending ? 0 : streaming.current ? STREAM_POLL_MS : POLL_MS
-          )
+        scheduleRefresh()
       }
     }
 
@@ -301,6 +340,8 @@ export function useSandboxDesktop(
         receivedAt = Date.now()
         setFrame(proof.screenshot)
         setControlling(true)
+        publishedLease = next
+        releaseNotificationPending = false
         leaseChange.current?.(next)
       } catch {
         await release()
@@ -308,6 +349,8 @@ export function useSandboxDesktop(
       } finally {
         acquiringLease = false
         if (alive) setAcquiring(false)
+        publishReleased()
+        scheduleRefresh()
       }
     }
 
@@ -407,7 +450,13 @@ export function useSandboxDesktop(
     const networkChanged = () => {
       if (openDesktop) visibilityChanged()
     }
-    session.current = { acquire, release, refresh, input }
+    const presentationChanged = () => {
+      clearTimeout(poll)
+      // Resuming native/legacy observation needs a fresh proof immediately,
+      // independently of the previous slow-stream polling deadline.
+      if (!healthyObserver()) void refresh()
+    }
+    session.current = { acquire, release, refresh, input, presentationChanged }
     const initial = setTimeout(() => {
       setFrame(null)
       setControlling(false)
@@ -463,8 +512,18 @@ export function useSandboxDesktop(
     }
   }, [connectionId, enabled, openDesktop, inputAllowed])
 
+  useEffect(() => {
+    const next = [Boolean(options.streaming), Boolean(options.streamHealthy)]
+    if (presentation.current.every((value, index) => value === next[index])) return
+    presentation.current = next
+    session.current?.presentationChanged()
+  }, [options.streaming, options.streamHealthy])
+
   const acquire = useCallback((takeover = false) => session.current?.acquire(takeover), [])
-  const release = useCallback(() => session.current?.release(), [])
+  const release = useCallback(
+    (expectedLease?: SandboxControlLease) => session.current?.release(expectedLease),
+    []
+  )
   const refresh = useCallback(() => session.current?.refresh(), [])
   const input = useCallback(
     (action: UiAction, point: Point | null, capturedAt: number) =>

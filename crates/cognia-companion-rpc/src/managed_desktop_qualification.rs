@@ -424,7 +424,10 @@ async fn orchestrate(
                         },
                         provider_config_id: config.clone(),
                         lifetime_seconds: 240,
-                        criteria: vec!["Qualification launch and private checkpoint".into()],
+                        criteria: vec![crate::managed_desktop_handoff::AcceptanceCriterionInput {
+                            description: "Qualification launch and private checkpoint".into(),
+                            screenshot_required: true,
+                        }],
                         acceptance_files: vec![],
                         argv: vec!["npm".into(), "run".into(), handoff.script.clone()],
                     };
@@ -504,7 +507,7 @@ pub async fn reconcile_devices(service: &ManagedDesktopService) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use cognia_automation::cua_sandbox::managed::provider::{
         CreatedDesktop, LifecycleAdmission, ProviderDesktop,
@@ -512,7 +515,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Default)]
-    struct FakeProvider {
+    pub(in crate::managed_desktops) struct FakeProvider {
         resources: tokio::sync::Mutex<BTreeMap<String, ProviderDesktop>>,
         creates: AtomicUsize,
         delete_blocked: std::sync::atomic::AtomicBool,
@@ -540,8 +543,8 @@ mod tests {
                 "reportVersion":1,"workloadIsolationRevision":1,"phase":"desktopLive",
                 "boundaryGeneration":"6a370d8e-2d69-40fb-9586-786b7424365a",
                 "namespaceInitPid":20,"namespaceInitStartTime":1,"workloadPid":21,"workloadStartTime":2,
-                "namespaces":{"user":"user:[2]","mnt":"mnt:[2]","pid":"pid:[2]","net":"net:[2]","ipc":"ipc:[2]","uts":"uts:[2]","cgroup":"cgroup:[2]"},
-                "providerNamespaces":{"user":"user:[1]","mnt":"mnt:[1]","pid":"pid:[1]","net":"net:[1]","ipc":"ipc:[1]","uts":"uts:[1]","cgroup":"cgroup:[1]"},
+                "namespaces":{"user":"user:[2]","mnt":"mnt:[2]","pid":"pid:[2]","net":"net:[2]","ipc":"ipc:[2]","uts":"uts:[2]"},
+                "providerNamespaces":{"user":"user:[1]","mnt":"mnt:[1]","pid":"pid:[1]","net":"net:[1]","ipc":"ipc:[1]","uts":"uts:[1]"},
                 "status":"Uid:1000 1000 1000 1000\nGid:1000 1000 1000 1000\nGroups:\nCapInh:0\nCapPrm:0\nCapEff:0\nCapBnd:0\nCapAmb:0\nNoNewPrivs:1\nSeccomp:2\n",
                 "networkDevices":"header\nheader\n lo: 0\n","ipv4Routes":"header\n","ipv6Routes":"",
                 "descriptors":{"0":{"target":"/dev/null","flags":0,"socketScope":null},"1":{"target":"/dev/null","flags":0,"socketScope":null},"2":{"target":"/dev/null","flags":0,"socketScope":null}}
@@ -613,7 +616,7 @@ mod tests {
             self.resources.lock().await.insert(id, resource.clone());
             Ok(CreatedDesktop {
                 resource,
-                secrets: secrets.clone(),
+                secrets: DesktopSecrets { traffic_token:Some("test-traffic".into()), ..secrets.clone() },
             })
         }
         async fn inspect(

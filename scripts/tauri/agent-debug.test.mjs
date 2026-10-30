@@ -8,6 +8,116 @@ import { createServer } from "node:http"
 import { pathToFileURL } from "node:url"
 import * as debug from "./agent-debug.mjs"
 
+test("native smoke selects a same-origin static document without compiling the app route", () => {
+  assert.equal(debug.parseArgs(["launch", "--native-smoke"]).options["native-smoke"], true)
+  const args = debug.tauriDevArgs({ "native-smoke": true }, "http://localhost:3000/")
+  assert.deepEqual(JSON.parse(args.at(-1)), {
+    build: { devUrl: "http://localhost:3000/cognia-native-automation-smoke.html" },
+  })
+  assert.equal(args.at(-2), "--config")
+})
+
+test("native smoke fixture creation refuses foreign files and cleanup preserves changed content", () => {
+  const parent = path.resolve(".cache/tauri-agent-debug/native-smoke-tests")
+  fs.mkdirSync(parent, { recursive: true })
+  const workspace = fs.mkdtempSync(path.join(parent, "fixture-"))
+  fs.mkdirSync(path.join(workspace, "public"))
+  const file = path.join(workspace, "public/cognia-native-automation-smoke.html")
+  try {
+    debug.prepareNativeSmoke(workspace)
+    assert.match(fs.readFileSync(file, "utf8"), /<title>Cognia native automation verification/)
+    debug.prepareNativeSmoke(workspace)
+    debug.cleanupNativeSmoke(workspace)
+    assert.equal(fs.existsSync(file), false)
+    fs.writeFileSync(file, "another session owns this file")
+    assert.throws(() => debug.prepareNativeSmoke(workspace), /refusing to overwrite/)
+    debug.cleanupNativeSmoke(workspace)
+    assert.equal(fs.readFileSync(file, "utf8"), "another session owns this file")
+  } finally {
+    fs.rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
+test("failed launch setup cleans its new document and retires a dead smoke session", async (t) => {
+  const parent = path.resolve(".cache/tauri-agent-debug/native-smoke-tests")
+  fs.mkdirSync(parent, { recursive: true })
+  for (const previousSmoke of [false, true]) {
+    const workspace = fs.mkdtempSync(path.join(parent, "setup-"))
+    const script = path.join(workspace, "scripts/tauri/agent-debug.mjs")
+    const record = path.join(workspace, ".cache/tauri-agent-debug/session.json")
+    const document = path.join(workspace, "public/cognia-native-automation-smoke.html")
+    fs.mkdirSync(path.dirname(script), { recursive: true })
+    fs.mkdirSync(path.dirname(record), { recursive: true })
+    fs.mkdirSync(path.join(workspace, "public"))
+    fs.mkdirSync(path.join(workspace, "src-tauri"))
+    fs.writeFileSync(
+      path.join(workspace, "src-tauri/tauri.conf.json"),
+      JSON.stringify({
+        build: { devUrl: "http://localhost:3000/" },
+      })
+    )
+    fs.copyFileSync(new URL("./agent-debug.mjs", import.meta.url), script)
+    if (previousSmoke) {
+      debug.prepareNativeSmoke(workspace)
+      fs.writeFileSync(
+        record,
+        JSON.stringify({
+          sessionId: "exited",
+          workspace,
+          startedAt: "2026-10-28T00:00:00Z",
+          nativeSmoke: true,
+        })
+      )
+    }
+    const isolated = await import(pathToFileURL(script).href)
+    const write = fs.writeFileSync
+    const fault = t.mock.method(fs, "writeFileSync", (file, ...args) => {
+      if (String(file).startsWith(path.dirname(record)))
+        throw Object.assign(new Error("simulated session publication ENOSPC"), { code: "ENOSPC" })
+      return write(file, ...args)
+    })
+    try {
+      await assert.rejects(
+        isolated.run({
+          command: "launch",
+          positional: [],
+          options: { "native-smoke": !previousSmoke, timeout: 1000 },
+        }),
+        /ENOSPC/
+      )
+      assert.equal(fs.existsSync(document), false)
+      assert.equal(fs.existsSync(record), false)
+    } finally {
+      fault.mock.restore()
+      fs.rmSync(workspace, { recursive: true, force: true })
+    }
+  }
+})
+
+test("partial native document writes roll back before public publication", (t) => {
+  const parent = path.resolve(".cache/tauri-agent-debug/native-smoke-tests")
+  fs.mkdirSync(parent, { recursive: true })
+  const workspace = fs.mkdtempSync(path.join(parent, "partial-"))
+  const directory = path.join(workspace, "public")
+  fs.mkdirSync(directory)
+  const write = fs.writeFileSync
+  const fault = t.mock.method(fs, "writeFileSync", (file, data, ...args) => {
+    write(file, data.slice(0, 20), ...args)
+    throw Object.assign(new Error("simulated partial write ENOSPC"), { code: "ENOSPC" })
+  })
+  try {
+    assert.throws(() => debug.prepareNativeSmoke(workspace), /ENOSPC/)
+    assert.deepEqual(fs.readdirSync(directory), [])
+    fault.mock.restore()
+    debug.prepareNativeSmoke(workspace)
+    debug.cleanupNativeSmoke(workspace)
+    assert.deepEqual(fs.readdirSync(directory), [])
+  } finally {
+    fault.mock.restore()
+    fs.rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
 test("startup recovery requires compiled HTML and a never-initialized new window", () => {
   const empty = { helper: null, renderers: {} }
   assert.equal(debug.canRecoverInitialNavigation(empty, true, false), true)
@@ -378,11 +488,21 @@ test("launch uses the lean agent-debug config and checkout runtimes", () => {
   ])
   const environment = agentDebugEnvironment({ PATH: "/bin" }, "/repo")
   assert.equal(environment.COGNIA_AGENT_DEBUG, "1")
+  assert.equal(environment.COGNIA_DISABLE_WEBPACK_CACHE, "1")
   assert.match(
     environment.COGNIA_PLUGIN_NODE_PATH,
     /src-tauri\/resources\/plugin-node\/bin\/node(?:\.exe)?$/
   )
   assert.equal(environment.COGNIA_MCP_SIDECAR_PATH, "/repo/sidecar/cognia-mcp.mjs")
+})
+
+test("native debug frontend preserves lifecycle preparation and selects webpack", () => {
+  const root = new URL("../../", import.meta.url)
+  const base = JSON.parse(fs.readFileSync(new URL("src-tauri/tauri.conf.json", root), "utf8"))
+  const config = JSON.parse(
+    fs.readFileSync(new URL("src-tauri/tauri.agent-debug.conf.json", root), "utf8")
+  )
+  assert.equal(config.build?.beforeDevCommand, `${base.build.beforeDevCommand} --webpack`)
 })
 
 test("resolves the Rust directories config path on every desktop platform", () => {

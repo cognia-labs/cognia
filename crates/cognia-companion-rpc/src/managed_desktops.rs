@@ -50,6 +50,13 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_delegate",
     "managed_desktop_delegation_revoke",
     "managed_desktop_delegation_list",
+    "managed_desktop_acceptance_start",
+    "managed_desktop_acceptance_attach",
+    "managed_desktop_acceptance_cancel",
+    "managed_desktop_acceptance_status",
+    "managed_desktop_acceptance_list",
+    "managed_desktop_acceptance_checkpoint",
+    "managed_desktop_acceptance_complete",
     "managed_desktop_list_configs",
     "managed_desktop_list",
     "managed_desktop_quote",
@@ -66,6 +73,7 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_control_release",
     "managed_desktop_control_input",
 ];
+pub use crate::managed_desktop_acceptance::ACCEPTANCE_CHANGED_TOPIC;
 
 pub type HostEventSink = Arc<dyn Fn(&str, Value) + Send + Sync>;
 pub type AdminAuthorityCheck = Arc<dyn Fn() -> Result<()> + Send + Sync>;
@@ -156,6 +164,7 @@ struct Installed {
     release: crate::managed_desktop_release::ReleaseStatus,
     worker: tokio::task::JoinHandle<()>,
     qualification: Arc<qualification::QualificationRuntime>,
+    acceptance: Arc<crate::managed_desktop_acceptance::AcceptanceRuntime>,
 }
 impl Drop for Installed {
     fn drop(&mut self) {
@@ -289,10 +298,14 @@ struct DelegationRevokeArgs {
     expected_revision: u64,
 }
 fn delegation_json(grant: &ManagedDesktopDelegation) -> Value {
+    let grantee = match &grant.grantee {
+        ManagedDesktopGrantee::Acceptance { acceptance_id, .. } => serde_json::json!({"kind":"acceptance","acceptanceId":acceptance_id}),
+        _ => serde_json::json!(grant.grantee),
+    };
     serde_json::json!({
         "id":grant.id, "desktopId":grant.desktop_id,
         "desktopGeneration":grant.desktop_generation, "providerConfigId":grant.provider_config_id,
-        "grantee":grant.grantee, "mode":grant.mode, "state":grant.state,
+        "grantee":grantee, "mode":grant.mode, "state":grant.state,
         "endReason":grant.end_reason, "expiresAt":grant.expires_at, "revision":grant.revision,
         "createdAt":grant.created_at, "endedAt":grant.ended_at,
     })
@@ -342,6 +355,11 @@ pub async fn install(
     install_delegation_runtime(&service, events.clone());
     cognia_automation::cua_sandbox::registry::install_managed_agent_service(Some(&service));
     let qualification = Arc::new(qualification::QualificationRuntime::new(service.clone(), events.clone()));
+    let acceptance = Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(service.clone(), events.clone()));
+    if let Err(error) = acceptance.reconcile(&installed_directory).await {
+        log::warn!("managed desktop acceptance startup reconciliation: {}", error.code);
+    }
+    let acceptance_worker = acceptance.clone();
     let weak = Arc::downgrade(&service);
     let evidence_directory = installed_directory.clone();
     let evidence_host = host_id.to_owned();
@@ -352,6 +370,9 @@ pub async fn install(
         loop {
             interval.tick().await;
             let Some(service) = weak.upgrade() else { break };
+            if let Err(error) = acceptance_worker.reconcile(&evidence_directory).await {
+                log::warn!("managed desktop acceptance reconciliation: {}", error.code);
+            }
             if let Err(error) = crate::managed_desktop_results::reconcile(&evidence_directory, &service, &evidence_host).await {
                 log::warn!("managed desktop evidence reconciliation: {}", error.code);
             }
@@ -380,6 +401,7 @@ pub async fn install(
         release: release_status,
         worker,
         qualification,
+        acceptance,
     });
     Ok(())
 }
@@ -1287,6 +1309,9 @@ pub async fn dispatch(
             | "managed_desktop_control_renew"
             | "managed_desktop_control_release"
             | "managed_desktop_control_input"
+            | "managed_desktop_acceptance_start"
+            | "managed_desktop_acceptance_attach"
+            | "managed_desktop_acceptance_cancel"
     ) {
         principal.require_human()?;
         if !caller.local && admin_check.is_none() {
@@ -1301,9 +1326,45 @@ pub async fn dispatch(
         admission_observer: None,
     };
     if crate::managed_desktop_results::COMMANDS.contains(&name) {
-        return crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await;
+        let value = crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await?;
+        if name == "managed_desktop_results_complete" { acceptance_runtime()?.reconcile(&directory).await?; }
+        return Ok(value);
     }
     let result = match name {
+        "managed_desktop_acceptance_start" => {
+            require_acceptance_admin(&authority.caller, &principal)?;
+            delegation_deployment(cognia_companion::deployment::deployment_mode())?;
+            authority.revalidate(&principal).await?;
+            let current = qualification_principal_check(authority.caller, &host_id, &principal);
+            let lease = authority.admin_check.clone();
+            let current = Arc::new(move || { if let Some(check) = &lease { check()?; } current() });
+            encode(acceptance_runtime()?.start(directory.clone(), principal.clone(), decode(args)?, current).await?)
+        }
+        "managed_desktop_acceptance_attach" => {
+            require_acceptance_admin(&authority.caller, &principal)?;
+            let a: crate::managed_desktop_acceptance::Attach = decode(args)?;
+            let value = service.acceptance_attach(&principal,&a.acceptance_id,a.session_key,&authority).await?;
+            acceptance_runtime()?.notify();
+            encode(value)
+        }
+        "managed_desktop_acceptance_cancel" => {
+            require_acceptance_admin(&authority.caller, &principal)?;
+            let a: crate::managed_desktop_acceptance::RunId = decode(args)?;
+            encode(acceptance_runtime()?.cancel(&directory,&principal,&a.acceptance_id,&authority).await?)
+        }
+        "managed_desktop_acceptance_status" => {
+            require_acceptance_admin(&authority.caller, &principal)?;
+            let a: crate::managed_desktop_acceptance::RunId = decode(args)?;
+            encode(service.acceptance_status(&principal,&a.acceptance_id).await?)
+        }
+        "managed_desktop_acceptance_list" => {
+            require_acceptance_admin(&authority.caller, &principal)?;
+            let _: QualifyEmptyArgs = decode(args)?;
+            Ok(serde_json::json!({"runs":service.acceptance_list(&principal).await?}))
+        }
+        "managed_desktop_acceptance_checkpoint" | "managed_desktop_acceptance_complete" => {
+            crate::managed_desktop_acceptance::tools(&directory,acceptance_runtime()?.as_ref(),&principal,&authority,authority.caller.local,name,args).await
+        }
         "managed_desktop_delegate" => {
             let a: DelegateArgs = decode(args)?;
             principal.require_admin()?;
@@ -2565,6 +2626,7 @@ mod tests {
             release: crate::managed_desktop_release::ReleaseStatus::of(&Ok(None)),
             worker: tokio::spawn(std::future::pending()),
             qualification,
+            acceptance: Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(service.clone(), None)),
         });
         (directory, service, p)
     }
@@ -2996,24 +3058,56 @@ mod tests {
     ) {
         delegation_rpc_fixture_qualified(false).await
     }
+    fn qualify_acceptance_test_journal(state: &mut journal::ManagedDesktopJournal, config: &ManagedDesktopConfig, now: i64) {
+        let digest = config.binding_digest();
+        let mut bindings = Vec::new();
+        let mut hashes = Vec::new();
+        for (index, mode) in ["commit", "bundle"].into_iter().enumerate() {
+            let operation = uuid::Uuid::new_v4().to_string();
+            let id = format!("handoff-evidence-{index}");
+            let mut desktop = state.desktops["evidence-3"].clone();
+            let mut binding = state.workload_boundaries["evidence-3"].clone();
+            desktop.desktop.id = id.clone(); desktop.source_id = Some(format!("handoff:{operation}"));
+            desktop.resource_id = Some(format!("resource-{id}"));
+            binding.desktop_id = id.clone(); binding.resource_id = desktop.resource_id.clone().unwrap();
+            let hash = index.to_string().repeat(64); hashes.push(hash.clone()); bindings.push(binding.clone());
+            state.handoff_diagnostics.insert(operation.clone(), NativeHandoffDiagnostic { evidence_version:1,mode:mode.into(),operation_id:operation,
+                boundary:binding.clone(),receipt_sha256:hash,source_tree_sha256:"c".repeat(64),recorded_at:now });
+            state.workload_boundaries.insert(id.clone(),binding); state.desktops.insert(id,desktop);
+        }
+        bindings.push(state.workload_diagnostics[&digest].boundary.clone());
+        bindings.push(state.authority_diagnostics[&digest].boundary.clone());
+        let mut receipt = state.lifecycle_diagnostics[&digest].clone();
+        receipt.workload_evidence = Some(WorkloadQualificationEvidence { workload_isolation_revision:1,enforcement:"provider-and-guest-kernel".into(),boundaries:bindings,
+            launch_paths_verified:vec!["desktop".into(),"importer".into(),"acceptance".into()],workload_egress_verified:true,escape_resistance_verified:true,native_handoff_receipt_sha256:hashes });
+        state.qualifications.insert(digest,receipt);
+    }
     async fn delegation_rpc_fixture_qualified(qualified: bool) -> (
 
         tempfile::TempDir,
         Arc<ManagedDesktopService>,
         DelegationTestEvents,
     ) {
+        delegation_rpc_fixture_kind(qualified, false).await
+    }
+    async fn delegation_rpc_fixture_kind(qualified: bool, acceptance: bool) -> (
+        tempfile::TempDir, Arc<ManagedDesktopService>, DelegationTestEvents,
+    ) {
         let events_seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let observed = events_seen.clone();
         let events: HostEventSink = Arc::new(move |topic, data| {
             observed.lock().push((topic.to_owned(), data));
         });
-        let (directory, service, p) = qualification_fixture(None).await;
+        let (directory, service, p) = if acceptance {
+            qualification_fixture_with_provider(None, Arc::new(qualification::tests::FakeProvider::default())).await
+        } else { qualification_fixture(None).await };
         let provider = service.diagnostic_provider();
         shutdown();
         drop(service);
         let store = journal::JournalStore::open(directory.path()).unwrap();
         let mut registry = store.registry().unwrap();
         registry.providers[0].enablement.agent_control = qualified;
+        registry.providers[0].enablement.acceptance = acceptance;
         store.save_registry(&registry).unwrap();
         let config = registry.providers.remove(0);
         let now = chrono::Utc::now().timestamp_millis();
@@ -3057,6 +3151,7 @@ mod tests {
         if qualified {
             qualify_delegation_test_journal(&mut state, &config, now);
         }
+        if acceptance { qualify_acceptance_test_journal(&mut state, &config, now); }
         state.delegations.insert("grant".into(), ManagedDesktopDelegation {
             id: "grant".into(),
             account_binding_epoch: Some(host_identity::account_binding_epoch()),
@@ -3092,7 +3187,8 @@ mod tests {
             host_id: "test-host".into(),
             release: crate::managed_desktop_release::ReleaseStatus::of(&Ok(None)),
             worker: tokio::spawn(std::future::pending()),
-            qualification: Arc::new(qualification::QualificationRuntime::new(service.clone(), Some(events))),
+            qualification: Arc::new(qualification::QualificationRuntime::new(service.clone(), Some(events.clone()))),
+            acceptance: Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(service.clone(), Some(events))),
         });
         (directory, service, events_seen)
     }
@@ -3117,6 +3213,143 @@ mod tests {
         assert_eq!(revoked["endReason"], "revoked");
         assert_eq!(events.lock().iter().filter(|(topic, _)| topic == DELEGATION_CHANGED_TOPIC).count(), 2);
         assert!(events.lock().iter().all(|(_, data)| *data == serde_json::json!({})));
+    }
+
+    async fn acceptance_input(directory: &Path, service: &ManagedDesktopService, p: &ManagedDesktopPrincipal) -> AcceptanceStartInput {
+        use cognia_external_agent::spawn_authority::DeliverySourceDeclaration;
+        use cognia_sandbox_pool::{provenance::SourceStore, delivery::{TaskDeliveryRecord, PublishState, DELIVERY_DIR}};
+        let source = SourceStore::new(directory).admit(&p.owner_principal_id,&p.host_id,"task","device",
+            DeliverySourceDeclaration { conversation_id:"chat".into(),origin_run_ref:"original-run".into() },
+            "https://example.com/repo.git","main","branch",None).unwrap();
+        let mut delivery = TaskDeliveryRecord::running("delivery".into(),"agent".into(),Some("task".into()),"provider".into(),"instance".into(),"branch".into());
+        delivery.source_id = Some(source.id); delivery.revision = 1; delivery.commit = Some("a".repeat(40)); delivery.publish_state = PublishState::Pushed;
+        std::fs::create_dir_all(directory.join(DELIVERY_DIR)).unwrap();
+        std::fs::write(directory.join(DELIVERY_DIR).join("delivery.json"),serde_json::to_vec(&delivery).unwrap()).unwrap();
+        AcceptanceStartInput { delivery_id:"delivery".into(),delivery_revision:1,mode:AcceptanceTransferMode::Commit,provider_config_id:"e2b".into(),lifetime_seconds:120,
+            criteria:vec![handoff::AcceptanceCriterionInput { description:"Page loads".into(),screenshot_required:false }],acceptance_files:vec![],argv:vec![],
+            quote_id:service.quote(p,"e2b",120).await.unwrap().id,idempotency_key:"acceptance-start".into() }
+    }
+    async fn attached_acceptance(directory: &Path, service: &ManagedDesktopService) -> (ManagedDesktopPrincipal,AcceptanceRunRecord) {
+        let p = principal(&local_qualification_caller(),"test-host").unwrap();
+        let input = acceptance_input(directory,service,&p).await;
+        let (_,source) = crate::managed_desktop_handoff::resolve(directory,&p,&crate::managed_desktop_handoff::PrepareHandoff {
+            delivery_id:input.delivery_id.clone(),delivery_revision:1,mode:input.mode,provider_config_id:"e2b".into(),lifetime_seconds:120,
+            criteria:input.criteria.clone(),acceptance_files:vec![],argv:vec![],
+        }).unwrap();
+        let authority = HostAuthority { caller:local_qualification_caller(),host_id:"test-host",admin_check:None,input_policy:None,admission_observer:None };
+        let (row,_) = service.acceptance_begin(&p,input,source.id,AcceptanceRunSource { session_id:source.conversation_id,task_id:Some(source.task_id),parent_run_id:Some(source.coding_run_id) },source.origin_run_ref,"a".repeat(40),&authority).await.unwrap();
+        let registry: journal::ManagedDesktopRegistry = serde_json::from_slice(&std::fs::read(directory.join("managed-desktops.json")).unwrap()).unwrap();
+        FileManagedDesktopSecrets::open(&directory.join("vault")).unwrap().set_provider_key(&registry.providers[0],"test-key").unwrap();
+        let auth = service.authorize(&p,"e2b",&row.request.quote_id,AuthorizationPurpose::Create,Some(format!("acceptance:{}",row.run.acceptance_id))).await.unwrap();
+        let desktop = service.create(&p,CreateManagedDesktop { provider_config_id:"e2b".into(),quote_id:row.request.quote_id.clone(),authorization_id:auth.id,idempotency_key:row.run.acceptance_id.clone() }).await.unwrap();
+        assert_eq!(service.acceptance_status(&p,&row.run.acceptance_id).await.unwrap().state,AcceptanceRunState::Provisioning,"desktop: {desktop:?}");
+        let binding = crate::managed_desktop_acceptance::production_binding(&row,&desktop,&"b".repeat(64)).unwrap();
+        let owner = p.owner_principal_id.clone(); let host = p.host_id.clone();
+        crate::managed_desktop_results::disk(directory,move |s| s.register(&owner,&host,binding)).await.unwrap();
+        service.acceptance_await_session(&p,&row.run.acceptance_id,&authority).await.unwrap();
+        dispatch("managed_desktop_acceptance_attach",serde_json::json!({"acceptanceId":row.run.acceptance_id,"sessionKey":"child"}),local_qualification_caller(),None,None).await.unwrap();
+        let row = service.acceptance_record(&p,&row.run.acceptance_id).await.unwrap();
+        (p,row)
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn acceptance_rpc_start_is_async_idempotent_admin_only_and_does_not_change_delivery() {
+        let _scope = TestScope::new();
+        let (directory,service,events) = delegation_rpc_fixture_kind(true,true).await;
+        let p = principal(&local_qualification_caller(),"test-host").unwrap();
+        let input = acceptance_input(directory.path(),&service,&p).await;
+        let path = directory.path().join(cognia_sandbox_pool::delivery::DELIVERY_DIR).join("delivery.json");
+        let original = std::fs::read(&path).unwrap();
+        let tenant = host_identity::current().unwrap().remote_tenant_id;
+        let store = security_store().unwrap();
+        let challenge = store.issue_challenge(&tenant,NOW,600).unwrap();
+        let enrollment = store.create_worker_enrollment(&tenant,"owner-device",NOW,600).unwrap();
+        store.register_worker_device(&tenant,&enrollment,&challenge.id,&challenge.nonce,"worker-device","Worker",
+            "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----","worker-thumb",NOW).unwrap();
+        for (device,scope) in [("member-device",Some("device")),("service",Some("service")),("worker-device",None)] {
+            assert!(dispatch("managed_desktop_acceptance_start",serde_json::to_value(&input).unwrap(),Caller { device_id:device,tenant_id:Some(&tenant),scope,local:false },None,
+                Some(Arc::new(|| Ok(())))).await.is_err());
+        }
+        assert!(service.acceptance_list(&p).await.unwrap().is_empty());
+        for command in ["managed_desktop_acceptance_start","managed_desktop_acceptance_attach","managed_desktop_acceptance_cancel"] {
+            assert_eq!(dispatch(command,serde_json::json!({}),Caller { device_id:"owner-device",tenant_id:Some(&tenant),scope:Some("device"),local:false },None,None).await.unwrap_err().code,
+                "managed_desktop_control_admin_lease_expired");
+        }
+        let first = dispatch("managed_desktop_acceptance_start",serde_json::to_value(&input).unwrap(),local_qualification_caller(),None,None).await.unwrap();
+        assert_eq!(first["state"],"provisioning");
+        let second = dispatch("managed_desktop_acceptance_start",serde_json::to_value(&input).unwrap(),local_qualification_caller(),None,None).await.unwrap();
+        assert_eq!(first["acceptanceId"],second["acceptanceId"]);
+        dispatch("managed_desktop_acceptance_cancel",serde_json::json!({"acceptanceId":first["acceptanceId"]}),local_qualification_caller(),None,None).await.unwrap();
+        assert_eq!(std::fs::read(path).unwrap(),original);
+        assert!(events.lock().iter().any(|(topic,value)| topic == ACCEPTANCE_CHANGED_TOPIC && value == &serde_json::json!({})));
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn acceptance_tools_require_live_attached_local_session_and_correct_agent_then_complete_destroys() {
+        let _scope = TestScope::new();
+        let (directory,service,_) = delegation_rpc_fixture_kind(true,true).await;
+        let (p,row) = attached_acceptance(directory.path(),&service).await;
+        let id = &row.run.acceptance_id;
+        assert!(dispatch("managed_desktop_acceptance_attach",serde_json::json!({"acceptanceId":id,"sessionKey":"child"}),local_qualification_caller(),None,None).await.is_err());
+        let checkpoint = serde_json::json!({"acceptanceId":id,"sessionKey":"child","criterionId":"criterion-0","idempotencyKey":"checkpoint"});
+        let complete = serde_json::json!({"acceptanceId":id,"sessionKey":"child","idempotencyKey":"complete","outcome":"passed",
+            "criteria":[{"criterionId":"criterion-0","outcome":"passed","artifactIds":[]}],"summary":"Page loads"});
+        let tenant = host_identity::current().unwrap().remote_tenant_id;
+        for (command,args) in [("managed_desktop_acceptance_checkpoint",checkpoint.clone()),("managed_desktop_acceptance_complete",complete.clone())] {
+            assert_eq!(dispatch(command,args.clone(),Caller { device_id:"owner-device",tenant_id:Some(&tenant),scope:Some("device"),local:false },None,None).await.unwrap_err().code,"managed_desktop_acceptance_local_only");
+            let mut wrong = args; wrong["sessionKey"] = serde_json::json!("other-child");
+            assert_eq!(dispatch(command,wrong,local_qualification_caller(),None,None).await.unwrap_err().code,"managed_desktop_acceptance_delegation_required");
+        }
+        let mut wrong = p.clone(); wrong.authority = ManagedDesktopAuthority::Agent; wrong.principal_id = "wrong-agent".into();
+        assert!(!service.acceptance_session_live(&wrong,id,"child"));
+        let owner = p.owner_principal_id.clone(); let host = p.host_id.clone(); let acceptance = id.clone();
+        assert_eq!(crate::managed_desktop_results::disk(directory.path(),move |s| s.complete(&owner,&host,&acceptance,evidence::AgentVerdictInput {
+            idempotency_key:"wrong".into(),principal_id:"wrong-agent".into(),outcome:evidence::AcceptanceOutcome::Passed,criteria:vec![],summary:"forged".into(),
+        })).await.unwrap_err().code,"acceptance_agent_authority_required");
+        let result = dispatch("managed_desktop_acceptance_complete",complete.clone(),local_qualification_caller(),None,None).await.unwrap();
+        assert_eq!(result["agentVerdict"]["input"]["principalId"],format!("acceptance:{id}"));
+        let status = service.acceptance_status(&p,id).await.unwrap(); assert_eq!(status.state,AcceptanceRunState::Completed);
+        let grant = service.delegation_list(&p).await.unwrap().into_iter().find(|g| Some(&g.id) == status.delegation_id.as_ref()).unwrap();
+        assert_eq!(grant.end_reason,Some(ManagedDesktopDelegationEndReason::Completed));
+        assert_eq!(delegation_json(&grant)["grantee"],serde_json::json!({"kind":"acceptance","acceptanceId":id}));
+        assert_eq!(service.list(&p).await.unwrap().into_iter().find(|d| Some(&d.id) == status.desktop_id.as_ref()).unwrap().state,ManagedDesktopState::Destroyed);
+        for (command,args) in [("managed_desktop_acceptance_checkpoint",checkpoint),("managed_desktop_acceptance_complete",complete)] {
+            assert_eq!(dispatch(command,args,local_qualification_caller(),None,None).await.unwrap_err().code,"managed_desktop_acceptance_delegation_required");
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn acceptance_cancel_records_system_outcome_revokes_and_destroys() {
+        let _scope = TestScope::new();
+        let (directory,service,_) = delegation_rpc_fixture_kind(true,true).await;
+        let (p,row) = attached_acceptance(directory.path(),&service).await;
+        let result = dispatch("managed_desktop_acceptance_cancel",serde_json::json!({"acceptanceId":row.run.acceptance_id}),local_qualification_caller(),None,None).await.unwrap();
+        assert_eq!(result["state"],"cancelled");
+        let owner = p.owner_principal_id.clone(); let host = p.host_id.clone(); let id = row.run.acceptance_id;
+        let result = crate::managed_desktop_results::disk(directory.path(),move |s| s.get(&owner,&host,&id)).await.unwrap();
+        assert_eq!(result.system_outcome.unwrap().outcome,evidence::AcceptanceOutcome::Cancelled);
+        assert!(!result.cleanup_pending);
+        assert_eq!(service.list(&p).await.unwrap().into_iter().find(|d| Some(&d.id) == row.run.desktop_id.as_ref()).unwrap().state,ManagedDesktopState::Destroyed);
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn acceptance_revoke_destroy_and_account_change_record_inconclusive_and_cleanup() {
+        let _scope = TestScope::new();
+        for reason in ["revoke","destroy","account"] {
+            let (directory,service,_) = delegation_rpc_fixture_kind(true,true).await;
+            let (p,row) = attached_acceptance(directory.path(),&service).await;
+            match reason {
+                "revoke" => {
+                    let grant = service.delegation_list(&p).await.unwrap().into_iter().find(|g| Some(&g.id) == row.run.delegation_id.as_ref()).unwrap();
+                    dispatch("managed_desktop_delegation_revoke",serde_json::json!({"delegationId":grant.id,"expectedRevision":grant.revision}),local_qualification_caller(),None,None).await.unwrap();
+                }
+                "destroy" => { service.delete(&p,row.run.desktop_id.as_deref().unwrap(),row.run.desktop_generation.unwrap()).await.unwrap(); }
+                _ => { host_identity::bind_local_account("other-account","other-digest").unwrap(); }
+            }
+            acceptance_runtime().unwrap().reconcile(directory.path()).await.unwrap();
+            let owner = p.owner_principal_id.clone(); let host = p.host_id.clone(); let id = row.run.acceptance_id.clone();
+            let result = crate::managed_desktop_results::disk(directory.path(),move |s| s.get(&owner,&host,&id)).await.unwrap();
+            assert_eq!(result.system_outcome.unwrap().outcome,evidence::AcceptanceOutcome::Inconclusive,"{reason}");
+            assert!(!result.cleanup_pending,"{reason}");
+            assert_eq!(service.acceptance_status(&p,&row.run.acceptance_id).await.unwrap().state,AcceptanceRunState::Failed);
+            assert_eq!(service.list(&p).await.unwrap().into_iter().find(|d| Some(&d.id) == row.run.desktop_id.as_ref()).unwrap().state,ManagedDesktopState::Destroyed,"{reason}");
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -3219,6 +3452,16 @@ struct QualifyEmptyArgs {}
 fn require_qualification_admin(p: &ManagedDesktopPrincipal) -> Result<()> {
     p.require_human()?;
     p.require_admin()
+}
+fn require_acceptance_admin(caller: &Caller<'_>, p: &ManagedDesktopPrincipal) -> Result<()> {
+    if cognia_companion::jwt::is_service_scope(caller.scope) {
+        return Err(refused("managed_desktop_admin_required"));
+    }
+    p.require_admin()
+}
+fn acceptance_runtime() -> Result<Arc<crate::managed_desktop_acceptance::AcceptanceRuntime>> {
+    INSTALLED.read().as_ref().map(|i| i.acceptance.clone())
+        .ok_or_else(|| refused("managed_desktop_host_unavailable"))
 }
 fn qualification_runtime() -> Result<Arc<qualification::QualificationRuntime>> {
     INSTALLED.read().as_ref().map(|i| i.qualification.clone())

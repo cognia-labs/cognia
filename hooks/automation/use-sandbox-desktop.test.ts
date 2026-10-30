@@ -60,6 +60,202 @@ test("starts read-only, polls sequentially, and stops on unmount", async () => {
   expect(client.desktopFrame).toHaveBeenCalledTimes(2)
 })
 
+test.each(["reacquire", "replace", "unmount"])(
+  "a delayed release notification cannot affect %s control lifecycle",
+  async (action) => {
+    const onLeaseChange = jest.fn()
+    let finish!: () => void
+    client.releaseControl.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve
+        })
+    )
+    const { result, rerender, unmount } = renderHook(
+      ({ id }) => useSandboxDesktop(id, true, undefined, true, { onLeaseChange }),
+      { initialProps: { id: "c1" } }
+    )
+    await tick()
+    await act(async () => {
+      await result.current.acquire()
+    })
+    let released: Promise<void> | undefined
+    act(() => {
+      released = result.current.release()
+    })
+    if (action === "reacquire")
+      await act(async () => {
+        await result.current.acquire()
+      })
+    else if (action === "replace") {
+      rerender({ id: "c2" })
+      await tick()
+    } else unmount()
+    onLeaseChange.mockClear()
+    await act(async () => {
+      finish()
+      await released
+    })
+    expect(onLeaseChange).not.toHaveBeenCalledWith(null)
+    if (action === "reacquire") expect(result.current.controlling).toBe(true)
+  }
+)
+
+test("duplicate releases still publish the settled release once", async () => {
+  const onLeaseChange = jest.fn()
+  let finish!: () => void
+  client.releaseControl.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  const { result } = renderHook(() =>
+    useSandboxDesktop("c1", true, undefined, true, { onLeaseChange })
+  )
+  await tick()
+  await act(async () => {
+    await result.current.acquire()
+  })
+  onLeaseChange.mockClear()
+  let released: Promise<void> | undefined
+  act(() => {
+    released = result.current.release()
+  })
+  await act(async () => {
+    await result.current.release()
+  })
+  await act(async () => {
+    finish()
+    await released
+  })
+  expect(client.releaseControl).toHaveBeenCalledTimes(1)
+  expect(onLeaseChange).toHaveBeenCalledTimes(1)
+  expect(onLeaseChange).toHaveBeenCalledWith(null)
+})
+
+test("a claim failure can release only its own current token and fence", async () => {
+  const { result } = renderHook(() => useSandboxDesktop("c1", true))
+  await tick()
+  await act(async () => {
+    await result.current.acquire()
+  })
+  await act(async () => {
+    await result.current.release({ token: "old", fence: 2, expiresAt: Date.now() + 15000 })
+    await result.current.release({ token: "lease", fence: 1, expiresAt: Date.now() + 15000 })
+  })
+  expect(client.releaseControl).not.toHaveBeenCalled()
+  expect(result.current.controlling).toBe(true)
+  await act(async () => {
+    await result.current.release({ token: "lease", fence: 2, expiresAt: Date.now() + 15000 })
+  })
+  expect(client.releaseControl).toHaveBeenCalledWith("c1", "lease", 2)
+  expect(result.current.controlling).toBe(false)
+})
+
+test("a settled release is published after an overlapping acquisition fails", async () => {
+  const onLeaseChange = jest.fn()
+  let finishRelease!: () => void
+  let failAcquire!: (error: Error) => void
+  client.releaseControl.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishRelease = resolve
+      })
+  )
+  const { result } = renderHook(() =>
+    useSandboxDesktop("c1", true, undefined, true, { onLeaseChange })
+  )
+  await tick()
+  await act(async () => {
+    await result.current.acquire()
+  })
+  let release: Promise<void> | undefined
+  act(() => {
+    release = result.current.release()
+  })
+  client.acquireControl.mockImplementationOnce(
+    () =>
+      new Promise((_, reject) => {
+        failAcquire = reject
+      })
+  )
+  let acquire: Promise<void> | undefined
+  act(() => {
+    acquire = result.current.acquire()
+  })
+  onLeaseChange.mockClear()
+  await act(async () => {
+    finishRelease()
+    await release
+  })
+  expect(onLeaseChange).not.toHaveBeenCalled()
+  await act(async () => {
+    failAcquire(new Error("new acquisition failed"))
+    await acquire
+  })
+  expect(onLeaseChange).toHaveBeenCalledTimes(1)
+  expect(onLeaseChange).toHaveBeenCalledWith(null)
+})
+
+test("a monitored healthy observer captures once, supports manual refresh and captures immediately on fallback", async () => {
+  const { result, rerender } = renderHook(
+    ({ healthy }) =>
+      useSandboxDesktop("c1", true, undefined, true, {
+        streaming: true,
+        streamHealthy: healthy,
+      }),
+    { initialProps: { healthy: true } }
+  )
+  await tick()
+  for (let i = 0; i < 12; i++) await tick(5000)
+  expect(client.desktopFrame).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    await result.current.refresh()
+  })
+  expect(client.desktopFrame).toHaveBeenCalledTimes(2)
+  rerender({ healthy: false })
+  await tick()
+  expect(client.desktopFrame).toHaveBeenCalledTimes(3)
+  expect(client.acquireControl).not.toHaveBeenCalled()
+  expect(client.releaseControl).not.toHaveBeenCalled()
+})
+
+test("healthy video retains fresh takeover proofs, controller captures and lease renewal", async () => {
+  const { result } = renderHook(() =>
+    useSandboxDesktop("c1", true, undefined, true, { streaming: true, streamHealthy: true })
+  )
+  await tick()
+  await act(async () => {
+    await result.current.acquire()
+  })
+  expect(client.desktopFrame).toHaveBeenCalledTimes(2)
+  expect(result.current.controlling).toBe(true)
+  await tick(5000)
+  expect(client.desktopFrame).toHaveBeenCalledTimes(3)
+  expect(client.renewControl).toHaveBeenCalledWith("c1", "lease", 2)
+  await act(async () => {
+    await result.current.release()
+  })
+  for (let i = 0; i < 12; i++) await tick(5000)
+  expect(client.desktopFrame).toHaveBeenCalledTimes(3)
+  expect(client.releaseControl).toHaveBeenCalledWith("c1", "lease", 2)
+})
+
+test("healthy media retries failed observer priming before suppressing periodic captures", async () => {
+  client.desktopFrame.mockRejectedValueOnce(new Error("initial capture unavailable"))
+  const { result } = renderHook(() =>
+    useSandboxDesktop("c1", true, undefined, true, { streaming: true, streamHealthy: true })
+  )
+  await tick()
+  expect(result.current.frame).toBeNull()
+  await tick(5000)
+  expect(result.current.frame).toEqual(frame)
+  expect(client.desktopFrame).toHaveBeenCalledTimes(2)
+  for (let i = 0; i < 12; i++) await tick(5000)
+  expect(client.desktopFrame).toHaveBeenCalledTimes(2)
+})
+
 test("renews human control and releases on blur", async () => {
   const { result } = renderHook(() => useSandboxDesktop("c1", true))
   await tick()
@@ -447,6 +643,22 @@ function managedSession() {
     invalidate: () => invalidated?.(),
   }
 }
+
+test("managed sessions retain status checks and capture polling despite healthy media options", async () => {
+  const desktop = managedSession()
+  desktop.frame.mockImplementation(async () => proofFor())
+  const open = jest.fn().mockResolvedValue(desktop)
+  const { result } = renderHook(() =>
+    useSandboxDesktop("cloud", true, open, true, { streaming: true, streamHealthy: true })
+  )
+  await tick()
+  await tick(5000)
+  await tick(5000)
+  expect(desktop.status).toHaveBeenCalledTimes(3)
+  expect(desktop.frame).toHaveBeenCalledTimes(3)
+  expect(result.current.frame).toEqual(frame)
+  expect(desktop.acquire).not.toHaveBeenCalled()
+})
 
 test("managed acquisition requires a fresh fenced frame before enabling input", async () => {
   const desktop = managedSession()

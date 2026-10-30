@@ -31,3 +31,4 @@ pub use service::control::{
 pub use service::qualification_runs::*;
 
 pub use service::delegation::*;
+pub use service::acceptance::*;

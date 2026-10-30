@@ -17,6 +17,56 @@ const SESSION_FILE = path.join(CACHE_DIR, "session.json")
 const TOKEN_HEADER = "X-Cognia-Dev-Token"
 export const DEFAULT_LAUNCH_TIMEOUT_MS = 1_200_000
 export const AGENT_DEBUG_TAURI_CONFIG = "src-tauri/tauri.agent-debug.conf.json"
+const NATIVE_SMOKE_FILE = "cognia-native-automation-smoke.html"
+const NATIVE_SMOKE_HTML =
+  '<!doctype html><html lang="en"><meta charset="utf-8"><title>Cognia native automation verification</title><body><main><h1>Native automation verification</h1><p>Local test document for the current Tauri backend.</p></main></body></html>\n'
+
+// A static document keeps native IPC/capture checks independent of the app's
+// client graph. It contains no fixture implementation of a native command.
+export function prepareNativeSmoke(workspace = REPO_ROOT) {
+  const file = path.join(workspace, "public", NATIVE_SMOKE_FILE)
+  const staged = `${file}.${randomUUID()}.tmp`
+  let descriptor
+  try {
+    descriptor = fs.openSync(staged, "wx", 0o600)
+    fs.writeFileSync(descriptor, NATIVE_SMOKE_HTML)
+    try {
+      fs.linkSync(staged, file)
+      return true
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error
+      if (
+        fs.lstatSync(file).isSymbolicLink() ||
+        fs.readFileSync(file, "utf8") !== NATIVE_SMOKE_HTML
+      )
+        throw new Error(`refusing to overwrite native smoke document: ${file}`)
+      return false
+    }
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor)
+      } finally {
+        fs.rmSync(staged, { force: true })
+      }
+    }
+  }
+}
+
+export function cleanupNativeSmoke(workspace = REPO_ROOT) {
+  const file = path.join(workspace, "public", NATIVE_SMOKE_FILE)
+  try {
+    if (!fs.lstatSync(file).isSymbolicLink() && fs.readFileSync(file, "utf8") === NATIVE_SMOKE_HTML)
+      fs.unlinkSync(file)
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+  }
+}
+
+function nativeSmokeUrl(devUrl) {
+  if (!devUrl) throw new Error("native smoke requires the configured development origin")
+  return new URL(NATIVE_SMOKE_FILE, devUrl).href
+}
 
 /** The OS owns this mutex: a dead launcher cannot leave a stale file lock. */
 export async function withLifecycleLock(
@@ -55,7 +105,10 @@ export async function withLifecycleLock(
   }
 }
 
-export function tauriDevArgs(options = {}) {
+export function tauriDevArgs(
+  options = {},
+  devUrl = readJson(path.join(REPO_ROOT, "src-tauri/tauri.conf.json"))?.build?.devUrl
+) {
   return [
     "tauri",
     "dev",
@@ -63,6 +116,9 @@ export function tauriDevArgs(options = {}) {
     "agent-debug",
     "--config",
     AGENT_DEBUG_TAURI_CONFIG,
+    ...(options["native-smoke"]
+      ? ["--config", JSON.stringify({ build: { devUrl: nativeSmokeUrl(devUrl) } })]
+      : []),
     ...(options["no-watch"] ? ["--no-watch"] : []),
   ]
 }
@@ -71,6 +127,7 @@ export function agentDebugEnvironment(baseEnv = process.env, repoRoot = REPO_ROO
   return {
     ...baseEnv,
     COGNIA_AGENT_DEBUG: "1",
+    COGNIA_DISABLE_WEBPACK_CACHE: "1",
     COGNIA_AGENT_DEBUG_WORKSPACE: repoRoot,
     ...(session
       ? {
@@ -178,7 +235,11 @@ export function parseArgs(argv) {
       continue
     }
     const name = token.slice(2)
-    if (["include-text", "foreground", "no-watch", "shared", "can-write"].includes(name)) {
+    if (
+      ["include-text", "foreground", "no-watch", "native-smoke", "shared", "can-write"].includes(
+        name
+      )
+    ) {
       options[name] = true
       continue
     }
@@ -292,7 +353,7 @@ export function writePrivateJson(file, value, { exclusive = false } = {}) {
   }
 }
 
-function removeSession(expected) {
+function removeSession(expected, { cleanupDocument = true } = {}) {
   const current = readJson(SESSION_FILE)
   if (
     !current ||
@@ -302,6 +363,7 @@ function removeSession(expected) {
   )
     return
   fs.rmSync(SESSION_FILE, { force: true })
+  if (cleanupDocument && expected.nativeSmoke) cleanupNativeSmoke()
 }
 
 export async function request(
@@ -498,6 +560,7 @@ export async function waitForAgent(
           // exists. Do not let an older server satisfy this run's warmup.
           warmupStarted = true
           frontendUrl = readJson(path.join(REPO_ROOT, "src-tauri/tauri.conf.json"))?.build?.devUrl
+          if (session?.nativeSmoke) frontendUrl = nativeSmokeUrl(frontendUrl)
           if (frontendUrl)
             void warmDevFrontend(frontendUrl, {
               timeout: Math.max(1, deadline - Date.now()),
@@ -548,6 +611,10 @@ async function launch(options) {
   const existing = readJson(SESSION_FILE)
   assertResolvedStartup(existing)
   if (existing && (processTreeAlive(existing.pid) || processAlive(existing.healthPid))) {
+    if (Boolean(options["native-smoke"]) !== Boolean(existing.nativeSmoke))
+      throw new Error(
+        "the existing run uses a different frontend; stop that owned run before relaunching"
+      )
     if (Boolean(options.shared) !== Boolean(existing.shared))
       throw new Error(
         "the existing run has a different shared-mode policy; stop that owned run before relaunching"
@@ -574,37 +641,60 @@ async function launch(options) {
     return output({ ok: true, reused: true, session: updated, health: ready.health })
   }
 
+  // A dead run cannot retain ownership of its temporary frontend document.
+  // Unresolved startup intents were rejected above, before any cleanup.
+  if (existing) removeSession(existing)
   const startedAt = Date.now()
   const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, "-")
   const artifactDir = path.join(CACHE_DIR, stamp)
-  fs.mkdirSync(artifactDir, { recursive: true })
   const logFile = path.join(artifactDir, "tauri-dev.log")
-  const stdout = fs.openSync(logFile, "a")
-  const stderr = fs.openSync(logFile, "a")
   const session = {
     sessionId: randomUUID(),
     workspace: fs.realpathSync(REPO_ROOT),
     endpointFile: path.join(artifactDir, "cli-endpoint.json"),
     noWatch: options["no-watch"] === true,
+    nativeSmoke: options["native-smoke"] === true,
     shared: options.shared === true,
     startedAt: new Date(startedAt).toISOString(),
     artifactDir,
     logFile,
   }
-  // Persist intent before spawn: a launcher killed in the registration gap must
-  // never make a successor believe it is safe to create a second app.
-  session.startupIntent = true
-  session.launcherPid = process.pid
-  saveSession(session)
-  const child = spawn("pnpm", tauriDevArgs(options), {
-    cwd: REPO_ROOT,
-    detached: true,
-    env: agentDebugEnvironment(process.env, session.workspace, session),
-    stdio: ["ignore", stdout, stderr],
-    windowsHide: false,
-  })
-  fs.closeSync(stdout)
-  fs.closeSync(stderr)
+  let stdout
+  let stderr
+  let child
+  let createdDocument = false
+  let spawnAttempted = false
+  try {
+    const args = tauriDevArgs(options)
+    fs.mkdirSync(artifactDir, { recursive: true })
+    stdout = fs.openSync(logFile, "a")
+    stderr = fs.openSync(logFile, "a")
+    if (options["native-smoke"]) createdDocument = prepareNativeSmoke()
+    // Persist intent before spawn: a launcher killed in the registration gap
+    // must never make a successor believe it is safe to create a second app.
+    session.startupIntent = true
+    session.launcherPid = process.pid
+    saveSession(session)
+    spawnAttempted = true
+    child = spawn("pnpm", args, {
+      cwd: REPO_ROOT,
+      detached: true,
+      env: agentDebugEnvironment(process.env, session.workspace, session),
+      stdio: ["ignore", stdout, stderr],
+      windowsHide: false,
+    })
+  } catch (error) {
+    // This process can prove no child was attempted. A successor cannot make
+    // that assumption after a crash, so keep post-spawn intent fail-closed.
+    if (!spawnAttempted) {
+      removeSession(session, { cleanupDocument: false })
+      if (createdDocument) cleanupNativeSmoke()
+    }
+    throw error
+  } finally {
+    if (stdout !== undefined) fs.closeSync(stdout)
+    if (stderr !== undefined) fs.closeSync(stderr)
+  }
   if (!child.pid) throw new Error("failed to start pnpm tauri dev")
   session.pid = child.pid
   session.startupIntent = false

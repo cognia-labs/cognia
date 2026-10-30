@@ -11,9 +11,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const DORMANT_REASON: &str = "managed_desktop_handoff_requires_results_qualification";
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum TransferMode { Commit, Bundle }
+pub use cognia_automation::cua_sandbox::managed::AcceptanceTransferMode as TransferMode;
+pub use cognia_automation::cua_sandbox::managed::handoff::AcceptanceCriterionInput;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrepareHandoff {
@@ -22,7 +21,7 @@ pub struct PrepareHandoff {
     pub mode: TransferMode,
     pub provider_config_id: String,
     pub lifetime_seconds: u64,
-    pub criteria: Vec<String>,
+    pub criteria: Vec<AcceptanceCriterionInput>,
     pub acceptance_files: Vec<String>,
     pub argv: Vec<String>,
 }
@@ -30,7 +29,7 @@ impl PrepareHandoff {
     pub fn validate(&self) -> Result<()> {
         if self.delivery_id.is_empty() || self.delivery_id.len() > 128
             || self.criteria.is_empty() || self.criteria.len() > 50
-            || self.criteria.iter().any(|s| s.trim().is_empty() || s.len() > 1024 || s.contains('\0'))
+            || self.criteria.iter().any(|c| c.validate().is_err())
             || self.acceptance_files.len() > 100 {
             return Err(refused("managed_desktop_handoff_invalid_request"));
         }
@@ -154,7 +153,7 @@ mod tests {
     use super::*;
     fn request() -> PrepareHandoff {
         PrepareHandoff { delivery_id:"delivery".into(), delivery_revision:1, mode:TransferMode::Commit,
-            provider_config_id:"e2b".into(), lifetime_seconds:60, criteria:vec!["Page loads".into()],
+            provider_config_id:"e2b".into(), lifetime_seconds:60, criteria:vec![AcceptanceCriterionInput { description:"Page loads".into(), screenshot_required:true }],
             acceptance_files:vec!["tests/acceptance.js".into()], argv:vec![] }
     }
     fn persisted_source() -> (tempfile::TempDir, ManagedDesktopPrincipal, PrepareHandoff) {
