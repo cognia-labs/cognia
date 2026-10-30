@@ -83,7 +83,8 @@ pub struct ManagedDesktopAcceptanceRun {
     pub desktop_generation: Option<u64>,
     pub deadline_at: Option<i64>,
     pub delegation_id: Option<String>,
-    pub child_session_key: Option<String>,
+    #[serde(default)]
+    pub child_attached: bool,
     pub source: AcceptanceRunSource,
     pub error_code: Option<String>,
     pub created_at: i64,
@@ -128,6 +129,20 @@ impl AcceptanceRunRecord {
 
 pub(in crate::cua_sandbox::managed) fn recover(state: &mut ManagedDesktopJournal, now: i64) {
     for row in state.acceptance_runs.values_mut() {
+        // Older journals kept the key in both projections. The delegation is
+        // its sole durable owner; recover attachment without exposing the key.
+        if !row.run.child_attached {
+            row.run.child_attached = row
+                .run
+                .delegation_id
+                .as_ref()
+                .and_then(|id| state.delegations.get(id))
+                .is_some_and(|g| {
+                    matches!(&g.grantee, ManagedDesktopGrantee::Acceptance {
+                        child_session_key: Some(_), ..
+                    })
+                });
+        }
         if matches!(
             row.run.state,
             AcceptanceRunState::Provisioning | AcceptanceRunState::AwaitingSession
@@ -392,7 +407,7 @@ impl ManagedDesktopService {
                     desktop_generation: None,
                     deadline_at: None,
                     delegation_id: None,
-                    child_session_key: None,
+                    child_attached: false,
                     source,
                     error_code: None,
                     created_at: now,
@@ -537,7 +552,7 @@ impl ManagedDesktopService {
                     .get_mut(id)
                     .ok_or_else(|| refused("managed_desktop_not_found"))?;
                 if row.run.state != AcceptanceRunState::AwaitingSession
-                    || row.run.child_session_key.is_some()
+                    || row.run.child_attached
                 {
                     return Err(refused("managed_desktop_acceptance_invalid_state"));
                 }
@@ -556,7 +571,7 @@ impl ManagedDesktopService {
                     *child_session_key = Some(session.clone());
                 }
                 grant.revision += 1;
-                row.run.child_session_key = Some(session);
+                row.run.child_attached = true;
                 row.run.state = AcceptanceRunState::Running;
                 row.run.updated_at = now;
                 Ok(row.run.clone())
@@ -602,7 +617,11 @@ impl ManagedDesktopService {
         p.require_admin()?;
         self.acceptance_record(p, id).await?;
         self.transaction(|s, _| {
-            s.acceptance_runs.get_mut(id).unwrap().cleanup_pending = false;
+            s.acceptance_runs
+                .get_mut(id)
+                .filter(|r| r.owner_principal_id == p.owner_principal_id && r.host_id == p.host_id)
+                .ok_or_else(|| refused("managed_desktop_not_found"))?
+                .cleanup_pending = false;
             Ok(())
         })
         .await
@@ -620,6 +639,33 @@ impl ManagedDesktopService {
             && matches!(&g.grantee, ManagedDesktopGrantee::Acceptance { acceptance_id, .. } if acceptance_id == id)
             && p.authority == ManagedDesktopAuthority::Agent && p.principal_id == format!("acceptance:{id}")
             && self.agent_live_from_snapshot(&snapshot,g,ManagedDesktopRuntimeGate::Acceptance))
+    }
+    pub(super) fn acceptance_frame_live(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        desktop: &str,
+        generation: u64,
+    ) -> bool {
+        let Some(id) = p.principal_id.strip_prefix("acceptance:") else {
+            return false;
+        };
+        let snapshot = self.agent_admission.read();
+        p.authority == ManagedDesktopAuthority::Agent
+            && snapshot.grants.iter().any(|g| {
+                g.owner_principal_id == p.owner_principal_id
+                    && g.host_id == p.host_id
+                    && g.desktop_id == desktop
+                    && g.desktop_generation == generation
+                    && g.mode == ManagedDesktopDelegationMode::Acceptance
+                    && matches!(&g.grantee, ManagedDesktopGrantee::Acceptance {
+                        acceptance_id, child_session_key: Some(_),
+                    } if acceptance_id == id)
+                    && self.agent_live_from_snapshot(
+                        &snapshot,
+                        g,
+                        ManagedDesktopRuntimeGate::Acceptance,
+                    )
+            })
     }
 }
 
@@ -873,13 +919,22 @@ mod tests {
             .acceptance_await_session(&f.p, id, &Authority)
             .await
             .unwrap();
+        let agent = ManagedDesktopPrincipal {
+            authority: ManagedDesktopAuthority::Agent,
+            principal_id: format!("acceptance:{id}"),
+            ..f.p.clone()
+        };
+        assert_eq!(f.service.control_frame(&agent, &desktop.id, 1, &Authority).await.unwrap_err().code,
+            "managed_desktop_control_unqualified");
         assert!(!f.service.agent_live(&desktop.id, 1, Some("child"), None));
         let attached = f
             .service
             .acceptance_attach(&f.p, id, "child".into(), &Authority)
             .await
             .unwrap();
-        assert_eq!(attached.child_session_key.as_deref(), Some("child"));
+        let projection = serde_json::to_value(&attached).unwrap();
+        assert_eq!(projection["childAttached"], true);
+        assert!(projection.get("childSessionKey").is_none());
         assert!(f
             .service
             .acceptance_attach(&f.p, id, "child".into(), &Authority)
@@ -931,6 +986,92 @@ mod tests {
             )
             .await
             .is_err());
+    }
+    #[tokio::test]
+    async fn acceptance_frames_require_the_exact_attached_grant_and_no_human_control() {
+        let f = fixture().await;
+        let (row, desktop) = running(&f).await;
+        let agent = ManagedDesktopPrincipal {
+            authority: ManagedDesktopAuthority::Agent,
+            principal_id: format!("acceptance:{}", row.run.acceptance_id),
+            ..f.p.clone()
+        };
+        assert_eq!(f.service.delegate(&f.p, &desktop.id, 1,
+            ManagedDesktopGrantee::Session { session_key: "unrelated".into() }, None, &Authority)
+            .await.unwrap_err().code, "managed_desktop_acceptance_desktop");
+        for principal in ["worker:paired", "service:paired", "acceptance:other"] {
+            let p = ManagedDesktopPrincipal { principal_id: principal.into(), ..agent.clone() };
+            assert_eq!(f.service.control_frame(&p, &desktop.id, 1, &Authority).await.unwrap_err().code,
+                "managed_desktop_control_unqualified");
+        }
+        let screenshot = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls = screenshot.clone();
+        use base64::Engine;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let image = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+        let wire_image = image.clone();
+        let client = crate::cua_sandbox::remote_client::CuaRemoteClient::from_handler(Arc::new(move |_, _| {
+            let calls = calls.clone();
+            let image = wire_image.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::json!({"image_data":image}))
+            })
+        }));
+        let slot = f.service.control_slot(&desktop.id, 1).await;
+        slot.lock().await.client = Some(client);
+        // Admission reaches the frame provider for this run's principal only.
+        f.service.control_frame(&agent, &desktop.id, 1, &Authority).await.unwrap();
+        assert_eq!(screenshot.load(Ordering::SeqCst), 1);
+        for pending in [false, true] {
+            let takeover = if pending {
+                Some(crate::cua_sandbox::desktop_session::PendingTakeover::begin(
+                    f.service.control_agent_preemption(&desktop.id).await).unwrap())
+            } else {
+                slot.lock().await.core.issue("human", 1000, desktop.deadline_at);
+                None
+            };
+            assert_eq!(f.service.control_frame(&agent, &desktop.id, 1, &Authority).await.unwrap_err().code,
+                "managed_desktop_acceptance_human_control");
+            assert_eq!(screenshot.load(Ordering::SeqCst), 1);
+            slot.lock().await.core.invalidate();
+            drop(takeover);
+        }
+        let preempt = f.service.control_agent_preemption(&desktop.id).await;
+        let publication = f.service.acceptance_capture_admission(&agent, &desktop.id, 1).await.unwrap();
+        assert!(publication());
+        let takeover = crate::cua_sandbox::desktop_session::PendingTakeover::begin(preempt.clone()).unwrap();
+        drop(takeover);
+        assert!(!publication(), "a completed takeover still fences publication of old pixels");
+        slot.lock().await.client = Some(crate::cua_sandbox::remote_client::CuaRemoteClient::from_handler(
+            Arc::new(move |_, _| {
+                let preempt = preempt.clone();
+                let image = image.clone();
+                Box::pin(async move {
+                    let takeover = crate::cua_sandbox::desktop_session::PendingTakeover::begin(preempt).unwrap();
+                    drop(takeover);
+                    Ok(serde_json::json!({"image_data":image}))
+                })
+            }),
+        ));
+        assert_eq!(f.service.control_frame(&agent, &desktop.id, 1, &Authority).await.unwrap_err().code,
+            "managed_desktop_acceptance_human_control");
+    }
+    #[tokio::test]
+    async fn legacy_run_projection_recovers_attachment_from_the_private_grant() {
+        let f = fixture().await;
+        let (row, _) = running(&f).await;
+        let mut state = f.service.state.lock().await.clone();
+        let mut legacy = serde_json::to_value(&row.run).unwrap();
+        legacy.as_object_mut().unwrap().remove("childAttached");
+        legacy["childSessionKey"] = serde_json::json!("child");
+        state.acceptance_runs.get_mut(&row.run.acceptance_id).unwrap().run = serde_json::from_value(legacy).unwrap();
+        recover(&mut state, 1000);
+        let projection = serde_json::to_value(&state.acceptance_runs[&row.run.acceptance_id].run).unwrap();
+        assert_eq!(projection["childAttached"], true);
+        assert!(projection.get("childSessionKey").is_none());
+        assert_eq!(projection["state"], "running");
     }
     #[tokio::test]
     async fn interrupted_provisioning_and_awaiting_session_destroy_on_reopen_without_recreating() {

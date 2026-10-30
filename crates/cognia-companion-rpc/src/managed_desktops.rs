@@ -1327,7 +1327,15 @@ pub async fn dispatch(
     };
     if crate::managed_desktop_results::COMMANDS.contains(&name) {
         let value = crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await?;
-        if name == "managed_desktop_results_complete" { acceptance_runtime()?.reconcile(&directory).await?; }
+        if name == "managed_desktop_results_complete" {
+            let cleanup = match acceptance_runtime() {
+                Ok(runtime) => runtime.reconcile(&directory).await,
+                Err(error) => Err(error),
+            };
+            if let Err(error) = cleanup {
+                log::warn!("managed desktop acceptance post-complete cleanup: {}", error.code);
+            }
+        }
         return Ok(value);
     }
     let result = match name {
@@ -3288,6 +3296,17 @@ mod tests {
         let (directory,service,_) = delegation_rpc_fixture_kind(true,true).await;
         let (p,row) = attached_acceptance(directory.path(),&service).await;
         let id = &row.run.acceptance_id;
+        let status = dispatch(
+            "managed_desktop_acceptance_status", serde_json::json!({"acceptanceId":id}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(status["childAttached"], true);
+        assert!(status.get("childSessionKey").is_none());
+        let listed = dispatch(
+            "managed_desktop_acceptance_list", serde_json::json!({}),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert_eq!(listed["runs"][0], status);
         assert!(dispatch("managed_desktop_acceptance_attach",serde_json::json!({"acceptanceId":id,"sessionKey":"child"}),local_qualification_caller(),None,None).await.is_err());
         let checkpoint = serde_json::json!({"acceptanceId":id,"sessionKey":"child","criterionId":"criterion-0","idempotencyKey":"checkpoint"});
         let complete = serde_json::json!({"acceptanceId":id,"sessionKey":"child","idempotencyKey":"complete","outcome":"passed",
@@ -3313,6 +3332,73 @@ mod tests {
         assert_eq!(service.list(&p).await.unwrap().into_iter().find(|d| Some(&d.id) == status.desktop_id.as_ref()).unwrap().state,ManagedDesktopState::Destroyed);
         for (command,args) in [("managed_desktop_acceptance_checkpoint",checkpoint),("managed_desktop_acceptance_complete",complete)] {
             assert_eq!(dispatch(command,args,local_qualification_caller(),None,None).await.unwrap_err().code,"managed_desktop_acceptance_delegation_required");
+        }
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn durable_acceptance_complete_survives_a_post_step_reconcile_error() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let _scope = TestScope::new();
+        let (directory, service, _) = delegation_rpc_fixture_kind(true, true).await;
+        let (p, row) = attached_acceptance(directory.path(), &service).await;
+        let index = directory.path().join("managed-desktop-evidence/index.enc");
+        let retained = directory.path().join("managed-desktop-evidence/index.retained");
+        let unavailable = index.clone();
+        let durable = retained.clone();
+        let injected = Arc::new(AtomicBool::new(false));
+        let failed = injected.clone();
+        // Grant termination occurs after the verdict has been durably written.
+        // Temporarily refuse subsequent evidence reads while retaining its bytes.
+        install_delegation_runtime(&service, Some(Arc::new(move |_, _| {
+            if !failed.swap(true, Ordering::SeqCst) {
+                std::fs::rename(&unavailable, &durable).unwrap();
+                std::fs::create_dir(&unavailable).unwrap();
+            }
+        })));
+        let result = dispatch(
+            "managed_desktop_acceptance_complete",
+            serde_json::json!({
+                "acceptanceId":row.run.acceptance_id,"sessionKey":"child","idempotencyKey":"complete",
+                "outcome":"passed","criteria":[{"criterionId":"criterion-0","outcome":"passed","artifactIds":[]}],
+                "summary":"Page loads",
+            }),
+            local_qualification_caller(), None, None,
+        ).await.unwrap();
+        assert!(injected.load(Ordering::SeqCst));
+        assert_eq!(result["agentVerdict"]["input"]["outcome"], "passed");
+        std::fs::remove_dir(&index).unwrap();
+        std::fs::rename(retained, index).unwrap();
+        let owner = p.owner_principal_id.clone();
+        let host = p.host_id.clone();
+        let id = row.run.acceptance_id.clone();
+        let persisted = crate::managed_desktop_results::disk(directory.path(), move |s| s.get(&owner, &host, &id)).await.unwrap();
+        assert!(persisted.agent_verdict.is_some());
+        acceptance_runtime().unwrap().reconcile(directory.path()).await.unwrap();
+        assert!(!service.acceptance_record(&p, &row.run.acceptance_id).await.unwrap().cleanup_pending);
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn acceptance_switch_does_not_admit_paired_worker_or_service_frames() {
+        let _scope = TestScope::new();
+        let (_directory, service, _) = delegation_rpc_fixture_kind(true, true).await;
+        let p = principal(&local_qualification_caller(), "test-host").unwrap();
+        let enabled = service.effective_enablement(&p, "e2b").await.unwrap();
+        assert!(enabled.acceptance);
+        assert!(!enabled.manual_gui);
+        let tenant = host_identity::current().unwrap().remote_tenant_id;
+        let store = security_store().unwrap();
+        let challenge = store.issue_challenge(&tenant, NOW, 600).unwrap();
+        let enrollment = store.create_worker_enrollment(&tenant, "owner-device", NOW, 600).unwrap();
+        store.register_worker_device(
+            &tenant, &enrollment, &challenge.id, &challenge.nonce, "worker-device", "Worker",
+            "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----", "worker-thumb", NOW,
+        ).unwrap();
+        for (device, scope) in [("worker-device", None), ("service", Some("service"))] {
+            let caller = Caller { device_id: device, tenant_id: Some(&tenant), scope, local: false };
+            assert_eq!(principal(&caller, "test-host").unwrap().authority, ManagedDesktopAuthority::Agent);
+            let error = dispatch(
+                "managed_desktop_control_frame", serde_json::json!({"desktopId":"desktop","generation":1}),
+                caller, None, None,
+            ).await.unwrap_err();
+            assert_eq!(error.code, "managed_desktop_control_unqualified");
         }
     }
     #[tokio::test(flavor = "current_thread")]

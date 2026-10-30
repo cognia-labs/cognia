@@ -283,6 +283,14 @@ impl ManagedDesktopService {
         authority.revalidate(p).await?;
         self.reconcile_delegations().await?;
         let row = self.scoped(p, id, generation).await?;
+        if row
+            .source_id
+            .as_deref()
+            .is_some_and(|source| source.starts_with("acceptance:"))
+            && !matches!(&grantee, ManagedDesktopGrantee::Acceptance { .. })
+        {
+            return Err(refused("managed_desktop_acceptance_desktop"));
+        }
         let binding = self
             .delegation_binding(&p.owner_principal_id)
             .ok_or_else(|| refused("managed_desktop_forbidden"))?;
@@ -327,6 +335,14 @@ impl ManagedDesktopService {
                     .get(id)
                     .ok_or_else(|| refused("managed_desktop_not_found"))?;
                 row.config.authorize(p)?;
+                if row
+                    .source_id
+                    .as_deref()
+                    .is_some_and(|source| source.starts_with("acceptance:"))
+                    && !matches!(&grantee, ManagedDesktopGrantee::Acceptance { .. })
+                {
+                    return Err(refused("managed_desktop_acceptance_desktop"));
+                }
                 if row.desktop.generation != generation
                     || row.delete_requested
                     || row.desktop.state != ManagedDesktopState::Running
@@ -476,8 +492,11 @@ pub(crate) mod tests {
             session_key: value.into(),
         }
     }
-    pub(super) async fn fixture() -> (super::super::tests::Fixture, ManagedDesktop, Arc<AtomicU64>)
-    {
+    pub(in crate::cua_sandbox::managed) async fn fixture() -> (
+        super::super::tests::Fixture,
+        ManagedDesktop,
+        Arc<AtomicU64>,
+    ) {
         let f = super::super::tests::Fixture::new();
         super::super::qualification::enablement_tests::install_gui_evidence(&f).await;
         let mut registry = f.service.registry().await.unwrap();
@@ -561,6 +580,28 @@ pub(crate) mod tests {
                 Action::CursorPosition,
             )
             .await
+    }
+    #[tokio::test]
+    async fn acceptance_desktop_refuses_session_and_character_grants() {
+        let (f, row, _) = fixture().await;
+        f.service
+            .transaction(|s, _| {
+                s.desktops.get_mut(&row.id).unwrap().source_id = Some("acceptance:private".into());
+                Ok(())
+            })
+            .await
+            .unwrap();
+        for grantee in [
+            session("chat"),
+            ManagedDesktopGrantee::Character { character_id: "character".into() },
+        ] {
+            assert_eq!(
+                f.service.delegate(&f.p, &row.id, row.generation, grantee, None, &Authority)
+                    .await.unwrap_err().code,
+                "managed_desktop_acceptance_desktop"
+            );
+        }
+        assert!(f.service.delegation_list(&f.p).await.unwrap().is_empty());
     }
     #[tokio::test]
     async fn grants_are_idempotent_capped_owner_scoped_and_admin_only() {

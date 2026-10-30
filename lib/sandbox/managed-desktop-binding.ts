@@ -14,6 +14,7 @@ import {
   putSandboxConnection,
 } from "@/lib/db/sandbox-connections"
 import { SandboxRuntimeError } from "@cognia/plugin-sdk/api/sandbox"
+import { getSession } from "@/lib/db/sessions"
 import type { SandboxConnectionRow } from "@/types/sandbox"
 import { managedDesktopCapabilities } from "./connection-capabilities"
 import {
@@ -334,6 +335,12 @@ export async function requireManagedDesktopDelegation(
     const runs = acceptanceGrants.length
       ? (await managedDesktopHandoffClient.acceptanceList(LOCAL)).runs
       : []
+    // The Host never returns a child session key. A session is the child of a
+    // run only if it was created for that run; the Host re-checks the key on
+    // every desktop operation.
+    const attachedTo = acceptanceGrants.length
+      ? (await getSession(sessionKey))?.managedAcceptance?.acceptanceId
+      : undefined
     assertActive()
     if (
       !live.some(
@@ -348,7 +355,8 @@ export async function requireManagedDesktopDelegation(
                 item.grantee.kind === "acceptance" &&
                 run.acceptanceId === item.grantee.acceptanceId &&
                 run.state === "running" &&
-                run.childSessionKey === sessionKey &&
+                run.childAttached &&
+                attachedTo === run.acceptanceId &&
                 run.delegationId === item.id &&
                 run.desktopId === item.desktopId &&
                 run.desktopGeneration === item.desktopGeneration &&

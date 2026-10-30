@@ -47908,11 +47908,8 @@
               "null"
             ]
           },
-          "childSessionKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "childAttached": {
+            "type": "boolean"
           },
           "source": {
             "type": "object",
@@ -47970,7 +47967,7 @@
           "desktopGeneration",
           "deadlineAt",
           "delegationId",
-          "childSessionKey",
+          "childAttached",
           "source",
           "errorCode",
           "createdAt",
@@ -48077,11 +48074,8 @@
               "null"
             ]
           },
-          "childSessionKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "childAttached": {
+            "type": "boolean"
           },
           "source": {
             "type": "object",
@@ -48139,7 +48133,7 @@
           "desktopGeneration",
           "deadlineAt",
           "delegationId",
-          "childSessionKey",
+          "childAttached",
           "source",
           "errorCode",
           "createdAt",
@@ -48781,11 +48775,8 @@
                     "null"
                   ]
                 },
-                "childSessionKey": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                "childAttached": {
+                  "type": "boolean"
                 },
                 "source": {
                   "type": "object",
@@ -48843,7 +48834,7 @@
                 "desktopGeneration",
                 "deadlineAt",
                 "delegationId",
-                "childSessionKey",
+                "childAttached",
                 "source",
                 "errorCode",
                 "createdAt",
@@ -49037,11 +49028,8 @@
               "null"
             ]
           },
-          "childSessionKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "childAttached": {
+            "type": "boolean"
           },
           "source": {
             "type": "object",
@@ -49099,7 +49087,7 @@
           "desktopGeneration",
           "deadlineAt",
           "delegationId",
-          "childSessionKey",
+          "childAttached",
           "source",
           "errorCode",
           "createdAt",
@@ -49196,11 +49184,8 @@
               "null"
             ]
           },
-          "childSessionKey": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "childAttached": {
+            "type": "boolean"
           },
           "source": {
             "type": "object",
@@ -49258,7 +49243,7 @@
           "desktopGeneration",
           "deadlineAt",
           "delegationId",
-          "childSessionKey",
+          "childAttached",
           "source",
           "errorCode",
           "createdAt",
@@ -109939,5 +109924,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "f7bfe07c852b63e6e33426f1e5056652a14e75cac9f0e8c51b4526e39487bae6"
+  "catalogHash": "d155b8cb0ed3c7d741fe978a15bea33e56a8a40ab97926cb4fe8203596d19f76"
 }

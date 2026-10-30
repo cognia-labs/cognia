@@ -100,8 +100,70 @@ pub(crate) async fn claim_operation(directory: &Path, operation_id: &str) -> Res
         Ok(reports.join(format!("{operation_id}.json")))
     }).await
 }
-struct SourceWatcher { task: tokio::task::JoinHandle<()> }
-impl Drop for SourceWatcher { fn drop(&mut self) { self.task.abort(); } }
+/// Shared off-thread source validation. A failed check is sticky; synchronous
+/// admission reads only the flag, including while a journal lock is held.
+pub(crate) struct SourceWatcher {
+    task: tokio::task::JoinHandle<()>,
+    current: Arc<std::sync::atomic::AtomicBool>,
+    check: Arc<dyn Fn() -> bool + Send + Sync>,
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+impl SourceWatcher {
+    pub(crate) async fn start(
+        check: Arc<dyn Fn() -> bool + Send + Sync>,
+        cancel: tokio::sync::watch::Sender<bool>,
+    ) -> Self {
+        let current = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        Self::refresh(check.clone(), current.clone(), cancel.clone()).await;
+        let watcher_check = check.clone();
+        let watcher_current = current.clone();
+        let revoke = cancel.clone();
+        let task = tokio::spawn(async move {
+            while watcher_current.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                Self::refresh(
+                    watcher_check.clone(),
+                    watcher_current.clone(),
+                    revoke.clone(),
+                )
+                .await;
+            }
+        });
+        Self {
+            task,
+            current,
+            check,
+            cancel,
+        }
+    }
+    async fn refresh(
+        check: Arc<dyn Fn() -> bool + Send + Sync>,
+        current: Arc<std::sync::atomic::AtomicBool>,
+        cancel: tokio::sync::watch::Sender<bool>,
+    ) -> bool {
+        let valid = tokio::task::spawn_blocking(move || check())
+            .await
+            .unwrap_or(false);
+        let valid = current.fetch_and(valid, std::sync::atomic::Ordering::SeqCst) && valid;
+        if !valid {
+            let _ = cancel.send(true);
+        }
+        valid
+    }
+    pub(crate) async fn revalidate(&self) -> bool {
+        Self::refresh(self.check.clone(), self.current.clone(), self.cancel.clone()).await
+    }
+    pub(crate) fn admission(&self) -> Arc<dyn Fn() -> bool + Send + Sync> {
+        let current = self.current.clone();
+        Arc::new(move || current.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+impl Drop for SourceWatcher {
+    fn drop(&mut self) {
+        self.current.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.task.abort();
+    }
+}
 
 pub(crate) async fn source_proxy(source: &cognia_external_agent::spawn_authority::DeliverySource) -> Result<GitProxy> {
     let upstream = url::Url::parse(&source.repository_url).map_err(|_| refused("managed_desktop_handoff_source_unavailable"))?;
@@ -166,14 +228,7 @@ pub(crate) async fn run_request(
     let (cancel, cancelled) = tokio::sync::watch::channel(false);
     let check_root = directory.clone(); let check_principal = p.clone(); let check_request = input.request.clone();
     let check: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || resolve_transfer(&check_root, &check_principal, &check_request, qualification).is_ok());
-    let watcher_check = check.clone(); let revoke = cancel.clone();
-    let _watcher = SourceWatcher { task:tokio::spawn(async move {
-        loop {
-            let check = watcher_check.clone();
-            if !tokio::task::spawn_blocking(move || check()).await.unwrap_or(false) { let _ = revoke.send(true); break; }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-    }) };
+    let _watcher = SourceWatcher::start(check.clone(), cancel.clone()).await;
     let budget = HandoffBudget { deadline_at_ms: chrono::Utc::now().timestamp_millis().saturating_add(10 * 60 * 1000), cancel:cancelled };
     let mut native_receipt = None;
     let outcome: Result<()> = async {
@@ -387,6 +442,29 @@ async fn finish_diagnostic(path: &Path, row: &mut ChildAcceptanceRun, outcome: R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn shared_source_watcher_revokes_on_fresh_and_background_checks_without_readmitting() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for background in [false, true] {
+            let valid = Arc::new(AtomicBool::new(true));
+            let source = valid.clone();
+            let (cancel, mut cancelled) = tokio::sync::watch::channel(false);
+            let watcher = SourceWatcher::start(Arc::new(move || source.load(Ordering::SeqCst)), cancel).await;
+            let admission = watcher.admission();
+            assert!(admission());
+            valid.store(false, Ordering::SeqCst);
+            if background {
+                tokio::time::timeout(Duration::from_secs(3), cancelled.changed()).await.unwrap().unwrap();
+            } else {
+                assert!(!watcher.revalidate().await);
+            }
+            assert!(*cancelled.borrow());
+            assert!(!admission());
+            valid.store(true, Ordering::SeqCst);
+            assert!(!watcher.revalidate().await);
+            assert!(!admission());
+        }
+    }
     fn row() -> ChildAcceptanceRun {
         ChildAcceptanceRun { version:1, id:uuid::Uuid::new_v4().to_string(), parent_run_id:"parent".into(),
             origin_run_ref:"origin".into(), session_id:"chat".into(), task_id:"task".into(), source_id:"source".into(),

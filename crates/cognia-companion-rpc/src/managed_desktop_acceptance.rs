@@ -1,6 +1,7 @@
 //! WP9 Host orchestration. One durable intent precedes all paid work. Domain
 //! transactions own fences; delivery and evidence stores remain their owners.
 use crate::managed_desktop_handoff::{self as handoff_rpc, PrepareHandoff, TransferMode};
+use crate::managed_desktop_handoff_operator::SourceWatcher;
 use crate::managed_desktop_results::{self as results, Capture, Complete};
 use crate::managed_desktops::HostEventSink;
 use cognia_automation::cua_sandbox::managed::{evidence::*, handoff::*, *};
@@ -14,7 +15,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
 };
 
 pub use cognia_automation::cua_sandbox::managed::ACCEPTANCE_CHANGED_TOPIC;
@@ -61,19 +61,22 @@ fn request(input: &AcceptanceStartInput) -> PrepareHandoff {
     }
 }
 struct RunAuthority {
-    current: Current,
+    source: SourceWatcher,
+    live: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 #[async_trait::async_trait]
 impl ManagedControlAuthority for RunAuthority {
     async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
-        let current = self.current.clone();
-        tokio::task::spawn_blocking(move || current())
-            .await
-            .map_err(|_| refused("managed_desktop_forbidden"))?
+        if self.source.revalidate().await && (self.live)() {
+            Ok(())
+        } else {
+            Err(refused("managed_desktop_acceptance_authority_expired"))
+        }
     }
     fn input_admission(&self, _: &ManagedDesktopPrincipal) -> Arc<dyn Fn() -> bool + Send + Sync> {
-        let current = self.current.clone();
-        Arc::new(move || current().is_ok())
+        let source = self.source.admission();
+        let live = self.live.clone();
+        Arc::new(move || source() && live())
     }
 }
 impl AcceptanceRuntime {
@@ -97,8 +100,11 @@ impl AcceptanceRuntime {
     ) -> Result<ManagedDesktopAcceptanceRun> {
         p.require_admin()?;
         input.validate()?;
+        let initial = current.clone();
+        let (cancel, _) = tokio::sync::watch::channel(false);
         let authority = RunAuthority {
-            current: current.clone(),
+            source: SourceWatcher::start(Arc::new(move || initial().is_ok()), cancel).await,
+            live: Arc::new(|| true),
         };
         authority.revalidate(&p).await?;
         // Retry before re-resolving a now-expired quote/source: never spend twice.
@@ -150,21 +156,18 @@ impl AcceptanceRuntime {
             let prepare = request(&row.request);
             let provisioning_service = service.clone();
             let provisioning_id = id.clone();
-            let check: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
                 !cancel.load(Ordering::SeqCst)
                     && provisioning_service.acceptance_provisioning_live(&provisioning_id)
-                    && current().is_ok()
+            });
+            let check: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                current().is_ok()
                     && handoff_rpc::resolve(&root, &principal, &prepare).is_ok()
             });
-            let run_check = check.clone();
+            let (cancel_source, cancelled_source) = tokio::sync::watch::channel(false);
             let authority = RunAuthority {
-                current: Arc::new(move || {
-                    if run_check() {
-                        Ok(())
-                    } else {
-                        Err(refused("managed_desktop_acceptance_authority_expired"))
-                    }
-                }),
+                source: SourceWatcher::start(check.clone(), cancel_source).await,
+                live,
             };
             let root = directory.clone();
             let runner = service.clone();
@@ -178,6 +181,7 @@ impl AcceptanceRuntime {
                     &row,
                     &authority,
                     check,
+                    cancelled_source,
                     publication,
                 )
                 .await
@@ -262,6 +266,7 @@ async fn provision(
     row: &AcceptanceRunRecord,
     authority: &dyn ManagedControlAuthority,
     source_current: Arc<dyn Fn() -> bool + Send + Sync>,
+    cancelled: tokio::sync::watch::Receiver<bool>,
     publication: Arc<tokio::sync::Mutex<()>>,
 ) -> Result<()> {
     let input = &row.request;
@@ -276,7 +281,7 @@ async fn provision(
             authority,
         )
         .await?;
-    let mut desktop = service
+    let desktop = service
         .create_with_authority(
             p,
             CreateManagedDesktop {
@@ -288,22 +293,14 @@ async fn provision(
             authority,
         )
         .await?;
-    while desktop.state == ManagedDesktopState::Creating {
-        authority.revalidate(p).await?;
-        if chrono::Utc::now().timestamp_millis() >= desktop.deadline_at {
-            return Err(refused("managed_desktop_acceptance_deadline"));
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        desktop = service.connect(p, &desktop.id, desktop.generation).await?;
-    }
-    if desktop.state != ManagedDesktopState::Running {
-        return Err(refused("managed_desktop_acceptance_desktop_unavailable"));
-    }
-    let (_cancel, cancelled) = tokio::sync::watch::channel(false);
+    let desktop = service
+        .wait_ready_with_authority(p, desktop, authority)
+        .await?;
     let budget = HandoffBudget {
         deadline_at_ms: desktop.deadline_at,
         cancel: cancelled,
     };
+    authority.revalidate(p).await?;
     let prepare = request(input);
     let root = directory.to_owned();
     let principal = p.clone();
@@ -313,6 +310,7 @@ async fn provision(
             .await
             .map_err(|_| refused("managed_desktop_storage_unavailable"))??;
     let proxy = crate::managed_desktop_handoff_operator::source_proxy(&source).await?;
+    authority.revalidate(p).await?;
     let recovery = if input.mode == TransferMode::Bundle {
         Some(RecoverySource {
             path: PathBuf::from(
@@ -337,6 +335,7 @@ async fn provision(
     )
     .await
     .map_err(|_| refused("managed_desktop_handoff_transfer_failed"))?;
+    authority.revalidate(p).await?;
     let launch =
         parse_launch(&input.argv).map_err(|_| refused("managed_desktop_handoff_invalid_launch"))?;
     service
@@ -455,107 +454,126 @@ async fn reconcile_locked(
     service: &ManagedDesktopService,
     events: &Option<HostEventSink>,
 ) -> Result<()> {
-    for record in service.acceptance_records().await {
-        let p = record.principal();
-        let id = record.run.acceptance_id.clone();
-        let result = read_result(directory, &record).await?;
-        // A verdict's durable publication wins a simultaneous expiry/cancel.
-        if result.as_ref().is_some_and(|r| r.agent_verdict.is_some())
-            && record.run.state != AcceptanceRunState::Completed
-        {
-            service
-                .acceptance_end(&p, &id, AcceptanceRunState::Completed, None)
-                .await?;
+    let mut first_error = None;
+    for record in service
+        .acceptance_records()
+        .await
+        .into_iter()
+        .filter(|r| r.run.state.active() || r.cleanup_pending)
+    {
+        if let Err(error) = reconcile_record(directory, service, events, record).await {
+            log::warn!("managed desktop acceptance reconcile: {}", error.code);
+            first_error.get_or_insert(error);
         }
-        let mut current = service.acceptance_record(&p, &id).await?;
-        if current.run.state.active() {
-            let root = directory.to_owned();
-            let principal = p.clone();
-            let prepare = request(&current.request);
-            let live_source = tokio::task::spawn_blocking(move || {
-                handoff_rpc::resolve(&root, &principal, &prepare).is_ok()
-            })
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+async fn reconcile_record(
+    directory: &Path,
+    service: &ManagedDesktopService,
+    events: &Option<HostEventSink>,
+    record: AcceptanceRunRecord,
+) -> Result<()> {
+    let p = record.principal();
+    let id = record.run.acceptance_id.clone();
+    let result = read_result(directory, &record).await?;
+    // A verdict's durable publication wins a simultaneous expiry/cancel.
+    if result.as_ref().is_some_and(|r| r.agent_verdict.is_some())
+        && record.run.state != AcceptanceRunState::Completed
+    {
+        service
+            .acceptance_end(&p, &id, AcceptanceRunState::Completed, None)
+            .await?;
+    }
+    let mut current = service.acceptance_record(&p, &id).await?;
+    if current.run.state.active() {
+        let root = directory.to_owned();
+        let principal = p.clone();
+        let prepare = request(&current.request);
+        let live_source = tokio::task::spawn_blocking(move || {
+            handoff_rpc::resolve(&root, &principal, &prepare).is_ok()
+        })
+        .await
+        .unwrap_or(false);
+        let enabled = service
+            .effective_enablement(&p, &current.run.provider_config_id)
             .await
-            .unwrap_or(false);
-            let enabled = service
-                .effective_enablement(&p, &current.run.provider_config_id)
-                .await
-                .is_ok_and(|e| e.acceptance);
-            if !live_source || !enabled {
-                service
-                    .acceptance_end(
-                        &p,
-                        &id,
-                        AcceptanceRunState::Failed,
-                        Some("managed_desktop_acceptance_authority_expired".into()),
-                    )
-                    .await?;
-                current = service.acceptance_record(&p, &id).await?;
+            .is_ok_and(|e| e.acceptance);
+        if !live_source || !enabled {
+            service
+                .acceptance_end(
+                    &p,
+                    &id,
+                    AcceptanceRunState::Failed,
+                    Some("managed_desktop_acceptance_authority_expired".into()),
+                )
+                .await?;
+            current = service.acceptance_record(&p, &id).await?;
+        }
+    }
+    if current.run.state.active() || !current.cleanup_pending {
+        return Ok(());
+    }
+    if let Some(result) = &result {
+        let owner = p.owner_principal_id.clone();
+        let host = p.host_id.clone();
+        let acceptance = id.clone();
+        let cancelled = current.run.state == AcceptanceRunState::Cancelled;
+        let finish = result.agent_verdict.is_none() && result.system_outcome.is_none();
+        results::disk(directory, move |s| {
+            if finish {
+                s.finish_system(
+                    &owner,
+                    &host,
+                    &acceptance,
+                    if cancelled {
+                        AcceptanceOutcome::Cancelled
+                    } else {
+                        AcceptanceOutcome::Inconclusive
+                    },
+                    if cancelled {
+                        "acceptance_cancelled"
+                    } else {
+                        "acceptance_incomplete"
+                    },
+                )?;
             }
+            s.set_cleanup_pending(&owner, &host, &acceptance, true)
+        })
+        .await?;
+    }
+    let cleaned = if let Some(desktop) = &current.run.desktop_id {
+        // Read the current generation for cleanup: a generation fence must
+        // not leave the same owned resource billed indefinitely.
+        match service
+            .list(&p)
+            .await?
+            .into_iter()
+            .find(|d| &d.id == desktop)
+        {
+            Some(d) => service
+                .delete(&p, &d.id, d.generation)
+                .await
+                .is_ok_and(|d| d.state == ManagedDesktopState::Destroyed),
+            None => true,
         }
-        if current.run.state.active() || !current.cleanup_pending {
-            continue;
-        }
-        if let Some(result) = &result {
+    } else {
+        true
+    };
+    if cleaned {
+        if result.is_some() {
             let owner = p.owner_principal_id.clone();
             let host = p.host_id.clone();
             let acceptance = id.clone();
-            let cancelled = current.run.state == AcceptanceRunState::Cancelled;
-            let finish = result.agent_verdict.is_none() && result.system_outcome.is_none();
             results::disk(directory, move |s| {
-                if finish {
-                    s.finish_system(
-                        &owner,
-                        &host,
-                        &acceptance,
-                        if cancelled {
-                            AcceptanceOutcome::Cancelled
-                        } else {
-                            AcceptanceOutcome::Inconclusive
-                        },
-                        if cancelled {
-                            "acceptance_cancelled"
-                        } else {
-                            "acceptance_incomplete"
-                        },
-                    )?;
-                }
-                s.set_cleanup_pending(&owner, &host, &acceptance, true)
+                s.set_cleanup_pending(&owner, &host, &acceptance, false)
             })
             .await?;
         }
-        let cleaned = if let Some(desktop) = &current.run.desktop_id {
-            // Read the current generation for cleanup: a generation fence must
-            // not leave the same owned resource billed indefinitely.
-            match service
-                .list(&p)
-                .await?
-                .into_iter()
-                .find(|d| &d.id == desktop)
-            {
-                Some(d) => service
-                    .delete(&p, &d.id, d.generation)
-                    .await
-                    .is_ok_and(|d| d.state == ManagedDesktopState::Destroyed),
-                None => true,
-            }
-        } else {
-            true
-        };
-        if cleaned {
-            if result.is_some() {
-                let owner = p.owner_principal_id.clone();
-                let host = p.host_id.clone();
-                let acceptance = id.clone();
-                results::disk(directory, move |s| {
-                    s.set_cleanup_pending(&owner, &host, &acceptance, false)
-                })
-                .await?;
-            }
-            service.acceptance_cleaned(&p, &id).await?;
-        }
-        emit(events);
+        service.acceptance_cleaned(&p, &id).await?;
     }
+    emit(events);
     Ok(())
 }
 
@@ -710,16 +728,113 @@ pub(crate) async fn tools(
             },
         )
         .await?;
-        reconcile_locked(directory, &runtime.service, &runtime.events).await?;
+        if let Err(error) = reconcile_locked(directory, &runtime.service, &runtime.events).await {
+            log::warn!("managed desktop acceptance post-complete cleanup: {}", error.code);
+        }
         Ok(value)
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    #[test]
-    fn criteria_flags_bind_the_production_manifest_and_wire_requests_are_closed() {
+    pub(crate) fn service_with_records(
+        directory: &Path,
+        rows: Vec<AcceptanceRunRecord>,
+    ) -> ManagedDesktopService {
+        let store = journal::JournalStore::open(directory).unwrap();
+        let mut state = store.load("host").unwrap();
+        for row in rows {
+            state
+                .acceptance_runs
+                .insert(row.run.acceptance_id.clone(), row);
+        }
+        store.save(&state).unwrap();
+        drop(store);
+        ManagedDesktopService::open(
+            directory,
+            "host".into(),
+            Arc::new(E2bDesktopProvider::new(Arc::new(
+                crate::managed_desktop_release::OciDesktopImageVerifier,
+            ))),
+            Arc::new(FileManagedDesktopSecrets::open(&directory.join("vault")).unwrap()),
+            None,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reconciliation_continues_after_a_bad_record_and_reports_the_first_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut bad = record();
+        bad.run.acceptance_id = "a-bad".into();
+        bad.run.state = AcceptanceRunState::Running;
+        bad.host_id = "other-host".into();
+        let mut good = record();
+        good.run.acceptance_id = "z-good".into();
+        good.run.state = AcceptanceRunState::Running;
+        let service = service_with_records(directory.path(), vec![bad, good.clone()]);
+        let error = reconcile_locked(directory.path(), &service, &None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "managed_desktop_forbidden");
+        let ended = service
+            .acceptance_record(&good.principal(), &good.run.acceptance_id)
+            .await
+            .unwrap();
+        assert_eq!(ended.run.state, AcceptanceRunState::Failed);
+        assert_eq!(
+            ended.run.error_code.as_deref(),
+            Some("managed_desktop_acceptance_authority_expired")
+        );
+        assert!(!ended.cleanup_pending);
+    }
+
+    #[tokio::test]
+    async fn reconciliation_skips_settled_history_without_evidence_io_or_journal_transactions() {
+        let directory = tempfile::tempdir().unwrap();
+        let unavailable = tempfile::NamedTempFile::new().unwrap();
+        let mut row = record();
+        row.run.state = AcceptanceRunState::Completed;
+        row.run.ended_at = Some(chrono::Utc::now().timestamp_millis());
+        let service = service_with_records(directory.path(), vec![row]);
+        let journal = directory.path().join("managed-desktops-journal.json");
+        let before = std::fs::read(&journal).unwrap();
+        reconcile_locked(unavailable.path(), &service, &None)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(journal).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn provisioning_admission_never_invokes_the_blocking_source_or_principal_lookup() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let runtime_thread = std::thread::current().id();
+        let check = Arc::new(move || {
+            assert_ne!(std::thread::current().id(), runtime_thread);
+            observed.fetch_add(1, Ordering::SeqCst);
+            true
+        });
+        let (cancel, _) = tokio::sync::watch::channel(false);
+        let authority = RunAuthority {
+            source: SourceWatcher::start(check, cancel).await,
+            live: Arc::new(|| true),
+        };
+        let p = record().principal();
+        let admission = authority.input_admission(&p);
+        let before = calls.load(Ordering::SeqCst);
+        for _ in 0..100 {
+            assert!(admission());
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), before);
+        authority.revalidate(&p).await.unwrap();
+        assert!(calls.load(Ordering::SeqCst) > before);
+        drop(authority);
+        assert!(!admission());
+    }
+
+    fn record() -> AcceptanceRunRecord {
         let input = AcceptanceStartInput {
             delivery_id: "delivery".into(),
             delivery_revision: 1,
@@ -735,7 +850,7 @@ mod tests {
             quote_id: "quote".into(),
             idempotency_key: "key".into(),
         };
-        let mut row = AcceptanceRunRecord {
+        AcceptanceRunRecord {
             run: ManagedDesktopAcceptanceRun {
                 acceptance_id: "run".into(),
                 provider_config_id: "e2b".into(),
@@ -747,7 +862,7 @@ mod tests {
                 desktop_generation: None,
                 deadline_at: None,
                 delegation_id: None,
-                child_session_key: None,
+                child_attached: false,
                 source: AcceptanceRunSource {
                     session_id: "source-session".into(),
                     task_id: Some("source-task".into()),
@@ -767,7 +882,11 @@ mod tests {
             source_id: "source".into(),
             origin_run_ref: "origin".into(),
             cleanup_pending: false,
-        };
+        }
+    }
+    #[test]
+    fn criteria_flags_bind_the_production_manifest_and_wire_requests_are_closed() {
+        let mut row = record();
         let desktop = ManagedDesktop {
             id: "desktop".into(),
             provider_config_id: "e2b".into(),
@@ -806,7 +925,8 @@ mod tests {
         }
         let summary = serde_json::to_value(&row.run).unwrap();
         assert_eq!(summary.as_object().unwrap().len(), 16);
-        assert!(summary["childSessionKey"].is_null());
+        assert!(summary.get("childSessionKey").is_none());
+        assert_eq!(summary["childAttached"], false);
         assert!(summary["endedAt"].is_null());
         assert_eq!(
             summary["source"],

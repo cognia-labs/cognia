@@ -9,6 +9,11 @@ jest.mock("@/lib/automation/managed-desktop-client", () => ({
   watchManagedDesktopDelegations: jest.fn(() => jest.fn()),
   managedDesktopIdentityScope: jest.fn(),
 }))
+jest.mock("@/lib/db/sessions", () => ({
+  getSession: jest.fn(async (id: string) =>
+    id === "child" ? { id, managedAcceptance: { acceptanceId: "acceptance" } } : { id }
+  ),
+}))
 jest.mock("@/lib/db/sandbox-connections", () => ({
   ...jest.requireActual("@/lib/db/sandbox-connections"),
   getSandboxConnection: jest.fn(),
@@ -136,7 +141,7 @@ it("projects a live acceptance delegation without minting another grant and admi
     runs: [
       {
         acceptanceId: "acceptance",
-        childSessionKey: "child",
+        childAttached: true,
         state: "running",
         desktopId: "desktop",
         desktopGeneration: 3,
@@ -165,6 +170,7 @@ it("cannot borrow an ended, mismatched or unreadable acceptance run", async () =
   await reconcileManagedDesktopBindings()
   const row = rows.get(id)!
   for (const patch of [
+    { childAttached: false },
     { state: "completed" },
     { desktopGeneration: 4 },
     { acceptanceId: "other" },
@@ -174,7 +180,7 @@ it("cannot borrow an ended, mismatched or unreadable acceptance run", async () =
       runs: [
         {
           acceptanceId: "acceptance",
-          childSessionKey: "child",
+          childAttached: true,
           state: "running",
           desktopId: "desktop",
           desktopGeneration: 3,

@@ -198,7 +198,7 @@ beforeEach(() => {
   jest.mocked(getSession).mockResolvedValue({ id: "parent" } as never)
   jest.mocked(createAttachedSession).mockResolvedValue({ id: "child" } as never)
   api.acceptanceStart.mockResolvedValue(run())
-  api.acceptanceAttach.mockResolvedValue(run({ state: "running", childSessionKey: "child" }))
+  api.acceptanceAttach.mockResolvedValue(run({ state: "running", childAttached: true }))
   api.acceptanceCancel.mockResolvedValue(run({ state: "cancelled" }))
   jest.mocked(consumeAcceptancePanelRequest).mockReturnValue(undefined)
 })
@@ -312,7 +312,7 @@ function run(patch: Partial<ManagedDesktopAcceptanceRun> = {}): ManagedDesktopAc
     desktopGeneration: 2,
     deadlineAt: Date.now() + 60000,
     delegationId: null,
-    childSessionKey: null,
+    childAttached: false,
     source: { sessionId: "parent", taskId: "task", parentRunId: "parent-run" },
     errorCode: null,
     createdAt: 1,
@@ -439,7 +439,7 @@ test("a proposal prefill loads the selected delivery and criteria without prepar
 test("a live run shows its state/deadline and destructive cancellation uses the Host", async () => {
   render(panel({ kind: "local" }))
   await import("@testing-library/react").then(({ act }) =>
-    act(async () => notify([run({ state: "running", childSessionKey: "child" })]))
+    act(async () => notify([run({ state: "running", childAttached: true })]))
   )
   expect(screen.getByRole("status")).toHaveTextContent("Running")
   expect(screen.getByRole("status")).toHaveTextContent("Hard deadline:")

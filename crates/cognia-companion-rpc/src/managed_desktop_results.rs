@@ -181,13 +181,32 @@ pub(crate) async fn capture(directory: &Path, service: &ManagedDesktopService,
         authority.revalidate(p).await?;
         return encode(previous);
     }
+    let human_admission = if p.authority == ManagedDesktopAuthority::Agent {
+        Some(
+            service
+                .acceptance_capture_admission(
+                    p,
+                    &row.binding.desktop_id,
+                    row.binding.desktop_generation,
+                )
+                .await?,
+        )
+    } else {
+        None
+    };
     // Capture comes from the bound desktop, never caller-supplied pixels.
     let frame = service.control_frame(p, &row.binding.desktop_id, row.binding.desktop_generation, authority).await?;
     authority.revalidate(p).await?;
     current_source(directory, p, &row).await?;
+    if human_admission.as_ref().is_some_and(|live| !live()) {
+        return Err(refused("managed_desktop_acceptance_human_control"));
+    }
     let bytes = base64::engine::general_purpose::STANDARD.decode(&frame.screenshot.bytes)
         .map_err(|_| refused("managed_desktop_evidence_invalid_image"))?;
-    encode(guarded_disk(directory, admission, move |s| s.capture(&owner, &host, &a.acceptance_id, input, &bytes)).await?)
+    let publication = std::sync::Arc::new(move || {
+        admission() && human_admission.as_ref().is_none_or(|live| live())
+    });
+    encode(guarded_disk(directory, publication, move |s| s.capture(&owner, &host, &a.acceptance_id, input, &bytes)).await?)
 
 }
 pub(crate) async fn complete(directory: &Path, service: &ManagedDesktopService,
@@ -304,6 +323,82 @@ pub async fn reconcile(directory: &Path, service: &ManagedDesktopService, host_i
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct Authority;
+    #[async_trait::async_trait]
+    impl ManagedControlAuthority for Authority {
+        async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
+            Ok(())
+        }
+        fn input_admission(
+            &self,
+            _: &ManagedDesktopPrincipal,
+        ) -> std::sync::Arc<dyn Fn() -> bool + Send + Sync> {
+            std::sync::Arc::new(|| true)
+        }
+    }
+
+    #[tokio::test]
+    async fn exhausted_capture_quota_refuses_before_accessing_a_provider_frame() {
+        let root = tempfile::tempdir().unwrap();
+        let source = SourceStore::new(root.path())
+            .admit(
+                "owner",
+                "host",
+                "task",
+                "device",
+                cognia_external_agent::spawn_authority::DeliverySourceDeclaration {
+                    conversation_id: "chat".into(),
+                    origin_run_ref: "run".into(),
+                },
+                "https://example.com/repo.git",
+                "main",
+                "task/branch",
+                None,
+            )
+            .unwrap();
+        let store = EvidenceStore::new(root.path());
+        let row = store.register("owner", "host", binding(&source)).unwrap();
+        for _ in 0..MAX_SCREENSHOTS {
+            let input = CaptureInput {
+                artifact_id: uuid::Uuid::new_v4().to_string(),
+                criterion_id: "first".into(),
+                kind: CaptureKind::Checkpoint,
+                explicitly_requested: true,
+                sensitive_human_input: false,
+            };
+            assert!(store
+                .capture("owner", "host", &row.binding.acceptance_id, input, b"invalid")
+                .is_err());
+        }
+        let service =
+            crate::managed_desktop_acceptance::tests::service_with_records(root.path(), vec![]);
+        let p = ManagedDesktopPrincipal {
+            owner_principal_id: "owner".into(),
+            host_id: "host".into(),
+            principal_id: "human".into(),
+            authority: ManagedDesktopAuthority::Administrator,
+        };
+        let error = capture(
+            root.path(),
+            &service,
+            &p,
+            &Authority,
+            Capture {
+                acceptance_id: row.binding.acceptance_id.clone(),
+                artifact_id: uuid::Uuid::new_v4().to_string(),
+                criterion_id: "first".into(),
+                kind: CaptureKind::Checkpoint,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "evidence_limit_reached");
+        // No desktop exists: reaching control_frame would return not_found.
+        assert!(store
+            .get("owner", "host", &row.binding.acceptance_id)
+            .unwrap()
+            .evidence_limit_reached);
+    }
     fn binding(source: &cognia_external_agent::spawn_authority::DeliverySource) -> AcceptanceBinding {
         AcceptanceBinding { acceptance_id:uuid::Uuid::new_v4().to_string(), owner_account_id:"owner".into(),
             host_id:"host".into(), source_id:source.id.clone(), session_id:source.conversation_id.clone(), task_id:source.task_id.clone(),

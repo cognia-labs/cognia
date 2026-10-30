@@ -1477,13 +1477,16 @@ impl ManagedDesktopService {
         {
             return Err(refused("managed_desktop_control_unavailable"));
         }
-        if !(smoke && row.smoke && p.authority == ManagedDesktopAuthority::Administrator)
-            && (!self.control_qualified(&row).await
-                || !(if p.authority == ManagedDesktopAuthority::Agent {
-                    self.effective_enablement(p, &current.id).await?.acceptance
-                } else { self.effective_enablement(p, &current.id).await?.manual_gui }))
-        {
-            return Err(refused("managed_desktop_control_unqualified"));
+        if !(smoke && row.smoke && p.authority == ManagedDesktopAuthority::Administrator) {
+            let enabled = self.effective_enablement(p, &current.id).await?;
+            let qualified = if self.acceptance_frame_live(p, id, generation) {
+                enabled.acceptance
+            } else {
+                enabled.manual_gui
+            };
+            if !qualified || !self.control_qualified(&row).await {
+                return Err(refused("managed_desktop_control_unqualified"));
+            }
         }
         let agent_active = self.control_projections.read().get(id).is_some_and(|status| {
             status.generation == generation && status.agent_active.load(Ordering::SeqCst)
@@ -1696,6 +1699,31 @@ impl ManagedDesktopService {
         self.control_frame_inner(p, id, generation, authority, false)
             .await
     }
+    /// Memory-only publication fence: a takeover during capture or evidence
+    /// persistence must discard the agent's sample, even after the lease ends.
+    pub async fn acceptance_capture_admission(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+    ) -> Result<Arc<dyn Fn() -> bool + Send + Sync>> {
+        self.scoped(p, id, generation).await?;
+        let preempt = self.control_agent_preemption(id).await;
+        let epoch = preempt.epoch.load(Ordering::SeqCst);
+        let slot = self.control_slot(id, generation).await;
+        let mut control = slot.lock().await;
+        control.expire();
+        if control.lease.is_some()
+            || preempt.pending.load(Ordering::SeqCst)
+            || preempt.epoch.load(Ordering::SeqCst) != epoch
+        {
+            return Err(refused("managed_desktop_acceptance_human_control"));
+        }
+        Ok(Arc::new(move || {
+            !preempt.pending.load(Ordering::SeqCst)
+                && preempt.epoch.load(Ordering::SeqCst) == epoch
+        }))
+    }
     async fn control_frame_inner(
         &self,
         p: &ManagedDesktopPrincipal,
@@ -1764,6 +1792,13 @@ impl ManagedDesktopService {
         stream: bool,
     ) -> Result<ManagedControlFrame> {
         self.scoped(p, id, generation).await?;
+        let human_admission = if p.authority == ManagedDesktopAuthority::Agent
+            && p.principal_id.starts_with("acceptance:")
+        {
+            Some(self.acceptance_capture_admission(p, id, generation).await?)
+        } else {
+            None
+        };
         let slot = self.control_slot(id, generation).await;
         // Input has priority over the stream: a stream capture never queues
         // control input behind a network screenshot, it skips the tick.
@@ -1777,6 +1812,11 @@ impl ManagedDesktopService {
             .control_check(p, id, generation, authority, smoke)
             .await?;
         c.expire();
+        if human_admission.as_ref().is_some_and(|live| !live())
+            || (human_admission.is_some() && c.lease.is_some())
+        {
+            return Err(refused("managed_desktop_acceptance_human_control"));
+        }
         let client = self.control_client(&row, &mut c).await?;
         let screenshot = desktop_session::capture(&client)
             .await
@@ -1794,6 +1834,11 @@ impl ManagedDesktopService {
             return Err(e);
         }
         c.expire();
+        if human_admission.as_ref().is_some_and(|live| !live())
+            || (human_admission.is_some() && c.lease.is_some())
+        {
+            return Err(refused("managed_desktop_acceptance_human_control"));
+        }
         let now = self.now().await;
         // A newer poll may arrive at the Host before its pixels reach the
         // viewer. The core retains prior unexpired proofs so the visible frame
@@ -3585,4 +3630,31 @@ mod tests {
         assert!(desktop.held_mouse_buttons.is_empty());
     }
 
+    #[tokio::test]
+    async fn generic_agent_frames_keep_the_manual_gui_gate() {
+        let (f, row, _) = super::super::delegation::tests::fixture().await;
+        use base64::Engine;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let image = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+        let client = CuaRemoteClient::from_handler(Arc::new(move |_, _| {
+            let image = image.clone();
+            Box::pin(async move { Ok(serde_json::json!({"image_data":image})) })
+        }));
+        f.service.control_slot(&row.id, 1).await.lock().await.client = Some(client);
+        let p = ManagedDesktopPrincipal {
+            authority: ManagedDesktopAuthority::Agent,
+            principal_id: "worker:paired".into(),
+            ..f.p.clone()
+        };
+        let authority = Authority(Arc::new(AtomicBool::new(true)));
+        f.service.control_frame(&p, &row.id, 1, &authority).await.unwrap();
+        let mut registry = f.service.registry().await.unwrap();
+        registry.providers[0].enablement.manual_gui = false;
+        f.service.save_registry(registry).await.unwrap();
+        assert_eq!(f.service.control_frame(&p, &row.id, 1, &authority).await.unwrap_err().code,
+            "managed_desktop_control_unqualified");
+    }
 }

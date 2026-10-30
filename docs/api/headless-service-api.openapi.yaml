@@ -111961,10 +111961,8 @@ paths:
                     type:
                       - string
                       - "null"
-                  childSessionKey:
-                    type:
-                      - string
-                      - "null"
+                  childAttached:
+                    type: boolean
                   source:
                     type: object
                     properties:
@@ -112006,7 +112004,7 @@ paths:
                   - desktopGeneration
                   - deadlineAt
                   - delegationId
-                  - childSessionKey
+                  - childAttached
                   - source
                   - errorCode
                   - createdAt
@@ -112231,10 +112229,8 @@ paths:
                     type:
                       - string
                       - "null"
-                  childSessionKey:
-                    type:
-                      - string
-                      - "null"
+                  childAttached:
+                    type: boolean
                   source:
                     type: object
                     properties:
@@ -112276,7 +112272,7 @@ paths:
                   - desktopGeneration
                   - deadlineAt
                   - delegationId
-                  - childSessionKey
+                  - childAttached
                   - source
                   - errorCode
                   - createdAt
@@ -113176,10 +113172,8 @@ paths:
                           type:
                             - string
                             - "null"
-                        childSessionKey:
-                          type:
-                            - string
-                            - "null"
+                        childAttached:
+                          type: boolean
                         source:
                           type: object
                           properties:
@@ -113221,7 +113215,7 @@ paths:
                         - desktopGeneration
                         - deadlineAt
                         - delegationId
-                        - childSessionKey
+                        - childAttached
                         - source
                         - errorCode
                         - createdAt
@@ -113512,10 +113506,8 @@ paths:
                     type:
                       - string
                       - "null"
-                  childSessionKey:
-                    type:
-                      - string
-                      - "null"
+                  childAttached:
+                    type: boolean
                   source:
                     type: object
                     properties:
@@ -113557,7 +113549,7 @@ paths:
                   - desktopGeneration
                   - deadlineAt
                   - delegationId
-                  - childSessionKey
+                  - childAttached
                   - source
                   - errorCode
                   - createdAt
@@ -113772,10 +113764,8 @@ paths:
                     type:
                       - string
                       - "null"
-                  childSessionKey:
-                    type:
-                      - string
-                      - "null"
+                  childAttached:
+                    type: boolean
                   source:
                     type: object
                     properties:
@@ -113817,7 +113807,7 @@ paths:
                   - desktopGeneration
                   - deadlineAt
                   - delegationId
-                  - childSessionKey
+                  - childAttached
                   - source
                   - errorCode
                   - createdAt

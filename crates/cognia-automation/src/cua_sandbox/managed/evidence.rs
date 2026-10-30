@@ -261,7 +261,7 @@ impl EvidenceStore {
     /// Owner, deletion fences and durable image integrity still apply to retries.
     pub fn captured(&self, owner: &str, host: &str, id: &str, input: &CaptureInput) -> Result<Option<EvidenceArtifact>> {
         canonical_id(&input.artifact_id)?;
-        let state = self.lock()?;
+        let mut state = self.lock()?;
         let record = authorized(&state.index, owner, host, id)?;
         if input.sensitive_human_input && !input.explicitly_requested { return Err("sensitive_capture_requires_request".into()); }
         if !record.binding.criteria.iter().any(|c| c.id == input.criterion_id) { return Err("evidence_criterion_invalid".into()); }
@@ -275,6 +275,11 @@ impl EvidenceStore {
         if terminal(record) { return Err("acceptance_terminal".into()); }
         if state.index.pending_artifacts.get(id).is_some_and(|ids| ids.contains(&input.artifact_id)) {
             return Err("evidence_capture_previously_incomplete".into());
+        }
+        if record.capture_attempts >= MAX_SCREENSHOTS {
+            state.index.records.get_mut(id).unwrap().evidence_limit_reached = true;
+            self.save(&state)?;
+            return Err("evidence_limit_reached".into());
         }
         Ok(None)
     }
@@ -977,6 +982,7 @@ mod tests {
         }
         let mut reopened = EvidenceStore::new(temp.path()); reopened.test_key = Some([7; 32]);
         assert_eq!(reopened.capture("owner", "host", &binding.acceptance_id, capture(), &png()).unwrap_err(), "evidence_limit_reached");
+        assert_eq!(reopened.captured("owner", "host", &binding.acceptance_id, &capture()).unwrap_err(), "evidence_limit_reached");
         let result = reopened.get("owner", "host", &binding.acceptance_id).unwrap();
         assert_eq!(result.capture_attempts, MAX_SCREENSHOTS);
         assert_eq!(result.reserved_bytes, 7 * MAX_SCREENSHOTS as u64);

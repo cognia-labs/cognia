@@ -362,10 +362,37 @@ async fn run_steps(
 pub(super) async fn wait_ready(
     service: &ManagedDesktopService,
     p: &ManagedDesktopPrincipal,
-    mut desktop: ManagedDesktop,
+    desktop: ManagedDesktop,
     wait: &dyn SmokeWait,
 ) -> Result<ManagedDesktop> {
+    wait_ready_inner(service, p, desktop, wait, None).await
+}
+
+impl ManagedDesktopService {
+    pub async fn wait_ready_with_authority(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        desktop: ManagedDesktop,
+        authority: &dyn control::ManagedControlAuthority,
+    ) -> Result<ManagedDesktop> {
+        wait_ready_inner(self, p, desktop, &RealWait, Some(authority)).await
+    }
+}
+
+async fn wait_ready_inner(
+    service: &ManagedDesktopService,
+    p: &ManagedDesktopPrincipal,
+    mut desktop: ManagedDesktop,
+    wait: &dyn SmokeWait,
+    authority: Option<&dyn control::ManagedControlAuthority>,
+) -> Result<ManagedDesktop> {
     for _ in 0..12 {
+        if let Some(authority) = authority {
+            authority.revalidate(p).await?;
+        }
+        if authority.is_some() && service.now().await >= desktop.deadline_at {
+            return Err(refused("managed_desktop_acceptance_deadline"));
+        }
         if desktop.state == ManagedDesktopState::Running {
             return Ok(desktop);
         }
@@ -378,6 +405,9 @@ pub(super) async fn wait_ready(
             ));
         }
         wait.wait(Duration::from_secs(2)).await;
+        if let Some(authority) = authority {
+            authority.revalidate(p).await?;
+        }
         desktop = service.connect(p, &desktop.id, desktop.generation).await?;
     }
     Err(refused("managed_desktop_smoke_not_ready"))
@@ -511,6 +541,48 @@ impl ManagedDesktopProvider for FailOneDelete {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct ReadinessAuthority(std::sync::atomic::AtomicBool);
+    #[async_trait]
+    impl control::ManagedControlAuthority for ReadinessAuthority {
+        async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
+            if self.0.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(refused("managed_desktop_forbidden"))
+            }
+        }
+        fn input_admission(
+            &self,
+            _: &ManagedDesktopPrincipal,
+        ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+            Arc::new(|| true)
+        }
+    }
+
+    #[tokio::test]
+    async fn acceptance_readiness_uses_the_service_clock_and_rechecks_authority() {
+        let f = super::super::tests::Fixture::new();
+        f.prepare().await;
+        let desktop = f.smoke("acceptance-ready").await;
+        let authority = ReadinessAuthority(std::sync::atomic::AtomicBool::new(true));
+        f.service
+            .wait_ready_with_authority(&f.p, desktop.clone(), &authority)
+            .await
+            .unwrap();
+        authority.0.store(false, Ordering::SeqCst);
+        assert_eq!(
+            f.service.wait_ready_with_authority(&f.p, desktop.clone(), &authority)
+                .await.unwrap_err().code,
+            "managed_desktop_forbidden"
+        );
+        authority.0.store(true, Ordering::SeqCst);
+        f.clock.store(desktop.deadline_at, Ordering::SeqCst);
+        assert_eq!(
+            f.service.wait_ready_with_authority(&f.p, desktop, &authority)
+                .await.unwrap_err().code,
+            "managed_desktop_acceptance_deadline"
+        );
+    }
     #[tokio::test]
     async fn readiness_reports_the_lifecycle_failure_before_cleanup() {
         let f = super::super::tests::Fixture::new();

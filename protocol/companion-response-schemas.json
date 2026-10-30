@@ -14906,69 +14906,34 @@
     "ManagedDesktopAcceptanceRun": {
       "type": "object",
       "properties": {
-        "acceptanceId": {
-          "type": "string"
-        },
-        "providerConfigId": {
-          "type": "string"
-        },
-        "deliveryId": {
-          "type": "string"
-        },
-        "commit": {
-          "type": "string"
-        },
-        "mode": {
-          "type": "string",
-          "enum": ["commit", "bundle"]
-        },
+        "acceptanceId": { "type": "string" },
+        "providerConfigId": { "type": "string" },
+        "deliveryId": { "type": "string" },
+        "commit": { "type": "string" },
+        "mode": { "type": "string", "enum": ["commit", "bundle"] },
         "state": {
           "type": "string",
           "enum": ["provisioning", "awaitingSession", "running", "completed", "cancelled", "failed"]
         },
-        "desktopId": {
-          "type": ["string", "null"]
-        },
-        "desktopGeneration": {
-          "type": ["integer", "null"]
-        },
-        "deadlineAt": {
-          "type": ["integer", "null"]
-        },
-        "delegationId": {
-          "type": ["string", "null"]
-        },
-        "childSessionKey": {
-          "type": ["string", "null"]
-        },
+        "desktopId": { "type": ["string", "null"] },
+        "desktopGeneration": { "type": ["integer", "null"] },
+        "deadlineAt": { "type": ["integer", "null"] },
+        "delegationId": { "type": ["string", "null"] },
+        "childAttached": { "type": "boolean" },
         "source": {
           "type": "object",
           "properties": {
-            "sessionId": {
-              "type": "string"
-            },
-            "taskId": {
-              "type": ["string", "null"]
-            },
-            "parentRunId": {
-              "type": ["string", "null"]
-            }
+            "sessionId": { "type": "string" },
+            "taskId": { "type": ["string", "null"] },
+            "parentRunId": { "type": ["string", "null"] }
           },
           "required": ["sessionId", "taskId", "parentRunId"],
           "additionalProperties": false
         },
-        "errorCode": {
-          "type": ["string", "null"]
-        },
-        "createdAt": {
-          "type": "integer"
-        },
-        "updatedAt": {
-          "type": "integer"
-        },
-        "endedAt": {
-          "type": ["integer", "null"]
-        }
+        "errorCode": { "type": ["string", "null"] },
+        "createdAt": { "type": "integer" },
+        "updatedAt": { "type": "integer" },
+        "endedAt": { "type": ["integer", "null"] }
       },
       "required": [
         "acceptanceId",
@@ -14981,7 +14946,7 @@
         "desktopGeneration",
         "deadlineAt",
         "delegationId",
-        "childSessionKey",
+        "childAttached",
         "source",
         "errorCode",
         "createdAt",

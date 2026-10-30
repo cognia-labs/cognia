@@ -68,7 +68,8 @@ export interface ManagedDesktopAcceptanceRun {
   desktopGeneration: number | null
   deadlineAt: number | null
   delegationId: string | null
-  childSessionKey: string | null
+  /** Whether the one-time child session attach happened. The key itself never leaves the Host. */
+  childAttached: boolean
   source: { sessionId: string; taskId: string | null; parentRunId: string | null }
   errorCode: string | null
   createdAt: number
