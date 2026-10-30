@@ -2,6 +2,7 @@
 // and renders text / reasoning / tool-call blocks as fenced markdown that
 // round-trips through any standard renderer (GitHub, Obsidian, etc).
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type { UIMessage } from "ai"
 import type { ChatSession, StoredMessage } from "@cognia/agent-config-types"
 
@@ -92,7 +93,7 @@ export function exportToRichJSON(data: RichExportData): string {
       version: "cognia-next-1.0",
       exportedAt: exportedAt.toISOString(),
       session,
-      messages,
+      messages: projectRemoteDocumentData(messages, true),
       statistics: {
         totalMessages: messages.length,
         userMessages: messages.filter((m) => m.role === "user").length,

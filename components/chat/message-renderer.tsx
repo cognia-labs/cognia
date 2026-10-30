@@ -1,5 +1,9 @@
 "use client"
 
+import { CreatedDocumentAction } from "./message-parts/created-document-action"
+import { ChatDocumentSessionContext } from "./markdown/chat-link-options"
+import { useTranscriptSessionId } from "./transcript-session-context"
+import { REMOTE_DOC_PART_KEY } from "@/lib/chat/attachments/remote-document"
 import {
   Message,
   MessageAction,
@@ -391,6 +395,18 @@ function MessageRendererInner({
     (typeof (message as { metadata?: { sessionId?: unknown } }).metadata?.sessionId === "string"
       ? ((message as { metadata?: { sessionId?: string } }).metadata!.sessionId as string)
       : undefined) ?? activeSessionId
+  const transcriptSessionId = useTranscriptSessionId()
+  const documentSessionId =
+    (typeof (message as { sessionId?: unknown }).sessionId === "string"
+      ? (message as unknown as { sessionId: string }).sessionId
+      : undefined) ??
+    (typeof (message.metadata as { sessionId?: unknown } | undefined)?.sessionId === "string"
+      ? (message.metadata as { sessionId: string }).sessionId
+      : undefined) ??
+    // A live message has no session id yet; the transcript list knows whose it
+    // is (a side chat or an unfocused split pane is not the active session).
+    transcriptSessionId ??
+    activeSessionId
   // Where "hand this back" should land. An aside hands back to the main
   // conversation; a branch hands back to the one it was cut from. Both are
   // "up one level", so one action covers both rather than two that differ only
@@ -971,7 +987,7 @@ function MessageRendererInner({
                 agentFlowMode,
                 opts,
                 message.id,
-                branchSessionId ?? undefined,
+                documentSessionId ?? undefined,
                 display.tools
               )
             }
@@ -1046,7 +1062,7 @@ function MessageRendererInner({
         mentionPattern={message.role === "user" ? mentionPattern : null}
         characterById={characterById}
         messageId={message.id}
-        sessionId={branchSessionId ?? undefined}
+        sessionId={documentSessionId ?? undefined}
         mode={agentFlowMode}
         display={display}
         t={t}
@@ -2100,19 +2116,23 @@ const MessagePart = memo(function MessagePart({
   projectRoot?: string | null
   untrusted: boolean
 }) {
-  return renderPart(
-    part,
-    partKey,
-    isStreaming,
-    mentionPattern,
-    characterById,
-    messageId,
-    sessionId,
-    mode,
-    display,
-    t,
-    projectRoot,
-    untrusted
+  return (
+    <ChatDocumentSessionContext.Provider value={sessionId}>
+      {renderPart(
+        part,
+        partKey,
+        isStreaming,
+        mentionPattern,
+        characterById,
+        messageId,
+        sessionId,
+        mode,
+        display,
+        t,
+        projectRoot,
+        untrusted
+      )}
+    </ChatDocumentSessionContext.Provider>
   )
 })
 MessagePart.displayName = "MessagePart"
@@ -2152,17 +2172,20 @@ function renderToolPart(
   visibility: ResolvedMessageDisplayOptions["tools"]
 ): React.ReactNode {
   const slot = (
-    <PluginExtensionSlot
-      point="chat.tool-call.actions"
-      className="mt-1 flex items-center gap-1 empty:hidden"
-      context={{
-        toolName: tp.type,
-        toolState: tp.state,
-        toolInput: tp.input,
-        messageId,
-        sessionId,
-      }}
-    />
+    <>
+      <CreatedDocumentAction part={tp} sessionId={sessionId} />
+      <PluginExtensionSlot
+        point="chat.tool-call.actions"
+        className="mt-1 flex items-center gap-1 empty:hidden"
+        context={{
+          toolName: tp.type,
+          toolState: tp.state,
+          toolInput: tp.input,
+          messageId,
+          sessionId,
+        }}
+      />
+    </>
   )
   const preferenceOpen =
     visibility === "expanded" ? true : visibility === "collapsed" ? false : undefined
@@ -2545,6 +2568,12 @@ function renderPart(
     const extraction = readAttachmentExtractedContent(
       (part as { extractedContent?: unknown }).extractedContent
     )
+    // Even an extraction from another build may still name an asset. Keep
+    // that identity so deleting its source can never revive the part body.
+    const storedAssetId = (part as { extractedContent?: { attachmentId?: unknown } })
+      .extractedContent?.attachmentId
+    const sourceAssetId =
+      extraction?.attachmentId ?? (typeof storedAssetId === "string" ? storedAssetId : undefined)
     if (!url && (attachedText || extraction)) {
       return (
         <AttachmentTextCard
@@ -2553,7 +2582,9 @@ function renderPart(
           mediaType={mediaType}
           text={attachedText ?? ""}
           sessionId={sessionId}
-          assetId={extraction?.attachmentId}
+          assetId={sourceAssetId}
+          messageId={messageId}
+          provenance={(part as unknown as Record<string, unknown>)[REMOTE_DOC_PART_KEY]}
         />
       )
     }

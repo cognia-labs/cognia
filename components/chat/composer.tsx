@@ -14,6 +14,8 @@
 // truth. We just don't render `<PromptInput>` (which forces a vertical
 // `<InputGroup>` layout), and we own the form/textarea ourselves.
 
+import { stagedRemoteDocument } from "@/lib/chat/attachments/remote-document"
+import { parseRemoteDocumentProvenance } from "@/lib/docs-providers/document-provenance"
 import {
   PromptInputProvider,
   usePromptInputAttachments,
@@ -2099,7 +2101,14 @@ function ComposerInner(props: InnerProps) {
       : undefined
     // `id` is RETAINED here (unlike before): it is the key `buildSendContent`
     // uses to look each file up in the staging-time extraction cache.
-    const snapshotAttachmentInputs = snapshotFiles.map((item) => ({ ...item }))
+    // Provenance survives even when this send captured an extraction that was
+    // still pending. It belongs to the submitted File, independently of parsing.
+    const snapshotAttachmentInputs = snapshotFiles.map((item) => {
+      const remoteDocument = parseRemoteDocumentProvenance(
+        staged.byId.get(item.id)?.remoteDocument ?? stagedRemoteDocument(item.sourceFile)
+      )
+      return { ...item, ...(remoteDocument ? { remoteDocument } : {}) }
+    })
     // Snapshot the folded-paste bodies too: the optimistic clear wipes them, so
     // the send (and a restore-on-failure) reads from this stable map.
     const pasteMap = pastedBlocks
@@ -3109,6 +3118,7 @@ function ComposerInner(props: InnerProps) {
                 sizeBytes: a.size,
                 bytes: a.bytes,
                 restoredContent: a.extractedContent,
+                remoteDocument: parseRemoteDocumentProvenance(a.remoteDocument) ?? undefined,
                 ocrText: a.ocrText,
                 includeOcr: a.includeOcr,
                 ...(a.extractedText

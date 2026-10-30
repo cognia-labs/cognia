@@ -248,7 +248,8 @@ export function createDispatcher(browser, supervisor, media, eventJournal) {
         ? browser.createPage(sessionId, url, { activate: false })
         : browser.createPage(sessionId, url),
     "browser.page.activate": ({ sessionId, pageId }) => browser.activatePage(sessionId, pageId),
-    "browser.page.close": ({ sessionId, pageId }) => browser.closePage(sessionId, pageId),
+    "browser.page.close": ({ sessionId, pageId, runBeforeUnload }) =>
+      browser.closePage(sessionId, pageId, { runBeforeUnload: runBeforeUnload === true }),
     "browser.drag": ({ sessionId, sourceRef, targetRef }) =>
       browser.drag(sessionId, sourceRef, targetRef),
     "browser.dialog.handle": ({ sessionId, accept, promptText }) =>
@@ -353,7 +354,7 @@ export function createDispatcher(browser, supervisor, media, eventJournal) {
   }
   return async (type, payload) => {
     const safePayload = payload ?? {}
-    browser.assertSessionOperation?.(safePayload.sessionId, type)
+    browser.assertSessionOperation?.(safePayload.sessionId, type, safePayload)
     const operation = Object.hasOwn(operations, type) ? operations[type] : undefined
     if (!operation)
       throw Object.assign(new Error("unknown control operation"), { code: "unknown_operation" })

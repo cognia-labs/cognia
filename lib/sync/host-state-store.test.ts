@@ -87,6 +87,35 @@ describe("HostState durable store", () => {
     __resetDbForTesting()
   })
 
+  it("strips provenance from citation-free draft snapshot references", async () => {
+    await getDb().chatDrafts.put({
+      sessionId: "session-1",
+      text: "draft",
+      updatedAt: 1,
+      attachmentRefs: [
+        {
+          name: "Plan.md",
+          mediaType: "text/markdown",
+          size: 4,
+          remoteDocument: {
+            v: 1,
+            accountId: "private-account",
+            authorizationEpoch: "epoch",
+            accountBinding: { accountId: "private-account" },
+          },
+        },
+      ],
+    } as never)
+    await acquireWritableLease()
+    const snapshot = await getHostStateSnapshot(channel)
+    expect(snapshot.state).toMatchObject({
+      draft: { attachments: [{ name: "Plan.md", mediaType: "text/markdown", size: 4 }] },
+    })
+    expect(JSON.stringify(snapshot.state)).not.toMatch(
+      /remoteDocument|private-account|authorizationEpoch|accountBinding/
+    )
+    expect(snapshot.digest).toBe(hostStateDigest(snapshot.state))
+  })
   it("archives scratch once, keeps the transaction alive, and skips cleanup on unarchive", async () => {
     await acquireWritableLease()
     archiveScratchMock.mockImplementation(async (session: { id: string; archivedAt?: number }) => {

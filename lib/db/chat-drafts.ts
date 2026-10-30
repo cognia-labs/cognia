@@ -1,3 +1,5 @@
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
+import type { RemoteDocumentProvenanceV1 } from "@/lib/docs-providers/document-provenance"
 import { getDb } from "./schema"
 import { enqueueHostStateIntentIfAvailable } from "./mobile-outbound-queue"
 import type { ChatTemplateBinding } from "@/lib/chat/template/binding"
@@ -73,6 +75,7 @@ export interface DraftAttachmentMeta {
    * Local only, like `bytes`: the Host projection carries names and sizes.
    */
   citation?: ContextRef
+  remoteDocument?: RemoteDocumentProvenanceV1
 }
 
 /**
@@ -175,7 +178,7 @@ export interface SetDraftOptions {
 
 export async function getDraft(sessionId: string): Promise<ChatDraftRow | null> {
   const row = await getDb().chatDrafts.get(sessionId)
-  return row ?? null
+  return row ? projectRemoteDocumentData(row, true) : null
 }
 
 export async function setDraft(

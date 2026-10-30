@@ -1530,3 +1530,61 @@ describe("ComposerPopover — remote documents", () => {
     expect(screen.getByTestId("composer-doc-account")).toHaveTextContent("Acme Feishu")
   })
 })
+
+import { openDockDocument } from "@/lib/artifacts/dock-documents"
+jest.mock("@/lib/artifacts/dock-documents", () => ({ openDockDocument: jest.fn() }))
+it("Preview preserves the trigger and pick behavior; Enter/Tab confirmation still attaches", () => {
+  const doc = {
+    providerId: "google",
+    kind: "doc" as const,
+    id: "abcdefghijklmnop1234",
+    title: "Plan",
+    url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+    accountBinding: { accountId: "a", authorizationEpoch: "v1" },
+  }
+  useRemoteDocSearchMock.mockReturnValue(
+    docSearchState({
+      provider: { id: "google" } as never,
+      hostSupported: true,
+      reach: { available: true },
+      accountId: "a",
+      accounts: [{ id: "a", label: "Alice", authorizationEpoch: "v1" }],
+      items: [doc],
+    })
+  )
+  const onPick = jest.fn(),
+    onDismiss = jest.fn(),
+    ref = createRef<ComposerPopoverHandle>(),
+    anchor = document.createElement("div")
+  document.body.append(anchor)
+  render(
+    <ComposerPopover
+      ref={ref}
+      anchor={anchor}
+      trigger={{ kind: "doc", namespace: "gdoc:", query: "Plan", tokenStart: 0, tokenEnd: 10 }}
+      cwd={null}
+      slashCommands={commands}
+      entityContext={{ sessionId: "owner" }}
+      onPick={onPick}
+      onDismiss={onDismiss}
+    />
+  )
+  const preview = screen.getByRole("button", { name: /previewDocument/ })
+  fireEvent.mouseDown(preview)
+  fireEvent.click(preview)
+  expect(onPick).not.toHaveBeenCalled()
+  expect(onDismiss).not.toHaveBeenCalled()
+  expect(openDockDocument).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: "owner",
+      view: "snapshot",
+      binding: doc.accountBinding,
+      entry: "picker",
+    })
+  )
+  act(() => {
+    ref.current!.confirm()
+  })
+  expect(onPick).toHaveBeenCalledTimes(1)
+  expect(onPick).toHaveBeenCalledWith({ kind: "doc", providerId: "google", accountId: "a", doc })
+})

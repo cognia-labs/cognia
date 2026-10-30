@@ -4,6 +4,7 @@
 // default — they'd just be re-seeded on import — but `includeBuiltIns: true`
 // can override for "true full snapshot" use cases.
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import {
   exportAuthoredContent,
   portableSessionReferences,
@@ -360,7 +361,9 @@ export async function buildBackupPackage(
     )
     const exportedSessionIds = new Set(exportedSessions.map((session) => session.id))
     payload.sessions = exportedSessions
-    payload.messages = messages.filter((message) => exportedSessionIds.has(message.sessionId))
+    payload.messages = messages
+      .filter((message) => exportedSessionIds.has(message.sessionId))
+      .map((message) => projectRemoteDocumentData(message, true))
     payload.sessionState = sessionState.filter((state) => exportedSessionIds.has(state.sessionId))
     for await (const record of exportSessionAssetRecords(exportedSessionIds)) {
       if (record.section === "sessionAssets") (payload.sessionAssets ??= []).push(...record.rows)

@@ -20,6 +20,7 @@
  * guard, same bridge-injection pattern for tests.
  */
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { messageRepository } from "@/lib/db"
 import { getDb } from "@/lib/db/schema"
@@ -690,7 +691,7 @@ function toWireMessage(row: StoredMessage): StoredMessage {
   const { syncRevision: _hostSyncClock, ...message } = row as StoredMessage & {
     syncRevision?: number
   }
-  return message
+  return projectRemoteDocumentData(message, true)
 }
 
 const TRANSCRIPT_SCAN_CHUNK = 200
@@ -855,10 +856,10 @@ function toTranscriptMessage(message: StoredMessage): TranscriptMessage {
     sessionId: message.sessionId,
     ...(message.turnKey ? { turnKey: message.turnKey } : {}),
     role: message.role,
-    parts: message.parts,
+    parts: projectRemoteDocumentData(message.parts, true),
     ...(message.senderId ? { senderId: message.senderId } : {}),
     ...(message.senderKind ? { senderKind: message.senderKind } : {}),
-    ...(message.metadata ? { metadata: message.metadata } : {}),
+    ...(message.metadata ? { metadata: projectRemoteDocumentData(message.metadata, true) } : {}),
     createdAt: message.createdAt,
   }
 }

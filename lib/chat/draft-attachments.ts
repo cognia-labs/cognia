@@ -10,6 +10,10 @@
  * instead of its frames, and is re-sampled on restore.
  */
 
+import {
+  parseRemoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
 import type { VideoPreprocessSettings } from "@/lib/chat/attachments/video/settings"
 import type { DraftAttachmentMeta } from "@/lib/db/chat-drafts"
 import type { ContextRef } from "@/lib/chat/mentions/types"
@@ -24,6 +28,7 @@ export interface DraftSourceFile {
 
 /** The slice of a staged attachment's derived state that a draft persists. */
 export interface DraftSourceState {
+  remoteDocument?: RemoteDocumentProvenanceV1
   sizeBytes: number
   bytes?: Uint8Array
   ocrText?: string
@@ -67,6 +72,7 @@ export function draftAttachmentsFromFiles(
   return files.map((f) => {
     const state = states?.get(f.id)
     const citation = citationOf?.(f.id)
+    const remoteDocument = parseRemoteDocumentProvenance(state?.remoteDocument)
     // Fall back to the URL estimate only when there is no staged state (e.g. a
     // caller outside the composer); it yields 0 for blob: URLs.
     const size = state?.sizeBytes ?? estimateDataUrlBytes(f.url)
@@ -83,6 +89,7 @@ export function draftAttachmentsFromFiles(
       ...(state?.extracted?.tokens ? { tokens: state.extracted.tokens } : {}),
       ...(state?.video ? { videoSettings: state.video.settings } : {}),
       ...(citation ? { citation } : {}),
+      ...(remoteDocument ? { remoteDocument } : {}),
     }
   })
 }

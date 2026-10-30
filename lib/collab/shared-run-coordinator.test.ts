@@ -1478,3 +1478,50 @@ describe("ADR-0241 WP3 live publisher", () => {
     expect(frames(client).map((frame) => frame.state)).toEqual(["streaming", "reset"])
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("re-parses provenance on shared-session sends, including durable retry parts", async () => {
+  const client = fullClient()
+  useContext(client)
+  jest.requireMock("./shared-chat-conversion").uploadMessageAttachments.mockResolvedValueOnce({
+    parts: [
+      {
+        type: "file",
+        text: "body",
+        mediaType: "text/markdown",
+        remoteDocument: injectedCloudProvenance,
+      },
+    ],
+    attachmentIds: [],
+  })
+  await sendSharedSessionMessage(session, {
+    id: "cloud-send",
+    parts: [
+      {
+        type: "file",
+        text: "body",
+        mediaType: "text/markdown",
+        remoteDocument: injectedCloudProvenance,
+      },
+    ],
+    metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+  })
+  const sent = client.appendSessionEvent.mock.calls[0][2]
+  expect(sent.payload.parts[0].remoteDocument).toEqual(cloudProvenance)
+  expect(JSON.stringify(sent)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})

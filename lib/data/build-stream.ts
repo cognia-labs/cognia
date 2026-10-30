@@ -1,3 +1,4 @@
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import {
   exportAuthoredContent,
   portableSessionReferences,
@@ -353,7 +354,10 @@ async function* tableSections<T, TKey>(
   for await (const page of iterate(table)) {
     const rows: T[] = []
     for (const row of page) {
-      if (!filter || (await filter(row))) rows.push(transform ? transform(row) : row)
+      if (!filter || (await filter(row))) {
+        const projected = transform ? transform(row) : row
+        rows.push(section === "messages" ? projectRemoteDocumentData(projected, true) : projected)
+      }
     }
     if (rows.length > 0) {
       emitted = true

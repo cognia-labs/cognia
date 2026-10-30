@@ -134,3 +134,31 @@ describe("materializeChatShareMedia", () => {
     expect(result.attachments).toEqual([])
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("strips provenance from share links before any exporter renders parts", async () => {
+  const source = message("cloud-share", [
+    { type: "file", text: "body", remoteDocument: injectedCloudProvenance },
+  ])
+  const result = await materializeChatShareMedia([source])
+  expect(result.messages[0].parts[0]).not.toHaveProperty("remoteDocument")
+  expect(JSON.stringify(result.messages)).not.toMatch(
+    /private-account|authorizationEpoch|accountBinding/
+  )
+  expect(source.parts[0]).toHaveProperty("remoteDocument.accountId", "private-account")
+})

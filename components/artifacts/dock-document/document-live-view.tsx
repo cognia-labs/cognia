@@ -37,40 +37,70 @@ export function DocumentLiveView({ sessionId, tab }: { sessionId: string; tab: D
           : !local.status.installed
             ? "chromium"
             : runtime.reason
-  const state = reason ? "blocked" : !local.status ? "preparing" : runtime.state
+  const state =
+    !tab.url || !desktop || local.error || !local.status?.installed
+      ? reason
+        ? "blocked"
+        : "preparing"
+      : runtime.state
+  const showBanner = state !== "ready"
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
-      <p role="status">{t(`live.states.${state}`)}</p>
-      {reason ? (
-        <p className="text-sm text-muted-foreground">
-          {t(
-            `live.reasons.${["unknown-link", "web", "chromium", "isolation-unavailable", "browser-error"].includes(reason) ? reason : "browser-error"}`
-          )}
-        </p>
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden">
+      {showBanner ? (
+        <div className="pointer-events-none absolute inset-x-2 top-11 z-10 flex justify-center">
+          <div className="pointer-events-auto flex max-w-full flex-wrap items-center gap-2 rounded-md border bg-background/95 px-3 py-2 text-xs shadow-sm">
+            <span role="status">{t(`live.states.${state}`)}</span>
+            {reason ? (
+              <span className="text-muted-foreground">
+                {t(
+                  `live.reasons.${
+                    [
+                      "unknown-link",
+                      "web",
+                      "chromium",
+                      "isolation-unavailable",
+                      "browser-error",
+                      "profile-in-use",
+                      "op-refused",
+                      "cap-reached",
+                      "runtime-exited",
+                      "update-app",
+                      "signed-out",
+                    ].includes(reason)
+                      ? reason
+                      : "browser-error"
+                  }`
+                )}
+              </span>
+            ) : null}
+            {reason === "chromium" ? <LocalChromiumInstall local={local} /> : null}
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!tab.url}
+              onClick={() =>
+                void openExternal(tab.url).catch(() =>
+                  onState("error", { reason: "browser-error" })
+                )
+              }
+            >
+              {t("openSystem")}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setRuntime({ state: "preparing" })
+                setAttempt((value) => value + 1)
+                void local.refresh()
+              }}
+            >
+              {t("retry")}
+            </Button>
+          </div>
+        </div>
       ) : null}
-      {reason === "chromium" ? <LocalChromiumInstall local={local} /> : null}
-      <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          disabled={!tab.url}
-          onClick={() =>
-            void openExternal(tab.url).catch(() => onState("error", { reason: "browser-error" }))
-          }
-        >
-          {t("openSystem")}
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => {
-            setRuntime({ state: "preparing" })
-            setAttempt((value) => value + 1)
-            void local.refresh()
-          }}
-        >
-          {t("retry")}
-        </Button>
-      </div>
-      {desktop && tab.url && local.status?.installed ? (
+      {desktop && tab.url && local.status?.installed && !local.error ? (
         <DocumentViewerBrowser
           key={attempt}
           sessionId={sessionId}

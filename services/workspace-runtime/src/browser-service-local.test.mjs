@@ -540,6 +540,55 @@ test("document-viewer runtime and crate allowlists stay identical", async () => 
   assert.deepEqual(DOCUMENT_VIEWER_OPS, ops)
 })
 
+test("document viewer accepts viewport-only emulation and refuses other capabilities", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  const session = service.sessions.get("viewer")
+  const pageId = session.activePageId
+  const control = createDispatcher(service, null, new MediaLatestStore(), { publish() {} })
+  const viewport = { width: 420, height: 700, deviceScaleFactor: 2, fitToWidth: false }
+  const payload = { sessionId: "viewer", pageId, viewport, synchronizeFrame: false }
+  await control("browser.emulate", payload)
+  assert.deepEqual(session.pages.get(pageId).page.viewport, { width: 420, height: 700 })
+  for (const key of [
+    "userAgent",
+    "geolocation",
+    "device",
+    "locale",
+    "timezone",
+    "media",
+    "colorScheme",
+    "offline",
+    "reset",
+    "extra",
+  ]) {
+    await assert.rejects(
+      () => control("browser.emulate", { ...payload, pageId: "missing", [key]: null }),
+      { code: "browser_document_viewer_op_refused" },
+      key
+    )
+    await assert.rejects(
+      () => service.emulate("viewer", { pageId, viewport, [key]: null }),
+      { code: "browser_document_viewer_op_refused" },
+      `direct ${key}`
+    )
+  }
+  for (const invalid of [
+    { ...payload, viewport: { ...viewport, locale: "en" } },
+    { ...payload, viewport: null },
+    { ...payload, viewport: { ...viewport, width: 0 } },
+    { ...payload, viewport: { ...viewport, height: 8193 } },
+    { ...payload, viewport: { ...viewport, deviceScaleFactor: 0 } },
+    { ...payload, viewport: { ...viewport, fitToWidth: "yes" } },
+    { ...payload, synchronizeFrame: "yes" },
+    { ...payload, pageId: undefined },
+  ]) {
+    await assert.rejects(() => control("browser.emulate", invalid), {
+      code: "browser_document_viewer_op_refused",
+    })
+  }
+})
+
 test("document viewer find does not depend on overlay functions", async (t) => {
   const { service } = await fixture(t)
   await service.createSession({ id: "find-viewer", purpose: "document-viewer" })
@@ -746,6 +795,120 @@ test("publishes pages.changed, dialog.opened and session.closed events", async (
 function pageIdOf(service, sessionId, page) {
   return service.sessions.get(sessionId).pageIds.get(page)
 }
+
+test("beforeunload close keeps the page on cancel and ordinary close still dismisses", async (t) => {
+  const { service, chromium, events } = await fixture(t)
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  const page = chromium.launches[0].context._pages[0]
+  const pageId = pageIdOf(service, "viewer", page)
+  const originalClose = page.close.bind(page)
+  let optionsSeen
+  let dismissed = 0
+  page.close = async (options) => {
+    optionsSeen = options
+    if (!options?.runBeforeUnload) return originalClose()
+    page.emit("dialog", {
+      type: () => "beforeunload",
+      message: () => "Unsaved changes",
+      defaultValue: () => "",
+      dismiss: async () => {
+        dismissed += 1
+      },
+      accept: originalClose,
+    })
+  }
+  await service.closePage("viewer", pageId, { runBeforeUnload: true })
+  assert.deepEqual(optionsSeen, { runBeforeUnload: true })
+  assert.equal(events.at(-1).dialog.type, "beforeunload")
+  assert.equal(page.closed, false)
+  // A second close must not dismiss an already pending dialog.
+  await service.closePage("viewer", pageId, { runBeforeUnload: true })
+  assert.equal(dismissed, 0)
+  await service.handleDialog("viewer", { accept: false })
+  assert.equal(page.closed, false)
+  assert.equal(dismissed, 1)
+  await service.closePage("viewer", pageId, { runBeforeUnload: true })
+  await service.handleDialog("viewer", { accept: true })
+  assert.equal(page.closed, true)
+
+  const ordinary = await service.createPage("viewer")
+  const other = service.sessions.get("viewer").pages.get(ordinary.id).page
+  other.emit("dialog", {
+    type: () => "alert",
+    message: () => "Hi",
+    defaultValue: () => "",
+    dismiss: async () => {
+      dismissed += 1
+    },
+  })
+  await service.closePage("viewer", ordinary.id)
+  assert.equal(other.closed, true)
+  assert.equal(dismissed, 2)
+})
+
+test("document viewer close reports a pre-existing dialog and succeeds after it is answered", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  const session = service.sessions.get("viewer")
+  const pageId = session.activePageId
+  const page = session.pages.get(pageId).page
+  let accepted = false
+  page.emit("dialog", {
+    type: () => "alert",
+    message: () => "Question",
+    defaultValue: () => "",
+    accept: async () => {
+      accepted = true
+    },
+    dismiss: async () => {},
+  })
+  const control = createDispatcher(service, null, new MediaLatestStore(), { publish() {} })
+  assert.deepEqual(
+    await control("browser.page.close", {
+      sessionId: "viewer",
+      pageId,
+      runBeforeUnload: true,
+    }),
+    { closed: false, reason: "dialog-pending" }
+  )
+  assert.equal(page.closed, false)
+  assert.equal(accepted, false)
+  await control("browser.dialog.handle", { sessionId: "viewer", pageId, accept: true })
+  assert.equal(accepted, true)
+  await control("browser.page.close", { sessionId: "viewer", pageId, runBeforeUnload: true })
+  assert.equal(page.closed, true)
+})
+
+test("document viewer publishes loading until load finishes, and marks failed navigation", async (t) => {
+  const { service, chromium, events } = await fixture(t)
+  await service.createSession({ id: "viewer", purpose: "document-viewer" })
+  const page = chromium.launches[0].context._pages[0]
+  const request = {
+    isNavigationRequest: () => true,
+    frame: () => page.mainFrame,
+    url: () => "https://docs.google.com/",
+  }
+  page.emit("request", request)
+  await page.goto("https://docs.google.com/")
+  await tick()
+  assert.equal(
+    events.filter((event) => event.type === "pages.changed").at(-1).pages[0].loading,
+    true
+  )
+  page.emit("load")
+  await tick()
+  assert.equal(
+    events.filter((event) => event.type === "pages.changed").at(-1).pages[0].loading,
+    false
+  )
+  page.emit("request", request)
+  page.emit("requestfailed", request)
+  await tick()
+  assert.equal(
+    events.filter((event) => event.type === "pages.changed").at(-1).pages[0].loadError,
+    "navigation-failed"
+  )
+})
 
 test("a crashed local browser publishes session.closed with reason disconnected", async (t) => {
   const { service, chromium, events } = await fixture(t)

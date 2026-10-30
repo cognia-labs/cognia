@@ -352,3 +352,36 @@ describe("exportToRichMarkdown — additional rendering branches", () => {
     expect(md).toContain("[object Object]")
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("re-parses provenance in rich JSON, which already carries citation metadata", () => {
+  const exported = JSON.parse(
+    exportToRichJSON({
+      ...data,
+      messages: [
+        {
+          ...data.messages[0],
+          parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }] as never,
+          metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+        },
+      ],
+    })
+  )
+  expect(exported.messages[0].parts[0].remoteDocument).toEqual(cloudProvenance)
+  expect(JSON.stringify(exported)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})

@@ -126,3 +126,31 @@ describe("exportToJsonlChat", () => {
     expect(JSON.parse(lines[1]).messages[1].content).toBe("v1")
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("strips provenance from citation-free JSONL exports", () => {
+  const exported = JSON.parse(
+    exportToJsonlPerMessage([
+      msg("1", "user", "", {
+        parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }] as never,
+      }),
+    ])
+  )
+  expect(exported.parts[0]).not.toHaveProperty("remoteDocument")
+  expect(JSON.stringify(exported)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})

@@ -174,3 +174,33 @@ describe("draftAttachmentsFromFiles", () => {
     })
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+it("keeps a validated provenance record beside the draft citation", () => {
+  const citation = { kind: "doc" as const, id: "google:doc", label: "Plan" }
+  const rows = draftAttachmentsFromFiles(
+    [{ id: "a", filename: "Plan.md" }],
+    new Map([
+      ["a", { sizeBytes: 4, bytes: new Uint8Array([1]), remoteDocument: injectedCloudProvenance }],
+    ]),
+    () => citation
+  )
+  expect(rows[0].remoteDocument).toEqual(cloudProvenance)
+  expect(rows[0].citation).toEqual(citation)
+})

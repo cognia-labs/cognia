@@ -107,3 +107,24 @@ it("disables refresh on unavailable hosts while retaining a CSV snapshot", () =>
   expect(screen.getByText("refreshFailed")).toBeInTheDocument()
   expect(screen.getByText("truncated")).toBeInTheDocument()
 })
+
+it("shows Attach only for a verified latest snapshot and invokes it explicitly", async () => {
+  const state = jest.mocked(useDocumentSnapshot).mock.results[0]?.value ?? {
+    state: "ready",
+    reach: { available: true },
+    refresh: jest.fn(),
+  }
+  const attachToChat = jest.fn(async () => true)
+  jest
+    .mocked(useDocumentSnapshot)
+    .mockReturnValue({ ...state, canAttach: true, attachToChat } as never)
+  const { rerender } = render(<DocumentSnapshotView sessionId="s" tab={tab} />)
+  expect(attachToChat).not.toHaveBeenCalled()
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "attachToChat" })))
+  expect(attachToChat).toHaveBeenCalledTimes(1)
+  jest
+    .mocked(useDocumentSnapshot)
+    .mockReturnValue({ ...state, canAttach: false, attachToChat } as never)
+  rerender(<DocumentSnapshotView sessionId="s" tab={tab} />)
+  expect(screen.queryByRole("button", { name: "attachToChat" })).not.toBeInTheDocument()
+})

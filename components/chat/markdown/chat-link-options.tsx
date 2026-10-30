@@ -15,6 +15,8 @@ import { createContext, useContext, type ReactNode } from "react"
 import { DEFAULT_MESSAGE_LINK_OPTIONS } from "@/lib/chat/message-display"
 import type { MessageLinkOptions } from "@/types/appearance"
 
+export const ChatDocumentSessionContext = createContext<string | undefined>(undefined)
+
 const ChatLinkOptionsContext = createContext<MessageLinkOptions>(DEFAULT_MESSAGE_LINK_OPTIONS)
 
 export function ChatLinkOptionsProvider({

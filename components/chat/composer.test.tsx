@@ -2105,3 +2105,72 @@ describe("Composer — next-prompt predictions", () => {
     expect(ta).toHaveValue("")
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+it("restores a cloud attachment's provenance into its composer tile", async () => {
+  const create = URL.createObjectURL,
+    revoke = URL.revokeObjectURL
+  URL.createObjectURL = jest.fn(() => "blob:restored-document")
+  URL.revokeObjectURL = jest.fn()
+  jest.mocked(getDraft).mockResolvedValue({
+    sessionId: "ses_42",
+    text: "",
+    updatedAt: 1,
+    attachments: [
+      {
+        name: "Plan.md",
+        mediaType: "text/markdown",
+        size: 4,
+        bytes: new TextEncoder().encode("body"),
+        remoteDocument: injectedCloudProvenance,
+      },
+    ],
+  } as never)
+  const Wrapper = withAdapter(makeAdapter())
+  const onSend = jest.fn(async () => undefined)
+  const view = render(
+    <Wrapper>
+      <Composer
+        session={mkSession()}
+        onStartNewSession={async () => undefined}
+        onOpenSettings={() => undefined}
+        onSend={onSend}
+        onStop={async () => undefined}
+      />
+    </Wrapper>
+  )
+  try {
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /modelView|Model view/ })).toBeInTheDocument()
+    )
+    const input = screen.getByRole("textbox")
+    fireEvent.change(input, { target: { value: "send document" } })
+    fireEvent.keyDown(input, { key: "Enter", code: "Enter" })
+    await waitFor(() => expect(onSend).toHaveBeenCalled())
+    const submitted = jest
+      .requireMock("@/lib/chat/attachments/dispatch")
+      .buildSendContent.mock.calls.at(-1)[1]
+    expect(submitted[0].remoteDocument).toEqual(cloudProvenance)
+  } finally {
+    view.unmount()
+    jest.mocked(getDraft).mockResolvedValue(undefined as never)
+    URL.createObjectURL = create
+    URL.revokeObjectURL = revoke
+  }
+})

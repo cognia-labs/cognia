@@ -364,3 +364,26 @@ describe("useRemoteDocStaging", () => {
     expect(toast.error).toHaveBeenCalled()
   })
 })
+
+it("hands the fetched provenance to intake beside the same File's citation", async () => {
+  getProviderMock.mockReturnValue({
+    fetch: jest.fn(async () => content()),
+    listAccounts: jest.fn(async () => []),
+  })
+  const { stage, acceptFiles } = renderStaging()
+  let file: File | null = null
+  await act(async () => {
+    file = await stage({ providerId: "lark", accountId: "a", doc: REF })
+  })
+  const options = acceptFiles.mock.calls[0][1]
+  expect(options.provenance.get(file)).toMatchObject({
+    providerId: "lark",
+    resourceId: REF.id,
+    title: "Q3 Plan",
+    completeness: { status: "complete" },
+  })
+  expect(options.citations.has(file)).toBe(true)
+  expect(JSON.stringify(options.provenance.get(file))).not.toMatch(
+    /accountId|authorizationEpoch|accountBinding/
+  )
+})

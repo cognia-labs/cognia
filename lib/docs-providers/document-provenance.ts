@@ -40,6 +40,11 @@ export interface RemoteDocumentProvenanceV1 {
   fetchedAt: number
   completeness: RemoteDocCompleteness
   truncated?: boolean
+  /**
+   * Lark folds legacy docs and docx into `doc`; a search hit's opaque token
+   * needs this to be read again. Not identity: only `"doc"` or `"docx"`.
+   */
+  sourceType?: "doc" | "docx"
 }
 
 const PROVIDERS = new Set(["lark", "google"])
@@ -110,6 +115,11 @@ export function parseRemoteDocumentProvenance(value: unknown): RemoteDocumentPro
     fetchedAt,
     completeness,
     ...(value.truncated === true ? { truncated: true } : {}),
+    ...(providerId === "lark" &&
+    kind === "doc" &&
+    (value.sourceType === "doc" || value.sourceType === "docx")
+      ? { sourceType: value.sourceType }
+      : {}),
   }
 }
 
@@ -136,5 +146,6 @@ export function remoteDocumentProvenance(
         ? { status: "partial", reasons: ["upstream-truncated"] }
         : { status: "complete" }),
     truncated: content.truncated,
+    sourceType: ref.sourceType,
   })
 }

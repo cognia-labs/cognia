@@ -99,6 +99,22 @@ describe("parseRemoteDocumentProvenance", () => {
   })
 })
 
+it("keeps a Lark doc/docx source type and drops any other value", () => {
+  expect(parseRemoteDocumentProvenance({ ...valid, sourceType: "docx" })?.sourceType).toBe("docx")
+  expect(parseRemoteDocumentProvenance({ ...valid, sourceType: "sheet" })).not.toHaveProperty(
+    "sourceType"
+  )
+  expect(
+    parseRemoteDocumentProvenance({
+      ...valid,
+      providerId: "google",
+      resourceId: GOOGLE_ID,
+      url: "",
+      sourceType: "docx",
+    })
+  ).not.toHaveProperty("sourceType")
+})
+
 describe("remoteDocumentProvenance", () => {
   const content = (over: Partial<RemoteDocContent> = {}): RemoteDocContent => ({
     ref: {

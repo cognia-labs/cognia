@@ -12846,6 +12846,8 @@
     "workspaceBoundaryHint": "请选择可访问且位于 COGNIA_WORKSPACES_DIR 配置范围内的目录，或在目标工作区重新启动 CLI。"
   },
   "cloudDocPreview": {
+    "attachToChat": "附加到聊天",
+    "attachUnavailable": "输入框不可用或授权已过期。请打开此会话后重试。",
     "chooseAccount": "选择用于读取的账号",
     "copyFailed": "无法复制链接。",
     "copyLink": "复制链接",
@@ -12876,13 +12878,28 @@
     },
     "latestPreview": "最新预览",
     "live": {
+      "back": "后退",
+      "cancel": "取消",
+      "canvas": "实时文档页面",
+      "forward": "前进",
+      "more": "文档浏览器选项",
+      "providerBadge": "官方平台",
       "reasons": {
         "browser-error": "无法打开原文。",
+        "cap-reached": "请先关闭另一个文档标签页再打开此文档（最多 8 个页面）。",
         "chromium": "请安装本地 Chromium 以打开实时原文。",
         "isolation-unavailable": "此版本尚未提供隔离文档浏览器。",
+        "op-refused": "应用拒绝了此文档浏览器操作。",
+        "profile-in-use": "另一个窗口正在使用文档登录环境，请在该窗口关闭后重试。",
+        "runtime-exited": "文档浏览器已停止，请重试以重新打开文档。",
+        "signed-out": "文档浏览器登录已清除，请重试以重新登录。",
         "unknown-link": "原文链接未知。",
+        "update-app": "请更新应用以使用独立文档浏览器。",
         "web": "实时原文需要桌面应用。"
       },
+      "reload": "重新加载",
+      "signOut": "退出文档浏览器登录",
+      "signOutDescription": "这将关闭所有文档页面并清除独立文档浏览器的登录状态，未保存的更改可能丢失。不会断开文档 API 连接。",
       "states": {
         "blocked": "实时视图不可用。",
         "error": "无法加载原文。",
@@ -12891,12 +12908,17 @@
         "needs-login": "请登录文档提供商。",
         "preparing": "正在准备隔离浏览器…",
         "ready": "实时原文"
-      }
+      },
+      "toolbar": "文档浏览器"
     },
+    "modelView": "模型视图",
     "noAccounts": "没有已连接账号，请在设置中连接账号。",
+    "openDock": "在停靠区中打开",
     "openLive": "打开实时原文",
     "openSystem": "在系统浏览器中打开",
     "partial": "不完整快照 · {reasons}",
+    "preview": "预览",
+    "previewDocument": "预览 {title}",
     "providers": {
       "google": "Google Workspace",
       "lark": "飞书 / Lark"

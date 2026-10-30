@@ -167,6 +167,9 @@ jest.mock("./markdown-renderer", () => ({
       {
         "data-test": "markdown",
         "data-project-root": projectRoot,
+        "data-document-session": ReactForMocks.useContext(
+          jest.requireActual("./markdown/chat-link-options").ChatDocumentSessionContext
+        ),
         "data-untrusted": untrusted ? "true" : undefined,
       },
       content
@@ -200,10 +203,24 @@ jest.mock("@/components/chat/renderers/message-video-attachment-card", () => ({
 }))
 
 jest.mock("@/components/chat/message-parts/attachment-text-card", () => ({
-  AttachmentTextCard: ({ filename, text }: { filename: string; text: string }) =>
+  AttachmentTextCard: ({
+    filename,
+    text,
+    assetId,
+    sessionId,
+  }: {
+    filename: string
+    text: string
+    assetId?: string
+    sessionId?: string
+  }) =>
     ReactForMocks.createElement(
       "div",
-      { "data-testid": "attachment-text-card" },
+      {
+        "data-testid": "attachment-text-card",
+        "data-asset-id": assetId,
+        "data-session-id": sessionId,
+      },
       `${filename}:${text}`
     ),
 }))
@@ -520,6 +537,7 @@ jest.mock("@/components/chat/message-parts/tool-call-row", () => ({
 
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react"
 import type { UIMessage } from "ai"
+import { TranscriptSessionProvider } from "./transcript-session-context"
 import { HOVER_REVEAL_CLASS, MessageRenderer, messageAgentCatalogId } from "./message-renderer"
 import { TranscriptSelectionHostContext } from "@/hooks/chat/use-transcript-selection"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -1117,6 +1135,34 @@ describe("file parts", () => {
     render(<MessageRenderer message={msg} />)
     expect(screen.getByTestId("attachment-text-card")).toHaveTextContent(
       "report.txt:extracted payload"
+    )
+  })
+
+  it("binds a live message's attachment to the transcript's session, not the focused one", () => {
+    // A live side-chat or split-pane message has no session id yet; the
+    // focused session (or an aside's main conversation) would be the wrong owner.
+    useChatStore.setState({ activeSessionId: "focused" } as never)
+    const msg = {
+      id: "f-live",
+      role: "user",
+      parts: [
+        {
+          type: "file",
+          mediaType: "text/plain",
+          filename: "report.txt",
+          text: "body",
+          extractedContent: { attachmentId: "asset-1" },
+        },
+      ],
+    } as unknown as UIMessage
+    render(
+      <TranscriptSessionProvider sessionId="pane-session">
+        <MessageRenderer message={msg} />
+      </TranscriptSessionProvider>
+    )
+    expect(screen.getByTestId("attachment-text-card")).toHaveAttribute(
+      "data-session-id",
+      "pane-session"
     )
   })
 
@@ -3188,4 +3234,65 @@ describe("aside return actions", () => {
       mode: "append",
     })
   })
+})
+
+it("provides a background message's own session to Markdown links", () => {
+  useChatStore.setState({ activeSessionId: "foreground" })
+  render(
+    <MessageRenderer message={{ ...assistantMsg("owned", "Plan"), sessionId: "owner" } as never} />
+  )
+  expect(document.querySelector("[data-test=markdown]")).toHaveAttribute(
+    "data-document-session",
+    "owner"
+  )
+})
+it("offers a completed create-tool dock action through the renderer action seam", () => {
+  render(
+    <MessageRenderer
+      message={
+        {
+          ...assistantMsg("created", ""),
+          metadata: { sessionId: "owner" },
+          parts: [
+            {
+              type: "tool-lark.doc.create",
+              toolCallId: "create",
+              state: "output-available",
+              input: {},
+              output: {
+                ok: true,
+                data: { document: { url: "https://team.feishu.cn/docx/abcdefghijklmnop1234" } },
+              },
+            },
+          ],
+        } as never
+      }
+    />
+  )
+  expect(screen.getByRole("button", { name: /openDock|Open in dock/ })).toBeInTheDocument()
+})
+
+it("keeps a declared asset identity even when the saved extraction format is unknown", () => {
+  render(
+    <MessageRenderer
+      message={
+        {
+          id: "legacy-source",
+          role: "user",
+          parts: [
+            {
+              type: "file",
+              filename: "Plan.md",
+              text: "old body",
+              extractedContent: { attachmentId: "removed-copy", version: "future" },
+            },
+          ],
+        } as never
+      }
+    />
+  )
+  expect(screen.getByTestId("attachment-text-card")).toHaveAttribute(
+    "data-asset-id",
+    "removed-copy"
+  )
 })

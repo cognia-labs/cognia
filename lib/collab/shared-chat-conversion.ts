@@ -1,3 +1,4 @@
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type {
   AuthorRef,
   ChatSession,
@@ -198,7 +199,7 @@ export async function uploadMessageAttachments(
     const parts = await input.prepareAttachmentParts(message, remote)
     assertCurrentAccount()
     return {
-      parts,
+      parts: projectRemoteDocumentData(parts, true),
       attachmentIds: [],
     }
   }
@@ -241,7 +242,7 @@ export async function uploadMessageAttachments(
     attachmentIds.push(initialized.attachment.id)
     parts.push({ ...part, url: `cognia://shared-attachment/${initialized.attachment.id}` })
   }
-  return { parts, attachmentIds }
+  return { parts: projectRemoteDocumentData(parts, true), attachmentIds }
 }
 
 async function readSource(localSessionId: string): Promise<{
@@ -357,7 +358,7 @@ export async function convertLocalSessionToShared(
     const uploaded = hasFilePart(message)
       ? await uploadMessageAttachments(client, input, remoteDraft, message)
       : { parts: message.parts, attachmentIds: [] }
-    const parts = uploaded.parts
+    const parts = projectRemoteDocumentData(uploaded.parts, true)
     if (getDb() !== db) throw new DOMException("Shared conversion cancelled", "AbortError")
     const author = authorFor(message, identity.userId)
     // Whitelist the reference subset of the row's metadata: imported messages

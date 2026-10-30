@@ -26,6 +26,14 @@
  */
 
 import {
+  rememberRemoteDocument,
+  stagedRemoteDocument,
+} from "@/lib/chat/attachments/remote-document"
+import {
+  parseRemoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
+import {
   createContext,
   useCallback,
   useContext,
@@ -77,6 +85,7 @@ import {
 } from "@cognia/agent-config-types/attachment"
 
 export interface StagedAttachmentState {
+  remoteDocument?: RemoteDocumentProvenanceV1
   restoredContent?: AttachmentExtractedContent
   processing?: { processed: number; total: number }
   processingError?: string
@@ -462,6 +471,8 @@ export function StagedAttachmentsProvider({
       // provider mints ids internally and `add()` returns nothing.
       const seedIdx = seedQueueRef.current.findIndex((e) => e.filename === file.filename)
       const entry = seedIdx >= 0 ? seedQueueRef.current.splice(seedIdx, 1)[0] : undefined
+      const provenance = parseRemoteDocumentProvenance(entry?.state.remoteDocument)
+      if (provenance && file.sourceFile) rememberRemoteDocument(file.sourceFile, provenance)
       if (originalFiles) {
         extractAsDocumentOrImage(file)
         continue
@@ -501,8 +512,10 @@ export function StagedAttachmentsProvider({
           setResults((prev) =>
             new Map(prev).set(file.id, {
               ...entry!.state,
+              remoteDocument: provenance ?? undefined,
               extracted: {
                 ...extracted,
+                remoteDocument: provenance ?? undefined,
                 original: blob,
                 extractedContent: { ...extracted.extractedContent!, attachmentId: file.id },
               },
@@ -522,6 +535,7 @@ export function StagedAttachmentsProvider({
     }
 
     function extractAsDocumentOrImage(file: (typeof files)[number]) {
+      const remoteDocument = stagedRemoteDocument(file.sourceFile)
       const controller = new AbortController()
       motionRunsRef.current.get(file.id)?.abort()
       motionRunsRef.current.set(file.id, controller)
@@ -533,6 +547,7 @@ export function StagedAttachmentsProvider({
             new Map(prev).set(file.id, {
               status: "extracting",
               sizeBytes: prev.get(file.id)?.sizeBytes ?? 0,
+              ...(remoteDocument ? { remoteDocument } : {}),
             })
           )
           const url = file.url ?? ""
@@ -550,6 +565,7 @@ export function StagedAttachmentsProvider({
                 status: "ready",
                 sizeBytes: blob.size,
                 bytes,
+                ...(remoteDocument ? { remoteDocument } : {}),
               })
             )
             return
@@ -627,10 +643,11 @@ export function StagedAttachmentsProvider({
           setResults((prev) =>
             new Map(prev).set(file.id, {
               ...restoredOcr,
+              ...(remoteDocument ? { remoteDocument } : {}),
               status: extracted.block ? "ready" : "rejected",
               sizeBytes: original?.size ?? size,
               bytes: sourceBytes,
-              extracted,
+              extracted: { ...extracted, ...(remoteDocument ? { remoteDocument } : {}) },
             })
           )
         } catch (err) {
@@ -643,6 +660,7 @@ export function StagedAttachmentsProvider({
             new Map(prev).set(file.id, {
               status: "rejected",
               sizeBytes: 0,
+              ...(remoteDocument ? { remoteDocument } : {}),
               extracted: {
                 kind: isImage ? "image" : "document",
                 block: null,

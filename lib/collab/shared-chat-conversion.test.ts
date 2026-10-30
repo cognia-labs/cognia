@@ -4,6 +4,7 @@ import {
   SharedChatTeamSessionUnsupportedError,
   convertLocalSessionToShared,
   resolveSharedAttachmentParts,
+  uploadMessageAttachments,
 } from "./shared-chat-conversion"
 
 jest.mock("@/lib/db/schema", () => {
@@ -812,3 +813,55 @@ describe("attachment reads are guarded", () => {
     }
   )
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+it.each([true, false])(
+  "re-parses shared attachment parts from default and prepared conversions (prepared=%s)",
+  async (prepared) => {
+    const dbIdentity = {} as ReturnType<typeof getDb>
+    jest.mocked(getDb).mockReturnValue(dbIdentity)
+    const parts = [
+      {
+        type: "file",
+        mediaType: "text/markdown",
+        text: "body",
+        remoteDocument: injectedCloudProvenance,
+      },
+    ]
+    const client = {
+      initializeSessionAttachment: jest.fn(),
+      uploadSessionAttachment: jest.fn(),
+      commitSessionAttachment: jest.fn(),
+    }
+    const result = await uploadMessageAttachments(
+      client as never,
+      {
+        orgId: "o",
+        localSessionId: "s",
+        workspaceId: "w",
+        ...(prepared ? { prepareAttachmentParts: async () => parts as never } : {}),
+      },
+      { id: "remote" } as never,
+      { id: "m", sessionId: "s", role: "user", parts, createdAt: 1 } as never
+    )
+    expect(result.parts[0]).toHaveProperty("remoteDocument", cloudProvenance)
+    expect(JSON.stringify(result)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+    jest.mocked(getDb).mockImplementation(jest.requireActual("@/lib/db/schema").getDb)
+  }
+)

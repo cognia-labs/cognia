@@ -794,3 +794,79 @@ describe("AttachmentPreview — images the model will not see", () => {
     expect(screen.queryByTestId("attachment-visual-notice")).toBeNull()
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+import { openDockDocument } from "@/lib/artifacts/dock-documents"
+jest.mock("@/lib/artifacts/dock-documents", () => ({ openDockDocument: jest.fn() }))
+it("opens a cloud tile in its composer's dock and retains the model-view dialog", async () => {
+  stage([{ id: "remote", filename: "Plan.md", mediaType: "text/markdown" }], {
+    remote: {
+      ...ready(),
+      bytes: new TextEncoder().encode("staged original"),
+      remoteDocument: injectedCloudProvenance,
+    },
+  })
+  renderPreview(
+    <div data-composer-session="owner">
+      <AttachmentPreview videoRoute={ROUTE} />
+    </div>
+  )
+  fireEvent.click(screen.getByRole("button", { name: /Preview Plan.md|Open preview.*Plan.md/i }))
+  expect(openDockDocument).toHaveBeenCalledWith(
+    expect.objectContaining({
+      sessionId: "owner",
+      entry: "staged-attachment",
+      snapshot: {
+        kind: "inline",
+        content: expect.objectContaining({ text: "staged original", origin: "staged" }),
+      },
+    })
+  )
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole("button", { name: /modelView|Model view/ }))
+  await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument())
+})
+
+import { rememberRemoteDocument } from "@/lib/chat/attachments/remote-document"
+it("opens the staged File before its extraction has settled", async () => {
+  jest.mocked(openDockDocument).mockClear()
+  const original = new File(["original file text"], "Plan.md", { type: "text/markdown" })
+  rememberRemoteDocument(original, cloudProvenance)
+  stage([{ id: "reading", filename: "Plan.md", mediaType: "text/markdown" }], {
+    reading: { status: "extracting", sizeBytes: 0 },
+  })
+  Object.assign(mockState.files[0], { sourceFile: original })
+  renderPreview(
+    <div data-composer-session="owner">
+      <AttachmentPreview videoRoute={ROUTE} />
+    </div>
+  )
+  fireEvent.click(screen.getByRole("button", { name: /Preview Plan.md|Open preview.*Plan.md/i }))
+  await waitFor(() =>
+    expect(openDockDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        snapshot: {
+          kind: "inline",
+          content: expect.objectContaining({ text: "original file text", origin: "staged" }),
+        },
+      })
+    )
+  )
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+})

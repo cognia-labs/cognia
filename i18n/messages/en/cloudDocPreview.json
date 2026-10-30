@@ -1,4 +1,10 @@
 {
+  "openDock": "Open in dock",
+  "preview": "Preview",
+  "previewDocument": "Preview {title}",
+  "modelView": "Model view",
+  "attachToChat": "Attach to chat",
+  "attachUnavailable": "The composer is unavailable or this authorization expired. Open the conversation and try again.",
   "title": "Cloud document",
   "openSystem": "Open in system browser",
   "openLive": "Open live",
@@ -63,8 +69,24 @@
       "chromium": "Install local Chromium to open live documents.",
       "isolation-unavailable": "The isolated document browser is not available in this build.",
       "unknown-link": "Original link unknown.",
-      "browser-error": "Could not open the original document."
-    }
+      "browser-error": "Could not open the original document.",
+      "profile-in-use": "The document login is in use in another window. Close it there and retry.",
+      "op-refused": "The app refused this document browser operation.",
+      "cap-reached": "Close another document tab before opening this document (maximum 8 pages).",
+      "runtime-exited": "The document browser stopped. Retry to reopen the document.",
+      "update-app": "Update the app to use the isolated document browser.",
+      "signed-out": "Document browser login cleared. Retry to sign in again."
+    },
+    "toolbar": "Document browser",
+    "back": "Back",
+    "forward": "Forward",
+    "reload": "Reload",
+    "more": "Document browser options",
+    "providerBadge": "Provider",
+    "canvas": "Live document page",
+    "signOut": "Sign out of document browser",
+    "signOutDescription": "This closes all document pages and clears the separate document browser login. Unsaved changes may be lost. It does not disconnect your document API connection.",
+    "cancel": "Cancel"
   },
   "reasons": {
     "budget": "Read limit reached",

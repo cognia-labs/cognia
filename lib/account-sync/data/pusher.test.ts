@@ -495,3 +495,45 @@ it.each([false, true])(
     }
   }
 )
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("re-parses captured message provenance before encrypting account-sync payloads", async () => {
+  const { a, devices, deps, pushed, open } = await setup()
+  try {
+    await a.db.messages.put({
+      id: "cloud-sync",
+      sessionId: "s",
+      role: "user",
+      parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }],
+      metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+      createdAt: 1,
+    } as never)
+    await pushOutbox(deps())
+    const payloads = await Promise.all(pushed.flat().map(open))
+    const serialized = JSON.stringify(payloads)
+    expect(serialized).toContain("remoteDocument")
+    expect(serialized).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+    const message = payloads.find((row) => row.t === "messages")
+    expect(
+      message?.k === "upsert" &&
+        (message.f.parts[0] as Array<{ remoteDocument: unknown }>)[0].remoteDocument
+    ).toEqual(cloudProvenance)
+  } finally {
+    closeAll(devices)
+  }
+})

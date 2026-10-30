@@ -793,3 +793,60 @@ describe("videos", () => {
     expect(manifest).toHaveLength(2)
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+it("carries validated staged provenance on the manifest only for accepted blocks", async () => {
+  const cached: ExtractedAttachment = {
+    kind: "document",
+    block: { type: "text", text: "body" },
+    text: "body",
+    tokens: 1,
+    remoteDocument: injectedCloudProvenance,
+  }
+  const result = await buildAttachmentBlocks(
+    [
+      {
+        id: "a",
+        url: "data:text/plain;base64,YQ==",
+        filename: "Plan.md",
+        mediaType: "text/markdown",
+      },
+    ],
+    { precomputed: new Map([["a", cached]]) }
+  )
+  expect(result.manifest[0].remoteDocument).toEqual(cloudProvenance)
+  expect(result.blocks).toEqual([{ type: "text", text: "body" }])
+})
+
+it("keeps submitted provenance when no staging extraction was captured", async () => {
+  const result = await buildAttachmentBlocks([
+    {
+      id: "uncached",
+      filename: "Plan.md",
+      mediaType: "text/markdown",
+      url: dataUrl("text/markdown", "body"),
+      remoteDocument: injectedCloudProvenance,
+    },
+  ])
+  expect(result.rejected).toEqual([])
+  expect(result.manifest[0].remoteDocument).toEqual(cloudProvenance)
+  expect(JSON.stringify(result.manifest[0].remoteDocument)).not.toMatch(
+    /accountId|authorizationEpoch|accountBinding/
+  )
+})

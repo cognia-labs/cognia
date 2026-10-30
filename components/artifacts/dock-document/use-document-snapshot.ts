@@ -1,5 +1,6 @@
 "use client"
 
+import { requestComposerDocument } from "@/lib/chat/composer-document-request"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import { getDocsProvider } from "@/lib/docs-providers"
@@ -85,8 +86,13 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
     error?: DocsProviderErrorCode
   }>({ phase: "idle" })
   const [accounts, setAccounts] = useState<DocsProviderAccount[] | null>(null)
-  const [showLatest, setShowLatest] = useState(true)
+  const showLatest = memory?.showing !== "sent"
+  const setShowLatest = useCallback(
+    (latest: boolean) => updateDocumentMemory(tab.id, { showing: latest ? "latest" : "sent" }),
+    [tab.id]
+  )
   const requestId = useRef(0)
+  const autoFetched = useRef<string | null>(null)
   const mounted = useRef(false)
   const latest = memory?.latest
   const sent = memory?.sent ?? (memory?.seed?.origin === "sent" ? memory.seed : undefined)
@@ -184,6 +190,13 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
       const attempt = ++requestId.current
       const captured = documentMemory(tab.id)
       const binding = choice ?? captured.binding
+      if (binding)
+        autoFetched.current = JSON.stringify([
+          tab.id,
+          binding.accountId,
+          binding.authorizationEpoch,
+          captured.generation,
+        ])
       const untrack = trackDocumentRequest(tab.id, controller)
       const alive = () =>
         mounted.current &&
@@ -227,7 +240,7 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
           return true
         }
         if (!(await verify())) return
-        if (tab.snapshotRef && !documentMemory(tab.id).sent) {
+        if (tab.snapshotRef && !documentMemory(tab.id).sent && !sourceRemoved) {
           const snapshot = await assetSnapshot(sessionId, tab)
           if (!alive()) return
           if (snapshot)
@@ -267,14 +280,13 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
                 ? { status: "partial", reasons: ["upstream-truncated"] }
                 : { status: "complete" },
         }
-        updateDocumentMemory(tab.id, { latest: snapshot })
+        updateDocumentMemory(tab.id, { latest: snapshot, showing: "latest" })
         const descriptor = useDockDocumentsStore
           .getState()
           .bySession[sessionId]?.documents.find((doc) => doc.id === tab.id)
         if (descriptor && fetched.title && descriptor.title !== fetched.title) {
           useDockDocumentsStore.getState().put(sessionId, { ...descriptor, title: fetched.title })
         }
-        setShowLatest(true)
         setAccounts(null)
         setOperation({ phase: "ready", generation: captured.generation })
       } catch (error) {
@@ -292,8 +304,68 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
         controller.abort()
       }
     },
-    [content, currentTab, provider, reach.available, sessionId, tab]
+    [content, currentTab, provider, reach.available, sessionId, sourceRemoved, tab]
   )
+
+  const binding = memory?.binding
+  useEffect(() => {
+    if (
+      content ||
+      tab.snapshotRef ||
+      !binding ||
+      !reach.available ||
+      !currentTab() ||
+      (operation.generation === memory?.generation &&
+        ["loading", "refreshing"].includes(operation.phase))
+    )
+      return
+    const key = JSON.stringify([
+      tab.id,
+      binding.accountId,
+      binding.authorizationEpoch,
+      memory?.generation,
+    ])
+    if (autoFetched.current === key) return
+    autoFetched.current = key
+    void Promise.resolve().then(() => refresh())
+  }, [
+    binding,
+    content,
+    currentTab,
+    operation.phase,
+    operation.generation,
+    memory?.generation,
+    reach.available,
+    refresh,
+    tab.id,
+    tab.snapshotRef,
+  ])
+
+  const canAttach =
+    latest?.origin === "fetched" && content === latest && !!binding && reach.available
+  const attachToChat = useCallback(async () => {
+    if (!provider || !canAttach || !binding || !currentTab()) return false
+    const held = documentMemory(tab.id)
+    const accounts = await provider.listAccounts().catch(() => [])
+    if (!mounted.current || !currentTab() || documentMemory(tab.id).generation !== held.generation)
+      return false
+    if (!accounts.some((account) => accountMatchesBinding(account, binding))) {
+      dropDocumentIdentity(tab.id)
+      return false
+    }
+    return requestComposerDocument({
+      sessionId,
+      doc: {
+        providerId: tab.providerId,
+        kind: tab.resourceKind,
+        id: tab.resourceId,
+        title: latest!.title,
+        url: tab.url || undefined,
+        sourceType: tab.sourceType,
+        accountBinding: { ...binding },
+      },
+    })
+  }, [binding, canAttach, currentTab, latest, provider, sessionId, tab])
 
   const validOperation =
     operation.generation === memory?.generation ? operation : { phase: "idle" as const }
@@ -321,5 +393,7 @@ export function useDocumentSnapshot(sessionId: string, tab: DockDocumentTab) {
     error: "error" in validOperation ? validOperation.error : undefined,
     refreshFailed: !!content && validOperation.phase === "error",
     sourceRemoved,
+    canAttach,
+    attachToChat,
   }
 }

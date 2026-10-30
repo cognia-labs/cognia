@@ -923,6 +923,21 @@ it("forwards native input to the runtime, one event at a time in order", async (
   ])
 })
 
+it("keeps IME input wired through the extracted surface in the ordinary preview", async () => {
+  renderPreview(makeSession())
+  const canvas = screen.getByRole("application", { name: "Local browser page" })
+  await act(async () => {
+    fireEvent.compositionStart(canvas)
+    fireEvent.keyDown(canvas, { key: "Process", keyCode: 229 })
+    fireEvent.compositionEnd(canvas, { data: "文档" })
+  })
+  expect(rpcMock).toHaveBeenCalledTimes(1)
+  expect(rpcMock).toHaveBeenCalledWith("browser.input", {
+    sessionId: "pane-1",
+    input: { kind: "key", payload: { type: "char", text: "文档" } },
+  })
+})
+
 it("holds input behind the event in flight and coalesces the moves and wheels waiting", async () => {
   let finish: () => void = () => undefined
   rpcMock.mockImplementation(

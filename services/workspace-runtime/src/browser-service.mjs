@@ -90,7 +90,39 @@ export const DOCUMENT_VIEWER_OPS = Object.freeze([
   "browser.screencast.ack",
   "browser.cancel",
   "browser.wait.load",
+  "browser.emulate",
 ])
+
+function isViewerViewportPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false
+  if (
+    Object.keys(payload).some(
+      (key) => !["sessionId", "pageId", "viewport", "synchronizeFrame"].includes(key)
+    )
+  )
+    return false
+  if (["sessionId", "pageId"].some((key) => typeof payload[key] !== "string" || !payload[key]))
+    return false
+  if (Object.hasOwn(payload, "synchronizeFrame") && typeof payload.synchronizeFrame !== "boolean")
+    return false
+  const viewport = payload.viewport
+  return (
+    !!viewport &&
+    typeof viewport === "object" &&
+    !Array.isArray(viewport) &&
+    Object.keys(viewport).every((key) =>
+      ["width", "height", "deviceScaleFactor", "fitToWidth"].includes(key)
+    ) &&
+    ["width", "height"].every(
+      (key) => Number.isInteger(viewport[key]) && viewport[key] >= 1 && viewport[key] <= 8192
+    ) &&
+    typeof viewport.deviceScaleFactor === "number" &&
+    Number.isFinite(viewport.deviceScaleFactor) &&
+    viewport.deviceScaleFactor >= 0.5 &&
+    viewport.deviceScaleFactor <= 4 &&
+    (!Object.hasOwn(viewport, "fitToWidth") || typeof viewport.fitToWidth === "boolean")
+  )
+}
 
 /**
  * Local fit-to-width runs off the frame path: at most one layout check per
@@ -242,6 +274,8 @@ function pageSummary(record, pageId, activePageId) {
       url: url.startsWith("chrome-error:") ? record.navigationUrl : url,
       title,
       active: pageId === activePageId,
+      ...(record.loading !== undefined ? { loading: record.loading } : {}),
+      ...(record.loadError ? { loadError: record.loadError } : {}),
       ...(record.openerPageId ? { openerId: record.openerPageId } : {}),
       ...(record.zoom !== undefined ? { zoom: record.zoom } : {}),
       ...(record.fitToWidth !== undefined ? { fitToWidth: record.fitToWidth } : {}),
@@ -634,9 +668,13 @@ export class RemoteChromiumService {
   }
 
   /** Defense in depth at the runtime control boundary, before page targeting. */
-  assertSessionOperation(sessionId, op) {
+  assertSessionOperation(sessionId, op, payload) {
     const session = this.sessions.get(sessionId)
-    if (session?.purpose === "document-viewer" && !DOCUMENT_VIEWER_OPS.includes(op)) {
+    if (
+      session?.purpose === "document-viewer" &&
+      (!DOCUMENT_VIEWER_OPS.includes(op) ||
+        (op === "browser.emulate" && !isViewerViewportPayload(payload)))
+    ) {
       throw new RemoteBrowserError(
         DOCUMENT_VIEWER_OP_REFUSED,
         `${op} is unavailable in a document viewer`
@@ -1535,6 +1573,7 @@ export class RemoteChromiumService {
     const record = {
       page,
       navigationUrl: page.url(),
+      ...(session.purpose === "document-viewer" ? { loading: false } : {}),
       generation: 0,
       cdp: null,
       emulationCdp: null,
@@ -1574,6 +1613,14 @@ export class RemoteChromiumService {
     page.on("close", () => {
       session.submissions.forgetPage(pageId)
       void record.recordingCdp?.detach().catch(() => undefined)
+      // A beforeunload close event means the user already accepted. Do not
+      // race that answer by dismissing the same dialog during page teardown.
+      if (
+        session.purpose === "document-viewer" &&
+        record.pendingDialog?.metadata.type === "beforeunload"
+      ) {
+        record.pendingDialog = null
+      }
       void this.dismissPendingDialog(session, pageId).catch(() => undefined)
       if (session.pendingFileChooser?.pageId === pageId) session.pendingFileChooser = null
       session.pages.delete(pageId)
@@ -1592,6 +1639,11 @@ export class RemoteChromiumService {
       request.isNavigationRequest() && request.frame() === pageMainFrame(page)
     page.on("request", (request) => {
       if (!isDocumentRequest(request)) return
+      if (session.purpose === "document-viewer") {
+        record.loading = true
+        record.loadError = null
+        this.schedulePagesChanged(session)
+      }
       record.pendingDocument = {
         url: urlWithoutHash(request.url()),
         sockets: new Set(record.openSockets ?? []),
@@ -1601,11 +1653,20 @@ export class RemoteChromiumService {
     page.on("requestfailed", (request) => {
       // Chromium may still commit an error page in its place.
       if (isDocumentRequest(request) && record.pendingDocument) record.pendingDocument.failed = true
+      if (isDocumentRequest(request) && session.purpose === "document-viewer") {
+        record.loading = false
+        record.loadError = "navigation-failed"
+        this.schedulePagesChanged(session)
+      }
     })
     page.on("response", (response) => {
       // A 204 / 205 (a refused navigation is fulfilled with 204) keeps the page.
       if (isDocumentRequest(response.request()) && [204, 205].includes(response.status())) {
         record.pendingDocument = undefined
+        if (session.purpose === "document-viewer") {
+          record.loading = false
+          this.schedulePagesChanged(session)
+        }
       }
     })
     page.on("framenavigated", (frame) => {
@@ -1630,6 +1691,12 @@ export class RemoteChromiumService {
       if (record.fitToWidth) record.fitReset = true
       this.schedulePagesChanged(session)
     })
+    if (session.purpose === "document-viewer") {
+      page.on("load", () => {
+        record.loading = false
+        this.schedulePagesChanged(session)
+      })
+    }
     if (session.uploadRoots?.length) {
       // Local mode with upload roots (ADR-0201): a headless page has no native file dialog, so
       // the chooser is intercepted and handed to the host, which lets the
@@ -1772,13 +1839,18 @@ export class RemoteChromiumService {
     await this.setActivePage(session, pageId)
   }
 
-  /** Close a tab, dismissing a dialog it was holding open rather than refusing. */
-  async closePage(sessionId, pageId) {
+  /** Ordinary closes dismiss dialogs; human document closes preserve beforeunload. */
+  async closePage(sessionId, pageId, { runBeforeUnload = false } = {}) {
     const session = this.requireSession(sessionId)
     const record = session.pages.get(pageId)
     if (!record) throw new RemoteBrowserError("browser_page_not_found", "Page not found")
-    await this.dismissPendingDialog(session, pageId)
-    await record.page.close()
+    if (runBeforeUnload) {
+      if (record.pendingDialog) return { closed: false, reason: "dialog-pending" }
+      await record.page.close({ runBeforeUnload: true })
+    } else {
+      await this.dismissPendingDialog(session, pageId)
+      await record.page.close()
+    }
   }
 
   /**
@@ -3742,6 +3814,7 @@ export class RemoteChromiumService {
    * the user's own tabs.
    */
   async emulate(sessionId, options = {}) {
+    this.assertSessionOperation(sessionId, "browser.emulate", { ...options, sessionId })
     const session = this.requireSession(sessionId)
     this.assertNoPendingDialog(session, options.pageId)
     const { page, record } = this.pageRecord(session, options.pageId)

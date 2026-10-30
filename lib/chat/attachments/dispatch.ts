@@ -32,6 +32,10 @@
  * handle attached files.
  */
 
+import {
+  parseRemoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
 import { decodeDataUrl, downscaleImage, bytesToBase64, isImageMimeType } from "@/lib/ocr/image-prep"
 // Import the specific submodules (not the `@cognia/document` barrel) so the heavy
 // pdfjs/mammoth/xlsx parsers stay lazily loaded — the same pattern the Twin
@@ -72,6 +76,7 @@ export const INLINE_TOKEN_CEILING = 12_000
 
 /** A composer attachment staged for send. `url` is expected to be a data: URL. */
 export interface SubmittedFile {
+  remoteDocument?: RemoteDocumentProvenanceV1
   url?: string
   mediaType?: string
   filename?: string
@@ -128,6 +133,7 @@ export interface ExtractedVideo {
 }
 
 export interface ExtractedAttachment {
+  remoteDocument?: RemoteDocumentProvenanceV1
   kind: "image" | "document" | "video" | "audio"
   /** Full source-located extraction, independent of the selected outbound text. */
   extractedContent?: AttachmentExtractedContent
@@ -161,6 +167,7 @@ export interface ExtractedAttachment {
  * rejected file cannot shift the alignment.
  */
 export interface AttachmentManifestEntry {
+  remoteDocument?: RemoteDocumentProvenanceV1
   filename: string
   mediaType: string
   kind: "image" | "document" | "video" | "audio"
@@ -802,10 +809,14 @@ export async function buildAttachmentBlocks(
         result.kind === "document"
           ? authorizeMatchingPluginAttachments(f, filename, mediaType)
           : undefined
+      const remoteDocument =
+        parseRemoteDocumentProvenance(f.remoteDocument) ??
+        parseRemoteDocumentProvenance(cached?.remoteDocument)
       const entry: AttachmentManifestEntry = {
         filename,
         mediaType,
         kind: result.kind,
+        ...(remoteDocument ? { remoteDocument } : {}),
         extractedContent: result.extractedContent,
         original: result.original,
         ...(pluginHandles ? { pluginHandles } : {}),

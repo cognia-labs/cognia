@@ -1,6 +1,10 @@
 import { render, screen } from "@testing-library/react"
 import { DEFAULT_MESSAGE_LINK_OPTIONS } from "@/lib/chat/message-display"
-import { ChatLinkOptionsProvider, useChatLinkOptions } from "./chat-link-options"
+import {
+  ChatDocumentSessionContext,
+  ChatLinkOptionsProvider,
+  useChatLinkOptions,
+} from "./chat-link-options"
 
 function Probe() {
   const options = useChatLinkOptions()
@@ -24,4 +28,17 @@ describe("ChatLinkOptionsProvider", () => {
     )
     expect(screen.getByRole("status")).toHaveTextContent(JSON.stringify(value))
   })
+})
+
+import { useContext } from "react"
+function DocumentOwner() {
+  return <span>{useContext(ChatDocumentSessionContext) ?? "none"}</span>
+}
+it("scopes document ownership independently of display options", () => {
+  render(
+    <ChatDocumentSessionContext.Provider value="owner">
+      <DocumentOwner />
+    </ChatDocumentSessionContext.Provider>
+  )
+  expect(screen.getByText("owner")).toBeInTheDocument()
 })

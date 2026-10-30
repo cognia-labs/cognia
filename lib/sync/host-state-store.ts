@@ -1,3 +1,4 @@
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import Dexie from "dexie"
 import { archiveSessionScratchWorkspace } from "@/lib/task-workspace/managed-workspace"
 import { messageMediaRefRows } from "@/lib/db/message-media-refs"
@@ -1408,14 +1409,15 @@ async function persistBusinessProjection(
 }
 
 function snapshotFromRow(row: HostStateChannelRow, meta: HostStateMetaRow): HostStateSnapshot {
+  const state = projectRemoteDocumentData(row.state, false)
   return {
     channel: row.channel,
     hostId: meta.hostId,
     hostGeneration: meta.hostGeneration,
     cutHostSeq: meta.hostSeq,
     revision: row.revision,
-    digest: row.digest,
-    state: row.state,
+    digest: state === row.state ? row.digest : hostStateDigest(state),
+    state,
   }
 }
 

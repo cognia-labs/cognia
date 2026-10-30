@@ -14,6 +14,7 @@
  * not stored, so their entries stay and go out again under fresh numbers.
  */
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import {
   MAX_OPS_PER_PUSH,
   MAX_OP_PLAINTEXT_BYTES,
@@ -106,11 +107,20 @@ function payloadFor(
       : entry.fields
     for (const name of names) {
       const clock = clocks.fields[name]
-      if (clock) f[name] = [row[name] ?? null, clock]
+      if (clock)
+        f[name] = [
+          entry.table === "messages"
+            ? projectRemoteDocumentData(row[name] ?? null, true)
+            : (row[name] ?? null),
+          clock,
+        ]
     }
   }
   if (Object.keys(f).length === 0) return null
-  const u = clocks.unknown && Object.keys(clocks.unknown).length > 0 ? clocks.unknown : undefined
+  const u =
+    clocks.unknown && Object.keys(clocks.unknown).length > 0
+      ? projectRemoteDocumentData(clocks.unknown, false)
+      : undefined
   return { t: entry.table, id: entry.rowId, k: "upsert", f, ...(u ? { u } : {}) }
 }
 

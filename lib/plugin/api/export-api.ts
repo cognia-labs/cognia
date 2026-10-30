@@ -4,6 +4,7 @@
  * Provides export capabilities to plugins.
  */
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import {
   exportToRichMarkdown,
   exportToRichJSON,
@@ -247,6 +248,7 @@ async function performExport(
   options: ExportOptions,
   pluginId: string
 ): Promise<ExportResult> {
+  data = projectRemoteDocumentData(data, true)
   const { format, ...restOptions } = options
 
   let content: string

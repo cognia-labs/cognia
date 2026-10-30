@@ -10,6 +10,8 @@
 // Mouse interactions (click) work through the regular onMouseDown/onClick
 // handlers.
 
+import { openChatDocument } from "@/lib/artifacts/open-chat-document"
+import { cloudDocumentTargetFromRef } from "@/lib/docs-providers/document-url"
 import {
   useCallback,
   useDeferredValue,
@@ -1082,6 +1084,7 @@ export const ComposerPopover = forwardRef<ComposerPopoverHandle, Props>(function
                       pinned={item.kind === "slash" ? pinnedSet.has(item.command.name) : false}
                       onTogglePin={onTogglePin}
                       onPickAsText={pickAsText}
+                      sessionId={entityContext?.sessionId ?? undefined}
                     />
                   </li>
                 </Fragment>
@@ -1358,8 +1361,10 @@ const ItemRow = memo(function ItemRow({
   pinned,
   onTogglePin,
   onPickAsText,
+  sessionId,
 }: {
   item: PopoverItem
+  sessionId?: string
   pinned: boolean
   onTogglePin?: (name: string) => void
   /** Take a record that carries `insertText` as text rather than as a chip. */
@@ -1368,6 +1373,7 @@ const ItemRow = memo(function ItemRow({
   const t = useTranslations("chat.composer.popover")
   const tMemory = useTranslations("chat.composer.memory")
   const tDocs = useTranslations("docsProviders")
+  const tPreview = useTranslations("cloudDocPreview")
   if (item.kind === "slash") {
     const c = item.command
     const hintParts = argumentHintParts(c.argumentHint)
@@ -1474,6 +1480,17 @@ const ItemRow = memo(function ItemRow({
   }
   if (item.kind === "doc") {
     const { doc } = item
+    const target = cloudDocumentTargetFromRef(item.providerId, doc)
+    const preview = () => {
+      if (target && sessionId && doc.accountBinding)
+        openChatDocument({
+          sessionId,
+          target,
+          entry: "picker",
+          view: "snapshot",
+          binding: doc.accountBinding,
+        })
+    }
     const Icon = doc.kind === "sheet" ? SheetIcon : doc.kind === "bitable" ? TableIcon : CloudIcon
     return (
       <>
@@ -1482,6 +1499,24 @@ const ItemRow = memo(function ItemRow({
         <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
           {tDocs(`kind.${doc.kind}`)}
         </span>
+        {target && sessionId && doc.accountBinding ? (
+          <button
+            type="button"
+            aria-label={tPreview("previewDocument", { title: doc.title })}
+            className="shrink-0 rounded px-1 text-xs opacity-0 group-hover/row:opacity-100 group-data-[active=true]/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+            onMouseDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+            }}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              preview()
+            }}
+          >
+            {tPreview("preview")}
+          </button>
+        ) : null}
       </>
     )
   }

@@ -18,6 +18,7 @@
 // of the image inside JSON inside base64 ciphertext roughly doubles it, and
 // the share server caps a request at 10 MiB.
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { getMessageMedia, parseMediaRef, type MessageMediaRow } from "@/lib/db/message-media"
 
@@ -132,7 +133,8 @@ export async function materializeChatShareMedia(
   }
 
   const out: StoredMessage[] = []
-  for (const message of messages) {
+  for (const source of messages) {
+    const message = projectRemoteDocumentData(source, false)
     let changed = false
     const parts = []
     for (const part of message.parts) {

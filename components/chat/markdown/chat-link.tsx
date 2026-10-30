@@ -1,9 +1,13 @@
 "use client"
 
-import { Suspense, useSyncExternalStore, type AnchorHTMLAttributes } from "react"
+import { isDocumentPrimaryClick, openCloudDocumentLink } from "@/lib/artifacts/open-chat-document"
+import { Suspense, useContext, useSyncExternalStore, type AnchorHTMLAttributes } from "react"
 import { LinkHoverPreview } from "@/components/chat/link-preview/link-hover-preview"
 import { LinkSiteIcon } from "@/components/chat/link-preview/link-site-icon"
-import { useChatLinkOptions } from "@/components/chat/markdown/chat-link-options"
+import {
+  ChatDocumentSessionContext,
+  useChatLinkOptions,
+} from "@/components/chat/markdown/chat-link-options"
 import { ProjectFileLink } from "@/components/chat/project-file-link"
 import { PluginSurface } from "@/components/plugins/plugin-surface"
 import { ExternalLink } from "@/components/shared/external-link"
@@ -48,6 +52,7 @@ export function ChatLink({
     getLinkMatchersRevision
   )
   const linkOptions = useChatLinkOptions()
+  const sessionId = useContext(ChatDocumentSessionContext)
   const target = href ? parseProjectFileReference(href, projectRoot) : null
   if (target) {
     return (
@@ -69,6 +74,15 @@ export function ChatLink({
       title={isBareUrl ? href : undefined}
       data-chat-link={isWebLink ? "web" : "other"}
       {...props}
+      onClick={(event) => {
+        props.onClick?.(event)
+        if (
+          !event.defaultPrevented &&
+          isDocumentPrimaryClick(event) &&
+          openCloudDocumentLink(href, sessionId, "link")
+        )
+          event.preventDefault()
+      }}
     >
       {isWebLink && linkOptions.siteIcon ? (
         <LinkSiteIcon url={href} allowFetch={linkOptions.preview !== "off" && !isStreaming} />

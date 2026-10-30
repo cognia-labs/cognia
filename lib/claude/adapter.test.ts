@@ -2917,3 +2917,37 @@ it("projects participant progress into the existing visible commentary part", ()
   ])
   expect(output.turnComplete).toBe(false)
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+it("persists remote document provenance on a sent file part without retrieval authority", () => {
+  const message = makeUserMessage([{ type: "text", text: "body" }], "remote-doc", [
+    {
+      filename: "Plan.md",
+      mediaType: "text/markdown",
+      kind: "document",
+      remoteDocument: injectedCloudProvenance,
+    },
+  ])
+  expect(message.parts[0]).toMatchObject({
+    type: "file",
+    text: "body",
+    remoteDocument: cloudProvenance,
+  })
+  expect(JSON.stringify(message)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})

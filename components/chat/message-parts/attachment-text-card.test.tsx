@@ -48,3 +48,57 @@ describe("AttachmentTextCard", () => {
     expect(screen.getByText("0 chars extracted")).toBeInTheDocument()
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+import { openDockDocument } from "@/lib/artifacts/dock-documents"
+jest.mock("@/lib/artifacts/dock-documents", () => ({ openDockDocument: jest.fn() }))
+jest.mock("./attachment-source-actions", () => ({ AttachmentSourceActions: () => null }))
+it.each(["deleted-asset", undefined])(
+  "opens a sent cloud snapshot without inline fallback when assetId=%s",
+  (assetId) => {
+    jest.mocked(openDockDocument).mockClear()
+    render(
+      <AttachmentTextCard
+        filename="Plan.md"
+        text="saved body"
+        sessionId="owner"
+        messageId="m"
+        assetId={assetId}
+        provenance={injectedCloudProvenance}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: /openDock|Open in dock/ }))
+    expect(openDockDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "owner",
+        view: "snapshot",
+        snapshot: assetId
+          ? { kind: "asset", assetId, messageId: "m" }
+          : {
+              kind: "inline",
+              content: expect.objectContaining({ origin: "sent", text: "saved body" }),
+            },
+      })
+    )
+  }
+)
+it("keeps legacy cards without provenance unchanged", () => {
+  render(<AttachmentTextCard filename="local.txt" text="local" sessionId="owner" />)
+  expect(screen.queryByRole("button", { name: /openDock|Open in dock/ })).not.toBeInTheDocument()
+})

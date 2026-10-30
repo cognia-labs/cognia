@@ -14,6 +14,9 @@
  * file card the composer showed for it before the send.
  */
 
+import { openAttachedDocument } from "@/lib/artifacts/open-chat-document"
+import { parseRemoteDocumentProvenance } from "@/lib/docs-providers/document-provenance"
+import { Button } from "@/components/ui/button"
 import { useId, useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import { ChevronRightIcon } from "lucide-react"
@@ -36,6 +39,8 @@ export interface AttachmentTextCardProps {
   text: string
   sessionId?: string
   assetId?: string
+  messageId?: string
+  provenance?: unknown
 }
 
 export function AttachmentTextCard({
@@ -44,8 +49,12 @@ export function AttachmentTextCard({
   text,
   sessionId,
   assetId,
+  messageId,
+  provenance: value,
 }: AttachmentTextCardProps) {
   const t = useTranslations("chat.filePreview")
+  const tDoc = useTranslations("cloudDocPreview")
+  const provenance = parseRemoteDocumentProvenance(value)
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   // The AI Elements attachment primitives the composer's tiles build on, in
@@ -91,6 +100,25 @@ export function AttachmentTextCard({
             aria-hidden
           />
         </button>
+        {sessionId && provenance ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              openAttachedDocument({
+                sessionId,
+                provenance,
+                text,
+                mediaType,
+                assetId,
+                messageId,
+                origin: "sent",
+              })
+            }
+          >
+            {tDoc("openDock")}
+          </Button>
+        ) : null}
         {sessionId && assetId ? (
           // Hidden while the source controls have nothing to say yet, so the
           // card never shows an empty bordered strip.

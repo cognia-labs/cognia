@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { lazy, type ComponentType } from "react"
 import { ChatLink } from "./chat-link"
-import { ChatLinkOptionsProvider } from "./chat-link-options"
+import { ChatDocumentSessionContext, ChatLinkOptionsProvider } from "./chat-link-options"
 import { DEFAULT_MESSAGE_LINK_OPTIONS } from "@/lib/chat/message-display"
 import {
   clearAllLinkMatchers,
@@ -250,4 +250,71 @@ describe("ChatLink", () => {
       expect(screen.getByRole("link").closest("[data-link-preview-anchor]")).not.toBeNull()
     })
   })
+})
+
+import { openDockDocument } from "@/lib/artifacts/dock-documents"
+jest.mock("@/lib/artifacts/dock-documents", () => ({ openDockDocument: jest.fn() }))
+const cloudUrl = "https://docs.google.com/document/d/abcdefghijklmnop1234/edit"
+it("routes a primary document link to the message owner", () => {
+  jest.mocked(openDockDocument).mockClear()
+  render(
+    <ChatDocumentSessionContext.Provider value="owner">
+      <ChatLink href={cloudUrl}>Plan</ChatLink>
+    </ChatDocumentSessionContext.Provider>
+  )
+  fireEvent.click(screen.getByRole("link", { name: "Plan" }))
+  expect(openDockDocument).toHaveBeenCalledWith(
+    expect.objectContaining({ sessionId: "owner", entry: "link", view: "live" })
+  )
+})
+it.each([
+  { metaKey: true },
+  { ctrlKey: true },
+  { shiftKey: true },
+  { altKey: true },
+  { button: 1 },
+])("leaves modified/middle document links external: %j", (gesture) => {
+  jest.mocked(openDockDocument).mockClear()
+  render(
+    <ChatDocumentSessionContext.Provider value="owner">
+      <ChatLink href={cloudUrl}>Plan</ChatLink>
+    </ChatDocumentSessionContext.Provider>
+  )
+  fireEvent.click(screen.getByRole("link", { name: "Plan" }), gesture)
+  expect(openDockDocument).not.toHaveBeenCalled()
+})
+it("keeps spoofed document hosts on the ordinary embedded browser route", () => {
+  jest.mocked(openDockDocument).mockClear()
+  render(
+    <ChatDocumentSessionContext.Provider value="owner">
+      <ChatLink href={cloudUrl.replace("docs.google.com", "docs.google.com.evil.test")}>
+        Plan
+      </ChatLink>
+    </ChatDocumentSessionContext.Provider>
+  )
+  const take = jest.fn((event: Event) => {
+    ;(event as CustomEvent).detail.claimed = true
+  })
+  window.addEventListener("cognia:browser:open-url", take)
+  fireEvent.click(screen.getByRole("link", { name: "Plan" }))
+  expect(take).toHaveBeenCalled()
+  expect(openDockDocument).not.toHaveBeenCalled()
+  window.removeEventListener("cognia:browser:open-url", take)
+})
+it("lets plugin link matchers win before document routing", () => {
+  jest.mocked(openDockDocument).mockClear()
+  registerLinkMatcher("cloud", {
+    id: "cloud",
+    patterns: ["docs.google.com/**"],
+    component: PluginLink,
+    priority: 10,
+  })
+  render(
+    <ChatDocumentSessionContext.Provider value="owner">
+      <ChatLink href={cloudUrl}>Plan</ChatLink>
+    </ChatDocumentSessionContext.Provider>
+  )
+  expect(screen.getByRole("link", { name: "Plan" })).toHaveAttribute("data-plugin-link")
+  fireEvent.click(screen.getByRole("link", { name: "Plan" }))
+  expect(openDockDocument).not.toHaveBeenCalled()
 })

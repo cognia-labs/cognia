@@ -23,6 +23,10 @@
  *     it.
  */
 
+import {
+  remoteDocumentProvenance,
+  type RemoteDocumentProvenanceV1,
+} from "@/lib/docs-providers/document-provenance"
 import { useCallback, useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -102,6 +106,7 @@ export interface UseRemoteDocStagingOptions {
     files: File[],
     options: {
       citations: ReadonlyMap<File, ContextRef>
+      provenance: ReadonlyMap<File, RemoteDocumentProvenanceV1>
       isCurrent: () => boolean
       beforeCommit: () => Promise<boolean>
     }
@@ -216,10 +221,12 @@ export function useRemoteDocStaging({
           return null
         }
 
+        const provenance = remoteDocumentProvenance(content)
         let staged: readonly File[]
         try {
           staged = await acceptFiles([file], {
             citations: new Map([[file, remoteDocCitation(item, content.title)]]),
+            provenance: new Map(provenance ? [[file, provenance]] : []),
             isCurrent: current,
             beforeCommit,
           })

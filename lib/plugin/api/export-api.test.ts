@@ -504,3 +504,50 @@ describe("permission gate", () => {
     expect(() => api.exportSession("s", { format: "json" })).toThrow(/export:session/)
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("sanitizes provenance before a custom exporter receives citation-bearing messages", async () => {
+  initializePluginPermissions("cloud-export", ["export:session"])
+  const api = createExportAPI("cloud-export"),
+    exporter = jest.fn(async () => "safe")
+  api.registerExporter({
+    id: "cloud",
+    name: "Cloud",
+    description: "Cloud document export projection",
+    format: "cloud",
+    extension: "json",
+    mimeType: "application/json",
+    export: exporter,
+  })
+  await api.exportMessages(
+    [
+      {
+        id: "m",
+        role: "user",
+        parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }],
+        metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+      },
+    ] as never,
+    { format: "cloud-export:cloud" as ExportFormat }
+  )
+  expect(exporter).toHaveBeenCalled()
+  expect(JSON.stringify(exporter.mock.calls[0])).not.toMatch(
+    /private-account|authorizationEpoch|accountBinding/
+  )
+  expect(JSON.stringify(exporter.mock.calls[0])).toContain("remoteDocument")
+})

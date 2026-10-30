@@ -1616,3 +1616,43 @@ it("contains native unregister rejections for all message-source channels", asyn
   await Promise.all(failures.map((failure) => failure.catch(() => {})))
   expect(attached).toEqual(Array(11).fill(1))
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("sanitizes provenance in paired-device message pages and turn details", async () => {
+  await putExposedSession("cloud-owner")
+  await getDb().sessions.update("cloud-owner", { transcriptRevision: 4 } as never)
+  await getDb().messages.put({
+    id: "cloud-user",
+    sessionId: "cloud-owner",
+    role: "user",
+    parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }],
+    createdAt: 1,
+    metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+  } as never)
+  const page = await readMessagesPage("cloud-owner")
+  const turn = await readTranscriptTurnMessages({
+    sessionId: "cloud-owner",
+    turnKey: "turn:cloud-user",
+    revision: 4,
+    detailRevision: 4,
+  })
+  for (const row of [page.rows[0], turn.messages[0]]) {
+    expect(row.parts[0]).toHaveProperty("remoteDocument", cloudProvenance)
+    expect(JSON.stringify(row)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+  }
+})

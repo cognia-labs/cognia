@@ -897,3 +897,33 @@ it("rejects oversized original draft files before reading or extracting them", a
   expect(captured.store.byId.get(captured.store.order[0]!)?.bytes).toBeUndefined()
   expect(extractMock).not.toHaveBeenCalled()
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+import { rememberRemoteDocument } from "@/lib/chat/attachments/remote-document"
+it("keeps File provenance in staged state and the send extraction without giving it to a local namesake", async () => {
+  mount()
+  const file = new File(["body"], "Plan.md", { type: "text/markdown" })
+  rememberRemoteDocument(file, injectedCloudProvenance)
+  act(() => captured.addFiles([file, new File(["local"], "Plan.md", { type: "text/markdown" })]))
+  await waitFor(() => expect(captured.store.isExtracting).toBe(false))
+  const [remote, local] = captured.fileIds
+  expect(captured.store.byId.get(remote)?.remoteDocument).toEqual(cloudProvenance)
+  expect(captured.store.precomputed.get(remote)?.remoteDocument).toEqual(cloudProvenance)
+  expect(captured.store.byId.get(local)?.remoteDocument).toBeUndefined()
+})

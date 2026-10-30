@@ -1,5 +1,13 @@
 /** @jest-environment jsdom */
 jest.mock("@/lib/docs-providers", () => ({ getDocsProvider: jest.fn() }))
+jest.mock("@/lib/browser/document-viewer-session", () => ({
+  closeDocumentViewerPage: jest.fn(async () => true),
+  hasDocumentViewerPage: jest.fn(() => false),
+}))
+import {
+  closeDocumentViewerPage,
+  hasDocumentViewerPage,
+} from "@/lib/browser/document-viewer-session"
 import {
   openDockDocument,
   closeDockDocument,
@@ -25,6 +33,9 @@ const target = {
   title: "Report",
 }
 beforeEach(() => {
+  jest.clearAllMocks()
+  jest.mocked(hasDocumentViewerPage).mockReturnValue(false)
+  jest.mocked(closeDocumentViewerPage).mockResolvedValue(true)
   useDockDocumentsStore.setState({ bySession: {} })
   useDockDocumentCache.setState({ byId: {} })
   useChatStore.setState({
@@ -34,6 +45,52 @@ beforeEach(() => {
   useArtifactDockLayoutStore.getState().resetLayout()
   useArtifactDockLayoutStore.getState().setDockCollapsed(true)
   useContextWorkbenchStore.setState({ layouts: {} })
+})
+
+it("releases original pages on leaving the chat while preserving canonical descriptors", () => {
+  const id = openDockDocument({ sessionId: "s1", target, entry: "link" })!
+  useChatStore.setState({ activeSessionId: "s2" })
+  expect(closeDocumentViewerPage).toHaveBeenCalledWith(id)
+  expect(useDockDocumentsStore.getState().bySession.s1.documents[0].url).toBe(target.url)
+})
+
+it("defers release while streaming and cancels a deferred release when returning", () => {
+  const id = openDockDocument({ sessionId: "s1", target, entry: "link" })!
+  useChatStore.setState({
+    sessions: { s1: { id: "s1", status: "streaming" }, s2: { id: "s2" } } as never,
+  })
+  useChatStore.setState({ activeSessionId: "s2" })
+  expect(closeDocumentViewerPage).not.toHaveBeenCalled()
+  useChatStore.setState({ activeSessionId: "s1" })
+  useChatStore.setState({
+    sessions: { s1: { id: "s1", status: "idle" }, s2: { id: "s2" } } as never,
+  })
+  expect(closeDocumentViewerPage).not.toHaveBeenCalled()
+  useChatStore.setState({ activeSessionId: "s2" })
+  expect(closeDocumentViewerPage).toHaveBeenCalledWith(id)
+})
+
+it("releases a background chat's document pages when its run settles", () => {
+  const id = openDockDocument({ sessionId: "s1", target, entry: "link" })!
+  useChatStore.setState({ sessions: { s1: { id: "s1", status: "streaming" } } as never })
+  useChatStore.setState({ activeSessionId: "s2" })
+  expect(closeDocumentViewerPage).not.toHaveBeenCalled()
+  useChatStore.setState({ sessions: { s1: { id: "s1", status: "idle" } } as never })
+  expect(closeDocumentViewerPage).toHaveBeenCalledWith(id)
+})
+
+it("keeps a closing tab until beforeunload resolves and retains it on cancel", async () => {
+  const id = openDockDocument({ sessionId: "s1", target, entry: "link", view: "snapshot" })!
+  jest.mocked(hasDocumentViewerPage).mockReturnValue(true)
+  jest.mocked(closeDocumentViewerPage).mockResolvedValueOnce(false)
+  closeDockDocument("s1", id)
+  await Promise.resolve()
+  expect(useDockDocumentsStore.getState().bySession.s1.documents).toHaveLength(1)
+  expect(useDockDocumentsStore.getState().bySession.s1.documents[0].view).toBe("live")
+  jest.mocked(closeDocumentViewerPage).mockResolvedValueOnce(true)
+  closeDockDocument("s1", id)
+  await Promise.resolve()
+  expect(useDockDocumentsStore.getState().bySession.s1.documents).toHaveLength(0)
 })
 afterEach(() => subscribeDockDocumentLifecycle()())
 it("deduplicates by session/provider/kind/id and preserves an unnamed view", () => {
@@ -231,4 +288,48 @@ it("switching the reading account keeps a staged snapshot but drops the old acco
   expect(documentMemory(id).binding).toEqual({ accountId: "b" })
   expect(documentMemory(id).latest).toBeUndefined()
   expect(documentMemory(id).seed?.text).toBe("staged")
+})
+
+it("reopening a sent attachment after a refresh shows the sent version, a staged reopen the latest", () => {
+  const sent = {
+    title: "Report",
+    text: "v1",
+    format: "text" as const,
+    fetchedAt: 1,
+    completeness: { status: "complete" as const },
+    origin: "sent" as const,
+  }
+  const id = openDockDocument({
+    sessionId: "s1",
+    target,
+    entry: "sent-attachment",
+    snapshot: { kind: "asset", assetId: "a1", messageId: "m1" },
+  })!
+  useDockDocumentCache.setState((state) => ({
+    byId: {
+      ...state.byId,
+      [id]: {
+        ...state.byId[id],
+        sent,
+        latest: { ...sent, text: "v2", origin: "fetched" },
+        showing: "latest",
+      },
+    },
+  }))
+  openDockDocument({
+    sessionId: "s1",
+    target,
+    entry: "sent-attachment",
+    snapshot: { kind: "asset", assetId: "a1", messageId: "m1" },
+  })
+  expect(documentMemory(id).showing).toBe("sent")
+  expect(documentMemory(id).latest?.text).toBe("v2")
+  openDockDocument({
+    sessionId: "s1",
+    target,
+    entry: "staged-attachment",
+    snapshot: { kind: "inline", content: { ...sent, text: "staged", origin: "staged" } },
+  })
+  expect(documentMemory(id).showing).toBe("latest")
+  expect(documentMemory(id).latest?.text).toBe("staged")
 })

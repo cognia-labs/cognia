@@ -1032,3 +1032,46 @@ it("round-trips workspace and conversation-folder parents with sessions", async 
     expect.objectContaining({ id: "portable-folder", projectId: "portable-project" }),
   ])
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("backs up citation-bearing messages with sanitized provenance", async () => {
+  const db = getDb()
+  await db.sessions.put({
+    id: "cloud-backup",
+    title: "Plan",
+    kind: "direct",
+    createdAt: 1,
+    updatedAt: 1,
+  } as never)
+  await db.messages.put({
+    id: "cloud-message",
+    sessionId: "cloud-backup",
+    role: "user",
+    createdAt: 1,
+    parts: [{ type: "file", text: "body", remoteDocument: injectedCloudProvenance }],
+    metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+  } as never)
+  const rows = (
+    await buildBackupPackage({ includeSessions: true, includeApiKey: false }, { storage: null })
+  ).payload.messages!
+  const row = rows.find((row) => (row as { id: string }).id === "cloud-message") as unknown as {
+    parts: Array<{ remoteDocument: unknown }>
+  }
+  expect(row.parts[0].remoteDocument).toEqual(cloudProvenance)
+  expect(JSON.stringify(row)).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})

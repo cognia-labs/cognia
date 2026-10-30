@@ -79,6 +79,65 @@ function serviceStub() {
   }
 }
 
+test("page close forwards beforeunload only when explicitly requested", async () => {
+  const browser = serviceStub()
+  const calls = []
+  browser.closePage = async (...args) => calls.push(args)
+  const dispatch = createDispatcher(browser, null, new MediaLatestStore(), { publish() {} })
+  await dispatch("browser.page.close", { sessionId: "viewer", pageId: "p", runBeforeUnload: true })
+  await dispatch("browser.page.close", { sessionId: "ordinary", pageId: "p" })
+  assert.deepEqual(calls, [
+    ["viewer", "p", { runBeforeUnload: true }],
+    ["ordinary", "p", { runBeforeUnload: false }],
+  ])
+})
+
+test("document viewer viewport policy sees the full payload before targeting", async () => {
+  const browser = serviceStub()
+  browser.sessions = new Map([["viewer", { purpose: "document-viewer" }]])
+  browser.assertSessionOperation = RemoteChromiumService.prototype.assertSessionOperation
+  const targeted = []
+  const emulated = []
+  browser.withPageTarget = async (sessionId, pageId, action) => {
+    targeted.push([sessionId, pageId])
+    return action()
+  }
+  browser.emulate = async (...args) => {
+    emulated.push(args)
+  }
+  const dispatch = createDispatcher(browser, null, new MediaLatestStore(), { publish() {} })
+  const payload = {
+    sessionId: "viewer",
+    pageId: "p",
+    viewport: { width: 420, height: 700, deviceScaleFactor: 1 },
+    synchronizeFrame: true,
+  }
+  await assert.rejects(() => dispatch("browser.emulate", { ...payload, locale: "en" }), {
+    code: "browser_document_viewer_op_refused",
+  })
+  await assert.rejects(
+    () =>
+      dispatch("browser.emulate", {
+        ...payload,
+        viewport: { ...payload.viewport, userAgent: "forbidden" },
+      }),
+    { code: "browser_document_viewer_op_refused" }
+  )
+  assert.deepEqual(targeted, [])
+  await dispatch("browser.emulate", payload)
+  assert.deepEqual(targeted, [["viewer", "p"]])
+  assert.deepEqual(emulated, [
+    [
+      "viewer",
+      {
+        pageId: "p",
+        viewport: payload.viewport,
+        synchronizeFrame: true,
+      },
+    ],
+  ])
+})
+
 function supervisorStub() {
   return {
     spawn: async ({ id }) => ({ id, state: "running" }),

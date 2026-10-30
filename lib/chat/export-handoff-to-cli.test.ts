@@ -200,3 +200,43 @@ describe("lossless handoff projection", () => {
     expect(result).toContain(mirror.trim())
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("sanitizes provenance in citation-bearing CLI handoff rows", async () => {
+  const d = deps()
+  await exportHandoffToCli(
+    {
+      sessionId: "s",
+      messages: [
+        {
+          id: "m",
+          role: "user",
+          parts: [
+            { type: "text", text: "continue" },
+            { type: "file", text: "body", remoteDocument: injectedCloudProvenance },
+          ],
+          metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+        } as never,
+      ],
+    },
+    d
+  )
+  const line = JSON.parse(d.writes[0].content.trim())
+  expect(line.parts[1].remoteDocument).toEqual(cloudProvenance)
+  expect(d.writes[0].content).not.toMatch(/private-account|authorizationEpoch|accountBinding/)
+})

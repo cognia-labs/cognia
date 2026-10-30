@@ -314,3 +314,57 @@ it("a failed re-verification clears what the revoked account read", async () => 
   expect(result.current.content).toBeUndefined()
   expect(result.current.error).toBe("notAuthorized")
 })
+
+import { onComposerDocumentRequest } from "@/lib/chat/composer-document-request"
+it("auto-fetches an explicitly bound picker preview once, after epoch verification", async () => {
+  bindDockDocument(tab.id, binding)
+  const { result, rerender } = renderHook(() => useDocumentSnapshot("s", tab))
+  await waitFor(() => expect(result.current.content?.text).toBe("fresh"))
+  expect(provider.listAccounts).toHaveBeenCalled()
+  expect(provider.fetch).toHaveBeenCalledTimes(1)
+  expect(provider.fetch).toHaveBeenCalledWith(
+    expect.objectContaining({ accountBinding: binding }),
+    expect.objectContaining({ expectedAuthorizationEpoch: "v1" })
+  )
+  rerender()
+  await act(async () => {})
+  expect(provider.fetch).toHaveBeenCalledTimes(1)
+})
+it("refuses a bound picker preview after the account epoch changed", async () => {
+  bindDockDocument(tab.id, binding)
+  jest.mocked(provider.listAccounts).mockResolvedValue([{ ...account, authorizationEpoch: "v2" }])
+  const { result } = renderHook(() => useDocumentSnapshot("s", tab))
+  await waitFor(() => expect(result.current.error).toBe("notAuthorized"))
+  expect(provider.fetch).not.toHaveBeenCalled()
+})
+it("only explicit Attach requests stage a fetched preview and recheck its binding", async () => {
+  const stage = jest.fn(),
+    stop = onComposerDocumentRequest("s", stage)
+  bindDockDocument(tab.id, binding)
+  const { result } = renderHook(() => useDocumentSnapshot("s", tab))
+  await waitFor(() => expect(result.current.canAttach).toBe(true))
+  expect(stage).not.toHaveBeenCalled()
+  await act(async () => {
+    expect(await result.current.attachToChat()).toBe(true)
+  })
+  expect(stage).toHaveBeenCalledWith(
+    expect.objectContaining({ id: tab.resourceId, accountBinding: binding })
+  )
+  jest.mocked(provider.listAccounts).mockResolvedValue([{ ...account, authorizationEpoch: "v2" }])
+  await act(async () => {
+    expect(await result.current.attachToChat()).toBe(false)
+  })
+  expect(stage).toHaveBeenCalledTimes(1)
+  stop()
+})
+
+it("retries a failed picker read on a new explicit Preview without an automatic retry loop", async () => {
+  jest.mocked(provider.fetch).mockRejectedValueOnce(new DocsProviderError("network"))
+  bindDockDocument(tab.id, binding)
+  const { result } = renderHook(() => useDocumentSnapshot("s", tab))
+  await waitFor(() => expect(result.current.error).toBe("network"))
+  expect(provider.fetch).toHaveBeenCalledTimes(1)
+  act(() => bindDockDocument(tab.id, binding))
+  await waitFor(() => expect(result.current.content?.text).toBe("fresh"))
+  expect(provider.fetch).toHaveBeenCalledTimes(2)
+})

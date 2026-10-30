@@ -12846,6 +12846,8 @@
     "workspaceBoundaryHint": "Choose an accessible directory within the configured COGNIA_WORKSPACES_DIR boundary, or restart the CLI in the intended workspace."
   },
   "cloudDocPreview": {
+    "attachToChat": "Attach to chat",
+    "attachUnavailable": "The composer is unavailable or this authorization expired. Open the conversation and try again.",
     "chooseAccount": "Choose the account to read with",
     "copyFailed": "Could not copy the link.",
     "copyLink": "Copy link",
@@ -12876,13 +12878,28 @@
     },
     "latestPreview": "Latest preview",
     "live": {
+      "back": "Back",
+      "cancel": "Cancel",
+      "canvas": "Live document page",
+      "forward": "Forward",
+      "more": "Document browser options",
+      "providerBadge": "Provider",
       "reasons": {
         "browser-error": "Could not open the original document.",
+        "cap-reached": "Close another document tab before opening this document (maximum 8 pages).",
         "chromium": "Install local Chromium to open live documents.",
         "isolation-unavailable": "The isolated document browser is not available in this build.",
+        "op-refused": "The app refused this document browser operation.",
+        "profile-in-use": "The document login is in use in another window. Close it there and retry.",
+        "runtime-exited": "The document browser stopped. Retry to reopen the document.",
+        "signed-out": "Document browser login cleared. Retry to sign in again.",
         "unknown-link": "Original link unknown.",
+        "update-app": "Update the app to use the isolated document browser.",
         "web": "Live documents need the desktop app."
       },
+      "reload": "Reload",
+      "signOut": "Sign out of document browser",
+      "signOutDescription": "This closes all document pages and clears the separate document browser login. Unsaved changes may be lost. It does not disconnect your document API connection.",
       "states": {
         "blocked": "Live view is unavailable.",
         "error": "The original could not be loaded.",
@@ -12891,12 +12908,17 @@
         "needs-login": "Sign in to the document provider.",
         "preparing": "Preparing isolated browser…",
         "ready": "Live original"
-      }
+      },
+      "toolbar": "Document browser"
     },
+    "modelView": "Model view",
     "noAccounts": "No connected accounts. Connect an account in Settings.",
+    "openDock": "Open in dock",
     "openLive": "Open live",
     "openSystem": "Open in system browser",
     "partial": "Partial snapshot · {reasons}",
+    "preview": "Preview",
+    "previewDocument": "Preview {title}",
     "providers": {
       "google": "Google Workspace",
       "lark": "Feishu / Lark"

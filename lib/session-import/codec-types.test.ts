@@ -383,3 +383,48 @@ describe("materialize is deliberately dormant (Working Rule 7)", () => {
     expect(hits.filter((file) => !ALLOWED.has(file))).toEqual([])
   })
 })
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+it("drops provenance in canonical projections that do not carry citations", () => {
+  const input = conversation()
+  input.messages = [
+    {
+      id: "cloud",
+      sessionId: input.session.id,
+      role: "user",
+      createdAt: 1,
+      parts: [
+        {
+          type: "file",
+          url: "https://example.com/source.md",
+          mediaType: "text/markdown",
+          filename: "Plan.md",
+          remoteDocument: injectedCloudProvenance,
+        },
+      ],
+      metadata: { mentions: [{ kind: "doc", id: "google:doc" }] },
+    } as never,
+  ]
+  const result = conversationToCanonical(input, {
+    sourceRuntime: "cognia",
+    importFidelity: "structured",
+  })
+  expect(JSON.stringify(result.session)).not.toMatch(
+    /remoteDocument|private-account|authorizationEpoch|accountBinding/
+  )
+})

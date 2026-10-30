@@ -1,5 +1,6 @@
 "use client"
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type {
   ChatSession,
   SendContent,
@@ -513,9 +514,9 @@ export async function sendSharedSessionMessage(
     payload: {
       messageId: pending.messageId,
       role: "user",
-      parts: pending.parts,
+      parts: projectRemoteDocumentData(pending.parts, true),
       createdAt: pending.createdAt,
-      ...(pending.metadata ? { metadata: pending.metadata } : {}),
+      ...(pending.metadata ? { metadata: projectRemoteDocumentData(pending.metadata, true) } : {}),
     },
     operationId: `user-message:${pending.messageId}`,
   })

@@ -19,6 +19,11 @@ import { useArtifactDockLayoutStore } from "@/stores/artifact/artifact-dock-layo
 import { useContextWorkbenchStore } from "@/stores/context-workbench/context-workbench-store"
 import { useChatStore } from "@/stores/chat"
 import { unwrapUntrustedContent } from "@/lib/web/untrusted-content"
+import { isInFlight } from "@/lib/chat/aggregate-run-state"
+import {
+  closeDocumentViewerPage,
+  hasDocumentViewerPage,
+} from "@/lib/browser/document-viewer-session"
 
 export const DOCK_DOCUMENT_PANEL_ID = "cloud-document"
 export type DockDocumentEntry =
@@ -28,7 +33,7 @@ export interface DockDocumentSnapshotContent {
   text: string
   format: "markdown" | "text" | "csv"
   fetchedAt: number
-  completeness: { status: "complete" } | { status: "partial"; reasons: string[] }
+  completeness: { status: "complete" } | { status: "partial"; reasons: readonly string[] }
   truncated?: boolean
   origin: "sent" | "staged" | "fetched"
 }
@@ -52,6 +57,11 @@ export interface DockDocumentMemory {
   /** Revision of the session asset `sent` was read from; a change reloads it. */
   sentRevision?: number
   latest?: DockDocumentSnapshotContent
+  /**
+   * Which body the tab shows when it has both. Reopening a sent attachment asks
+   * for the version that was sent; a refresh asks for the latest preview.
+   */
+  showing?: "sent" | "latest"
 }
 export const useDockDocumentCache = create<{ byId: Record<string, DockDocumentMemory> }>(() => ({
   byId: {},
@@ -156,6 +166,11 @@ function watchProvider(providerId: string): void {
 /** Installed by the dock and lazily by direct opens, including restored tabs. */
 export function subscribeDockDocumentLifecycle(): () => void {
   if (stopLifecycle) return stopLifecycle
+  const waiting = new Set<string>()
+  const releasePages = (sessionId: string) => {
+    for (const tab of useDockDocumentsStore.getState().bySession[sessionId]?.documents ?? [])
+      void closeDocumentViewerPage(tab.id).catch(() => undefined)
+  }
   const watch = () => {
     for (const entry of Object.values(useDockDocumentsStore.getState().bySession)) {
       for (const tab of entry.documents) watchProvider(tab.providerId)
@@ -166,14 +181,23 @@ export function subscribeDockDocumentLifecycle(): () => void {
     for (const [sessionId, entry] of Object.entries(previous.bySession)) {
       const next = state.bySession[sessionId]
       for (const tab of entry.documents) {
-        if (!next?.documents.some((doc) => doc.id === tab.id)) invalidateDocument(tab.id, true)
-        else if (entry.activeDocumentTabId === tab.id && next.activeDocumentTabId !== tab.id)
+        if (!next?.documents.some((doc) => doc.id === tab.id)) {
+          invalidateDocument(tab.id, true)
+          void closeDocumentViewerPage(tab.id).catch(() => undefined)
+        } else if (entry.activeDocumentTabId === tab.id && next.activeDocumentTabId !== tab.id)
           invalidateDocument(tab.id)
       }
     }
     watch()
   })
   const stopChat = useChatStore.subscribe((state, previous) => {
+    for (const sessionId of waiting) {
+      if (state.activeSessionId === sessionId) waiting.delete(sessionId)
+      else if (!isInFlight(state.sessions[sessionId]?.status ?? "idle")) {
+        waiting.delete(sessionId)
+        releasePages(sessionId)
+      }
+    }
     for (const [sessionId, entry] of Object.entries(useDockDocumentsStore.getState().bySession)) {
       if (!state.sessions[sessionId] && previous.sessions[sessionId]) {
         for (const tab of entry.documents) closeDockDocument(sessionId, tab.id)
@@ -183,12 +207,15 @@ export function subscribeDockDocumentLifecycle(): () => void {
         sessionId === previous.activeSessionId
       ) {
         for (const tab of entry.documents) invalidateDocument(tab.id)
+        if (isInFlight(state.sessions[sessionId]?.status ?? "idle")) waiting.add(sessionId)
+        else releasePages(sessionId)
       }
     }
   })
   stopLifecycle = () => {
     stopDocuments()
     stopChat()
+    waiting.clear()
     for (const stop of accountSubscriptions.values()) stop()
     accountSubscriptions.clear()
     for (const id of Object.keys(useDockDocumentCache.getState().byId)) invalidateDocument(id, true)
@@ -261,6 +288,9 @@ export function openDockDocument(req: DockDocumentOpenRequest): string | null {
     tab.snapshotRef = { ...req.snapshot }
     updateDocumentMemory(id, { seed: undefined, sent: undefined })
   }
+  // Opening from a sent message shows what was sent, even after a refresh.
+  if (req.snapshot?.kind === "asset" || req.snapshot?.content.origin === "sent")
+    updateDocumentMemory(id, { showing: "sent" })
   store.put(req.sessionId, tab)
   if (req.binding) bindDockDocument(id, req.binding)
   if (req.snapshot?.kind === "inline") {
@@ -272,7 +302,9 @@ export function openDockDocument(req: DockDocumentOpenRequest): string | null {
     if (content.origin !== "sent")
       updateDocumentMemory(
         id,
-        held.sent || tab.snapshotRef ? { latest: content } : { seed: content, latest: undefined }
+        held.sent || tab.snapshotRef
+          ? { latest: content, showing: "latest" }
+          : { seed: content, latest: undefined }
       )
     else if (!held.sent && !tab.snapshotRef) updateDocumentMemory(id, { sent: content })
   }
@@ -286,6 +318,20 @@ export function closeDockDocument(sessionId: string, docTabId: string): void {
       .bySession[sessionId]?.documents.some((tab) => tab.id === docTabId)
   )
     return
+  if (hasDocumentViewerPage(docTabId)) {
+    // Make an unsaved-change dialog reachable even when closing an inactive tab.
+    setDockDocumentView(sessionId, docTabId, "live")
+    activateDockDocument(sessionId, docTabId)
+    void closeDocumentViewerPage(docTabId)
+      .then((closed) => {
+        if (closed) removeDockDocument(sessionId, docTabId)
+      })
+      .catch(() => undefined)
+    return
+  }
+  removeDockDocument(sessionId, docTabId)
+}
+function removeDockDocument(sessionId: string, docTabId: string): void {
   invalidateDocument(docTabId, true)
   useDockDocumentsStore.getState().remove(sessionId, docTabId)
   const tabs = useDockTabsStore.getState()

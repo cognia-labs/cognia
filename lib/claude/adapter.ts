@@ -1,6 +1,8 @@
 // Translates SDKMessage events from the Claude Agent SDK (via the sidecar)
 // into UIMessage parts in the shape AI SDK Elements expect.
 
+import { REMOTE_DOC_PART_KEY } from "@/lib/chat/attachments/remote-document"
+import { parseRemoteDocumentProvenance } from "@/lib/docs-providers/document-provenance"
 import type { UIMessage } from "ai"
 import type {
   BetaContentBlock,
@@ -1390,6 +1392,7 @@ export function makeUserMessage(
     const entry = manifest?.[index]
     const video = entry?.kind === "video" ? entry.video : undefined
     const sourceId = entry?.extractedContent?.attachmentId
+    const remoteDocument = parseRemoteDocumentProvenance(entry?.remoteDocument)
     const storesPart =
       block.type === "text" ||
       block.type === "image" ||
@@ -1402,6 +1405,7 @@ export function makeUserMessage(
       entry && firstSourcePart
         ? {
             ...(entry.extractedContent ? { extractedContent: entry.extractedContent } : {}),
+            ...(remoteDocument ? { [REMOTE_DOC_PART_KEY]: remoteDocument } : {}),
             ...(entry.original
               ? { attachmentOriginal: entry.original, attachmentOriginalMediaType: entry.mediaType }
               : {}),

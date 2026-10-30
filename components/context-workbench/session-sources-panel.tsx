@@ -1,5 +1,7 @@
 "use client"
 
+import { isDocumentPrimaryClick, openCloudDocumentLink } from "@/lib/artifacts/open-chat-document"
+import { useChatStore } from "@/stores/chat"
 import { useMemo, useState, type ReactNode } from "react"
 import type { UIMessage } from "ai"
 import { useTranslations } from "next-intl"
@@ -56,7 +58,19 @@ function SourceRow({
   return children(content)
 }
 
-export function SessionSourcesPanel({ messages }: { messages: readonly UIMessage[] }) {
+export function SessionSourcesPanel({
+  messages,
+  sessionId,
+}: {
+  messages: readonly UIMessage[]
+  sessionId?: string
+}) {
+  const activeSessionId = useChatStore((state) => state.activeSessionId)
+  const owner =
+    sessionId ??
+    (messages[0] as { sessionId?: string } | undefined)?.sessionId ??
+    (messages[0]?.metadata as { sessionId?: string } | undefined)?.sessionId ??
+    activeSessionId
   const t = useTranslations("contextWorkbench.sessionSources")
   const [query, setQuery] = useState("")
   const [kind, setKind] = useState<"all" | SessionSourceKind>("all")
@@ -161,6 +175,14 @@ export function SessionSourcesPanel({ messages }: { messages: readonly UIMessage
                   source.url ? (
                     <ExternalLink
                       href={source.url}
+                      preferEmbedded
+                      onClick={(event) => {
+                        if (
+                          isDocumentPrimaryClick(event) &&
+                          openCloudDocumentLink(source.url!, owner, "source")
+                        )
+                          event.preventDefault()
+                      }}
                       className={cn(
                         "flex items-start gap-2 rounded-lg border border-transparent p-2",
                         "transition-colors hover:border-border hover:bg-muted/60",

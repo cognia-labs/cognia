@@ -14,6 +14,7 @@
  * which would silently drop the transcript in the wrong home.
  */
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type { UIMessage } from "ai"
 
 import { resolveCliHome } from "@/lib/cli-bridge/home"
@@ -219,8 +220,8 @@ function toLine(message: UIMessage, ts: number): string | null {
     role,
     content,
     id: message.id,
-    parts: message.parts,
-    metadata: message.metadata,
+    parts: projectRemoteDocumentData(message.parts, true),
+    metadata: projectRemoteDocumentData(message.metadata, true),
   })
 }
 

@@ -29,6 +29,10 @@
  * instead of animating out while removing any other one animated correctly.
  */
 
+import { stagedRemoteDocument } from "@/lib/chat/attachments/remote-document"
+import { openAttachedDocument } from "@/lib/artifacts/open-chat-document"
+import { parseRemoteDocumentProvenance } from "@/lib/docs-providers/document-provenance"
+import { readBlobAsArrayBuffer } from "@cognia/ocr/blob-utils"
 import { useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { AnimatePresence, motion, useReducedMotion } from "motion/react"
@@ -237,7 +241,40 @@ export function AttachmentPreview(props: AttachmentPreviewProps) {
               animateLayout={activeDragId === null}
               transition={transition}
               triggerRef={tileTriggerRef}
+              onModelView={() => openModelView(f.id)}
               onOpenPreview={() => {
+                const state = staged.byId.get(f.id)
+                const provenance = parseRemoteDocumentProvenance(
+                  state?.remoteDocument ?? stagedRemoteDocument(f.sourceFile)
+                )
+                const sessionId = tileTriggerRef.current
+                  ?.closest("[data-composer-session]")
+                  ?.getAttribute("data-composer-session")
+                if (provenance && sessionId && state?.bytes) {
+                  openAttachedDocument({
+                    provenance,
+                    sessionId,
+                    text: new TextDecoder().decode(state.bytes),
+                    mediaType: f.mediaType,
+                    origin: "staged",
+                  })
+                  return
+                }
+                const original = f.sourceFile ?? state?.extracted?.original
+                if (provenance && sessionId && original) {
+                  void readBlobAsArrayBuffer(original)
+                    .then((bytes) => {
+                      openAttachedDocument({
+                        provenance,
+                        sessionId,
+                        text: new TextDecoder().decode(bytes),
+                        mediaType: f.mediaType,
+                        origin: "staged",
+                      })
+                    })
+                    .catch(() => openModelView(f.id))
+                  return
+                }
                 // Rejected attachments always go to the dialog — that's where
                 // the reason lives. Healthy images go fullscreen.
                 const rejected = staged.byId.get(f.id)?.status === "rejected"
@@ -382,6 +419,7 @@ function SortableChip({
   transition,
   triggerRef,
   onOpenPreview,
+  onModelView,
   onRemove,
   t,
 }: {
@@ -391,6 +429,7 @@ function SortableChip({
   transition: ReturnType<typeof useReducedMotionTransition>
   triggerRef: React.RefObject<HTMLElement | null>
   onOpenPreview: () => void
+  onModelView: () => void
   onRemove: () => void
   t: ChipTranslator
 }) {
@@ -402,6 +441,7 @@ function SortableChip({
     transition: dndTransition,
     isDragging,
   } = useSortable({ id: file.id })
+  const tDoc = useTranslations("cloudDocPreview")
   const displayName = ("filename" in file ? file.filename : undefined) ?? t("fallbackName")
   const isVideo = isVideoDescriptor({
     name: ("filename" in file ? file.filename : undefined) ?? "",
@@ -481,6 +521,20 @@ function SortableChip({
               <StatusBadge state={state} isImage={isImage} t={t} />
             </div>
           )}
+          {parseRemoteDocumentProvenance(state?.remoteDocument) ? (
+            <button
+              type="button"
+              aria-label={tDoc("modelView")}
+              onClick={(event) => {
+                event.stopPropagation()
+                onModelView()
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="absolute right-7 top-0 rounded bg-background/90 px-1 text-[10px]"
+            >
+              {tDoc("modelView")}
+            </button>
+          ) : null}
           <AttachmentRemove
             label={t("removeAria", { filename: displayName })}
             // Visible without hover, like the old chips: touch devices have no

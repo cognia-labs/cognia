@@ -11,6 +11,7 @@
 //    branches and `allBranches` is on, one line is emitted per distinct
 //    root→leaf path.
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { extractPlainText } from "@/lib/inbox/extract-plain-text"
 
@@ -39,7 +40,7 @@ export function exportToJsonlPerMessage(messages: StoredMessage[], allBranches =
         id: m.id,
         role: m.role,
         createdAt: m.createdAt,
-        parts: m.parts,
+        parts: projectRemoteDocumentData(m.parts, false),
         ...(m.senderId !== undefined ? { senderId: m.senderId } : {}),
         ...(branchGroupId !== undefined ? { branchGroupId } : {}),
         ...(branchIndex !== undefined ? { branchIndex } : {}),

@@ -57,6 +57,7 @@ export function DocumentSnapshotView({
   const snapshot = useDocumentSnapshot(sessionId, tab)
   const { content } = snapshot
   const [openFailed, setOpenFailed] = useState(false)
+  const [attachFailed, setAttachFailed] = useState(false)
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="space-y-2 border-b p-4">
@@ -106,6 +107,17 @@ export function DocumentSnapshotView({
         ) : null}
         {content?.truncated ? <p className="text-xs text-amber-600">{t("truncated")}</p> : null}
         <div className="flex flex-wrap gap-2">
+          {snapshot.canAttach ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                void snapshot.attachToChat().then((claimed) => setAttachFailed(!claimed))
+              }}
+            >
+              {t("attachToChat")}
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="outline"
@@ -136,6 +148,7 @@ export function DocumentSnapshotView({
         {!tab.url ? (
           <p className="text-xs text-muted-foreground">{t("live.reasons.unknown-link")}</p>
         ) : null}
+        {attachFailed ? <p role="alert">{t("attachUnavailable")}</p> : null}
         {openFailed ? <p role="alert">{t("live.reasons.browser-error")}</p> : null}
         <DocsProviderNotice reach={snapshot.reach} />
         {snapshot.accounts ? (

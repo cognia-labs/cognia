@@ -101,9 +101,9 @@ struct LocalSession {
 }
 
 impl LocalSession {
-    fn authorize(&self, caller: &str, op: &str) -> Result<(), String> {
+    fn authorize(&self, caller: &str, op: &str, payload: &Value) -> Result<(), String> {
         document_viewer::authorize_window(self.purpose, &self.creator_window, caller)
-            .and_then(|()| document_viewer::authorize_operation(self.purpose, op))
+            .and_then(|()| document_viewer::authorize_operation(self.purpose, op, payload))
             .map_err(|error| error.to_string())
     }
 
@@ -171,12 +171,18 @@ impl LocalBrowserState {
         self.sessions.lock().drain().collect()
     }
 
-    fn authorize_session(&self, session_id: &str, caller: &str, op: &str) -> Result<(), String> {
+    fn authorize_session(
+        &self,
+        session_id: &str,
+        caller: &str,
+        op: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
         self.sessions
             .lock()
             .get(session_id)
             .ok_or_else(|| "browser_session_not_found: session is not registered".to_string())?
-            .authorize(caller, op)
+            .authorize(caller, op, payload)
     }
 
     fn is_document_viewer(&self, session_id: &str) -> bool {
@@ -812,7 +818,7 @@ async fn call(
         Some((id, identity))
     } else {
         if let Some(id) = payload.get("sessionId").and_then(Value::as_str) {
-            state.authorize_session(id, creator_window, op)?;
+            state.authorize_session(id, creator_window, op, &payload)?;
         }
         None
     };
@@ -849,7 +855,7 @@ pub async fn rpc_privileged(app: &AppHandle, op: &str, payload: Value) -> Result
         .try_state::<LocalBrowserState>()
         .ok_or_else(|| "local_browser_unavailable: state is not managed".to_string())?;
     if let Some(id) = payload.get("sessionId").and_then(Value::as_str) {
-        state.authorize_session(id, "", op)?;
+        state.authorize_session(id, "", op, &payload)?;
     }
     let core = ensure_started(app, state.inner()).await?;
     core.transport
@@ -957,7 +963,7 @@ pub async fn browser_local_rpc(
     payload: Value,
 ) -> Result<Value, String> {
     if let Some(id) = payload.get("sessionId").and_then(Value::as_str) {
-        state.authorize_session(id, window.label(), &op)?;
+        state.authorize_session(id, window.label(), &op, &payload)?;
     }
     if !bridge::is_renderer_op(&op) {
         return Err(not_allowed(&op));
@@ -1038,9 +1044,19 @@ pub async fn browser_local_frames_subscribe(
     channel: Channel<InvokeResponseBody>,
     subscription_id: Option<String>,
 ) -> Result<(), String> {
-    state.authorize_session(&session_id, window.label(), "browser.screencast.start")?;
+    state.authorize_session(
+        &session_id,
+        window.label(),
+        "browser.screencast.start",
+        &Value::Null,
+    )?;
     let core = ensure_started(&app, state.inner()).await?;
-    state.authorize_session(&session_id, window.label(), "browser.screencast.start")?;
+    state.authorize_session(
+        &session_id,
+        window.label(),
+        "browser.screencast.start",
+        &Value::Null,
+    )?;
     let stream_id = subscription_id.unwrap_or_else(|| {
         format!(
             "legacy-{}",
@@ -1099,7 +1115,12 @@ pub async fn browser_local_frames_unsubscribe(
     session_id: String,
     subscription_id: Option<String>,
 ) -> Result<(), String> {
-    state.authorize_session(&session_id, window.label(), "browser.screencast.ack")?;
+    state.authorize_session(
+        &session_id,
+        window.label(),
+        "browser.screencast.ack",
+        &Value::Null,
+    )?;
     state.stop_frame_subscription(&session_id, subscription_id.as_deref());
     Ok(())
 }
@@ -1138,25 +1159,58 @@ mod tests {
             "browser.screencast.ack",
         ] {
             assert!(state
-                .authorize_session("viewer", "document-dock", op)
+                .authorize_session("viewer", "document-dock", op, &Value::Null)
                 .is_ok());
             assert!(state
-                .authorize_session("viewer", "other-window", op)
+                .authorize_session("viewer", "other-window", op, &Value::Null)
                 .unwrap_err()
                 .starts_with(document_viewer::DOCUMENT_VIEWER_WINDOW_MISMATCH));
         }
         assert!(state
-            .authorize_session("viewer", "document-dock", "browser.evaluate")
+            .authorize_session("viewer", "document-dock", "browser.evaluate", &Value::Null)
             .unwrap_err()
             .starts_with(document_viewer::DOCUMENT_VIEWER_OP_REFUSED));
         let ordinary = test_session(None);
         assert!(ordinary
-            .authorize("other-window", "browser.evaluate")
+            .authorize("other-window", "browser.evaluate", &Value::Null)
             .is_ok());
         assert!(state
-            .authorize_session("unregistered", "other-window", "browser.screencast.start")
+            .authorize_session(
+                "unregistered",
+                "other-window",
+                "browser.screencast.start",
+                &Value::Null
+            )
             .unwrap_err()
             .starts_with("browser_session_not_found"));
+    }
+
+    #[test]
+    fn document_viewer_emulation_checks_payload_and_creator_before_dispatch() {
+        let state = LocalBrowserState::default();
+        state.sessions.lock().insert(
+            "viewer".into(),
+            test_session(Some(SessionPurpose::DocumentViewer)),
+        );
+        let payload = serde_json::json!({"sessionId": "viewer", "pageId": "page", "viewport": {
+            "width": 420, "height": 700, "deviceScaleFactor": 2
+        }});
+        assert!(state
+            .authorize_session("viewer", "document-dock", "browser.emulate", &payload)
+            .is_ok());
+        let mut forbidden = payload.clone();
+        forbidden["userAgent"] = serde_json::json!("other identity");
+        assert!(state
+            .authorize_session("viewer", "document-dock", "browser.emulate", &forbidden)
+            .unwrap_err()
+            .starts_with(document_viewer::DOCUMENT_VIEWER_OP_REFUSED));
+        assert!(state
+            .authorize_session("viewer", "other-window", "browser.emulate", &payload)
+            .unwrap_err()
+            .starts_with(document_viewer::DOCUMENT_VIEWER_WINDOW_MISMATCH));
+        assert!(test_session(None)
+            .authorize("other-window", "browser.emulate", &forbidden)
+            .is_ok());
     }
 
     #[test]
@@ -1198,10 +1252,15 @@ mod tests {
         for code in ["runtime_unreachable", "runtime_protocol_error"] {
             state.session_create_failed("viewer", &identity, &ClientError::new(code, "lost reply"));
             assert!(state
-                .authorize_session("viewer", "document-dock", "browser.session.close")
+                .authorize_session(
+                    "viewer",
+                    "document-dock",
+                    "browser.session.close",
+                    &Value::Null
+                )
                 .is_ok());
             assert!(state
-                .authorize_session("viewer", "other-window", "browser.navigate")
+                .authorize_session("viewer", "other-window", "browser.navigate", &Value::Null)
                 .is_err());
         }
         state.session_create_failed(

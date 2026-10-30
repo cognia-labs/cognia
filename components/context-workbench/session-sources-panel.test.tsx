@@ -247,3 +247,40 @@ describe("SessionSourcesPanel", () => {
     expect(screen.getByText("noResultsDescription")).toBeInTheDocument()
   })
 })
+
+import { openDockDocument } from "@/lib/artifacts/dock-documents"
+jest.mock("@/lib/artifacts/dock-documents", () => ({ openDockDocument: jest.fn() }))
+it("opens classified source rows in their owning session and other URLs in the embedded browser", () => {
+  const rows: UIMessage[] = [
+    {
+      id: "m",
+      role: "assistant",
+      parts: [
+        {
+          type: "source-url",
+          sourceId: "cloud",
+          url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+          title: "Cloud plan",
+        },
+        {
+          type: "source-url",
+          sourceId: "other",
+          url: "https://example.com/page",
+          title: "Web page",
+        },
+      ],
+    },
+  ]
+  render(<SessionSourcesPanel messages={rows} sessionId="owner" />)
+  fireEvent.click(screen.getByRole("link", { name: /Cloud plan/ }))
+  expect(openDockDocument).toHaveBeenCalledWith(
+    expect.objectContaining({ sessionId: "owner", entry: "source", view: "live" })
+  )
+  const take = jest.fn((event: Event) => {
+    ;(event as CustomEvent).detail.claimed = true
+  })
+  window.addEventListener("cognia:browser:open-url", take)
+  fireEvent.click(screen.getByRole("link", { name: /Web page/ }))
+  expect(take).toHaveBeenCalled()
+  window.removeEventListener("cognia:browser:open-url", take)
+})

@@ -17,6 +17,9 @@
  * held here.
  */
 
+import { onComposerDocumentRequest } from "@/lib/chat/composer-document-request"
+import { rememberRemoteDocument } from "@/lib/chat/attachments/remote-document"
+import type { RemoteDocumentProvenanceV1 } from "@/lib/docs-providers/document-provenance"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { ChangeEvent, ClipboardEvent as ReactClipboardEvent, DragEvent } from "react"
 import { toast } from "sonner"
@@ -71,6 +74,7 @@ export interface AcceptFilesOptions {
    * does; only an oversized image is re-encoded.
    */
   citations?: ReadonlyMap<File, ContextRef>
+  provenance?: ReadonlyMap<File, RemoteDocumentProvenanceV1>
 }
 
 export interface UseAttachmentIntakeOptions {
@@ -210,6 +214,8 @@ export function useAttachmentIntake({
           for (const staged of take) {
             const citation = options.citations?.get(staged)
             if (citation) attachmentCitations.expect(staged, citation)
+            const provenance = options.provenance?.get(staged)
+            if (provenance) rememberRemoteDocument(staged, provenance)
           }
           attachments.add(take)
         }
@@ -294,6 +300,17 @@ export function useAttachmentIntake({
   }, [isDesktop, t, textareaRef])
 
   const stageRemoteDoc = useRemoteDocStaging({ acceptFiles, captureDestination })
+  useEffect(
+    () =>
+      onComposerDocumentRequest(destinationKey, (doc) => {
+        void stageRemoteDoc({
+          providerId: doc.providerId,
+          accountId: doc.accountBinding!.accountId,
+          doc,
+        })
+      }),
+    [destinationKey, stageRemoteDoc]
+  )
 
   // Mobile "+" menu → fold every pick (camera / album multi-pick / files)
   // into the same acceptFiles gate the paperclip input uses, so the size /

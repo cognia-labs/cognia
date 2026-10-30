@@ -42,6 +42,7 @@ pub const DOCUMENT_VIEWER_OPS: &[&str] = &[
     "browser.screencast.ack",
     "browser.cancel",
     "browser.wait.load",
+    "browser.emulate",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,14 +103,62 @@ pub(crate) fn prepare_fields(
     Ok(())
 }
 
-pub fn authorize_operation(purpose: Option<SessionPurpose>, op: &str) -> Result<(), ClientError> {
-    if purpose == Some(SessionPurpose::DocumentViewer) && !DOCUMENT_VIEWER_OPS.contains(&op) {
+pub fn authorize_operation(
+    purpose: Option<SessionPurpose>,
+    op: &str,
+    payload: &Value,
+) -> Result<(), ClientError> {
+    if purpose == Some(SessionPurpose::DocumentViewer)
+        && (!DOCUMENT_VIEWER_OPS.contains(&op)
+            || (op == "browser.emulate" && !viewport_only(payload)))
+    {
         return Err(ClientError::new(
             DOCUMENT_VIEWER_OP_REFUSED,
             format!("{op} is unavailable in a document viewer"),
         ));
     }
     Ok(())
+}
+
+/// Viewer emulation can only resize its named page, never change identity or environment.
+fn viewport_only(payload: &Value) -> bool {
+    let Some(object) = payload.as_object() else {
+        return false;
+    };
+    if object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "sessionId" | "pageId" | "viewport" | "synchronizeFrame"
+        )
+    }) || ["sessionId", "pageId"].iter().any(|key| {
+        !object
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty())
+    }) || object
+        .get("synchronizeFrame")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return false;
+    }
+    let Some(viewport) = object.get("viewport").and_then(Value::as_object) else {
+        return false;
+    };
+    !viewport.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "width" | "height" | "deviceScaleFactor" | "fitToWidth"
+        )
+    }) && ["width", "height"].iter().all(|key| {
+        viewport
+            .get(*key)
+            .and_then(Value::as_f64)
+            .is_some_and(|size| size.fract() == 0.0 && (1.0..=8192.0).contains(&size))
+    }) && viewport
+        .get("deviceScaleFactor")
+        .and_then(Value::as_f64)
+        .is_some_and(|density| (0.5..=4.0).contains(&density))
+        && viewport.get("fitToWidth").is_none_or(Value::is_boolean)
 }
 
 pub fn authorize_window(
@@ -151,23 +200,133 @@ mod tests {
     use super::*;
     use crate::bridge::RENDERER_OPS;
 
+    fn viewport_payload() -> Value {
+        json!({"sessionId": "viewer", "pageId": "page", "viewport": {
+            "width": 420, "height": 700, "deviceScaleFactor": 2, "fitToWidth": false
+        }, "synchronizeFrame": true})
+    }
+
     #[test]
     fn document_viewer_allowlist_contains_only_real_renderer_ops() {
         for op in DOCUMENT_VIEWER_OPS {
             assert!(RENDERER_OPS.contains(op), "unknown renderer op {op}");
-            assert!(authorize_operation(Some(SessionPurpose::DocumentViewer), op).is_ok());
+            assert!(authorize_operation(
+                Some(SessionPurpose::DocumentViewer),
+                op,
+                &viewport_payload()
+            )
+            .is_ok());
         }
         for op in RENDERER_OPS.iter().chain(crate::bridge::PRIVILEGED_OPS) {
-            let result = authorize_operation(Some(SessionPurpose::DocumentViewer), op);
+            let result = authorize_operation(
+                Some(SessionPurpose::DocumentViewer),
+                op,
+                &viewport_payload(),
+            );
             assert_eq!(result.is_ok(), DOCUMENT_VIEWER_OPS.contains(op), "{op}");
             if let Err(error) = result {
                 assert_eq!(error.code, DOCUMENT_VIEWER_OP_REFUSED);
             }
-            assert!(authorize_operation(None, op).is_ok());
+            assert!(authorize_operation(None, op, &Value::Null).is_ok());
         }
-        assert!(
-            authorize_operation(Some(SessionPurpose::DocumentViewer), "browser.future").is_err()
-        );
+        assert!(authorize_operation(
+            Some(SessionPurpose::DocumentViewer),
+            "browser.future",
+            &Value::Null
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn document_viewer_emulation_accepts_only_viewport_payloads() {
+        let purpose = Some(SessionPurpose::DocumentViewer);
+        let op = "browser.emulate";
+        assert!(authorize_operation(purpose, op, &viewport_payload()).is_ok());
+        let mut minimal = viewport_payload();
+        minimal.as_object_mut().unwrap().remove("synchronizeFrame");
+        minimal["viewport"]
+            .as_object_mut()
+            .unwrap()
+            .remove("fitToWidth");
+        assert!(authorize_operation(purpose, op, &minimal).is_ok());
+        for key in [
+            "userAgent",
+            "geolocation",
+            "device",
+            "locale",
+            "timezone",
+            "media",
+            "colorScheme",
+            "offline",
+            "reset",
+            "extra",
+        ] {
+            let mut payload = viewport_payload();
+            payload[key] = Value::Null;
+            assert_eq!(
+                authorize_operation(purpose, op, &payload).unwrap_err().code,
+                DOCUMENT_VIEWER_OP_REFUSED,
+                "{key}"
+            );
+            assert!(authorize_operation(None, op, &payload).is_ok());
+            let mut nested = viewport_payload();
+            nested["viewport"][key] = Value::Null;
+            assert!(
+                authorize_operation(purpose, op, &nested).is_err(),
+                "nested {key}"
+            );
+        }
+        for payload in [
+            Value::Null,
+            json!({}),
+            {
+                let mut value = viewport_payload();
+                value["viewport"] = Value::Null;
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["pageId"] = json!("");
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["viewport"]["width"] = json!(0);
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["viewport"]["height"] = json!(8193);
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["viewport"]["width"] = json!(1.5);
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["viewport"]["deviceScaleFactor"] = json!(0);
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["viewport"]["fitToWidth"] = json!("true");
+                value
+            },
+            {
+                let mut value = viewport_payload();
+                value["synchronizeFrame"] = json!(1);
+                value
+            },
+        ] {
+            assert!(
+                authorize_operation(purpose, op, &payload).is_err(),
+                "{payload}"
+            );
+        }
+        // Other allowlisted operations keep their existing payload semantics.
+        assert!(authorize_operation(purpose, "browser.navigate", &Value::Null).is_ok());
     }
 
     #[test]

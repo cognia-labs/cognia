@@ -38,10 +38,7 @@ import {
 import { useTranslations } from "next-intl"
 import {
   type FormEvent,
-  type KeyboardEvent,
-  type PointerEvent,
   type ReactNode,
-  type RefObject,
   useCallback,
   useEffect,
   useId,
@@ -51,6 +48,7 @@ import {
 } from "react"
 import { toast } from "sonner"
 
+import { LocalBrowserCanvas, useFrameCanvas, type FrameCanvas } from "./local-browser-surface"
 import { resolveBrowserAddress } from "@/components/browser/browser-address"
 import {
   BrowserConsolePanel,
@@ -97,19 +95,10 @@ import { localBrowser, type UserChromeBrowser } from "@/lib/browser/local-client
 import type { LocalChromiumEngine, LocalEngineBackend } from "@/lib/browser/local-chromium-engine"
 import type { BrowserPageSummary } from "@/lib/browser/session-types"
 import type { LocalBrowserDialog as LocalBrowserDialogState } from "@/lib/browser/shared-local-browser"
-import { createFramePainter, type FramePainter } from "@/lib/browser/frame-painter"
 import {
   createLocalViewportScheduler,
-  type LocalViewport,
   type LocalViewportResult,
 } from "@/lib/browser/local-viewport-scheduler"
-import type { RemoteBrowserFrame } from "@/lib/browser/remote-stream"
-import {
-  createLocalInputQueue,
-  type LocalBrowserInput,
-  type LocalInputQueue,
-} from "@/lib/browser/local-input-queue"
-import { canvasPointToFrame, decodeRemoteBrowserFrame } from "@/lib/browser/remote-stream"
 import type { BrowserAdjustDriver } from "@/lib/browser/adjust"
 import { BROWSER_DETAIL_STORAGE_KEY } from "@/lib/browser/preview-data"
 import type { OutputDetailLevel } from "@/lib/browser/protocol"
@@ -119,12 +108,6 @@ import { cn } from "@/lib/utils"
 
 const DEVTOOLS_POLL_MS = 1_500
 const DEVTOOLS_IDLE_POLL_MS = 6_000
-
-function mouseButton(button: number): "left" | "middle" | "right" {
-  if (button === 1) return "middle"
-  if (button === 2) return "right"
-  return "left"
-}
 
 export interface LocalChromiumPreviewProps {
   backend: LocalEngineBackend
@@ -169,15 +152,6 @@ interface PaneSession {
   closePage: (pageId: string) => Promise<void>
 }
 
-interface FrameCanvas {
-  canvasRef: RefObject<HTMLCanvasElement | null>
-  frameSizeRef: RefObject<{ width: number; height: number }>
-  drawFrame: (bytes: Uint8Array) => void
-  resetPage: () => void
-  requestViewport: (viewport: LocalViewport) => void
-  applyViewport: (viewport: LocalViewport, result: LocalViewportResult | void) => void
-}
-
 const DETAIL_LEVELS: readonly OutputDetailLevel[] = ["compact", "standard", "detailed", "forensic"]
 
 /** The comment detail level the lightweight preview's selector last stored. */
@@ -187,101 +161,6 @@ function storedDetailLevel(): OutputDetailLevel {
   return DETAIL_LEVELS.includes(stored as OutputDetailLevel)
     ? (stored as OutputDetailLevel)
     : "standard"
-}
-
-/** The canvas the screencast is drawn into (`createFramePainter`). */
-function useFrameCanvas(): FrameCanvas {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const frameSizeRef = useRef({ width: 1, height: 1 })
-  // Made on the first frame and dropped on unmount (a remount makes another).
-  const painterRef = useRef<FramePainter | null>(null)
-  const activeRef = useRef(false)
-  const viewportRef = useRef<{
-    width: number
-    height: number
-    ready: boolean
-    after: number
-  } | null>(null)
-  const candidateRef = useRef<RemoteBrowserFrame | null>(null)
-  const resetPage = useCallback(() => {
-    painterRef.current?.dispose()
-    painterRef.current = null
-    viewportRef.current = null
-    candidateRef.current = null
-    frameSizeRef.current = { width: 1, height: 1 }
-    if (canvasRef.current) {
-      canvasRef.current.style.opacity = "0"
-      canvasRef.current.style.pointerEvents = "none"
-      canvasRef.current.dataset.viewportReady = "false"
-    }
-  }, [])
-  useEffect(() => {
-    activeRef.current = true
-    return () => {
-      activeRef.current = false
-      painterRef.current?.dispose()
-      painterRef.current = null
-      candidateRef.current = null
-    }
-  }, [])
-  const paint = useCallback((frame: RemoteBrowserFrame) => {
-    if (!activeRef.current) return
-    painterRef.current ??= createFramePainter(() => canvasRef.current, undefined, {
-      canPaint: (next) => {
-        const viewport = viewportRef.current
-        return (
-          !!viewport?.ready &&
-          next.width === viewport.width &&
-          next.height === viewport.height &&
-          next.sequence > viewport.after
-        )
-      },
-      onPaint: (next) => {
-        frameSizeRef.current = { width: next.width, height: next.height }
-        if (canvasRef.current) {
-          canvasRef.current.style.opacity = "1"
-          canvasRef.current.style.pointerEvents = "auto"
-          canvasRef.current.dataset.viewportReady = "true"
-        }
-      },
-    })
-    painterRef.current.paint(frame)
-  }, [])
-  const requestViewport = useCallback((viewport: LocalViewport) => {
-    viewportRef.current = { ...viewport, ready: false, after: viewportRef.current?.after ?? -1 }
-    candidateRef.current = null
-  }, [])
-  const applyViewport = useCallback(
-    (viewport: LocalViewport, result: LocalViewportResult | void) => {
-      const current = viewportRef.current
-      if (!current || current.width !== viewport.width || current.height !== viewport.height) return
-      current.ready = true
-      if (typeof result?.frameSequence === "number") current.after = result.frameSequence
-      const candidate = candidateRef.current
-      candidateRef.current = null
-      if (candidate) paint(candidate)
-    },
-    [paint]
-  )
-  const drawFrame = useCallback(
-    (bytes: Uint8Array) => {
-      let frame
-      try {
-        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-        frame = decodeRemoteBrowserFrame(buffer as ArrayBuffer)
-      } catch {
-        return
-      }
-      if (!activeRef.current) return
-      const viewport = viewportRef.current
-      if (!viewport || frame.width !== viewport.width || frame.height !== viewport.height) return
-      // The only fresh damage frame can beat the viewport RPC response.
-      if (!viewport.ready) candidateRef.current = frame
-      else paint(frame)
-    },
-    [paint]
-  )
-  return { canvasRef, frameSizeRef, drawFrame, resetPage, requestViewport, applyViewport }
 }
 
 export function LocalChromiumPreview(props: LocalChromiumPreviewProps) {
@@ -361,23 +240,13 @@ function LocalPreviewBody({
   const screenshotT = useTranslations("browser.screenshot")
   const dialogT = useTranslations("browserLocal.dialog")
 
-  const { canvasRef, frameSizeRef, resetPage, requestViewport, applyViewport } = canvas
+  const { resetPage, requestViewport, applyViewport } = canvas
   const viewportRef = useRef<HTMLDivElement>(null)
   const toolbarRef = useRef<HTMLDivElement>(null)
   const urlInputRef = useRef<HTMLInputElement>(null)
   const navigationAttemptRef = useRef(0)
 
   const { engine, sessionId, pages, activePageId, state, refreshPages } = session
-  // The user's input goes out in order, coalesced while one event is in
-  // flight: one queue per runtime session, made on the first event.
-  const inputQueueRef = useRef<{ sessionId: string; queue: LocalInputQueue } | null>(null)
-  useEffect(
-    () => () => {
-      inputQueueRef.current?.queue.dispose()
-      inputQueueRef.current = null
-    },
-    []
-  )
   // A file input clicked in the page: the user picks, Rust stages, the page gets the copies.
   useLocalFileChooser(sessionId)
   const activePage =
@@ -636,52 +505,6 @@ function LocalPreviewBody({
     }
   }
 
-  const sendInput = (input: LocalBrowserInput) => {
-    if (!sessionId) return
-    let entry = inputQueueRef.current
-    if (entry?.sessionId !== sessionId) {
-      entry?.queue.dispose()
-      const target = sessionId
-      entry = {
-        sessionId: target,
-        queue: createLocalInputQueue((queued) =>
-          localBrowser.rpc("browser.input", { sessionId: target, input: queued })
-        ),
-      }
-      inputQueueRef.current = entry
-    }
-    entry.queue.send(input)
-  }
-
-  const pointerPayload = (event: PointerEvent<HTMLCanvasElement>) => ({
-    ...canvasPointToFrame(
-      { x: event.clientX, y: event.clientY },
-      event.currentTarget.getBoundingClientRect(),
-      frameSizeRef.current
-    ),
-    button: mouseButton(event.button),
-    clickCount: 1,
-  })
-
-  const sendKey = (event: KeyboardEvent<HTMLCanvasElement>, type: "keyDown" | "keyUp") => {
-    if (!ready) return
-    event.preventDefault()
-    sendInput({
-      kind: "key",
-      payload: {
-        type,
-        key: event.key,
-        code: event.code,
-        modifiers:
-          (event.altKey ? 1 : 0) |
-          (event.ctrlKey ? 2 : 0) |
-          (event.metaKey ? 4 : 0) |
-          (event.shiftKey ? 8 : 0),
-        ...(type === "keyDown" && event.key.length === 1 ? { text: event.key } : {}),
-      },
-    })
-  }
-
   const answerDialog = async (answer: { accept: boolean; promptText?: string }) => {
     try {
       await session.answerDialog(answer)
@@ -897,23 +720,12 @@ function LocalPreviewBody({
             ref={viewportRef}
             className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-black"
           >
-            <canvas
-              ref={canvasRef}
-              style={{ opacity: 0, pointerEvents: "none" }}
-              tabIndex={0}
-              role="application"
-              aria-label={t("canvas")}
-              className="absolute inset-0 h-full w-full object-contain outline-none"
-              onPointerMove={(event) => {
-                if (!ready) return
-                sendInput({
-                  kind: "mouse",
-                  payload: { type: "mouseMoved", ...pointerPayload(event) },
-                })
-              }}
-              onPointerDown={(event) => {
-                event.currentTarget.focus()
-                if (!ready) return
+            <LocalBrowserCanvas
+              canvas={canvas}
+              sessionId={sessionId}
+              ready={ready}
+              label={t("canvas")}
+              onPointerPress={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect()
                 const x = rect.width ? ((event.clientX - rect.left) / rect.width) * 100 : 0
                 const y = rect.height ? ((event.clientY - rect.top) / rect.height) * 100 : 0
@@ -922,39 +734,13 @@ function LocalPreviewBody({
                   y: Math.max(0, Math.min(100, y)),
                   key: (previous?.key ?? 0) + 1,
                 }))
-                sendInput({
-                  kind: "mouse",
-                  payload: { type: "mousePressed", ...pointerPayload(event) },
-                })
-              }}
-              onPointerUp={(event) => {
-                if (!ready) return
-                sendInput({
-                  kind: "mouse",
-                  payload: { type: "mouseReleased", ...pointerPayload(event) },
-                })
-              }}
-              onWheel={(event) => {
-                if (!ready) return
-                sendInput({
-                  kind: "mouse",
-                  payload: {
-                    type: "mouseWheel",
-                    ...pointerPayload(event as unknown as PointerEvent<HTMLCanvasElement>),
-                    deltaX: event.deltaX,
-                    deltaY: event.deltaY,
-                  },
-                })
               }}
               onKeyDown={(event) => {
-                if (isFindShortcut(event)) {
-                  event.preventDefault()
-                  setFindOpen(true)
-                  return
-                }
-                sendKey(event, "keyDown")
+                if (!isFindShortcut(event)) return false
+                event.preventDefault()
+                setFindOpen(true)
+                return true
               }}
-              onKeyUp={(event) => sendKey(event, "keyUp")}
             />
             {clickPointer && (
               <span

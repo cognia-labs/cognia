@@ -170,13 +170,22 @@ describe("chat-drafts", () => {
     const bytes = new Uint8Array([1, 2])
 
     await setDraft(sessionId, "shared", [
-      { name: "note.txt", mediaType: "text/plain", size: 2, bytes },
+      {
+        name: "note.txt",
+        mediaType: "text/plain",
+        size: 2,
+        bytes,
+        remoteDocument: injectedCloudProvenance,
+      },
     ])
 
     const actionRow = (await getDb().mobileOutboundQueue.toArray()).find(
       (row) => row.protocol === "host-state"
     )
     expect(actionRow).toMatchObject({ status: "pending", baseRevision: 5 })
+    expect(JSON.stringify(actionRow?.payload)).not.toMatch(
+      /remoteDocument|private-account|authorizationEpoch|accountBinding/
+    )
     expect(actionRow?.payload).toMatchObject({
       actions: [
         expect.objectContaining({
@@ -801,4 +810,41 @@ describe("draft folded links", () => {
     expect(row?.text).toBe("no links here")
     expect(row?.foldedLinks).toBeUndefined()
   })
+})
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+const injectedCloudProvenance = {
+  ...cloudProvenance,
+  accountId: "private-account",
+  authorizationEpoch: "private-epoch",
+  accountBinding: { accountId: "private-account" },
+}
+
+it("restores draft provenance through its parser without a schema change", async () => {
+  await setDraft("provenance-draft", "", [
+    {
+      name: "Plan.md",
+      mediaType: "text/markdown",
+      size: 4,
+      bytes: new Uint8Array([1, 2]),
+      remoteDocument: injectedCloudProvenance,
+      citation: { kind: "doc", id: "google:doc" },
+    },
+  ])
+  expect((await getDraft("provenance-draft"))?.attachments?.[0]).toMatchObject({
+    remoteDocument: cloudProvenance,
+    citation: { kind: "doc", id: "google:doc" },
+  })
+  expect(JSON.stringify((await getDraft("provenance-draft"))?.attachments)).not.toMatch(
+    /private-account|authorizationEpoch|accountBinding/
+  )
 })

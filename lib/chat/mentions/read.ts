@@ -12,6 +12,7 @@
  * findable at all, since it left no text behind to match.
  */
 
+import { projectRemoteDocumentData } from "@/lib/chat/attachments/remote-document"
 import { resolveMentions } from "./resolve-mentions"
 import { readPromptPreambleSummary, type PromptPreambleSummary } from "@/lib/chat/prompt-preamble"
 import type { ContextRef, ContextRefKind } from "./types"
@@ -68,7 +69,9 @@ export function pickReferenceMetadata(
 ): { mentions?: ContextRef[]; promptPreamble?: PromptPreambleSummary } | undefined {
   if (!metadata || typeof metadata !== "object") return undefined
   const mentions = Array.isArray((metadata as { mentions?: unknown }).mentions)
-    ? (metadata as { mentions: unknown[] }).mentions.filter(isContextRef)
+    ? (metadata as { mentions: unknown[] }).mentions
+        .filter(isContextRef)
+        .map((ref) => projectRemoteDocumentData(ref, true))
     : []
   const promptPreamble = readPromptPreambleSummary(metadata)
   if (!mentions.length && !promptPreamble) return undefined

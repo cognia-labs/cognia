@@ -69,6 +69,7 @@ function mount(
     initialText?: string
     acceptMotion?: boolean
     originalFiles?: boolean
+    destinationKey?: string
   } = {}
 ) {
   const add = jest.fn()
@@ -90,6 +91,7 @@ function mount(
   const state = { value: opts.initialText ?? "" }
   const view = renderHook(() =>
     useAttachmentIntake({
+      destinationKey: opts.destinationKey,
       attachments: { files: new Array(opts.staged ?? 0).fill(null), add: sink.add },
       attachmentCitations: { expect: expectCitation },
       textInput: {
@@ -745,4 +747,55 @@ it("preserves arbitrary platform files through the real intake gate", async () =
     audio: false,
     originalFiles: true,
   })
+})
+
+const cloudProvenance = {
+  v: 1 as const,
+  providerId: "google" as const,
+  resourceKind: "doc" as const,
+  resourceId: "abcdefghijklmnop1234",
+  url: "https://docs.google.com/document/d/abcdefghijklmnop1234/edit",
+  title: "Plan",
+  fetchedAt: 1,
+  completeness: { status: "complete" as const },
+}
+import { stagedRemoteDocument } from "@/lib/chat/attachments/remote-document"
+import { requestComposerDocument } from "@/lib/chat/composer-document-request"
+it("announces only accepted File identities before add; rejected files have no provenance", async () => {
+  const accepted = file("Plan.md"),
+    rejected = file("refused.md")
+  prepared.mockResolvedValue({
+    files: [accepted],
+    unsupportedCount: 1,
+    tooLargeCount: 0,
+    motionTooLargeCount: 0,
+    optimizedCount: 0,
+  })
+  const { view, add } = mount()
+  add.mockImplementation(() => expect(stagedRemoteDocument(accepted)).toEqual(cloudProvenance))
+  await act(async () => {
+    await view.result.current.acceptFiles([accepted, rejected], {
+      provenance: new Map([
+        [accepted, cloudProvenance],
+        [rejected, cloudProvenance],
+      ]),
+    })
+  })
+  expect(stagedRemoteDocument(rejected)).toBeUndefined()
+})
+it("dock requests rejoin stageRemoteDoc only in the owning composer without editing text", () => {
+  const stage = jest.fn(async () => null)
+  jest.mocked(useRemoteDocStaging).mockReturnValue(stage)
+  const { setInput } = mount({ destinationKey: "owner", initialText: "@lark:keep" })
+  const doc = {
+    providerId: "google",
+    kind: "doc" as const,
+    id: cloudProvenance.resourceId,
+    title: "Plan",
+    accountBinding: { accountId: "a", authorizationEpoch: "v1" },
+  }
+  expect(requestComposerDocument({ sessionId: "other", doc })).toBe(false)
+  expect(requestComposerDocument({ sessionId: "owner", doc })).toBe(true)
+  expect(stage).toHaveBeenCalledWith({ providerId: "google", accountId: "a", doc })
+  expect(setInput).not.toHaveBeenCalled()
 })
