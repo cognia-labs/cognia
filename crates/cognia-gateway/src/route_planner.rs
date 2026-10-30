@@ -104,6 +104,9 @@ fn value_contains_image(value: &Value) -> bool {
     match value {
         Value::Array(values) => values.iter().any(value_contains_image),
         Value::Object(object) => {
+            if ["inlineData", "inline_data", "fileData", "file_data"].iter().any(|field| object.get(*field).is_some_and(|data| {
+                data.get("mimeType").or_else(|| data.get("mime_type")).and_then(Value::as_str).is_none_or(|mime| mime.starts_with("image/"))
+            })) { return true; }
             object
                 .get("type")
                 .and_then(Value::as_str)
@@ -123,9 +126,11 @@ fn request_requirements(body: &Value) -> RequestRequirements {
             .get("tools")
             .and_then(Value::as_array)
             .is_some_and(|tools| !tools.is_empty()),
-        vision: body.get("messages").is_some_and(value_contains_image),
+        vision: ["messages", "contents", "input"].iter().any(|field| body.get(*field).is_some_and(value_contains_image)),
         structured_output: body.get("response_format").is_some()
-            || body.pointer("/output_config/format").is_some(),
+            || body.pointer("/output_config/format").is_some()
+            || body.pointer("/generationConfig/responseMimeType").is_some_and(|mime| mime == "application/json")
+            || body.pointer("/generation_config/response_mime_type").is_some_and(|mime| mime == "application/json"),
         streaming: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
         estimated_context_tokens: (serialized_len as u64).div_ceil(4),
         local_only: body
@@ -548,6 +553,7 @@ pub fn route_provider_ids(snapshot: &RoutingSnapshot, model: &str) -> HashSet<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::snapshot::RoutingSnapshot;
 
     fn snapshot(distribution: &str) -> RoutingSnapshot {
@@ -749,6 +755,16 @@ mod tests {
             request_requirements(&body).estimated_context_tokens,
             expected.div_ceil(4)
         );
+    }
+
+    #[test]
+    fn native_google_parts_and_schema_require_capable_routes() {
+        for image in [json!({"inlineData":{"mimeType":"image/png","data":"abc"}}), json!({"file_data":{"mime_type":"image/jpeg","file_uri":"https://example.test/image"}})] {
+            let requirements = request_requirements(&json!({"contents":[{"parts":[image]}],"generationConfig":{"responseMimeType":"application/json"}}));
+            assert!(requirements.vision);
+            assert!(requirements.structured_output);
+        }
+        assert!(!request_requirements(&json!({"contents":[{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"abc"}}]}]})).vision);
     }
 
     #[test]

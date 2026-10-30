@@ -341,9 +341,13 @@ async fn wait_for_answer(
                     ),
                 }
             }
-            Err(BrainBridgeError::Unavailable(_)) if started.elapsed() + pause < budget => {}
+            Err(BrainBridgeError::Unavailable(_) | BrainBridgeError::NotDispatched(_))
+                if started.elapsed() + pause < budget => {}
             Err(error) => {
-                let unavailable = matches!(error, BrainBridgeError::Unavailable(_));
+                let unavailable = matches!(
+                    error,
+                    BrainBridgeError::Unavailable(_) | BrainBridgeError::NotDispatched(_)
+                );
                 let (status, code, message, details) = bridge_failure(error);
                 // The run is the brain's: say which one, so the caller can read
                 // it once the brain is back.

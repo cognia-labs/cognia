@@ -56,6 +56,13 @@ pub fn fingerprint_of(secret: &str) -> String {
     format!("…{tail}")
 }
 
+/// Opaque identity for authorization and affinity. Display fingerprints are
+/// deliberately short and may collide; they must never select a credential.
+pub fn lease_identity_of(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(secret.as_bytes()))
+}
+
 pub trait CredentialResolver: Send + Sync + 'static {
     fn resolve(&self, source: &CredentialSource<'_>)
         -> Result<ResolvedCredential, CredentialError>;
@@ -232,6 +239,13 @@ impl CredentialResolver for ChainResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lease_identity_distinguishes_credentials_with_the_same_display_suffix() {
+        assert_eq!(fingerprint_of("first-key"), fingerprint_of("second-key"));
+        assert_ne!(lease_identity_of("first-key"), lease_identity_of("second-key"));
+        assert_eq!(lease_identity_of("first-key"), lease_identity_of("first-key"));
+    }
 
     #[test]
     fn inline_resolves_and_fingerprints_without_leaking() {

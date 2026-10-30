@@ -79,6 +79,30 @@ export const gatewayConfigSchema = z
     maxRetryWaitMs: u32,
     respectRetryAfter: z.boolean(),
     gatewayLocalRoutingV2: z.boolean(),
+    privacyMode: z.enum(["off", "mask"]).default("off"),
+    subscriptionRotationProviderIds: z
+      .array(nonEmptyString.max(256))
+      .max(128)
+      .default([])
+      .refine((providers) => new Set(providers).size === providers.length, {
+        message: "subscriptionRotationProviderIds must be unique",
+      }),
+    middlewareEnabled: z.boolean().optional(),
+    bridgeModels: z
+      .object({
+        search: nonEmptyString
+          .max(512)
+          .refine((value) => !/[\u0000-\u001f\u007f]/.test(value))
+          .nullish()
+          .transform((value) => value ?? undefined),
+        vision: nonEmptyString
+          .max(512)
+          .refine((value) => !/[\u0000-\u001f\u007f]/.test(value))
+          .nullish()
+          .transform((value) => value ?? undefined),
+      })
+      .strict()
+      .optional(),
     exposedModels: z.array(nonEmptyString),
     hideRawProviderModels: z.boolean(),
     cooldownFallbackSecs: u32,

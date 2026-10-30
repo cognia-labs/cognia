@@ -1,5 +1,5 @@
-//! Local axum HTTP server exposing OpenAI- and Anthropic-compatible chat
-//! endpoints backed by the user's configured providers + routing snapshot.
+//! Local axum HTTP server exposing OpenAI, Anthropic, Gemini and Ollama wire
+//! formats backed by the user's configured providers + routing snapshot.
 //!
 //! Layout:
 //!   - GET  /healthz                  → liveness (no auth)
@@ -9,6 +9,10 @@
 //!   - POST /v1/messages/count_tokens → Anthropic token count (forwarded, or a local estimate when no Anthropic route)
 //!   - POST /v1/embeddings            → OpenAI-format embeddings
 //!   - POST /v1/responses             → OpenAI Responses API (stream + non-stream)
+//!   - ANY  /v1beta/models, /v1alpha/models[/...] → native Gemini catalog/inference
+//!   - ANY  /api/version, /api/tags, /api/show, /api/chat, /api/generate → Ollama
+//!   - POST /v1/images/{generations,edits}, /v1/audio/{transcriptions,translations,speech}
+//!   - POST /v1/rerank, /v1/videos; GET /v1/videos/{id}[/content] → media routing
 //!   - GET  /v1/models/cognia/{mode}  → one Router + Fusion virtual model (ADR-0188)
 //!   - ANY  /v1/runs, /v1/sessions/{id}, /v1/artifacts/{id}[/content]
 //!     → the Router + Fusion Run API (`runs.rs`); 403 until the brain turns it on
@@ -16,7 +20,7 @@
 //! Middleware mirrors `remote_control::server` (the audited reference), with
 //! the gateway's own additions: Host check (skipped for LAN peers when LAN
 //! binding is on) → Origin/Referer rejection → IPv4 allowlist → scoped API-key
-//! auth (constant-time; accepts BOTH `Authorization: Bearer` and `x-api-key`)
+//! auth (constant-time; `Authorization: Bearer`, `x-api-key`, `x-goog-api-key`)
 //! → per-key rate limit → global rate limit. The listener binds 127.0.0.1 by
 //! default, 0.0.0.0 when the LAN interface is selected.
 
@@ -25,6 +29,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::host::GatewayHost;
+mod bridges;
+mod gemini;
+mod media;
+mod ollama;
+mod privacy;
+use privacy::{prepare_gateway_body, PrivacyRestorer};
+
 use crate::lease::CredentialLeaseMap;
 use crate::route_ticket::{
     RouteTicket, RouteTicketRegistry, TicketAffinity, TicketOperation, TicketReject,
@@ -53,9 +64,9 @@ use super::concurrency::{ConcurrencyLimiter, InFlightGuard, InFlightTracker, Slo
 use super::cooldown::{self, KeyCooldownMap};
 use super::count_tokens::estimate_input_tokens;
 use super::execute::{
-    candidates_from_entries, count_tokens_url, embeddings_url, expand_for_ticket, expand_key_pools,
+    candidates_from_entries, count_tokens_url, embeddings_url, expand_for_ticket,
     is_executable_provider, record_key_success, resolve_candidates, rewrite_model,
-    strip_request_fields, upstream_headers, upstream_url, Candidate, KeyRotationMap, SseDeframer,
+    strip_request_fields, Candidate, KeyRotationMap, SseDeframer,
 };
 use super::keyed_rate_limit::KeyedRateLimiter;
 use super::session_key::derive_session_id;
@@ -152,6 +163,11 @@ pub struct ServerHandle {
 }
 
 impl ServerHandle {
+    pub(crate) fn clear_account_data(&self) {
+        self.state.media.clear();
+        *self.state.response_history.lock() = ResponseHistory::default();
+    }
+
     /// Detach a probe bound to the running server's state.
     ///
     /// Returned as its own value rather than exposing `AppState` so callers can
@@ -201,6 +217,9 @@ struct ReqCtx {
     /// Client User-Agent, captured for the W1.3 fallback session key (all
     /// loopback callers share `remote_ip`, so the UA carries the distinctness).
     user_agent: String,
+    session_id: Option<String>,
+    body_prepared: bool,
+    gateway_slot: Option<Arc<Slot>>,
     /// Present when the request authenticated with a route-ticket secret
     /// (ADR-0090 Phase 2). Frozen candidates/bindings; never the secret.
     ticket: Option<RouteTicket>,
@@ -212,6 +231,7 @@ struct ReqCtx {
 
 #[derive(Clone)]
 struct AppState {
+    bound_port: u16,
     account: Arc<RwLock<crate::GatewayAccountContext>>,
     account_changes: Arc<tokio::sync::watch::Sender<u64>>,
     host: Arc<dyn GatewayHost>,
@@ -245,6 +265,7 @@ struct AppState {
     /// Upstream HTTP clients, one per live proxy route.
     http: Arc<UpstreamClients>,
     response_history: Arc<parking_lot::Mutex<ResponseHistory>>,
+    media: Arc<media::MediaState>,
     /// The Run API's brain link, surface switches and compat-waiter cap
     /// (ADR-0188 B2–B3). With the surface off — the default — `/v1/runs` and
     /// the `cognia/*` models refuse without ever touching the brain.
@@ -304,8 +325,21 @@ impl AppState {
             }
         }
         self.host = Arc::new(AccountBoundHost {
-            person_partition: ctx.ticket.as_ref().filter(|ticket| ticket.member.is_some())
-                .and_then(|ticket| ticket.owner_account_id.clone().map(|account| (account, ticket.session_id.clone()))),
+            person_partition: ctx
+                .ticket
+                .as_ref()
+                .filter(|ticket| ticket.member.is_some())
+                .and_then(|ticket| {
+                    ticket
+                        .owner_account_id
+                        .clone()
+                        .map(|account| (account, ticket.session_id.clone()))
+                })
+                .or_else(|| {
+                    ctx.ticket
+                        .as_ref()
+                        .and_then(|ticket| self.tickets.internal_bridge_audience(&ticket.ticket_id))
+                }),
             host: self.host.clone(),
             account: self.account.clone(),
             generation: ctx.account_generation,
@@ -391,15 +425,16 @@ async fn run_with_ticket_boundary(
     Response::from_parts(parts, Body::from_stream(stream))
 }
 
-fn body_has_no_leaking_pii(body: &Value) -> bool {
-    fn clean(value: &Value) -> bool {
-        match value {
-            Value::String(text) => cognia_net::outbound_pii::has_no_leaking_pii(text),
-            Value::Array(items) => items.iter().all(clean),
-            Value::Object(fields) => fields.values().all(clean),
-            _ => true,
-        }
+fn value_has_no_leaking_pii(value: &Value) -> bool {
+    match value {
+        Value::String(text) => cognia_net::outbound_pii::has_no_leaking_pii(text),
+        Value::Array(items) => items.iter().all(value_has_no_leaking_pii),
+        Value::Object(fields) => fields.values().all(value_has_no_leaking_pii),
+        _ => true,
     }
+}
+
+fn body_has_no_leaking_pii(body: &Value) -> bool {
     [
         "messages",
         "input",
@@ -407,11 +442,20 @@ fn body_has_no_leaking_pii(body: &Value) -> bool {
         "system",
         "tools",
         "response_format",
+        "contents",
+        "systemInstruction",
+        "system_instruction",
+        "generationConfig",
+        "generation_config",
+        "toolConfig",
+        "tool_config",
+        "generateContentRequest",
+        "generate_content_request",
     ]
     .iter()
-    .all(|field| clean(&body[*field]))
-        && clean(&body["text"]["format"])
-        && clean(&body["output_config"]["format"])
+    .all(|field| value_has_no_leaking_pii(&body[*field]))
+        && value_has_no_leaking_pii(&body["text"]["format"])
+        && value_has_no_leaking_pii(&body["output_config"]["format"])
 }
 
 /// Upstream HTTP clients bound to the live network-proxy policy.
@@ -610,6 +654,7 @@ pub async fn spawn_server_with_account(
     // original moves into `AppState`.
     let keys_for_flush = keys.clone();
     let state = AppState {
+        bound_port,
         account,
         account_changes,
         host,
@@ -633,6 +678,7 @@ pub async fn spawn_server_with_account(
         leases,
         http,
         response_history: Arc::new(parking_lot::Mutex::new(ResponseHistory::default())),
+        media: Arc::new(media::MediaState::default()),
         runs,
     };
     // Cloned before the router consumes `state`; both share the same Arcs, so a
@@ -659,6 +705,7 @@ pub async fn spawn_server_with_account(
                     let _ = api_keys::save_keys(&flush_keys.read());
                     // Ticket budget counters ride the same cadence: never a
                     // disk write per request.
+                    flush_tickets.sweep_expired(chrono::Utc::now().timestamp_millis());
                     let _ = flush_tickets.flush();
                 }
                 _ = flush_rx.changed() => break,
@@ -712,9 +759,13 @@ fn app_router(state: AppState) -> Router {
         .route("/v1/messages/count_tokens", post(anthropic_count_tokens))
         .route("/v1/embeddings", post(openai_embeddings))
         .route("/v1/responses", post(openai_responses))
+        .merge(ollama::routes())
+        .merge(gemini::routes())
+        .merge(media::routes())
         // `/v1/runs` shares this router's Host, origin, allowlist, key and
         // rate-limit checks; what it adds is the scope check and the brain.
         .merge(crate::runs::routes().with_state(state.runs.clone()))
+        .layer(from_fn_with_state(state.clone(), privacy::request_boundary))
         .layer(from_fn_with_state(state.clone(), middleware))
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
         // Outermost, so a Run API failure answered by any layer above — the
@@ -722,7 +773,9 @@ fn app_router(state: AppState) -> Router {
         // for every other path (ADR-0188 D37).
         .layer(axum::middleware::from_fn(
             crate::runs::contract_error_envelope,
-        ));
+        ))
+        .layer(axum::middleware::from_fn(ollama::error_envelope))
+        .layer(axum::middleware::from_fn(gemini::error_envelope));
 
     Router::new()
         // R2 client-compat: Claude Code probes `GET/HEAD /` before trusting an
@@ -856,11 +909,12 @@ async fn run_upstream_probe(state: &AppState, model: &str) -> UpstreamProbeOutco
         return UpstreamProbeOutcome::NoSnapshot;
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let candidates = expand_key_pools(
+    let candidates = expand_gateway_pools(
+        state,
+        &cfg,
         route_candidates(state, &snapshot, &cfg, model, &Value::Null, "gateway-probe").await,
-        &state.key_rotation,
-        &state.key_cooldown,
         now_ms,
+        None,
     );
     if candidates.is_empty() {
         return UpstreamProbeOutcome::NoCandidate;
@@ -871,10 +925,10 @@ async fn run_upstream_probe(state: &AppState, model: &str) -> UpstreamProbeOutco
         // A probe is a real (billable) upstream call, so it counts toward the
         // in-flight tally that now drives least-busy routing — otherwise a
         // self-check would be invisible to the very decisions it runs beside.
-        let _in_flight = state.in_flight.enter(&candidate.provider.id);
+        let _in_flight = state.in_flight.enter(source_provider_id(candidate));
         let (ok, status, error) = probe_candidate(state, &cfg, candidate).await;
         results.push(UpstreamProbeResult {
-            provider_id: candidate.provider.id.clone(),
+            provider_id: source_provider_id(candidate).to_string(),
             model_id: candidate.model_id.clone(),
             ok,
             status,
@@ -925,15 +979,22 @@ async fn probe_candidate(
     let mut body = minimal_probe_body(&candidate.provider.protocol, &candidate.model_id);
     strip_request_fields(
         &mut body,
-        &candidate.provider.id,
+        source_provider_id(candidate),
         &cfg.stripped_request_fields,
         &cfg.field_strip_allow,
     );
-    let url = upstream_url(&candidate.provider.protocol, &candidate.provider.base_url);
-    let mut rb = apply_timeout(state.http.post(&url).json(&body), cfg);
-    for (name, value) in upstream_headers(
+    let url = super::execute::upstream_url_for(
         &candidate.provider.protocol,
+        &candidate.provider.base_url,
+        &candidate.model_id,
+        false,
+    );
+    let mut rb = apply_timeout(state.http.post(&url).json(&body), cfg);
+    for (name, value) in super::execute::upstream_headers_for(
+        &candidate.provider.protocol,
+        candidate.provider.transport.as_ref(),
         candidate.provider.api_key.as_deref(),
+        None,
     ) {
         rb = rb.header(name, value);
     }
@@ -973,6 +1034,12 @@ fn classify_probe_failure(status: u16, body: &str) -> (bool, Option<u16>, Option
 
 /// A one-token probe body in the candidate's wire protocol.
 fn minimal_probe_body(protocol: &str, model_id: &str) -> Value {
+    if matches!(protocol, "google" | "gemini") {
+        return json!({"contents":[{"role":"user","parts":[{"text":"ping"}]}],"generationConfig":{"maxOutputTokens":1}});
+    }
+    if protocol == "responses" {
+        return json!({"model":model_id,"input":"ping","max_output_tokens":1});
+    }
     let mut body = json!({
         "model": model_id,
         "max_tokens": 1,
@@ -1012,7 +1079,10 @@ fn supplied_token(headers: &HeaderMap) -> Option<&str> {
     {
         return Some(bearer);
     }
-    headers.get("x-api-key").and_then(|v| v.to_str().ok())
+    headers
+        .get("x-api-key")
+        .or_else(|| headers.get("x-goog-api-key"))
+        .and_then(|v| v.to_str().ok())
 }
 
 /// Collect inbound headers whose names the shared policy allows (values
@@ -1043,10 +1113,21 @@ fn clean_inbound_headers(headers: &HeaderMap) -> Vec<(String, String)> {
 /// ticket can never reach, which the middleware turns into a 403 rather than
 /// guessing a scope.
 fn ticket_operation_for_route(route: &str) -> Option<TicketOperation> {
+    if gemini::is_native_path(route) {
+        return if route.ends_with(":countTokens") {
+            Some(TicketOperation::CountTokens)
+        } else if route.ends_with(":generateContent") || route.ends_with(":streamGenerateContent") {
+            Some(TicketOperation::Chat)
+        } else {
+            Some(TicketOperation::Models)
+        };
+    }
     match route {
-        "/v1/models" => Some(TicketOperation::Models),
+        "/v1/models" | "/api/version" | "/api/tags" | "/api/show" => Some(TicketOperation::Models),
         path if path.starts_with("/v1/models/") => Some(TicketOperation::Models),
-        "/v1/chat/completions" | "/v1/messages" => Some(TicketOperation::Chat),
+        "/v1/chat/completions" | "/v1/messages" | "/api/chat" | "/api/generate" => {
+            Some(TicketOperation::Chat)
+        }
         "/v1/messages/count_tokens" => Some(TicketOperation::CountTokens),
         "/v1/embeddings" => Some(TicketOperation::Embeddings),
         "/v1/responses" => Some(TicketOperation::Responses),
@@ -1272,6 +1353,9 @@ async fn middleware(
             key_id: None,
             key_model_allowlist: Vec::new(),
             user_agent,
+            session_id: Some(ticket.session_id.clone()),
+            body_prepared: false,
+            gateway_slot: None,
             ticket: Some(ticket),
             inbound_headers: clean_inbound_headers(&headers),
         });
@@ -1374,6 +1458,9 @@ async fn middleware(
         key_id: Some(key_id),
         key_model_allowlist,
         user_agent,
+        session_id: None,
+        body_prepared: false,
+        gateway_slot: None,
         ticket: None,
         inbound_headers: clean_inbound_headers(&headers),
     });
@@ -1470,7 +1557,8 @@ fn ticket_model_documents(snapshot: &RoutingSnapshot, ticket: &RouteTicket) -> V
         .into_iter()
         .filter_map(|selector| {
             let resolved = ticket.resolve_model(&selector)?;
-            let candidates = ticket_base_candidates(snapshot, ticket, Some(&resolved));
+            let candidates =
+                ticket_base_candidates(snapshot, ticket, Some(&resolved), Some(&selector));
             candidates.first().map(|candidate| {
                 model_document(&selector, &candidate.provider, &candidate.model_id)
             })
@@ -1558,11 +1646,34 @@ fn content_has_type(value: &Value, kinds: &[&str]) -> bool {
     match value {
         Value::Array(items) => items.iter().any(|item| content_has_type(item, kinds)),
         Value::Object(object) => {
-            object
-                .get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|kind| kinds.contains(&kind))
-                || ["content", "output"].iter().any(|key| {
+            let native_media = ["inlineData", "inline_data", "fileData", "file_data"]
+                .iter()
+                .filter_map(|key| object.get(*key))
+                .any(|data| {
+                    let mime = data
+                        .get("mimeType")
+                        .or_else(|| data.get("mime_type"))
+                        .and_then(Value::as_str);
+                    (kinds.contains(&"image") && mime.is_none_or(|mime| mime.starts_with("image/")))
+                        || (kinds.contains(&"audio")
+                            && mime.is_some_and(|mime| mime.starts_with("audio/")))
+                        || (kinds.contains(&"video")
+                            && mime.is_some_and(|mime| mime.starts_with("video/")))
+                });
+            native_media
+                || object
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kinds.contains(&kind))
+                || [
+                    "content",
+                    "output",
+                    "parts",
+                    "functionResponse",
+                    "function_response",
+                ]
+                .iter()
+                .any(|key| {
                     object
                         .get(*key)
                         .is_some_and(|part| content_has_type(part, kinds))
@@ -1570,6 +1681,107 @@ fn content_has_type(value: &Value, kinds: &[&str]) -> bool {
         }
         _ => false,
     }
+}
+
+/// Select the protocol's output control without rewriting native field styles.
+fn request_output_limit_field(
+    body: &Value,
+    protocol: &str,
+) -> Result<(Option<&'static str>, &'static str), String> {
+    let object = body
+        .as_object()
+        .ok_or("model request must be a JSON object")?;
+    let (container, field) = if matches!(protocol, "google" | "gemini") {
+        if object.contains_key("generationConfig") && object.contains_key("generation_config") {
+            return Err(
+                "Gemini request cannot contain both generationConfig and generation_config".into(),
+            );
+        }
+        let container = if object.contains_key("generation_config") {
+            "generation_config"
+        } else {
+            "generationConfig"
+        };
+        let generation = object
+            .get(container)
+            .map(|value| {
+                value
+                    .as_object()
+                    .ok_or("Gemini generation configuration must be an object")
+            })
+            .transpose()?;
+        if generation.is_some_and(|fields| {
+            fields.contains_key("maxOutputTokens") && fields.contains_key("max_output_tokens")
+        }) {
+            return Err(
+                "Gemini generation configuration cannot contain both output-token field styles"
+                    .into(),
+            );
+        }
+        let field = if generation.is_some_and(|fields| fields.contains_key("maxOutputTokens")) {
+            "maxOutputTokens"
+        } else if generation.is_some_and(|fields| fields.contains_key("max_output_tokens"))
+            || container == "generation_config"
+        {
+            "max_output_tokens"
+        } else {
+            "maxOutputTokens"
+        };
+        (Some(container), field)
+    } else {
+        (
+            None,
+            if object.contains_key("max_completion_tokens") {
+                "max_completion_tokens"
+            } else if object.contains_key("max_output_tokens") || protocol == "responses" {
+                "max_output_tokens"
+            } else {
+                "max_tokens"
+            },
+        )
+    };
+    let value = match container {
+        Some(container) => body
+            .get(container)
+            .and_then(|generation| generation.get(field)),
+        None => body.get(field),
+    };
+    if value.is_some_and(|value| !value.is_null() && value.as_u64().is_none()) {
+        return Err("maximum output tokens must be an unsigned integer".into());
+    }
+    Ok((container, field))
+}
+
+fn request_max_output_tokens(body: &Value, protocol: &str) -> Option<u64> {
+    let (container, field) = request_output_limit_field(body, protocol).ok()?;
+    match container {
+        Some(container) => body[container][field].as_u64(),
+        None => body[field].as_u64(),
+    }
+}
+
+fn set_request_max_output_tokens(
+    body: &mut Value,
+    protocol: &str,
+    limit: u64,
+) -> Result<(), String> {
+    let (container, field) = request_output_limit_field(body, protocol)?;
+    if let Some(container) = container {
+        let generation = body
+            .as_object_mut()
+            .expect("request validated as object")
+            .entry(container)
+            .or_insert_with(|| json!({}));
+        generation
+            .as_object_mut()
+            .expect("generation configuration validated as object")
+            .insert(field.into(), json!(limit));
+    } else {
+        body.as_object_mut()
+            .expect("request validated as object")
+            .insert(field.into(), json!(limit));
+    }
+    Ok(())
 }
 
 fn tools_require_strict(tools: &Value) -> bool {
@@ -1585,6 +1797,7 @@ fn tools_require_strict(tools: &Value) -> bool {
 /// Enforce only published model facts; absent limits remain absent. Input
 /// estimates use the same gateway estimator as ticket reservations/count_tokens.
 fn apply_model_limits(body: &mut Value, candidate: &Candidate) -> Result<(), String> {
+    request_output_limit_field(body, &candidate.provider.protocol)?;
     let Some(metadata) = candidate
         .provider
         .model_metadata
@@ -1610,7 +1823,24 @@ fn apply_model_limits(body: &mut Value, candidate: &Candidate) -> Result<(), Str
     {
         return Err("selected model does not support streaming".into());
     }
-    let structured = body
+    let generation = body
+        .get("generationConfig")
+        .or_else(|| body.get("generation_config"));
+    let structured = generation.is_some_and(|generation| {
+        [
+            "responseSchema",
+            "response_schema",
+            "responseJsonSchema",
+            "response_json_schema",
+        ]
+        .iter()
+        .any(|key| generation.get(*key).is_some_and(|value| !value.is_null()))
+            || generation
+                .get("responseMimeType")
+                .or_else(|| generation.get("response_mime_type"))
+                .and_then(Value::as_str)
+                .is_some_and(|mime| matches!(mime, "application/json" | "text/x.enum"))
+    }) || body
         .get("response_format")
         .is_some_and(|f| !f.is_null() && f["type"] != "text")
         || body
@@ -1623,7 +1853,27 @@ fn apply_model_limits(body: &mut Value, candidate: &Candidate) -> Result<(), Str
     if metadata.fields.get("supportsStructuredOutput") == Some(&Value::Bool(false)) && structured {
         return Err("selected model does not support structured output or strict tools".into());
     }
-    let reasoning = body
+    let native_thinking = generation.and_then(|generation| {
+        generation
+            .get("thinkingConfig")
+            .or_else(|| generation.get("thinking_config"))
+    });
+    let reasoning = native_thinking.is_some_and(|thinking| {
+        thinking
+            .get("thinkingBudget")
+            .or_else(|| thinking.get("thinking_budget"))
+            .and_then(Value::as_i64)
+            .is_some_and(|budget| budget != 0)
+            || thinking
+                .get("thinkingLevel")
+                .or_else(|| thinking.get("thinking_level"))
+                .and_then(Value::as_str)
+                .is_some_and(|level| !level.eq_ignore_ascii_case("none"))
+            || thinking
+                .get("includeThoughts")
+                .or_else(|| thinking.get("include_thoughts"))
+                == Some(&Value::Bool(true))
+    }) || body
         .get("reasoning_effort")
         .or(body.pointer("/reasoning/effort"))
         .or(body.pointer("/output_config/effort"))
@@ -1648,9 +1898,16 @@ fn apply_model_limits(body: &mut Value, candidate: &Candidate) -> Result<(), Str
         ),
     ] {
         if metadata.fields.get(capability) == Some(&Value::Bool(false))
-            && ["messages", "input", "system"]
-                .iter()
-                .any(|key| content_has_type(&body[*key], kinds))
+            && [
+                "messages",
+                "input",
+                "system",
+                "contents",
+                "systemInstruction",
+                "system_instruction",
+            ]
+            .iter()
+            .any(|key| content_has_type(&body[*key], kinds))
         {
             return Err(format!("selected model does not support {label}"));
         }
@@ -1667,17 +1924,10 @@ fn apply_model_limits(body: &mut Value, candidate: &Candidate) -> Result<(), Str
         cap = Some(cap.map_or(context - input, |output| output.min(context - input)));
     }
     if let Some(cap) = cap {
-        let field = if body.get("max_completion_tokens").is_some() {
-            "max_completion_tokens"
-        } else if body.get("max_output_tokens").is_some()
-            || candidate.provider.protocol == "responses"
-        {
-            "max_output_tokens"
-        } else {
-            "max_tokens"
-        };
-        let requested = body[field].as_u64().filter(|n| *n > 0).unwrap_or(cap);
-        body[field] = json!(requested.min(cap));
+        let requested = request_max_output_tokens(body, &candidate.provider.protocol)
+            .filter(|n| *n > 0)
+            .unwrap_or(cap);
+        set_request_max_output_tokens(body, &candidate.provider.protocol, requested.min(cap))?;
     }
     Ok(())
 }
@@ -1821,11 +2071,29 @@ fn ticket_base_candidates(
     snapshot: &RoutingSnapshot,
     ticket: &RouteTicket,
     resolved: Option<&str>,
+    selector: Option<&str>,
 ) -> Vec<Candidate> {
+    let deployment = if ticket.selector_deployments.is_empty() {
+        None
+    } else {
+        let Some(selector) = selector else {
+            return Vec::new();
+        };
+        if ticket.model_bindings.get(selector).map(String::as_str) != resolved {
+            return Vec::new();
+        }
+        let Some(deployment) = ticket.selector_deployments.get(selector) else {
+            return Vec::new();
+        };
+        Some(deployment)
+    };
     ticket
         .candidates
         .iter()
         .filter_map(|tc| {
+            if deployment.is_some_and(|id| id != &tc.deployment_id) {
+                return None;
+            }
             snapshot
                 .provider_by_deployment(&tc.deployment_id)
                 .or_else(|| snapshot.provider(&tc.deployment_id))
@@ -1941,7 +2209,7 @@ async fn anthropic_count_tokens(
     // Same walk as chat, but NOT expanded across key pools: a token count
     // needs one credential, never a rotation slot.
     let candidates = match &ticket {
-        Some(t) => ticket_base_candidates(&snapshot, t, resolved.as_deref()),
+        Some(t) => ticket_base_candidates(&snapshot, t, resolved.as_deref(), Some(&model)),
         None => route_candidates(&state, &snapshot, &cfg, &model, &body, &session_id).await,
     };
     if ticket.as_ref().is_some_and(|t| t.strict_selectors) && candidates.is_empty() {
@@ -1965,9 +2233,14 @@ async fn anthropic_count_tokens(
 
     let started = Instant::now();
     let mut upstream_body = rewrite_model(&body, &candidate.model_id);
+    upstream_body =
+        match privacy::prepare_provider_body(&state, &ctx, &candidate, upstream_body).await {
+            Ok(body) => body,
+            Err(response) => return *response,
+        };
     strip_request_fields(
         &mut upstream_body,
-        &candidate.provider.id,
+        source_provider_id(&candidate),
         &cfg.stripped_request_fields,
         &cfg.field_strip_allow,
     );
@@ -2103,6 +2376,9 @@ fn synthesized_count(state: &AppState, ctx: &ReqCtx, model: &str, body: &Value) 
         false,
         None,
         true,
+        ctx.session_id
+            .as_deref()
+            .or_else(|| ctx.ticket.as_ref().map(|ticket| ticket.session_id.as_str())),
     );
     Json(json!({ "input_tokens": input_tokens })).into_response()
 }
@@ -2121,6 +2397,17 @@ async fn openai_embeddings(
         return refusal;
     }
     let format = InboundFormat::OpenAiChat;
+    if ctx.ticket.is_some() && !value_has_no_leaking_pii(&body) {
+        return logged_error(
+            &state,
+            &ctx,
+            format,
+            StatusCode::BAD_REQUEST,
+            "pii_blocked",
+            "recognized sensitive data must be redacted before sending this task to the model",
+            None,
+        );
+    }
     let cfg = state.config.read().clone();
     let snapshot = state.snapshot.read().clone();
     let Some(snapshot) = snapshot else {
@@ -2158,9 +2445,46 @@ async fn openai_embeddings(
             Some(&model),
         );
     }
-    if let Some(resp) = exposure_guard(&state, &ctx, format, &cfg, &model) {
-        return resp;
+    let ticket = ctx.ticket.clone();
+    if ticket.is_some()
+        && !(body["input"].is_string()
+            || body["input"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty() && items.iter().all(Value::is_string)))
+    {
+        return logged_error(
+            &state,
+            &ctx,
+            format,
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "route-ticket embeddings require text input so privacy checks can inspect it",
+            Some(&model),
+        );
     }
+    if ticket.is_none() {
+        if let Some(resp) = exposure_guard(&state, &ctx, format, &cfg, &model) {
+            return resp;
+        }
+    }
+    let resolved = if let Some(ticket) = &ticket {
+        match ticket.resolve_model(&model) {
+            Some(resolved) => Some(resolved),
+            None => {
+                return logged_error(
+                    &state,
+                    &ctx,
+                    format,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request_error",
+                    &format!("model \"{model}\" is not bound by this route ticket"),
+                    Some(&model),
+                );
+            }
+        }
+    } else {
+        None
+    };
 
     // W1.2: gateway-key in-flight cap. Embeddings responses are always buffered,
     // so the slot lives in this handler's scope — no SSE-pump hand-off needed.
@@ -2181,17 +2505,55 @@ async fn openai_embeddings(
     // skip pooled keys the upstream just parked (W1.1) / permanently disabled
     // (W3.1) — the same cooldown state the chat path records.
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let all = route_candidates(&state, &snapshot, &cfg, &model, &body, "gateway-embeddings").await;
-    let candidates: Vec<Candidate> = expand_key_pools(
-        all.into_iter()
-            .filter(|c| c.provider.protocol == "openai")
-            .collect(),
-        &state.key_rotation,
-        &state.key_cooldown,
-        now_ms,
-    );
+    let base: Vec<Candidate> = match &ticket {
+        Some(ticket) => {
+            ticket_base_candidates(&snapshot, ticket, resolved.as_deref(), Some(&model))
+        }
+        None => {
+            route_candidates(&state, &snapshot, &cfg, &model, &body, "gateway-embeddings").await
+        }
+    }
+    .into_iter()
+    .filter(|candidate| candidate.provider.protocol == "openai")
+    .collect();
+    let lease_scope = ticket.as_ref().map(|ticket| {
+        super::execute::ticket_lease_scope(
+            ticket,
+            base.first()
+                .map(|candidate| {
+                    candidate
+                        .provider
+                        .deployment_id
+                        .as_deref()
+                        .unwrap_or(&candidate.provider.id)
+                })
+                .unwrap_or(""),
+        )
+    });
+    let candidates = match &ticket {
+        Some(ticket) => expand_for_ticket(
+            base,
+            ticket.credential_affinity,
+            &state.leases,
+            lease_scope.as_deref().expect("ticket scope"),
+            &state.key_rotation,
+            &state.key_cooldown,
+            now_ms,
+        ),
+        None => expand_gateway_pools(
+            &state,
+            &cfg,
+            base,
+            now_ms,
+            Some(&format!(
+                "{}:embeddings",
+                ctx.key_id.as_deref().unwrap_or("")
+            )),
+        ),
+    };
     if candidates.is_empty() {
-        let status = if crate::route_planner::model_is_known(&snapshot, &model) {
+        let status = if ticket.is_some() || crate::route_planner::model_is_known(&snapshot, &model)
+        {
             StatusCode::SERVICE_UNAVAILABLE
         } else {
             StatusCode::NOT_FOUND
@@ -2219,7 +2581,8 @@ async fn openai_embeddings(
     // is sent and settled from the usage the answer reports — the same lane,
     // failure classes, 402 refusal and 2 s bypass as the chat endpoints. With
     // the switch off nothing below asks the brain anything (D37).
-    let ledger_enabled = state.runs.passthrough_ledger_enabled();
+    let ledger_enabled =
+        state.runs.passthrough_ledger_enabled() && !privacy::is_internal(&state, &ctx);
     let ledger_bridge = state.runs.bridge();
     let ledger_key_name = ledger_key_name_of(&state, &ctx);
     let mut ledger_header =
@@ -2250,20 +2613,65 @@ async fn openai_embeddings(
             }
         };
         // Counted whether or not a cap is set — this is the least-busy signal.
-        let _in_flight = state.in_flight.enter(&candidate.provider.id);
+        let _in_flight = state.in_flight.enter(source_provider_id(candidate));
 
         let mut upstream_body = rewrite_model(&body, &candidate.model_id);
+        upstream_body =
+            match privacy::prepare_provider_body(&state, &ctx, candidate, upstream_body).await {
+                Ok(body) => body,
+                Err(response) => return *response,
+            };
+        if ctx.ticket.is_some() && !value_has_no_leaking_pii(&upstream_body) {
+            return logged_error(
+                &state,
+                &ctx,
+                format,
+                StatusCode::BAD_REQUEST,
+                "pii_blocked",
+                "recognized sensitive data must be redacted before sending this task to the model",
+                Some(&model),
+            );
+        }
         strip_request_fields(
             &mut upstream_body,
-            &candidate.provider.id,
+            source_provider_id(candidate),
             &cfg.stripped_request_fields,
             &cfg.field_strip_allow,
         );
         let url = embeddings_url(&candidate.provider.base_url);
         let mut req = state.http.post(&url).json(&upstream_body);
         req = apply_timeout(req, &cfg);
-        for (name, value) in upstream_headers("openai", candidate.provider.api_key.as_deref()) {
+        for (name, value) in super::execute::upstream_headers_for(
+            "openai",
+            candidate.provider.transport.as_ref(),
+            candidate.provider.api_key.as_deref(),
+            None,
+        ) {
             req = req.header(name, value);
+        }
+        for (name, value) in &ctx.inbound_headers {
+            let transport = candidate.provider.transport.as_ref();
+            let declared = transport.is_some_and(|profile| {
+                profile
+                    .forwarded_semantic_headers
+                    .iter()
+                    .any(|extra| extra.eq_ignore_ascii_case(name))
+            });
+            let host_owned = transport.is_some_and(|profile| {
+                profile
+                    .auth_header_name
+                    .as_deref()
+                    .is_some_and(|auth| auth.eq_ignore_ascii_case(name))
+                    || profile
+                        .static_headers
+                        .iter()
+                        .any(|(header, _)| header.eq_ignore_ascii_case(name))
+            });
+            if !host_owned
+                && (crate::header_policy::is_forwardable_semantic_header(name) || declared)
+            {
+                req = req.header(name, value);
+            }
         }
 
         // Reserved here and nowhere earlier: every bail above this line sent
@@ -2276,7 +2684,7 @@ async fn openai_embeddings(
                 kind: crate::passthrough_ledger::CallKind::Embeddings,
                 request_id: ctx.request_id.clone(),
                 attempt: attempt_index,
-                provider_id: candidate.provider.id.clone(),
+                provider_id: source_provider_id(candidate).to_string(),
                 model_id: candidate.model_id.clone(),
                 requested_model: model.clone(),
                 key_id: ctx.key_id.clone(),
@@ -2487,6 +2895,30 @@ async fn openai_embeddings(
         let input_tokens = upstream["usage"]["prompt_tokens"]
             .as_u64()
             .or_else(|| upstream["usage"]["total_tokens"].as_u64());
+        if let Some(ticket) = &ticket {
+            if matches!(
+                ticket.credential_affinity,
+                TicketAffinity::SessionSticky | TicketAffinity::StickyWithFailover
+            ) {
+                state.leases.acquire(
+                    &super::execute::ticket_lease_scope(
+                        ticket,
+                        candidate
+                            .provider
+                            .deployment_id
+                            .as_deref()
+                            .unwrap_or(&candidate.provider.id),
+                    ),
+                    candidate
+                        .provider
+                        .deployment_id
+                        .as_deref()
+                        .unwrap_or(&candidate.provider.id),
+                    &super::execute::candidate_credential_identity(candidate),
+                    now_ms,
+                );
+            }
+        }
         settle_attempt(
             &ledger_bridge,
             ledgered,
@@ -2500,7 +2932,7 @@ async fn openai_embeddings(
             candidate,
             true,
             started,
-            Some((input_tokens, None)),
+            Some((input_tokens, Some(0))),
             None,
             None,
             None,
@@ -2512,7 +2944,7 @@ async fn openai_embeddings(
             candidate,
             started.elapsed().as_millis() as u64,
             input_tokens,
-            None,
+            Some(0),
             false,
         );
         return with_ledger_headers(
@@ -2658,7 +3090,12 @@ async fn openai_responses(
     let native = state.snapshot.read().as_ref().is_some_and(|snapshot| {
         let model = body["model"].as_str().unwrap_or("");
         let candidates = if let Some(ticket) = &ctx.ticket {
-            ticket_base_candidates(snapshot, ticket, ticket.resolve_model(model).as_deref())
+            ticket_base_candidates(
+                snapshot,
+                ticket,
+                ticket.resolve_model(model).as_deref(),
+                Some(model),
+            )
         } else {
             resolve_candidates(snapshot, model)
         };
@@ -2667,7 +3104,11 @@ async fn openai_responses(
                 .iter()
                 .all(|c| c.provider.protocol == "responses")
     });
-    if let Some(reason) = responses_translate::unsupported_feature(&body).filter(|_| !native) {
+    let compensated_search =
+        state.config.read().bridge_models.search.is_some() && bridges::has_search(&body);
+    if let Some(reason) =
+        responses_translate::unsupported_feature(&body).filter(|_| !native && !compensated_search)
+    {
         return logged_error(
             &state,
             &ctx,
@@ -2707,7 +3148,7 @@ async fn openai_responses(
     }
     body["input"] = json!(input);
     let stream = body["stream"].as_bool().unwrap_or(false);
-    if !native {
+    if !native && !compensated_search {
         if let Err(error) = responses_translate::request_to_ir(&body) {
             return logged_error(
                 &state,
@@ -3036,12 +3477,13 @@ fn record_upstream_cooldown(
     body: &str,
     now_ms: i64,
 ) -> Option<i64> {
-    let api_key = candidate.provider.api_key.as_deref()?;
+    candidate.provider.api_key.as_deref()?;
+    let api_key = super::execute::candidate_cooldown_key(candidate);
     if let Some(reason) = cooldown::permanent_failure_reason(status, body, &cfg.disable_keywords) {
         cooldown::record_permanent(
             &state.key_cooldown,
-            &candidate.provider.id,
-            api_key,
+            source_provider_id(candidate),
+            &api_key,
             &reason,
         );
         return None;
@@ -3056,8 +3498,8 @@ fn record_upstream_cooldown(
     )?;
     cooldown::record_cooldown(
         &state.key_cooldown,
-        &candidate.provider.id,
-        api_key,
+        source_provider_id(candidate),
+        &api_key,
         now_ms + ms,
         &format!("HTTP {status}"),
     );
@@ -3073,16 +3515,64 @@ fn gw_gate_key(ctx: &ReqCtx) -> String {
     format!("gw:{}", ctx.key_id.as_deref().unwrap_or("_"))
 }
 
+fn source_provider_id(candidate: &Candidate) -> &str {
+    candidate
+        .provider
+        .source_provider_id
+        .as_deref()
+        .unwrap_or(&candidate.provider.id)
+}
+
+fn expand_gateway_pools(
+    state: &AppState,
+    cfg: &GatewayConfig,
+    mut candidates: Vec<Candidate>,
+    now_ms: i64,
+    affinity_scope: Option<&str>,
+) -> Vec<Candidate> {
+    candidates.retain_mut(|candidate| {
+        let source = candidate
+            .provider
+            .source_provider_id
+            .as_deref()
+            .unwrap_or(&candidate.provider.id);
+        if !cfg
+            .subscription_rotation_provider_ids
+            .iter()
+            .any(|id| id == source)
+        {
+            if candidate.provider.subscription_pool.is_some()
+                && candidate.provider.api_key.is_none()
+            {
+                return false;
+            }
+            candidate.provider.subscription_pool = None;
+        }
+        true
+    });
+    super::execute::expand_key_pools_with_affinity(
+        candidates,
+        &state.key_rotation,
+        &state.key_cooldown,
+        now_ms,
+        affinity_scope,
+    )
+}
+
 /// Concurrency-gate key for one pooled upstream account (W1.2). Same
 /// shared-budget invariant as [`gw_gate_key`].
 ///
-/// Note this embeds the upstream secret and therefore must never be serialized;
-/// the renderer-facing in-flight tally keys on `provider.id` alone.
+/// Uses the full credential/account identity; never serialized. The public
+/// in-flight tally remains keyed by the source provider.
 fn up_gate_key(candidate: &Candidate) -> String {
     format!(
         "up:{}:{}",
-        candidate.provider.id,
-        candidate.provider.api_key.as_deref().unwrap_or("")
+        candidate
+            .provider
+            .source_provider_id
+            .as_deref()
+            .unwrap_or(&candidate.provider.id),
+        super::execute::candidate_credential_identity(candidate)
     )
 }
 
@@ -3295,6 +3785,24 @@ fn virtual_model_refusal(state: &AppState, ctx: &ReqCtx, body: &Value) -> Option
 }
 
 async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: Value) -> Response {
+    let bridges_enabled = {
+        let cfg = state.config.read();
+        cfg.bridge_models.search.is_some() || cfg.bridge_models.vision.is_some()
+    };
+    if bridges_enabled && !privacy::is_internal(&state, &ctx) {
+        bridges::handle(state, ctx, format, body).await
+    } else {
+        handle_chat_once(state, ctx, format, body).await
+    }
+}
+
+async fn handle_chat_once(
+    state: AppState,
+    ctx: ReqCtx,
+    format: InboundFormat,
+    body: Value,
+) -> Response {
+    let mut ctx = ctx;
     let state = state.for_request(&ctx);
     let _perf = cognia_instrument::guard("gateway.chat");
     // `cognia/*` names a routing MODE, not a model (ADR-0188 D13), and is
@@ -3385,18 +3893,23 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
             ctx.key_id.as_deref().unwrap_or(""),
         ),
     };
+    ctx.session_id = Some(session_id.clone());
 
     // W1.2: gateway-key in-flight cap for the whole request. Held until the
     // response completes — moved into the streaming task below so it releases at
     // stream end, not at this handler's return.
     let wait = Duration::from_millis(cfg.concurrency_wait_ms as u64);
-    let gw_slot = match state
-        .concurrency
-        .acquire(&gw_gate_key(&ctx), cfg.max_concurrent_per_key, wait)
-        .await
-    {
-        Ok(slot) => slot,
-        Err(()) => return concurrency_rejected(&state, &ctx, format, Some(&model)),
+    let gw_slot = if ctx.gateway_slot.is_some() {
+        Slot::Unlimited
+    } else {
+        match state
+            .concurrency
+            .acquire(&gw_gate_key(&ctx), cfg.max_concurrent_per_key, wait)
+            .await
+        {
+            Ok(slot) => slot,
+            Err(()) => return concurrency_rejected(&state, &ctx, format, Some(&model)),
+        }
     };
 
     let candidates = if let Some(t) = &ticket {
@@ -3404,7 +3917,7 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
         // snapshot by deployment id. A global alias update cannot change this
         // set; a candidate whose deployment vanished is skipped, and zero
         // servable candidates is a 503 (gateway-generated — legitimate here).
-        let base = ticket_base_candidates(&snapshot, t, resolved.as_deref());
+        let base = ticket_base_candidates(&snapshot, t, resolved.as_deref(), Some(&model));
         if base.is_empty() {
             return logged_error(
                 &state,
@@ -3416,21 +3929,30 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
                 Some(&model),
             );
         }
+        let lease_scope = super::execute::ticket_lease_scope(
+            t,
+            base[0]
+                .provider
+                .deployment_id
+                .as_deref()
+                .unwrap_or(&base[0].provider.id),
+        );
         expand_for_ticket(
             base,
             t.credential_affinity,
             &state.leases,
-            &session_id,
+            &lease_scope,
             &state.key_rotation,
             &state.key_cooldown,
             now_ms,
         )
     } else {
-        expand_key_pools(
+        expand_gateway_pools(
+            &state,
+            &cfg,
             route_candidates(&state, &snapshot, &cfg, &model, &body, &session_id).await,
-            &state.key_rotation,
-            &state.key_cooldown,
             now_ms,
+            Some(&session_id),
         )
     };
     if candidates.is_empty() {
@@ -3456,9 +3978,10 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
         );
     }
 
-    let needs_translation = candidates
-        .iter()
-        .any(|c| c.provider.protocol != format.protocol_name());
+    let needs_translation = candidates.iter().any(|c| {
+        c.provider.protocol != format.protocol_name()
+            && !(format == InboundFormat::Gemini && c.provider.protocol == "gemini")
+    });
     let ir = if needs_translation {
         match request_to_ir(format, &body) {
             Ok(ir) => Some(ir),
@@ -3496,7 +4019,8 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
     // reserved before it is sent and settled from the usage this handler already
     // reads. With it off nothing below asks the brain anything, so the proxy path
     // is byte-for-byte what it was (D37).
-    let ledger_enabled = state.runs.passthrough_ledger_enabled();
+    let ledger_enabled =
+        state.runs.passthrough_ledger_enabled() && !privacy::is_internal(&state, &ctx);
     let ledger_bridge = state.runs.bridge();
     // Resolved once, before any await: `state.keys` is a parking_lot guard, and
     // the name is what the run's own history shows for "who asked" — a copy,
@@ -3532,9 +4056,10 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
         };
         // Counted whether or not a cap is set. Tracks `up_slot`'s lifetime
         // exactly — including the move into the streaming task below.
-        let in_flight = state.in_flight.enter(&candidate.provider.id);
+        let in_flight = state.in_flight.enter(source_provider_id(candidate));
 
-        let passthrough = candidate.provider.protocol == format.protocol_name();
+        let passthrough = candidate.provider.protocol == format.protocol_name()
+            || (format == InboundFormat::Gemini && candidate.provider.protocol == "gemini");
         let mut upstream_body = if passthrough {
             rewrite_model(&body, &candidate.model_id)
         } else {
@@ -3576,6 +4101,11 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
                 }
             }
         };
+        upstream_body =
+            match privacy::prepare_provider_body(&state, &ctx, candidate, upstream_body).await {
+                Ok(body) => body,
+                Err(response) => return *response,
+            };
         if let Err(reason) = apply_model_limits(&mut upstream_body, candidate) {
             return logged_error(
                 &state,
@@ -3588,19 +4118,28 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
             );
         }
         if ctx.ticket.is_some() {
-            let field = if upstream_body.get("max_completion_tokens").is_some() {
-                "max_completion_tokens"
-            } else if candidate.provider.protocol == "responses" {
-                "max_output_tokens"
-            } else {
-                "max_tokens"
-            };
             match state.tickets.reserve_model_output(
                 &ctx.request_id,
                 estimate_input_tokens(&upstream_body),
-                upstream_body[field].as_u64(),
+                request_max_output_tokens(&upstream_body, &candidate.provider.protocol),
             ) {
-                Ok(Some(output)) => upstream_body[field] = json!(output),
+                Ok(Some(output)) => {
+                    if let Err(reason) = set_request_max_output_tokens(
+                        &mut upstream_body,
+                        &candidate.provider.protocol,
+                        output,
+                    ) {
+                        return logged_error(
+                            &state,
+                            &ctx,
+                            format,
+                            StatusCode::BAD_REQUEST,
+                            "invalid_request_error",
+                            &reason,
+                            Some(&model),
+                        );
+                    }
+                }
                 Ok(None) => {}
                 Err(TicketReject::MemberUsageCapReached { reset_at }) => {
                     let _ = logged_error(&state, &ctx, format, StatusCode::TOO_MANY_REQUESTS,
@@ -3628,14 +4167,30 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
         // outbound body (both passthrough AND translated paths).
         strip_request_fields(
             &mut upstream_body,
-            &candidate.provider.id,
+            source_provider_id(candidate),
             &cfg.stripped_request_fields,
             &cfg.field_strip_allow,
         );
 
-        org_usage_request_stream_usage(&mut upstream_body, &candidate.provider.protocol,
-            ctx.ticket.as_ref().is_some_and(|ticket| ticket.member.is_some()));
-        let url = upstream_url(&candidate.provider.protocol, &candidate.provider.base_url);
+        org_usage_request_stream_usage(
+            &mut upstream_body,
+            &candidate.provider.protocol,
+            ctx.ticket
+                .as_ref()
+                .is_some_and(|ticket| ticket.member.is_some()),
+        );
+        if matches!(candidate.provider.protocol.as_str(), "google" | "gemini") {
+            if let Some(object) = upstream_body.as_object_mut() {
+                object.remove("model");
+                object.remove("stream");
+            }
+        }
+        let url = super::execute::upstream_url_for(
+            &candidate.provider.protocol,
+            &candidate.provider.base_url,
+            &candidate.model_id,
+            stream,
+        );
         let mut req = state.http.post(&url).json(&upstream_body);
         if !stream {
             req = apply_timeout(req, &cfg);
@@ -3695,16 +4250,16 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
                 kind: crate::passthrough_ledger::CallKind::Chat,
                 request_id: ctx.request_id.clone(),
                 attempt: attempt_index,
-                provider_id: candidate.provider.id.clone(),
+                provider_id: source_provider_id(candidate).to_string(),
                 model_id: candidate.model_id.clone(),
                 requested_model: model.clone(),
                 key_id: ctx.key_id.clone(),
                 key_name: ledger_key_name.clone(),
                 estimated_input_tokens: estimate_input_tokens(&upstream_body),
-                max_output_tokens: upstream_body["max_tokens"]
-                    .as_u64()
-                    .or_else(|| upstream_body["max_completion_tokens"].as_u64())
-                    .or_else(|| upstream_body["max_output_tokens"].as_u64()),
+                max_output_tokens: request_max_output_tokens(
+                    &upstream_body,
+                    &candidate.provider.protocol,
+                ),
             },
         )
         .await;
@@ -3913,11 +4468,9 @@ async fn handle_chat(state: AppState, ctx: ReqCtx, format: InboundFormat, body: 
                     .clone()
                     .unwrap_or_else(|| candidate.provider.id.clone());
                 state.leases.acquire(
-                    &session_id,
+                    &super::execute::ticket_lease_scope(t, &deployment),
                     &deployment,
-                    &crate::credentials::fingerprint_of(
-                        candidate.provider.api_key.as_deref().unwrap_or(""),
-                    ),
+                    &super::execute::candidate_credential_identity(candidate),
                     now_ms,
                 );
             }
@@ -4117,6 +4670,10 @@ async fn buffered_response(
                 upstream["usage"]["input_tokens"].as_u64(),
                 upstream["usage"]["output_tokens"].as_u64(),
             ),
+            InboundFormat::Gemini => {
+                let usage = passthrough_usage_of(format, &upstream);
+                (usage.input_tokens, usage.output_tokens)
+            }
         };
         settle_attempt(
             &ledger_bridge,
@@ -4256,6 +4813,20 @@ fn passthrough_usage_of(
                 cache_write_tokens: usage["cache_creation_input_tokens"].as_u64(),
             }
         }
+        InboundFormat::Gemini => {
+            let usage = &upstream["usageMetadata"];
+            crate::passthrough_ledger::AttemptUsage {
+                input_tokens: usage["promptTokenCount"].as_u64(),
+                output_tokens: usage["candidatesTokenCount"]
+                    .as_u64()
+                    .or_else(|| usage["thoughtsTokenCount"].as_u64().map(|_| 0))
+                    .map(|tokens| {
+                        tokens.saturating_add(usage["thoughtsTokenCount"].as_u64().unwrap_or(0))
+                    }),
+                cache_read_tokens: usage["cachedContentTokenCount"].as_u64(),
+                cache_write_tokens: None,
+            }
+        }
     }
 }
 
@@ -4278,7 +4849,8 @@ async fn stream_response(
     // Resolved here, not inside the pump tasks: the guard is a parking_lot read
     // lock and must never be held across an `.await`.
     let idle_timeout = state.config.read().stream_idle_timeout();
-    let passthrough = candidate.provider.protocol == format.protocol_name();
+    let passthrough = candidate.provider.protocol == format.protocol_name()
+        || (format == InboundFormat::Gemini && candidate.provider.protocol == "gemini");
     if passthrough {
         // Forward upstream bytes to the client UNCHANGED while sniffing the SSE
         // frames for token usage, so streaming passthrough still draws down
@@ -4376,6 +4948,12 @@ async fn stream_response(
     }
 
     let direction = match (candidate.provider.protocol.as_str(), format) {
+        ("google" | "gemini", InboundFormat::AnthropicMessages) => Direction::GeminiToAnthropic,
+        ("google" | "gemini", InboundFormat::OpenAiResponses) => Direction::GeminiToResponses,
+        ("google" | "gemini", _) => Direction::GeminiToOpenAi,
+        ("openai", InboundFormat::Gemini) => Direction::OpenAiToGemini,
+        ("responses", InboundFormat::Gemini) => Direction::ResponsesToGemini,
+        ("anthropic", InboundFormat::Gemini) => Direction::AnthropicToGemini,
         ("responses", InboundFormat::AnthropicMessages) => Direction::ResponsesToAnthropic,
         ("responses", _) => Direction::ResponsesToOpenAi,
         (_, InboundFormat::AnthropicMessages) => Direction::OpenAiToAnthropic,
@@ -4383,7 +4961,7 @@ async fn stream_response(
     };
     let message_id = match format {
         InboundFormat::AnthropicMessages => format!("msg_{}", uuid::Uuid::new_v4().simple()),
-        InboundFormat::OpenAiChat | InboundFormat::OpenAiResponses => {
+        InboundFormat::OpenAiChat | InboundFormat::OpenAiResponses | InboundFormat::Gemini => {
             format!("chatcmpl-{}", uuid::Uuid::new_v4().simple())
         }
     };
@@ -4411,7 +4989,10 @@ async fn stream_response(
                     break 'pump;
                 }
             };
-            let Ok(bytes) = chunk else { break };
+            let Ok(bytes) = chunk else {
+                stalled = true;
+                break;
+            };
             for frame in transcode_upstream_sse_bytes(&mut deframer, &mut transcoder, &bytes) {
                 if tx.send(Ok(Bytes::from(frame.to_frame()))).await.is_err() {
                     break 'pump;
@@ -4427,12 +5008,13 @@ async fn stream_response(
         // must surface as the inbound protocol's own error framing instead of
         // a silent close — Anthropic clients get `event: error`.
         if stalled {
-            let error_frame = match direction {
-                Direction::OpenAiToAnthropic | Direction::ResponsesToAnthropic => Some(
+            let error_frame = match format {
+                InboundFormat::AnthropicMessages => Some(
                     "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream stalled\"}}\n\n"
                         .to_string(),
                 ),
-                Direction::AnthropicToOpenAi | Direction::ResponsesToOpenAi => None,
+                InboundFormat::Gemini => Some("data: {\"error\":{\"code\":502,\"status\":\"UNAVAILABLE\",\"message\":\"upstream stream stalled\"}}\n\n".to_string()),
+                InboundFormat::OpenAiChat | InboundFormat::OpenAiResponses => Some("data: {\"error\":{\"type\":\"api_error\",\"message\":\"upstream stream stalled\"}}\n\n".to_string()),
             };
             if let Some(frame) = error_frame {
                 let _ = tx.send(Ok(Bytes::from(frame))).await;
@@ -4451,6 +5033,7 @@ async fn stream_response(
             crate::passthrough_ledger::AttemptUsage {
                 input_tokens: Some(usage.input_tokens),
                 output_tokens: Some(usage.output_tokens),
+                cache_read_tokens: Some(usage.cache_read_tokens),
                 ..Default::default()
             },
             stall_error.clone(),
@@ -4598,7 +5181,8 @@ fn outcome_payload(
         .as_deref()
         .map(cooldown::key_fingerprint);
     json!({
-        "providerId": candidate.provider.id,
+        "providerId": source_provider_id(candidate),
+        "subscriptionAccountId": candidate.provider.selected_subscription_account_id,
         "modelId": candidate.model_id,
         "deploymentId": candidate.provider.deployment_id,
         "keyFingerprint": key_fingerprint,
@@ -4645,6 +5229,7 @@ fn emit_request_log(
         stream,
         candidate,
         false,
+        None,
     );
 }
 
@@ -4666,6 +5251,7 @@ fn emit_request_log_full(
     stream: bool,
     candidate: Option<&Candidate>,
     synthesized: bool,
+    session_id: Option<&str>,
 ) {
     let id = uuid::Uuid::new_v4().to_string();
     let decision_id = id.clone();
@@ -4680,6 +5266,7 @@ fn emit_request_log_full(
         "route": route,
         "remoteIp": remote_ip,
         "keyId": key_id,
+        "sessionId": session_id,
         "model": model,
         "providerId": provider_id,
         "status": status,
@@ -4710,12 +5297,37 @@ fn log_success(
     output_tokens: Option<u64>,
     stream: bool,
 ) {
+    log_success_status(
+        state,
+        ctx,
+        model,
+        candidate,
+        latency_ms,
+        input_tokens,
+        output_tokens,
+        stream,
+        200,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn log_success_status(
+    state: &AppState,
+    ctx: &ReqCtx,
+    model: &str,
+    candidate: &Candidate,
+    latency_ms: u64,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    stream: bool,
+    status: u16,
+) {
     emit_request_log_ctx(
         state.host.as_ref(),
         ctx,
         Some(model),
         Some(&candidate.provider.id),
-        200,
+        status,
         latency_ms,
         input_tokens,
         output_tokens,
@@ -4742,7 +5354,26 @@ fn log_success(
         }
     }
     // Record the upstream account's success for rotation + per-account usage.
-    record_key_success(&state.key_rotation, candidate);
+    if !privacy::is_internal(state, ctx) {
+        record_key_success(&state.key_rotation, candidate);
+    }
+    if state.config.read().middleware_enabled && !privacy::is_internal(state, ctx) {
+        let mut payload = privacy::context(state, ctx, model);
+        payload["providerId"] = json!(source_provider_id(candidate));
+        payload["modelId"] = json!(candidate.model_id);
+        payload["usage"] = json!({"inputTokens":input_tokens,"outputTokens":output_tokens,"status":status,"stream":stream});
+        let state = state.clone();
+        let task_state = state.clone();
+        spawn_request_task(&state, ctx, async move {
+            let _ = privacy::call(
+                &task_state,
+                "gateway_middleware_usage",
+                payload,
+                Duration::from_secs(3),
+            )
+            .await;
+        });
+    }
 }
 
 /// Extract token usage from one passthrough SSE payload so streaming passthrough
@@ -4780,6 +5411,15 @@ fn sniff_passthrough_usage(
                 *output = Some(v);
             }
         }
+        InboundFormat::Gemini => {
+            let usage = passthrough_usage_of(format, value);
+            if usage.input_tokens.is_some() {
+                *input = usage.input_tokens;
+            }
+            if usage.output_tokens.is_some() {
+                *output = usage.output_tokens;
+            }
+        }
     }
 }
 
@@ -4798,13 +5438,13 @@ fn emit_request_log_ctx(
     stream: bool,
     candidate: Option<&Candidate>,
 ) {
-    emit_request_log(
+    emit_request_log_full(
         host,
         &ctx.route,
         &ctx.remote_ip,
         ctx.key_id.as_deref(),
         model,
-        provider_id,
+        candidate.map(source_provider_id).or(provider_id),
         status,
         latency_ms,
         input_tokens,
@@ -4812,6 +5452,10 @@ fn emit_request_log_ctx(
         error,
         stream,
         candidate,
+        false,
+        ctx.session_id
+            .as_deref()
+            .or_else(|| ctx.ticket.as_ref().map(|ticket| ticket.session_id.as_str())),
     );
 }
 
@@ -4908,6 +5552,96 @@ mod tests {
             .contains("tools"));
     }
 
+    #[test]
+    fn google_output_limits_keep_native_styles_validate_shapes_and_check_capabilities() {
+        let provider = serde_json::from_value(json!({"id":"fixture","protocol":"google","enabled":true,"baseUrl":"https://example.test/v1beta",
+            "modelMetadata":[{"id":"model","maxOutputTokens":60,"supportsVision":false,"supportsAudio":false,"supportsVideo":false,"supportsStructuredOutput":false,"supportsReasoning":false}]})).unwrap();
+        let candidate = Candidate::new(&provider, "model");
+        for (mut body, container, field) in [
+            (
+                json!({"contents":[{"parts":[{"text":"hello"}]}]}),
+                "generationConfig",
+                "maxOutputTokens",
+            ),
+            (
+                json!({"generationConfig":{"maxOutputTokens":1000,"temperature":0.4}}),
+                "generationConfig",
+                "maxOutputTokens",
+            ),
+            (
+                json!({"generation_config":{"max_output_tokens":1000,"temperature":0.4}}),
+                "generation_config",
+                "max_output_tokens",
+            ),
+            (
+                json!({"generation_config":{"maxOutputTokens":1000}}),
+                "generation_config",
+                "maxOutputTokens",
+            ),
+        ] {
+            apply_model_limits(&mut body, &candidate).unwrap();
+            assert_eq!(body[container][field], 60);
+            assert_eq!(request_max_output_tokens(&body, "google"), Some(60));
+            assert!(body.get("max_tokens").is_none());
+            assert!(body.get("max_output_tokens").is_none());
+            set_request_max_output_tokens(&mut body, "gemini", 20).unwrap();
+            assert_eq!(body[container][field], 20);
+            assert_eq!(request_max_output_tokens(&body, "gemini"), Some(20));
+        }
+        for mut body in [
+            json!(null),
+            json!({"generationConfig":false}),
+            json!({"generation_config":[]}),
+            json!({"generationConfig":null}),
+            json!({"generationConfig":{"maxOutputTokens":"100"}}),
+            json!({"generationConfig":{},"generation_config":{}}),
+            json!({"generationConfig":{"maxOutputTokens":1,"max_output_tokens":2}}),
+        ] {
+            assert!(
+                set_request_max_output_tokens(&mut body, "google", 10).is_err(),
+                "{body}"
+            );
+            assert!(apply_model_limits(&mut body, &candidate).is_err(), "{body}");
+        }
+        for mut body in [
+            json!({"contents":[{"parts":[{"inlineData":{"mimeType":"image/png","data":"abc"}}]}]}),
+            json!({"contents":[{"parts":[{"file_data":{"mime_type":"image/jpeg","file_uri":"https://example.test/image"}}]}]}),
+            json!({"contents":[{"parts":[{"inline_data":{"mime_type":"audio/wav","data":"abc"}}]}]}),
+            json!({"contents":[{"parts":[{"fileData":{"mimeType":"video/mp4","fileUri":"https://example.test/video"}}]}]}),
+            json!({"generationConfig":{"responseMimeType":"application/json"}}),
+            json!({"generation_config":{"response_json_schema":{"type":"object"}}}),
+            json!({"generationConfig":{"thinkingConfig":{"thinkingLevel":"HIGH"}}}),
+        ] {
+            assert!(apply_model_limits(&mut body, &candidate).is_err(), "{body}");
+        }
+        let mut schema_only = json!({"tools":[{"functionDeclarations":[{"parametersJsonSchema":{"properties":{"parts":{"const":{"inlineData":{"mimeType":"image/png"}}}}}}]}],"generationConfig":{"thinkingConfig":{"thinkingBudget":0}}});
+        apply_model_limits(&mut schema_only, &candidate).unwrap();
+        for (protocol, field) in [
+            ("openai", "max_tokens"),
+            ("responses", "max_output_tokens"),
+            ("anthropic", "max_tokens"),
+        ] {
+            let mut body = json!({});
+            set_request_max_output_tokens(&mut body, protocol, 7).unwrap();
+            assert_eq!(body[field], 7);
+            assert_eq!(request_max_output_tokens(&body, protocol), Some(7));
+        }
+    }
+
+    #[test]
+    fn google_output_limits_usage_includes_thinking_without_candidate_tokens() {
+        let body = json!({"usageMetadata":{"promptTokenCount":3,"thoughtsTokenCount":7}});
+        let usage = passthrough_usage_of(InboundFormat::Gemini, &body);
+        assert_eq!(usage.input_tokens, Some(3));
+        assert_eq!(usage.output_tokens, Some(7));
+        let (mut input, mut output) = (None, None);
+        sniff_passthrough_usage(InboundFormat::Gemini, &body, &mut input, &mut output);
+        assert_eq!((input, output), (Some(3), Some(7)));
+        assert_eq!(
+            passthrough_usage_of(InboundFormat::Gemini, &json!({"usageMetadata":{}})).output_tokens,
+            None
+        );
+    }
     #[test]
     fn published_capability_denials_cover_all_request_formats() {
         let provider = serde_json::from_value(json!({"id":"fixture","protocol":"openai","enabled":true,"baseUrl":"http://127.0.0.1/v1",
@@ -5065,7 +5799,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    fn ctx() -> ReqCtx {
+    pub(super) fn ctx() -> ReqCtx {
         ReqCtx {
             account_generation: 0,
             request_id: "req-test".into(),
@@ -5074,6 +5808,9 @@ mod tests {
             key_id: Some("k1".into()),
             key_model_allowlist: vec![],
             user_agent: "test-agent".into(),
+            session_id: None,
+            body_prepared: false,
+            gateway_slot: None,
             ticket: None,
             inbound_headers: Vec::new(),
         }
@@ -5199,7 +5936,7 @@ mod tests {
             "providers": [
                 { "id": "groq", "protocol": "openai", "baseUrl": "https://api.groq.com/openai/v1",
                   "apiKey": "sk-g", "enabled": true, "models": ["llama-3.3-70b"] },
-                { "id": "weird", "protocol": "gemini", "baseUrl": "https://g",
+                { "id": "weird", "protocol": "unsupported-fixture", "baseUrl": "https://g",
                   "apiKey": "sk-w", "enabled": true, "models": ["gemini-pro"] },
                 { "id": "off", "protocol": "openai", "baseUrl": "https://o",
                   "apiKey": "sk-o", "enabled": false, "models": ["hidden-model"] }
@@ -5243,8 +5980,12 @@ mod tests {
     #[test]
     fn strict_plan_routes_exact_model_on_task_deployment_or_refuses() {
         let (mut snapshot, ticket) = strict_plan_ticket();
-        let candidates =
-            ticket_base_candidates(&snapshot, &ticket, ticket.resolve_model("child").as_deref());
+        let candidates = ticket_base_candidates(
+            &snapshot,
+            &ticket,
+            ticket.resolve_model("child").as_deref(),
+            Some("child"),
+        );
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].provider.id, "task");
         assert_eq!(candidates[0].model_id, "child");
@@ -5252,12 +5993,51 @@ mod tests {
             assert!(ticket_base_candidates(
                 &snapshot,
                 &ticket,
-                ticket.resolve_model(model).as_deref()
+                ticket.resolve_model(model).as_deref(),
+                Some(model)
             )
             .is_empty());
         }
         snapshot.providers[0].models.retain(|id| id != "child");
-        assert!(ticket_base_candidates(&snapshot, &ticket, Some("child")).is_empty());
+        assert!(
+            ticket_base_candidates(&snapshot, &ticket, Some("child"), Some("child")).is_empty()
+        );
+    }
+
+    #[test]
+    fn identical_role_models_route_only_to_their_exact_selected_deployment() {
+        let (mut snapshot, mut ticket) = strict_plan_ticket();
+        let mut other = snapshot.providers[0].clone();
+        other.id = "other-account".into();
+        other.deployment_id = Some("other-account".into());
+        other.api_key = Some("other-selected-key".into());
+        snapshot.providers.push(other);
+        ticket
+            .candidates
+            .push(crate::route_ticket::TicketCandidate {
+                deployment_id: "other-account".into(),
+                model_id: "parent".into(),
+            });
+        ticket.model_bindings = std::collections::BTreeMap::from([
+            ("primary".into(), "parent".into()),
+            ("review".into(), "parent".into()),
+        ]);
+        ticket.selector_deployments = std::collections::BTreeMap::from([
+            ("primary".into(), "task".into()),
+            ("review".into(), "other-account".into()),
+        ]);
+        for (selector, deployment) in [("primary", "task"), ("review", "other-account")] {
+            let candidates =
+                ticket_base_candidates(&snapshot, &ticket, Some("parent"), Some(selector));
+            assert_eq!(candidates.len(), 1);
+            assert_eq!(candidates[0].provider.id, deployment);
+        }
+        assert!(
+            ticket_base_candidates(&snapshot, &ticket, Some("parent"), Some("unknown")).is_empty()
+        );
+        assert!(
+            ticket_base_candidates(&snapshot, &ticket, Some("child"), Some("review")).is_empty()
+        );
     }
 
     fn listed_ids(data: &[Value]) -> Vec<String> {
@@ -5272,7 +6052,7 @@ mod tests {
         // Executable + enabled only.
         assert!(ids.contains(&"fast".to_string()));
         assert!(ids.contains(&"llama-3.3-70b".to_string()));
-        // The gemini-protocol provider would 404 on the very next chat call, so
+        // A provider with an unknown protocol cannot execute a chat call, so
         // neither it nor the alias that only points at it may be advertised.
         assert!(!ids.contains(&"gemini-pro".to_string()));
         assert!(!ids.contains(&"vision".to_string()));
@@ -5357,7 +6137,11 @@ mod tests {
             .into_iter()
             .next()
             .expect("groq candidate");
-        assert_eq!(up_gate_key(&candidate), "up:groq:sk-g");
+        assert_eq!(
+            up_gate_key(&candidate),
+            format!("up:groq:{}", crate::credentials::lease_identity_of("sk-g"))
+        );
+        assert!(!up_gate_key(&candidate).contains("sk-g"));
     }
 
     #[test]
@@ -5597,7 +6381,7 @@ mod tests {
 
     #[test]
     fn in_flight_snapshot_never_carries_a_credential() {
-        // `up_gate_key` deliberately embeds the API key, and the decide payload
+        // `up_gate_key` contains a private credential identity; the decide payload
         // is serialized to the renderer — so the tally MUST key on the provider
         // id alone. Working rule 7: pin the intentional invariant.
         let tracker = InFlightTracker::default();
@@ -5606,8 +6390,8 @@ mod tests {
             .next()
             .expect("groq candidate");
         assert!(
-            up_gate_key(&candidate).contains("sk-"),
-            "fixture has a secret"
+            !up_gate_key(&candidate).contains("sk-"),
+            "concurrency identity must not contain the original credential"
         );
 
         let _guard = tracker.enter(&candidate.provider.id);
@@ -5733,7 +6517,7 @@ mod router_fusion_server_tests {
     use axum::http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
     use tower::ServiceExt;
 
-    const SECRET: &str = "sk-cognia-rf-server-tests-scoped-000000000000000000";
+    pub(super) const SECRET: &str = "sk-cognia-rf-server-tests-scoped-000000000000000000";
     const LIMITED: &str = "sk-cognia-rf-server-tests-limited-00000000000000000";
     const PLAIN: &str = "sk-cognia-rf-server-tests-plain-0000000000000000000";
     const DRAINED: &str = "sk-cognia-rf-server-tests-drained-00000000000000000";
@@ -5786,12 +6570,12 @@ mod router_fusion_server_tests {
         ]
     }
 
-    struct Gateway {
-        app: Router,
-        state: AppState,
+    pub(super) struct Gateway {
+        pub(super) app: Router,
+        pub(super) state: AppState,
     }
 
-    fn gateway_with(
+    pub(super) fn gateway_with(
         bridge: Arc<dyn BrainBridge>,
         runs_enabled: bool,
         lan: bool,
@@ -5804,6 +6588,7 @@ mod router_fusion_server_tests {
             ..GatewayConfig::default()
         };
         let state = AppState {
+            bound_port: 9,
             account: Arc::new(RwLock::new(crate::GatewayAccountContext::default())),
             account_changes: Arc::new(watch::channel(0).0),
             host: Arc::new(crate::host::RecordingGatewayHost::new(false)),
@@ -5827,6 +6612,7 @@ mod router_fusion_server_tests {
             leases: Arc::new(CredentialLeaseMap::default()),
             http: Arc::new(UpstreamClients::new(Duration::from_secs(1))),
             response_history: Arc::new(parking_lot::Mutex::new(ResponseHistory::default())),
+            media: Arc::new(media::MediaState::default()),
             runs,
         };
         Gateway {
@@ -5837,6 +6623,14 @@ mod router_fusion_server_tests {
 
     fn gateway(bridge: &RecordingBrainBridge, runs_enabled: bool) -> Gateway {
         gateway_with(Arc::new(bridge.clone()), runs_enabled, false, None)
+    }
+
+    #[tokio::test]
+    async fn requested_privacy_requires_a_working_brain_before_routing() {
+        let gw = gateway(&RecordingBrainBridge::new(), false);
+        gw.state.config.write().privacy_mode = crate::types::GatewayPrivacyMode::Mask;
+        let response = send(&gw.app, request("POST", "/v1/chat/completions", Some(SECRET), Some(json!({"model":"missing","messages":[{"role":"user","content":"contact me at me@example.com"}]})))).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     /// A request as the listener hands it over: with the connection info the
@@ -5874,7 +6668,7 @@ mod router_fusion_server_tests {
         request
     }
 
-    fn request(
+    pub(super) fn request(
         method: &str,
         uri: &str,
         bearer: Option<&str>,
@@ -5883,7 +6677,7 @@ mod router_fusion_server_tests {
         request_via(method, uri, bearer, body, PEER, LOCAL, LOCAL)
     }
 
-    async fn send(app: &Router, request: axum::http::Request<Body>) -> Response {
+    pub(super) async fn send(app: &Router, request: axum::http::Request<Body>) -> Response {
         app.clone().oneshot(request).await.unwrap()
     }
 
@@ -5893,7 +6687,7 @@ mod router_fusion_server_tests {
             .unwrap()
     }
 
-    async fn json_of(response: Response) -> Value {
+    pub(super) async fn json_of(response: Response) -> Value {
         serde_json::from_slice(&bytes_of(response).await).unwrap_or(Value::Null)
     }
 
@@ -6638,7 +7432,7 @@ mod router_fusion_server_tests {
         let record = seen.clone();
         let app = Router::new().route(
             "/v1/embeddings",
-            post(move |Json(body): Json<Value>| {
+            post(move |headers: HeaderMap, Json(body): Json<Value>| {
                 let record = record.clone();
                 async move {
                     record.lock().push(body.clone());
@@ -6653,7 +7447,14 @@ mod router_fusion_server_tests {
                         "object": "list",
                         "model": body["model"],
                         "data": [{ "object": "embedding", "index": 0, "embedding": [0.1, 0.2] }],
-                        "usage": { "prompt_tokens": 7, "total_tokens": 7 }
+                        "usage": { "prompt_tokens": 7, "total_tokens": 7 },
+                        "request_headers": {
+                            "authorization": headers.get("authorization").and_then(|value| value.to_str().ok()),
+                            "x-provider-auth": headers.get("x-provider-auth").and_then(|value| value.to_str().ok()),
+                            "x-tenant-id": headers.get("x-tenant-id").and_then(|value| value.to_str().ok()),
+                            "x-app": headers.get("x-app").and_then(|value| value.to_str().ok()),
+                            "cookie": headers.get("cookie").and_then(|value| value.to_str().ok())
+                        }
                     }))
                     .into_response()
                 }
@@ -6707,6 +7508,412 @@ mod router_fusion_server_tests {
 
     fn embed() -> Value {
         json!({ "model": "emb", "input": "the quick brown fox" })
+    }
+
+    fn embeddings_ticket(gw: &Gateway, provider: &str) -> crate::route_ticket::MintedTicket {
+        gw.state
+            .tickets
+            .mint(
+                serde_json::from_value(json!({
+                    "sessionId": "embedding-session",
+                    "executionFingerprint": format!("embedding-{}", uuid::Uuid::new_v4()),
+                    "candidates": [{ "deploymentId": provider, "modelId": "embed-small" }],
+                    "modelBindings": { "emb": "embed-small" },
+                    "strictSelectors": true,
+                    "credentialAffinity": "session-sticky",
+                    "routePolicy": "gateway-required",
+                    "operations": ["embeddings"]
+                }))
+                .unwrap(),
+                gw.state.snapshot.read().as_ref(),
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_blocks_pii_before_dispatch() {
+        let (upstream, seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        let ticket = embeddings_ticket(&gw, "up0");
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(json!({ "model": "emb", "input": ["contact person@example.com"] })),
+            ),
+        )
+        .await;
+        let status = response.status();
+        let body = json_of(response).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["type"], "pii_blocked");
+        assert!(seen.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_requires_inspectable_text_and_checks_the_user_field() {
+        let (upstream, seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        let ticket = embeddings_ticket(&gw, "up0");
+        for body in [
+            json!({ "model": "emb", "input": [101, 202, 303] }),
+            json!({ "model": "emb", "input": [[101, 202], [303, 404]] }),
+            json!({ "model": "emb", "input": "safe text", "user": "person@example.com" }),
+        ] {
+            let response = send(
+                &gw.app,
+                request("POST", "/v1/embeddings", Some(&ticket.secret), Some(body)),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        assert!(seen.lock().is_empty());
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(SECRET),
+                Some(json!({ "model": "emb", "input": [101, 202, 303] })),
+            ),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "ordinary API keys retain token-array compatibility"
+        );
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_keeps_its_frozen_candidate() {
+        let (first, first_seen) = spawn_embeddings_upstream(200).await;
+        let (second, second_seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(
+            Arc::new(RecordingBrainBridge::new()),
+            false,
+            &[first, second],
+        );
+        let ticket = embeddings_ticket(&gw, "up1");
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(embed()),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            first_seen.lock().is_empty(),
+            "a ticket cannot use a live alias's other deployment"
+        );
+        assert_eq!(second_seen.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_skips_non_embedding_protocols_before_selecting_its_lease() {
+        let (first, first_seen) = spawn_embeddings_upstream(200).await;
+        let (second, second_seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(
+            Arc::new(RecordingBrainBridge::new()),
+            false,
+            &[first, second],
+        );
+        gw.state.snapshot.write().as_mut().unwrap().providers[0].protocol = "anthropic".into();
+        let ticket = gw.state.tickets.mint(
+            serde_json::from_value(json!({
+                "sessionId": "mixed-embedding-session", "executionFingerprint": uuid::Uuid::new_v4().to_string(),
+                "candidates": [{"deploymentId":"up0","modelId":"embed-small"},{"deploymentId":"up1","modelId":"embed-small"}],
+                "modelBindings": {"emb":"embed-small"}, "credentialAffinity":"session-sticky",
+                "routePolicy":"gateway-required", "operations":["embeddings"]
+            })).unwrap(), gw.state.snapshot.read().as_ref(), chrono::Utc::now().timestamp_millis(),
+        ).unwrap();
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(embed()),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(first_seen.lock().is_empty());
+        assert_eq!(second_seen.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_refuses_an_unbound_selector() {
+        let (upstream, seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        let ticket = embeddings_ticket(&gw, "up0");
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(json!({ "model": "up0:embed-small", "input": "safe text" })),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(seen.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_refuses_a_removed_candidate_without_live_fallback() {
+        let (first, first_seen) = spawn_embeddings_upstream(200).await;
+        let (second, second_seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(
+            Arc::new(RecordingBrainBridge::new()),
+            false,
+            &[first, second],
+        );
+        let ticket = embeddings_ticket(&gw, "up1");
+        gw.state
+            .snapshot
+            .write()
+            .as_mut()
+            .unwrap()
+            .providers
+            .retain(|provider| provider.id != "up1");
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(embed()),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(first_seen.lock().is_empty());
+        assert!(second_seen.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_is_not_changed_by_live_exposure_edits() {
+        let (upstream, seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        let ticket = embeddings_ticket(&gw, "up0");
+        gw.state.config.write().exposed_models = vec!["another-model".into()];
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(embed()),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(seen.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn embeddings_transport_preserves_custom_auth_static_and_semantic_headers() {
+        let (upstream, _) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        gw.state.snapshot.write().as_mut().unwrap().providers[0].transport =
+            Some(crate::snapshot::TransportSnapshot {
+                auth_scheme: "custom-header".into(),
+                auth_header_name: Some("x-provider-auth".into()),
+                static_headers: vec![("x-tenant-id".into(), "selected-tenant".into())],
+                forwarded_semantic_headers: Vec::new(),
+            });
+        let mut incoming = request("POST", "/v1/embeddings", Some(SECRET), Some(embed()));
+        incoming
+            .headers_mut()
+            .insert("x-app", "embedding-client".parse().unwrap());
+        incoming
+            .headers_mut()
+            .insert("cookie", "session=caller-secret".parse().unwrap());
+        let response = send(&gw.app, incoming).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_of(response).await;
+        assert_eq!(body["request_headers"]["x-provider-auth"], "sk-up0");
+        assert_eq!(body["request_headers"]["x-tenant-id"], "selected-tenant");
+        assert_eq!(body["request_headers"]["x-app"], "embedding-client");
+        assert!(body["request_headers"]["authorization"].is_null());
+        assert!(body["request_headers"]["cookie"].is_null());
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_keeps_its_credential_lease_and_refuses_parked_credentials() {
+        let (upstream, seen) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        {
+            let mut snapshot = gw.state.snapshot.write();
+            let provider = &mut snapshot.as_mut().unwrap().providers[0];
+            provider.api_keys = vec!["first-key".into(), "second-key".into()];
+            provider.rotation_enabled = true;
+        }
+        let ticket = embeddings_ticket(&gw, "up0");
+        let mut credentials = Vec::new();
+        for _ in 0..2 {
+            let response = send(
+                &gw.app,
+                request(
+                    "POST",
+                    "/v1/embeddings",
+                    Some(&ticket.secret),
+                    Some(embed()),
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            credentials.push(json_of(response).await["request_headers"]["authorization"].clone());
+        }
+        assert_eq!(credentials[0], credentials[1]);
+        let lease = gw
+            .state
+            .leases
+            .get("embedding-session")
+            .expect("successful ticket request owns a lease");
+        let leased_key =
+            if lease.credential_identity == crate::credentials::lease_identity_of("first-key") {
+                "first-key"
+            } else {
+                "second-key"
+            };
+        cooldown::record_permanent(&gw.state.key_cooldown, "up0", leased_key, "disabled");
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(embed()),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(seen.lock().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn embeddings_ticket_concurrent_first_requests_share_one_credential() {
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let capture = seen.clone();
+        let upstream_app = Router::new().route(
+            "/v1/embeddings",
+            post(move |headers: HeaderMap| {
+                let capture = capture.clone();
+                let barrier = barrier.clone();
+                async move {
+                    capture
+                        .lock()
+                        .push(headers["authorization"].to_str().unwrap().to_owned());
+                    barrier.wait().await;
+                    Json(json!({"data":[],"usage":{"prompt_tokens":7}}))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream = listener.local_addr().unwrap();
+        let mut servers = tokio::task::JoinSet::new();
+        servers.spawn(async move {
+            axum::serve(listener, upstream_app).await.unwrap();
+        });
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        {
+            let mut snapshot = gw.state.snapshot.write();
+            let provider = &mut snapshot.as_mut().unwrap().providers[0];
+            provider.api_keys = vec!["first-key".into(), "second-key".into()];
+            provider.rotation_enabled = true;
+        }
+        let ticket = embeddings_ticket(&gw, "up0");
+        let replies = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                send(
+                    &gw.app,
+                    request(
+                        "POST",
+                        "/v1/embeddings",
+                        Some(&ticket.secret),
+                        Some(embed())
+                    )
+                ),
+                send(
+                    &gw.app,
+                    request(
+                        "POST",
+                        "/v1/embeddings",
+                        Some(&ticket.secret),
+                        Some(embed())
+                    )
+                )
+            )
+        })
+        .await
+        .unwrap();
+        servers.abort_all();
+        while servers.join_next().await.is_some() {}
+        assert_eq!(replies.0.status(), StatusCode::OK);
+        assert_eq!(replies.1.status(), StatusCode::OK);
+        let credentials = seen.lock();
+        assert_eq!(credentials.len(), 2);
+        assert_eq!(credentials[0], credentials[1]);
+    }
+
+    #[tokio::test]
+    async fn embeddings_member_usage_settles_known_input_and_zero_output() {
+        let (upstream, _) = spawn_embeddings_upstream(200).await;
+        let gw = embeddings_gateway(Arc::new(RecordingBrainBridge::new()), false, &[upstream]);
+        let now = chrono::Utc::now().timestamp_millis();
+        let ticket = gw
+            .state
+            .tickets
+            .person_mint_owned(
+                serde_json::from_value(json!({
+                    "sessionId": "member-embedding-session",
+                    "executionFingerprint": uuid::Uuid::new_v4().to_string(),
+                    "candidates": [{ "deploymentId": "up0", "modelId": "embed-small" }],
+                    "modelBindings": { "emb": "embed-small" },
+                    "credentialAffinity": "session-sticky",
+                    "routePolicy": "gateway-required",
+                    "operations": ["embeddings"]
+                }))
+                .unwrap(),
+                gw.state.snapshot.read().as_ref(),
+                now,
+                None,
+                Some(crate::org_usage::MemberBinding {
+                    org_id: "org_embedding_test".into(),
+                    user_id: "usr_embedding_test".into(),
+                }),
+            )
+            .unwrap();
+        let response = send(
+            &gw.app,
+            request(
+                "POST",
+                "/v1/embeddings",
+                Some(&ticket.secret),
+                Some(json!({ "model": "emb", "input": "long safe text ".repeat(100) })),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let report = gw
+            .state
+            .tickets
+            .org_member_usage_get("org_embedding_test", &crate::org_usage::month_at(now), &[])
+            .unwrap();
+        assert_eq!(report["members"][0]["spentTokens"], 7);
+        assert_eq!(report["members"][0]["reservedTokens"], 0);
+        assert!(gw.state.tickets.open_reservations().is_empty());
     }
 
     fn header<'a>(response: &'a Response, name: &str) -> Option<&'a str> {

@@ -30,6 +30,8 @@ default = []
 tauri-host = ["dep:tauri"]
 
 [dependencies]
+cognia-core = { path = "../cognia-core" }
+sha2.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 # Format-preserving TOML rewrites for Codex's `config.toml` — the whole reason
@@ -42,6 +44,9 @@ dirs.workspace = true
 # `generate_handler!` references them as `agents::commands::…` through the
 # crate alias.
 tauri = { workspace = true, optional = true, features = ["macos-private-api", "macos-proxy", "tray-icon", "image-png", "unstable"] }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

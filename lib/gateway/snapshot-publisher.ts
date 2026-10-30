@@ -27,7 +27,11 @@ import type {
   GatewayRotationStrategy,
   GatewayRouterFusionSwitches,
   GatewayRoutingSnapshot,
+  GatewaySubscriptionAccountSnapshot,
+  GatewaySubscriptionWindow,
+  GatewayTransportSnapshot,
 } from "@/types/gateway"
+import type { AccountSummary, ProviderLimits } from "@/types/subscription"
 import type { ModelMapping } from "@cognia/provider-types/model-mapping"
 import type { RoutingStrategy } from "@cognia/provider-types/auto-router"
 import { getCatalogModelMetadata } from "@/lib/ai/providers/models-dev-sync"
@@ -48,6 +52,14 @@ export interface SnapshotSettingsSlice {
   }
   /** Read for the Router + Fusion surface switches the gateway serves (ADR-0188 D36). */
   routerFusion?: AppSettings["routerFusion"]
+}
+
+function protocolAuth(
+  protocol: string
+): Pick<GatewayTransportSnapshot, "authScheme" | "authHeaderName"> {
+  if (protocol === "google" || protocol === "gemini")
+    return { authScheme: "custom-header", authHeaderName: "x-goog-api-key" }
+  return { authScheme: protocol === "anthropic" ? "x-api-key" : "bearer" }
 }
 
 /**
@@ -256,8 +268,7 @@ function buildProviders(slice: SnapshotSettingsSlice): GatewayProviderSnapshot[]
       ...(resolution.headers
         ? {
             transport: {
-              authScheme:
-                resolution.protocol === "anthropic" ? ("x-api-key" as const) : ("bearer" as const),
+              ...protocolAuth(resolution.protocol),
               staticHeaders: Object.entries(resolution.headers),
             },
           }
@@ -604,11 +615,8 @@ export async function enrichSnapshotWithSubscriptionCreds(
     const transport =
       headers.size > 0
         ? {
-            authScheme:
-              (cred.protocol ?? prev?.protocol) === "anthropic"
-                ? ("x-api-key" as const)
-                : ("bearer" as const),
-            ...prev?.transport,
+            ...protocolAuth(cred.protocol ?? prev?.protocol ?? "openai"),
+            ...(cred.protocol && cred.protocol !== prev?.protocol ? {} : prev?.transport),
             staticHeaders: [...headers.entries()],
           }
         : prev?.transport
@@ -641,39 +649,226 @@ export async function enrichSnapshotWithSubscriptionCreds(
   return { ...snapshot, providers }
 }
 
+export interface SubscriptionPoolSource {
+  providerId: string
+  vaultProviderId: string
+  selectedAccountId?: string
+  rotationEnabled: boolean
+  manualCredential?: boolean
+  plan?: string
+  transport?: GatewayTransportSnapshot
+}
+
+export interface SubscriptionPoolDependencies {
+  listAccounts: (providerId: string) => Promise<AccountSummary[]>
+  readLimits: (providerId: string, accountId: string) => Promise<ProviderLimits | null>
+  resolveCredential: (providerId: string, accountId: string) => ReturnType<VaultCredentialResolver>
+}
+
+function allowanceWindows(
+  limits: ProviderLimits | null,
+  models: readonly string[]
+): GatewaySubscriptionWindow[] {
+  if (!limits || limits.error) return []
+  return limits.meters
+    .flatMap((meter): GatewaySubscriptionWindow[] => {
+      if (
+        meter.kind !== "window" ||
+        meter.usedPct == null ||
+        !Number.isFinite(meter.usedPct) ||
+        meter.usedPct < 0 ||
+        meter.usedPct > 10_000
+      )
+        return []
+      const family =
+        meter.id === "weekly_sonnet" ? "sonnet" : meter.id === "weekly_opus" ? "opus" : undefined
+      const modelIds = family
+        ? models.filter((model) => model.toLowerCase().includes(family))
+        : undefined
+      // Unknown meter scopes cannot be promoted into an account-wide denial.
+      if (
+        family ? !modelIds?.length : !["session", "weekly", "daily", "monthly"].includes(meter.id)
+      )
+        return []
+      return [
+        {
+          id: meter.id,
+          usedPct: meter.usedPct,
+          ...(typeof meter.resetAt === "number" &&
+          Number.isFinite(meter.resetAt) &&
+          meter.resetAt >= 0
+            ? { resetAtMs: meter.resetAt }
+            : {}),
+          ...(modelIds ? { modelIds } : {}),
+        },
+      ]
+    })
+    .slice(0, 64)
+}
+
+/** Project only authorized vault choices; this never polls quota or changes the active pointer. */
+export async function enrichSnapshotWithSubscriptionPools(
+  snapshot: GatewayRoutingSnapshot,
+  sources: readonly SubscriptionPoolSource[],
+  dependencies: SubscriptionPoolDependencies,
+  now: number
+): Promise<GatewayRoutingSnapshot> {
+  const providers = [...snapshot.providers]
+  const inventory: NonNullable<GatewayRoutingSnapshot["subscriptionRotationProviders"]> = []
+  for (const source of sources.slice(0, 256)) {
+    const summaries = (
+      await dependencies.listAccounts(source.vaultProviderId).catch(() => [])
+    ).filter(
+      (account) =>
+        account.health !== "reauth_required" &&
+        account.health !== "source_unavailable" &&
+        (!source.plan || (account.plan ?? "zen").toLowerCase() === source.plan)
+    )
+    if (summaries.length)
+      inventory.push({ providerId: source.providerId, accountCount: summaries.length })
+    const index = providers.findIndex((provider) => provider.id === source.providerId)
+    const previous = providers[index]
+    if (!previous || previous.credentialFallbackAllowed === false || source.manualCredential)
+      continue
+    if (source.selectedAccountId) {
+      providers[index] = {
+        ...previous,
+        selectedSubscriptionAccountId: source.selectedAccountId,
+        subscriptionPool: undefined,
+      }
+      continue
+    }
+    if (!source.rotationEnabled) continue
+    const accounts: GatewaySubscriptionAccountSnapshot[] = []
+    for (const summary of summaries.slice(0, 128)) {
+      if (summary.expiresAtMs > 0 && summary.expiresAtMs <= now) continue
+      const credential = await dependencies
+        .resolveCredential(source.providerId, summary.id)
+        .catch(() => null)
+      if (!credential?.apiKey?.trim() || !credential.baseURL) continue
+      const reading = await dependencies
+        .readLimits(source.vaultProviderId, summary.id)
+        .catch(() => null)
+      const limits =
+        reading?.provider === source.vaultProviderId && reading.accountId === summary.id
+          ? reading
+          : null
+      const protocol = credential.protocol ?? previous.protocol
+      if (!["openai", "responses", "anthropic", "google", "gemini"].includes(protocol)) continue
+      const headers = new Map(
+        (source.transport?.staticHeaders ?? []).map(([name, value]) => [name.toLowerCase(), value])
+      )
+      for (const [name, value] of Object.entries(credential.headers ?? {}))
+        if (!name.toLowerCase().startsWith("x-cognia-")) headers.set(name.toLowerCase(), value)
+      accounts.push({
+        accountId: summary.id,
+        apiKey: credential.apiKey,
+        baseUrl: credential.baseURL,
+        protocol,
+        ...(credential.apiFlavor ? { apiFlavor: credential.apiFlavor } : {}),
+        transport: {
+          ...protocolAuth(protocol),
+          ...source.transport,
+          ...(headers.size ? { staticHeaders: [...headers.entries()] } : {}),
+        },
+        ...(summary.expiresAtMs > 0 ? { expiresAtMs: summary.expiresAtMs } : {}),
+        lastUsedAtMs: Number.isFinite(summary.lastUsedAtMs) ? Math.max(0, summary.lastUsedAtMs) : 0,
+        ...(limits && !limits.error && Number.isFinite(limits.fetchedAt) && limits.fetchedAt >= 0
+          ? { quotaObservedAtMs: limits.fetchedAt }
+          : {}),
+        windows: allowanceWindows(limits, previous.models),
+      })
+    }
+    if (!accounts.length) continue
+    const first = accounts[0]
+    providers[index] = {
+      ...previous,
+      enabled: true,
+      apiKey: previous.apiKey,
+      baseUrl: previous.apiKey ? previous.baseUrl : first.baseUrl,
+      protocol: previous.apiKey ? previous.protocol : (first.protocol ?? previous.protocol),
+      ...(previous.apiKey ? {} : first.apiFlavor ? { apiFlavor: first.apiFlavor } : {}),
+      transport: previous.apiKey ? previous.transport : first.transport,
+      apiKeys: [],
+      rotationEnabled: false,
+      selectedSubscriptionAccountId: undefined,
+      subscriptionPool: { strategy: "allowance-reset", quotaFreshnessMs: 300_000, accounts },
+    }
+  }
+  return { ...snapshot, providers, subscriptionRotationProviders: inventory }
+}
+
+export interface EnrichedGatewaySnapshotOptions {
+  subscriptionRotationProviderIds?: readonly string[]
+}
+
 /** One enrichment path shared by periodic publication and required task minting. */
 export async function buildEnrichedGatewaySnapshot(
   settings: AppSettings,
   generatedAtMs: number,
-  profileMeta?: SnapshotProfileMeta
+  profileMeta?: SnapshotProfileMeta,
+  options: EnrichedGatewaySnapshotOptions = {}
 ): Promise<GatewayRoutingSnapshot> {
   const [
     { listSubscriptionProviders },
     { OPENCODE_CHAT_PROVIDER_IDS },
     { resolveSubscriptionProviderCredential },
+    { listAccounts },
+    { latestLimitsSnapshot },
   ] = await Promise.all([
     import("@/lib/subscription/core/provider-registry"),
     import("@/types/subscription/opencode"),
     import("@/lib/claude/provider-attempt-options"),
+    import("@/lib/subscription/core/transport"),
+    import("@/lib/subscription/limits/store"),
   ])
   const definitions = listSubscriptionProviders(settings.customProviders)
-  const snapshot = await enrichSnapshotWithSubscriptionCreds(
-    buildGatewaySnapshot(settings, generatedAtMs, profileMeta),
-    [
+  const base = buildGatewaySnapshot(settings, generatedAtMs, profileMeta)
+  const subscriptionProviderIds = [
+    ...new Set([
       ...OPENCODE_CHAT_PROVIDER_IDS,
+      "codex",
       ...definitions
         .filter((provider) => provider.authMode === "api-key")
         .map((provider) => provider.id),
-    ],
-    (id) => resolveSubscriptionProviderCredential(id, settings)
+    ]),
+  ]
+  const credentialFor = async (id: string, accountId?: string) => {
+    const credential = await resolveSubscriptionProviderCredential(id, settings, accountId)
+    return id === "codex" && credential
+      ? { ...credential, protocol: "openai", apiFlavor: "responses" as const }
+      : credential
+  }
+  const snapshot = await enrichSnapshotWithSubscriptionCreds(base, subscriptionProviderIds, (id) =>
+    credentialFor(id)
   )
-  return {
+  const enriched: GatewayRoutingSnapshot = {
     ...snapshot,
-    providers: snapshot.providers.map((provider) => {
+    providers: [
+      ...snapshot.providers,
+      ...subscriptionProviderIds
+        .filter(
+          (id) =>
+            options.subscriptionRotationProviderIds?.includes(id) &&
+            !snapshot.providers.some((provider) => provider.id === id)
+        )
+        .map(
+          (id) =>
+            ({
+              id,
+              protocol:
+                definitions.find((definition) => definition.id === id)?.protocol ?? "openai",
+              baseUrl: "",
+              enabled: false,
+              models: [],
+            }) satisfies GatewayProviderSnapshot
+        ),
+    ].map((provider) => {
       const definition = definitions.find((entry) => entry.id === provider.id)
       const models = [
         ...new Set([
           ...provider.models,
+          ...(getAllProviders()[provider.id]?.models?.map((model) => model.id) ?? []),
           ...(definition?.models ?? []),
           ...(settings.providerSettings?.[provider.id]?.discoveredModels?.map(
             (model) => model.id
@@ -687,4 +882,34 @@ export async function buildEnrichedGatewaySnapshot(
       }
     }),
   }
+  return enrichSnapshotWithSubscriptionPools(
+    enriched,
+    subscriptionProviderIds.map((providerId) => {
+      const definition = definitions.find(
+        (entry) =>
+          entry.id === providerId || entry.plans?.some((plan) => plan.chatProviderId === providerId)
+      )
+      const vaultProviderId = definition?.id ?? providerId
+      const baseProvider = base.providers.find((provider) => provider.id === providerId)
+      return {
+        providerId,
+        vaultProviderId,
+        rotationEnabled: options.subscriptionRotationProviderIds?.includes(providerId) ?? false,
+        selectedAccountId:
+          settings.defaultAccountIds?.[vaultProviderId] ??
+          (settings.defaultProvider === providerId || settings.defaultProvider === vaultProviderId
+            ? (settings.defaultAccountId ?? undefined)
+            : undefined),
+        manualCredential: !!baseProvider?.apiKey,
+        transport: baseProvider?.transport,
+        ...(providerId === "opencode-go"
+          ? { plan: "go" }
+          : providerId === "opencode"
+            ? { plan: "zen" }
+            : {}),
+      }
+    }),
+    { listAccounts, readLimits: latestLimitsSnapshot, resolveCredential: credentialFor },
+    generatedAtMs
+  )
 }

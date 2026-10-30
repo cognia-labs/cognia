@@ -387,7 +387,7 @@ pub(crate) fn bridge_failure(
     error_value: BrainBridgeError,
 ) -> (StatusCode, String, String, Option<Value>) {
     match error_value {
-        BrainBridgeError::Unavailable(reason) => (
+        BrainBridgeError::Unavailable(reason) | BrainBridgeError::NotDispatched(reason) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "BRAIN_UNAVAILABLE".to_string(),
             reason,

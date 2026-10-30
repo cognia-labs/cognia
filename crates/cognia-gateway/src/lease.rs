@@ -13,8 +13,8 @@ use parking_lot::Mutex;
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialLease {
     pub deployment_id: String,
-    /// Non-secret credential fingerprint (`credentials::fingerprint_of`).
-    pub credential_fingerprint: String,
+    /// Full opaque credential identity (`credentials::lease_identity_of`).
+    pub credential_identity: String,
     pub acquired_at_ms: i64,
 }
 
@@ -28,6 +28,22 @@ impl CredentialLeaseMap {
         self.inner.lock().get(session_id).cloned()
     }
 
+    /// Atomically choose a strict session's first credential. Claim before
+    /// dispatch so concurrent first requests cannot establish different users.
+    pub fn claim(
+        &self,
+        session_id: &str,
+        deployment_id: &str,
+        credential_identity: &str,
+        now_ms: i64,
+    ) -> CredentialLease {
+        self.inner.lock().entry(session_id.to_string()).or_insert_with(|| CredentialLease {
+            deployment_id: deployment_id.to_string(),
+            credential_identity: credential_identity.to_string(),
+            acquired_at_ms: now_ms,
+        }).clone()
+    }
+
     /// Record (or move) the session's lease. Called on successful attempts;
     /// under `sticky-with-failover` a pre-first-byte failover that succeeds on
     /// another credential MOVES the lease there and sticks.
@@ -35,14 +51,14 @@ impl CredentialLeaseMap {
         &self,
         session_id: &str,
         deployment_id: &str,
-        credential_fingerprint: &str,
+        credential_identity: &str,
         now_ms: i64,
     ) {
         self.inner.lock().insert(
             session_id.to_string(),
             CredentialLease {
                 deployment_id: deployment_id.to_string(),
-                credential_fingerprint: credential_fingerprint.to_string(),
+                credential_identity: credential_identity.to_string(),
                 acquired_at_ms: now_ms,
             },
         );
@@ -71,6 +87,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn concurrent_first_claims_choose_one_credential() {
+        let leases = std::sync::Arc::new(CredentialLeaseMap::default());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles: Vec<_> = (0..8).map(|index| {
+            let leases = leases.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                leases.claim("session", "deployment", &format!("identity-{index}"), index)
+            })
+        }).collect();
+        let claimed: Vec<_> = handles.into_iter().map(|handle| handle.join().unwrap()).collect();
+        assert!(claimed.iter().all(|lease| lease == &claimed[0]));
+        assert_eq!(leases.len(), 1);
+    }
+
+    #[test]
     fn acquire_get_move_release_round_trip() {
         let leases = CredentialLeaseMap::default();
         assert!(leases.get("s1").is_none());
@@ -81,7 +114,7 @@ mod tests {
             leases.get("s1"),
             Some(CredentialLease {
                 deployment_id: "dep-a".into(),
-                credential_fingerprint: "…1111".into(),
+                credential_identity: "…1111".into(),
                 acquired_at_ms: 100,
             })
         );

@@ -16,6 +16,8 @@ export interface TaskModelPlan {
   >
   models: string[]
   allowedSpawnModels?: string[]
+  /** Collision-safe client selectors mapped to their selected provider/account. */
+  bindings?: Record<string, ExternalAgentCogniaModelBinding>
   fingerprint: string
 }
 
@@ -85,12 +87,18 @@ export function compileTaskModelPlan(input: {
   layers: readonly { source: ModelPlanSource; overrides?: AgentModelRoleOverrides }[]
   /** Explicit native agent definitions, validated before the gateway lease is minted. */
   explicitModels?: Readonly<Record<string, ExternalAgentCogniaModelBinding & { variant?: string }>>
-  modelSupportsReasoning?: (modelId: string) => boolean | undefined
+  modelSupportsReasoning?: (
+    modelId: string,
+    binding?: ExternalAgentCogniaModelBinding
+  ) => boolean | undefined
   /**
    * The efforts a model itself accepts (e.g. GPT-6 rejects `minimal`), as the
    * app's reasoning-tier tables say. `undefined` leaves only the slot's ladder.
    */
-  modelEffortValues?: (modelId: string) => readonly string[] | undefined
+  modelEffortValues?: (
+    modelId: string,
+    binding?: ExternalAgentCogniaModelBinding
+  ) => readonly string[] | undefined
 }): TaskModelPlanResult {
   const { primary, layers } = input
   const descriptors = new Map<string, AgentModelSlotDescriptor>(
@@ -106,6 +114,22 @@ export function compileTaskModelPlan(input: {
 
   const slots: TaskModelPlan["slots"] = {}
   const models = new Set([primary.modelId])
+  const bindings: Record<string, ExternalAgentCogniaModelBinding> = {}
+  const selectorFor = (selected: ExternalAgentCogniaModelBinding): string => {
+    const binding = {
+      providerId: selected.providerId,
+      modelId: selected.modelId,
+      ...(selected.accountId !== undefined ? { accountId: selected.accountId } : {}),
+      ...(selected.accountId === undefined && selected.providerId === primary.providerId
+        ? { accountId: primary.accountId }
+        : {}),
+    }
+    if (binding.providerId === primary.providerId && binding.accountId === primary.accountId)
+      return binding.modelId
+    const selector = `cognia-role-${contentDigest(binding)}`
+    bindings[selector] = binding
+    return selector
+  }
   for (const id of [...namedSlots].sort()) {
     for (const layer of layers) {
       if (!layer.overrides || !Object.hasOwn(layer.overrides.slots, id)) continue
@@ -114,17 +138,14 @@ export function compileTaskModelPlan(input: {
       let reasoningEffort: string | undefined
       if (selection.kind === "cognia") {
         const binding = selection.binding
-        if (binding.providerId !== primary.providerId)
-          return { ok: false, reason: "cross-provider-unsupported", slot: id }
-        if (binding.accountId !== undefined && binding.accountId !== primary.accountId)
-          return { ok: false, reason: "cross-account-unsupported", slot: id }
-        modelId = binding.modelId
+        modelId = selectorFor(binding)
         reasoningEffort = selection.reasoningEffort
         if (
           reasoningEffort !== undefined &&
           (!descriptors.get(id)?.reasoningEfforts?.includes(reasoningEffort) ||
-            input.modelSupportsReasoning?.(modelId) === false ||
-            input.modelEffortValues?.(modelId)?.includes(reasoningEffort) === false)
+            input.modelSupportsReasoning?.(binding.modelId, binding) === false ||
+            input.modelEffortValues?.(binding.modelId, binding)?.includes(reasoningEffort) ===
+              false)
         )
           return { ok: false, reason: "effort-unsupported", slot: id }
       }
@@ -141,16 +162,13 @@ export function compileTaskModelPlan(input: {
 
   for (const id of Object.keys(input.explicitModels ?? {}).sort()) {
     const binding = input.explicitModels![id]
-    if (binding.providerId !== primary.providerId)
-      return { ok: false, reason: "cross-provider-unsupported", slot: id }
-    if (binding.accountId !== undefined && binding.accountId !== primary.accountId)
-      return { ok: false, reason: "cross-account-unsupported", slot: id }
+    const modelId = selectorFor(binding)
     slots[id] = {
-      modelId: binding.modelId,
+      modelId,
       ...(binding.variant !== undefined ? { variant: binding.variant } : {}),
       source: "config",
     }
-    models.add(binding.modelId)
+    models.add(modelId)
     if (models.size > 32) return { ok: false, reason: "too-many-models", slot: id }
   }
 
@@ -163,12 +181,9 @@ export function compileTaskModelPlan(input: {
       return { ok: false, reason: "spawn-models-unsupported" }
     const candidates = new Set<string>()
     for (const binding of policy.allowedSpawnModels) {
-      if (binding.providerId !== primary.providerId)
-        return { ok: false, reason: "cross-provider-unsupported" }
-      if (binding.accountId !== undefined && binding.accountId !== primary.accountId)
-        return { ok: false, reason: "cross-account-unsupported" }
-      candidates.add(binding.modelId)
-      models.add(binding.modelId)
+      const selector = selectorFor(binding)
+      candidates.add(selector)
+      models.add(selector)
     }
     if (models.size > 32) return { ok: false, reason: "too-many-models" }
     if (candidates.size && !candidates.has(slots["subagent.default"]?.modelId ?? primary.modelId))
@@ -184,7 +199,9 @@ export function compileTaskModelPlan(input: {
       slots,
       models: [...models],
       ...(allowedSpawnModels !== undefined ? { allowedSpawnModels } : {}),
+      ...(Object.keys(bindings).length ? { bindings } : {}),
       fingerprint: contentDigest({
+        ...(Object.keys(bindings).length ? { bindings } : {}),
         version,
         ...(allowedSpawnModels !== undefined ? { allowedSpawnModels } : {}),
         primaryModelId: primary.modelId,

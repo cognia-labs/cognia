@@ -11,7 +11,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use super::cooldown::{usable_pool, KeyCooldownMap};
-use super::snapshot::{ProviderSnapshot, RoutingSnapshot, SnapshotEntry};
+use super::snapshot::{
+    ProviderSnapshot, RoutingSnapshot, SnapshotEntry, SubscriptionAccountSnapshot,
+};
 
 /// One executable route: a provider snapshot (credentials + protocol) and
 /// the concrete upstream model id.
@@ -24,7 +26,12 @@ pub struct Candidate {
 impl Candidate {
     pub(crate) fn new(provider: &ProviderSnapshot, model_id: &str) -> Self {
         let mut provider = provider.clone();
-        if provider.id == "commandcode" {
+        if provider
+            .source_provider_id
+            .as_deref()
+            .unwrap_or(&provider.id)
+            == "commandcode"
+        {
             // CommandCode exposes Claude only through Anthropic Messages.
             provider.protocol = if model_id.split('/').any(|part| part.starts_with("claude-")) {
                 "anthropic"
@@ -58,11 +65,218 @@ pub struct ProviderKeyRotation {
     /// Ordered usable-pool identity. Cursor changes never carry across a pool
     /// replacement, preventing removed credentials from influencing selection.
     pool_fingerprint: String,
+    subscription_reservations: HashMap<String, u64>,
+    subscription_affinity: HashMap<String, (String, i64)>,
 }
 
 /// Rotation cursors keyed by provider id. Lives on `GatewayState`, shared with
 /// the running server so the same cursor advances across requests.
 pub type KeyRotationMap = Mutex<HashMap<String, ProviderKeyRotation>>;
+
+/// An opaque account/transport identity. Legacy API-key leases keep their old identity.
+pub fn candidate_credential_identity(candidate: &Candidate) -> String {
+    let Some(account) = candidate
+        .provider
+        .selected_subscription_account_id
+        .as_deref()
+    else {
+        return crate::credentials::lease_identity_of(
+            candidate.provider.api_key.as_deref().unwrap_or(""),
+        );
+    };
+    let transport = candidate.provider.transport.as_ref();
+    crate::credentials::lease_identity_of(
+        &serde_json::json!({
+            "account":account,"key":candidate.provider.api_key,"base":candidate.provider.base_url,
+            "protocol":candidate.provider.protocol,"flavor":candidate.provider.api_flavor,
+            "auth":transport.map(|value|(&value.auth_scheme,&value.auth_header_name)),
+            "headers":transport.map(|value|&value.static_headers),
+        })
+        .to_string(),
+    )
+}
+
+/// Cooldowns remain owned by the source provider, with isolated account identities.
+pub fn candidate_cooldown_key(candidate: &Candidate) -> String {
+    if candidate
+        .provider
+        .selected_subscription_account_id
+        .is_some()
+    {
+        candidate_credential_identity(candidate)
+    } else {
+        candidate.provider.api_key.clone().unwrap_or_default()
+    }
+}
+
+pub fn subscription_account_candidate(
+    provider: &ProviderSnapshot,
+    account: &SubscriptionAccountSnapshot,
+    model: &str,
+) -> Candidate {
+    let mut provider = provider.clone();
+    provider.api_key = Some(account.api_key.clone());
+    provider.base_url = account.base_url.clone();
+    if let Some(protocol) = &account.protocol {
+        provider.protocol = protocol.clone();
+    }
+    if let Some(flavor) = &account.api_flavor {
+        provider.api_flavor = Some(flavor.clone());
+    }
+    if let Some(transport) = &account.transport {
+        provider.transport = Some(transport.clone());
+    }
+    provider.api_keys.clear();
+    provider.rotation_enabled = false;
+    provider.subscription_pool = None;
+    provider.selected_subscription_account_id = Some(account.account_id.clone());
+    Candidate::new(&provider, model)
+}
+
+fn expand_subscription_pool(
+    candidate: Candidate,
+    rotation: &KeyRotationMap,
+    cooldown: &KeyCooldownMap,
+    now_ms: i64,
+    affinity_scope: Option<&str>,
+) -> Vec<Candidate> {
+    let pool = candidate
+        .provider
+        .subscription_pool
+        .as_ref()
+        .expect("caller checked subscription pool");
+    let mut eligible = Vec::new();
+    for account in &pool.accounts {
+        if candidate
+            .provider
+            .selected_subscription_account_id
+            .as_ref()
+            .is_some_and(|selected| selected != &account.account_id)
+            || account.expires_at_ms.is_some_and(|expiry| expiry <= now_ms)
+        {
+            continue;
+        }
+        let fresh = account.quota_observed_at_ms.is_some_and(|observed| {
+            observed <= now_ms && now_ms - observed <= i64::from(pool.quota_freshness_ms)
+        });
+        let windows: Vec<_> = account
+            .windows
+            .iter()
+            .filter(|window| {
+                fresh
+                    && (window.model_ids.is_empty()
+                        || window.model_ids.contains(&candidate.model_id))
+                    && window.reset_at_ms.is_none_or(|reset| reset > now_ms)
+            })
+            .collect();
+        if windows.iter().any(|window| window.used_pct >= 100.0) {
+            continue;
+        }
+        let selected =
+            subscription_account_candidate(&candidate.provider, account, &candidate.model_id);
+        let identity = candidate_credential_identity(&selected);
+        if cooldown
+            .lock()
+            .get(&(candidate.provider.id.clone(), identity.clone()))
+            .is_some_and(|entry| entry.permanent || entry.until_ms > now_ms)
+        {
+            continue;
+        }
+        let deadline = windows
+            .iter()
+            .filter_map(|window| window.reset_at_ms)
+            .min()
+            .unwrap_or(i64::MAX);
+        let utilization = windows
+            .iter()
+            .map(|window| window.used_pct)
+            .reduce(f64::max);
+        eligible.push((
+            selected,
+            identity,
+            deadline,
+            utilization,
+            account.last_used_at_ms,
+            account.expires_at_ms,
+        ));
+    }
+    let rotation_key = format!(
+        "{}|{}",
+        candidate.provider.id,
+        candidate
+            .provider
+            .deployment_id
+            .as_deref()
+            .unwrap_or(&candidate.provider.id)
+    );
+    let mut rotations = rotation.lock();
+    let state = rotations.entry(rotation_key).or_default();
+    state
+        .subscription_reservations
+        .retain(|identity, _| eligible.iter().any(|account| &account.1 == identity));
+    state.subscription_affinity.retain(|_, (identity, until)| {
+        *until > now_ms && eligible.iter().any(|account| &account.1 == identity)
+    });
+    let affinity = affinity_scope
+        .and_then(|scope| state.subscription_affinity.get(scope))
+        .map(|(identity, _)| identity.clone());
+    eligible.sort_by(|left, right| {
+        let left_pinned = affinity
+            .as_ref()
+            .is_some_and(|identity| identity == &left.1);
+        let right_pinned = affinity
+            .as_ref()
+            .is_some_and(|identity| identity == &right.1);
+        right_pinned
+            .cmp(&left_pinned)
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.is_none().cmp(&right.3.is_none()))
+            .then_with(|| match (left.3, right.3) {
+                (Some(left), Some(right)) => left.total_cmp(&right),
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| {
+                state
+                    .subscription_reservations
+                    .get(&left.1)
+                    .copied()
+                    .unwrap_or(0)
+                    .cmp(
+                        &state
+                            .subscription_reservations
+                            .get(&right.1)
+                            .copied()
+                            .unwrap_or(0),
+                    )
+            })
+            .then_with(|| left.4.cmp(&right.4))
+            .then_with(|| {
+                left.0
+                    .provider
+                    .selected_subscription_account_id
+                    .cmp(&right.0.provider.selected_subscription_account_id)
+            })
+    });
+    if let Some(first) = eligible.first() {
+        *state
+            .subscription_reservations
+            .entry(first.1.clone())
+            .or_default() += 1;
+        if let Some(scope) = affinity_scope {
+            if state.subscription_affinity.len() >= 1024 {
+                state.subscription_affinity.clear();
+            }
+            let until = now_ms
+                .saturating_add(300_000)
+                .min(first.2)
+                .min(first.5.unwrap_or(i64::MAX));
+            state
+                .subscription_affinity
+                .insert(scope.to_string(), (first.1.clone(), until));
+        }
+    }
+    eligible.into_iter().map(|account| account.0).collect()
+}
 
 /// Pick the pool index the walk should START at, given the strategy. For
 /// round-robin this advances (and persists) the per-provider cursor; random
@@ -132,8 +346,28 @@ pub fn expand_key_pools(
     cooldown: &KeyCooldownMap,
     now_ms: i64,
 ) -> Vec<Candidate> {
+    expand_key_pools_with_affinity(candidates, rotation, cooldown, now_ms, None)
+}
+
+pub fn expand_key_pools_with_affinity(
+    candidates: Vec<Candidate>,
+    rotation: &KeyRotationMap,
+    cooldown: &KeyCooldownMap,
+    now_ms: i64,
+    affinity_scope: Option<&str>,
+) -> Vec<Candidate> {
     let mut out = Vec::with_capacity(candidates.len());
     for candidate in candidates {
+        if candidate.provider.subscription_pool.is_some() {
+            out.extend(expand_subscription_pool(
+                candidate,
+                rotation,
+                cooldown,
+                now_ms,
+                affinity_scope,
+            ));
+            continue;
+        }
         let raw_pool: Vec<String> = if candidate.provider.rotation_enabled {
             let mut seen = std::collections::HashSet::new();
             candidate
@@ -198,6 +432,15 @@ pub fn record_key_success(rotation: &KeyRotationMap, candidate: &Candidate) {
     let provider_id = &candidate.provider.id;
     let api_key = candidate.provider.api_key.as_deref();
     let Some(key) = api_key else { return };
+    let key = if candidate
+        .provider
+        .selected_subscription_account_id
+        .is_some()
+    {
+        candidate_credential_identity(candidate)
+    } else {
+        key.to_string()
+    };
     let mut guard = rotation.lock();
     let rotation_key = format!(
         "{}|{}",
@@ -209,12 +452,15 @@ pub fn record_key_success(rotation: &KeyRotationMap, candidate: &Candidate) {
             .unwrap_or(provider_id)
     );
     let st = guard.entry(rotation_key).or_default();
-    *st.use_counts.entry(key.to_string()).or_insert(0) += 1;
+    *st.use_counts.entry(key).or_insert(0) += 1;
 }
 
 /// Protocols the gateway can execute today.
 pub fn is_executable_protocol(protocol: &str) -> bool {
-    matches!(protocol, "openai" | "anthropic" | "responses")
+    matches!(
+        protocol,
+        "openai" | "anthropic" | "responses" | "google" | "gemini"
+    )
 }
 
 /// A provider the gateway can actually dial: an executable protocol AND a
@@ -299,6 +545,35 @@ pub fn upstream_url(protocol: &str, base_url: &str) -> String {
     }
 }
 
+/// Gemini names its model and operation in the URL, not in the request body.
+/// Appending one escaped path segment prevents a model selector from changing
+/// the configured upstream host, query or versioned base path.
+pub fn upstream_url_for(protocol: &str, base_url: &str, model: &str, stream: bool) -> String {
+    if !matches!(protocol, "google" | "gemini") {
+        return upstream_url(protocol, base_url);
+    }
+    let operation = if stream {
+        "streamGenerateContent"
+    } else {
+        "generateContent"
+    };
+    let model = model.strip_prefix("models/").unwrap_or(model);
+    let Ok(mut url) = reqwest::Url::parse(base_url) else {
+        return String::new();
+    };
+    if let Ok(mut segments) = url.path_segments_mut() {
+        segments.pop_if_empty();
+        segments.push("models");
+        segments.push(&format!("{model}:{operation}"));
+    } else {
+        return String::new();
+    }
+    if stream {
+        url.query_pairs_mut().append_pair("alt", "sse");
+    }
+    url.into()
+}
+
 /// Upstream embeddings endpoint. OpenAI-compatible only (the catalog base URL
 /// already includes `/v1`, matching [`upstream_url`]); Anthropic exposes no
 /// embeddings endpoint in this protocol.
@@ -316,6 +591,11 @@ pub fn count_tokens_url(base_url: &str) -> String {
 pub fn upstream_headers(protocol: &str, api_key: Option<&str>) -> Vec<(&'static str, String)> {
     let mut headers = vec![("content-type", "application/json".to_string())];
     match protocol {
+        "google" | "gemini" => {
+            if let Some(key) = api_key {
+                headers.push(("x-goog-api-key", key.to_string()));
+            }
+        }
         "anthropic" => {
             if let Some(key) = api_key {
                 headers.push(("x-api-key", key.to_string()));
@@ -352,10 +632,12 @@ pub fn upstream_headers_for(
         .map(|t| t.auth_scheme.as_str())
         .unwrap_or(match protocol {
             "anthropic" => "x-api-key",
+            "google" | "gemini" => "google-api-key",
             _ => "bearer",
         });
     if let Some(key) = api_key {
         match scheme {
+            "google-api-key" => headers.push(("x-goog-api-key".into(), key.to_string())),
             "x-api-key" => headers.push(("x-api-key".into(), key.to_string())),
             "custom-header" => {
                 let name = transport
@@ -403,6 +685,21 @@ pub fn upstream_headers_for(
     headers
 }
 
+/// Multiple explicitly authorized deployments keep independent sticky leases.
+/// Legacy tickets retain the original session scope.
+pub fn ticket_lease_scope(
+    ticket: &crate::route_ticket::RouteTicket,
+    deployment_id: &str,
+) -> String {
+    if ticket.selector_deployments.is_empty() {
+        ticket.session_id.clone()
+    } else {
+        serde_json::to_string(&(ticket.session_id.as_str(), deployment_id))
+            .expect("strings serialize")
+    }
+}
+
+
 /// Ticket-scoped candidate expansion (ADR-0090 Phase 2, R4). The base
 /// candidates are the ticket's FROZEN, ordered walk; affinity narrows or
 /// reorders it:
@@ -433,35 +730,35 @@ pub fn expand_for_ticket(
             .clone()
             .unwrap_or_else(|| c.provider.id.clone())
     };
-    let fingerprint_of = |c: &Candidate| -> String {
-        crate::credentials::fingerprint_of(c.provider.api_key.as_deref().unwrap_or(""))
-    };
+    let identity_of = |c: &Candidate| -> String { candidate_credential_identity(c) };
 
     match affinity {
         TicketAffinity::PerRequest => expanded,
         TicketAffinity::SessionSticky => {
-            if let Some(lease) = leases.get(session_id) {
-                let leased: Vec<Candidate> = expanded
-                    .iter()
-                    .filter(|c| {
-                        deployment_of(c) == lease.deployment_id
-                            && fingerprint_of(c) == lease.credential_fingerprint
-                    })
-                    .cloned()
-                    .collect();
-                // The leased credential only — if it is cooling/vanished the
-                // request fails rather than silently switching accounts.
-                leased
-            } else {
-                expanded.into_iter().take(1).collect()
-            }
+            let first = &expanded[0];
+            let lease = leases.claim(
+                session_id,
+                &deployment_of(first),
+                &identity_of(first),
+                now_ms,
+            );
+            // A strict session claims before dispatch. Concurrent initial
+            // requests observe the same identity; a parked/removed credential
+            // fails closed rather than switching accounts.
+            expanded
+                .into_iter()
+                .filter(|candidate| {
+                    deployment_of(candidate) == lease.deployment_id
+                        && identity_of(candidate) == lease.credential_identity
+                })
+                .collect()
         }
         TicketAffinity::StickyWithFailover => {
             if let Some(lease) = leases.get(session_id) {
                 let (mut leased, rest): (Vec<Candidate>, Vec<Candidate>) =
                     expanded.into_iter().partition(|c| {
                         deployment_of(c) == lease.deployment_id
-                            && fingerprint_of(c) == lease.credential_fingerprint
+                            && identity_of(c) == lease.credential_identity
                     });
                 leased.extend(rest);
                 leased
@@ -585,6 +882,140 @@ fn remove_path(value: &mut Value, path: &str) {
 mod tests {
     use super::*;
 
+    fn subscription_account(id: &str, used: Option<f64>, reset: Option<i64>) -> Value {
+        serde_json::json!({"accountId":id,"apiKey":"same-token","baseUrl":format!("https://{id}.invalid/v1"),"lastUsedAtMs":0,"quotaObservedAtMs":1000,"transport":{"authScheme":"bearer","staticHeaders":[["chatgpt-account-id",id]]},"windows":used.map(|used|vec![serde_json::json!({"id":"session","usedPct":used,"resetAtMs":reset})]).unwrap_or_default()})
+    }
+
+    fn subscription_candidate(accounts: Vec<Value>) -> Candidate {
+        let provider: ProviderSnapshot = serde_json::from_value(serde_json::json!({"id":"subscription","protocol":"openai","baseUrl":"https://default.invalid/v1","enabled":true,"models":["model"],"subscriptionPool":{"strategy":"allowance-reset","quotaFreshnessMs":300000,"accounts":accounts}})).unwrap();
+        Candidate::new(&provider, "model")
+    }
+
+    fn subscription_ids(candidates: &[Candidate]) -> Vec<&str> {
+        candidates
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .provider
+                    .selected_subscription_account_id
+                    .as_deref()
+                    .unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn subscription_allowance_orders_reset_deadlines_and_excludes_known_exhaustion() {
+        let candidate = subscription_candidate(vec![
+            subscription_account("spent", Some(100.0), Some(9000)),
+            subscription_account("later", Some(10.0), Some(8000)),
+            subscription_account("soon", Some(80.0), Some(4000)),
+            subscription_account("unknown", None, None),
+        ]);
+        let result = expand_key_pools(
+            vec![candidate],
+            &KeyRotationMap::default(),
+            &KeyCooldownMap::default(),
+            2000,
+        );
+        assert_eq!(subscription_ids(&result), vec!["soon", "later", "unknown"]);
+        assert_eq!(result[0].provider.id, "subscription");
+        assert_eq!(result[0].provider.base_url, "https://soon.invalid/v1");
+        assert!(result[0].provider.subscription_pool.is_none());
+    }
+
+    #[test]
+    fn subscription_stale_reset_and_unrelated_model_windows_become_unknown_not_free_or_spent() {
+        let mut stale = subscription_account("stale", Some(100.0), Some(900000));
+        stale["quotaObservedAtMs"] = serde_json::json!(0);
+        let reset = subscription_account("reset", Some(100.0), Some(2000));
+        let mut scoped = subscription_account("scoped", Some(100.0), Some(900000));
+        scoped["windows"][0]["modelIds"] = serde_json::json!(["other-model"]);
+        let mut expired = subscription_account("expired", None, None);
+        expired["expiresAtMs"] = serde_json::json!(300001);
+        let result = expand_key_pools(
+            vec![subscription_candidate(vec![stale, reset, scoped, expired])],
+            &KeyRotationMap::default(),
+            &KeyCooldownMap::default(),
+            300002,
+        );
+        let ids = subscription_ids(&result);
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&"stale") && ids.contains(&"reset") && ids.contains(&"scoped"));
+    }
+
+    #[test]
+    fn subscription_reservations_spread_initial_requests_and_affinity_stays_per_session() {
+        let candidate = subscription_candidate(vec![
+            subscription_account("one", None, None),
+            subscription_account("two", None, None),
+        ]);
+        let rotation = KeyRotationMap::default();
+        let cooldown = KeyCooldownMap::default();
+        let first = expand_key_pools_with_affinity(
+            vec![candidate.clone()],
+            &rotation,
+            &cooldown,
+            2000,
+            Some("session-one"),
+        );
+        let same = expand_key_pools_with_affinity(
+            vec![candidate.clone()],
+            &rotation,
+            &cooldown,
+            2001,
+            Some("session-one"),
+        );
+        let other = expand_key_pools_with_affinity(
+            vec![candidate],
+            &rotation,
+            &cooldown,
+            2002,
+            Some("session-two"),
+        );
+        assert_eq!(subscription_ids(&first)[0], "one");
+        assert_eq!(subscription_ids(&same)[0], "one");
+        assert_eq!(subscription_ids(&other)[0], "two");
+    }
+
+    #[test]
+    fn subscription_identity_cooldown_and_explicit_selection_are_account_scoped() {
+        let candidate = subscription_candidate(vec![
+            subscription_account("one", None, None),
+            subscription_account("two", None, None),
+        ]);
+        let cooldown = KeyCooldownMap::default();
+        let expanded = expand_key_pools(
+            vec![candidate.clone()],
+            &KeyRotationMap::default(),
+            &cooldown,
+            2000,
+        );
+        assert_ne!(
+            candidate_credential_identity(&expanded[0]),
+            candidate_credential_identity(&expanded[1])
+        );
+        crate::cooldown::record_permanent(
+            &cooldown,
+            "subscription",
+            &candidate_cooldown_key(&expanded[0]),
+            "unauthorized",
+        );
+        let result = expand_key_pools(
+            vec![candidate.clone()],
+            &KeyRotationMap::default(),
+            &cooldown,
+            2001,
+        );
+        assert_eq!(subscription_ids(&result), vec!["two"]);
+        let mut selected = candidate;
+        selected.provider.selected_subscription_account_id = Some("one".into());
+        assert!(
+            expand_key_pools(vec![selected], &KeyRotationMap::default(), &cooldown, 2001)
+                .is_empty()
+        );
+    }
+
     #[test]
     fn commandcode_routes_each_model_family_across_all_candidate_sources() {
         let snapshot: RoutingSnapshot = serde_json::from_value(serde_json::json!({
@@ -646,7 +1077,7 @@ mod tests {
                 { "id": "anthropic", "protocol": "anthropic", "baseUrl": "https://api.anthropic.com/v1",
                   "apiKey": "sk-a", "enabled": true, "models": ["claude-haiku"] },
                 { "id": "disabled-one", "protocol": "openai", "baseUrl": "https://x", "enabled": false },
-                { "id": "weird", "protocol": "gemini", "baseUrl": "https://g", "enabled": true }
+                { "id": "weird", "protocol": "cohere", "baseUrl": "https://g", "enabled": true }
             ],
             "generatedAtMs": 1
         }))
@@ -733,7 +1164,7 @@ mod tests {
         ]))
         .unwrap();
         let candidates = candidates_from_entries(&snapshot(), &entries);
-        // disabled + gemini protocol skipped; order preserved.
+        // Disabled and unsupported protocols are skipped; order preserved.
         assert_eq!(
             candidates
                 .iter()
@@ -763,6 +1194,64 @@ mod tests {
         assert!(an.iter().any(|(n, _)| *n == "anthropic-version"));
         // Keyless local providers get no auth header but keep content-type.
         assert_eq!(upstream_headers("openai", None).len(), 1);
+    }
+
+    #[test]
+    fn gemini_urls_keep_the_configured_base_and_escape_model_selectors() {
+        assert_eq!(
+            upstream_url_for(
+                "google",
+                "https://generativelanguage.googleapis.com/v1beta/",
+                "models/gemini-test",
+                false
+            ),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-test:generateContent"
+        );
+        let url = reqwest::Url::parse(&upstream_url_for(
+            "gemini",
+            "https://proxy.test/google/v1beta?tenant=one",
+            "gemini/../x?key=other#fragment",
+            true,
+        ))
+        .unwrap();
+        assert_eq!(url.host_str(), Some("proxy.test"));
+        assert_eq!(
+            url.path(),
+            "/google/v1beta/models/gemini%2F..%2Fx%3Fkey=other%23fragment:streamGenerateContent"
+        );
+        assert_eq!(
+            url.query_pairs().collect::<Vec<_>>(),
+            vec![
+                ("tenant".into(), "one".into()),
+                ("alt".into(), "sse".into())
+            ]
+        );
+        assert_eq!(url.fragment(), None);
+        assert_eq!(upstream_url_for("google", "not a URL", "m", false), "");
+        assert_eq!(
+            upstream_url_for("responses", "https://proxy.test/v1", "m", true),
+            "https://proxy.test/v1/responses"
+        );
+    }
+
+    #[test]
+    fn gemini_defaults_to_google_api_key_auth() {
+        for protocol in ["google", "gemini"] {
+            assert_eq!(
+                upstream_headers(protocol, None),
+                vec![("content-type", "application/json".into())]
+            );
+            let legacy = upstream_headers(protocol, Some("fixture-key"));
+            assert!(legacy
+                .iter()
+                .any(|(name, value)| *name == "x-goog-api-key" && value == "fixture-key"));
+            assert!(!legacy.iter().any(|(name, _)| *name == "authorization"));
+            let profile = upstream_headers_for(protocol, None, Some("fixture-key"), None);
+            assert!(profile
+                .iter()
+                .any(|(name, value)| name == "x-goog-api-key" && value == "fixture-key"));
+            assert!(!profile.iter().any(|(name, _)| name == "authorization"));
+        }
     }
 
     #[test]

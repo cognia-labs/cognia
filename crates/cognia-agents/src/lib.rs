@@ -20,5 +20,6 @@
 //! `codeserver` and `files` resolve unchanged.
 
 pub mod commands;
+pub mod gateway_config;
 pub mod io;
 pub mod paths;

@@ -86,7 +86,7 @@ describe("filterCogniaGatewayModels", () => {
     }
   })
 
-  it("drops a model explicitly lacking tools or streaming, and a non-OpenAI/Anthropic protocol", () => {
+  it("drops models lacking tools or streaming and admits executable native Gemini", () => {
     const ids = filterCogniaGatewayModels({
       providerSettings: {},
       customProviders: [
@@ -119,7 +119,7 @@ describe("filterCogniaGatewayModels", () => {
       subscriptions: [],
     }).map((model) => `${model.providerId}/${model.modelId}`)
     expect(ids).toContain("custom-ok/ok-1")
-    expect(ids).not.toContain("custom-gemini/g")
+    expect(ids).toContain("custom-gemini/g")
     expect(ids).not.toContain("custom-tools-off/a")
     expect(ids).not.toContain("custom-tools-off/b")
   })

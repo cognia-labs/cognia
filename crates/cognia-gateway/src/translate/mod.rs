@@ -18,6 +18,7 @@
 
 pub mod anthropic;
 pub mod errors;
+pub mod gemini;
 pub mod ir;
 pub mod openai;
 pub mod responses;
@@ -33,6 +34,7 @@ pub fn request_to_ir(format: InboundFormat, body: &Value) -> Result<ChatIR, NotT
         InboundFormat::OpenAiChat => openai::to_ir(body),
         InboundFormat::OpenAiResponses => responses::request_to_ir(body),
         InboundFormat::AnthropicMessages => anthropic::to_ir(body),
+        InboundFormat::Gemini => gemini::to_ir(body),
     }
 }
 
@@ -83,6 +85,7 @@ pub fn request_from_ir(protocol: &str, ir: &ChatIR) -> Result<Value, NotTranslat
         "openai" => openai::from_ir(ir),
         "responses" => Ok(responses::request_from_ir(ir)),
         "anthropic" => Ok(anthropic::from_ir(ir)),
+        "google" | "gemini" => gemini::from_ir(ir),
         other => Err(NotTranslatable::new(format!(
             "upstream protocol \"{other}\" is not executable by the gateway"
         ))),
@@ -95,6 +98,7 @@ pub fn response_to_ir(protocol: &str, body: &Value) -> Result<IrResponse, NotTra
         "openai" => openai::response_to_ir(body),
         "responses" => responses::response_to_ir(body),
         "anthropic" => anthropic::response_to_ir(body),
+        "google" | "gemini" => gemini::response_to_ir(body),
         other => Err(NotTranslatable::new(format!(
             "upstream protocol \"{other}\" is not executable by the gateway"
         ))),
@@ -107,6 +111,7 @@ pub fn response_from_ir(format: InboundFormat, resp: &IrResponse, created: i64) 
         InboundFormat::OpenAiChat => openai::response_from_ir(resp, created),
         InboundFormat::OpenAiResponses => responses::response_from_ir(resp, &resp.model, created),
         InboundFormat::AnthropicMessages => anthropic::response_from_ir(resp),
+        InboundFormat::Gemini => gemini::response_from_ir(resp),
     }
 }
 
@@ -114,6 +119,48 @@ pub fn response_from_ir(format: InboundFormat, resp: &IrResponse, created: i64) 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn google_adapter_executes_a_chat_request() {
+        let ir = openai::to_ir(&json!({"model":"gemini-test","messages":[{"role":"user","content":"hello"}]})).unwrap();
+        let body = request_from_ir("google", &ir).unwrap();
+        assert_eq!(body["contents"][0]["parts"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn gemini_nonstream_interoperates_with_all_three_wire_formats() {
+        let gemini = json!({"model":"gemini-test","contents":[{"role":"user","parts":[{"text":"hello"},{"inlineData":{"mimeType":"image/png","data":"YWJj"}}]}]});
+        let ir = request_to_ir(InboundFormat::Gemini,&gemini).unwrap();
+        for protocol in ["openai","responses","anthropic"] {
+            let wire=request_from_ir(protocol,&ir).unwrap();
+            let format=match protocol {"openai"=>InboundFormat::OpenAiChat,"responses"=>InboundFormat::OpenAiResponses,_=>InboundFormat::AnthropicMessages};
+            let roundtrip=request_to_ir(format,&wire).unwrap();
+            let target=request_from_ir("google",&roundtrip).unwrap();
+            assert_eq!(target["contents"][0]["parts"][0]["text"],"hello", "{protocol}");
+            assert_eq!(target["contents"][0]["parts"][1]["inlineData"]["data"],"YWJj", "{protocol}");
+        }
+        let ir=response_to_ir("google",&json!({"responseId":"r","modelVersion":"gemini-test","candidates":[{"content":{"parts":[{"text":"thinking","thought":true},{"text":"answer"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2,"thoughtsTokenCount":3,"cachedContentTokenCount":4}})).unwrap();
+        for format in [InboundFormat::OpenAiChat,InboundFormat::OpenAiResponses,InboundFormat::AnthropicMessages] {
+            let wire=response_from_ir(format,&ir,0);
+            let protocol=format.protocol_name();
+            let roundtrip=response_to_ir(protocol,&wire).unwrap();
+            assert_eq!(roundtrip.reasoning.as_deref(),Some("thinking"),"{protocol}");
+            assert_eq!(roundtrip.usage,ir.usage,"{protocol}");
+        }
+    }
+
+    #[test]
+    fn gemini_signed_function_history_survives_an_openai_client_roundtrip() {
+        let response=response_to_ir("google",&json!({"responseId":"r","candidates":[{"content":{"parts":[{"functionCall":{"id":"native-id","name":"lookup","args":{"q":1}},"thoughtSignature":"opaque-signed-state"}]},"finishReason":"STOP"}]})).unwrap();
+        let message=response_from_ir(InboundFormat::OpenAiChat,&response,0)["choices"][0]["message"].clone();
+        let id=message["tool_calls"][0]["id"].as_str().unwrap();
+        let ir=request_to_ir(InboundFormat::OpenAiChat,&json!({"model":"gemini-test","messages":[{"role":"user","content":"look it up"},message,{"role":"tool","tool_call_id":id,"content":"{\"answer\":42}"}]})).unwrap();
+        let request=request_from_ir("google",&ir).unwrap();
+        assert_eq!(request["contents"][1]["parts"][0]["thoughtSignature"],"opaque-signed-state");
+        assert_eq!(request["contents"][1]["parts"][0]["functionCall"]["id"],"native-id");
+        assert_eq!(request["contents"][2]["parts"][0]["functionResponse"]["id"],"native-id");
+        assert_eq!(request["contents"][2]["parts"][0]["functionResponse"]["name"],"lookup");
+    }
 
     #[test]
     fn structured_output_strict_tools_parallel_and_effort_survive_translation() {
@@ -282,7 +329,7 @@ mod tests {
             &json!({ "model": "m", "messages": [] }),
         )
         .unwrap();
-        assert!(request_from_ir("gemini", &ir).is_err());
+        assert!(request_from_ir("cohere", &ir).is_err());
         assert!(response_to_ir("cohere", &json!({})).is_err());
     }
 }

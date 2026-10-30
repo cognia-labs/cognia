@@ -175,3 +175,44 @@ it("forwards the exact model plan to a capable Host", async () => {
   expect(call.mock.calls[0][1].request.modelPlan).toEqual(modelPlan)
   await lease.revoke()
 })
+
+it.each(["http://127.0.0.1:99/v1", "https://10.0.0.1/v1", "https://provider.internal/v1"])(
+  "refuses a nonpublic override %s before transferring any credentials",
+  async (baseUrl) => {
+    const value = input()
+    await expect(
+      acquireRemoteTaskLease({
+        ...value,
+        providerOverrides: [{ ...value.provider, id: "private-child", baseUrl }],
+      })
+    ).rejects.toThrow("public HTTPS")
+    expect(call).not.toHaveBeenCalled()
+  }
+)
+
+it("forwards each frozen public deployment without replacing its account transport", async () => {
+  const value = input()
+  const providerOverrides = [
+    {
+      ...value.provider,
+      id: "child-a",
+      deploymentId: "deployment-a",
+      selectedSubscriptionAccountId: "account-a",
+    },
+    {
+      ...value.provider,
+      id: "child-b",
+      baseUrl: "https://second.example.com/v1",
+      apiKey: "fake-second-key",
+      transport: {
+        authScheme: "custom-header" as const,
+        authHeaderName: "x-child-token",
+        staticHeaders: [],
+      },
+    },
+  ]
+  const lease = await acquireRemoteTaskLease({ ...value, providerOverrides })
+  expect(call.mock.calls[0][1].request.providerOverrides).toEqual(providerOverrides)
+  expect(call.mock.calls[0][1].request.provider).toEqual(value.provider)
+  await lease.revoke()
+})

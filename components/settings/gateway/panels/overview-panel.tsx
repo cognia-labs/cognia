@@ -48,10 +48,20 @@ import { RollingNumber } from "@/components/settings/subagents/motion/rolling-nu
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { InputGroupTextarea } from "@/components/ui/input-group"
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from "@/components/ui/item"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { shellQuote } from "@/lib/mcp/config-transfer"
 import { isGatewayAccountLocked } from "@/lib/gateway/status"
 import { gatewayProbeUpstream } from "@/lib/tauri/gateway"
 import type { GatewayConfig, GatewayStatus, GatewayUpstreamProbeResult } from "@/types/gateway"
@@ -60,6 +70,7 @@ import type { GatewayNavigate, GatewayPanelContext } from "../gateway-section"
 import { GatewayPanelSection, GatewayPanelStack } from "../shared/panel-section"
 import { SinceTime } from "../shared/since-time"
 import { GatewaySetupSteps, isGatewaySetupComplete } from "./overview-setup-steps"
+import { GatewayClientConnections } from "../gateway-client-connections"
 
 /** The first connect snippet — focused when the setup list sends the user there. */
 const FIRST_SNIPPET_INPUT_ID = "gw-snippet-anthropic"
@@ -97,9 +108,25 @@ export function GatewayOverviewPanel({
   const { reduce } = useFlowMotion()
   const { config, status } = ctx
   const connectRef = useRef<HTMLDivElement>(null)
+  const [primaryAlias, setPrimaryAlias] = useState("")
+  const [helperAlias, setHelperAlias] = useState("")
 
   const running = status?.running ?? false
   const origin = gatewayClientOrigin(config, status)
+  const aliases = status?.modelAliases ?? []
+  const selectedPrimary = aliases.includes(primaryAlias) ? primaryAlias : aliases[0]
+  const selectedHelper = aliases.includes(helperAlias)
+    ? helperAlias
+    : (aliases[1] ?? selectedPrimary)
+  const roleSnippet =
+    selectedPrimary && selectedHelper
+      ? [
+          `export ANTHROPIC_BASE_URL=${shellQuote(origin)}`,
+          'export ANTHROPIC_API_KEY="$COGNIA_GATEWAY_KEY"',
+          `export ANTHROPIC_MODEL=${shellQuote(selectedPrimary)}`,
+          `export ANTHROPIC_DEFAULT_HAIKU_MODEL=${shellQuote(selectedHelper)}`,
+        ].join("\n")
+      : null
   const accountLocked = isGatewayAccountLocked(status)
   const lastCall = status?.lastCallAt ? new Date(status.lastCallAt) : null
   const snapshotAt = status?.snapshotGeneratedAtMs ? new Date(status.snapshotGeneratedAtMs) : null
@@ -235,6 +262,8 @@ export function GatewayOverviewPanel({
               </span>
             ) : null}
           </dd>
+          <dt className="text-muted-foreground">{t("routingModeLabel")}</dt>
+          <dd>{t(config.gatewayLocalRoutingV2 ? "routingLocalHelp" : "routingLiveHelp")}</dd>
         </dl>
         {status?.routingStrategyUnavailable ? (
           <Alert variant="destructive">
@@ -246,6 +275,123 @@ export function GatewayOverviewPanel({
       </GatewayPanelSection>
 
       <UpstreamSelfCheckSection running={running} onProbed={onRefreshStatus} />
+
+      {status?.subscriptionRotationProviders?.length ? (
+        <GatewayPanelSection
+          title={t("subscriptionRotationHeading")}
+          description={t("subscriptionRotationHelp")}
+        >
+          {status.subscriptionRotationProviders.map(({ providerId, accountCount }) => (
+            <div key={providerId} className="flex items-center gap-2">
+              <Checkbox
+                id={`gw-rotate-${providerId}`}
+                aria-label={t("subscriptionRotationProvider", { providerId, count: accountCount })}
+                checked={config.subscriptionRotationProviderIds?.includes(providerId) ?? false}
+                onCheckedChange={(checked) =>
+                  void ctx.persist({
+                    subscriptionRotationProviderIds:
+                      checked === true
+                        ? [
+                            ...new Set([
+                              ...(config.subscriptionRotationProviderIds ?? []),
+                              providerId,
+                            ]),
+                          ]
+                        : (config.subscriptionRotationProviderIds ?? []).filter(
+                            (id) => id !== providerId
+                          ),
+                  })
+                }
+              />
+              <Label htmlFor={`gw-rotate-${providerId}`}>
+                {t("subscriptionRotationProvider", { providerId, count: accountCount })}
+              </Label>
+            </div>
+          ))}
+        </GatewayPanelSection>
+      ) : null}
+
+      <GatewayPanelSection title={t("privacyHeading")} description={t("privacyMaskTextHelp")}>
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="gw-privacy-mask" className="text-sm">
+            {t("privacyMaskText")}
+          </Label>
+          <Switch
+            id="gw-privacy-mask"
+            aria-label={t("privacyMaskText")}
+            checked={config.privacyMode === "mask"}
+            onCheckedChange={(next) => void ctx.persist({ privacyMode: next ? "mask" : "off" })}
+          />
+        </div>
+      </GatewayPanelSection>
+
+      <GatewayPanelSection
+        title={t("gatewayExtensionsHeading")}
+        description={t("gatewayExtensionsHelp")}
+      >
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="gw-extensions" className="text-sm">
+            {t("gatewayExtensionsEnabled")}
+          </Label>
+          <Switch
+            id="gw-extensions"
+            aria-label={t("gatewayExtensionsEnabled")}
+            checked={config.middlewareEnabled === true}
+            onCheckedChange={(next) => void ctx.persist({ middlewareEnabled: next })}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">{t("gatewayBridgeHelp")}</p>
+        <div className="grid gap-3 @lg/gateway-pane:grid-cols-2">
+          {(["search", "vision"] as const).map((kind) => {
+            const configured = config.bridgeModels?.[kind]
+            const unavailable = configured && !aliases.includes(configured)
+            return (
+              <div key={kind} className="space-y-1.5">
+                <Label htmlFor={`gw-bridge-${kind}`}>
+                  {t(kind === "search" ? "gatewayBridgeSearch" : "gatewayBridgeVision")}
+                </Label>
+                <Select
+                  value={configured ? `alias:${configured}` : "off"}
+                  onValueChange={(value) =>
+                    void ctx.persist({
+                      bridgeModels: {
+                        ...config.bridgeModels,
+                        [kind]: value === "off" ? undefined : value.slice("alias:".length),
+                      },
+                    })
+                  }
+                >
+                  <SelectTrigger
+                    id={`gw-bridge-${kind}`}
+                    aria-label={t(
+                      kind === "search" ? "gatewayBridgeSearch" : "gatewayBridgeVision"
+                    )}
+                    className="w-full min-w-0"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="off">{t("gatewayBridgeDisabled")}</SelectItem>
+                    {unavailable ? (
+                      <SelectItem value={`alias:${configured}`} disabled>
+                        {configured}
+                      </SelectItem>
+                    ) : null}
+                    {aliases.map((alias) => (
+                      <SelectItem key={alias} value={`alias:${alias}`}>
+                        {alias}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {unavailable ? (
+                  <p className="text-xs text-destructive">{t("gatewayBridgeAliasUnavailable")}</p>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </GatewayPanelSection>
 
       <div ref={connectRef} className="scroll-mt-3" data-testid="gateway-connect-section">
         <GatewayPanelSection
@@ -272,6 +418,86 @@ export function GatewayOverviewPanel({
             </div>
           ))}
           <p className="text-xs text-muted-foreground">{t("authNote")}</p>
+          <div className="grid gap-3 border-t pt-3 text-xs @lg/gateway-pane:grid-cols-2">
+            <div className="space-y-1">
+              <p className="font-medium">{t("ordinaryClientsTitle")}</p>
+              <p className="text-muted-foreground">{t("ordinaryClientsHelp")}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="font-medium">{t("managedTasksTitle")}</p>
+              <p className="text-muted-foreground">{t("managedTasksHelp")}</p>
+              <Button size="sm" variant="outline" onClick={() => onNavigate("tickets")}>
+                {t("managedTasksOpen")}
+              </Button>
+            </div>
+          </div>
+          <div className="space-y-2 border-t pt-3">
+            <p className="text-xs font-medium">{t("roleModelsTitle")}</p>
+            <p className="text-xs text-muted-foreground">{t("roleModelsHelp")}</p>
+            {roleSnippet ? (
+              <>
+                <p className="text-[11px] text-muted-foreground">{t("roleAliasesLive")}</p>
+                <div className="grid gap-2 @md/gateway-pane:grid-cols-2">
+                  {(
+                    [
+                      ["primary", t("rolePrimaryAlias"), selectedPrimary, setPrimaryAlias],
+                      ["helper", t("roleHelperAlias"), selectedHelper, setHelperAlias],
+                    ] as const
+                  ).map(([id, label, value, onChange]) => (
+                    <div key={id} className="space-y-1">
+                      <Label htmlFor={`gw-role-${id}`} className="text-xs">
+                        {label}
+                      </Label>
+                      <Select value={value} onValueChange={onChange}>
+                        <SelectTrigger
+                          id={`gw-role-${id}`}
+                          className="w-full text-xs"
+                          aria-label={label}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {aliases.map((alias) => (
+                            <SelectItem key={alias} value={alias}>
+                              {alias}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+                <Label htmlFor="gw-role-snippet" className="text-xs">
+                  {t("roleSnippet")}
+                </Label>
+                <Snippet code={roleSnippet} className="min-w-0">
+                  <InputGroupTextarea
+                    id="gw-role-snippet"
+                    className="min-h-24 text-xs"
+                    readOnly
+                    value={roleSnippet}
+                  />
+                  <SnippetCopyButton
+                    aria-label={t("roleSnippetCopy")}
+                    title={t("copy")}
+                    onCopy={() => toast.success(t("copied"))}
+                    onError={() => toast.error(t("copyFailed"))}
+                  />
+                </Snippet>
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("roleAliasesUnavailable")}</p>
+            )}
+          </div>
+          <GatewayClientConnections
+            primaryAlias={selectedPrimary}
+            helperAlias={selectedHelper}
+            running={running}
+            accountGeneration={status?.accountGeneration}
+          />
+          <p className="border-t pt-3 text-xs text-muted-foreground">
+            {t("headlessCredentialsHelp")}
+          </p>
           {config.publicOrigin ? (
             <p className="text-xs text-muted-foreground" data-testid="gateway-origin-note">
               {t("connectUsesPublicOrigin")}

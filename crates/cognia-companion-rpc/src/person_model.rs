@@ -53,6 +53,7 @@ pub fn person_mint(mode: DeploymentMode, person: &PersonPartition, request: Pers
             parent_session_id: None, execution_fingerprint: format!("person_p6c_{}", uuid::Uuid::new_v4()),
             candidates: vec![TicketCandidate { deployment_id, model_id: request.model.clone() }],
             model_bindings: std::collections::BTreeMap::from([(request.model.clone(), request.model.clone())]),
+            selector_deployments: Default::default(),
             strict_selectors: true, credential_affinity: TicketAffinity::SessionSticky,
             allow_auth_failover: false, route_policy: "person_p6c_tool_less".into(), ttl_ms: Some(900_000),
             model: Some(request.model.clone()), operations: Some(default_ticket_operations()), budget: None,
@@ -243,6 +244,8 @@ mod tests {
         assert_eq!(ticket.member, Some(MemberBinding { org_id:a.org_id, user_id:a.user_id }));
         assert_eq!(ticket.session_id, "p6c-mint"); assert!(ticket.budget.is_none());
         assert_eq!(ticket.operations, default_ticket_operations());
+        assert_eq!(ticket.resolve_model("p6c-model").as_deref(), Some("p6c-model"));
+        assert_eq!(ticket.resolve_model("haiku"), None);
         assert_eq!(ticket.expires_at_ms - ticket.issued_at_ms, 900_000);
         assert_eq!(result["credentialFingerprint"], metadata.fingerprint);
         assert!(!result.to_string().contains(key));

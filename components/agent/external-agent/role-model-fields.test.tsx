@@ -14,7 +14,22 @@ const settings = { providerSettings: {}, customProviders: [] }
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: (select: (s: unknown) => unknown) => select({ settings }),
 }))
-jest.mock("@/lib/subscription/core/hooks", () => ({ useSubscriptionProviders: () => [] }))
+jest.mock("@/lib/subscription/core/hooks", () => ({
+  useSubscriptionProviders: () => [{ id: "other", authMode: "api-key" }],
+}))
+jest.mock("./cognia-model-picker", () => ({
+  CogniaModelAccount: ({
+    value,
+    onChange,
+  }: {
+    value: { providerId: string; modelId: string }
+    onChange: (value: unknown) => void
+  }) => (
+    <button onClick={() => onChange({ ...value, accountId: "account-b" })}>
+      choose role account
+    </button>
+  ),
+}))
 jest.mock("@/lib/ai/agent/external/config/cognia-model-options", () => {
   const { compileTaskModelPlan } = jest.requireActual("@/lib/ai/agent/external/config/model-plan")
   const { gatewayModelSlots } = jest.requireActual("@/lib/ai/agent/external/config/model-slots")
@@ -203,18 +218,18 @@ describe("RoleModelFields", () => {
       expect(screen.getByTestId(`role-model-slot-${slot}`)).toBeInTheDocument()
   })
 
-  it("offers only the primary provider's models and stores a binding that follows its account", () => {
+  it("offers every eligible provider and preserves the primary account on its provider", () => {
     const { onChange } = renderFields()
     const row = screen.getByTestId("role-model-slot-subagent.default")
     fireEvent.change(within(row).getByRole("combobox"), { target: { value: "__model__" } })
-    expect(within(row).queryByText("pick other/elsewhere")).not.toBeInTheDocument()
+    expect(within(row).getByText("pick other/elsewhere")).toBeInTheDocument()
     fireEvent.click(within(row).getByText("pick gateway/small"))
     expect(onChange).toHaveBeenLastCalledWith({
       version: 1,
       slots: {
         "subagent.default": {
           kind: "cognia",
-          binding: { providerId: "gateway", modelId: "small" },
+          binding: { providerId: "gateway", modelId: "small", accountId: "account-a" },
         },
       },
     })
@@ -277,8 +292,8 @@ describe("RoleModelFields", () => {
       },
     })
     expect(
-      within(screen.getByTestId("role-model-slot-subagent.default")).getByRole("alert")
-    ).toHaveTextContent("Choose a model from gateway")
+      within(screen.getByTestId("role-model-slot-subagent.default")).queryByRole("alert")
+    ).not.toBeInTheDocument()
   })
 
   it("emits undefined once the last slot is cleared", () => {
@@ -315,8 +330,8 @@ describe("RoleModelFields", () => {
     })
   })
 
-  it("flags a stored cross-provider binding on its row", () => {
-    renderFields({
+  it("keeps a stored cross-provider binding and lets its account change", () => {
+    const { onChange } = renderFields({
       value: {
         version: 1,
         slots: {
@@ -328,7 +343,17 @@ describe("RoleModelFields", () => {
       },
     })
     const row = screen.getByTestId("role-model-slot-subagent.default")
-    expect(within(row).getByRole("alert")).toHaveTextContent("Choose a model from gateway")
+    expect(within(row).queryByRole("alert")).not.toBeInTheDocument()
+    fireEvent.click(within(row).getByRole("button", { name: "choose role account" }))
+    expect(onChange).toHaveBeenLastCalledWith({
+      version: 1,
+      slots: {
+        "subagent.default": {
+          kind: "cognia",
+          binding: { providerId: "other", modelId: "elsewhere", accountId: "account-b" },
+        },
+      },
+    })
   })
 
   it("flags an effort on a model that does not reason", () => {

@@ -72,6 +72,7 @@ export async function acquireRemoteTaskLease(input: {
   scope: ReturnType<typeof captureRemoteGatewayTarget>
   taskId: string
   provider: Provider
+  providerOverrides?: Provider[]
   model: string
   modelPlan?: GatewayTaskModelPlan
   ingressProtocol: string
@@ -83,21 +84,23 @@ export async function acquireRemoteTaskLease(input: {
 }) {
   if (input.modelPlan && hostSupportsExternalAgentModelPlans(activeHostFeatureManifest()) !== true)
     throw new Error("This Host does not support external agent model plans; update the Host")
-  const url = new URL(input.provider.baseUrl)
-  if (
-    url.protocol !== "https:" ||
-    url.username ||
-    url.password ||
-    url.hash ||
-    isLoopbackHostname(url.hostname) ||
-    isPrivateIpv4(url.hostname) ||
-    url.hostname.includes(":") ||
-    !url.hostname.includes(".") ||
-    /\.(local|internal|localhost)\.?$/i.test(url.hostname)
-  )
-    throw new Error(
-      "Remote task gateways require a public HTTPS provider; local providers need a service bridge"
+  for (const provider of [input.provider, ...(input.providerOverrides ?? [])]) {
+    const url = new URL(provider.baseUrl)
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      isLoopbackHostname(url.hostname) ||
+      isPrivateIpv4(url.hostname) ||
+      url.hostname.includes(":") ||
+      !url.hostname.includes(".") ||
+      /\.(local|internal|localhost)\.?$/i.test(url.hostname)
     )
+      throw new Error(
+        "Remote task gateways require a public HTTPS provider; local providers need a service bridge"
+      )
+  }
   let hostChanged = false
   const assertCurrent = () => {
     if (hostChanged) throw new Error("Task gateway Host changed")
@@ -124,6 +127,7 @@ export async function acquireRemoteTaskLease(input: {
       request: {
         taskId: input.taskId,
         provider: input.provider,
+        ...(input.providerOverrides?.length ? { providerOverrides: input.providerOverrides } : {}),
         model: input.model,
         ...(input.modelPlan ? { modelPlan: input.modelPlan } : {}),
         ingressProtocol: input.ingressProtocol,

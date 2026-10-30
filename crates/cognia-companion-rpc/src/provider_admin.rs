@@ -195,6 +195,7 @@ pub fn mint_bridge_ticket(
         execution_fingerprint: request.execution_fingerprint,
         candidates,
         model_bindings: Default::default(),
+        selector_deployments: Default::default(),
         strict_selectors: false,
         credential_affinity: if failover {
             TicketAffinity::StickyWithFailover
@@ -334,6 +335,11 @@ mod tests {
 
         let minted = mint_bridge_ticket(&gateway, ticket_request("claude-opus-5")).unwrap();
         assert_eq!(minted.ticket.candidates.len(), 1);
+        assert_eq!(
+            minted.ticket.resolve_model("haiku").as_deref(),
+            Some("claude-haiku-4-5-20251001")
+        );
+        assert_eq!(minted.ticket.resolve_model("ungranted-model"), None);
         assert_eq!(
             minted.ticket.model_bindings["haiku"],
             "claude-haiku-4-5-20251001"

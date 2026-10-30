@@ -16,6 +16,7 @@
  * validates.
  */
 
+import { contentDigest } from "@cognia/agent"
 import type { GatewayTaskBudget, GatewayTaskModelPlan } from "@/types/gateway"
 import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import { captureRemoteGatewayTarget, acquireRemoteTaskLease } from "./remote-task-lease"
@@ -25,6 +26,7 @@ import { isAgentExecutionFlagEnabled } from "@/lib/ai/agent/execution/feature-fl
 import { isHeadlessHost } from "@/lib/platform/detect"
 import {
   gatewayGetStatus,
+  gatewayGetConfig,
   gatewayMintRouteTicket,
   gatewayPushSnapshot,
   gatewayRevokeRouteTicket,
@@ -187,7 +189,12 @@ async function prepareHostGatewayRoute(input: ExternalAgentGatewayRouteInput) {
   // Profile-store providers carry one Host credential each; there is no vault
   // account to pin, and silently ignoring an explicit pick would run the task
   // on a credential the caller did not choose.
-  if (typeof input.accountId === "string" && input.accountId)
+  if (
+    (typeof input.accountId === "string" && input.accountId) ||
+    Object.values(input.modelPlan?.bindings ?? {}).some(
+      (binding) => typeof binding.accountId === "string" && binding.accountId
+    )
+  )
     throw new Error("This Host's Cognia providers have no selectable accounts")
   const { acquireHostTaskLease } = await import("./host-task-lease")
   const lease = await acquireHostTaskLease({
@@ -257,8 +264,20 @@ export async function prepareExternalAgentGatewayRoute(
   const routeInputs = (value: typeof settings | null | undefined) =>
     value
       ? JSON.stringify([
-          value.providerSettings?.[input.providerId],
-          value.customProviders?.find((provider) => provider.id === input.providerId),
+          [
+            ...new Set([
+              input.providerId,
+              ...Object.values(input.modelPlan?.bindings ?? {}).map(
+                (binding) => binding.providerId
+              ),
+            ]),
+          ]
+            .sort()
+            .map((id) => [
+              id,
+              value.providerSettings?.[id],
+              value.customProviders?.find((provider) => provider.id === id),
+            ]),
           value.defaultProvider,
           value.defaultAccountId,
           value.defaultAccountIds,
@@ -294,31 +313,6 @@ export async function prepareExternalAgentGatewayRoute(
     authorityListeners.clear()
   }
   try {
-    const { getSubscriptionProvider } = await import("@/lib/subscription/core/provider-registry")
-    const definition = getSubscriptionProvider(input.providerId, settings.customProviders)
-    const configured =
-      settings.customProviders?.find((provider) => provider.id === input.providerId) ??
-      settings.providerSettings?.[input.providerId]
-    const allowsUnauthenticated = getAllProviders()[input.providerId]?.apiKeyRequired === false
-    const hasManualCredential = Boolean(
-      configured?.apiKey?.trim() || configured?.apiKeys?.some((key) => key.trim())
-    )
-    let providerAccountId = input.accountId
-    if (providerAccountId === undefined) {
-      if (hasManualCredential) providerAccountId = null
-      else if (definition && definition.authMode !== "anthropic-oauth") {
-        const { getActiveAccount } = await import("@/lib/subscription/core/transport")
-        providerAccountId =
-          settings.defaultAccountIds?.[definition.id] ??
-          (settings.defaultProvider === input.providerId ||
-          settings.defaultProvider === definition.id
-            ? settings.defaultAccountId
-            : undefined) ??
-          (await getActiveAccount(definition.id)).activeAccountId
-      } else providerAccountId = null
-    }
-    if (!providerAccountId && !hasManualCredential && !allowsUnauthenticated)
-      throw new Error("The selected Cognia model has no usable gateway credential")
     const assertCurrent = () => {
       remoteScope?.assertCurrent()
       input.signal?.throwIfAborted()
@@ -352,97 +346,188 @@ export async function prepareExternalAgentGatewayRoute(
     const profileMeta = await publisher.loadSnapshotProfileMeta()
     const snapshot = await publisher.buildEnrichedGatewaySnapshot(settings, Date.now(), profileMeta)
     assertCurrent()
-    const provider = snapshot.providers.find((entry) => entry.id === input.providerId)
-    if (!provider || provider.credentialFallbackAllowed === false)
-      throw new Error("The selected Cognia provider is unavailable or disabled")
-    let upstream = { ...provider }
-    if (providerAccountId) {
-      const credential = await resolveSubscriptionProviderCredential(
-        input.providerId,
-        settings,
-        providerAccountId
-      )
-      assertCurrent()
-      if (!credential) throw new Error("The selected Cognia subscription account is unavailable")
-      upstream = {
-        ...upstream,
-        apiKey: credential.apiKey,
-        apiKeys: undefined,
-        rotationEnabled: false,
-        rotationStrategy: undefined,
-        baseUrl: credential.baseURL,
-        protocol: credential.protocol ?? upstream.protocol,
-        apiFlavor: credential.apiFlavor ?? upstream.apiFlavor,
-        enabled: true,
-        transport: {
-          ...upstream.transport,
-          authScheme:
-            (credential.protocol ?? upstream.protocol) === "anthropic" ? "x-api-key" : "bearer",
-          staticHeaders: Object.entries(credential.headers ?? {}),
-        },
+    const { getSubscriptionProvider } = await import("@/lib/subscription/core/provider-registry")
+    const gatewayConfig = await gatewayGetConfig()
+    assertCurrent()
+    const bridgeBindings: NonNullable<GatewayTaskModelPlan["bindings"]> = {}
+    if (gatewayConfig.bridgeModels) {
+      for (const selector of Object.values(gatewayConfig.bridgeModels ?? {})) {
+        if (!selector?.trim()) continue
+        const target = candidatesForModel(snapshot, selector).find((candidate) =>
+          snapshot.providers.some(
+            (provider) =>
+              (provider.deploymentId ?? provider.id) === candidate.deploymentId &&
+              provider.enabled &&
+              provider.models.includes(candidate.modelId)
+          )
+        )
+        const provider =
+          target &&
+          snapshot.providers.find(
+            (provider) => (provider.deploymentId ?? provider.id) === target.deploymentId
+          )
+        if (!provider || !target)
+          throw new Error(`The configured gateway bridge model ${selector} is unavailable`)
+        if (selector === input.modelId || input.modelPlan?.additionalModels.includes(selector))
+          throw new Error("A gateway bridge selector conflicts with a task model selector")
+        bridgeBindings[selector] = {
+          providerId: provider.id,
+          modelId: target.modelId,
+          ...(provider.id === input.providerId ? { accountId: input.accountId } : {}),
+        }
       }
     }
-    // CommandCode serves different model families through different protocols.
-    // Freeze the shared resolver's decision before replacing the provider id
-    // with a task deployment id, which cannot identify the original provider.
-    if (input.providerId === "commandcode") {
-      const protocol = resolveProviderProtocol(input.providerId, input.modelId) as
-        "openai" | "anthropic"
-      upstream = {
-        ...upstream,
-        protocol,
-        transport: {
-          ...upstream.transport,
-          authScheme: protocol === "anthropic" ? "x-api-key" : "bearer",
-        },
-      }
-    }
-    if (
-      !upstream.enabled ||
-      !upstream.baseUrl ||
-      (!upstream.apiKey && !upstream.apiKeys?.length && !allowsUnauthenticated)
-    )
-      throw new Error("The selected Cognia model has no usable gateway credential")
-    if (upstream.protocol !== "openai" && upstream.protocol !== "anthropic")
-      throw new Error(
-        "The selected provider protocol cannot serve this external agent through the gateway"
-      )
-    const models = [input.modelId, ...(input.modelPlan?.additionalModels ?? [])]
+    const effectivePlan: GatewayTaskModelPlan | undefined = Object.keys(bridgeBindings).length
+      ? {
+          additionalModels: [
+            ...(input.modelPlan?.additionalModels ?? []),
+            ...Object.keys(bridgeBindings),
+          ],
+          modelBindings: {
+            ...input.modelPlan?.modelBindings,
+            ...Object.fromEntries(
+              Object.entries(bridgeBindings).map(([selector, binding]) => [
+                selector,
+                binding.modelId,
+              ])
+            ),
+          },
+          bindings: { ...input.modelPlan?.bindings, ...bridgeBindings },
+        }
+      : input.modelPlan
+    const requested = [input.modelId, ...(effectivePlan?.additionalModels ?? [])]
+    if (new Set(requested).size !== requested.length || requested.length > 32)
+      throw new Error("The task model plan contains duplicate models or exceeds its limit")
     const modelMetadataById: Record<string, GatewayModelMetadata> = Object.create(null)
-    for (const modelId of models) {
-      if (
-        input.providerId === "commandcode" &&
-        resolveProviderProtocol(input.providerId, modelId) !== upstream.protocol
+    const taskProviders = new Map<string, GatewayRoutingSnapshot["providers"][number]>()
+    const selectorDeployments: Record<string, string> = Object.create(null)
+    let providerAccountId: string | null | undefined
+    for (const selector of requested) {
+      const selected = effectivePlan?.bindings?.[selector] ?? {
+        providerId: input.providerId,
+        modelId: effectivePlan?.modelBindings[selector] ?? selector,
+        accountId: input.accountId,
+      }
+      if (!selected.providerId.trim() || !selected.modelId.trim())
+        throw new Error("Each task model requires a provider and concrete model")
+      const definition = getSubscriptionProvider(selected.providerId, settings.customProviders)
+      const configured =
+        settings.customProviders?.find((entry) => entry.id === selected.providerId) ??
+        settings.providerSettings?.[selected.providerId]
+      const provider = snapshot.providers.find((entry) => entry.id === selected.providerId)
+      if (!provider || provider.credentialFallbackAllowed === false)
+        throw new Error(
+          `The selected Cognia provider ${selected.providerId} is unavailable or disabled`
+        )
+      const allowsUnauthenticated = getAllProviders()[selected.providerId]?.apiKeyRequired === false
+      const hasManualCredential = Boolean(
+        configured?.apiKey?.trim() ||
+        configured?.apiKeys?.some((key) => key.trim()) ||
+        (!definition && (provider.apiKey?.trim() || provider.apiKeys?.some((key) => key.trim())))
       )
-        throw new Error("Task models must use the same provider deployment protocol")
-      let modelAvailable = upstream.models.includes(modelId)
-      // Per-provider discovery may describe a different subscription account.
-      // Resolve selected-account facts transiently, without changing the picker or
-      // another task's metadata. Unknown limits fall back to the declaration only.
+      let accountId = selected.accountId
+      if (accountId === undefined) {
+        if (hasManualCredential) accountId = null
+        else if (definition && definition.authMode !== "anthropic-oauth") {
+          const { getActiveAccount } = await import("@/lib/subscription/core/transport")
+          accountId =
+            settings.defaultAccountIds?.[definition.id] ??
+            (settings.defaultProvider === selected.providerId ||
+            settings.defaultProvider === definition.id
+              ? settings.defaultAccountId
+              : undefined) ??
+            (await getActiveAccount(definition.id)).activeAccountId
+        } else accountId = null
+      }
+      assertCurrent()
+      if (!accountId && !hasManualCredential && !allowsUnauthenticated)
+        throw new Error(`The selected Cognia model ${selector} has no usable gateway credential`)
+      if (selector === input.modelId) providerAccountId = accountId
+      let upstream = { ...provider }
+      if (accountId) {
+        const credential = await resolveSubscriptionProviderCredential(
+          selected.providerId,
+          settings,
+          accountId
+        )
+        assertCurrent()
+        if (!credential)
+          throw new Error(`The selected Cognia subscription account is unavailable for ${selector}`)
+        const protocol = credential.protocol ?? upstream.protocol
+        upstream = {
+          ...upstream,
+          apiKey: credential.apiKey,
+          apiKeys: undefined,
+          rotationEnabled: false,
+          subscriptionPool: undefined,
+          selectedSubscriptionAccountId: accountId,
+          rotationStrategy: undefined,
+          baseUrl: credential.baseURL,
+          protocol,
+          apiFlavor: credential.apiFlavor ?? upstream.apiFlavor,
+          enabled: true,
+          transport: {
+            ...upstream.transport,
+            authScheme:
+              protocol === "anthropic"
+                ? "x-api-key"
+                : protocol === "google" || protocol === "gemini"
+                  ? "custom-header"
+                  : "bearer",
+            ...(protocol === "google" || protocol === "gemini"
+              ? { authHeaderName: "x-goog-api-key" }
+              : {}),
+            staticHeaders: Object.entries(credential.headers ?? {}),
+          },
+        }
+      }
+      if (selected.providerId === "commandcode") {
+        const protocol = resolveProviderProtocol(selected.providerId, selected.modelId) as
+          "openai" | "anthropic"
+        upstream = {
+          ...upstream,
+          protocol,
+          transport: {
+            ...upstream.transport,
+            authScheme: protocol === "anthropic" ? "x-api-key" : "bearer",
+          },
+        }
+      }
+      if (
+        !upstream.enabled ||
+        !upstream.baseUrl ||
+        (!upstream.apiKey && !upstream.apiKeys?.length && !allowsUnauthenticated)
+      )
+        throw new Error(`The selected Cognia model ${selector} has no usable gateway credential`)
+      if (!["openai", "responses", "anthropic", "google", "gemini"].includes(upstream.protocol))
+        throw new Error(
+          "The selected provider protocol cannot serve this external agent through the gateway"
+        )
+      let modelAvailable = upstream.models.includes(selected.modelId)
       let metadataSettings = settings
-      if (providerAccountId) {
+      if (accountId) {
         metadataSettings = {
           ...settings,
           providerSettings: {
             ...settings.providerSettings,
-            [input.providerId]: {
-              ...settings.providerSettings?.[input.providerId],
-              providerId: input.providerId,
-              defaultModel: modelId,
+            [selected.providerId]: {
+              ...settings.providerSettings?.[selected.providerId],
+              providerId: selected.providerId,
+              defaultModel: selected.modelId,
               enabled: true,
               discoveredModels: [],
             },
           },
           customProviders: settings.customProviders?.map((entry) =>
-            entry.id === input.providerId ? { ...entry, discoveredModels: [] } : entry
+            entry.id === selected.providerId ? { ...entry, discoveredModels: [] } : entry
           ),
         }
-        const { getSubscriptionModel } = await import("@/lib/subscription/core/model-discovery")
         if (definition?.modelApi?.list || definition?.modelApi?.retrieve) {
+          const { getSubscriptionModel } = await import("@/lib/subscription/core/model-discovery")
           const detail = await getSubscriptionModel({
             definition,
-            providerAccountId,
-            model: modelId,
+            providerAccountId: accountId,
+            model: selected.modelId,
             signal: input.signal,
           })
           assertCurrent()
@@ -454,55 +539,98 @@ export async function prepareExternalAgentGatewayRoute(
             ...metadataSettings,
             providerSettings: {
               ...metadataSettings.providerSettings,
-              [input.providerId]: {
-                ...metadataSettings.providerSettings?.[input.providerId],
-                providerId: input.providerId,
-                defaultModel: modelId,
+              [selected.providerId]: {
+                ...metadataSettings.providerSettings?.[selected.providerId],
+                providerId: selected.providerId,
+                defaultModel: selected.modelId,
                 enabled: true,
                 discoveredModels,
               },
             },
             customProviders: metadataSettings.customProviders?.map((entry) =>
-              entry.id === input.providerId ? { ...entry, discoveredModels } : entry
+              entry.id === selected.providerId ? { ...entry, discoveredModels } : entry
             ),
           }
         }
       }
       if (!modelAvailable)
         throw new Error("The selected model is unavailable in the Cognia provider catalog")
-      const metadata = publisher.gatewayModelMetadata(metadataSettings, input.providerId, modelId)
+      const metadata = publisher.gatewayModelMetadata(
+        metadataSettings,
+        selected.providerId,
+        selected.modelId
+      )
       if (metadata.supportsTools === false || metadata.supportsStreaming === false)
         throw new Error(
-          `The selected model ${modelId} does not support the tools and streaming this agent requires`
+          `The selected model ${selected.modelId} does not support the tools and streaming this agent requires`
         )
-      modelMetadataById[modelId] = metadata
+      modelMetadataById[selector] = { ...metadata, id: selector }
+      const deploymentId = `cognia-task-${encodeURIComponent(JSON.stringify([input.sessionId, selected.providerId, accountId ?? null, upstream.protocol]))}`
+      selectorDeployments[selector] = deploymentId
+      const existing = taskProviders.get(deploymentId)
+      if (existing) {
+        if (!existing.models.includes(selected.modelId)) existing.models.push(selected.modelId)
+        if (!existing.modelMetadata?.some((item) => item.id === selected.modelId))
+          existing.modelMetadata?.push(metadata)
+      } else
+        taskProviders.set(deploymentId, {
+          ...upstream,
+          sourceProviderId: upstream.sourceProviderId ?? upstream.id,
+          id: deploymentId,
+          deploymentId,
+          models: [selected.modelId],
+          modelMetadata: [metadata],
+        })
     }
+    for (const selector of Object.keys(effectivePlan?.bindings ?? {}))
+      if (!requested.includes(selector))
+        throw new Error("A task binding names a model outside the plan")
     const modelMetadata = modelMetadataById[input.modelId]
-    // A transcript continuation gets a fresh ticket, but its sticky credential
-    // lease must still name the same task/account deployment on the next turn.
-    const deploymentId = `cognia-task-${encodeURIComponent(
-      JSON.stringify([input.sessionId, input.providerId, providerAccountId ?? null])
-    )}`
-    const taskProvider = {
-      ...upstream,
-      id: deploymentId,
-      deploymentId,
-      models,
-      modelMetadata: Object.values(modelMetadataById),
+    const deploymentId = selectorDeployments[input.modelId]
+    const taskProvider = taskProviders.get(deploymentId)!
+    const concreteBindings = Object.fromEntries(
+      requested.map((selector) => [
+        selector,
+        effectivePlan?.bindings?.[selector]?.modelId ??
+          effectivePlan?.modelBindings[selector] ??
+          selector,
+      ])
+    )
+    const planDeployments = {
+      ...Object.fromEntries(
+        ["primary", "fast", "powerful", "sonnet", "haiku", "opus"].map((selector) => [
+          selector,
+          deploymentId,
+        ])
+      ),
+      ...selectorDeployments,
     }
+    const candidates = [...taskProviders.values()].map((provider) => ({
+      deploymentId: provider.deploymentId!,
+      modelId: provider.models[0],
+    }))
     if (remoteScope) {
       const lease = await acquireRemoteTaskLease({
         scope: remoteScope,
         taskId: input.sessionId,
         provider: {
           ...taskProvider,
-          id: input.providerId,
-          apiKey: upstream.apiKey || upstream.apiKeys?.[0],
+          apiKey: taskProvider.apiKey || taskProvider.apiKeys?.[0],
           apiKeys: [],
           rotationEnabled: false,
         },
         model: input.modelId,
-        ...(input.modelPlan ? { modelPlan: input.modelPlan } : {}),
+        ...(effectivePlan
+          ? { modelPlan: { ...effectivePlan, selectorDeployments: planDeployments } }
+          : {}),
+        providerOverrides: [...taskProviders.values()]
+          .filter((provider) => provider.id !== taskProvider.id)
+          .map((provider) => ({
+            ...provider,
+            apiKey: provider.apiKey || provider.apiKeys?.[0],
+            apiKeys: [],
+            rotationEnabled: false,
+          })),
         ingressProtocol: input.ingressProtocol ?? "openai-chat",
         ...(input.budget ? { budget: input.budget } : {}),
         assertCurrent,
@@ -546,9 +674,16 @@ export async function prepareExternalAgentGatewayRoute(
     const minted = await gatewayMintRouteTicket(
       {
         sessionId: input.sessionId,
-        executionFingerprint: input.executionFingerprint ?? crypto.randomUUID(),
-        candidates: [{ deploymentId, modelId: input.modelId }],
-        providerOverrides: [taskProvider],
+        executionFingerprint: contentDigest({
+          executionFingerprint: input.executionFingerprint,
+          sessionId: input.sessionId,
+          modelBindings: concreteBindings,
+          selectorDeployments: planDeployments,
+          bridgeModels: gatewayConfig.bridgeModels,
+        }),
+        candidates,
+        providerOverrides: [...taskProviders.values()],
+        selectorDeployments: planDeployments,
         model: input.modelId,
         modelBindings: {
           ...Object.fromEntries(
@@ -556,10 +691,10 @@ export async function prepareExternalAgentGatewayRoute(
               (selector) => [selector, input.modelId]
             )
           ),
-          ...(input.modelPlan?.modelBindings ?? {}),
-          ...Object.fromEntries(models.map((model) => [model, model])),
+          ...(effectivePlan?.modelBindings ?? {}),
+          ...concreteBindings,
         },
-        ...(input.modelPlan ? { strictSelectors: true } : {}),
+        ...(effectivePlan ? { strictSelectors: true } : {}),
         credentialAffinity: "session-sticky",
         allowAuthFailover: false,
         routePolicy: "gateway-required",

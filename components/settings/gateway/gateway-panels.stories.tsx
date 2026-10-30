@@ -39,6 +39,7 @@ const status: GatewayStatus = {
   snapshotGeneratedAtMs: Date.now() - 12 * 60_000,
   snapshotProviderCount: 4,
   snapshotAliasCount: 9,
+  modelAliases: ["fast", "balanced", "powerful"],
   localRoutingEnabled: true,
   routingPolicyRevision: "rev-2026-09-25",
   routingStrategy: "least-busy",
@@ -63,6 +64,7 @@ const ctx: GatewayPanelContext = {
 const logRows: GatewayRequestLogRow[] = [
   {
     id: "story-1",
+    sessionId: "claude-project",
     at: new Date(Date.now() - 20_000).toISOString(),
     route: "/v1/messages",
     remoteIp: "127.0.0.1",
@@ -95,6 +97,7 @@ const logRows: GatewayRequestLogRow[] = [
   },
   {
     id: "story-2",
+    sessionId: "codex-review",
     at: new Date(Date.now() - 90_000).toISOString(),
     route: "/v1/chat/completions",
     remoteIp: "192.168.1.20",
@@ -110,6 +113,7 @@ const logRows: GatewayRequestLogRow[] = [
   },
   {
     id: "story-3",
+    sessionId: "claude-project",
     at: new Date(Date.now() - 300_000).toISOString(),
     route: "/v1/messages/count_tokens",
     remoteIp: "127.0.0.1",
@@ -155,7 +159,7 @@ function Pane({ width, children }: { width: number; children: ReactNode }) {
     <div className="bg-background p-4">
       <div
         style={{ width }}
-        className="flex h-[760px] min-h-0 flex-col overflow-hidden rounded-lg border @container/gateway-shell"
+        className="flex h-[760px] min-h-0 max-w-full flex-col overflow-hidden rounded-lg border @container/gateway-shell"
       >
         <GatewayRestartBanner pending={PENDING} restarting={false} onRestart={() => {}} />
         <div className="min-h-0 flex-1 overflow-y-auto p-3 @container/gateway-pane @lg/gateway-shell:p-4">

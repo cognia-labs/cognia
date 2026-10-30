@@ -254,8 +254,10 @@ pub fn create_owned_key(
         created_at_ms: now_ms(),
         last_used_at_ms: None,
     };
-    keys.push(key.clone());
-    save_keys(keys)?;
+    let mut next = keys.clone();
+    next.push(key.clone());
+    save_keys(&next)?;
+    *keys = next;
     Ok(key)
 }
 
@@ -479,6 +481,28 @@ mod tests {
         assert!(delete_key(&mut keys, &made.id));
         save_keys(&keys).unwrap();
         assert!(!load_keys().unwrap().iter().any(|k| k.id == made.id));
+    }
+
+    #[test]
+    fn failed_key_persistence_never_publishes_a_usable_credential() {
+        let _guard = STORE_TEST_GUARD
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let original = vec![key("existing", "existing-secret")];
+        save_keys(&original).unwrap();
+        let mut live = original.clone();
+        secret_store::fail_next_mutation_for_test(SERVICE, KEYS_ACCOUNT);
+        assert!(create_key(
+            &mut live,
+            "failed".into(),
+            vec!["fast".into()],
+            None,
+            None,
+            None
+        )
+        .is_err());
+        assert_eq!(live, original);
+        assert_eq!(load_keys().unwrap(), original);
     }
 
     #[test]

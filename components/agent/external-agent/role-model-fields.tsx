@@ -5,6 +5,8 @@ import { resolvePiSubagents, piSubagentSupport } from "@/lib/ai/agent/external/c
 import { useTranslations } from "next-intl"
 import { groupByProvider } from "@cognia/provider-routing/model-option-source"
 import { useSettingsStore } from "@/stores/settings"
+import { CogniaModelAccount } from "./cognia-model-picker"
+import { getSubscriptionProvider } from "@/lib/subscription/core/provider-registry"
 import { useSubscriptionProviders } from "@/lib/subscription/core/hooks"
 import {
   cogniaModelReasoningFacts,
@@ -103,7 +105,7 @@ function withSlot(
  * Per-slot models for an external agent's gateway tasks: the default child
  * model, alias tiers and helper calls, as the runtime declares them in
  * `gatewayModelSlots`. Rendered under the primary {@link CogniaModelPicker};
- * every slot runs on the primary model's provider and account.
+ * each slot can select its own provider and subscription account.
  *
  * Emits `undefined` once no slot is set, so an untouched configuration keeps
  * its historical single-model behaviour without a stored empty object.
@@ -191,24 +193,24 @@ export function RoleModelFields({
   const options = useMemo(
     () =>
       providerId
-        ? filterCogniaGatewayModels({ providerSettings, customProviders, subscriptions }).filter(
-            (option) => option.providerId === providerId
-          )
+        ? filterCogniaGatewayModels({ providerSettings, customProviders, subscriptions })
         : [],
     [providerId, providerSettings, customProviders, subscriptions]
   )
   const groups = useMemo(() => groupByProvider(options), [options])
-  const facts = useMemo(
-    () =>
-      providerId
-        ? cogniaModelReasoningFacts(providerId, {
-            providerSettings: providerSettings ?? {},
-            customProviders,
-            subscriptions,
-          })
-        : undefined,
-    [providerId, providerSettings, customProviders, subscriptions]
-  )
+  const effortValues = (providerId: string, modelId: string) =>
+    cogniaModelReasoningFacts(providerId, {
+      providerSettings: providerSettings ?? {},
+      customProviders,
+      subscriptions,
+    }).modelEffortValues(modelId)
+  const subscriptionFor = (providerId: string) =>
+    subscriptions.find(
+      (entry) =>
+        entry.id === providerId || entry.plans?.some((plan) => plan.chatProviderId === providerId)
+    ) ?? getSubscriptionProvider(providerId, customProviders)
+  const subscriptionForSelection = (selection?: AgentModelSlotSelection) =>
+    selection?.kind === "cognia" ? subscriptionFor(selection.binding.providerId)?.id : undefined
   const refusal = useMemo(() => {
     if (!ready || (!value && !inherited)) return undefined
     const result = compileEditorModelPlan({
@@ -271,7 +273,8 @@ export function RoleModelFields({
             selection={value?.slots[descriptor.id]}
             layer={layer}
             groups={groups}
-            effortValues={facts?.modelEffortValues}
+            effortValues={effortValues}
+            subscriptionProviderId={subscriptionForSelection(value?.slots[descriptor.id])}
             issue={refusal?.slot === descriptor.id ? refusal.reason : undefined}
             onChange={(selection) => onChange(withSlot(value, descriptor.id, selection))}
           />
@@ -298,15 +301,26 @@ export function RoleModelFields({
                     groups={groups}
                     searchPlaceholder={t("search", { provider: primary.providerId })}
                     emptyLabel={t("empty")}
-                    onSelect={(_provider, modelId) => {
+                    onSelect={(providerId, modelId) => {
                       const current = value?.version === 2 ? (value.allowedSpawnModels ?? []) : []
                       const defaultModel =
                         value?.slots["subagent.default"] ?? inherited?.slots["subagent.default"]
                       const defaultBinding =
                         defaultModel?.kind === "cognia" ? defaultModel.binding : primary
                       const bindings = current.length ? [...current] : [defaultBinding]
-                      if (!bindings.some((binding) => binding.modelId === modelId))
-                        bindings.push({ ...primary, modelId })
+                      const selected = {
+                        providerId,
+                        modelId,
+                        ...(providerId === primary.providerId
+                          ? { accountId: primary.accountId }
+                          : {}),
+                      }
+                      if (
+                        !bindings.some(
+                          (binding) => JSON.stringify(binding) === JSON.stringify(selected)
+                        )
+                      )
+                        bindings.push(selected)
                       onChange({
                         version: 2,
                         slots: value?.slots ?? {},
@@ -318,8 +332,24 @@ export function RoleModelFields({
                 </ResponsivePicker>
                 {value?.version === 2 &&
                   value.allowedSpawnModels?.map((binding) => (
-                    <div key={binding.modelId} className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 break-all text-xs">{binding.modelId}</span>
+                    <div key={JSON.stringify(binding)} className="space-y-2">
+                      <span className="min-w-0 break-all text-xs">
+                        {binding.providerId} / {binding.modelId}
+                      </span>
+                      {subscriptionFor(binding.providerId) && (
+                        <CogniaModelAccount
+                          providerId={subscriptionFor(binding.providerId)!.id}
+                          value={binding}
+                          onChange={(selected) =>
+                            onChange({
+                              ...value,
+                              allowedSpawnModels: value.allowedSpawnModels!.map((item) =>
+                                item === binding ? selected : item
+                              ),
+                            })
+                          }
+                        />
+                      )}
                       <Button
                         type="button"
                         variant="ghost"
@@ -329,7 +359,7 @@ export function RoleModelFields({
                           onChange({
                             ...value,
                             allowedSpawnModels: value.allowedSpawnModels!.filter(
-                              (item) => item.modelId !== binding.modelId
+                              (item) => item !== binding
                             ),
                           })
                         }
@@ -393,6 +423,7 @@ function RoleModelSlotRow({
   layer,
   groups,
   effortValues,
+  subscriptionProviderId,
   issue,
   onChange,
 }: {
@@ -402,7 +433,8 @@ function RoleModelSlotRow({
   layer: RoleModelLayer
   groups: ReturnType<typeof groupByProvider>
   /** The efforts a model accepts; the row offers the slot ladder narrowed to these. */
-  effortValues?: (modelId: string) => readonly string[]
+  effortValues?: (providerId: string, modelId: string) => readonly string[]
+  subscriptionProviderId?: string
   issue?: TaskModelPlanRefusal
   onChange: (selection: AgentModelSlotSelection | undefined) => void
 }) {
@@ -412,10 +444,18 @@ function RoleModelSlotRow({
   const label = t(SLOT_LABEL_KEYS[descriptor.id])
   const mode = !selection ? UNSET : selection.kind === "inherit-primary" ? PRIMARY : MODEL
   const model = selection?.kind === "cognia" ? selection : undefined
-  const pick = (modelId: string) => {
+  const pick = (providerId: string, modelId: string) => {
     onChange({
       kind: "cognia",
-      binding: { providerId: primary.providerId, modelId },
+      binding: {
+        providerId,
+        modelId,
+        ...(providerId === model?.binding.providerId
+          ? { accountId: model.binding.accountId }
+          : providerId === primary.providerId
+            ? { accountId: primary.accountId }
+            : {}),
+      },
       ...(model?.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
     })
     setOpen(false)
@@ -467,9 +507,16 @@ function RoleModelSlotRow({
             activeModelId={model?.binding.modelId}
             searchPlaceholder={t("search", { provider: primary.providerId })}
             emptyLabel={t("empty")}
-            onSelect={(_providerId, modelId) => pick(modelId)}
+            onSelect={pick}
           />
         </ResponsivePicker>
+      )}
+      {model && subscriptionProviderId && (
+        <CogniaModelAccount
+          providerId={subscriptionProviderId}
+          value={model.binding}
+          onChange={(binding) => onChange({ ...model, binding })}
+        />
       )}
       {model && descriptor.reasoningEfforts && (
         <div className="space-y-1">
@@ -494,7 +541,7 @@ function RoleModelSlotRow({
                   (effort) =>
                     effort === model.reasoningEffort ||
                     !effortValues ||
-                    effortValues(model.binding.modelId).includes(effort)
+                    effortValues(model.binding.providerId, model.binding.modelId).includes(effort)
                 )
                 .map((effort) => (
                   <SelectItem key={effort} value={effort}>

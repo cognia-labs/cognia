@@ -66,6 +66,8 @@ fn content_tokens(content: &Value) -> u64 {
 }
 
 fn block_tokens(block: &Value) -> u64 {
+    if let Some(text) = block.get("text").and_then(Value::as_str) { return estimate_text_tokens(text); }
+    if ["inlineData", "inline_data", "fileData", "file_data"].iter().any(|field| block.get(*field).is_some()) { return NON_TEXT_BLOCK_TOKENS; }
     match block.get("type").and_then(Value::as_str) {
         Some("text" | "input_text" | "output_text") => block
             .get("text")
@@ -100,6 +102,11 @@ pub fn estimate_input_tokens(body: &Value) -> u64 {
         return 0;
     };
     let mut total = 0u64;
+    if let Some(request) = obj.get("generateContentRequest").or_else(|| obj.get("generate_content_request")) { total += estimate_input_tokens(request); }
+    if let Some(system) = obj.get("systemInstruction").or_else(|| obj.get("system_instruction")) { total += content_tokens(&system["parts"]); }
+    if let Some(contents) = obj.get("contents").and_then(Value::as_array) {
+        for content in contents { total += PER_MESSAGE_OVERHEAD + content_tokens(&content["parts"]); }
+    }
 
     if let Some(input) = obj.get("input") {
         total += content_tokens(input);
@@ -125,6 +132,10 @@ pub fn estimate_input_tokens(body: &Value) -> u64 {
 
     if let Some(tools) = obj.get("tools").and_then(Value::as_array) {
         for tool in tools {
+            if let Some(declarations) = tool.get("functionDeclarations").or_else(|| tool.get("function_declarations")) {
+                total += estimate_text_tokens(&declarations.to_string());
+                continue;
+            }
             let tool = tool.get("function").unwrap_or(tool);
             for key in ["name", "description"] {
                 if let Some(text) = tool.get(key).and_then(Value::as_str) {
@@ -144,6 +155,15 @@ pub fn estimate_input_tokens(body: &Value) -> u64 {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_google_text_images_and_functions_are_never_free_or_base64_sized() {
+        let body = json!({"system_instruction":{"parts":[{"text":"system"}]},"contents":[{"parts":[{"text":"hello"},{"inlineData":{"mimeType":"image/png","data":"x".repeat(10000)}}]}],"tools":[{"functionDeclarations":[{"name":"lookup","parameters":{"type":"object"}}]}]});
+        let tokens = estimate_input_tokens(&body);
+        assert!(tokens > NON_TEXT_BLOCK_TOKENS);
+        assert!(tokens < NON_TEXT_BLOCK_TOKENS + 100);
+        assert_eq!(estimate_input_tokens(&json!({"generateContentRequest":body})),tokens);
+    }
 
     #[test]
     fn estimates_responses_inputs_and_openai_function_schemas() {

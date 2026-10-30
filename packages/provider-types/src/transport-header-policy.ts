@@ -39,6 +39,7 @@ const TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 const AUTH_HEADERS = new Set([
   "authorization",
   "x-api-key",
+  "x-goog-api-key",
   "proxy-authorization",
   "proxy-authenticate",
 ])

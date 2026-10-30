@@ -11,6 +11,24 @@ describe("GatewayConfig schema", () => {
     expect(parseGatewayConfig(DEFAULT_GATEWAY_CONFIG)).toEqual(DEFAULT_GATEWAY_CONFIG)
   })
 
+  it("defaults subscription rotation to explicit opt-in and validates its provider set", () => {
+    const { subscriptionRotationProviderIds: _providers, ...legacy } = DEFAULT_GATEWAY_CONFIG
+    expect(parseGatewayConfig(legacy).subscriptionRotationProviderIds).toEqual([])
+    expect(
+      parseGatewayConfig({ ...DEFAULT_GATEWAY_CONFIG, subscriptionRotationProviderIds: ["codex"] })
+        .subscriptionRotationProviderIds
+    ).toEqual(["codex"])
+    for (const invalid of [
+      [""],
+      ["codex", "codex"],
+      Array.from({ length: 129 }, (_, index) => `provider-${index}`),
+    ]) {
+      expect(() =>
+        parseGatewayConfig({ ...DEFAULT_GATEWAY_CONFIG, subscriptionRotationProviderIds: invalid })
+      ).toThrow(/subscriptionRotationProviderIds/)
+    }
+  })
+
   it("rejects unknown fields and invalid primitive ranges", () => {
     expect(() =>
       parseGatewayConfig({ ...DEFAULT_GATEWAY_CONFIG, apiKey: "must-not-enter-config" })
@@ -48,6 +66,38 @@ describe("GatewayConfig schema", () => {
       parseGatewayConfig({ ...DEFAULT_GATEWAY_CONFIG, fieldStripAllow: ["service_tier"] })
     ).toThrow(/fieldStripAllow/)
   })
+})
+
+describe("gateway runtime settings", () => {
+  it("normalizes nullable native-host bridge selectors before editing other settings", () => {
+    const config = parseGatewayConfig({
+      ...DEFAULT_GATEWAY_CONFIG,
+      bridgeModels: { search: null, vision: null },
+    })
+    expect(config.bridgeModels?.search).toBeUndefined()
+    expect(config.bridgeModels?.vision).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(config)).bridgeModels).toEqual({})
+    expect(parseGatewayConfig({ ...config, privacyMode: "mask" }).privacyMode).toBe("mask")
+  })
+  it("accepts independent privacy and bridge configuration", () => {
+    const config = parseGatewayConfig({
+      ...DEFAULT_GATEWAY_CONFIG,
+      privacyMode: "mask",
+      middlewareEnabled: false,
+      bridgeModels: { search: "helper", vision: "vision-helper" },
+    })
+    expect(config.privacyMode).toBe("mask")
+    expect(config.bridgeModels?.search).toBe("helper")
+  })
+
+  it.each(["", "a".repeat(513), "invalid\u0000alias", "invalid\nalias"])(
+    "refuses an invalid bridge model selector",
+    (search) => {
+      expect(() =>
+        parseGatewayConfig({ ...DEFAULT_GATEWAY_CONFIG, bridgeModels: { search } })
+      ).toThrow()
+    }
+  )
 })
 
 describe("isValidAllowlistEntry", () => {

@@ -62,6 +62,12 @@ export interface GatewayConfig {
   respectRetryAfter: boolean
   /** Rollout kill switch for the Rust-local V2 planner. */
   gatewayLocalRoutingV2: boolean
+  /** Optional text masking at the native gateway; media bytes are not redacted. */
+  privacyMode?: "off" | "mask"
+  middlewareEnabled?: boolean
+  bridgeModels?: { search?: string; vision?: string }
+  /** Explicit vault-account rotation consent; absent/empty uses one selected account. */
+  subscriptionRotationProviderIds?: string[]
   /** Model/alias ids the gateway advertises + serves. Empty = expose all. */
   exposedModels: string[]
   /** List only aliases in `/v1/models` (hide raw provider model ids). */
@@ -99,6 +105,44 @@ export interface GatewayConfig {
   fieldStripAllow: string[]
 }
 
+export type GatewayClientId = "claude-code" | "codex" | "gemini" | "opencode"
+
+export interface GatewayClientConnectionStatus {
+  client: GatewayClientId
+  installed: boolean
+  path: string
+  sourcePaths: string[]
+  revision: string
+  state: "unmanaged" | "configured" | "drifted" | "restore-needed" | "other-account" | "unavailable"
+  modelAlias: string | null
+  helperAlias: string | null
+  endpoint: string | null
+  backupPaths: string[]
+  connectionVerified: boolean
+  supportsHelper: boolean
+  errorCode: string | null
+}
+
+export interface GatewayClientConnectionReport {
+  ownerAccountId: string | null
+  accountGeneration: number
+  clients: GatewayClientConnectionStatus[]
+}
+
+export interface GatewayClientConnectionRequest {
+  client: GatewayClientId
+  modelAlias: string
+  helperAlias?: string | null
+  expectedRevision: string
+  ownerAccountId: string | null
+  accountGeneration: number
+}
+
+export type GatewayClientRollbackRequest = Omit<
+  GatewayClientConnectionRequest,
+  "modelAlias" | "helperAlias"
+>
+
 export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   enabled: false,
   port: 47823,
@@ -115,6 +159,8 @@ export const DEFAULT_GATEWAY_CONFIG: GatewayConfig = {
   maxRetryWaitMs: 60000,
   respectRetryAfter: true,
   gatewayLocalRoutingV2: true,
+  privacyMode: "off",
+  subscriptionRotationProviderIds: [],
   exposedModels: [],
   hideRawProviderModels: false,
   cooldownFallbackSecs: 20,
@@ -167,6 +213,10 @@ export interface GatewayStatus extends GatewayAccountScope {
   snapshotGeneratedAtMs: number | null
   snapshotProviderCount: number
   snapshotAliasCount: number
+  /** Aliases currently executable and exposed by the accepted live snapshot. */
+  modelAliases?: string[]
+  /** Safe inventory from the accepted snapshot, including providers not opted in. */
+  subscriptionRotationProviders?: GatewaySubscriptionRotationProvider[]
   /** Active V2 policy revision; absent for legacy snapshots. */
   routingPolicyRevision?: string | null
   /** Effective built-in strategy used for the virtual `auto` model. */
@@ -355,9 +405,44 @@ export interface GatewayModelMetadata {
   supportsStructuredOutput?: boolean
 }
 
+export interface GatewaySubscriptionWindow {
+  id: string
+  usedPct: number
+  resetAtMs?: number
+  /** Absent for a provider-wide allowance; otherwise exact upstream model ids. */
+  modelIds?: string[]
+}
+
+export interface GatewaySubscriptionAccountSnapshot {
+  accountId: string
+  apiKey: string
+  baseUrl: string
+  protocol?: string
+  apiFlavor?: "chat" | "responses"
+  transport?: GatewayTransportSnapshot
+  expiresAtMs?: number
+  lastUsedAtMs: number
+  quotaObservedAtMs?: number
+  windows: GatewaySubscriptionWindow[]
+}
+
+export interface GatewaySubscriptionPoolSnapshot {
+  strategy: "allowance-reset"
+  /** Bounded observation age; unknown/stale/reset windows never imply free allowance. */
+  quotaFreshnessMs: number
+  accounts: GatewaySubscriptionAccountSnapshot[]
+}
+
+export interface GatewaySubscriptionRotationProvider {
+  providerId: string
+  accountCount: number
+}
+
 /** A provider the gateway can execute against. Credentials stay Rust-side. */
 export interface GatewayProviderSnapshot {
   id: string
+  /** Provider SDK registry identity when a private ticket uses a deployment id. */
+  sourceProviderId?: string
   protocol: string
   apiFlavor?: "chat" | "responses"
   modelMetadata?: GatewayModelMetadata[]
@@ -380,10 +465,14 @@ export interface GatewayProviderSnapshot {
   deploymentId?: string
   /** Transport behavior override; absent = legacy protocol defaults. */
   transport?: GatewayTransportSnapshot
+  subscriptionPool?: GatewaySubscriptionPoolSnapshot
+  /** Exact chosen account; explicit selections and frozen tickets never expand beyond it. */
+  selectedSubscriptionAccountId?: string
 }
 
 /** Routing + credential snapshot pushed into the Rust gateway. */
 export interface GatewayRoutingSnapshot {
+  subscriptionRotationProviders?: GatewaySubscriptionRotationProvider[]
   aliases: GatewayAliasSnapshot[]
   providers: GatewayProviderSnapshot[]
   generatedAtMs: number
@@ -441,6 +530,7 @@ export interface GatewayRouteTicket {
   parentSessionId?: string | null
   candidates: Array<{ deploymentId: string; modelId: string }>
   modelBindings: Record<string, string>
+  selectorDeployments?: Record<string, string>
   strictSelectors?: boolean
   credentialAffinity: "session-sticky" | "sticky-with-failover" | "per-request"
   allowAuthFailover?: boolean
@@ -470,6 +560,7 @@ export interface GatewayMintRouteTicketRequest {
    * Without bindings Claude Code's first background haiku turn fails closed.
    */
   modelBindings?: Record<string, string>
+  selectorDeployments?: Record<string, string>
   strictSelectors?: boolean
   /** The model the execution will ask for. */
   model?: string
@@ -505,6 +596,8 @@ export interface GatewayMintedRouteTicket {
  */
 export interface GatewayRequestLogRow extends GatewayAccountScope {
   id: string
+  /** Trusted gateway-derived conversation identity; older rows may omit it. */
+  sessionId?: string | null
   at: string
   route: string
   remoteIp: string
@@ -602,4 +695,8 @@ export interface GatewayTaskModelPlan {
    * binding for each plan model itself. Pinned by the manager tests.
    */
   modelBindings: Record<string, string>
+  /** Client selectors authorized on another selected provider/account. */
+  bindings?: Record<string, { providerId: string; modelId: string; accountId?: string | null }>
+  /** Resolved private deployment for each selector, frozen by the issuer. */
+  selectorDeployments?: Record<string, string>
 }

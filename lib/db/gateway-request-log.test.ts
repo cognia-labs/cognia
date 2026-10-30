@@ -5,6 +5,7 @@ import {
   clearGatewayRequestLog,
   filterGatewayRequestLog,
   GATEWAY_REQUEST_LOG_CAP,
+  groupGatewayRequestsBySession,
   listGatewayRequestLog,
   summarizeGatewayUsage,
   summarizePerKeyUsage,
@@ -41,6 +42,27 @@ beforeEach(async () => {
   await getDb().gatewayRequestLog.clear()
 }, 30_000)
 
+it("groups requests by opaque session ids and links only identified groups to the existing ledger", () => {
+  const rows = [
+    row("new-a", "4", { sessionId: "session-a" }),
+    row("legacy", "3"),
+    row("b", "2", { sessionId: "__proto__" }),
+    row("old-a", "1", { sessionId: "session-a" }),
+  ]
+  const groups = groupGatewayRequestsBySession(rows)
+  expect(
+    groups.map((group) => [
+      group.sessionId,
+      group.usageSessionId,
+      group.rows.map((entry) => entry.id),
+    ])
+  ).toEqual([
+    ["session-a", "gateway:session-a", ["new-a", "old-a"]],
+    [null, null, ["legacy"]],
+    ["__proto__", "gateway:__proto__", ["b"]],
+  ])
+})
+
 describe("gateway-request-log CRUD", () => {
   it("appends and lists newest-first", async () => {
     await appendGatewayRequestLog(row("a", "2026-07-03T00:00:01Z"))
@@ -67,6 +89,24 @@ describe("gateway-request-log CRUD", () => {
     await appendGatewayRequestLog(row("a", "2026-07-03T00:00:01Z"))
     await appendGatewayRequestLog(row("b", "2026-07-03T00:00:02Z"))
     expect((await listGatewayRequestLog({ limit: 1 })).map((r) => r.id)).toEqual(["b"])
+  })
+
+  it("finds an exact session beyond the newest filtered window and keeps legacy rows", async () => {
+    await getDb().gatewayRequestLog.bulkPut([
+      row("session-old", "2026-07-03T00:00:00Z", { sessionId: "session-a" }),
+      ...Array.from({ length: 450 }, (_, index) =>
+        row(
+          `new-${index}`,
+          `2026-07-04T00:${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}Z`,
+          { sessionId: "session-ab" }
+        )
+      ),
+      row("legacy", "2026-07-05T00:00:00Z"),
+    ])
+    expect(
+      (await listGatewayRequestLog({ sessionId: "session-a", limit: 1 })).map((entry) => entry.id)
+    ).toEqual(["session-old"])
+    expect((await listGatewayRequestLog({ limit: 1 })).map((entry) => entry.id)).toEqual(["legacy"])
   })
 
   it("still fills a filtered page from beyond the first `limit` rows", async () => {

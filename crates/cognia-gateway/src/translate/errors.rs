@@ -32,6 +32,7 @@ pub enum InboundFormat {
     OpenAiChat,
     OpenAiResponses,
     AnthropicMessages,
+    Gemini,
 }
 
 impl InboundFormat {
@@ -41,6 +42,7 @@ impl InboundFormat {
             Self::OpenAiChat => "openai",
             Self::OpenAiResponses => "responses",
             Self::AnthropicMessages => "anthropic",
+            Self::Gemini => "google",
         }
     }
 }
@@ -54,6 +56,9 @@ pub fn error_body(format: InboundFormat, error_type: &str, message: &str) -> Val
         InboundFormat::AnthropicMessages => json!({
             "type": "error",
             "error": { "type": error_type, "message": message }
+        }),
+        InboundFormat::Gemini => json!({
+            "error": { "code": if error_type == "invalid_request_error" { 400 } else { 502 }, "message": message, "status": if error_type == "invalid_request_error" { "INVALID_ARGUMENT" } else { "UNKNOWN" } }
         }),
     }
 }

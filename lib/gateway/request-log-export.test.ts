@@ -32,13 +32,21 @@ const row = (over: Partial<GatewayRequestLogRow> = {}): GatewayRequestLogRow => 
 beforeEach(() => mockDownloadFile.mockReset())
 
 describe("gatewayRequestLogToCsv", () => {
+  it("exports the session identity and escapes spreadsheet formulas in it", () => {
+    const [header, line] = gatewayRequestLogToCsv([row({ sessionId: "=unsafe-session" })]).split(
+      "\n"
+    )
+    const index = header.split(",").indexOf("sessionId")
+    expect(index).toBeGreaterThanOrEqual(0)
+    expect(line.split(",")[index]).toBe("'=unsafe-session")
+  })
   it("writes a header and one line per row, blanking absent values", () => {
     const csv = gatewayRequestLogToCsv([row({ inputTokens: null })])
     const [header, line] = csv.split("\n")
 
     expect(header.split(",")[0]).toBe("at")
     expect(line).toBe(
-      "2026-09-25T06:30:05.000Z,200,12,/v1/chat/completions,fast,groq,k1,127.0.0.1,,5,true,,,,,,"
+      "2026-09-25T06:30:05.000Z,200,12,/v1/chat/completions,fast,groq,k1,127.0.0.1,,5,true,,,,,,,"
     )
   })
 

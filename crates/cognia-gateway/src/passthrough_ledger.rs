@@ -300,7 +300,9 @@ pub async fn reserve(
             code,
             reasons: Vec::new(),
         },
-        Ok(Err(BrainBridgeError::Unavailable(_))) => bypass("brain_unavailable"),
+        Ok(Err(BrainBridgeError::Unavailable(_) | BrainBridgeError::NotDispatched(_))) => {
+            bypass("brain_unavailable")
+        }
         Err(_) => bypass("brain_timeout"),
     }
 }
@@ -391,7 +393,9 @@ async fn deliver_settle(bridge: Arc<dyn BrainBridge>, payload: Value) -> SettleD
                     reason: format!("refused {code}: {message}"),
                 }
             }
-            Ok(Err(BrainBridgeError::Unavailable(reason))) => last_failure = reason,
+            Ok(Err(
+                BrainBridgeError::Unavailable(reason) | BrainBridgeError::NotDispatched(reason),
+            )) => last_failure = reason,
             Err(_) => {
                 last_failure = format!(
                     "the brain did not answer within {} ms",

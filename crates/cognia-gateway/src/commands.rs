@@ -13,6 +13,29 @@ pub async fn gateway_get_status(state: State<'_, GatewayState>) -> Result<Gatewa
     Ok(state.status())
 }
 
+#[tauri::command]
+pub async fn gateway_client_status(
+    state: State<'_, GatewayState>,
+) -> Result<super::client_connections::ClientConnectionReport, String> {
+    super::client_connections::status(&state).await
+}
+
+#[tauri::command]
+pub async fn gateway_client_connect(
+    state: State<'_, GatewayState>,
+    request: super::client_connections::ConnectClientRequest,
+) -> Result<super::client_connections::ClientConnectionReport, String> {
+    super::client_connections::connect(&state, request).await
+}
+
+#[tauri::command]
+pub async fn gateway_client_rollback(
+    state: State<'_, GatewayState>,
+    request: super::client_connections::RollbackClientRequest,
+) -> Result<super::client_connections::ClientConnectionReport, String> {
+    super::client_connections::rollback(&state, request).await
+}
+
 /// Read the persisted config so the settings UI hydrates from the saved values
 /// (port, allowlist, timeouts, retry policy, model exposure, bind interface)
 /// rather than the compile-time defaults.

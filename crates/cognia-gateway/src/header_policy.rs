@@ -54,9 +54,10 @@ pub struct HeaderVerdict {
     pub reason: HeaderPolicyReason,
 }
 
-const AUTH_HEADERS: [&str; 4] = [
+const AUTH_HEADERS: [&str; 5] = [
     "authorization",
     "x-api-key",
+    "x-goog-api-key",
     "proxy-authorization",
     "proxy-authenticate",
 ];

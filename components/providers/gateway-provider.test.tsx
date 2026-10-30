@@ -1,11 +1,14 @@
 import { render, act } from "@testing-library/react"
 import { GatewayProvider } from "./gateway-provider"
 import { notifySubscriptionChanged } from "@/lib/subscription/core/subscription-events"
+import { notifyGatewaySnapshotChanged } from "@/lib/gateway/snapshot-events"
 
 const mockGetStatus = jest.fn()
+const mockGetConfig = jest.fn()
 const mockPushSnapshot = jest.fn()
 const mockDecisionResponse = jest.fn()
 const handlers: Record<string, (p: unknown) => void> = {}
+const mockSubscribedEvents: string[] = []
 const mockUnsubscribe = jest.fn()
 let tauri = true
 const accountState = { unlockedAccountId: "local-a" as string | null }
@@ -23,6 +26,7 @@ jest.mock("@/lib/tauri", () => ({
   isTauri: () => tauri,
   transport: {
     subscribe: (event: string, handler: (p: unknown) => void) => {
+      mockSubscribedEvents.push(event)
       handlers[event] = (payload) =>
         handler({ ownerAccountId: "local-a", accountGeneration: 1, ...(payload as object) })
       return mockUnsubscribe
@@ -31,6 +35,7 @@ jest.mock("@/lib/tauri", () => ({
 }))
 
 jest.mock("@/lib/tauri/gateway", () => ({
+  gatewayGetConfig: (...a: unknown[]) => mockGetConfig(...a),
   gatewayGetStatus: (...a: unknown[]) => mockGetStatus(...a),
   gatewayPushSnapshot: (...a: unknown[]) => mockPushSnapshot(...a),
   gatewayDecisionResponse: (...a: unknown[]) => mockDecisionResponse(...a),
@@ -136,6 +141,7 @@ describe("GatewayProvider", () => {
     accountState.unlockedAccountId = "local-a"
     settingsState.settings.defaultAccountIds = {}
     mockVaultCredential.mockReset().mockResolvedValue(null)
+    mockGetConfig.mockReset().mockResolvedValue({ subscriptionRotationProviderIds: [] })
     mockGetStatus.mockReset().mockResolvedValue({
       hasToken: true,
       ownerAccountId: "local-a",
@@ -189,6 +195,19 @@ describe("GatewayProvider", () => {
       for (let i = 0; i < 30; i += 1) await Promise.resolve()
     })
     expect(mockPushSnapshot).toHaveBeenCalled()
+  })
+
+  it("reloads native gateway opt-ins and republishes after a config save", async () => {
+    render(<GatewayProvider />)
+    await flushPublication()
+    const before = mockPushSnapshot.mock.calls.length
+    mockGetConfig.mockResolvedValue({ subscriptionRotationProviderIds: ["codex"] })
+    await act(async () => {
+      notifyGatewaySnapshotChanged()
+      for (let i = 0; i < 40; i += 1) await Promise.resolve()
+    })
+    expect(mockGetConfig).toHaveBeenCalledTimes(before + 1)
+    expect(mockPushSnapshot).toHaveBeenCalledTimes(before + 1)
   })
 
   async function flushPublication() {
@@ -267,7 +286,8 @@ describe("GatewayProvider", () => {
     await flushPublication()
     expect(mockVaultCredential).toHaveBeenCalledWith(
       "opencode",
-      expect.objectContaining({ defaultAccountIds: { opencode: "chosen-account" } })
+      expect.objectContaining({ defaultAccountIds: { opencode: "chosen-account" } }),
+      undefined
     )
   })
 
@@ -443,6 +463,33 @@ describe("GatewayProvider", () => {
       })
     })
     expect(mockForward).toHaveBeenCalledWith(expect.objectContaining({ providerId: "openai" }))
+  })
+
+  it("shares one telemetry sink across two mounted desktop providers", async () => {
+    mockSubscribedEvents.length = 0
+    const view = render(
+      <>
+        <GatewayProvider />
+        <GatewayProvider />
+      </>
+    )
+    await flushPublication()
+    expect(
+      mockSubscribedEvents.filter((event) => event === "gateway://request-outcome")
+    ).toHaveLength(1)
+    expect(mockSubscribedEvents.filter((event) => event === "gateway://request-log")).toHaveLength(
+      1
+    )
+    act(() =>
+      handlers["gateway://request-outcome"]({
+        providerId: "openai",
+        modelId: "gpt-4o",
+        ok: true,
+        latencyMs: 1,
+      })
+    )
+    expect(mockForward).toHaveBeenCalledTimes(1)
+    view.unmount()
   })
 
   it("persists request-log events into Dexie", async () => {

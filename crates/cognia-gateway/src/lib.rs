@@ -29,6 +29,7 @@
 
 pub mod api_keys;
 pub mod brain_bridge;
+pub mod client_connections;
 #[cfg(feature = "tauri-host")]
 pub mod commands;
 pub mod concurrency;
@@ -269,6 +270,9 @@ impl GatewayState {
         self.leases.clear();
         self.key_cooldown.lock().clear();
         let mut inner = self.inner.lock();
+        if let Some(server) = inner.server.as_ref() {
+            server.clear_account_data();
+        }
         inner.status.snapshot_generated_at_ms = None;
         inner.status.snapshot_provider_count = 0;
         inner.status.snapshot_alias_count = 0;
@@ -431,6 +435,31 @@ impl GatewayState {
                 status.pending_restart_fields = Vec::new();
             }
         }
+        let exposure = config.clone();
+        drop(config);
+        let snapshot = self.snapshot.read();
+        status.model_aliases = snapshot
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .aliases
+                    .iter()
+                    .filter(|alias| {
+                        exposure.model_is_exposed(&alias.alias)
+                            && alias.entries.iter().any(|entry| {
+                                snapshot
+                                    .provider(&entry.provider_id)
+                                    .is_some_and(execute::is_executable_provider)
+                            })
+                    })
+                    .map(|alias| alias.alias.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        status.subscription_rotation_providers = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.subscription_rotation_providers.clone())
+            .unwrap_or_default();
         status
     }
 
@@ -718,6 +747,15 @@ impl GatewayState {
         host: Arc<dyn GatewayHost>,
         require_api_key: bool,
     ) -> Result<(), GatewayError> {
+        let recovery_state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            client_connections::revoke_pending_on_start(&recovery_state)
+        })
+        .await
+        .map_err(|_| {
+            GatewayError::InvalidConfig("gateway client credential recovery was interrupted".into())
+        })?
+        .map_err(GatewayError::InvalidConfig)?;
         {
             let now = chrono::Utc::now().timestamp_millis();
             if require_api_key && !api_keys::has_usable_key(&self.keys.read(), now) {
@@ -874,6 +912,9 @@ mod tests {
     #[test]
     fn p6e_listener_fixture_changes_only_listener_facts() {
         let gateway = GatewayState::new();
+        // Other tests may persist keys in the shared in-memory secret store.
+        // This fixture owns only this state's independent credential list.
+        gateway.keys.write().clear();
         let before = gateway.status();
         assert!(!before.running);
         gateway.person_test_listener(19385);
@@ -917,6 +958,26 @@ mod tests {
         assert_eq!(status.snapshot_generated_at_ms, Some(123));
         assert_eq!(status.snapshot_provider_count, 1); // only enabled
         assert_eq!(status.snapshot_alias_count, 1);
+    }
+
+    #[test]
+    fn status_projects_only_live_exposed_aliases_and_safe_rotation_inventory() {
+        let state = GatewayState::new();
+        let snapshot:RoutingSnapshot=serde_json::from_value(serde_json::json!({"generatedAtMs":1,
+            "providers":[{"id":"p","protocol":"google","baseUrl":"https://fixture.invalid/v1beta","enabled":true,"models":["m"],"apiKey":"never-in-status"}],
+            "aliases":[{"alias":"public","entries":[{"providerId":"p","modelId":"m"}]},{"alias":"hidden","entries":[{"providerId":"p","modelId":"m"}]}],
+            "subscriptionRotationProviders":[{"providerId":"p","accountCount":2}]})).unwrap();
+        *state.snapshot.write() = Some(snapshot);
+        state.config.write().exposed_models = vec!["public".into()];
+        let status = state.status();
+        assert_eq!(status.model_aliases, vec!["public"]);
+        assert_eq!(status.subscription_rotation_providers[0].account_count, 2);
+        assert!(!serde_json::to_string(&status)
+            .unwrap()
+            .contains("never-in-status"));
+        state.require_local_account();
+        assert!(state.status().model_aliases.is_empty());
+        assert!(state.status().subscription_rotation_providers.is_empty());
     }
 
     #[test]

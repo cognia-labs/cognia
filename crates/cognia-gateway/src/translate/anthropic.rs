@@ -376,6 +376,7 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
         .as_array()
         .ok_or_else(|| NotTranslatable::new("upstream response has no content"))?;
     let mut content = Vec::new();
+    let mut reasoning = String::new();
     for block in blocks {
         match s(&block["type"]).as_deref() {
             Some("text") => content.push(IrContent::Text(s(&block["text"]).unwrap_or_default())),
@@ -384,8 +385,8 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
                 name: s(&block["name"]).unwrap_or_default(),
                 input: block.get("input").cloned().unwrap_or_else(|| json!({})),
             }),
-            // Thinking never crosses a protocol hop.
-            Some("thinking") | Some("redacted_thinking") => {}
+            Some("thinking") => reasoning.push_str(block["thinking"].as_str().unwrap_or("")),
+            Some("redacted_thinking") => {}
             _ => {}
         }
     }
@@ -393,19 +394,23 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
         id: s(&body["id"]).unwrap_or_default(),
         model: s(&body["model"]).unwrap_or_default(),
         content,
+        reasoning: (!reasoning.is_empty()).then_some(reasoning),
         stop_reason: IrStopReason::from_anthropic(
             body["stop_reason"].as_str().unwrap_or("end_turn"),
         ),
         usage: IrUsage {
-            input_tokens: body["usage"]["input_tokens"].as_u64().unwrap_or(0),
+            input_tokens: body["usage"]["input_tokens"].as_u64().unwrap_or(0)
+                .saturating_add(body["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0))
+                .saturating_add(body["usage"]["cache_creation_input_tokens"].as_u64().unwrap_or(0)),
             output_tokens: body["usage"]["output_tokens"].as_u64().unwrap_or(0),
+            cache_read_tokens: body["usage"]["cache_read_input_tokens"].as_u64().unwrap_or(0),
         },
     })
 }
 
 /// Render an Anthropic NON-STREAMING response from the canonical response.
 pub fn response_from_ir(resp: &IrResponse) -> Value {
-    let blocks: Vec<Value> = resp
+    let mut blocks: Vec<Value> = resp
         .content
         .iter()
         .filter_map(|c| match c {
@@ -419,6 +424,9 @@ pub fn response_from_ir(resp: &IrResponse) -> Value {
             | IrContent::Image(_) => None,
         })
         .collect();
+    if let Some(reasoning) = &resp.reasoning {
+        blocks.insert(0, json!({"type":"thinking","thinking":reasoning,"signature":"cognia-advisory"}));
+    }
     json!({
         "id": resp.id,
         "type": "message",
@@ -428,7 +436,8 @@ pub fn response_from_ir(resp: &IrResponse) -> Value {
         "stop_reason": resp.stop_reason.to_anthropic(),
         "stop_sequence": null,
         "usage": {
-            "input_tokens": resp.usage.input_tokens,
+            "input_tokens": resp.usage.input_tokens.saturating_sub(resp.usage.cache_read_tokens),
+            "cache_read_input_tokens": resp.usage.cache_read_tokens,
             "output_tokens": resp.usage.output_tokens,
         }
     })

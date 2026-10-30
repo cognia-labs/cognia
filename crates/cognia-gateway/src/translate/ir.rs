@@ -325,6 +325,8 @@ impl IrStopReason {
 pub struct IrUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Read tokens already included in input_tokens, never an extra bill.
+    pub cache_read_tokens: u64,
 }
 
 /// Canonical NON-STREAMING response: assistant content + stop reason + usage.
@@ -333,6 +335,9 @@ pub struct IrResponse {
     pub id: String,
     pub model: String,
     pub content: Vec<IrContent>,
+    /// Provider-supplied advisory reasoning, separate from answer text. Native
+    /// signed reasoning state is preserved only on same-protocol passthrough.
+    pub reasoning: Option<String>,
     pub stop_reason: IrStopReason,
     pub usage: IrUsage,
 }

@@ -51,6 +51,11 @@ use crate::SharedState;
 /// (`passthrough_ledger::RESERVE_TIMEOUT`), inside this one.
 pub const RUN_API_BRIDGE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// A search can spend a minute retrieving evidence and another minute
+/// synthesizing it. Image descriptions use the same bounded model-service
+/// path, so these internal commands need that budget on the real transport.
+pub const INFERENCE_BRIDGE_TIMEOUT: Duration = Duration::from_secs(130);
+
 /// The `respond` command the headless brain publishes the account's gateway
 /// switches with. Mirrored by `GATEWAY_SWITCHES_PUBLISH_COMMAND` in
 /// `lib/headless/runtimes/router-fusion.ts`.
@@ -73,16 +78,22 @@ pub type WritesRouteResolver = Arc<dyn Fn() -> Result<WritesRoute, String> + Sen
 /// never answered from a stale read.
 pub struct WritesBrainBridge {
     resolve: WritesRouteResolver,
-    timeout: Duration,
+    timeout_override: Option<Duration>,
 }
 
 impl WritesBrainBridge {
     pub fn new(resolve: WritesRouteResolver) -> Arc<Self> {
-        Self::with_timeout(resolve, RUN_API_BRIDGE_TIMEOUT)
+        Arc::new(Self {
+            resolve,
+            timeout_override: None,
+        })
     }
 
     pub fn with_timeout(resolve: WritesRouteResolver, timeout: Duration) -> Arc<Self> {
-        Arc::new(Self { resolve, timeout })
+        Arc::new(Self {
+            resolve,
+            timeout_override: Some(timeout),
+        })
     }
 
     /// The headless server's bridge: the companion state's writes bridge, and
@@ -100,9 +111,12 @@ impl WritesBrainBridge {
 impl BrainBridge for WritesBrainBridge {
     fn call(&self, command: &'static str, payload: Value) -> BrainFuture {
         let route = (self.resolve)();
-        let timeout = self.timeout;
+        let timeout = self.timeout_override.unwrap_or(match command {
+            "gateway_bridge_search" | "gateway_bridge_vision" => INFERENCE_BRIDGE_TIMEOUT,
+            _ => RUN_API_BRIDGE_TIMEOUT,
+        });
         Box::pin(async move {
-            let (writes, transport) = route.map_err(BrainBridgeError::unavailable)?;
+            let (writes, transport) = route.map_err(BrainBridgeError::NotDispatched)?;
             let raw = writes
                 .dispatch(transport.as_ref(), command, payload, timeout)
                 .await
@@ -357,7 +371,7 @@ mod tests {
             .call(command::RUN_GET, json!({}))
             .await
             .expect_err("nothing to answer");
-        assert!(matches!(error, BrainBridgeError::Unavailable(_)));
+        assert!(matches!(error, BrainBridgeError::NotDispatched(_)));
     }
 
     #[tokio::test]
@@ -381,6 +395,164 @@ mod tests {
             BrainBridgeError::Unavailable(reason) => assert!(reason.contains("timed out"), "{reason}"),
             other => panic!("unexpected: {other:?}"),
         }
+        clear_socket_for_testing();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn inference_bridge_commands_can_answer_after_the_run_api_deadline() {
+        let _slot = lock_slot().await;
+        let state = test_state();
+        let mut socket = install_socket_for_testing(&state);
+        let bridge = WritesBrainBridge::for_shared_state(Arc::clone(&state));
+
+        for command in ["gateway_bridge_search", "gateway_bridge_vision"] {
+            let call = tokio::spawn({
+                let bridge = Arc::clone(&bridge);
+                async move {
+                    bridge
+                        .call(command, json!({ "requestId": "inference" }))
+                        .await
+                }
+            });
+            let (request_id, name, _) = request_of(socket.recv().await.unwrap());
+            assert_eq!(name, command);
+            tokio::time::advance(RUN_API_BRIDGE_TIMEOUT + Duration::from_secs(1)).await;
+            tokio::task::yield_now().await;
+            assert!(
+                !call.is_finished(),
+                "{command} must not inherit the Run API timeout"
+            );
+            answer(
+                &state,
+                &request_id,
+                json!({ "ok": true, "value": { "text": "answer" } }),
+            );
+            assert_eq!(call.await.unwrap().unwrap()["text"], "answer");
+        }
+        clear_socket_for_testing();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ordinary_gateway_commands_keep_the_short_default_deadline() {
+        let _slot = lock_slot().await;
+        let state = test_state();
+        let mut socket = install_socket_for_testing(&state);
+        let bridge = WritesBrainBridge::for_shared_state(Arc::clone(&state));
+
+        for command in [
+            command::RUN_GET,
+            "gateway_privacy_prepare",
+            "gateway_middleware_event",
+        ] {
+            let call = tokio::spawn({
+                let bridge = Arc::clone(&bridge);
+                async move { bridge.call(command, json!({})).await }
+            });
+            let _ = request_of(socket.recv().await.unwrap());
+            tokio::time::advance(RUN_API_BRIDGE_TIMEOUT).await;
+            assert!(
+                matches!(call.await.unwrap(), Err(BrainBridgeError::Unavailable(reason)) if reason.contains("10000 ms"))
+            );
+        }
+        clear_socket_for_testing();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn explicit_timeout_overrides_inference_commands_too() {
+        let _slot = lock_slot().await;
+        let state = test_state();
+        let mut socket = install_socket_for_testing(&state);
+        let shared = Arc::clone(&state);
+        let bridge = WritesBrainBridge::with_timeout(
+            Arc::new(move || {
+                Ok((
+                    Arc::clone(&shared.desktop_writes_bridge),
+                    resolve_bridge_transport(&shared)?,
+                ))
+            }),
+            Duration::from_millis(20),
+        );
+        let call =
+            tokio::spawn(async move { bridge.call("gateway_bridge_search", json!({})).await });
+        let _ = request_of(socket.recv().await.unwrap());
+        tokio::time::advance(Duration::from_millis(20)).await;
+        assert!(
+            matches!(call.await.unwrap(), Err(BrainBridgeError::Unavailable(reason)) if reason.contains("20 ms"))
+        );
+        clear_socket_for_testing();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn inference_commands_still_timeout_and_late_answers_are_ignored() {
+        let _slot = lock_slot().await;
+        let state = test_state();
+        let mut socket = install_socket_for_testing(&state);
+        let bridge = WritesBrainBridge::for_shared_state(Arc::clone(&state));
+        let call = tokio::spawn({
+            let bridge = Arc::clone(&bridge);
+            async move { bridge.call("gateway_bridge_vision", json!({})).await }
+        });
+        let (expired_id, _, _) = request_of(socket.recv().await.unwrap());
+        tokio::time::advance(INFERENCE_BRIDGE_TIMEOUT - Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert!(!call.is_finished());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(
+            matches!(call.await.unwrap(), Err(BrainBridgeError::Unavailable(reason)) if reason.contains("130000 ms"))
+        );
+
+        let next = tokio::spawn({
+            let bridge = Arc::clone(&bridge);
+            async move { bridge.call("gateway_bridge_vision", json!({})).await }
+        });
+        let (next_id, _, _) = request_of(socket.recv().await.unwrap());
+        answer(
+            &state,
+            &expired_id,
+            json!({ "ok": true, "value": { "text": "too late" } }),
+        );
+        tokio::task::yield_now().await;
+        assert!(!next.is_finished());
+        answer(
+            &state,
+            &next_id,
+            json!({ "ok": true, "value": { "text": "current" } }),
+        );
+        assert_eq!(next.await.unwrap().unwrap()["text"], "current");
+        clear_socket_for_testing();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn canceling_inference_releases_the_connection_request_slot() {
+        let _slot = lock_slot().await;
+        let state = test_state();
+        let mut socket = install_socket_for_testing(&state);
+        let bridge = WritesBrainBridge::for_shared_state(Arc::clone(&state));
+        // Exceed the socket's pending-request capacity one call at a time.
+        // A leaked permit would refuse dispatch instead of emitting a frame.
+        for _ in 0..512 {
+            let call = tokio::spawn({
+                let bridge = Arc::clone(&bridge);
+                async move { bridge.call("gateway_bridge_search", json!({})).await }
+            });
+            let (request_id, _, _) = request_of(socket.recv().await.unwrap());
+            call.abort();
+            assert!(call.await.unwrap_err().is_cancelled());
+            answer(
+                &state,
+                &request_id,
+                json!({ "ok": true, "value": { "text": "late" } }),
+            );
+        }
+        let call =
+            tokio::spawn(async move { bridge.call("gateway_bridge_search", json!({})).await });
+        let (request_id, _, _) = request_of(socket.recv().await.unwrap());
+        answer(
+            &state,
+            &request_id,
+            json!({ "ok": true, "value": { "text": "done" } }),
+        );
+        assert_eq!(call.await.unwrap().unwrap()["text"], "done");
         clear_socket_for_testing();
     }
 

@@ -415,6 +415,7 @@ pub fn request_from_ir(ir: &ChatIR) -> Value {
 
 pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
     let mut content = Vec::new();
+    let mut reasoning = String::new();
     for item in body["output"]
         .as_array()
         .ok_or_else(|| NotTranslatable::new("Responses output is missing"))?
@@ -427,7 +428,11 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
                 input: serde_json::from_str(&required_string(item, "arguments")?)
                     .map_err(|_| NotTranslatable::new("invalid function arguments"))?,
             }),
-            Some("reasoning") => {}
+            Some("reasoning") => {
+                for summary in item["summary"].as_array().into_iter().flatten() {
+                    if let Some(text) = summary["text"].as_str() { reasoning.push_str(text); }
+                }
+            }
             _ => {
                 return Err(NotTranslatable::new(
                     "native hosted tool output cannot translate to chat",
@@ -436,6 +441,7 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
         }
     }
     Ok(IrResponse {
+        reasoning: (!reasoning.is_empty()).then_some(reasoning),
         id: required_string(body, "id")?,
         model: body["model"].as_str().unwrap_or("").into(),
         stop_reason: if body["status"] == "incomplete" {
@@ -452,6 +458,7 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
         usage: super::ir::IrUsage {
             input_tokens: body["usage"]["input_tokens"].as_u64().unwrap_or(0),
             output_tokens: body["usage"]["output_tokens"].as_u64().unwrap_or(0),
+            cache_read_tokens: body["usage"]["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
         },
     })
 }
@@ -511,6 +518,9 @@ fn image_url(part: &Value) -> Option<String> {
 /// Render a Responses object from the upstream canonical [`IrResponse`].
 pub fn response_from_ir(resp: &IrResponse, model: &str, created: i64) -> Value {
     let mut output = Vec::new();
+    if let Some(reasoning) = &resp.reasoning {
+        output.push(json!({"type":"reasoning","id":format!("rs_{}",uuid::Uuid::new_v4().simple()),"summary":[{"type":"summary_text","text":reasoning}]}));
+    }
     let text: String = resp
         .content
         .iter()
@@ -547,6 +557,7 @@ pub fn response_from_ir(resp: &IrResponse, model: &str, created: i64) -> Value {
         "output": output,
         "usage": {
             "input_tokens": resp.usage.input_tokens,
+            "input_tokens_details":{"cached_tokens":resp.usage.cache_read_tokens},
             "output_tokens": resp.usage.output_tokens,
             "total_tokens": resp.usage.input_tokens + resp.usage.output_tokens,
         },
@@ -668,6 +679,9 @@ impl ResponsesStream {
             }
             if let Some(n) = usage["completion_tokens"].as_u64() {
                 self.response["usage"]["output_tokens"] = json!(n);
+            }
+            if let Some(n) = usage["prompt_tokens_details"]["cached_tokens"].as_u64() {
+                self.response["usage"]["input_tokens_details"] = json!({"cached_tokens":n});
             }
         }
         let delta = &value["choices"][0]["delta"];
@@ -1018,10 +1032,12 @@ mod tests {
             id: "up-1".into(),
             model: "gpt".into(),
             content: vec![IrContent::Text("the answer".into())],
+            reasoning: None,
             stop_reason: IrStopReason::Stop,
             usage: super::super::ir::IrUsage {
                 input_tokens: 5,
                 output_tokens: 3,
+                ..Default::default()
             },
         };
         let out = response_from_ir(&resp, "my-alias", 1234);
@@ -1046,6 +1062,7 @@ mod tests {
             id: "up-2".into(),
             model: "gpt".into(),
             content: vec![IrContent::Text("truncat".into())],
+            reasoning: None,
             stop_reason: IrStopReason::MaxTokens,
             usage: super::super::ir::IrUsage::default(),
         };

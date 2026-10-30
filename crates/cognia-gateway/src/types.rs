@@ -101,10 +101,27 @@ impl BindInterface {
     }
 }
 
-/// Persisted gateway configuration (renderer-owned; pushed via
-/// `gateway_set_config`, mirrored to `<app_data>/cognia/gateway-config.json`).
+/// Optional inspectable-text privacy at the gateway boundary.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum GatewayPrivacyMode {
+    #[default]
+    Off,
+    Mask,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GatewayBridgeModels {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vision: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Persisted gateway configuration, shared with desktop and headless hosts.
 pub struct GatewayConfig {
     /// Whether the listener should run (auto-started at boot when a key
     /// exists).
@@ -160,6 +177,15 @@ pub struct GatewayConfig {
     pub respect_retry_after: bool,
     #[serde(default = "default_true")]
     pub gateway_local_routing_v2: bool,
+    #[serde(default)]
+    pub privacy_mode: GatewayPrivacyMode,
+    #[serde(default)]
+    pub middleware_enabled: bool,
+    #[serde(default)]
+    pub bridge_models: GatewayBridgeModels,
+    /// Providers whose vault account pool the operator explicitly permits.
+    #[serde(default)]
+    pub subscription_rotation_provider_ids: Vec<String>,
     /// Allowlist of model/alias ids the gateway advertises AND serves. Empty =
     /// expose everything. A request for a model outside this list resolves to
     /// no candidate (404).
@@ -284,6 +310,10 @@ impl Default for GatewayConfig {
             max_retry_wait_ms: default_max_retry_wait_ms(),
             respect_retry_after: true,
             gateway_local_routing_v2: true,
+            privacy_mode: GatewayPrivacyMode::Off,
+            middleware_enabled: false,
+            bridge_models: GatewayBridgeModels::default(),
+            subscription_rotation_provider_ids: Vec::new(),
             exposed_models: Vec::new(),
             hide_raw_provider_models: false,
             cooldown_fallback_secs: default_cooldown_fallback_secs(),
@@ -301,6 +331,34 @@ impl Default for GatewayConfig {
 
 impl GatewayConfig {
     pub fn validate(&self) -> Result<(), GatewayError> {
+        if [&self.bridge_models.search, &self.bridge_models.vision]
+            .into_iter()
+            .flatten()
+            .any(|alias| {
+                alias.trim().is_empty()
+                    || alias != alias.trim()
+                    || alias.len() > 512
+                    || alias.chars().any(char::is_control)
+            })
+        {
+            return Err(GatewayError::InvalidConfig("bridge model aliases must be nonempty, bounded selectors without control characters".into()));
+        }
+        let mut rotation_providers = std::collections::HashSet::new();
+        if self.subscription_rotation_provider_ids.len() > 128
+            || self
+                .subscription_rotation_provider_ids
+                .iter()
+                .any(|provider| {
+                    provider.trim().is_empty()
+                        || provider.len() > 256
+                        || provider != provider.trim()
+                        || !rotation_providers.insert(provider)
+                })
+        {
+            return Err(GatewayError::InvalidConfig(
+                "subscription rotation providers must be unique nonempty ids (maximum 128)".into(),
+            ));
+        }
         cognia_net::inbound_policy::ParsedAllowlist::parse(&self.allowlist)
             .map_err(GatewayError::InvalidConfig)?;
         if self.rate_limit_per_min == 0 {
@@ -478,6 +536,9 @@ pub struct GatewayStatus {
     pub routing_strategy: Option<String>,
     pub routing_strategy_unavailable: Option<String>,
     pub local_routing_enabled: bool,
+    pub model_aliases: Vec<String>,
+    #[serde(default)]
+    pub subscription_rotation_providers: Vec<crate::snapshot::SubscriptionRotationProvider>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -543,6 +604,50 @@ mod tests {
             .iter()
             .any(|f| f == "service_tier"));
         assert!(cfg.field_strip_allow.is_empty());
+        assert!(cfg.subscription_rotation_provider_ids.is_empty());
+    }
+
+    #[test]
+    fn subscription_rotation_config_requires_explicit_bounded_provider_set() {
+        let mut cfg = GatewayConfig {
+            subscription_rotation_provider_ids: vec!["codex".into()],
+            ..GatewayConfig::default()
+        };
+        assert!(cfg.validate().is_ok());
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(
+            json["subscriptionRotationProviderIds"],
+            serde_json::json!(["codex"])
+        );
+        for invalid in [
+            vec![String::new()],
+            vec!["codex".into(), "codex".into()],
+            vec!["x".repeat(257)],
+            (0..129).map(|index| format!("provider-{index}")).collect(),
+        ] {
+            cfg.subscription_rotation_provider_ids = invalid;
+            assert!(cfg.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn runtime_config_is_opt_in_and_bridge_selectors_are_bounded() {
+        let mut config = GatewayConfig::default();
+        assert_eq!(config.privacy_mode, GatewayPrivacyMode::Off);
+        assert!(!config.middleware_enabled);
+        assert!(config.bridge_models.search.is_none());
+        assert_eq!(serde_json::to_value(&config).unwrap()["bridgeModels"],serde_json::json!({}));
+        for alias in [
+            "".to_string(),
+            "bad\nalias".to_string(),
+            "x".repeat(513),
+            " spaced ".to_string(),
+        ] {
+            config.bridge_models.search = Some(alias);
+            assert!(config.validate().is_err());
+        }
+        config.bridge_models.search = Some("cognia/helper".into());
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -574,6 +679,7 @@ mod tests {
             stream_idle_timeout_secs: 90,
             stripped_request_fields: vec!["service_tier".into()],
             field_strip_allow: vec!["openai:service_tier".into()],
+            ..GatewayConfig::default()
         };
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["rateLimitPerMin"], 120);

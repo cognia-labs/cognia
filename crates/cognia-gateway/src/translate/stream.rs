@@ -56,6 +56,12 @@ pub enum Direction {
     AnthropicToOpenAi,
     ResponsesToOpenAi,
     ResponsesToAnthropic,
+    GeminiToOpenAi,
+    GeminiToAnthropic,
+    GeminiToResponses,
+    OpenAiToGemini,
+    AnthropicToGemini,
+    ResponsesToGemini,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,6 +69,7 @@ enum OpenBlock {
     None,
     Text { index: u64 },
     Tool { index: u64 },
+    Thinking { index: u64 },
 }
 
 pub struct StreamTranscoder {
@@ -81,6 +88,9 @@ pub struct StreamTranscoder {
     stop_reason: Option<IrStopReason>,
     usage: IrUsage,
     message_id: String,
+    gemini_tool_index: u64,
+    gemini_tool_parts: std::collections::BTreeMap<u64, Value>,
+    responses: Option<super::responses::ResponsesStream>,
 }
 
 impl StreamTranscoder {
@@ -89,9 +99,12 @@ impl StreamTranscoder {
         client_model: impl Into<String>,
         message_id: impl Into<String>,
     ) -> Self {
+        let client_model = client_model.into();
+        let responses = (direction == Direction::GeminiToResponses)
+            .then(|| super::responses::ResponsesStream::new(&client_model, Vec::new()));
         Self {
             direction,
-            client_model: client_model.into(),
+            client_model,
             started: false,
             finished: false,
             open_block: OpenBlock::None,
@@ -102,6 +115,9 @@ impl StreamTranscoder {
             stop_reason: None,
             usage: IrUsage::default(),
             message_id: message_id.into(),
+            gemini_tool_index: 0,
+            gemini_tool_parts: Default::default(),
+            responses,
         }
     }
 
@@ -112,11 +128,28 @@ impl StreamTranscoder {
 
     /// Feed one upstream data payload (already de-framed, JSON-parsed).
     pub fn push(&mut self, data: &Value) -> Vec<SseOut> {
+        if self.finished {
+            return Vec::new();
+        }
         match self.direction {
             Direction::OpenAiToAnthropic => self.push_openai_chunk(data),
             Direction::AnthropicToOpenAi => self.push_anthropic_event(data),
-            Direction::ResponsesToOpenAi | Direction::ResponsesToAnthropic => {
-                self.push_responses_event(data)
+            Direction::ResponsesToOpenAi
+            | Direction::ResponsesToAnthropic
+            | Direction::ResponsesToGemini => self.push_responses_event(data),
+            Direction::GeminiToOpenAi
+            | Direction::GeminiToAnthropic
+            | Direction::GeminiToResponses => self.push_gemini(data),
+            Direction::OpenAiToGemini => self.push_chat_to_gemini(data),
+            Direction::AnthropicToGemini => {
+                let chat = self.push_anthropic_event(data);
+                let mut out = Vec::new();
+                for frame in chat {
+                    if let Ok(chunk) = serde_json::from_str(&frame.data) {
+                        out.extend(self.push_chat_to_gemini(&chunk));
+                    }
+                }
+                out
             }
         }
     }
@@ -126,10 +159,62 @@ impl StreamTranscoder {
         if self.finished {
             return Vec::new();
         }
+        if self.direction == Direction::GeminiToResponses {
+            let frames = if let Some(stop) = self.stop_reason {
+                let chunk = self.terminal_chat_chunk(stop);
+                let responses = self
+                    .responses
+                    .as_mut()
+                    .expect("Responses destination initialized");
+                let mut frames = responses.push(&chunk.to_string());
+                frames.extend(responses.push("[DONE]"));
+                frames
+            } else {
+                self.responses
+                    .as_mut()
+                    .expect("Responses destination initialized")
+                    .fail("Gemini stream ended without a finish reason")
+            };
+            self.finished = true;
+            return Self::from_wire_frames(frames);
+        }
+        if matches!(
+            self.direction,
+            Direction::OpenAiToGemini | Direction::AnthropicToGemini | Direction::ResponsesToGemini
+        ) {
+            if self.stop_reason.is_none() {
+                self.finished = true;
+                return vec![Self::gemini_error(
+                    "upstream stream ended without a finish reason",
+                )];
+            }
+            let mut out = self.flush_gemini_tools();
+            if self.finished {
+                return out;
+            }
+            out.push(SseOut::json(None, json!({"responseId":self.message_id,"modelVersion":self.client_model,
+                "candidates":[{"index":0,"content":{"role":"model","parts":[]},"finishReason":match self.stop_reason {Some(IrStopReason::MaxTokens)=>"MAX_TOKENS",Some(IrStopReason::Other)=>"OTHER",_=>"STOP"}}],
+                "usageMetadata":{"promptTokenCount":self.usage.input_tokens,"candidatesTokenCount":self.usage.output_tokens,"cachedContentTokenCount":self.usage.cache_read_tokens,"totalTokenCount":self.usage.input_tokens.saturating_add(self.usage.output_tokens)}})));
+            self.finished = true;
+            return out;
+        }
+        if matches!(
+            self.direction,
+            Direction::GeminiToOpenAi | Direction::GeminiToAnthropic
+        ) && self.stop_reason.is_none()
+        {
+            self.finished = true;
+            return vec![SseOut::json(
+                Some("error"),
+                json!({"error":{"type":"api_error","message":"Gemini stream ended without a finish reason"}}),
+            )];
+        }
         self.finished = true;
         let mut out = Vec::new();
         match self.direction {
-            Direction::OpenAiToAnthropic | Direction::ResponsesToAnthropic => {
+            Direction::OpenAiToAnthropic
+            | Direction::ResponsesToAnthropic
+            | Direction::GeminiToAnthropic => {
                 self.ensure_started_anthropic(&mut out);
                 self.close_open_block(&mut out);
                 let stop = self.stop_reason.unwrap_or(IrStopReason::Stop);
@@ -146,7 +231,9 @@ impl StreamTranscoder {
                     json!({ "type": "message_stop" }),
                 ));
             }
-            Direction::AnthropicToOpenAi | Direction::ResponsesToOpenAi => {
+            Direction::AnthropicToOpenAi
+            | Direction::ResponsesToOpenAi
+            | Direction::GeminiToOpenAi => {
                 let stop = self.stop_reason.unwrap_or(IrStopReason::Stop);
                 out.push(SseOut::json(
                     None,
@@ -159,13 +246,185 @@ impl StreamTranscoder {
                             "prompt_tokens": self.usage.input_tokens,
                             "completion_tokens": self.usage.output_tokens,
                             "total_tokens": self.usage.input_tokens + self.usage.output_tokens,
+                            "prompt_tokens_details":{"cached_tokens":self.usage.cache_read_tokens},
                         }
                     }),
                 ));
                 out.push(SseOut::done());
             }
+            _ => unreachable!("Gemini destination handled before legacy trailers"),
         }
         out
+    }
+
+    fn terminal_chat_chunk(&self, stop: IrStopReason) -> Value {
+        json!({"id":self.message_id,"object":"chat.completion.chunk","model":self.client_model,
+            "choices":[{"index":0,"delta":{},"finish_reason":stop.to_openai()}],
+            "usage":{"prompt_tokens":self.usage.input_tokens,"completion_tokens":self.usage.output_tokens,
+                "total_tokens":self.usage.input_tokens.saturating_add(self.usage.output_tokens),
+                "prompt_tokens_details":{"cached_tokens":self.usage.cache_read_tokens}}})
+    }
+
+    fn from_wire_frames(frames: Vec<String>) -> Vec<SseOut> {
+        frames
+            .into_iter()
+            .map(|frame| {
+                let event = frame
+                    .lines()
+                    .find_map(|line| line.strip_prefix("event: ").map(str::to_owned));
+                let data = frame
+                    .lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                SseOut { event, data }
+            })
+            .collect()
+    }
+
+    fn gemini_error(message: &str) -> SseOut {
+        SseOut::json(
+            None,
+            json!({"error":{"code":502,"status":"UNKNOWN","message":message}}),
+        )
+    }
+
+    fn push_gemini(&mut self, data: &Value) -> Vec<SseOut> {
+        if data.get("usageMetadata").is_some() || data.get("usage_metadata").is_some() {
+            self.usage = super::gemini::usage(data);
+        }
+        let chunks = match super::gemini::chat_chunks(
+            data,
+            &self.client_model,
+            &self.message_id,
+            &mut self.gemini_tool_index,
+        ) {
+            Ok(chunks) => chunks,
+            Err(error) => {
+                self.finished = true;
+                return if let Some(responses) = &mut self.responses {
+                    Self::from_wire_frames(responses.fail(&error.reason))
+                } else {
+                    vec![SseOut::json(
+                        Some("error"),
+                        json!({"error":{"type":"api_error","message":error.reason}}),
+                    )]
+                };
+            }
+        };
+        let mut out = Vec::new();
+        for mut chunk in chunks {
+            if let Some(reason) = chunk["choices"][0]["finish_reason"].as_str() {
+                self.stop_reason = Some(IrStopReason::from_openai(reason));
+                // Gemini may send a separate usage trailer after its terminal
+                // candidate; wait for EOF before closing the destination.
+                chunk["choices"][0]["finish_reason"] = Value::Null;
+            }
+            match self.direction {
+                Direction::GeminiToAnthropic => out.extend(self.push_openai_chunk(&chunk)),
+                Direction::GeminiToResponses => out.extend(Self::from_wire_frames(
+                    self.responses
+                        .as_mut()
+                        .expect("Responses destination initialized")
+                        .push(&chunk.to_string()),
+                )),
+                _ => out.push(SseOut::json(None, chunk)),
+            }
+        }
+        out
+    }
+
+    fn push_chat_to_gemini(&mut self, chunk: &Value) -> Vec<SseOut> {
+        if let Some(value) = chunk["usage"]["prompt_tokens"].as_u64() {
+            self.usage.input_tokens = value;
+        }
+        if let Some(value) = chunk["usage"]["completion_tokens"].as_u64() {
+            self.usage.output_tokens = value;
+        }
+        if let Some(value) = chunk["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64() {
+            self.usage.cache_read_tokens = value;
+        }
+        let Some(choice) = chunk["choices"].as_array().and_then(|items| items.first()) else {
+            return Vec::new();
+        };
+        if let Some(reason) = choice["finish_reason"].as_str() {
+            self.stop_reason = Some(IrStopReason::from_openai(reason));
+        }
+        let mut parts = Vec::new();
+        let delta = &choice["delta"];
+        if let Some(text) = delta["reasoning_content"]
+            .as_str()
+            .or_else(|| delta["reasoning"].as_str())
+        {
+            if !text.is_empty() {
+                parts.push(json!({"text":text,"thought":true}));
+            }
+        }
+        if let Some(text) = delta["content"].as_str() {
+            if !text.is_empty() {
+                parts.push(json!({"text":text}));
+            }
+        }
+        for call in delta["tool_calls"].as_array().into_iter().flatten() {
+            let index = call["index"].as_u64().unwrap_or(0);
+            let state = self
+                .gemini_tool_parts
+                .entry(index)
+                .or_insert_with(|| json!({"id":"","name":"","arguments":""}));
+            if let Some(id) = call["id"].as_str() {
+                state["id"] = json!(id);
+            }
+            if let Some(name) = call["function"]["name"].as_str() {
+                state["name"] = json!(name);
+            }
+            if let Some(fragment) = call["function"]["arguments"].as_str() {
+                let mut args = state["arguments"].as_str().unwrap_or("").to_owned();
+                args.push_str(fragment);
+                state["arguments"] = json!(args);
+            }
+        }
+        let mut out = if parts.is_empty() {
+            Vec::new()
+        } else {
+            vec![SseOut::json(
+                None,
+                json!({"responseId":self.message_id,"modelVersion":self.client_model,"candidates":[{"index":0,"content":{"role":"model","parts":parts}}]}),
+            )]
+        };
+        if choice["finish_reason"].is_string() {
+            out.extend(self.flush_gemini_tools());
+        }
+        out
+    }
+
+    fn flush_gemini_tools(&mut self) -> Vec<SseOut> {
+        if self.gemini_tool_parts.is_empty() {
+            return Vec::new();
+        }
+        let mut parts = Vec::new();
+        for (_, state) in std::mem::take(&mut self.gemini_tool_parts) {
+            let args = state["arguments"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .unwrap_or("{}");
+            let Ok(args) = serde_json::from_str::<Value>(args) else {
+                self.finished = true;
+                return vec![Self::gemini_error(
+                    "upstream function arguments are not valid JSON",
+                )];
+            };
+            if !args.is_object() || state["name"].as_str().is_none_or(|name| name.is_empty()) {
+                self.finished = true;
+                return vec![Self::gemini_error(
+                    "upstream function call requires a name and object arguments",
+                )];
+            }
+            parts.push(json!({"functionCall":{"id":state["id"],"name":state["name"],"args":args}}));
+        }
+        vec![SseOut::json(
+            None,
+            json!({"responseId":self.message_id,"modelVersion":self.client_model,"candidates":[{"index":0,"content":{"role":"model","parts":parts}}]}),
+        )]
     }
 
     fn push_responses_event(&mut self, data: &Value) -> Vec<SseOut> {
@@ -193,6 +452,10 @@ impl StreamTranscoder {
                 self.usage.output_tokens = data["response"]["usage"]["output_tokens"]
                     .as_u64()
                     .unwrap_or(0);
+                self.usage.cache_read_tokens = data["response"]["usage"]["input_tokens_details"]
+                    ["cached_tokens"]
+                    .as_u64()
+                    .unwrap_or(0);
                 stop = Some(if data["type"] == "response.incomplete" {
                     "length"
                 } else if data["response"]["output"]
@@ -207,6 +470,9 @@ impl StreamTranscoder {
             }
             "response.failed" | "error" => {
                 self.finished = true;
+                if self.direction == Direction::ResponsesToGemini {
+                    return vec![Self::gemini_error("upstream Responses stream failed")];
+                }
                 return vec![SseOut::json(
                     Some("error"),
                     json!({"error":{"type":"api_error","message":"upstream Responses stream failed"}}),
@@ -217,7 +483,9 @@ impl StreamTranscoder {
         let chat = json!({"id":self.message_id,"object":"chat.completion.chunk","model":self.client_model,
             "choices":[{"index":0,"delta":delta,"finish_reason":stop}],
             "usage":{"prompt_tokens":self.usage.input_tokens,"completion_tokens":self.usage.output_tokens}});
-        if self.direction == Direction::ResponsesToAnthropic {
+        if self.direction == Direction::ResponsesToGemini {
+            self.push_chat_to_gemini(&chat)
+        } else if self.direction == Direction::ResponsesToAnthropic {
             self.push_openai_chunk(&chat)
         } else {
             let mut out = vec![SseOut::json(None, chat)];
@@ -248,7 +516,7 @@ impl StreamTranscoder {
                     "content": [],
                     "stop_reason": null,
                     "stop_sequence": null,
-                    "usage": { "input_tokens": self.usage.input_tokens, "output_tokens": 0 },
+                    "usage": { "input_tokens": self.usage.input_tokens.saturating_sub(self.usage.cache_read_tokens), "cache_read_input_tokens":self.usage.cache_read_tokens, "output_tokens": 0 },
                 }
             }),
         ));
@@ -257,7 +525,9 @@ impl StreamTranscoder {
     fn close_open_block(&mut self, out: &mut Vec<SseOut>) {
         let index = match self.open_block {
             OpenBlock::None => return,
-            OpenBlock::Text { index } | OpenBlock::Tool { index } => index,
+            OpenBlock::Text { index }
+            | OpenBlock::Tool { index }
+            | OpenBlock::Thinking { index } => index,
         };
         out.push(SseOut::json(
             Some("content_block_stop"),
@@ -278,6 +548,9 @@ impl StreamTranscoder {
             if let Some(c) = usage["completion_tokens"].as_u64() {
                 self.usage.output_tokens = c;
             }
+            if let Some(cached) = usage["prompt_tokens_details"]["cached_tokens"].as_u64() {
+                self.usage.cache_read_tokens = cached;
+            }
         }
 
         let Some(choice) = chunk["choices"].as_array().and_then(|c| c.first()) else {
@@ -290,6 +563,24 @@ impl StreamTranscoder {
         }
 
         let delta = &choice["delta"];
+
+        if let Some(thinking) = delta["reasoning_content"]
+            .as_str()
+            .or_else(|| delta["reasoning"].as_str())
+        {
+            if !thinking.is_empty() {
+                if !matches!(self.open_block, OpenBlock::Thinking { .. }) {
+                    self.close_open_block(&mut out);
+                    let index = self.next_block_index;
+                    self.next_block_index += 1;
+                    self.open_block = OpenBlock::Thinking { index };
+                    out.push(SseOut::json(Some("content_block_start"), json!({"type":"content_block_start","index":index,"content_block":{"type":"thinking","thinking":"","signature":"cognia-advisory"}})));
+                }
+                if let OpenBlock::Thinking { index } = self.open_block {
+                    out.push(SseOut::json(Some("content_block_delta"), json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":thinking}})));
+                }
+            }
+        }
 
         // Text deltas.
         if let Some(text) = delta["content"].as_str() {
@@ -374,7 +665,17 @@ impl StreamTranscoder {
         match event["type"].as_str() {
             Some("message_start") => {
                 if let Some(p) = event["message"]["usage"]["input_tokens"].as_u64() {
-                    self.usage.input_tokens = p;
+                    self.usage.cache_read_tokens = event["message"]["usage"]
+                        ["cache_read_input_tokens"]
+                        .as_u64()
+                        .unwrap_or(0);
+                    self.usage.input_tokens = p
+                        .saturating_add(self.usage.cache_read_tokens)
+                        .saturating_add(
+                            event["message"]["usage"]["cache_creation_input_tokens"]
+                                .as_u64()
+                                .unwrap_or(0),
+                        );
                 }
                 if !self.started {
                     self.started = true;
@@ -462,6 +763,165 @@ impl StreamTranscoder {
 mod tests {
     use super::*;
 
+    #[test]
+    fn gemini_stream_reaches_chat_messages_and_responses_with_tools_reasoning_and_cache() {
+        for direction in [
+            Direction::GeminiToOpenAi,
+            Direction::GeminiToAnthropic,
+            Direction::GeminiToResponses,
+        ] {
+            let mut transcoder = StreamTranscoder::new(direction, "alias", "message");
+            let mut frames = transcoder.push(&json!({"candidates":[{"content":{"parts":[
+                {"text":"consider","thought":true},{"text":"answer"},
+                {"functionCall":{"id":"call-one","name":"lookup","args":{"q":"value"}},"thoughtSignature":"signature"}
+            ]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3,"thoughtsTokenCount":2,"cachedContentTokenCount":6}}));
+            frames.extend(transcoder.finish());
+            let wire = frames.iter().map(SseOut::to_frame).collect::<String>();
+            assert!(wire.contains("consider"), "{direction:?}: {wire}");
+            assert!(wire.contains("answer"), "{direction:?}: {wire}");
+            assert!(wire.contains("lookup"), "{direction:?}: {wire}");
+            assert_eq!(
+                transcoder.usage(),
+                IrUsage {
+                    input_tokens: 8,
+                    output_tokens: 5,
+                    cache_read_tokens: 6
+                }
+            );
+            match direction {
+                Direction::GeminiToOpenAi => {
+                    assert!(wire.contains("reasoning_content"));
+                    assert_eq!(frames.last().unwrap().data, "[DONE]");
+                }
+                Direction::GeminiToAnthropic => {
+                    assert!(wire.contains("thinking_delta"));
+                    assert!(wire.contains("input_json_delta"));
+                    assert_eq!(
+                        frames.last().unwrap().event.as_deref(),
+                        Some("message_stop")
+                    );
+                }
+                Direction::GeminiToResponses => {
+                    assert!(wire.contains("response.reasoning_summary_text.delta"));
+                    assert!(wire.contains("response.completed"));
+                    assert!(wire.contains("cached_tokens"));
+                }
+                _ => unreachable!(),
+            }
+            assert!(transcoder.finish().is_empty());
+        }
+    }
+
+    #[test]
+    fn chat_stream_to_gemini_buffers_fragmented_function_arguments() {
+        let mut transcoder = StreamTranscoder::new(Direction::OpenAiToGemini, "alias", "message");
+        let mut frames = transcoder.push(&json!({"choices":[{"delta":{"reasoning_content":"think","content":"hello","tool_calls":[{"index":0,"id":"call-a","function":{"name":"lookup","arguments":"{\"q\":"}}]}}]}));
+        assert!(frames
+            .iter()
+            .all(|frame| !frame.data.contains("functionCall")));
+        frames.extend(transcoder.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"value\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":6,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":3}}})));
+        frames.extend(transcoder.finish());
+        let values: Vec<Value> = frames.iter().map(parse).collect();
+        let parts: Vec<&Value> = values
+            .iter()
+            .flat_map(|value| {
+                value["candidates"][0]["content"]["parts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+            })
+            .collect();
+        assert!(parts
+            .iter()
+            .any(|part| part["thought"] == true && part["text"] == "think"));
+        assert!(parts
+            .iter()
+            .any(|part| part["functionCall"]["args"] == json!({"q":"value"})));
+        assert_eq!(
+            values.last().unwrap()["usageMetadata"]["cachedContentTokenCount"],
+            3
+        );
+        assert_eq!(
+            values.last().unwrap()["candidates"][0]["finishReason"],
+            "STOP"
+        );
+        assert!(frames.iter().all(|frame| frame.data != "[DONE]"));
+    }
+
+    #[test]
+    fn messages_and_responses_streams_reach_gemini_without_losing_usage() {
+        let mut messages = StreamTranscoder::new(Direction::AnthropicToGemini, "alias", "message");
+        let mut frames = messages.push(&json!({"type":"message_start","message":{"usage":{"input_tokens":4,"cache_read_input_tokens":2}}}));
+        frames.extend(messages.push(&json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"think"}})));
+        frames.extend(messages.push(&json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello"}})));
+        frames.extend(messages.push(&json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":3}})));
+        frames.extend(messages.finish());
+        assert_eq!(
+            parse(frames.last().unwrap())["candidates"][0]["finishReason"],
+            "MAX_TOKENS"
+        );
+        assert_eq!(
+            messages.usage(),
+            IrUsage {
+                input_tokens: 6,
+                output_tokens: 3,
+                cache_read_tokens: 2
+            }
+        );
+
+        let mut responses = StreamTranscoder::new(Direction::ResponsesToGemini, "alias", "message");
+        let mut frames =
+            responses.push(&json!({"type":"response.output_text.delta","delta":"hello"}));
+        frames.extend(
+            responses
+                .push(&json!({"type":"response.reasoning_summary_text.delta","delta":"think"})),
+        );
+        frames.extend(responses.push(&json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call-a","name":"lookup"}})));
+        frames.extend(responses.push(&json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\":1}"})));
+        frames.extend(responses.push(&json!({"type":"response.completed","response":{"output":[{"type":"function_call"}],"usage":{"input_tokens":9,"output_tokens":4,"input_tokens_details":{"cached_tokens":2}}}})));
+        frames.extend(responses.finish());
+        let wire = frames.iter().map(SseOut::to_frame).collect::<String>();
+        assert!(wire.contains("functionCall"));
+        assert!(wire.contains("lookup"));
+        assert!(wire.contains("think"));
+        assert_eq!(
+            responses.usage(),
+            IrUsage {
+                input_tokens: 9,
+                output_tokens: 4,
+                cache_read_tokens: 2
+            }
+        );
+    }
+
+    #[test]
+    fn gemini_streams_do_not_turn_truncation_or_invalid_tools_into_success() {
+        for direction in [
+            Direction::GeminiToOpenAi,
+            Direction::GeminiToAnthropic,
+            Direction::GeminiToResponses,
+            Direction::OpenAiToGemini,
+            Direction::AnthropicToGemini,
+            Direction::ResponsesToGemini,
+        ] {
+            let mut transcoder = StreamTranscoder::new(direction, "alias", "id");
+            let frames = transcoder.finish();
+            let wire = frames.iter().map(SseOut::to_frame).collect::<String>();
+            assert!(
+                wire.contains("error") || wire.contains("response.failed"),
+                "{direction:?}: {wire}"
+            );
+            assert!(!wire.contains("response.completed"));
+            assert!(!wire.contains("\"finishReason\":\"STOP\""));
+        }
+        let mut transcoder = StreamTranscoder::new(Direction::OpenAiToGemini, "alias", "id");
+        transcoder.push(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"id","function":{"name":"lookup","arguments":"{"}}]}}]}));
+        let frames =
+            transcoder.push(&json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}));
+        assert_eq!(parse(&frames[0])["error"]["code"], 502);
+        assert!(transcoder.finish().is_empty());
+    }
+
     fn parse(out: &SseOut) -> Value {
         serde_json::from_str(&out.data).unwrap()
     }
@@ -516,7 +976,8 @@ mod tests {
             t.usage(),
             IrUsage {
                 input_tokens: 9,
-                output_tokens: 2
+                output_tokens: 2,
+                ..Default::default()
             }
         );
         // SSE framing includes the event name line.

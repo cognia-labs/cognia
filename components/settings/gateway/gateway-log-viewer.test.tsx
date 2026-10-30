@@ -14,12 +14,15 @@ jest.mock("next-intl", () => ({
 }))
 
 let liveRows: GatewayRequestLogRow[] = []
+let liveUsage: unknown
 let lastFilter: unknown
 jest.mock("dexie-react-hooks", () => ({
   // Actually run the query callback so the filter it builds is observable —
   // returning `liveRows` blindly left every filter branch untested.
   useLiveQuery: (fn: () => unknown) => {
-    lastFilter = fn()
+    const value = fn()
+    if (value instanceof Promise) return liveUsage
+    lastFilter = value
     return liveRows
   },
 }))
@@ -31,7 +34,11 @@ jest.mock("@/lib/db/gateway-request-log", () => ({
   listGatewayRequestLog: (filter: unknown) => filter,
   clearGatewayRequestLog: () => mockClear(),
   summarizeGatewayUsage: (...a: unknown[]) => mockSummary(...a),
+  groupGatewayRequestsBySession: jest.requireActual("@/lib/db/gateway-request-log")
+    .groupGatewayRequestsBySession,
 }))
+
+jest.mock("@/lib/db/session-usage", () => ({ totalsBySession: jest.fn() }))
 
 const mockDownload = jest.fn()
 jest.mock("@/lib/gateway/request-log-export", () => ({
@@ -70,6 +77,7 @@ const row = (over: Partial<GatewayRequestLogRow> = {}): GatewayRequestLogRow => 
 beforeEach(() => {
   mockDownload.mockReset()
   liveRows = []
+  liveUsage = undefined
   lastFilter = undefined
   mockEstimateCost.mockReset().mockReturnValue(undefined)
   mockClear.mockReset().mockResolvedValue(undefined)
@@ -83,6 +91,63 @@ beforeEach(() => {
 })
 
 describe("GatewayLogViewer", () => {
+  it("filters requests by an exact conversation identity", async () => {
+    liveRows = [row({ sessionId: "session-a" })]
+    const user = userEvent.setup()
+    render(<GatewayLogViewer />)
+    await user.type(screen.getByRole("textbox", { name: "colSession" }), "session-a")
+    expect(lastFilter).toEqual({ limit: 100, sessionId: "session-a" })
+    await user.click(screen.getByRole("button", { name: "logClearFilters" }))
+    expect(lastFilter).toEqual({ limit: 100 })
+  })
+
+  it("groups identified sessions and retains legacy requests without inventing an identity", async () => {
+    liveRows = [
+      row({ id: "a", sessionId: "session-a" }),
+      row({ id: "legacy" }),
+      row({ id: "b", sessionId: "session-a" }),
+    ]
+    const user = userEvent.setup()
+    render(<GatewayLogViewer />)
+    await user.click(screen.getByRole("radio", { name: "logViewSessions" }))
+    expect(screen.getByRole("button", { name: "session-a" })).toBeInTheDocument()
+    expect(screen.getByText("logSessionUnknown")).toBeInTheDocument()
+    expect(screen.getByText("logSessionRequests:2")).toBeInTheDocument()
+    expect(screen.getAllByRole("button", { name: "sessionUsageOpen" })).toHaveLength(1)
+    await user.click(screen.getByRole("button", { name: "session-a" }))
+    expect(lastFilter).toEqual({ limit: 100, sessionId: "session-a" })
+  })
+
+  it("opens the existing gateway session usage ledger instead of deriving a new bill from log rows", async () => {
+    const { totalsBySession } = jest.requireMock("@/lib/db/session-usage")
+    totalsBySession.mockResolvedValue({
+      turns: 1,
+      inputTokens: 25,
+      outputTokens: 5,
+      costUsd: 0.01,
+      cacheReadTokens: 10,
+      cacheCreationTokens: 0,
+    })
+    liveUsage = {
+      status: "ok",
+      totals: {
+        turns: 1,
+        inputTokens: 25,
+        outputTokens: 5,
+        costUsd: 0.01,
+        cacheReadTokens: 10,
+        cacheCreationTokens: 0,
+      },
+    }
+    liveRows = [row({ sessionId: "native/session" })]
+    const user = userEvent.setup()
+    render(<GatewayLogViewer />)
+    await user.click(screen.getByRole("radio", { name: "logViewSessions" }))
+    await user.click(screen.getByRole("button", { name: "sessionUsageOpen" }))
+    expect(totalsBySession).toHaveBeenCalledWith("gateway:native/session")
+    expect(screen.getByText("sessionUsageHelp")).toBeInTheDocument()
+    expect(screen.getByText("$0.0100")).toBeInTheDocument()
+  })
   it("shows the empty state and usage tiles when there are no rows", () => {
     render(<GatewayLogViewer />)
     expect(screen.getByText("logEmpty")).toBeInTheDocument()

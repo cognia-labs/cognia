@@ -1,11 +1,13 @@
 import {
   buildGatewaySnapshot,
   enrichSnapshotWithSubscriptionCreds,
+  enrichSnapshotWithSubscriptionPools,
   loadSnapshotProfileMeta,
   type SnapshotSettingsSlice,
 } from "./snapshot-publisher"
 import type { GatewayRoutingSnapshot } from "@/types/gateway"
 import type { ModelMapping } from "@cognia/provider-types/model-mapping"
+import type { AccountSummary } from "@/types/subscription"
 import * as profiles from "@/lib/db/provider-profiles"
 
 jest.mock("@/lib/db/provider-profiles", () => ({
@@ -13,6 +15,203 @@ jest.mock("@/lib/db/provider-profiles", () => ({
   listDeploymentProfiles: jest.fn(),
   listTransportProfiles: jest.fn(),
 }))
+
+describe("subscription account snapshot projection", () => {
+  const summary = (id: string, fields: Partial<AccountSummary> = {}): AccountSummary => ({
+    id,
+    provider: "codex",
+    variant: "codex",
+    expiresAtMs: 0,
+    createdAtMs: 1,
+    lastUsedAtMs: 2,
+    authMode: "chatgpt",
+    credentialSource: "managed",
+    health: "ready",
+    isExternal: false,
+    ...fields,
+  })
+  const snapshot = (): GatewayRoutingSnapshot => ({
+    providers: [
+      {
+        id: "codex",
+        protocol: "openai",
+        apiFlavor: "responses",
+        apiKey: "active",
+        baseUrl: "https://active.invalid/v1",
+        enabled: true,
+        models: ["claude-sonnet-5", "gpt-5"],
+      },
+    ],
+    aliases: [],
+    generatedAtMs: 10_000,
+  })
+
+  it("lists safe opt-in candidates without reading sibling credentials or quota", async () => {
+    const resolveCredential = jest.fn()
+    const readLimits = jest.fn()
+    const result = await enrichSnapshotWithSubscriptionPools(
+      snapshot(),
+      [{ providerId: "codex", vaultProviderId: "codex", rotationEnabled: false }],
+      {
+        listAccounts: async () => [
+          summary("one"),
+          summary("two"),
+          summary("blocked", { health: "reauth_required" }),
+        ],
+        resolveCredential,
+        readLimits,
+      },
+      10_000
+    )
+    expect(result.subscriptionRotationProviders).toEqual([{ providerId: "codex", accountCount: 2 }])
+    expect(result.providers[0].subscriptionPool).toBeUndefined()
+    expect(resolveCredential).not.toHaveBeenCalled()
+    expect(readLimits).not.toHaveBeenCalled()
+  })
+
+  it("retains each opted-in account endpoint, headers and cached allowance scope", async () => {
+    const resolveCredential = jest.fn(async (_provider: string, id: string) => ({
+      apiKey: `key-${id}`,
+      baseURL: `https://${id}.invalid/v1`,
+      headers: { "ChatGPT-Account-Id": id },
+      apiFlavor: "responses" as const,
+    }))
+    const result = await enrichSnapshotWithSubscriptionPools(
+      snapshot(),
+      [
+        {
+          providerId: "codex",
+          vaultProviderId: "codex",
+          rotationEnabled: true,
+          transport: { authScheme: "bearer", staticHeaders: [["x-tenant", "tenant"]] },
+        },
+      ],
+      {
+        listAccounts: async () => [
+          summary("one"),
+          summary("two"),
+          summary("expired", { expiresAtMs: 9999 }),
+        ],
+        resolveCredential,
+        readLimits: async (_provider, id) => ({
+          provider: "codex",
+          accountId: id,
+          fetchedAt: 9500,
+          meters: [
+            {
+              id: "session",
+              kind: "window",
+              usedPct: id === "one" ? 100 : 20,
+              resetAt: 20_000,
+              status: "ok",
+            },
+            {
+              id: "weekly_sonnet",
+              kind: "window",
+              usedPct: 100,
+              resetAt: 30_000,
+              status: "exceeded",
+            },
+            { id: "unscoped_custom", kind: "window", usedPct: 100, status: "exceeded" },
+          ],
+        }),
+      },
+      10_000
+    )
+    const pool = result.providers[0].subscriptionPool!
+    expect(result.providers[0].apiKey).toBe("active")
+    expect(result.providers[0].baseUrl).toBe("https://active.invalid/v1")
+    expect(pool.quotaFreshnessMs).toBe(300_000)
+    expect(pool.accounts).toHaveLength(2)
+    expect(pool.accounts[1]).toMatchObject({
+      accountId: "two",
+      apiKey: "key-two",
+      baseUrl: "https://two.invalid/v1",
+      transport: {
+        staticHeaders: [
+          ["x-tenant", "tenant"],
+          ["chatgpt-account-id", "two"],
+        ],
+      },
+      quotaObservedAtMs: 9500,
+    })
+    expect(pool.accounts[0].windows).toEqual([
+      { id: "session", usedPct: 100, resetAtMs: 20_000 },
+      { id: "weekly_sonnet", usedPct: 100, resetAtMs: 30_000, modelIds: ["claude-sonnet-5"] },
+    ])
+    expect(resolveCredential.mock.calls.map((call) => call[1])).toEqual(["one", "two"])
+  })
+
+  it("never broadens an explicit account or overrides a configured manual credential", async () => {
+    const resolveCredential = jest.fn()
+    const readLimits = jest.fn()
+    for (const source of [
+      {
+        providerId: "codex",
+        vaultProviderId: "codex",
+        rotationEnabled: true,
+        selectedAccountId: "chosen",
+      },
+      {
+        providerId: "codex",
+        vaultProviderId: "codex",
+        rotationEnabled: true,
+        manualCredential: true,
+      },
+    ]) {
+      const result = await enrichSnapshotWithSubscriptionPools(
+        snapshot(),
+        [source],
+        {
+          listAccounts: async () => [summary("one"), summary("two")],
+          resolveCredential,
+          readLimits,
+        },
+        10_000
+      )
+      expect(result.providers[0].apiKey).toBe("active")
+      expect(result.providers[0].subscriptionPool).toBeUndefined()
+      if ("selectedAccountId" in source)
+        expect(result.providers[0].selectedSubscriptionAccountId).toBe("chosen")
+    }
+    expect(resolveCredential).not.toHaveBeenCalled()
+    expect(readLimits).not.toHaveBeenCalled()
+  })
+
+  it("keeps unavailable quota unknown and uses Google API-key authentication with headers", async () => {
+    const result = await enrichSnapshotWithSubscriptionCreds(
+      { providers: [], aliases: [], generatedAtMs: 1 },
+      ["google-sub"],
+      async () => ({
+        apiKey: "google-key",
+        baseURL: "https://google.invalid/v1beta",
+        protocol: "google",
+        headers: { "x-tenant": "one" },
+      })
+    )
+    expect(result.providers[0].transport).toEqual({
+      authScheme: "custom-header",
+      authHeaderName: "x-goog-api-key",
+      staticHeaders: [["x-tenant", "one"]],
+    })
+    const pools = await enrichSnapshotWithSubscriptionPools(
+      result,
+      [{ providerId: "google-sub", vaultProviderId: "google-sub", rotationEnabled: true }],
+      {
+        listAccounts: async () => [summary("one")],
+        resolveCredential: async () => ({
+          apiKey: "one",
+          baseURL: "https://google.invalid/v1beta",
+          protocol: "google",
+        }),
+        readLimits: async () => null,
+      },
+      10_000
+    )
+    expect(pools.providers[0].subscriptionPool!.accounts[0].windows).toEqual([])
+    expect(pools.providers[0].subscriptionPool!.accounts[0].quotaObservedAtMs).toBeUndefined()
+  })
+})
 
 const mapping = (
   alias: string,

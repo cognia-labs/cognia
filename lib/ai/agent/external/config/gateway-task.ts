@@ -844,13 +844,34 @@ export function nativeSubagentModelBindings(
   }
 }
 
+/** Resolve an explicit native child through the plan's frozen client selector. */
+function admittedNativeModel(
+  plan: TaskModelPlan | undefined,
+  slot: string,
+  selected: ExternalAgentCogniaModelBinding,
+  primaryProvider: string,
+  allowed: readonly string[]
+): string {
+  const selector = plan?.slots[slot]?.modelId ?? selected.modelId
+  const binding = plan?.bindings?.[selector]
+  if (
+    !allowed.includes(selector) ||
+    (binding
+      ? binding.providerId !== selected.providerId || binding.modelId !== selected.modelId
+      : selected.providerId !== primaryProvider || selector !== selected.modelId)
+  )
+    throw new Error("Native subagent model is not admitted by this Cognia task")
+  return selector
+}
+
 /** Explicit inline customization is separate from task-owned provider routing. */
 function openCodeCustomization(
   config: ExternalAgentConfig,
   selectedModel: string,
   subagentModel: string | undefined,
   providerId: string,
-  allowedModels: readonly string[]
+  allowedModels: readonly string[],
+  plan?: TaskModelPlan
 ): Record<string, unknown> {
   const output = readOpenCodeCustomization(config)
   const v2 = config.protocol === "opencode-v2"
@@ -869,14 +890,19 @@ function openCodeCustomization(
             model = subagentModel ?? selectedModel
             if (entry.model !== undefined) {
               const binding = openCodeModelBinding(entry.model, providerId, v2)
-              if (binding.providerId !== providerId || !allowedModels.includes(binding.modelId))
-                throw new Error("OpenCode subagent model is not admitted by this Cognia task")
+              const selector = admittedNativeModel(
+                plan,
+                `opencode.${key === agentKey ? "agent" : "command"}.${name}`,
+                binding,
+                providerId,
+                allowedModels
+              )
               model =
                 typeof entry.model === "string"
-                  ? `cognia/${binding.modelId}${binding.variant !== undefined ? `#${binding.variant}` : ""}`
+                  ? `cognia/${selector}${binding.variant !== undefined ? `#${binding.variant}` : ""}`
                   : {
                       providerID: "cognia",
-                      model: binding.modelId,
+                      model: selector,
                       ...(binding.variant !== undefined ? { variant: binding.variant } : {}),
                     }
             }
@@ -1175,7 +1201,8 @@ export function buildGatewayTaskConfig(input: {
       selectedModel,
       subagent ? `cognia/${subagent.modelId}` : undefined,
       binding.providerId,
-      modelPlan?.models ?? [model]
+      modelPlan?.models ?? [model],
+      modelPlan
     )
     const modelEntry = (id: string, v2: boolean) => {
       const facts =
@@ -1339,9 +1366,15 @@ export function buildGatewayTaskConfig(input: {
     const overridden: Record<string, string> = {}
     for (const [name, selection] of Object.entries(plugin?.modelOverrides ?? {})) {
       const explicit = piModelBinding(selection, binding)
-      if (explicit.providerId !== binding.providerId || !ids.includes(explicit.modelId))
-        throw new Error("Pi subagent model is not admitted by this Cognia task")
-      overridden[name] = selection === "inherit" ? "inherit" : `cognia/${explicit.modelId}`
+      if (plugin?.agents[name]?.model !== undefined) continue
+      const selector = admittedNativeModel(
+        modelPlan,
+        `pi.agent.${name}`,
+        explicit,
+        binding.providerId,
+        ids
+      )
+      overridden[name] = selection === "inherit" ? "inherit" : `cognia/${selector}`
     }
     files["pi/settings.json"] = JSON.stringify({
       defaultProvider: "cognia",
@@ -1374,9 +1407,14 @@ export function buildGatewayTaskConfig(input: {
         let selected: string | undefined
         if (definition.model !== undefined) {
           const explicit = piModelBinding(definition.model, binding)
-          if (explicit.providerId !== binding.providerId || !ids.includes(explicit.modelId))
-            throw new Error("Pi subagent model is not admitted by this Cognia task")
-          selected = `cognia/${explicit.modelId}`
+          const selector = admittedNativeModel(
+            modelPlan,
+            `pi.agent.${name}`,
+            explicit,
+            binding.providerId,
+            ids
+          )
+          selected = `cognia/${selector}`
           if (definition.model === "inherit") selected = "inherit"
           agents[name] = selected
         }

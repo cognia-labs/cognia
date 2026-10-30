@@ -149,7 +149,7 @@ describe("plugin-gated Pi child models", () => {
       })
     ).toThrow(/not admitted/)
   })
-  it("rejects cross-provider explicit models instead of projecting a fallback", () => {
+  it("projects cross-provider explicit models through the admitted selector", () => {
     const input = source()
     input.metadata!.cogniaPiSubagents = {
       ...(input.metadata!.cogniaPiSubagents as object),
@@ -161,11 +161,23 @@ describe("plugin-gated Pi child models", () => {
       explicitModels: nativeSubagentModelBindings(input, binding),
       layers: [],
     })
-    expect(result).toEqual({
-      ok: false,
-      reason: "cross-provider-unsupported",
-      slot: "pi.agent.reviewer",
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.reason)
+    const selector = result.plan.slots["pi.agent.reviewer"].modelId
+    expect(result.plan.bindings?.[selector]).toEqual({ providerId: "foreign", modelId: "review" })
+    const built = buildGatewayTaskConfig({
+      config: input,
+      binding,
+      taskId: "pi-cross-provider",
+      model: binding.modelId,
+      endpoint: "http://127.0.0.1:9000/v1",
+      secret: "lease",
+      settings,
+      ownerAccountId: null,
+      modelPlan: result.plan,
     })
+    const files = JSON.parse(built.config.process!.env!.COGNIA_GATEWAY_TASK_CONFIG).files
+    expect(parseFrontmatter(files["pi/agents/reviewer.md"]).data.model).toBe(`cognia/${selector}`)
   })
 })
 

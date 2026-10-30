@@ -460,10 +460,12 @@ pub fn response_to_ir(body: &Value) -> Result<IrResponse, NotTranslatable> {
         id: s(&body["id"]).unwrap_or_default(),
         model: s(&body["model"]).unwrap_or_default(),
         content,
+        reasoning: message["reasoning_content"].as_str().or_else(|| message["reasoning"].as_str()).map(str::to_owned),
         stop_reason: IrStopReason::from_openai(choice["finish_reason"].as_str().unwrap_or("stop")),
         usage: IrUsage {
             input_tokens: body["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
             output_tokens: body["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+            cache_read_tokens: body["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0),
         },
     })
 }
@@ -501,6 +503,9 @@ pub fn response_from_ir(resp: &IrResponse, created: i64) -> Value {
     if !tool_calls.is_empty() {
         message["tool_calls"] = json!(tool_calls);
     }
+    if let Some(reasoning) = &resp.reasoning {
+        message["reasoning_content"] = json!(reasoning);
+    }
     json!({
         "id": resp.id,
         "object": "chat.completion",
@@ -513,6 +518,7 @@ pub fn response_from_ir(resp: &IrResponse, created: i64) -> Value {
         }],
         "usage": {
             "prompt_tokens": resp.usage.input_tokens,
+            "prompt_tokens_details": {"cached_tokens":resp.usage.cache_read_tokens},
             "completion_tokens": resp.usage.output_tokens,
             "total_tokens": resp.usage.input_tokens + resp.usage.output_tokens,
         }

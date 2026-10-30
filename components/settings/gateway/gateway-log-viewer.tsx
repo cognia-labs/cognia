@@ -32,7 +32,7 @@
  */
 
 import { Spinner } from "@/components/ui/spinner"
-import { useEffect, useMemo, useState } from "react"
+import { Fragment, useEffect, useMemo, useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import {
@@ -79,10 +79,12 @@ import { cn } from "@/lib/utils"
 import {
   clearGatewayRequestLog,
   GATEWAY_REQUEST_LOG_CAP,
+  groupGatewayRequestsBySession,
   listGatewayRequestLog,
   summarizeGatewayUsage,
   type GatewayRequestLogFilter,
 } from "@/lib/db/gateway-request-log"
+import { totalsBySession } from "@/lib/db/session-usage"
 import {
   downloadGatewayRequestLog,
   type GatewayRequestLogExportFormat,
@@ -138,6 +140,9 @@ export function GatewayLogViewer({
   const format = useFormatter()
   const [outcome, setOutcome] = useState<Outcome>("all")
   const [model, setModel] = useState("")
+  const [sessionId, setSessionId] = useState("")
+  const [view, setView] = useState<"requests" | "sessions">("requests")
+  const [usageSessionId, setUsageSessionId] = useState<string | null>(null)
   const [localKeyFilter, setLocalKeyFilter] = useState<string>(ALL_KEYS)
   const controlled = controlledKeyFilter !== undefined
   const keyFilter = controlled ? (controlledKeyFilter ?? ALL_KEYS) : localKeyFilter
@@ -166,10 +171,13 @@ export function GatewayLogViewer({
   // loaded) still needs an option, or the trigger renders empty.
   const orphanKeyFilter =
     keyFilter !== ALL_KEYS && !keys.some((k) => k.id === keyFilter) ? keyFilter : null
-  const filtersActive = outcome !== "all" || model.trim() !== "" || keyFilter !== ALL_KEYS
+  const filtersActive =
+    outcome !== "all" || model.trim() !== "" || sessionId.trim() !== "" || keyFilter !== ALL_KEYS
   const clearFilters = () => {
     setOutcome("all")
     setModel("")
+    setSessionId("")
+    setUsageSessionId(null)
     setKeyFilter(ALL_KEYS)
   }
 
@@ -179,8 +187,17 @@ export function GatewayLogViewer({
       if (outcome !== "all") filter.outcome = outcome
       if (model.trim()) filter.model = model.trim()
       if (keyFilter !== ALL_KEYS) filter.keyId = keyFilter
+      if (sessionId.trim()) filter.sessionId = sessionId.trim()
       return listGatewayRequestLog(filter)
-    }, [outcome, model, keyFilter, limit]) ?? NO_ROWS
+    }, [outcome, model, keyFilter, sessionId, limit]) ?? NO_ROWS
+
+  const groups = useMemo(
+    () =>
+      view === "sessions"
+        ? groupGatewayRequestsBySession(rows)
+        : [{ sessionId: null, usageSessionId: null, rows }],
+    [rows, view]
+  )
 
   const summary = summarizeGatewayUsage(rows)
   const costs = useMemo(() => new Map(rows.map((row) => [row.id, rowCostUsd(row)])), [rows])
@@ -353,6 +370,13 @@ export function GatewayLogViewer({
           className="h-8 min-w-0 flex-1 basis-36 text-xs"
           onChange={(e) => setModel(e.target.value)}
         />
+        <Input
+          value={sessionId}
+          placeholder={t("logFilterSessionPlaceholder")}
+          aria-label={t("colSession")}
+          className="h-8 min-w-0 flex-1 basis-36 text-xs"
+          onChange={(event) => setSessionId(event.target.value)}
+        />
         {/* shadcn Select, not a bare <select>: this was the only native one
               left in the repo and it ignored the app theme. */}
         <Select value={keyFilter} onValueChange={setKeyFilter}>
@@ -389,6 +413,28 @@ export function GatewayLogViewer({
           </Button>
         ) : null}
       </div>
+
+      <ToggleGroup
+        type="single"
+        variant="outline"
+        size="sm"
+        value={view}
+        onValueChange={(value) => {
+          if (value === "requests" || value === "sessions") setView(value)
+        }}
+        aria-label={t("logView")}
+      >
+        <ToggleGroupItem value="requests">{t("logViewRequests")}</ToggleGroupItem>
+        <ToggleGroupItem value="sessions">{t("logViewSessions")}</ToggleGroupItem>
+      </ToggleGroup>
+
+      {usageSessionId ? (
+        <SessionUsageView
+          key={usageSessionId}
+          usageSessionId={usageSessionId}
+          onClose={() => setUsageSessionId(null)}
+        />
+      ) : null}
 
       {rows.length === 0 ? (
         filtersActive ? (
@@ -430,20 +476,57 @@ export function GatewayLogViewer({
               </TableRow>
             </TableHeader>
             <TableBody className="font-mono">
-              {rows.map((r) => {
-                const cost = costs.get(r.id)
-                return (
-                  <LogRow
-                    key={r.id}
-                    row={r}
-                    keyName={keyName(r.keyId)}
-                    costLabel={cost === undefined ? t("costUnknown") : formatUsd(cost)}
-                    isFresh={new Date(r.at).getTime() > openedAt}
-                    isExpanded={expanded === r.id}
-                    onToggle={() => setExpanded((cur) => (cur === r.id ? null : r.id))}
-                  />
-                )
-              })}
+              {groups.map((group, index) => (
+                <Fragment key={group.sessionId ?? `unassigned-${index}`}>
+                  {view === "sessions" ? (
+                    <TableRow className="bg-muted/30 hover:bg-muted/30">
+                      <TableCell colSpan={9} className="py-2 font-sans">
+                        <div className="flex min-w-0 flex-wrap items-center gap-2">
+                          {group.sessionId ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-auto max-w-full py-1 text-xs"
+                              onClick={() => setSessionId(group.sessionId ?? "")}
+                            >
+                              <span className="truncate">{group.sessionId}</span>
+                            </Button>
+                          ) : (
+                            <span>{t("logSessionUnknown")}</span>
+                          )}
+                          <Badge variant="outline">
+                            {t("logSessionRequests", { count: group.rows.length })}
+                          </Badge>
+                          {group.usageSessionId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs"
+                              onClick={() => setUsageSessionId(group.usageSessionId)}
+                            >
+                              {t("sessionUsageOpen")}
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                  {group.rows.map((r) => {
+                    const cost = costs.get(r.id)
+                    return (
+                      <LogRow
+                        key={r.id}
+                        row={r}
+                        keyName={keyName(r.keyId)}
+                        costLabel={cost === undefined ? t("costUnknown") : formatUsd(cost)}
+                        isFresh={new Date(r.at).getTime() > openedAt}
+                        isExpanded={expanded === r.id}
+                        onToggle={() => setExpanded((cur) => (cur === r.id ? null : r.id))}
+                      />
+                    )
+                  })}
+                </Fragment>
+              ))}
             </TableBody>
           </Table>
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -572,6 +655,11 @@ function LogRow({
                   {costLabel}
                 </Detail>
                 <Detail label={t("colRoute")}>{row.route}</Detail>
+                {row.sessionId ? (
+                  <Detail label={t("colSession")} wrap>
+                    {row.sessionId}
+                  </Detail>
+                ) : null}
                 <Detail label={t("colRemoteIp")}>{row.remoteIp}</Detail>
                 <Detail label={t("colStream")}>
                   {row.stream ? t("streamYes") : t("streamNo")}
@@ -654,6 +742,79 @@ function LogRow({
         </TableCell>
       </TableRow>
     </>
+  )
+}
+
+function SessionUsageView({
+  usageSessionId,
+  onClose,
+}: {
+  usageSessionId: string
+  onClose: () => void
+}) {
+  const t = useTranslations("settings.gateway")
+  const format = useFormatter()
+  const result = useLiveQuery(async () => {
+    try {
+      return { status: "ok" as const, totals: await totalsBySession(usageSessionId) }
+    } catch {
+      return { status: "error" as const }
+    }
+  }, [usageSessionId])
+
+  return (
+    <Alert>
+      <AlertDescription className="flex flex-col gap-2">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="truncate font-medium">
+            {t("sessionUsageTitle", { session: usageSessionId.slice("gateway:".length) })}
+          </span>
+          <Button size="sm" variant="ghost" onClick={onClose}>
+            {t("sessionUsageClose")}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">{t("sessionUsageHelp")}</p>
+        {!result ? (
+          <p>{t("sessionUsageLoading")}</p>
+        ) : result.status === "error" ? (
+          <p className="text-destructive">{t("sessionUsageFailed")}</p>
+        ) : result.totals.turns === 0 ? (
+          <p>{t("sessionUsageEmpty")}</p>
+        ) : (
+          <dl className="grid grid-cols-2 gap-2 text-xs @xl/gateway-pane:grid-cols-4">
+            <div>
+              <dt className="text-muted-foreground">{t("summaryRequests")}</dt>
+              <dd>{format.number(result.totals.turns)}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">{t("summaryTokens")}</dt>
+              <dd>
+                {format.number(result.totals.inputTokens)} /{" "}
+                {format.number(result.totals.outputTokens)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">{t("sessionUsageCache")}</dt>
+              <dd>
+                {format.number(result.totals.cacheReadTokens)} /{" "}
+                {format.number(result.totals.cacheCreationTokens)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">{t("summaryCost")}</dt>
+              <dd>
+                {format.number(result.totals.costUsd, {
+                  style: "currency",
+                  currency: "USD",
+                  minimumFractionDigits: 4,
+                  maximumFractionDigits: 4,
+                })}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </AlertDescription>
+    </Alert>
   )
 }
 

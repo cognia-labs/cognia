@@ -66,7 +66,7 @@ function setup(
       onNavigate={onNavigate}
     />
   )
-  return { onToggleEnabled, onRefreshStatus, onNavigate }
+  return { onToggleEnabled, onRefreshStatus, onNavigate, persist }
 }
 
 beforeEach(() => {
@@ -78,6 +78,65 @@ beforeEach(() => {
 })
 
 describe("GatewayOverviewPanel", () => {
+  it("opts in one actual subscription provider without enabling other providers", async () => {
+    const user = userEvent.setup()
+    const { persist } = setup(
+      status({
+        subscriptionRotationProviders: [
+          { providerId: "codex", accountCount: 2 },
+          { providerId: "opencode", accountCount: 3 },
+        ],
+      })
+    )
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2)
+    await user.click(screen.getByRole("checkbox", { name: "subscriptionRotationProvider:codex,2" }))
+    expect(persist).toHaveBeenCalledWith({ subscriptionRotationProviderIds: ["codex"] })
+  })
+
+  it("keeps gateway extensions off until explicitly enabled", async () => {
+    const user = userEvent.setup()
+    const { persist } = setup()
+    expect(screen.getByRole("switch", { name: "gatewayExtensionsEnabled" })).not.toBeChecked()
+    await user.click(screen.getByRole("switch", { name: "gatewayExtensionsEnabled" }))
+    expect(persist).toHaveBeenCalledWith({ middlewareEnabled: true })
+  })
+
+  it("saves an explicit bridge alias while preserving the other bridge selection", async () => {
+    const user = userEvent.setup()
+    const { persist } = setup(status({ modelAliases: ["quick", "vision"] }), false, {
+      bridgeModels: { vision: "vision" },
+    })
+    await user.click(screen.getByRole("combobox", { name: "gatewayBridgeSearch" }))
+    await user.click(screen.getByRole("option", { name: "quick" }))
+    expect(persist).toHaveBeenCalledWith({ bridgeModels: { search: "quick", vision: "vision" } })
+  })
+
+  it("keeps optional text masking off until the user enables it", async () => {
+    const user = userEvent.setup()
+    const { persist } = setup()
+    expect(screen.getByRole("switch", { name: "privacyMaskText" })).not.toBeChecked()
+    expect(screen.getByText("privacyMaskTextHelp")).toBeInTheDocument()
+    await user.click(screen.getByRole("switch", { name: "privacyMaskText" }))
+    expect(persist).toHaveBeenCalledWith({ privacyMode: "mask" })
+  })
+  it("builds role examples only from currently served aliases and preserves the selected endpoint", async () => {
+    setup(status({ running: true, modelAliases: ["quick", "powerful"] }), false, {
+      publicOrigin: "https://gateway.example.com",
+    })
+    const snippet = screen.getByRole("textbox", { name: "roleSnippet" }) as HTMLTextAreaElement
+    expect(snippet.value).toContain("ANTHROPIC_MODEL=quick")
+    expect(snippet.value).toContain("ANTHROPIC_DEFAULT_HAIKU_MODEL=powerful")
+    expect(snippet.value).toContain("ANTHROPIC_BASE_URL=https://gateway.example.com")
+    expect(screen.getByText("ordinaryClientsHelp")).toBeInTheDocument()
+    expect(screen.getByText("managedTasksHelp")).toBeInTheDocument()
+    expect(screen.getByText("headlessCredentialsHelp")).toBeInTheDocument()
+  })
+
+  it("does not invent a model mapping when the live host supplies no alias catalog", () => {
+    setup(status({ modelAliases: [] }))
+    expect(screen.queryByRole("textbox", { name: "roleSnippet" })).not.toBeInTheDocument()
+    expect(screen.getByText("roleAliasesUnavailable")).toBeInTheDocument()
+  })
   // These five fields were computed by Rust, serialized into GatewayStatus, and
   // rendered nowhere — they appeared only in a test fixture. Pinned so they
   // cannot quietly regress to that state.

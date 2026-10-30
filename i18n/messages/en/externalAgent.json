@@ -1461,7 +1461,7 @@
   },
   "roleModels": {
     "title": "Sub-task models",
-    "description": "Native subagents, model aliases and helper calls of this runtime can run on other models from the primary model's provider and account. Unset slots keep the primary model. A turn moved to another provider or account runs on its primary model alone.",
+    "description": "Choose models and provider accounts for native subagents, model aliases and helper calls. Unset slots keep the primary model. A turn moved to another provider or account runs on its primary model alone.",
     "needsPrimary": "Turn on Cognia models and choose a primary model to set sub-task models.",
     "noSlots": "This runtime runs every call on the primary model.",
     "hostOutdated": "The paired Host must be updated before sub-task models can be set.",
@@ -1485,8 +1485,8 @@
     "modeLabel": "{slot}: model source",
     "modelLabel": "{slot}: model",
     "choose": "Choose a model",
-    "search": "Search {provider} models…",
-    "empty": "No other compatible models from this provider.",
+    "search": "Search compatible models…",
+    "empty": "No compatible gateway models are available.",
     "effort": "Reasoning effort",
     "effortDefault": "Model default",
     "efforts": {
@@ -1496,7 +1496,7 @@
       "high": "High",
       "xhigh": "Extra high"
     },
-    "sameAccount": "Uses the primary model's provider account.",
+    "sameAccount": "Each selected provider account is checked before the task starts.",
     "remove": "Remove",
     "removeStale": "Remove the unsupported sub-task model setting",
     "refusals": {

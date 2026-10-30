@@ -50,6 +50,11 @@ pub fn reconcile(
         let new = next.providers.iter().find(|p| &p.id == provider_id);
         match (old, new) {
             (Some(old), Some(new)) => {
+                if subscription_credential_keys(old).contains(key)
+                    && subscription_credential_keys(new).contains(key)
+                {
+                    return old.enabled && new.enabled;
+                }
                 new.enabled
                     && old.enabled
                     && old.base_url == new.base_url
@@ -60,6 +65,36 @@ pub fn reconcile(
             _ => false,
         }
     });
+}
+
+fn subscription_credential_keys(
+    provider: &super::snapshot::ProviderSnapshot,
+) -> std::collections::HashSet<String> {
+    let mut identities = std::collections::HashSet::new();
+    let models = if provider
+        .source_provider_id
+        .as_deref()
+        .unwrap_or(&provider.id)
+        == "commandcode"
+    {
+        vec!["", "claude-model"]
+    } else {
+        vec![""]
+    };
+    for model in models {
+        if let Some(pool) = &provider.subscription_pool {
+            for account in &pool.accounts {
+                identities.insert(super::execute::candidate_cooldown_key(
+                    &super::execute::subscription_account_candidate(provider, account, model),
+                ));
+            }
+        } else if provider.selected_subscription_account_id.is_some() {
+            identities.insert(super::execute::candidate_cooldown_key(
+                &super::execute::Candidate::new(provider, model),
+            ));
+        }
+    }
+    identities
 }
 
 /// Compute the cooldown window (ms from now) an upstream response implies, or
@@ -234,6 +269,35 @@ pub fn key_fingerprint(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subscription_reconciliation_keeps_account_cooldown_until_credential_or_transport_changes() {
+        let previous: super::super::snapshot::RoutingSnapshot = serde_json::from_value(serde_json::json!({"providers":[{"id":"p","enabled":true,"protocol":"openai","baseUrl":"https://default.invalid/v1","subscriptionPool":{"strategy":"allowance-reset","quotaFreshnessMs":300000,"accounts":[{"accountId":"one","apiKey":"shared","baseUrl":"https://one.invalid/v1","lastUsedAtMs":0,"windows":[]},{"accountId":"two","apiKey":"shared","baseUrl":"https://two.invalid/v1","lastUsedAtMs":0,"windows":[]}]}}],"generatedAtMs":1})).unwrap();
+        let provider = &previous.providers[0];
+        let account = &provider.subscription_pool.as_ref().unwrap().accounts[0];
+        let key = super::super::execute::candidate_cooldown_key(
+            &super::super::execute::subscription_account_candidate(provider, account, "m"),
+        );
+        let map = KeyCooldownMap::default();
+        record_permanent(&map, "p", &key, "unauthorized");
+        let mut next = previous.clone();
+        next.providers[0]
+            .subscription_pool
+            .as_mut()
+            .unwrap()
+            .accounts[0]
+            .quota_observed_at_ms = Some(5000);
+        reconcile(&map, Some(&previous), &next);
+        assert_eq!(map.lock().len(), 1);
+        next.providers[0]
+            .subscription_pool
+            .as_mut()
+            .unwrap()
+            .accounts[0]
+            .base_url = "https://new.invalid/v1".into();
+        reconcile(&map, Some(&previous), &next);
+        assert!(map.lock().is_empty());
+    }
 
     #[test]
     fn snapshot_reconciliation_preserves_identical_credentials_and_recovers_transport_changes() {

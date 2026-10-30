@@ -175,8 +175,58 @@ pub struct ModelMetadata {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SubscriptionWindow {
+    pub id: String,
+    pub used_pct: f64,
+    #[serde(default)]
+    pub reset_at_ms: Option<i64>,
+    #[serde(default)]
+    pub model_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionAccountSnapshot {
+    pub account_id: String,
+    pub api_key: String,
+    pub base_url: String,
+    #[serde(default)]
+    pub protocol: Option<String>,
+    #[serde(default)]
+    pub api_flavor: Option<String>,
+    #[serde(default)]
+    pub transport: Option<TransportSnapshot>,
+    #[serde(default)]
+    pub expires_at_ms: Option<i64>,
+    #[serde(default)]
+    pub last_used_at_ms: i64,
+    #[serde(default)]
+    pub quota_observed_at_ms: Option<i64>,
+    #[serde(default)]
+    pub windows: Vec<SubscriptionWindow>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionPoolSnapshot {
+    pub strategy: String,
+    pub quota_freshness_ms: u32,
+    pub accounts: Vec<SubscriptionAccountSnapshot>,
+}
+
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionRotationProvider {
+    pub provider_id: String,
+    pub account_count: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderSnapshot {
     pub id: String,
+    #[serde(default)]
+    pub source_provider_id: Option<String>,
     /// Wire protocol: "openai" | "anthropic" (others are not yet executable
     /// by the gateway and are skipped by the fallback walk).
     pub protocol: String,
@@ -213,11 +263,17 @@ pub struct ProviderSnapshot {
     /// Transport behavior override; absent ⇒ legacy protocol defaults.
     #[serde(default)]
     pub transport: Option<TransportSnapshot>,
+    #[serde(default)]
+    pub subscription_pool: Option<SubscriptionPoolSnapshot>,
+    #[serde(default)]
+    pub selected_subscription_account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutingSnapshot {
+    #[serde(default)]
+    pub subscription_rotation_providers: Vec<SubscriptionRotationProvider>,
     #[serde(default)]
     pub aliases: Vec<AliasSnapshot>,
     #[serde(default)]
@@ -274,6 +330,19 @@ impl RoutingSnapshot {
             if provider_id.is_empty() || !provider_ids.insert(provider_id) {
                 return Err(format!("duplicate provider '{}'", provider.id));
             }
+            if [
+                &provider.source_provider_id,
+                &provider.selected_subscription_account_id,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|id| id.trim().is_empty() || id.len() > 256)
+            {
+                return Err(format!(
+                    "provider {}: invalid source/account identity",
+                    provider.id
+                ));
+            }
             if let Some(deployment_id) = provider.deployment_id.as_deref() {
                 let deployment_id = deployment_id.trim().to_ascii_lowercase();
                 if deployment_id.is_empty() || !deployment_ids.insert(deployment_id) {
@@ -291,6 +360,99 @@ impl RoutingSnapshot {
                     ));
                 }
             }
+            if let Some(pool) = &provider.subscription_pool {
+                if pool.strategy != "allowance-reset"
+                    || pool.quota_freshness_ms == 0
+                    || pool.quota_freshness_ms > 300_000
+                    || pool.accounts.is_empty()
+                    || pool.accounts.len() > 128
+                {
+                    return Err(format!(
+                        "provider {}: invalid subscription pool limits",
+                        provider.id
+                    ));
+                }
+                let mut accounts = std::collections::HashSet::new();
+                for account in &pool.accounts {
+                    let base = reqwest::Url::parse(&account.base_url).map_err(|_| {
+                        format!("provider {}: invalid subscription endpoint", provider.id)
+                    })?;
+                    if account.account_id.trim().is_empty()
+                        || account.account_id.len() > 256
+                        || !accounts.insert(&account.account_id)
+                        || account.api_key.trim().is_empty()
+                        || account.api_key.len() > 65_536
+                        || account.base_url.len() > 8192
+                        || !matches!(base.scheme(), "http" | "https")
+                        || base.host_str().is_none()
+                        || !base.username().is_empty()
+                        || base.password().is_some()
+                        || account.last_used_at_ms < 0
+                        || account.expires_at_ms.is_some_and(|time| time < 0)
+                        || account.quota_observed_at_ms.is_some_and(|time| time < 0)
+                        || account.windows.len() > 64
+                        || account.protocol.as_ref().is_some_and(|protocol| {
+                            !matches!(
+                                protocol.as_str(),
+                                "openai" | "responses" | "anthropic" | "google" | "gemini"
+                            )
+                        })
+                        || account
+                            .api_flavor
+                            .as_ref()
+                            .is_some_and(|flavor| !matches!(flavor.as_str(), "chat" | "responses"))
+                    {
+                        return Err(format!(
+                            "provider {}: invalid subscription account",
+                            provider.id
+                        ));
+                    }
+                    let mut windows = std::collections::HashSet::new();
+                    for window in &account.windows {
+                        if window.id.trim().is_empty()
+                            || window.id.len() > 256
+                            || !windows.insert(&window.id)
+                            || !window.used_pct.is_finite()
+                            || !(0.0..=10_000.0).contains(&window.used_pct)
+                            || window.reset_at_ms.is_some_and(|time| time < 0)
+                            || window.model_ids.len() > 128
+                            || window
+                                .model_ids
+                                .iter()
+                                .any(|model| model.trim().is_empty() || model.len() > 1024)
+                        {
+                            return Err(format!(
+                                "provider {}: invalid subscription allowance window",
+                                provider.id
+                            ));
+                        }
+                    }
+                }
+                if provider
+                    .selected_subscription_account_id
+                    .as_ref()
+                    .is_some_and(|selected| {
+                        !pool
+                            .accounts
+                            .iter()
+                            .any(|account| &account.account_id == selected)
+                    })
+                {
+                    return Err(format!(
+                        "provider {}: selected subscription account is absent",
+                        provider.id
+                    ));
+                }
+            }
+        }
+
+        let mut inventory = std::collections::HashSet::new();
+        if self.subscription_rotation_providers.len() > 256
+            || self.subscription_rotation_providers.iter().any(|provider| {
+                provider.provider_id.trim().is_empty() || !inventory.insert(&provider.provider_id)
+            })
+        {
+            return Err("invalid subscription rotation inventory".into());
         }
 
         let mut aliases = std::collections::HashSet::new();
@@ -463,64 +625,71 @@ impl RoutingSnapshot {
                     }
                 }
             }
-            let Some(transport) = &provider.transport else {
-                continue;
-            };
-            match transport.auth_scheme.as_str() {
-                "x-api-key" | "bearer" => {}
-                "custom-header" => {
-                    let name = transport.auth_header_name.as_deref().unwrap_or("");
-                    // The auth header itself may be a normally-blocked name
-                    // ONLY if it is a well-formed token that is not hop-by-hop
-                    // or internal; re-use the policy but allow the dedicated
-                    // auth classification (a custom auth header IS an auth
-                    // header by design — e.g. `x-goog-api-key`).
+            for transport in std::iter::once(provider.transport.as_ref())
+                .chain(provider.subscription_pool.iter().flat_map(|pool| {
+                    pool.accounts
+                        .iter()
+                        .map(|account| account.transport.as_ref())
+                }))
+                .flatten()
+            {
+                match transport.auth_scheme.as_str() {
+                    "x-api-key" | "bearer" => {}
+                    "custom-header" => {
+                        let name = transport.auth_header_name.as_deref().unwrap_or("");
+                        // The auth header itself may be a normally-blocked name
+                        // ONLY if it is a well-formed token that is not hop-by-hop
+                        // or internal; re-use the policy but allow the dedicated
+                        // auth classification (a custom auth header IS an auth
+                        // header by design — e.g. `x-goog-api-key`).
+                        let verdict = crate::header_policy::check_header(
+                            name,
+                            Some("x"),
+                            crate::header_policy::HeaderContext::Static,
+                        );
+                        let acceptable = verdict.allowed
+                            || verdict.reason
+                                == crate::header_policy::HeaderPolicyReason::AuthHeader;
+                        if !acceptable {
+                            return Err(format!(
+                                "provider {}: invalid custom auth header name '{name}' ({})",
+                                provider.id,
+                                verdict.reason.code()
+                            ));
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "provider {}: unknown auth scheme '{other}'",
+                            provider.id
+                        ));
+                    }
+                }
+                let violations = crate::header_policy::validate_static_headers(
+                    transport
+                        .static_headers
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_str())),
+                );
+                if let Some((name, reason)) = violations.first() {
+                    return Err(format!(
+                        "provider {}: blocked static header '{name}' ({reason})",
+                        provider.id
+                    ));
+                }
+                for name in &transport.forwarded_semantic_headers {
                     let verdict = crate::header_policy::check_header(
                         name,
-                        Some("x"),
-                        crate::header_policy::HeaderContext::Static,
+                        None,
+                        crate::header_policy::HeaderContext::Forward,
                     );
-                    let acceptable = verdict.allowed
-                        || verdict.reason == crate::header_policy::HeaderPolicyReason::AuthHeader;
-                    if !acceptable {
+                    if !verdict.allowed {
                         return Err(format!(
-                            "provider {}: invalid custom auth header name '{name}' ({})",
+                            "provider {}: blocked forwarded header '{name}' ({})",
                             provider.id,
                             verdict.reason.code()
                         ));
                     }
-                }
-                other => {
-                    return Err(format!(
-                        "provider {}: unknown auth scheme '{other}'",
-                        provider.id
-                    ));
-                }
-            }
-            let violations = crate::header_policy::validate_static_headers(
-                transport
-                    .static_headers
-                    .iter()
-                    .map(|(k, v)| (k.as_str(), v.as_str())),
-            );
-            if let Some((name, reason)) = violations.first() {
-                return Err(format!(
-                    "provider {}: blocked static header '{name}' ({reason})",
-                    provider.id
-                ));
-            }
-            for name in &transport.forwarded_semantic_headers {
-                let verdict = crate::header_policy::check_header(
-                    name,
-                    None,
-                    crate::header_policy::HeaderContext::Forward,
-                );
-                if !verdict.allowed {
-                    return Err(format!(
-                        "provider {}: blocked forwarded header '{name}' ({})",
-                        provider.id,
-                        verdict.reason.code()
-                    ));
                 }
             }
         }
@@ -557,6 +726,51 @@ mod tests {
         assert_eq!(s.aliases[0].entries[0].provider_id, "groq");
         assert_eq!(s.providers[0].base_url, "https://api.groq.com/openai/v1");
         assert_eq!(s.providers[1].models.len(), 0); // defaulted
+    }
+
+    #[test]
+    fn subscription_pool_validates_identities_allowance_bounds_and_transport_policy() {
+        let account = serde_json::json!({"accountId":"account","apiKey":"credential","baseUrl":"https://account.invalid/v1","lastUsedAtMs":0,"windows":[{"id":"session","usedPct":25,"resetAtMs":10000}],"transport":{"authScheme":"custom-header","authHeaderName":"x-goog-api-key","staticHeaders":[["x-tenant","tenant"]]}});
+        let value = serde_json::json!({"providers":[{"id":"provider","protocol":"google","baseUrl":"https://default.invalid/v1beta","enabled":true,"subscriptionPool":{"strategy":"allowance-reset","quotaFreshnessMs":300000,"accounts":[account]}}],"generatedAtMs":1});
+        let valid: RoutingSnapshot = serde_json::from_value(value.clone()).unwrap();
+        assert!(valid.validate().is_ok());
+        for (path, replacement) in [
+            (
+                "/providers/0/subscriptionPool/quotaFreshnessMs",
+                serde_json::json!(300001),
+            ),
+            (
+                "/providers/0/subscriptionPool/accounts/0/baseUrl",
+                serde_json::json!("file:///private/data"),
+            ),
+            (
+                "/providers/0/subscriptionPool/accounts/0/windows/0/usedPct",
+                serde_json::json!(-1),
+            ),
+            (
+                "/providers/0/subscriptionPool/accounts/0/transport/staticHeaders",
+                serde_json::json!([["authorization", "secret"]]),
+            ),
+        ] {
+            let mut invalid = value.clone();
+            *invalid.pointer_mut(path).unwrap() = replacement;
+            assert!(
+                serde_json::from_value::<RoutingSnapshot>(invalid)
+                    .unwrap()
+                    .validate()
+                    .is_err(),
+                "{path}"
+            );
+        }
+        let mut duplicate = value;
+        duplicate["providers"][0]["subscriptionPool"]["accounts"]
+            .as_array_mut()
+            .unwrap()
+            .push(account);
+        assert!(serde_json::from_value::<RoutingSnapshot>(duplicate)
+            .unwrap()
+            .validate()
+            .is_err());
     }
 
     #[test]

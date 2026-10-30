@@ -248,7 +248,6 @@
       "allowed": false,
       "reason": "invalid-value"
     },
-
     {
       "name": "anthropic-beta",
       "value": null,
@@ -277,6 +276,13 @@
       "context": "forward",
       "allowed": false,
       "reason": "auth-header"
+    },
+    {
+      "name": "x-goog-api-key",
+      "value": "listener-only",
+      "context": "forward",
+      "allowed": false,
+      "reason": "auth-header"
     }
   ],
   "semanticForwardCases": [
@@ -287,6 +293,7 @@
     { "name": "x-app", "semantic": true },
     { "name": "authorization", "semantic": false },
     { "name": "x-api-key", "semantic": false },
+    { "name": "x-goog-api-key", "semantic": false },
     { "name": "user-agent", "semantic": false },
     { "name": "x-cognia-session", "semantic": false },
     { "name": "cookie", "semantic": false }

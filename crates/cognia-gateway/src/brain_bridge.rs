@@ -64,6 +64,8 @@ pub mod command {
 /// What went wrong on the way to, or inside, the brain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrainBridgeError {
+    /// The host could not hand the call to any brain; no provider work began.
+    NotDispatched(String),
     /// No brain answered: no window is open, or the bridge timed out.
     Unavailable(String),
     /// The brain answered, and its answer is a refusal the caller must see.
@@ -169,8 +171,8 @@ pub struct DetachedBrainBridge;
 impl BrainBridge for DetachedBrainBridge {
     fn call(&self, _command: &'static str, _payload: Value) -> BrainFuture {
         Box::pin(async {
-            Err(BrainBridgeError::unavailable(
-                "no Cognia window or headless brain is attached",
+            Err(BrainBridgeError::NotDispatched(
+                "no Cognia window or headless brain is attached".into(),
             ))
         })
     }
@@ -363,7 +365,7 @@ mod tests {
             .call(command::RUN_GET, json!({}))
             .await
             .expect_err("a detached bridge has no brain to answer");
-        assert!(matches!(error, BrainBridgeError::Unavailable(_)));
+        assert!(matches!(error, BrainBridgeError::NotDispatched(_)));
     }
 
     #[tokio::test]

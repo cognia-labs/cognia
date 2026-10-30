@@ -291,7 +291,7 @@ export function CogniaModelPicker({
   )
 }
 
-function CogniaModelAccount({
+export function CogniaModelAccount({
   providerId,
   value,
   onChange,

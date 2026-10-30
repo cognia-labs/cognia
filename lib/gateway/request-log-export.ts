@@ -34,6 +34,7 @@ const CSV_COLUMNS = [
   "attempts",
   "fallbackReason",
   "error",
+  "sessionId",
 ] as const satisfies readonly (keyof GatewayRequestLogRow)[]
 
 /** A leading `= + - @` (or tab / CR) makes Excel and Sheets evaluate the cell. */

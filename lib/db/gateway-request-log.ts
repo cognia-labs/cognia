@@ -22,6 +22,8 @@ export interface GatewayRequestLogFilter {
   model?: string
   /** Exact key id. */
   keyId?: string
+  /** Exact gateway-derived session id; never a substring match. */
+  sessionId?: string
   /** `"errors"` = status ≥ 400; `"ok"` = status < 400; default = all. */
   outcome?: "ok" | "errors"
   limit?: number
@@ -43,18 +45,16 @@ export async function listGatewayRequestLog(
   filter: GatewayRequestLogFilter = {}
 ): Promise<GatewayRequestLogRow[]> {
   const limit = filter.limit ?? 200
-  // Fetch a generous newest-first window, then filter — the table is capped so
-  // this stays bounded, and cross-field filtering doesn't map to one index.
-  // Unfiltered reads skip the over-fetch: every row qualifies, and live
-  // queries (the log viewer, the keys panel's usage line) re-run this on each
-  // logged request.
-  const filtered = Boolean(filter.outcome || filter.keyId || filter.model?.trim())
-  const window = await getDb()
-    .gatewayRequestLog.orderBy("at")
-    .reverse()
-    .limit(filtered ? Math.max(limit * 4, 400) : limit)
+  // Filter before limiting: a quiet session can be older than hundreds of
+  // unrelated requests. The capped table bounds the scan without truncating
+  // a filtered page to an arbitrary newest-first window.
+  const collection = getDb().gatewayRequestLog.orderBy("at").reverse()
+  const filtered = Boolean(
+    filter.outcome || filter.keyId || filter.sessionId?.trim() || filter.model?.trim()
+  )
+  return (filtered ? collection.filter(requestLogPredicate(filter)) : collection)
+    .limit(limit)
     .toArray()
-  return filterGatewayRequestLog(window, filter).slice(0, limit)
 }
 
 /** Pure filter — extracted so it's unit-testable without a DB. */
@@ -62,14 +62,44 @@ export function filterGatewayRequestLog(
   rows: GatewayRequestLogRow[],
   filter: GatewayRequestLogFilter
 ): GatewayRequestLogRow[] {
+  return rows.filter(requestLogPredicate(filter))
+}
+
+function requestLogPredicate(filter: GatewayRequestLogFilter) {
   const needle = filter.model?.trim().toLowerCase()
-  return rows.filter((r) => {
+  const sessionId = filter.sessionId?.trim()
+  return (r: GatewayRequestLogRow): boolean => {
     if (filter.outcome === "errors" && r.status < 400) return false
     if (filter.outcome === "ok" && r.status >= 400) return false
     if (filter.keyId && r.keyId !== filter.keyId) return false
+    if (sessionId && r.sessionId !== sessionId) return false
     if (needle && !(r.model ?? "").toLowerCase().includes(needle)) return false
     return true
-  })
+  }
+}
+
+export interface GatewayRequestSessionGroup {
+  sessionId: string | null
+  /** Same grouping key written by forwardGatewayOutcome into sessionUsage. */
+  usageSessionId: string | null
+  rows: GatewayRequestLogRow[]
+}
+
+/** Retain newest-first group/row order and keep legacy unidentified rows visible. */
+export function groupGatewayRequestsBySession(
+  rows: readonly GatewayRequestLogRow[]
+): GatewayRequestSessionGroup[] {
+  const groups = new Map<string | null, GatewayRequestSessionGroup>()
+  for (const row of rows) {
+    const sessionId = row.sessionId || null
+    let group = groups.get(sessionId)
+    if (!group) {
+      group = { sessionId, usageSessionId: sessionId ? `gateway:${sessionId}` : null, rows: [] }
+      groups.set(sessionId, group)
+    }
+    group.rows.push(row)
+  }
+  return [...groups.values()]
 }
 
 export async function clearGatewayRequestLog(): Promise<void> {

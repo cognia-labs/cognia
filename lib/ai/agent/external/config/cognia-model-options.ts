@@ -10,8 +10,7 @@
  *
  * A model is eligible when the gateway can serve it to a task:
  *
- *   - its provider speaks OpenAI or Anthropic (the gateway's two upstream
- *     families for task tickets);
+ *   - its provider speaks a protocol the gateway can translate for task tickets;
  *   - it is not explicitly known to lack tool calling or streaming (an agent
  *     cannot work without either; unknown stays eligible, the launch adapter
  *     re-checks);
@@ -177,7 +176,7 @@ export function filterCogniaGatewayModels(input: CogniaGatewayModelFilterInput):
       !!(settings?.apiKey || settings?.apiKeys?.some((key) => key.trim())) ||
       (!custom && !!scopedSettings[model.providerId]?.apiKey?.trim())
     return (
-      (protocol === "openai" || protocol === "anthropic") &&
+      ["openai", "responses", "anthropic", "google", "gemini"].includes(protocol ?? "") &&
       metadata.supportsTools !== false &&
       metadata.supportsStreaming !== false &&
       (subscription?.authMode === "api-key" || hasManualKey || provider?.apiKeyRequired === false)
@@ -374,8 +373,11 @@ export function cogniaModelReasoningFacts(
     Pick<CogniaGatewayModelFilterInput, "providerSettings" | "customProviders" | "subscriptions">
   >
 ): {
-  modelSupportsReasoning: (modelId: string) => boolean
-  modelEffortValues: (modelId: string) => readonly string[]
+  modelSupportsReasoning: (modelId: string, binding?: ExternalAgentCogniaModelBinding) => boolean
+  modelEffortValues: (
+    modelId: string,
+    binding?: ExternalAgentCogniaModelBinding
+  ) => readonly string[]
 } {
   const settings = overlayHostProviderKeys({ ...input.providerSettings })
   const supports = (modelId: string) =>
@@ -388,9 +390,14 @@ export function cogniaModelReasoningFacts(
     catalog: getAllProviders(),
   })
   return {
-    modelSupportsReasoning: supports,
-    modelEffortValues: (modelId) =>
-      reasoningTiersFor({ providerId, modelId, protocol, reasoning: supports(modelId) }),
+    modelSupportsReasoning: (modelId, binding) =>
+      binding && binding.providerId !== providerId
+        ? cogniaModelReasoningFacts(binding.providerId, input).modelSupportsReasoning(modelId)
+        : supports(modelId),
+    modelEffortValues: (modelId, binding) =>
+      binding && binding.providerId !== providerId
+        ? cogniaModelReasoningFacts(binding.providerId, input).modelEffortValues(modelId)
+        : reasoningTiersFor({ providerId, modelId, protocol, reasoning: supports(modelId) }),
   }
 }
 

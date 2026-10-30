@@ -32,6 +32,8 @@ tauri-host = ["dep:tauri"]
 test-support = []
 
 [dependencies]
+cognia-agents = { path = "../cognia-agents" }
+cognia-core = { path = "../cognia-core" }
 cognia-secrets = { path = "../cognia-secrets" }
 cognia-net = { path = "../cognia-net" }
 cognia-instrument = { path = "../cognia-instrument" }
@@ -39,9 +41,9 @@ tauri = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 toml_edit = { workspace = true, features = ["serde"] }
-axum = { workspace = true, features = ["macros", "ws"] }
+axum = { workspace = true, features = ["macros", "ws", "multipart"] }
 tower-http = { workspace = true, features = ["limit", "trace", "cors"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync", "time", "process"] }
 reqwest = { workspace = true, features = ["json", "rustls-no-provider", "stream", "socks", "http2", "multipart"] }
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 futures-util = { workspace = true }
@@ -53,8 +55,11 @@ log.workspace = true
 thiserror.workspace = true
 subtle.workspace = true
 rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 cognia-secrets = { path = "../cognia-secrets", features = ["test-inmemory"] }
 tower = { workspace = true, features = ["util", "limit", "timeout"] }
 # `test-util` gives tests a paused clock, so the SSE idle-timeout test can

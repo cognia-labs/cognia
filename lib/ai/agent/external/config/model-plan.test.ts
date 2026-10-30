@@ -68,19 +68,24 @@ describe("compileTaskModelPlan", () => {
     expect(native("review", "high").fingerprint).not.toBe(plan.fingerprint)
   })
 
-  it.each([
-    [{ providerId: "elsewhere" }, "cross-provider-unsupported"],
-    [{ accountId: "elsewhere" }, "cross-account-unsupported"],
-  ])("refuses incompatible explicit native bindings: %j", (patch, reason) => {
-    expect(
-      compileTaskModelPlan({
-        primary,
-        slots,
-        layers: [],
-        explicitModels: { "opencode.agent.reviewer": { ...primary, modelId: "review", ...patch } },
-      })
-    ).toEqual({ ok: false, reason, slot: "opencode.agent.reviewer" })
-  })
+  it.each([{ providerId: "elsewhere" }, { accountId: "elsewhere" }])(
+    "freezes explicit native provider/account bindings: %j",
+    (patch) => {
+      const binding = { ...primary, modelId: "review", ...patch }
+      const plan = planOf(
+        compileTaskModelPlan({
+          primary,
+          slots,
+          layers: [],
+          explicitModels: { "opencode.agent.reviewer": binding },
+        })
+      )
+      const selector = plan.slots["opencode.agent.reviewer"].modelId
+      expect(selector).toMatch(/^cognia-role-/)
+      expect(plan.bindings?.[selector]).toEqual(binding)
+      expect(plan.models).toEqual(["primary", selector])
+    }
+  )
 
   it("counts explicit native models toward the task model limit", () => {
     expect(
@@ -236,34 +241,49 @@ describe("compileTaskModelPlan", () => {
     ).toEqual({ ok: false, reason: "unsupported-slot", slot: "stale" })
   })
 
-  it("checks provider only on winning selections", () => {
-    expect(
-      compile({ "subagent.default": choose("child", undefined, { providerId: "other" }) })
-    ).toEqual({ ok: false, reason: "cross-provider-unsupported", slot: "subagent.default" })
+  it("isolates identical model ids on different providers and accounts", () => {
+    const plan = planOf(
+      compile({
+        "subagent.default": choose("primary", undefined, {
+          providerId: "other",
+          accountId: "other-account",
+        }),
+        "aux.small": choose("primary", undefined, { accountId: "other-account" }),
+      })
+    )
+    expect(new Set(plan.models).size).toBe(3)
+    for (const selector of plan.models.slice(1))
+      expect(plan.bindings?.[selector].modelId).toBe("primary")
+    expect(plan.fingerprint).not.toBe(
+      planOf(compile({ "subagent.default": choose("primary") })).fingerprint
+    )
   })
 
   it.each([
-    [undefined, "account", true],
-    ["account", "account", true],
-    [null, "account", false],
-    ["other", "account", false],
-    [undefined, null, true],
-    [null, null, true],
-    ["account", null, false],
-    [null, undefined, false],
-    ["account", undefined, false],
-    [undefined, undefined, true],
-  ])("validates account %s against primary %s", (accountId, primaryAccountId, accepted) => {
-    const result = compile(
-      { "subagent.default": choose("child", undefined, { accountId }) },
-      { primary: { ...primary, accountId: primaryAccountId } }
+    [undefined, "account"],
+    ["account", "account"],
+    [null, "account"],
+    ["other", "account"],
+    [undefined, null],
+    [null, null],
+    ["account", null],
+    [null, undefined],
+    ["account", undefined],
+    [undefined, undefined],
+  ])("freezes account %s with primary %s", (accountId, primaryAccountId) => {
+    const plan = planOf(
+      compile(
+        { "subagent.default": choose("child", undefined, { accountId }) },
+        { primary: { ...primary, accountId: primaryAccountId } }
+      )
     )
-    if (accepted) expect(result.ok).toBe(true)
+    const selector = plan.slots["subagent.default"].modelId
+    if (accountId === undefined || accountId === primaryAccountId) expect(selector).toBe("child")
     else
-      expect(result).toEqual({
-        ok: false,
-        reason: "cross-account-unsupported",
-        slot: "subagent.default",
+      expect(plan.bindings?.[selector]).toEqual({
+        providerId: primary.providerId,
+        modelId: "child",
+        accountId,
       })
   })
 
@@ -301,7 +321,10 @@ describe("compileTaskModelPlan", () => {
       planOf(compile({ "subagent.default": choose("child", "high") }, { modelSupportsReasoning }))
         .slots["subagent.default"].reasoningEffort
     ).toBe("high")
-    expect(modelSupportsReasoning).toHaveBeenCalledWith("child")
+    expect(modelSupportsReasoning).toHaveBeenCalledWith("child", {
+      providerId: primary.providerId,
+      modelId: "child",
+    })
   })
 
   it("does not require reasoning capability without an effort", () => {

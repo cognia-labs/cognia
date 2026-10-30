@@ -10,11 +10,24 @@ use std::collections::BTreeMap;
 
 pub const TASK_LEASE_TTL_MS: i64 = 120_000;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskModelPlan {
     pub additional_models: Vec<String>,
     pub model_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub bindings: BTreeMap<String, TaskModelBinding>,
+    #[serde(default)]
+    pub selector_deployments: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskModelBinding {
+    pub provider_id: String,
+    pub model_id: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 impl TaskModelPlan {
@@ -36,9 +49,19 @@ impl TaskModelPlan {
             if selector.is_empty()
                 || selector.len() > 128
                 || !selector.bytes().all(|b| (b' '..=b'~').contains(&b))
-                || !models.contains(model.as_str())
+                || (!models.contains(model.as_str()) && !self.bindings.values().any(|binding| &binding.model_id == model))
             {
                 return Err("invalid task model binding or model outside the plan".into());
+            }
+        }
+        if self.bindings.len() > 31 || self.selector_deployments.len() > 104 {
+            return Err("task model plan exceeds deployment limit".into());
+        }
+        for (selector, binding) in &self.bindings {
+            if !models.contains(selector.as_str()) || binding.provider_id.trim().is_empty()
+                || binding.model_id.is_empty() || binding.model_id.len() > 256
+                || binding.model_id.chars().any(char::is_control) {
+                return Err("invalid task deployment binding".into());
             }
         }
         Ok(())
@@ -56,6 +79,8 @@ impl TaskModelPlan {
 pub struct TaskLeaseRequest {
     pub task_id: String,
     pub provider: ProviderSnapshot,
+    #[serde(default)]
+    pub provider_overrides: Vec<ProviderSnapshot>,
     pub model: String,
     #[serde(default)]
     pub model_plan: Option<TaskModelPlan>,
@@ -89,6 +114,7 @@ pub(crate) fn empty_snapshot() -> RoutingSnapshot {
         profile_version: None,
         authority: None,
         router_fusion: None,
+        subscription_rotation_providers: Vec::new(),
     }
 }
 
@@ -109,54 +135,46 @@ fn scope(tenant: &str, device: &str, task: &str) -> Result<String, String> {
 /// A desktop-local URL would resolve against the runner's network. Refuse it
 /// before accepting credentials; the request-scoped provider is HTTPS only.
 pub async fn validate_public_upstream(value: &str) -> Result<reqwest::Client, String> {
-    let url = reqwest::Url::parse(value).map_err(|_| "invalid task upstream URL")?;
-    let host = url.host_str().ok_or("task upstream requires a host")?;
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || !host.contains('.')
-        || host.ends_with(".localhost")
-        || host.ends_with(".local")
-        || host.ends_with(".internal")
-    {
-        return Err(
-            "remote tasks require a public HTTPS upstream; local providers need a service bridge"
-                .into(),
-        );
-    }
-    let addresses: Vec<_> =
-        tokio::net::lookup_host((host, url.port_or_known_default().unwrap_or(443)))
-            .await
-            .map_err(|_| "task upstream DNS resolution failed")?
-            .collect();
-    if addresses.is_empty()
-        || addresses
-            .iter()
-            .any(|a| cognia_net::egress::is_forbidden_dest_ip(&a.ip()))
-    {
-        return Err("remote tasks cannot use private or loopback upstreams".into());
-    }
+    validate_public_upstreams(&[value.to_owned()]).await
+}
+
+/// Pin every delegated deployment in one redirect-free HTTPS client. One task
+/// may use several providers; each host is checked before any credential is accepted.
+pub async fn validate_public_upstreams(values: &[String]) -> Result<reqwest::Client, String> {
+    if values.is_empty() || values.len() > 32 { return Err("invalid task upstream count".into()); }
     cognia_net::proxy_config::ensure_crypto_provider();
-    reqwest::Client::builder()
-        .no_proxy()
-        .https_only(true)
+    let mut builder = reqwest::Client::builder().no_proxy().https_only(true)
         .redirect(reqwest::redirect::Policy::none())
-        .resolve_to_addrs(host, &addresses)
-        .connect_timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|_| "task upstream client initialization failed".into())
+        .connect_timeout(std::time::Duration::from_secs(15));
+    for value in values {
+        let url = reqwest::Url::parse(value).map_err(|_| "invalid task upstream URL")?;
+        let host = url.host_str().ok_or("task upstream requires a host")?;
+        if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some()
+            || url.fragment().is_some() || !host.contains('.') || host.ends_with(".localhost")
+            || host.ends_with(".local") || host.ends_with(".internal") {
+            return Err("remote tasks require a public HTTPS upstream; local providers need a service bridge".into());
+        }
+        let addresses: Vec<_> = tokio::net::lookup_host((host, url.port_or_known_default().unwrap_or(443)))
+            .await.map_err(|_| "task upstream DNS resolution failed")?.collect();
+        if addresses.is_empty() || addresses.iter().any(|address| cognia_net::egress::is_forbidden_dest_ip(&address.ip())) {
+            return Err("remote tasks cannot use private or loopback upstreams".into());
+        }
+        builder = builder.resolve_to_addrs(host, &addresses);
+    }
+    builder.build().map_err(|_| "task upstream client initialization failed".into())
 }
 
 /// The one ticket shape a gateway task runs under, whoever supplied the
-/// provider: a single private deployment with exact plan models (or the legacy
+/// provider: private deployments with exact model/account bindings (or the legacy
 /// primary selectors), no failover, `gateway-required`, and inference/models/
 /// count-tokens only.
+#[allow(clippy::too_many_arguments)]
 fn task_mint_request(
     session: String,
     fingerprint: String,
     deployment: String,
     provider: ProviderSnapshot,
+    extra_providers: Vec<ProviderSnapshot>,
     model: String,
     ingress_protocol: &str,
     budget: Option<TicketBudget>,
@@ -178,16 +196,37 @@ fn task_mint_request(
         bindings.extend(plan.model_bindings.clone());
         bindings.extend(plan.models(&model).into_iter().map(|id| (id.clone(), id)));
     }
+    let mut selector_deployments = model_plan.as_ref().map(|plan| plan.selector_deployments.clone()).unwrap_or_default();
+    let mut providers = vec![provider];
+    providers.extend(extra_providers);
+    let candidates = providers.iter().map(|provider| TicketCandidate {
+        deployment_id: provider.deployment_id.clone().unwrap_or_else(|| provider.id.clone()),
+        model_id: provider.models.first().cloned().unwrap_or_else(|| model.clone()),
+    }).collect();
+    if !selector_deployments.is_empty() {
+        for selector in ["primary", "fast", "powerful", "sonnet", "haiku", "opus"] {
+            selector_deployments.entry(selector.into()).or_insert_with(|| deployment.clone());
+        }
+        for (selector, binding) in model_plan.as_ref().into_iter().flat_map(|plan| &plan.bindings) {
+            bindings.insert(selector.clone(), binding.model_id.clone());
+        }
+    }
+    if !selector_deployments.is_empty() {
+        for (selector, model) in &bindings {
+            if selector_deployments.contains_key(selector) { continue; }
+            let deployments: std::collections::BTreeSet<_> = providers.iter().filter(|provider| provider.models.contains(model))
+                .map(|provider| provider.deployment_id.clone().unwrap_or_else(|| provider.id.clone())).collect();
+            if deployments.len() == 1 { selector_deployments.insert(selector.clone(), deployments.into_iter().next().unwrap()); }
+        }
+    }
     MintRequest {
-        provider_overrides: vec![provider],
+        provider_overrides: providers,
         session_id: session,
         parent_session_id: None,
         execution_fingerprint: fingerprint,
-        candidates: vec![TicketCandidate {
-            deployment_id: deployment,
-            model_id: model.clone(),
-        }],
+        candidates,
         model_bindings: bindings,
+        selector_deployments,
         strict_selectors: model_plan.is_some(),
         credential_affinity: TicketAffinity::SessionSticky,
         allow_auth_failover: false,
@@ -226,6 +265,7 @@ impl GatewayState {
     /// with member billing. The Host supplies the org override under its
     /// credential fence. Keep the provider id so credential rotation can
     /// revoke this lease through the P6c registry path.
+    #[allow(clippy::too_many_arguments)]
     pub fn person_mint_task_lease(&self, owner: &str, member: MemberBinding, runtime: &str,
         task: &str, expected_generation: u64, provider: ProviderSnapshot, model: String,
         ingress: &str) -> Result<TaskLease, String> {
@@ -239,7 +279,7 @@ impl GatewayState {
         }
         let deployment = provider.deployment_id.clone().unwrap_or_else(|| provider.id.clone());
         let mut request = task_mint_request(session.clone(), session.clone(), deployment,
-            provider, model, ingress, None, None);
+            provider, Vec::new(), model, ingress, None, None);
         request.route_policy = format!("person_p6d:{runtime}");
         self.tickets.revoke_session(&session);
         let minted = self.tickets.person_mint_owned(request, Some(&empty_snapshot()),
@@ -291,33 +331,49 @@ impl GatewayState {
         {
             return Err("gateway account changed or is locked".into());
         }
-        if input.model.trim().is_empty()
-            || input.model.len() > 512
-            || !["openai", "anthropic"].contains(&input.provider.protocol.as_str())
-            || !["openai-chat", "openai-responses", "anthropic"]
-                .contains(&input.ingress_protocol.as_str())
-            || !input.provider.enabled
-            || input.provider.api_key.as_deref().is_none_or(str::is_empty)
-            || !input.provider.api_keys.is_empty()
-            || input.provider.rotation_enabled
-        {
-            return Err("a task must delegate exactly one selected provider credential".into());
+        if input.model.trim().is_empty() || input.model.len() > 256
+            || !["openai-chat", "openai-responses", "anthropic"].contains(&input.ingress_protocol.as_str())
+            || input.provider_overrides.len() > 31 {
+            return Err("invalid task model or ingress protocol".into());
         }
-        if let Some(plan) = &input.model_plan {
-            plan.validate(&input.model)?;
+        if let Some(plan) = &input.model_plan { plan.validate(&input.model)?; }
+        let selectors = input.model_plan.as_ref().map_or_else(|| vec![input.model.clone()], |plan| plan.models(&input.model));
+        let primary_original = input.provider.deployment_id.clone().unwrap_or_else(|| input.provider.id.clone());
+        let mut providers = vec![input.provider];
+        providers.append(&mut input.provider_overrides);
+        let mut remap = BTreeMap::new();
+        for provider in &mut providers {
+            if !crate::execute::is_executable_protocol(&provider.protocol) || !provider.enabled
+                || provider.api_key.as_deref().is_none_or(str::is_empty) || !provider.api_keys.is_empty()
+                || provider.rotation_enabled {
+                return Err("a task must delegate one selected credential for each provider".into());
+            }
+            let original = provider.deployment_id.clone().unwrap_or_else(|| provider.id.clone());
+            let deployment = format!("task-{}-{}", input.task_id, original);
+            if remap.insert(original.clone(), deployment.clone()).is_some() {
+                return Err("duplicate task deployment".into());
+            }
+            let models: Vec<String> = selectors.iter().filter_map(|selector| {
+                let selected = input.model_plan.as_ref().and_then(|plan| plan.selector_deployments.get(selector)).unwrap_or(&primary_original);
+                if selected != &original { return None; }
+                Some(input.model_plan.as_ref().and_then(|plan| plan.bindings.get(selector).map(|binding| binding.model_id.clone()).or_else(|| plan.model_bindings.get(selector).cloned())).unwrap_or_else(|| selector.clone()))
+            }).collect();
+            if models.is_empty() || (!provider.models.is_empty() && models.iter().any(|model| !provider.models.contains(model))) {
+                return Err("the selected task model is unavailable on its deployment".into());
+            }
+            if provider.source_provider_id.is_none() { provider.source_provider_id = Some(provider.id.clone()); }
+            provider.id = deployment.clone(); provider.deployment_id = Some(deployment);
+            provider.models = models;
+            provider.model_metadata.retain(|model| provider.models.contains(&model.id));
         }
-        let models = input.model_plan.as_ref().map_or_else(
-            || vec![input.model.clone()],
-            |plan| plan.models(&input.model),
-        );
-        let deployment = format!("task-{}-{}", input.task_id, input.provider.id);
-        input.provider.id = deployment.clone();
-        input.provider.deployment_id = Some(deployment.clone());
-        input.provider.models = models.clone();
-        input
-            .provider
-            .model_metadata
-            .retain(|m| models.contains(&m.id));
+        let deployment = remap.get(&primary_original).ok_or("missing primary task deployment")?.clone();
+        if let Some(plan) = &mut input.model_plan {
+            for selected in plan.selector_deployments.values_mut() {
+                *selected = remap.get(selected).ok_or("task selector names an undelegated deployment")?.clone();
+            }
+        }
+        input.provider = providers.remove(0);
+        input.provider_overrides = providers;
         // Replace any live lease for this exact device/task; no sibling device
         // can revoke it, and re-mint cannot retain two spending authorities.
         self.tickets.revoke_session(&session);
@@ -330,6 +386,7 @@ impl GatewayState {
                     session,
                     deployment,
                     input.provider,
+                    input.provider_overrides,
                     model,
                     &input.ingress_protocol,
                     input.budget,
@@ -542,87 +599,96 @@ impl GatewayState {
         {
             return Err("gateway account changed or is locked".into());
         }
-        let mut provider = self
-            .with_snapshot(|snapshot| {
-                snapshot
-                    .and_then(|snapshot| {
-                        snapshot
-                            .provider(&input.provider_id)
-                            .or_else(|| snapshot.provider_by_deployment(&input.provider_id))
+        let mut model_plan = input.model_plan;
+        let bridge_config = self.config.read().clone();
+        if bridge_config.bridge_models.search.is_some() || bridge_config.bridge_models.vision.is_some() {
+            let mut bridge_selectors=std::collections::HashSet::new();
+            for selector in [bridge_config.bridge_models.search, bridge_config.bridge_models.vision].into_iter().flatten() {
+                if selector.trim().is_empty() { continue; }
+                if !bridge_selectors.insert(selector.clone()) { continue; }
+                let selected = self.with_snapshot(|snapshot| {
+                    let snapshot = snapshot?;
+                    crate::route_planner::candidates_for_model(snapshot, &selector).into_iter().find_map(|candidate| {
+                        let provider = snapshot.provider_by_deployment(&candidate.deployment_id).or_else(|| snapshot.provider(&candidate.deployment_id))?;
+                        (provider.enabled && provider.models.contains(&candidate.model_id)).then_some(TaskModelBinding { provider_id:provider.id.clone(), model_id:candidate.model_id, account_id:None })
                     })
-                    .cloned()
-            })
-            .ok_or("the selected provider is not configured on this Host")?;
-        if !["openai", "anthropic"].contains(&provider.protocol.as_str()) {
-            return Err("the selected provider protocol cannot serve a gateway task".into());
+                }).ok_or("the configured gateway bridge model is unavailable")?;
+                let plan = model_plan.get_or_insert_with(TaskModelPlan::default);
+                if selector == input.model || plan.additional_models.contains(&selector) { return Err("gateway bridge selector conflicts with a task model".into()); }
+                plan.additional_models.push(selector.clone());
+                plan.model_bindings.insert(selector.clone(), selected.model_id.clone());
+                plan.bindings.insert(selector, selected);
+            }
         }
-        if let Some(plan) = &input.model_plan {
-            plan.validate(&input.model)?;
+        if let Some(plan) = &model_plan { plan.validate(&input.model)?; }
+        if model_plan.as_ref().is_some_and(|plan| !plan.selector_deployments.is_empty()) {
+            return Err("Host task deployment mappings are resolved by the Host".into());
         }
-        let models = input.model_plan.as_ref().map_or_else(
-            || vec![input.model.clone()],
-            |plan| plan.models(&input.model),
-        );
-        if models.iter().any(|model| !provider.models.contains(model)) {
-            return Err("the selected model is not configured for this provider".into());
-        }
-        let credential = provider
-            .api_key
-            .clone()
-            .filter(|key| !key.is_empty())
-            .or_else(|| {
-                provider
-                    .api_keys
-                    .iter()
-                    .find(|key| !key.is_empty())
-                    .cloned()
-            })
-            .ok_or("the selected provider has no usable credential on this Host")?;
+        let selectors = model_plan.as_ref().map_or_else(|| vec![input.model.clone()], |plan| plan.models(&input.model));
         let deployment = format!("host-task-{}", input.task_id);
-        provider.id = deployment.clone();
-        provider.deployment_id = Some(deployment.clone());
-        provider.api_key = Some(credential);
-        provider.api_keys = Vec::new();
-        provider.rotation_enabled = false;
-        provider.rotation_strategy = None;
-        provider.models = models.clone();
-        provider.model_metadata.retain(|m| models.contains(&m.id));
-        let model_metadata = provider
-            .model_metadata
-            .iter()
-            .find(|m| m.id == input.model)
-            .cloned();
-        let model_metadata_by_id = models
-            .into_iter()
-            .map(|id| {
-                let metadata = provider
-                    .model_metadata
-                    .iter()
-                    .find(|m| m.id == id)
-                    .cloned()
-                    .unwrap_or_else(|| crate::snapshot::ModelMetadata {
-                        id: id.clone(),
-                        fields: BTreeMap::new(),
-                    });
-                (id, metadata)
-            })
-            .collect();
+        let mut providers: BTreeMap<String, ProviderSnapshot> = BTreeMap::new();
+        let mut model_metadata_by_id = BTreeMap::new();
+        let mut selector_deployments = BTreeMap::new();
+        for selector in &selectors {
+            let selected = model_plan.as_ref().and_then(|plan| plan.bindings.get(selector));
+            if selected.is_some_and(|binding| binding.account_id.is_some()) {
+                return Err("this Host's providers have no selectable accounts".into());
+            }
+            let provider_id = selected.map(|binding| binding.provider_id.as_str()).unwrap_or(&input.provider_id);
+            let model = selected.map(|binding| binding.model_id.as_str()).unwrap_or(selector);
+            let provider = self.with_snapshot(|snapshot| snapshot.and_then(|snapshot| snapshot.provider(provider_id).or_else(|| snapshot.provider_by_deployment(provider_id))).cloned())
+                .ok_or("the selected provider is not configured on this Host")?;
+            if !provider.enabled || !crate::execute::is_executable_protocol(&provider.protocol) {
+                return Err("the selected provider protocol cannot serve a gateway task".into());
+            }
+            if !provider.models.iter().any(|id| id == model) {
+                return Err("the selected model is not configured for this provider".into());
+            }
+            let credential = provider.api_key.clone().filter(|key| !key.trim().is_empty())
+                .or_else(|| provider.api_keys.iter().find(|key| !key.trim().is_empty()).cloned())
+                .ok_or("the selected provider has no usable credential on this Host")?;
+            let selected_deployment = if provider_id == input.provider_id { deployment.clone() } else { format!("{deployment}-{provider_id}") };
+            selector_deployments.insert(selector.clone(), selected_deployment.clone());
+            let metadata = provider.model_metadata.iter().find(|metadata| metadata.id == model).cloned()
+                .unwrap_or_else(|| crate::snapshot::ModelMetadata { id: model.into(), fields: BTreeMap::new() });
+            if metadata.fields.get("supportsTools") == Some(&serde_json::Value::Bool(false))
+                || metadata.fields.get("supportsStreaming") == Some(&serde_json::Value::Bool(false)) {
+                return Err("the selected model lacks tools or streaming required by the task".into());
+            }
+            let mut client_metadata = metadata.clone(); client_metadata.id = selector.clone();
+            model_metadata_by_id.insert(selector.clone(), client_metadata);
+            let private = providers.entry(selected_deployment.clone()).or_insert_with(|| {
+                let mut provider = provider;
+                if provider.source_provider_id.is_none() { provider.source_provider_id = Some(provider.id.clone()); }
+                provider.id = selected_deployment.clone(); provider.deployment_id = Some(selected_deployment);
+                provider.api_key = Some(credential); provider.api_keys.clear(); provider.rotation_enabled = false;
+                provider.rotation_strategy = None; provider.models.clear(); provider.model_metadata.clear(); provider
+            });
+            if !private.models.iter().any(|id| id == model) { private.models.push(model.into()); private.model_metadata.push(metadata); }
+        }
+        let provider = providers.remove(&deployment).ok_or("missing primary task deployment")?;
+        let model_metadata = model_metadata_by_id.get(&input.model).cloned();
+        if let Some(plan) = &mut model_plan {
+            plan.selector_deployments = selector_deployments;
+            for (selector, binding) in &plan.bindings { plan.model_bindings.insert(selector.clone(), binding.model_id.clone()); }
+        }
         // One live lease per task: a rebind or retry replaces the previous one.
         self.tickets.revoke_session(&session);
         let minted = self
             .tickets
             .mint_owned(
                 task_mint_request(
-                    session,
-                    // Unique per mint, so an in-task rebind to another model is
-                    // a new frozen spec rather than a widened re-mint.
-                    format!("host-task:{}", uuid::Uuid::new_v4().simple()),
+                    session.clone(),
+                    // The complete selection defines the frozen authority; repeats
+                    // keep their existing shared spending counters.
+                    format!("host-task:{}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(serde_json::to_vec(&(&session, &input.provider_id, &input.model, &model_plan)).expect("model plan serializes")))),
                     deployment,
                     provider,
+                    providers.into_values().collect(),
                     input.model,
                     &input.ingress_protocol,
                     input.budget,
-                    input.model_plan,
+                    model_plan,
                 ),
                 Some(&empty_snapshot()),
                 chrono::Utc::now().timestamp_millis(),
@@ -823,6 +889,7 @@ mod tests {
         TaskModelPlan {
             additional_models: vec!["model-b".into()],
             model_bindings: BTreeMap::from([("haiku".into(), "model-b".into())]),
+            bindings: BTreeMap::new(), selector_deployments: BTreeMap::new(),
         }
     }
 
@@ -989,6 +1056,7 @@ mod tests {
             model_bindings: (0..64)
                 .map(|n| (format!("selector-{n}"), primary.clone()))
                 .collect(),
+            bindings: BTreeMap::new(), selector_deployments: BTreeMap::new(),
         });
         let lease = state
             .mint_task_lease(
@@ -1011,6 +1079,7 @@ mod tests {
         input.model_plan = Some(TaskModelPlan {
             additional_models: vec!["not-configured".into()],
             model_bindings: BTreeMap::new(),
+            bindings: BTreeMap::new(), selector_deployments: BTreeMap::new(),
         });
         assert!(state
             .mint_host_task_lease(state.status().account_generation, input, None)
@@ -1018,6 +1087,48 @@ mod tests {
             .unwrap()
             .contains("not configured"));
         assert!(state.tickets.list().is_empty());
+    }
+
+    #[test]
+    fn host_roles_freeze_separate_credentials_for_identical_model_ids_and_one_budget() {
+        let state = host_state("https://api.example.com/v1");
+        let mut sibling = state.snapshot.read().as_ref().unwrap().providers[0].clone();
+        sibling.id = "secondary".into(); sibling.api_key = Some("secondary-only-key".into()); sibling.deployment_id = None;
+        state.snapshot.write().as_mut().unwrap().providers.push(sibling);
+        let mut input = host_request("multi-provider",None);
+        input.model_plan = Some(serde_json::from_value(serde_json::json!({"additionalModels":["review"],"modelBindings":{"review":"model-a"},"bindings":{"review":{"providerId":"secondary","modelId":"model-a"}}})).unwrap());
+        input.budget = Some(TicketBudget { max_requests:Some(1), ..Default::default() });
+        let lease = state.mint_host_task_lease(state.status().account_generation,input,None).unwrap();
+        let ticket = state.tickets.validate(&lease.secret,chrono::Utc::now().timestamp_millis()).unwrap();
+        assert_eq!(ticket.candidates.len(),2);
+        assert_ne!(ticket.selector_deployments["model-a"],ticket.selector_deployments["review"]);
+        let overrides = state.tickets.provider_overrides(&ticket.ticket_id);
+        assert_eq!(overrides.iter().find(|provider| provider.id == ticket.selector_deployments["review"]).unwrap().api_key.as_deref(),Some("secondary-only-key"));
+        state.tickets.validate_and_reserve(&lease.secret,chrono::Utc::now().timestamp_millis(),TicketOperation::Chat,"primary-turn",1).unwrap();
+        assert_eq!(state.tickets.reserve_continuation(&ticket.ticket_id,chrono::Utc::now().timestamp_millis(),"review-turn",1),Err(TicketReject::BudgetExhausted));
+        for (provider,model) in [("keyless","model-a"),("secondary","missing-model")] {
+            let mut input=host_request("denied-secondary",None);
+            input.model_plan=Some(serde_json::from_value(serde_json::json!({"additionalModels":["review"],"modelBindings":{"review":model},"bindings":{"review":{"providerId":provider,"modelId":model}}})).unwrap());
+            assert!(state.mint_host_task_lease(state.status().account_generation,input,None).is_err());
+        }
+    }
+
+    #[test]
+    fn remote_roles_keep_each_delegated_deployment_and_reject_undelegated_selectors() {
+        let state = GatewayState::new();
+        let mut input = request();
+        input.provider.models = vec!["model-a".into()];
+        let mut other = input.provider.clone(); other.id = "secondary".into(); other.api_key = Some("secondary-secret".into());
+        input.provider_overrides.push(other);
+        input.model_plan = Some(serde_json::from_value(serde_json::json!({"additionalModels":["review"],"modelBindings":{"review":"model-a"},"bindings":{"review":{"providerId":"secondary","modelId":"model-a","accountId":"secondary-account"}},"selectorDeployments":{"model-a":"selected","review":"secondary"}})).unwrap());
+        let lease=state.mint_task_lease("owner","device",state.status().account_generation,input).unwrap();
+        let ticket=state.tickets.validate(&lease.secret,chrono::Utc::now().timestamp_millis()).unwrap();
+        assert_eq!(ticket.candidates.len(),2);
+        assert_ne!(ticket.selector_deployments["model-a"],ticket.selector_deployments["review"]);
+        assert_eq!(state.tickets.provider_overrides(&ticket.ticket_id).iter().find(|provider| provider.id == ticket.selector_deployments["review"]).unwrap().api_key.as_deref(),Some("secondary-secret"));
+        let mut input=request();
+        input.model_plan=Some(serde_json::from_value(serde_json::json!({"additionalModels":["review"],"modelBindings":{"review":"model-a"},"bindings":{"review":{"providerId":"secondary","modelId":"model-a"}},"selectorDeployments":{"model-a":"selected","review":"not-delegated"}})).unwrap());
+        assert!(state.mint_task_lease("owner","device",state.status().account_generation,input).is_err());
     }
 
     #[test]
@@ -1289,7 +1400,7 @@ mod tests {
                      "apiKey":"host-only-key","enabled":true,"models":["model-a","model-b"],
                      "modelMetadata":[{"id":"model-a","contextLength":64000,"supportsTools":true}]},
                     {"id":"keyless","protocol":"openai","baseUrl":base_url,"enabled":true,"models":["model-a"]},
-                    {"id":"gemini","protocol":"gemini","baseUrl":base_url,"apiKey":"k","enabled":true,"models":["model-a"]},
+                    {"id":"unsupported","protocol":"cohere","baseUrl":base_url,"apiKey":"k","enabled":true,"models":["model-a"]},
                     {"id":"disabled","protocol":"openai","baseUrl":base_url,"apiKey":"k","enabled":false,"models":["model-a"]}
                 ],
                 "generatedAtMs": 1
@@ -1328,6 +1439,20 @@ mod tests {
         assert_eq!(budget.max_requests, Some(7));
         // A caller cannot pre-load spend; the registry owns the counters.
         assert_eq!(budget.spent_tokens, 0);
+    }
+
+    #[test]
+    fn host_bridge_alias_can_serve_search_and_vision_once() {
+        let state=host_state("https://api.example.com/v1");
+        state.with_snapshot(|snapshot|assert!(snapshot.is_some()));
+        let mut snapshot=state.snapshot.read().clone().unwrap();
+        snapshot.aliases=serde_json::from_value(serde_json::json!([{"alias":"helper","entries":[{"providerId":"host-openai","modelId":"model-b"}]}])).unwrap();
+        state.set_snapshot(snapshot);
+        { let mut config=state.config.write();config.bridge_models.search=Some("helper".into());config.bridge_models.vision=Some("helper".into()); }
+        let lease=state.mint_host_task_lease(state.status().account_generation,host_request("shared-helper",None),None).unwrap();
+        let ticket=state.tickets.validate(&lease.secret,chrono::Utc::now().timestamp_millis()).unwrap();
+        assert_eq!(ticket.resolve_model("helper").as_deref(),Some("model-b"));
+        assert!(ticket.selector_deployments.contains_key("helper"));
     }
 
     #[test]
@@ -1467,7 +1592,7 @@ mod tests {
             ("missing", "model-a", "openai-chat"),
             ("host-openai", "model-z", "openai-chat"),
             ("keyless", "model-a", "openai-chat"),
-            ("gemini", "model-a", "openai-chat"),
+            ("unsupported", "model-a", "openai-chat"),
             ("disabled", "model-a", "openai-chat"),
             ("host-openai", "model-a", "gemini"),
             ("host-openai", " ", "openai-chat"),

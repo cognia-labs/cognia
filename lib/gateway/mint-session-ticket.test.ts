@@ -16,6 +16,7 @@ jest.mock("@/lib/ai/agent/execution/feature-flags", () => ({
   isAgentExecutionFlagEnabled: (...args: unknown[]) => flagMock(...args),
 }))
 
+const configMock = jest.fn()
 const statusMock = jest.fn()
 const mintMock = jest.fn()
 const pushMock = jest.fn()
@@ -23,6 +24,7 @@ const revokeMock = jest.fn()
 const startMock = jest.fn()
 jest.mock("@/lib/tauri/gateway", () => ({
   gatewayGetStatus: () => statusMock(),
+  gatewayGetConfig: () => configMock(),
   gatewayStart: () => startMock(),
   gatewayPushSnapshot: (...args: unknown[]) => pushMock(...args),
   gatewayRevokeRouteTicket: (...args: unknown[]) => revokeMock(...args),
@@ -133,6 +135,7 @@ beforeEach(() => {
   settingsListeners.clear()
   flagMock.mockReturnValue(true)
   statusMock.mockResolvedValue({ running: true, boundPort: 8317 })
+  configMock.mockResolvedValue({ middlewareEnabled: false })
   buildSnapshotMock.mockReturnValue(snapshot())
   enrichedMock.mockImplementation(() => ({
     ...snapshot(),
@@ -300,6 +303,100 @@ describe("mintSessionRouteTicket", () => {
 describe("required external agent gateway leases", () => {
   const input = { providerId: "anthropic", modelId: "claude-opus-5", sessionId: "task-a" } as const
 
+  it("freezes configured bridge aliases on checked private deployments", async () => {
+    configMock.mockResolvedValue({
+      middlewareEnabled: false,
+      bridgeModels: { search: "lookup-model" },
+    })
+    enrichedMock.mockResolvedValue({
+      ...snapshot(),
+      aliases: [
+        { alias: "lookup-model", entries: [{ providerId: "anthropic", modelId: input.modelId }] },
+      ],
+      providers: [{ ...snapshot().providers[0], apiKey: "default-key" }],
+    })
+    await prepareExternalAgentGatewayRoute(input)
+    const request = mintMock.mock.calls[0][0]
+    expect(request.modelBindings["lookup-model"]).toBe(input.modelId)
+    expect(request.selectorDeployments["lookup-model"]).toBe(
+      request.selectorDeployments[input.modelId]
+    )
+    expect(request.providerOverrides).toHaveLength(1)
+    expect(request.strictSelectors).toBe(true)
+  })
+
+  it("pins identical models to separately resolved provider accounts before mint", async () => {
+    const same = input.modelId
+    const other = {
+      ...snapshot().providers[0],
+      id: "other",
+      protocol: "openai",
+      apiKey: "other-manual",
+      models: [same],
+    }
+    enrichedMock.mockResolvedValue({
+      ...snapshot(),
+      providers: [{ ...snapshot().providers[0], apiKey: "primary-manual" }, other],
+    })
+    settingsState.settings.providerSettings.other = { providerId: "other", apiKey: "other-manual" }
+    credentialMock.mockImplementation(async (provider, _settings, account) => ({
+      apiKey: `${provider}-${account}`,
+      baseURL: `https://${provider}.example/v1`,
+      protocol: provider === "anthropic" ? "anthropic" : "openai",
+    }))
+    const modelPlan = {
+      additionalModels: ["review", "audit"],
+      modelBindings: { review: same, audit: same },
+      bindings: {
+        review: { providerId: "other", modelId: same, accountId: "other-account" },
+        audit: { providerId: "anthropic", modelId: same, accountId: "audit-account" },
+      },
+    }
+    const result = await prepareExternalAgentGatewayRoute({ ...input, accountId: null, modelPlan })
+    const request = mintMock.mock.calls[0][0]
+    expect(request.providerOverrides).toHaveLength(3)
+    expect(new Set(Object.values(request.selectorDeployments)).size).toBe(3)
+    expect(request.modelBindings.review).toBe(same)
+    expect(request.modelBindings.audit).toBe(same)
+    expect(credentialMock).toHaveBeenCalledWith("other", settingsState.settings, "other-account")
+    expect(credentialMock).toHaveBeenCalledWith(
+      "anthropic",
+      settingsState.settings,
+      "audit-account"
+    )
+    expect(
+      request.providerOverrides.find(
+        (provider: { id: string }) => provider.id === request.selectorDeployments.review
+      ).apiKey
+    ).toBe("other-other-account")
+    expect(result.modelMetadataById.review.id).toBe("review")
+    expect(JSON.stringify(request.modelBindings)).not.toContain("other-account")
+  })
+
+  it("refuses an unavailable secondary account without using the primary credential", async () => {
+    const source = { ...snapshot().providers[0], apiKey: "primary-manual" }
+    enrichedMock.mockResolvedValue({ ...snapshot(), providers: [source] })
+    credentialMock.mockResolvedValue(undefined)
+    await expect(
+      prepareExternalAgentGatewayRoute({
+        ...input,
+        accountId: null,
+        modelPlan: {
+          additionalModels: ["review"],
+          modelBindings: { review: input.modelId },
+          bindings: {
+            review: {
+              providerId: input.providerId,
+              modelId: input.modelId,
+              accountId: "denied-account",
+            },
+          },
+        },
+      })
+    ).rejects.toThrow("account is unavailable")
+    expect(mintMock).not.toHaveBeenCalled()
+  })
+
   it("freezes multiple models on one deployment with exact bindings and per-model facts", async () => {
     const provider = {
       ...snapshot().providers[0],
@@ -381,7 +478,7 @@ describe("required external agent gateway leases", () => {
     expect(mintMock).not.toHaveBeenCalled()
   })
 
-  it("keeps the sticky deployment across revoked per-turn tickets without reusing execution authority", async () => {
+  it("keeps the frozen fingerprint and sticky deployment across revoked per-turn tickets", async () => {
     const first = await prepareExternalAgentGatewayRoute(input)
     const firstRequest = mintMock.mock.calls[0][0]
     await revokeMock(first.ticketId)
@@ -391,7 +488,7 @@ describe("required external agent gateway leases", () => {
     expect(nextRequest.providerOverrides[0].deploymentId).toBe(
       firstRequest.providerOverrides[0].deploymentId
     )
-    expect(nextRequest.executionFingerprint).not.toBe(firstRequest.executionFingerprint)
+    expect(nextRequest.executionFingerprint).toBe(firstRequest.executionFingerprint)
     expect(nextRequest.credentialAffinity).toBe("session-sticky")
     expect(nextRequest.allowAuthFailover).toBe(false)
   })

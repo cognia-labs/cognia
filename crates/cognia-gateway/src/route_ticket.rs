@@ -129,6 +129,9 @@ pub struct RouteTicket {
     /// Frozen selector → concrete model map (primary/fast/powerful roles and
     /// the sonnet/haiku/opus family selectors Claude Code sends).
     pub model_bindings: BTreeMap<String, String>,
+    /// Exact selector → deployment pin for task models on different accounts.
+    #[serde(default)]
+    pub selector_deployments: BTreeMap<String, String>,
     #[serde(default)]
     pub strict_selectors: bool,
     pub credential_affinity: TicketAffinity,
@@ -162,6 +165,9 @@ impl RouteTicket {
     pub fn resolve_model(&self, selector: &str) -> Option<String> {
         if let Some(bound) = self.model_bindings.get(selector) {
             return Some(bound.clone());
+        }
+        if !self.selector_deployments.is_empty() {
+            return None;
         }
         if self.strict_selectors {
             return self
@@ -212,6 +218,8 @@ pub struct MintRequest {
     pub candidates: Vec<TicketCandidate>,
     #[serde(default)]
     pub model_bindings: BTreeMap<String, String>,
+    #[serde(default)]
+    pub selector_deployments: BTreeMap<String, String>,
     #[serde(default)]
     pub strict_selectors: bool,
     pub credential_affinity: TicketAffinity,
@@ -322,6 +330,10 @@ struct TicketRecord {
     task_authority: Option<std::sync::Arc<dyn Fn() -> bool + Send + Sync>>,
     /// P6e one-use claim, private to this Host lifetime.
     person_run: Option<String>,
+    /// Trusted Host-only marker; never serialized or accepted from a mint request.
+    internal_bridge: bool,
+    internal_bridge_audience: Option<(String, String)>,
+    internal_bridge_parent_reservation: Option<String>,
 }
 
 /// Everything the accounting needs, behind ONE lock.
@@ -357,13 +369,17 @@ impl RouteTicketRegistry {
             .map(|mut ticket| {
                 if ticket.route_policy.starts_with("person_p6d:") { ticket.revoked = true; }
                 TicketRecord {
-                ticket,
-                secret: None,
-                provider_overrides: Vec::new(),
-                task_client: None,
-                task_authority: None,
-                person_run: None,
-            }})
+                    ticket,
+                    secret: None,
+                    provider_overrides: Vec::new(),
+                    task_client: None,
+                    task_authority: None,
+                    person_run: None,
+                    internal_bridge: false,
+                    internal_bridge_audience: None,
+                    internal_bridge_parent_reservation: None,
+                }
+            })
             .collect();
         Self {
             inner: Mutex::new(Inner {
@@ -442,7 +458,10 @@ impl RouteTicketRegistry {
                     provider_overrides: Vec::new(),
                     task_client: None,
                     task_authority: None,
-                person_run: None,
+                    person_run: None,
+                    internal_bridge: false,
+                    internal_bridge_audience: None,
+                    internal_bridge_parent_reservation: None,
                 });
             }
         }
@@ -551,7 +570,7 @@ impl RouteTicketRegistry {
                 &model,
             );
         }
-        if request.strict_selectors {
+        if request.strict_selectors && request.selector_deployments.is_empty() {
             if request.candidates.len() != 1
                 || request.allow_auth_failover
                 || request.credential_affinity != TicketAffinity::SessionSticky
@@ -580,6 +599,8 @@ impl RouteTicketRegistry {
             }
             let plan = crate::task_lease::TaskModelPlan {
                 additional_models: bound.into_iter().cloned().collect(),
+                bindings: BTreeMap::new(),
+                selector_deployments: BTreeMap::new(),
                 // The lease adds defaults and identities after validating the caller's
                 // 64 selectors. Those generated entries do not consume that limit.
                 model_bindings: request
@@ -606,11 +627,66 @@ impl RouteTicketRegistry {
                 request.model_bindings.insert(model.clone(), model.clone());
             }
         }
+        if !request.selector_deployments.is_empty() {
+            if request.selector_deployments.len() > 104
+                || request.candidates.len() > 32
+                || request.allow_auth_failover
+                || request.credential_affinity != TicketAffinity::SessionSticky
+            {
+                return Err(TicketError::InvalidModelPlan(
+                    "bounded exact deployments and no auth failover required".into(),
+                ));
+            }
+            let mut models = std::collections::BTreeSet::new();
+            for (selector, deployment) in &request.selector_deployments {
+                let model = request.model_bindings.get(selector).ok_or_else(|| {
+                    TicketError::InvalidModelPlan("deployment selector has no model binding".into())
+                })?;
+                if selector.is_empty()
+                    || selector.len() > 256
+                    || selector.chars().any(char::is_control)
+                    || !request
+                        .candidates
+                        .iter()
+                        .any(|candidate| &candidate.deployment_id == deployment)
+                {
+                    return Err(TicketError::InvalidModelPlan(
+                        "invalid deployment selector or deployment outside frozen candidates"
+                            .into(),
+                    ));
+                }
+                let provider = snapshot
+                    .provider_by_deployment(deployment)
+                    .or_else(|| snapshot.provider(deployment))
+                    .ok_or_else(|| {
+                        TicketError::InvalidModelPlan("missing task deployment".into())
+                    })?;
+                if !provider.models.contains(model)
+                    || !provider.enabled
+                    || provider.base_url.trim().is_empty()
+                {
+                    return Err(TicketError::InvalidModelPlan(
+                        "bound model is unavailable on its selected deployment".into(),
+                    ));
+                }
+                models.insert((deployment, model));
+            }
+            if models.len() > 32
+                || request
+                    .model_bindings
+                    .keys()
+                    .any(|selector| !request.selector_deployments.contains_key(selector))
+            {
+                return Err(TicketError::InvalidModelPlan(
+                    "every model selector needs exactly one frozen deployment".into(),
+                ));
+            }
+        }
         let operations = request
             .operations
             .clone()
             .unwrap_or_else(default_ticket_operations);
-        let budget = request.budget.clone().map(|b| TicketBudget {
+        let mut budget = request.budget.clone().map(|b| TicketBudget {
             max_tokens: b.max_tokens,
             max_requests: b.max_requests,
             max_requests_per_min: b.max_requests_per_min,
@@ -633,15 +709,17 @@ impl RouteTicketRegistry {
         }
 
         let mut inner = self.inner.lock();
-        if let Some(prior) = inner
+        let prior_index = inner
             .records
             .iter()
-            .filter(|r| {
-                r.ticket.execution_fingerprint == request.execution_fingerprint
-                    && r.ticket.owner_account_id == owner_account_id
+            .enumerate()
+            .filter(|(_, record)| {
+                record.ticket.execution_fingerprint == request.execution_fingerprint
+                    && record.ticket.owner_account_id == owner_account_id
             })
-            .max_by_key(|r| r.ticket.issued_at_ms)
-        {
+            .max_by_key(|(_, record)| record.ticket.issued_at_ms)
+            .map(|(index, _)| index);
+        if let Some(prior) = prior_index.map(|index| &inner.records[index]) {
             let prior_set: std::collections::BTreeSet<(&str, &str)> = prior
                 .ticket
                 .candidates
@@ -663,11 +741,19 @@ impl RouteTicketRegistry {
                 }
             }
             if request.model_bindings != prior.ticket.model_bindings
+                || request.session_id != prior.ticket.session_id
+                || request.parent_session_id != prior.ticket.parent_session_id
+                || request.route_policy != prior.ticket.route_policy
+                || member != prior.ticket.member
                 || request.strict_selectors != prior.ticket.strict_selectors
+                || request.selector_deployments != prior.ticket.selector_deployments
+                || request.credential_affinity != prior.ticket.credential_affinity
+                || request.allow_auth_failover != prior.ticket.allow_auth_failover
             {
                 return Err(TicketError::WidenedRemint {
                     fingerprint: request.execution_fingerprint.clone(),
-                    detail: "model bindings differ from the original ticket".into(),
+                    detail: "task identity or model bindings differ from the original ticket"
+                        .into(),
                 });
             }
             if let Some(op) = operations
@@ -687,11 +773,20 @@ impl RouteTicketRegistry {
             }
         }
 
+        if let (Some(index), Some(next)) = (prior_index, budget.as_mut()) {
+            if let Some(prior) = &inner.records[index].ticket.budget {
+                next.spent_tokens = prior.spent_tokens;
+                next.spent_requests = prior.spent_requests;
+            }
+        }
+        let reusable = prior_index.filter(|index| !inner.records[*index].ticket.revoked);
         let ttl = request
             .ttl_ms
             .unwrap_or(DEFAULT_TTL_MS)
             .clamp(MIN_TTL_MS, MAX_TTL_MS);
-        let ticket_id = format!("rt_{}", uuid::Uuid::new_v4().simple());
+        let ticket_id = reusable
+            .map(|index| inner.records[index].ticket.ticket_id.clone())
+            .unwrap_or_else(|| format!("rt_{}", uuid::Uuid::new_v4().simple()));
         let secret = format!(
             "{TICKET_SECRET_PREFIX}{}{}",
             uuid::Uuid::new_v4().simple(),
@@ -701,12 +796,15 @@ impl RouteTicketRegistry {
             member,
             owner_account_id,
             ticket_id: ticket_id.clone(),
-            route_pin_id: format!("pin_{}", uuid::Uuid::new_v4().simple()),
+            route_pin_id: reusable
+                .map(|index| inner.records[index].ticket.route_pin_id.clone())
+                .unwrap_or_else(|| format!("pin_{}", uuid::Uuid::new_v4().simple())),
             execution_fingerprint: request.execution_fingerprint,
             session_id: request.session_id,
             parent_session_id: request.parent_session_id,
             candidates: request.candidates,
             model_bindings: request.model_bindings,
+            selector_deployments: request.selector_deployments,
             strict_selectors: request.strict_selectors,
             credential_affinity: request.credential_affinity,
             allow_auth_failover: request.allow_auth_failover,
@@ -718,13 +816,37 @@ impl RouteTicketRegistry {
             operations,
             budget,
         };
+        if let Some(index) = reusable {
+            let record = &mut inner.records[index];
+            record.ticket = ticket.clone();
+            record.internal_bridge = false;
+            record.internal_bridge_audience = None;
+            record.internal_bridge_parent_reservation = None;
+            record.secret = Some(secret.clone());
+            record.provider_overrides = request.provider_overrides;
+            self.persist(&inner.records)?;
+            return Ok(MintedTicket { ticket, secret });
+        }
+        if let Some(index) = prior_index {
+            let prior_id = inner.records[index].ticket.ticket_id.clone();
+            for reservation in inner
+                .reservations
+                .values_mut()
+                .filter(|hold| hold.ticket_id == prior_id)
+            {
+                reservation.ticket_id = ticket_id.clone();
+            }
+        }
         inner.records.push(TicketRecord {
             ticket: ticket.clone(),
             secret: Some(secret.clone()),
             provider_overrides: request.provider_overrides,
             task_client: None,
             task_authority: None,
-                person_run: None,
+            person_run: None,
+            internal_bridge: false,
+            internal_bridge_audience: None,
+            internal_bridge_parent_reservation: None,
         });
         self.persist(&inner.records)?;
         Ok(MintedTicket { ticket, secret })
@@ -776,6 +898,46 @@ impl RouteTicketRegistry {
     ) -> Result<RouteTicket, TicketReject> {
         let mut inner = self.inner.lock();
         let index = Self::match_secret(&inner.records, supplied).ok_or(TicketReject::Unknown)?;
+        Self::reserve_locked(&mut inner, index, now_ms, op, request_id, est_tokens)
+    }
+
+    /// Reserve an additional authorized gateway round without issuing a secret
+    /// or widening the original ticket's scope. Only Host-owned execution calls this.
+    pub fn reserve_continuation(
+        &self,
+        ticket_id: &str,
+        now_ms: i64,
+        request_id: &str,
+        est_tokens: u64,
+    ) -> Result<RouteTicket, TicketReject> {
+        let mut inner = self.inner.lock();
+        let index = inner
+            .records
+            .iter()
+            .position(|record| record.ticket.ticket_id == ticket_id)
+            .ok_or(TicketReject::Unknown)?;
+        if inner.reservations.contains_key(request_id) {
+            return Err(TicketReject::BudgetExhausted);
+        }
+        let op = if inner.records[index]
+            .ticket
+            .allows(TicketOperation::Responses)
+        {
+            TicketOperation::Responses
+        } else {
+            TicketOperation::Chat
+        };
+        Self::reserve_locked(&mut inner, index, now_ms, op, request_id, est_tokens)
+    }
+
+    fn reserve_locked(
+        inner: &mut Inner,
+        index: usize,
+        now_ms: i64,
+        op: TicketOperation,
+        request_id: &str,
+        est_tokens: u64,
+    ) -> Result<RouteTicket, TicketReject> {
         let ticket_id = inner.records[index].ticket.ticket_id.clone();
         {
             let ticket = &inner.records[index].ticket;
@@ -1010,6 +1172,95 @@ impl RouteTicketRegistry {
             .unwrap_or_default()
     }
 
+    pub(crate) fn mark_internal_bridge(&self, ticket_id: &str) -> bool {
+        let mut inner = self.inner.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        if let Some(record) = inner.records.iter_mut().find(|record| {
+            record.ticket.ticket_id == ticket_id
+                && !record.ticket.revoked
+                && record.ticket.expires_at_ms > now
+                && record.secret.is_some()
+        }) {
+            record.internal_bridge = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn is_internal_bridge(&self, ticket_id: &str) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.inner.lock().records.iter().any(|record| {
+            record.ticket.ticket_id == ticket_id
+                && record.internal_bridge
+                && !record.ticket.revoked
+                && record.ticket.expires_at_ms > now
+                && record.secret.is_some()
+                && record.task_authority.as_ref().is_none_or(|check| check())
+        })
+    }
+
+    pub(crate) fn set_internal_bridge_audience(&self, ticket_id: &str, audience: (String, String)) {
+        if let Some(record) = self.inner.lock().records.iter_mut().find(|record| {
+            record.ticket.ticket_id == ticket_id && record.internal_bridge && !record.ticket.revoked
+        }) {
+            record.internal_bridge_audience = Some(audience);
+        }
+    }
+
+    pub(crate) fn internal_bridge_audience(&self, ticket_id: &str) -> Option<(String, String)> {
+        self.inner
+            .lock()
+            .records
+            .iter()
+            .find(|record| {
+                record.ticket.ticket_id == ticket_id
+                    && record.internal_bridge
+                    && !record.ticket.revoked
+            })
+            .and_then(|record| record.internal_bridge_audience.clone())
+    }
+
+    pub(crate) fn bind_internal_bridge_reservation(
+        &self,
+        ticket_id: &str,
+        request_id: &str,
+    ) -> bool {
+        let mut inner = self.inner.lock();
+        if !inner.reservations.contains_key(request_id) {
+            return false;
+        }
+        if let Some(record) = inner.records.iter_mut().find(|record| {
+            record.ticket.ticket_id == ticket_id && record.internal_bridge && !record.ticket.revoked
+        }) {
+            record.internal_bridge_parent_reservation = Some(request_id.to_string());
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn internal_bridge_reservation(&self, ticket_id: &str) -> Option<String> {
+        self.inner
+            .lock()
+            .records
+            .iter()
+            .find(|record| {
+                record.ticket.ticket_id == ticket_id
+                    && record.internal_bridge
+                    && !record.ticket.revoked
+            })
+            .and_then(|record| record.internal_bridge_parent_reservation.clone())
+    }
+
+    pub(crate) fn reservation_tokens(&self, request_id: &str) -> Option<u64> {
+        self.inner
+            .lock()
+            .reservations
+            .get(request_id)
+            .map(|reservation| reservation.tokens_held)
+    }
+
     pub fn is_live(&self, ticket_id: &str, now_ms: i64) -> bool {
         self.inner.lock().records.iter().any(|record| {
             record.ticket.ticket_id == ticket_id
@@ -1125,6 +1376,9 @@ impl RouteTicketRegistry {
         for record in inner.records.iter_mut() {
             if record.ticket.ticket_id == ticket_id {
                 record.ticket.revoked = true;
+                record.internal_bridge = false;
+                record.internal_bridge_audience = None;
+                record.internal_bridge_parent_reservation = None;
                 record.secret = None;
                 record.provider_overrides.clear();
                 record.task_client = None;
@@ -1144,10 +1398,19 @@ impl RouteTicketRegistry {
         let mut count = 0;
         for record in &mut inner.records {
             if !record.ticket.revoked
-                && record.ticket.member.as_ref().is_some_and(|member| member.org_id == org)
-                && record.provider_overrides.iter().any(|entry| entry.id == provider
-                    || entry.deployment_id.as_deref() == Some(provider)) {
+                && record
+                    .ticket
+                    .member
+                    .as_ref()
+                    .is_some_and(|member| member.org_id == org)
+                && record.provider_overrides.iter().any(|entry| {
+                    entry.id == provider || entry.deployment_id.as_deref() == Some(provider)
+                })
+            {
                 record.ticket.revoked = true;
+                record.internal_bridge = false;
+                record.internal_bridge_audience = None;
+                record.internal_bridge_parent_reservation = None;
                 record.secret = None;
                 record.provider_overrides.clear();
                 record.task_client = None;
@@ -1164,6 +1427,9 @@ impl RouteTicketRegistry {
         for record in inner.records.iter_mut() {
             if record.ticket.session_id == session_id && !record.ticket.revoked {
                 record.ticket.revoked = true;
+                record.internal_bridge = false;
+                record.internal_bridge_audience = None;
+                record.internal_bridge_parent_reservation = None;
                 record.secret = None;
                 record.provider_overrides.clear();
                 record.task_client = None;
@@ -1721,6 +1987,164 @@ mod tests {
             reg2.mint(changed_bindings, Some(&snapshot()), 20),
             Err(TicketError::WidenedRemint { .. })
         ));
+    }
+
+    #[test]
+    fn remint_rotates_auth_preserves_inflight_liveness_and_never_resets_budget() {
+        let reg = registry();
+        let mut request = mint_request();
+        request.budget = Some(TicketBudget {
+            max_tokens: Some(20),
+            max_requests: Some(2),
+            ..Default::default()
+        });
+        let first = reg.mint(request.clone(), Some(&snapshot()), 0).unwrap();
+        reg.validate_and_reserve(&first.secret, 1, TicketOperation::Chat, "in-flight", 10)
+            .unwrap();
+        let second = reg.mint(request.clone(), Some(&snapshot()), 2).unwrap();
+        assert_eq!(first.ticket.ticket_id, second.ticket.ticket_id);
+        assert!(reg.is_live(&first.ticket.ticket_id, 3));
+        assert!(reg.validate(&first.secret, 3).is_err());
+        assert_eq!(
+            reg.validate_and_reserve(&second.secret, 3, TicketOperation::Chat, "too-much", 11),
+            Err(TicketReject::BudgetExhausted)
+        );
+        reg.settle_reservation("in-flight", 7);
+        reg.validate_and_reserve(&second.secret, 3, TicketOperation::Chat, "second", 13)
+            .unwrap();
+        let third = reg.mint(request.clone(), Some(&snapshot()), 4).unwrap();
+        assert_eq!(
+            reg.validate_and_reserve(&third.secret, 5, TicketOperation::Chat, "third", 1),
+            Err(TicketReject::BudgetExhausted)
+        );
+        reg.settle_reservation("second", 13);
+        let fourth = reg.mint(request, Some(&snapshot()), 6).unwrap();
+        assert_eq!(fourth.ticket.budget.unwrap().spent_tokens, 20);
+        assert_eq!(
+            reg.validate_and_reserve(&fourth.secret, 7, TicketOperation::Chat, "fourth", 1),
+            Err(TicketReject::BudgetExhausted)
+        );
+    }
+
+    #[test]
+    fn same_fingerprint_never_changes_session_or_authority_identity() {
+        for field in ["session", "parent", "policy", "member"] {
+            let reg = registry();
+            let request = mint_request();
+            reg.mint(request.clone(), Some(&snapshot()), 1).unwrap();
+            let mut changed = request;
+            match field {
+                "session" => changed.session_id = "another-session".into(),
+                "parent" => changed.parent_session_id = Some("another-parent".into()),
+                "policy" => changed.route_policy = "another-policy".into(),
+                _ => {}
+            }
+            let member = (field == "member").then(|| MemberBinding {
+                org_id: "other-org".into(),
+                user_id: "other-user".into(),
+            });
+            assert!(
+                matches!(
+                    reg.person_mint_owned(changed, Some(&snapshot()), 2, None, member),
+                    Err(TicketError::WidenedRemint { .. })
+                ),
+                "changed {field} must refuse remint"
+            );
+        }
+    }
+
+    #[test]
+    fn internal_continuations_obey_budget_revocation_expiry_and_unique_holds() {
+        let reg = registry();
+        let mut request = mint_request();
+        request.budget = Some(TicketBudget {
+            max_tokens: Some(10),
+            max_requests: Some(2),
+            ..Default::default()
+        });
+        let minted = reg.mint(request, Some(&snapshot()), 0).unwrap();
+        let id = &minted.ticket.ticket_id;
+        reg.reserve_continuation(id, 1, "round-one", 6).unwrap();
+        assert_eq!(
+            reg.reserve_continuation(id, 1, "round-one", 0),
+            Err(TicketReject::BudgetExhausted)
+        );
+        assert_eq!(
+            reg.reserve_continuation(id, 1, "round-over", 5),
+            Err(TicketReject::BudgetExhausted)
+        );
+        reg.settle_reservation("round-one", 6);
+        reg.reserve_continuation(id, 2, "round-two", 4).unwrap();
+        reg.settle_reservation("round-two", 4);
+        assert_eq!(
+            reg.reserve_continuation(id, 3, "round-three", 0),
+            Err(TicketReject::BudgetExhausted)
+        );
+        assert_eq!(
+            reg.reserve_continuation(id, minted.ticket.expires_at_ms, "expired", 0),
+            Err(TicketReject::Expired)
+        );
+        reg.revoke(id);
+        assert_eq!(
+            reg.reserve_continuation(id, 3, "revoked", 0),
+            Err(TicketReject::Revoked)
+        );
+    }
+
+    #[test]
+    fn bridge_trust_is_runtime_only_and_cannot_be_claimed_in_route_policy() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let store = std::sync::Arc::new(InMemoryTicketMetaStore::default());
+        let reg = RouteTicketRegistry::new(store.clone());
+        let mut request = mint_request();
+        request.route_policy = "gateway-bridge-internal".into();
+        let ticket = reg.mint(request, Some(&snapshot()), now).unwrap().ticket;
+        assert!(!reg.is_internal_bridge(&ticket.ticket_id));
+        assert!(reg.mark_internal_bridge(&ticket.ticket_id));
+        assert!(reg.is_internal_bridge(&ticket.ticket_id));
+        assert!(!RouteTicketRegistry::new(store).is_internal_bridge(&ticket.ticket_id));
+        reg.revoke(&ticket.ticket_id);
+        assert!(!reg.is_internal_bridge(&ticket.ticket_id));
+        assert!(!reg.mark_internal_bridge(&ticket.ticket_id));
+    }
+
+    #[test]
+    fn exact_deployment_plans_freeze_identical_models_and_affinity() {
+        let reg = registry();
+        let mut request = mint_request();
+        request.strict_selectors = true;
+        request.credential_affinity = TicketAffinity::SessionSticky;
+        request.model_bindings = BTreeMap::from([
+            ("primary".into(), "model-alpha".into()),
+            ("review".into(), "model-alpha".into()),
+        ]);
+        request.selector_deployments = BTreeMap::from([
+            ("primary".into(), "dep-primary".into()),
+            ("review".into(), "backup".into()),
+        ]);
+        let ticket = reg
+            .mint(request.clone(), Some(&snapshot()), 0)
+            .unwrap()
+            .ticket;
+        assert_eq!(
+            ticket.resolve_model("review").as_deref(),
+            Some("model-alpha")
+        );
+        assert_eq!(ticket.resolve_model("model-alpha"), None);
+        assert_ne!(
+            crate::execute::ticket_lease_scope(&ticket, "dep-primary"),
+            crate::execute::ticket_lease_scope(&ticket, "backup")
+        );
+        let mut switched = request.clone();
+        switched
+            .selector_deployments
+            .insert("review".into(), "dep-primary".into());
+        assert!(matches!(
+            reg.mint(switched, Some(&snapshot()), 1),
+            Err(TicketError::WidenedRemint { .. })
+        ));
+        request.allow_auth_failover = true;
+        assert!(reg.mint(request, Some(&snapshot()), 1).is_err());
     }
 
     #[test]

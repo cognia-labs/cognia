@@ -32,6 +32,39 @@ Magpie 中的提供商密钥。
 
 参见 [Magpie 官方接入约定](https://github.com/yetone/magpie/blob/main/docs/integrating.md)。
 
+## Cognia 内置网关
+
+进入 **设置 → 网关**，配置上游提供商、启动监听器并创建网关密钥。默认地址是 `http://127.0.0.1:47823`；若设置中显示其他绑定端口，以实际端口为准。上游凭据保留在 Host。客户端通过 `Authorization: Bearer …`、`x-api-key` 或 `x-goog-api-key` 提交网关密钥。
+
+| 客户端协议 | 支持的监听器路径 |
+| --- | --- |
+| OpenAI | `/v1/models`、`/v1/chat/completions`、`/v1/responses`、`/v1/embeddings` |
+| Anthropic | `/v1/messages`、`/v1/messages/count_tokens` |
+| Google Gemini | `/v1beta/models`、`/v1beta/models/{model}`，以及 `:generateContent`、`:streamGenerateContent`、`:countTokens` 操作；`/v1alpha` 提供相同路由 |
+| Ollama | `/api/version`、`/api/tags`、`/api/show`、`/api/chat`、`/api/generate` |
+| 媒体与重排 | `/v1/images/generations`、`/v1/images/edits`、`/v1/audio/speech`、`/v1/audio/transcriptions`、`/v1/audio/translations`、`/v1/videos`、视频状态与内容、`/v1/rerank` |
+
+OpenAI、Responses、Anthropic 与 Gemini 聊天适配器共享文本、图片、函数调用及结果、思考内容和流式转换。同协议原生请求保留提供商字段。无法准确表达的转换会明确拒绝：例如 Gemini 安全设置、非图片媒体、带签名的文本历史和部分工具约束需要原生路由。Ollama 端点将请求适配到已有提供商，不安装模型权重，也不实现 Ollama 的模型驻留控制。媒体和重排要求兼容的上游及可复用网关密钥；任务 ticket 不授予这些操作。
+
+可以先执行不调用模型的目录检查：
+
+```bash
+curl -H "Authorization: Bearer $GATEWAY_KEY" http://127.0.0.1:47823/v1/models
+curl -H "x-goog-api-key: $GATEWAY_KEY" http://127.0.0.1:47823/v1beta/models
+```
+
+使用目录中公布的完整模型 ID 或已配置的别名。请求发出前会执行明确的上下文及输出限制，并拒绝已知不支持的能力。Gemini 用量包含思考 token。上游没有 token 计数接口时，带有 `x-cognia-token-count: estimated` 的响应属于本地估算，适合估算上下文，不用于计费。
+
+网关设置中的 **客户端接入** 可配置 Claude Code、Codex、Gemini CLI 和 OpenCode。选择实际可用的模型别名后连接，系统会创建独立的模型限定密钥，验证本地模型目录，并保留私有恢复备份。如果客户端文件在连接后被其他程序修改，恢复操作会拒绝覆盖。连接成功表示配置与目录访问通过；所选上游仍需通过有意发起的客户端请求验证。密钥撤销失败时会保留恢复记录，并在下次监听器启动前处理。
+
+外部 Agent 选择 Cognia 主模型后，可在 **子任务模型** 中为受支持的角色选择其他提供商或订阅账号。任务开始前会分别校验每个所选账号是否提供对应模型、工具调用与流式能力。不同提供商上的同名模型使用独立任务选择器，并冻结到各自部署。所有角色共享任务预算；续签同一冻结 ticket 不会重置已用额度，也不会静默扩大模型或账号权限。所选凭据缺失时会拒绝，不会改用主账号。
+
+订阅轮换需要在网关设置中明确启用对应提供商。已知额度耗尽的账号会被排除，重置窗口会影响排序，未知额度仍按未知处理。明确选定的账号与粘性任务租约保持固定。文本脱敏、已注册中间件和已配置的搜索及视觉桥接复用现有网关边界；桥接模型需要明确配置和任务权限。二进制媒体原样转发，不进行内容脱敏。功能可用不代表任意提供商都接受全部模型或选项；请通过有意发起的测试调用校验目标提供商。
+
+搜索补偿处理声明的提供商网页搜索工具；客户端自己的函数工具仍由客户端执行。最多执行六轮搜索、十二次内部搜索调用。视觉补偿仅为明确不支持图片的模型替换内联图片；远程图片 URL 需要上游本身支持视觉。每次内部提示词上限为 64 KiB，输出最多 2,048 token，单次调用总上限为 32,768 token；模型和父任务预算可以进一步降低上限。即使结果文本被拒绝，已知用量仍会结算。已交付但用量不确定时保守保留有界额度；明确尚未交付给 brain 的调用不消耗提供商 token。可选脱敏、中间件和补偿需要已连接的桌面或 headless brain。视频后续查询 ID 限于原调用方，24 小时后失效，且不跨网关重启保留。
+
+无前端的服务器配置参见 [Headless 网关配置](../subsystems/companion-api/headless-service-plane#无前端-llm-网关)。
+
 ## 总览架构
 
 ```mermaid

@@ -20,23 +20,24 @@ import { useCallback, useEffect, useRef } from "react"
 import type { AppSettings } from "@cognia/agent-config-types"
 
 import { isTauri, transport } from "@/lib/tauri"
-import { gatewayDecisionResponse, gatewayGetStatus, gatewayPushSnapshot } from "@/lib/tauri/gateway"
+import {
+  gatewayDecisionResponse,
+  gatewayGetConfig,
+  gatewayGetStatus,
+  gatewayPushSnapshot,
+} from "@/lib/tauri/gateway"
+import { subscribeGatewaySnapshotChanged } from "@/lib/gateway/snapshot-events"
 import { buildEnrichedGatewaySnapshot } from "@/lib/gateway/snapshot-publisher"
-import { forwardGatewayOutcome } from "@/lib/gateway/telemetry-forwarder"
+import { installGatewayTelemetrySubscription } from "@/lib/gateway/telemetry-subscription"
 import { resolveGatewayDecision, type GatewayDecideRequest } from "@/lib/gateway/decide"
 import { subscribeSubscriptionChanged } from "@/lib/subscription/core/subscription-events"
 import { useAccountStore } from "@/stores/account/account-store"
 import { loggers } from "@cognia/logging"
-import { appendGatewayRequestLog } from "@/lib/db/gateway-request-log"
 import { useSettingsStore } from "@/stores/settings"
 import {
   GATEWAY_DECIDE_EVENT,
-  GATEWAY_REQUEST_LOG_EVENT,
-  GATEWAY_REQUEST_OUTCOME_EVENT,
   GATEWAY_SNAPSHOT_INVALIDATED_EVENT,
   type GatewayAccountScope,
-  type GatewayRequestLogRow,
-  type GatewayRequestOutcome,
 } from "@/types/gateway"
 
 /** Slow periodic re-push so a multi-hour session never serves a stale snapshot. */
@@ -111,7 +112,11 @@ export function GatewayProvider() {
           const projectionKey = routingSliceKey(live)
           const { loadSnapshotProfileMeta } = await import("@/lib/gateway/snapshot-publisher")
           const profileMeta = await loadSnapshotProfileMeta()
-          const snapshot = await buildEnrichedGatewaySnapshot(live, Date.now(), profileMeta)
+          const config = await gatewayGetConfig()
+          if (stale()) return
+          const snapshot = await buildEnrichedGatewaySnapshot(live, Date.now(), profileMeta, {
+            subscriptionRotationProviderIds: config.subscriptionRotationProviderIds ?? [],
+          })
           if (stale()) return
           if (routingSliceKey(useSettingsStore.getState().settings) !== projectionKey) {
             void push()
@@ -134,6 +139,7 @@ export function GatewayProvider() {
     const debounce = setTimeout(() => void push(), DEBOUNCE_MS)
     const interval = setInterval(() => void push(), PERIODIC_PUSH_MS)
     const unsubscribeSubscription = subscribeSubscriptionChanged(() => void push())
+    const unsubscribeConfig = subscribeGatewaySnapshotChanged(() => void push())
     const unsubscribeInvalidation = transport.subscribe(
       GATEWAY_SNAPSHOT_INVALIDATED_EVENT,
       () => void push()
@@ -145,41 +151,15 @@ export function GatewayProvider() {
       clearTimeout(debounce)
       clearInterval(interval)
       unsubscribeSubscription()
+      unsubscribeConfig()
       unsubscribeInvalidation()
     }
   }, [sliceKey, unlockedAccountId])
 
-  // Telemetry forwarding.
+  // Shared telemetry and durable request log sink; also installed headlessly.
   useEffect(() => {
     if (!isTauri()) return
-    const unsubscribe = transport.subscribe<GatewayRequestOutcome>(
-      GATEWAY_REQUEST_OUTCOME_EVENT,
-      (payload) => {
-        if (!acceptsEvent(payload)) return
-        try {
-          forwardGatewayOutcome(payload)
-        } catch {
-          // Telemetry must never break on a malformed event.
-        }
-      }
-    )
-    return unsubscribe
-  }, [acceptsEvent])
-
-  // Durable request log: persist every gateway request row into Dexie so the
-  // Settings "Logs" view survives a restart (the newapi Logs page equivalent).
-  useEffect(() => {
-    if (!isTauri()) return
-    const unsubscribe = transport.subscribe<GatewayRequestLogRow>(
-      GATEWAY_REQUEST_LOG_EVENT,
-      (row) => {
-        if (!acceptsEvent(row)) return
-        void appendGatewayRequestLog(row).catch(() => {
-          // A logging failure must never break the gateway.
-        })
-      }
-    )
-    return unsubscribe
+    return installGatewayTelemetrySubscription(transport, { acceptsEvent })
   }, [acceptsEvent])
 
   // Live routing decisions: the gateway asks per-request; run the full engine
