@@ -24,6 +24,7 @@
  *     connected user's identity (open_id / name / …) for the UI.
  */
 
+import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import {
   connectorsHttpRequest,
   connectorsKeyringGet,
@@ -122,10 +123,11 @@ interface TenantTokenResponse {
  * @returns The tenant access token string
  * @throws Error if the Lark API returns a non-zero code
  */
-export async function getTenantAccessToken(opts: {
-  appId: string
-  appSecret: string
-}): Promise<string> {
+export async function getTenantAccessToken(
+  opts: { appId: string; appSecret: string },
+  purpose: TenantTokenPurposeV1
+): Promise<string> {
+  void purpose
   const cacheKey = `${opts.appId}:${opts.appSecret}`
   const now = Date.now()
 
@@ -157,6 +159,15 @@ export async function getTenantAccessToken(opts: {
   tokenCache.set(cacheKey, entry)
 
   return entry.token
+}
+
+/** The only production entry to the token cache. Purpose is a label, never a cache key. */
+export function getTenantToken(
+  opts: { appId: string; appSecret: string },
+  purpose: TenantTokenPurposeV1
+): Promise<string> {
+  // Deliberately no policy, logging, or purpose-specific credential selection.
+  return getTenantAccessToken(opts, purpose)
 }
 
 /**

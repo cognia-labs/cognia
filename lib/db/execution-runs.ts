@@ -214,19 +214,35 @@ export async function listExecutionRunEvents(runId: string): Promise<RunEvent[]>
  */
 export async function appendRunObservation(
   runId: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  options?: { throttleMs: number }
 ): Promise<RunEvent | undefined> {
   return withExecutionDatabaseRetry((db) =>
     db.transaction("rw", db.executionRuns, db.executionRunEvents, async () => {
       const run = await db.executionRuns.get(runId)
+      const now = Date.now()
+      const redacted = redactPayload(payload)
+      if (options) {
+        const recent = await db.executionRunEvents
+          .where("[runId+seq]")
+          .equals([runId, 0])
+          .filter(
+            (event) =>
+              event.ts > now - options.throttleMs &&
+              event.payload.operation === redacted.operation &&
+              event.payload.path === redacted.path
+          )
+          .first()
+        if (recent) return undefined
+      }
       const event: RunEvent = {
         id: `execution-observation:${crypto.randomUUID()}`,
         runId,
         seq: 0,
-        ts: Date.now(),
+        ts: now,
         type: "authority.observed",
         visibility: "private",
-        payload: redactPayload(payload),
+        payload: redacted,
         ...(run?.projectId ? { projectId: run.projectId } : {}),
       }
       await db.executionRunEvents.add(event)

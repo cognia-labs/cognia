@@ -19,6 +19,7 @@
  * Rust-side `connectors_lark_upload_*` commands surface).
  */
 
+import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import { clearTokenCache, refreshUserToken } from "./auth"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
@@ -99,7 +100,12 @@ export interface TatRefreshContext {
  * is returned / propagated unchanged — we never retry more than once,
  * to avoid masking persistent credential failures.
  */
-export async function withTatRefresh<T>(ctx: TatRefreshContext, fn: () => Promise<T>): Promise<T> {
+export async function withTatRefresh<T>(
+  ctx: TatRefreshContext,
+  purpose: TenantTokenPurposeV1,
+  fn: () => Promise<T>
+): Promise<T> {
+  void purpose
   try {
     return await fn()
   } catch (err) {

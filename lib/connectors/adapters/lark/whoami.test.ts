@@ -9,6 +9,12 @@
  *   - clock injection: `lastWhoamiAt` honours the optional `now` shim.
  */
 
+import { getTenantToken } from "./auth"
+jest.mock("./auth", () => {
+  const actual = jest.requireActual("./auth")
+  return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
+})
+
 import "fake-indexeddb/auto"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { connectorsHttpRequest, connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
@@ -68,6 +74,21 @@ function makeBotInfoResponse(bot: Record<string, unknown>) {
 }
 
 describe("probeBotIdentity", () => {
+  it("labels the self-identity probe as adapter administration", async () => {
+    await seedRow()
+    mockKeyring.mockImplementation(async (_id: string, cred: string) =>
+      cred === "appId" ? APP_ID : APP_SECRET
+    )
+    mockHttp
+      .mockResolvedValueOnce(makeTatResponse())
+      .mockResolvedValueOnce(makeBotInfoResponse({ app_name: "Self", open_id: "ou_self" }))
+    await probeBotIdentity(ADAPTER_ID)
+    expect(getTenantToken).toHaveBeenCalledWith(
+      { appId: APP_ID, appSecret: APP_SECRET },
+      "adapter-admin"
+    )
+  })
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

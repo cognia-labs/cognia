@@ -262,8 +262,10 @@ async function resolveSource(
     ])
     if (!appId || !appSecret || !active()) return undefined
     const { larkTenantRequest } = await import("@/lib/connectors/adapters/lark/http")
-    const tenantRequest = (path: string) =>
-      larkTenantRequest({ appId, appSecret }, "GET", path, undefined, { avatarPolicy: true })
+    const tenantRequest = (path: string, purpose: "service-data" | "adapter-admin") =>
+      larkTenantRequest({ appId, appSecret }, "GET", path, undefined, purpose, {
+        avatarPolicy: true,
+      })
     if (target.actorKind === "bot" || target.remoteIdType === "app_id") {
       const whoami = record(adapter.lastWhoamiResult)
       const own = remoteId === appId || (whoami?.appId === appId && whoami.openId === remoteId)
@@ -285,7 +287,7 @@ async function resolveSource(
       // Only the verified self bot may use bot/v3/info. Never substitute its
       // picture for an unknown bot's open_id or query contact users with app_id.
       if (own || target.remoteIdType !== "app_id") {
-        const bot = record(record(await tenantRequest("/bot/v3/info"))?.bot)
+        const bot = record(record(await tenantRequest("/bot/v3/info", "adapter-admin"))?.bot)
         if (!active()) return undefined
         if (own || bot?.open_id === remoteId) {
           const safe = publicUrl(platform, bot?.avatar_url, true)
@@ -295,8 +297,12 @@ async function resolveSource(
       }
       const app = record(
         record(
-          record(await tenantRequest(`/application/v6/applications/${encode(remoteId)}?lang=zh_cn`))
-            ?.data
+          record(
+            await tenantRequest(
+              `/application/v6/applications/${encode(remoteId)}?lang=zh_cn`,
+              "service-data"
+            )
+          )?.data
         )?.app
       )
       const safe = publicUrl(platform, app?.avatar_url, true)
@@ -306,7 +312,8 @@ async function resolveSource(
       await tenantRequest(
         kind === "user"
           ? `/contact/v3/users/${encode(remoteId)}?user_id_type=open_id`
-          : `/im/v1/chats/${encode(remoteId)}`
+          : `/im/v1/chats/${encode(remoteId)}`,
+        "service-data"
       )
     )
     const data = record(result?.data)

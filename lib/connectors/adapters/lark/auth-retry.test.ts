@@ -173,7 +173,7 @@ describe("withTatRefresh", () => {
 
   it("returns result on first-pass success without touching cache", async () => {
     const fn = jest.fn().mockResolvedValue("ok")
-    const result = await withTatRefresh(ctx, fn)
+    const result = await withTatRefresh(ctx, "service-data", fn)
     expect(result).toBe("ok")
     expect(fn).toHaveBeenCalledTimes(1)
     expect(mockClearTokenCache).not.toHaveBeenCalled()
@@ -182,7 +182,7 @@ describe("withTatRefresh", () => {
   it("propagates non-TAT errors without retry", async () => {
     const err = new Error("network timeout")
     const fn = jest.fn().mockRejectedValue(err)
-    await expect(withTatRefresh(ctx, fn)).rejects.toBe(err)
+    await expect(withTatRefresh(ctx, "service-data", fn)).rejects.toBe(err)
     expect(fn).toHaveBeenCalledTimes(1)
     expect(mockClearTokenCache).not.toHaveBeenCalled()
   })
@@ -192,7 +192,7 @@ describe("withTatRefresh", () => {
       .fn()
       .mockRejectedValueOnce(new LarkApiError({ status: 401, code: null, message: "Unauthorized" }))
       .mockResolvedValueOnce("refreshed-ok")
-    const result = await withTatRefresh(ctx, fn)
+    const result = await withTatRefresh(ctx, "service-data", fn)
     expect(result).toBe("refreshed-ok")
     expect(fn).toHaveBeenCalledTimes(2)
     expect(mockClearTokenCache).toHaveBeenCalledWith("cli_test", "secret")
@@ -206,7 +206,7 @@ describe("withTatRefresh", () => {
         new LarkApiError({ status: 200, code: 99991663, message: "code=99991663" })
       )
       .mockResolvedValueOnce("ok")
-    await withTatRefresh(ctx, fn)
+    await withTatRefresh(ctx, "service-data", fn)
     expect(fn).toHaveBeenCalledTimes(2)
     expect(mockClearTokenCache).toHaveBeenCalledWith("cli_test", "secret")
   })
@@ -221,14 +221,14 @@ describe("withTatRefresh", () => {
       .fn()
       .mockRejectedValueOnce(new LarkApiError({ status: 401, code: null, message: "first 401" }))
       .mockRejectedValueOnce(persistent)
-    await expect(withTatRefresh(ctx, fn)).rejects.toBe(persistent)
+    await expect(withTatRefresh(ctx, "service-data", fn)).rejects.toBe(persistent)
     expect(fn).toHaveBeenCalledTimes(2)
     expect(mockClearTokenCache).toHaveBeenCalledTimes(1)
   })
 
   it("does not call clearTokenCache for unrelated errors during retry detection", async () => {
     const fn = jest.fn().mockRejectedValue(new Error("dns lookup failed"))
-    await expect(withTatRefresh(ctx, fn)).rejects.toThrow("dns lookup failed")
+    await expect(withTatRefresh(ctx, "service-data", fn)).rejects.toThrow("dns lookup failed")
     expect(mockClearTokenCache).not.toHaveBeenCalled()
   })
 })
@@ -272,3 +272,17 @@ describe("LarkApiError retry delay", () => {
     ).toBeUndefined()
   })
 })
+
+it.each(["transport", "service-data", "adapter-admin"] as const)(
+  "preserves the callback result for %s retries",
+  async (purpose) => {
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(new LarkApiError({ status: 401, code: 99991663, message: "expired" }))
+      .mockResolvedValueOnce("unchanged")
+    await expect(
+      withTatRefresh({ appId: "purpose", appSecret: "secret" }, purpose, fn)
+    ).resolves.toBe("unchanged")
+    expect(fn).toHaveBeenCalledTimes(2)
+  }
+)

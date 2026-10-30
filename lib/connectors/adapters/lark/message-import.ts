@@ -36,7 +36,7 @@ import {
 } from "@/lib/db/lark-message-imports"
 import { getDb } from "@/lib/db/schema"
 import { createPlatformSession } from "@/lib/connectors/session-bindings"
-import { larkTenantRequest, type LarkCredentials } from "./http"
+import { larkTenantRequest, type LarkCredentials, type LarkTenantRequest } from "./http"
 import { parseLarkEventEnvelope, type LarkEventEnvelope } from "./parse"
 import { markSessionDirty } from "@/lib/chat/search/indexer"
 import { invalidatePersistSnapshot, stampSessionLastMessage } from "@/lib/db/messages"
@@ -63,7 +63,7 @@ export type ImportMessagesOutcome =
   | { ok: false; error: string }
 
 export interface ImportMessagesDependencies {
-  tenantRequest: typeof larkTenantRequest
+  tenantRequest: LarkTenantRequest
   keyringGet: (adapterId: string, credential: string) => Promise<string | null>
   getAdapter: typeof getAdapterInstance
   isMember: (adapterId: string, chatId: string, openId: string) => Promise<boolean>
@@ -117,7 +117,9 @@ async function fetchVerifiedMessage(
     const parsed = (await deps.tenantRequest(
       creds,
       "GET",
-      `/im/v1/messages/${encodeURIComponent(messageId)}`
+      `/im/v1/messages/${encodeURIComponent(messageId)}`,
+      undefined,
+      "service-data"
     )) as { data?: { items?: RawLarkHistoryItem[] } } | null
     raw = parsed?.data?.items?.[0]
   } catch {
@@ -176,7 +178,8 @@ export function buildImportedContextBlock(
 
 function defaults(overrides: Partial<ImportMessagesDependencies>): ImportMessagesDependencies {
   return {
-    tenantRequest: larkTenantRequest,
+    tenantRequest: (creds, method, path, body, purpose, options) =>
+      larkTenantRequest(creds, method, path, body, purpose, options),
     keyringGet: () => Promise.resolve(null),
     getAdapter: getAdapterInstance,
     isMember: () => Promise.reject(new Error("isMember dependency not wired")),

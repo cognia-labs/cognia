@@ -26,7 +26,8 @@
 
 import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
-import { getTenantAccessToken } from "@/lib/connectors/adapters/lark/auth"
+import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
+import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import { assertLarkActingIdentity, LarkActingIdentityError } from "./acting-identity"
 import type { BuiltInSkillContext } from "../types"
 
@@ -176,7 +177,8 @@ export async function resolveLarkAuth(
 
   // Bot identity (tenant_access_token).
   try {
-    const tenantToken = await getTenantAccessToken({ appId, appSecret })
+    observeTenantServiceData(input.context?.sessionId, adapter.id, "lark-cli")
+    const tenantToken = await getTenantToken({ appId, appSecret }, "service-data")
     return {
       ok: true,
       adapterId: adapter.id,

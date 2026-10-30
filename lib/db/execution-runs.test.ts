@@ -8,6 +8,7 @@ import { reduceRunEvents } from "@/lib/execution/run-reducer"
 import { __resetDbForTesting, getDb } from "./schema"
 import {
   appendRunEventsInsideTransaction,
+  appendRunObservation,
   adoptExecutionRun,
   createExecutionRun,
   createExecutionRunBinding,
@@ -828,5 +829,58 @@ describe("execution run journal", () => {
     expect(await sweepExecutionRunEventRetention()).toBe(1)
     expect(await listExecutionRunEvents("old-run")).toHaveLength(0)
     expect(await getExecutionRunSnapshot("old-run")).toMatchObject({ status: "completed" })
+  })
+})
+
+describe("tenant service-data observation throttle", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+  })
+
+  it("serializes duplicates per run/path over a rolling minute without changing run control", async () => {
+    const run: ExecutionRun = {
+      id: "tenant-run",
+      kind: "agent-turn",
+      sourceId: "turn",
+      sessionId: "session",
+      title: "Test",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    }
+    await createExecutionRun(run)
+    await createExecutionRun({ ...run, id: "another-run" })
+    const clock = jest.spyOn(Date, "now").mockReturnValue(100_000)
+    const payload = {
+      mode: "observe",
+      operation: "tenant-service-data",
+      adapterId: "adapter",
+      path: "/contact/v3/users?email=alice@example.com",
+    }
+    const options = { throttleMs: 60_000 }
+    try {
+      const events = await Promise.all(
+        Array.from({ length: 8 }, () => appendRunObservation(run.id, payload, options))
+      )
+      expect(events.filter(Boolean)).toHaveLength(1)
+      clock.mockReturnValue(159_999)
+      expect(
+        await appendRunObservation(run.id, { ...payload, adapterId: "other" }, options)
+      ).toBeUndefined()
+      expect(
+        await appendRunObservation(run.id, { ...payload, path: "/im/v1/chats" }, options)
+      ).toBeDefined()
+      expect(await appendRunObservation("another-run", payload, options)).toBeDefined()
+      clock.mockReturnValue(160_000)
+      expect(await appendRunObservation(run.id, payload, options)).toBeDefined()
+      expect(await getExecutionRun(run.id)).toEqual(run)
+      expect(await listVisibleExecutionRunEvents(run.id)).toEqual([])
+      expect(await getDb().notificationProjectionWork.count()).toBe(0)
+      expect(await listExecutionRunEvents(run.id)).toHaveLength(3)
+    } finally {
+      clock.mockRestore()
+    }
   })
 })

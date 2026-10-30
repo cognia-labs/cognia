@@ -261,3 +261,37 @@ export async function recordRunAuthority(
     // Observe-only storage must never affect the existing send/dispatch result.
   }
 }
+
+/**
+ * Detached phase-1B observation: never awaits, gates, or changes a tenant request.
+ * Resolve the current run exactly like the authority snapshot; adapter internals
+ * without a session are intentionally classified only.
+ */
+export function observeTenantServiceData(
+  sessionId: string | undefined,
+  adapterId: string,
+  path: string
+): void {
+  if (!sessionId) return
+  void Promise.resolve()
+    .then(async () => {
+      const db = getDb()
+      const session = await db.sessions.get(sessionId)
+      if (!session?.platformBinding || getDb() !== db) return
+      const snapshot = await snapshotActingAuthority(sessionId)
+      if (!snapshot || getDb() !== db) return
+      const { appendRunObservation } = await import("@/lib/db/execution-runs")
+      if (getDb() !== db) return
+      await appendRunObservation(
+        snapshot.runId,
+        {
+          mode: "observe",
+          operation: "tenant-service-data",
+          adapterId,
+          path,
+        },
+        { throttleMs: 60_000 }
+      )
+    })
+    .catch(() => undefined)
+}

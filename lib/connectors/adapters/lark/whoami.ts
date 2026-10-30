@@ -27,7 +27,7 @@ import { connectorsHttpRequest, connectorsKeyringGet } from "@/lib/connectors/ta
 import { getAdapterInstance, updateAdapterInstance } from "@/lib/db/adapter-instances"
 import { buildSelfIdentity } from "@/lib/connectors/self-identity"
 import type { AdapterSelfIdentitySnapshot } from "@/lib/db/connector-types"
-import { getTenantAccessToken } from "./auth"
+import { getTenantToken } from "./auth"
 
 const LARK_BOT_INFO_URL = "https://open.feishu.cn/open-apis/bot/v3/info"
 
@@ -130,7 +130,7 @@ export async function probeBotIdentity(
 
   // Reuse the existing TAT cache. Throws on auth failure with a message
   // describing the Lark code + msg.
-  const tat = await getTenantAccessToken({ appId, appSecret })
+  const tat = await getTenantToken({ appId, appSecret }, "adapter-admin")
 
   const resp = await connectorsHttpRequest({
     url: LARK_BOT_INFO_URL,

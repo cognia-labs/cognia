@@ -48,7 +48,7 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
 }))
 
 jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
-  getTenantAccessToken: jest.fn().mockResolvedValue("fake-tat"),
+  getTenantToken: jest.fn().mockResolvedValue("fake-tat"),
 }))
 
 function makeRow(overrides: Partial<AdapterInstanceRow> = {}): AdapterInstanceRow {
@@ -384,4 +384,20 @@ describe("OneBot transport-specific idle health", () => {
       handle.dispose()
     }
   })
+})
+
+it("labels the passive Lark heartbeat as adapter administration", async () => {
+  const { getTenantToken } = await import("@/lib/connectors/adapters/lark/auth")
+  const { connectorsHttpRequest } = await import("@/lib/connectors/tauri/commands")
+  jest.mocked(getTenantToken).mockClear()
+  jest.mocked(connectorsHttpRequest).mockResolvedValue({ status: 200, headers: {}, body: "{}" })
+  const heartbeat = await deriveHeartbeat(makeRow(), {
+    now: 1_000_000,
+    probeOverrides: { lastInboundAt: async () => null },
+  })
+  expect(heartbeat.pingOk).toBe(true)
+  expect(getTenantToken).toHaveBeenCalledWith(
+    { appId: "token", appSecret: "token" },
+    "adapter-admin"
+  )
 })

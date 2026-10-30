@@ -43,6 +43,47 @@ const ctx = {
 }
 
 describe("reconcileGroupMenuSurface", () => {
+  it.each([false, true])(
+    "labels listing and %s existing-menu reconciliation as service data",
+    async (existing) => {
+      const request = jest.fn(
+        async (
+          _creds: unknown,
+          method: string,
+          _path: string,
+          _body: unknown,
+          _purpose: string
+        ) => ({
+          data: {
+            menu_tree: {
+              chat_menu_top_levels:
+                method === "GET" && existing
+                  ? [
+                      {
+                        chat_menu_top_level_id: "menu_old",
+                        chat_menu_item: {
+                          name: "Cognia",
+                          redirect_link: { common_url: "https://old" },
+                        },
+                      },
+                    ]
+                  : [],
+            },
+          },
+        })
+      )
+      expect(await reconcileGroupMenuSurface(ctx, CHAT_ID, deps({ request }))).toBe("synced")
+      expect(request.mock.calls.map((call) => [call[1], call[2], call[4]])).toEqual([
+        ["GET", `/im/v1/chats/${CHAT_ID}/menu_tree`, "service-data"],
+        [
+          existing ? "PATCH" : "POST",
+          `/im/v1/chats/${CHAT_ID}/${existing ? "menu_items/menu_old" : "menu_tree"}`,
+          "service-data",
+        ],
+      ])
+    }
+  )
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

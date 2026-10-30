@@ -12,6 +12,7 @@ import {
   hasLarkDocumentSearchScope,
   mergeLarkScopes,
   getTenantAccessToken,
+  getTenantToken,
   clearTokenCache,
   buildLarkOAuthUrl,
   exchangeCodeForUserAccessToken,
@@ -71,7 +72,10 @@ describe("getTenantAccessToken", () => {
 
   it("fetches a token and returns it", async () => {
     mockHttp.mockResolvedValue(makeTokenResponse("t-fresh"))
-    const token = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET })
+    const token = await getTenantAccessToken(
+      { appId: APP_ID, appSecret: APP_SECRET },
+      "service-data"
+    )
     expect(token).toBe("t-fresh")
     expect(mockHttp).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -84,8 +88,8 @@ describe("getTenantAccessToken", () => {
   it("returns the cached token on a second call without hitting the API", async () => {
     mockHttp.mockResolvedValue(makeTokenResponse("t-cached"))
 
-    const t1 = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET })
-    const t2 = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET })
+    const t1 = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET }, "service-data")
+    const t2 = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET }, "service-data")
 
     expect(t1).toBe("t-cached")
     expect(t2).toBe("t-cached")
@@ -97,9 +101,9 @@ describe("getTenantAccessToken", () => {
       .mockResolvedValueOnce(makeTokenResponse("t-first"))
       .mockResolvedValueOnce(makeTokenResponse("t-second"))
 
-    await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET })
+    await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET }, "service-data")
     clearTokenCache(APP_ID, APP_SECRET)
-    const t2 = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET })
+    const t2 = await getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET }, "service-data")
 
     expect(t2).toBe("t-second")
     expect(mockHttp).toHaveBeenCalledTimes(2)
@@ -107,14 +111,14 @@ describe("getTenantAccessToken", () => {
 
   it("throws when Lark returns a non-zero code", async () => {
     mockHttp.mockResolvedValue(makeErrorResponse(99991663, "invalid_app"))
-    await expect(getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET })).rejects.toThrow(
-      /tenant_access_token failed/
-    )
+    await expect(
+      getTenantAccessToken({ appId: APP_ID, appSecret: APP_SECRET }, "service-data")
+    ).rejects.toThrow(/tenant_access_token failed/)
   })
 
   it("sends appId and appSecret in the request body", async () => {
     mockHttp.mockResolvedValue(makeTokenResponse())
-    await getTenantAccessToken({ appId: "cli_abc", appSecret: "sec_xyz" })
+    await getTenantAccessToken({ appId: "cli_abc", appSecret: "sec_xyz" }, "service-data")
 
     const call = mockHttp.mock.calls[0][0] as { body: string }
     const body = JSON.parse(call.body) as { app_id: string; app_secret: string }
@@ -585,4 +589,18 @@ describe("getUserAccessToken / refreshUserToken (send-as-user)", () => {
       )
     }
   )
+})
+
+it("shares the same tenant token and request across every purpose", async () => {
+  clearTokenCache("purpose-app", "purpose-secret")
+  mockHttp.mockReset().mockResolvedValue(makeTokenResponse("same-token"))
+  const creds = { appId: "purpose-app", appSecret: "purpose-secret" }
+  for (const purpose of ["transport", "service-data", "adapter-admin"] as const) {
+    expect(await getTenantToken(creds, purpose)).toBe("same-token")
+  }
+  expect(mockHttp).toHaveBeenCalledTimes(1)
+  expect(JSON.parse(mockHttp.mock.calls[0][0].body)).toEqual({
+    app_id: creds.appId,
+    app_secret: creds.appSecret,
+  })
 })

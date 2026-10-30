@@ -18,6 +18,7 @@
  * their own localized error taxonomy; this module owns none.
  */
 
+import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import { isTauri } from "@/lib/tauri"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import {
@@ -26,7 +27,7 @@ import {
   connectorsLarkUserAuth,
 } from "@/lib/connectors/tauri/commands"
 import { throwIfRequestAborted, withRequestAbort } from "@/lib/network/request-abort"
-import { getTenantAccessToken, getUserAccessToken } from "./auth"
+import { getTenantToken, getUserAccessToken } from "./auth"
 import {
   LarkApiError,
   isLarkUserTokenInvalidation,
@@ -82,6 +83,8 @@ export interface LarkAuthedApiAccount {
 }
 
 export interface WithLarkAuthedApiOptions {
+  /** Optional observation context; never used to select an identity. */
+  sessionId?: string
   /** Bound Lark adapter instance id (`cai_...`) whose credentials to use. */
   adapterId: string
   expectedAuthorizationEpoch?: string
@@ -161,6 +164,7 @@ export async function withLarkAuthedApi<T>(
     ): Promise<R> => {
       await assertCurrent()
       throwIfRequestAborted(opts.signal)
+      if (opts.identity === "bot") observeTenantServiceData(opts.sessionId, opts.adapterId, path)
       const resp = await httpImpl({
         url: `${LARK_API_BASE}${path}`,
         method: init?.method ?? "GET",
@@ -246,10 +250,10 @@ export async function withLarkAuthedApi<T>(
       }
     }
     try {
-      return await withTatRefresh(ctx, async () => {
+      return await withTatRefresh(ctx, "service-data", async () => {
         await assertCurrent()
         throwIfRequestAborted(opts.signal)
-        const tat = await getTenantAccessToken({ appId, appSecret })
+        const tat = await getTenantToken({ appId, appSecret }, "service-data")
         throwIfRequestAborted(opts.signal)
         const value = await fn(bindApi(`Bearer ${tat}`), account)
         await assertCurrent()

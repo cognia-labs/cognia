@@ -32,7 +32,11 @@ import { transport } from "@/lib/tauri"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { markEntryContextConsumed, touchWebSession } from "@/lib/db/lark-entry"
 import { appendAudit } from "@/lib/connectors/audit"
-import { larkTenantRequest, type LarkCredentials } from "@/lib/connectors/adapters/lark/http"
+import {
+  larkTenantRequest,
+  type LarkCredentials,
+  type LarkTenantRequest,
+} from "@/lib/connectors/adapters/lark/http"
 import { importLarkMessages } from "@/lib/connectors/adapters/lark/message-import"
 import { handlePlusCreate } from "@/lib/connectors/adapters/lark/plus-create"
 import { runPrincipalAdminIntent } from "@/lib/connectors/principal/admin-intent"
@@ -79,7 +83,7 @@ export interface LarkIntentFrame {
 export interface LarkIntentDependencies {
   call: <T>(name: string, args?: Record<string, unknown>) => Promise<T>
   keyringGet: (adapterId: string, credential: string) => Promise<string | null>
-  tenantRequest: typeof larkTenantRequest
+  tenantRequest: LarkTenantRequest
   markConsumed: typeof markEntryContextConsumed
   touchSession: typeof touchWebSession
   hashIdentity: typeof hashOpenId
@@ -129,7 +133,9 @@ export async function isChatMember(
     const resp = (await deps.tenantRequest(
       creds,
       "GET",
-      `/im/v1/chats/${encodeURIComponent(chatId)}/members?${query.toString()}`
+      `/im/v1/chats/${encodeURIComponent(chatId)}/members?${query.toString()}`,
+      undefined,
+      "service-data"
     )) as MemberListPage
     const items = resp.data?.items ?? []
     if (items.some((item) => item.member_id === openId)) return true
@@ -463,7 +469,8 @@ export function installLarkIntentHandler(
   const deps: LarkIntentDependencies = {
     call: (name, args) => transport.call(name, args),
     keyringGet: connectorsKeyringGet,
-    tenantRequest: larkTenantRequest,
+    tenantRequest: (creds, method, path, body, purpose, options) =>
+      larkTenantRequest(creds, method, path, body, purpose, options),
     markConsumed: markEntryContextConsumed,
     touchSession: touchWebSession,
     hashIdentity: hashOpenId,

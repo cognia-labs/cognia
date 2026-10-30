@@ -1,5 +1,6 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
+import { waitFor } from "@testing-library/react"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
 import {
   createExecutionRun,
@@ -14,6 +15,7 @@ import {
   authorityFromPermissionCeiling,
   connectorRequester,
   observeActingAuthority,
+  observeTenantServiceData,
   recordedRunMetadata,
   recordAbsorbedRequester,
   recordRunAuthority,
@@ -407,4 +409,90 @@ it("persists the resolved ceiling monotonically and leaves old executions operat
     "run"
   )
   expect((await getExecutionRun("run"))?.authority?.pools?.costUsd).toBe(1)
+})
+
+it("detaches tenant data observations onto the current IM run and excludes projected siblings", async () => {
+  const db = getDb()
+  await db.sessions.put({
+    id: "session",
+    platformBinding: { platform: "lark", adapterId: "adapter", conversationKey: "chat" },
+  } as never)
+  await createExecutionRun(seed({ id: "older-run", updatedAt: 1 }))
+  await createExecutionRun(seed({ id: "current-run", updatedAt: 2 }))
+  await createExecutionRun(seed({ id: "projected-job", kind: "job", updatedAt: 3 }))
+  await createExecutionRun(seed({ id: "completed-run", status: "completed", updatedAt: 4 }))
+  expect(observeTenantServiceData("session", "adapter", "/im/v1/chats")).toBeUndefined()
+  observeTenantServiceData("session", "adapter", "/im/v1/chats")
+  observeTenantServiceData("session", "adapter", "/contact/v3/users")
+  await waitFor(async () => expect(await listExecutionRunEvents("current-run")).toHaveLength(2))
+  expect((await listExecutionRunEvents("current-run")).map((event) => event.payload)).toEqual(
+    expect.arrayContaining([
+      {
+        mode: "observe",
+        operation: "tenant-service-data",
+        adapterId: "adapter",
+        path: "/im/v1/chats",
+      },
+      {
+        mode: "observe",
+        operation: "tenant-service-data",
+        adapterId: "adapter",
+        path: "/contact/v3/users",
+      },
+    ])
+  )
+  expect(await listExecutionRunEvents("older-run")).toEqual([])
+  expect(await listExecutionRunEvents("projected-job")).toEqual([])
+  expect(await listExecutionRunEvents("completed-run")).toEqual([])
+  expect((await getExecutionRun("current-run"))?.updatedAt).toBe(2)
+  expect((await getExecutionRun("current-run"))?.currentRevision).toBe(0)
+})
+
+it("skips desktop/missing sessions and swallows an unavailable observation database", async () => {
+  const db = getDb()
+  await db.sessions.put({ id: "desktop" } as never)
+  await createExecutionRun(seed({ sessionId: "desktop" }))
+  const read = jest.spyOn(db.sessions, "get")
+  observeTenantServiceData(undefined, "adapter", "/no-session")
+  expect(read).not.toHaveBeenCalled()
+  observeTenantServiceData("desktop", "adapter", "/desktop")
+  observeTenantServiceData("missing", "adapter", "/missing")
+  await waitFor(() => expect(read).toHaveBeenCalledTimes(2))
+  expect(await listExecutionRunEvents("run")).toEqual([])
+  read.mockRejectedValueOnce(new Error("storage unavailable"))
+  expect(observeTenantServiceData("broken", "adapter", "/data")).toBeUndefined()
+  await waitFor(() => expect(read).toHaveBeenCalledWith("broken"))
+  expect(await listExecutionRunEvents("run")).toEqual([])
+  read.mockRestore()
+})
+
+it("returns before a stalled observation read and swallows journal write failures", async () => {
+  const db = getDb()
+  let release!: (value: undefined) => void
+  const stalled = new Promise<undefined>((resolve) => {
+    release = resolve
+  })
+  const read = jest.spyOn(db.sessions, "get").mockReturnValueOnce(stalled as never)
+  try {
+    expect(observeTenantServiceData("stalled", "adapter", "/data")).toBeUndefined()
+    expect(read).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(read).toHaveBeenCalledWith("stalled")
+  } finally {
+    release(undefined)
+    read.mockRestore()
+  }
+  await db.sessions.put({ id: "session", platformBinding: { platform: "lark" } } as never)
+  await createExecutionRun(seed())
+  const write = jest
+    .spyOn(db.executionRunEvents, "add")
+    .mockRejectedValueOnce(new Error("journal unavailable"))
+  try {
+    expect(observeTenantServiceData("session", "adapter", "/data")).toBeUndefined()
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1))
+    expect(await listExecutionRunEvents("run")).toEqual([])
+    expect((await getExecutionRun("run"))?.currentRevision).toBe(0)
+  } finally {
+    write.mockRestore()
+  }
 })

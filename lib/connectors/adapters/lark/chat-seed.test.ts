@@ -36,6 +36,26 @@ function seedInput() {
 }
 
 describe("listBotChats", () => {
+  it("requires service-data on the injected chat-list request", async () => {
+    const request = jest.fn(
+      async (
+        _creds: unknown,
+        _method: string,
+        _path: string,
+        _body: unknown,
+        _purpose: string
+      ) => ({ data: { items: [] } })
+    )
+    await listBotChats({ request, getAdapter: jest.fn(), ensure: jest.fn(), now: () => 1 }, CREDS)
+    expect(request).toHaveBeenCalledWith(
+      CREDS,
+      "GET",
+      "/im/v1/chats?page_size=100",
+      undefined,
+      "service-data"
+    )
+  })
+
   it("pages until has_more is false", async () => {
     const { request, calls } = pagedRequest([
       [{ chat_id: "oc_1" }],

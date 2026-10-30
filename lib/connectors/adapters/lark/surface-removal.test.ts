@@ -35,6 +35,37 @@ async function seed(
 }
 
 describe("removeChatSurface", () => {
+  it.each(["chat_tab", "group_menu"] as const)(
+    "labels %s removal as service data",
+    async (surfaceType) => {
+      const request = jest.fn(
+        async (
+          _creds: unknown,
+          _method: string,
+          _path: string,
+          _body: unknown,
+          _purpose: string
+        ) => ({})
+      )
+      expect(
+        await removeChatSurface(
+          ctx,
+          { chatId: "oc_purpose", surfaceType, platformSurfaceId: "surface_1" },
+          makeDeps({ request })
+        )
+      ).toBe(true)
+      expect(request).toHaveBeenCalledWith(
+        { appId: "cli", appSecret: "s" },
+        "DELETE",
+        `/im/v1/chats/oc_purpose/${surfaceType === "chat_tab" ? "chat_tabs/delete_tabs" : "menu_tree"}`,
+        surfaceType === "chat_tab"
+          ? { tab_ids: ["surface_1"] }
+          : { chat_menu_top_level_ids: ["surface_1"] },
+        "service-data"
+      )
+    }
+  )
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

@@ -34,7 +34,7 @@ import { createWechatOaAdapter } from "./adapters/wechat-oa"
 import { getWechatOaAccessToken } from "./adapters/wechat-oa/auth"
 import { createDingTalkAdapter } from "./adapters/dingtalk"
 import { getDingTalkAccessToken } from "./adapters/dingtalk/auth"
-import { getTenantAccessToken } from "./adapters/lark/auth"
+import { getTenantToken } from "./adapters/lark/auth"
 import { normalizeQuickCommandList } from "@/lib/connectors/quick-commands"
 import { buildPluginAdapter } from "@/lib/connectors/plugin-connector-registry"
 
@@ -268,7 +268,7 @@ export async function buildLarkAdapter(row: AdapterInstanceRow): Promise<Platfor
   // stale cache.
   if (!selfBotOpenId) {
     try {
-      const tat = await getTenantAccessToken({ appId, appSecret })
+      const tat = await getTenantToken({ appId, appSecret }, "adapter-admin")
       const resp = await connectorsHttpRequest({
         url: "https://open.feishu.cn/open-apis/bot/v3/info",
         method: "GET",
@@ -566,7 +566,7 @@ export async function refreshSelfBotOpenId(adapterId: string): Promise<RefreshSe
 
   let tat: string
   try {
-    tat = await getTenantAccessToken({ appId, appSecret })
+    tat = await getTenantToken({ appId, appSecret }, "adapter-admin")
   } catch (err) {
     return {
       ok: false,

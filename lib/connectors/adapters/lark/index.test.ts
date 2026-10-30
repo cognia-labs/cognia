@@ -2,6 +2,12 @@
  * @jest-environment jsdom
  */
 
+import { getTenantToken } from "./auth"
+jest.mock("./auth", () => {
+  const actual = jest.requireActual("./auth")
+  return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
+})
+
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { createLarkAdapter } from "./index"
@@ -171,6 +177,28 @@ function createFakeLongConnSession() {
 // ---------------------------------------------------------------------------
 
 describe("createLarkAdapter", () => {
+  it("separates outbound transport from message-history data at the token entry", async () => {
+    mockInvoke.mockImplementation(async (cmd: string, args: { req?: { url?: string } }) => {
+      if (cmd !== "connectors_http_request") return undefined
+      if (args.req?.url?.includes("tenant_access_token")) return makeTatOkResp()
+      return {
+        status: 200,
+        headers: {},
+        body: JSON.stringify({ code: 0, data: { message_id: "om_sent", items: [] } }),
+      }
+    })
+    const token = jest.mocked(getTenantToken)
+    token.mockClear()
+    const adapter = makeAdapter()
+    await adapter.addReaction!("om_sent", "OK")
+    expect(token.mock.calls.map((call) => call[1])).toEqual(["transport"])
+    token.mockClear()
+    for await (const _event of adapter.fetchHistory!("lark:lark-1:oc_chat", {})) {
+      /* empty history */
+    }
+    expect(token.mock.calls.map((call) => call[1])).toEqual(["service-data"])
+  })
+
   it("uses configured card appearance in the real run presentation driver", async () => {
     const requests: Array<{ url: string; body?: string }> = []
     mockInvoke.mockImplementation(

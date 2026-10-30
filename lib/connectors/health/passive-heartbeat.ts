@@ -37,7 +37,7 @@ import {
   connectorsHealth,
   connectorsKeyringGet,
 } from "@/lib/connectors/tauri/commands"
-import { getTenantAccessToken } from "@/lib/connectors/adapters/lark/auth"
+import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
 import { getRunningAdapter } from "@/lib/connectors/lifecycle"
 
 export const PASSIVE_HEARTBEAT_INTERVAL_MS = 60_000
@@ -109,7 +109,7 @@ async function pingLark(row: AdapterInstanceRow): Promise<boolean> {
     const appId = (await connectorsKeyringGet(row.id, "appId")) ?? ""
     const appSecret = (await connectorsKeyringGet(row.id, "appSecret")) ?? ""
     if (!appId || !appSecret) return false
-    const tat = await getTenantAccessToken({ appId, appSecret })
+    const tat = await getTenantToken({ appId, appSecret }, "adapter-admin")
     if (!tat) return false
     const resp = await connectorsHttpRequest({
       url: "https://open.feishu.cn/open-apis/bot/v3/info",

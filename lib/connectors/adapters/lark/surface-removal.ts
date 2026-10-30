@@ -21,11 +21,11 @@ import { appendAudit } from "@/lib/connectors/audit"
 import type { LarkChatSurfaceRow, LarkChatSurfaceType } from "@/lib/db/connector-types"
 import { listChatSurfaces, setChatSurfaceStatus } from "@/lib/db/lark-chat-surfaces"
 import { isLarkFeatureEnabled } from "@/lib/connectors/feature-flags"
-import { larkTenantRequest, type LarkCredentials } from "./http"
+import { larkTenantRequest, type LarkCredentials, type LarkTenantRequest } from "./http"
 import type { SurfaceReconcileContext } from "./chat-tabs"
 
 export interface SurfaceRemovalDependencies {
-  request: typeof larkTenantRequest
+  request: LarkTenantRequest
   getAdapter: typeof getAdapterInstance
   setStatus: typeof setChatSurfaceStatus
   list: typeof listChatSurfaces
@@ -35,7 +35,8 @@ export interface SurfaceRemovalDependencies {
 
 function withDefaults(overrides: Partial<SurfaceRemovalDependencies>): SurfaceRemovalDependencies {
   return {
-    request: larkTenantRequest,
+    request: (creds, method, path, body, purpose, options) =>
+      larkTenantRequest(creds, method, path, body, purpose, options),
     getAdapter: getAdapterInstance,
     setStatus: setChatSurfaceStatus,
     list: listChatSurfaces,
@@ -64,13 +65,20 @@ async function removePlatformSurface(
       creds,
       "DELETE",
       `/im/v1/chats/${encodeURIComponent(chatId)}/chat_tabs/delete_tabs`,
-      { tab_ids: [platformSurfaceId] }
+      { tab_ids: [platformSurfaceId] },
+      "service-data"
     )
     return
   }
-  await deps.request(creds, "DELETE", `/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`, {
-    chat_menu_top_level_ids: [platformSurfaceId],
-  })
+  await deps.request(
+    creds,
+    "DELETE",
+    `/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`,
+    {
+      chat_menu_top_level_ids: [platformSurfaceId],
+    },
+    "service-data"
+  )
 }
 
 export interface RemoveSurfacesResult {

@@ -18,7 +18,16 @@ function setup(sendAsUser = false) {
         ? { code: 0, data: { chat_mode: "group", chat_type: "private" } }
         : { code: 0, data: { message_id: "om_private" } }
   )
-  return { request, helper: createLarkEphemeral({ request, classifyError, sendAsUser }) }
+  return {
+    request,
+    helper: createLarkEphemeral({
+      // Preserve the existing wire-call assertions while adapting the labelled seam.
+      request: (method, path, body, _purpose) =>
+        body === undefined ? request(method, path) : request(method, path, body),
+      classifyError,
+      sendAsUser,
+    }),
+  }
 }
 
 describe("Lark ephemeral cards", () => {
@@ -156,4 +165,21 @@ describe("Lark ephemeral cards", () => {
     await expect(helper.delete("")).rejects.toThrow("message_id")
     expect(request).toHaveBeenCalledTimes(1)
   })
+})
+
+it("separates chat-info service data from ephemeral send and recall transport", async () => {
+  const request = jest.fn(
+    async (_method: string, path: string, _body: unknown, _purpose: string) =>
+      path.startsWith("/im/v1/chats/")
+        ? { data: { chat_mode: "group" } }
+        : { data: { message_id: "om_private" } }
+  )
+  const helper = createLarkEphemeral({ request, classifyError })
+  expect(await helper.send(req(), async () => card)).toMatchObject({ ok: true })
+  await helper.delete("om_private")
+  expect(request.mock.calls.map((call) => [call[1], call[3]])).toEqual([
+    ["/im/v1/chats/oc_group", "service-data"],
+    ["/ephemeral/v1/send", "transport"],
+    ["/ephemeral/v1/delete", "transport"],
+  ])
 })

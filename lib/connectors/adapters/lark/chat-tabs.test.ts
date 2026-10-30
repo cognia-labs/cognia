@@ -52,6 +52,39 @@ const ctx = {
 }
 
 describe("reconcileChatTabSurface", () => {
+  it.each([false, true])(
+    "labels listing and %s existing-tab reconciliation as service data",
+    async (existing) => {
+      const request = jest.fn(
+        async (_creds: unknown, _method: string, path: string, _body: unknown, _purpose: string) =>
+          path.endsWith("/list_tabs")
+            ? {
+                data: {
+                  chat_tabs: existing
+                    ? [
+                        {
+                          tab_id: "tab_old",
+                          tab_name: "Cognia",
+                          tab_content: { url: "https://old" },
+                        },
+                      ]
+                    : [],
+                },
+              }
+            : { data: { chat_tabs: [{ tab_id: "tab_new", tab_name: "Cognia" }] } }
+      )
+      expect(await reconcileChatTabSurface(ctx, CHAT_ID, deps({ request }))).toBe("synced")
+      expect(request.mock.calls.map((call) => [call[1], call[2], call[4]])).toEqual([
+        ["GET", `/im/v1/chats/${CHAT_ID}/chat_tabs/list_tabs`, "service-data"],
+        [
+          "POST",
+          `/im/v1/chats/${CHAT_ID}/chat_tabs${existing ? "/update_tabs" : ""}`,
+          "service-data",
+        ],
+      ])
+    }
+  )
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

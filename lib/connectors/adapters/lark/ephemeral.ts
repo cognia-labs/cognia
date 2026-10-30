@@ -1,6 +1,12 @@
 import type { OutboundError, OutboundRequest, OutboundResult } from "@/types/connectors/outbound"
+import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 
-type EphemeralRequest = (method: "GET" | "POST", path: string, body?: unknown) => Promise<unknown>
+type EphemeralRequest = (
+  method: "GET" | "POST",
+  path: string,
+  body: unknown,
+  purpose: TenantTokenPurposeV1
+) => Promise<unknown>
 
 interface LarkEphemeralOptions {
   /** Authenticated bot request; must not auto-retry ambiguous POST failures. */
@@ -60,7 +66,9 @@ export function createLarkEphemeral(options: LarkEphemeralOptions) {
       try {
         const info = (await options.request(
           "GET",
-          `/im/v1/chats/${encodeURIComponent(chatId)}`
+          `/im/v1/chats/${encodeURIComponent(chatId)}`,
+          undefined,
+          "service-data"
         )) as {
           data?: { chat_mode?: string; chat_type?: string }
         }
@@ -86,12 +94,17 @@ export function createLarkEphemeral(options: LarkEphemeralOptions) {
         }
       }
       try {
-        const response = (await options.request("POST", "/ephemeral/v1/send", {
-          chat_id: chatId,
-          open_id: recipient,
-          msg_type: "interactive",
-          card,
-        })) as { data?: { message_id?: string } }
+        const response = (await options.request(
+          "POST",
+          "/ephemeral/v1/send",
+          {
+            chat_id: chatId,
+            open_id: recipient,
+            msg_type: "interactive",
+            card,
+          },
+          "transport"
+        )) as { data?: { message_id?: string } }
         if (typeof response?.data?.message_id !== "string" || !response.data.message_id) {
           return unknownDelivery(
             "Lark ephemeral send returned no message_id; reconcile before retrying"
@@ -109,7 +122,7 @@ export function createLarkEphemeral(options: LarkEphemeralOptions) {
     async delete(messageId: string): Promise<void> {
       if (!/^om_[A-Za-z0-9_-]+$/.test(messageId))
         throw new Error("Invalid Lark ephemeral message_id")
-      await options.request("POST", "/ephemeral/v1/delete", { message_id: messageId })
+      await options.request("POST", "/ephemeral/v1/delete", { message_id: messageId }, "transport")
     },
   }
 }

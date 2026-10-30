@@ -11,6 +11,7 @@
  * recipient-only group cards retain their dedicated delivery lifecycles.
  */
 
+import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
 import type {
   PlatformAdapter,
   AdapterContext,
@@ -72,7 +73,7 @@ import {
   serializeUrgent,
   sniffReceiveId,
 } from "./serialize"
-import { fetchLarkUserInfo, getTenantAccessToken, getUserAccessToken } from "./auth"
+import { fetchLarkUserInfo, getTenantToken, getUserAccessToken } from "./auth"
 import { LarkApiError, withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 import { createLarkChatManagement } from "./chat-management"
 import { resolveLarkMediaKeys } from "./upload"
@@ -295,9 +296,9 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   // of the same media don't re-upload. Cleared on `stop()`.
   const uploadCache = new Map<string, string>()
 
-  async function getTat(): Promise<string> {
+  async function getTat(purpose: TenantTokenPurposeV1): Promise<string> {
     const [appId, appSecret] = await Promise.all([opts.appId(), opts.appSecret()])
-    return getTenantAccessToken({ appId, appSecret })
+    return getTenantToken({ appId, appSecret }, purpose)
   }
 
   async function resolveCredentials(): Promise<{ appId: string; appSecret: string }> {
@@ -372,6 +373,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   }
 
   async function doRequest(
+    purpose: TenantTokenPurposeV1,
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     urlPath: string,
     body?: unknown,
@@ -412,8 +414,8 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       }
     }
 
-    return withTatRefresh(creds, async () => {
-      const tat = await getTenantAccessToken(creds)
+    return withTatRefresh(creds, purpose, async () => {
+      const tat = await getTenantToken(creds, purpose)
       return sendHttp(method, urlPath, body, tat)
     })
   }
@@ -506,7 +508,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       const row = await getAdapterInstance(opts.id).catch(() => undefined)
       if (!isLarkFeatureEnabled("larkNativeSlash", row)) return
       const result = await syncLarkSlashCommands((method, path, body) =>
-        doRequest(method, path, body)
+        doRequest("adapter-admin", method, path, body)
       )
       const changed = result.created.length + result.updated.length
       if (changed > 0 || result.failed.length > 0) {
@@ -750,7 +752,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       // Second pass: download inbound rich media (image / file bytes) so the
       // model + inbound OCR see actual content rather than a bare platform key.
       // Best-effort and self-contained — never blocks or fails the dispatch.
-      await enrichLarkInboundMedia(event, { getAccessToken: getTat })
+      await enrichLarkInboundMedia(event, { getAccessToken: () => getTat("service-data") })
       await ctx.emit(event)
     }
 
@@ -822,7 +824,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   }
 
   const ephemeral = createLarkEphemeral({
-    request: doRequest,
+    request: (method, path, body, purpose) => doRequest(purpose, method, path, body),
     classifyError: larkOutboundError,
     sendAsUser: opts.sendAsUser,
   })
@@ -874,12 +876,12 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       // Upload pre-pass — Rust `connectors_lark_upload_*` commands surface
       // TAT invalidation as Error.message text; `withTatRefresh` detects
       // those by substring and retries with a fresh token.
-      const resolvedSegments = await withTatRefresh(creds, () =>
+      const resolvedSegments = await withTatRefresh(creds, "transport", () =>
         resolveLarkMediaKeys(segments, {
           getAccessToken:
             expectedAuthorizationEpoch === undefined
               ? getTat
-              : () => guardedMedia(() => getTenantAccessToken(creds)),
+              : () => guardedMedia(() => getTenantToken(creds, "transport")),
           uploadFile:
             expectedAuthorizationEpoch === undefined
               ? undefined
@@ -904,7 +906,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       // points (a person's open id: the bot's single chat with them); a reply
       // lands in its parent's chat, and a user-sent one in the user's chat.
       botCreated = !asUser && urlPath.startsWith("/im/v1/messages?receive_id_type=")
-      return (await doRequest(call.method, urlPath, call.payload, {
+      return (await doRequest("transport", call.method, urlPath, call.payload, {
         asUser,
         expectedAuthorizationEpoch,
       })) as {
@@ -962,7 +964,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
               },
             }
           })
-          const resolvedSegments = await withTatRefresh(creds, () =>
+          const resolvedSegments = await withTatRefresh(creds, "transport", () =>
             resolveLarkMediaKeys(segments, { getAccessToken: getTat, uploadCache })
           )
           const call = await serializeOutboundAsync({ ...req, segments: resolvedSegments }, opts.id)
@@ -1045,7 +1047,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   async function deleteMessage(messageId: string): Promise<void> {
     const call = serializeDelete(messageId)
     const urlPath = call.url.replace(LARK_API_BASE, "")
-    await doRequest(call.method, urlPath)
+    await doRequest("transport", call.method, urlPath)
   }
 
   /**
@@ -1088,6 +1090,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       // Managed topics use the stable root message id locally. The history
       // API requires the platform's allocated omt_ id, obtainable from the root.
       const rootResponse = (await doRequest(
+        "service-data",
         "GET",
         `/im/v1/messages/${encodeURIComponent(topicId!)}`
       )) as { data?: { items?: Array<Record<string, unknown>> } } | null
@@ -1118,7 +1121,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     const search = new URLSearchParams(params).toString()
     const response = rootItems
       ? { data: { items: rootItems } }
-      : ((await doRequest("GET", `/im/v1/messages?${search}`)) as {
+      : ((await doRequest("service-data", "GET", `/im/v1/messages?${search}`)) as {
           data?: {
             items?: Array<Record<string, unknown>>
             page_token?: string
@@ -1277,7 +1280,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   // stays out of the adapter's eager bundle.
   const presence = createLarkPresence({
     adapterId: opts.id,
-    request: (method, urlPath, body) => doRequest(method, urlPath, body),
+    request: (method, urlPath, body) => doRequest("service-data", method, urlPath, body),
     getStatusId: async () => {
       const { getAdapterInstance } = await import("@/lib/db/adapter-instances")
       const row = await getAdapterInstance(opts.id)
@@ -1298,7 +1301,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     const urlPath = call.url.replace(LARK_API_BASE, "")
     // Surface the platform reaction_id so callers can later `removeReaction`
     // exactly this reaction (Lark keys removals by reaction_id, not emoji).
-    const resp = (await doRequest(call.method, urlPath, call.payload)) as {
+    const resp = (await doRequest("transport", call.method, urlPath, call.payload)) as {
       data?: { reaction_id?: string }
     } | null
     return { ...(resp?.data?.reaction_id ? { reactionId: resp.data.reaction_id } : {}) }
@@ -1307,7 +1310,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   async function removeReaction(messageId: string, reactionId: string): Promise<void> {
     const call = serializeRemoveReaction(messageId, reactionId)
     const urlPath = call.url.replace(LARK_API_BASE, "")
-    await doRequest(call.method, urlPath, call.payload)
+    await doRequest("transport", call.method, urlPath, call.payload)
   }
 
   /**
@@ -1341,7 +1344,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
           ? serializeMergeForward(ids, receiveIdType, receiveId)
           : serializeForward(singleId ?? "", receiveIdType, receiveId)
       const urlPath = call.url.replace(LARK_API_BASE, "")
-      const resp = (await doRequest(call.method, urlPath, call.payload)) as {
+      const resp = (await doRequest("transport", call.method, urlPath, call.payload)) as {
         data?: { message_id?: string }
       } | null
       const messageId = resp?.data?.message_id
@@ -1363,7 +1366,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
   ): Promise<void> {
     const call = serializeUrgent(messageId, userIds, via)
     const urlPath = call.url.replace(LARK_API_BASE, "")
-    await doRequest(call.method, urlPath, call.payload)
+    await doRequest("transport", call.method, urlPath, call.payload)
   }
 
   /**
@@ -1421,7 +1424,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     botOnly = false
   ): Promise<{ value: T; asBot: boolean } | undefined> {
     try {
-      const value = read(await doRequest("GET", path))
+      const value = read(await doRequest("service-data", "GET", path))
       return value === undefined ? undefined : { value, asBot: true }
     } catch (err) {
       if (larkOutboundError(err).retryable) throw err
@@ -1601,6 +1604,7 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
     for (let page = 0; page < READ_RECEIPT_MAX_PAGES; page++) {
       const cursor = pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""
       const resp = (await doRequest(
+        "service-data",
         "GET",
         `/im/v1/messages/${encodeURIComponent(messageId)}/read_users?user_id_type=open_id&page_size=50${cursor}`
       )) as {
@@ -1640,12 +1644,15 @@ export function createLarkAdapter(opts: LarkAdapterOptions): PlatformAdapter {
       }
     },
     id: opts.id,
-    runPresentation: createLarkRunPresentationDriver(doRequest, {
-      statusReactions: true,
-      webEntryBaseUrl: opts.webEntryBaseUrl,
-      cot: true,
-      presentation: opts.cardPresentation,
-    }),
+    runPresentation: createLarkRunPresentationDriver(
+      (method, path, body) => doRequest("transport", method, path, body),
+      {
+        statusReactions: true,
+        webEntryBaseUrl: opts.webEntryBaseUrl,
+        cot: true,
+        presentation: opts.cardPresentation,
+      }
+    ),
     runtimeCapabilities: builtInConnectorRuntimeCapabilities("lark"),
     historyCursorKind: "timestamp",
     start,

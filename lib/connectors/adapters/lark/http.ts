@@ -11,7 +11,8 @@
  */
 
 import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
-import { getTenantAccessToken, getUserAccessToken } from "./auth"
+import type { TenantTokenPurposeV1 } from "@cognia/plugin-contract/types/execution/acting-identity"
+import { getTenantToken, getUserAccessToken } from "./auth"
 import { LarkApiError, withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
 import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
@@ -88,14 +89,18 @@ export async function larkTenantRequest(
   creds: LarkCredentials,
   method: LarkHttpMethod,
   urlPath: string,
-  body?: unknown,
+  body: unknown,
+  purpose: TenantTokenPurposeV1,
   options?: { avatarPolicy?: boolean }
 ): Promise<unknown> {
-  return withTatRefresh(creds, async () => {
-    const tat = await getTenantAccessToken(creds)
+  return withTatRefresh(creds, purpose, async () => {
+    const tat = await getTenantToken(creds, purpose)
     return rawRequest(method, urlPath, body, tat, options?.avatarPolicy)
   })
 }
+
+/** Injected requests retain the required purpose argument of the labelled entry. */
+export type LarkTenantRequest = typeof larkTenantRequest
 
 /**
  * User-token (connected user identity) request with refresh-once retry.

@@ -550,6 +550,20 @@ describe("intent frame hardening", () => {
 })
 
 describe("isChatMember", () => {
+  it("labels membership checks as service-data on the injected request", async () => {
+    const deps = makeDeps({
+      tenantRequest: jest.fn(async () => ({ data: { items: [{ member_id: "ou_person" }] } })),
+    })
+    expect(await isChatMember(deps, "lk-1", "oc_chat", "ou_person")).toBe(true)
+    expect(deps.tenantRequest).toHaveBeenCalledWith(
+      { appId: "cli_1", appSecret: "secret_1" },
+      "GET",
+      "/im/v1/chats/oc_chat/members?member_id_type=open_id&page_size=100",
+      undefined,
+      "service-data"
+    )
+  })
+
   it("pages through the member list until a hit", async () => {
     const pages = [
       { data: { items: [{ member_id: "ou_1" }], has_more: true, page_token: "p2" } },

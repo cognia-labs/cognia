@@ -17,6 +17,9 @@ export type PrincipalRefV1 =
   /** An event actor records a trigger only; it never supplies principal authority. */
   | { kind: "event-actor"; source: string; externalId?: string; displayName?: string }
 
+/** Why a tenant token is used; labels never select credentials or grant data access. */
+export type TenantTokenPurposeV1 = "transport" | "service-data" | "adapter-admin"
+
 /** `legacy` leaves credential selection entirely with the pre-ADR paths. */
 export type CredentialLaneV1 = "delegated" | "service" | "bound-person" | "legacy"
 export type RunTriggerV1 = "requester" | "schedule" | "external-event" | "local" | "child"

@@ -13,6 +13,7 @@
  *                         token (`search/v1/user` rejects bot identities).
  */
 
+import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 import type {
   ChatMembersInput,
   ChatMembersResult,
@@ -41,11 +42,13 @@ async function tenantCall(
   requiredScope: string,
   method: Parameters<typeof larkTenantRequest>[1],
   urlPath: string,
-  body?: unknown
+  body?: unknown,
+  observation?: { adapterId: string; sessionId: string }
 ): Promise<unknown> {
   const creds = await resolveCreds()
   try {
-    return await larkTenantRequest(creds, method, urlPath, body)
+    if (observation) observeTenantServiceData(observation.sessionId, observation.adapterId, urlPath)
+    return await larkTenantRequest(creds, method, urlPath, body, "service-data")
   } catch (err) {
     throw classifyScopeError(err, requiredScope) ?? err
   }
@@ -145,7 +148,8 @@ export function createLarkChatManagement(
           {
             ...(emails.length > 0 ? { emails } : {}),
             ...(phones.length > 0 ? { mobiles: phones } : {}),
-          }
+          },
+          input.skillContext ? { adapterId, sessionId: input.skillContext.sessionId } : undefined
         )) as {
           data?: { user_list?: Array<{ user_id?: string; email?: string; mobile?: string }> }
         } | null

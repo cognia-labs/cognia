@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  observeTenantServiceData: jest.fn(),
+}))
+import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/tauri", () => ({ isTauri: jest.fn(() => true) }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
@@ -9,12 +14,16 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
     accessToken: "user-a",
   })),
 }))
-jest.mock("./auth", () => ({
-  getUserAccessToken: jest.fn(),
-  getTenantAccessToken: jest.fn(),
-  refreshUserToken: jest.fn(),
-  clearTokenCache: jest.fn(),
-}))
+jest.mock("./auth", () => {
+  const getTenantAccessToken = jest.fn()
+  return {
+    getUserAccessToken: jest.fn(),
+    getTenantAccessToken,
+    getTenantToken: getTenantAccessToken,
+    refreshUserToken: jest.fn(),
+    clearTokenCache: jest.fn(),
+  }
+})
 
 import { isTauri } from "@/lib/tauri"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
@@ -532,4 +541,39 @@ describe("withLarkAuthedApi — write verbs", () => {
     ])
     expect((out as Array<{ body?: string }>)[2].body).toBeUndefined()
   })
+})
+
+it("labels and observes explicit bot calls at their actual paths without awaiting observation", async () => {
+  jest.mocked(observeTenantServiceData).mockReturnValueOnce(new Promise(() => {}) as never)
+  const { impl, calls } = makeHttp([ok({ n: 1 }), ok({ n: 2 })])
+  await expect(
+    withLarkAuthedApi(
+      { adapterId: ADAPTER, identity: "bot", sessionId: "im-session", httpImpl: impl },
+      async (api) => {
+        await api.get("/open-apis/first")
+        return api.post("/open-apis/second", { value: 2 })
+      }
+    )
+  ).resolves.toEqual({ n: 2 })
+  expect(calls.map((call) => call.url)).toEqual([
+    "https://open.feishu.cn/open-apis/first",
+    "https://open.feishu.cn/open-apis/second",
+  ])
+  expect(getTenantAccessTokenMock).toHaveBeenCalledWith(
+    { appId: "cli_app", appSecret: "secret" },
+    "service-data"
+  )
+  expect(jest.mocked(observeTenantServiceData).mock.calls).toEqual([
+    ["im-session", ADAPTER, "/open-apis/first"],
+    ["im-session", ADAPTER, "/open-apis/second"],
+  ])
+})
+
+it("does not observe a user-identity call as tenant data", async () => {
+  const { impl } = makeHttp([ok({})])
+  await withLarkAuthedApi(
+    { adapterId: ADAPTER, identity: "user", sessionId: "im-session", httpImpl: impl },
+    (api) => api.get("/open-apis/user")
+  )
+  expect(observeTenantServiceData).not.toHaveBeenCalled()
 })

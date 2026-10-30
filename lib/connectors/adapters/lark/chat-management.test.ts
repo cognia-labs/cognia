@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  observeTenantServiceData: jest.fn(),
+}))
+import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 jest.mock("./http", () => ({
   ...jest.requireActual("./http"),
   larkTenantRequest: jest.fn(),
@@ -169,4 +174,27 @@ describe("resolveContacts", () => {
     const out = await mgmt.resolveContacts({ emails: ["a@x.com"], query: "Z" })
     expect(out.map((c) => c.memberId)).toEqual(["ou_a", "ou_z"])
   })
+})
+
+it("observes the tenant contact lookup only when skill context is already present", async () => {
+  mTenant.mockResolvedValue({ data: { user_list: [] } })
+  await mgmt.resolveContacts({
+    emails: ["a@example.com"],
+    skillContext: { sessionId: "im-session" },
+  })
+  expect(mTenant).toHaveBeenCalledWith(
+    CREDS,
+    "POST",
+    "/contact/v3/users/batch_get_id?user_id_type=open_id",
+    { emails: ["a@example.com"] },
+    "service-data"
+  )
+  expect(observeTenantServiceData).toHaveBeenCalledWith(
+    "im-session",
+    "adapter-1",
+    "/contact/v3/users/batch_get_id?user_id_type=open_id"
+  )
+  jest.mocked(observeTenantServiceData).mockClear()
+  await mgmt.resolveContacts({ emails: ["a@example.com"] })
+  expect(observeTenantServiceData).not.toHaveBeenCalled()
 })

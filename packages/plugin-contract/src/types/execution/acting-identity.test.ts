@@ -7,6 +7,7 @@ import {
   type ActingIdentityV1,
   type PrincipalRefV1,
   type RunAuthorityV1,
+  type TenantTokenPurposeV1,
 } from "./acting-identity"
 
 const identity: ActingIdentityV1 = {
@@ -196,4 +197,12 @@ describe("meetRunAuthority", () => {
     const once = meetRunAuthority(a, a)
     expect(meetRunAuthority(once, once)).toEqual(once)
   })
+})
+
+it("keeps tenant-token purposes separate from credential lanes and authority", () => {
+  const purposes: TenantTokenPurposeV1[] = ["transport", "service-data", "adapter-admin"]
+  expect(purposes).toHaveLength(3)
+  // @ts-expect-error A credential lane is not a tenant-token purpose.
+  const lane: TenantTokenPurposeV1 = "delegated"
+  expect(purposes).not.toContain(lane)
 })

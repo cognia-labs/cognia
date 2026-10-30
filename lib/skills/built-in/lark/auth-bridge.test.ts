@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  observeTenantServiceData: jest.fn(),
+}))
+import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 /**
  * Tests for lib/skills/built-in/lark/auth-bridge.ts.
  *
@@ -31,9 +36,13 @@ jest.mock("@/lib/db/schema", () => ({
 jest.mock("../context", () => ({
   resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "alice" }] }),
 }))
-jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
-  getTenantAccessToken: jest.fn(),
-}))
+jest.mock("@/lib/connectors/adapters/lark/auth", () => {
+  const getTenantAccessToken = jest.fn()
+  return {
+    getTenantAccessToken,
+    getTenantToken: getTenantAccessToken,
+  }
+})
 
 const mockGetAdapter = getAdapterInstance as jest.Mock
 const mockListByType = listAdapterInstancesByType as jest.Mock
@@ -288,4 +297,24 @@ describe("resolveLarkAuth", () => {
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toBe("missing_app_secret")
   })
+})
+
+it("labels explicit CLI bot credentials as service data and forwards existing session context", async () => {
+  mockListByType.mockResolvedValue([mkAdapter()])
+  mockKeyring.mockImplementation(async (_id: string, key: string) =>
+    key === "appId" ? "cli_app" : "secret"
+  )
+  mockTenantToken.mockResolvedValue("tat-labelled")
+  await expect(
+    resolveLarkAuth({ identity: "bot", context: { sessionId: "im-session" } })
+  ).resolves.toMatchObject({
+    ok: true,
+    identity: "bot",
+    env: { LARK_TENANT_ACCESS_TOKEN: "tat-labelled" },
+  })
+  expect(mockTenantToken).toHaveBeenCalledWith(
+    { appId: "cli_app", appSecret: "secret" },
+    "service-data"
+  )
+  expect(observeTenantServiceData).toHaveBeenCalledWith("im-session", "lark-1", "lark-cli")
 })

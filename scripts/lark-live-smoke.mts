@@ -178,7 +178,7 @@ setConnectorCommandInvoker(async <T,>(name: string, args?: Record<string, unknow
 const { createLarkAdapter } = await import("../lib/connectors/adapters/lark/index")
 const { probeBotIdentity } = await import("../lib/connectors/adapters/lark/whoami")
 const { larkTenantRequest } = await import("../lib/connectors/adapters/lark/http")
-const { getTenantAccessToken } = await import("../lib/connectors/adapters/lark/auth")
+const { getTenantToken } = await import("../lib/connectors/adapters/lark/auth")
 const { getDb } = await import("../lib/db/schema")
 // The contract module itself, not the `types/connectors/event` shim: tsx loads
 // the shim as CommonJS, and its `export *` re-exports are invisible to this ESM
@@ -231,7 +231,7 @@ await getDb().adapterInstances.put({
 
 // 1. Tenant token.
 await step("tenant_access_token", async () => {
-  const tok = await getTenantAccessToken(creds)
+  const tok = await getTenantToken(creds, "adapter-admin")
   if (!tok.startsWith("t-")) throw new Error(`unexpected token shape: ${tok.slice(0, 8)}…`)
   return `token ok (${tok.slice(0, 8)}…)`
 })
@@ -259,7 +259,13 @@ const adapter = createLarkAdapter({
 let chatId = process.env.LARK_TEST_CHAT_ID ?? ""
 if (!chatId) {
   await step("list joined chats (/im/v1/chats)", async () => {
-    const resp = (await larkTenantRequest(creds, "GET", "/im/v1/chats?page_size=20")) as {
+    const resp = (await larkTenantRequest(
+      creds,
+      "GET",
+      "/im/v1/chats?page_size=20",
+      undefined,
+      "service-data"
+    )) as {
       data?: { items?: Array<{ chat_id: string; name?: string }> }
     } | null
     const items = resp?.data?.items ?? []

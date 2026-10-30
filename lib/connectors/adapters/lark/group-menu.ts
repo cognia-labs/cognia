@@ -54,7 +54,9 @@ async function getMenuTree(
   const parsed = (await deps.request(
     creds,
     "GET",
-    `/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`
+    `/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`,
+    undefined,
+    "service-data"
   )) as { data?: { menu_tree?: { chat_menu_top_levels?: LarkTopLevelMenuRecord[] } } } | null
   return parsed?.data?.menu_tree?.chat_menu_top_levels ?? []
 }
@@ -158,14 +160,16 @@ export async function reconcileGroupMenuSurface(
           `/im/v1/chats/${encodeURIComponent(chatId)}/menu_items/${encodeURIComponent(
             existing.chat_menu_top_level_id
           )}`,
-          { update_fields: ["REDIRECT_LINK"], chat_menu_item: cogniaMenuItem(url) }
+          { update_fields: ["REDIRECT_LINK"], chat_menu_item: cogniaMenuItem(url) },
+          "service-data"
         )
       } else {
         const created = (await deps.request(
           creds,
           "POST",
           `/im/v1/chats/${encodeURIComponent(chatId)}/menu_tree`,
-          { menu_tree: { chat_menu_top_levels: [{ chat_menu_item: cogniaMenuItem(url) }] } }
+          { menu_tree: { chat_menu_top_levels: [{ chat_menu_item: cogniaMenuItem(url) }] } },
+          "service-data"
         )) as {
           data?: { menu_tree?: { chat_menu_top_levels?: LarkTopLevelMenuRecord[] } }
         } | null

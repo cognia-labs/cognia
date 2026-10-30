@@ -491,3 +491,18 @@ describe("resolveLarkMediaKeys — Lark card payload images", () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1)
   })
 })
+
+it("requests a transport token once for media being sent", async () => {
+  const getAccessToken = jest.fn(async () => "transport-token")
+  const uploadImage = jest.fn(async () => "img_uploaded")
+  await resolveLarkMediaKeys(
+    [
+      { type: "image", url: "https://example.com/one.png" },
+      { type: "image", url: "https://example.com/two.png" },
+    ],
+    { getAccessToken, uploadImage }
+  )
+  expect(getAccessToken).toHaveBeenCalledTimes(1)
+  expect(getAccessToken).toHaveBeenCalledWith("transport")
+  expect(uploadImage).toHaveBeenCalledTimes(2)
+})

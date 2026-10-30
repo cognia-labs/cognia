@@ -58,6 +58,27 @@ function makeDeps(overrides: Partial<Record<string, unknown>> = {}) {
 }
 
 describe("importLarkMessages", () => {
+  it("labels imported message reads as service-data on the injected request", async () => {
+    const deps = makeDeps()
+    const result = await importLarkMessages(
+      {
+        adapterId: ADAPTER_ID,
+        chatId: CHAT_ID,
+        messageIds: ["om_purpose"],
+        verifiedIdentity: IDENTITY,
+      },
+      deps
+    )
+    expect(result.ok).toBe(true)
+    expect(deps.tenantRequest).toHaveBeenCalledWith(
+      { appId: "cli_1", appSecret: "secret" },
+      "GET",
+      "/im/v1/messages/om_purpose",
+      undefined,
+      "service-data"
+    )
+  })
+
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

@@ -80,7 +80,7 @@ function fileNameFromUrl(url: string, fallback: string): string {
 
 export interface ResolveMediaKeysOptions {
   /** Resolves a fresh tenant access token (cached by `getTenantAccessToken`). */
-  getAccessToken: () => Promise<string>
+  getAccessToken: (purpose: "transport") => Promise<string>
   /**
    * Optional per-adapter-session url→key cache. Pass the same Map across
    * multiple `send` calls on the same adapter and the helper will short-
@@ -113,7 +113,7 @@ export async function resolveLarkMediaKeys(
 
   let cachedToken: string | null = null
   const token = async () => {
-    if (cachedToken === null) cachedToken = await opts.getAccessToken()
+    if (cachedToken === null) cachedToken = await opts.getAccessToken("transport")
     return cachedToken
   }
 

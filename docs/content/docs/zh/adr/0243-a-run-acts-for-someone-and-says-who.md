@@ -257,3 +257,5 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 Phase 1A 在 `ExecutionRun` 上以 observe mode 记录执行身份和已解析的运行权限。凭证选择和既有拒绝逻辑保持不变；权限修订不匹配只记录私有事件，不阻止执行。子运行保留父运行的固定身份（包括原始触发类型）；父身份不可用时记录 `child` 触发类型，不推测主体。权限强制执行和共享预算池记账仍属于后续阶段。
 
 新身份通过 `rootRunId` 标记根运行；子运行保留创建时的身份快照，实时观察和发起人吸收则读写根运行。元数据记录不改变 `updatedAt`，相同值不重复写入，并随运行的下一次实际更新同步到其他设备。缺少已知人工来源的自动入口记录为 `external-event`。
+
+Phase 1B 按用途（`transport`、`service-data` 或 `adapter-admin`）标记每次 tenant-token 使用，不改变凭证选择或请求行为。

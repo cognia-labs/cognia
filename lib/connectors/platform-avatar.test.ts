@@ -32,7 +32,19 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsHttpRequest: jest.fn(),
   connectorsKeyringGet: jest.fn(),
 }))
-jest.mock("@/lib/connectors/adapters/lark/http", () => ({ larkTenantRequest: jest.fn() }))
+jest.mock("@/lib/connectors/adapters/lark/http", () => {
+  const tenantTokenPurposes = jest.fn()
+  return {
+    tenantTokenPurposes,
+    // Keep the existing transport assertions; capture the added label separately.
+    larkTenantRequest: new Proxy(jest.fn(), {
+      apply(target, _receiver, [creds, method, path, body, purpose, options]) {
+        tenantTokenPurposes(path, purpose)
+        return target(creds, method, path, body, options)
+      },
+    }),
+  }
+})
 jest.mock("@/lib/connectors/credentials-events", () => {
   const actual = jest.requireActual("@/lib/connectors/credentials-events")
   return { ...actual, getCredentialsGeneration: jest.fn(actual.getCredentialsGeneration) }
@@ -1029,4 +1041,34 @@ it("resolves a Discord partial member before accepting its supplied global fallb
       sourceUrl: "https://cdn.discordapp.com/guilds/456/users/123/avatars/beef.png?size=128",
     })
   )
+})
+
+it("labels self-bot avatars as administration and contact avatars as service data", async () => {
+  const { larkTenantRequest, tenantTokenPurposes } = jest.requireMock(
+    "@/lib/connectors/adapters/lark/http"
+  )
+  jest.mocked(getAdapterInstance).mockResolvedValue({ type: "lark", settings: {} } as never)
+  jest
+    .mocked(connectorsKeyringGet)
+    .mockImplementation(async (_adapterId, name) => (name === "appId" ? "cli_self" : "secret"))
+  larkTenantRequest.mockResolvedValue({ bot: { open_id: "ou_self" } })
+  await resolvePlatformAvatar({
+    platform: "lark",
+    adapterId: "purpose-avatar",
+    kind: "user",
+    actorKind: "bot",
+    remoteIdType: "app_id",
+    remoteId: "cli_self",
+  })
+  larkTenantRequest.mockResolvedValue({ data: {} })
+  await resolvePlatformAvatar({
+    platform: "lark",
+    adapterId: "purpose-avatar",
+    kind: "user",
+    remoteId: "ou_person",
+  })
+  expect(tenantTokenPurposes.mock.calls).toEqual([
+    ["/bot/v3/info", "adapter-admin"],
+    ["/contact/v3/users/ou_person?user_id_type=open_id", "service-data"],
+  ])
 })

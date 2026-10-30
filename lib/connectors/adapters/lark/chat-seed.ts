@@ -18,7 +18,7 @@ import { isLarkFeatureEnabled } from "@/lib/connectors/feature-flags"
 import { CHAT_TAB_URL_VERSION } from "@/lib/connectors/entry/deep-links"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { ensureChatSurface } from "@/lib/db/lark-chat-surfaces"
-import { larkTenantRequest, type LarkCredentials } from "./http"
+import { larkTenantRequest, type LarkCredentials, type LarkTenantRequest } from "./http"
 import { resolveSurfaceIdentity } from "./chat-tabs"
 
 export const CHAT_LIST_SCOPE = "im:chat:readonly"
@@ -34,7 +34,7 @@ export interface LarkChatListItem {
 }
 
 export interface ChatSeedDependencies {
-  request: typeof larkTenantRequest
+  request: LarkTenantRequest
   getAdapter: typeof getAdapterInstance
   ensure: typeof ensureChatSurface
   now: () => number
@@ -42,7 +42,8 @@ export interface ChatSeedDependencies {
 
 function withDefaults(overrides: Partial<ChatSeedDependencies>): ChatSeedDependencies {
   return {
-    request: larkTenantRequest,
+    request: (creds, method, path, body, purpose, options) =>
+      larkTenantRequest(creds, method, path, body, purpose, options),
     getAdapter: getAdapterInstance,
     ensure: ensureChatSurface,
     now: Date.now,
@@ -62,7 +63,13 @@ export async function listBotChats(
       page_size: String(PAGE_SIZE),
       ...(pageToken ? { page_token: pageToken } : {}),
     })
-    const parsed = (await deps.request(creds, "GET", `/im/v1/chats?${query.toString()}`)) as {
+    const parsed = (await deps.request(
+      creds,
+      "GET",
+      `/im/v1/chats?${query.toString()}`,
+      undefined,
+      "service-data"
+    )) as {
       data?: { items?: LarkChatListItem[]; has_more?: boolean; page_token?: string }
     } | null
     chats.push(...(parsed?.data?.items ?? []))

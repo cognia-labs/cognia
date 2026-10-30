@@ -30,7 +30,12 @@ import {
   markChatSurfaceError,
   markChatSurfaceSynced,
 } from "@/lib/db/lark-chat-surfaces"
-import { classifyScopeError, larkTenantRequest, type LarkCredentials } from "./http"
+import {
+  classifyScopeError,
+  larkTenantRequest,
+  type LarkCredentials,
+  type LarkTenantRequest,
+} from "./http"
 
 export const COGNIA_TAB_NAME = "Cognia"
 export const CHAT_TAB_WRITE_SCOPE = "im:chat.tabs:write_only"
@@ -41,7 +46,7 @@ export interface SurfaceReconcileContext {
 }
 
 export interface SurfaceReconcileDependencies {
-  request: typeof larkTenantRequest
+  request: LarkTenantRequest
   getAdapter: typeof getAdapterInstance
   ensure: typeof ensureChatSurface
   markSynced: typeof markChatSurfaceSynced
@@ -56,7 +61,8 @@ export function withSurfaceDefaults(
   overrides: Partial<SurfaceReconcileDependencies>
 ): SurfaceReconcileDependencies {
   return {
-    request: larkTenantRequest,
+    request: (creds, method, path, body, purpose, options) =>
+      larkTenantRequest(creds, method, path, body, purpose, options),
     getAdapter: getAdapterInstance,
     ensure: ensureChatSurface,
     markSynced: markChatSurfaceSynced,
@@ -138,7 +144,9 @@ async function listChatTabs(
   const parsed = (await deps.request(
     creds,
     "GET",
-    `/im/v1/chats/${encodeURIComponent(chatId)}/chat_tabs/list_tabs`
+    `/im/v1/chats/${encodeURIComponent(chatId)}/chat_tabs/list_tabs`,
+    undefined,
+    "service-data"
   )) as { data?: { chat_tabs?: LarkChatTabRecord[] } } | null
   return parsed?.data?.chat_tabs ?? []
 }
@@ -249,14 +257,16 @@ export async function reconcileChatTabSurface(
                 tab_content: { url },
               },
             ],
-          }
+          },
+          "service-data"
         )
       } else {
         const created = (await deps.request(
           creds,
           "POST",
           `/im/v1/chats/${encodeURIComponent(chatId)}/chat_tabs`,
-          { chat_tabs: [{ tab_name: COGNIA_TAB_NAME, tab_type: "url", tab_content: { url } }] }
+          { chat_tabs: [{ tab_name: COGNIA_TAB_NAME, tab_type: "url", tab_content: { url } }] },
+          "service-data"
         )) as { data?: { chat_tabs?: LarkChatTabRecord[] } } | null
         tabId = created?.data?.chat_tabs?.find((tab) => tab.tab_name === COGNIA_TAB_NAME)?.tab_id
       }

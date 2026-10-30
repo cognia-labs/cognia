@@ -5,6 +5,12 @@
  * and that unsupported types return null.
  */
 
+import { getTenantToken } from "./adapters/lark/auth"
+jest.mock("./adapters/lark/auth", () => {
+  const actual = jest.requireActual("./adapters/lark/auth")
+  return { ...actual, getTenantToken: jest.fn(actual.getTenantToken) }
+})
+
 import { invoke } from "@tauri-apps/api/core"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 
@@ -877,4 +883,20 @@ describe("buildOneBotAdapter", () => {
     const callArgs = mockCreateOneBotAdapter.mock.calls[0][0] as { selfBotUin: string }
     expect(callArgs.selfBotUin).toBe("")
   })
+})
+
+it("labels registry self-bot discovery as adapter administration", async () => {
+  mockInvoke.mockImplementation(async (cmd: string, args: { req?: { url?: string } }) => {
+    if (cmd === "connectors_keyring_get") return "purpose-registry-credential"
+    if (cmd === "connectors_http_request")
+      return args.req?.url?.includes("tenant_access_token")
+        ? makeLarkTatResp()
+        : makeLarkBotInfoResp("ou_purpose")
+    return null
+  })
+  await buildLarkAdapter(makeRow({ id: "purpose-registry", type: "lark", settings: {} }))
+  expect(getTenantToken).toHaveBeenCalledWith(
+    { appId: "purpose-registry-credential", appSecret: "purpose-registry-credential" },
+    "adapter-admin"
+  )
 })

@@ -7,12 +7,16 @@ jest.mock("@/lib/connectors/tauri/commands", () => ({
   })),
 }))
 
-jest.mock("./auth", () => ({
-  getTenantAccessToken: jest.fn(),
-  getUserAccessToken: jest.fn(),
-  clearTokenCache: jest.fn(),
-  refreshUserToken: jest.fn(),
-}))
+jest.mock("./auth", () => {
+  const getTenantAccessToken = jest.fn()
+  return {
+    getTenantAccessToken,
+    getTenantToken: getTenantAccessToken,
+    getUserAccessToken: jest.fn(),
+    clearTokenCache: jest.fn(),
+    refreshUserToken: jest.fn(),
+  }
+})
 
 import { connectorsHttpRequest, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { clearTokenCache, getTenantAccessToken, getUserAccessToken, refreshUserToken } from "./auth"
@@ -45,16 +49,22 @@ beforeEach(() => {
 
 describe("larkTenantRequest", () => {
   it("opts avatar profile reads into the native no-redirect policy", async () => {
-    await larkTenantRequest(CREDS, "GET", "/contact/v3/users/ou_1", undefined, {
+    await larkTenantRequest(CREDS, "GET", "/contact/v3/users/ou_1", undefined, "service-data", {
       avatarPolicy: true,
     })
     expect(mHttp.mock.calls[0][0].headers["X-Cognia-Avatar-Policy"]).toBe("1")
     mHttp.mockClear()
-    await larkTenantRequest(CREDS, "GET", "/im/v1/chats/oc_1")
+    await larkTenantRequest(CREDS, "GET", "/im/v1/chats/oc_1", undefined, "service-data")
     expect(mHttp.mock.calls[0][0].headers["X-Cognia-Avatar-Policy"]).toBeUndefined()
   })
   it("issues a bearer tenant-token request and returns the parsed body", async () => {
-    const out = await larkTenantRequest(CREDS, "POST", "/im/v1/chats?x=1", { name: "g" })
+    const out = await larkTenantRequest(
+      CREDS,
+      "POST",
+      "/im/v1/chats?x=1",
+      { name: "g" },
+      "service-data"
+    )
     expect(out).toEqual({ code: 0, data: { ok: true } })
     const call = mHttp.mock.calls[0][0]
     expect(call.url).toBe("https://open.feishu.cn/open-apis/im/v1/chats?x=1")
@@ -64,7 +74,7 @@ describe("larkTenantRequest", () => {
   })
 
   it("supports PUT (chat update — the factory closures never did)", async () => {
-    await larkTenantRequest(CREDS, "PUT", "/im/v1/chats/oc_1", { name: "n" })
+    await larkTenantRequest(CREDS, "PUT", "/im/v1/chats/oc_1", { name: "n" }, "service-data")
     expect(mHttp.mock.calls[0][0].method).toBe("PUT")
   })
 
@@ -75,7 +85,7 @@ describe("larkTenantRequest", () => {
         body: JSON.stringify({ code: 99991663, msg: "invalid token" }),
       })
       .mockResolvedValueOnce({ status: 200, body: JSON.stringify({ code: 0, data: { ok: 1 } }) })
-    const out = await larkTenantRequest(CREDS, "GET", "/x")
+    const out = await larkTenantRequest(CREDS, "GET", "/x", undefined, "service-data")
     expect(out).toEqual({ code: 0, data: { ok: 1 } })
     expect(mClear).toHaveBeenCalledWith("cli_x", "sec")
     expect(mHttp).toHaveBeenCalledTimes(2)
@@ -86,13 +96,17 @@ describe("larkTenantRequest", () => {
       status: 200,
       body: JSON.stringify({ code: 1248006, msg: "no perm" }),
     })
-    await expect(larkTenantRequest(CREDS, "GET", "/x")).rejects.toBeInstanceOf(LarkApiError)
+    await expect(
+      larkTenantRequest(CREDS, "GET", "/x", undefined, "service-data")
+    ).rejects.toBeInstanceOf(LarkApiError)
     expect(mHttp).toHaveBeenCalledTimes(1)
   })
 
   it("throws LarkApiError with the extracted code on HTTP >= 400", async () => {
     mHttp.mockResolvedValue({ status: 403, body: JSON.stringify({ code: 99991672, msg: "scope" }) })
-    const err = await larkTenantRequest(CREDS, "GET", "/x").catch((e) => e)
+    const err = await larkTenantRequest(CREDS, "GET", "/x", undefined, "service-data").catch(
+      (e) => e
+    )
     expect(err).toBeInstanceOf(LarkApiError)
     expect((err as LarkApiError).status).toBe(403)
     expect((err as LarkApiError).code).toBe(99991672)
@@ -102,21 +116,31 @@ describe("larkTenantRequest", () => {
 describe("larkTenantRequest — body/parse edges", () => {
   it("omits the body for body-less requests and returns null for empty responses", async () => {
     mHttp.mockResolvedValue({ status: 200, body: "" })
-    const out = await larkTenantRequest(CREDS, "GET", "/im/v1/chats/oc_1")
+    const out = await larkTenantRequest(
+      CREDS,
+      "GET",
+      "/im/v1/chats/oc_1",
+      undefined,
+      "service-data"
+    )
     expect(out).toBeNull()
     expect(mHttp.mock.calls[0][0].body).toBeUndefined()
   })
 
   it("extracts null codes from non-JSON error bodies (HTTP >= 400)", async () => {
     mHttp.mockResolvedValue({ status: 500, body: "<html>gateway error</html>" })
-    const err = await larkTenantRequest(CREDS, "GET", "/x").catch((e) => e)
+    const err = await larkTenantRequest(CREDS, "GET", "/x", undefined, "service-data").catch(
+      (e) => e
+    )
     expect(err).toBeInstanceOf(LarkApiError)
     expect((err as LarkApiError).code).toBeNull()
   })
 
   it("ignores non-numeric code fields in error bodies", async () => {
     mHttp.mockResolvedValue({ status: 400, body: JSON.stringify({ code: "weird" }) })
-    const err = await larkTenantRequest(CREDS, "GET", "/x").catch((e) => e)
+    const err = await larkTenantRequest(CREDS, "GET", "/x", undefined, "service-data").catch(
+      (e) => e
+    )
     expect((err as LarkApiError).code).toBeNull()
   })
 })
@@ -280,9 +304,25 @@ describe("Lark rate-limit reset headers", () => {
       headers: { "x-ogw-ratelimit-reset": "1.5" },
       body: JSON.stringify({ code: 99991400, msg: "limited" }),
     })
-    await expect(larkTenantRequest(CREDS, "GET", "/x")).rejects.toMatchObject({
+    await expect(
+      larkTenantRequest(CREDS, "GET", "/x", undefined, "service-data")
+    ).rejects.toMatchObject({
       retryAfterMs: 1500,
     })
     expect(mHttp).toHaveBeenCalledTimes(1)
   })
 })
+
+it.each(["transport", "service-data", "adapter-admin"] as const)(
+  "threads the %s label without adding it to the wire request",
+  async (purpose) => {
+    await larkTenantRequest(CREDS, "GET", "/bot/v3/info", undefined, purpose)
+    expect(mTat).toHaveBeenCalledWith(CREDS, purpose)
+    expect(mHttp.mock.calls[0][0]).toEqual({
+      url: "https://open.feishu.cn/open-apis/bot/v3/info",
+      method: "GET",
+      headers: { Authorization: "Bearer tat-1", "Content-Type": "application/json; charset=utf-8" },
+      body: undefined,
+    })
+  }
+)
