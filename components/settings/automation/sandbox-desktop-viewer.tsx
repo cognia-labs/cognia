@@ -81,7 +81,16 @@ export function SandboxDesktopViewer({
     (observeOnly ||
       isCapacitor() ||
       (typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)))
-  const releaseRef = useRef<(() => Promise<void> | undefined) | null>(null)
+  const releaseRef = useRef<
+    ((expectedLease?: SandboxControlLease) => Promise<void> | undefined) | null
+  >(null)
+  const leaseChangeEpoch = useRef(0)
+  useLayoutEffect(
+    () => () => {
+      leaseChangeEpoch.current += 1
+    },
+    [connectionId, enabled, openDesktop, allowStreaming]
+  )
   const releaseBeforeRecovery = useCallback(async () => {
     await releaseRef.current?.()
   }, [])
@@ -101,13 +110,14 @@ export function SandboxDesktopViewer({
   const streaming = streamGrant !== null
   const onLeaseChange = useCallback(
     (lease: SandboxControlLease | null) => {
+      const epoch = ++leaseChangeEpoch.current
       if (!lease) {
         void reopenStream()
         return
       }
       // Control the stream cannot carry is control the user cannot use.
       void claimStream(lease).then((claimed) => {
-        if (!claimed) void releaseRef.current?.()
+        if (!claimed && leaseChangeEpoch.current === epoch) void releaseRef.current?.(lease)
       })
     },
     [claimStream, reopenStream]
@@ -115,6 +125,7 @@ export function SandboxDesktopViewer({
   const { frame, controlling, acquiring, error, acquire, release, refresh, input, status } =
     useSandboxDesktop(connectionId, enabled, openDesktop, !mobileObservation, {
       streaming,
+      streamHealthy: streamStatus === "open" && streamGrant?.healthVersion === 1,
       onLeaseChange: openDesktop || !allowStreaming ? undefined : onLeaseChange,
     })
   useLayoutEffect(() => {

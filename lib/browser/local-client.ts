@@ -188,18 +188,80 @@ export const localBrowser = {
   ): Promise<() => void> {
     // Rust sends `InvokeResponseBody::Raw`, which arrives as an ArrayBuffer;
     // `toFrameBytes` also accepts the JSON byte-array form older shells used.
-    const channel = new Channel<ArrayBuffer>()
     let active = true
-    channel.onmessage = (message) => {
-      if (!active) return
-      const bytes = message instanceof ArrayBuffer ? new Uint8Array(message) : toFrameBytes(message)
-      if (bytes) onFrame(bytes)
+    let subscriptionId: string | null = null
+    let retry: ReturnType<typeof setTimeout> | undefined
+    let failures = 0
+    const stopSubscription = (id: string) =>
+      invoke("browser_local_frames_unsubscribe", { sessionId, subscriptionId: id }).catch(
+        () => undefined
+      )
+    const schedule = () => {
+      if (!active || document.hidden || retry !== undefined) return
+      const delay = Math.min(250 * 2 ** Math.min(failures++, 7), 30_000)
+      retry = setTimeout(() => {
+        retry = undefined
+        void start().catch(() => schedule())
+      }, delay)
     }
-    await invoke("browser_local_frames_subscribe", { sessionId, channel })
+    const start = async () => {
+      if (!active || document.hidden || subscriptionId) return
+      const id = crypto.randomUUID()
+      subscriptionId = id
+      const channel = new Channel<ArrayBuffer | { type: "ended"; subscriptionId: string }>()
+      channel.onmessage = (message) => {
+        if (!active || subscriptionId !== id) return
+        if (
+          message &&
+          typeof message === "object" &&
+          "type" in message &&
+          message.type === "ended"
+        ) {
+          if (message.subscriptionId !== id) return
+          subscriptionId = null
+          schedule()
+          return
+        }
+        const bytes =
+          message instanceof ArrayBuffer ? new Uint8Array(message) : toFrameBytes(message)
+        if (bytes) {
+          failures = 0
+          onFrame(bytes)
+        }
+      }
+      try {
+        await invoke("browser_local_frames_subscribe", { sessionId, subscriptionId: id, channel })
+      } catch (error) {
+        if (!active || document.hidden || subscriptionId !== id) return
+        subscriptionId = null
+        throw error
+      }
+      if (!active || subscriptionId !== id) await stopSubscription(id)
+    }
+    const visibilityChanged = () => {
+      clearTimeout(retry)
+      retry = undefined
+      if (document.hidden) {
+        const previous = subscriptionId
+        subscriptionId = null
+        if (previous) void stopSubscription(previous)
+      } else if (!subscriptionId) void start().catch(() => schedule())
+    }
+    document.addEventListener("visibilitychange", visibilityChanged)
+    try {
+      if (!document.hidden) await start()
+    } catch (error) {
+      active = false
+      clearTimeout(retry)
+      document.removeEventListener("visibilitychange", visibilityChanged)
+      throw error
+    }
     return () => {
       if (!active) return
       active = false
-      void invoke("browser_local_frames_unsubscribe", { sessionId }).catch(() => undefined)
+      clearTimeout(retry)
+      document.removeEventListener("visibilitychange", visibilityChanged)
+      if (subscriptionId) void stopSubscription(subscriptionId)
     }
   },
   async onEvent(callback: (event: LocalBrowserEvent) => void): Promise<UnlistenFn> {

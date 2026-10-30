@@ -50,11 +50,17 @@ export interface BrowserConsolePanelProps {
 
 export function BrowserConsolePanel({ entries, onClear }: BrowserConsolePanelProps) {
   const t = useTranslations("browser.devtools")
+  const dropped = entries.reduce((count, entry) => count + (entry.droppedBefore ?? 0), 0)
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center">
         <ClearButton onClear={onClear} />
       </div>
+      {dropped > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t("historyDropped", { count: dropped })}
+        </p>
+      )}
       {entries.length === 0 ? (
         <p className="py-4 text-center text-xs text-muted-foreground">{t("consoleEmpty")}</p>
       ) : (
@@ -75,6 +81,9 @@ export function BrowserConsolePanel({ entries, onClear }: BrowserConsolePanelPro
                 <span className="w-10 shrink-0 text-[10px] uppercase text-muted-foreground">
                   {entry.level}
                 </span>
+                {entry.truncated && (
+                  <span className="shrink-0 text-muted-foreground">{t("entryTruncated")}</span>
+                )}
                 <span className="min-w-0 flex-1">{entry.text}</span>
               </li>
             ))}
@@ -92,11 +101,17 @@ export interface BrowserNetworkPanelProps {
 
 export function BrowserNetworkPanel({ entries, onClear }: BrowserNetworkPanelProps) {
   const t = useTranslations("browser.devtools")
+  const dropped = entries.reduce((count, entry) => count + (entry.droppedBefore ?? 0), 0)
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center">
         <ClearButton onClear={onClear} />
       </div>
+      {dropped > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t("historyDropped", { count: dropped })}
+        </p>
+      )}
       {entries.length === 0 ? (
         <p className="py-4 text-center text-xs text-muted-foreground">{t("networkEmpty")}</p>
       ) : (
@@ -118,6 +133,11 @@ export function BrowserNetworkPanel({ entries, onClear }: BrowserNetworkPanelPro
                   {entry.method}
                 </span>
                 <span className="w-9 shrink-0 tabular-nums">{entry.status}</span>
+                {entry.truncated && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {t("entryTruncated")}
+                  </span>
+                )}
                 <span className="min-w-0 flex-1 truncate" title={entry.url}>
                   {entry.url}
                 </span>

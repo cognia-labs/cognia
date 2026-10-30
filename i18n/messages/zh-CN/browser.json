@@ -76,7 +76,9 @@
     "consoleEmpty": "尚未捕获控制台输出。",
     "consoleTab": "控制台（{count}）",
     "durationMs": "{ms} 毫秒",
+    "entryTruncated": "已截断",
     "failedRequests": "{count} 个失败请求",
+    "historyDropped": "已丢弃 {count} 条较早的记录。",
     "networkEmpty": "尚未捕获请求。",
     "networkTab": "网络（{count}）",
     "problems": "{count} 个问题"

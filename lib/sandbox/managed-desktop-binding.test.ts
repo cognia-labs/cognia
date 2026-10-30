@@ -16,6 +16,11 @@ jest.mock("@/lib/db/sandbox-connections", () => ({
   putSandboxConnection: jest.fn(),
   deleteSandboxConnection: jest.fn(),
 }))
+jest.mock("@/lib/automation/managed-desktop-handoff-client", () => ({
+  managedDesktopHandoffClient: { acceptanceList: jest.fn() },
+  watchManagedDesktopAcceptance: jest.fn(() => jest.fn()),
+}))
+import { managedDesktopHandoffClient } from "@/lib/automation/managed-desktop-handoff-client"
 
 import {
   managedDesktopClient,
@@ -87,6 +92,7 @@ beforeEach(() => {
   })
   rows = new Map()
   live = [delegation()]
+  jest.mocked(managedDesktopHandoffClient.acceptanceList).mockResolvedValue({ runs: [] })
   api.list.mockResolvedValue([
     {
       id: "desktop",
@@ -120,6 +126,75 @@ beforeEach(() => {
   jest.mocked(deleteSandboxConnection).mockImplementation(async (key) => {
     rows.delete(key)
   })
+})
+
+it("projects a live acceptance delegation without minting another grant and admits only its attached child", async () => {
+  live = [
+    delegation({ grantee: { kind: "acceptance", acceptanceId: "acceptance" }, mode: "acceptance" }),
+  ]
+  jest.mocked(managedDesktopHandoffClient.acceptanceList).mockResolvedValue({
+    runs: [
+      {
+        acceptanceId: "acceptance",
+        childSessionKey: "child",
+        state: "running",
+        desktopId: "desktop",
+        desktopGeneration: 3,
+        providerConfigId: "config",
+        delegationId: "delegation",
+      },
+    ],
+  } as never)
+  await reconcileManagedDesktopBindings()
+  expect(api.delegate).not.toHaveBeenCalled()
+  expect(rows.get(id)).toMatchObject({
+    id,
+    config: { delegationId: "delegation", desktopId: "desktop", generation: 3 },
+    capabilities: { gui: true },
+  })
+  await expect(requireManagedDesktopDelegation(rows.get(id)!, "child")).resolves.toBeUndefined()
+  await expect(requireManagedDesktopDelegation(rows.get(id)!, "other")).rejects.toMatchObject({
+    code: "placement-unavailable",
+  })
+})
+
+it("cannot borrow an ended, mismatched or unreadable acceptance run", async () => {
+  live = [
+    delegation({ grantee: { kind: "acceptance", acceptanceId: "acceptance" }, mode: "acceptance" }),
+  ]
+  await reconcileManagedDesktopBindings()
+  const row = rows.get(id)!
+  for (const patch of [
+    { state: "completed" },
+    { desktopGeneration: 4 },
+    { acceptanceId: "other" },
+    { delegationId: "other" },
+  ]) {
+    jest.mocked(managedDesktopHandoffClient.acceptanceList).mockResolvedValue({
+      runs: [
+        {
+          acceptanceId: "acceptance",
+          childSessionKey: "child",
+          state: "running",
+          desktopId: "desktop",
+          desktopGeneration: 3,
+          providerConfigId: "config",
+          delegationId: "delegation",
+          ...patch,
+        },
+      ],
+    } as never)
+    await expect(requireManagedDesktopDelegation(row, "child")).rejects.toMatchObject({
+      code: "placement-unavailable",
+    })
+  }
+  jest.mocked(managedDesktopHandoffClient.acceptanceList).mockRejectedValue(new Error("offline"))
+  await expect(requireManagedDesktopDelegation(row, "child")).rejects.toMatchObject({
+    code: "placement-unavailable",
+  })
+  live = []
+  await reconcileManagedDesktopBindings()
+  expect(rows.has(id)).toBe(false)
 })
 
 it("waits for a live Host delegation, writes the existing registry, then allows saving the target", async () => {

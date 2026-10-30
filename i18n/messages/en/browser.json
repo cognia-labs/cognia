@@ -76,7 +76,9 @@
     "consoleEmpty": "No console output captured yet.",
     "consoleTab": "Console ({count})",
     "durationMs": "{ms} ms",
+    "entryTruncated": "Truncated",
     "failedRequests": "{count, plural, =1 {1 failed request} other {# failed requests}}",
+    "historyDropped": "{count, plural, =1 {1 earlier entry was discarded.} other {# earlier entries were discarded.}}",
     "networkEmpty": "No requests captured yet.",
     "networkTab": "Network ({count})",
     "problems": "{count, plural, =1 {1 problem} other {# problems}}"

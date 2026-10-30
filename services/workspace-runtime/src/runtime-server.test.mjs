@@ -831,6 +831,43 @@ test("a failed capture start invalidates its publisher without releasing a repla
   assert.equal((await fetch(`${baseUrl}/v1/media/reused`, { headers })).status, 204)
 })
 
+test("consumer retirement releases media even when CDP cleanup rejects and cannot release a replacement", async (t) => {
+  const browser = serviceStub()
+  let owner = null
+  const publishers = []
+  const retired = new Set()
+  browser.isScreencastConsumerRetired = (_id, streamId) => retired.has(streamId)
+  browser.startScreencast = async (_id, publish, { streamId }) => {
+    owner = streamId
+    publishers.push(publish)
+  }
+  browser.stopScreencastConsumer = async (_id, streamId, onRetired) => {
+    retired.add(streamId)
+    if (owner !== streamId) return false
+    owner = null
+    onRetired()
+    throw new Error("CDP cleanup failed after retirement")
+  }
+  const baseUrl = await fixture(t, browser)
+  const headers = { authorization: `Bearer ${"x".repeat(32)}`, "content-type": "application/json" }
+  const control = (type, streamId) =>
+    fetch(`${baseUrl}/v1/control`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ version: 1, type, payload: { sessionId: "s", streamId } }),
+    })
+  await control("browser.screencast.start", "old")
+  assert.equal((await control("browser.screencast.stop", "old")).status, 400)
+  publishers[0](Buffer.from("late"))
+  assert.equal((await fetch(`${baseUrl}/v1/media/s`, { headers })).status, 204)
+  await control("browser.screencast.start", "new")
+  publishers[1](Buffer.from("new frame"))
+  await control("browser.screencast.stop", "old")
+  await control("browser.screencast.start", "old")
+  assert.equal(publishers.length, 2)
+  assert.equal(await (await fetch(`${baseUrl}/v1/media/s`, { headers })).text(), "new frame")
+})
+
 test("submission ops reach the service; a drain addresses its tab and is not audited", async (t) => {
   const calls = []
   const browser = serviceStub()

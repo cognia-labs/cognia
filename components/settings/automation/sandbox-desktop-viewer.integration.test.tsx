@@ -158,6 +158,190 @@ test("an auxiliary screenshot failure keeps the streaming lease and iframe", asy
   expect(client.renewControl).toHaveBeenCalled()
 })
 
+test.each(["resolve", "reject"])(
+  "a late %s of an obsolete stream claim cannot release reacquired control",
+  async (outcome) => {
+    let resolve!: (value: Awaited<ReturnType<typeof sandboxClient.streamClaim>>) => void
+    let reject!: (error: Error) => void
+    client.streamClaim.mockImplementationOnce(
+      () =>
+        new Promise((done, fail) => {
+          resolve = done
+          reject = fail
+        })
+    )
+    mount()
+    await tick()
+    await confirmHealthy()
+    fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+    await tick()
+    fireEvent.click(screen.getByRole("button", { name: "Release control" }))
+    await tick()
+    await confirmHealthy()
+    fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+    await tick()
+    expect(client.streamClaim).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole("status")).toHaveTextContent("You have control")
+    expect(client.releaseControl).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      if (outcome === "resolve")
+        resolve({
+          viewerId: "viewer-1",
+          url: "http://127.0.0.1:49000/?old=controller",
+          role: "controller",
+          healthVersion: 1,
+        })
+      else reject(new Error("old claim failed"))
+    })
+    await tick()
+    expect(client.releaseControl).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole("status")).toHaveTextContent("You have control")
+  }
+)
+
+test("a failed current stream claim still releases its own control lease", async () => {
+  client.streamClaim.mockRejectedValueOnce(new Error("current claim failed"))
+  mount()
+  await tick()
+  await confirmHealthy()
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  await tick()
+  expect(client.releaseControl).toHaveBeenCalledWith("diagnostic", "fixture-lease", 2)
+  expect(screen.getByRole("status")).toHaveTextContent("View only")
+})
+
+test("a delayed old release cannot reopen the stream carrying a newer lease", async () => {
+  let finish!: () => void
+  client.releaseControl.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  mount()
+  await tick()
+  await confirmHealthy()
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  await tick()
+  await confirmHealthy()
+  fireEvent.click(screen.getByRole("button", { name: "Release control" }))
+  await tick()
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  await tick()
+  const controller = screen.getByTitle("Live sandbox desktop stream")
+  expect(controller).toHaveAttribute("data-stream-role", "controller")
+  expect(client.streamClaim).toHaveBeenCalledTimes(2)
+  await act(async () => finish())
+  await tick()
+  expect(client.streamOpen).toHaveBeenCalledTimes(1)
+  expect(screen.getByTitle("Live sandbox desktop stream")).toBe(controller)
+  expect(screen.getByRole("status")).toHaveTextContent("You have control")
+})
+
+test("duplicate release notifications reopen a legacy stream once without reacquiring control", async () => {
+  client.streamOpen.mockImplementation(async () => ({
+    viewerId: `viewer-${++viewers}`,
+    url: `http://127.0.0.1:49000/?legacy=${viewers}`,
+    role: "viewer",
+  }))
+  client.streamClaim.mockImplementation(async (_connection, viewerId) => ({
+    viewerId,
+    url: "http://127.0.0.1:49000/?legacy-controller",
+    role: "controller",
+  }))
+  let finish!: () => void
+  client.releaseControl.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve
+      })
+  )
+  mount()
+  await tick()
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  await tick()
+  fireEvent.click(screen.getByRole("button", { name: "Release control" }))
+  await tick()
+  window.dispatchEvent(new Event("blur"))
+  await tick()
+  await act(async () => finish())
+  await tick()
+  expect(client.releaseControl).toHaveBeenCalledTimes(1)
+  expect(client.streamOpen).toHaveBeenCalledTimes(2)
+  expect(client.acquireControl).toHaveBeenCalledTimes(1)
+  expect(screen.getByTitle("Live sandbox desktop stream")).toHaveAttribute(
+    "data-stream-role",
+    "viewer"
+  )
+})
+
+test("an old claim cannot release a newer lease while its first frame is pending", async () => {
+  let failClaim!: (error: Error) => void
+  let finishRelease!: () => void
+  let finishFrame!: (value: Awaited<ReturnType<typeof sandboxClient.desktopFrame>>) => void
+  client.streamClaim.mockImplementationOnce(
+    () =>
+      new Promise((_, reject) => {
+        failClaim = reject
+      })
+  )
+  client.releaseControl.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finishRelease = resolve
+      })
+  )
+  mount()
+  await tick()
+  await confirmHealthy()
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  await tick()
+  fireEvent.click(screen.getByRole("button", { name: "Release control" }))
+  await tick()
+  client.desktopFrame.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishFrame = resolve
+      })
+  )
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  await tick()
+  await act(async () => {
+    failClaim(new Error("obsolete claim failed"))
+  })
+  await tick()
+  expect(client.releaseControl).toHaveBeenCalledTimes(1)
+  await act(async () => {
+    finishFrame({
+      screenshot: { bytes: "aA==", width: 800, height: 600, capturedAt: Date.now(), format: "png" },
+      frameId: "new-controller",
+      fence: 3,
+      expiresAt: Date.now() + 5000,
+    })
+  })
+  await tick()
+  await act(async () => {
+    finishRelease()
+  })
+  await tick()
+  expect(client.releaseControl).toHaveBeenCalledTimes(1)
+  expect(screen.getByRole("status")).toHaveTextContent("You have control")
+})
+
+test("iframe revalidation resumes auxiliary captures before waiting for the watchdog", async () => {
+  mount()
+  await tick()
+  await confirmHealthy()
+  const previous = client.desktopFrame.mock.calls.length
+  fireEvent.load(screen.getByTitle("Live sandbox desktop stream"))
+  await tick()
+  expect(client.desktopFrame.mock.calls.length).toBeGreaterThan(previous)
+  expect(screen.getByRole("button", { name: "Take control" })).toBeDisabled()
+  expect(client.acquireControl).not.toHaveBeenCalled()
+  await confirmHealthy()
+  expect(screen.getByRole("button", { name: "Take control" })).toBeEnabled()
+})
+
 test("the actual guest bridge establishes media health and triggers view-only recovery", async () => {
   mount()
   await tick()

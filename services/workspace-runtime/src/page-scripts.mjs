@@ -15,6 +15,7 @@ export const CREDENTIAL_BINDING = "__cogniaCredentialSubmitted"
  * `__cogniaSignal` binding instead.)
  */
 export const OVERLAY_TRANSPORT_SCRIPT =
+  "window.__cogniaRuntimeDiagnostics=true;" +
   "window.__cogniaSignalNav=function(){};" +
   "window.__cogniaSignalLoaded=function(){};" +
   "window.__cogniaSignalPush=function(){};"

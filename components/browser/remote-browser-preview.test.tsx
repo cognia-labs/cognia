@@ -165,9 +165,9 @@ jest.mock("@/hooks/browser/use-recent-pages", () => ({
 }))
 // The rings' own behaviour is use-browser-devtools.test.ts's; here only the
 // poll this surface asks for matters.
-let mockDevtoolsPoll: { intervalMs?: number } | null | undefined
+let mockDevtoolsPoll: { intervalMs?: number; source?: object } | null | undefined
 jest.mock("@/hooks/browser/use-browser-devtools", () => ({
-  useBrowserDevtools: (options?: { poll?: { intervalMs?: number } | null }) => {
+  useBrowserDevtools: (options?: { poll?: { intervalMs?: number; source?: object } | null }) => {
     mockDevtoolsPoll = options?.poll
     return {
       console: [],
@@ -1223,6 +1223,9 @@ it("polls the readouts at full rate only while the dock is open", async () => {
   )
   await screen.findByTestId("browser-tools-dock")
   expect(mockDevtoolsPoll?.intervalMs).toBe(6_000)
+  const source = mockDevtoolsPoll?.source
+  expect(source).toBeDefined()
   fireEvent.click(screen.getByTestId("browser-tools-toggle"))
   expect(mockDevtoolsPoll?.intervalMs).toBe(1_500)
+  expect(mockDevtoolsPoll?.source).toBe(source)
 })

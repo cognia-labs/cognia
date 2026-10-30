@@ -361,6 +361,7 @@ export function RemoteBrowserPreview({
       () =>
         engine
           ? {
+              source: engine,
               readConsole: () => engine.readConsole(),
               readNetwork: () => engine.readNetwork(),
               intervalMs: toolsExpanded ? DEVTOOLS_POLL_MS : DEVTOOLS_IDLE_POLL_MS,

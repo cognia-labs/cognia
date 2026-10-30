@@ -1406,6 +1406,40 @@ describe("push channels (ADR-0127)", () => {
     expect(pushes).toHaveLength(1)
     expect(api.setPushEnabled("not json")).toContain('"console":false')
   })
+
+  it("delegates Chromium diagnostics without wrapping console or installing another mutation watcher", () => {
+    const original = console.log
+    const fetch = window.fetch
+    const xhrOpen = XMLHttpRequest.prototype.open
+    const xhrSend = XMLHttpRequest.prototype.send
+    const observer = jest.spyOn(window, "MutationObserver")
+    ;(window as unknown as Record<string, unknown>).__cogniaRuntimeDiagnostics = true
+    try {
+      const api = install() as PushApi
+      expect(console.log).toBe(original)
+      expect(window.fetch).toBe(fetch)
+      expect(XMLHttpRequest.prototype.open).toBe(xhrOpen)
+      expect(XMLHttpRequest.prototype.send).toBe(xhrSend)
+      expect(observer).not.toHaveBeenCalled()
+      expect(JSON.parse(api.setPushEnabled("{}"))).toEqual({
+        console: false,
+        network: false,
+        snapshot: false,
+      })
+      expect(
+        JSON.parse(
+          (window as unknown as { __cogniaDrainConsole: () => string }).__cogniaDrainConsole()
+        )
+      ).toEqual([])
+      expect(typeof (window as unknown as Record<string, unknown>).__cogniaSetSelectMode).toBe(
+        "function"
+      )
+      expect(api.find("missing").matches).toBe(0)
+    } finally {
+      delete (window as unknown as Record<string, unknown>).__cogniaRuntimeDiagnostics
+      observer.mockRestore()
+    }
+  })
 })
 
 describe("__cogniaAdjust", () => {

@@ -61,6 +61,39 @@ export const LOCAL_SESSION_FIELDS = Object.freeze([
 const FIT_CHECK_INTERVAL_MS = 150
 
 const MAX_TRACKED_REQUESTS = 200
+const MAX_DIAGNOSTIC_ENTRIES = 500
+const MAX_DIAGNOSTIC_BYTES = 256 * 1024
+const MAX_DIAGNOSTIC_STRING = 4096
+
+// Bound collectors independently of renderer drains (hidden/background pages
+// may have no reader). Keep existing array responses and attach loss metadata.
+function appendDiagnostic(record, kind, entry) {
+  for (const field of ["text", "url", "method"]) {
+    if (typeof entry[field] === "string" && entry[field].length > MAX_DIAGNOSTIC_STRING) {
+      entry[field] = entry[field].slice(0, MAX_DIAGNOSTIC_STRING)
+      entry.truncated = true
+    }
+  }
+  const bytes = (record.diagnosticBytes ??= { console: 0, network: 0 })
+  const dropped = (record.diagnosticDropped ??= { console: 0, network: 0 })
+  const entries = record[kind]
+  entries.push(entry)
+  bytes[kind] += Buffer.byteLength(JSON.stringify(entry)) + 1
+  while (entries.length > MAX_DIAGNOSTIC_ENTRIES || bytes[kind] > MAX_DIAGNOSTIC_BYTES - 100) {
+    bytes[kind] -= Buffer.byteLength(JSON.stringify(entries.shift())) + 1
+    dropped[kind]++
+  }
+}
+
+function drainDiagnostics(record, kind) {
+  const entries = record[kind].splice(0)
+  const dropped = record.diagnosticDropped?.[kind] ?? 0
+  if (dropped && entries.length) entries[0].droppedBefore = dropped
+  if (record.diagnosticBytes) record.diagnosticBytes[kind] = 0
+  if (record.diagnosticDropped) record.diagnosticDropped[kind] = 0
+  return entries
+}
+
 const CREDENTIAL_DEDUPE_MS = 10_000
 /** How long a held action waits for a navigation it caused to reach the route. */
 const SUBMISSION_SETTLE_MS = 150
@@ -435,6 +468,7 @@ export class RemoteChromiumService {
     defaultDownloadsDir = path.join(os.homedir(), "Downloads"),
     localPolicyFactory = (options) => new LocalNetworkPolicy(options),
     userChromeConnectTimeoutMs = 120_000,
+    screencastTeardownTimeoutMs = 500,
     eventDebounceMs = 50,
     createId = () => crypto.randomUUID(),
     networkPolicyFactory = () => new NetworkPolicy(),
@@ -450,6 +484,7 @@ export class RemoteChromiumService {
     this.mode = mode
     this.chromium = chromium
     this.overlayScript = overlayScript
+    this.overlayInitScript = `${OVERLAY_TRANSPORT_SCRIPT}\n${overlayScript}`
     this.workspaceRoot = workspaceRoot ? path.resolve(workspaceRoot) : null
     this.profilesRoot = path.resolve(profilesRoot)
     this.stagingRoot = path.resolve(
@@ -467,6 +502,7 @@ export class RemoteChromiumService {
     this.devices = devices
     this.localPolicyFactory = localPolicyFactory
     this.userChromeConnectTimeoutMs = userChromeConnectTimeoutMs
+    this.screencastTeardownTimeoutMs = screencastTeardownTimeoutMs
     this.eventDebounceMs = eventDebounceMs
     this.createId = createId
     this.networkPolicyFactory = networkPolicyFactory
@@ -725,8 +761,7 @@ export class RemoteChromiumService {
     })
     this.sessions.set(id, session)
     try {
-      await context.addInitScript(OVERLAY_TRANSPORT_SCRIPT)
-      await context.addInitScript(this.overlayScript)
+      await context.addInitScript(this.overlayInitScript)
       await context.route("**/*", async (route) => this.authorizeRoute(session, route))
       context.on("page", (page) => this.onContextPage(session, page))
       context.on("close", () => {
@@ -860,8 +895,7 @@ export class RemoteChromiumService {
     // Shutdown began while Chromium was starting: bail out so the caller
     // closes this context instead of wiring it up.
     this.assertNotShuttingDown()
-    await context.addInitScript(OVERLAY_TRANSPORT_SCRIPT)
-    await context.addInitScript(this.overlayScript)
+    await context.addInitScript(this.overlayInitScript)
     await context.exposeBinding(CREDENTIAL_BINDING, (source, payload) =>
       this.onCredentialSubmitted(session, source, payload)
     )
@@ -984,8 +1018,7 @@ export class RemoteChromiumService {
     })
     session.targetIds.add(targetId)
     const page = await this.waitForTargetPage(session, targetId)
-    await page.addInitScript(OVERLAY_TRANSPORT_SCRIPT)
-    await page.addInitScript(this.overlayScript)
+    await page.addInitScript(this.overlayInitScript)
     await this.exposeSelectionSignal(session, page)
     const pageId = this.registerPage(session, page)
     if (!pageId) throw new RemoteBrowserError("browser_page_quota_exceeded", "Page quota exceeded")
@@ -999,8 +1032,7 @@ export class RemoteChromiumService {
     if (!openerId) return
     const targetId = await this.pageTargetId(session, page).catch(() => null)
     if (targetId) session.targetIds.add(targetId)
-    await page.addInitScript(OVERLAY_TRANSPORT_SCRIPT)
-    await page.addInitScript(this.overlayScript)
+    await page.addInitScript(this.overlayInitScript)
     await this.exposeSelectionSignal(session, page)
     const pageId = this.registerPage(session, page)
     if (pageId) await this.linkOpener(session, pageId, openerId)
@@ -1060,7 +1092,7 @@ export class RemoteChromiumService {
       if (!request || session.closing || session.restarting) return
       if (session.screencast?.pageId === session.activePageId) return
       if (session.screencast) await this.stopScreencast(session.id).catch(() => undefined)
-      if (!session.activePageId) return
+      if (!session.activePageId || session.screencastRequest !== request) return
       await this.startScreencast(session.id, request.onFrame, { quality: request.quality })
     }
     session.screencastRetarget = (session.screencastRetarget ?? Promise.resolve())
@@ -1536,7 +1568,7 @@ export class RemoteChromiumService {
     page.on("console", (message) => {
       const type = message.type()
       const text = message.text()
-      record.console.push({
+      appendDiagnostic(record, "console", {
         level: ["log", "info", "warn", "error", "debug"].includes(type) ? type : "log",
         text: session.humanKeyboardInputOccurred || SECRET_FIELD.test(text) ? "[REDACTED]" : text,
         ts: Date.now(),
@@ -1562,7 +1594,7 @@ export class RemoteChromiumService {
       if (session.requests.size > MAX_TRACKED_REQUESTS) {
         session.requests.delete(session.requests.keys().next().value)
       }
-      record.network.push({
+      appendDiagnostic(record, "network", {
         id: requestId,
         url: requestUrl.toString(),
         method: request.method(),
@@ -2415,13 +2447,13 @@ export class RemoteChromiumService {
   /** The addressed (else the front) page's console since the last read. */
   async readConsole(sessionId) {
     const record = this.addressedRecordOrNull(this.requireSession(sessionId))
-    return record ? record.console.splice(0) : []
+    return record ? drainDiagnostics(record, "console") : []
   }
 
   /** The addressed (else the front) page's requests since the last read. */
   async readNetwork(sessionId) {
     const record = this.addressedRecordOrNull(this.requireSession(sessionId))
-    return record ? record.network.splice(0) : []
+    return record ? drainDiagnostics(record, "network") : []
   }
 
   async history(sessionId, operation) {
@@ -2651,13 +2683,23 @@ export class RemoteChromiumService {
   }
 
   /** Stream the page in front; `setActivePage` moves the stream with it. */
-  startScreencast(sessionId, onFrame, { quality = 70 } = {}) {
+  startScreencast(sessionId, onFrame, { quality = 70, streamId } = {}) {
     const session = this.requireSession(sessionId)
+    if (
+      streamId !== undefined &&
+      (typeof streamId !== "string" || !streamId || streamId.length > 128)
+    )
+      throw invalidOption("streamId must be a nonempty string of at most 128 characters")
+    if (this.isScreencastConsumerRetired(sessionId, streamId)) return Promise.resolve()
     const generation = (session.screencastGeneration ?? 0) + 1
     session.screencastGeneration = generation
-    session.screencastRequest = { onFrame, quality }
+    session.screencastRequest = {
+      onFrame,
+      quality,
+      streamId: streamId ?? session.screencastRequest?.streamId,
+    }
     const run = async () => {
-      await this.releaseScreencast(this.retireScreencast(session))
+      await this.releaseScreencast(this.retireScreencast(session)).catch(() => undefined)
       if (session.screencastGeneration !== generation || session.closing || session.restarting)
         return
       await this.attachScreencast(session, generation, onFrame, quality)
@@ -2666,6 +2708,68 @@ export class RemoteChromiumService {
       .catch(() => undefined)
       .then(run)
     return session.screencastTask
+  }
+
+  screencastOptions(session, record, quality) {
+    const viewport = record.page.viewportSize() ?? session.viewport ?? this.viewport
+    const local = this.mode === "local"
+    const scale = record.presentationScale ?? session.renderScale ?? 1
+    return {
+      format: "jpeg",
+      quality: local ? Math.max(80, Math.min(100, quality)) : Math.max(60, Math.min(80, quality)),
+      maxWidth: local ? Math.ceil(viewport.width * scale) : 1600,
+      maxHeight: local ? Math.ceil(viewport.height * scale) : 1200,
+      everyNthFrame: 1,
+    }
+  }
+
+  async updateScreencastViewport(session, record) {
+    if (this.mode !== "local" || !session.screencast) return
+    const run = async () => {
+      const state = session.screencast
+      if (
+        !state ||
+        session.pages.get(state.pageId) !== record ||
+        session.activePageId !== state.pageId
+      )
+        return
+      const options = this.screencastOptions(session, record, session.screencastRequest.quality)
+      if (
+        state.options.maxWidth === options.maxWidth &&
+        state.options.maxHeight === options.maxHeight
+      )
+        return
+      const generation = session.screencastGeneration
+      // CDP refuses start while a capture is active. Keep the connection and
+      // consumer, but retire old pending ACKs before restarting with new bounds.
+      state.paused = true
+      state.pending = null
+      state.queuedEvent = null
+      try {
+        await this.screencastTeardown(() => state.cdp.send("Page.stopScreencast"))
+        if (
+          session.screencast !== state ||
+          session.screencastGeneration !== generation ||
+          session.activePageId !== state.pageId
+        )
+          return
+        state.paused = false
+        await state.cdp.send("Page.startScreencast", options)
+        if (session.screencast === state) state.options = options
+      } catch (error) {
+        if (session.screencast === state) {
+          this.retireScreencast(session)
+          await this.screencastTeardown(() => state.cdp.detach()).catch(() => undefined)
+        }
+        throw error
+      } finally {
+        if (session.screencast === state) state.paused = false
+      }
+    }
+    session.screencastTask = (session.screencastTask ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(run)
+    await session.screencastTask
   }
 
   async attachScreencast(session, generation, onFrame, quality) {
@@ -2682,7 +2786,7 @@ export class RemoteChromiumService {
       session.screencastGeneration !== generation ||
       session.activePageId !== pageId
     ) {
-      await cdp.detach().catch(() => undefined)
+      await this.screencastTeardown(() => cdp.detach()).catch(() => undefined)
       return
     }
     const state = {
@@ -2692,14 +2796,17 @@ export class RemoteChromiumService {
       pending: null,
       queuedEvent: null,
       receive: null,
+      options: this.screencastOptions(session, record, quality),
     }
     session.screencast = state
     const local = this.mode === "local"
-    const frameQuality = local
-      ? Math.max(80, Math.min(100, quality))
-      : Math.max(60, Math.min(80, quality))
     const receive = async (event, acknowledged = false) => {
-      if (session.screencast !== state || session.screencastGeneration !== generation) return
+      if (
+        session.screencast !== state ||
+        session.screencastGeneration !== generation ||
+        state.paused
+      )
+        return
       if (local) this.scheduleFitCheck(session, record)
       if (state.pending) {
         if (local) {
@@ -2756,12 +2863,7 @@ export class RemoteChromiumService {
     state.receive = receive
     cdp.on("Page.screencastFrame", receive)
     try {
-      await cdp.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: frameQuality,
-        ...(local ? {} : { maxWidth: 1600, maxHeight: 1200 }),
-        everyNthFrame: 1,
-      })
+      await cdp.send("Page.startScreencast", state.options)
     } catch (error) {
       if (session.screencast === state) {
         await this.releaseScreencast(this.retireScreencast(session)).catch(() => undefined)
@@ -2796,13 +2898,60 @@ export class RemoteChromiumService {
     return state
   }
 
+  async screencastTeardown(operation) {
+    let timer
+    try {
+      return await Promise.race([
+        Promise.resolve().then(operation),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new RemoteBrowserError(
+                  "browser_screencast_timeout",
+                  "Screencast teardown timed out"
+                )
+              ),
+            this.screencastTeardownTimeoutMs
+          )
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   async releaseScreencast(state) {
     if (!state) return
     try {
-      await state.cdp.send("Page.stopScreencast")
+      await this.screencastTeardown(() => state.cdp.send("Page.stopScreencast"))
     } finally {
-      await state.cdp.detach()
+      // Each capture owns its CDP session. Detach that retired session even
+      // when stop stalls; a late completion cannot retire the replacement.
+      await this.screencastTeardown(() => state.cdp.detach())
     }
+  }
+
+  isScreencastConsumerRetired(sessionId, streamId) {
+    return (
+      !!streamId &&
+      this.requireSession(sessionId).retiredScreencastConsumers?.has(streamId) === true
+    )
+  }
+
+  async stopScreencastConsumer(sessionId, streamId, onRetired = () => {}) {
+    const session = this.requireSession(sessionId)
+    if (typeof streamId !== "string" || !streamId || streamId.length > 128)
+      throw invalidOption("Invalid streamId")
+    const retired = (session.retiredScreencastConsumers ??= new Set())
+    retired.add(streamId)
+    if (retired.size > 128) retired.delete(retired.values().next().value)
+    if (!streamId || session.screencastRequest?.streamId !== streamId) return false
+    session.screencastRequest = null
+    const stopping = this.stopScreencast(sessionId)
+    onRetired()
+    await stopping
+    return true
   }
 
   stopScreencast(sessionId) {
@@ -3053,7 +3202,6 @@ export class RemoteChromiumService {
       0,
       records.findIndex(([pageId]) => pageId === session.activePageId)
     )
-    const screencast = session.screencast ? session.screencastRequest : null
     session.restarting = true
     try {
       if (session.screencast) await this.stopScreencast(session.id).catch(() => undefined)
@@ -3089,9 +3237,11 @@ export class RemoteChromiumService {
     } finally {
       session.restarting = false
     }
-    if (screencast) {
+    const screencast = session.screencastRequest
+    if (screencast && !this.isScreencastConsumerRetired(session.id, screencast.streamId)) {
       await this.startScreencast(session.id, screencast.onFrame, {
         quality: screencast.quality,
+        streamId: screencast.streamId,
       }).catch(() => undefined)
     }
     this.emit({
@@ -3484,6 +3634,8 @@ export class RemoteChromiumService {
       }
       await page.setViewportSize(session.viewport ?? this.viewport)
       record.viewportRevision = (record.viewportRevision ?? 0) + 1
+      delete record.presentationScale
+      await this.updateScreencastViewport(session, record)
       await page.emulateMedia({ colorScheme: null })
       return { ok: true, applied: ["reset"] }
     }
@@ -3581,6 +3733,7 @@ export class RemoteChromiumService {
         deviceScaleFactor: deviceScaleFactor ?? (Number(device?.deviceScaleFactor) || 1),
         mobile: device?.isMobile === true,
       })
+      record.presentationScale = deviceScaleFactor ?? (Number(device?.deviceScaleFactor) || 1)
     }
     if (viewport) record.viewportRevision = (record.viewportRevision ?? 0) + 1
     if (fitToWidth) await this.applyFitToWidth(session, record)
@@ -3630,13 +3783,20 @@ export class RemoteChromiumService {
       const request = session.screencastRequest
       // Retire the old stream before taking the fence. Even an unchanged
       // viewport needs a fresh damage frame when a pane returns to this page.
-      await this.stopScreencast(sessionId)
+      if (session.pages.get(session.activePageId) !== record)
+        throw new RemoteBrowserError("browser_page_not_active", "The requested page is not active")
+      await this.stopScreencast(sessionId).catch(() => undefined)
       const frameSequence = session.screencastSequence ?? 0
-      if (request && session.pages.get(session.activePageId) === record) {
+      if (
+        request &&
+        session.screencastRequest === request &&
+        session.pages.get(session.activePageId) === record
+      ) {
         await this.startScreencast(sessionId, request.onFrame, { quality: request.quality })
       }
       return { ok: true, applied, frameSequence }
     }
+    if (viewport) await this.updateScreencastViewport(session, record)
     return { ok: true, applied }
   }
 

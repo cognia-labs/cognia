@@ -375,4 +375,5 @@ test("the overlay transport script turns every sentinel report hook into a no-op
   }
   // The pick signal is a Playwright binding, not a stub.
   assert.equal(window.__cogniaSignal, undefined)
+  assert.equal(window.__cogniaRuntimeDiagnostics, true)
 })

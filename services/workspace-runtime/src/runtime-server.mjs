@@ -304,15 +304,24 @@ function createDispatcher(browser, supervisor, media, eventJournal) {
     "browser.selection.clear": ({ sessionId }) => browser.clearSelection(sessionId),
     "browser.selection.for-ref": ({ sessionId, ref }) => browser.selectionForRef(sessionId, ref),
     "browser.adjust": ({ sessionId, action, input }) => browser.adjust(sessionId, action, input),
-    "browser.screencast.start": async ({ sessionId, quality }) => {
+    "browser.screencast.start": async ({ sessionId, quality, streamId }) => {
+      if (browser.isScreencastConsumerRetired?.(sessionId, streamId)) return { started: false }
+      media.release(sessionId)
       const publish = media.publisher(sessionId)
       try {
-        await browser.startScreencast(sessionId, publish, { quality })
+        await browser.startScreencast(sessionId, publish, { quality, streamId })
         return { started: true }
       } catch (error) {
         media.release(sessionId, publish)
         throw error
       }
+    },
+    "browser.screencast.stop": async ({ sessionId, streamId }) => {
+      const publish = media.sessions.get(sessionId)?.publish
+      const stopped = await browser.stopScreencastConsumer(sessionId, streamId, () => {
+        if (publish) media.release(sessionId, publish)
+      })
+      return { stopped }
     },
     "browser.screencast.ack": ({ sessionId, sequence }) =>
       browser.ackScreencastFrame(sessionId, sequence),

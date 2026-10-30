@@ -69,6 +69,45 @@ test("requires explicit takeover before keyboard or pointer input", () => {
   expect(screen.getByRole("status")).toHaveTextContent("View only")
 })
 
+test.each(["open", "opening", "connecting", "unmonitored", "error"])(
+  "only monitored open media permits observer capture suppression: %s",
+  (status) => {
+    useDesktop.mockReturnValue(state())
+    useStream.mockReturnValue(
+      streamState({
+        status,
+        grant: { viewerId: "v", url: "http://localhost/", role: "viewer", healthVersion: 1 },
+      })
+    )
+    mount()
+    expect(useDesktop).toHaveBeenCalledWith(
+      "c1",
+      true,
+      undefined,
+      true,
+      expect.objectContaining({ streamHealthy: status === "open" })
+    )
+  }
+)
+
+test("an open legacy grant cannot suppress observer screenshots", () => {
+  useDesktop.mockReturnValue(state())
+  useStream.mockReturnValue(
+    streamState({
+      status: "open",
+      grant: { viewerId: "v", url: "http://localhost/", role: "viewer" },
+    })
+  )
+  mount()
+  expect(useDesktop).toHaveBeenCalledWith(
+    "c1",
+    true,
+    undefined,
+    true,
+    expect.objectContaining({ streamHealthy: false })
+  )
+})
+
 test("a screenshot-only Lume viewer preserves human control without a stream grant", () => {
   const model = state({ controlling: true })
   const stream = streamState({ claim: jest.fn().mockResolvedValue(false) })
@@ -364,4 +403,30 @@ test("a managed desktop never asks for a stream", () => {
   )
   expect(useStream).toHaveBeenCalledWith("c1", false, undefined, expect.any(Function))
   expect(useDesktop.mock.calls.at(-1)?.[4]).toMatchObject({ onLeaseChange: undefined })
+})
+
+test("an obsolete claim cannot release control after the viewer connection changes", async () => {
+  let finish!: (claimed: boolean) => void
+  useStream.mockReturnValue(
+    streamState({
+      claim: jest.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finish = resolve
+          })
+      ),
+    })
+  )
+  const model = state()
+  useDesktop.mockReturnValue(model)
+  const { rerender } = mount()
+  const options = useDesktop.mock.calls.at(-1)?.[4]
+  act(() => options?.onLeaseChange?.({ token: "old", fence: 2, expiresAt: Date.now() + 15000 }))
+  rerender(
+    <NextIntlClientProvider locale="en" messages={{ automation: messages }}>
+      <SandboxDesktopViewer connectionId="c2" enabled />
+    </NextIntlClientProvider>
+  )
+  await act(async () => finish(false))
+  expect(model.release).not.toHaveBeenCalled()
 })

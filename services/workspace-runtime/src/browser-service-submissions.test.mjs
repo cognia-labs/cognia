@@ -154,7 +154,6 @@ async function localService(t, { uploads = false } = {}) {
   const chromium = await realChromium(t)
   if (!chromium) return null
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cognia-submissions-"))
-  t.after(() => fs.rm(workspaceRoot, { recursive: true, force: true }))
   const overlayScript = await fs.readFile(
     new URL("../../../lib/browser/overlay.injected.js", import.meta.url),
     "utf8"
@@ -169,7 +168,10 @@ async function localService(t, { uploads = false } = {}) {
     createId: () => `id-${++id}`,
     fileBridge: new WorkspaceFileBridge({ workspaceRoot }),
   })
-  t.after(() => service.closeAll())
+  t.after(async () => {
+    await service.closeAll()
+    await fs.rm(workspaceRoot, { recursive: true, force: true })
+  })
   const uploadsDir = path.join(workspaceRoot, "uploads")
   if (uploads) {
     await fs.mkdir(uploadsDir)

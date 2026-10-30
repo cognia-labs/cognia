@@ -319,7 +319,6 @@ function fakeChromium() {
 
 async function fixture(t, options = {}) {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cognia-browser-service-"))
-  t.after(() => fs.rm(workspaceRoot, { recursive: true, force: true }))
   const chromium = fakeChromium()
   let id = 0
   const service = new RemoteChromiumService({
@@ -335,6 +334,10 @@ async function fixture(t, options = {}) {
     }),
     fileBridge: new WorkspaceFileBridge({ workspaceRoot }),
     ...options,
+  })
+  t.after(async () => {
+    await service.closeAll()
+    await fs.rm(workspaceRoot, { recursive: true, force: true })
   })
   return { service, chromium }
 }
@@ -408,7 +411,6 @@ test("clamps page zoom and re-applies it after navigation", async (t) => {
 test("page summaries retain the main-frame destination when Chromium commits an error document", async (t) => {
   const { service, chromium } = await fixture(t)
   await service.createSession({ id: "session-1" })
-  t.after(() => service.closeSession("session-1"))
   const page = chromium.launches[0].context.pages[0]
   const destination = "http://localhost:8765/spa"
   page.emit("request", {
@@ -1203,6 +1205,7 @@ test("suppresses diagnostics after human keyboard input so credentials cannot en
   const request = {
     url: () => "https://example.com/callback?token=totally-random-secret-value",
     method: () => "GET",
+    isNavigationRequest: () => false,
   }
   page.emit("response", {
     request: () => request,
@@ -1396,6 +1399,58 @@ test("console and network are read per tab", async (t) => {
     (await service.readConsole("session-1")).map((entry) => entry.text),
     ["front"]
   )
+})
+
+test("unread diagnostics retain the newest 500 entries and report discarded history", async (t) => {
+  const { service, chromium } = await fixture(t)
+  await service.createSession({ id: "session-1", grants: [] })
+  const page = chromium.launches[0].context.pages[0]
+  for (let i = 0; i < 1000; i++) {
+    page.emit("console", { type: () => "log", text: () => `line-${i}` })
+    const request = {
+      url: () => `http://localhost:3000/${i}`,
+      method: () => "GET",
+      isNavigationRequest: () => false,
+    }
+    page.emit("response", { request: () => request, status: () => 200, ok: () => true })
+  }
+  const console = await service.readConsole("session-1")
+  const network = await service.readNetwork("session-1")
+  assert.equal(console.length, 500)
+  assert.equal(network.length, 500)
+  assert.equal(console[0].text, "line-500")
+  assert.equal(console.at(-1).text, "line-999")
+  assert.equal(network.at(-1).url, "http://localhost:3000/999")
+  assert.equal(console[0].droppedBefore, 500)
+  assert.equal(network[0].droppedBefore, 500)
+  assert.deepEqual(await service.readConsole("session-1"), [])
+  page.emit("console", { type: () => "log", text: () => "fresh" })
+  assert.equal((await service.readConsole("session-1"))[0].droppedBefore, undefined)
+})
+
+test("diagnostics enforce a byte budget and flag oversized strings without bypassing redaction", async (t) => {
+  const { service, chromium } = await fixture(t)
+  await service.createSession({ id: "session-1", grants: [] })
+  const page = chromium.launches[0].context.pages[0]
+  for (let i = 0; i < 100; i++) {
+    page.emit("console", { type: () => "log", text: () => "界".repeat(6000) })
+    const request = {
+      url: () => `http://localhost:3000/${"x".repeat(12000)}`,
+      method: () => "GET",
+      isNavigationRequest: () => false,
+    }
+    page.emit("response", { request: () => request, status: () => 200, ok: () => true })
+  }
+  for (const entries of [
+    await service.readConsole("session-1"),
+    await service.readNetwork("session-1"),
+  ]) {
+    assert.ok(Buffer.byteLength(JSON.stringify(entries)) <= 256 * 1024)
+    assert.ok(entries[0].droppedBefore > 0)
+    assert.ok(entries.every((entry) => entry.truncated === true))
+  }
+  page.emit("console", { type: () => "log", text: () => `password=${"private".repeat(2000)}` })
+  assert.equal((await service.readConsole("session-1"))[0].text, "[REDACTED]")
 })
 
 test("the screencast follows the tab in front", async (t) => {

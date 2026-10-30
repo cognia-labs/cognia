@@ -83,8 +83,10 @@ pub struct LocalBrowserState {
     /// it stuck.
     installing: AtomicBool,
     install_error: Mutex<Option<String>>,
-    frames: Mutex<HashMap<String, (u64, StopHandle)>>,
+    frames: Mutex<HashMap<String, (u64, String, StopHandle)>>,
     frame_tokens: AtomicU64,
+    frame_starts: Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
+    frame_cleanup: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     events: Mutex<Option<StopHandle>>,
     sessions: Mutex<HashMap<String, bridge::SessionKind>>,
 }
@@ -110,8 +112,32 @@ impl LocalBrowserState {
         self.frames.lock().remove(session_id);
     }
 
+    fn stop_frame_subscription(&self, session_id: &str, subscription_id: Option<&str>) {
+        let mut frames = self.frames.lock();
+        if frames
+            .get(session_id)
+            .is_some_and(|(_, id, _)| subscription_id.is_none_or(|wanted| wanted == id))
+        {
+            frames.remove(session_id);
+        }
+    }
+
+    fn frame_start_lane(&self, session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut starts = self.frame_starts.lock();
+        starts.retain(|_, lane| lane.strong_count() > 0);
+        let lane = starts
+            .get(session_id)
+            .and_then(std::sync::Weak::upgrade)
+            .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(())));
+        starts.insert(session_id.to_owned(), Arc::downgrade(&lane));
+        lane
+    }
+
     fn stop_all_frames(&self) {
         self.frames.lock().clear();
+        for job in self.frame_cleanup.lock().drain(..) {
+            job.abort();
+        }
     }
 
     fn take_sessions(&self) -> Vec<String> {
@@ -758,28 +784,81 @@ pub async fn browser_local_rpc(
     call(&app, state.inner(), &op, payload).await
 }
 
+async fn begin_frame_subscription<T: RuntimeTransport + Clone + Send + Sync + 'static>(
+    state: &LocalBrowserState,
+    transport: T,
+    session_id: &str,
+    stream_id: &str,
+) -> Result<(u64, bridge::StopSignal), String> {
+    let token = state.frame_tokens.fetch_add(1, Ordering::SeqCst);
+    let (handle, mut stop) = bridge::stop_pair();
+    state
+        .frames
+        .lock()
+        .insert(session_id.to_owned(), (token, stream_id.to_owned(), handle));
+    let start_lane = state.frame_start_lane(&session_id);
+    let start_guard = tokio::select! {
+        guard = start_lane.lock() => guard,
+        _ = stop.cancelled() => return Err("frame subscription cancelled".into()),
+    };
+    if !state
+        .frames
+        .lock()
+        .get(session_id)
+        .is_some_and(|(owner, _, _)| *owner == token)
+    {
+        return Err("frame subscription superseded".into());
+    }
+    let started = tokio::select! {
+        result = transport
+        .control(
+            "browser.screencast.start",
+            json!({ "sessionId": session_id, "quality": 70, "streamId": stream_id }),
+        )
+        => result,
+        _ = stop.cancelled() => Err(cognia_local_browser::client::ClientError::new("subscription_cancelled", "frame subscription cancelled")),
+    };
+    drop(start_guard);
+    if let Err(error) = started {
+        state.stop_frame_subscription(&session_id, Some(&stream_id));
+        let session_id = session_id.to_owned();
+        let stream_id = stream_id.to_owned();
+        let cleanup = tokio::spawn(async move {
+            bridge::retire_screencast(&transport, &session_id, &stream_id).await
+        });
+        let mut jobs = state.frame_cleanup.lock();
+        jobs.retain(|job| !job.is_finished());
+        jobs.push(cleanup);
+        return Err(error.to_string());
+    }
+    Ok((token, stop))
+}
+
 #[tauri::command]
 pub async fn browser_local_frames_subscribe(
     app: AppHandle,
     state: State<'_, LocalBrowserState>,
     session_id: String,
     channel: Channel<InvokeResponseBody>,
+    subscription_id: Option<String>,
 ) -> Result<(), String> {
     let core = ensure_started(&app, state.inner()).await?;
-    core.transport
-        .control(
-            "browser.screencast.start",
-            json!({ "sessionId": session_id, "quality": 70 }),
+    let stream_id = subscription_id.unwrap_or_else(|| {
+        format!(
+            "legacy-{}",
+            state.frame_tokens.fetch_add(1, Ordering::SeqCst)
         )
-        .await
-        .map_err(|error| error.to_string())?;
-    let (handle, stop) = bridge::stop_pair();
-    let token = state.frame_tokens.fetch_add(1, Ordering::SeqCst);
-    // Replacing an earlier subscription drops its handle, which stops it.
-    state
-        .frames
-        .lock()
-        .insert(session_id.clone(), (token, handle));
+    });
+    if stream_id.is_empty() || stream_id.len() > 128 {
+        return Err("invalid frame subscription identity".into());
+    }
+    let (token, stop) = begin_frame_subscription(
+        state.inner(),
+        core.transport.clone(),
+        &session_id,
+        &stream_id,
+    )
+    .await?;
     let transport = core.transport.clone();
     let poll_app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -796,11 +875,20 @@ pub async fn browser_local_frames_subscribe(
             let mut frames = state.frames.lock();
             if frames
                 .get(&session_id)
-                .is_some_and(|(owner, _)| *owner == token)
+                .is_some_and(|(owner, _, _)| *owner == token)
             {
                 frames.remove(&session_id);
             }
         }
+        let reason = match end {
+            bridge::FramePollEnd::Stopped => "stopped",
+            bridge::FramePollEnd::SinkClosed => "sink-closed",
+            bridge::FramePollEnd::RuntimeRestarted => "runtime-restarted",
+            bridge::FramePollEnd::RuntimeFailed(_) => "runtime-failed",
+        };
+        let ended = json!({ "type": "ended", "subscriptionId": stream_id, "reason": reason });
+        let _ = channel.send(InvokeResponseBody::Json(ended.to_string()));
+        bridge::retire_screencast(&transport, &session_id, &stream_id).await;
     });
     Ok(())
 }
@@ -809,8 +897,9 @@ pub async fn browser_local_frames_subscribe(
 pub async fn browser_local_frames_unsubscribe(
     state: State<'_, LocalBrowserState>,
     session_id: String,
+    subscription_id: Option<String>,
 ) -> Result<(), String> {
-    state.stop_frames(&session_id);
+    state.stop_frame_subscription(&session_id, subscription_id.as_deref());
     Ok(())
 }
 
@@ -825,6 +914,128 @@ pub async fn browser_user_chrome_discover() -> Result<Vec<user_chrome::UserChrom
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct FrameStartTransport {
+        generation: Arc<AtomicU64>,
+        entered: Arc<tokio::sync::Notify>,
+        fail_start: Arc<AtomicBool>,
+        fail_stop: Arc<AtomicBool>,
+        calls: Arc<Mutex<Vec<(String, Value)>>>,
+    }
+
+    impl RuntimeTransport for FrameStartTransport {
+        fn generation(&self) -> Option<u64> {
+            match self.generation.load(Ordering::SeqCst) {
+                0 => None,
+                value => Some(value),
+            }
+        }
+        async fn control(
+            &self,
+            op: &str,
+            payload: Value,
+        ) -> Result<Value, cognia_local_browser::client::ClientError> {
+            self.calls.lock().push((op.to_owned(), payload.clone()));
+            if op == "browser.screencast.start" && self.fail_start.load(Ordering::SeqCst) {
+                return Err(cognia_local_browser::client::ClientError::new(
+                    "failed_start",
+                    "start failed",
+                ));
+            }
+            if op == "browser.screencast.start" && payload["streamId"] == "old" {
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+            if op == "browser.screencast.stop" && self.fail_stop.load(Ordering::SeqCst) {
+                return Err(cognia_local_browser::client::ClientError::new(
+                    "lost_stop",
+                    "stop failed",
+                ));
+            }
+            Ok(json!({"ok":true}))
+        }
+        async fn media(
+            &self,
+            _: &str,
+            _: u64,
+        ) -> Result<
+            Option<cognia_local_browser::client::MediaFrame>,
+            cognia_local_browser::client::ClientError,
+        > {
+            Ok(None)
+        }
+        async fn events(
+            &self,
+            _: u64,
+        ) -> Result<Vec<Value>, cognia_local_browser::client::ClientError> {
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn production_frame_start_cancels_old_rpc_and_preserves_replacement() {
+        let state = LocalBrowserState::default();
+        let transport = FrameStartTransport::default();
+        transport.generation.store(1, Ordering::SeqCst);
+        let (old, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(
+                begin_frame_subscription(&state, transport.clone(), "a", "old"),
+                async {
+                    transport.entered.notified().await;
+                    let (_, other) =
+                        begin_frame_subscription(&state, transport.clone(), "b", "independent")
+                            .await
+                            .unwrap();
+                    assert!(!other.is_stopped());
+                    let (_, newer) =
+                        begin_frame_subscription(&state, transport.clone(), "a", "new")
+                            .await
+                            .unwrap();
+                    assert!(!newer.is_stopped());
+                }
+            )
+        })
+        .await
+        .expect("a pending start cannot block its replacement or another session");
+        assert!(old.is_err());
+        assert_eq!(state.frames.lock().get("a").unwrap().1, "new");
+        let jobs: Vec<_> = state.frame_cleanup.lock().drain(..).collect();
+        for job in jobs {
+            job.await.unwrap();
+        }
+        assert!(transport
+            .calls
+            .lock()
+            .iter()
+            .any(|(op, payload)| op == "browser.screencast.stop" && payload["streamId"] == "old"));
+    }
+
+    #[tokio::test]
+    async fn production_start_failure_returns_while_retirement_remains_owned() {
+        let state = LocalBrowserState::default();
+        let transport = FrameStartTransport::default();
+        transport.generation.store(1, Ordering::SeqCst);
+        transport.fail_start.store(true, Ordering::SeqCst);
+        transport.fail_stop.store(true, Ordering::SeqCst);
+        let failed = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            begin_frame_subscription(&state, transport.clone(), "a", "failed"),
+        )
+        .await
+        .expect("cleanup retry cannot hide a known start failure");
+        assert!(failed.is_err());
+        assert!(!state.frames.lock().contains_key("a"));
+        assert_eq!(state.frame_cleanup.lock().len(), 1);
+        transport.generation.store(0, Ordering::SeqCst);
+        let jobs: Vec<_> = state.frame_cleanup.lock().drain(..).collect();
+        for job in jobs {
+            tokio::time::timeout(std::time::Duration::from_secs(1), job)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+    }
 
     #[test]
     fn the_installing_flag_resets_on_drop() {
@@ -1006,6 +1217,33 @@ mod tests {
         assert_eq!(failed.address, None);
     }
 
+    #[tokio::test]
+    async fn pending_frame_starts_are_cancellable_and_do_not_block_another_session() {
+        let state = LocalBrowserState::default();
+        let first = state.frame_start_lane("a");
+        assert!(Arc::ptr_eq(&first, &state.frame_start_lane("a")));
+        let held = first.lock().await;
+        assert!(state.frame_start_lane("b").try_lock().is_ok());
+        let (handle, mut stop) = bridge::stop_pair();
+        handle.stop();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::select! {
+                _ = first.lock() => panic!("pending start should wait for its session"),
+                _ = stop.cancelled() => {},
+            }
+        })
+        .await
+        .unwrap();
+        drop(held);
+        drop(first);
+        state.frame_start_lane("c");
+        assert_eq!(
+            state.frame_starts.lock().len(),
+            1,
+            "finished sessions do not retain lane entries"
+        );
+    }
+
     #[test]
     fn state_tracks_sessions_and_frame_handles() {
         let state = LocalBrowserState::default();
@@ -1018,7 +1256,15 @@ mod tests {
             .lock()
             .insert("s2".into(), bridge::SessionKind::UserChrome);
         let (handle, stop) = bridge::stop_pair();
-        state.frames.lock().insert("s1".into(), (1, handle));
+        state
+            .frames
+            .lock()
+            .insert("s1".into(), (1, "new".into(), handle));
+        state.stop_frame_subscription("s1", Some("old"));
+        assert!(
+            !stop.is_stopped(),
+            "a late unsubscribe cannot stop a newer stream"
+        );
         state.stop_frames("s1");
         assert!(stop.is_stopped(), "unsubscribing stops the poller");
         let mut sessions = state.take_sessions();

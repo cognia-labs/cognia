@@ -1,0 +1,130 @@
+{
+  "environment": {
+    "cpu": "Apple M4 Pro",
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v26.12.1",
+    "memoryBytes": 51539607552
+  },
+  "recovery": {
+    "baseline": {
+      "sourceSha256": "bf702e32e26e9bb352aef5513b563dc4330613f7239d4f4451cb933b09cdefb6",
+      "chromium": "153.0.8010.12",
+      "sourceUnchanged": true,
+      "windowMs": 2500,
+      "faults": {
+        "healthy": {
+          "samples": 10,
+          "recovered": 10,
+          "recovery": {
+            "medianMs": 16.21422900000016,
+            "madMs": 0.376729499999783
+          },
+          "guards": true
+        },
+        "stop": {
+          "samples": 10,
+          "recovered": 0,
+          "recovery": null,
+          "guards": true
+        },
+        "detach": {
+          "samples": 10,
+          "recovered": 0,
+          "recovery": null,
+          "guards": true
+        }
+      }
+    },
+    "result": {
+      "sourceSha256": "c0cf41f899d91d654368508d4800eaedea776b7bad5f4643d5c49e7cd88f9fee",
+      "chromium": "153.0.8010.12",
+      "sourceUnchanged": true,
+      "windowMs": 2500,
+      "faults": {
+        "healthy": {
+          "samples": 10,
+          "recovered": 10,
+          "recovery": {
+            "medianMs": 13.379208500000004,
+            "madMs": 0.8907285000000229
+          },
+          "guards": true
+        },
+        "stop": {
+          "samples": 10,
+          "recovered": 10,
+          "recovery": {
+            "medianMs": 514.0753540000005,
+            "madMs": 1.7993955000001733
+          },
+          "guards": true
+        },
+        "detach": {
+          "samples": 10,
+          "recovered": 10,
+          "recovery": {
+            "medianMs": 514.4309164999995,
+            "madMs": 0.39414599999963684
+          },
+          "guards": true
+        }
+      }
+    }
+  },
+  "hooks": {
+    "baseline": {
+      "samplesPerWorkload": 10,
+      "staleOpenAtReload": 10,
+      "captureCallsDuringFourteenSeconds": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "erroneousNewLeaseReleases": 10
+    },
+    "result": {
+      "samplesPerWorkload": 10,
+      "staleOpenAtReload": 0,
+      "captureCallsDuringFourteenSeconds": [3, 3, 3, 3, 3, 3, 3, 3, 3, 3],
+      "erroneousNewLeaseReleases": 0
+    }
+  },
+  "panelCollector": {
+    "consoleCount": 500,
+    "networkCount": 500,
+    "consoleDropped": 101,
+    "networkDropped": 21
+  },
+  "panelChecks": {
+    "baseline": {
+      "en": {
+        "renderChecks": 10,
+        "historyNotices": [],
+        "truncationBadges": 0
+      },
+      "zh-CN": {
+        "renderChecks": 10,
+        "historyNotices": [],
+        "truncationBadges": 0
+      }
+    },
+    "result": {
+      "en": {
+        "renderChecks": 10,
+        "historyNotices": [
+          "101 earlier entries were discarded.",
+          "21 earlier entries were discarded."
+        ],
+        "truncationBadges": 2
+      },
+      "zh-CN": {
+        "renderChecks": 10,
+        "historyNotices": ["已丢弃 101 条较早的记录。", "已丢弃 21 条较早的记录。"],
+        "truncationBadges": 2
+      }
+    }
+  },
+  "integrity": {
+    "serviceStillMeasured": true,
+    "stagedServiceMatches": true,
+    "hookSourcesStillMeasured": true,
+    "hooksUnchangedDuringMeasurement": true
+  }
+}

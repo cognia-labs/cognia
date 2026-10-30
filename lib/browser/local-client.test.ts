@@ -1,3 +1,4 @@
+/** @jest-environment jsdom */
 type Handler = (payload: unknown) => void
 const mockInvoke = jest.fn()
 const channels: Array<{ onmessage?: (message: unknown) => void }> = []
@@ -96,6 +97,7 @@ it("streams frames through a Channel and unsubscribes once", async () => {
   const stop = await localBrowser.subscribeFrames("s1", (bytes) => frames.push(bytes))
   expect(mockInvoke).toHaveBeenCalledWith("browser_local_frames_subscribe", {
     sessionId: "s1",
+    subscriptionId: expect.any(String),
     channel: channels[0],
   })
   channels[0].onmessage?.([1, 2, 3])
@@ -109,7 +111,118 @@ it("streams frames through a Channel and unsubscribes once", async () => {
   expect(mockInvoke).toHaveBeenCalledTimes(2)
   expect(mockInvoke).toHaveBeenLastCalledWith("browser_local_frames_unsubscribe", {
     sessionId: "s1",
+    subscriptionId: mockInvoke.mock.calls[0][1].subscriptionId,
   })
+})
+
+it("recovers only the ended subscription and cancels retry on teardown", async () => {
+  jest.useFakeTimers()
+  const receive = jest.fn()
+  const stop = await localBrowser.subscribeFrames("s1", receive)
+  const oldId = mockInvoke.mock.calls[0][1].subscriptionId
+  try {
+    channels[0].onmessage?.({ type: "ended", subscriptionId: "foreign" })
+    await jest.advanceTimersByTimeAsync(1000)
+    expect(mockInvoke).toHaveBeenCalledTimes(1)
+    channels[0].onmessage?.({ type: "ended", subscriptionId: oldId })
+    await jest.advanceTimersByTimeAsync(250)
+    expect(channels).toHaveLength(2)
+    const newId = mockInvoke.mock.calls[1][1].subscriptionId
+    expect(newId).not.toBe(oldId)
+    channels[0].onmessage?.({ type: "ended", subscriptionId: oldId })
+    channels[1].onmessage?.(new Uint8Array([8]).buffer)
+    expect(receive).toHaveBeenCalledTimes(1)
+    channels[1].onmessage?.({ type: "ended", subscriptionId: newId })
+    stop()
+    await jest.advanceTimersByTimeAsync(60000)
+    expect(channels).toHaveLength(2)
+  } finally {
+    stop()
+    jest.useRealTimers()
+  }
+})
+
+it("stops background-window video without closing the session and resumes with a new identity", async () => {
+  const original = Object.getOwnPropertyDescriptor(document, "hidden")
+  const stop = await localBrowser.subscribeFrames("s1", jest.fn())
+  try {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true })
+    document.dispatchEvent(new Event("visibilitychange"))
+    expect(mockInvoke).toHaveBeenLastCalledWith("browser_local_frames_unsubscribe", {
+      sessionId: "s1",
+      subscriptionId: mockInvoke.mock.calls[0][1].subscriptionId,
+    })
+    Object.defineProperty(document, "hidden", { configurable: true, value: false })
+    document.dispatchEvent(new Event("visibilitychange"))
+    await Promise.resolve()
+    expect(channels).toHaveLength(2)
+    expect(call).not.toHaveBeenCalledWith(
+      "browser_local_rpc",
+      expect.objectContaining({ op: "browser.session.close" })
+    )
+  } finally {
+    stop()
+    if (original) Object.defineProperty(document, "hidden", original)
+    else delete (document as unknown as { hidden?: boolean }).hidden
+  }
+})
+
+it("keeps visibility recovery when the initial pending start is cancelled by hiding", async () => {
+  const original = Object.getOwnPropertyDescriptor(document, "hidden")
+  let rejectStart: (error: Error) => void = () => {}
+  let starts = 0
+  mockInvoke.mockImplementation((command) =>
+    command === "browser_local_frames_subscribe" && starts++ === 0
+      ? new Promise((_resolve, reject) => {
+          rejectStart = reject
+        })
+      : Promise.resolve()
+  )
+  const pending = localBrowser.subscribeFrames("s", jest.fn())
+  let stop = () => {}
+  try {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true })
+    document.dispatchEvent(new Event("visibilitychange"))
+    rejectStart(new Error("frame subscription cancelled"))
+    stop = await pending
+    Object.defineProperty(document, "hidden", { configurable: true, value: false })
+    document.dispatchEvent(new Event("visibilitychange"))
+    await Promise.resolve()
+    expect(channels).toHaveLength(2)
+  } finally {
+    stop()
+    if (original) Object.defineProperty(document, "hidden", original)
+    else delete (document as unknown as { hidden?: boolean }).hidden
+  }
+})
+
+it("does not retry a late failed recovery after the window becomes hidden", async () => {
+  jest.useFakeTimers()
+  const original = Object.getOwnPropertyDescriptor(document, "hidden")
+  let rejectRecovery: (error: Error) => void = () => {}
+  const stop = await localBrowser.subscribeFrames("s", jest.fn())
+  const id = mockInvoke.mock.calls[0][1].subscriptionId
+  mockInvoke.mockImplementation((command) =>
+    command === "browser_local_frames_subscribe"
+      ? new Promise((_resolve, reject) => {
+          rejectRecovery = reject
+        })
+      : Promise.resolve()
+  )
+  try {
+    channels[0].onmessage?.({ type: "ended", subscriptionId: id })
+    await jest.advanceTimersByTimeAsync(250)
+    Object.defineProperty(document, "hidden", { configurable: true, value: true })
+    document.dispatchEvent(new Event("visibilitychange"))
+    rejectRecovery(new Error("late failure"))
+    await jest.advanceTimersByTimeAsync(60_000)
+    expect(channels).toHaveLength(2)
+  } finally {
+    stop()
+    jest.useRealTimers()
+    if (original) Object.defineProperty(document, "hidden", original)
+    else delete (document as unknown as { hidden?: boolean }).hidden
+  }
 })
 
 it("filters runtime events to the known vocabulary", async () => {

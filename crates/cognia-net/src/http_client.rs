@@ -190,6 +190,18 @@ fn check_rate_limit(host: &str) -> Result<(), Duration> {
 /// Execute a platform HTTP request. Returns a structured response or a string
 /// error that the TS side can inspect.
 pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, String> {
+    http_request_with_limit(req, None).await
+}
+
+/// Existing connector transport with an opt-in collector budget. Callers use
+/// an explicit command so older hosts cannot silently ignore the budget.
+pub async fn http_request_with_limit(
+    req: HttpRequest,
+    max_bytes: Option<usize>,
+) -> Result<HttpResponse, String> {
+    if max_bytes.is_some_and(|limit| limit == 0 || limit > 20 * 1024 * 1024) {
+        return Err("invalid_response_byte_limit".into());
+    }
     // Extract host for rate-limit keying.
     let parsed = url::Url::parse(&req.url).map_err(|e| format!("invalid URL: {e}"))?;
     let host = parsed.host_str().unwrap_or("").to_string();
@@ -248,10 +260,16 @@ pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, String> {
         })
         .collect();
 
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("failed to read response body: {e}"))?;
+    let body = if let Some(limit) = max_bytes {
+        let bytes = crate::http_download::read_bounded_response(resp, limit).await?;
+        String::from_utf8_lossy(&bytes)
+            .trim_start_matches('\u{feff}')
+            .to_string()
+    } else {
+        resp.text()
+            .await
+            .map_err(|e| format!("failed to read response body: {e}"))?
+    };
 
     Ok(HttpResponse {
         status,
@@ -263,6 +281,66 @@ pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn bounded_connector_body_preserves_utf8_and_rejects_declared_overflow() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("中文"))
+            .mount(&server)
+            .await;
+        let req = HttpRequest {
+            url: server.uri(),
+            method: "POST".into(),
+            headers: None,
+            body: Some("{}".into()),
+            timeout_ms: None,
+            allow_invalid_certificates: None,
+        };
+        assert_eq!(
+            http_request_with_limit(req.clone(), Some(6))
+                .await
+                .unwrap()
+                .body,
+            "中文"
+        );
+        assert_eq!(
+            http_request_with_limit(req, Some(5)).await.unwrap_err(),
+            "download_body_too_large"
+        );
+        crate::proxy_config::reset_uninitialized();
+    }
+
+    #[tokio::test]
+    async fn bounded_connector_body_rejects_chunked_overflow_without_content_length() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            stream.read(&mut request).await.unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n7\r\npayload\r\n0\r\n\r\n").await.unwrap();
+        });
+        let req = HttpRequest {
+            url: format!("http://{address}/"),
+            method: "GET".into(),
+            headers: None,
+            body: None,
+            timeout_ms: Some(2000),
+            allow_invalid_certificates: None,
+        };
+        assert_eq!(
+            http_request_with_limit(req, Some(4)).await.unwrap_err(),
+            "download_body_too_large"
+        );
+        server.await.unwrap();
+        crate::proxy_config::reset_uninitialized();
+    }
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

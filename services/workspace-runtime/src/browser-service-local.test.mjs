@@ -160,6 +160,11 @@ class FakeCdp extends EventEmitter {
     this.detached = false
   }
   async send(method, params) {
+    if (method === "Page.startScreencast") {
+      if (this.capturing) throw new Error("Screencast is already active")
+      this.capturing = true
+    }
+    if (method === "Page.stopScreencast") this.capturing = false
     this.commands.push([method, params])
     return this.handler(method, params)
   }
@@ -458,8 +463,7 @@ test("launches local Chromium on the persistent profile with extensions and stag
   })
   // The overlay's sentinel report hooks are stubbed out before it runs.
   assert.deepEqual(launch.context.initScripts, [
-    OVERLAY_TRANSPORT_SCRIPT,
-    "window.__overlay = true",
+    `${OVERLAY_TRANSPORT_SCRIPT}\nwindow.__overlay = true`,
     CREDENTIAL_CAPTURE_SCRIPT,
   ])
   assert.ok(launch.context.bindings.has(CREDENTIAL_BINDING))
@@ -608,7 +612,10 @@ test("local downloads are saved with collision-safe names and published with pro
     state: "inProgress",
   })
   complete()
-  await tick()
+  const deadline = Date.now() + 2_000
+  while (service.listDownloads("s1")[0]?.state !== "completed" && Date.now() < deadline) {
+    await tick()
+  }
   const [summary] = service.listDownloads("s1")
   assert.equal(summary.state, "completed")
   assert.equal(summary.filename, "data (1).csv")
@@ -1160,8 +1167,8 @@ test("local screencast streams Chromium's own Retina frames in the frame's CSS c
   await service.startScreencast("s1", (frame) => frames.push(frame))
   const cdp = context.cdpSessions.at(-1).cdp
   const [, options] = cdp.commands.find(([method]) => method === "Page.startScreencast")
-  assert.equal(options.maxWidth, undefined)
-  assert.equal(options.maxHeight, undefined)
+  assert.equal(options.maxWidth, 1660)
+  assert.equal(options.maxHeight, 2900)
   assert.ok(options.quality >= 80)
   const retina = Buffer.from("1660x2900-jpeg")
   // Chromium painted at the old size; the page was resized before the frame
@@ -1181,6 +1188,231 @@ test("local screencast streams Chromium's own Retina frames in the frame's CSS c
   for (const { cdp: session } of context.cdpSessions) {
     assert.ok(!session.commands.some(([method]) => method === "Page.captureScreenshot"))
   }
+})
+
+test("an older resize cannot retire the stream of a newly activated page", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "resize-race" })
+  const session = service.sessions.get("resize-race")
+  const originalId = session.activePageId
+  const page = session.pages.get(originalId).page
+  const other = await service.createPage(session.id, "about:blank", { activate: false })
+  await service.startScreencast(session.id, () => {})
+  let entered, release
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const started = new Promise((resolve) => {
+    entered = resolve
+  })
+  const resize = page.setViewportSize.bind(page)
+  page.setViewportSize = async (viewport) => {
+    entered()
+    await gate
+    await resize(viewport)
+  }
+  const pending = service.emulate(session.id, {
+    pageId: originalId,
+    viewport: { width: 800, height: 600 },
+    synchronizeFrame: true,
+  })
+  await started
+  await service.activatePage(session.id, other.id)
+  release()
+  await assert.rejects(pending, { code: "browser_page_not_active" })
+  assert.equal(session.screencast.pageId, other.id)
+})
+
+test("consumer stop preserves pages and rejects an older subscription's stop", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "consumer-stop" })
+  const session = service.sessions.get("consumer-stop")
+  const pageId = session.activePageId
+  await service.startScreencast(session.id, () => {}, { streamId: "old" })
+  await service.startScreencast(session.id, () => {}, { streamId: "new" })
+  assert.equal(await service.stopScreencastConsumer(session.id, "old"), false)
+  assert.equal(session.screencast.pageId, pageId)
+  assert.equal(await service.stopScreencastConsumer(session.id, "new"), true)
+  assert.equal(session.screencast, null)
+  assert.equal(session.screencastRequest, null)
+  assert.ok(session.pages.has(pageId))
+  await service.retargetScreencast(session)
+  assert.equal(session.screencast, null)
+})
+
+test("consumer retirement rejects a start that arrives after cancellation", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "cancel-before-start" })
+  await service.stopScreencastConsumer("cancel-before-start", "cancelled")
+  await service.startScreencast("cancel-before-start", () => {}, { streamId: "cancelled" })
+  assert.equal(service.sessions.get("cancel-before-start").screencast, null)
+})
+
+test("an extension restart cannot resurrect a retired consumer", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "restart-stop" })
+  const session = service.sessions.get("restart-stop")
+  await service.startScreencast(session.id, () => {}, { streamId: "old" })
+  let entered, release
+  const started = new Promise((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const close = session.context.close.bind(session.context)
+  session.context.close = async () => {
+    entered()
+    await gate
+    await close()
+  }
+  const restarting = service.restartLocalSession(session, [])
+  await started
+  await service.stopScreencastConsumer(session.id, "old")
+  release()
+  await restarting
+  assert.equal(session.screencastRequest, null)
+  assert.equal(session.screencast, null)
+})
+
+test("an extension restart attaches the newest subscription accepted while closing", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "restart-replace" })
+  const session = service.sessions.get("restart-replace")
+  await service.startScreencast(session.id, () => {}, { streamId: "old" })
+  let entered, release
+  const started = new Promise((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const close = session.context.close.bind(session.context)
+  session.context.close = async () => {
+    entered()
+    await gate
+    await close()
+  }
+  const restarting = service.restartLocalSession(session, [])
+  await started
+  const newest = () => {}
+  await service.startScreencast(session.id, newest, { streamId: "new" })
+  release()
+  await restarting
+  assert.equal(session.screencastRequest.streamId, "new")
+  assert.equal(session.screencastRequest.onFrame, newest)
+  assert.ok(session.screencast)
+})
+
+test("live viewport density updates the existing CDP stream and reset restores launch density", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "live-density", deviceScaleFactor: 2 })
+  const session = service.sessions.get("live-density")
+  await service.startScreencast(session.id, () => {}, { streamId: "viewer" })
+  const state = session.screencast
+  state.cdp.emit("Page.screencastFrame", {
+    sessionId: 42,
+    data: Buffer.from("old-density").toString("base64"),
+  })
+  await tick()
+  const oldSequence = session.screencastSequence
+  await service.emulate(session.id, { viewport: { width: 800, height: 600, deviceScaleFactor: 1 } })
+  assert.equal(session.screencast, state)
+  assert.equal(state.options.maxWidth, 800)
+  assert.equal(state.options.maxHeight, 600)
+  assert.equal(await service.ackScreencastFrame(session.id, oldSequence), false)
+  await service.emulate(session.id, { viewport: { width: 800, height: 600, deviceScaleFactor: 2 } })
+  assert.equal(state.options.maxWidth, 1600)
+  assert.equal(state.options.maxHeight, 1200)
+  await service.emulate(session.id, { reset: true })
+  assert.equal(state.options.maxWidth, 2560)
+  assert.equal(state.options.maxHeight, 1440)
+  assert.equal(session.screencastRequest.streamId, "viewer")
+  assert.deepEqual(
+    state.cdp.commands
+      .filter(([method]) => method === "Page.startScreencast")
+      .map(([, options]) => [options.maxWidth, options.maxHeight]),
+    [
+      [2560, 1440],
+      [800, 600],
+      [1600, 1200],
+      [2560, 1440],
+    ]
+  )
+  assert.equal(state.cdp.commands.filter(([method]) => method === "Page.stopScreencast").length, 3)
+  assert.equal(session.screencast.cdp, state.cdp)
+  assert.equal(state.cdp.detached, false)
+})
+
+test("a late live resize does not update the new active page's capture bounds", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "live-resize-race", deviceScaleFactor: 2 })
+  const session = service.sessions.get("live-resize-race")
+  const originalId = session.activePageId
+  const page = session.pages.get(originalId).page
+  const other = await service.createPage(session.id, "about:blank", { activate: false })
+  await service.startScreencast(session.id, () => {})
+  let entered, release
+  const started = new Promise((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const resize = page.setViewportSize.bind(page)
+  page.setViewportSize = async (viewport) => {
+    entered()
+    await gate
+    await resize(viewport)
+  }
+  const pending = service.emulate(session.id, {
+    pageId: originalId,
+    viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+  })
+  await started
+  await service.activatePage(session.id, other.id)
+  const active = session.screencast
+  const options = { ...active.options }
+  release()
+  await pending
+  assert.equal(session.screencast, active)
+  assert.deepEqual(active.options, options)
+})
+
+test("switching pages during a live capture restart cannot restart the old page", async (t) => {
+  const { service } = await fixture(t)
+  await service.createSession({ id: "capture-restart-race", deviceScaleFactor: 2 })
+  const session = service.sessions.get("capture-restart-race")
+  const other = await service.createPage(session.id, "about:blank", { activate: false })
+  await service.startScreencast(session.id, () => {})
+  const old = session.screencast
+  let entered, release
+  const started = new Promise((resolve) => {
+    entered = resolve
+  })
+  const gate = new Promise((resolve) => {
+    release = resolve
+  })
+  const send = old.cdp.send.bind(old.cdp)
+  let stopped = false
+  old.cdp.send = async (method, params) => {
+    if (method === "Page.stopScreencast" && !stopped) {
+      stopped = true
+      entered()
+      await gate
+    }
+    return send(method, params)
+  }
+  const resizing = service.emulate(session.id, {
+    viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+  })
+  await started
+  const switching = service.activatePage(session.id, other.id)
+  release()
+  await Promise.all([resizing, switching])
+  assert.equal(session.screencast.pageId, other.id)
+  assert.equal(old.cdp.commands.filter(([method]) => method === "Page.startScreencast").length, 1)
+  assert.equal(old.cdp.detached, true)
 })
 
 test("a frame the consumer fails to take is acknowledged so the next frame still flows", async (t) => {
@@ -1522,6 +1754,7 @@ function fakeExchange({ url, headers, responseHeaders, body, status = 200 }) {
   const request = {
     url: () => url,
     method: () => "POST",
+    isNavigationRequest: () => false,
     allHeaders: async () => headers,
   }
   return {
@@ -1669,7 +1902,7 @@ test("user-chrome attaches over CDP, opens agent tabs in a new window, and final
   assert.deepEqual(connection.context.initScripts, [])
   assert.equal(connection.context.bindings.size, 0)
   const agentTab = connection.context._pages[2]
-  assert.deepEqual(agentTab.initScripts, [OVERLAY_TRANSPORT_SCRIPT, "window.__overlay = true"])
+  assert.deepEqual(agentTab.initScripts, [`${OVERLAY_TRANSPORT_SCRIPT}\nwindow.__overlay = true`])
   // The pick signal is bound on that tab alone (ADR-0214).
   assert.deepEqual([...agentTab.bindings.keys()], [SELECTION_SIGNAL_BINDING])
 
@@ -2026,6 +2259,153 @@ test("retiring a capture releases queued frames and detaches even when stop fail
   assert.equal(state.queuedEvent, null)
   assert.equal(state.receive, null)
   assert.equal(cdp.detached, true)
+})
+
+for (const blocked of ["stop", "detach"]) {
+  test(`late rejection of a timed-out ${blocked} cannot damage the replacement`, async (t) => {
+    const { service, chromium } = await fixture(t, { screencastTeardownTimeoutMs: 20 })
+    await service.createSession({ id: "late-rejection" })
+    await service.startScreencast("late-rejection", () => undefined, { streamId: "old" })
+    const old = chromium.launches[0].context.cdpSessions.at(-1).cdp
+    let reject
+    const barrier = new Promise((_, fail) => {
+      reject = fail
+    })
+    const send = old.send.bind(old)
+    old.send = (method, params) =>
+      blocked === "stop" && method === "Page.stopScreencast" ? barrier : send(method, params)
+    if (blocked === "detach") old.detach = () => barrier
+    const starting = service.startScreencast("late-rejection", () => undefined, { streamId: "new" })
+    try {
+      await starting
+      const replacement = service.sessions.get("late-rejection").screencast
+      reject(new Error("late old operation failure"))
+      await tick()
+      assert.equal(service.sessions.get("late-rejection").screencast, replacement)
+      assert.notEqual(replacement.cdp, old)
+    } finally {
+      reject(new Error("cleanup"))
+      await starting
+    }
+  })
+  test(`direct replacement survives a stalled old capture ${blocked}`, async (t) => {
+    const { service, chromium } = await fixture(t, { screencastTeardownTimeoutMs: 20 })
+    await service.createSession({ id: "direct-replacement" })
+    await service.startScreencast("direct-replacement", () => undefined, { streamId: "old" })
+    const old = chromium.launches[0].context.cdpSessions.at(-1).cdp
+    let release
+    const barrier = new Promise((resolve) => {
+      release = resolve
+    })
+    const send = old.send.bind(old)
+    old.send = (method, params) =>
+      blocked === "stop" && method === "Page.stopScreencast"
+        ? barrier.then(() => send(method, params))
+        : send(method, params)
+    const detach = old.detach.bind(old)
+    old.detach = () => (blocked === "detach" ? barrier.then(detach) : detach())
+    const starting = service.startScreencast("direct-replacement", () => undefined, {
+      streamId: "new",
+    })
+    try {
+      const started = await Promise.race([starting.then(() => true), tick(150).then(() => false)])
+      assert.equal(started, true)
+      const replacement = service.sessions.get("direct-replacement").screencast
+      assert.notEqual(replacement.cdp, old)
+      release()
+      await tick()
+      assert.equal(service.sessions.get("direct-replacement").screencast, replacement)
+    } finally {
+      release()
+      await starting
+    }
+  })
+  test(`a stalled capture ${blocked} cannot block a replacement or retire it on late completion`, async (t) => {
+    const { service, chromium } = await fixture(t, { screencastTeardownTimeoutMs: 20 })
+    await service.createSession({ id: "stalled-teardown" })
+    await service.startScreencast("stalled-teardown", () => undefined, { streamId: "old" })
+    const context = chromium.launches[0].context
+    const old = context.cdpSessions.at(-1).cdp
+    let release
+    const barrier = new Promise((resolve) => {
+      release = resolve
+    })
+    const send = old.send.bind(old)
+    const detach = old.detach.bind(old)
+    old.send = (method, params) =>
+      method === "Page.stopScreencast" && blocked === "stop"
+        ? barrier.then(() => send(method, params))
+        : send(method, params)
+    old.detach = () => (blocked === "detach" ? barrier.then(detach) : detach())
+    const stopping = service
+      .stopScreencastConsumer("stalled-teardown", "old")
+      .catch((error) => error)
+    const frames = []
+    const starting = service.startScreencast("stalled-teardown", (frame) => frames.push(frame), {
+      streamId: "new",
+    })
+    try {
+      const recovered = await Promise.race([starting.then(() => true), tick(150).then(() => false)])
+      assert.equal(recovered, true, "teardown deadline must release the serialized capture lane")
+      const next = context.cdpSessions.at(-1).cdp
+      assert.notEqual(next, old)
+      assert.equal(old.listenerCount("Page.screencastFrame"), 0)
+      release()
+      await stopping
+      await tick()
+      assert.equal(service.sessions.get("stalled-teardown").screencast.cdp, next)
+      old.emit("Page.screencastFrame", {
+        sessionId: 1,
+        data: Buffer.from("old").toString("base64"),
+      })
+      next.emit("Page.screencastFrame", {
+        sessionId: 2,
+        data: Buffer.from("new").toString("base64"),
+      })
+      await tick()
+      assert.equal(frames.length, 1)
+    } finally {
+      release()
+      await Promise.allSettled([stopping, starting])
+    }
+  })
+}
+
+test("viewport synchronization restarts after a stalled teardown", async (t) => {
+  const { service, chromium } = await fixture(t, { screencastTeardownTimeoutMs: 20 })
+  await service.createSession({ id: "stalled-sync" })
+  await service.startScreencast("stalled-sync", () => undefined, { streamId: "consumer" })
+  const old = chromium.launches[0].context.cdpSessions.at(-1).cdp
+  const send = old.send.bind(old)
+  old.send = (method, params) =>
+    method === "Page.stopScreencast" ? new Promise(() => {}) : send(method, params)
+  await service.emulate("stalled-sync", {
+    viewport: { width: 1280, height: 720 },
+    synchronizeFrame: true,
+  })
+  assert.notEqual(service.sessions.get("stalled-sync").screencast.cdp, old)
+})
+
+test("a stale attachment with a stalled detach releases the capture lane", async (t) => {
+  const { service, chromium } = await fixture(t, { screencastTeardownTimeoutMs: 20 })
+  await service.createSession({ id: "stale-detach" })
+  const context = chromium.launches[0].context
+  const attach = context.newCDPSession.bind(context)
+  let finish
+  context.newCDPSession = () =>
+    new Promise((resolve) => {
+      finish = resolve
+    })
+  const oldStart = service.startScreencast("stale-detach", () => undefined, { streamId: "old" })
+  await tick()
+  const stopping = service.stopScreencastConsumer("stale-detach", "old")
+  const late = new FakeCdp()
+  late.detach = () => new Promise(() => {})
+  context.newCDPSession = attach
+  finish(late)
+  await Promise.all([oldStart, stopping])
+  await service.startScreencast("stale-detach", () => undefined, { streamId: "new" })
+  assert.notEqual(service.sessions.get("stale-detach").screencast.cdp, late)
 })
 
 test("failed cloud initialization closes Chromium and emits lifecycle release", async (t) => {

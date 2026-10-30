@@ -382,6 +382,12 @@ impl StopSignal {
         *self.0.borrow()
     }
 
+    pub async fn cancelled(&mut self) {
+        if !self.is_stopped() {
+            let _ = self.0.changed().await;
+        }
+    }
+
     /// Sleep for `duration`; `true` when the stop fired first.
     pub async fn sleep_or_stop(&mut self, duration: Duration) -> bool {
         if self.is_stopped() {
@@ -392,6 +398,35 @@ impl StopSignal {
             // A dropped sender also counts as a stop.
             _ = self.0.changed() => true,
         }
+    }
+}
+
+/// Retain cleanup ownership until the idempotent stop is confirmed or this
+/// runtime generation exits. A newer consumer is protected by its stream id.
+pub async fn retire_screencast<T: RuntimeTransport>(
+    transport: &T,
+    session_id: &str,
+    stream_id: &str,
+) {
+    let generation = transport.generation();
+    let mut delay = Duration::from_millis(100);
+    loop {
+        if generation.is_none() || transport.generation() != generation {
+            return;
+        }
+        match transport
+            .control(
+                "browser.screencast.stop",
+                json!({"sessionId":session_id,"streamId":stream_id}),
+            )
+            .await
+        {
+            Ok(_) => return,
+            Err(error) if error.code == "browser_session_not_found" => return,
+            Err(error) => tracing::debug!(session_id, %error, "retrying stream retirement"),
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_secs(2));
     }
 }
 
@@ -466,14 +501,31 @@ where
                 }
                 // Ack the screencast frame (the header's own sequence) so the
                 // runtime asks Chromium for the next one.
-                if let Err(error) = transport
-                    .control(
-                        "browser.screencast.ack",
-                        json!({ "sessionId": session_id, "sequence": header.sequence }),
-                    )
-                    .await
-                {
-                    tracing::debug!(session_id, %error, "screencast ack failed");
+                let mut ack_failures = 0;
+                loop {
+                    if transport.generation() != start_generation {
+                        return FramePollEnd::RuntimeRestarted;
+                    }
+                    if stop.is_stopped() {
+                        return FramePollEnd::Stopped;
+                    }
+                    let acknowledged = tokio::select! {
+                        result = transport.control("browser.screencast.ack",
+                            json!({ "sessionId": session_id, "sequence": header.sequence })) => result,
+                        _ = stop.0.changed() => return FramePollEnd::Stopped,
+                    };
+                    match acknowledged {
+                        Ok(_) => break, // Also covers an already-processed ACK whose reply was lost.
+                        Err(error) => {
+                            ack_failures += 1;
+                            if ack_failures >= config.max_consecutive_errors {
+                                return FramePollEnd::RuntimeFailed(error.to_string());
+                            }
+                            if stop.sleep_or_stop(config.error_interval).await {
+                                return FramePollEnd::Stopped;
+                            }
+                        }
+                    }
                 }
             }
             Ok(None) => {
@@ -696,6 +748,9 @@ mod tests {
         media: Mutex<VecDeque<Result<Option<MediaFrame>, ClientError>>>,
         events: Mutex<VecDeque<Result<Vec<Value>, ClientError>>>,
         controls: Mutex<Vec<(String, Value)>>,
+        control_results: Mutex<VecDeque<Result<Value, ClientError>>>,
+        stall_control: std::sync::atomic::AtomicBool,
+        control_started: tokio::sync::Notify,
         media_cursors: Mutex<Vec<u64>>,
         event_cursors: Mutex<Vec<u64>>,
     }
@@ -721,7 +776,15 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((operation.to_string(), payload));
-            Ok(json!(true))
+            if self.stall_control.load(Ordering::SeqCst) {
+                self.control_started.notify_one();
+                std::future::pending::<()>().await;
+            }
+            self.control_results
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Ok(json!(true)))
         }
 
         async fn media(
@@ -1045,6 +1108,171 @@ mod tests {
         assert_eq!(controls[0].0, "browser.screencast.ack");
         assert_eq!(controls[0].1, json!({"sessionId": "s1", "sequence": 10}));
         assert_eq!(*transport.media_cursors.lock().unwrap(), vec![0, 1, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn frame_poller_retries_ack_without_redelivering_pixels() {
+        let transport = FakeTransport::running(1);
+        transport.control_results.lock().unwrap().extend([
+            Err(ClientError::new(
+                "runtime_unreachable",
+                "transient ACK loss",
+            )),
+            Ok(json!(false)), // The first ACK may have succeeded but lost its reply.
+        ]);
+        transport.media.lock().unwrap().extend([
+            Ok(Some(MediaFrame {
+                sequence: 1,
+                bytes: frame(10, b"a"),
+            })),
+            Ok(Some(MediaFrame {
+                sequence: 2,
+                bytes: frame(11, b"b"),
+            })),
+        ]);
+        let mut delivered = 0;
+        let (_handle, stop) = stop_pair();
+        let end = run_frame_poller(
+            &transport,
+            "s",
+            |_| {
+                delivered += 1;
+                delivered < 2
+            },
+            stop,
+            FramePollConfig {
+                error_interval: Duration::from_millis(1),
+                ..FramePollConfig::default()
+            },
+        )
+        .await;
+        assert_eq!(end, FramePollEnd::SinkClosed);
+        assert_eq!(delivered, 2);
+        let controls = transport.controls.lock().unwrap();
+        assert_eq!(
+            controls.len(),
+            2,
+            "retry the pending ACK before reading a newer frame"
+        );
+        assert!(controls
+            .iter()
+            .all(|(op, payload)| op == "browser.screencast.ack" && payload["sequence"] == 10));
+    }
+
+    #[tokio::test]
+    async fn frame_poller_ack_has_a_failure_budget_and_cancels_pending_io() {
+        let transport = FakeTransport::running(1);
+        transport
+            .control_results
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| Err(ClientError::new("runtime_unreachable", "lost ACK"))));
+        transport
+            .media
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(MediaFrame {
+                sequence: 1,
+                bytes: frame(1, b"a"),
+            })));
+        let (_handle, stop) = stop_pair();
+        let end = run_frame_poller(
+            &transport,
+            "s",
+            |_| true,
+            stop,
+            FramePollConfig {
+                error_interval: Duration::from_millis(1),
+                max_consecutive_errors: 2,
+                ..FramePollConfig::default()
+            },
+        )
+        .await;
+        assert!(matches!(end, FramePollEnd::RuntimeFailed(_)));
+        assert_eq!(transport.controls.lock().unwrap().len(), 2);
+
+        let transport = FakeTransport::running(1);
+        transport.stall_control.store(true, Ordering::SeqCst);
+        transport
+            .media
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(MediaFrame {
+                sequence: 1,
+                bytes: frame(1, b"a"),
+            })));
+        let (handle, stop) = stop_pair();
+        let (end, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(
+                run_frame_poller(&transport, "s", |_| true, stop, FramePollConfig::default()),
+                async {
+                    transport.control_started.notified().await;
+                    handle.stop();
+                }
+            )
+        })
+        .await
+        .expect("pending ACK must remain cancellable");
+        assert_eq!(end, FramePollEnd::Stopped);
+    }
+
+    #[tokio::test]
+    async fn generation_change_stops_ack_retries_and_retirement_retries() {
+        let transport = FakeTransport::running(1);
+        transport
+            .control_results
+            .lock()
+            .unwrap()
+            .push_back(Err(ClientError::new("runtime_unreachable", "lost ACK")));
+        transport
+            .media
+            .lock()
+            .unwrap()
+            .push_back(Ok(Some(MediaFrame {
+                sequence: 1,
+                bytes: frame(1, b"a"),
+            })));
+        let (_handle, stop) = stop_pair();
+        let (end, ()) = tokio::join!(
+            run_frame_poller(&transport, "s", |_| true, stop, FramePollConfig::default()),
+            async {
+                while transport.controls.lock().unwrap().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+                transport.generation.store(2, Ordering::SeqCst);
+            }
+        );
+        assert_eq!(end, FramePollEnd::RuntimeRestarted);
+        assert_eq!(transport.controls.lock().unwrap().len(), 1);
+
+        let transport = FakeTransport::running(1);
+        transport
+            .control_results
+            .lock()
+            .unwrap()
+            .push_back(Err(ClientError::new("runtime_unreachable", "lost stop")));
+        tokio::join!(retire_screencast(&transport, "s", "old"), async {
+            while transport.controls.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+            transport.generation.store(2, Ordering::SeqCst);
+        });
+        assert_eq!(transport.controls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retirement_retries_the_same_consumer_without_replaying_input() {
+        let transport = FakeTransport::running(1);
+        transport.control_results.lock().unwrap().extend([
+            Err(ClientError::new("runtime_unreachable", "stop request lost")),
+            Ok(json!({"stopped":true})),
+        ]);
+        retire_screencast(&transport, "s", "old").await;
+        let calls = transport.controls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert!(calls
+            .iter()
+            .all(|(op, payload)| op == "browser.screencast.stop" && payload["streamId"] == "old"));
     }
 
     #[tokio::test]

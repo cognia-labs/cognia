@@ -28,6 +28,7 @@ pub const PRIVATE_PROTOCOL_VERSION: u64 = 1;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(180);
 /// Media and event polls are cheap reads of in-memory state.
 const POLL_TIMEOUT: Duration = Duration::from_secs(15);
+const STREAM_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long a media read waits for the next frame before answering `204`.
 /// The runtime answers as soon as a frame is published, so a frame reaches
 /// the pane without waiting for the poller's next tick; a runtime that predates
@@ -224,7 +225,11 @@ impl RuntimeClient {
             .http
             .post(Self::url(endpoint, "/v1/control"))
             .bearer_auth(&endpoint.secret)
-            .timeout(CONTROL_TIMEOUT)
+            .timeout(match operation {
+                "browser.screencast.ack" | "browser.screencast.stop" => STREAM_TIMEOUT,
+                "browser.screencast.start" => POLL_TIMEOUT,
+                _ => CONTROL_TIMEOUT,
+            })
             .json(&envelope(operation, payload, Some(&request_id)))
             .send()
             .await
@@ -465,6 +470,32 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, "unknown_operation");
+    }
+
+    #[tokio::test]
+    async fn a_stalled_ack_uses_the_short_stream_deadline() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/control"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(3))
+                    .set_body_json(json!({"version":1,"type":"result","payload":true})),
+            )
+            .mount(&server)
+            .await;
+        let client = RuntimeClient::new().unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_millis(2800),
+            client.control(
+                &endpoint(&server),
+                "browser.screencast.ack",
+                json!({"sessionId":"s","sequence":1}),
+            ),
+        )
+        .await
+        .expect("the stream deadline must not use the 180 second action budget");
+        assert_eq!(result.unwrap_err().code, "runtime_unreachable");
     }
 
     #[tokio::test]

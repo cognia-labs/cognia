@@ -85,6 +85,35 @@ describe("useBrowserDevtools (ADR-0127)", () => {
     expect(appendRing(ring, [])).toBe(ring)
   })
 
+  it("carries backend and renderer loss across ring rollover until cleared", async () => {
+    const { result } = renderHook(() => useBrowserDevtools())
+    await act(flush)
+    const entries = Array.from({ length: DEVTOOLS_RING }, (_, ts) => ({
+      level: "log",
+      text: `line-${ts}`,
+      ts,
+      ...(ts === 0 ? { droppedBefore: 500 } : {}),
+    }))
+    act(() => handlers.get("browser://console")!({ paneId: "p1", entries }))
+    act(() =>
+      handlers.get("browser://console")!({
+        paneId: "p1",
+        entries: [{ level: "log", text: "new", ts: 501 }],
+      })
+    )
+    expect(result.current.console[0].droppedBefore).toBe(501)
+    expect(entries[1]).not.toHaveProperty("droppedBefore")
+    act(() =>
+      handlers.get("browser://console")!({
+        paneId: "p1",
+        entries: [{ level: "log", text: "newer", ts: 502 }],
+      })
+    )
+    expect(result.current.console[0].droppedBefore).toBe(502)
+    act(() => result.current.clearConsole())
+    expect(result.current.console).toEqual([])
+  })
+
   // Two panes can be mounted at once but only one owns the native webview.
   // A non-owner mirroring the owner's feeds would describe a page it is not
   // showing, so it must not subscribe at all.
@@ -150,6 +179,96 @@ describe("useBrowserDevtools (ADR-0127)", () => {
     } finally {
       jest.useRealTimers()
     }
+  })
+
+  it("waits for an outstanding drain and retains the independently successful stream", async () => {
+    jest.useFakeTimers()
+    let finish: (entries: never[]) => void = () => {}
+    const readConsole = jest.fn(
+      () =>
+        new Promise<never[]>((resolve) => {
+          finish = resolve
+        })
+    )
+    const readNetwork = jest
+      .fn()
+      .mockResolvedValue([
+        { url: "https://x", method: "GET", status: 200, ok: true, durationMs: 1 },
+      ])
+    const poll = { readConsole, readNetwork, intervalMs: 100 }
+    const { unmount } = renderHook(() => useBrowserDevtools({ poll }))
+    try {
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(1000)
+      })
+      expect(readConsole).toHaveBeenCalledTimes(1)
+      expect(readNetwork).toHaveBeenCalledTimes(1)
+    } finally {
+      unmount()
+      await act(async () => finish([]))
+      jest.useRealTimers()
+    }
+    const partialPoll = {
+      readConsole: async () => {
+        throw new Error("console temporarily unavailable")
+      },
+      readNetwork,
+    }
+    const { result } = renderHook(() => useBrowserDevtools({ poll: partialPoll }))
+    await act(flush)
+    expect(result.current.network).toHaveLength(1)
+  })
+
+  it("pauses hidden-window polling and resumes once on visibility", async () => {
+    const original = Object.getOwnPropertyDescriptor(document, "hidden")
+    Object.defineProperty(document, "hidden", { configurable: true, value: true })
+    const readConsole = jest.fn().mockResolvedValue([])
+    const readNetwork = jest.fn().mockResolvedValue([])
+    const poll = { readConsole, readNetwork }
+    const { unmount } = renderHook(() => useBrowserDevtools({ poll }))
+    try {
+      await act(flush)
+      expect(readConsole).not.toHaveBeenCalled()
+      Object.defineProperty(document, "hidden", { configurable: true, value: false })
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"))
+        await flush()
+      })
+      expect(readConsole).toHaveBeenCalledTimes(1)
+    } finally {
+      unmount()
+      if (original) Object.defineProperty(document, "hidden", original)
+      else delete (document as unknown as { hidden?: boolean }).hidden
+    }
+  })
+
+  it("retains an in-flight result across interval changes for the same source", async () => {
+    let finish: (entries: { level: "warn"; text: string; ts: number }[]) => void = () => {}
+    const source = {}
+    const read = jest.fn(
+      () =>
+        new Promise<{ level: "warn"; text: string; ts: number }[]>((resolve) => {
+          finish = resolve
+        })
+    )
+    const network = jest.fn().mockResolvedValue([])
+    const { result, rerender, unmount } = renderHook(
+      ({ intervalMs }) =>
+        useBrowserDevtools({
+          poll: { source, readConsole: () => read(), readNetwork: () => network(), intervalMs },
+        }),
+      { initialProps: { intervalMs: 6000 } }
+    )
+    await act(flush)
+    rerender({ intervalMs: 1500 })
+    await act(flush)
+    expect(read).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      finish([{ level: "warn", text: "retained", ts: 1 }])
+      await flush()
+    })
+    expect(result.current.console.map((entry) => entry.text)).toContain("retained")
+    unmount()
   })
 
   it("does not poll a pane that does not own the session", async () => {

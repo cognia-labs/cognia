@@ -419,6 +419,27 @@ describe("adaptive viewport", () => {
     expect(rpcMock).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps the same pending readout when the tools change polling frequency", async () => {
+    const session = makeSession()
+    let finish = () => {}
+    const read = session.engine!.readConsole as jest.Mock
+    read.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve([])
+        })
+    )
+    renderPreview(session)
+    await settleResize()
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime })
+    await user.click(screen.getByRole("tab", { name: /Console/ }))
+    await act(async () => {
+      await jest.advanceTimersByTimeAsync(10_000)
+    })
+    expect(read).toHaveBeenCalledTimes(1)
+    await act(async () => finish())
+  })
+
   it("follows window resizing and the height left after expanding Console", async () => {
     renderPreview(makeSession())
     await settleResize()

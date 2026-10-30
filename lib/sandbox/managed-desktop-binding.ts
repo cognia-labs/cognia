@@ -16,6 +16,10 @@ import {
 import { SandboxRuntimeError } from "@cognia/plugin-sdk/api/sandbox"
 import type { SandboxConnectionRow } from "@/types/sandbox"
 import { managedDesktopCapabilities } from "./connection-capabilities"
+import {
+  managedDesktopHandoffClient,
+  watchManagedDesktopAcceptance,
+} from "@/lib/automation/managed-desktop-handoff-client"
 
 const LOCAL = { kind: "local" } as const
 export type ManagedDesktopGrantee = ManagedDesktopDelegationRequest["grantee"]
@@ -47,13 +51,16 @@ function ensureProjectionWatch(): void {
   if (projectionWatch) return
   const identity = managedDesktopIdentityScope(LOCAL, stopProjectionWatch)
   try {
-    const stop = watchManagedDesktopDelegations(LOCAL, () => {
+    const refresh = () => {
       void reconcileManagedDesktopBindings().catch(() => {
         /* The next Host event or bind retries. */
       })
-    })
+    }
+    const stop = watchManagedDesktopDelegations(LOCAL, refresh)
+    const stopAcceptance = watchManagedDesktopAcceptance(LOCAL, refresh)
     projectionWatch = () => {
       stop()
+      stopAcceptance()
       identity.dispose()
     }
   } catch (error) {
@@ -199,6 +206,61 @@ async function reconcileNow(assertActive: () => void): Promise<ManagedDesktopDel
   const live = delegations.filter(isLiveManagedDesktopDelegation)
   const rows = await listSandboxConnections()
   assertActive()
+  // Acceptance grants are created by the Host runner, never by bindManagedDesktop.
+  // Project them on discovery so the child can use the existing routing registry.
+  const acceptance = live.filter(
+    (item) => item.mode === "acceptance" && item.grantee.kind === "acceptance"
+  )
+  if (acceptance.length) {
+    const [desktops, configs] = await Promise.all([
+      managedDesktopClient.list(LOCAL),
+      managedDesktopClient.listConfigs(LOCAL),
+    ])
+    assertActive()
+    for (const grant of acceptance) {
+      const desktop = desktops.find(
+        (d) =>
+          d.id === grant.desktopId &&
+          d.generation === grant.desktopGeneration &&
+          d.state === "running"
+      )
+      const config = configs.find((c) => c.id === grant.providerConfigId)
+      const capabilities =
+        config &&
+        managedDesktopCapabilities({ ...config, agentControl: config.enablement.agentControl })
+      if (!desktop || !config || !capabilities?.gui || desktop.providerConfigId !== config.id)
+        continue
+      const id = managedDesktopConnectionId(desktop.id, desktop.generation)
+      const existing = rows.find((row) => row.id === id)
+      const row = createSandboxConnectionRow({
+        id,
+        name: desktop.id,
+        driver: "computer-server",
+        now: Date.now(),
+        config: {
+          provider: "e2b",
+          target: LOCAL,
+          providerConfigId: config.id,
+          desktopId: desktop.id,
+          generation: desktop.generation,
+          delegationId: grant.id,
+          agentControl: config.enablement.agentControl,
+          qualification: config.qualification,
+          qualificationEvidenceVersion: config.qualificationEvidenceVersion,
+          workloadIsolationRevision: config.workloadIsolationRevision,
+          egressEnforcement: config.egressEnforcement,
+        },
+      })
+      await putSandboxConnection({
+        ...row,
+        createdAt: existing?.createdAt ?? row.createdAt,
+        state: "running",
+        lastHealthStatus: "ok",
+        capabilities,
+      })
+      assertActive()
+    }
+  }
   let retained = false
   for (const row of rows) {
     assertActive()
@@ -223,7 +285,7 @@ async function reconcileNow(assertActive: () => void): Promise<ManagedDesktopDel
     }
   }
   assertActive()
-  if (retained) ensureProjectionWatch()
+  if (retained || acceptance.length) ensureProjectionWatch()
   else stopProjectionWatch()
   return live
 }
@@ -237,13 +299,15 @@ export async function reconcileManagedDesktopBindings(): Promise<ManagedDesktopD
 export function watchManagedDesktopBindings(
   onError: (error: unknown) => void = () => {}
 ): () => void {
-  return watchManagedDesktopDelegations(
-    LOCAL,
-    () => {
-      void reconcileManagedDesktopBindings().catch(onError)
-    },
-    onError
-  )
+  const refresh = () => {
+    void reconcileManagedDesktopBindings().catch(onError)
+  }
+  const stop = watchManagedDesktopDelegations(LOCAL, refresh, onError)
+  const stopAcceptance = watchManagedDesktopAcceptance(LOCAL, refresh, onError)
+  return () => {
+    stop()
+    stopAcceptance()
+  }
 }
 
 /** Host truth, including the bound grantee; never borrow another session's delegation. */
@@ -264,13 +328,35 @@ export async function requireManagedDesktopDelegation(
     throw missingDelegation()
   await serialize(async (assertActive) => {
     const live = await reconcileNow(assertActive)
+    const acceptanceGrants = live.filter(
+      (item) => item.mode === "acceptance" && item.grantee.kind === "acceptance"
+    )
+    const runs = acceptanceGrants.length
+      ? (await managedDesktopHandoffClient.acceptanceList(LOCAL)).runs
+      : []
+    assertActive()
     if (
       !live.some(
         (item) =>
           item.desktopId === config.desktopId &&
           item.desktopGeneration === config.generation &&
           item.providerConfigId === config.providerConfigId &&
-          ((item.grantee.kind === "session" && item.grantee.sessionKey === sessionKey) ||
+          ((item.mode === "acceptance" &&
+            item.grantee.kind === "acceptance" &&
+            runs.some(
+              (run) =>
+                item.grantee.kind === "acceptance" &&
+                run.acceptanceId === item.grantee.acceptanceId &&
+                run.state === "running" &&
+                run.childSessionKey === sessionKey &&
+                run.delegationId === item.id &&
+                run.desktopId === item.desktopId &&
+                run.desktopGeneration === item.desktopGeneration &&
+                run.providerConfigId === item.providerConfigId
+            )) ||
+            (item.mode === "computerUse" &&
+              item.grantee.kind === "session" &&
+              item.grantee.sessionKey === sessionKey) ||
             (item.grantee.kind === "character" &&
               !!characterId &&
               item.grantee.characterId === characterId))
