@@ -35,9 +35,9 @@
     "resultFailed": "套装安装失败:{message}",
     "resultInstalled": "套装已安装——{installed}/{total} 个插件。",
     "resultPartial": "已安装 {installed}/{total};{failed} 个失败:{message}",
-    "saveAsCogset": "保存为齿轮组",
-    "savedAsCogset": "已将{name}保存为齿轮组",
-    "saveAsCogsetFailed": "无法保存齿轮组"
+    "saveAsCogset": "保存为 Cogset",
+    "savedAsCogset": "已将{name}保存为 Cogset",
+    "saveAsCogsetFailed": "无法保存 Cogset"
   },
   "retry": "重试",
   "searchPlaceholder": "在市场中搜索…"

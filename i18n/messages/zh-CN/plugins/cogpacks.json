@@ -1,8 +1,8 @@
 {
   "export": {
-    "title": "将{name}导出为齿轮包",
+    "title": "将{name}导出为 Cogpack",
     "description": "描述",
-    "id": "齿轮包 ID",
+    "id": "Cogpack ID",
     "idHint": "字母、数字、点、短横线和下划线",
     "invalidId": "请输入有效的 ID",
     "version": "版本",
@@ -28,24 +28,24 @@
     "sign": "使用你的发布者密钥签名",
     "signCreate": "创建发布者密钥并签名",
     "signHint": "接收者能看到是谁制作的，并可选择信任你的密钥。",
-    "needsDesktop": "将插件文件复制进齿轮包需要桌面端。",
-    "empty": "这个齿轮组中没有可以导出的内容。",
+    "needsDesktop": "将插件文件复制进 Cogpack 需要桌面端。",
+    "empty": "这个 Cogset 中没有可以导出的内容。",
     "submit": "导出",
     "cancel": "取消",
     "saved": "已保存 {file}",
-    "failed": "无法导出齿轮包",
+    "failed": "无法导出 Cogpack",
     "loading": "正在准备…",
-    "fileFilter": "齿轮包",
-    "loadFailed": "无法为导出准备这个齿轮组。"
+    "fileFilter": "Cogpack",
+    "loadFailed": "无法为导出准备这个 Cogset。"
   },
   "import": {
-    "title": "导入齿轮包",
-    "reading": "正在检查齿轮包…",
+    "title": "导入 Cogpack",
+    "reading": "正在检查 Cogpack…",
     "openFailed": "无法读取 {file}",
     "invalid": {
-      "unsafe-path": "其中包含可能写到齿轮包之外的文件路径。",
-      "too-large": "文件大小超出齿轮包的上限。",
-      "too-many-files": "文件数量超出齿轮包可携带的上限。",
+      "unsafe-path": "其中包含可能写到 Cogpack 之外的文件路径。",
+      "too-large": "文件大小超出 Cogpack 的上限。",
+      "too-many-files": "文件数量超出 Cogpack 可携带的上限。",
       "unsafe-expansion": "其中有文件解压后的大小不安全。",
       "unreadable": "这不是一个可读取的 zip 文件。",
       "signature-invalid": "签名与内容不符，文件可能在签名后被修改过。",
@@ -54,7 +54,7 @@
       "file-missing": "清单中列出的某个文件缺失。",
       "checksum-mismatch": "其中有文件与记录的校验和不符，可能被修改过。",
       "undeclared-path": "其中包含清单未列出的文件。",
-      "manifest-missing": "缺少清单文件，因此它不是齿轮包。",
+      "manifest-missing": "缺少清单文件，因此它不是 Cogpack。",
       "manifest-not-json": "清单不是有效的 JSON。",
       "manifest-invalid": "清单格式有误，或使用了此版本不支持的格式。",
       "unknown": "无法打开该文件。"
@@ -67,27 +67,27 @@
     "signer": "签名者：{name} · {fingerprint}",
     "trustSigner": "今后信任此发布者",
     "refused": {
-      "signature-required": "你的插件策略只允许导入已签名的齿轮包。",
-      "trusted-publishers-only": "你的插件策略只允许导入受信任发布者的齿轮包。"
+      "signature-required": "你的插件策略只允许导入已签名的 Cogpack。",
+      "trusted-publishers-only": "你的插件策略只允许导入受信任发布者的 Cogpack。"
     },
     "compatibility": "它由 Cognia {required} 制作，而本应用为 {current}，随应用提供的插件可能缺失。",
     "updateTitle": "你之前导入过{name}",
     "updateExisting": "更新{cogset}",
-    "importNew": "导入为新的齿轮组",
+    "importNew": "导入为新的 Cogset",
     "change": {
       "added": "新增",
       "removed": "移除",
       "repinned": "{from} → {to}",
       "config-changed": "设置有变化",
       "unchanged": "未变化",
-      "local-only": "仅在你的齿轮组中"
+      "local-only": "仅在你的 Cogset 中"
     },
     "localEdited": "你修改过",
     "useNext": "使用新版本",
     "members": "插件",
     "status": {
       "same": "已安装",
-      "different-version": "你安装的是 {installed}，齿轮包为 {version}",
+      "different-version": "你安装的是 {installed}，Cogpack 为 {version}",
       "new": "将被安装",
       "unavailable": "不可用"
     },
@@ -105,8 +105,8 @@
     "conflicts": "与已安装插件冲突",
     "reviewAfterInstall": "安装后再审核它的权限。",
     "secrets": "{name}的机密信息",
-    "secretPlaceholder": "保存到插件中，而不是齿轮组",
-    "missingDependencies": "需要齿轮包中未包含的插件",
+    "secretPlaceholder": "保存到插件中，而不是 Cogset",
+    "missingDependencies": "需要 Cogpack 中未包含的插件",
     "dependency": "{plugin} 需要 {dependency} {constraint}",
     "dependencyVersion": "{plugin} 需要 {dependency} {constraint}，但已安装的是 {installed}",
     "disabledOnActivation": "切换到它会关闭：{names}",
@@ -115,7 +115,7 @@
     "installing": "正在安装 {done}/{total}…",
     "done": "已导入{name}",
     "doneWithMissing": "已导入{name}，缺少 {count, plural, other {# 个插件}}",
-    "failed": "无法导入齿轮包",
+    "failed": "无法导入 Cogpack",
     "switchNow": "立即切换",
     "close": "关闭",
     "resultTitle": "{name}已导入",

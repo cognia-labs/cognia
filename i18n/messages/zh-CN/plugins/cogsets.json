@@ -1,8 +1,8 @@
 {
   "defaultName": "默认",
   "switcher": {
-    "aria": "齿轮组：{name}。切换齿轮组",
-    "none": "未选择齿轮组",
+    "aria": "Cogset：{name}。切换 Cogset",
+    "none": "未选择 Cogset",
     "switchTo": "切换到",
     "memberCount": "{count, plural, =0 {没有插件} other {# 个插件}}",
     "scopeSession": "仅本次",
@@ -10,16 +10,16 @@
     "partial": "部分应用",
     "pending": "等待切换到{name}",
     "pendingDetail": "有智能体任务正在运行，结束后将切换到{name}。",
-    "new": "新建齿轮组…",
-    "saveCurrent": "将当前插件保存为齿轮组…",
-    "manage": "管理齿轮组…",
-    "importCogpack": "导入齿轮包…",
-    "exportCogpack": "将{name}导出为齿轮包…",
-    "mirroredHint": "切换请求会发送到桌面端并由其执行。齿轮组需在桌面端编辑。",
+    "new": "新建 Cogset…",
+    "saveCurrent": "将当前插件保存为 Cogset…",
+    "manage": "管理 Cogset…",
+    "importCogpack": "导入 Cogpack…",
+    "exportCogpack": "将{name}导出为 Cogpack…",
+    "mirroredHint": "切换请求会发送到桌面端并由其执行。Cogset 需在桌面端编辑。",
     "queued": "已发送到桌面端，桌面端在线时会切换到{name}。",
     "switched": "已切换到{name}",
     "switchFailed": "无法切换到{name}",
-    "triggerLabel": "齿轮组"
+    "triggerLabel": "Cogset"
   },
   "confirmRuns": {
     "title": "在智能体运行时切换？",
@@ -31,7 +31,7 @@
     "title": "正在切换到{name}",
     "progress": "已完成 {done}/{total} 项变更",
     "partialTitle": "{name}只应用了一部分",
-    "partialDescription": "以下插件没有达到齿轮组要求的状态，其余插件均已切换。",
+    "partialDescription": "以下插件没有达到 Cogset 要求的状态，其余插件均已切换。",
     "retry": "重试",
     "close": "关闭",
     "optional": "可选"
@@ -44,7 +44,7 @@
   },
   "reason": {
     "not-installed": "未安装",
-    "version-mismatch": "已安装版本为 {installed}，齿轮组要求 {expected}",
+    "version-mismatch": "已安装版本为 {installed}，Cogset 要求 {expected}",
     "dependency-missing": "需要 {dependency}{constraint, select, any {} other { {constraint}}}，但它未安装",
     "dependency-disabled": "需要 {dependency}，但它无法在此设备上运行",
     "dependency-version": "需要 {dependency}{constraint, select, any {} other { {constraint}}}，但已安装的是 {found}",
@@ -55,10 +55,10 @@
     "config-failed": "设置未能应用"
   },
   "manager": {
-    "title": "齿轮组",
-    "description": "齿轮组是一组一起运行的插件。切换时会开启它包含的插件并关闭其余插件（常驻插件除外），不会卸载任何插件。",
-    "empty": "还没有齿轮组。",
-    "listAria": "齿轮组",
+    "title": "Cogset",
+    "description": "Cogset 是一组一起运行的插件。切换时会开启它包含的插件并关闭其余插件（常驻插件除外），不会卸载任何插件。",
+    "empty": "还没有 Cogset。",
+    "listAria": "Cogset",
     "applied": "运行中",
     "global": "默认选择",
     "workspace": "当前工作区",
@@ -66,7 +66,7 @@
       "default": "根据你的插件创建",
       "manual": "由你创建",
       "preset": "来自预设 {name}",
-      "cogpack": "来自齿轮包 {name} {version}"
+      "cogpack": "来自 Cogpack {name} {version}"
     },
     "members": "插件",
     "noMembers": "没有插件。切换到它会关闭除常驻插件外的所有插件。",
@@ -83,17 +83,17 @@
     "lastPartial": "上次切换只应用了一部分",
     "retry": "重试",
     "alwaysOnTitle": "常驻插件",
-    "alwaysOnDescription": "无论运行哪个齿轮组，这些插件都保持开启。",
+    "alwaysOnDescription": "无论运行哪个 Cogset，这些插件都保持开启。",
     "alwaysOnEmpty": "还没有。可在插件菜单中将其设为常驻。",
     "alwaysOnRemove": "将{name}移出常驻插件",
-    "mirroredHint": "你正在查看桌面端的齿轮组。可以在这里切换，编辑请在桌面端进行。",
-    "madeDefault": "{name}已设为默认齿轮组",
+    "mirroredHint": "你正在查看桌面端的 Cogset。可以在这里切换，编辑请在桌面端进行。",
+    "madeDefault": "{name}已设为默认 Cogset",
     "actionFailed": "操作失败",
-    "new": "新建齿轮组",
-    "export": "导出为齿轮包"
+    "new": "新建 Cogset",
+    "export": "导出为 Cogpack"
   },
   "editor": {
-    "createTitle": "新建齿轮组",
+    "createTitle": "新建 Cogset",
     "editTitle": "编辑{name}",
     "saveCurrentTitle": "保存当前插件",
     "name": "名称",
@@ -110,27 +110,27 @@
     "pin": "锁定 {version}",
     "pinHint": "安装了其他版本时给出提醒",
     "alwaysOnBadge": "常驻",
-    "alwaysOnHint": "已在所有齿轮组中开启",
+    "alwaysOnHint": "已在所有 Cogset 中开启",
     "save": "保存",
     "cancel": "取消",
     "saved": "已保存{name}",
-    "saveFailed": "无法保存齿轮组"
+    "saveFailed": "无法保存 Cogset"
   },
   "delete": {
     "title": "删除{name}？",
-    "description": "齿轮组将被删除，其中的插件仍保持安装。",
-    "orphans": "只有这个齿轮组用到以下插件。是否同时卸载？",
+    "description": "Cogset 将被删除，其中的插件仍保持安装。",
+    "orphans": "只有这个 Cogset 用到以下插件。是否同时卸载？",
     "confirm": "删除",
     "cancel": "取消",
     "deleted": "已删除{name}",
     "failed": "无法删除{name}",
-    "inUseApplied": "请先切换到其他齿轮组。",
-    "inUseGlobal": "请先将其他齿轮组设为默认。"
+    "inUseApplied": "请先切换到其他 Cogset。",
+    "inUseGlobal": "请先将其他 Cogset 设为默认。"
   },
   "alwaysOn": {
     "add": "设为常驻",
     "remove": "取消常驻",
-    "detail": "在所有齿轮组中保持开启",
+    "detail": "在所有 Cogset 中保持开启",
     "mirrored": "请在桌面端修改",
     "failed": "无法更改{name}的常驻设置"
   }
