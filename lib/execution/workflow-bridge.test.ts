@@ -61,6 +61,211 @@ function workflowRun(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
 }
 
 describe("workflow execution bridge", () => {
+  it.each([
+    "trigger.webhook",
+    "trigger.integration.event",
+    "trigger.connector.system",
+    "trigger.goal.completed",
+    "trigger.terminal.command",
+    "trigger.pet.event",
+    "trigger.issue.event",
+    "trigger.plan.event",
+    "trigger.scheduler.taskCompleted",
+    "trigger.capture.item",
+    "trigger.memory.written",
+    "trigger.file.watch",
+    "trigger.workflow.completed",
+    "trigger.desktop.event",
+    "trigger.chat.message",
+  ] as const)(
+    "records automatic %s without triggeredBy as an external event",
+    async (triggerKind) => {
+      await syncWorkflowExecutionRun(
+        workflowRun({ triggerKind, triggeredBy: undefined, triggeredBySource: undefined }),
+        [],
+        []
+      )
+      expect(
+        (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+      ).toMatchObject({ trigger: "external-event", requesters: [] })
+    }
+  )
+
+  it("records an integration envelope's actor only as an event actor", async () => {
+    await syncWorkflowExecutionRun(
+      workflowRun({
+        triggerKind: "trigger.integration.event",
+        triggeredBy: undefined,
+        triggerPayload: { actor: { id: "sender", label: "Sender" } },
+      }),
+      [],
+      []
+    )
+    expect(
+      (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+    ).toMatchObject({
+      trigger: "external-event",
+      requesters: [],
+      eventActors: [
+        {
+          kind: "event-actor",
+          source: "trigger.integration.event",
+          externalId: "sender",
+          displayName: "Sender",
+        },
+      ],
+    })
+  })
+
+  it.each(["trigger.chat.message", "trigger.team"] as const)(
+    "ignores the default UI index stamp on automatic %s",
+    async (triggerKind) => {
+      await syncWorkflowExecutionRun(
+        workflowRun({ triggerKind, triggeredBy: undefined, triggeredBySource: "ui" }),
+        [],
+        []
+      )
+      expect(
+        (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+      ).toMatchObject({ trigger: "external-event", requesters: [] })
+    }
+  )
+
+  it.each([
+    {
+      triggerKind: "trigger.connector.system",
+      triggerPayload: { sender: { remoteUserId: "sender", displayName: "Sender" } },
+    },
+    {
+      triggerKind: "trigger.integration.event",
+      triggerPayload: { event: { actor: { id: "sender", displayName: "Sender" } } },
+    },
+    {
+      triggerKind: "trigger.webhook",
+      triggerPayload: {},
+      triggeredBy: {
+        source: "bot" as const,
+        initiator: { platformIdentityId: "sender", displayName: "Sender" },
+      },
+    },
+  ])("keeps $triggerKind event senders out of requesters", async (overrides) => {
+    await syncWorkflowExecutionRun(
+      workflowRun({ triggeredBy: undefined, ...(overrides as Partial<WorkflowRunRow>) }),
+      [],
+      []
+    )
+    expect(
+      (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+    ).toMatchObject({
+      trigger: "external-event",
+      requesters: [],
+      eventActors: [
+        {
+          kind: "event-actor",
+          source: overrides.triggerKind,
+          externalId: "sender",
+          displayName: "Sender",
+        },
+      ],
+    })
+  })
+
+  it("records a connector message's existing sender as a requester", async () => {
+    await syncWorkflowExecutionRun(
+      workflowRun({
+        triggerKind: "trigger.connector.inbound",
+        triggeredBy: undefined,
+        triggerPayload: {
+          platform: "lark",
+          adapterId: "adapter",
+          sender: { remoteUserId: "alice" },
+          channelData: { identityScope: { unionId: "union" } },
+        },
+      }),
+      [],
+      []
+    )
+    expect(
+      (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+    ).toMatchObject({
+      trigger: "requester",
+      requesters: [
+        {
+          kind: "platform",
+          platform: "lark",
+          adapterId: "adapter",
+          remoteUserId: "alice",
+          unionId: "union",
+        },
+      ],
+    })
+  })
+
+  it("does not infer an event actor from arbitrary webhook body fields", async () => {
+    await syncWorkflowExecutionRun(
+      workflowRun({
+        triggerKind: "trigger.webhook",
+        triggeredBy: undefined,
+        triggerPayload: { body: { actor: { id: "untrusted" } } },
+      }),
+      [],
+      []
+    )
+    expect(
+      (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+    ).toMatchObject({ trigger: "external-event", requesters: [], eventActors: [] })
+  })
+
+  it.each([{ actor: "alice" }, { actor: null }, null])(
+    "does not let malformed event metadata interrupt projection: %p",
+    async (triggerPayload) => {
+      await expect(
+        syncWorkflowExecutionRun(
+          workflowRun({
+            triggerKind: "trigger.integration.event",
+            triggeredBy: undefined,
+            triggerPayload,
+          }),
+          [],
+          []
+        )
+      ).resolves.toBeUndefined()
+      expect(
+        (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity
+      ).toMatchObject({ trigger: "external-event", requesters: [], eventActors: [] })
+    }
+  )
+
+  it("records a scheduled workflow's resolved ceiling without inventing its authorizer", async () => {
+    const row = workflowRun({
+      triggerKind: "trigger.cron",
+      triggeredBy: { source: "schedule" },
+      securityContext: {
+        piiEgressRequired: true,
+        sourceTriggerKind: "trigger.cron",
+        permissionCeiling: {
+          permissionMode: "plan",
+          allowedTools: ["Read"],
+          disallowedTools: ["Bash"],
+          mcpServers: [{ name: "docs" }],
+        },
+      },
+    })
+    await syncWorkflowExecutionRun(row, [], [])
+    const run = await getDb().executionRuns.get("execution:workflow:wf-run-1")
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "schedule",
+      requesters: [],
+    })
+    expect(run?.actingIdentity?.authorizingPrincipal).toBeUndefined()
+    expect(run?.authority).toEqual({
+      schemaVersion: 1,
+      permissionMode: "plan",
+      tools: { allow: ["Read"], deny: ["Bash"] },
+      mcpServers: { only: ["docs"] },
+    })
+  })
   beforeEach(async () => {
     __resetWorkflowExecutionBridgeForTesting()
     stopAgentStateBridge.mockClear()
@@ -86,6 +291,12 @@ describe("workflow execution bridge", () => {
     await syncWorkflowExecutionRun(row, [event], [])
 
     const run = await getDb().executionRuns.get("execution:workflow:wf-run-1")
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "requester",
+      requesters: [],
+      authorityRevision: 0,
+    })
     expect(run?.latestSnapshot).toMatchObject({
       kind: "workflow",
       workflowGraph: {

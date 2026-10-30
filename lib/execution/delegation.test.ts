@@ -89,6 +89,12 @@ describe("delegation runs", () => {
     expect(created).toBe(true)
     expect(runId).toBe(delegationExecutionRunId("d-1"))
     const run = await getExecutionRun(runId)
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "requester",
+      requesters: [],
+      authorityRevision: 0,
+    })
     expect(run?.kind).toBe("delegation")
     expect(run?.currentRevision).toBeGreaterThan(0)
     expect(run?.latestSnapshot?.status).toBe("running")

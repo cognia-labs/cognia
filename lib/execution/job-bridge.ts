@@ -31,6 +31,15 @@ import {
 } from "@/lib/db/execution-runs"
 import type { BackgroundTaskJournalRecord } from "@/lib/background-tasks/registry-core"
 import type { ExecutionRunStatus } from "@/types/execution/run"
+import {
+  getDispatchContext,
+  getResolvedPermissionCeiling,
+} from "@/lib/claude/agents/dispatch-context-registry"
+import {
+  authorityFromPermissionCeiling,
+  recordedRunMetadata,
+  snapshotActingAuthority,
+} from "./acting-authority"
 
 export function jobExecutionRunId(sourceRunId: string): string {
   return `execution:job:${sourceRunId}`
@@ -68,8 +77,21 @@ export async function syncJobExecutionRun(record: BackgroundTaskJournalRecord): 
   const existing = await getExecutionRun(runId)
 
   if (!existing) {
+    const caller = record.recovery?.caller
+    const parentSubagentId =
+      caller?.parentSubagentId ?? getDispatchContext(record.sessionId)?.selfRunId
+    const parentId = parentSubagentId
+      ? jobExecutionRunId(parentSubagentId)
+      : (await snapshotActingAuthority(record.sessionId))?.runId
     await createExecutionRun({
       id: runId,
+      ...recordedRunMetadata("child", {
+        runId,
+        parent: parentId ? await getExecutionRun(parentId).catch(() => undefined) : undefined,
+        authority: authorityFromPermissionCeiling(
+          caller?.parentCeiling ?? getResolvedPermissionCeiling(record.sessionId)
+        ),
+      }),
       kind: "job",
       sourceId: record.runId,
       sessionId: record.sessionId,

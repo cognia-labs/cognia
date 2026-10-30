@@ -1,3 +1,9 @@
+import {
+  recordedRunMetadata,
+  authorityFromPermissionCeiling,
+  requestersFromRunOrigin,
+  runTriggerFromOrigin,
+} from "@/lib/execution/acting-authority"
 /**
  * The app's binding of the durable Agent Team coordinator (ADR-0217).
  *
@@ -19,7 +25,7 @@ import {
   type TeamRunJournal,
 } from "@cognia/agent-orchestration/coordinator"
 import type { TeamRunStore } from "@cognia/agent-orchestration/store"
-import { dexieTeamRunStore } from "@/lib/db/agent-team-runtime"
+import { dexieTeamRunStore, getAgentTeamRun } from "@/lib/db/agent-team-runtime"
 import { createExecutionRun, getExecutionRun, runEventJournal } from "@/lib/db/execution-runs"
 import { agentTeamExecutionRunId } from "@/lib/execution/agent-team-bridge"
 import { isPathWithinRoot, normalizeFsPath } from "@/lib/files/permissions"
@@ -53,8 +59,15 @@ export const executionRunTeamJournal: TeamRunJournal = {
     const executionRunId = agentTeamExecutionRunId(runId)
     const executionRun = await getExecutionRun(executionRunId)
     if (!executionRun) {
+      const constraints = (await getAgentTeamRun(runId).catch(() => undefined))
+        ?.executionConstraints
       await createExecutionRun({
         id: executionRunId,
+        ...recordedRunMetadata(runTriggerFromOrigin(constraints?.triggeredFrom), {
+          runId: executionRunId,
+          authority: authorityFromPermissionCeiling(constraints?.permissionCeiling),
+          requesters: requestersFromRunOrigin(constraints?.triggeredFrom),
+        }),
         kind: "team",
         sourceId: runId,
         ...(projectId ? { projectId } : {}),

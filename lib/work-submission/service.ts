@@ -48,6 +48,7 @@ import type { SendOptions } from "@cognia/agent-config-types"
 
 import { appendRunEventInsideTransaction, semanticRunEvent } from "@/lib/db/execution-runs"
 import { getDb, withDbReopenRetry } from "@/lib/db/schema"
+import { recordedRunMetadata } from "@/lib/execution/acting-authority"
 import {
   bindExecutionContextBundle,
   countOpenWorkSubmissions,
@@ -283,6 +284,26 @@ export async function acceptWorkSubmission(
         await db.workInputBatches.add(batch)
         await db.executionRuns.add({
           id: input.runId,
+          ...recordedRunMetadata(
+            intent.source.kind === "connector"
+              ? "requester"
+              : ["agent-executor", "workflow-agent-turn", "team", "plugin"].includes(
+                    intent.source.kind
+                  )
+                ? "child"
+                : intent.source.kind === "chat" || intent.source.kind === "cli"
+                  ? "local"
+                  : "external-event",
+            {
+              runId: input.runId,
+              ...(intent.source.kind === "chat" || intent.source.kind === "cli"
+                ? {
+                    requesters: [{ kind: "local-person", accountId }],
+                    actingPrincipal: { kind: "local-person", accountId },
+                  }
+                : {}),
+            }
+          ),
           kind: "agent-turn",
           sourceId: input.submissionId,
           ...(intent.scope.sessionId ? { sessionId: intent.scope.sessionId } : {}),

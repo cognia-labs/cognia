@@ -17,6 +17,7 @@ import {
   recordChatSdkMessage,
 } from "@/lib/chat/canonical-sink"
 import { finishSharedSessionRun } from "@/lib/collab/shared-run-coordinator"
+import { recordedRunMetadata } from "./acting-authority"
 
 export interface StartDirectChatExecutionRunInput {
   sessionId: string
@@ -65,6 +66,11 @@ export async function startDirectChatExecutionRun(
     try {
       run = await createExecutionRun({
         id: input.runId,
+        ...recordedRunMetadata("local", {
+          runId: input.runId,
+          requesters: [{ kind: "local-person" }],
+          actingPrincipal: { kind: "local-person" },
+        }),
         kind: "agent-turn",
         sourceId: input.runId,
         sessionId: input.sessionId,

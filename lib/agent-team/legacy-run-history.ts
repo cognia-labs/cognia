@@ -1,3 +1,9 @@
+import {
+  authorityFromPermissionCeiling,
+  recordedRunMetadata,
+  requestersFromRunOrigin,
+  runTriggerFromOrigin,
+} from "@/lib/execution/acting-authority"
 /**
  * Backfill legacy Squad run history into the canonical run records (ADR-0169).
  *
@@ -127,6 +133,11 @@ export async function backfillLegacyTeamRun(
 
       const executionRun: ExecutionRun = {
         id: executionRunId,
+        ...recordedRunMetadata(runTriggerFromOrigin(row.triggeredBy), {
+          runId: executionRunId,
+          authority: authorityFromPermissionCeiling(row.securityContext?.permissionCeiling),
+          requesters: requestersFromRunOrigin(row.triggeredBy),
+        }),
         kind: "team",
         sourceId: row.id,
         ...(row.projectId ? { projectId: row.projectId } : {}),

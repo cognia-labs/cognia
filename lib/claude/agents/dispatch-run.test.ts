@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  snapshotActingAuthority: jest.fn(async () => undefined),
+  observeActingAuthority: jest.fn(async () => ({ ok: true })),
+}))
+import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 import { startDispatchRun, resolveCaller, loadNesting, type ResolvedCaller } from "./dispatch-run"
 import { dispatchSubagent } from "@/lib/plugin/agent-sdk/dispatch"
 import { getDispatchableSubagentDef } from "@/lib/claude/agents/subagents"
@@ -106,6 +111,20 @@ it("gives an unknown caller an empty knowledge ceiling", async () => {
   expect((await resolveCaller("missing-knowledge-parent")).knowledgeAccess).toEqual({
     allowedKnowledgeBaseIds: [],
   })
+})
+
+it("retains the caller's earlier authority revision for subsequent child launch", async () => {
+  jest.mocked(snapshotActingAuthority).mockResolvedValueOnce({ runId: "parent", revision: 4 })
+  const resolved = await resolveCaller("session")
+  await Promise.resolve()
+  expect(resolved.actingAuthority).toEqual({ runId: "parent", revision: 4 })
+  expect(JSON.parse(JSON.stringify(resolved))).not.toHaveProperty("actingAuthority")
+  expect(structuredClone(resolved)).not.toHaveProperty("actingAuthority")
+})
+
+it("does not wait for observation storage when resolving a caller", async () => {
+  jest.mocked(snapshotActingAuthority).mockReturnValueOnce(new Promise(() => {}))
+  expect((await resolveCaller("session")).parentDepth).toBe(0)
 })
 const mockGetDef = getDispatchableSubagentDef as jest.MockedFunction<
   typeof getDispatchableSubagentDef
@@ -872,4 +891,24 @@ it("does not retry a background tool-capable attempt after an ambiguous transpor
   await mockStartBackground.mock.calls[0][2]
   expect(mockDispatch).toHaveBeenCalledTimes(1)
   expect(runs()[0].status).toBe("failed")
+})
+
+it("observes the caller's earlier revision and dispatches while observation is pending", async () => {
+  const seen = { runId: "parent", revision: 2 }
+  jest.mocked(observeActingAuthority).mockReturnValueOnce(new Promise(() => {}))
+  const handle = await startDispatchRun({
+    subagentId: "coder",
+    prompt: "build",
+    toolsEnabled: true,
+    background: false,
+    parentSessionId: "chat-1",
+    caller: { ...caller(), actingAuthority: seen },
+  })
+  expect(handle.text).toBe("[coder]\ndone")
+  expect(observeActingAuthority).toHaveBeenCalledWith("parent", 2, "child-launch")
+  expect(mockDispatch).toHaveBeenCalledWith(
+    expect.anything(),
+    "build",
+    expect.objectContaining({ _actingAuthority: seen })
+  )
 })

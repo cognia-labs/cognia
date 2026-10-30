@@ -13,8 +13,69 @@ import { mapWorkflowRunEvent } from "@/lib/execution/sources/workflow"
 import type { WorkflowFanoutSubscriptionRow } from "@/lib/db/connector-types"
 import type { WorkflowRunEventRow, WorkflowRunRow } from "@/types/workflow/visual"
 import { getConnectorConversationState } from "@/lib/db/connector-conversation-state"
-import type { ExecutionRunKind } from "@/types/execution/run"
+import type { ExecutionRunKind, PrincipalRefV1, RunTriggerV1 } from "@/types/execution/run"
+import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import { startAgentStateExecutionBridge } from "./agent-state-bridge"
+import {
+  authorityFromPermissionCeiling,
+  recordedRunMetadata,
+  requestersFromRunOrigin,
+  runTriggerFromOrigin,
+  connectorRequester,
+} from "./acting-authority"
+
+function recordedWorkflowTrigger(row: WorkflowRunRow): RunTriggerV1 {
+  if (row.lineage?.retryOfRunId || row.lineage?.parentRunId) return "child"
+  if (row.triggerKind === "trigger.cron") return "schedule"
+  if (row.triggerKind === "trigger.connector.inbound") return "requester"
+  if (["trigger.manual", "trigger.team", "trigger.chat.message"].includes(row.triggerKind)) {
+    // triggeredBySource defaults to "ui" even for automatic events; it is an
+    // index value, not evidence that a person started this run.
+    const origin = row.triggeredBy
+    if (!origin && row.triggerKind === "trigger.manual") return "local"
+    return runTriggerFromOrigin(origin)
+  }
+  // Webhooks, integration/system events and unknown automatic trigger kinds.
+  return "external-event"
+}
+
+function workflowEventActors(row: WorkflowRunRow): PrincipalRefV1[] {
+  const payload = row.triggerPayload as {
+    actor?: { id?: unknown; label?: unknown; displayName?: unknown }
+    event?: { actor?: { id?: unknown; label?: unknown; displayName?: unknown } }
+    sender?: { remoteUserId?: unknown; displayName?: unknown }
+  } | null
+  const actor =
+    row.triggerKind === "trigger.integration.event"
+      ? (payload?.actor ?? payload?.event?.actor)
+      : undefined
+  const sender = row.triggerKind === "trigger.connector.system" ? payload?.sender : undefined
+  const initiator = row.triggeredBy?.initiator
+  const id =
+    actor?.id ?? sender?.remoteUserId ?? initiator?.remoteUserId ?? initiator?.platformIdentityId
+  const name = actor?.label ?? actor?.displayName ?? sender?.displayName ?? initiator?.displayName
+  if (typeof id !== "string" && typeof name !== "string") return []
+  return [
+    {
+      kind: "event-actor",
+      source: row.triggerKind,
+      ...(typeof id === "string" ? { externalId: id } : {}),
+      ...(typeof name === "string" ? { displayName: name } : {}),
+    },
+  ]
+}
+
+function workflowRequesters(row: WorkflowRunRow): PrincipalRefV1[] {
+  const known = requestersFromRunOrigin(row.triggeredBy)
+  if (known.length || row.triggerKind !== "trigger.connector.inbound") return known
+  const event = row.triggerPayload as NormalizedInboundEvent | null
+  return event &&
+    typeof event.platform === "string" &&
+    typeof event.adapterId === "string" &&
+    typeof event.sender?.remoteUserId === "string"
+    ? [connectorRequester(event)]
+    : []
+}
 
 export function workflowExecutionRunId(sourceRunId: string): string {
   return `execution:workflow:${sourceRunId}`
@@ -48,9 +109,21 @@ export async function syncWorkflowExecutionRun(
   const runId = workflowExecutionRunId(sourceRun.id)
   let run = await getExecutionRun(runId)
   if (!run) {
+    const trigger = recordedWorkflowTrigger(sourceRun)
     try {
       await createExecutionRun({
         id: runId,
+        ...recordedRunMetadata(trigger, {
+          runId,
+          authority: authorityFromPermissionCeiling(sourceRun.securityContext?.permissionCeiling),
+          requesters: trigger === "requester" ? workflowRequesters(sourceRun) : [],
+          ...(trigger === "external-event" ? { eventActors: workflowEventActors(sourceRun) } : {}),
+          parent: sourceRun.lineage?.parentRunId
+            ? await getExecutionRun(workflowExecutionRunId(sourceRun.lineage.parentRunId)).catch(
+                () => undefined
+              )
+            : undefined,
+        }),
         kind: executionKindForWorkflowRun(sourceRun),
         // A retry is a REPLACEMENT, not a stranger: `lineage.retryOfRunId` is
         // already persisted on the new workflow row, so the parent link is

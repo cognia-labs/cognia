@@ -25,6 +25,7 @@ import {
   cancelLiveBotRun,
   getLiveBotRunSignal,
   runBotDelivery,
+  recordedBotRunMetadata,
 } from "./run"
 
 jest.mock("@/lib/db/bot-run-steps", () => {
@@ -122,6 +123,75 @@ describe("botRunId", () => {
 })
 
 describe("runBotDelivery", () => {
+  it("records integration actors separately and persists the folded Bot authority", async () => {
+    const { delivery, resolved } = await seed()
+    resolved.policy = {
+      maxAuthority: "plan",
+      maxRunCostUsd: 2,
+      permissionProfile: { outbound: "deny" },
+    }
+    const outcome = await runBotDelivery({
+      delivery,
+      resolved,
+      now,
+      executors: { handler: async () => ({ output: {} }) },
+    })
+    const run = await getExecutionRun(outcome.runId)
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "external-event",
+      requesters: [],
+      eventActors: [
+        {
+          kind: "event-actor",
+          source: "integration",
+          externalId: "octocat",
+          displayName: "Octocat",
+        },
+      ],
+    })
+    expect(run?.authority).toEqual({
+      schemaVersion: 1,
+      permissionMode: "plan",
+      permissionProfile: { outbound: "deny" },
+      pools: { rootRunId: outcome.runId, costUsd: 2 },
+    })
+  })
+
+  it("records timed triggers without guessing a schedule's authorizer", async () => {
+    const { delivery } = await seed()
+    const metadata = recordedBotRunMetadata({
+      ...delivery,
+      envelope: { ...delivery.envelope, source: "schedule" },
+    })
+    expect(metadata.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "schedule",
+      requesters: [],
+    })
+    expect(metadata.actingIdentity?.authorizingPrincipal).toBeUndefined()
+  })
+
+  it("records a connector sender as a requester using the existing envelope projection", async () => {
+    const { delivery } = await seed()
+    const metadata = recordedBotRunMetadata({
+      ...delivery,
+      envelope: {
+        ...delivery.envelope,
+        source: "connector",
+        binding: { adapterId: "adapter" },
+        payload: { platform: "lark" },
+      },
+    })
+    expect(metadata.actingIdentity).toMatchObject({
+      trigger: "requester",
+      requesters: [
+        { kind: "platform", platform: "lark", adapterId: "adapter", remoteUserId: "octocat" },
+      ],
+    })
+    expect(metadata.actingIdentity?.eventActors).toBeUndefined()
+  })
+
   it("keeps cancellation terminal when startup resumes after a checkpoint barrier", async () => {
     const { delivery, resolved } = await seed()
     let release!: () => void

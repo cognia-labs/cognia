@@ -1,3 +1,9 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  snapshotActingAuthority: jest.fn(async () => undefined),
+  observeActingAuthority: jest.fn(async () => ({ ok: true })),
+}))
+import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 import type { PermissionRequestEvent } from "@cognia/agent-config-types"
 
 import type { CapturePermissionDecision } from "./run-and-capture"
@@ -165,5 +171,43 @@ describe("unattended park", () => {
     deps.announceResolved = jest.fn().mockRejectedValue(new Error("bus down"))
     const park = createUnattendedPark({ origin: "bot", sessionId: "s1", label: "Bot", deps })
     await expect(park.park(request())).resolves.toMatchObject({ kind: "approved" })
+  })
+})
+
+it("resumes an approved parked run even when its recorded authority advanced", async () => {
+  const { deps } = harness(() => ({ decision: "allow" }))
+  jest
+    .mocked(snapshotActingAuthority)
+    .mockResolvedValueOnce({ runId: "unattended:s1:n1", revision: 1 })
+  jest
+    .mocked(observeActingAuthority)
+    .mockResolvedValueOnce({ ok: false, reason: "revision_advanced" })
+  const park = createUnattendedPark({
+    origin: "scheduler",
+    sessionId: "s1",
+    label: "Scheduled",
+    deps,
+  })
+  await expect(park.park(request())).resolves.toEqual({
+    kind: "approved",
+    decision: { decision: "allow" },
+  })
+  await Promise.resolve()
+  expect(observeActingAuthority).toHaveBeenCalledWith("unattended:s1:n1", 1, "unattended-resume")
+})
+
+it("does not wait for observation before returning an approved resume", async () => {
+  const { deps } = harness(() => ({ decision: "allow" }))
+  jest.mocked(snapshotActingAuthority).mockResolvedValueOnce({ runId: "run", revision: 0 })
+  jest.mocked(observeActingAuthority).mockReturnValueOnce(new Promise(() => {}))
+  const park = createUnattendedPark({
+    origin: "scheduler",
+    sessionId: "s1",
+    label: "Scheduled",
+    deps,
+  })
+  await expect(park.park(request())).resolves.toEqual({
+    kind: "approved",
+    decision: { decision: "allow" },
   })
 })

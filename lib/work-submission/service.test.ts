@@ -94,6 +94,12 @@ describe("acceptWorkSubmission", () => {
       runtimeTargetId: "target-1",
     })
     expect(await getWorkInputBatch("submission-1")).toBeDefined()
+    expect((await getDb().executionRuns.get("run-1"))?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "local",
+      requesters: [{ kind: "local-person", accountId: "account-1" }],
+      actingPrincipal: { kind: "local-person", accountId: "account-1" },
+    })
     // Accepted but not yet dispatched is exactly what `queued` means. Emitting
     // `run.started` here would project the run to `running` before anything is.
     expect((await getDb().executionRuns.get("run-1"))?.status).toBe("queued")

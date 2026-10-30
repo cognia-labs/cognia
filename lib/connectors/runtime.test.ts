@@ -2152,6 +2152,20 @@ describe("installRuntime — ai-run (live-activity card wiring)", () => {
     await callHandler(event, "ai-run")
     expect(typeof receivedCap?.onEvent).toBe("function")
     const run = await getDb().executionRuns.where("kind").equals("agent-turn").first()
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "requester",
+      authorityRevision: 0,
+      requesters: [
+        {
+          kind: "platform",
+          platform: event.platform,
+          adapterId: event.adapterId,
+          remoteUserId: event.sender.remoteUserId,
+        },
+      ],
+    })
+    expect(run?.authority?.schemaVersion).toBe(1)
     const events = await getDb().executionRunEvents.where("runId").equals(run!.id).toArray()
     expect(events.map((item) => item.type)).toEqual(
       expect.arrayContaining(["run.started", "tool.started", "run.completed"])

@@ -1,3 +1,13 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  recordAbsorbedRequester: jest.fn(async () => undefined),
+}))
+import { recordAbsorbedRequester } from "@/lib/execution/acting-authority"
+jest.mock("@/lib/db/connector-inbound-jobs", () => ({
+  ...jest.requireActual("@/lib/db/connector-inbound-jobs"),
+  completeConnectorInboundJob: jest.fn(async () => undefined),
+}))
+import { completeConnectorInboundJob } from "@/lib/db/connector-inbound-jobs"
 /**
  * Tests for ConnectorBus singleton (Task 25).
  * The runtime pipeline (Task 28) is exercised in bus.runtime.test.ts.
@@ -959,3 +969,58 @@ describe("ConnectorBus — ask_user short-circuit", () => {
     expect(generic).toHaveBeenCalledTimes(1)
   })
 })
+
+it("records an accepted steer's requester before marking its inbound job complete", async () => {
+  const bus = getBus()
+  const event = { ...makeEvent("a1", "steer"), channelData: { activeRunDispatchMode: "steer" } }
+  const internal = bus as unknown as {
+    turnQueues: Map<string, { tail: Promise<void>; depth: number }>
+    enqueueRouteHandlerTurn(...args: unknown[]): Promise<boolean>
+  }
+  internal.turnQueues.set(event.conversationKey, { tail: Promise.resolve(), depth: 1 })
+  bus.liveSteerHandler = jest.fn(async () => ({
+    activeRun: true,
+    accepted: true,
+    executionRunId: "run",
+  }))
+  await expect(internal.enqueueRouteHandlerTurn("job", event, {}, {}, null, {})).resolves.toBe(true)
+  expect(recordAbsorbedRequester).toHaveBeenCalledWith("run", {
+    kind: "platform",
+    platform: "telegram",
+    adapterId: "a1",
+    remoteUserId: "u_1",
+  })
+  expect(completeConnectorInboundJob).toHaveBeenCalledWith(
+    "job",
+    expect.objectContaining({ executionRunId: "run" })
+  )
+  expect(jest.mocked(recordAbsorbedRequester).mock.invocationCallOrder.at(-1)).toBeLessThan(
+    jest.mocked(completeConnectorInboundJob).mock.invocationCallOrder.at(-1)!
+  )
+})
+
+it("completes an accepted steer without waiting for requester recording", async () => {
+  jest.mocked(recordAbsorbedRequester).mockReturnValueOnce(new Promise(() => {}))
+  const bus = getBus()
+  const event = {
+    ...makeEvent("a1", "nonblocking-steer"),
+    channelData: { activeRunDispatchMode: "steer" },
+  }
+  const internal = bus as unknown as {
+    turnQueues: Map<string, { tail: Promise<void>; depth: number }>
+    enqueueRouteHandlerTurn(...args: unknown[]): Promise<boolean>
+  }
+  internal.turnQueues.set(event.conversationKey, { tail: Promise.resolve(), depth: 1 })
+  bus.liveSteerHandler = jest.fn(async () => ({
+    activeRun: true,
+    accepted: true,
+    executionRunId: "run",
+  }))
+  await expect(
+    internal.enqueueRouteHandlerTurn("nonblocking-job", event, {}, {}, null, {})
+  ).resolves.toBe(true)
+  expect(completeConnectorInboundJob).toHaveBeenCalledWith(
+    "nonblocking-job",
+    expect.objectContaining({ executionRunId: "run" })
+  )
+}, 1000)

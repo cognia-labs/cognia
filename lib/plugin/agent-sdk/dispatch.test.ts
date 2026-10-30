@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  snapshotActingAuthority: jest.fn(async () => undefined),
+  observeActingAuthority: jest.fn(async () => ({ ok: true })),
+}))
+import { observeActingAuthority } from "@/lib/execution/acting-authority"
 import { dispatchSubagent, resolveSubagentExternalTarget, runTeam } from "./dispatch"
 import { runCompletionRail } from "@/lib/ai/agent/agent-executor"
 import { getSubagent } from "@/lib/plugin/registries/subagent-registry"
@@ -1009,4 +1014,23 @@ describe("resolveSubagentExternalTarget", () => {
       presetId: "codex",
     })
   })
+})
+
+it("launches despite an observe-only authority mismatch", async () => {
+  jest
+    .mocked(observeActingAuthority)
+    .mockResolvedValueOnce({ ok: false, reason: "revision_advanced" })
+  const result = await dispatchSubagent(subagent, "review", {
+    _actingAuthority: { runId: "parent", revision: 1 },
+  })
+  expect(result.text).toBe("reviewed")
+  expect(observeActingAuthority).toHaveBeenCalledWith("parent", 1, "child-launch")
+  expect(mockExecute).toHaveBeenCalled()
+})
+
+it("does not wait for observation before running a child", async () => {
+  jest.mocked(observeActingAuthority).mockReturnValueOnce(new Promise(() => {}))
+  await expect(
+    dispatchSubagent(subagent, "review", { _actingAuthority: { runId: "parent", revision: 1 } })
+  ).resolves.toMatchObject({ text: "reviewed" })
 })

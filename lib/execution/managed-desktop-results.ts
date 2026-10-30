@@ -1,3 +1,4 @@
+import { recordedRunMetadata } from "./acting-authority"
 /** Disposable child-history projection; the encrypted Host evidence store remains authoritative. */
 import { getDb } from "@/lib/db/schema"
 import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
@@ -92,8 +93,10 @@ export async function syncManagedDesktopAcceptanceResult(
       // never causes a terminal child to be reopened or its result to be recreated.
       if (existing && ["completed", "failed", "cancelled"].includes(existing.status)) return true
       if (!existing) {
+        const parent = await db.executionRuns.get(binding.parentRunId)
         await db.executionRuns.add({
           id,
+          ...recordedRunMetadata("child", { runId: id, parent }),
           managedDesktopHostId: binding.hostId,
           kind: "job",
           sourceId: binding.taskId,

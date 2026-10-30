@@ -51,6 +51,11 @@ describe("syncSecurityScanExecutionRun", () => {
   it("projects a running scan under its own kind, titled by target", () => {
     return (async () => {
       await syncSecurityScanExecutionRun(record())
+      expect((await getExecutionRun(RUN_ID))?.actingIdentity).toMatchObject({
+        lane: "legacy",
+        trigger: "local",
+        requesters: [],
+      })
       expect(await getExecutionRun(RUN_ID)).toMatchObject({
         kind: "security-scan",
         sourceId: SOURCE,

@@ -11,6 +11,7 @@ import {
   type AppendRunEventInput,
 } from "@/lib/db/execution-runs"
 import { readForResolution } from "@/lib/db/conversation-overrides"
+import { recordedRunMetadata } from "./acting-authority"
 import { getConnectorConversationState } from "@/lib/db/connector-conversation-state"
 import type { Goal } from "@/types/goal"
 import type { AgentPlan, PlanStepStatus } from "@/types/agent/plan"
@@ -104,6 +105,16 @@ async function ensureRun(
     try {
       await createExecutionRun({
         id: runId,
+        ...recordedRunMetadata(
+          input.session.origin?.kind === "scheduled-task"
+            ? "schedule"
+            : input.session.origin?.kind === "gateway-api"
+              ? "external-event"
+              : input.session.platformBinding
+                ? "requester"
+                : "local",
+          { runId }
+        ),
         kind: input.kind,
         sourceId: input.sourceId,
         sessionId: input.session.id,

@@ -42,6 +42,7 @@ import { reduceRunEvents } from "./run-reducer"
 
 import { ensureConnectorRunBinding } from "./agent-state-bridge"
 import { getDb } from "@/lib/db/schema"
+import { recordedRunMetadata } from "./acting-authority"
 
 /** Stable id so a repeated accept is a no-op rather than a second card. */
 export function delegationExecutionRunId(delegationId: string): string {
@@ -119,6 +120,33 @@ export async function acceptDelegation(
   try {
     await createExecutionRun({
       id: runId,
+      ...recordedRunMetadata(
+        input.session?.origin?.kind === "scheduled-task"
+          ? "schedule"
+          : input.session?.origin?.kind === "gateway-api"
+            ? "external-event"
+            : input.session?.platformBinding
+              ? "requester"
+              : "local",
+        {
+          runId,
+          ...(input.session?.platformBinding && input.initiator?.remoteUserId
+            ? {
+                requesters: [
+                  {
+                    kind: "platform",
+                    platform: input.session.platformBinding.platform,
+                    adapterId: input.session.platformBinding.adapterId,
+                    remoteUserId: input.initiator.remoteUserId,
+                    ...(input.initiator.principalId
+                      ? { principalId: input.initiator.principalId }
+                      : {}),
+                  },
+                ],
+              }
+            : {}),
+        }
+      ),
       kind: "delegation",
       sourceId: input.delegationId,
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),

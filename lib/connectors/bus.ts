@@ -1,3 +1,4 @@
+import { connectorRequester, recordAbsorbedRequester } from "@/lib/execution/acting-authority"
 import { conversationAutomationState, waitForConversationAutomation } from "./automation-control"
 import {
   captureSystemDeliveryContext,
@@ -1571,6 +1572,11 @@ export class ConnectorBus {
     if (wantsLiveSteer && liveSteerPayloadSafe && this.liveSteerHandler) {
       const liveSteer = await this.liveSteerHandler(event)
       if (liveSteer.accepted) {
+        if (liveSteer.executionRunId) {
+          void recordAbsorbedRequester(liveSteer.executionRunId, connectorRequester(event)).catch(
+            () => undefined
+          )
+        }
         await completeConnectorInboundJob(inboundJobId, {
           executionRunId: liveSteer.executionRunId,
           now: Date.now(),

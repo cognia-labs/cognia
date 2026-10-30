@@ -220,6 +220,8 @@ export interface PluginDispatchSubagentOptions {
    * `dispatch_agent` tool from the caller's recorded ceiling.
    */
   _permissionCeiling?: import("../../lib/ai/agent/external/policy/permission-cascade").ExternalSessionPermissionSpec
+  /** ADR-0243 phase 1: the caller's earlier snapshot, observed only on child launch. */
+  _actingAuthority?: { runId: string; revision: number }
   /** Host-owned source authority inherited by nested dispatch; stripped from public plugin arguments. */
   _knowledgeAccess?: import("../../lib/knowledge-base/runtime/progressive-reading").KnowledgeReadingAccess
   /** Explicit run id (defaults to a generated one) — also the background key. */

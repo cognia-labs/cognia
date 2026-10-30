@@ -1,3 +1,7 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  recordRunAuthority: jest.fn(async () => undefined),
+}))
+import { recordRunAuthority } from "@/lib/execution/acting-authority"
 // Mock every database / store / agent-mode dependency so build-options can be
 // exercised as a pure function. We never want to touch Dexie or Zustand here.
 
@@ -6970,6 +6974,12 @@ describe("desktop-independent DI seams (standalone CLI)", () => {
         session: makeSession({ id: "sess-rec", characterId: "c1" }),
         permissionCeiling: { allowedTools: ["Read"] },
       })
+      await Promise.resolve()
+      expect(recordRunAuthority).toHaveBeenCalledWith(
+        "sess-rec",
+        expect.objectContaining({ schemaVersion: 1, tools: { allow: ["Read"] } }),
+        undefined
+      )
       expect(getResolvedPermissionCeiling("sess-rec")).toEqual({
         allowedTools: ["Read"],
       })

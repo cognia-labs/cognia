@@ -26,6 +26,19 @@ const seed: SquadRunSeed = {
 }
 
 describe("createSquadRunRecords", () => {
+  it("records an automatic Squad with no human provenance as external-event", async () => {
+    const result = await createSquadRunRecords({ ...seed, origin: "automation" })
+    expect(result.executionRun.actingIdentity).toMatchObject({
+      trigger: "external-event",
+      rootRunId: result.executionRunId,
+      requesters: [],
+    })
+  })
+
+  it("records an explicitly scheduled Squad even without frozen constraints", async () => {
+    const result = await createSquadRunRecords({ ...seed, origin: "schedule" })
+    expect(result.executionRun.actingIdentity?.trigger).toBe("schedule")
+  })
   let disableDbRuntime: (() => void) | undefined
 
   beforeEach(async () => {
@@ -209,6 +222,70 @@ describe("createSquadRunRecords", () => {
   it("links a replacement to the run it replaces", async () => {
     const result = await createSquadRunRecords({ ...seed, parentRunId: "execution:team:old" })
     expect(result.executionRun.parentRunId).toBe("execution:team:old")
+    expect(result.executionRun.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "child",
+      requesters: [],
+    })
+  })
+
+  it("copies the parent's fixed identity and meets a child's resolved ceiling", async () => {
+    const actingIdentity = {
+      schemaVersion: 1 as const,
+      rootRunId: "execution:team:old",
+      lane: "legacy" as const,
+      trigger: "requester" as const,
+      requesters: [{ kind: "local-person" as const, accountId: "owner" }],
+      authorityRevision: 3,
+      bindingId: "binding",
+    }
+    const pools = {
+      rootRunId: "execution:team:old",
+      tokenBudget: 100,
+      costUsd: 2,
+      deadlineMs: 5000,
+    }
+    await getDb().executionRuns.add({
+      id: "execution:team:old",
+      kind: "team",
+      sourceId: "old",
+      title: "Parent",
+      status: "completed",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      actingIdentity,
+      authority: {
+        schemaVersion: 1,
+        permissionMode: "default",
+        tools: { allow: ["Read", "Write"], deny: ["Bash"] },
+        maxTurns: 8,
+        pools,
+      },
+    })
+    const result = await createSquadRunRecords({
+      ...seed,
+      parentRunId: "execution:team:old",
+      executionConstraints: {
+        version: 1,
+        origin: "chat",
+        triggeredFrom: { source: "chat" },
+        requirePlanApprovalFloor: false,
+        permissionCeiling: {
+          permissionMode: "plan",
+          allowedTools: ["Read", "Bash"],
+          disallowedTools: ["Write"],
+        },
+      },
+    })
+    expect(result.executionRun.actingIdentity).toEqual(actingIdentity)
+    expect(result.executionRun.authority).toEqual({
+      schemaVersion: 1,
+      permissionMode: "plan",
+      tools: { allow: ["Read"], deny: ["Bash", "Write"] },
+      maxTurns: 8,
+      pools,
+    })
   })
 
   /**

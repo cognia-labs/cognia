@@ -14,6 +14,7 @@ import { getDb, withDbReopenRetry } from "./schema"
 import { redactText } from "@cognia/redact"
 import { touchNotificationProjectionInTransaction } from "./notification-projection-work"
 import { cachedNotificationScopeKey } from "@/lib/notifications/scope"
+import { recordedRunMetadata } from "@/lib/execution/acting-authority"
 
 export type AppendRunEventInput = Omit<RunEvent, "id" | "runId" | "seq" | "projectId"> & {
   id?: string
@@ -57,8 +58,19 @@ function withExecutionDatabaseRetry<T>(
 }
 
 export async function createExecutionRun(run: ExecutionRun): Promise<ExecutionRun> {
-  await withExecutionDatabaseRetry((db) => db.executionRuns.add(run).then(() => undefined))
-  return run
+  return withExecutionDatabaseRetry(async (db) => {
+    let recorded = run
+    if (run.parentRunId && run.actingIdentity) {
+      const parent = await db.executionRuns.get(run.parentRunId).catch(() => undefined)
+      if (parent)
+        recorded = {
+          ...run,
+          ...recordedRunMetadata("child", { runId: run.id, parent, authority: run.authority }),
+        }
+    }
+    await db.executionRuns.add(recorded)
+    return recorded
+  })
 }
 
 export async function getExecutionRun(runId: string): Promise<ExecutionRun | undefined> {
@@ -128,10 +140,24 @@ export async function listChildExecutionRuns(
  */
 export async function adoptExecutionRun(runId: string, parentRunId: string): Promise<boolean> {
   if (runId === parentRunId) return false
-  const run = await getExecutionRun(runId)
-  if (!run || run.parentRunId === parentRunId) return false
-  await getDb().executionRuns.update(runId, { parentRunId })
-  return true
+  return withExecutionDatabaseRetry((db) =>
+    db.transaction("rw", db.executionRuns, async () => {
+      const run = await db.executionRuns.get(runId)
+      if (!run || run.parentRunId === parentRunId) return false
+      const parent = await db.executionRuns.get(parentRunId).catch(() => undefined)
+      const inherited = parent
+        ? recordedRunMetadata("child", { runId: run.id, parent, authority: run.authority })
+        : undefined
+      await db.executionRuns.update(runId, {
+        parentRunId,
+        // Adoption happens after creation: never replace an established fixed
+        // identity or discard requesters/revisions already absorbed by this run.
+        ...(!run.actingIdentity && parent?.actingIdentity ? inherited : {}),
+        ...(parent?.authority ? { authority: inherited?.authority } : {}),
+      })
+      return true
+    })
+  )
 }
 
 export async function createExecutionRunBinding(
@@ -178,6 +204,35 @@ export async function listExecutionRunEvents(runId: string): Promise<RunEvent[]>
     .executionRunEvents.where("[runId+seq]")
     .between([runId, 0], [runId, Number.POSITIVE_INFINITY])
     .toArray()
+}
+
+/**
+ * Observation-only records live outside the executable journal sequence.
+ * Canonical events start at 1; reducers already exclude seq <= 0. Recording
+ * at 0 preserves the raw audit without advancing control revisions, touching
+ * notification work, republishing IM cards, or changing a terminal run.
+ */
+export async function appendRunObservation(
+  runId: string,
+  payload: Record<string, unknown>
+): Promise<RunEvent | undefined> {
+  return withExecutionDatabaseRetry((db) =>
+    db.transaction("rw", db.executionRuns, db.executionRunEvents, async () => {
+      const run = await db.executionRuns.get(runId)
+      const event: RunEvent = {
+        id: `execution-observation:${crypto.randomUUID()}`,
+        runId,
+        seq: 0,
+        ts: Date.now(),
+        type: "authority.observed",
+        visibility: "private",
+        payload: redactPayload(payload),
+        ...(run?.projectId ? { projectId: run.projectId } : {}),
+      }
+      await db.executionRunEvents.add(event)
+      return event
+    })
+  )
 }
 
 export async function listVisibleExecutionRunEvents(

@@ -251,3 +251,9 @@ Before phases 4 and 5 ship, the attack scenarios behind this ADR run as acceptan
 - shell egress after a disclosure;
 - a summary written to a document the person owns but shares;
 - an unmetered engine under a finite budget.
+
+## Implementation status
+
+Phase 1A records acting identity and resolved run authority on `ExecutionRun` in observe mode. Credential selection and existing refusals remain unchanged; revision mismatches are recorded privately and do not block execution. Children retain the parent's fixed identity (including its original trigger); when that identity is unavailable they record a `child` trigger with no inferred principal. Enforcement and shared pool accounting remain later rollout steps.
+
+New identities name their `rootRunId`; children keep historical identity snapshots while live observations and requester absorption use the root. Metadata recording leaves `updatedAt` unchanged, skips unchanged values, and reaches other devices with the run's next real update. Automatic sources without known human provenance record `external-event`.

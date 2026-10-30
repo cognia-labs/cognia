@@ -26,6 +26,11 @@ import type { PermissionClass, PermissionRequestEvent } from "@cognia/agent-conf
 import type { CapturePermissionDecision } from "./run-and-capture"
 import type { RunApprovalOrigin } from "@/lib/execution/run-approval-push"
 import {
+  observeActingAuthority,
+  recordedRunMetadata,
+  snapshotActingAuthority,
+} from "@/lib/execution/acting-authority"
+import {
   forgetRunApprovalOutbound,
   rememberRunApprovalOutbound,
 } from "@/lib/execution/run-approval-outbound"
@@ -77,6 +82,7 @@ export interface UnattendedParkDeps {
     title: string
     projectId?: string
     startedAt: number
+    trigger?: "schedule" | "child"
   }): Promise<void>
   finishRun(
     runId: string,
@@ -138,6 +144,7 @@ function defaultDeps(): UnattendedParkDeps {
       if (!(await getExecutionRun(input.runId))) {
         await createExecutionRun({
           id: input.runId,
+          ...recordedRunMetadata(input.trigger ?? "schedule", { runId: input.runId }),
           kind: "agent-turn",
           sourceId: input.runId,
           sessionId: input.sessionId,
@@ -213,6 +220,7 @@ export function createUnattendedPark(options: UnattendedParkOptions): Unattended
         title: options.label,
         ...(options.projectId ? { projectId: options.projectId } : {}),
         startedAt: now(),
+        trigger: options.origin === "scheduler" ? "schedule" : "child",
       })
       runId = id
       return id
@@ -224,6 +232,7 @@ export function createUnattendedPark(options: UnattendedParkOptions): Unattended
     runId: () => runId,
     async park(request) {
       const run = await ensureRun()
+      const authoritySnapshot = snapshotActingAuthority(options.sessionId, run)
       const interruptId = parkedInterruptId(run, request.requestId)
       const createdAt = now()
       const expiresAt = createdAt + ttlMs
@@ -271,6 +280,13 @@ export function createUnattendedPark(options: UnattendedParkOptions): Unattended
         // An answer came through the control gate, which already resolved the
         // interrupt row; tell foreground cards it is gone.
         const approved = decision.decision === "allow"
+        if (approved)
+          void authoritySnapshot
+            .then((seen) => {
+              if (seen)
+                return observeActingAuthority(seen.runId, seen.revision, "unattended-resume")
+            })
+            .catch(() => undefined)
         await deps
           .announceResolved({
             interruptId,

@@ -24,9 +24,25 @@ const sourceRun: AgentTeamRunRecord = {
   createdAt: 100,
   startedAt: 110,
   updatedAt: 110,
+  executionConstraints: {
+    version: 1,
+    origin: "chat",
+    triggeredFrom: { source: "chat" },
+    requirePlanApprovalFloor: false,
+  },
 }
 
 describe("AgentTeam ExecutionRun bridge", () => {
+  it("records an automatic team with no origin as external-event", async () => {
+    await ensureAgentTeamExecutionRun({ ...sourceRun, executionConstraints: undefined })
+    expect(
+      (await getDb().executionRuns.get("execution:team:team-run-1"))?.actingIdentity
+    ).toMatchObject({
+      trigger: "external-event",
+      rootRunId: "execution:team:team-run-1",
+      requesters: [],
+    })
+  })
   let disableDbRuntime: (() => void) | undefined
 
   beforeEach(async () => {
@@ -89,6 +105,12 @@ describe("AgentTeam ExecutionRun bridge", () => {
     await settleAgentTeamExecutionRun(sourceRun, "completed", 200)
     const rows = await getDb().executionRuns.toArray()
     expect(rows).toHaveLength(1)
+    expect(rows[0]?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "local",
+      requesters: [],
+      authorityRevision: 0,
+    })
     expect(rows[0]).toMatchObject({
       id: "execution:team:team-run-1",
       sourceId: "team-run-1",

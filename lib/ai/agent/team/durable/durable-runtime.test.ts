@@ -177,6 +177,38 @@ describe("the app's durable AgentTeam coordinator", () => {
     removeManagedFleetSession.mockReset().mockResolvedValue(true)
   })
 
+  it("records an already frozen scheduled run's resolved ceiling", async () => {
+    await runtimeDb.createAgentTeamRun({
+      id: "run-scheduled",
+      teamId: "team-1",
+      objective: "Ship",
+      status: "queued",
+      priority: 0,
+      decisionVersion: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      executionConstraints: {
+        version: 1,
+        origin: "schedule",
+        triggeredFrom: { source: "schedule" },
+        requirePlanApprovalFloor: false,
+        permissionCeiling: { permissionMode: "plan", allowedTools: ["Read"] },
+      },
+    })
+    await createDurableTeamCoordinator({ now: () => 50 }).prepareRun(team(), "run-scheduled")
+    const run = await getDb().executionRuns.get("execution:team:run-scheduled")
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "schedule",
+      requesters: [],
+    })
+    expect(run?.authority).toEqual({
+      schemaVersion: 1,
+      permissionMode: "plan",
+      tools: { allow: ["Read"] },
+    })
+  })
+
   afterEach(async () => {
     jest.restoreAllMocks()
     mockLeakCheck.mockReset().mockReturnValue(undefined)
@@ -211,12 +243,36 @@ describe("the app's durable AgentTeam coordinator", () => {
   })
 
   it("journals the run under the bridge's execution id and notes a resumption", async () => {
+    await runtimeDb.createAgentTeamRun({
+      id: "run-journal",
+      teamId: "team-1",
+      objective: "Ship",
+      status: "queued",
+      priority: 0,
+      decisionVersion: 0,
+      createdAt: 90,
+      updatedAt: 90,
+      executionConstraints: {
+        version: 1,
+        origin: "chat",
+        triggeredFrom: { source: "chat" },
+        requirePlanApprovalFloor: false,
+      },
+    })
     const coordinator = createDurableTeamCoordinator({ now: () => 90 })
     await coordinator.prepareRun(team(), "run-journal")
     // Addressed the way `agent-team-bridge` addresses it. Keying the row on the
     // bare run id made this path create a SECOND execution row for the same
     // run (`sourceId: <teamId>` rather than `<runId>`), which nothing deduped.
     expect(await getDb().executionRuns.get("run-journal")).toBeUndefined()
+    const recordedIdentity = (await getDb().executionRuns.get("execution:team:run-journal"))
+      ?.actingIdentity
+    expect(recordedIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "local",
+      requesters: [],
+      authorityRevision: 0,
+    })
     expect(await getDb().executionRuns.get("execution:team:run-journal")).toMatchObject({
       kind: "team",
       sourceId: "run-journal",
@@ -229,6 +285,20 @@ describe("the app's durable AgentTeam coordinator", () => {
     await createDurableTeamCoordinator({ now: () => 95 }).prepareRun(team(), "run-journal")
     const events = await runEventJournal.replay("execution:team:run-journal")
     expect(events.map((event) => event.type)).toEqual(["run.started", "run.resumed"])
+    expect((await getDb().executionRuns.get("execution:team:run-journal"))?.actingIdentity).toEqual(
+      recordedIdentity
+    )
+  })
+
+  it("records a durable run without frozen origin as external-event", async () => {
+    await createDurableTeamCoordinator({ now: () => 90 }).prepareRun(team(), "automatic")
+    expect(
+      (await getDb().executionRuns.get("execution:team:automatic"))?.actingIdentity
+    ).toMatchObject({
+      trigger: "external-event",
+      rootRunId: "execution:team:automatic",
+      requesters: [],
+    })
   })
 
   it("sends the steering payload redacted by @cognia/redact to the live runtime", async () => {

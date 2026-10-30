@@ -8,6 +8,7 @@ import { reduceRunEvents } from "@/lib/execution/run-reducer"
 import { __resetDbForTesting, getDb } from "./schema"
 import {
   appendRunEventsInsideTransaction,
+  adoptExecutionRun,
   createExecutionRun,
   createExecutionRunBinding,
   getExecutionRun,
@@ -29,6 +30,87 @@ describe("execution run journal", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("inherits recorded parent identity and meets child authority without changing legacy creation", async () => {
+    const parent: ExecutionRun = {
+      id: "parent",
+      kind: "job",
+      sourceId: "parent",
+      title: "Parent",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      actingIdentity: {
+        schemaVersion: 1,
+        rootRunId: "parent",
+        lane: "legacy",
+        trigger: "local",
+        requesters: [{ kind: "local-person" }],
+        authorityRevision: 2,
+      },
+      authority: {
+        schemaVersion: 1,
+        permissionMode: "default",
+        maxTurns: 4,
+        pools: { rootRunId: "parent", costUsd: 2 },
+      },
+    }
+    await createExecutionRun(parent)
+    const child = await createExecutionRun({
+      ...parent,
+      id: "child",
+      parentRunId: "parent",
+      actingIdentity: {
+        schemaVersion: 1,
+        lane: "legacy",
+        trigger: "child",
+        requesters: [],
+        authorityRevision: 0,
+      },
+      authority: { schemaVersion: 1, permissionMode: "plan", maxTurns: 8 },
+    })
+    expect(child.actingIdentity).toEqual(parent.actingIdentity)
+    expect(child.authority).toEqual({ ...parent.authority, permissionMode: "plan" })
+    expect(await getExecutionRun("parent")).toEqual(parent)
+  })
+
+  it("does not replace an established fixed identity or lower revision when adopting a run", async () => {
+    const base: ExecutionRun = {
+      id: "adopt-parent",
+      kind: "delegation",
+      sourceId: "parent",
+      title: "Parent",
+      status: "running",
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+      actingIdentity: {
+        schemaVersion: 1,
+        lane: "legacy",
+        trigger: "requester",
+        requesters: [],
+        authorityRevision: 0,
+      },
+      authority: { schemaVersion: 1, permissionMode: "plan" },
+    }
+    await createExecutionRun(base)
+    const identity = {
+      ...base.actingIdentity!,
+      trigger: "local" as const,
+      requesters: [{ kind: "local-person" as const }],
+      authorityRevision: 3,
+    }
+    await createExecutionRun({
+      ...base,
+      id: "adopt-child",
+      actingIdentity: identity,
+      authority: { schemaVersion: 1, permissionMode: "default" },
+    })
+    expect(await adoptExecutionRun("adopt-child", base.id)).toBe(true)
+    expect((await getExecutionRun("adopt-child"))?.actingIdentity).toEqual(identity)
+    expect((await getExecutionRun("adopt-child"))?.authority?.permissionMode).toBe("plan")
   })
 
   const listingCases: { query: ExecutionRunQuery; ids: string[] }[] = [

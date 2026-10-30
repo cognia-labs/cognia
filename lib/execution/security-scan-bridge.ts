@@ -34,6 +34,7 @@ import {
   securityScanRunStatus,
   type SecurityScanRunRecord,
 } from "@cognia/plugin-sdk/api/security-findings"
+import { recordedRunMetadata } from "./acting-authority"
 
 export {
   securityScanExecutionRunId,
@@ -67,6 +68,7 @@ export async function syncSecurityScanExecutionRun(record: SecurityScanRunRecord
   if (!existing) {
     await createExecutionRun({
       id: runId,
+      ...recordedRunMetadata("local", { runId }),
       kind: "security-scan",
       sourceId: record.runId,
       // The target is the one piece of scan detail that must cross: a row

@@ -13,6 +13,12 @@ import type { AgentTeamRunRecord } from "@/types/agent/agent-team-runtime"
 import type { RunEventType, RunUsageSnapshot } from "@/types/execution/run"
 
 import { ensureConnectorRunBinding } from "./agent-state-bridge"
+import {
+  authorityFromPermissionCeiling,
+  recordedRunMetadata,
+  requestersFromRunOrigin,
+  runTriggerFromOrigin,
+} from "./acting-authority"
 
 export function agentTeamExecutionRunId(sourceRunId: string): string {
   return `execution:team:${sourceRunId}`
@@ -28,6 +34,7 @@ export function agentTeamExecutionRunId(sourceRunId: string): string {
  * whichever path runs first wins and the second is a no-op.
  */
 export interface TeamExecutionRunSeed {
+  executionConstraints?: AgentTeamRunRecord["executionConstraints"]
   sourceRunId: string
   objective: string
   projectId?: string
@@ -64,6 +71,11 @@ export async function ensureTeamExecutionRun(seed: TeamExecutionRunSeed): Promis
     try {
       await createExecutionRun({
         id: runId,
+        ...recordedRunMetadata(runTriggerFromOrigin(seed.executionConstraints?.triggeredFrom), {
+          runId: runId,
+          authority: authorityFromPermissionCeiling(seed.executionConstraints?.permissionCeiling),
+          requesters: requestersFromRunOrigin(seed.executionConstraints?.triggeredFrom),
+        }),
         kind: "team",
         sourceId: seed.sourceRunId,
         ...(seed.projectId ? { projectId: seed.projectId } : {}),
@@ -171,6 +183,7 @@ export async function reportTeamRunUsage(
 export async function ensureAgentTeamExecutionRun(sourceRun: AgentTeamRunRecord): Promise<string> {
   return ensureTeamExecutionRun({
     sourceRunId: sourceRun.id,
+    executionConstraints: sourceRun.executionConstraints,
     objective: sourceRun.objective,
     teamId: sourceRun.teamId,
     ...(sourceRun.projectId ? { projectId: sourceRun.projectId } : {}),

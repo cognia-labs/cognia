@@ -77,6 +77,19 @@ test.each([
     await source()
     const parent = {
       id: "parent",
+      actingIdentity: {
+        schemaVersion: 1,
+        rootRunId: "parent",
+        lane: "legacy",
+        trigger: "local",
+        requesters: [{ kind: "local-person", accountId: "owner" }],
+        authorityRevision: 3,
+      },
+      authority: {
+        schemaVersion: 1,
+        permissionMode: "plan",
+        pools: { rootRunId: "parent", costUsd: 1 },
+      },
       kind: "job",
       sourceId: "task",
       title: "Source",
@@ -89,6 +102,8 @@ test.each([
     await syncManagedDesktopAcceptanceResult(result(outcome), scope)
     expect(await getExecutionRun("parent")).toEqual(parent)
     const id = managedDesktopAcceptanceRunId("a")
+    expect((await getExecutionRun(id))?.actingIdentity).toEqual(parent.actingIdentity)
+    expect((await getExecutionRun(id))?.authority).toEqual(parent.authority)
     expect(await getExecutionRun(id)).toMatchObject({
       status,
       title: "桌面验收",

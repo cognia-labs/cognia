@@ -58,6 +58,53 @@ import { clearPendingPark } from "./host-step"
 import { bindImPresentationForBotDelivery } from "./im-presentation"
 import { beginBotOutboundRun } from "@/lib/policy/action-review/configured-grants"
 import { parseBotDefinitionId } from "@/lib/plugin/registries/bot-registry"
+import { recordedRunMetadata, recordRunAuthority } from "@/lib/execution/acting-authority"
+import type { RunAuthorityV1, PrincipalRefV1 } from "@/types/execution/run"
+
+export function recordedBotRunMetadata(delivery: BotEventDeliveryRow) {
+  const { envelope } = delivery
+  const actor = envelope.actor
+  const payload = envelope.payload as { platform?: unknown } | undefined
+  const requester: PrincipalRefV1 | undefined =
+    envelope.source === "connector" &&
+    actor?.kind === "human" &&
+    actor.id &&
+    envelope.binding?.adapterId &&
+    typeof payload?.platform === "string"
+      ? {
+          kind: "platform",
+          platform: payload.platform,
+          adapterId: envelope.binding.adapterId,
+          remoteUserId: actor.id,
+          ...(actor.principalId ? { principalId: actor.principalId } : {}),
+        }
+      : undefined
+  return recordedRunMetadata(
+    envelope.source === "schedule"
+      ? "schedule"
+      : envelope.source === "connector"
+        ? "requester"
+        : envelope.source === "manual" || envelope.source === "desktop"
+          ? "local"
+          : "external-event",
+    {
+      runId: botRunId(delivery.id),
+      requesters: requester ? [requester] : [],
+      ...(envelope.source !== "connector" && envelope.source !== "schedule" && actor
+        ? {
+            eventActors: [
+              {
+                kind: "event-actor" as const,
+                source: envelope.source,
+                ...(actor.id ? { externalId: actor.id } : {}),
+                ...(actor.displayName ? { displayName: actor.displayName } : {}),
+              },
+            ],
+          }
+        : {}),
+    }
+  )
+}
 
 /**
  * Run the executor with the installation's recipient list lent to its plugin
@@ -368,6 +415,7 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
       if (!currentRun) {
         await getDb().executionRuns.add({
           id: runId,
+          ...recordedBotRunMetadata(delivery),
           kind: "bot",
           sourceId: resolved.installation.id,
           title: resolved.definition.name,
@@ -523,6 +571,19 @@ export async function runBotDelivery(input: RunBotDeliveryInput): Promise<BotRun
       composition.selection,
       resolved.policy
     )
+    // Record the already folded policy. The executor still consumes its existing policy inputs.
+    const recordedAuthority: RunAuthorityV1 = {
+      schemaVersion: 1,
+      permissionMode: executionComposition.authority,
+      ...(resolved.policy.permissionProfile
+        ? { permissionProfile: resolved.policy.permissionProfile }
+        : {}),
+      ...(resolved.policy.maxRunCostUsd !== undefined
+        ? { pools: { rootRunId: runId, costUsd: resolved.policy.maxRunCostUsd } }
+        : {}),
+    }
+    void recordRunAuthority("", recordedAuthority, runId)
+
     if (
       executionComposition.autonomy === "observe" ||
       executionComposition.engagement === "human"

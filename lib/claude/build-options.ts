@@ -6545,6 +6545,38 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     throw new Error(
       "Active stream or turn interceptors require an AI SDK runtime; the native Claude SDK exposes no model-step gate"
     )
+  // ADR-0243 phase 1: persist the resolved ceiling without changing what dispatch reads.
+  if (session?.id) {
+    void import("@/lib/execution/acting-authority")
+      .then(({ recordRunAuthority }) =>
+        recordRunAuthority(
+          session.id,
+          {
+            schemaVersion: 1,
+            ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+            ...(opts.allowedTools || opts.disallowedTools
+              ? {
+                  tools: {
+                    ...(opts.allowedTools ? { allow: opts.allowedTools } : {}),
+                    ...(opts.disallowedTools ? { deny: opts.disallowedTools } : {}),
+                  },
+                }
+              : {}),
+            ...(opts.mcpServers ? { mcpServers: { only: Object.keys(opts.mcpServers) } } : {}),
+            ...(opts.agents ? { subagents: { only: Object.keys(opts.agents) } } : {}),
+            ...(characterSkillIds.length || ephemeralIds.length
+              ? {
+                  skills: { only: [...skills.map((skill) => skill.id), ...enabledBuiltInSkillIds] },
+                }
+              : {}),
+            ...(opts.permissionProfile ? { permissionProfile: opts.permissionProfile } : {}),
+            ...(opts.maxTurns !== undefined ? { maxTurns: opts.maxTurns } : {}),
+          },
+          ctx.executionIdentity?.runId
+        )
+      )
+      .catch(() => undefined)
+  }
   return opts
 }
 

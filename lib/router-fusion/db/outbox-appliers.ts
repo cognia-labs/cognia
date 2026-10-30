@@ -1,3 +1,4 @@
+import { recordedRunMetadata } from "@/lib/execution/acting-authority"
 /**
  * Production appliers for the fusion outbox: they write into the account
  * database. Each is idempotent by construction — the usage row is keyed by a
@@ -130,6 +131,7 @@ const TERMINAL_EVENT: Record<string, RunEventType> = {
 export function projectedExecutionRun(p: ProjectionPayload) {
   return {
     id: p.runId,
+    ...recordedRunMetadata(p.origin === "local" ? "local" : "external-event", { runId: p.runId }),
     kind: "fusion" as const,
     // The fusion run IS the source: no engine run stands behind it.
     sourceId: p.runId,

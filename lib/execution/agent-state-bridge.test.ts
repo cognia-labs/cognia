@@ -312,6 +312,11 @@ describe("agent state execution bridge", () => {
 
     const runId = agentStateExecutionRunId("goal", "goal-1")
     const run = await getDb().executionRuns.get(runId)
+    expect(run?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "requester",
+      requesters: [],
+    })
     expect(run?.latestSnapshot).toMatchObject({
       kind: "goal",
       title: "redacted objective",
@@ -492,5 +497,17 @@ describe("agent state execution bridge", () => {
       await getDb().executionRuns.get(agentStateExecutionRunId("plan", "plan-local"))
     ).toBeDefined()
     expect(await getDb().executionRunBindings.count()).toBe(0)
+  })
+
+  it("records a gateway-created goal as external-event", async () => {
+    const gatewaySession: ChatSession = {
+      ...session(),
+      platformBinding: undefined,
+      origin: { kind: "gateway-api", keyId: "key", keyName: "automation" },
+    }
+    await syncGoalExecutionRun(goal(), gatewaySession)
+    expect(
+      (await getDb().executionRuns.get(agentStateExecutionRunId("goal", "goal-1")))?.actingIdentity
+    ).toMatchObject({ trigger: "external-event", requesters: [] })
   })
 })

@@ -81,6 +81,11 @@ import { discloseTwinOutboundSegments } from "@/lib/twin/outbound-disclosure"
 import { inferBuiltInSkillIntents } from "@/lib/skills/intent-resolver"
 import { generateEmbedding } from "@cognia/provider-embedding/embedding"
 import { readResolvedPrincipal } from "./principal/resolve"
+import {
+  authorityFromPermissionCeiling,
+  connectorRequester,
+  recordedRunMetadata,
+} from "@/lib/execution/acting-authority"
 import { tryBuildMemoryDeps } from "@/lib/memory/runtime/build-deps"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
@@ -2199,6 +2204,11 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
             : runTitle
         await createExecutionRun({
           id: executionRunId,
+          ...recordedRunMetadata(recoveryParentRunId ? "child" : "requester", {
+            runId: executionRunId,
+            requesters: [connectorRequester(event)],
+            authority: authorityFromPermissionCeiling(permissionCeiling),
+          }),
           ...(recoveryParentRunId ? { parentRunId: recoveryParentRunId } : {}),
           kind: "agent-turn",
           sourceId: storedMsg.id,

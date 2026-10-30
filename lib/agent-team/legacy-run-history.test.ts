@@ -68,7 +68,7 @@ describe("legacy run history backfill", () => {
   })
 
   it("imports a completed legacy run as canonical, immutable history", async () => {
-    const row = legacyRow({ id: "wf-done" })
+    const row = legacyRow({ id: "wf-done", triggeredBy: { source: "chat" } })
     await getDb().workflowRuns.add(row)
 
     const outcome = await backfillLegacyTeamRunHistory(9_000)
@@ -84,6 +84,13 @@ describe("legacy run history backfill", () => {
       completedAt: 2_000,
     })
     const execution = await getDb().executionRuns.get("execution:team:wf-done")
+    expect(execution?.actingIdentity).toMatchObject({
+      lane: "legacy",
+      trigger: "local",
+      requesters: [],
+      authorityRevision: 0,
+    })
+    expect(execution?.authority).toBeUndefined()
     expect(execution).toMatchObject({ kind: "team", sourceId: "wf-done", status: "completed" })
     const events = await getDb()
       .executionRunEvents.where("runId")
@@ -118,6 +125,18 @@ describe("legacy run history backfill", () => {
     expect(events[1]).toMatchObject({
       type: "run.recovery_required",
       payload: { reason: LEGACY_RUN_NOT_RESUMABLE },
+    })
+  })
+
+  it("records legacy history without a known human origin as external-event", async () => {
+    await getDb().workflowRuns.add(legacyRow({ id: "automatic" }))
+    await backfillLegacyTeamRunHistory(9_000)
+    expect(
+      (await getDb().executionRuns.get("execution:team:automatic"))?.actingIdentity
+    ).toMatchObject({
+      trigger: "external-event",
+      rootRunId: "execution:team:automatic",
+      requesters: [],
     })
   })
 

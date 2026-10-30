@@ -3,6 +3,7 @@ import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { resolveBuiltInSkillTurnActors } from "../context"
 import type { BuiltInSkillContext } from "../types"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 
 export interface VerifiedLarkUserAuthorization {
   accessToken: string
@@ -28,6 +29,7 @@ export async function assertLarkActingIdentity(
 ): Promise<VerifiedLarkUserAuthorization | undefined> {
   // Adapter/control-plane callers without a session are outside the IM skill lane.
   if (!ctx) return
+  const authoritySnapshot = snapshotActingAuthority(ctx.sessionId)
   try {
     const { getDb } = await import("@/lib/db/schema")
     const session = await getDb().sessions.get(ctx.sessionId)
@@ -75,6 +77,11 @@ export async function assertLarkActingIdentity(
     )
       throw new LarkActingIdentityError(ownerName)
     // The native token publication precedes the separate connectedUser write.
+    void authoritySnapshot
+      .then((seen) => {
+        if (seen) return observeActingAuthority(seen.runId, seen.revision, "lark-personal-token")
+      })
+      .catch(() => undefined)
     // Never combine metadata for one authorization with another one's token.
     const snapshot = await connectorsLarkUserAuth({ action: "snapshot", adapterId })
     if (!snapshot.configured || !snapshot.accessToken || !snapshot.authorizationEpoch)

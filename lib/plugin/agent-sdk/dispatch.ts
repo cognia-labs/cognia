@@ -1,3 +1,4 @@
+import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 /**
  * Plugin Agent SDK — programmatic subagent / team dispatch (Package C).
  *
@@ -127,6 +128,11 @@ export async function dispatchSubagent(
   }
 
   const runId = options._runId ?? newRunId()
+  const authoritySnapshot = options._actingAuthority
+    ? Promise.resolve(options._actingAuthority)
+    : options._approvalRoute?.parentSessionId
+      ? snapshotActingAuthority(options._approvalRoute.parentSessionId)
+      : Promise.resolve(undefined)
 
   let def: PluginSubagentDef | undefined
   let thisId: string
@@ -229,6 +235,11 @@ export async function dispatchSubagent(
   }
 
   // Thread A2: route to an external CLI agent when the def (or options) names a
+  void authoritySnapshot
+    .then((seen) => {
+      if (seen) return observeActingAuthority(seen.runId, seen.revision, "child-launch")
+    })
+    .catch(() => undefined)
   // preset. External agents run their own loop and do not nest back in, so the
   // depth/budget threading stops here.
   const externalTarget = externalTargetOf(def, options)

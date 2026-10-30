@@ -211,6 +211,13 @@ describe("account database outbox appliers", () => {
         await accountDatabaseAppliers.execution_run_projection(projection("queued"), NO_ARTIFACTS)
       ).toBe("applied")
       const run = await getExecutionRun("run-9")
+      expect(run?.actingIdentity).toMatchObject({
+        lane: "legacy",
+        trigger: "external-event",
+        requesters: [],
+      })
+      expect(run?.actingIdentity?.actingPrincipal).toBeUndefined()
+      expect(run?.authority).toBeUndefined()
       expect(run).toMatchObject({
         kind: "fusion",
         sourceId: "run-9",

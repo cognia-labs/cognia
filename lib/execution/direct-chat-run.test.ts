@@ -81,6 +81,15 @@ describe("direct chat execution run", () => {
     await finishDirectChatExecutionRun("session-1", "completed", 2_000)
 
     const run = await getDb().executionRuns.get(input.runId)
+    expect(run?.actingIdentity).toMatchObject({
+      schemaVersion: 1,
+      lane: "legacy",
+      trigger: "local",
+      requesters: [{ kind: "local-person" }],
+      actingPrincipal: { kind: "local-person" },
+      authorityRevision: 0,
+    })
+    expect(run?.authority).toBeUndefined()
     expect(run).toMatchObject({
       id: input.runId,
       kind: "agent-turn",

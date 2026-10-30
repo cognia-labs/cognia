@@ -1,3 +1,8 @@
+jest.mock("@/lib/execution/acting-authority", () => ({
+  snapshotActingAuthority: jest.fn(async () => undefined),
+  observeActingAuthority: jest.fn(async () => ({ ok: true })),
+}))
+import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/schema", () => ({ getDb: jest.fn() }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
 jest.mock("../context", () => ({ resolveBuiltInSkillTurnActors: jest.fn() }))
@@ -233,4 +238,27 @@ it.each(
   await expect(
     assertLarkActingIdentity("a1", { sessionId: "s1", hitlBypass: true, actingSenders })
   ).rejects.toMatchObject({ reason: "sender_not_token_owner" })
+})
+
+it.each(["missing", "revision_advanced"] as const)(
+  "observes %s without changing the existing owner gate",
+  async (reason) => {
+    jest.mocked(snapshotActingAuthority).mockResolvedValueOnce({ runId: "run", revision: 2 })
+    jest.mocked(observeActingAuthority).mockResolvedValueOnce({ ok: false, reason })
+    await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).resolves.toEqual({
+      accessToken: "owner-token",
+      authorizationEpoch: "auth-owner",
+    })
+    await Promise.resolve()
+    expect(observeActingAuthority).toHaveBeenCalledWith("run", 2, "lark-personal-token")
+  }
+)
+
+it("does not wait for the observe-only personal-token check", async () => {
+  jest.mocked(snapshotActingAuthority).mockResolvedValueOnce({ runId: "run", revision: 0 })
+  jest.mocked(observeActingAuthority).mockReturnValueOnce(new Promise(() => {}))
+  await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).resolves.toEqual({
+    accessToken: "owner-token",
+    authorizationEpoch: "auth-owner",
+  })
 })

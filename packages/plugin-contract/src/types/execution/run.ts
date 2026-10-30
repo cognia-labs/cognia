@@ -1,6 +1,8 @@
 /** Stable execution semantics shared by agent turns, workflows, and IM presenters. */
 
 import type { ConversationDeliveryTarget } from "../connectors/event"
+import type { ActingIdentityV1, RunAuthorityV1 } from "./acting-identity"
+export * from "./acting-identity"
 
 export type ExecutionRunKind =
   | "agent-turn"
@@ -145,6 +147,7 @@ export type RunEventType =
   | "control.rejected"
   | "projection.degraded"
   | "usage.reported"
+  | "authority.observed"
 
 export type RunStepStatus =
   "pending" | "in_progress" | "completed" | "failed" | "skipped" | "blocked"
@@ -383,6 +386,10 @@ export interface ExecutionRunRetryStamp {
 
 export interface ExecutionRun {
   id: string
+  /** ADR-0243 phase 1: recorded only; existing credential selection is unchanged. */
+  actingIdentity?: ActingIdentityV1
+  /** ADR-0243 phase 1: recorded only; existing runtime ceilings remain authoritative. */
+  authority?: RunAuthorityV1
   /** Verified owning Host for ADR-0233 acceptance projections and canonical deletion. */
   managedDesktopHostId?: string
   /** Independent deliverable obligation within a delegation. Absent means this run's id. */
@@ -417,6 +424,7 @@ export interface ExecutionRun {
 export interface RunEvent {
   id: string
   runId: string
+  /** Canonical lifecycle events start at 1; private observe-only audit records use 0. */
   seq: number
   ts: number
   type: RunEventType

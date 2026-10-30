@@ -1,3 +1,9 @@
+import {
+  authorityFromPermissionCeiling,
+  recordedRunMetadata,
+  requestersFromRunOrigin,
+  runTriggerFromOrigin,
+} from "@/lib/execution/acting-authority"
 /**
  * The two rows a Squad run is made of, created together or not at all.
  *
@@ -174,6 +180,21 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
       if (!executionRun) {
         executionRun = {
           id: executionRunId,
+          ...recordedRunMetadata(
+            seed.parentRunId
+              ? "child"
+              : runTriggerFromOrigin(
+                  seed.executionConstraints?.triggeredFrom ?? { source: seed.origin }
+                ),
+            {
+              runId: executionRunId,
+              parent: seed.parentRunId ? await db.executionRuns.get(seed.parentRunId) : undefined,
+              requesters: requestersFromRunOrigin(seed.executionConstraints?.triggeredFrom),
+              authority: authorityFromPermissionCeiling(
+                seed.executionConstraints?.permissionCeiling
+              ),
+            }
+          ),
           kind: "team",
           sourceId: seed.runId,
           ...(seed.parentRunId ? { parentRunId: seed.parentRunId } : {}),

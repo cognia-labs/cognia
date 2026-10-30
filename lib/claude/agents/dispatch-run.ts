@@ -15,6 +15,11 @@
  */
 
 import type { BackgroundDispatchRecovery } from "@/lib/background-tasks/registry-core"
+import {
+  observeActingAuthority,
+  snapshotActingAuthority,
+  type ActingAuthoritySnapshot,
+} from "@/lib/execution/acting-authority"
 import { captureBackgroundDispatchRecovery } from "@/lib/background-tasks/redispatch"
 import { admitBackgroundDispatch } from "@/lib/db/background-tasks"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
@@ -62,6 +67,8 @@ import {
 export const DEFAULT_NESTING_MAX_DEPTH = 2
 
 export interface ResolvedCaller {
+  /** Transient, non-enumerable observation only; never part of a recovery fingerprint. */
+  actingAuthority?: ActingAuthoritySnapshot
   knowledgeAccess?: KnowledgeReadingAccess
   /**
    * The directory the caller's own turn runs in, so every child inherits it
@@ -94,6 +101,13 @@ export interface NestingSettings {
   /** Fan-out width cap. `0` means unlimited. */
   maxConcurrent: number
 }
+
+// Snapshot I/O must not delay caller resolution. Keep pending observations out
+// of the serializable caller/recovery record while retaining their earlier revision.
+const callerAuthoritySnapshots = new WeakMap<
+  ResolvedCaller,
+  Promise<ActingAuthoritySnapshot | undefined>
+>()
 
 /** Clamp a stored concurrency cap to a usable integer (`0` = unlimited). */
 function normalizeMaxConcurrent(raw: unknown): number {
@@ -165,9 +179,23 @@ export async function resolveCaller(sessionId: string): Promise<ResolvedCaller> 
   const ctx = getDispatchContext(sessionId)
   // The concurrency cap is a global policy, not part of the per-run context
   // a nested caller carries, so every caller reads it from settings.
+  const authoritySnapshot = snapshotActingAuthority(
+    sessionId,
+    ctx?.selfRunId ? `execution:job:${ctx.selfRunId}` : undefined
+  )
   const [settings, cwd] = await Promise.all([loadNesting(), resolveCallerCwd(sessionId)])
+  const withObservation = (caller: ResolvedCaller): ResolvedCaller => {
+    callerAuthoritySnapshots.set(caller, authoritySnapshot)
+    void authoritySnapshot
+      .then((seen) => {
+        if (seen)
+          Object.defineProperty(caller, "actingAuthority", { value: seen, enumerable: false })
+      })
+      .catch(() => undefined)
+    return caller
+  }
   if (ctx) {
-    return {
+    return withObservation({
       parentDepth: ctx.depth,
       maxDepth: ctx.maxDepth,
       parentChain: ctx.parentChain,
@@ -178,12 +206,12 @@ export async function resolveCaller(sessionId: string): Promise<ResolvedCaller> 
       ...(cwd ? { cwd } : {}),
       ...(parentCeiling ? { parentCeiling } : {}),
       knowledgeAccess,
-    }
+    })
   }
   // Top-level chat: derive from settings and seed the subtree budget once.
   const budgetRoot = `dispatch:${sessionId}`
   getOrCreateDispatchBudget(budgetRoot, settings.tokenBudget)
-  return {
+  return withObservation({
     parentDepth: 0,
     maxDepth: settings.maxDepth,
     parentChain: [],
@@ -193,7 +221,7 @@ export async function resolveCaller(sessionId: string): Promise<ResolvedCaller> 
     ...(settings.timeoutMs > 0 ? { deadlineMs: Date.now() + settings.timeoutMs } : {}),
     ...(parentCeiling ? { parentCeiling } : {}),
     knowledgeAccess,
-  }
+  })
 }
 
 /**
@@ -324,8 +352,20 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
   }
 
   let recovery = p.recovery
-  const attemptDispatch = (): Promise<PluginSubagentDispatchResult> =>
-    dispatchSubagent(target, p.prompt, {
+  const attemptDispatch = (): Promise<PluginSubagentDispatchResult> => {
+    const seen = p.caller.actingAuthority
+    if (seen)
+      void observeActingAuthority(seen.runId, seen.revision, "child-launch").catch(() => undefined)
+    else
+      void callerAuthoritySnapshots
+        .get(p.caller)
+        ?.then((snapshot) => {
+          if (snapshot)
+            return observeActingAuthority(snapshot.runId, snapshot.revision, "child-launch")
+        })
+        .catch(() => undefined)
+    return dispatchSubagent(target, p.prompt, {
+      ...(seen ? { _actingAuthority: seen } : {}),
       toolsEnabled: p.toolsEnabled,
       _knowledgeAccess: effectiveCaller.knowledgeAccess ?? { allowedKnowledgeBaseIds: [] },
       _runId: childRunId,
@@ -366,6 +406,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
           errorEnvelope: envelope,
         }
       })
+  }
 
   // Terminal store recording happens exactly once, AFTER the retry loop
   // settles — a retried attempt must never record `failed` first.
