@@ -1,5 +1,5 @@
 import type { SandboxCapabilities, SandboxLifecycleState } from "@/types/sandbox"
-import { SANDBOX_LIFECYCLE_OPERATIONS } from "./connection-capabilities"
+import { SANDBOX_LIFECYCLE_OPERATIONS, defaultSandboxCapabilities } from "./connection-capabilities"
 import {
   SandboxCapabilityError,
   assertSandboxOperationAllowed,
@@ -298,5 +298,46 @@ it("refuses E2B GUI and workspace even when stored capabilities falsely advertis
         operation
       )
     ).toThrow(SandboxCapabilityError)
+  }
+})
+
+test("managed workspace capability is fenced by qualified delegation even when stored flags are forged", () => {
+  const config = {
+    provider: "e2b" as const,
+    target: { kind: "local" as const },
+    providerConfigId: "config",
+    desktopId: "desktop",
+    generation: 1,
+    delegationId: "grant",
+    agentControl: true,
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+    operationsQualified: true,
+  }
+  const ctx = {
+    connectionId: "managed:desktop:1",
+    provider: "e2b" as const,
+    driver: "computer-server" as const,
+    state: "running" as const,
+    capabilities: {
+      ...defaultSandboxCapabilities("e2b", "computer-server"),
+      workspaceRead: true,
+      workspaceExec: true,
+    },
+    config,
+  }
+  for (const operation of ["workspaceRead", "workspaceExec"] as const) {
+    expect(() => assertSandboxOperationAllowed(ctx, operation)).not.toThrow()
+    for (const patch of [
+      { config: undefined },
+      { config: { ...config, delegationId: undefined } },
+      { config: { ...config, operationsQualified: false } },
+      { connectionId: "managed:desktop:2" },
+    ])
+      expect(() => assertSandboxOperationAllowed({ ...ctx, ...patch }, operation)).toThrow(
+        SandboxCapabilityError
+      )
   }
 })

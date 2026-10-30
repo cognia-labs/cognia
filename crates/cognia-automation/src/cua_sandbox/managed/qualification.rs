@@ -540,6 +540,20 @@ pub(super) fn gui_current(s: &ManagedDesktopJournal, config: &ManagedDesktopConf
     ];
     ids.into_iter().collect::<BTreeSet<_>>().len() == 3
 }
+/// Recipe-7 GUI receipts cannot authorize recipe-8 operations. Re-derive
+/// current configuration/template/native evidence, never trust a stored flag.
+pub(super) fn operations_current(
+    s: &ManagedDesktopJournal,
+    config: &ManagedDesktopConfig,
+    now: i64,
+) -> bool {
+    config.release.recipe_revision == "8"
+        && gui_current(s, config, now)
+        && s.workload_diagnostics
+            .get(&config.binding_digest())
+            .is_some_and(|q| q.report.operations.is_some() && q.report.validate().is_ok())
+}
+
 pub(super) fn effective_enablement(
     s: &ManagedDesktopJournal,
     config: &ManagedDesktopConfig,

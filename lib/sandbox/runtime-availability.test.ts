@@ -230,3 +230,34 @@ it.each([undefined, 0, 1, 2, 3])(
     })
   }
 )
+
+it("narrows stored managed workspace flags when current Host qualification is absent", () => {
+  const config = {
+    provider: "e2b" as const,
+    target: { kind: "local" as const },
+    providerConfigId: "config",
+    desktopId: "desktop",
+    generation: 1,
+    delegationId: "grant",
+    agentControl: true,
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+    operationsQualified: true,
+  }
+  const row = connection({
+    id: "managed:desktop:1",
+    provider: "e2b",
+    config,
+    capabilities: managedDesktopCapabilities(config),
+  })
+  expect(projectSandboxConnectionCapabilities(row, true).workspaceExec).toBe(true)
+  for (const flags of [false, undefined])
+    expect(
+      projectSandboxConnectionCapabilities(
+        { ...row, config: { ...config, ...{ operationsQualified: flags } } },
+        true
+      )
+    ).toMatchObject({ workspaceRead: false, workspaceExec: false })
+})

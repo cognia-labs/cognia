@@ -108,12 +108,13 @@ The managed desktop (ADR-0233) is built and natively qualified, but a user canno
 
 ## Residual risks
 
-| ID  | Residual                                                               | From | Why still open         | Next action           | Status |
-| --- | ---------------------------------------------------------------------- | ---- | ---------------------- | --------------------- | ------ |
-| X1  | Real frame rate and CPU on E2B unknown                                 | A1   | not measured           | measure in WP12 smoke | open   |
-| X2  | Host-local concurrency limit is not account-wide across Hosts          | D2   | accepted v1 limitation | label in UI           | open   |
-| X3  | Egress Off makes the desktop offline for internet-dependent acceptance | D5   | deferred by decision   | separate amendment    | open   |
-| X4  | Agents can bind only managed desktops of the Host the session runs on  | D9   | decided Q26 (a), WP13  | WP13                  | open   |
+| ID  | Residual                                                                    | From | Why still open                          | Next action                                                 | Status |
+| --- | --------------------------------------------------------------------------- | ---- | --------------------------------------- | ----------------------------------------------------------- | ------ |
+| X1  | Real frame rate and CPU on E2B unknown                                      | A1   | not measured                            | measure in WP12 smoke                                       | open   |
+| X2  | Host-local concurrency limit is not account-wide across Hosts               | D2   | accepted v1 limitation                  | label in UI                                                 | open   |
+| X3  | Egress Off makes the desktop offline for internet-dependent acceptance      | D5   | deferred by decision                    | separate amendment                                          | open   |
+| X4  | Agents can bind only managed desktops of the Host the session runs on       | D9   | decided Q26 (a), WP13                   | WP13                                                        | open   |
+| X5  | Managed exec cannot narrow writes below the workload home or take env/stdin | D5   | guest exec contract is argv/cwd/timeout | requests are attested like Docker and refused when stricter | open   |
 
 ## Outcome
 

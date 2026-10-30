@@ -784,6 +784,8 @@ pub struct ManagedDesktopConfigSummary {
     pub can_prepare_template: bool,
     pub can_create: bool,
     pub gui_qualified: bool,
+    #[serde(default)]
+    pub operations_qualified: bool,
     pub qualification_evidence_version: Option<u32>,
     pub workload_isolation_revision: Option<u32>,
     pub isolation_tier: IsolationTier,

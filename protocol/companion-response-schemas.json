@@ -14373,6 +14373,10 @@
             "required": ["category", "current", "observedAt"],
             "additionalProperties": false
           }
+        },
+        "operationsQualified": {
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -18411,6 +18415,76 @@
     },
     "managed_desktop_control_input": {
       "type": "null"
+    },
+    "managed_desktop_files_read": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "file-read"
+        },
+        "chunk": {
+          "type": "array",
+          "maxItems": 65536,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "eof": {
+          "type": "boolean"
+        }
+      },
+      "required": ["kind", "chunk", "eof"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+    },
+    "managed_desktop_files_write": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "file-write"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "final": {
+          "type": "boolean"
+        }
+      },
+      "required": ["kind", "bytes", "final"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+    },
+    "managed_desktop_clipboard_get": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "clipboard-get"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": ["kind", "text"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
+    },
+    "managed_desktop_clipboard_set": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "clipboard-set"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["kind", "bytes"],
+      "additionalProperties": false,
+      "x-cognia-wire-source": "crates/cognia-automation/src/cua_sandbox/managed/operations.rs"
     },
     "managed_desktop_control_frame": {
       "$ref": "#/$defs/ManagedDesktopControlFrame"

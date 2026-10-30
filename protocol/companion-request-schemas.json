@@ -13798,6 +13798,91 @@
       ],
       "additionalProperties": false
     },
+    "managed_desktop_clipboard_get": {
+      "type": "object",
+      "properties": {
+        "desktopId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "fence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "desktopId",
+        "generation",
+        "token",
+        "fence"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_clipboard_set": {
+      "type": "object",
+      "properties": {
+        "desktopId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "fence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "desktopId",
+        "generation",
+        "token",
+        "fence",
+        "text"
+      ],
+      "additionalProperties": false
+    },
     "managed_desktop_config_delete": {
       "type": "object",
       "properties": {
@@ -14773,6 +14858,130 @@
       "required": [
         "desktopId",
         "generation"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_files_read": {
+      "type": "object",
+      "properties": {
+        "desktopId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "fence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "desktopId",
+        "generation",
+        "token",
+        "fence",
+        "path",
+        "offset",
+        "length"
+      ],
+      "additionalProperties": false
+    },
+    "managed_desktop_files_write": {
+      "type": "object",
+      "properties": {
+        "desktopId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "fence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8388608
+        },
+        "chunk": {
+          "type": "array",
+          "maxItems": 65536,
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          }
+        },
+        "final": {
+          "type": "boolean"
+        },
+        "adminLease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "admin_lease": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "required": [
+        "desktopId",
+        "generation",
+        "token",
+        "fence",
+        "path",
+        "offset",
+        "chunk",
+        "final"
       ],
       "additionalProperties": false
     },

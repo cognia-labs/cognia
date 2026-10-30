@@ -186,10 +186,31 @@ pub(crate) fn spawn_diagnostic(
 /// Only the authenticated root control worker invokes this. Use exactly the
 /// acceptance launch/admission path; no alternate nsenter or bare exec path.
 pub(crate) fn spawn_operations(boundary: &Boundary) -> io::Result<AcceptanceJob> {
-    spawn_inner(boundary, &uuid::Uuid::new_v4().to_string(), "operations",
-        // The control session ends at one hour. Allow its last bounded exec
-        // and guarded helper exit to drain before this lifetime backstop.
-        Instant::now() + Duration::from_secs(3690), false, true)
+    spawn_inner(
+        boundary,
+        &uuid::Uuid::new_v4().to_string(),
+        "operations",
+        Instant::now() + OPERATIONS_LIFETIME,
+        false,
+        true,
+    )
+}
+
+/// Acceptance and diagnostic helpers live at most one hour.
+const ACCEPTANCE_LIFETIME: Duration = Duration::from_secs(3600);
+/// The operations control session ends at one hour; its last bounded exec and
+/// guarded helper exit get 90 seconds to drain before this lifetime backstop.
+const OPERATIONS_LIFETIME: Duration = Duration::from_secs(3690);
+
+fn deadline_admitted(deadline: Instant, operations: bool) -> bool {
+    let limit = if operations {
+        OPERATIONS_LIFETIME
+    } else {
+        ACCEPTANCE_LIFETIME
+    };
+    deadline
+        .checked_duration_since(Instant::now())
+        .is_some_and(|remaining| !remaining.is_zero() && remaining <= limit)
 }
 
 fn spawn_inner(
@@ -204,11 +225,7 @@ fn spawn_inner(
         crate::qualify::acceptance_stage("acceptance_prepare");
     }
     validate_identifiers(operation, script)?;
-    if unsafe { libc::geteuid() } != 0
-        || !deadline
-            .checked_duration_since(Instant::now())
-            .is_some_and(|remaining| !remaining.is_zero() && remaining <= Duration::from_secs(3600))
-    {
+    if unsafe { libc::geteuid() } != 0 || !deadline_admitted(deadline, operations) {
         return Err(refused());
     }
     if !operations { validate_promoted_path(operation)?; }
@@ -997,6 +1014,20 @@ fn close_except(mut keep: [i32; 3]) -> io::Result<()> {
 pub(crate) mod tests {
     use super::*;
     const OP: &str = "12345678-1234-1234-1234-123456789abc";
+
+    #[test]
+    fn operations_lifetime_outlasts_its_one_hour_session_and_acceptance_stays_capped() {
+        let session_end = Instant::now() + Duration::from_secs(3600);
+        let operations_end = Instant::now() + OPERATIONS_LIFETIME;
+        assert!(deadline_admitted(operations_end, true));
+        assert!(deadline_admitted(session_end, false));
+        assert!(!deadline_admitted(operations_end, false));
+        assert!(!deadline_admitted(
+            operations_end + Duration::from_secs(5),
+            true
+        ));
+        assert!(!deadline_admitted(Instant::now(), true));
+    }
 
     pub(crate) struct TestDesktop(pub Child);
     impl Drop for TestDesktop {

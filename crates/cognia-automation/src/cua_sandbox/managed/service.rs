@@ -392,6 +392,7 @@ impl ManagedDesktopService {
                 let digest = c.binding_digest();
                 let template = latest_template(&state, &digest);
                 let qualified = qualification::gui_current(&state, &c, now);
+                let operations_qualified = qualification::operations_current(&state, &c, now);
                 let enablement = qualification::effective_enablement(&state, &c, now);
                 let categories = qualification::category_statuses(&state, &c, now);
                 let error = self.admission(&c, now).err();
@@ -439,6 +440,7 @@ impl ManagedDesktopService {
                         && (enablement.manual_gui || enablement.agent_control || enablement.acceptance)
                         && p.require_human().is_ok(),
                     gui_qualified: valid && qualified,
+                    operations_qualified: valid && operations_qualified,
                     qualification_evidence_version: qualified.then_some(2),
                     workload_isolation_revision: qualified.then_some(1),
                     isolation_tier: IsolationTier::Vm,
@@ -1668,7 +1670,21 @@ pub(super) mod tests {
         collections::BTreeMap,
         sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     };
+    pub(super) type WorkspaceHandler = Arc<
+        dyn Fn(
+                super::super::operations::GuestOperation,
+                LifecycleAdmission,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = Result<super::super::operations::GuestOperationResult>,
+                        > + Send,
+                >,
+            > + Send
+            + Sync,
+    >;
     pub(super) struct FakeProvider {
+        pub(super) workspace_handler: std::sync::Mutex<Option<WorkspaceHandler>>,
         resources: Mutex<BTreeMap<String, ProviderDesktop>>,
         creates: AtomicUsize,
         deletes: AtomicUsize,
@@ -1702,6 +1718,7 @@ pub(super) mod tests {
     impl FakeProvider {
         fn new() -> Self {
             Self {
+                workspace_handler: Default::default(),
                 resources: Mutex::new(BTreeMap::new()),
                 creates: AtomicUsize::new(0),
                 deletes: AtomicUsize::new(0),
@@ -1723,6 +1740,21 @@ pub(super) mod tests {
     }
     #[async_trait]
     impl ManagedDesktopProvider for FakeProvider {
+        async fn guest_operation(
+            &self,
+            _: &DesktopRecord,
+            _: &DesktopSecrets,
+            _: &HostBoundaryBinding,
+            request: &super::super::operations::GuestOperation,
+            admission: LifecycleAdmission,
+        ) -> Result<super::super::operations::GuestOperationResult> {
+            let handler = self.workspace_handler.lock().unwrap().clone();
+            handler.ok_or_else(|| refused("managed_desktop_operations_unqualified"))?(
+                request.clone(),
+                admission,
+            )
+            .await
+        }
         async fn verify_release(&self, _: &ManagedDesktopConfig) -> Result<()> {
             let gate = self.verify_gate.lock().await.take();
             if let Some(gate) = gate { gate.pause().await; }

@@ -12,11 +12,31 @@ import {
   type SandboxProviderAdapter,
 } from "./lifecycle-contract"
 
-import { hasCurrentManagedDesktopQualification } from "./connection-capabilities"
+import {
+  delegatedManagedDesktopWorkspace,
+  hasCurrentManagedDesktopQualification,
+} from "./connection-capabilities"
+import { localTransport } from "@/lib/tauri/transport-instance"
+import type { SandboxExecOutcome } from "@/lib/automation/sandbox-client"
 import type { LumeAdapterOptions } from "./lume-adapter"
+import { MicrovmAdapterError, type MicrovmRequest } from "@cognia/plugin-sdk/api/sandbox"
+import { attestManagedPolicy } from "./docker-policy-attestation"
+
+/** All managed shell/file entry points attest before dispatching to the Host. */
+export function requireManagedPolicy(
+  config: Parameters<typeof attestManagedPolicy>[0],
+  policy: Partial<MicrovmRequest>,
+  cwd?: string
+): void {
+  const attestation = attestManagedPolicy(config, policy, cwd)
+  if (!attestation.attested)
+    throw new MicrovmAdapterError("policy-not-attested", attestation.reason)
+}
 
 export interface ManagedDesktopAdapterOptions extends LumeAdapterOptions {
   managedClient?: ManagedDesktopClient
+  /** WP8 renderer tags; the Host revalidates the delegation on every call. */
+  managedAgent?: { sessionKey: string; characterId?: string }
   /** Single-use authorization issued by the owning Host after human consent. Never persisted in the row. */
   managedCreation?: ManagedDesktopCreation
 }
@@ -56,6 +76,45 @@ export function buildE2bSandboxAdapter(
   return {
     provider: "e2b",
     driver: "computer-server",
+    workspaceRead: async (ctx, path) => {
+      if (!delegatedManagedDesktopWorkspace(row))
+        throw new SandboxCapabilityError({
+          code: "provider-unqualified",
+          operation: "workspaceRead",
+          provider: "e2b",
+          driver: row.driver,
+        })
+      if (!options.managedAgent?.sessionKey) throw new Error("managed_desktop_delegation_required")
+      requireManagedPolicy(config, { readable: [path] })
+      return localTransport.call<string>("cua_sandbox_read_file", {
+        connectionId: ctx.connectionId,
+        path,
+        maxBytes: 8 * 1024 * 1024,
+        ...options.managedAgent,
+      })
+    },
+    workspaceExec: async (ctx, request) => {
+      if (!delegatedManagedDesktopWorkspace(row))
+        throw new SandboxCapabilityError({
+          code: "provider-unqualified",
+          operation: "workspaceExec",
+          provider: "e2b",
+          driver: row.driver,
+        })
+      if (Object.keys(request.env ?? {}).length || request.stdin !== undefined)
+        throw new Error("managed_desktop_exec_env_stdin_unsupported")
+      requireManagedPolicy(config, request.policy ?? {}, request.cwd)
+      if (!options.managedAgent?.sessionKey) throw new Error("managed_desktop_delegation_required")
+      return localTransport.call<SandboxExecOutcome>("cua_sandbox_exec", {
+        connectionId: ctx.connectionId,
+        argv: request.argv,
+        cwd: request.cwd,
+        env: request.env,
+        stdin: request.stdin,
+        timeoutMs: request.timeoutMs,
+        ...options.managedAgent,
+      })
+    },
     create: async () => {
       if (!hasCurrentManagedDesktopQualification(config))
         throw new SandboxCapabilityError({

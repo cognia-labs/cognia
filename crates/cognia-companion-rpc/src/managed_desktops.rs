@@ -72,6 +72,18 @@ pub const COMMANDS: &[&str] = &[
     "managed_desktop_control_renew",
     "managed_desktop_control_release",
     "managed_desktop_control_input",
+    "managed_desktop_files_read",
+    "managed_desktop_files_write",
+    "managed_desktop_clipboard_get",
+    "managed_desktop_clipboard_set",
+];
+/// Recipe-8 guest operations (ADR-0233 A8): the subset of [`COMMANDS`] that
+/// needs the live control runtime and a current recipe-8 receipt.
+pub const OPERATION_COMMANDS: &[&str] = &[
+    "managed_desktop_files_read",
+    "managed_desktop_files_write",
+    "managed_desktop_clipboard_get",
+    "managed_desktop_clipboard_set",
 ];
 pub use crate::managed_desktop_acceptance::ACCEPTANCE_CHANGED_TOPIC;
 
@@ -958,6 +970,67 @@ struct LeaseArgs {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OperationArgs {
+    desktop_id: String,
+    generation: u64,
+    token: String,
+    fence: u64,
+    path: Option<String>,
+    offset: Option<u64>,
+    length: Option<usize>,
+    chunk: Option<Vec<u8>>,
+    r#final: Option<bool>,
+    text: Option<String>,
+}
+impl OperationArgs {
+    fn request(&self, command: &str) -> Result<operations::GuestOperation> {
+        use operations::GuestOperation as Op;
+        let invalid = || refused("managed_desktop_invalid_request");
+        if self.token.is_empty() || self.token.len() > 256 || self.generation == 0 {
+            return Err(invalid());
+        }
+        Ok(match command {
+            "managed_desktop_files_read"
+                if self.chunk.is_none() && self.r#final.is_none() && self.text.is_none() =>
+            {
+                Op::FileRead {
+                    path: self.path.clone().ok_or_else(invalid)?,
+                    offset: self.offset.ok_or_else(invalid)?,
+                    length: self.length.ok_or_else(invalid)?,
+                }
+            }
+            "managed_desktop_files_write" if self.length.is_none() && self.text.is_none() => {
+                Op::FileWrite {
+                    path: self.path.clone().ok_or_else(invalid)?,
+                    offset: self.offset.ok_or_else(invalid)?,
+                    chunk: self.chunk.clone().ok_or_else(invalid)?,
+                    r#final: self.r#final.ok_or_else(invalid)?,
+                }
+            }
+            "managed_desktop_clipboard_get" | "managed_desktop_clipboard_set"
+                if self.path.is_none()
+                    && self.offset.is_none()
+                    && self.length.is_none()
+                    && self.chunk.is_none()
+                    && self.r#final.is_none() =>
+            {
+                if command.ends_with("_get") && self.text.is_none() {
+                    Op::ClipboardGet
+                } else if command.ends_with("_set") {
+                    Op::ClipboardSet {
+                        text: self.text.clone().ok_or_else(invalid)?,
+                    }
+                } else {
+                    return Err(invalid());
+                }
+            }
+            _ => return Err(invalid()),
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct InputArgs {
     desktop_id: String,
     generation: u64,
@@ -1087,6 +1160,22 @@ impl InputPolicyGuard {
         point: Option<Point>,
         action: &UiAction,
     ) -> Self {
+        Self::for_operation(
+            runtime,
+            command,
+            point,
+            match action {
+                UiAction::Drag { to, .. } => Some(*to),
+                _ => None,
+            },
+        )
+    }
+    fn for_operation(
+        runtime: &ManagedControlRuntime,
+        command: &'static str,
+        point: Option<Point>,
+        destination: Option<Point>,
+    ) -> Self {
         let call = cognia_automation::automation::permission::Call {
             command,
             surface: Surface::ComputerUse,
@@ -1097,10 +1186,7 @@ impl InputPolicyGuard {
             enforcement: runtime.enforcement.clone(),
             command,
             point,
-            destination: match action {
-                UiAction::Drag { to, .. } => Some(*to),
-                _ => None,
-            },
+            destination,
             required_consent: matches!(
                 runtime.enforcement.gate.evaluate(&call),
                 cognia_automation::automation::permission::Decision::RequireConsent { .. }
@@ -1350,12 +1436,116 @@ async fn execute_input_pipeline(
     p: &ManagedDesktopPrincipal,
     authority: &HostAuthority<'_>,
     a: InputArgs,
-    mut runtime: ManagedControlRuntime,
+    runtime: ManagedControlRuntime,
     delivery: &dyn HumanInputDelivery,
 ) -> Result<()> {
     let command = input_command(&a.action)?;
+    execute_human_pipeline(
+        p,
+        authority,
+        HumanGateInput {
+            desktop_id: &a.desktop_id,
+            generation: a.generation,
+            fence: a.fence,
+            command,
+            point: a.point,
+            action: Some(&a.action),
+        },
+        runtime,
+        &InputDelivery {
+            p,
+            input: &a,
+            delivery,
+        },
+    )
+    .await
+    .map(|_| ())
+}
+struct HumanGateInput<'a> {
+    desktop_id: &'a str,
+    generation: u64,
+    fence: u64,
+    command: &'static str,
+    point: Option<Point>,
+    action: Option<&'a UiAction>,
+}
+#[async_trait]
+trait HumanDelivery: Send + Sync {
+    async fn deliver(&self, authority: &dyn ManagedControlAuthority) -> Result<Value>;
+}
+struct InputDelivery<'a> {
+    p: &'a ManagedDesktopPrincipal,
+    input: &'a InputArgs,
+    delivery: &'a dyn HumanInputDelivery,
+}
+#[async_trait]
+impl HumanDelivery for InputDelivery<'_> {
+    async fn deliver(&self, authority: &dyn ManagedControlAuthority) -> Result<Value> {
+        let a = self.input;
+        self.delivery
+            .deliver(
+                self.p,
+                InputArgs {
+                    desktop_id: a.desktop_id.clone(),
+                    generation: a.generation,
+                    token: a.token.clone(),
+                    fence: a.fence,
+                    frame_id: a.frame_id.clone(),
+                    point: a.point,
+                    action: a.action.clone(),
+                },
+                authority,
+            )
+            .await?;
+        Ok(Value::Null)
+    }
+}
+struct WorkspaceDelivery<'a> {
+    delivered: &'a std::sync::atomic::AtomicBool,
+    p: &'a ManagedDesktopPrincipal,
+    service: &'a ManagedDesktopService,
+    args: &'a OperationArgs,
+    request: operations::GuestOperation,
+}
+#[async_trait]
+impl HumanDelivery for WorkspaceDelivery<'_> {
+    async fn deliver(&self, authority: &dyn ManagedControlAuthority) -> Result<Value> {
+        self.delivered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let p = self.p;
+        let a = self.args;
+        encode(
+            self.service
+                .human_workspace_operation(
+                    p,
+                    &a.desktop_id,
+                    a.generation,
+                    ManagedControlLeaseRef {
+                        token: &a.token,
+                        fence: a.fence,
+                    },
+                    self.request.clone(),
+                    authority,
+                )
+                .await?,
+        )
+    }
+}
+async fn execute_human_pipeline(
+    p: &ManagedDesktopPrincipal,
+    authority: &HostAuthority<'_>,
+    a: HumanGateInput<'_>,
+    mut runtime: ManagedControlRuntime,
+    delivery: &dyn HumanDelivery,
+) -> Result<Value> {
+    p.require_human()?;
+    let command = a.command;
     require_verified_target_constraints(&runtime.enforcement)?;
-    let policy_guard = InputPolicyGuard::new(&runtime, command, a.point, &a.action);
+    let policy_guard = if let Some(action) = a.action {
+        InputPolicyGuard::new(&runtime, command, a.point, action)
+    } else {
+        InputPolicyGuard::for_operation(&runtime, command, a.point, None)
+    };
     let guarded_authority = HostAuthority {
         caller: authority.caller,
         host_id: authority.host_id,
@@ -1411,7 +1601,7 @@ async fn execute_input_pipeline(
             return Err(error);
         }
         delivery
-            .deliver(p, a, authority)
+            .deliver(authority)
             .await
             .map_err(|error| AutomationError::BackendError {
                 message: error.code,
@@ -1508,6 +1698,56 @@ pub async fn dispatch(
         input_policy: None,
         admission_observer: None,
     };
+    if OPERATION_COMMANDS.contains(&name) {
+        let a: OperationArgs = decode(args)?;
+        let request = a.request(name)?;
+        let delivered = std::sync::atomic::AtomicBool::new(false);
+        let result = async {
+            principal.require_admin()?;
+            if !caller.local && authority.admin_check.is_none() {
+                return Err(refused("managed_desktop_control_admin_lease_expired"));
+            }
+            request.validate()?;
+            let runtime =
+                runtime.ok_or_else(|| refused("managed_desktop_control_policy_unavailable"))?;
+            let command = match name {
+                "managed_desktop_files_read" => "managed_desktop_files_read",
+                "managed_desktop_files_write" => "managed_desktop_files_write",
+                "managed_desktop_clipboard_get" => "managed_desktop_clipboard_get",
+                _ => "managed_desktop_clipboard_set",
+            };
+            execute_human_pipeline(
+                &principal,
+                &authority,
+                HumanGateInput {
+                    desktop_id: &a.desktop_id,
+                    generation: a.generation,
+                    fence: a.fence,
+                    command,
+                    point: None,
+                    action: None,
+                },
+                runtime,
+                &WorkspaceDelivery {
+                    delivered: &delivered,
+                    p: &principal,
+                    service: &service,
+                    args: &a,
+                    request: request.clone(),
+                },
+            )
+            .await
+        }
+        .await;
+        if !delivered.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Err(error) = &result {
+                service
+                    .record_operation_audit(&a.desktop_id, &request, &Err(error.clone()))
+                    .await?;
+            }
+        }
+        return result;
+    }
     if crate::managed_desktop_results::COMMANDS.contains(&name) {
         let value = crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await?;
         if name == "managed_desktop_results_complete" {
@@ -3083,6 +3323,108 @@ mod tests {
         });
         (directory, service, p)
     }
+    #[test]
+    fn operation_rpc_shapes_are_closed_and_bounded() {
+        let common =
+            serde_json::json!({"desktopId":"desktop","generation":1,"token":"holder","fence":2});
+        for command in OPERATION_COMMANDS {
+            let mut args = common.clone();
+            if command.ends_with("files_read") {
+                args["path"] = serde_json::json!("/home/cua/a");
+                args["offset"] = serde_json::json!(0);
+                args["length"] = serde_json::json!(65536);
+            }
+            if command.ends_with("files_write") {
+                args["path"] = serde_json::json!("/home/cua/a");
+                args["offset"] = serde_json::json!(0);
+                args["chunk"] = serde_json::json!([0, 255]);
+                args["final"] = serde_json::json!(true);
+            }
+            if command.ends_with("clipboard_set") {
+                args["text"] = serde_json::json!("private text");
+            }
+            let a: OperationArgs = decode(args.clone()).unwrap();
+            a.request(command).unwrap().validate().unwrap();
+            args["ownerPrincipalId"] = serde_json::json!("forged");
+            assert!(decode::<OperationArgs>(args).is_err());
+        }
+        let mut a: OperationArgs = decode(common).unwrap();
+        a.text = Some("unexpected".into());
+        assert!(a.request("managed_desktop_clipboard_get").is_err());
+    }
+    #[tokio::test]
+    async fn operation_dispatch_requires_admin_and_remote_step_up_and_audits_refusals() {
+        let _scope = TestScope::new();
+        let (directory, _, _) = qualification_fixture(None).await;
+        let tenant = host_identity::current().unwrap().remote_tenant_id;
+        let args =
+            serde_json::json!({"desktopId":"desktop","generation":1,"token":"holder","fence":2});
+        for command in OPERATION_COMMANDS {
+            let mut request = args.clone();
+            if command.ends_with("files_read") {
+                request["path"] = serde_json::json!("/home/cua/private-name");
+                request["offset"] = serde_json::json!(0);
+                request["length"] = serde_json::json!(1);
+            }
+            if command.ends_with("files_write") {
+                request["path"] = serde_json::json!("/home/cua/private-name");
+                request["offset"] = serde_json::json!(0);
+                request["chunk"] = serde_json::json!([83, 69, 67]);
+                request["final"] = serde_json::json!(true);
+            }
+            if command.ends_with("clipboard_set") {
+                request["text"] = serde_json::json!("private text");
+            }
+            let caller = Caller {
+                device_id: "owner-device",
+                tenant_id: Some(&tenant),
+                scope: Some("device"),
+                local: false,
+            };
+            assert_eq!(
+                dispatch(command, request.clone(), caller, None, None)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "managed_desktop_control_admin_lease_expired"
+            );
+            let member = Caller {
+                device_id: "member-device",
+                ..caller
+            };
+            assert_eq!(
+                dispatch(
+                    command,
+                    request.clone(),
+                    member,
+                    None,
+                    Some(Arc::new(|| Ok(())))
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "managed_desktop_admin_required"
+            );
+            assert_ne!(
+                dispatch(command, request, local_qualification_caller(), None, None)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "managed_desktop_unknown_command"
+            );
+        }
+        let data = std::fs::read_to_string(directory.path().join("managed-desktops-journal.json"))
+            .unwrap();
+        assert!(!data.contains("private-name") && !data.contains("private text"));
+        assert!(
+            serde_json::from_str::<Value>(&data).unwrap()["operationAudit"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= 8
+        );
+    }
+
     fn local_qualification_caller() -> Caller<'static> {
         Caller {
             device_id: LOCAL_DEVICE_ID,

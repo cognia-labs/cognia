@@ -21,6 +21,18 @@ describe("managedDesktopCapabilities", () => {
     egressEnforcement: "provider-and-guest-kernel" as const,
     agentControl: true,
   }
+  it("keeps operations dormant unless the Host reports current recipe-8 qualification", () => {
+    expect(managedDesktopCapabilities(projection).workspaceExec).toBe(false)
+    const qualified = { ...projection, operationsQualified: true }
+    expect(managedDesktopCapabilities(qualified).workspaceExec).toBe(true)
+    expect(managedDesktopCapabilities(qualified).workspaceRead).toBe(true)
+    expect(managedDesktopCapabilities({ ...qualified, agentControl: false }).workspaceExec).toBe(
+      false
+    )
+    expect(
+      managedDesktopCapabilities({ ...qualified, qualification: "unqualified" }).workspaceRead
+    ).toBe(false)
+  })
   it("adds only GUI to the E2B defaults under current Host enablement", () => {
     expect(managedDesktopCapabilities(projection)).toEqual({
       ...defaultSandboxCapabilities("e2b", "computer-server"),

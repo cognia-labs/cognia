@@ -465,6 +465,7 @@ test("GUI qualification mounts the existing viewer only after an explicit open g
       connectionId: "desktop",
       enabled: true,
       openDesktop: expect.any(Function),
+      managed: expect.objectContaining({ operationsQualified: false }),
     }),
     undefined
   )

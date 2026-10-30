@@ -216,11 +216,22 @@ export function isDelegatedManagedDesktop(row: {
 
 /** Host-reported enablement and current qualification are both required for agent GUI. */
 export function managedDesktopCapabilities(
-  projection: ManagedDesktopQualificationProjection & { agentControl?: boolean }
+  projection: ManagedDesktopQualificationProjection & {
+    agentControl?: boolean
+    operationsQualified?: boolean
+  }
 ): SandboxCapabilities {
   return Object.freeze({
     ...defaultSandboxCapabilities("e2b", "computer-server"),
     gui: projection.agentControl === true && hasCurrentManagedDesktopQualification(projection),
+    workspaceRead:
+      projection.agentControl === true &&
+      projection.operationsQualified === true &&
+      hasCurrentManagedDesktopQualification(projection),
+    workspaceExec:
+      projection.agentControl === true &&
+      projection.operationsQualified === true &&
+      hasCurrentManagedDesktopQualification(projection),
   })
 }
 
@@ -231,4 +242,13 @@ export function delegatedManagedDesktopGui(row: {
   config?: SandboxProviderConfig
 }): boolean {
   return isDelegatedManagedDesktop(row) && managedDesktopCapabilities(row.config).gui
+}
+
+/** Operations additionally require the Host's CURRENT recipe-8 receipt. */
+export function delegatedManagedDesktopWorkspace(row: {
+  id: string
+  driver: SandboxConnectionDriver
+  config?: SandboxProviderConfig
+}): boolean {
+  return isDelegatedManagedDesktop(row) && managedDesktopCapabilities(row.config).workspaceExec
 }

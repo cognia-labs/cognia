@@ -449,6 +449,76 @@ impl CuaSandboxRegistry {
         }
     }
 
+    async fn managed_workspace(
+        &self,
+        connection_id: &str,
+        request: super::managed::operations::GuestOperation,
+    ) -> Result<super::managed::operations::GuestOperationResult> {
+        let (id, generation) = managed_target(connection_id)?;
+        let service = MANAGED_SERVICE
+            .read()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| backend_err("managed_desktop_host_unavailable"))?;
+        let (session, character) = crate::automation::cua_route::agent_identity();
+        service
+            .agent_workspace_operation(id, generation, session, character, request)
+            .await
+            .map_err(|e| AutomationError::PermissionDenied { reason: e.code })
+    }
+    async fn managed_file(
+        &self,
+        connection_id: &str,
+        path: &str,
+        bytes: Option<Vec<u8>>,
+        expected_hash: Option<String>,
+    ) -> Result<super::file_transfer::SandboxFileDownload> {
+        let (id, generation) = managed_target(connection_id)?;
+        let service = MANAGED_SERVICE
+            .read()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .ok_or_else(|| backend_err("managed_desktop_host_unavailable"))?;
+        let (session, character) = crate::automation::cua_route::agent_identity();
+        service
+            .agent_file_transfer(
+                id,
+                generation,
+                session,
+                character,
+                path,
+                bytes,
+                expected_hash,
+            )
+            .await
+            .map_err(|e| AutomationError::PermissionDenied { reason: e.code })
+    }
+    /// Binary agent write through the same WP8 identity and desktop guard.
+    pub async fn write_file(
+        &self,
+        connection_id: &str,
+        path: &str,
+        bytes: &[u8],
+        expected_hash: Option<&str>,
+    ) -> Result<super::file_transfer::SandboxFileInfo> {
+        if bytes.len() > super::file_transfer::MAX_TRANSFER_BYTES {
+            return Err(backend_err("managed_desktop_operation_limit"));
+        }
+        let result = self
+            .managed_file(
+                connection_id,
+                path,
+                Some(bytes.to_vec()),
+                expected_hash.map(str::to_owned),
+            )
+            .await?;
+        Ok(super::file_transfer::SandboxFileInfo {
+            path: result.path,
+            size: result.size,
+            sha256: result.sha256,
+        })
+    }
+
     /// Run one command inside the machine. Commands run under the exec user
     /// recorded on the container at create time — the entrypoint's supervisord
     /// must boot as root, so the user bound lives on this channel, and the
@@ -462,6 +532,51 @@ impl CuaSandboxRegistry {
         stdin: Option<&str>,
         timeout: Duration,
     ) -> Result<ExecOutcome> {
+        if connection_id.starts_with("managed:") {
+            use super::managed::operations::{GuestOperation, GuestOperationResult};
+            if !env.is_empty() || stdin.is_some() {
+                return Err(backend_err("managed_desktop_exec_env_stdin_unsupported"));
+            }
+            let started = std::time::Instant::now();
+            let result = self
+                .managed_workspace(
+                    connection_id,
+                    GuestOperation::Exec {
+                        argv: argv.into(),
+                        cwd: cwd.unwrap_or("/home/cua").into(),
+                        timeout_ms: timeout.as_millis().min(60_000) as u64,
+                    },
+                )
+                .await?;
+            if let GuestOperationResult::Exec {
+                output,
+                truncated,
+                timed_out,
+                exit_code,
+                signal,
+            } = result
+            {
+                let mut stdout = String::from_utf8_lossy(&output).into_owned();
+                let expanded = stdout.len() > super::managed::operations::TEXT_BYTES;
+                if expanded {
+                    let mut end = super::managed::operations::TEXT_BYTES;
+                    while !stdout.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    stdout.truncate(end);
+                }
+                return Ok(ExecOutcome {
+                    exit_code: exit_code.unwrap_or_else(|| 128 + signal.unwrap_or(0)),
+                    stdout,
+                    stderr: String::new(),
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    timed_out,
+                    stdout_truncated: truncated || expanded,
+                    stderr_truncated: false,
+                });
+            }
+            return Err(backend_err("managed_desktop_operation_protocol"));
+        }
         require_unmanaged(connection_id)?;
         let mut desktop = self.agent_guard(connection_id).await?;
         desktop.sessions = crate::automation::session::UiSessionManager::default();
@@ -487,6 +602,18 @@ impl CuaSandboxRegistry {
         path: &str,
         max_bytes: usize,
     ) -> Result<String> {
+        if connection_id.starts_with("managed:") {
+            if max_bytes == 0 || max_bytes > super::file_transfer::MAX_TRANSFER_BYTES {
+                return Err(backend_err("managed_desktop_operation_limit"));
+            }
+            let result = self.managed_file(connection_id, path, None, None).await?;
+            let bytes = super::file_transfer::decode_bytes(&result.data_base64)?;
+            if bytes.len() > max_bytes {
+                return Err(backend_err("managed_desktop_file_limit"));
+            }
+            return String::from_utf8(bytes)
+                .map_err(|_| backend_err("managed_desktop_file_not_utf8"));
+        }
         require_unmanaged(connection_id)?;
         let desktop = self.desktop_guard(connection_id).await;
         desktop.require_quiescent()?;
@@ -502,6 +629,19 @@ impl CuaSandboxRegistry {
         path: &str,
         data_base64: &str,
     ) -> Result<super::file_transfer::SandboxFileInfo> {
+        if connection_id.starts_with("managed:") {
+            if expected_container_id != connection_id {
+                return Err(backend_err("managed_desktop_stale_generation"));
+            }
+            return self
+                .write_file(
+                    connection_id,
+                    path,
+                    &super::file_transfer::decode_bytes(data_base64)?,
+                    None,
+                )
+                .await;
+        }
         require_unmanaged(connection_id)?;
         use super::file_transfer;
         file_transfer::validate_path(path)?;
@@ -585,6 +725,12 @@ impl CuaSandboxRegistry {
         expected_container_id: &str,
         path: &str,
     ) -> Result<super::file_transfer::SandboxFileDownload> {
+        if connection_id.starts_with("managed:") {
+            if expected_container_id != connection_id {
+                return Err(backend_err("managed_desktop_stale_generation"));
+            }
+            return self.managed_file(connection_id, path, None, None).await;
+        }
         require_unmanaged(connection_id)?;
         use super::file_transfer;
         file_transfer::validate_path(path)?;
@@ -1049,5 +1195,28 @@ mod tests {
             Err(AutomationError::PermissionDenied { .. })
         ));
         server.await.unwrap();
+    }
+    #[tokio::test]
+    async fn managed_exec_explicitly_refuses_env_and_stdin_without_falling_back() {
+        let registry = CuaSandboxRegistry::default();
+        for (env, stdin) in [
+            (BTreeMap::from([("CI".into(), "1".into())]), None),
+            (BTreeMap::new(), Some("content")),
+        ] {
+            let error = registry
+                .exec(
+                    "managed:desktop:1",
+                    &["id".into()],
+                    None,
+                    &env,
+                    stdin,
+                    Duration::from_secs(1),
+                )
+                .await
+                .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("managed_desktop_exec_env_stdin_unsupported"));
+        }
     }
 }

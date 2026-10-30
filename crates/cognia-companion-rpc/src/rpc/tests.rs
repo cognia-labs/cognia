@@ -1576,6 +1576,10 @@ fn managed_desktop_mutations_require_admin_leases_but_observation_does_not() {
                 | "managed_desktop_control_renew"
                 | "managed_desktop_control_release"
                 | "managed_desktop_control_input"
+                | "managed_desktop_files_read"
+                | "managed_desktop_files_write"
+                | "managed_desktop_clipboard_get"
+                | "managed_desktop_clipboard_set"
         );
         assert_eq!(STEP_UP_COMMANDS.contains(name), mutation, "{name}");
         assert!(KNOWN_COMMANDS.contains(name), "{name}");

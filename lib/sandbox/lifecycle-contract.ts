@@ -27,6 +27,7 @@ import type {
 import {
   defaultSandboxCapabilities,
   delegatedManagedDesktopGui,
+  delegatedManagedDesktopWorkspace,
   supportsSandboxOperation,
 } from "./connection-capabilities"
 
@@ -101,7 +102,9 @@ export interface SandboxExecRequest {
    */
   argv: string[]
   cwd?: string
+  /** Docker supports overrides; managed recipe-8 exec refuses nonempty env with managed_desktop_exec_env_stdin_unsupported. */
   env?: Record<string, string>
+  /** Managed recipe-8 exec has no stdin field and refuses a provided value with the same stable code. */
   stdin?: string
   timeoutMs?: number
   /**
@@ -188,10 +191,16 @@ export function assertSandboxOperationAllowed(
             driver: ctx.driver,
             config: ctx.config,
           })
-        : !supportsSandboxOperation(
-            defaultSandboxCapabilities(ctx.provider, ctx.driver),
-            operation
-          )))
+        : operation === "workspaceRead" || operation === "workspaceExec"
+          ? !delegatedManagedDesktopWorkspace({
+              id: ctx.connectionId,
+              driver: ctx.driver,
+              config: ctx.config,
+            })
+          : !supportsSandboxOperation(
+              defaultSandboxCapabilities(ctx.provider, ctx.driver),
+              operation
+            )))
   ) {
     throw new SandboxCapabilityError({
       code: "unsupported-operation",

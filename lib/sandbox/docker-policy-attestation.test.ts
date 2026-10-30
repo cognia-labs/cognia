@@ -2,6 +2,7 @@ import type { MicrovmRequest } from "@cognia/plugin-sdk/api/sandbox"
 import type { DockerSandboxConfig } from "@/types/sandbox"
 import {
   attestDockerPolicy,
+  attestManagedPolicy,
   containerPathFor,
   memoryBytesFor,
   nanoCpusFor,
@@ -120,6 +121,77 @@ describe("attestDockerPolicy", () => {
       })
     )
     expect(result.failures).toHaveLength(4)
+  })
+})
+
+describe("attestManagedPolicy", () => {
+  it("admits nested workload paths and cwd", () => {
+    expect(
+      attestManagedPolicy(
+        {},
+        request({
+          network: "off",
+          writable: ["/home/cua/project"],
+          readable: ["/home/cua/project/src"],
+          targetFiles: ["/home/cua/project/a.ts"],
+        }),
+        "/home/cua/project/nested"
+      )
+    ).toMatchObject({ attested: true, failures: [] })
+  })
+
+  it.each(["writable", "readable", "targetFiles"] as const)("refuses outside %s", (field) => {
+    for (const path of [
+      "/etc/passwd",
+      "/home/cua-other/a",
+      "/home/cua/../../etc/passwd",
+      "/HOME/CUA/a",
+    ]) {
+      expect(attestManagedPolicy({}, request({ [field]: [path] })).failures).toEqual([
+        "path-outside-workspace",
+      ])
+    }
+  })
+
+  it("checks cwd even without a policy and never attests an allowlist", () => {
+    expect(attestManagedPolicy({}, {}, "/tmp").failures).toEqual(["path-outside-workspace"])
+    expect(attestManagedPolicy({}, request({ network: "allowlist" })).failures).toEqual([
+      "network-not-confined",
+    ])
+    expect(attestManagedPolicy({}, request({ network: "on" })).attested).toBe(true)
+  })
+
+  it("attests requested caps only when the corresponding fixed VM ceiling is known", () => {
+    const caps = request({ maxCpuSeconds: 1, maxMemoryMb: 1 })
+    expect(attestManagedPolicy({ cpuCount: 2, memoryMb: 2048 }, caps).attested).toBe(true)
+    expect(attestManagedPolicy({ cpuCount: 2 }, caps).failures).toEqual(["memory-not-capped"])
+    expect(attestManagedPolicy({ memoryMb: 2048 }, caps).failures).toEqual(["cpu-not-capped"])
+    for (const value of [undefined, 0, -1, NaN, Infinity]) {
+      expect(attestManagedPolicy({ cpuCount: value, memoryMb: value }, caps).failures).toEqual([
+        "cpu-not-capped",
+        "memory-not-capped",
+      ])
+    }
+  })
+
+  it("reports every unmet part together", () => {
+    const result = attestManagedPolicy(
+      {},
+      request({
+        network: "allowlist",
+        maxCpuSeconds: 1,
+        maxMemoryMb: 1,
+        readable: ["/etc/passwd"],
+      }),
+      "/tmp"
+    )
+    expect(result.failures).toEqual([
+      "network-not-confined",
+      "cpu-not-capped",
+      "memory-not-capped",
+      "path-outside-workspace",
+    ])
+    expect(result.reason).toMatch(/managed desktop/)
   })
 })
 

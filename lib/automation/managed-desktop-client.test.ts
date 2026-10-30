@@ -1020,3 +1020,79 @@ test("preserves versioned Host qualification projections without upgrading legac
   expect(await managedDesktopClient.listConfigs({ kind: "local" })).toEqual([legacy, current])
   expect(legacy).not.toHaveProperty("qualificationEvidenceVersion")
 })
+
+test("managed file and clipboard RPCs preserve local holder and generation proofs", async () => {
+  const session = await openManagedDesktop(
+    { kind: "local" },
+    { desktopId: "desktop", generation: 7 }
+  )
+  const lease = { token: "lease", fence: 8, expiresAt: Date.now() + 15000 }
+  await session.readChunk(lease, "/home/cua/file", 0, 65536)
+  await session.writeChunk(lease, "/home/cua/file", 0, [0, 255], true)
+  await session.clipboardGet(lease)
+  await session.clipboardSet(lease, "private text")
+  const common = { desktopId: "desktop", generation: 7, token: "lease", fence: 8 }
+  expect(localTransport.call).toHaveBeenCalledWith("managed_desktop_local_call", {
+    name: "managed_desktop_files_read",
+    args: { ...common, path: "/home/cua/file", offset: 0, length: 65536 },
+  })
+  expect(localTransport.call).toHaveBeenCalledWith("managed_desktop_local_call", {
+    name: "managed_desktop_files_write",
+    args: { ...common, path: "/home/cua/file", offset: 0, chunk: [0, 255], final: true },
+  })
+  expect(localTransport.call).toHaveBeenCalledWith("managed_desktop_local_call", {
+    name: "managed_desktop_clipboard_get",
+    args: common,
+  })
+  expect(localTransport.call).toHaveBeenCalledWith("managed_desktop_local_call", {
+    name: "managed_desktop_clipboard_set",
+    args: { ...common, text: "private text" },
+  })
+  expect(issueHostAdminLease).not.toHaveBeenCalled()
+  session.close()
+})
+
+test("all remote operation RPCs require and carry the bound control admin lease", async () => {
+  const bound = prepareViewer()
+  const session = await openManagedDesktop(
+    { kind: "remote", hostId: "chosen" },
+    { desktopId: "desktop", generation: 2 }
+  )
+  const lease = { token: "control", fence: 5, expiresAt: Date.now() + 15000 }
+  await expect(session.clipboardGet(lease)).rejects.toThrow("managed_desktop_admin_lease_expired")
+  const admin = { token: "step-up", expiresAt: Date.now() + 60000 }
+  jest.mocked(issueHostAdminLease).mockResolvedValue(admin as never)
+  bound.transport.call.mockResolvedValue(lease)
+  await session.acquire(true)
+  await session.readChunk(lease, "/home/cua/a", 0, 1)
+  await session.writeChunk(lease, "/home/cua/a", 0, [1], true)
+  await session.clipboardGet(lease)
+  await session.clipboardSet(lease, "text")
+  const commands = [
+    "managed_desktop_files_read",
+    "managed_desktop_files_write",
+    "managed_desktop_clipboard_get",
+    "managed_desktop_clipboard_set",
+  ]
+  expect(issueHostAdminLease).toHaveBeenCalledWith(
+    expect.arrayContaining(commands),
+    undefined,
+    bound.transport
+  )
+  for (const name of commands)
+    expect(bound.transport.call).toHaveBeenCalledWith(
+      name,
+      expect.objectContaining({
+        desktopId: "desktop",
+        generation: 2,
+        token: "control",
+        fence: 5,
+        adminLease: "step-up",
+      })
+    )
+  admin.expiresAt = 0
+  await expect(session.clipboardSet(lease, "text")).rejects.toThrow(
+    "managed_desktop_admin_lease_expired"
+  )
+  session.close()
+})

@@ -1,3 +1,5 @@
+jest.mock("@/lib/tauri/transport-instance", () => ({ localTransport: { call: jest.fn() } }))
+import { localTransport } from "@/lib/tauri/transport-instance"
 import type { SandboxClient } from "@/lib/automation/sandbox-client"
 import type { LumeClient, LumeResource } from "@/lib/automation/lume-client"
 import type { SandboxConnectionRow } from "@/types/sandbox"
@@ -403,4 +405,45 @@ it("connects E2B through its explicit Host and returns a cloud outcome without D
     { desktopId: "desktop", generation: 1 }
   )
   expect(local.start).not.toHaveBeenCalled()
+})
+
+test("managed workspace dispatch includes configuration for the provider-neutral gate", async () => {
+  const config = {
+    provider: "e2b" as const,
+    target: { kind: "local" as const },
+    providerConfigId: "config",
+    desktopId: "desktop",
+    generation: 1,
+    delegationId: "grant",
+    agentControl: true,
+    qualification: "qualified" as const,
+    qualificationEvidenceVersion: 2,
+    workloadIsolationRevision: 1,
+    egressEnforcement: "provider-and-guest-kernel" as const,
+    operationsQualified: true,
+  }
+  const source = row({
+    id: "managed:desktop:1",
+    provider: "e2b",
+    config,
+    state: "running",
+    capabilities: {
+      ...defaultSandboxCapabilities("e2b", "computer-server"),
+      workspaceRead: true,
+      workspaceExec: true,
+    },
+  })
+  jest.mocked(localTransport.call).mockResolvedValue("content")
+  const result = await runSandboxConnectionOperation(source, "workspaceRead", {
+    path: "/home/cua/file",
+    managedAgent: { sessionKey: "session" },
+  })
+  expect(result.contents).toBe("content")
+  await expect(
+    runSandboxConnectionOperation(
+      { ...source, config: { ...config, ...{ operationsQualified: false } } },
+      "workspaceRead",
+      { path: "/home/cua/file" }
+    )
+  ).rejects.toMatchObject({ code: "unsupported-operation" })
 })

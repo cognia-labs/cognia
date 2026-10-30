@@ -10,6 +10,7 @@ import { hasSandboxConnectionLifecycleAdapter } from "./connection-lifecycle"
 
 import {
   delegatedManagedDesktopGui,
+  delegatedManagedDesktopWorkspace,
   hasCurrentManagedDesktopQualification,
 } from "./connection-capabilities"
 
@@ -94,6 +95,11 @@ export function projectSandboxConnectionCapabilities(
         adapterAvailable &&
           enabled &&
           !(row.config.provider === "lume" && !lumeOperationReady(row, operation)) &&
+          !(
+            row.config.provider === "e2b" &&
+            ["workspaceRead", "workspaceExec"].includes(operation) &&
+            !delegatedManagedDesktopWorkspace(row)
+          ) &&
           !(
             row.config.provider === "e2b" &&
             operation === "gui" &&

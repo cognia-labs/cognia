@@ -201,6 +201,8 @@ export interface ManagedDesktopConfigSummary extends ManagedDesktopQualification
   canCreate: boolean
   /** False until the Host records an authorized, measured GUI smoke receipt. */
   guiQualified?: boolean
+  /** Host-derived CURRENT recipe-8 operation qualification. Missing is false. */
+  operationsQualified?: boolean
   enablement: ManagedDesktopEnablement
   /** All six categories, in qualification order. */
   qualificationCategories: ManagedDesktopCategoryReceipt[]
@@ -713,11 +715,38 @@ export function watchManagedDesktopQualification(
   )
 }
 
+export interface ManagedDesktopOperationSession extends SandboxDesktopSession {
+  readChunk(
+    lease: SandboxControlLease,
+    path: string,
+    offset: number,
+    length: number
+  ): Promise<{ kind: "file-read"; chunk: number[]; eof: boolean }>
+  writeChunk(
+    lease: SandboxControlLease,
+    path: string,
+    offset: number,
+    chunk: number[],
+    final: boolean
+  ): Promise<{ kind: "file-write"; bytes: number; final: boolean }>
+  clipboardGet(lease: SandboxControlLease): Promise<{ kind: "clipboard-get"; text: string }>
+  clipboardSet(
+    lease: SandboxControlLease,
+    text: string
+  ): Promise<{ kind: "clipboard-set"; bytes: number }>
+}
+const MANAGED_OPERATION_COMMANDS = [
+  "managed_desktop_files_read",
+  "managed_desktop_files_write",
+  "managed_desktop_clipboard_get",
+  "managed_desktop_clipboard_set",
+]
+
 /** Open once per viewer. Authentication replacement invalidates, never silently rebinds control. */
 export async function openManagedDesktop(
   target: ManagedDesktopTarget,
   ref: ManagedDesktopRef
-): Promise<SandboxDesktopSession> {
+): Promise<ManagedDesktopOperationSession> {
   const account = useAccountStore.getState().unlockedAccountId
   if (!account || useAccountStore.getState().locked)
     throw new Error("managed_desktop_authentication_required")
@@ -802,6 +831,7 @@ export async function openManagedDesktop(
           "managed_desktop_control_renew",
           "managed_desktop_control_release",
           "managed_desktop_control_input",
+          ...MANAGED_OPERATION_COMMANDS,
         ],
         undefined,
         bound
@@ -816,6 +846,7 @@ export async function openManagedDesktop(
         "managed_desktop_control_renew",
         "managed_desktop_control_release",
         "managed_desktop_control_input",
+        ...MANAGED_OPERATION_COMMANDS,
       ].includes(name)
     ) {
       if (!controlAdmin || controlAdmin.expiresAt <= Date.now())
@@ -830,6 +861,13 @@ export async function openManagedDesktop(
   }
   return {
     managed: true,
+    readChunk: (lease, path, offset, length) =>
+      callControl("managed_desktop_files_read", { ...proof(lease), path, offset, length }),
+    writeChunk: (lease, path, offset, chunk, final) =>
+      callControl("managed_desktop_files_write", { ...proof(lease), path, offset, chunk, final }),
+    clipboardGet: (lease) => callControl("managed_desktop_clipboard_get", proof(lease)),
+    clipboardSet: (lease, text) =>
+      callControl("managed_desktop_clipboard_set", { ...proof(lease), text }),
     status: () => callControl<SandboxDesktopStatus>("managed_desktop_control_status", {}),
     frame: () => callControl<SandboxDesktopFrame>("managed_desktop_control_frame", {}),
     acquire: (takeover) =>

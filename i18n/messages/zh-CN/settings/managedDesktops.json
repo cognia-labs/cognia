@@ -1,4 +1,5 @@
 {
+  "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
   "alerts": {
     "pastDeadline": {
       "title": "云桌面已超过截止时间",

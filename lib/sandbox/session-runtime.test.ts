@@ -1,3 +1,5 @@
+jest.mock("@/lib/tauri/transport-instance", () => ({ localTransport: { call: jest.fn() } }))
+import { localTransport } from "@/lib/tauri/transport-instance"
 import type { SandboxResourcePolicy } from "@cognia/agent-config-types"
 import type { LumeClient } from "@/lib/automation/lume-client"
 
@@ -122,6 +124,37 @@ describe("managed desktop placement", () => {
     ).rejects.toMatchObject({ code: "target-not-found" })
   })
 
+  it("managed shell uses the bound grantee and never falls back after native refusal", async () => {
+    const deps = createDeps()
+    const source = managedRow()
+    if (source.config.provider !== "e2b") throw new Error("fixture")
+    source.config = { ...source.config, ...{ operationsQualified: true } }
+    source.capabilities = { ...source.capabilities, workspaceExec: true, workspaceRead: true }
+    deps.getConnection.mockResolvedValue(source)
+    const runtime = new SandboxSessionRuntime(deps)
+    const ref = await runtime.bindSession({
+      ...input,
+      sandboxEnabled: true,
+      binding: { ...input.binding, shellTier: "cua-desktop" },
+    })
+    jest.mocked(localTransport.call).mockRejectedValue(new Error("guest refused"))
+    await expect(
+      runtime.executeSandbox(ref, {
+        ...payload,
+        command: { ...payload.command, cwd: "/home/cua" },
+        request: { ...payload.request, writable: ["/home/cua"] },
+      })
+    ).rejects.toThrow("guest refused")
+    expect(localTransport.call).toHaveBeenLastCalledWith(
+      "cua_sandbox_exec",
+      expect.objectContaining({
+        connectionId: source.id,
+        sessionKey: "managed-session",
+        characterId: "agent",
+      })
+    )
+    expect(deps.executeOsSandbox).not.toHaveBeenCalled()
+  })
   it("refuses an E2B row whose GUI capability is absent despite a delegation", async () => {
     const deps = createDeps()
     const row = managedRow()
@@ -132,6 +165,133 @@ describe("managed desktop placement", () => {
     await expect(new SandboxSessionRuntime(deps).bindSession(input)).rejects.toMatchObject({
       code: "unsupported-operation",
     })
+  })
+
+  it("serves normal agent file writes through typed managed transfers with frozen grantee and hash", async () => {
+    const deps = createDeps()
+    const source = managedRow()
+    source.config = { ...source.config, ...{ operationsQualified: true } }
+    source.capabilities = { ...source.capabilities, workspaceExec: true, workspaceRead: true }
+    deps.getConnection.mockResolvedValue(source)
+    const runtime = new SandboxSessionRuntime(deps)
+    const ref = await runtime.bindSession({
+      ...input,
+      sandboxEnabled: true,
+      binding: { ...input.binding, shellTier: "cua-desktop" },
+    })
+    const hash = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    const metadata = { path: "/home/cua/file", size: 3, sha256: hash }
+    jest.mocked(localTransport.call).mockReset().mockResolvedValue(metadata)
+    await expect(
+      runtime.fileOperation(ref, {
+        kind: "write",
+        path: metadata.path,
+        content: "abc",
+        expectedHash: hash,
+      })
+    ).resolves.toEqual({ hash })
+    expect(localTransport.call).toHaveBeenLastCalledWith("cua_sandbox_upload_file", {
+      connectionId: source.id,
+      expectedContainerId: source.id,
+      token: "delegated-agent",
+      path: metadata.path,
+      dataBase64: "YWJj",
+      expectedHash: hash,
+      sessionKey: "managed-session",
+      characterId: "agent",
+    })
+    jest.mocked(localTransport.call).mockResolvedValue({ ...metadata, dataBase64: "YWJj" })
+    await expect(
+      runtime.fileOperation(ref, { kind: "read", path: metadata.path })
+    ).resolves.toEqual({ content: "abc", hash })
+    expect(localTransport.call).toHaveBeenLastCalledWith("cua_sandbox_download_file", {
+      connectionId: source.id,
+      expectedContainerId: source.id,
+      path: metadata.path,
+      sessionKey: "managed-session",
+      characterId: "agent",
+    })
+    jest
+      .mocked(localTransport.call)
+      .mockResolvedValue({ ...metadata, sha256: "0".repeat(64), dataBase64: "YWJj" })
+    await expect(runtime.fileOperation(ref, { kind: "read", path: metadata.path })).rejects.toThrow(
+      "managed_desktop_file_integrity"
+    )
+    jest.mocked(localTransport.call).mockClear()
+    for (const path of ["/etc/passwd", "/home/cua/../../etc/passwd"])
+      for (const kind of ["read", "write"] as const)
+        await expect(
+          runtime.fileOperation(
+            ref,
+            kind === "write" ? { kind, path, content: "abc" } : { kind, path }
+          )
+        ).rejects.toMatchObject({ code: "policy-not-attested" })
+    expect(localTransport.call).not.toHaveBeenCalled()
+    await expect(
+      runtime.fileOperation(
+        ref,
+        { kind: "read", path: metadata.path },
+        {
+          signal: AbortSignal.abort(new Error("cancelled file request")),
+        }
+      )
+    ).rejects.toThrow("cancelled file request")
+    expect(localTransport.call).not.toHaveBeenCalled()
+    deps.getConnection.mockResolvedValue({
+      ...source,
+      config: { ...source.config, ...{ operationsQualified: false } },
+    })
+    await expect(
+      runtime.fileOperation(ref, { kind: "write", path: metadata.path, content: "abc" })
+    ).rejects.toMatchObject({ code: "unsupported-operation" })
+    expect(localTransport.call).not.toHaveBeenCalled()
+    deps.getConnection.mockResolvedValue(source)
+    jest
+      .mocked(requireManagedDesktopDelegation)
+      .mockRejectedValue(new Error("managed_delegation_missing"))
+    jest.mocked(localTransport.call).mockClear()
+    await expect(runtime.fileOperation(ref, { kind: "read", path: metadata.path })).rejects.toThrow(
+      "managed_delegation_missing"
+    )
+    expect(localTransport.call).not.toHaveBeenCalled()
+    expect(deps.executeOsSandbox).not.toHaveBeenCalled()
+  })
+  it("enforces frozen read and write ceilings even when a typed file caller skips clampRequest", async () => {
+    const deps = createDeps()
+    const row = managedRow()
+    row.config = { ...row.config, ...{ operationsQualified: true } }
+    row.capabilities = { ...row.capabilities, workspaceRead: true, workspaceExec: true }
+    deps.getConnection.mockResolvedValue(row)
+    const runtime = new SandboxSessionRuntime(deps)
+    const writable = ["/home/cua/allowed"]
+    const ref = await runtime.bindSession({
+      ...input,
+      sandboxEnabled: true,
+      binding: { ...input.binding, shellTier: "cua-desktop" },
+      policy: { readableRoots: ["/home/cua/read"], writableRoots: ["/home/cua/allowed"] },
+      confine: { readable: ["/home/cua/read"], writable },
+    })
+    writable[0] = "/home/cua/outside"
+    jest.mocked(localTransport.call).mockClear()
+    for (const path of ["/home/cua/outside/x", "/home/cua", "/home/cua/allowed/../outside/x"])
+      await expect(runtime.fileOperation(ref, { kind: "read", path })).rejects.toThrow(
+        /readable roots/
+      )
+    await expect(
+      runtime.fileOperation(ref, { kind: "write", path: "/home/cua/read/x", content: "x" })
+    ).rejects.toThrow(/writable roots/)
+    expect(localTransport.call).not.toHaveBeenCalled()
+    const confineOnly = new SandboxSessionRuntime(deps)
+    const second = await confineOnly.bindSession({
+      ...input,
+      sandboxEnabled: true,
+      confine: { writable: ["/home/cua/allowed"] },
+      binding: { ...input.binding, shellTier: "cua-desktop" },
+    })
+    await expect(
+      confineOnly.fileOperation(second, { kind: "write", path: "/home/cua/read/x", content: "x" })
+    ).rejects.toThrow("managed_desktop_file_write_ceiling")
+    expect(localTransport.call).not.toHaveBeenCalled()
   })
 })
 

@@ -5857,6 +5857,12 @@
         "acquiring": "Taking control…",
         "agentDormant": "Task and agent control remain dormant until delivery handoff is implemented.",
         "cadence": "Screenshots refresh about once per second while this view is visible.",
+        "clipboardFailed": "Clipboard transfer failed. Check qualification and control access.",
+        "clipboardGet": "Read desktop clipboard",
+        "clipboardHelp": "Transfer text manually (up to 1 MiB). Each action takes exclusive control.",
+        "clipboardSet": "Send text to desktop clipboard",
+        "clipboardText": "Clipboard text",
+        "clipboardTitle": "Clipboard",
         "controlHelp": "Click the screen to use the keyboard. Drag or scroll to interact. Escape releases control. Control also ends when this window loses focus. Agent input is paused while you have control.",
         "controlling": "You have control",
         "disconnected": "Desktop disconnected. Retrying automatically…",
@@ -5887,6 +5893,7 @@
         },
         "loading": "Connecting to the desktop…",
         "mobileObservation": "This viewer is observation only.",
+        "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
         "otherController": "Another user has control",
         "qualificationRequired": "Cloud desktop viewing and control require a separately authorized GUI smoke test.",
         "quarantined": "Input cleanup uncertain; control unavailable",
@@ -5922,6 +5929,7 @@
         "downloading": "Downloading…",
         "folder": "Existing folder inside the sandbox",
         "help": "Upload or download one binary file up to {limit} MiB. Uploads use an existing folder and never overwrite a file. Uploading releases manual desktop control.",
+        "managedHelp": "Upload or download one binary file up to {limit} MiB within /home/cua. Uploads replace the selected file. Each transfer takes exclusive control.",
         "missingContainer": "Refresh the connection health to identify its container before transferring files.",
         "notice": {
           "cancelled": "File transfer cancelled.",
@@ -5929,12 +5937,15 @@
           "downloaded": "File saved.",
           "invalidPath": "Enter an absolute path inside the sandbox without parent-directory traversal.",
           "invalidPayload": "The downloaded file failed its size or checksum check.",
+          "managedDownloadFailed": "Download failed. Check that the desktop is running, the file is readable, and qualified control access is available.",
+          "managedUploadFailed": "Upload failed. Check that the desktop is running, the folder exists, and qualified control access is available.",
           "readFailed": "Unable to read the selected file.",
           "saveFailed": "Unable to save the downloaded file.",
           "tooLarge": "The file exceeds the 8 MiB transfer limit.",
           "uploadFailed": "Upload failed. Check that the same container is running, the folder exists, the filename is unused, and control is available.",
           "uploaded": "File uploaded to the selected sandbox."
         },
+        "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
         "title": "Files",
         "upload": "Choose file and upload",
         "uploading": "Uploading…"
@@ -53627,6 +53638,7 @@
         "title": "Billing and cleanup"
       },
       "openDesktop": "Open desktop",
+      "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
       "prepare": "Prepare pinned template",
       "prepared": "Pinned template prepared. Real-provider smoke authorization and qualification are still required before creation.",
       "qualification": {

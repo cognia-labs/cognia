@@ -19,6 +19,16 @@ pub struct ManagedDesktopJournal {
     pub qualification_runs: BTreeMap<String, super::service::qualification_runs::QualificationRunRecord>,
     #[serde(default)]
     pub delegations: BTreeMap<String, super::service::delegation::ManagedDesktopDelegation>,
+    /// Reserved transfer volume, retained even after desktop destruction.
+    #[serde(default)]
+    pub operation_bytes: BTreeMap<String, u64>,
+    /// Guest work has no GUI key-up cleanup barrier. Only confirmed operation
+    /// teardown clears this marker; GUI cleanup must never clear it.
+    #[serde(default)]
+    pub operation_quarantines: std::collections::BTreeSet<String>,
+    /// Last 1024 content-free operation outcomes, durable with the Host journal.
+    #[serde(default)]
+    pub operation_audit: std::collections::VecDeque<super::operations::OperationAudit>,
     pub version: u32,
     pub host_id: String,
     pub revision: u64,

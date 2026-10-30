@@ -17,7 +17,7 @@
  */
 
 import type { MicrovmRequest } from "@cognia/plugin-sdk/api/sandbox"
-import type { DockerSandboxConfig } from "@/types/sandbox"
+import type { DockerSandboxConfig, E2bSandboxConfig } from "@/types/sandbox"
 import { isPathUnderRoot } from "./policy-bridge"
 
 export type SandboxAttestationFailure =
@@ -45,15 +45,87 @@ const ATTESTED: SandboxAttestation = Object.freeze({
 const NANO_CPUS_PER_CPU = 1_000_000_000
 const BYTES_PER_MIB = 1024 * 1024
 
-const EXPLANATIONS: Record<SandboxAttestationFailure, string> = {
-  "network-not-confined":
-    "the request needs the network off, but the container was created with it on",
-  "cpu-not-capped": "the request needs a cpu ceiling the container was not created with",
-  "memory-not-capped": "the request needs a memory ceiling the container was not created with",
-  "no-workspace-mount":
-    "the request names writable paths, but no host directory is mounted into the container",
-  "path-outside-workspace":
-    "the request names a path outside the directory mounted into the container",
+function explanations(subject: string, root: string): Record<SandboxAttestationFailure, string> {
+  return {
+    "network-not-confined": `the request needs network off or allowlist confinement the ${subject} cannot attest`,
+    "cpu-not-capped": `the request needs a cpu ceiling the ${subject} was not created with`,
+    "memory-not-capped": `the request needs a memory ceiling the ${subject} was not created with`,
+    "no-workspace-mount": `the request names writable paths, but no host directory is mounted into the ${subject}`,
+    "path-outside-workspace": `the request names a path outside ${root}`,
+  }
+}
+
+/** Shared report construction keeps both fixed-confinement tiers honest. */
+function attestFixedPolicy(
+  request: Partial<MicrovmRequest>,
+  confinement: {
+    subject: string
+    network: boolean
+    cpu: boolean
+    memory: boolean
+    root?: string
+    paths: string[]
+    platform?: string
+  }
+): SandboxAttestation {
+  const failures: SandboxAttestationFailure[] = []
+  if (request.network !== "on" && !confinement.network) failures.push("network-not-confined")
+  if ((request.maxCpuSeconds ?? 0) > 0 && !confinement.cpu) failures.push("cpu-not-capped")
+  if ((request.maxMemoryMb ?? 0) > 0 && !confinement.memory) failures.push("memory-not-capped")
+  if (confinement.paths.length) {
+    if (!confinement.root) failures.push("no-workspace-mount")
+    else if (
+      !confinement.paths.every((path) =>
+        isPathUnderRoot(path, confinement.root!, confinement.platform)
+      )
+    )
+      failures.push("path-outside-workspace")
+  }
+  if (!failures.length) return ATTESTED
+  const reasons = explanations(
+    confinement.subject,
+    confinement.subject === "container"
+      ? "the directory mounted into the container"
+      : "the workload home /home/cua"
+  )
+  return Object.freeze({
+    attested: false,
+    failures,
+    reason: `The ${confinement.subject} cannot attest this request: ${failures
+      .map((failure) => reasons[failure])
+      .join("; ")}.`,
+  })
+}
+
+/** Safe Host configuration summary fields carried by a managed binding. */
+export interface ManagedDesktopPolicyShape {
+  cpuCount?: number
+  memoryMb?: number
+}
+
+/** Recipe-8 qualification proves the workload home boundary and network off.
+ * VM shape is fixed at template creation; as for Docker, any known cap meets
+ * a request for a cap. An absent legacy projection never attests one.
+ */
+export function attestManagedPolicy(
+  config: ManagedDesktopPolicyShape & Partial<Pick<E2bSandboxConfig, "providerConfigId">>,
+  request: Partial<MicrovmRequest>,
+  cwd = "/home/cua"
+): SandboxAttestation {
+  return attestFixedPolicy(request, {
+    subject: "managed desktop",
+    network: request.network !== "allowlist",
+    cpu: Number.isFinite(config.cpuCount) && (config.cpuCount ?? 0) > 0,
+    memory: Number.isFinite(config.memoryMb) && (config.memoryMb ?? 0) > 0,
+    root: "/home/cua",
+    platform: "linux",
+    paths: [
+      ...(request.writable ?? []),
+      ...(request.readable ?? []),
+      ...(request.targetFiles ?? []),
+      cwd,
+    ],
+  })
 }
 
 /**
@@ -69,39 +141,17 @@ export function attestDockerPolicy(
   config: DockerSandboxConfig,
   request: MicrovmRequest
 ): SandboxAttestation {
-  const failures: SandboxAttestationFailure[] = []
-
   // "off" is the only network setting a container can be built to guarantee.
   // "allowlist" cannot be honoured by a container flag at all, so it is
   // treated as a confinement the container does not provide rather than
   // silently downgraded to "off" or to "on".
-  if (request.network !== "on" && !networkIsConfined(config.networkMode)) {
-    failures.push("network-not-confined")
-  }
-  if (request.maxCpuSeconds > 0 && !hasCpuCeiling(config)) {
-    failures.push("cpu-not-capped")
-  }
-  if (request.maxMemoryMb > 0 && !hasMemoryCeiling(config)) {
-    failures.push("memory-not-capped")
-  }
-
-  const paths = [...request.writable, ...request.targetFiles]
-  if (paths.length > 0) {
-    const mount = config.workspaceMount
-    if (!mount) {
-      failures.push("no-workspace-mount")
-    } else if (!paths.every((path) => isPathUnderRoot(path, mount.hostPath))) {
-      failures.push("path-outside-workspace")
-    }
-  }
-
-  if (failures.length === 0) return ATTESTED
-  return Object.freeze({
-    attested: false,
-    failures,
-    reason: `The container cannot attest this request: ${failures
-      .map((failure) => EXPLANATIONS[failure])
-      .join("; ")}.`,
+  return attestFixedPolicy(request, {
+    subject: "container",
+    network: networkIsConfined(config.networkMode),
+    cpu: hasCpuCeiling(config),
+    memory: hasMemoryCeiling(config),
+    root: config.workspaceMount?.hostPath,
+    paths: [...request.writable, ...request.targetFiles],
   })
 }
 

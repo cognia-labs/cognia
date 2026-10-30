@@ -611,6 +611,13 @@
     "workspaceHostPath": "要挂载的宿主目录",
     "workspaceMountHelp": "两项必须同时填写。不挂载目录，机器内的 shell 与文件操作就无法访问任何宿主路径。",
     "desktopViewer": {
+      "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
+      "clipboardTitle": "剪贴板",
+      "clipboardHelp": "手动传输文本（最多 1 MiB），每次操作需要独占控制。",
+      "clipboardText": "剪贴板文本",
+      "clipboardGet": "读取桌面剪贴板",
+      "clipboardSet": "将文本发送到桌面剪贴板",
+      "clipboardFailed": "剪贴板传输失败，请检查资格验证和控制权限。",
       "title": "桌面",
       "readOnly": "仅查看",
       "controlling": "正在由你控制",
@@ -677,6 +684,8 @@
     "deleteConfirm": "永久删除",
     "deleting": "正在删除…",
     "fileTransfer": {
+      "managedHelp": "在 /home/cua 内上传或下载一个最多 {limit} MiB 的二进制文件。上传会替换目标文件，每次传输需要独占控制。",
+      "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
       "title": "文件",
       "help": "上传或下载单个最大 {limit} MiB 的二进制文件。上传目标必须是已存在的目录，且不会覆盖现有文件。上传会释放手动桌面控制权。",
       "missingContainer": "请先刷新连接健康状态以确定容器，再传输文件。",
@@ -687,6 +696,8 @@
       "download": "下载文件",
       "downloading": "正在下载…",
       "notice": {
+        "managedUploadFailed": "上传失败，请检查桌面是否运行、目录是否存在，以及是否已通过资格验证并取得控制权限。",
+        "managedDownloadFailed": "下载失败，请检查桌面是否运行、文件是否可读，以及是否已通过资格验证并取得控制权限。",
         "cancelled": "文件传输已取消。",
         "uploaded": "文件已上传到所选沙箱。",
         "downloaded": "文件已保存。",

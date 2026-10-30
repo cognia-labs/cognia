@@ -101,6 +101,7 @@ export async function runSandboxConnectionOperation(
     provider: row.provider,
     driver: row.driver,
     capabilities: row.capabilities,
+    config: row.config,
     state: row.state,
     signal: options.signal,
   }

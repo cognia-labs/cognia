@@ -9,6 +9,9 @@ import type { CallContext } from "@/lib/automation/client"
 import type { AutomationAuditLogRow } from "@/lib/automation/audit"
 import { getSandboxConnection } from "@/lib/db/sandbox-connections"
 import { transport } from "@/lib/tauri"
+import { localTransport } from "@/lib/tauri/transport-instance"
+import { decodeBase64, encodeBase64 } from "@/lib/share/encoding"
+import type { SandboxFileDownload, SandboxFileInfo } from "@/lib/automation/sandbox-client"
 import { getOsSandboxExec } from "@/lib/sandbox/os-exec-bridge"
 import type { SandboxConnectionRow, SandboxSessionBinding } from "@/types/sandbox"
 
@@ -27,6 +30,7 @@ import { lumeClient, type LumeBinding, type LumeClient } from "@/lib/automation/
 import { lumeReference } from "./lume-adapter"
 import { projectLumeResource } from "./lume-projection"
 import { requireManagedDesktopDelegation } from "./managed-desktop-binding"
+import { requireManagedPolicy } from "./e2b-adapter"
 import type {
   SandboxFileRequest,
   SandboxFileResult,
@@ -693,6 +697,9 @@ export class SandboxSessionRuntime {
         try {
           const exec = await runSandboxConnectionOperation(row, "workspaceExec", {
             signal: options?.signal,
+            ...(row.config.provider === "e2b"
+              ? { managedAgent: { sessionKey: record.sessionId, characterId: record.characterId } }
+              : {}),
             ...(record.lume
               ? {
                   lumeBinding: record.lume.binding,
@@ -765,6 +772,99 @@ export class SandboxSessionRuntime {
     options?: { signal?: AbortSignal }
   ): Promise<SandboxFileResult | undefined> {
     const record = this.requireRecord(ref)
+    if (record.binding.shellTier === "cua-desktop" && !record.lume) {
+      const row = await this.requireConnection(record.binding.connectionId)
+      if (row.config.provider === "e2b") {
+        if (!record.sandboxEnabled || record.unplaced?.sandbox)
+          throw new SandboxRuntimeError(
+            "surface-disabled",
+            "managed_desktop_file_surface_unavailable"
+          )
+        await requireManagedDesktopDelegation(row, record.sessionId, record.characterId)
+        assertSandboxOperationAllowed(
+          operationContext(row),
+          request.kind === "read" ? "workspaceRead" : "workspaceExec"
+        )
+        // Typed callers may skip the tools' clampRequest. The guest's
+        // no-follow file API enforces the home floor; preserve the frozen
+        // session's narrower ceiling here as well, without inventing a cwd
+        // from the requested path and thereby widening the read scope.
+        const filePath = request.path.startsWith("/") ? request.path : `/home/cua/${request.path}`
+        requireManagedPolicy(
+          row.config,
+          request.kind === "write" ? { targetFiles: [filePath] } : { readable: [filePath] }
+        )
+        if (request.kind === "write") {
+          this.assertWritablePath(ref, filePath)
+          if (
+            record.confine?.writable !== undefined &&
+            !record.confine.writable.some((root) => isPathUnderRoot(filePath, root))
+          )
+            throw new Error("managed_desktop_file_write_ceiling")
+        } else {
+          const scope = clampReadableRequest<{ readable: string[]; readableRoots?: string[] }>(
+            { readable: [filePath] },
+            record.policy,
+            [...(record.confine?.readable ?? []), ...(record.confine?.writable ?? [])],
+            record.workspaceRoot ? [record.workspaceRoot] : []
+          )
+          if (
+            scope.readableRoots &&
+            !scope.readableRoots.some((root) => isPathUnderRoot(filePath, root))
+          )
+            throw new Error("sandbox: file is outside the configured readable roots")
+        }
+        const ceiling = 8 * 1024 * 1024
+        const content =
+          request.kind === "write" ? new TextEncoder().encode(request.content) : undefined
+        if (content && content.length > ceiling) throw new Error("managed_desktop_operation_limit")
+        options?.signal?.throwIfAborted()
+        const common = {
+          connectionId: row.id,
+          expectedContainerId: row.id,
+          path: request.path,
+          sessionKey: record.sessionId,
+          characterId: record.characterId,
+        }
+        let reply: SandboxFileInfo | SandboxFileDownload
+        if (content && request.kind === "write") {
+          const encoded: string[] = []
+          for (let offset = 0; offset < content.length; offset += 48 * 1024)
+            encoded.push(encodeBase64(content.subarray(offset, offset + 48 * 1024)))
+          reply = await localTransport.call<SandboxFileInfo>("cua_sandbox_upload_file", {
+            ...common,
+            token: "delegated-agent",
+            dataBase64: encoded.join(""),
+            expectedHash: request.expectedHash,
+          })
+        } else
+          reply = await localTransport.call<SandboxFileDownload>(
+            "cua_sandbox_download_file",
+            common
+          )
+        options?.signal?.throwIfAborted()
+        if (
+          reply.path !== request.path ||
+          !Number.isSafeInteger(reply.size) ||
+          reply.size < 0 ||
+          reply.size > ceiling
+        )
+          throw new Error("managed_desktop_file_integrity")
+        const encoded = "dataBase64" in reply ? reply.dataBase64 : undefined
+        if (encoded !== undefined && encoded.length > 4 * Math.ceil(ceiling / 3))
+          throw new Error("managed_desktop_file_integrity")
+        const bytes = content ?? decodeBase64(encoded ?? "")
+        const hash = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>)),
+          (byte) => byte.toString(16).padStart(2, "0")
+        ).join("")
+        if (reply.size !== bytes.length || reply.sha256 !== hash)
+          throw new Error("managed_desktop_file_integrity")
+        return request.kind === "write"
+          ? { hash }
+          : { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes), hash }
+      }
+    }
     if (!record.lume) return undefined
     if (!record.sandboxEnabled || record.unplaced?.sandbox)
       throw new SandboxRuntimeError("surface-disabled", "lume_file_surface_unavailable")

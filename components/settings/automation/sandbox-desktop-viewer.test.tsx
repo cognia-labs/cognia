@@ -20,6 +20,8 @@ jest.mock("next-intl", () => {
       },
   }
 })
+jest.mock("@/lib/automation/managed-desktop-client", () => ({ openManagedDesktop: jest.fn() }))
+import { openManagedDesktop } from "@/lib/automation/managed-desktop-client"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en/automation.json"
@@ -73,6 +75,7 @@ function mount() {
   return render(viewer())
 }
 beforeEach(() => {
+  jest.mocked(openManagedDesktop).mockReset()
   jest.resetAllMocks()
   useStream.mockReturnValue(streamState())
 })
@@ -477,4 +480,75 @@ test("an obsolete claim cannot release control after the viewer connection chang
   )
   await act(async () => finish(false))
   expect(model.release).not.toHaveBeenCalled()
+})
+
+function managedViewer(qualified = true) {
+  useDesktop.mockReturnValue(state())
+  return (
+    <SandboxDesktopViewer
+      connectionId="managed:desktop:1"
+      enabled
+      openDesktop={jest.fn()}
+      managed={{
+        target: { kind: "local" },
+        ref: { desktopId: "desktop", generation: 1 },
+        operationsQualified: qualified,
+      }}
+    />
+  )
+}
+test("managed clipboard is explicit and disabled with a recipe-8 reason", () => {
+  render(managedViewer(false))
+  expect(screen.getByRole("button", { name: "Read desktop clipboard" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Send text to desktop clipboard" })).toBeDisabled()
+  expect(screen.getByText(/require current recipe-8 qualification/)).toBeInTheDocument()
+  expect(openManagedDesktop).not.toHaveBeenCalled()
+})
+test("managed clipboard obtains and releases a holder lease without automatic synchronization", async () => {
+  const lease = { token: "holder", fence: 1, expiresAt: Date.now() + 15000 }
+  const session = {
+    acquire: jest.fn().mockResolvedValue(lease),
+    clipboardGet: jest.fn().mockResolvedValue({ kind: "clipboard-get", text: "from desktop" }),
+    clipboardSet: jest.fn().mockResolvedValue({ kind: "clipboard-set", bytes: 12 }),
+    release: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn(),
+  }
+  jest.mocked(openManagedDesktop).mockResolvedValue(session as never)
+  render(managedViewer())
+  expect(session.clipboardGet).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole("button", { name: "Read desktop clipboard" }))
+  await waitFor(() =>
+    expect(screen.getByRole("textbox", { name: "Clipboard text" })).toHaveValue("from desktop")
+  )
+  await waitFor(() => expect(session.release).toHaveBeenCalledWith(lease))
+  fireEvent.change(screen.getByRole("textbox", { name: "Clipboard text" }), {
+    target: { value: "to desktop" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Send text to desktop clipboard" }))
+  await waitFor(() => expect(session.clipboardSet).toHaveBeenCalledWith(lease, "to desktop"))
+  await waitFor(() => expect(session.close).toHaveBeenCalledTimes(2))
+})
+test("revoking operations qualification discards a late clipboard response", async () => {
+  let resolve!: (value: { kind: string; text: string }) => void
+  const session = {
+    acquire: jest.fn().mockResolvedValue({ token: "holder", fence: 1 }),
+    clipboardGet: jest.fn(
+      () =>
+        new Promise((done) => {
+          resolve = done
+        })
+    ),
+    release: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn(),
+  }
+  jest.mocked(openManagedDesktop).mockResolvedValue(session as never)
+  const { rerender } = render(managedViewer())
+  fireEvent.click(screen.getByRole("button", { name: "Read desktop clipboard" }))
+  await waitFor(() => expect(session.clipboardGet).toHaveBeenCalled())
+  rerender(managedViewer(false))
+  await act(async () => {
+    resolve({ kind: "clipboard-get", text: "late private text" })
+  })
+  expect(screen.getByRole("textbox", { name: "Clipboard text" })).toHaveValue("")
+  expect(session.release).toHaveBeenCalled()
 })

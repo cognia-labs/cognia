@@ -611,6 +611,13 @@
     "workspaceHostPath": "Host directory to mount",
     "workspaceMountHelp": "Both are needed together. Without a mount, shell and file work inside the machine cannot reach any host path.",
     "desktopViewer": {
+      "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+      "clipboardTitle": "Clipboard",
+      "clipboardHelp": "Transfer text manually (up to 1 MiB). Each action takes exclusive control.",
+      "clipboardText": "Clipboard text",
+      "clipboardGet": "Read desktop clipboard",
+      "clipboardSet": "Send text to desktop clipboard",
+      "clipboardFailed": "Clipboard transfer failed. Check qualification and control access.",
       "title": "Desktop",
       "readOnly": "View only",
       "controlling": "You have control",
@@ -677,6 +684,8 @@
     "deleteConfirm": "Delete permanently",
     "deleting": "Deleting…",
     "fileTransfer": {
+      "managedHelp": "Upload or download one binary file up to {limit} MiB within /home/cua. Uploads replace the selected file. Each transfer takes exclusive control.",
+      "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
       "title": "Files",
       "help": "Upload or download one binary file up to {limit} MiB. Uploads use an existing folder and never overwrite a file. Uploading releases manual desktop control.",
       "missingContainer": "Refresh the connection health to identify its container before transferring files.",
@@ -687,6 +696,8 @@
       "download": "Download file",
       "downloading": "Downloading…",
       "notice": {
+        "managedUploadFailed": "Upload failed. Check that the desktop is running, the folder exists, and qualified control access is available.",
+        "managedDownloadFailed": "Download failed. Check that the desktop is running, the file is readable, and qualified control access is available.",
         "cancelled": "File transfer cancelled.",
         "uploaded": "File uploaded to the selected sandbox.",
         "downloaded": "File saved.",

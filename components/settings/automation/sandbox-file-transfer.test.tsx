@@ -1,3 +1,26 @@
+jest.mock("next-intl", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const automation = require("@/i18n/messages/en/automation.json")
+  return {
+    useTranslations:
+      (namespace: string) => (key: string, values?: Record<string, string | number>) => {
+        const result = `${namespace}.${key}`
+          .split(".")
+          .reduce<unknown>(
+            (value, part) =>
+              value && typeof value === "object"
+                ? (value as Record<string, unknown>)[part]
+                : undefined,
+            { automation }
+          )
+        return typeof result === "string"
+          ? result.replace(/\{(\w+)\}/g, (_, name: string) => String(values?.[name] ?? `{${name}}`))
+          : key
+      },
+  }
+})
+jest.mock("@/lib/automation/managed-desktop-client", () => ({ openManagedDesktop: jest.fn() }))
+import { openManagedDesktop } from "@/lib/automation/managed-desktop-client"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { SandboxFileTransfer } from "./sandbox-file-transfer"
 import { pickStreamFiles } from "@/lib/files/file-bridge"
@@ -295,4 +318,104 @@ test("missing container identity disables transfer and asks for health refresh",
   render(panel("a", ""))
   expect(screen.getByRole("button", { name: "Choose file and upload" })).toBeDisabled()
   expect(screen.getByText(/Refresh the connection health/)).toBeInTheDocument()
+})
+
+function managedPanel(qualified = true) {
+  return (
+    <SandboxFileTransfer
+      connectionId="managed:desktop:1"
+      enabled
+      managed={{
+        target: { kind: "local" },
+        ref: { desktopId: "desktop", generation: 1 },
+        operationsQualified: qualified,
+      }}
+      releaseControl={release}
+      onBusyChange={busyChanged}
+    />
+  )
+}
+function managedSession() {
+  const lease = { token: "managed-control", fence: 4, expiresAt: Date.now() + 15000 }
+  const session = {
+    acquire: jest.fn().mockResolvedValue(lease),
+    renew: jest.fn().mockResolvedValue(lease),
+    writeChunk: jest.fn().mockResolvedValue({ kind: "file-write", bytes: 3, final: true }),
+    readChunk: jest.fn().mockResolvedValue({ kind: "file-read", chunk: [0, 255, 128], eof: true }),
+    release: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn(),
+  }
+  jest.mocked(openManagedDesktop).mockResolvedValue(session as never)
+  return { session, lease }
+}
+test("managed transfer remains visible and labelled disabled before recipe-8 qualification", () => {
+  render(managedPanel(false))
+  expect(screen.getByRole("button", { name: "Choose file and upload" })).toBeDisabled()
+  expect(screen.getByRole("button", { name: "Download file" })).toBeDisabled()
+  expect(screen.getByText(/require current recipe-8 qualification/)).toBeInTheDocument()
+  expect(openManagedDesktop).not.toHaveBeenCalled()
+})
+test("managed upload and download require the exact holder and use chunk RPCs", async () => {
+  const { session, lease } = managedSession()
+  picker.mockResolvedValue([picked([new Uint8Array([0, 255, 128])])])
+  render(managedPanel())
+  expect(screen.getByText(/Uploads replace the selected file/)).toBeInTheDocument()
+  fireEvent.click(screen.getByRole("button", { name: "Choose file and upload" }))
+  await screen.findByText("File uploaded to the selected sandbox.")
+  expect(session.writeChunk).toHaveBeenCalledWith(
+    lease,
+    "/home/cua/binary.dat",
+    0,
+    [0, 255, 128],
+    true
+  )
+  await waitFor(() => expect(session.release).toHaveBeenCalled())
+  fireEvent.change(screen.getByLabelText("File path inside the sandbox"), {
+    target: { value: "/home/cua/binary.dat" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Download file" }))
+  await waitFor(() =>
+    expect(session.readChunk).toHaveBeenCalledWith(lease, "/home/cua/binary.dat", 0, 65536)
+  )
+  await waitFor(() => expect(session.close).toHaveBeenCalledTimes(2))
+  expect(client.uploadFile).not.toHaveBeenCalled()
+  expect(client.downloadFile).not.toHaveBeenCalled()
+})
+test("managed qualification revocation during picker prevents acquiring control", async () => {
+  let finish!: (files: Awaited<ReturnType<typeof pickStreamFiles>>) => void
+  picker.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve
+    })
+  )
+  const { rerender } = render(managedPanel())
+  fireEvent.click(screen.getByRole("button", { name: "Choose file and upload" }))
+  rerender(managedPanel(false))
+  await act(async () => {
+    finish([picked([new Uint8Array([1])])])
+  })
+  expect(openManagedDesktop).not.toHaveBeenCalled()
+})
+
+test("revocation while a managed renewal waits prevents sending the next chunk", async () => {
+  const { session, lease } = managedSession()
+  let finish!: () => void
+  session.renew.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve(lease)
+      })
+  )
+  picker.mockResolvedValue([picked([new Uint8Array([1])])])
+  const { rerender } = render(managedPanel())
+  fireEvent.click(screen.getByRole("button", { name: "Choose file and upload" }))
+  await waitFor(() => expect(session.renew).toHaveBeenCalled())
+  rerender(managedPanel(false))
+  await act(async () => {
+    finish()
+  })
+  expect(session.writeChunk).not.toHaveBeenCalled()
+  expect(session.release).toHaveBeenCalledWith(
+    expect.objectContaining({ token: lease.token, fence: lease.fence })
+  )
 })

@@ -453,6 +453,7 @@ function ProviderSettings({
             resource={resource}
             row={connectionRow(config, target, resource)}
             qualified={config.enablement.manualGui && qualified}
+            operationsQualified={config.operationsQualified === true}
           />
           <div className="flex gap-2">
             <Button
@@ -510,11 +511,13 @@ function ManagedResourceViewer({
   target,
   resource,
   qualified,
+  operationsQualified,
   row,
 }: {
   target: ManagedDesktopTarget
   resource: ManagedDesktopResource
   qualified: boolean
+  operationsQualified: boolean
   row: SandboxConnectionRow
 }) {
   const t = useTranslations("settings.managedDesktops")
@@ -562,6 +565,9 @@ function ManagedResourceViewer({
     <div className="space-y-2">
       {error ? <p role="alert">{t(`errors.${error}`)}</p> : null}
       {!qualified ? <p data-dormant="managed-desktop-control">{t("guiDormant")}</p> : null}
+      {!operationsQualified ? (
+        <p data-dormant="managed-desktop-operations">{t("operationsDormant")}</p>
+      ) : null}
       <Button
         size="sm"
         variant="outline"
@@ -571,7 +577,12 @@ function ManagedResourceViewer({
         {opened ? t("closeDesktop") : t("openDesktop")}
       </Button>
       {opened && enabled ? (
-        <SandboxDesktopViewer connectionId={id} enabled openDesktop={openDesktop} />
+        <SandboxDesktopViewer
+          connectionId={id}
+          enabled
+          openDesktop={openDesktop}
+          managed={{ target, ref: { desktopId: id, generation }, operationsQualified }}
+        />
       ) : null}
     </div>
   )

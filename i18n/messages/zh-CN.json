@@ -5857,6 +5857,12 @@
         "acquiring": "正在接管…",
         "agentDormant": "任务与 agent 控制保持 dormant，直到交接功能完成。",
         "cadence": "此视图可见时，桌面截图约每秒刷新一次。",
+        "clipboardFailed": "剪贴板传输失败，请检查资格验证和控制权限。",
+        "clipboardGet": "读取桌面剪贴板",
+        "clipboardHelp": "手动传输文本（最多 1 MiB），每次操作需要独占控制。",
+        "clipboardSet": "将文本发送到桌面剪贴板",
+        "clipboardText": "剪贴板文本",
+        "clipboardTitle": "剪贴板",
         "controlHelp": "点击画面后可使用键盘，也可拖拽和滚动。Escape 释放控制权；此窗口失去焦点时也会释放。接管期间智能体输入会暂停。",
         "controlling": "正在由你控制",
         "disconnected": "桌面已断开，正在自动重试…",
@@ -5887,6 +5893,7 @@
         },
         "loading": "正在连接桌面…",
         "mobileObservation": "此查看器仅支持观察。",
+        "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
         "otherController": "其他用户正在控制",
         "qualificationRequired": "云桌面查看与控制需要另行授权并通过 GUI smoke 验证。",
         "quarantined": "输入清理状态不确定，暂不可控制",
@@ -5922,6 +5929,7 @@
         "downloading": "正在下载…",
         "folder": "沙箱内已存在的目录",
         "help": "上传或下载单个最大 {limit} MiB 的二进制文件。上传目标必须是已存在的目录，且不会覆盖现有文件。上传会释放手动桌面控制权。",
+        "managedHelp": "在 /home/cua 内上传或下载一个最多 {limit} MiB 的二进制文件。上传会替换目标文件，每次传输需要独占控制。",
         "missingContainer": "请先刷新连接健康状态以确定容器，再传输文件。",
         "notice": {
           "cancelled": "文件传输已取消。",
@@ -5929,12 +5937,15 @@
           "downloaded": "文件已保存。",
           "invalidPath": "请输入沙箱内的绝对路径，不可包含上级目录跳转。",
           "invalidPayload": "下载文件的大小或校验和检查失败。",
+          "managedDownloadFailed": "下载失败，请检查桌面是否运行、文件是否可读，以及是否已通过资格验证并取得控制权限。",
+          "managedUploadFailed": "上传失败，请检查桌面是否运行、目录是否存在，以及是否已通过资格验证并取得控制权限。",
           "readFailed": "无法读取所选文件。",
           "saveFailed": "无法保存下载的文件。",
           "tooLarge": "文件超过 8 MiB 传输限制。",
           "uploadFailed": "上传失败。请确认仍是同一运行中的容器、目录存在、文件名未被占用且控制权可用。",
           "uploaded": "文件已上传到所选沙箱。"
         },
+        "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
         "title": "文件",
         "upload": "选择文件并上传",
         "uploading": "正在上传…"
@@ -53627,6 +53638,7 @@
         "title": "计费与清理"
       },
       "openDesktop": "打开桌面",
+      "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
       "prepare": "准备固定版本模板",
       "prepared": "固定版本模板已准备。创建桌面前仍须授权真实 provider smoke 并通过验证。",
       "qualification": {

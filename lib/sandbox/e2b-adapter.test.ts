@@ -1,3 +1,5 @@
+jest.mock("@/lib/tauri/transport-instance", () => ({ localTransport: { call: jest.fn() } }))
+import { localTransport } from "@/lib/tauri/transport-instance"
 jest.mock("@/lib/automation/managed-desktop-client", () => ({ managedDesktopClient: {} }))
 import type { SandboxConnectionRow } from "@/types/sandbox"
 import type { ManagedDesktopClient } from "@/lib/automation/managed-desktop-client"
@@ -125,3 +127,146 @@ test.each([undefined, 0, 1, 3])(
     expect(api.create).not.toHaveBeenCalled()
   }
 )
+
+test("qualified workspace routes to the exact managed id and passes the grantee without Host fallback", async () => {
+  const source = row(true)
+  source.id = "managed:desktop:2"
+  source.state = "running"
+  if (source.config.provider !== "e2b") throw new Error("fixture")
+  source.config = {
+    ...source.config,
+    target: { kind: "local" },
+    delegationId: "grant",
+    agentControl: true,
+    ...{ operationsQualified: true },
+  }
+  const adapter = buildE2bSandboxAdapter(
+    source,
+    {},
+    { managedAgent: { sessionKey: "session", characterId: "character" } }
+  )
+  jest.mocked(localTransport.call).mockResolvedValue({ exitCode: 0 })
+  const ctx = { ...source, connectionId: source.id }
+  await adapter.workspaceExec!(ctx, { argv: ["id"] })
+  expect(localTransport.call).toHaveBeenLastCalledWith(
+    "cua_sandbox_exec",
+    expect.objectContaining({
+      connectionId: "managed:desktop:2",
+      sessionKey: "session",
+      characterId: "character",
+      argv: ["id"],
+    })
+  )
+  await adapter.workspaceRead!(ctx, "/home/cua/file")
+  expect(localTransport.call).toHaveBeenLastCalledWith(
+    "cua_sandbox_read_file",
+    expect.objectContaining({
+      connectionId: "managed:desktop:2",
+      sessionKey: "session",
+      path: "/home/cua/file",
+    })
+  )
+  await expect(
+    buildE2bSandboxAdapter(source, {}).workspaceExec!(ctx, { argv: ["id"] })
+  ).rejects.toThrow("managed_desktop_delegation_required")
+})
+
+test("managed workspace refuses stale Host truth and unattested execution policy", async () => {
+  const source = row(true)
+  source.id = "managed:desktop:2"
+  source.state = "running"
+  if (source.config.provider !== "e2b") throw new Error("fixture")
+  source.config = {
+    ...source.config,
+    target: { kind: "local" },
+    delegationId: "grant",
+    agentControl: true,
+    ...{ operationsQualified: false },
+  }
+  const ctx = { ...source, connectionId: source.id }
+  const unavailable = buildE2bSandboxAdapter(
+    source,
+    {},
+    { managedAgent: { sessionKey: "session" } }
+  )
+  await expect(unavailable.workspaceRead!(ctx, "/home/cua/a")).rejects.toMatchObject({
+    code: "provider-unqualified",
+  })
+  await expect(unavailable.workspaceExec!(ctx, { argv: ["id"] })).rejects.toMatchObject({
+    code: "provider-unqualified",
+  })
+  source.config = { ...source.config, ...{ operationsQualified: true } }
+  const adapter = buildE2bSandboxAdapter(source, {}, { managedAgent: { sessionKey: "session" } })
+  await expect(
+    adapter.workspaceExec!(ctx, { argv: ["cat"], stdin: "normal file write" })
+  ).rejects.toThrow("managed_desktop_exec_env_stdin_unsupported")
+  await expect(adapter.workspaceExec!(ctx, { argv: ["id"], env: { CI: "1" } })).rejects.toThrow(
+    "managed_desktop_exec_env_stdin_unsupported"
+  )
+  await expect(
+    adapter.workspaceExec!(ctx, {
+      argv: ["id"],
+      policy: {
+        readable: [],
+        writable: [],
+        targetFiles: [],
+        maxCpuSeconds: 1,
+        maxMemoryMb: 0,
+        network: "off",
+        networkHosts: [],
+      },
+    })
+  ).rejects.toMatchObject({ code: "policy-not-attested" })
+  await expect(
+    buildE2bSandboxAdapter(source, {}).workspaceRead!(ctx, "/home/cua/a")
+  ).rejects.toThrow("managed_desktop_delegation_required")
+})
+
+test("managed exec attests nested cwd and fixed VM shape before dispatch", async () => {
+  const source = row(true)
+  source.id = "managed:desktop:2"
+  source.state = "running"
+  if (source.config.provider !== "e2b") throw new Error("fixture")
+  source.config = {
+    ...source.config,
+    target: { kind: "local" },
+    delegationId: "grant",
+    agentControl: true,
+    ...{ operationsQualified: true, cpuCount: 2, memoryMb: 2048 },
+  }
+  const adapter = buildE2bSandboxAdapter(source, {}, { managedAgent: { sessionKey: "session" } })
+  const ctx = { ...source, connectionId: source.id }
+  const policy = {
+    readable: ["/home/cua/project/src"],
+    writable: ["/home/cua/project"],
+    targetFiles: [],
+    maxCpuSeconds: 1,
+    maxMemoryMb: 1,
+    network: "off" as const,
+    networkHosts: [],
+  }
+  jest.mocked(localTransport.call).mockClear().mockResolvedValue({ exitCode: 0 })
+  await adapter.workspaceExec!(ctx, {
+    argv: ["bash", "-lc", "pwd"],
+    cwd: "/home/cua/project",
+    policy,
+  })
+  expect(localTransport.call).toHaveBeenCalledTimes(1)
+  expect(localTransport.call).toHaveBeenLastCalledWith(
+    "cua_sandbox_exec",
+    expect.objectContaining({ cwd: "/home/cua/project" })
+  )
+  jest.mocked(localTransport.call).mockClear()
+  for (const request of [
+    { argv: ["id"], cwd: "/etc" },
+    { argv: ["id"], policy: { ...policy, network: "allowlist" as const } },
+    { argv: ["id"], policy: { ...policy, readable: ["/etc/passwd"] } },
+  ])
+    await expect(adapter.workspaceExec!(ctx, request)).rejects.toMatchObject({
+      code: "policy-not-attested",
+    })
+  await expect(adapter.workspaceRead!(ctx, "/etc/passwd")).rejects.toMatchObject({
+    code: "policy-not-attested",
+  })
+  expect(localTransport.call).not.toHaveBeenCalled()
+})

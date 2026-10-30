@@ -16,7 +16,7 @@ export interface NativeControlInput {
   action: NativeUiAction
   frameId: string
 }
-export function encodeNativeInput(input: NativeControlInput): Uint8Array {
+export function encodeNativeInput(input: NativeControlInput): Uint8Array<ArrayBuffer> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.frameId))
     invalid()
   const json = new TextEncoder().encode(JSON.stringify(input))

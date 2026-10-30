@@ -113,7 +113,9 @@ beforeEach(() => {
       qualificationEvidenceVersion: 2,
       workloadIsolationRevision: 1,
       egressEnforcement: "provider-and-guest-kernel",
-      enablement: { agentControl: true },
+      cpuCount: 2,
+      memoryMb: 2048,
+      enablement: { agentControl: true, acceptance: true },
     } as ManagedDesktopConfigSummary,
   ])
   api.delegate.mockImplementation(async () => live[0])
@@ -154,7 +156,13 @@ it("projects a live acceptance delegation without minting another grant and admi
   expect(api.delegate).not.toHaveBeenCalled()
   expect(rows.get(id)).toMatchObject({
     id,
-    config: { delegationId: "delegation", desktopId: "desktop", generation: 3 },
+    config: {
+      delegationId: "delegation",
+      desktopId: "desktop",
+      generation: 3,
+      cpuCount: 2,
+      memoryMb: 2048,
+    },
     capabilities: { gui: true },
   })
   await expect(requireManagedDesktopDelegation(rows.get(id)!, "child")).resolves.toBeUndefined()
@@ -434,4 +442,57 @@ it("does not revoke an idempotently reused delegation on a projection failure", 
   await expect(bindManagedDesktop(request)).rejects.toThrow("database unavailable")
   expect(api.revokeDelegation).not.toHaveBeenCalled()
   expect(rows.get(id)?.config).toMatchObject({ delegationId: "delegation" })
+})
+
+it("refreshes workspace capabilities from current Host operations qualification", async () => {
+  const id = await bindManagedDesktop({
+    desktopId: "desktop",
+    generation: 3,
+    grantee: { kind: "session", sessionKey: "session" },
+  })
+  expect(rows.get(id)?.capabilities.workspaceExec).toBe(false)
+  expect(rows.get(id)?.config).toMatchObject({ cpuCount: 2, memoryMb: 2048 })
+  const configs = await api.listConfigs({ kind: "local" })
+  api.listConfigs.mockResolvedValue(
+    configs.map((config) => ({ ...config, operationsQualified: true, cpuCount: 4, memoryMb: 4096 }))
+  )
+  await reconcileManagedDesktopBindings()
+  expect(rows.get(id)?.capabilities.workspaceExec).toBe(true)
+  expect(rows.get(id)?.config).toMatchObject({ cpuCount: 4, memoryMb: 4096 })
+  api.listConfigs.mockResolvedValue(configs)
+  await reconcileManagedDesktopBindings()
+  expect(rows.get(id)?.capabilities.workspaceRead).toBe(false)
+})
+
+it("acceptance workspace uses its switch independently of agentControl", async () => {
+  live = [
+    delegation({ grantee: { kind: "acceptance", acceptanceId: "acceptance" }, mode: "acceptance" }),
+  ]
+  const configs = await api.listConfigs({ kind: "local" })
+  api.listConfigs.mockResolvedValue(
+    configs.map((config) => ({
+      ...config,
+      operationsQualified: true,
+      enablement: { ...config.enablement, agentControl: false, acceptance: true },
+    }))
+  )
+  await reconcileManagedDesktopBindings()
+  expect(rows.get(id)?.capabilities).toMatchObject({
+    gui: true,
+    workspaceExec: true,
+    workspaceRead: true,
+  })
+  api.listConfigs.mockResolvedValue(
+    configs.map((config) => ({
+      ...config,
+      operationsQualified: true,
+      enablement: { ...config.enablement, agentControl: true, acceptance: false },
+    }))
+  )
+  await reconcileManagedDesktopBindings()
+  expect(rows.get(id)?.capabilities).toMatchObject({
+    gui: false,
+    workspaceExec: false,
+    workspaceRead: false,
+  })
 })

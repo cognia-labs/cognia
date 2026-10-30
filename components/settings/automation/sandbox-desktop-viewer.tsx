@@ -23,7 +23,8 @@ import type { OpenSandboxDesktop, SandboxControlLease } from "@/lib/automation/s
 import { isCapacitor } from "@/lib/platform/detect"
 import { prefersTouchInput } from "@cognia/plugin-ui"
 import { NativeTouchControls } from "@/components/devices/remote-desktop/native-touch-controls"
-import { SandboxFileTransfer } from "./sandbox-file-transfer"
+import { openManagedDesktop } from "@/lib/automation/managed-desktop-client"
+import { SandboxFileTransfer, type ManagedDesktopTransferTarget } from "./sandbox-file-transfer"
 
 function framePoint(
   image: HTMLImageElement,
@@ -55,28 +56,40 @@ function framePoint(
  * is shown as its live stream instead: a loopback page with a Host-issued
  * session token that can only watch until this viewer holds the control lease.
  */
-export function SandboxDesktopViewer({
-  connectionId,
-  enabled,
-  containerId,
-  transferTargetId,
-  transferFolder,
-  openDesktop,
-  observeOnly = false,
-  streamDeps,
-  allowStreaming = true,
-}: {
+interface SandboxDesktopViewerProps {
   connectionId: string
   enabled: boolean
   containerId?: string
   transferTargetId?: string
   transferFolder?: string
+  managed?: ManagedDesktopTransferTarget
   openDesktop?: OpenSandboxDesktop
   observeOnly?: boolean
   /** Test seam for the stream grant calls. */
   streamDeps?: SandboxDesktopStreamDeps
   allowStreaming?: boolean
-}) {
+}
+export function SandboxDesktopViewer(props: SandboxDesktopViewerProps) {
+  const target = props.managed
+  return (
+    <SandboxDesktopViewerSession
+      key={`${props.connectionId}:${props.enabled}:${target?.ref.desktopId ?? ""}:${target?.ref.generation ?? ""}:${target?.operationsQualified ?? false}:${target?.target.kind === "remote" ? target.target.hostId : "local"}`}
+      {...props}
+    />
+  )
+}
+function SandboxDesktopViewerSession({
+  connectionId,
+  enabled,
+  containerId,
+  transferTargetId,
+  transferFolder,
+  managed,
+  openDesktop,
+  observeOnly = false,
+  streamDeps,
+  allowStreaming = true,
+}: SandboxDesktopViewerProps) {
   const t = useTranslations("automation.sandboxConnections.desktopViewer")
   const mobileObservation = observeOnly
   const [touchScreen] = useState(
@@ -147,8 +160,51 @@ export function SandboxDesktopViewer({
   })
   const [text, setText] = useState("")
   const [sending, setSending] = useState(false)
+  const [clipboard, setClipboard] = useState("")
+  const [clipboardBusy, setClipboardBusy] = useState(false)
+  const clipboardInFlight = useRef(false)
+  const [clipboardError, setClipboardError] = useState(false)
   const [doubleClick, setDoubleClick] = useState(false)
   const [transferring, setTransferring] = useState(false)
+  const operationEpoch = useRef(0)
+  useEffect(() => {
+    operationEpoch.current += 1
+    return () => {
+      operationEpoch.current += 1
+    }
+  }, [connectionId, managed?.ref.desktopId, managed?.ref.generation, managed?.operationsQualified])
+  async function transferClipboard(write: boolean) {
+    if (!managed?.operationsQualified || !enabled || clipboardInFlight.current) return
+    clipboardInFlight.current = true
+    const epoch = operationEpoch.current
+    setClipboardBusy(true)
+    setClipboardError(false)
+    let session: Awaited<ReturnType<typeof openManagedDesktop>> | undefined
+    let lease: SandboxControlLease | undefined
+    try {
+      if (new TextEncoder().encode(clipboard).length > 1024 * 1024)
+        throw new Error("managed_desktop_operation_limit")
+      await release()
+      if (epoch !== operationEpoch.current) return
+      session = await openManagedDesktop(managed.target, managed.ref)
+      lease = await session.acquire(true)
+      if (epoch !== operationEpoch.current) return
+      if (write) await session.clipboardSet(lease, clipboard)
+      else {
+        const result = await session.clipboardGet(lease)
+        if (new TextEncoder().encode(result.text).length > 1024 * 1024)
+          throw new Error("managed_desktop_operation_limit")
+        if (epoch === operationEpoch.current) setClipboard(result.text)
+      }
+    } catch {
+      if (epoch === operationEpoch.current) setClipboardError(true)
+    } finally {
+      if (lease) await session?.release(lease).catch(() => undefined)
+      session?.close()
+      clipboardInFlight.current = false
+      if (epoch === operationEpoch.current) setClipboardBusy(false)
+    }
+  }
   const image = useRef<HTMLImageElement>(null)
   const touchSurface = useCallback(() => image.current, [])
   const start = useRef<{
@@ -398,6 +454,7 @@ export function SandboxDesktopViewer({
               streamStatus !== "unmonitored") ||
             acquiring ||
             transferring ||
+            clipboardBusy ||
             mobileObservation ||
             (Boolean(openDesktop) && !controlling && !status?.canAcquire)
           }
@@ -447,16 +504,48 @@ export function SandboxDesktopViewer({
           </div>
         </div>
       ) : null}
-      {!openDesktop ? (
+      {!openDesktop || managed ? (
         <SandboxFileTransfer
           key={`${connectionId}:${transferTargetId ?? containerId ?? ""}`}
           connectionId={connectionId}
+          managed={managed}
           containerId={transferTargetId ?? containerId}
           defaultFolder={transferFolder}
-          enabled={enabled}
+          enabled={enabled && !clipboardBusy}
           releaseControl={release}
           onBusyChange={setTransferring}
         />
+      ) : null}
+      {managed ? (
+        <section aria-label={t("clipboardTitle")} className="space-y-2">
+          <h3 className="text-sm font-medium">{t("clipboardTitle")}</h3>
+          <p className="text-xs text-muted-foreground">
+            {t(managed.operationsQualified ? "clipboardHelp" : "operationsDormant")}
+          </p>
+          <Textarea
+            aria-label={t("clipboardText")}
+            value={clipboard}
+            disabled={!enabled || !managed.operationsQualified || clipboardBusy}
+            onChange={(event) => setClipboard(event.target.value)}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!enabled || !managed.operationsQualified || clipboardBusy || transferring}
+            onClick={() => void transferClipboard(false)}
+          >
+            {t("clipboardGet")}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!enabled || !managed.operationsQualified || clipboardBusy || transferring}
+            onClick={() => void transferClipboard(true)}
+          >
+            {t("clipboardSet")}
+          </Button>
+          {clipboardError ? <p role="alert">{t("clipboardFailed")}</p> : null}
+        </section>
       ) : null}
     </section>
   )

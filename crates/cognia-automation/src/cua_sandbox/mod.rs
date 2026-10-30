@@ -344,16 +344,22 @@ pub async fn cua_sandbox_exec(
     env: Option<BTreeMap<String, String>>,
     stdin: Option<String>,
     timeout_ms: Option<u64>,
+    session_key: Option<String>,
+    character_id: Option<String>,
 ) -> std::result::Result<SandboxExecDto, String> {
     let env = env.unwrap_or_default();
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_EXEC_TIMEOUT_MS));
-    reg.exec(
-        &connection_id,
-        &argv,
-        cwd.as_deref(),
-        &env,
-        stdin.as_deref(),
-        timeout,
+    crate::automation::cua_route::with_agent_identity(
+        session_key,
+        character_id,
+        reg.exec(
+            &connection_id,
+            &argv,
+            cwd.as_deref(),
+            &env,
+            stdin.as_deref(),
+            timeout,
+        ),
     )
     .await
     .map(Into::into)
@@ -368,16 +374,23 @@ pub async fn cua_sandbox_read_file(
     connection_id: String,
     path: String,
     max_bytes: Option<u64>,
+    session_key: Option<String>,
+    character_id: Option<String>,
 ) -> std::result::Result<String, String> {
     let max = max_bytes
         .map(|value| value as usize)
         .unwrap_or(DEFAULT_READ_MAX_BYTES);
-    reg.read_file(&connection_id, &path, max)
-        .await
-        .map_err(|e| e.to_string())
+    crate::automation::cua_route::with_agent_identity(
+        session_key,
+        character_id,
+        reg.read_file(&connection_id, &path, max),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
-/// Upload a bounded binary file without replacing an existing guest path.
+/// Upload a bounded binary file. Managed agent writes may replace the path,
+/// optionally requiring its current hash; Docker uploads remain create-only.
 #[cfg(feature = "tauri-host")]
 #[tauri::command]
 pub async fn cua_sandbox_upload_file(
@@ -387,16 +400,43 @@ pub async fn cua_sandbox_upload_file(
     token: String,
     path: String,
     data_base64: String,
+    session_key: Option<String>,
+    character_id: Option<String>,
+    expected_hash: Option<String>,
 ) -> std::result::Result<file_transfer::SandboxFileInfo, String> {
-    reg.upload_file(
-        &connection_id,
-        &expected_container_id,
-        &token,
-        &path,
-        &data_base64,
-    )
-    .await
-    .map_err(|error| error.to_string())
+    let operation = async {
+        if connection_id.starts_with("managed:") {
+            if expected_container_id != connection_id {
+                return Err(crate::automation::types::AutomationError::BackendError {
+                    message: "managed_desktop_stale_generation".into(),
+                });
+            }
+            reg.write_file(
+                &connection_id,
+                &path,
+                &file_transfer::decode_bytes(&data_base64)?,
+                expected_hash.as_deref(),
+            )
+            .await
+        } else {
+            if expected_hash.is_some() {
+                return Err(crate::automation::types::AutomationError::BackendError {
+                    message: "managed_desktop_invalid_target".into(),
+                });
+            }
+            reg.upload_file(
+                &connection_id,
+                &expected_container_id,
+                &token,
+                &path,
+                &data_base64,
+            )
+            .await
+        }
+    };
+    crate::automation::cua_route::with_agent_identity(session_key, character_id, operation)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Download a regular guest file through the bounded, attested exec channel.
@@ -407,10 +447,16 @@ pub async fn cua_sandbox_download_file(
     connection_id: String,
     expected_container_id: String,
     path: String,
+    session_key: Option<String>,
+    character_id: Option<String>,
 ) -> std::result::Result<file_transfer::SandboxFileDownload, String> {
-    reg.download_file(&connection_id, &expected_container_id, &path)
-        .await
-        .map_err(|error| error.to_string())
+    crate::automation::cua_route::with_agent_identity(
+        session_key,
+        character_id,
+        reg.download_file(&connection_id, &expected_container_id, &path),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }
 
 // Viewer commands stay on the local renderer transport; input requires the

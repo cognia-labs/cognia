@@ -142,6 +142,11 @@ export function bindManagedDesktop(input: ManagedDesktopDelegationRequest): Prom
           desktopId: desktop.id,
           generation: desktop.generation,
           delegationId: delegation.id,
+          ...{
+            operationsQualified: config.operationsQualified === true,
+            cpuCount: config.cpuCount,
+            memoryMb: config.memoryMb,
+          },
           agentControl: config.enablement.agentControl,
           qualification: config.qualification,
           qualificationEvidenceVersion: config.qualificationEvidenceVersion,
@@ -206,6 +211,7 @@ async function reconcileNow(assertActive: () => void): Promise<ManagedDesktopDel
   assertActive()
   const live = delegations.filter(isLiveManagedDesktopDelegation)
   const rows = await listSandboxConnections()
+  const configsNow = live.length ? await managedDesktopClient.listConfigs(LOCAL) : []
   assertActive()
   // Acceptance grants are created by the Host runner, never by bindManagedDesktop.
   // Project them on discovery so the child can use the existing routing registry.
@@ -228,7 +234,7 @@ async function reconcileNow(assertActive: () => void): Promise<ManagedDesktopDel
       const config = configs.find((c) => c.id === grant.providerConfigId)
       const capabilities =
         config &&
-        managedDesktopCapabilities({ ...config, agentControl: config.enablement.agentControl })
+        managedDesktopCapabilities({ ...config, agentControl: config.enablement.acceptance })
       if (!desktop || !config || !capabilities?.gui || desktop.providerConfigId !== config.id)
         continue
       const id = managedDesktopConnectionId(desktop.id, desktop.generation)
@@ -245,7 +251,12 @@ async function reconcileNow(assertActive: () => void): Promise<ManagedDesktopDel
           desktopId: desktop.id,
           generation: desktop.generation,
           delegationId: grant.id,
-          agentControl: config.enablement.agentControl,
+          ...{
+            operationsQualified: config.operationsQualified === true,
+            cpuCount: config.cpuCount,
+            memoryMb: config.memoryMb,
+          },
+          agentControl: config.enablement.acceptance,
           qualification: config.qualification,
           qualificationEvidenceVersion: config.qualificationEvidenceVersion,
           workloadIsolationRevision: config.workloadIsolationRevision,
@@ -281,8 +292,27 @@ async function reconcileNow(assertActive: () => void): Promise<ManagedDesktopDel
     // when one grantee revokes; runtime authorization still checks the caller.
     else {
       retained = true
-      if (!live.some((item) => item.id === config.delegationId))
-        await putSandboxConnection({ ...row, config: { ...config, delegationId: current.id } })
+      const hostConfig = configsNow.find((item) => item.id === current.providerConfigId)
+      const projection = {
+        ...config,
+        delegationId: current.id,
+        operationsQualified: hostConfig?.operationsQualified === true,
+        cpuCount: hostConfig?.cpuCount,
+        memoryMb: hostConfig?.memoryMb,
+        agentControl:
+          current.mode === "acceptance"
+            ? hostConfig?.enablement.acceptance === true
+            : hostConfig?.enablement.agentControl === true,
+        qualification: hostConfig?.qualification ?? "unqualified",
+        qualificationEvidenceVersion: hostConfig?.qualificationEvidenceVersion,
+        workloadIsolationRevision: hostConfig?.workloadIsolationRevision,
+        egressEnforcement: hostConfig?.egressEnforcement ?? "unverified",
+      }
+      await putSandboxConnection({
+        ...row,
+        config: projection,
+        capabilities: managedDesktopCapabilities(projection),
+      })
     }
   }
   assertActive()

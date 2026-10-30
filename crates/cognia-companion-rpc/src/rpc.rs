@@ -234,6 +234,10 @@ const KNOWN_COMMANDS: &[&str] = &[
     "managed_desktop_control_renew",
     "managed_desktop_control_release",
     "managed_desktop_control_input",
+    "managed_desktop_files_read",
+    "managed_desktop_files_write",
+    "managed_desktop_clipboard_get",
+    "managed_desktop_clipboard_set",
     // External remote desktop targets and sessions (ADR-0234 Phases 3 and 5).
     "remote_desktop_target_list",
     "remote_desktop_target_save",
@@ -2296,6 +2300,12 @@ const STEP_UP_COMMANDS: &[&str] = &[
     "managed_desktop_control_renew",
     "managed_desktop_control_release",
     "managed_desktop_control_input",
+    // Recipe-8 guest operations (ADR-0233 A8) read or change a desktop's files
+    // and clipboard; every one needs a live human administrator.
+    "managed_desktop_files_read",
+    "managed_desktop_files_write",
+    "managed_desktop_clipboard_get",
+    "managed_desktop_clipboard_set",
     "thread_handoff_accept",
     "thread_handoff_commit",
     "fleet_opencode_outbox_repair",
@@ -3977,7 +3987,9 @@ pub(super) async fn dispatch(
             args.remove("adminLease");
             args.remove("admin_lease");
         }
-        let runtime = if name == "managed_desktop_control_input" {
+        let runtime = if name == "managed_desktop_control_input"
+            || crate::managed_desktops::OPERATION_COMMANDS.contains(&name)
+        {
             let event_host = host.to_shared();
             let events: crate::managed_desktops::HostEventSink =
                 std::sync::Arc::new(move |topic, value| {

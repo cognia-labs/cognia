@@ -1,4 +1,5 @@
 {
+  "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
   "alerts": {
     "pastDeadline": {
       "title": "A cloud desktop outlived its deadline",

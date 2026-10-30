@@ -1255,6 +1255,50 @@ impl ManagedDesktopService {
         self.release_ended_agent_inputs().await;
         outcome
     }
+    async fn agent_operation_admission(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        operations: bool,
+    ) -> Result<(DesktopRecord, Arc<dyn Fn() -> bool + Send + Sync>)> {
+        self.reconcile_delegations().await?;
+        self.refresh_agent_admission().await?;
+        let row = self
+            .state
+            .lock()
+            .await
+            .desktops
+            .get(id)
+            .cloned()
+            .ok_or_else(|| refused("managed_desktop_not_found"))?;
+        if row.desktop.generation != generation {
+            return Err(refused("managed_desktop_stale_generation"));
+        }
+        let service = self.clone();
+        let target = id.to_owned();
+        let gate = self.agent_gate(id, generation, session.as_deref());
+        let live = Arc::new(move || {
+            service.agent_live(
+                &target,
+                generation,
+                session.as_deref(),
+                character.as_deref(),
+            )
+        });
+        if !live() {
+            return Err(refused("managed_desktop_delegation_required"));
+        }
+        if operations {
+            self.operations_check(&row).await?;
+        }
+        let admission = self.runtime_admission_for_record(&row, gate, live);
+        if !admission() {
+            return Err(refused("managed_desktop_agent_control_unqualified"));
+        }
+        Ok((row, admission))
+    }
     async fn agent_operation_inner(
         &self,
         id: &str,
@@ -1264,31 +1308,12 @@ impl ManagedDesktopService {
         action: Action,
     ) -> AutomationResult<ActionOutput> {
         validate_agent_action(&action)?;
-        let deny = |error: ManagedDesktopError| AutomationError::PermissionDenied { reason: error.code };
-        self.reconcile_delegations().await.map_err(deny)?;
-        self.refresh_agent_admission().await.map_err(deny)?;
-        let row = self
-            .state
-            .lock()
+        let deny =
+            |error: ManagedDesktopError| AutomationError::PermissionDenied { reason: error.code };
+        let (row, admission) = self
+            .agent_operation_admission(id, generation, session, character, false)
             .await
-            .desktops
-            .get(id)
-            .cloned()
-            .ok_or_else(|| deny(refused("managed_desktop_not_found")))?;
-        let service = self.clone();
-        let target = id.to_owned();
-        let gate = self.agent_gate(id, generation, session.as_deref());
-        let live = Arc::new(move || {
-            service.agent_live(&target, generation, session.as_deref(), character.as_deref())
-        });
-        if !live() {
-            return Err(deny(refused("managed_desktop_delegation_required")));
-        }
-        let admission =
-            self.runtime_admission_for_record(&row, gate, live);
-        if !admission() {
-            return Err(deny(refused("managed_desktop_agent_control_unqualified")));
-        }
+            .map_err(deny)?;
         let slot = self.control_slot(id, generation).await;
         let preempt = self.control_agent_preemption(id).await;
         let mut c = slot.lock().await;
@@ -1299,7 +1324,10 @@ impl ManagedDesktopService {
         if c.lease.is_some() {
             return Err(deny(refused("managed_desktop_control_busy")));
         }
-        if self.state.lock().await.control_quarantines.contains(id) {
+        if {
+            let state = self.state.lock().await;
+            state.control_quarantines.contains(id) || state.operation_quarantines.contains(id)
+        } {
             return Err(deny(refused("managed_desktop_control_quarantined")));
         }
         if !admission() {
@@ -1492,10 +1520,17 @@ impl ManagedDesktopService {
                 return Err(refused("managed_desktop_control_unqualified"));
             }
         }
-        let agent_active = self.control_projections.read().get(id).is_some_and(|status| {
-            status.generation == generation && status.agent_active.load(Ordering::SeqCst)
-        });
-        if !agent_active && self.state.lock().await.control_quarantines.contains(id) {
+        let agent_active = self
+            .control_projections
+            .read()
+            .get(id)
+            .is_some_and(|status| {
+                status.generation == generation && status.agent_active.load(Ordering::SeqCst)
+            });
+        if !agent_active && {
+            let state = self.state.lock().await;
+            state.control_quarantines.contains(id) || state.operation_quarantines.contains(id)
+        } {
             return Err(refused("managed_desktop_control_quarantined"));
         }
         // Recheck authentication after asynchronous configuration/storage work.
@@ -1571,8 +1606,10 @@ impl ManagedDesktopService {
         let active = projection.generation == generation
             && projection.agent_active.load(Ordering::SeqCst);
         let quarantined = !active
-            && (self.state.lock().await.control_quarantines.contains(id)
-                || (projection.generation == generation && projection.uncertain));
+            && ({
+                let state = self.state.lock().await;
+                state.control_quarantines.contains(id) || state.operation_quarantines.contains(id)
+            } || (projection.generation == generation && projection.uncertain));
         if unavailable || !qualified || quarantined {
             if let Some(c) = &mut locked {
                 c.invalidate();
@@ -3939,5 +3976,1335 @@ mod tests {
         f.service.save_registry(registry).await.unwrap();
         assert_eq!(f.service.control_frame(&p, &row.id, 1, &authority).await.unwrap_err().code,
             "managed_desktop_control_unqualified");
+    }
+}
+
+impl ManagedDesktopService {
+    async fn operations_check(&self, row: &DesktopRecord) -> Result<()> {
+        let p = ManagedDesktopPrincipal {
+            owner_principal_id: row.config.owner_principal_id.clone(),
+            principal_id: "operations".into(),
+            host_id: self.host_id.clone(),
+            authority: ManagedDesktopAuthority::Administrator,
+        };
+        let current = self.config(&p, &row.config.id).await?;
+        self.admission(&current, self.now().await)?;
+        let state = self.state.lock().await;
+        if current.binding_digest() != row.config.binding_digest()
+            || latest_template(&state, &current.binding_digest()).and_then(|t| t.identity.as_ref())
+                != Some(&row.template)
+            || !qualification::operations_current(
+                &state,
+                &current,
+                (self.clock)().max(state.last_observed_at),
+            )
+        {
+            return Err(refused("managed_desktop_operations_unqualified"));
+        }
+        Ok(())
+    }
+    async fn reserve_operation(
+        &self,
+        id: &str,
+        generation: u64,
+        bytes: u64,
+        request: Option<&super::super::operations::GuestOperation>,
+    ) -> Result<()> {
+        self.transaction(|s, now| {
+            let row = s
+                .desktops
+                .get(id)
+                .ok_or_else(|| refused("managed_desktop_not_found"))?;
+            if row.desktop.generation != generation || row.delete_requested || row.expired(now) {
+                return Err(refused("managed_desktop_stale_generation"));
+            }
+            let spent = s.operation_bytes.entry(id.into()).or_default();
+            let total = spent
+                .checked_add(bytes)
+                .filter(|n| *n <= super::super::operations::DESKTOP_VOLUME_BYTES)
+                .ok_or_else(|| refused("managed_desktop_operation_volume_exceeded"))?;
+            *spent = total;
+            s.operation_quarantines.insert(id.into());
+            s.control_quarantines.insert(id.into());
+            // A dropped future still leaves an operation/outcome audit record.
+            if let Some(request) = request {
+                let fields = request.audit_fields();
+                s.operation_audit
+                    .push_back(super::super::operations::OperationAudit {
+                        observed_at: now,
+                        desktop_id: Some(id.into()),
+                        operation: request.name().into(),
+                        path_length: fields["pathLength"].as_u64().unwrap_or(0) as usize,
+                        input_bytes: fields["inputBytes"].as_u64().unwrap_or(0) as usize,
+                        output_bytes: 0,
+                        reserved_bytes: bytes,
+                        outcome: super::super::operations::OperationOutcome::Uncertain,
+                    });
+                while s.operation_audit.len() > 1024 {
+                    s.operation_audit.pop_front();
+                }
+            }
+            Ok(())
+        })
+        .await
+    }
+    /// Human operations share the input lease core, current Host authority and
+    /// revocation epochs. Reads also require the holder's token/fence.
+    pub async fn human_workspace_operation(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        lease: ManagedControlLeaseRef<'_>,
+        request: super::super::operations::GuestOperation,
+        authority: &dyn ManagedControlAuthority,
+    ) -> Result<super::super::operations::GuestOperationResult> {
+        let result = self
+            .human_workspace_inner(
+                p,
+                id,
+                generation,
+                lease.token,
+                lease.fence,
+                &request,
+                authority,
+            )
+            .await;
+        self.record_operation_audit(id, &request, &result).await?;
+        result
+    }
+    async fn human_workspace_inner(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        token: &str,
+        fence: u64,
+        request: &super::super::operations::GuestOperation,
+        authority: &dyn ManagedControlAuthority,
+    ) -> Result<super::super::operations::GuestOperationResult> {
+        p.require_admin()?;
+        request.validate()?;
+        let row = self.scoped(p, id, generation).await?;
+        self.operations_check(&row).await?;
+        self.control_check(p, id, generation, authority, false)
+            .await?;
+        let slot = self.control_slot(id, generation).await;
+        let mut c = slot.lock().await;
+        c.require_lease(p, token, fence)?;
+        let principal_epoch = c.revoked.clone();
+        let expected_principal_epoch = c.lease.as_ref().unwrap().epoch;
+        let deadline = c.lease.as_ref().unwrap().deadline;
+        let desktop_epoch = self
+            .control_desktop_epochs
+            .lock()
+            .await
+            .entry(id.into())
+            .or_default()
+            .clone();
+        let expected_desktop_epoch = desktop_epoch.load(Ordering::SeqCst);
+        let authority_live = self.runtime_admission_for_record(
+            &row,
+            ManagedDesktopRuntimeGate::ManualGui,
+            authority.input_admission(p),
+        );
+        let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            authority_live()
+                && Instant::now() < deadline
+                && principal_epoch.load(Ordering::SeqCst) == expected_principal_epoch
+                && desktop_epoch.load(Ordering::SeqCst) == expected_desktop_epoch
+        });
+        let result = self
+            .deliver_workspace_operation(&row, request, live, false)
+            .await;
+        if result.is_ok() {
+            c.frames.clear();
+        }
+        result
+    }
+    /// Shell/files and GUI use the SAME delegation admission and shared agent
+    /// guard. No human lease and no Docker/Host fallback are manufactured here.
+    pub(crate) async fn agent_workspace_operation(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        request: super::super::operations::GuestOperation,
+    ) -> Result<super::super::operations::GuestOperationResult> {
+        let service = self.clone();
+        let operation = request.clone();
+        let result = async {
+            request.validate()?;
+            self.with_agent_workspace(
+                id,
+                generation,
+                session,
+                character,
+                move |row, live| async move {
+                    service
+                        .deliver_workspace_operation(&row, &operation, live, true)
+                        .await
+                },
+            )
+            .await
+        }
+        .await;
+        self.record_operation_audit(id, &request, &result).await?;
+        result
+    }
+    /// The same WP8 admission, agent guard and preemption epoch covers an
+    /// entire file transfer, including its optional expected-hash precondition.
+    async fn with_agent_workspace<T, F, Fut>(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        work: F,
+    ) -> Result<T>
+    where
+        T: Send,
+        F: FnOnce(DesktopRecord, Arc<dyn Fn() -> bool + Send + Sync>) -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T>> + Send,
+    {
+        let result = async {
+            let (row, admission) = self
+                .agent_operation_admission(id, generation, session, character, true)
+                .await?;
+            self.operations_check(&row).await?;
+            let slot = self.control_slot(id, generation).await;
+            let preempt = self.control_agent_preemption(id).await;
+            let mut c = slot.lock().await;
+            c.expire();
+            c.desktop.preempt = preempt.clone();
+            c.desktop.agent_epoch = preempt.epoch.load(Ordering::SeqCst);
+            c.desktop.require_agent().map_err(control_error)?;
+            if c.lease.is_some() {
+                return Err(refused("managed_desktop_control_busy"));
+            }
+            let epoch = c.desktop.agent_epoch;
+            let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+                admission()
+                    && !preempt.pending.load(Ordering::SeqCst)
+                    && preempt.epoch.load(Ordering::SeqCst) == epoch
+            });
+            let p = ManagedDesktopPrincipal {
+                owner_principal_id: row.config.owner_principal_id.clone(),
+                principal_id: "delegated-agent".into(),
+                host_id: self.host_id.clone(),
+                authority: ManagedDesktopAuthority::Agent,
+            };
+            self.validate_live_boundary(&p, &row.desktop).await?;
+            let _active = AgentOperationStatus::begin(c.agent_active.clone());
+            c.publish();
+            let result = work(row, live).await;
+            c.frames.clear();
+            result
+        }
+        .await;
+        if let Err(error) = self.reconcile_delegations().await {
+            log::warn!("managed workspace reconciliation: {}", error.code);
+        }
+        self.release_ended_agent_inputs().await;
+        result
+    }
+    async fn workspace_chunk(
+        &self,
+        row: &DesktopRecord,
+        request: super::super::operations::GuestOperation,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<super::super::operations::GuestOperationResult> {
+        request.validate()?;
+        let result = self
+            .deliver_workspace_operation(row, &request, live, true)
+            .await;
+        self.record_operation_audit(&row.desktop.id, &request, &result)
+            .await?;
+        result
+    }
+    async fn workspace_file_bytes(
+        &self,
+        row: &DesktopRecord,
+        path: &str,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Result<Vec<u8>> {
+        use super::super::operations::{
+            GuestOperation as Op, GuestOperationResult as Reply, CHUNK_BYTES, FILE_BYTES,
+        };
+        let mut bytes = Vec::new();
+        loop {
+            if bytes.len() >= FILE_BYTES {
+                return Err(refused("managed_desktop_file_limit"));
+            }
+            let result = self
+                .workspace_chunk(
+                    row,
+                    Op::FileRead {
+                        path: path.into(),
+                        offset: bytes.len() as u64,
+                        length: CHUNK_BYTES.min(FILE_BYTES - bytes.len()),
+                    },
+                    live.clone(),
+                )
+                .await?;
+            let Reply::FileRead { chunk, eof } = result else {
+                return Err(refused("managed_desktop_operation_protocol"));
+            };
+            bytes.extend(chunk);
+            if eof {
+                return Ok(bytes);
+            }
+        }
+    }
+    pub(crate) async fn agent_file_transfer(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        path: &str,
+        bytes: Option<Vec<u8>>,
+        expected_hash: Option<String>,
+    ) -> Result<crate::cua_sandbox::file_transfer::SandboxFileDownload> {
+        use super::super::operations::{GuestOperation as Op, CHUNK_BYTES, FILE_BYTES};
+        use crate::cua_sandbox::file_transfer;
+        use base64::Engine;
+        let metadata = if let Some(bytes) = &bytes {
+            Op::FileWrite {
+                path: path.into(),
+                offset: 0,
+                chunk: bytes[..bytes.len().min(CHUNK_BYTES)].to_vec(),
+                r#final: bytes.len() <= CHUNK_BYTES,
+            }
+        } else {
+            Op::FileRead {
+                path: path.into(),
+                offset: 0,
+                length: CHUNK_BYTES,
+            }
+        };
+        let service = self.clone();
+        let path = path.to_owned();
+        let result = self
+            .with_agent_workspace(
+                id,
+                generation,
+                session,
+                character,
+                move |row, live| async move {
+                    if bytes.as_ref().is_some_and(|b| b.len() > FILE_BYTES) {
+                        return Err(refused("managed_desktop_operation_limit"));
+                    }
+                    if let Some(expected) = &expected_hash {
+                        if bytes.is_none()
+                            || expected.len() != 64
+                            || !expected.bytes().all(|b| b.is_ascii_hexdigit())
+                        {
+                            return Err(refused("managed_desktop_invalid_request"));
+                        }
+                        let current = service
+                            .workspace_file_bytes(&row, &path, live.clone())
+                            .await?;
+                        if file_transfer::sha256(&current) != expected.to_ascii_lowercase() {
+                            return Err(refused("managed_desktop_file_changed"));
+                        }
+                    }
+                    let (content, download) = if let Some(bytes) = bytes {
+                        let mut offset = 0;
+                        loop {
+                            let end = (offset + CHUNK_BYTES).min(bytes.len());
+                            service
+                                .workspace_chunk(
+                                    &row,
+                                    Op::FileWrite {
+                                        path: path.clone(),
+                                        offset: offset as u64,
+                                        chunk: bytes[offset..end].to_vec(),
+                                        r#final: end == bytes.len(),
+                                    },
+                                    live.clone(),
+                                )
+                                .await?;
+                            if end == bytes.len() {
+                                break;
+                            }
+                            offset = end;
+                        }
+                        (bytes, false)
+                    } else {
+                        (service.workspace_file_bytes(&row, &path, live).await?, true)
+                    };
+                    Ok(file_transfer::SandboxFileDownload {
+                        path,
+                        size: content.len() as u64,
+                        sha256: file_transfer::sha256(&content),
+                        data_base64: if download {
+                            base64::engine::general_purpose::STANDARD.encode(content)
+                        } else {
+                            String::new()
+                        },
+                    })
+                },
+            )
+            .await;
+        if let Err(error) = &result {
+            self.record_operation_audit(id, &metadata, &Err(error.clone()))
+                .await?;
+        }
+        result
+    }
+    async fn deliver_workspace_operation(
+        &self,
+        row: &DesktopRecord,
+        request: &super::super::operations::GuestOperation,
+        live: Arc<dyn Fn() -> bool + Send + Sync>,
+        agent: bool,
+    ) -> Result<super::super::operations::GuestOperationResult> {
+        let id = &row.desktop.id;
+        if {
+            let state = self.state.lock().await;
+            state.control_quarantines.contains(id) || state.operation_quarantines.contains(id)
+        } {
+            return Err(refused("managed_desktop_control_quarantined"));
+        }
+        let secrets = self.secrets.desktop(id).await?;
+        let boundary = self
+            .state
+            .lock()
+            .await
+            .workload_boundaries
+            .get(id)
+            .cloned()
+            .filter(|b| b.matches_record(row))
+            .ok_or_else(|| refused("managed_desktop_boundary_mismatch"))?;
+        self.operations_check(row).await?;
+        if !live() {
+            return Err(refused("managed_desktop_operation_revoked"));
+        }
+        self.reserve_operation(
+            id,
+            row.desktop.generation,
+            request.reservation(),
+            Some(request),
+        )
+        .await?;
+        let send = live.clone();
+        let admission: super::super::provider::LifecycleAdmission = Arc::new(move || {
+            if send() {
+                Ok(())
+            } else {
+                Err(refused("managed_desktop_operation_revoked"))
+            }
+        });
+        let monitor = async {
+            loop {
+                tokio::time::sleep(cognia_remote_desktop::session::ADMISSION_INTERVAL).await;
+                if agent {
+                    self.refresh_agent_admission().await?;
+                }
+                self.operations_check(row).await?;
+                let current = self.state.lock().await;
+                if !current.desktops.get(id).is_some_and(|r| {
+                    r.desktop.generation == row.desktop.generation
+                        && !r.delete_requested
+                        && !r.expired((self.clock)().max(current.last_observed_at))
+                }) || !live()
+                {
+                    return Err(refused("managed_desktop_operation_revoked"));
+                }
+            }
+        };
+        let outcome = tokio::select! {
+            result = async {
+                use super::super::operations::GuestOperation;
+                let context=super::super::provider::GuestOperationContext {record:row,secrets:&secrets,boundary:&boundary,admission};
+                match request {
+                    GuestOperation::Exec {argv,cwd,timeout_ms} => self.provider.guest_exec(context,argv,cwd,*timeout_ms).await,
+                    GuestOperation::FileRead {path,offset,length} => self.provider.guest_file_read(context,path,*offset,*length).await,
+                    GuestOperation::FileWrite {path,offset,chunk,r#final} => self.provider.guest_file_write(context,path,*offset,chunk,*r#final).await,
+                    GuestOperation::ClipboardGet => self.provider.guest_clipboard_get(context).await,
+                    GuestOperation::ClipboardSet {text} => self.provider.guest_clipboard_set(context,text).await,
+                }
+            } => result,
+            result = monitor => result,
+        };
+        if !live() {
+            return Err(refused("managed_desktop_operation_revoked"));
+        }
+        if let Ok(result) = &outcome {
+            request.validate_result(result)?;
+        }
+        outcome
+    }
+}
+impl ManagedDesktopService {
+    /// Closed metadata only. The journal owner is used because the generic
+    /// remote-desktop audit intentionally rejects unknown operation fields.
+    pub async fn record_operation_audit(
+        &self,
+        id: &str,
+        request: &super::super::operations::GuestOperation,
+        result: &Result<super::super::operations::GuestOperationResult>,
+    ) -> Result<()> {
+        use super::super::operations::{
+            GuestOperationResult as Reply, OperationAudit, OperationOutcome,
+        };
+        let fields = request.audit_fields();
+        let output_bytes = match result {
+            Ok(Reply::Exec { output, .. }) => output.len(),
+            Ok(Reply::FileRead { chunk, .. }) => chunk.len(),
+            Ok(Reply::ClipboardGet { text }) => text.len(),
+            _ => 0,
+        };
+        let confirmed = result.is_ok()
+            || result.as_ref().is_err_and(|e| {
+                matches!(
+                    e.code.as_str(),
+                    "managed_desktop_operation_refused"
+                        | "managed_desktop_operation_exec_unavailable"
+                )
+            });
+        self.transaction(|s, now| {
+            let target = s.desktops.get(id).map(|row| row.desktop.id.clone());
+            let pending = s.control_quarantines.contains(id);
+            let outcome = if result.is_ok() {
+                OperationOutcome::Completed
+            } else if pending && !confirmed {
+                OperationOutcome::Uncertain
+            } else {
+                OperationOutcome::Refused
+            };
+            if confirmed {
+                s.operation_quarantines.remove(id);
+                s.control_quarantines.remove(id);
+                if let Some(row) = s.desktops.get_mut(id) {
+                    row.last_activity_at = now;
+                }
+            }
+            s.operation_audit.push_back(OperationAudit {
+                observed_at: now,
+                desktop_id: target,
+                operation: request.name().into(),
+                path_length: fields["pathLength"].as_u64().unwrap_or(0) as usize,
+                input_bytes: fields["inputBytes"].as_u64().unwrap_or(0) as usize,
+                output_bytes,
+                reserved_bytes: request.reservation(),
+                outcome,
+            });
+            while s.operation_audit.len() > 1024 {
+                s.operation_audit.pop_front();
+            }
+            Ok(())
+        })
+        .await
+    }
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+    use super::super::super::operations::{
+        GuestOperation as Op, GuestOperationResult as Reply, DESKTOP_VOLUME_BYTES,
+    };
+    use super::super::delegation::*;
+    struct Authority(Arc<AtomicBool>);
+    #[async_trait]
+    impl ManagedControlAuthority for Authority {
+        async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
+            if self.0.load(Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err(refused("managed_desktop_forbidden"))
+            }
+        }
+        fn input_admission(
+            &self,
+            _: &ManagedDesktopPrincipal,
+        ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+            let live = self.0.clone();
+            Arc::new(move || live.load(Ordering::SeqCst))
+        }
+    }
+    fn authority() -> Authority {
+        Authority(Arc::new(AtomicBool::new(true)))
+    }
+    async fn fixture() -> (super::super::tests::Fixture, ManagedDesktop) {
+        let mut f = super::super::tests::Fixture::new();
+        f.config.release.recipe_revision = "8".into();
+        f.service.trusted_release = Some(f.config.release.clone());
+        f.service
+            .store
+            .save_registry(&super::super::super::journal::ManagedDesktopRegistry {
+                version: 1,
+                providers: vec![f.config.clone()],
+            })
+            .unwrap();
+        super::super::qualification::enablement_tests::install_gui_evidence(&f).await;
+        let mut registry = f.service.registry().await.unwrap();
+        registry.providers[0].enablement = ManagedDesktopEnablement {
+            manual_gui: true,
+            agent_control: true,
+            acceptance: false,
+        };
+        f.service.save_registry(registry).await.unwrap();
+        f.service.set_delegation_runtime(
+            Arc::new(|_| true),
+            Arc::new(|| 1),
+            "workspace-tests".into(),
+            Arc::new(|| {}),
+        );
+        *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(|request, admission| {
+            Box::pin(async move {
+                admission()?;
+                Ok(match request {
+                    Op::ClipboardGet => Reply::ClipboardGet {
+                        text: "test text".into(),
+                    },
+                    Op::ClipboardSet { text } => Reply::ClipboardSet { bytes: text.len() },
+                    Op::FileRead { .. } => Reply::FileRead {
+                        chunk: vec![0, 255],
+                        eof: true,
+                    },
+                    Op::FileWrite { chunk, r#final, .. } => Reply::FileWrite {
+                        bytes: chunk.len(),
+                        r#final,
+                    },
+                    Op::Exec { .. } => Reply::Exec {
+                        output: b"ok".to_vec(),
+                        truncated: false,
+                        timed_out: false,
+                        exit_code: Some(0),
+                        signal: None,
+                    },
+                })
+            })
+        }));
+        let row = f.smoke("workspace").await;
+        use base64::Engine;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let image = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+        let client = CuaRemoteClient::from_handler(Arc::new(move |_, _| {
+            let image = image.clone();
+            Box::pin(async move { Ok(serde_json::json!({"image_data":image})) })
+        }));
+        f.service
+            .control_slot(&row.id, row.generation)
+            .await
+            .lock()
+            .await
+            .client = Some(client);
+        (f, row)
+    }
+    async fn lease(
+        f: &super::super::tests::Fixture,
+        row: &ManagedDesktop,
+        authority: &Authority,
+    ) -> ManagedControlLease {
+        f.service
+            .control_acquire(&f.p, &row.id, row.generation, true, authority)
+            .await
+            .unwrap()
+    }
+    async fn human(
+        f: &super::super::tests::Fixture,
+        row: &ManagedDesktop,
+        proof: &ManagedControlLease,
+        authority: &Authority,
+        request: Op,
+    ) -> Result<Reply> {
+        f.service
+            .human_workspace_operation(
+                &f.p,
+                &row.id,
+                row.generation,
+                ManagedControlLeaseRef {
+                    token: &proof.token,
+                    fence: proof.fence,
+                },
+                request,
+                authority,
+            )
+            .await
+    }
+    async fn delegate(
+        f: &super::super::tests::Fixture,
+        row: &ManagedDesktop,
+    ) -> ManagedDesktopDelegation {
+        f.service
+            .delegate(
+                &f.p,
+                &row.id,
+                row.generation,
+                ManagedDesktopGrantee::Session {
+                    session_key: "session".into(),
+                },
+                None,
+                &authority(),
+            )
+            .await
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn human_operations_require_holder_fence_admin_and_live_authority() {
+        let (f, row) = fixture().await;
+        let authority = authority();
+        let proof = lease(&f, &row, &authority).await;
+        assert!(human(&f, &row, &proof, &authority, Op::ClipboardGet)
+            .await
+            .is_ok());
+        let stale = ManagedControlLease {
+            fence: proof.fence + 1,
+            ..proof.clone()
+        };
+        assert_eq!(
+            human(&f, &row, &stale, &authority, Op::ClipboardGet)
+                .await
+                .unwrap_err()
+                .code,
+            "managed_desktop_control_lease_expired"
+        );
+        let other = ManagedDesktopPrincipal {
+            principal_id: "other".into(),
+            ..f.p.clone()
+        };
+        assert!(f
+            .service
+            .human_workspace_operation(
+                &other,
+                &row.id,
+                row.generation,
+                ManagedControlLeaseRef {
+                    token: &proof.token,
+                    fence: proof.fence
+                },
+                Op::ClipboardGet,
+                &authority
+            )
+            .await
+            .is_err());
+        let member = ManagedDesktopPrincipal {
+            authority: ManagedDesktopAuthority::Human,
+            ..f.p.clone()
+        };
+        assert_eq!(
+            f.service
+                .human_workspace_operation(
+                    &member,
+                    &row.id,
+                    row.generation,
+                    ManagedControlLeaseRef {
+                        token: &proof.token,
+                        fence: proof.fence
+                    },
+                    Op::ClipboardGet,
+                    &authority
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "managed_desktop_admin_required"
+        );
+        authority.0.store(false, Ordering::SeqCst);
+        assert!(human(&f, &row, &proof, &authority, Op::ClipboardGet)
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn dormancy_is_host_truth_and_old_recipe_or_missing_receipt_refuses() {
+        let (f, row) = fixture().await;
+        assert!(f.service.list_configs(&f.p).await.unwrap()[0].operations_qualified);
+        f.service
+            .transaction(|s, _| {
+                s.workload_diagnostics.clear();
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(!f.service.list_configs(&f.p).await.unwrap()[0].operations_qualified);
+        let result = f
+            .service
+            .human_workspace_operation(
+                &f.p,
+                &row.id,
+                row.generation,
+                ManagedControlLeaseRef {
+                    token: "invalid",
+                    fence: 0,
+                },
+                Op::ClipboardGet,
+                &authority(),
+            )
+            .await;
+        assert_eq!(
+            result.unwrap_err().code,
+            "managed_desktop_operations_unqualified"
+        );
+    }
+    #[tokio::test]
+    async fn budget_reservations_survive_reopen_failures_and_new_generations_only_new_desktops_reset(
+    ) {
+        let (f, row) = fixture().await;
+        f.service
+            .reserve_operation(&row.id, row.generation, DESKTOP_VOLUME_BYTES, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            f.service
+                .reserve_operation(&row.id, row.generation, 1, None)
+                .await
+                .unwrap_err()
+                .code,
+            "managed_desktop_operation_volume_exceeded"
+        );
+        assert_eq!(
+            f.service
+                .store
+                .load_checkpoint("host")
+                .unwrap()
+                .operation_bytes[&row.id],
+            DESKTOP_VOLUME_BYTES
+        );
+        f.service
+            .transaction(|s, _| {
+                s.desktops.get_mut(&row.id).unwrap().desktop.generation += 1;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(f
+            .service
+            .reserve_operation(&row.id, row.generation + 1, 1, None)
+            .await
+            .is_err());
+        let next = f.smoke("fresh-workspace").await;
+        f.service
+            .reserve_operation(&next.id, next.generation, 1, None)
+            .await
+            .unwrap();
+        assert_eq!(f.service.state.lock().await.operation_bytes[&next.id], 1);
+    }
+    #[tokio::test]
+    async fn delegated_operations_refuse_wrong_grantee_stale_generation_human_and_disabled_switch()
+    {
+        let (f, row) = fixture().await;
+        let _grant = delegate(&f, &row).await;
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("other".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_err());
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation + 1,
+                Some("session".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_err());
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_ok());
+        let authority = authority();
+        let proof = lease(&f, &row, &authority).await;
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_err());
+        f.service
+            .control_release(
+                &f.p,
+                &row.id,
+                row.generation,
+                &proof.token,
+                proof.fence,
+                &authority,
+            )
+            .await
+            .unwrap();
+        let mut registry = f.service.registry().await.unwrap();
+        registry.providers[0].enablement.agent_control = false;
+        f.service.save_registry(registry).await.unwrap();
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn acceptance_operations_use_acceptance_switch_and_attached_child_only() {
+        let (f, _) = fixture().await;
+        super::super::acceptance::tests::install_handoff_evidence(&f).await;
+        let mut registry = f.service.registry().await.unwrap();
+        registry.providers[0].enablement = ManagedDesktopEnablement {
+            manual_gui: false,
+            agent_control: false,
+            acceptance: true,
+        };
+        f.service.save_registry(registry).await.unwrap();
+        let (_, row) = super::super::acceptance::tests::running(&f).await;
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("child".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_ok());
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("other".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_err());
+        let mut registry = f.service.registry().await.unwrap();
+        registry.providers[0].enablement.acceptance = false;
+        f.service.save_registry(registry).await.unwrap();
+        assert!(f
+            .service
+            .agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("child".into()),
+                None,
+                Op::ClipboardGet
+            )
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn human_revocation_cancels_transfer_and_retains_durable_reservation_and_uncertainty() {
+        let (f, row) = fixture().await;
+        let authority = authority();
+        let proof = lease(&f, &row, &authority).await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let observed = started.clone();
+        *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(move |_, admission| {
+            let started = observed.clone();
+            Box::pin(async move {
+                admission()?;
+                started.notify_one();
+                std::future::pending::<Result<Reply>>().await
+            })
+        }));
+        let operation = human(
+            &f,
+            &row,
+            &proof,
+            &authority,
+            Op::ClipboardSet {
+                text: "private-text".into(),
+            },
+        );
+        let revoke = async {
+            started.notified().await;
+            authority.0.store(false, Ordering::SeqCst);
+        };
+        let (result, _) = tokio::join!(operation, revoke);
+        assert_eq!(
+            result.unwrap_err().code,
+            "managed_desktop_operation_revoked"
+        );
+        let state = f.service.store.load_checkpoint("host").unwrap();
+        assert_eq!(state.operation_bytes[&row.id], 12);
+        assert!(state.control_quarantines.contains(&row.id));
+        let audit = serde_json::to_string(&state.operation_audit).unwrap();
+        assert!(!audit.contains("private-text"));
+        assert_eq!(
+            state.operation_audit.back().unwrap().operation,
+            "clipboard-set"
+        );
+        assert_eq!(state.operation_audit.back().unwrap().input_bytes, 12);
+    }
+    #[tokio::test]
+    async fn delegation_revocation_and_pending_takeover_cancel_workspace_work() {
+        for takeover in [false, true] {
+            let (f, row) = fixture().await;
+            let grant = delegate(&f, &row).await;
+            let started = Arc::new(tokio::sync::Notify::new());
+            let observed = started.clone();
+            *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(move |_, admission| {
+                let started = observed.clone();
+                Box::pin(async move {
+                    admission()?;
+                    started.notify_one();
+                    std::future::pending::<Result<Reply>>().await
+                })
+            }));
+            let operation = f.service.agent_workspace_operation(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                Op::FileRead {
+                    path: "/home/cua/private-name".into(),
+                    offset: 0,
+                    length: 64,
+                },
+            );
+            let revoke = async {
+                started.notified().await;
+                if takeover {
+                    let preempt = f.service.control_agent_preemption(&row.id).await;
+                    let _pending = desktop_session::PendingTakeover::begin(preempt).unwrap();
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                } else {
+                    f.service
+                        .delegation_revoke(&f.p, &grant.id, grant.revision, &authority())
+                        .await
+                        .unwrap();
+                }
+            };
+            let (result, _) = tokio::join!(operation, revoke);
+            assert!(result.is_err());
+            let state = f.service.store.load_checkpoint("host").unwrap();
+            assert!(state.control_quarantines.contains(&row.id));
+            assert_eq!(state.operation_bytes[&row.id], 64);
+            assert!(!serde_json::to_string(&state.operation_audit)
+                .unwrap()
+                .contains("private-name"));
+        }
+    }
+    #[tokio::test]
+    async fn guest_refusals_are_audited_without_content_and_cancellation_survives_reopen() {
+        let (f, row) = fixture().await;
+        let authority = authority();
+        let proof = lease(&f, &row, &authority).await;
+        *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(|_, _| {
+            Box::pin(async { Err(refused("managed_desktop_operation_refused")) })
+        }));
+        assert_eq!(
+            human(
+                &f,
+                &row,
+                &proof,
+                &authority,
+                Op::FileWrite {
+                    path: "/home/cua/private-name".into(),
+                    offset: 0,
+                    chunk: b"secret".to_vec(),
+                    r#final: true
+                }
+            )
+            .await
+            .unwrap_err()
+            .code,
+            "managed_desktop_operation_refused"
+        );
+        let state = f.service.store.load_checkpoint("host").unwrap();
+        assert!(!state.control_quarantines.contains(&row.id));
+        let last = state.operation_audit.back().unwrap();
+        assert_eq!(last.input_bytes, 6);
+        assert_eq!(last.path_length, 22);
+        assert_eq!(last.operation, "file-write");
+        assert_eq!(
+            last.outcome,
+            super::super::super::operations::OperationOutcome::Refused
+        );
+        let started = Arc::new(tokio::sync::Notify::new());
+        let observed = started.clone();
+        *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(move |_, admission| {
+            let started = observed.clone();
+            Box::pin(async move {
+                admission()?;
+                started.notify_one();
+                std::future::pending::<Result<Reply>>().await
+            })
+        }));
+        {
+            let operation = human(&f, &row, &proof, &authority, Op::ClipboardGet);
+            tokio::pin!(operation);
+            tokio::select! {_=&mut operation=>panic!("must wait"),_=started.notified()=>{}}
+        }
+        let spent = f
+            .service
+            .store
+            .load_checkpoint("host")
+            .unwrap()
+            .operation_bytes[&row.id];
+        drop(f.service);
+        let mut reopened = ManagedDesktopService::open(
+            f.directory.path(),
+            "host".into(),
+            f.provider.clone(),
+            f.secrets.clone(),
+            Some(f.config.release.clone()),
+        )
+        .unwrap();
+        let clock = f.clock.clone();
+        reopened.clock = Arc::new(move || clock.load(Ordering::SeqCst));
+        let state = reopened.store.load_checkpoint("host").unwrap();
+        assert_eq!(state.operation_bytes[&row.id], spent);
+        assert!(state.control_quarantines.contains(&row.id));
+        assert!(state.operation_quarantines.contains(&row.id));
+        reopened
+            .transaction(|s, _| {
+                s.control_quarantines.remove(&row.id);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let status = reopened
+            .control_status(&f.p, &row.id, row.generation)
+            .await
+            .unwrap();
+        assert!(!status.can_acquire);
+        assert_eq!(status.state, "quarantined");
+        assert!(reopened
+            .human_workspace_operation(
+                &f.p,
+                &row.id,
+                row.generation,
+                ManagedControlLeaseRef {
+                    token: &proof.token,
+                    fence: proof.fence
+                },
+                Op::ClipboardGet,
+                &authority
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            state.operation_audit.back().unwrap().outcome,
+            super::super::super::operations::OperationOutcome::Uncertain
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_agent_files_hold_one_guard_and_enforce_hash_limits_and_budget() {
+        use super::super::super::operations::{CHUNK_BYTES, FILE_BYTES};
+        use crate::cua_sandbox::file_transfer::sha256;
+        use base64::Engine;
+        let (f, row) = fixture().await;
+        let _grant = delegate(&f, &row).await;
+        let stored = Arc::new(std::sync::Mutex::new(b"old".to_vec()));
+        let observed = stored.clone();
+        let slot = f.service.control_slot(&row.id, row.generation).await;
+        *f.provider.workspace_handler.lock().unwrap() =
+            Some(Arc::new(move |request, admission| {
+                let stored = observed.clone();
+                let slot = slot.clone();
+                Box::pin(async move {
+                    admission()?;
+                    assert!(
+                        slot.try_lock().is_err(),
+                        "the whole file transfer owns the GUI/agent guard"
+                    );
+                    let mut bytes = stored.lock().unwrap();
+                    Ok(match request {
+                        Op::FileRead { offset, length, .. } => {
+                            let offset = offset as usize;
+                            let end = (offset + length).min(bytes.len());
+                            Reply::FileRead {
+                                chunk: bytes[offset..end].to_vec(),
+                                eof: end == bytes.len(),
+                            }
+                        }
+                        Op::FileWrite {
+                            offset,
+                            chunk,
+                            r#final,
+                            ..
+                        } => {
+                            let start = offset as usize;
+                            let size = bytes.len().max(start + chunk.len());
+                            bytes.resize(size, 0);
+                            bytes[start..start + chunk.len()].copy_from_slice(&chunk);
+                            if r#final {
+                                bytes.truncate(start + chunk.len());
+                            }
+                            Reply::FileWrite {
+                                bytes: chunk.len(),
+                                r#final,
+                            }
+                        }
+                        _ => panic!("typed files do not invoke a shell"),
+                    })
+                })
+            }));
+        let original = sha256(b"old");
+        let bytes = vec![199; CHUNK_BYTES + 17];
+        let written = f
+            .service
+            .agent_file_transfer(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "/home/cua/private-file",
+                Some(bytes.clone()),
+                Some(original.clone()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(written.size, bytes.len() as u64);
+        assert_eq!(written.sha256, sha256(&bytes));
+        assert!(written.data_base64.is_empty());
+        let downloaded = f
+            .service
+            .agent_file_transfer(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "/home/cua/private-file",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(downloaded.data_base64)
+                .unwrap(),
+            bytes
+        );
+        let changed = f
+            .service
+            .agent_file_transfer(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "/home/cua/private-file",
+                Some(vec![]),
+                Some(original),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(changed.code, "managed_desktop_file_changed");
+        assert_eq!(*stored.lock().unwrap(), bytes);
+        assert_eq!(
+            f.service
+                .agent_file_transfer(
+                    &row.id,
+                    row.generation,
+                    Some("session".into()),
+                    None,
+                    "/home/cua/private-file",
+                    Some(vec![0; FILE_BYTES + 1]),
+                    None
+                )
+                .await
+                .unwrap_err()
+                .code,
+            "managed_desktop_operation_limit"
+        );
+        let empty = f
+            .service
+            .agent_file_transfer(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "/home/cua/private-file",
+                Some(vec![]),
+                Some(sha256(&bytes)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(empty.size, 0);
+        assert!(stored.lock().unwrap().is_empty());
+        let state = f.service.store.load_checkpoint("host").unwrap();
+        // Hash precondition reads reserve one or two maximum-size chunks;
+        // the download reserves two, and writes reserve their actual lengths.
+        assert_eq!(
+            state.operation_bytes[&row.id],
+            7 * CHUNK_BYTES as u64 + bytes.len() as u64
+        );
+        let audit = serde_json::to_string(&state.operation_audit).unwrap();
+        assert!(!audit.contains("private-file"));
+        assert!(!state.operation_quarantines.contains(&row.id));
+    }
+    #[tokio::test]
+    async fn typed_agent_transfer_revocation_stops_before_the_next_chunk() {
+        use super::super::super::operations::CHUNK_BYTES;
+        let (f, row) = fixture().await;
+        let _grant = delegate(&f, &row).await;
+        let preempt = f.service.control_agent_preemption(&row.id).await;
+        let sent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = sent.clone();
+        *f.provider.workspace_handler.lock().unwrap() =
+            Some(Arc::new(move |request, admission| {
+                let preempt = preempt.clone();
+                let sent = observed.clone();
+                Box::pin(async move {
+                    admission()?;
+                    sent.fetch_add(1, Ordering::SeqCst);
+                    preempt.epoch.fetch_add(1, Ordering::SeqCst);
+                    let Op::FileWrite { chunk, r#final, .. } = request else {
+                        panic!("write only")
+                    };
+                    Ok(Reply::FileWrite {
+                        bytes: chunk.len(),
+                        r#final,
+                    })
+                })
+            }));
+        let result = f
+            .service
+            .agent_file_transfer(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "private-file",
+                Some(vec![1; CHUNK_BYTES + 1]),
+                None,
+            )
+            .await;
+        assert_eq!(
+            result.unwrap_err().code,
+            "managed_desktop_operation_revoked"
+        );
+        assert_eq!(sent.load(Ordering::SeqCst), 1);
+        let state = f.service.store.load_checkpoint("host").unwrap();
+        assert_eq!(state.operation_bytes[&row.id], CHUNK_BYTES as u64);
+        assert!(state.operation_quarantines.contains(&row.id));
+        assert_eq!(
+            state.operation_audit.back().unwrap().outcome,
+            super::super::super::operations::OperationOutcome::Uncertain
+        );
     }
 }

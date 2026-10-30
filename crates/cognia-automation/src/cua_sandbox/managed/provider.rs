@@ -184,8 +184,116 @@ pub struct CreatedDesktop {
 /// Cleanup deliberately does not require an interactive caller admission.
 pub type LifecycleAdmission = Arc<dyn Fn() -> Result<()> + Send + Sync>;
 
+/// One pinned root-channel operation context. Every helper uses the same
+/// envd transport; this never contains a caller-selected endpoint or secret.
+pub struct GuestOperationContext<'a> {
+    pub record: &'a DesktopRecord,
+    pub secrets: &'a DesktopSecrets,
+    pub boundary: &'a HostBoundaryBinding,
+    pub admission: LifecycleAdmission,
+}
 #[async_trait]
 pub trait ManagedDesktopProvider: Send + Sync {
+    /// Providers without the recipe-8 root channel fail closed.
+    async fn guest_operation(
+        &self,
+        _record: &DesktopRecord,
+        _secrets: &DesktopSecrets,
+        _boundary: &HostBoundaryBinding,
+        _request: &super::operations::GuestOperation,
+        _admission: LifecycleAdmission,
+    ) -> Result<super::operations::GuestOperationResult> {
+        Err(refused("managed_desktop_operations_unqualified"))
+    }
+    async fn guest_exec(
+        &self,
+        c: GuestOperationContext<'_>,
+        argv: &[String],
+        cwd: &str,
+        timeout_ms: u64,
+    ) -> Result<super::operations::GuestOperationResult> {
+        self.guest_operation(
+            c.record,
+            c.secrets,
+            c.boundary,
+            &super::operations::GuestOperation::Exec {
+                argv: argv.into(),
+                cwd: cwd.into(),
+                timeout_ms,
+            },
+            c.admission,
+        )
+        .await
+    }
+    async fn guest_file_read(
+        &self,
+        c: GuestOperationContext<'_>,
+        path: &str,
+        offset: u64,
+        length: usize,
+    ) -> Result<super::operations::GuestOperationResult> {
+        self.guest_operation(
+            c.record,
+            c.secrets,
+            c.boundary,
+            &super::operations::GuestOperation::FileRead {
+                path: path.into(),
+                offset,
+                length,
+            },
+            c.admission,
+        )
+        .await
+    }
+    async fn guest_file_write(
+        &self,
+        c: GuestOperationContext<'_>,
+        path: &str,
+        offset: u64,
+        chunk: &[u8],
+        final_chunk: bool,
+    ) -> Result<super::operations::GuestOperationResult> {
+        self.guest_operation(
+            c.record,
+            c.secrets,
+            c.boundary,
+            &super::operations::GuestOperation::FileWrite {
+                path: path.into(),
+                offset,
+                chunk: chunk.into(),
+                r#final: final_chunk,
+            },
+            c.admission,
+        )
+        .await
+    }
+    async fn guest_clipboard_get(
+        &self,
+        c: GuestOperationContext<'_>,
+    ) -> Result<super::operations::GuestOperationResult> {
+        self.guest_operation(
+            c.record,
+            c.secrets,
+            c.boundary,
+            &super::operations::GuestOperation::ClipboardGet,
+            c.admission,
+        )
+        .await
+    }
+    async fn guest_clipboard_set(
+        &self,
+        c: GuestOperationContext<'_>,
+        text: &str,
+    ) -> Result<super::operations::GuestOperationResult> {
+        self.guest_operation(
+            c.record,
+            c.secrets,
+            c.boundary,
+            &super::operations::GuestOperation::ClipboardSet { text: text.into() },
+            c.admission,
+        )
+        .await
+    }
     async fn verify_release(&self, config: &ManagedDesktopConfig) -> Result<()>;
     async fn verify_smoke_egress(
         &self,
@@ -346,6 +454,23 @@ fn info(value: cognia_e2b::SandboxInfo) -> ProviderDesktop {
 }
 #[async_trait]
 impl ManagedDesktopProvider for E2bDesktopProvider {
+    async fn guest_operation(
+        &self,
+        record: &DesktopRecord,
+        secrets: &DesktopSecrets,
+        boundary: &HostBoundaryBinding,
+        request: &super::operations::GuestOperation,
+        admission: LifecycleAdmission,
+    ) -> Result<super::operations::GuestOperationResult> {
+        super::operations::execute(
+            &bootstrap_request(record, secrets)?,
+            boundary,
+            request,
+            admission,
+        )
+        .await
+    }
+
     async fn verify_release(&self, config: &ManagedDesktopConfig) -> Result<()> {
         let binding = config.binding_digest();
         let mut verified = self.verified_releases.lock().await;

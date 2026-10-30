@@ -670,7 +670,7 @@ impl ManagedDesktopService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::tests::Fixture;
     use super::*;
     use std::sync::atomic::Ordering;
@@ -688,9 +688,7 @@ mod tests {
             Arc::new(|| true)
         }
     }
-    async fn fixture() -> Fixture {
-        let f = Fixture::new();
-        qualification::enablement_tests::install_gui_evidence(&f).await;
+    pub(in crate::cua_sandbox::managed::service) async fn install_handoff_evidence(f: &Fixture) {
         for (index, mode) in ["commit", "bundle"].into_iter().enumerate() {
             let id = Uuid::new_v4().to_string();
             let desktop = f.smoke(&format!("acceptance-evidence-{index}")).await;
@@ -728,6 +726,11 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+    async fn fixture() -> Fixture {
+        let f = Fixture::new();
+        qualification::enablement_tests::install_gui_evidence(&f).await;
+        install_handoff_evidence(&f).await;
         let mut registry = f.service.registry().await.unwrap();
         registry.providers[0].enablement = ManagedDesktopEnablement {
             acceptance: true,
@@ -812,7 +815,9 @@ mod tests {
             .await
             .unwrap()
     }
-    async fn running(f: &Fixture) -> (AcceptanceRunRecord, ManagedDesktop) {
+    pub(in crate::cua_sandbox::managed::service) async fn running(
+        f: &Fixture,
+    ) -> (AcceptanceRunRecord, ManagedDesktop) {
         let (row, _) = begin(f, input(f, "run").await).await.unwrap();
         let desktop = create(f, &row).await;
         f.service

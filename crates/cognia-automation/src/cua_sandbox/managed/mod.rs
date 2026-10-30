@@ -6,6 +6,7 @@ pub mod evidence;
 pub mod handoff;
 pub mod journal;
 pub mod provider;
+pub mod operations;
 pub mod service;
 
 pub use contracts::*;
