@@ -143,3 +143,17 @@ test("equivalent Host objects retain Control and switching Hosts requires a new 
   f.deliver(2)
   expect(await screen.findByRole("button", { name: "Take control" })).toBeEnabled()
 })
+
+test("a failed native session renders the translated alert", async () => {
+  const f = setup()
+  f.openSession.mockRejectedValueOnce(new Error("remote_desktop_native_unavailable"))
+  render(
+    <NativeDesktopViewer
+      host={{ kind: "remote", hostRef: "host" }}
+      targetId="sandbox:a"
+      deps={f.deps}
+    />
+  )
+  expect(await screen.findByRole("alert")).toHaveTextContent(messages.errors.unavailable)
+  expect(f.channels).toHaveLength(0)
+})

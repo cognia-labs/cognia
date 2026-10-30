@@ -37,6 +37,7 @@ use std::{
 use tokio::net::TcpStream;
 
 pub const DEFAULT_TARGET_PAGE: u32 = 50;
+const PROVIDER_LIST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub type ResolveFuture = Pin<Box<dyn Future<Output = std::io::Result<Vec<SocketAddr>>> + Send>>;
 
@@ -108,7 +109,7 @@ pub struct RemoteDesktopHost {
         std::collections::BTreeMap<String, Arc<dyn crate::frames::NativeFrameProvider>>,
     >,
     frames: Arc<crate::frames::FrameHub>,
-    native_open: tokio::sync::Mutex<()>,
+    native_open: Mutex<std::collections::BTreeMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
 fn internal() -> RemoteDesktopError {
@@ -261,13 +262,15 @@ impl RemoteDesktopHost {
             .map(|(kind, provider)| (kind.clone(), provider.clone()))
             .collect();
         for (kind, provider) in providers {
-            match provider.list(principal.clone()).await {
-                Ok(targets) => all.extend(
+            match tokio::time::timeout(PROVIDER_LIST_TIMEOUT, provider.list(principal.clone()))
+                .await
+            {
+                Ok(Ok(targets)) => all.extend(
                     targets
                         .into_iter()
                         .map(|summary| RemoteTarget::native(&kind, summary)),
                 ),
-                Err(_) => log::debug!("native target provider enumeration unavailable"),
+                _ => log::debug!("native target provider enumeration unavailable"),
             }
         }
         all.sort_by(|a, b| a.id.cmp(&b.id));
@@ -638,7 +641,22 @@ impl RemoteDesktopHost {
                 .cloned()
                 .ok_or_else(|| RemoteDesktopError::new("remote_desktop_native_unavailable"))?;
             let source = provider.resolve(id.into(), principal.clone()).await?;
-            let _opening = self.native_open.lock().await;
+            let opening = if mode == SessionMode::Control {
+                let mut locks = self.native_open.lock();
+                locks.retain(|_, lock| lock.strong_count() > 0);
+                let lock = locks
+                    .get(target_id)
+                    .and_then(std::sync::Weak::upgrade)
+                    .unwrap_or_else(|| Arc::new(tokio::sync::Mutex::new(())));
+                locks.insert(target_id.into(), Arc::downgrade(&lock));
+                Some(lock)
+            } else {
+                None
+            };
+            let _opening = match &opening {
+                Some(lock) => Some(lock.lock().await),
+                None => None,
+            };
             let input = if mode == SessionMode::Control {
                 if takeover {
                     self.broker.preempt_native_control(target_id).await?;
@@ -1058,6 +1076,80 @@ mod tests {
         store.put(target).unwrap();
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn listing_skips_a_hung_provider_and_keeps_healthy_projections() {
+        struct Hung;
+        impl crate::frames::NativeFrameProvider for Hung {
+            fn list(
+                &self,
+                _: Principal,
+            ) -> crate::frames::FrameFuture<Vec<crate::frames::NativeTargetSummary>> {
+                Box::pin(std::future::pending())
+            }
+            fn resolve(
+                &self,
+                _: String,
+                _: Principal,
+            ) -> crate::frames::FrameFuture<Arc<dyn crate::frames::FrameSource>> {
+                Box::pin(std::future::pending())
+            }
+        }
+        let f = fixture();
+        f.host
+            .register_native_frames("managed-desktop", Arc::new(Hung))
+            .unwrap();
+        f.host
+            .register_native_frames(
+                "sandbox",
+                Arc::new(NativeProvider(crate::frames::tests::gate_source(
+                    Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                    false,
+                ))),
+            )
+            .unwrap();
+        let page = f.host.list_targets(None, None).await.unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].id, "sandbox:a");
+        assert!(!page.items[0].bindings[0].view_only);
+    }
+    #[tokio::test]
+    async fn native_control_open_lock_does_not_block_views_or_other_targets() {
+        let f = fixture();
+        f.host
+            .register_native_frames(
+                "sandbox",
+                Arc::new(NativeControlProvider {
+                    source: crate::frames::tests::gate_source(
+                        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        false,
+                    ),
+                    released: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                    inputs: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                }),
+            )
+            .unwrap();
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        f.host
+            .native_open
+            .lock()
+            .insert("sandbox:a".into(), Arc::downgrade(&lock));
+        let _held = lock.lock().await;
+        let p = Principal::device("phone", Arc::new(|_| true));
+        for (id, mode) in [
+            ("sandbox:a", SessionMode::View),
+            ("sandbox:b", SessionMode::Control),
+        ] {
+            let opened = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                f.host
+                    .open_session(&p, id, "native", mode, mode == SessionMode::Control),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            f.host.close_session(&p, &opened.session_id);
+        }
+    }
     #[tokio::test]
     async fn saving_pins_confirms_and_mints_ids() {
         let fixture = fixture();

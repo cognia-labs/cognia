@@ -1500,6 +1500,23 @@ impl HumanDelivery for InputDelivery<'_> {
         Ok(Value::Null)
     }
 }
+async fn finish_operation_result(
+    name: &str,
+    principal: &ManagedDesktopPrincipal,
+    authority: &dyn ManagedControlAuthority,
+    result: Result<Value>,
+) -> Result<Value> {
+    if result.is_ok()
+        && matches!(
+            name,
+            "managed_desktop_files_read" | "managed_desktop_clipboard_get"
+        )
+    {
+        authority.revalidate(principal).await?;
+    }
+    result
+}
+
 struct WorkspaceDelivery<'a> {
     delivered: &'a std::sync::atomic::AtomicBool,
     p: &'a ManagedDesktopPrincipal,
@@ -1741,12 +1758,15 @@ pub async fn dispatch(
         .await;
         if !delivered.load(std::sync::atomic::Ordering::SeqCst) {
             if let Err(error) = &result {
-                service
+                if let Err(audit_error) = service
                     .record_operation_audit(&a.desktop_id, &request, &Err(error.clone()))
-                    .await?;
+                    .await
+                {
+                    log::warn!("managed operation audit: {}", audit_error.code);
+                }
             }
         }
-        return result;
+        return finish_operation_result(name, &principal, &authority, result).await;
     }
     if crate::managed_desktop_results::COMMANDS.contains(&name) {
         let value = crate::managed_desktop_results::dispatch(&directory, &service, &principal, &authority, name, args).await?;
@@ -3322,6 +3342,65 @@ mod tests {
             control_runtime: None,
         });
         (directory, service, p)
+    }
+    #[tokio::test]
+    async fn operation_reads_revalidate_before_returning_content_and_keep_refusal_codes() {
+        struct Revoked;
+        #[async_trait]
+        impl ManagedControlAuthority for Revoked {
+            async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
+                Err(refused("managed_desktop_forbidden"))
+            }
+            fn input_admission(
+                &self,
+                _: &ManagedDesktopPrincipal,
+            ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+                Arc::new(|| false)
+            }
+        }
+        let principal = ManagedDesktopPrincipal {
+            owner_principal_id: "owner".into(),
+            principal_id: "owner".into(),
+            host_id: "host".into(),
+            authority: ManagedDesktopAuthority::Administrator,
+        };
+        for name in [
+            "managed_desktop_files_read",
+            "managed_desktop_clipboard_get",
+        ] {
+            assert_eq!(
+                finish_operation_result(
+                    name,
+                    &principal,
+                    &Revoked,
+                    Ok(serde_json::json!({"text":"private"}))
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "managed_desktop_forbidden"
+            );
+            assert_eq!(
+                finish_operation_result(
+                    name,
+                    &principal,
+                    &Revoked,
+                    Err(refused("managed_desktop_operation_refused"))
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "managed_desktop_operation_refused"
+            );
+        }
+        assert!(finish_operation_result(
+            "managed_desktop_files_write",
+            &principal,
+            &Revoked,
+            Ok(Value::Null)
+        )
+        .await
+        .is_ok());
     }
     #[test]
     fn operation_rpc_shapes_are_closed_and_bounded() {

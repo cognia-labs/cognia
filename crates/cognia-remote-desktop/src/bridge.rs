@@ -382,6 +382,59 @@ async fn accept_viewer(
 }
 
 /// Dial, authenticate and forward between the viewer stream and the server.
+/// End a session after 32 consecutive refusals; successful inputs reset it.
+const MAX_CONSECUTIVE_INPUT_REFUSALS: usize = 32;
+const INPUT_AUDIT_INTERVAL: Duration = Duration::from_secs(5);
+
+struct InputRefusals<'a> {
+    target: &'a str,
+    principal: &'a str,
+    fence: u64,
+    count: u64,
+    code: String,
+    last: tokio::time::Instant,
+}
+impl<'a> InputRefusals<'a> {
+    fn new(target: &'a str, principal: &'a str, fence: u64) -> Self {
+        Self {
+            target,
+            principal,
+            fence,
+            count: 0,
+            code: String::new(),
+            last: tokio::time::Instant::now(),
+        }
+    }
+    fn record(&mut self, code: &str) {
+        self.count += 1;
+        self.code = code.into();
+        if self.last.elapsed() >= INPUT_AUDIT_INTERVAL {
+            self.flush();
+        }
+    }
+    fn flush(&mut self) {
+        if self.count == 0 {
+            return;
+        }
+        crate::audit::record_background(
+            "remote_desktop.input",
+            crate::frames::native_kind(self.target).unwrap_or("external"),
+            self.target,
+            self.principal,
+            "deny",
+            self.fence,
+            serde_json::json!({"code": self.code, "count": self.count}),
+        );
+        self.count = 0;
+        self.last = tokio::time::Instant::now();
+    }
+}
+impl Drop for InputRefusals<'_> {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
 async fn relay_upstream(
     viewer: ViewerStream,
     target: Upstream,
@@ -395,24 +448,23 @@ async fn relay_upstream(
             let (mut reader, mut writer) = tokio::io::split(viewer);
             let inbound = async {
                 if let Some(input) = &target.input {
+                    let mut refusals =
+                        InputRefusals::new(&target.target_id, &target.principal, input.fence);
+                    let mut consecutive = 0;
                     loop {
                         let result = match crate::frames::read_input(&mut reader).await {
-                            Ok(message) => input.input(message).await,
+                            Ok(Some(message)) => input.input(message).await,
+                            Ok(None) => return Ok(()),
                             Err(error) => Err(error),
                         };
                         if let Err(error) = result {
-                            crate::audit::record_background(
-                                "remote_desktop.input",
-                                crate::frames::native_kind(&target.target_id).unwrap_or("external"),
-                                &target.target_id,
-                                &target.principal,
-                                "deny",
-                                input.fence,
-                                serde_json::json!({"code":error.error.code}),
-                            );
-                            if error.fatal {
+                            consecutive += 1;
+                            refusals.record(&error.error.code);
+                            if error.fatal || consecutive >= MAX_CONSECUTIVE_INPUT_REFUSALS {
                                 return Err(error.error);
                             }
+                        } else {
+                            consecutive = 0;
                         }
                     }
                 } else {
@@ -662,6 +714,163 @@ mod tests {
         out
     }
 
+    struct TestInput {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        renew: Arc<std::sync::atomic::AtomicBool>,
+        refused: bool,
+    }
+    impl crate::frames::NativeInputSink for TestInput {
+        fn fence(&self) -> u64 {
+            2
+        }
+        fn input(&self, _: crate::frames::NativeInput) -> crate::frames::NativeInputFuture {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let refused = self.refused;
+            Box::pin(async move {
+                if refused {
+                    Err(crate::frames::NativeInputError::refused(
+                        "remote_desktop_input_invalid",
+                    ))
+                } else {
+                    Ok(())
+                }
+            })
+        }
+        fn renew(&self) -> crate::frames::FrameFuture<()> {
+            let live = self.renew.load(std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                if live {
+                    Ok(())
+                } else {
+                    Err(crate::frames::invalid())
+                }
+            })
+        }
+        fn release(&self) -> crate::frames::FrameFuture<()> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+    async fn native_bridge(
+        refused: bool,
+        source: Arc<dyn crate::frames::FrameSource>,
+    ) -> (
+        Bridge,
+        tokio::io::DuplexStream,
+        Arc<std::sync::atomic::AtomicUsize>,
+        Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let renew = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let input = crate::frames::NativeInputLease::new(Arc::new(TestInput {
+            calls: calls.clone(),
+            renew: renew.clone(),
+            refused,
+        }));
+        let bridge = Bridge::start_frames(
+            FramesTarget {
+                hub: Arc::new(crate::frames::FrameHub::default()),
+                target_id: "sandbox:a".into(),
+                principal: "local-owner".into(),
+                source,
+                input: Some(input),
+            },
+            Attachment::Remote,
+            TICKET_TTL,
+        )
+        .await
+        .unwrap();
+        let (viewer, pipe) = tokio::io::duplex(64 * 1024);
+        bridge.attach_handle().attach(Box::new(pipe)).unwrap();
+        (bridge, viewer, calls, renew)
+    }
+    fn test_source() -> Arc<dyn crate::frames::FrameSource> {
+        crate::frames::tests::gate_source(Arc::new(std::sync::atomic::AtomicBool::new(true)), false)
+    }
+    #[tokio::test]
+    async fn native_input_eof_closes_cleanly_and_refusals_are_bounded() {
+        let (mut bridge, viewer, _, _) = native_bridge(false, test_source()).await;
+        drop(viewer);
+        assert_eq!(bridge.finished().await, BridgeState::Closed);
+        let (mut bridge, mut viewer, calls, _) = native_bridge(true, test_source()).await;
+        let message = serde_json::to_vec(&serde_json::json!({"frameId":uuid::Uuid::new_v4().to_string(),"action":{"kind":"pressKey","chord":"Tab"}})).unwrap();
+        for _ in 0..MAX_CONSECUTIVE_INPUT_REFUSALS {
+            viewer.write_u32(message.len() as u32).await.unwrap();
+            viewer.write_all(&message).await.unwrap();
+        }
+        assert_eq!(
+            bridge.finished().await,
+            BridgeState::Failed(RemoteDesktopError::new("remote_desktop_input_invalid"))
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_CONSECUTIVE_INPUT_REFUSALS
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn native_release_ends_an_attached_relay() {
+        let (mut bridge, _viewer, _, renew) = native_bridge(false, test_source()).await;
+        tokio::task::yield_now().await;
+        renew.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            bridge.finished().await,
+            BridgeState::Failed(RemoteDesktopError::new("remote_desktop_control_expired"))
+        );
+    }
+    #[tokio::test]
+    async fn mismatched_fence_is_skipped_and_first_unchanged_frame_uses_cached_jpeg() {
+        struct Source(
+            Arc<dyn crate::frames::FrameSource>,
+            std::sync::atomic::AtomicUsize,
+        );
+        impl crate::frames::FrameSource for Source {
+            fn authorize(&self) -> crate::frames::FrameFuture<()> {
+                self.0.authorize()
+            }
+            fn capture(&self) -> crate::frames::FrameFuture<crate::frames::CapturedFrame> {
+                let capture = self.0.capture();
+                let fence = if self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    1
+                } else {
+                    2
+                };
+                Box::pin(async move {
+                    let mut frame = capture.await?;
+                    frame.fence = fence;
+                    Ok(frame)
+                })
+            }
+        }
+        let source = Arc::new(Source(
+            test_source(),
+            std::sync::atomic::AtomicUsize::new(0),
+        ));
+        let (bridge, mut viewer, _, _) = native_bridge(false, source).await;
+        let mut bytes = [0; crate::frames::HEADER_BYTES];
+        tokio::time::timeout(Duration::from_secs(3), viewer.read_exact(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        let header = crate::frames::FrameHeader::decode(&bytes).unwrap();
+        assert_eq!(header.fence, 2);
+        assert_eq!(header.encoding, crate::frames::JPEG);
+        assert!(header.payload_bytes > 0);
+        bridge.close();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn refusal_audits_are_coalesced_with_a_final_flush() {
+        let mut audit = InputRefusals::new("sandbox:a", "owner", 1);
+        for _ in 0..10 {
+            audit.record("remote_desktop_input_invalid");
+        }
+        assert_eq!(audit.count, 10);
+        tokio::time::advance(INPUT_AUDIT_INTERVAL).await;
+        audit.record("remote_desktop_input_stale_frame");
+        assert_eq!(audit.count, 0);
+        audit.record("remote_desktop_input_invalid");
+        assert_eq!(audit.count, 1);
+        audit.flush();
+        assert_eq!(audit.count, 0);
+    }
     #[test]
     fn origins_are_limited_to_the_app() {
         assert!(origin_allowed(None));

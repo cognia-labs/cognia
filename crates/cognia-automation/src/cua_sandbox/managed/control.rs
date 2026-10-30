@@ -23,6 +23,57 @@ use std::{
 const LEASE_MS: i64 = cognia_remote_desktop::control::LEASE_MS;
 const FRAME_MS: i64 = cognia_remote_desktop::control::FRAME_MS;
 
+struct OperationReservation {
+    service: ManagedDesktopService,
+    id: String,
+    reserved: u64,
+    progress: Arc<super::super::operations::TransferProgress>,
+    settled: bool,
+}
+impl OperationReservation {
+    async fn settle(&mut self) -> Result<()> {
+        let refund = self.reserved.saturating_sub(self.progress.bytes());
+        let service = self.service.clone();
+        let id = self.id.clone();
+        // The owned worker completes once even if the caller is cancelled
+        // during the durable transaction; Drop must never refund twice.
+        self.settled = true;
+        tokio::spawn(async move {
+            let result = service
+                .transaction(|s, _| {
+                    let spent = s.operation_bytes.entry(id).or_default();
+                    *spent = spent.saturating_sub(refund);
+                    Ok(())
+                })
+                .await;
+            if let Err(error) = &result {
+                log::warn!("managed operation budget settlement: {}", error.code);
+            }
+            result
+        })
+        .await
+        .map_err(|_| refused("managed_desktop_storage_unavailable"))?
+    }
+}
+impl Drop for OperationReservation {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let mut reservation = Self {
+            service: self.service.clone(),
+            id: self.id.clone(),
+            reserved: self.reserved,
+            progress: self.progress.clone(),
+            settled: false,
+        };
+        // Cancellation still settles the bytes the protected channel observed.
+        tokio::spawn(async move {
+            let _ = reservation.settle().await;
+        });
+    }
+}
+
 fn retain_native_refusal(enabled: bool, error: &ManagedDesktopError) -> bool {
     enabled && !cognia_remote_desktop::frames::NativeInputError::managed(&error.code).fatal
 }
@@ -2118,8 +2169,8 @@ impl ManagedDesktopService {
         self.control_input_inner(p, id, generation, input, authority, false)
             .await
     }
-    /// Broker delivery shares the human input core. A refusal before sending
-    /// input retains the lease so the next fresh frame/action can be tried.
+    /// Broker delivery shares the human input core. Per-input refusals retain
+    /// the lease; unavailable policy, kill switch and unverified targets end it.
     pub async fn native_control_input(
         &self,
         p: &ManagedDesktopPrincipal,
@@ -2236,7 +2287,12 @@ impl ManagedDesktopService {
             .client
             .clone()
             .ok_or_else(|| refused("managed_desktop_control_disconnected"))?;
-        let deadline = c.lease.as_ref().unwrap().deadline.min(f.deadline);
+        let deadline = c
+            .lease
+            .as_ref()
+            .ok_or_else(|| refused("managed_desktop_control_lease_expired"))?
+            .deadline
+            .min(f.deadline);
         let observed_size = (f.width, f.height);
         let current = desktop_session::capture(&client)
             .await
@@ -4048,6 +4104,37 @@ impl ManagedDesktopService {
         })
         .await
     }
+    async fn reserve_operation_guard(
+        &self,
+        id: &str,
+        generation: u64,
+        request: &super::super::operations::GuestOperation,
+    ) -> Result<OperationReservation> {
+        let service = self.clone();
+        let desktop_id = id.to_owned();
+        let operation = request.clone();
+        // If cancellation interrupts the commit, the worker's unclaimed guard
+        // drops and refunds after the commit, instead of leaking a reservation.
+        tokio::spawn(async move {
+            service
+                .reserve_operation(
+                    &desktop_id,
+                    generation,
+                    operation.reservation(),
+                    Some(&operation),
+                )
+                .await?;
+            Ok(OperationReservation {
+                service,
+                id: desktop_id,
+                reserved: operation.reservation(),
+                progress: Arc::new(super::super::operations::TransferProgress::default()),
+                settled: false,
+            })
+        })
+        .await
+        .map_err(|_| refused("managed_desktop_storage_unavailable"))?
+    }
     /// Human operations share the input lease core, current Host authority and
     /// revocation epochs. Reads also require the holder's token/fence.
     pub async fn human_workspace_operation(
@@ -4070,7 +4157,9 @@ impl ManagedDesktopService {
                 authority,
             )
             .await;
-        self.record_operation_audit(id, &request, &result).await?;
+        if let Err(error) = self.record_operation_audit(id, &request, &result).await {
+            log::warn!("managed operation audit: {}", error.code);
+        }
         result
     }
     async fn human_workspace_inner(
@@ -4093,8 +4182,12 @@ impl ManagedDesktopService {
         let mut c = slot.lock().await;
         c.require_lease(p, token, fence)?;
         let principal_epoch = c.revoked.clone();
-        let expected_principal_epoch = c.lease.as_ref().unwrap().epoch;
-        let deadline = c.lease.as_ref().unwrap().deadline;
+        let lease = c
+            .lease
+            .as_ref()
+            .ok_or_else(|| refused("managed_desktop_control_lease_expired"))?;
+        let expected_principal_epoch = lease.epoch;
+        let deadline = lease.deadline;
         let desktop_epoch = self
             .control_desktop_epochs
             .lock()
@@ -4150,7 +4243,9 @@ impl ManagedDesktopService {
             .await
         }
         .await;
-        self.record_operation_audit(id, &request, &result).await?;
+        if let Err(error) = self.record_operation_audit(id, &request, &result).await {
+            log::warn!("managed operation audit: {}", error.code);
+        }
         result
     }
     /// The same WP8 admission, agent guard and preemption epoch covers an
@@ -4214,13 +4309,19 @@ impl ManagedDesktopService {
         row: &DesktopRecord,
         request: super::super::operations::GuestOperation,
         live: Arc<dyn Fn() -> bool + Send + Sync>,
+        audited_failure: &AtomicBool,
     ) -> Result<super::super::operations::GuestOperationResult> {
         request.validate()?;
         let result = self
             .deliver_workspace_operation(row, &request, live, true)
             .await;
-        self.record_operation_audit(&row.desktop.id, &request, &result)
-            .await?;
+        audited_failure.store(result.is_err(), Ordering::SeqCst);
+        if let Err(error) = self
+            .record_operation_audit(&row.desktop.id, &request, &result)
+            .await
+        {
+            log::warn!("managed operation audit: {}", error.code);
+        }
         result
     }
     async fn workspace_file_bytes(
@@ -4228,14 +4329,20 @@ impl ManagedDesktopService {
         row: &DesktopRecord,
         path: &str,
         live: Arc<dyn Fn() -> bool + Send + Sync>,
+        max_bytes: usize,
+        audited_failure: &AtomicBool,
     ) -> Result<Vec<u8>> {
         use super::super::operations::{
             GuestOperation as Op, GuestOperationResult as Reply, CHUNK_BYTES, FILE_BYTES,
         };
         let mut bytes = Vec::new();
         loop {
-            if bytes.len() >= FILE_BYTES {
-                return Err(refused("managed_desktop_file_limit"));
+            if bytes.len() >= max_bytes {
+                return if max_bytes == FILE_BYTES {
+                    Err(refused("managed_desktop_file_limit"))
+                } else {
+                    Ok(bytes)
+                };
             }
             let result = self
                 .workspace_chunk(
@@ -4243,9 +4350,10 @@ impl ManagedDesktopService {
                     Op::FileRead {
                         path: path.into(),
                         offset: bytes.len() as u64,
-                        length: CHUNK_BYTES.min(FILE_BYTES - bytes.len()),
+                        length: CHUNK_BYTES.min(max_bytes - bytes.len()),
                     },
                     live.clone(),
+                    audited_failure,
                 )
                 .await?;
             let Reply::FileRead { chunk, eof } = result else {
@@ -4267,6 +4375,29 @@ impl ManagedDesktopService {
         bytes: Option<Vec<u8>>,
         expected_hash: Option<String>,
     ) -> Result<crate::cua_sandbox::file_transfer::SandboxFileDownload> {
+        self.agent_file_transfer_bounded(
+            id,
+            generation,
+            session,
+            character,
+            path,
+            bytes,
+            expected_hash,
+            None,
+        )
+        .await
+    }
+    pub(crate) async fn agent_file_transfer_bounded(
+        &self,
+        id: &str,
+        generation: u64,
+        session: Option<String>,
+        character: Option<String>,
+        path: &str,
+        bytes: Option<Vec<u8>>,
+        expected_hash: Option<String>,
+        max_bytes: Option<usize>,
+    ) -> Result<crate::cua_sandbox::file_transfer::SandboxFileDownload> {
         use super::super::operations::{GuestOperation as Op, CHUNK_BYTES, FILE_BYTES};
         use crate::cua_sandbox::file_transfer;
         use base64::Engine;
@@ -4284,6 +4415,8 @@ impl ManagedDesktopService {
                 length: CHUNK_BYTES,
             }
         };
+        let audited_failure = Arc::new(AtomicBool::new(false));
+        let chunk_audited = audited_failure.clone();
         let service = self.clone();
         let path = path.to_owned();
         let result = self
@@ -4304,7 +4437,13 @@ impl ManagedDesktopService {
                             return Err(refused("managed_desktop_invalid_request"));
                         }
                         let current = service
-                            .workspace_file_bytes(&row, &path, live.clone())
+                            .workspace_file_bytes(
+                                &row,
+                                &path,
+                                live.clone(),
+                                FILE_BYTES,
+                                &chunk_audited,
+                            )
                             .await?;
                         if file_transfer::sha256(&current) != expected.to_ascii_lowercase() {
                             return Err(refused("managed_desktop_file_changed"));
@@ -4324,6 +4463,7 @@ impl ManagedDesktopService {
                                         r#final: end == bytes.len(),
                                     },
                                     live.clone(),
+                                    &chunk_audited,
                                 )
                                 .await?;
                             if end == bytes.len() {
@@ -4333,7 +4473,18 @@ impl ManagedDesktopService {
                         }
                         (bytes, false)
                     } else {
-                        (service.workspace_file_bytes(&row, &path, live).await?, true)
+                        (
+                            service
+                                .workspace_file_bytes(
+                                    &row,
+                                    &path,
+                                    live,
+                                    max_bytes.unwrap_or(FILE_BYTES),
+                                    &chunk_audited,
+                                )
+                                .await?,
+                            true,
+                        )
                     };
                     Ok(file_transfer::SandboxFileDownload {
                         path,
@@ -4348,9 +4499,15 @@ impl ManagedDesktopService {
                 },
             )
             .await;
-        if let Err(error) = &result {
-            self.record_operation_audit(id, &metadata, &Err(error.clone()))
-                .await?;
+        if !audited_failure.load(Ordering::SeqCst) {
+            if let Err(error) = &result {
+                if let Err(audit_error) = self
+                    .record_operation_audit(id, &metadata, &Err(error.clone()))
+                    .await
+                {
+                    log::warn!("managed operation audit: {}", audit_error.code);
+                }
+            }
         }
         result
     }
@@ -4382,13 +4539,10 @@ impl ManagedDesktopService {
         if !live() {
             return Err(refused("managed_desktop_operation_revoked"));
         }
-        self.reserve_operation(
-            id,
-            row.desktop.generation,
-            request.reservation(),
-            Some(request),
-        )
-        .await?;
+        let mut reservation = self
+            .reserve_operation_guard(id, row.desktop.generation, request)
+            .await?;
+        let progress = reservation.progress.clone();
         let send = live.clone();
         let admission: super::super::provider::LifecycleAdmission = Arc::new(move || {
             if send() {
@@ -4416,7 +4570,7 @@ impl ManagedDesktopService {
             }
         };
         let outcome = tokio::select! {
-            result = async {
+            result = super::super::operations::TRANSFER_PROGRESS.scope(progress.clone(), async {
                 use super::super::operations::GuestOperation;
                 let context=super::super::provider::GuestOperationContext {record:row,secrets:&secrets,boundary:&boundary,admission};
                 match request {
@@ -4426,9 +4580,13 @@ impl ManagedDesktopService {
                     GuestOperation::ClipboardGet => self.provider.guest_clipboard_get(context).await,
                     GuestOperation::ClipboardSet {text} => self.provider.guest_clipboard_set(context,text).await,
                 }
-            } => result,
+            }) => result,
             result = monitor => result,
         };
+        if let Ok(result) = &outcome {
+            progress.record(result.transferred_bytes().min(request.reservation()));
+        }
+        let _ = reservation.settle().await;
         if !live() {
             return Err(refused("managed_desktop_operation_revoked"));
         }
@@ -4502,6 +4660,54 @@ impl ManagedDesktopService {
 }
 
 #[cfg(test)]
+impl ManagedDesktopService {
+    pub(crate) async fn operation_test_context(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        row: &ManagedDesktop,
+    ) -> (
+        DesktopRecord,
+        super::super::provider::DesktopSecrets,
+        HostBoundaryBinding,
+    ) {
+        (
+            self.scoped(p, &row.id, row.generation).await.unwrap(),
+            self.secrets.desktop(&row.id).await.unwrap(),
+            self.state.lock().await.workload_boundaries[&row.id].clone(),
+        )
+    }
+}
+
+#[cfg(test)]
+pub(crate) type WorkspaceTestHandler = Arc<
+    dyn Fn(
+            super::super::operations::GuestOperation,
+            super::super::provider::LifecycleAdmission,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<super::super::operations::GuestOperationResult>,
+                    > + Send,
+            >,
+        > + Send
+        + Sync,
+>;
+
+#[cfg(test)]
+pub(crate) async fn workspace_test_fixture(
+    handler: WorkspaceTestHandler,
+) -> (
+    tempfile::TempDir,
+    Arc<ManagedDesktopService>,
+    ManagedDesktop,
+) {
+    let (f, row) = workspace_tests::fixture().await;
+    workspace_tests::delegate(&f, &row).await;
+    *f.provider.workspace_handler.lock().unwrap() = Some(handler);
+    (f.directory, Arc::new(f.service), row)
+}
+
+#[cfg(test)]
 mod workspace_tests {
     use super::*;
     use super::super::super::operations::{
@@ -4529,7 +4735,7 @@ mod workspace_tests {
     fn authority() -> Authority {
         Authority(Arc::new(AtomicBool::new(true)))
     }
-    async fn fixture() -> (super::super::tests::Fixture, ManagedDesktop) {
+    pub(super) async fn fixture() -> (super::super::tests::Fixture, ManagedDesktop) {
         let mut f = super::super::tests::Fixture::new();
         f.config.release.recipe_revision = "8".into();
         f.service.trusted_release = Some(f.config.release.clone());
@@ -4630,7 +4836,7 @@ mod workspace_tests {
             )
             .await
     }
-    async fn delegate(
+    pub(super) async fn delegate(
         f: &super::super::tests::Fixture,
         row: &ManagedDesktop,
     ) -> ManagedDesktopDelegation {
@@ -4647,6 +4853,242 @@ mod workspace_tests {
             )
             .await
             .unwrap()
+    }
+    #[tokio::test]
+    async fn audit_storage_failure_never_replaces_the_operation_result() {
+        for refused_reply in [false, true] {
+            let (f, row) = fixture().await;
+            let _grant = delegate(&f, &row).await;
+            let journal = f.directory.path().join("managed-desktops-journal.json");
+            *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(move |_, admission| {
+                let journal = journal.clone();
+                Box::pin(async move {
+                    admission()?;
+                    std::fs::remove_file(&journal).unwrap();
+                    std::fs::create_dir(&journal).unwrap();
+                    if refused_reply {
+                        Err(refused("managed_desktop_operation_refused"))
+                    } else {
+                        Ok(Reply::ClipboardGet { text: "ok".into() })
+                    }
+                })
+            }));
+            let result = f
+                .service
+                .agent_workspace_operation(
+                    &row.id,
+                    row.generation,
+                    Some("session".into()),
+                    None,
+                    Op::ClipboardGet,
+                )
+                .await;
+            if refused_reply {
+                assert_eq!(
+                    result.unwrap_err().code,
+                    "managed_desktop_operation_refused"
+                );
+            } else {
+                assert!(matches!(result.unwrap(), Reply::ClipboardGet { text } if text == "ok"));
+            }
+        }
+    }
+    #[tokio::test]
+    async fn small_read_of_large_file_charges_only_requested_payload() {
+        let (f, row) = fixture().await;
+        let _grant = delegate(&f, &row).await;
+        *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(|request, admission| {
+            Box::pin(async move {
+                admission()?;
+                let Op::FileRead { offset, length, .. } = request else {
+                    panic!("read only")
+                };
+                assert_eq!(offset, 0);
+                assert_eq!(length, 1024);
+                Ok(Reply::FileRead {
+                    chunk: vec![b'x'; length],
+                    eof: false,
+                })
+            })
+        }));
+        let read = f
+            .service
+            .agent_file_transfer_bounded(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "/home/cua/large",
+                None,
+                None,
+                Some(1024),
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.size, 1024);
+        assert_eq!(f.service.state.lock().await.operation_bytes[&row.id], 1024);
+    }
+    #[tokio::test]
+    async fn cancellation_during_reserve_or_settlement_refunds_exactly_once() {
+        for settling in [false, true] {
+            let (f, row) = fixture().await;
+            f.service
+                .transaction(|s, _| {
+                    s.operation_bytes.insert(row.id.clone(), 10);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            let request = Op::FileRead {
+                path: "/home/cua/a".into(),
+                offset: 0,
+                length: 100,
+            };
+            let reservation = if settling {
+                let reservation = f
+                    .service
+                    .reserve_operation_guard(&row.id, row.generation, &request)
+                    .await
+                    .unwrap();
+                reservation.progress.record(2);
+                Some(reservation)
+            } else {
+                None
+            };
+            let held = f.service.state.lock().await;
+            let service = f.service.clone();
+            let id = row.id.clone();
+            let generation = row.generation;
+            let started = Arc::new(tokio::sync::Notify::new());
+            let signal = started.clone();
+            let task = tokio::spawn(async move {
+                signal.notify_one();
+                if let Some(mut reservation) = reservation {
+                    reservation.settle().await.unwrap();
+                } else {
+                    let _reservation = service
+                        .reserve_operation_guard(&id, generation, &request)
+                        .await
+                        .unwrap();
+                }
+            });
+            started.notified().await;
+            tokio::task::yield_now().await;
+            task.abort();
+            let _ = task.await;
+            drop(held);
+            let expected = if settling { 12 } else { 10 };
+            for _ in 0..200 {
+                if f.service.state.lock().await.operation_bytes[&row.id] == expected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            assert_eq!(
+                f.service.state.lock().await.operation_bytes[&row.id],
+                expected
+            );
+        }
+    }
+    #[tokio::test]
+    async fn native_global_policy_failures_drop_the_lease_but_per_input_denials_retain_it() {
+        struct Denied(&'static str);
+        #[async_trait]
+        impl ManagedControlAuthority for Denied {
+            async fn revalidate(&self, _: &ManagedDesktopPrincipal) -> Result<()> {
+                Err(refused(self.0))
+            }
+            fn input_admission(
+                &self,
+                _: &ManagedDesktopPrincipal,
+            ) -> Arc<dyn Fn() -> bool + Send + Sync> {
+                Arc::new(|| false)
+            }
+        }
+        for (code, fatal) in [
+            ("managed_desktop_control_kill_switch", true),
+            ("managed_desktop_control_policy_unavailable", true),
+            ("managed_desktop_control_target_unverified", true),
+            ("managed_desktop_control_stale_frame", false),
+            ("managed_desktop_control_policy_denied", false),
+        ] {
+            let (f, row) = fixture().await;
+            let slot = f.service.control_slot(&row.id, row.generation).await;
+            let lease = slot.lock().await.issue(&f.p, 1000, row.deadline_at);
+            let error = f
+                .service
+                .native_control_input(
+                    &f.p,
+                    &row.id,
+                    row.generation,
+                    ManagedControlInput {
+                        token: &lease.token,
+                        fence: lease.fence,
+                        frame_id: "unused",
+                        point: None,
+                        action: UiAction::PressKey {
+                            chord: crate::automation::types::KeyChord("Tab".into()),
+                        },
+                    },
+                    &Denied(code),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, code);
+            assert_eq!(slot.lock().await.lease.is_none(), fatal, "{code}");
+        }
+    }
+    #[tokio::test]
+    async fn many_small_execs_charge_payload_instead_of_one_mib_each() {
+        let (f, row) = fixture().await;
+        let _grant = delegate(&f, &row).await;
+        for _ in 0..300 {
+            f.service
+                .agent_workspace_operation(
+                    &row.id,
+                    row.generation,
+                    Some("session".into()),
+                    None,
+                    Op::Exec {
+                        argv: vec!["true".into()],
+                        cwd: "/home/cua".into(),
+                        timeout_ms: 1000,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(f.service.state.lock().await.operation_bytes[&row.id], 600);
+    }
+    #[tokio::test]
+    async fn chunk_failure_has_one_final_audit_row() {
+        let (f, row) = fixture().await;
+        let _grant = delegate(&f, &row).await;
+        *f.provider.workspace_handler.lock().unwrap() = Some(Arc::new(|_, _| {
+            Box::pin(async { Err(refused("managed_desktop_operation_refused")) })
+        }));
+        let before = f.service.state.lock().await.operation_audit.len();
+        assert!(f
+            .service
+            .agent_file_transfer(
+                &row.id,
+                row.generation,
+                Some("session".into()),
+                None,
+                "/home/cua/a",
+                None,
+                None
+            )
+            .await
+            .is_err());
+        let state = f.service.state.lock().await;
+        assert_eq!(
+            state.operation_audit.len() - before,
+            2,
+            "one dispatch intent and one final refusal"
+        );
+        assert_eq!(state.operation_bytes[&row.id], 0);
     }
     #[tokio::test]
     async fn human_operations_require_holder_fence_admin_and_live_authority() {
@@ -4914,7 +5356,7 @@ mod workspace_tests {
             .is_err());
     }
     #[tokio::test]
-    async fn human_revocation_cancels_transfer_and_retains_durable_reservation_and_uncertainty() {
+    async fn human_revocation_charges_dispatched_input_and_retains_uncertainty() {
         let (f, row) = fixture().await;
         let authority = authority();
         let proof = lease(&f, &row, &authority).await;
@@ -4924,6 +5366,7 @@ mod workspace_tests {
             let started = observed.clone();
             Box::pin(async move {
                 admission()?;
+                super::super::super::operations::transferred(12);
                 started.notify_one();
                 std::future::pending::<Result<Reply>>().await
             })
@@ -5000,7 +5443,7 @@ mod workspace_tests {
             assert!(result.is_err());
             let state = f.service.store.load_checkpoint("host").unwrap();
             assert!(state.control_quarantines.contains(&row.id));
-            assert_eq!(state.operation_bytes[&row.id], 64);
+            assert_eq!(state.operation_bytes[&row.id], 0);
             assert!(!serde_json::to_string(&state.operation_audit)
                 .unwrap()
                 .contains("private-name"));
@@ -5056,6 +5499,14 @@ mod workspace_tests {
             let operation = human(&f, &row, &proof, &authority, Op::ClipboardGet);
             tokio::pin!(operation);
             tokio::select! {_=&mut operation=>panic!("must wait"),_=started.notified()=>{}}
+        }
+        for _ in 0..100 {
+            if f.service.state.lock().await.operation_bytes[&row.id] == 0
+                && Arc::strong_count(&f.service.store) == 1
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
         let spent = f
             .service
@@ -5247,12 +5698,8 @@ mod workspace_tests {
         assert_eq!(empty.size, 0);
         assert!(stored.lock().unwrap().is_empty());
         let state = f.service.store.load_checkpoint("host").unwrap();
-        // Hash precondition reads reserve one or two maximum-size chunks;
-        // the download reserves two, and writes reserve their actual lengths.
-        assert_eq!(
-            state.operation_bytes[&row.id],
-            7 * CHUNK_BYTES as u64 + bytes.len() as u64
-        );
+        // Every short read settles to its actual payload, including hash reads.
+        assert_eq!(state.operation_bytes[&row.id], 3 + 4 * bytes.len() as u64);
         let audit = serde_json::to_string(&state.operation_audit).unwrap();
         assert!(!audit.contains("private-file"));
         assert!(!state.operation_quarantines.contains(&row.id));

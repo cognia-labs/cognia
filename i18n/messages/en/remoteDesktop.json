@@ -241,6 +241,7 @@
       "keyboard": "Keyboard",
       "keyboardInput": "Type to send keys to the remote screen"
     },
+    "open": "Open desktop",
     "title": "Native desktop",
     "readOnly": "Managed by its owning service",
     "docker": "Docker sandbox",

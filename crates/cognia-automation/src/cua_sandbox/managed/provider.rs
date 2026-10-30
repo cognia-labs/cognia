@@ -990,6 +990,119 @@ fn validate_frame(data: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct NoOperationsProvider;
+    #[allow(unused_variables)]
+    #[async_trait]
+    impl ManagedDesktopProvider for NoOperationsProvider {
+        async fn verify_release(&self, config: &ManagedDesktopConfig) -> Result<()> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn verify_smoke_egress(
+            &self,
+            record: &DesktopRecord,
+            secrets: &DesktopSecrets,
+        ) -> Result<cognia_e2b::envd::EgressProbeReport> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn observe_boundary(
+            &self,
+            record: &DesktopRecord,
+            secrets: &DesktopSecrets,
+        ) -> Result<cognia_desktop_guest::observation::ProcessBoundaryReport> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn register_template(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            name: &str,
+            admission: LifecycleAdmission,
+        ) -> Result<TemplateIdentity> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn start_template(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            identity: &TemplateIdentity,
+            admission: LifecycleAdmission,
+        ) -> Result<()> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn template_status(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            identity: &TemplateIdentity,
+        ) -> Result<TemplateState> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn delete_template(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            template_id: &str,
+        ) -> Result<bool> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn create(
+            &self,
+            record: &DesktopRecord,
+            key: &ProviderSecret,
+            secrets: &DesktopSecrets,
+            remaining_seconds: u64,
+            admission: LifecycleAdmission,
+        ) -> Result<CreatedDesktop> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn inspect(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            id: &str,
+        ) -> Result<Option<ProviderDesktop>> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn list(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            metadata: &BTreeMap<String, String>,
+        ) -> Result<Vec<ProviderDesktop>> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn delete(
+            &self,
+            config: &ManagedDesktopConfig,
+            key: &ProviderSecret,
+            id: &str,
+        ) -> Result<()> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn bootstrap(&self, record: &DesktopRecord, secrets: &DesktopSecrets) -> Result<()> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+        async fn health(&self, record: &DesktopRecord, secrets: &DesktopSecrets) -> Result<()> {
+            unreachable!("lifecycle is unused by this default-method test")
+        }
+    }
+    #[tokio::test]
+    async fn provider_without_recipe_8_channel_refuses_operations_by_default() {
+        let (_dir, service, p, row, _) =
+            super::super::service::control::native_test_fixture().await;
+        let (record, secrets, boundary) = service.operation_test_context(&p, &row).await;
+        let error = NoOperationsProvider
+            .guest_operation(
+                &record,
+                &secrets,
+                &boundary,
+                &super::super::operations::GuestOperation::ClipboardGet,
+                Arc::new(|| Ok(())),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "managed_desktop_operations_unqualified");
+    }
     #[test]
     fn provider_uses_the_shared_control_plane_origin() {
         let provider = E2bDesktopProvider::new(Arc::new(TestImageVerifier));

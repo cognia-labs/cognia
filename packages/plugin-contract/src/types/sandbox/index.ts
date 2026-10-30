@@ -136,6 +136,12 @@ export interface E2bSandboxConfig extends ManagedDesktopQualificationProjection 
   agentControl?: boolean
   /** GUI remains dormant until separate phase-2 Host qualification; never authority by itself. */
   guiQualified?: boolean
+  /** Host projection of current desktop release recipe 8 qualification for files, clipboard and shell. */
+  operationsQualified?: boolean
+  /** Host-configured CPU count for the managed desktop. */
+  cpuCount?: number
+  /** Host-configured memory ceiling in MiB for the managed desktop. */
+  memoryMb?: number
 }
 
 export interface CuaCloudSandboxConfig {

@@ -501,7 +501,7 @@ test("managed clipboard is explicit and disabled with a recipe-8 reason", () => 
   render(managedViewer(false))
   expect(screen.getByRole("button", { name: "Read desktop clipboard" })).toBeDisabled()
   expect(screen.getByRole("button", { name: "Send text to desktop clipboard" })).toBeDisabled()
-  expect(screen.getByText(/require current recipe-8 qualification/)).toBeInTheDocument()
+  expect(screen.getByText(/passes qualification for desktop release recipe 8/)).toBeInTheDocument()
   expect(openManagedDesktop).not.toHaveBeenCalled()
 })
 test("managed clipboard obtains and releases a holder lease without automatic synchronization", async () => {
@@ -551,4 +551,74 @@ test("revoking operations qualification discards a late clipboard response", asy
   })
   expect(screen.getByRole("textbox", { name: "Clipboard text" })).toHaveValue("")
   expect(session.release).toHaveBeenCalled()
+})
+
+test.each([false, true])(
+  "managed clipboard enforces the 1 MiB UTF-8 limit on %s writes",
+  async (write) => {
+    const oversized = "界".repeat(Math.floor((1024 * 1024) / 3) + 1)
+    const session = {
+      acquire: jest.fn().mockResolvedValue({ token: "holder", fence: 1 }),
+      clipboardGet: jest.fn().mockResolvedValue({ kind: "clipboard-get", text: oversized }),
+      clipboardSet: jest.fn(),
+      release: jest.fn().mockResolvedValue(undefined),
+      close: jest.fn(),
+    }
+    jest.mocked(openManagedDesktop).mockResolvedValue(session as never)
+    render(managedViewer())
+    if (write)
+      fireEvent.change(screen.getByRole("textbox", { name: "Clipboard text" }), {
+        target: { value: oversized },
+      })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: write ? "Send text to desktop clipboard" : "Read desktop clipboard",
+      })
+    )
+    expect(await screen.findByRole("alert")).toBeInTheDocument()
+    expect(session.clipboardSet).not.toHaveBeenCalled()
+    if (write) expect(openManagedDesktop).not.toHaveBeenCalled()
+    else {
+      expect(screen.getByRole("textbox", { name: "Clipboard text" })).toHaveValue("")
+      await waitFor(() => expect(session.release).toHaveBeenCalled())
+    }
+  }
+)
+
+test.each([false, true])(
+  "touch controls mount only while controlling on a touch screen: %s",
+  (controlling) => {
+    const ua = jest.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone")
+    useDesktop.mockReturnValue(state({ controlling }))
+    mount()
+    if (controlling) expect(screen.getByRole("toolbar", { name: "Special keys" })).toBeVisible()
+    else expect(screen.queryByRole("toolbar", { name: "Special keys" })).toBeNull()
+    ua.mockRestore()
+  }
+)
+
+test.each([false, true])("managed clipboard accepts exactly 1 MiB: write=%s", async (write) => {
+  const text = "x".repeat(1024 * 1024)
+  const session = {
+    acquire: jest.fn().mockResolvedValue({ token: "holder", fence: 1 }),
+    clipboardGet: jest.fn().mockResolvedValue({ kind: "clipboard-get", text }),
+    clipboardSet: jest.fn().mockResolvedValue(undefined),
+    release: jest.fn().mockResolvedValue(undefined),
+    close: jest.fn(),
+  }
+  jest.mocked(openManagedDesktop).mockResolvedValue(session as never)
+  render(managedViewer())
+  if (write)
+    fireEvent.change(screen.getByRole("textbox", { name: "Clipboard text" }), {
+      target: { value: text },
+    })
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: write ? "Send text to desktop clipboard" : "Read desktop clipboard",
+    })
+  )
+  await waitFor(() => expect(session.close).toHaveBeenCalled())
+  expect(screen.queryByRole("alert")).toBeNull()
+  if (write) expect(session.clipboardSet).toHaveBeenCalledWith({ token: "holder", fence: 1 }, text)
+  else expect(screen.getByRole("textbox", { name: "Clipboard text" })).toHaveValue(text)
 })

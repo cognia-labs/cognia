@@ -241,6 +241,7 @@
       "keyboard": "键盘",
       "keyboardInput": "输入以向远程屏幕发送按键"
     },
+    "open": "打开桌面",
     "title": "原生桌面",
     "readOnly": "由所属服务管理",
     "docker": "Docker 沙箱",

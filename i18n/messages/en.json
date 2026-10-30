@@ -5893,7 +5893,7 @@
         },
         "loading": "Connecting to the desktop…",
         "mobileObservation": "This viewer is observation only.",
-        "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+        "operationsDormant": "Files, clipboard and shell turn on after this configuration passes qualification for desktop release recipe 8 on this Host.",
         "otherController": "Another user has control",
         "qualificationRequired": "Cloud desktop viewing and control require a separately authorized GUI smoke test.",
         "quarantined": "Input cleanup uncertain; control unavailable",
@@ -5929,7 +5929,7 @@
         "downloading": "Downloading…",
         "folder": "Existing folder inside the sandbox",
         "help": "Upload or download one binary file up to {limit} MiB. Uploads use an existing folder and never overwrite a file. Uploading releases manual desktop control.",
-        "managedHelp": "Upload or download one binary file up to {limit} MiB within /home/cua. Uploads replace the selected file. Each transfer takes exclusive control.",
+        "managedHelp": "Upload or download one binary file up to {limit} MiB within the desktop's home folder (/home/cua). Uploads replace the selected file. Each transfer takes exclusive control.",
         "missingContainer": "Refresh the connection health to identify its container before transferring files.",
         "notice": {
           "cancelled": "File transfer cancelled.",
@@ -5945,7 +5945,7 @@
           "uploadFailed": "Upload failed. Check that the same container is running, the folder exists, the filename is unused, and control is available.",
           "uploaded": "File uploaded to the selected sandbox."
         },
-        "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+        "operationsDormant": "Files, clipboard and shell turn on after this configuration passes qualification for desktop release recipe 8 on this Host.",
         "title": "Files",
         "upload": "Choose file and upload",
         "uploading": "Uploading…"
@@ -40922,6 +40922,7 @@
         "up": "Up arrow"
       },
       "loading": "Connecting to the desktop…",
+      "open": "Open desktop",
       "readOnly": "Managed by its owning service",
       "release": "Release control",
       "screen": "Native desktop screen",
@@ -53638,7 +53639,7 @@
         "title": "Billing and cleanup"
       },
       "openDesktop": "Open desktop",
-      "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+      "operationsDormant": "Files, clipboard and shell turn on after this configuration passes qualification for desktop release recipe 8 on this Host.",
       "prepare": "Prepare pinned template",
       "prepared": "Pinned template prepared. Real-provider smoke authorization and qualification are still required before creation.",
       "qualification": {

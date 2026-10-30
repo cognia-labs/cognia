@@ -8,17 +8,47 @@ use std::{collections::BTreeMap, time::Duration};
 pub const CHUNK_BYTES: usize = 64 * 1024;
 pub const FILE_BYTES: usize = 8 * 1024 * 1024;
 pub const TEXT_BYTES: usize = 1024 * 1024;
-/// Durable, pre-dispatch reservations: at most 256 MiB of files, clipboard and
-/// exec output per desktop lifetime, across connections AND Host restarts.
-/// Reads reserve their requested maximum; exec/clipboard-get reserve 1 MiB.
-/// Refusals, cancellation and short reads never refund a reservation, so an
-/// ambiguous provider outcome cannot reset/bypass the bound. This is a transfer
-/// budget, not a filesystem quota or a bound on files produced inside the guest.
-/// Only a NEW immutable desktop ID starts a fresh budget. Generation changes,
-/// lease/delegation renewal, configuration edits, reconnects and destruction
-/// never reset an existing ID's spent reservations.
+/// At most 256 MiB of file/clipboard payload and exec output per immutable
+/// desktop ID, across reconnects, generations and Host restarts. Reserve each
+/// call's upper bound before dispatch, then refund unused bytes on completion
+/// or cancellation. Charge sent input and decoded output even if teardown or
+/// admission subsequently fails. An ambiguous send retains its input bound;
+/// an incomplete reply charges received wire bytes up to the reserved bound.
+/// A complete decoded reply settles to payload bytes. An interrupted Host retains its outstanding
+/// reservations conservatively; only a new desktop ID starts a fresh budget.
+/// This is a transfer budget, not a guest filesystem quota.
 pub const DESKTOP_VOLUME_BYTES: u64 = 256 * 1024 * 1024;
 const FRAME_BYTES: usize = 6 * TEXT_BYTES + 8192;
+
+#[derive(Default)]
+pub(super) struct TransferProgress(std::sync::atomic::AtomicU64);
+impl TransferProgress {
+    pub(super) fn bytes(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    pub(super) fn record(&self, bytes: u64) {
+        self.0.fetch_max(bytes, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn decoded(&self, bytes: u64) {
+        self.0.store(bytes, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+tokio::task_local! {
+    pub(super) static TRANSFER_PROGRESS: std::sync::Arc<TransferProgress>;
+}
+pub(super) fn transferred(bytes: u64) {
+    let _ = TRANSFER_PROGRESS.try_with(|progress| progress.record(bytes));
+}
+impl GuestOperationResult {
+    pub(super) fn transferred_bytes(&self) -> u64 {
+        match self {
+            Self::Exec { output, .. } => output.len() as u64,
+            Self::FileRead { chunk, .. } => chunk.len() as u64,
+            Self::ClipboardGet { text } => text.len() as u64,
+            Self::FileWrite { bytes, .. } | Self::ClipboardSet { bytes } => *bytes as u64,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -264,6 +294,19 @@ fn response(bytes: &[u8], request: &GuestOperation) -> Result<GuestOperationResu
         serde_json::from_slice(bytes).map_err(|_| refused("managed_desktop_operation_protocol"))?;
     // Audit is never copied from the guest into Host audit records.
     let _ = value.audit;
+    let input_bytes = match request {
+        GuestOperation::FileWrite { chunk, .. } => chunk.len() as u64,
+        GuestOperation::ClipboardSet { text } => text.len() as u64,
+        _ => 0,
+    };
+    let payload = value
+        .result
+        .as_ref()
+        .map(GuestOperationResult::transferred_bytes)
+        .unwrap_or(0)
+        .max(input_bytes);
+    let _ =
+        TRANSFER_PROGRESS.try_with(|progress| progress.decoded(payload.min(request.reservation())));
     match (value.result, value.error.as_deref()) {
         (Some(result), None) => {
             request.validate_result(&result)?;
@@ -282,13 +325,24 @@ fn wire_error() -> ManagedDesktopError {
 async fn line(
     stream: &mut cognia_e2b::envd::ProcessStream,
     pending: &mut Vec<u8>,
+    transfer_limit: Option<u64>,
 ) -> Result<Vec<u8>> {
     loop {
+        if let Some(limit) = transfer_limit {
+            transferred((pending.len() as u64).min(limit));
+        }
         if let Some(end) = pending.iter().position(|b| *b == b'\n') {
             return Ok(pending.drain(..=end).collect());
         }
         match stream.next_event().await.map_err(|_| wire_error())? {
-            Some(ProcessEvent::Stdout(bytes)) if pending.len() + bytes.len() <= FRAME_BYTES => {
+            Some(ProcessEvent::Stdout(bytes)) => {
+                let received = pending.len().saturating_add(bytes.len());
+                if let Some(limit) = transfer_limit {
+                    transferred((received as u64).min(limit));
+                }
+                if received > FRAME_BYTES {
+                    return Err(wire_error());
+                }
                 pending.extend(bytes)
             }
             Some(ProcessEvent::Keepalive) => (),
@@ -329,14 +383,22 @@ pub(super) async fn execute(
             .await
             .map_err(|_| wire_error())?;
         let mut pending = Vec::new();
-        let ready: Ready = serde_json::from_slice(&line(&mut stream, &mut pending).await?)
+        let ready: Ready = serde_json::from_slice(&line(&mut stream, &mut pending, None).await?)
             .map_err(|_| wire_error())?;
         validate_admission(&ready, &boundary.observation)?;
         let mut bytes = serde_json::to_vec(request).map_err(|_| wire_error())?;
         bytes.push(b'\n');
         admission()?;
+        // SendInput can reach guest stdin before its HTTP acknowledgement.
+        // Retain the input payload when that acknowledgement is ambiguous.
+        match request {
+            GuestOperation::FileWrite { chunk, .. } => transferred(chunk.len() as u64),
+            GuestOperation::ClipboardSet { text } => transferred(text.len() as u64),
+            _ => (),
+        }
         input.send(&bytes).await.map_err(|_| wire_error())?;
-        let answer = line(&mut stream, &mut pending).await?;
+        let answer = line(&mut stream, &mut pending, Some(request.reservation())).await?;
+        let result = response(&answer, request);
         input.close().await.map_err(|_| wire_error())?;
         // Exit confirms worker/descendant teardown. A content response alone
         // must never clear the durable uncertainty quarantine.
@@ -350,7 +412,7 @@ pub(super) async fn execute(
                 _ => return Err(wire_error()),
             }
         }
-        response(&answer, request)
+        result
     };
     tokio::time::timeout(Duration::from_secs(75), work)
         .await
@@ -359,6 +421,20 @@ pub(super) async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn decoded_payload_is_charged_before_protocol_validation_and_refusals_refund_reads() {
+        let progress = std::sync::Arc::new(TransferProgress::default());
+        TRANSFER_PROGRESS.scope(progress.clone(), async {
+            let request = GuestOperation::FileRead { path: "/home/cua/a".into(), offset: 0, length: 1 };
+            assert!(response(br#"{"result":{"kind":"file-read","chunk":[1,2],"eof":false},"error":null,"audit":{}}"#, &request).is_err());
+            assert_eq!(progress.bytes(), 1);
+            assert!(response(br#"{"result":null,"error":"operation_refused","audit":{}}"#, &request).is_err());
+            assert_eq!(progress.bytes(), 0);
+            let write = GuestOperation::FileWrite { path: "/home/cua/a".into(), offset: 0, chunk: vec![1; CHUNK_BYTES], r#final: true };
+            assert!(response(br#"{"result":{"kind":"file-write","bytes":0,"final":true},"error":null,"audit":{}}"#, &write).is_err());
+            assert_eq!(progress.bytes(), CHUNK_BYTES as u64);
+        }).await;
+    }
     #[test]
     fn operation_admission_accepts_the_helper_and_refuses_changed_namespace_or_init() {
         use cognia_desktop_guest::observation::{

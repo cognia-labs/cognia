@@ -282,6 +282,8 @@ pub struct NativeInput {
     pub frame_id: String,
 }
 pub const MAX_INPUT_BYTES: usize = 32 * 1024;
+/// Bound teardown even when the owning provider stops responding.
+const INPUT_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Clone, Debug)]
 pub struct NativeInputError {
     pub error: RemoteDesktopError,
@@ -308,11 +310,12 @@ impl NativeInputError {
             "managed_desktop_control_input_limit" | "managed_desktop_invalid_request" => {
                 Self::refused("remote_desktop_input_invalid")
             }
-            "managed_desktop_control_policy_denied"
-            | "managed_desktop_control_target_unverified"
-            | "managed_desktop_control_policy_changed"
+            "managed_desktop_control_target_unverified"
             | "managed_desktop_control_policy_unavailable"
-            | "managed_desktop_control_kill_switch" => {
+            | "managed_desktop_control_kill_switch" => Self::fatal(RemoteDesktopError::new(
+                "remote_desktop_input_policy_denied",
+            )),
+            "managed_desktop_control_policy_denied" | "managed_desktop_control_policy_changed" => {
                 Self::refused("remote_desktop_input_policy_denied")
             }
             "managed_desktop_control_consent_denied"
@@ -334,12 +337,13 @@ impl NativeInputError {
 /// Length-delimited UTF-8 JSON survives relay chunks and WebSocket boundaries.
 pub async fn read_input(
     reader: &mut (impl tokio::io::AsyncRead + Unpin),
-) -> NativeInputResult<NativeInput> {
+) -> NativeInputResult<Option<NativeInput>> {
     use tokio::io::AsyncReadExt;
-    let size = reader
-        .read_u32()
-        .await
-        .map_err(|_| NativeInputError::fatal(invalid()))? as usize;
+    let size = match reader.read_u32().await {
+        Ok(size) => size as usize,
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(_) => return Err(NativeInputError::fatal(invalid())),
+    };
     if size > MAX_INPUT_BYTES {
         return Err(NativeInputError::fatal(invalid()));
     }
@@ -355,7 +359,7 @@ pub async fn read_input(
         .map_err(|_| NativeInputError::refused("remote_desktop_input_invalid"))?;
     uuid::Uuid::parse_str(&input.frame_id)
         .map_err(|_| NativeInputError::refused("remote_desktop_input_invalid"))?;
-    Ok(input)
+    Ok(Some(input))
 }
 /// One already-acquired owner lease. Implementations re-admit each operation
 /// and call the same control entry points used by the local viewer.
@@ -388,6 +392,7 @@ impl NativeInputLease {
         let (closed, mut closing) = watch::channel(());
         tokio::spawn(async move {
             let mut renew = tokio::time::interval(Duration::from_secs(5));
+            renew.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             renew.tick().await;
             'worker: loop {
                 tokio::select! {
@@ -425,7 +430,14 @@ impl NativeInputLease {
                     _ = closing.changed() => break,
                 }
             }
-            let _ = done.send(Some(sink.release().await));
+            let result = tokio::time::timeout(INPUT_RELEASE_TIMEOUT, sink.release())
+                .await
+                .unwrap_or_else(|_| {
+                    Err(RemoteDesktopError::new(
+                        "remote_desktop_control_release_timeout",
+                    ))
+                });
+            let _ = done.send(Some(result));
         });
         Self {
             fence,
@@ -802,6 +814,56 @@ async fn poll(weak: Weak<Poller>) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[tokio::test]
+    async fn input_eof_on_length_prefix_is_clean_but_truncated_payload_is_fatal() {
+        for bytes in [&b""[..], &b"\0"[..], &b"\0\0\0"[..]] {
+            assert!(read_input(&mut &*bytes).await.unwrap().is_none());
+        }
+        assert!(read_input(&mut &b"\0\0\0\x01"[..]).await.unwrap_err().fatal);
+    }
+    #[test]
+    fn managed_global_policy_failures_end_control_but_input_denials_do_not() {
+        for code in [
+            "managed_desktop_control_kill_switch",
+            "managed_desktop_control_policy_unavailable",
+            "managed_desktop_control_target_unverified",
+        ] {
+            assert!(NativeInputError::managed(code).fatal, "{code}");
+        }
+        for code in [
+            "managed_desktop_control_stale_frame",
+            "managed_desktop_control_policy_denied",
+            "managed_desktop_control_policy_changed",
+        ] {
+            assert!(!NativeInputError::managed(code).fatal, "{code}");
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn stalled_release_publishes_a_timeout() {
+        struct Sink;
+        impl NativeInputSink for Sink {
+            fn fence(&self) -> u64 {
+                1
+            }
+            fn input(&self, _: NativeInput) -> NativeInputFuture {
+                Box::pin(async { Ok(()) })
+            }
+            fn renew(&self) -> FrameFuture<()> {
+                Box::pin(async { Ok(()) })
+            }
+            fn release(&self) -> FrameFuture<()> {
+                Box::pin(std::future::pending())
+            }
+        }
+        let lease = NativeInputLease::new(Arc::new(Sink));
+        let mut done = lease.released.clone();
+        drop(lease);
+        done.wait_for(|value| value.is_some()).await.unwrap();
+        assert_eq!(
+            done.borrow().as_ref().unwrap().as_ref().unwrap_err().code,
+            "remote_desktop_control_release_timeout"
+        );
+    }
     #[tokio::test]
     async fn bounded_bad_inputs_preserve_boundaries_and_oversized_input_is_fatal() {
         use tokio::io::AsyncWriteExt;

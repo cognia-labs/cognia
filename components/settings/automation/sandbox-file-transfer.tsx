@@ -203,7 +203,7 @@ function SandboxFileTransferSession({
             )
             if (
               answer.kind !== "file-read" ||
-              answer.chunk.length > 64 * 1024 ||
+              answer.chunk.length > Math.min(64 * 1024, MAX_SANDBOX_TRANSFER_BYTES - length) ||
               answer.chunk.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
             )
               throw new Error("managed_desktop_operation_protocol")

@@ -22,9 +22,22 @@ const SRC_DIR = __dirname
  * checked out. Pin it here so the failure is local and immediate.
  */
 describe("standalone resolution", () => {
-  const sources = readdirSync(SRC_DIR).filter(
-    (f) => (f.endsWith(".ts") || f.endsWith(".tsx")) && !f.includes(".test.")
-  )
+  function sourcesIn(directory: string): string[] {
+    return readdirSync(join(SRC_DIR, directory), { withFileTypes: true }).flatMap((entry) => {
+      const path = join(directory, entry.name)
+      return entry.isDirectory()
+        ? sourcesIn(path)
+        : /\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")
+          ? [path]
+          : []
+    })
+  }
+  const sources = sourcesIn("")
+
+  it("includes nested remote desktop modules in the import guards", () => {
+    expect(sources).toContain(join("remote-desktop-touch", "touch-controls.tsx"))
+    expect(sources).toContain(join("remote-desktop-touch", "touch-input.ts"))
+  })
 
   it("ships more than just the barrel", () => {
     expect(sources.length).toBeGreaterThan(5)

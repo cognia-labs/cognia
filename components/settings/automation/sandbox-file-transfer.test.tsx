@@ -352,7 +352,7 @@ test("managed transfer remains visible and labelled disabled before recipe-8 qua
   render(managedPanel(false))
   expect(screen.getByRole("button", { name: "Choose file and upload" })).toBeDisabled()
   expect(screen.getByRole("button", { name: "Download file" })).toBeDisabled()
-  expect(screen.getByText(/require current recipe-8 qualification/)).toBeInTheDocument()
+  expect(screen.getByText(/passes qualification for desktop release recipe 8/)).toBeInTheDocument()
   expect(openManagedDesktop).not.toHaveBeenCalled()
 })
 test("managed upload and download require the exact holder and use chunk RPCs", async () => {
@@ -418,4 +418,24 @@ test("revocation while a managed renewal waits prevents sending the next chunk",
   expect(session.release).toHaveBeenCalledWith(
     expect.objectContaining({ token: lease.token, fence: lease.fence })
   )
+})
+
+test.each([
+  ["wrong result", { kind: "clipboard-get", text: "wrong result" }],
+  ["invalid byte", { kind: "file-read", chunk: [256], eof: true }],
+  ["fractional byte", { kind: "file-read", chunk: [0.5], eof: true }],
+  ["oversized chunk", { kind: "file-read", chunk: new Array(65537).fill(0), eof: true }],
+  ["empty without EOF", { kind: "file-read", chunk: [], eof: false }],
+])("managed download refuses %s", async (_, answer) => {
+  const { session } = managedSession()
+  session.readChunk.mockResolvedValue(answer as never)
+  render(managedPanel())
+  fireEvent.change(screen.getByLabelText("File path inside the sandbox"), {
+    target: { value: "/home/cua/binary.dat" },
+  })
+  fireEvent.click(screen.getByRole("button", { name: "Download file" }))
+  expect(await screen.findByRole("alert")).toBeInTheDocument()
+  expect(saver).not.toHaveBeenCalled()
+  expect(session.readChunk).toHaveBeenCalledTimes(1)
+  await waitFor(() => expect(session.release).toHaveBeenCalled())
 })

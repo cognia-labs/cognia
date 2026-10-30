@@ -236,7 +236,7 @@ function RemoteDesktopSectionForHost({
                         disabled={!binding.enabled || (selkies && remote)}
                         onClick={() => setNative({ target, selkies })}
                       >
-                        {t("section.openViewOnly")}
+                        {t("native.open")}
                       </Button>
                     </div>
                   )

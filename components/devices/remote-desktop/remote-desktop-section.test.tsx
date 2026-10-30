@@ -125,13 +125,13 @@ describe("RemoteDesktopSection", () => {
       <RemoteDesktopSection host={{ kind: "remote", hostRef }} deps={deps} />
     )
     const { rerender } = render(section("first"))
-    await userEvent.click(await screen.findByRole("button", { name: "View only" }))
+    await userEvent.click(await screen.findByRole("button", { name: "Open desktop" }))
     expect(screen.getByRole("region", { name: "Native viewer" })).toBeInTheDocument()
     rerender(section("first"))
     expect(screen.getByRole("region", { name: "Native viewer" })).toBeInTheDocument()
     rerender(section("second"))
     expect(screen.queryByRole("region", { name: "Native viewer" })).toBeNull()
-    expect(await screen.findByRole("button", { name: "View only" })).toBeEnabled()
+    expect(await screen.findByRole("button", { name: "Open desktop" })).toBeEnabled()
   })
   it("lists both native kinds as labelled read-only rows without a plugin", async () => {
     const native = (id: string, provider: "docker" | "e2b") =>
@@ -148,6 +148,7 @@ describe("RemoteDesktopSection", () => {
             providerId: "cognia-frames",
             endpoint: null,
             hasViewCredential: false,
+            viewOnly: false,
           }),
         ],
       })
@@ -164,8 +165,8 @@ describe("RemoteDesktopSection", () => {
     expect(screen.getAllByText("Managed by its owning service")).toHaveLength(2)
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
-    expect(screen.getAllByRole("button", { name: "View only" })).toHaveLength(2)
-    expect(screen.getAllByRole("button", { name: "View only" })[0]).toBeEnabled()
+    expect(screen.getAllByRole("button", { name: "Open desktop" })).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: "Open desktop" })[0]).toBeEnabled()
   })
   it("explains an empty list and offers to add one", async () => {
     registerVnc()

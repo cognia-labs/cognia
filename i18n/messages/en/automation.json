@@ -611,7 +611,7 @@
     "workspaceHostPath": "Host directory to mount",
     "workspaceMountHelp": "Both are needed together. Without a mount, shell and file work inside the machine cannot reach any host path.",
     "desktopViewer": {
-      "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+      "operationsDormant": "Files, clipboard and shell turn on after this configuration passes qualification for desktop release recipe 8 on this Host.",
       "clipboardTitle": "Clipboard",
       "clipboardHelp": "Transfer text manually (up to 1 MiB). Each action takes exclusive control.",
       "clipboardText": "Clipboard text",
@@ -684,8 +684,8 @@
     "deleteConfirm": "Delete permanently",
     "deleting": "Deleting…",
     "fileTransfer": {
-      "managedHelp": "Upload or download one binary file up to {limit} MiB within /home/cua. Uploads replace the selected file. Each transfer takes exclusive control.",
-      "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+      "managedHelp": "Upload or download one binary file up to {limit} MiB within the desktop's home folder (/home/cua). Uploads replace the selected file. Each transfer takes exclusive control.",
+      "operationsDormant": "Files, clipboard and shell turn on after this configuration passes qualification for desktop release recipe 8 on this Host.",
       "title": "Files",
       "help": "Upload or download one binary file up to {limit} MiB. Uploads use an existing folder and never overwrite a file. Uploading releases manual desktop control.",
       "missingContainer": "Refresh the connection health to identify its container before transferring files.",

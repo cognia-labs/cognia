@@ -931,6 +931,14 @@ pub(super) mod enablement_tests {
             let readable: QualificationReceipt = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(readable.template.recipe_revision, "7");
             let report = &state.workload_diagnostics[&f.config.binding_digest()].report;
+            assert!(
+                report.operations.is_some(),
+                "fixture includes the operations report"
+            );
+            assert!(
+                !operations_current(&state, &f.config, now),
+                "recipe 7 cannot qualify operations even with a report"
+            );
             let mut legacy = serde_json::to_value(report).unwrap();
             legacy["reportVersion"] = 2.into();
             legacy.as_object_mut().unwrap().remove("operations");

@@ -138,7 +138,7 @@ test("qualified workspace routes to the exact managed id and passes the grantee 
     target: { kind: "local" },
     delegationId: "grant",
     agentControl: true,
-    ...{ operationsQualified: true },
+    operationsQualified: true,
   }
   const adapter = buildE2bSandboxAdapter(
     source,
@@ -181,7 +181,7 @@ test("managed workspace refuses stale Host truth and unattested execution policy
     target: { kind: "local" },
     delegationId: "grant",
     agentControl: true,
-    ...{ operationsQualified: false },
+    operationsQualified: false,
   }
   const ctx = { ...source, connectionId: source.id }
   const unavailable = buildE2bSandboxAdapter(
@@ -195,7 +195,7 @@ test("managed workspace refuses stale Host truth and unattested execution policy
   await expect(unavailable.workspaceExec!(ctx, { argv: ["id"] })).rejects.toMatchObject({
     code: "provider-unqualified",
   })
-  source.config = { ...source.config, ...{ operationsQualified: true } }
+  source.config = { ...source.config, operationsQualified: true }
   const adapter = buildE2bSandboxAdapter(source, {}, { managedAgent: { sessionKey: "session" } })
   await expect(
     adapter.workspaceExec!(ctx, { argv: ["cat"], stdin: "normal file write" })
@@ -232,7 +232,9 @@ test("managed exec attests nested cwd and fixed VM shape before dispatch", async
     target: { kind: "local" },
     delegationId: "grant",
     agentControl: true,
-    ...{ operationsQualified: true, cpuCount: 2, memoryMb: 2048 },
+    operationsQualified: true,
+    cpuCount: 2,
+    memoryMb: 2048,
   }
   const adapter = buildE2bSandboxAdapter(source, {}, { managedAgent: { sessionKey: "session" } })
   const ctx = { ...source, connectionId: source.id }

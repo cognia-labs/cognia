@@ -1,5 +1,5 @@
 {
-  "operationsDormant": "Files, clipboard and shell require current recipe-8 qualification on this Host.",
+  "operationsDormant": "Files, clipboard and shell turn on after this configuration passes qualification for desktop release recipe 8 on this Host.",
   "alerts": {
     "pastDeadline": {
       "title": "A cloud desktop outlived its deadline",

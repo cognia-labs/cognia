@@ -352,10 +352,12 @@ impl Broker {
             .await
             .map_err(|_| RemoteDesktopError::new("remote_desktop_control_busy"))?
             .map_err(|_| RemoteDesktopError::new("remote_desktop_control_busy"))?;
-            release
-                .borrow()
-                .clone()
-                .ok_or_else(|| RemoteDesktopError::new("remote_desktop_control_busy"))??;
+            if let Some(Err(error)) = release.borrow().as_ref() {
+                log::warn!(
+                    "native controller release completed with error: {}",
+                    error.code
+                );
+            }
         }
         Ok(())
     }
@@ -646,6 +648,39 @@ mod tests {
         panic!("expected {count} sessions, have {}", broker.session_count());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn native_preemption_waits_for_completion_but_accepts_a_release_error() {
+        for completed in [false, true] {
+            let broker = Arc::new(Broker::default());
+            let opened = broker
+                .commit(
+                    admission(&broker, "sandbox:a", SessionMode::Control, false),
+                    bridge(Attachment::Remote).await,
+                )
+                .unwrap();
+            let (done, release) = watch::channel(if completed {
+                Some(Err(RemoteDesktopError::new(
+                    "remote_desktop_native_unavailable",
+                )))
+            } else {
+                None
+            });
+            broker
+                .state
+                .lock()
+                .sessions
+                .get_mut(&opened.session_id)
+                .unwrap()
+                .native_release = Some(release);
+            let result = broker.preempt_native_control("sandbox:a").await;
+            if completed {
+                result.unwrap();
+            } else {
+                assert_eq!(result.unwrap_err().code, "remote_desktop_control_busy");
+            }
+            drop(done);
+        }
+    }
     #[tokio::test]
     async fn one_controller_many_viewers_and_takeover_preempts() {
         let broker = Arc::new(Broker::default());

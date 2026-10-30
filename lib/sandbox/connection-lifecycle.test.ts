@@ -441,7 +441,7 @@ test("managed workspace dispatch includes configuration for the provider-neutral
   expect(result.contents).toBe("content")
   await expect(
     runSandboxConnectionOperation(
-      { ...source, config: { ...config, ...{ operationsQualified: false } } },
+      { ...source, config: { ...config, operationsQualified: false } },
       "workspaceRead",
       { path: "/home/cua/file" }
     )

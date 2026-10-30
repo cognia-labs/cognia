@@ -473,6 +473,17 @@ impl CuaSandboxRegistry {
         bytes: Option<Vec<u8>>,
         expected_hash: Option<String>,
     ) -> Result<super::file_transfer::SandboxFileDownload> {
+        self.managed_file_bounded(connection_id, path, bytes, expected_hash, None)
+            .await
+    }
+    async fn managed_file_bounded(
+        &self,
+        connection_id: &str,
+        path: &str,
+        bytes: Option<Vec<u8>>,
+        expected_hash: Option<String>,
+        max_bytes: Option<usize>,
+    ) -> Result<super::file_transfer::SandboxFileDownload> {
         let (id, generation) = managed_target(connection_id)?;
         let service = MANAGED_SERVICE
             .read()
@@ -480,18 +491,36 @@ impl CuaSandboxRegistry {
             .and_then(std::sync::Weak::upgrade)
             .ok_or_else(|| backend_err("managed_desktop_host_unavailable"))?;
         let (session, character) = crate::automation::cua_route::agent_identity();
-        service
-            .agent_file_transfer(
-                id,
-                generation,
-                session,
-                character,
-                path,
-                bytes,
-                expected_hash,
-            )
-            .await
-            .map_err(|e| AutomationError::PermissionDenied { reason: e.code })
+        let result = match max_bytes {
+            Some(limit) => {
+                service
+                    .agent_file_transfer_bounded(
+                        id,
+                        generation,
+                        session,
+                        character,
+                        path,
+                        bytes,
+                        expected_hash,
+                        Some(limit),
+                    )
+                    .await
+            }
+            None => {
+                service
+                    .agent_file_transfer(
+                        id,
+                        generation,
+                        session,
+                        character,
+                        path,
+                        bytes,
+                        expected_hash,
+                    )
+                    .await
+            }
+        };
+        result.map_err(|e| AutomationError::PermissionDenied { reason: e.code })
     }
     /// Binary agent write through the same WP8 identity and desktop guard.
     pub async fn write_file(
@@ -533,9 +562,12 @@ impl CuaSandboxRegistry {
         timeout: Duration,
     ) -> Result<ExecOutcome> {
         if connection_id.starts_with("managed:") {
-            use super::managed::operations::{GuestOperation, GuestOperationResult};
+            use super::managed::operations::GuestOperation;
             if !env.is_empty() || stdin.is_some() {
                 return Err(backend_err("managed_desktop_exec_env_stdin_unsupported"));
+            }
+            if timeout > Duration::from_secs(60) {
+                return Err(backend_err("managed_desktop_exec_timeout_limit"));
             }
             let started = std::time::Instant::now();
             let result = self
@@ -544,38 +576,11 @@ impl CuaSandboxRegistry {
                     GuestOperation::Exec {
                         argv: argv.into(),
                         cwd: cwd.unwrap_or("/home/cua").into(),
-                        timeout_ms: timeout.as_millis().min(60_000) as u64,
+                        timeout_ms: timeout.as_millis() as u64,
                     },
                 )
                 .await?;
-            if let GuestOperationResult::Exec {
-                output,
-                truncated,
-                timed_out,
-                exit_code,
-                signal,
-            } = result
-            {
-                let mut stdout = String::from_utf8_lossy(&output).into_owned();
-                let expanded = stdout.len() > super::managed::operations::TEXT_BYTES;
-                if expanded {
-                    let mut end = super::managed::operations::TEXT_BYTES;
-                    while !stdout.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    stdout.truncate(end);
-                }
-                return Ok(ExecOutcome {
-                    exit_code: exit_code.unwrap_or_else(|| 128 + signal.unwrap_or(0)),
-                    stdout,
-                    stderr: String::new(),
-                    duration_ms: started.elapsed().as_millis() as u64,
-                    timed_out,
-                    stdout_truncated: truncated || expanded,
-                    stderr_truncated: false,
-                });
-            }
-            return Err(backend_err("managed_desktop_operation_protocol"));
+            return managed_exec_outcome(result, started.elapsed());
         }
         require_unmanaged(connection_id)?;
         let mut desktop = self.agent_guard(connection_id).await?;
@@ -606,7 +611,9 @@ impl CuaSandboxRegistry {
             if max_bytes == 0 || max_bytes > super::file_transfer::MAX_TRANSFER_BYTES {
                 return Err(backend_err("managed_desktop_operation_limit"));
             }
-            let result = self.managed_file(connection_id, path, None, None).await?;
+            let result = self
+                .managed_file_bounded(connection_id, path, None, None, Some(max_bytes))
+                .await?;
             let bytes = super::file_transfer::decode_bytes(&result.data_base64)?;
             if bytes.len() > max_bytes {
                 return Err(backend_err("managed_desktop_file_limit"));
@@ -619,6 +626,43 @@ impl CuaSandboxRegistry {
         desktop.require_quiescent()?;
         let (_, state) = self.require_running(connection_id).await?;
         docker_read_file(&state.id, path, max_bytes, state.exec_user.as_deref()).await
+    }
+
+    /// Command routing lives here so managed hashes and generation checks are
+    /// exercised without enabling Tauri's command macro.
+    pub async fn upload_file_with_hash(
+        &self,
+        connection_id: &str,
+        expected_container_id: &str,
+        token: &str,
+        path: &str,
+        data_base64: &str,
+        expected_hash: Option<&str>,
+    ) -> Result<super::file_transfer::SandboxFileInfo> {
+        if connection_id.starts_with("managed:") {
+            if expected_container_id != connection_id {
+                return Err(backend_err("managed_desktop_stale_generation"));
+            }
+            return self
+                .write_file(
+                    connection_id,
+                    path,
+                    &super::file_transfer::decode_bytes(data_base64)?,
+                    expected_hash,
+                )
+                .await;
+        }
+        if expected_hash.is_some() {
+            return Err(backend_err("managed_desktop_invalid_target"));
+        }
+        self.upload_file(
+            connection_id,
+            expected_container_id,
+            token,
+            path,
+            data_base64,
+        )
+        .await
     }
 
     pub async fn upload_file(
@@ -924,6 +968,40 @@ impl CuaSandboxRegistry {
     }
 }
 
+fn managed_exec_outcome(
+    result: super::managed::operations::GuestOperationResult,
+    elapsed: Duration,
+) -> Result<ExecOutcome> {
+    if let super::managed::operations::GuestOperationResult::Exec {
+        output,
+        truncated,
+        timed_out,
+        exit_code,
+        signal,
+    } = result
+    {
+        let mut stdout = String::from_utf8_lossy(&output).into_owned();
+        let expanded = stdout.len() > super::managed::operations::TEXT_BYTES;
+        if expanded {
+            let mut end = super::managed::operations::TEXT_BYTES;
+            while !stdout.is_char_boundary(end) {
+                end -= 1;
+            }
+            stdout.truncate(end);
+        }
+        return Ok(ExecOutcome {
+            exit_code: exit_code.unwrap_or_else(|| 128 + signal.unwrap_or(0)),
+            stdout,
+            stderr: String::new(),
+            duration_ms: elapsed.as_millis() as u64,
+            timed_out,
+            stdout_truncated: truncated || expanded,
+            stderr_truncated: false,
+        });
+    }
+    Err(backend_err("managed_desktop_operation_protocol"))
+}
+
 fn verify_transfer_identity(expected: &str, actual: &str) -> Result<()> {
     if expected != actual {
         return Err(backend_err(
@@ -987,6 +1065,200 @@ fn stable_hash_suffix(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn managed_exec_bounds_lossy_utf8_and_converts_signals_and_protocol_errors() {
+        use super::super::managed::operations::{GuestOperationResult as Reply, TEXT_BYTES};
+        let result = managed_exec_outcome(
+            Reply::Exec {
+                output: vec![255; TEXT_BYTES],
+                truncated: false,
+                timed_out: false,
+                exit_code: None,
+                signal: Some(9),
+            },
+            Duration::ZERO,
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, 137);
+        assert!(result.stdout_truncated);
+        assert_eq!(result.stdout.len(), TEXT_BYTES - TEXT_BYTES % 3);
+        assert!(result.stdout.chars().all(|c| c == '\u{fffd}'));
+        assert!(managed_exec_outcome(
+            Reply::ClipboardGet {
+                text: String::new()
+            },
+            Duration::ZERO
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("managed_desktop_operation_protocol"));
+    }
+    #[tokio::test]
+    async fn managed_limits_generation_and_upload_hash_routing_refuse_before_dispatch() {
+        let registry = CuaSandboxRegistry::default();
+        for size in [0, super::super::file_transfer::MAX_TRANSFER_BYTES + 1] {
+            assert!(registry
+                .read_file("managed:desktop:1", "/home/cua/a", size)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("managed_desktop_operation_limit"));
+        }
+        assert!(registry
+            .exec(
+                "managed:desktop:1",
+                &["true".into()],
+                None,
+                &BTreeMap::new(),
+                None,
+                Duration::from_secs(61)
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed_desktop_exec_timeout_limit"));
+        assert!(registry
+            .upload_file(
+                "managed:desktop:1",
+                "managed:desktop:2",
+                "",
+                "/home/cua/a",
+                ""
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed_desktop_stale_generation"));
+        assert!(registry
+            .download_file("managed:desktop:1", "managed:desktop:2", "/home/cua/a")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed_desktop_stale_generation"));
+        assert!(registry
+            .upload_file_with_hash(
+                "managed:desktop:1",
+                "managed:desktop:2",
+                "",
+                "/home/cua/a",
+                "invalid",
+                Some("hash")
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed_desktop_stale_generation"));
+        assert!(registry
+            .upload_file_with_hash("docker", "docker", "", "/home/cua/a", "", Some("hash"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("managed_desktop_invalid_target"));
+    }
+    #[tokio::test]
+    async fn managed_reads_stop_at_max_bytes_and_hash_upload_uses_the_same_channel() {
+        use super::super::managed::{
+            operations::{GuestOperation as Op, GuestOperationResult as Reply, FILE_BYTES},
+            service::control::workspace_test_fixture,
+        };
+        let lengths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = lengths.clone();
+        let (directory, service, row) =
+            workspace_test_fixture(Arc::new(move |request, admission| {
+                let lengths = observed.clone();
+                Box::pin(async move {
+                    admission()?;
+                    match request {
+                        Op::FileRead { path, length, .. } => {
+                            lengths.lock().unwrap().push(length);
+                            if path.ends_with("hashed") {
+                                Ok(Reply::FileRead {
+                                    chunk: b"x".to_vec(),
+                                    eof: true,
+                                })
+                            } else {
+                                Ok(Reply::FileRead {
+                                    chunk: vec![
+                                        if path.ends_with("binary") { 255 } else { b'x' };
+                                        length
+                                    ],
+                                    eof: false,
+                                })
+                            }
+                        }
+                        Op::FileWrite { chunk, r#final, .. } => Ok(Reply::FileWrite {
+                            bytes: chunk.len(),
+                            r#final,
+                        }),
+                        _ => unreachable!(),
+                    }
+                })
+            }))
+            .await;
+        // Keep this test's service local to the current task; other registry
+        // tests deliberately fail before looking up the installed service.
+        install_managed_agent_service(Some(&service));
+        let id = format!("managed:{}:{}", row.id, row.generation);
+        let registry = CuaSandboxRegistry::default();
+        crate::automation::cua_route::with_agent_identity(Some("session".into()), None, async {
+            assert_eq!(
+                registry
+                    .read_file(&id, "/home/cua/large", 1024)
+                    .await
+                    .unwrap()
+                    .len(),
+                1024
+            );
+            assert_eq!(*lengths.lock().unwrap(), vec![1024]);
+            assert!(registry
+                .read_file(&id, "/home/cua/binary", 1)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("managed_desktop_file_not_utf8"));
+            assert!(registry
+                .read_file(&id, "/home/cua/large", FILE_BYTES)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("managed_desktop_file_limit"));
+            let wrong_hash = "0".repeat(64);
+            assert!(registry
+                .upload_file_with_hash(&id, &id, "", "/home/cua/hashed", "eA==", Some(&wrong_hash))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("managed_desktop_file_changed"));
+            let correct_hash = super::super::file_transfer::sha256(b"x");
+            assert_eq!(
+                registry
+                    .upload_file_with_hash(
+                        &id,
+                        &id,
+                        "",
+                        "/home/cua/hashed",
+                        "eA==",
+                        Some(&correct_hash)
+                    )
+                    .await
+                    .unwrap()
+                    .size,
+                1
+            );
+            // An empty write without a hash still uses the managed route.
+            assert_eq!(
+                registry
+                    .upload_file_with_hash(&id, &id, "", "/home/cua/new", "", None)
+                    .await
+                    .unwrap()
+                    .size,
+                0
+            );
+        })
+        .await;
+        install_managed_agent_service(None);
+        drop((directory, service));
+    }
     #[test]
     fn transfers_reject_a_replaced_container_identity() {
         assert!(verify_transfer_identity(&"a".repeat(64), &"b".repeat(64)).is_err());

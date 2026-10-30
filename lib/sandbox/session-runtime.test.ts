@@ -128,7 +128,7 @@ describe("managed desktop placement", () => {
     const deps = createDeps()
     const source = managedRow()
     if (source.config.provider !== "e2b") throw new Error("fixture")
-    source.config = { ...source.config, ...{ operationsQualified: true } }
+    source.config = { ...source.config, operationsQualified: true }
     source.capabilities = { ...source.capabilities, workspaceExec: true, workspaceRead: true }
     deps.getConnection.mockResolvedValue(source)
     const runtime = new SandboxSessionRuntime(deps)
@@ -170,7 +170,7 @@ describe("managed desktop placement", () => {
   it("serves normal agent file writes through typed managed transfers with frozen grantee and hash", async () => {
     const deps = createDeps()
     const source = managedRow()
-    source.config = { ...source.config, ...{ operationsQualified: true } }
+    source.config = { ...source.config, operationsQualified: true }
     source.capabilities = { ...source.capabilities, workspaceExec: true, workspaceRead: true }
     deps.getConnection.mockResolvedValue(source)
     const runtime = new SandboxSessionRuntime(deps)
@@ -239,7 +239,7 @@ describe("managed desktop placement", () => {
     expect(localTransport.call).not.toHaveBeenCalled()
     deps.getConnection.mockResolvedValue({
       ...source,
-      config: { ...source.config, ...{ operationsQualified: false } },
+      config: { ...source.config, operationsQualified: false },
     })
     await expect(
       runtime.fileOperation(ref, { kind: "write", path: metadata.path, content: "abc" })
@@ -259,7 +259,7 @@ describe("managed desktop placement", () => {
   it("enforces frozen read and write ceilings even when a typed file caller skips clampRequest", async () => {
     const deps = createDeps()
     const row = managedRow()
-    row.config = { ...row.config, ...{ operationsQualified: true } }
+    row.config = { ...row.config, operationsQualified: true }
     row.capabilities = { ...row.capabilities, workspaceRead: true, workspaceExec: true }
     deps.getConnection.mockResolvedValue(row)
     const runtime = new SandboxSessionRuntime(deps)

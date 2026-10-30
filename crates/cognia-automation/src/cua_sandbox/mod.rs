@@ -404,36 +404,14 @@ pub async fn cua_sandbox_upload_file(
     character_id: Option<String>,
     expected_hash: Option<String>,
 ) -> std::result::Result<file_transfer::SandboxFileInfo, String> {
-    let operation = async {
-        if connection_id.starts_with("managed:") {
-            if expected_container_id != connection_id {
-                return Err(crate::automation::types::AutomationError::BackendError {
-                    message: "managed_desktop_stale_generation".into(),
-                });
-            }
-            reg.write_file(
-                &connection_id,
-                &path,
-                &file_transfer::decode_bytes(&data_base64)?,
-                expected_hash.as_deref(),
-            )
-            .await
-        } else {
-            if expected_hash.is_some() {
-                return Err(crate::automation::types::AutomationError::BackendError {
-                    message: "managed_desktop_invalid_target".into(),
-                });
-            }
-            reg.upload_file(
-                &connection_id,
-                &expected_container_id,
-                &token,
-                &path,
-                &data_base64,
-            )
-            .await
-        }
-    };
+    let operation = reg.upload_file_with_hash(
+        &connection_id,
+        &expected_container_id,
+        &token,
+        &path,
+        &data_base64,
+        expected_hash.as_deref(),
+    );
     crate::automation::cua_route::with_agent_identity(session_key, character_id, operation)
         .await
         .map_err(|e| e.to_string())

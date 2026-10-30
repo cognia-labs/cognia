@@ -158,7 +158,8 @@ impl RemoteTarget {
             endpoint: None,
             console: None,
             launch: None,
-            view_only: true,
+            // Control is admitted by the broker's host.admin gate.
+            view_only: false,
             config: Value::Null,
             has_control_credential: false,
             has_view_credential: false,

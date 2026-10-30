@@ -675,3 +675,32 @@ test("each configuration gets its own runs and a finished run reloads receipts",
   onRuns([run("a", "byo", "passed")])
   await waitFor(() => expect(api.listConfigs).toHaveBeenCalledTimes(reads + 1))
 })
+
+test.each([false, true])(
+  "operations dormancy notice reflects qualification: %s",
+  async (operationsQualified) => {
+    api.listConfigs.mockResolvedValue([{ ...config, operationsQualified }])
+    api.list.mockResolvedValue([
+      {
+        id: "desktop",
+        providerConfigId: "byo",
+        generation: 1,
+        state: "running",
+        deadlineAt: Date.now() + 60000,
+        idleTimeoutSeconds: 600,
+        createdAt: 1,
+        updatedAt: 1,
+        cleanupAttempts: 0,
+        qualification: "qualified",
+      },
+    ])
+    const { container } = renderSettings()
+    await screen.findByRole("button", { name: messages.openDesktop })
+    const notice = container.querySelector('[data-dormant="managed-desktop-operations"]')
+    if (operationsQualified) expect(notice).toBeNull()
+    else {
+      expect(notice).toBeVisible()
+      expect(notice).toHaveTextContent(messages.operationsDormant)
+    }
+  }
+)

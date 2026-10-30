@@ -611,7 +611,7 @@
     "workspaceHostPath": "要挂载的宿主目录",
     "workspaceMountHelp": "两项必须同时填写。不挂载目录，机器内的 shell 与文件操作就无法访问任何宿主路径。",
     "desktopViewer": {
-      "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
+      "operationsDormant": "此配置在此 Host 上通过桌面发布配方 8 的验证后，即可使用文件、剪贴板和 Shell。",
       "clipboardTitle": "剪贴板",
       "clipboardHelp": "手动传输文本（最多 1 MiB），每次操作需要独占控制。",
       "clipboardText": "剪贴板文本",
@@ -684,8 +684,8 @@
     "deleteConfirm": "永久删除",
     "deleting": "正在删除…",
     "fileTransfer": {
-      "managedHelp": "在 /home/cua 内上传或下载一个最多 {limit} MiB 的二进制文件。上传会替换目标文件，每次传输需要独占控制。",
-      "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
+      "managedHelp": "在桌面的主目录（/home/cua）内上传或下载一个最多 {limit} MiB 的二进制文件。上传会替换目标文件，每次传输需要独占控制。",
+      "operationsDormant": "此配置在此 Host 上通过桌面发布配方 8 的验证后，即可使用文件、剪贴板和 Shell。",
       "title": "文件",
       "help": "上传或下载单个最大 {limit} MiB 的二进制文件。上传目标必须是已存在的目录，且不会覆盖现有文件。上传会释放手动桌面控制权。",
       "missingContainer": "请先刷新连接健康状态以确定容器，再传输文件。",

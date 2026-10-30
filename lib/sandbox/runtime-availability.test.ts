@@ -256,7 +256,7 @@ it("narrows stored managed workspace flags when current Host qualification is ab
   for (const flags of [false, undefined])
     expect(
       projectSandboxConnectionCapabilities(
-        { ...row, config: { ...config, ...{ operationsQualified: flags } } },
+        { ...row, config: { ...config, operationsQualified: flags } },
         true
       )
     ).toMatchObject({ workspaceRead: false, workspaceExec: false })

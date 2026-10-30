@@ -451,14 +451,22 @@ it("refreshes workspace capabilities from current Host operations qualification"
     grantee: { kind: "session", sessionKey: "session" },
   })
   expect(rows.get(id)?.capabilities.workspaceExec).toBe(false)
-  expect(rows.get(id)?.config).toMatchObject({ cpuCount: 2, memoryMb: 2048 })
+  expect(rows.get(id)?.config).toMatchObject({
+    operationsQualified: false,
+    cpuCount: 2,
+    memoryMb: 2048,
+  })
   const configs = await api.listConfigs({ kind: "local" })
   api.listConfigs.mockResolvedValue(
     configs.map((config) => ({ ...config, operationsQualified: true, cpuCount: 4, memoryMb: 4096 }))
   )
   await reconcileManagedDesktopBindings()
   expect(rows.get(id)?.capabilities.workspaceExec).toBe(true)
-  expect(rows.get(id)?.config).toMatchObject({ cpuCount: 4, memoryMb: 4096 })
+  expect(rows.get(id)?.config).toMatchObject({
+    operationsQualified: true,
+    cpuCount: 4,
+    memoryMb: 4096,
+  })
   api.listConfigs.mockResolvedValue(configs)
   await reconcileManagedDesktopBindings()
   expect(rows.get(id)?.capabilities.workspaceRead).toBe(false)

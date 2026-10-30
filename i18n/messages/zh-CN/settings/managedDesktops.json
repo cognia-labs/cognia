@@ -1,5 +1,5 @@
 {
-  "operationsDormant": "文件、剪贴板和 Shell 需要此 Host 当前有效的 recipe-8 资格验证。",
+  "operationsDormant": "此配置在此 Host 上通过桌面发布配方 8 的验证后，即可使用文件、剪贴板和 Shell。",
   "alerts": {
     "pastDeadline": {
       "title": "云桌面已超过截止时间",
