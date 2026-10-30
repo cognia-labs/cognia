@@ -387,16 +387,36 @@ pub(crate) fn managed_desktops(app: &App) {
             use tauri::Emitter as _;
             let _ = handle.emit(topic, payload);
         });
+    let automation_app = app.handle().clone();
     tauri::async_runtime::spawn(async move {
         let result = match crate::headless::deployment_id::resolve(&dir) {
             Ok(id) => cognia_companion_rpc::managed_desktops::install(
                 &dir,
                 bundled_release.as_deref(),
                 &id,
-                Some(events),
+                Some(events.clone()),
             )
                 .await
                 .map(|()| {
+                    // Broker control from a paired phone runs the same live
+                    // gate, policy and consent as the control RPC.
+                    let automation = automation_app
+                        .state::<cognia_automation::automation::commands::AutomationState>();
+                    let runtime = cognia_companion_rpc::managed_desktops::ManagedControlRuntime {
+                        enforcement:
+                            cognia_automation::automation::dispatcher::Enforcement::from_state(
+                                &automation,
+                            ),
+                        events: events.clone(),
+                        refresh_persisted: false,
+                    };
+                    if let Err(error) =
+                        cognia_companion_rpc::managed_desktops::install_native_control_runtime(
+                            runtime,
+                        )
+                    {
+                        log::warn!("managed desktop phone control unavailable: {}", error.code);
+                    }
                     // ADR-0234 N2: the remote desktop Host was installed
                     // earlier; a failure here leaves the RPC frames working.
                     if let Err(error) =

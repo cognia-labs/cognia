@@ -1,3 +1,27 @@
+jest.mock("next-intl", () => {
+  const messages = {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    remoteDesktop: require("@/i18n/messages/en/remoteDesktop.json"),
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    devices: require("@/i18n/messages/en/devices.json"),
+  }
+  return {
+    NextIntlClientProvider: ({ children }: { children: React.ReactNode }) => children,
+    useTranslations:
+      (namespace: string) => (key: string, values?: Record<string, string | number>) => {
+        const value = `${namespace}.${key}`
+          .split(".")
+          .reduce<unknown>(
+            (at, part) =>
+              at && typeof at === "object" ? (at as Record<string, unknown>)[part] : undefined,
+            messages
+          )
+        return typeof value === "string"
+          ? value.replace(/\{(\w+)\}/g, (_, name: string) => String(values?.[name] ?? `{${name}}`))
+          : key
+      },
+  }
+})
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
@@ -13,6 +37,9 @@ jest.mock("sonner", () => ({
   },
 }))
 jest.mock("@/lib/tauri", () => ({ transport: { call: jest.fn() } }))
+jest.mock("./native-desktop-viewer", () => ({
+  NativeDesktopViewer: () => <div role="region" aria-label="Native viewer" />,
+}))
 
 import {
   __resetRemoteDesktopProvidersForTests,
@@ -86,6 +113,60 @@ beforeEach(() => {
 afterEach(() => __resetRemoteDesktopProvidersForTests())
 
 describe("RemoteDesktopSection", () => {
+  it("keeps selection across Host refreshes and clears it when the Host changes", async () => {
+    const row = target({
+      id: "sandbox:a",
+      kind: "native",
+      readOnly: true,
+      bindings: [binding({ id: "native", adapter: "cognia-frames", endpoint: null })],
+    })
+    const deps = { list: async () => [row] }
+    const section = (hostRef: string) => (
+      <RemoteDesktopSection host={{ kind: "remote", hostRef }} deps={deps} />
+    )
+    const { rerender } = render(section("first"))
+    await userEvent.click(await screen.findByRole("button", { name: "View only" }))
+    expect(screen.getByRole("region", { name: "Native viewer" })).toBeInTheDocument()
+    rerender(section("first"))
+    expect(screen.getByRole("region", { name: "Native viewer" })).toBeInTheDocument()
+    rerender(section("second"))
+    expect(screen.queryByRole("region", { name: "Native viewer" })).toBeNull()
+    expect(await screen.findByRole("button", { name: "View only" })).toBeEnabled()
+  })
+  it("lists both native kinds as labelled read-only rows without a plugin", async () => {
+    const native = (id: string, provider: "docker" | "e2b") =>
+      target({
+        id,
+        name: id,
+        kind: "native",
+        provider,
+        readOnly: true,
+        bindings: [
+          binding({
+            id: "native",
+            adapter: "cognia-frames",
+            providerId: "cognia-frames",
+            endpoint: null,
+            hasViewCredential: false,
+          }),
+        ],
+      })
+    render(
+      <RemoteDesktopSection
+        host={LOCAL}
+        deps={{
+          list: async () => [native("sandbox:a", "docker"), native("managed-desktop:b", "e2b")],
+        }}
+      />
+    )
+    expect(await screen.findByText("sandbox:a")).toBeInTheDocument()
+    expect(screen.getByText("managed-desktop:b")).toBeInTheDocument()
+    expect(screen.getAllByText("Managed by its owning service")).toHaveLength(2)
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
+    expect(screen.getAllByRole("button", { name: "View only" })).toHaveLength(2)
+    expect(screen.getAllByRole("button", { name: "View only" })[0]).toBeEnabled()
+  })
   it("explains an empty list and offers to add one", async () => {
     registerVnc()
     render(<RemoteDesktopSection host={LOCAL} deps={{ list: async () => [] }} />)

@@ -1,6 +1,29 @@
-import type { RemoteDesktopBinding, RemoteDesktopProbeRequest } from "./types"
+import type { RemoteDesktopBinding, RemoteDesktopProbeRequest, RemoteDesktopTarget } from "./types"
 
 describe("remote desktop wire types", () => {
+  it("supports native projections while older external target metadata stays optional", () => {
+    const external: RemoteDesktopTarget = {
+      id: "external",
+      name: "External",
+      bindings: [],
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const native: RemoteDesktopTarget = {
+      ...external,
+      id: "sandbox:original/id",
+      name: "original/id",
+      kind: "native",
+      provider: "docker",
+      readOnly: true,
+    }
+    expect(external.readOnly).toBeUndefined()
+    expect(JSON.parse(JSON.stringify(native))).toMatchObject({
+      kind: "native",
+      provider: "docker",
+      readOnly: true,
+    })
+  })
   it("never carries a credential back from the Host", () => {
     const binding: RemoteDesktopBinding = {
       id: "b",

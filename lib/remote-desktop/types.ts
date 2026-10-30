@@ -1,15 +1,15 @@
 import type {
-  RemoteDesktopAdapter,
+  RemoteDesktopAdapter as PluginRemoteDesktopAdapter,
   RemoteDesktopConsoleProfile,
   RemoteDesktopLauncher,
   RemoteDesktopSessionMode,
 } from "@cognia/plugin-contract/lib/remote-desktop/types"
 export type {
-  RemoteDesktopAdapter,
   RemoteDesktopConsoleProfile,
   RemoteDesktopLauncher,
   RemoteDesktopSessionMode,
 } from "@cognia/plugin-contract/lib/remote-desktop/types"
+export type RemoteDesktopAdapter = PluginRemoteDesktopAdapter | "cognia-frames"
 
 /**
  * Wire types for the Host's remote desktop commands (ADR-0234 Phases 2 and
@@ -90,6 +90,9 @@ export interface RemoteDesktopTarget {
   bindings: RemoteDesktopBinding[]
   createdAt: number
   updatedAt: number
+  kind?: "external" | "native"
+  provider?: "docker" | "e2b"
+  readOnly?: boolean
 }
 
 export interface RemoteDesktopBindingDraft {

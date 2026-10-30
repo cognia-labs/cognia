@@ -156807,6 +156807,7 @@ paths:
                           enum:
                             - vnc
                             - none
+                            - cognia-frames
                         priority:
                           type: integer
                           minimum: 0
@@ -156902,6 +156903,20 @@ paths:
                     type: integer
                   updatedAt:
                     type: integer
+                  kind:
+                    type: string
+                    enum:
+                      - external
+                      - native
+                    default: external
+                  provider:
+                    type: string
+                    enum:
+                      - docker
+                      - e2b
+                  readOnly:
+                    type: boolean
+                    default: false
                 required:
                   - id
                   - name
@@ -157884,6 +157899,7 @@ paths:
                                 enum:
                                   - vnc
                                   - none
+                                  - cognia-frames
                               priority:
                                 type: integer
                                 minimum: 0
@@ -157979,6 +157995,20 @@ paths:
                           type: integer
                         updatedAt:
                           type: integer
+                        kind:
+                          type: string
+                          enum:
+                            - external
+                            - native
+                          default: external
+                        provider:
+                          type: string
+                          enum:
+                            - docker
+                            - e2b
+                        readOnly:
+                          type: boolean
+                          default: false
                       required:
                         - id
                         - name
@@ -158553,6 +158583,7 @@ paths:
                           enum:
                             - vnc
                             - none
+                            - cognia-frames
                         priority:
                           type: integer
                           minimum: 0
@@ -158648,6 +158679,20 @@ paths:
                     type: integer
                   updatedAt:
                     type: integer
+                  kind:
+                    type: string
+                    enum:
+                      - external
+                      - native
+                    default: external
+                  provider:
+                    type: string
+                    enum:
+                      - docker
+                      - e2b
+                  readOnly:
+                    type: boolean
+                    default: false
                 required:
                   - id
                   - name

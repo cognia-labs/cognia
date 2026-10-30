@@ -217,5 +217,39 @@
     "launchServerInvalid": "Enter the ID server as a host name or IP address, with an optional port.",
     "launchUriInvalid": "The Host returned a RustDesk link Cognia does not open.",
     "launcherUnknown": "This provider asks for an app Cognia cannot launch."
+  },
+  "native": {
+    "touch": {
+      "surfaceLabel": "Trackpad: drag to move the pointer, tap to click, tap with two fingers to right-click, drag with two fingers to scroll, press and hold to drag",
+      "trackpad": "Trackpad",
+      "direct": "Touch",
+      "switchToDirect": "Trackpad mode. Switch to direct touch",
+      "switchToTrackpad": "Direct touch mode. Switch to trackpad"
+    },
+    "keys": {
+      "barLabel": "Special keys",
+      "ctrl": "Ctrl",
+      "alt": "Alt",
+      "meta": "Super",
+      "esc": "Esc",
+      "tab": "Tab",
+      "left": "Left arrow",
+      "up": "Up arrow",
+      "down": "Down arrow",
+      "right": "Right arrow",
+      "ctrlAltDel": "Ctrl+Alt+Del",
+      "keyboard": "Keyboard",
+      "keyboardInput": "Type to send keys to the remote screen"
+    },
+    "title": "Native desktop",
+    "readOnly": "Managed by its owning service",
+    "docker": "Docker sandbox",
+    "e2b": "E2B managed desktop",
+    "takeControl": "Take control",
+    "release": "Release control",
+    "close": "Close desktop",
+    "loading": "Connecting to the desktop…",
+    "screen": "Native desktop screen",
+    "selkies": "Selkies (local desktop only)"
   }
 }

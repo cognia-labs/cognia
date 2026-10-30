@@ -21,7 +21,8 @@ export interface TrackpadSink {
   /** Move the pointer by a relative amount, in CSS pixels. */
   move(dx: number, dy: number): void
   /** Set which buttons are held, at the pointer. */
-  buttons(mask: number): void
+  buttons(mask: number, longPress?: boolean): void
+  cancel?(): void
   /** Scroll by a vertical amount, in CSS pixels (positive is down). */
   scroll(dy: number): void
 }
@@ -31,6 +32,7 @@ export interface TrackpadOptions {
   tapMs?: number
   slopPx?: number
   holdMs?: number
+  direct?: boolean
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
 }
@@ -56,6 +58,7 @@ export class TrackpadGestures {
   private twoFinger = false
   private scrolled = false
   private holdTimer: unknown = null
+  private readonly direct: boolean
 
   constructor(
     private readonly sink: TrackpadSink,
@@ -65,6 +68,7 @@ export class TrackpadGestures {
     this.tapMs = options.tapMs ?? 250
     this.slopPx = options.slopPx ?? 8
     this.holdMs = options.holdMs ?? 500
+    this.direct = options.direct ?? false
     this.setTimer = options.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
     this.clearTimer =
       options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>))
@@ -77,11 +81,16 @@ export class TrackpadGestures {
       this.moved = false
       this.scrolled = false
       this.twoFinger = false
+      if (this.direct) {
+        this.dragging = true
+        this.sink.buttons(BUTTON_LEFT)
+        return
+      }
       this.holdTimer = this.setTimer(() => {
         this.holdTimer = null
         if (!this.moved && this.touches.size === 1 && !this.dragging) {
           this.dragging = true
-          this.sink.buttons(BUTTON_LEFT)
+          this.sink.buttons(BUTTON_LEFT, true)
         }
       }, this.holdMs)
       return
@@ -89,6 +98,11 @@ export class TrackpadGestures {
     // A second finger: right-click or scroll, never a drag.
     this.twoFinger = true
     this.cancelHold()
+    if (this.dragging) {
+      this.sink.cancel?.()
+      this.dragging = false
+      this.sink.buttons(0)
+    }
   }
 
   move(id: number, x: number, y: number): void {
@@ -132,6 +146,7 @@ export class TrackpadGestures {
   cancel(): void {
     this.touches.clear()
     this.cancelHold()
+    this.sink.cancel?.()
     if (this.dragging) {
       this.dragging = false
       this.sink.buttons(0)

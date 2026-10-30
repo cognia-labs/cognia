@@ -23,6 +23,10 @@ use std::{
 const LEASE_MS: i64 = cognia_remote_desktop::control::LEASE_MS;
 const FRAME_MS: i64 = cognia_remote_desktop::control::FRAME_MS;
 
+fn retain_native_refusal(enabled: bool, error: &ManagedDesktopError) -> bool {
+    enabled && !cognia_remote_desktop::frames::NativeInputError::managed(&error.code).fatal
+}
+
 /// A lease proof is always checked as a token/fence pair.
 pub struct ManagedControlLeaseRef<'a> {
     pub token: &'a str,
@@ -2038,6 +2042,21 @@ impl ManagedDesktopService {
         p.require_human()?;
         authority.revalidate(p).await?;
         self.scoped(p, id, generation).await?;
+        self.native_control_release(p, id, generation, token, fence)
+            .await
+    }
+    /// Broker cleanup must release its exact existing lease even after device
+    /// revocation. Scope and token/fence checks still prevent releasing another
+    /// principal's lease. Interactive RPC admission above remains unchanged.
+    pub(crate) async fn native_control_release(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        token: &str,
+        fence: u64,
+    ) -> Result<()> {
+        p.require_human()?;
         self.scoped(p, id, generation).await?;
         let slot = self.control_slot(id, generation).await;
         let mut c = slot.lock().await;
@@ -2062,6 +2081,47 @@ impl ManagedDesktopService {
         self.control_input_inner(p, id, generation, input, authority, false)
             .await
     }
+    /// Broker delivery shares the human input core. A refusal before sending
+    /// input retains the lease so the next fresh frame/action can be tried.
+    pub async fn native_control_input(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        input: ManagedControlInput<'_>,
+        authority: &dyn ManagedControlAuthority,
+    ) -> Result<()> {
+        self.control_input_impl(p, id, generation, input, authority, false, true)
+            .await
+    }
+    /// Read-only broker precheck gives malformed input a per-input refusal
+    /// without changing the public control core's error or mutation semantics.
+    pub(crate) async fn native_input_check(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        input: &ManagedControlInput<'_>,
+    ) -> Result<()> {
+        self.scoped(p, id, generation).await?;
+        let slot = self.control_slot(id, generation).await;
+        let mut control = slot.lock().await;
+        control.require_lease(p, input.token, input.fence)?;
+        let frame = control
+            .core
+            .frame(&p.principal_id, input.frame_id, input.fence)
+            .map_err(|_| refused("managed_desktop_control_stale_frame"))?;
+        if let Some(point) = input.point {
+            desktop_session::validate_point(point, frame.width, frame.height)
+                .map_err(|_| refused("managed_desktop_control_input_limit"))?;
+        }
+        if let UiAction::Drag { to, .. } = &input.action {
+            desktop_session::validate_point(*to, frame.width, frame.height)
+                .map_err(|_| refused("managed_desktop_control_input_limit"))?;
+        }
+        desktop_session::validate_action(input.point, &input.action)
+            .map_err(|_| refused("managed_desktop_control_input_limit"))
+    }
     async fn control_input_inner(
         &self,
         p: &ManagedDesktopPrincipal,
@@ -2070,6 +2130,19 @@ impl ManagedDesktopService {
         input: ManagedControlInput<'_>,
         authority: &dyn ManagedControlAuthority,
         smoke: bool,
+    ) -> Result<()> {
+        self.control_input_impl(p, id, generation, input, authority, smoke, false)
+            .await
+    }
+    async fn control_input_impl(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        id: &str,
+        generation: u64,
+        input: ManagedControlInput<'_>,
+        authority: &dyn ManagedControlAuthority,
+        smoke: bool,
+        retain_refusals: bool,
     ) -> Result<()> {
         let ManagedControlInput {
             token,
@@ -2091,7 +2164,9 @@ impl ManagedDesktopService {
             .control_check_local(p, id, generation, authority, smoke)
             .await
         {
-            c.invalidate();
+            if !retain_native_refusal(retain_refusals, &e) {
+                c.invalidate();
+            }
             return Err(e);
         }
         c.require_lease(p, token, fence)?;
@@ -2137,7 +2212,9 @@ impl ManagedDesktopService {
             .control_check(p, id, generation, authority, smoke)
             .await
         {
-            c.invalidate();
+            if !retain_native_refusal(retain_refusals, &error) {
+                c.invalidate();
+            }
             return Err(error);
         }
         c.require_lease(p, token, fence)?;
@@ -2149,7 +2226,16 @@ impl ManagedDesktopService {
         .await?;
         // The durable pending flag intentionally makes cancellation/restart
         // quarantine the desktop; only successful acknowledgement clears it.
-        authority.revalidate(p).await?;
+        if let Err(error) = authority.revalidate(p).await {
+            if retain_native_refusal(retain_refusals, &error) {
+                self.transaction(|s, _| {
+                    s.control_quarantines.remove(id);
+                    Ok(())
+                })
+                .await?;
+            }
+            return Err(error);
+        }
         c.require_lease(p, token, fence)?;
         let row = self.scoped(p, id, generation).await?;
         if row.delete_requested || row.expired(self.now().await) {
@@ -2157,7 +2243,15 @@ impl ManagedDesktopService {
             return Err(refused("managed_desktop_control_unavailable"));
         }
         if Instant::now() >= deadline {
-            c.invalidate();
+            if retain_refusals {
+                self.transaction(|s, _| {
+                    s.control_quarantines.remove(id);
+                    Ok(())
+                })
+                .await?;
+            } else {
+                c.invalidate();
+            }
             return Err(refused("managed_desktop_control_stale_frame"));
         }
         let principal_epoch = c.revoked.clone();
@@ -2186,7 +2280,8 @@ impl ManagedDesktopService {
                 authority.input_admission(p),
             )
         };
-        let send_counts = smoke.then(|| Arc::new((AtomicU64::new(0), AtomicU64::new(0))));
+        let send_counts =
+            (smoke || retain_refusals).then(|| Arc::new((AtomicU64::new(0), AtomicU64::new(0))));
         let observed_sends = send_counts.clone();
         let client = client.fenced(Arc::new(move || {
             let admitted = live_authority()
@@ -2211,15 +2306,47 @@ impl ManagedDesktopService {
         )
         .await;
         if !matches!(outcome, Ok(Ok(()))) {
+            // The pump is the only place this fence is evaluated. Zero
+            // admitted commands plus a fence refusal proves no mutation was
+            // sent; a partial/uncertain send must retain quarantine below.
+            let unsent = retain_refusals
+                && matches!(&outcome, Ok(Err(AutomationError::PermissionDenied { .. })))
+                && send_counts.as_ref().is_some_and(|counts| {
+                    counts.0.load(Ordering::SeqCst) == 0 && counts.1.load(Ordering::SeqCst) > 0
+                });
+            if unsent {
+                let refusal = authority.revalidate(p).await.err().or_else(|| {
+                    (Instant::now() >= deadline)
+                        .then(|| refused("managed_desktop_control_stale_frame"))
+                });
+                if let Some(error) = refusal.filter(|error| retain_native_refusal(true, error)) {
+                    // The wrapper's quiescence check still sees this proven
+                    // unsent mutation as pending. Validate only its exact
+                    // lease proof before clearing that pending marker.
+                    c.core
+                        .require_lease(&p.principal_id, token, fence)
+                        .map_err(|_| refused("managed_desktop_control_lease_expired"))?;
+                    self.transaction(|s, _| {
+                        s.control_quarantines.remove(id);
+                        Ok(())
+                    })
+                    .await?;
+                    c.desktop.finish_mutation(&Ok::<(), AutomationError>(()));
+                    c.publish();
+                    return Err(error);
+                }
+            }
             if let Some(counts) = send_counts {
-                let cause = match &outcome {
-                    Err(_) => "input_deadline_elapsed",
-                    Ok(Err(error)) => smoke_driver_failure(error),
-                    Ok(Ok(())) => "unexpected_success",
-                };
-                eprintln!("Native control mutation quarantined: cause={cause} input_elapsed_ms={} send_elapsed_ms={} send_budget_ms={send_budget_ms} admitted_commands={} denied_commands={}",
-                    input_started.elapsed().as_millis(), send_started.elapsed().as_millis(),
-                    counts.0.load(Ordering::SeqCst), counts.1.load(Ordering::SeqCst));
+                if smoke {
+                    let cause = match &outcome {
+                        Err(_) => "input_deadline_elapsed",
+                        Ok(Err(error)) => smoke_driver_failure(error),
+                        Ok(Ok(())) => "unexpected_success",
+                    };
+                    eprintln!("Native control mutation quarantined: cause={cause} input_elapsed_ms={} send_elapsed_ms={} send_budget_ms={send_budget_ms} admitted_commands={} denied_commands={}",
+                        input_started.elapsed().as_millis(), send_started.elapsed().as_millis(),
+                        counts.0.load(Ordering::SeqCst), counts.1.load(Ordering::SeqCst));
+                }
             }
             let (action_kind, count) = desktop_session::input_audit_fields(&action);
             c.audit(
@@ -2254,7 +2381,9 @@ impl ManagedDesktopService {
             .control_check(p, id, generation, authority, smoke)
             .await
         {
-            c.invalidate();
+            if !retain_native_refusal(retain_refusals, &e) {
+                c.invalidate();
+            }
             return Err(e);
         }
         c.require_lease(p, token, fence)?;
@@ -2263,8 +2392,162 @@ impl ManagedDesktopService {
 }
 
 #[cfg(test)]
+pub(crate) async fn native_test_fixture() -> (
+    tempfile::TempDir,
+    Arc<ManagedDesktopService>,
+    ManagedDesktopPrincipal,
+    ManagedDesktop,
+    Arc<AtomicU64>,
+) {
+    native_test_fixture_with_capture(Arc::new(|| {})).await
+}
+#[cfg(test)]
+pub(crate) async fn native_test_fixture_with_capture(
+    captured: Arc<dyn Fn() + Send + Sync>,
+) -> (
+    tempfile::TempDir,
+    Arc<ManagedDesktopService>,
+    ManagedDesktopPrincipal,
+    ManagedDesktop,
+    Arc<AtomicU64>,
+) {
+    use base64::Engine as _;
+    let (fixture, row, _) = super::delegation::tests::fixture().await;
+    let inputs = Arc::new(AtomicU64::new(0));
+    let observed = inputs.clone();
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(20, 20)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let pixels = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+    let client = CuaRemoteClient::from_handler(Arc::new(move |request, _| {
+        let pixels = pixels.clone();
+        let observed = observed.clone();
+        let captured = captured.clone();
+        Box::pin(async move {
+            if request.command == "screenshot" {
+                captured();
+                Ok(serde_json::json!({"status":"success","image_data":pixels}))
+            } else {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(serde_json::json!({"status":"success"}))
+            }
+        })
+    }));
+    fixture
+        .service
+        .control_slot(&row.id, row.generation)
+        .await
+        .lock()
+        .await
+        .client = Some(client);
+    (
+        fixture.directory,
+        Arc::new(fixture.service),
+        fixture.p,
+        row,
+        inputs,
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn native_provider_lists_only_owner_desktops_and_refuses_observer_control() {
+        use crate::cua_sandbox::managed::frame_source::{
+            ManagedFrameContext, ManagedNativeFrameProvider,
+        };
+        use cognia_remote_desktop::{
+            frames::NativeFrameProvider,
+            session::{Principal, SessionMode},
+        };
+        let domain = super::super::tests::Fixture::new();
+        domain.prepare().await;
+        let row = domain.smoke("native-list").await;
+        let p = domain.p.clone();
+        let service = Arc::new(domain.service);
+        let provider = ManagedNativeFrameProvider::new(
+            service,
+            Arc::new(move |viewer| {
+                let mut principal = p.clone();
+                if viewer.id() == "device:foreign" {
+                    principal.owner_principal_id = "foreign-owner".into();
+                }
+                Box::pin(async move {
+                    Ok(ManagedFrameContext {
+                        principal,
+                        authority: Arc::new(Authority(Arc::new(AtomicBool::new(true)))),
+                        input_executor: Arc::new(|_| {
+                            Box::pin(async {
+                                Err(cognia_remote_desktop::frames::NativeInputError::fatal(
+                                    cognia_remote_desktop::error::RemoteDesktopError::new(
+                                        "remote_desktop_forbidden",
+                                    ),
+                                ))
+                            })
+                        }),
+                    })
+                })
+            }),
+        );
+        let observer = Principal::device("observer", Arc::new(|mode| mode == SessionMode::View));
+        let listed = provider.list(observer.clone()).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, row.id);
+        assert_eq!(
+            listed[0].provider,
+            cognia_remote_desktop::frames::NativeProviderKind::E2b
+        );
+        assert!(provider
+            .list(Principal::device("foreign", Arc::new(|_| true)))
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(provider
+            .acquire_input(row.id, observer, true)
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn native_cleanup_releases_exact_lease_after_revocation_and_never_releases_a_takeover() {
+        let domain = super::super::tests::Fixture::new();
+        domain.prepare().await;
+        let row = domain.smoke("native-cleanup").await;
+        let p = &domain.p;
+        let service = &domain.service;
+        let slot = service.control_slot(&row.id, row.generation).await;
+        let lease = slot.lock().await.issue(p, 1000, row.deadline_at);
+        let revoked = Authority(Arc::new(AtomicBool::new(false)));
+        assert!(service
+            .control_release(
+                p,
+                &row.id,
+                row.generation,
+                &lease.token,
+                lease.fence,
+                &revoked
+            )
+            .await
+            .is_err());
+        service
+            .native_control_release(p, &row.id, row.generation, &lease.token, lease.fence)
+            .await
+            .unwrap();
+        let next = slot.lock().await.issue(p, 1000, row.deadline_at);
+        assert!(service
+            .native_control_release(p, &row.id, row.generation, &lease.token, lease.fence)
+            .await
+            .is_err());
+        assert_eq!(
+            slot.lock().await.core.status().lease.unwrap().dto.token,
+            next.token
+        );
+        service
+            .native_control_release(p, &row.id, row.generation, &next.token, next.fence)
+            .await
+            .unwrap();
+    }
     struct Authority(Arc<AtomicBool>);
     #[async_trait]
     impl ManagedControlAuthority for Authority {

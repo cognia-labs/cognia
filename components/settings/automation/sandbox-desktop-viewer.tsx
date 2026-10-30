@@ -21,6 +21,8 @@ import { screenshotMimeType } from "@/lib/automation/model-frame"
 import type { Point, Screenshot } from "@/lib/automation/types"
 import type { OpenSandboxDesktop, SandboxControlLease } from "@/lib/automation/sandbox-client"
 import { isCapacitor } from "@/lib/platform/detect"
+import { prefersTouchInput } from "@cognia/plugin-ui"
+import { NativeTouchControls } from "@/components/devices/remote-desktop/native-touch-controls"
 import { SandboxFileTransfer } from "./sandbox-file-transfer"
 
 function framePoint(
@@ -76,11 +78,13 @@ export function SandboxDesktopViewer({
   allowStreaming?: boolean
 }) {
   const t = useTranslations("automation.sandboxConnections.desktopViewer")
-  const mobileObservation =
-    Boolean(openDesktop) &&
-    (observeOnly ||
+  const mobileObservation = observeOnly
+  const [touchScreen] = useState(
+    () =>
       isCapacitor() ||
-      (typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)))
+      prefersTouchInput() ||
+      (typeof navigator !== "undefined" && /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))
+  )
   const releaseRef = useRef<
     ((expectedLease?: SandboxControlLease) => Promise<void> | undefined) | null
   >(null)
@@ -146,6 +150,7 @@ export function SandboxDesktopViewer({
   const [doubleClick, setDoubleClick] = useState(false)
   const [transferring, setTransferring] = useState(false)
   const image = useRef<HTMLImageElement>(null)
+  const touchSurface = useCallback(() => image.current, [])
   const start = useRef<{
     point: Point
     frame: Screenshot
@@ -339,27 +344,40 @@ export function SandboxDesktopViewer({
           className="block aspect-[16/10] w-full rounded border bg-black"
         />
       ) : frame ? (
-        // Native img preserves the screenshot pixel aspect ratio for pointer mapping.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          ref={image}
-          src={`data:${screenshotMimeType(frame.format)};base64,${frame.bytes}`}
-          alt={t("screen")}
-          width={frame.width}
-          height={frame.height}
-          tabIndex={controlling ? 0 : -1}
-          draggable={false}
-          className={`block h-auto w-full rounded border outline-none focus-visible:ring-2 focus-visible:ring-ring ${controlling ? "touch-none cursor-crosshair" : ""}`}
-          onPointerDown={pointerDown}
-          onPointerUp={pointerUp}
-          onPointerCancel={() => {
-            start.current = null
-          }}
-          onContextMenu={(event) => {
-            if (controlling) event.preventDefault()
-          }}
-          onKeyDown={keyDown}
-        />
+        <div className="relative">
+          {/* Native img preserves the screenshot pixel aspect ratio for pointer mapping. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            ref={image}
+            src={`data:${screenshotMimeType(frame.format)};base64,${frame.bytes}`}
+            alt={t("screen")}
+            width={frame.width}
+            height={frame.height}
+            tabIndex={controlling ? 0 : -1}
+            draggable={false}
+            className={`block h-auto w-full rounded border outline-none focus-visible:ring-2 focus-visible:ring-ring ${controlling ? "touch-none cursor-crosshair" : ""}`}
+            onPointerDown={pointerDown}
+            onPointerUp={pointerUp}
+            onPointerCancel={() => {
+              start.current = null
+            }}
+            onContextMenu={(event) => {
+              if (controlling) event.preventDefault()
+            }}
+            onKeyDown={keyDown}
+          />
+          {controlling && touchScreen ? (
+            <NativeTouchControls
+              surface={touchSurface}
+              width={frame.sourceWidth ?? frame.width}
+              height={frame.sourceHeight ?? frame.height}
+              labels={(key) => t(key)}
+              input={(action, point) => {
+                void input(action, point, frame.capturedAt)
+              }}
+            />
+          ) : null}
+        </div>
       ) : (
         <div className="rounded border p-6 text-center text-xs text-muted-foreground">
           {enabled ? (error ? t("disconnected") : t("loading")) : t("unavailable")}

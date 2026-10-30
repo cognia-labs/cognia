@@ -646,9 +646,31 @@
       "quarantined": "输入清理状态不确定，暂不可控制",
       "otherController": "其他用户正在控制",
       "agentDormant": "任务与 agent 控制保持 dormant，直到交接功能完成。",
-      "mobileObservation": "移动端仅支持查看，桌面输入已禁用。",
+      "mobileObservation": "此查看器仅支持观察。",
       "qualificationRequired": "云桌面查看与控制需要另行授权并通过 GUI smoke 验证。",
-      "dockTitle": "沙箱桌面"
+      "dockTitle": "沙箱桌面",
+      "touch": {
+        "surfaceLabel": "触控板：拖动移动指针，轻点单击，双指轻点右键，双指拖动滚动，长按后拖动",
+        "trackpad": "触控板",
+        "direct": "触摸",
+        "switchToDirect": "当前为触控板模式，切换为直接触摸",
+        "switchToTrackpad": "当前为直接触摸模式，切换为触控板"
+      },
+      "keys": {
+        "barLabel": "特殊按键",
+        "ctrl": "Ctrl",
+        "alt": "Alt",
+        "meta": "Super",
+        "esc": "Esc",
+        "tab": "Tab",
+        "left": "左方向键",
+        "up": "上方向键",
+        "down": "下方向键",
+        "right": "右方向键",
+        "ctrlAltDel": "Ctrl+Alt+Del",
+        "keyboard": "键盘",
+        "keyboardInput": "输入以向远程屏幕发送按键"
+      }
     },
     "deleteConfirmTitle": "删除 {name}？",
     "deleteConfirmDescription": "此操作将永久删除容器及其内部存储的所有文件，挂载的主机目录中的文件会保留。请先导出需要保留的文件。",

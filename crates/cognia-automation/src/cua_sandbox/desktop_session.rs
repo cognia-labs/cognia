@@ -208,7 +208,7 @@ impl RemoteDesktop {
                 denied("sandbox control lease is absent, expired, or belongs to another controller")
             })
     }
-    fn acquire(&mut self) -> Result<ControlLease> {
+    pub(crate) fn acquire(&mut self) -> Result<ControlLease> {
         self.require_quiescent()?;
         if self.retained_execution_group {
             return Err(denied("Lume may still have background Agent work; stop and reconnect the VM before taking human control"));

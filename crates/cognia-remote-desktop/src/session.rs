@@ -171,6 +171,7 @@ struct SessionEntry {
     deadline: watch::Sender<Instant>,
     stop: watch::Sender<Option<EndReason>>,
     task: Option<JoinHandle<()>>,
+    native_release: Option<watch::Receiver<Option<Result<()>>>>,
 }
 
 impl SessionEntry {
@@ -238,6 +239,7 @@ impl Broker {
     }
 
     pub fn commit(self: &Arc<Self>, admission: Admission, bridge: Bridge) -> Result<SessionOpened> {
+        let native_release = bridge.native_release();
         let url = bridge.url.clone();
         let attach = bridge.attach_handle();
         let principal = admission.principal.id().to_owned();
@@ -284,6 +286,7 @@ impl Broker {
                 deadline: deadline_tx,
                 stop: stop_tx,
                 task: Some(task),
+                native_release,
             },
         );
         drop(state);
@@ -324,6 +327,37 @@ impl Broker {
             expires_at: now + RENEW_TIMEOUT.as_millis() as i64,
             lease,
         })
+    }
+
+    /// Stop the old broker controller and wait for its owning service to drop
+    /// the lease before acquiring another. Local-viewer leases remain untouched.
+    pub async fn preempt_native_control(&self, target: &str) -> Result<()> {
+        let releases: Vec<_> = {
+            let state = self.state.lock();
+            state
+                .sessions
+                .values()
+                .filter(|entry| entry.target_id == target && entry.mode == SessionMode::Control)
+                .filter_map(|entry| {
+                    entry.end(EndReason::Preempted);
+                    entry.native_release.clone()
+                })
+                .collect()
+        };
+        for mut release in releases {
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                release.wait_for(|result| result.is_some()),
+            )
+            .await
+            .map_err(|_| RemoteDesktopError::new("remote_desktop_control_busy"))?
+            .map_err(|_| RemoteDesktopError::new("remote_desktop_control_busy"))?;
+            release
+                .borrow()
+                .clone()
+                .ok_or_else(|| RemoteDesktopError::new("remote_desktop_control_busy"))??;
+        }
+        Ok(())
     }
 
     /// Only the opener renews; another principal is told the session does

@@ -8,6 +8,7 @@ use crate::{
     session::Principal,
 };
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     future::Future,
@@ -193,7 +194,256 @@ pub trait FrameSource: Send + Sync + 'static {
     fn capture(&self) -> FrameFuture<CapturedFrame>;
 }
 pub trait NativeFrameProvider: Send + Sync + 'static {
+    /// Owner-filtered live resources, never persisted in the target store.
+    fn list(&self, principal: Principal) -> FrameFuture<Vec<NativeTargetSummary>>;
     fn resolve(&self, id: String, principal: Principal) -> FrameFuture<Arc<dyn FrameSource>>;
+    fn acquire_input(
+        &self,
+        _id: String,
+        _principal: Principal,
+        _takeover: bool,
+    ) -> FrameFuture<Arc<dyn NativeInputSink>> {
+        Box::pin(async { Err(RemoteDesktopError::new("remote_desktop_forbidden")) })
+    }
+}
+
+pub struct NativeTargetSummary {
+    /// The owning service's connection id; the Host adds the registered kind.
+    pub id: String,
+    pub label: String,
+    pub provider: NativeProviderKind,
+    pub selkies: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeProviderKind {
+    Docker,
+    E2b,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativePoint {
+    pub x: i32,
+    pub y: i32,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NativeButton {
+    Left,
+    Middle,
+    Right,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeDragOptions {
+    pub button: Option<NativeButton>,
+    pub duration_ms: Option<u32>,
+    pub steps: Option<u32>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeScrollOptions {
+    #[serde(default)]
+    pub dx: i32,
+    #[serde(default)]
+    pub dy: i32,
+}
+/// Exactly the local viewer's public control vocabulary. No held input or
+/// internal control RPC names cross the data channel.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum NativeUiAction {
+    Click {
+        button: Option<NativeButton>,
+        count: Option<u32>,
+    },
+    Drag {
+        to: NativePoint,
+        #[serde(default)]
+        opts: NativeDragOptions,
+    },
+    Scroll {
+        #[serde(default)]
+        opts: NativeScrollOptions,
+    },
+    PressKey {
+        chord: String,
+    },
+    TypeText {
+        text: String,
+    },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeInput {
+    pub point: Option<NativePoint>,
+    pub action: NativeUiAction,
+    pub frame_id: String,
+}
+pub const MAX_INPUT_BYTES: usize = 32 * 1024;
+#[derive(Clone, Debug)]
+pub struct NativeInputError {
+    pub error: RemoteDesktopError,
+    pub fatal: bool,
+}
+pub type NativeInputResult<T> = std::result::Result<T, NativeInputError>;
+pub type NativeInputFuture = Pin<Box<dyn Future<Output = NativeInputResult<()>> + Send>>;
+impl NativeInputError {
+    pub fn fatal(error: RemoteDesktopError) -> Self {
+        Self { error, fatal: true }
+    }
+    pub fn refused(code: &'static str) -> Self {
+        Self {
+            error: RemoteDesktopError::new(code),
+            fatal: false,
+        }
+    }
+    /// One classification boundary; never copy provider detail or input content.
+    pub fn managed(code: &str) -> Self {
+        match code {
+            "managed_desktop_control_stale_frame" => {
+                Self::refused("remote_desktop_input_stale_frame")
+            }
+            "managed_desktop_control_input_limit" | "managed_desktop_invalid_request" => {
+                Self::refused("remote_desktop_input_invalid")
+            }
+            "managed_desktop_control_policy_denied"
+            | "managed_desktop_control_target_unverified"
+            | "managed_desktop_control_policy_changed"
+            | "managed_desktop_control_policy_unavailable"
+            | "managed_desktop_control_kill_switch" => {
+                Self::refused("remote_desktop_input_policy_denied")
+            }
+            "managed_desktop_control_consent_denied"
+            | "managed_desktop_control_consent_required" => {
+                Self::refused("remote_desktop_input_consent_required")
+            }
+            "managed_desktop_control_lease_expired" | "managed_desktop_stale_generation" => {
+                Self::fatal(RemoteDesktopError::new("remote_desktop_control_expired"))
+            }
+            "managed_desktop_forbidden"
+            | "managed_desktop_account_required"
+            | "managed_desktop_control_admin_lease_expired" => {
+                Self::fatal(RemoteDesktopError::new("remote_desktop_forbidden"))
+            }
+            _ => Self::fatal(RemoteDesktopError::new("remote_desktop_native_unavailable")),
+        }
+    }
+}
+/// Length-delimited UTF-8 JSON survives relay chunks and WebSocket boundaries.
+pub async fn read_input(
+    reader: &mut (impl tokio::io::AsyncRead + Unpin),
+) -> NativeInputResult<NativeInput> {
+    use tokio::io::AsyncReadExt;
+    let size = reader
+        .read_u32()
+        .await
+        .map_err(|_| NativeInputError::fatal(invalid()))? as usize;
+    if size > MAX_INPUT_BYTES {
+        return Err(NativeInputError::fatal(invalid()));
+    }
+    if size == 0 {
+        return Err(NativeInputError::refused("remote_desktop_input_invalid"));
+    }
+    let mut bytes = vec![0; size];
+    reader
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|_| NativeInputError::fatal(invalid()))?;
+    let input: NativeInput = serde_json::from_slice(&bytes)
+        .map_err(|_| NativeInputError::refused("remote_desktop_input_invalid"))?;
+    uuid::Uuid::parse_str(&input.frame_id)
+        .map_err(|_| NativeInputError::refused("remote_desktop_input_invalid"))?;
+    Ok(input)
+}
+/// One already-acquired owner lease. Implementations re-admit each operation
+/// and call the same control entry points used by the local viewer.
+pub trait NativeInputSink: Send + Sync + 'static {
+    fn fence(&self) -> u64;
+    fn input(&self, input: NativeInput) -> NativeInputFuture;
+    fn renew(&self) -> FrameFuture<()>;
+    fn release(&self) -> FrameFuture<()>;
+}
+/// A single owned worker serializes input/renewal and releases on the last
+/// sender's drop, including failed opens, broker revocation and aborted tasks.
+#[derive(Clone)]
+pub struct NativeInputLease {
+    pub fence: u64,
+    sender: tokio::sync::mpsc::Sender<(
+        NativeInput,
+        tokio::sync::oneshot::Sender<NativeInputResult<()>>,
+    )>,
+    pub released: watch::Receiver<Option<Result<()>>>,
+    _closed: watch::Sender<()>,
+}
+impl NativeInputLease {
+    pub fn new(sink: Arc<dyn NativeInputSink>) -> Self {
+        let fence = sink.fence();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<(
+            NativeInput,
+            tokio::sync::oneshot::Sender<NativeInputResult<()>>,
+        )>(1);
+        let (done, released) = watch::channel(None);
+        let (closed, mut closing) = watch::channel(());
+        tokio::spawn(async move {
+            let mut renew = tokio::time::interval(Duration::from_secs(5));
+            renew.tick().await;
+            'worker: loop {
+                tokio::select! {
+                    command = receiver.recv() => match command {
+                        Some((input, reply)) => {
+                            let work = sink.input(input);
+                            tokio::pin!(work);
+                            let result = loop {
+                                tokio::select! {
+                                    result = &mut work => break result,
+                                    _ = renew.tick() => {
+                                        tokio::select! {
+                                            result = &mut work => break result,
+                                            result = sink.renew() => if let Err(error) = result {
+                                                break Err(NativeInputError::fatal(error));
+                                            },
+                                            _ = closing.changed() => break 'worker,
+                                        }
+                                    },
+                                    _ = closing.changed() => break 'worker,
+                                }
+                            };
+                            let failed = result.as_ref().is_err_and(|error| error.fatal);
+                            let _ = reply.send(result);
+                            if failed { break; }
+                        }
+                        None => break,
+                    },
+                    _ = renew.tick() => {
+                        tokio::select! {
+                            result = sink.renew() => if result.is_err() { break; },
+                            _ = closing.changed() => break,
+                        }
+                    },
+                    _ = closing.changed() => break,
+                }
+            }
+            let _ = done.send(Some(sink.release().await));
+        });
+        Self {
+            fence,
+            sender,
+            released,
+            _closed: closed,
+        }
+    }
+    pub async fn input(&self, input: NativeInput) -> NativeInputResult<()> {
+        let (reply, result) = tokio::sync::oneshot::channel();
+        self.sender
+            .send((input, reply))
+            .await
+            .map_err(|_| NativeInputError::fatal(invalid()))?;
+        result
+            .await
+            .map_err(|_| NativeInputError::fatal(invalid()))?
+    }
 }
 
 /// Quality falls first, then dimensions. Original coordinates remain in header.
@@ -552,6 +802,179 @@ async fn poll(weak: Weak<Poller>) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    #[tokio::test]
+    async fn bounded_bad_inputs_preserve_boundaries_and_oversized_input_is_fatal() {
+        use tokio::io::AsyncWriteExt;
+        let (mut writer, mut reader) = tokio::io::duplex(1024);
+        for value in [
+            serde_json::json!({"action":{"kind":"keyDown"}}),
+            serde_json::json!({"frameId":uuid::Uuid::new_v4().to_string(),"action":{"kind":"pressKey","chord":"Tab"}}),
+        ] {
+            let bytes = serde_json::to_vec(&value).unwrap();
+            writer.write_u32(bytes.len() as u32).await.unwrap();
+            writer.write_all(&bytes).await.unwrap();
+        }
+        assert!(!read_input(&mut reader).await.unwrap_err().fatal);
+        assert!(read_input(&mut reader).await.is_ok());
+        writer.write_u32(MAX_INPUT_BYTES as u32 + 1).await.unwrap();
+        assert!(read_input(&mut reader).await.unwrap_err().fatal);
+    }
+    #[tokio::test]
+    async fn input_worker_keeps_lease_on_refusal_and_releases_on_fatal_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Sink(Arc<AtomicUsize>, Arc<AtomicUsize>);
+        impl NativeInputSink for Sink {
+            fn fence(&self) -> u64 {
+                1
+            }
+            fn input(&self, _: NativeInput) -> NativeInputFuture {
+                let n = self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    match n {
+                        0 => Err(NativeInputError::refused(
+                            "remote_desktop_input_stale_frame",
+                        )),
+                        1 => Ok(()),
+                        _ => Err(NativeInputError::fatal(RemoteDesktopError::new(
+                            "remote_desktop_forbidden",
+                        ))),
+                    }
+                })
+            }
+            fn renew(&self) -> FrameFuture<()> {
+                Box::pin(async { Ok(()) })
+            }
+            fn release(&self) -> FrameFuture<()> {
+                let released = self.1.clone();
+                Box::pin(async move {
+                    released.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                })
+            }
+        }
+        let released = Arc::new(AtomicUsize::new(0));
+        let lease = NativeInputLease::new(Arc::new(Sink(
+            Arc::new(AtomicUsize::new(0)),
+            released.clone(),
+        )));
+        let input = || NativeInput {
+            point: None,
+            frame_id: uuid::Uuid::new_v4().to_string(),
+            action: NativeUiAction::PressKey {
+                chord: "Tab".into(),
+            },
+        };
+        assert!(!lease.input(input()).await.unwrap_err().fatal);
+        lease.input(input()).await.unwrap();
+        assert_eq!(released.load(Ordering::SeqCst), 0);
+        assert!(lease.input(input()).await.unwrap_err().fatal);
+        let mut done = lease.released.clone();
+        done.wait_for(|result| result.is_some()).await.unwrap();
+        assert_eq!(released.load(Ordering::SeqCst), 1);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn pending_consent_does_not_block_renewal_and_close_cancels_the_wait() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Pending(Arc<AtomicUsize>);
+        impl NativeInputSink for Pending {
+            fn fence(&self) -> u64 {
+                1
+            }
+            fn input(&self, _: NativeInput) -> NativeInputFuture {
+                Box::pin(std::future::pending())
+            }
+            fn renew(&self) -> FrameFuture<()> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(()) })
+            }
+            fn release(&self) -> FrameFuture<()> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        let renewed = Arc::new(AtomicUsize::new(0));
+        let lease = NativeInputLease::new(Arc::new(Pending(renewed.clone())));
+        let mut released = lease.released.clone();
+        let sender = lease.clone();
+        let input = tokio::spawn(async move {
+            sender
+                .input(NativeInput {
+                    point: None,
+                    frame_id: uuid::Uuid::new_v4().to_string(),
+                    action: NativeUiAction::PressKey {
+                        chord: "Tab".into(),
+                    },
+                })
+                .await
+        });
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(6)).await;
+        tokio::task::yield_now().await;
+        assert!(renewed.load(Ordering::SeqCst) > 0);
+        input.abort();
+        let _ = input.await;
+        drop(lease);
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            released.wait_for(|result| result.is_some()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+    #[tokio::test(start_paused = true)]
+    async fn closing_cancels_a_stalled_renewal_with_or_without_pending_input() {
+        struct PendingRenew(Arc<AtomicUsize>);
+        impl NativeInputSink for PendingRenew {
+            fn fence(&self) -> u64 {
+                1
+            }
+            fn input(&self, _: NativeInput) -> NativeInputFuture {
+                Box::pin(std::future::pending())
+            }
+            fn renew(&self) -> FrameFuture<()> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(std::future::pending())
+            }
+            fn release(&self) -> FrameFuture<()> {
+                Box::pin(async { Ok(()) })
+            }
+        }
+        for pending_input in [false, true] {
+            let renewed = Arc::new(AtomicUsize::new(0));
+            let lease = NativeInputLease::new(Arc::new(PendingRenew(renewed.clone())));
+            let mut released = lease.released.clone();
+            let task = pending_input.then(|| {
+                let sender = lease.clone();
+                tokio::spawn(async move {
+                    sender
+                        .input(NativeInput {
+                            point: None,
+                            frame_id: uuid::Uuid::new_v4().to_string(),
+                            action: NativeUiAction::PressKey {
+                                chord: "Tab".into(),
+                            },
+                        })
+                        .await
+                })
+            });
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(6)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(renewed.load(Ordering::SeqCst), 1);
+            if let Some(task) = task {
+                task.abort();
+                let _ = task.await;
+            }
+            drop(lease);
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                released.wait_for(|result| result.is_some()),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        }
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Image {
         sizes: Mutex<Vec<(u8, u32, u32)>>,

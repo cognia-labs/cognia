@@ -646,9 +646,31 @@
       "quarantined": "Input cleanup uncertain; control unavailable",
       "otherController": "Another user has control",
       "agentDormant": "Task and agent control remain dormant until delivery handoff is implemented.",
-      "mobileObservation": "Mobile supports observation only. Desktop input is disabled.",
+      "mobileObservation": "This viewer is observation only.",
       "qualificationRequired": "Cloud desktop viewing and control require a separately authorized GUI smoke test.",
-      "dockTitle": "Sandbox desktop"
+      "dockTitle": "Sandbox desktop",
+      "touch": {
+        "surfaceLabel": "Trackpad: drag to move the pointer, tap to click, tap with two fingers to right-click, drag with two fingers to scroll, press and hold to drag",
+        "trackpad": "Trackpad",
+        "direct": "Touch",
+        "switchToDirect": "Trackpad mode. Switch to direct touch",
+        "switchToTrackpad": "Direct touch mode. Switch to trackpad"
+      },
+      "keys": {
+        "barLabel": "Special keys",
+        "ctrl": "Ctrl",
+        "alt": "Alt",
+        "meta": "Super",
+        "esc": "Esc",
+        "tab": "Tab",
+        "left": "Left arrow",
+        "up": "Up arrow",
+        "down": "Down arrow",
+        "right": "Right arrow",
+        "ctrlAltDel": "Ctrl+Alt+Del",
+        "keyboard": "Keyboard",
+        "keyboardInput": "Type to send keys to the remote screen"
+      }
     },
     "deleteConfirmTitle": "Delete {name}?",
     "deleteConfirmDescription": "This permanently deletes the container and all files stored inside it. Files in mounted host folders remain. Export any files you need before deleting.",

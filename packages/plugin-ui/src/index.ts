@@ -198,3 +198,6 @@ export {
 export { Tabs, TabsContent, TabsList, TabsTrigger, tabsListVariants } from "./tabs"
 export { Textarea } from "./textarea"
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./tooltip"
+
+export * from "./remote-desktop-touch/touch-input"
+export * from "./remote-desktop-touch/touch-controls"

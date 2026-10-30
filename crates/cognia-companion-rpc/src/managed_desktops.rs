@@ -77,6 +77,7 @@ pub use crate::managed_desktop_acceptance::ACCEPTANCE_CHANGED_TOPIC;
 
 pub type HostEventSink = Arc<dyn Fn(&str, Value) + Send + Sync>;
 pub type AdminAuthorityCheck = Arc<dyn Fn() -> Result<()> + Send + Sync>;
+#[derive(Clone)]
 pub struct ManagedControlRuntime {
     pub enforcement: Enforcement,
     pub events: HostEventSink,
@@ -165,6 +166,8 @@ struct Installed {
     worker: tokio::task::JoinHandle<()>,
     qualification: Arc<qualification::QualificationRuntime>,
     acceptance: Arc<crate::managed_desktop_acceptance::AcceptanceRuntime>,
+    events: Option<HostEventSink>,
+    control_runtime: Option<ManagedControlRuntime>,
 }
 impl Drop for Installed {
     fn drop(&mut self) {
@@ -360,6 +363,7 @@ pub async fn install(
         log::warn!("managed desktop acceptance startup reconciliation: {}", error.code);
     }
     let acceptance_worker = acceptance.clone();
+    let input_events = events.clone();
     let weak = Arc::downgrade(&service);
     let evidence_directory = installed_directory.clone();
     let evidence_host = host_id.to_owned();
@@ -402,6 +406,8 @@ pub async fn install(
         worker,
         qualification,
         acceptance,
+        events: input_events,
+        control_runtime: None,
     });
     Ok(())
 }
@@ -473,6 +479,37 @@ pub fn register_native_frames() -> Result<()> {
         .map_err(|_| refused("managed_desktop_frames_unavailable"))
 }
 
+/// Desktop startup injects its live AutomationState enforcement before native
+/// input is enabled. Dispatching another RPC never changes this authority.
+pub fn install_native_control_runtime(runtime: ManagedControlRuntime) -> Result<()> {
+    let mut installed = INSTALLED.write();
+    let installed = installed
+        .as_mut()
+        .ok_or_else(|| refused("managed_desktop_host_unavailable"))?;
+    installed.control_runtime = Some(runtime);
+    Ok(())
+}
+
+async fn native_control_runtime(
+    service: &Arc<ManagedDesktopService>,
+) -> Result<ManagedControlRuntime> {
+    let (runtime, events) = INSTALLED
+        .read()
+        .as_ref()
+        .filter(|installed| Arc::ptr_eq(&installed.service, service))
+        .map(|installed| (installed.control_runtime.clone(), installed.events.clone()))
+        .ok_or_else(|| refused("managed_desktop_forbidden"))?;
+    if let Some(runtime) = runtime {
+        return Ok(runtime);
+    }
+    // A desktop must never substitute persisted headless settings for its live
+    // kill switch/permission gate. Headless hosts have no AutomationState.
+    if cfg!(feature = "tauri-host") {
+        return Err(refused("managed_desktop_control_policy_unavailable"));
+    }
+    headless_control_runtime(events.unwrap_or_else(|| Arc::new(|_, _| {}))).await
+}
+
 /// Maps a remote desktop viewer onto the same principal and live authority the
 /// `managed_desktop_control_frame` RPC uses. A device's tenant is read from the
 /// pairing store, never from the viewer. Store queries run off the runtime.
@@ -485,10 +522,10 @@ fn native_frame_context(
     use cognia_remote_desktop::error::RemoteDesktopError;
     Box::pin(cognia_remote_desktop::frames::blocking(move || {
         let forbidden = || RemoteDesktopError::new("remote_desktop_forbidden");
-        let host_id = INSTALLED
+        let (host_id, service) = INSTALLED
             .read()
             .as_ref()
-            .map(|installed| installed.host_id.clone())
+            .map(|installed| (installed.host_id.clone(), installed.service.clone()))
             .ok_or_else(|| RemoteDesktopError::new("remote_desktop_native_unavailable"))?;
         let caller = if viewer.is_local() {
             OwnedCaller {
@@ -510,12 +547,16 @@ fn native_frame_context(
             }
         };
         let managed = principal(&caller.caller(), &caller.host_id).map_err(|_| forbidden())?;
+        let caller = Arc::new(caller);
+        let input_executor =
+            native_input_executor(caller.clone(), managed.clone(), viewer, service);
         Ok(ManagedFrameContext {
             principal: managed,
             authority: Arc::new(NativeFrameAuthority {
-                caller: Arc::new(caller),
+                caller,
                 checked: Default::default(),
             }),
+            input_executor,
         })
     }))
 }
@@ -541,18 +582,15 @@ impl OwnedCaller {
 /// The frame stream's live authority: the same identity re-derivation as
 /// [`HostAuthority`], run off the runtime and reused for one remote desktop
 /// admission interval so a 7 Hz stream repeats no store work. It carries no
-/// admin lease or input policy because observing grants no input.
+/// input authority on its own: broker Control admission and the managed lease
+/// must both succeed before this live check can authorize a mutation.
 struct NativeFrameAuthority {
     caller: Arc<OwnedCaller>,
     checked: parking_lot::Mutex<Option<std::time::Instant>>,
 }
 #[async_trait]
 impl ManagedControlAuthority for NativeFrameAuthority {
-    fn input_admission(
-        &self,
-        _: &ManagedDesktopPrincipal,
-    ) -> Arc<dyn Fn() -> bool + Send + Sync> {
-        // Input always goes through the lease-fenced control RPC.
+    fn input_admission(&self, _: &ManagedDesktopPrincipal) -> Arc<dyn Fn() -> bool + Send + Sync> {
         Arc::new(|| false)
     }
     async fn revalidate(&self, expected: &ManagedDesktopPrincipal) -> Result<()> {
@@ -574,6 +612,88 @@ impl ManagedControlAuthority for NativeFrameAuthority {
         *self.checked.lock() = outcome.is_ok().then(std::time::Instant::now);
         outcome
     }
+}
+
+fn native_input_executor(
+    caller: Arc<OwnedCaller>,
+    expected: ManagedDesktopPrincipal,
+    viewer: cognia_remote_desktop::session::Principal,
+    service: Arc<ManagedDesktopService>,
+) -> cognia_automation::cua_sandbox::managed::frame_source::ManagedInputExecutor {
+    Arc::new(move |request| {
+        let (caller, expected, viewer, service) = (
+            caller.clone(),
+            expected.clone(),
+            viewer.clone(),
+            service.clone(),
+        );
+        Box::pin(async move {
+            use cognia_remote_desktop::frames::NativeInputError;
+            let runtime = native_control_runtime(&service)
+                .await
+                .map_err(|error| NativeInputError::managed(&error.code))?;
+            execute_native_input(&service, &caller, &expected, viewer, request, runtime)
+                .await
+                .map_err(|error| NativeInputError::managed(&error.code))
+        })
+    })
+}
+
+async fn execute_native_input(
+    service: &ManagedDesktopService,
+    caller: &OwnedCaller,
+    expected: &ManagedDesktopPrincipal,
+    viewer: cognia_remote_desktop::session::Principal,
+    request: cognia_automation::cua_sandbox::managed::frame_source::ManagedNativeInput,
+    runtime: ManagedControlRuntime,
+) -> Result<()> {
+    execute_native_input_with_delivery(
+        expected,
+        caller,
+        viewer,
+        request,
+        runtime,
+        &CoreInputDelivery {
+            service,
+            smoke: None,
+            native: true,
+        },
+    )
+    .await
+}
+
+async fn execute_native_input_with_delivery(
+    expected: &ManagedDesktopPrincipal,
+    caller: &OwnedCaller,
+    viewer: cognia_remote_desktop::session::Principal,
+    request: cognia_automation::cua_sandbox::managed::frame_source::ManagedNativeInput,
+    runtime: ManagedControlRuntime,
+    delivery: &dyn HumanInputDelivery,
+) -> Result<()> {
+    let action = serde_json::to_value(request.input.action)
+        .map_err(|_| refused("managed_desktop_invalid_request"))?;
+    // Reuse the human RPC boundary's closed action validation as well as its
+    // full gate. The broker supplies the lease; the message never supplies it.
+    let args: InputArgs = decode(serde_json::json!({
+        "desktopId":request.desktop_id, "generation":request.generation,
+        "token":request.lease.token, "fence":request.lease.fence,
+        "frameId":request.input.frame_id, "point":request.input.point, "action":action,
+    }))?;
+    let authority = HostAuthority {
+        caller: caller.caller(),
+        host_id: &caller.host_id,
+        admin_check: Some(Arc::new(move || {
+            if viewer.admitted(cognia_remote_desktop::session::SessionMode::Control) {
+                Ok(())
+            } else {
+                Err(refused("managed_desktop_control_admin_lease_expired"))
+            }
+        })),
+        input_policy: None,
+        admission_observer: None,
+    };
+    authority.revalidate(expected).await?;
+    execute_input_pipeline(expected, &authority, args, runtime, delivery).await
 }
 
 /// Whether a freshly derived principal is still the one an operation began as.
@@ -1159,13 +1279,79 @@ async fn execute_input(
     execute_input_inner(service, p, authority, a, runtime, None).await
 }
 
+#[async_trait]
+trait HumanInputDelivery: Send + Sync {
+    async fn deliver(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        input: InputArgs,
+        authority: &dyn ManagedControlAuthority,
+    ) -> Result<()>;
+}
+struct CoreInputDelivery<'a> {
+    service: &'a ManagedDesktopService,
+    smoke: Option<&'a ExplicitPaidSmokeAuthorization>,
+    native: bool,
+}
+#[async_trait]
+impl HumanInputDelivery for CoreInputDelivery<'_> {
+    async fn deliver(
+        &self,
+        p: &ManagedDesktopPrincipal,
+        a: InputArgs,
+        authority: &dyn ManagedControlAuthority,
+    ) -> Result<()> {
+        let input = cognia_automation::cua_sandbox::managed::ManagedControlInput {
+            token: &a.token,
+            fence: a.fence,
+            frame_id: &a.frame_id,
+            point: a.point,
+            action: a.action,
+        };
+        if let Some(permit) = self.smoke {
+            self.service
+                .control_input_smoke(p, &a.desktop_id, a.generation, input, authority, permit)
+                .await
+        } else if self.native {
+            self.service
+                .native_control_input(p, &a.desktop_id, a.generation, input, authority)
+                .await
+        } else {
+            self.service
+                .control_input(p, &a.desktop_id, a.generation, input, authority)
+                .await
+        }
+    }
+}
+
 async fn execute_input_inner(
     service: &ManagedDesktopService,
     p: &ManagedDesktopPrincipal,
     authority: &HostAuthority<'_>,
     a: InputArgs,
-    mut runtime: ManagedControlRuntime,
+    runtime: ManagedControlRuntime,
     smoke: Option<&ExplicitPaidSmokeAuthorization>,
+) -> Result<()> {
+    execute_input_pipeline(
+        p,
+        authority,
+        a,
+        runtime,
+        &CoreInputDelivery {
+            service,
+            smoke,
+            native: false,
+        },
+    )
+    .await
+}
+
+async fn execute_input_pipeline(
+    p: &ManagedDesktopPrincipal,
+    authority: &HostAuthority<'_>,
+    a: InputArgs,
+    mut runtime: ManagedControlRuntime,
+    delivery: &dyn HumanInputDelivery,
 ) -> Result<()> {
     let command = input_command(&a.action)?;
     require_verified_target_constraints(&runtime.enforcement)?;
@@ -1224,12 +1410,9 @@ async fn execute_input_inner(
         {
             return Err(error);
         }
-        let delivery = if let Some(permit) = smoke {
-            service.control_input_smoke(p, &a.desktop_id, a.generation, cognia_automation::cua_sandbox::managed::ManagedControlInput { token: &a.token, fence: a.fence, frame_id: &a.frame_id, point: a.point, action: a.action }, authority, permit).await
-        } else {
-            service.control_input(p, &a.desktop_id, a.generation, cognia_automation::cua_sandbox::managed::ManagedControlInput { token: &a.token, fence: a.fence, frame_id: &a.frame_id, point: a.point, action: a.action }, authority).await
-        };
         delivery
+            .deliver(p, a, authority)
+            .await
             .map_err(|error| AutomationError::BackendError {
                 message: error.code,
             })
@@ -1708,6 +1891,263 @@ pub async fn managed_desktop_local_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct ObservedInput(std::sync::atomic::AtomicUsize);
+    #[async_trait]
+    impl HumanInputDelivery for ObservedInput {
+        async fn deliver(
+            &self,
+            p: &ManagedDesktopPrincipal,
+            _: InputArgs,
+            authority: &dyn ManagedControlAuthority,
+        ) -> Result<()> {
+            authority.revalidate(p).await?;
+            if !(authority.input_admission(p))() {
+                return Err(refused("managed_desktop_forbidden"));
+            }
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    fn native_request(
+        action: cognia_remote_desktop::frames::NativeUiAction,
+    ) -> cognia_automation::cua_sandbox::managed::frame_source::ManagedNativeInput {
+        cognia_automation::cua_sandbox::managed::frame_source::ManagedNativeInput {
+            desktop_id: "desktop".into(),
+            generation: 1,
+            lease: ManagedControlLease {
+                token: "host-owned-lease".into(),
+                fence: 1,
+                expires_at: i64::MAX,
+            },
+            input: cognia_remote_desktop::frames::NativeInput {
+                point: Some(cognia_remote_desktop::frames::NativePoint { x: 15, y: 15 }),
+                frame_id: uuid::Uuid::new_v4().to_string(),
+                action,
+            },
+        }
+    }
+    #[tokio::test]
+    async fn broker_and_rpc_share_coordinate_deny_computer_use_deny_consent_and_allowed_input() {
+        use cognia_automation::automation::{
+            permission::Tier,
+            policy::{Policy, ScreenRect},
+        };
+        use cognia_remote_desktop::{
+            frames::{NativeDragOptions, NativePoint, NativeUiAction},
+            session::Principal,
+        };
+        let _scope = TestScope::new();
+        install_security_store(Some(SecurityStore::in_memory().unwrap()));
+        host_identity::bind_local_account("native-gate-owner", "native-gate-owner").unwrap();
+        let caller = OwnedCaller {
+            device_id: LOCAL_DEVICE_ID.into(),
+            tenant_id: None,
+            local: true,
+            host_id: "native-host".into(),
+        };
+        let p = principal(&caller.caller(), &caller.host_id).unwrap();
+        for scenario in [
+            "coordinate",
+            "drag-destination",
+            "computer-use-deny",
+            "consent",
+            "allowed",
+        ] {
+            let runtime = ManagedControlRuntime {
+                enforcement: consent_enforcement(),
+                refresh_persisted: false,
+                events: Arc::new(|_, value| {
+                    cognia_companion::host_consent::resolve(
+                        value["id"].as_str().unwrap(),
+                        false,
+                        cognia_companion::host_consent::Approver::Host,
+                    )
+                    .unwrap();
+                }),
+            };
+            runtime.enforcement.gate.update(|settings| {
+                settings.enabled = scenario != "computer-use-deny";
+                settings.per_surface.computer_use.tier = if scenario == "consent" {
+                    Tier::PerCall
+                } else {
+                    Tier::Whitelist
+                };
+            });
+            if matches!(scenario, "coordinate" | "drag-destination") {
+                runtime
+                    .enforcement
+                    .policy
+                    .set(Policy {
+                        forbidden_screen_regions: vec![ScreenRect {
+                            x: 10,
+                            y: 10,
+                            width: 20,
+                            height: 20,
+                        }],
+                        ..Default::default()
+                    })
+                    .unwrap();
+            }
+            let action = if scenario == "drag-destination" {
+                NativeUiAction::Drag {
+                    to: NativePoint { x: 15, y: 15 },
+                    opts: NativeDragOptions::default(),
+                }
+            } else {
+                NativeUiAction::Click {
+                    button: None,
+                    count: Some(1),
+                }
+            };
+            let mut request = native_request(action);
+            if scenario == "drag-destination" {
+                request.input.point = Some(NativePoint { x: 1, y: 1 });
+            }
+            let rpc: InputArgs = decode(serde_json::json!({"desktopId":request.desktop_id,"generation":1,"token":request.lease.token,"fence":1,
+                "frameId":request.input.frame_id,"point":request.input.point,"action":request.input.action})).unwrap();
+            let delivered = ObservedInput(Default::default());
+            let broker_result = execute_native_input_with_delivery(
+                &p,
+                &caller,
+                Principal::local(),
+                request,
+                runtime.clone(),
+                &delivered,
+            )
+            .await;
+            let authority = HostAuthority {
+                caller: caller.caller(),
+                host_id: &caller.host_id,
+                admin_check: None,
+                input_policy: None,
+                admission_observer: None,
+            };
+            let rpc_result = execute_input_pipeline(&p, &authority, rpc, runtime, &delivered).await;
+            assert_eq!(
+                broker_result.as_ref().err().map(|error| &error.code),
+                rpc_result.as_ref().err().map(|error| &error.code),
+                "{scenario}"
+            );
+            if scenario == "allowed" {
+                broker_result.unwrap();
+                rpc_result.unwrap();
+                assert_eq!(delivered.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+            } else {
+                assert!(broker_result.is_err(), "{scenario}");
+                assert_eq!(
+                    delivered.0.load(std::sync::atomic::Ordering::SeqCst),
+                    0,
+                    "{scenario}"
+                );
+            }
+        }
+        cognia_companion::host_consent::forget_device(LOCAL_DEVICE_ID);
+    }
+    #[tokio::test]
+    async fn broker_input_rechecks_live_control_and_account_identity() {
+        use cognia_remote_desktop::{frames::NativeUiAction, session::Principal};
+        let _scope = TestScope::new();
+        install_security_store(Some(SecurityStore::in_memory().unwrap()));
+        host_identity::bind_local_account("native-owner-a", "native-owner-a").unwrap();
+        let caller = OwnedCaller {
+            device_id: LOCAL_DEVICE_ID.into(),
+            tenant_id: None,
+            local: true,
+            host_id: "native-host".into(),
+        };
+        let p = principal(&caller.caller(), &caller.host_id).unwrap();
+        let runtime = || ManagedControlRuntime {
+            enforcement: consent_enforcement(),
+            events: Arc::new(|_, _| {}),
+            refresh_persisted: false,
+        };
+        let delivered = ObservedInput(Default::default());
+        let result = execute_native_input_with_delivery(
+            &p,
+            &caller,
+            Principal::device("revoked", Arc::new(|_| false)),
+            native_request(NativeUiAction::PressKey {
+                chord: "Tab".into(),
+            }),
+            runtime(),
+            &delivered,
+        )
+        .await;
+        assert_eq!(
+            result.unwrap_err().code,
+            "managed_desktop_control_admin_lease_expired"
+        );
+        host_identity::bind_local_account("native-owner-b", "native-owner-b").unwrap();
+        let result = execute_native_input_with_delivery(
+            &p,
+            &caller,
+            Principal::local(),
+            native_request(NativeUiAction::PressKey {
+                chord: "Tab".into(),
+            }),
+            runtime(),
+            &delivered,
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(delivered.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn native_first_input_uses_the_explicit_live_runtime_and_obeys_live_deny() {
+        use cognia_remote_desktop::{frames::NativeUiAction, session::Principal};
+        let _scope = TestScope::new();
+        let (_directory, service, p) = qualification_fixture(None).await;
+        let caller = OwnedCaller {
+            device_id: LOCAL_DEVICE_ID.into(),
+            tenant_id: None,
+            local: true,
+            host_id: "test-host".into(),
+        };
+        let runtime = ManagedControlRuntime {
+            enforcement: consent_enforcement(),
+            events: Arc::new(|_, _| {}),
+            refresh_persisted: false,
+        };
+        runtime
+            .enforcement
+            .gate
+            .update(|settings| settings.enabled = false);
+        install_native_control_runtime(runtime.clone()).unwrap();
+        let selected = native_control_runtime(&service).await.unwrap();
+        let delivered = ObservedInput(Default::default());
+        let input = || {
+            native_request(NativeUiAction::PressKey {
+                chord: "Tab".into(),
+            })
+        };
+        assert!(execute_native_input_with_delivery(
+            &p,
+            &caller,
+            Principal::local(),
+            input(),
+            selected,
+            &delivered
+        )
+        .await
+        .is_err());
+        assert_eq!(delivered.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        runtime.enforcement.gate.update(|settings| {
+            settings.enabled = true;
+            settings.per_surface.computer_use.tier =
+                cognia_automation::automation::permission::Tier::Whitelist;
+        });
+        execute_native_input_with_delivery(
+            &p,
+            &caller,
+            Principal::local(),
+            input(),
+            native_control_runtime(&service).await.unwrap(),
+            &delivered,
+        )
+        .await
+        .unwrap();
+        assert_eq!(delivered.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
     use cognia_companion::security_store::{install_security_store, test_guard, SecurityStore};
 
     const NOW: i64 = 1_700_000_000;
@@ -2634,7 +3074,12 @@ mod tests {
             release: crate::managed_desktop_release::ReleaseStatus::of(&Ok(None)),
             worker: tokio::spawn(std::future::pending()),
             qualification,
-            acceptance: Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(service.clone(), None)),
+            acceptance: Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(
+                service.clone(),
+                None,
+            )),
+            events: None,
+            control_runtime: None,
         });
         (directory, service, p)
     }
@@ -2976,7 +3421,20 @@ mod tests {
         negative["namespaces"] = desktop["providerNamespaces"].clone();
         negative["status"] = json!("Uid:0 0 0 0");
         json!({
-            "reportVersion":2,"boundaryGeneration":desktop["boundaryGeneration"],"negativeControl":negative,
+            "reportVersion":3,"boundaryGeneration":desktop["boundaryGeneration"],"negativeControl":negative,
+            "operations":{
+                "admission":acceptance,
+                "networkClients":(["1.1.1.1","10.0.0.1","172.16.0.1","192.168.0.1","100.64.0.1","169.254.0.1",
+                    "169.254.169.254","2606:4700:4700::1111","fd00:ec2::254","169.254.170.2","100.100.100.200",
+                    "::ffff:169.254.169.254","fd00::1","fe80::1","::ffff:10.0.0.1"].into_iter().map(|target| json!({"target":target,"exitCode":101})).collect::<Vec<_>>()),
+                "refusals":(["symlink-read","symlink-write","directory-symlink-read","directory-symlink-write",
+                    "hardlink-read","hardlink-write","fifo-read","fifo-write","socket-read","socket-write",
+                    "parent-read","parent-write","special-file","file-cap","chunk-read-cap","chunk-write-cap",
+                    "session-read-cap","session-write-cap","clipboard-cap"].into_iter().map(|operation| json!({"operation":operation,"result":-1,"errno":1})).collect::<Vec<_>>()),
+                "writtenBytes":8*1024*1024,"readBytes":8*1024*1024,"outputBytes":1024*1024,"outputTruncated":true,
+                "timeoutMs":1000,"timeoutSignal":9,"clipboardBytes":1024*1024,
+                "timeoutProcesses":{"10":1,"11":1},"timeoutSurvivors":{},"deathProcesses":{"70":1,"71":1}
+            },
             "weakenedLaunch":{"profile":"importer-without-seccomp-v1","executable":"/usr/local/bin/cognia-desktop-guest",
                 "terminatedProcesses":{"20":1,"21":2},"survivingProcesses":{},"admission":weak},
             "acceptanceAdmission":acceptance,"importerAdmission":importer,
@@ -2985,7 +3443,7 @@ mod tests {
                     "localPreview":"cognia-qualified-loopback","metadataNavigationNetErrors":[-109],
                     "redirectNetErrors":[-109],"hostnameNetErrors":[-105]}},
             "importerProbe":{"importer":probe(&importer,43),"git":process(&importer,44,"/usr/bin/git"),"gitExitCode":0},
-            "terminatedProcesses":{"20":1,"50":1,"60":1},"survivingProcesses":{},"detachedOuterPid":50,
+            "terminatedProcesses":{"20":1,"50":1,"60":1,"70":1,"71":1},"survivingProcesses":{},"detachedOuterPid":50,
             "supervisorPid":60,"supervisorStartTime":1,"ingressErrno":111,"desktop":desktop,
         })
     }
@@ -3195,8 +3653,16 @@ mod tests {
             host_id: "test-host".into(),
             release: crate::managed_desktop_release::ReleaseStatus::of(&Ok(None)),
             worker: tokio::spawn(std::future::pending()),
-            qualification: Arc::new(qualification::QualificationRuntime::new(service.clone(), Some(events.clone()))),
-            acceptance: Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(service.clone(), Some(events))),
+            qualification: Arc::new(qualification::QualificationRuntime::new(
+                service.clone(),
+                Some(events.clone()),
+            )),
+            acceptance: Arc::new(crate::managed_desktop_acceptance::AcceptanceRuntime::new(
+                service.clone(),
+                Some(events),
+            )),
+            events: None,
+            control_runtime: None,
         });
         (directory, service, events_seen)
     }

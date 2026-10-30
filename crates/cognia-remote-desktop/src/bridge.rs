@@ -70,6 +70,8 @@ pub struct FramesTarget {
     pub hub: Arc<crate::frames::FrameHub>,
     pub target_id: String,
     pub source: Arc<dyn crate::frames::FrameSource>,
+    pub input: Option<crate::frames::NativeInputLease>,
+    pub principal: String,
 }
 
 enum Upstream {
@@ -125,6 +127,7 @@ pub struct Bridge {
     state: watch::Receiver<BridgeState>,
     close: watch::Sender<bool>,
     task: JoinHandle<()>,
+    native_release: Option<watch::Receiver<Option<Result<()>>>>,
 }
 
 /// Where the viewer will come from, once.
@@ -154,6 +157,10 @@ impl Bridge {
         attachment: Attachment,
         ticket_ttl: Duration,
     ) -> Result<Bridge> {
+        let native_release = match &target {
+            Upstream::Frames(target) => target.input.as_ref().map(|input| input.released.clone()),
+            _ => None,
+        };
         let (url, source, attach) = match attachment {
             Attachment::Loopback => {
                 let listener = TcpListener::bind("127.0.0.1:0")
@@ -189,11 +196,15 @@ impl Bridge {
             state,
             close,
             task,
+            native_release,
         })
     }
 
     pub fn attach_handle(&self) -> AttachHandle {
         self.attach.clone()
+    }
+    pub(crate) fn native_release(&self) -> Option<watch::Receiver<Option<Result<()>>>> {
+        self.native_release.clone()
     }
 
     pub fn state(&self) -> BridgeState {
@@ -383,22 +394,78 @@ async fn relay_upstream(
             let _ = state.send(BridgeState::Connected);
             let (mut reader, mut writer) = tokio::io::split(viewer);
             let inbound = async {
-                let mut byte = [0];
-                match reader.read(&mut byte).await {
-                    Ok(0) | Err(_) => Ok(()),
-                    // This stream grants no input authority.
-                    Ok(_) => Err(RemoteDesktopError::new("remote_desktop_protocol_invalid")),
-                }
-            };
-            let outbound = async {
-                loop {
-                    let frame = frames.next().await?;
-                    if writer.write_all(&frame).await.is_err() {
-                        return Ok(());
+                if let Some(input) = &target.input {
+                    loop {
+                        let result = match crate::frames::read_input(&mut reader).await {
+                            Ok(message) => input.input(message).await,
+                            Err(error) => Err(error),
+                        };
+                        if let Err(error) = result {
+                            crate::audit::record_background(
+                                "remote_desktop.input",
+                                crate::frames::native_kind(&target.target_id).unwrap_or("external"),
+                                &target.target_id,
+                                &target.principal,
+                                "deny",
+                                input.fence,
+                                serde_json::json!({"code":error.error.code}),
+                            );
+                            if error.fatal {
+                                return Err(error.error);
+                            }
+                        }
+                    }
+                } else {
+                    let mut byte = [0];
+                    match reader.read(&mut byte).await {
+                        Ok(0) | Err(_) => Ok(()),
+                        Ok(_) => Err(RemoteDesktopError::new("remote_desktop_protocol_invalid")),
                     }
                 }
             };
-            tokio::select! { result = inbound => result, result = outbound => result }
+            let released = async {
+                if let Some(input) = &target.input {
+                    let mut done = input.released.clone();
+                    done.wait_for(|result| result.is_some())
+                        .await
+                        .map_err(|_| crate::frames::invalid())?;
+                    Err(RemoteDesktopError::new("remote_desktop_control_expired"))
+                } else {
+                    std::future::pending::<Result<()>>().await
+                }
+            };
+            let outbound = async {
+                let mut pixels: Option<Vec<u8>> = None;
+                let mut sent_pixels = false;
+                loop {
+                    let mut frame = frames.next().await?.as_ref().clone();
+                    let mut header = crate::frames::FrameHeader::decode(&frame)?;
+                    if header.encoding == crate::frames::JPEG {
+                        pixels = Some(frame[crate::frames::HEADER_BYTES..].to_vec());
+                    }
+                    // A shared poller may still cache the observation captured
+                    // before takeover. Only send proofs for this native lease.
+                    if target
+                        .input
+                        .as_ref()
+                        .is_some_and(|input| header.fence != input.fence)
+                    {
+                        continue;
+                    }
+                    if !sent_pixels && header.encoding == crate::frames::UNCHANGED {
+                        let jpeg = pixels.as_ref().ok_or_else(crate::frames::invalid)?;
+                        header.encoding = crate::frames::JPEG;
+                        header.payload_bytes = jpeg.len() as u32;
+                        frame = header.encode()?.to_vec();
+                        frame.extend_from_slice(jpeg);
+                    }
+                    if writer.write_all(&frame).await.is_err() {
+                        return Ok(());
+                    }
+                    sent_pixels = true;
+                }
+            };
+            tokio::select! { result = inbound => result, result = outbound => result, result = released => result }
         }
     }
 }
@@ -896,6 +963,8 @@ mod tests {
         );
         let first = Bridge::start_frames(
             FramesTarget {
+                principal: "local-owner".into(),
+                input: None,
                 hub: hub.clone(),
                 target_id: "sandbox:a".into(),
                 source: source.clone()
@@ -907,6 +976,8 @@ mod tests {
         .unwrap();
         let mut second = Bridge::start_frames(
             FramesTarget {
+                principal: "local-owner".into(),
+                input: None,
                 hub,
                 target_id: "managed-desktop:b".into(),
                 source

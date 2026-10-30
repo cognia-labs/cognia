@@ -5870,8 +5870,23 @@
           "release": "无法确认控制权是否已释放；控制权将在 15 秒内自动过期。",
           "session": "账户或 Host 连接已变化。请关闭并重新打开桌面以继续查看，准备好后再明确接管。"
         },
+        "keys": {
+          "alt": "Alt",
+          "barLabel": "特殊按键",
+          "ctrl": "Ctrl",
+          "ctrlAltDel": "Ctrl+Alt+Del",
+          "down": "下方向键",
+          "esc": "Esc",
+          "keyboard": "键盘",
+          "keyboardInput": "输入以向远程屏幕发送按键",
+          "left": "左方向键",
+          "meta": "Super",
+          "right": "右方向键",
+          "tab": "Tab",
+          "up": "上方向键"
+        },
         "loading": "正在连接桌面…",
-        "mobileObservation": "移动端仅支持查看，桌面输入已禁用。",
+        "mobileObservation": "此查看器仅支持观察。",
         "otherController": "其他用户正在控制",
         "qualificationRequired": "云桌面查看与控制需要另行授权并通过 GUI smoke 验证。",
         "quarantined": "输入清理状态不确定，暂不可控制",
@@ -5891,6 +5906,13 @@
         "textLabel": "发送到沙箱的文字",
         "textPlaceholder": "在此输入或粘贴文字，支持中文输入法。",
         "title": "桌面",
+        "touch": {
+          "direct": "触摸",
+          "surfaceLabel": "触控板：拖动移动指针，轻点单击，双指轻点右键，双指拖动滚动，长按后拖动",
+          "switchToDirect": "当前为触控板模式，切换为直接触摸",
+          "switchToTrackpad": "当前为直接触摸模式，切换为触控板",
+          "trackpad": "触控板"
+        },
         "unavailable": "在桌面应用中启动此沙箱后即可查看画面。"
       },
       "empty": "尚未配置任何沙箱。",
@@ -40868,6 +40890,40 @@
       "viewerFailed": "查看器意外停止。",
       "viewerInvalid": "提供方的查看器无效。",
       "viewerRequiresWebview": "只有内置提供方可以在应用内渲染查看器；该提供方必须使用沙箱视图。"
+    },
+    "native": {
+      "close": "关闭桌面",
+      "docker": "Docker 沙箱",
+      "e2b": "E2B 托管桌面",
+      "keys": {
+        "alt": "Alt",
+        "barLabel": "特殊按键",
+        "ctrl": "Ctrl",
+        "ctrlAltDel": "Ctrl+Alt+Del",
+        "down": "下方向键",
+        "esc": "Esc",
+        "keyboard": "键盘",
+        "keyboardInput": "输入以向远程屏幕发送按键",
+        "left": "左方向键",
+        "meta": "Super",
+        "right": "右方向键",
+        "tab": "Tab",
+        "up": "上方向键"
+      },
+      "loading": "正在连接桌面…",
+      "readOnly": "由所属服务管理",
+      "release": "释放控制",
+      "screen": "原生桌面屏幕",
+      "selkies": "Selkies（仅限本机桌面）",
+      "takeControl": "接管控制",
+      "title": "原生桌面",
+      "touch": {
+        "direct": "触摸",
+        "surfaceLabel": "触控板：拖动移动指针，轻点单击，双指轻点右键，双指拖动滚动，长按后拖动",
+        "switchToDirect": "当前为触控板模式，切换为直接触摸",
+        "switchToTrackpad": "当前为直接触摸模式，切换为触控板",
+        "trackpad": "触控板"
+      }
     },
     "section": {
       "actionsLabel": "{name} 的操作",

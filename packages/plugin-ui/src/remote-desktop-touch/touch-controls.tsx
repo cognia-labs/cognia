@@ -2,11 +2,11 @@
  * Phone controls for the VNC viewer (ADR-0234 Phase 3), shown in control mode
  * on a touch screen.
  *
- *  * {@link VncTrackpadLayer} sits over noVNC's canvas in trackpad mode and
+ *  * {@link TouchTrackpadLayer} sits over noVNC's canvas in trackpad mode and
  *    turns gestures into mouse events on that canvas at a drawn pointer, so
  *    noVNC does the scaling and sends them. In direct-touch mode it is not
  *    rendered and noVNC's own touch gestures apply.
- *  * {@link VncKeyBar} has the keys a phone keyboard lacks (latching Ctrl,
+ *  * {@link TouchKeyBar} has the keys a phone keyboard lacks (latching Ctrl,
  *    Alt and Super; Esc, Tab, arrows, Ctrl+Alt+Del), the trackpad/touch
  *    switch, and a soft-keyboard toggle whose typed text is sent as keysyms.
  *
@@ -25,9 +25,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react"
-import { usePluginTranslations } from "@cognia/plugin-sdk/api/i18n"
 
-import { PLUGIN_ID } from "./ids"
 import {
   KEYSYM,
   keysymForChar,
@@ -37,24 +35,61 @@ import {
   type SendKey,
 } from "./touch-input"
 
+export type TouchLabelKey =
+  | "touch.surfaceLabel"
+  | "touch.switchToDirect"
+  | "touch.switchToTrackpad"
+  | "touch.trackpad"
+  | "touch.direct"
+  | "keys.barLabel"
+  | "keys.ctrl"
+  | "keys.alt"
+  | "keys.meta"
+  | "keys.esc"
+  | "keys.tab"
+  | "keys.left"
+  | "keys.up"
+  | "keys.down"
+  | "keys.right"
+  | "keys.ctrlAltDel"
+  | "keys.keyboard"
+  | "keys.keyboardInput"
+export type TouchLabels = (key: TouchLabelKey) => string
+
 export type TouchInputMode = "trackpad" | "direct"
 
-interface Point {
+export interface TouchPoint {
   x: number
   y: number
 }
+type Point = TouchPoint
 
-export interface VncTrackpadLayerProps {
+export interface TouchSurfaceSink {
+  pointer(point: TouchPoint, buttons: number, longPress?: boolean): void
+  scroll(point: TouchPoint, dy: number): void
+  cancel(): void
+}
+
+export interface TouchTrackpadLayerProps {
   /** noVNC's canvas, once it exists. */
-  canvas: () => HTMLCanvasElement | null
+  canvas: () => HTMLElement | null
+  labels: TouchLabels
+  sink?: TouchSurfaceSink
+  inputMode?: TouchInputMode
   /** Test seam: the gesture clock. */
   now?: () => number
 }
 
 const CURSOR_SIZE = 14
 
-export function VncTrackpadLayer({ canvas, now = () => performance.now() }: VncTrackpadLayerProps) {
-  const t = usePluginTranslations(PLUGIN_ID)
+export function TouchTrackpadLayer({
+  canvas,
+  labels,
+  sink,
+  inputMode = "trackpad",
+  now = () => performance.now(),
+}: TouchTrackpadLayerProps) {
+  const t = labels
   const layer = useRef<HTMLDivElement | null>(null)
   // Pointer position relative to the canvas, in CSS pixels.
   const cursor = useRef<Point | null>(null)
@@ -65,8 +100,10 @@ export function VncTrackpadLayer({ canvas, now = () => performance.now() }: VncT
   const place = useCallback(() => {
     const target = canvas()
     const box = layer.current?.getBoundingClientRect()
-    if (!target || !box || !cursor.current) return null
+    if (!target || !box) return null
     const rect = target.getBoundingClientRect()
+    if (!rect.width || !rect.height) return null
+    cursor.current ??= { x: rect.width / 2, y: rect.height / 2 }
     return {
       target,
       clientX: rect.left + cursor.current.x,
@@ -77,72 +114,89 @@ export function VncTrackpadLayer({ canvas, now = () => performance.now() }: VncT
   }, [canvas])
 
   const dispatch = useCallback(
-    (type: "mousemove" | "mousedown" | "mouseup") => {
+    (type: "mousemove" | "mousedown" | "mouseup", longPress?: boolean) => {
       const at = place()
       if (!at) return
-      at.target.dispatchEvent(
-        new MouseEvent(type, {
-          clientX: at.clientX,
-          clientY: at.clientY,
-          buttons: held.current,
-          bubbles: true,
-          cancelable: true,
-        })
-      )
-      setDrawn({ x: at.layerX, y: at.layerY })
-    },
-    [place]
-  )
-
-  useEffect(() => {
-    gestures.current = new TrackpadGestures({
-      move: (dx, dy) => {
-        const target = canvas()
-        if (!target) return
-        const rect = target.getBoundingClientRect()
-        const from = cursor.current ?? { x: rect.width / 2, y: rect.height / 2 }
-        cursor.current = {
-          x: Math.min(Math.max(from.x + dx, 0), Math.max(rect.width - 1, 0)),
-          y: Math.min(Math.max(from.y + dy, 0), Math.max(rect.height - 1, 0)),
-        }
-        dispatch("mousemove")
-      },
-      buttons: (mask) => {
-        const target = canvas()
-        if (!target) return
-        if (!cursor.current) {
-          const rect = target.getBoundingClientRect()
-          cursor.current = { x: rect.width / 2, y: rect.height / 2 }
-        }
-        const previous = held.current
-        held.current = mask
-        if (mask & ~previous) dispatch("mousedown")
-        else if (previous & ~mask) dispatch("mouseup")
-      },
-      scroll: (dy) => {
-        const at = place()
-        if (!at) return
+      if (sink)
+        sink.pointer({ x: cursor.current!.x, y: cursor.current!.y }, held.current, longPress)
+      else
         at.target.dispatchEvent(
-          new WheelEvent("wheel", {
+          new MouseEvent(type, {
             clientX: at.clientX,
             clientY: at.clientY,
-            deltaY: dy,
-            deltaMode: 0,
+            buttons: held.current,
             bubbles: true,
             cancelable: true,
           })
         )
+      setDrawn({ x: at.layerX, y: at.layerY })
+    },
+    [place, sink]
+  )
+
+  useEffect(() => {
+    gestures.current = new TrackpadGestures(
+      {
+        move: (dx, dy) => {
+          const target = canvas()
+          if (!target) return
+          const rect = target.getBoundingClientRect()
+          const from = cursor.current ?? { x: rect.width / 2, y: rect.height / 2 }
+          cursor.current = {
+            x: Math.min(Math.max(from.x + dx, 0), Math.max(rect.width - 1, 0)),
+            y: Math.min(Math.max(from.y + dy, 0), Math.max(rect.height - 1, 0)),
+          }
+          dispatch("mousemove")
+        },
+        buttons: (mask, longPress) => {
+          const target = canvas()
+          if (!target) return
+          if (!cursor.current) {
+            const rect = target.getBoundingClientRect()
+            cursor.current = { x: rect.width / 2, y: rect.height / 2 }
+          }
+          const previous = held.current
+          held.current = mask
+          if (mask & ~previous) dispatch("mousedown", longPress)
+          else if (previous & ~mask) dispatch("mouseup")
+        },
+        scroll: (dy) => {
+          const at = place()
+          if (!at) return
+          if (sink) sink.scroll(cursor.current!, dy)
+          else
+            at.target.dispatchEvent(
+              new WheelEvent("wheel", {
+                clientX: at.clientX,
+                clientY: at.clientY,
+                deltaY: dy,
+                deltaMode: 0,
+                bubbles: true,
+                cancelable: true,
+              })
+            )
+        },
+        cancel: () => sink?.cancel(),
       },
-    })
+      { direct: inputMode === "direct", speed: inputMode === "direct" ? 1 : undefined }
+    )
     return () => {
       gestures.current?.cancel()
       gestures.current = null
     }
-  }, [canvas, dispatch, place])
+  }, [canvas, dispatch, place, sink, inputMode])
 
   const onDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     event.currentTarget.setPointerCapture?.(event.pointerId)
+    if (inputMode === "direct" && held.current === 0) {
+      const rect = canvas()?.getBoundingClientRect()
+      if (rect)
+        cursor.current = {
+          x: Math.max(0, Math.min(event.clientX - rect.left, rect.width - 1)),
+          y: Math.max(0, Math.min(event.clientY - rect.top, rect.height - 1)),
+        }
+    }
     gestures.current?.down(event.pointerId, event.clientX, event.clientY, now())
   }
   const onMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -187,8 +241,10 @@ export function VncTrackpadLayer({ canvas, now = () => performance.now() }: VncT
   )
 }
 
-export interface VncKeyBarProps {
+export interface TouchKeyBarProps {
+  labels: TouchLabels
   sendKey: SendKey
+  sendText?: (text: string, modifiers: readonly Modifier[]) => void
   sendCtrlAltDel: () => void
   inputMode: TouchInputMode
   onInputModeChange: (mode: TouchInputMode) => void
@@ -250,13 +306,15 @@ const ARROWS = [
   ["right", KEYSYM.Right, "→"],
 ] as const
 
-export function VncKeyBar({
+export function TouchKeyBar({
+  labels,
   sendKey,
+  sendText,
   sendCtrlAltDel,
   inputMode,
   onInputModeChange,
-}: VncKeyBarProps) {
-  const t = usePluginTranslations(PLUGIN_ID)
+}: TouchKeyBarProps) {
+  const t = labels
   const [latched, setLatched] = useState<Modifier[]>([])
   const input = useRef<HTMLInputElement | null>(null)
   const [typing, setTyping] = useState(false)
@@ -274,6 +332,11 @@ export function VncKeyBar({
     )
 
   const typeText = (text: string) => {
+    if (sendText) {
+      sendText(text, latched)
+      setLatched([])
+      return
+    }
     // The latch covers the first character only.
     let modifiers: readonly Modifier[] = latched
     for (const char of text) {

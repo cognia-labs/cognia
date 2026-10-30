@@ -54,6 +54,42 @@ function setup() {
 describe("native frame observation stream", () => {
   beforeEach(() => jest.useFakeTimers())
   afterEach(() => jest.useRealTimers())
+  it("opens Control on explicit takeover, uses fresh proofs and never re-acquires after disconnect", async () => {
+    const f = setup()
+    f.openSession.mockImplementation(async () => ({
+      sessionId: "control",
+      transport: "companion",
+      mode: "control",
+      expiresAt: Date.now() + 15000,
+      lease: { token: "broker-lease", fence: 1, expiresAt: Date.now() + 15000 },
+    }))
+    const stream = await openNativeFrameStream(
+      { kind: "remote", hostRef: "phone-host" },
+      "sandbox:a",
+      { mode: "control" },
+      f.deps
+    )
+    expect(f.openSession).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ mode: "control", takeover: true })
+    )
+    f.channels[0]!.deliver()
+    stream.input({ action: { kind: "typeText", text: "hello" } })
+    stream.input({ action: { kind: "pressKey", chord: "ctrl+Tab" } })
+    expect(f.channels[0]!.send).toHaveBeenCalledTimes(1)
+    const bytes = f.channels[0]!.send.mock.calls[0]![0] as Uint8Array
+    expect(JSON.parse(new TextDecoder().decode(bytes.subarray(4)))).toEqual(
+      expect.objectContaining({
+        action: { kind: "typeText", text: "hello" },
+        frameId: expect.any(String),
+      })
+    )
+    f.channels[0]!.disconnect()
+    await jest.advanceTimersByTimeAsync(10000)
+    expect(f.openSession).toHaveBeenCalledTimes(1)
+    expect(f.closeSession).toHaveBeenCalledWith(expect.anything(), "control")
+    expect(() => stream.input({ action: { kind: "typeText", text: "late" } })).toThrow()
+  })
   it("yields latest frames and closes its observation session", async () => {
     const f = setup()
     const stream = await openNativeFrameStream(

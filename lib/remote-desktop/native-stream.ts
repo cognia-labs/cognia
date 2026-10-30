@@ -8,7 +8,12 @@ import {
   REMOTE_DESKTOP_RENEW_MS,
   RemoteDesktopError,
 } from "./host-client"
-import { NativeFrameDecoder, type NativeFrame } from "./frames"
+import {
+  encodeNativeInput,
+  NativeFrameDecoder,
+  type NativeFrame,
+  type NativeControlInput,
+} from "./frames"
 import {
   openRemoteDesktopStream,
   type RemoteDesktopRawChannel,
@@ -23,10 +28,13 @@ export const NATIVE_RECONNECT_MS = [500, 1000, 2000, 4000, 8000] as const
  */
 export interface NativeFrameStream extends AsyncIterable<NativeFrame> {
   close(): void
+  input(input: Omit<NativeControlInput, "frameId">): void
 }
 export interface NativeFrameStreamOptions {
   signal?: AbortSignal
   onReconnect?: (attempt: number, error: unknown) => void
+  mode?: "view" | "control"
+  takeover?: boolean
 }
 export interface NativeFrameStreamDeps {
   openSession?: typeof openRemoteDesktopSession
@@ -40,6 +48,7 @@ type Channel = WebSocket | RemoteDesktopRawChannel
 interface LiveConnection {
   ended: Promise<unknown>
   close(): void
+  input(input: Omit<NativeControlInput, "frameId">): void
 }
 function lost(): RemoteDesktopError {
   return new RemoteDesktopError("remote_desktop_connection_lost")
@@ -128,8 +137,8 @@ export async function openNativeFrameStream(
       (deps.openSession ?? openRemoteDesktopSession)(host, {
         targetId,
         bindingId: "native",
-        mode: "view",
-        takeover: false,
+        mode: options.mode ?? "view",
+        takeover: options.mode === "control" && (options.takeover ?? true),
       }),
       signal,
       (late) => closeSession(late.sessionId)
@@ -172,7 +181,10 @@ export async function openNativeFrameStream(
     try {
       if (stopped) throw abortError()
       // Defend against a mismatched/older Host returning control authority.
-      if (session.mode !== "view" || session.lease)
+      if (
+        session.mode !== (options.mode ?? "view") ||
+        (session.mode === "view" ? Boolean(session.lease) : !session.lease)
+      )
         throw new RemoteDesktopError("remote_desktop_protocol_invalid")
       transport = await interruptible(
         (deps.openStream ?? openRemoteDesktopStream)(host, session),
@@ -185,6 +197,16 @@ export async function openNativeFrameStream(
       }
       const decoder = new NativeFrameDecoder()
       let pixels: NativeFrame | undefined
+      let proof: NativeFrame | undefined
+      let usedFrame: string | undefined
+      const queue: Omit<NativeControlInput, "frameId">[] = []
+      const flush = () => {
+        if (!proof || usedFrame === proof.frameId || queue.length === 0 || cleaned || !channel)
+          return
+        const input = queue.shift()!
+        channel.send(encodeNativeInput({ ...input, frameId: proof.frameId }))
+        usedFrame = proof.frameId
+      }
       if (typeof transport.connection === "string") {
         const ws = (deps.socket ?? ((url) => new WebSocket(url, ["binary"])))(transport.connection)
         socket = ws
@@ -215,6 +237,8 @@ export async function openNativeFrameStream(
             }
             // Header-only refreshes update the proof while retaining visible pixels.
             deliver({ ...frame, jpeg: pixels!.jpeg })
+            proof = frame
+            flush()
           }
         } catch (error) {
           end(error)
@@ -242,7 +266,17 @@ export async function openNativeFrameStream(
             renewing = false
           })
       }, REMOTE_DESKTOP_RENEW_MS)
-      return { ended, close: cleanup }
+      return {
+        ended,
+        close: cleanup,
+        input: (input) => {
+          if (session.mode !== "control" || cleaned || stopped)
+            throw new RemoteDesktopError("remote_desktop_forbidden")
+          if (queue.length >= 32) throw new RemoteDesktopError("remote_desktop_frame_invalid")
+          queue.push(input)
+          flush()
+        },
+      }
     } catch (error) {
       cleanup()
       throw error
@@ -274,6 +308,11 @@ export async function openNativeFrameStream(
       latest = undefined
       current.close()
       if (stopped) return
+      // A disconnected control session is never re-acquired automatically.
+      if (options.mode === "control") {
+        close()
+        return
+      }
       while (!stopped) {
         attempt += 1
         options.onReconnect?.(attempt, error)
@@ -292,6 +331,10 @@ export async function openNativeFrameStream(
   let iterated = false
   return {
     close,
+    input: (input) => {
+      if (stopped || !live) throw lost()
+      live.input(input)
+    },
     [Symbol.asyncIterator]() {
       if (iterated) throw new Error("Native frame stream supports one consumer")
       iterated = true

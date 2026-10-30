@@ -25,10 +25,10 @@ import { usePluginTranslations } from "@cognia/plugin-sdk/api/i18n"
 import { PLUGIN_ID } from "./ids"
 import {
   prefersTouchInput,
-  VncKeyBar,
-  VncTrackpadLayer,
+  TouchKeyBar,
+  TouchTrackpadLayer,
   type TouchInputMode,
-} from "./touch-controls"
+} from "@cognia/plugin-ui"
 
 type RfbModule = typeof import("@novnc/novnc/lib/rfb")
 
@@ -148,10 +148,13 @@ export function VncViewer({
           style={{ width: "100%", height: "100%", background: "#111" }}
           data-testid="vnc-viewer"
         />
-        {phoneControls && inputMode === "trackpad" ? <VncTrackpadLayer canvas={canvas} /> : null}
+        {phoneControls && inputMode === "trackpad" ? (
+          <TouchTrackpadLayer canvas={canvas} labels={t} />
+        ) : null}
       </div>
       {phoneControls ? (
-        <VncKeyBar
+        <TouchKeyBar
+          labels={t}
           sendKey={sendKey}
           sendCtrlAltDel={sendCtrlAltDel}
           inputMode={inputMode}

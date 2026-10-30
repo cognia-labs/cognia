@@ -1,10 +1,26 @@
 import fixture from "@/crates/cognia-remote-desktop/fixtures/frame-v1.json"
 import {
+  encodeNativeInput,
   decodeNativeFrame,
   decodeNativeFrameHeader,
   NativeFrameDecoder,
   NATIVE_FRAME_MAX_BYTES,
 } from "./frames"
+
+test("native input uses a bounded length-prefixed local control message", () => {
+  const input = {
+    frameId: "00112233-4455-6677-8899-aabbccddeeff",
+    point: { x: 1, y: 2 },
+    action: { kind: "click" as const, button: "left" as const, count: 2 },
+  }
+  const bytes = encodeNativeInput(input)
+  expect(new DataView(bytes.buffer).getUint32(0)).toBe(bytes.length - 4)
+  expect(JSON.parse(new TextDecoder().decode(bytes.subarray(4)))).toEqual(input)
+  expect(() => encodeNativeInput({ ...input, frameId: "invalid" })).toThrow()
+  expect(() =>
+    encodeNativeInput({ ...input, action: { kind: "typeText", text: "x".repeat(33000) } })
+  ).toThrow()
+})
 
 const vector = () => Uint8Array.from(Buffer.from(fixture.hex, "hex"))
 describe("native frame decoder", () => {

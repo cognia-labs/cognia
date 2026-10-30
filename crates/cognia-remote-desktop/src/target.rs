@@ -125,6 +125,66 @@ pub struct RemoteTarget {
     pub bindings: Vec<Binding>,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "TargetKind::is_external")]
+    pub kind: TargetKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<crate::frames::NativeProviderKind>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetKind {
+    #[default]
+    External,
+    Native,
+}
+impl TargetKind {
+    fn is_external(&self) -> bool {
+        *self == Self::External
+    }
+}
+
+impl RemoteTarget {
+    pub fn native(kind: &str, summary: crate::frames::NativeTargetSummary) -> Self {
+        let binding = Binding {
+            id: "native".into(),
+            provider_id: "cognia-frames".into(),
+            access: Access::Bridge,
+            adapter: Adapter::CogniaFrames,
+            priority: 0,
+            enabled: true,
+            endpoint: None,
+            console: None,
+            launch: None,
+            view_only: true,
+            config: Value::Null,
+            has_control_credential: false,
+            has_view_credential: false,
+        };
+        let mut bindings = vec![binding.clone()];
+        if summary.selkies {
+            bindings.push(Binding {
+                id: "selkies".into(),
+                provider_id: "selkies".into(),
+                adapter: Adapter::None,
+                priority: 1,
+                config: serde_json::json!({"localOnly": true}),
+                ..binding
+            });
+        }
+        Self {
+            id: format!("{kind}:{}", summary.id),
+            name: summary.label,
+            bindings,
+            created_at: 0,
+            updated_at: 0,
+            kind: TargetKind::Native,
+            provider: Some(summary.provider),
+            read_only: true,
+        }
+    }
 }
 
 /// What a caller may change. Endpoint pinning happens before the store sees it.
@@ -442,6 +502,19 @@ fn write_store(path: &Path, value: &StoreFile) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_external_targets_default_and_serialize_without_native_metadata() {
+        let original = target("old");
+        let json = serde_json::to_value(&original).unwrap();
+        for key in ["kind", "provider", "readOnly"] {
+            assert!(json.get(key).is_none());
+        }
+        let decoded: RemoteTarget = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.kind, TargetKind::External);
+        assert_eq!(decoded.provider, None);
+        assert!(!decoded.read_only);
+        assert_eq!(decoded, original);
+    }
 
     fn endpoint() -> Endpoint {
         Endpoint {
@@ -455,6 +528,9 @@ mod tests {
 
     fn target(id: &str) -> RemoteTarget {
         RemoteTarget {
+            kind: TargetKind::External,
+            provider: None,
+            read_only: false,
             id: id.into(),
             name: "NAS".into(),
             bindings: vec![Binding {

@@ -206,7 +206,9 @@ pub async fn dispatch(state: &RemoteDesktopState, principal: &Principal, name: &
     match name {
         "remote_desktop_target_list" => {
             let args: ListArgs = parse(args)?;
-            let page = host.list_targets(args.page_size, args.page_token.as_deref()).await?;
+            let page = host
+                .list_targets_for(principal, args.page_size, args.page_token.as_deref())
+                .await?;
             if principal.admitted(SessionMode::Control) {
                 reply(page)
             } else {

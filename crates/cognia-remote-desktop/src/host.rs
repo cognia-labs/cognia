@@ -108,6 +108,7 @@ pub struct RemoteDesktopHost {
         std::collections::BTreeMap<String, Arc<dyn crate::frames::NativeFrameProvider>>,
     >,
     frames: Arc<crate::frames::FrameHub>,
+    native_open: tokio::sync::Mutex<()>,
 }
 
 fn internal() -> RemoteDesktopError {
@@ -186,6 +187,7 @@ impl RemoteDesktopHost {
             resolver,
             broker: Arc::new(Broker::default()),
             native_frames: Default::default(),
+            native_open: Default::default(),
             frames: Arc::new(crate::frames::FrameHub::default()),
         }
     }
@@ -232,10 +234,43 @@ impl RemoteDesktopHost {
         endpoint::pin_with(host, port, move |host, port| resolver.resolve(host, port)).await
     }
 
-    pub async fn list_targets(&self, page_size: Option<u32>, page_token: Option<&str>) -> Result<Page<RemoteTarget>> {
+    pub async fn list_targets(
+        &self,
+        page_size: Option<u32>,
+        page_token: Option<&str>,
+    ) -> Result<Page<RemoteTarget>> {
+        self.list_targets_for(&Principal::local(), page_size, page_token)
+            .await
+    }
+    pub async fn list_targets_for(
+        &self,
+        principal: &Principal,
+        page_size: Option<u32>,
+        page_token: Option<&str>,
+    ) -> Result<Page<RemoteTarget>> {
+        if !principal.admitted(SessionMode::View) {
+            return Err(RemoteDesktopError::new("remote_desktop_forbidden"));
+        }
         let request = PageRequest::from_parts(page_size, page_token)
             .map_err(|_| RemoteDesktopError::new("remote_desktop_page_token_invalid"))?;
-        let all = self.blocking(|store, _| Ok(store.list().to_vec())).await?;
+        let mut all = self.blocking(|store, _| Ok(store.list().to_vec())).await?;
+        let providers: Vec<_> = self
+            .native_frames
+            .read()
+            .iter()
+            .map(|(kind, provider)| (kind.clone(), provider.clone()))
+            .collect();
+        for (kind, provider) in providers {
+            match provider.list(principal.clone()).await {
+                Ok(targets) => all.extend(
+                    targets
+                        .into_iter()
+                        .map(|summary| RemoteTarget::native(&kind, summary)),
+                ),
+                Err(_) => log::debug!("native target provider enumeration unavailable"),
+            }
+        }
+        all.sort_by(|a, b| a.id.cmp(&b.id));
         Page::slice_all(all, &request, DEFAULT_TARGET_PAGE)
             .map_err(|_| RemoteDesktopError::new("remote_desktop_page_token_invalid"))
     }
@@ -583,8 +618,7 @@ impl RemoteDesktopHost {
         }
         let revision = self.broker.revision();
         if let Some(kind) = crate::frames::native_kind(target_id) {
-            // Control is exclusively owned by the existing native lease RPC.
-            if binding_id != "native" || mode != SessionMode::View || takeover {
+            if binding_id != "native" || (mode == SessionMode::View && takeover) {
                 return Err(RemoteDesktopError::new(
                     "remote_desktop_native_observation_only",
                 ));
@@ -596,7 +630,7 @@ impl RemoteDesktopHost {
             if id.is_empty() || id.len() > 256 {
                 return Err(crate::frames::invalid());
             }
-            self.broker.precheck(target_id, mode, false)?;
+            self.broker.precheck(target_id, mode, takeover)?;
             let provider = self
                 .native_frames
                 .read()
@@ -604,6 +638,18 @@ impl RemoteDesktopHost {
                 .cloned()
                 .ok_or_else(|| RemoteDesktopError::new("remote_desktop_native_unavailable"))?;
             let source = provider.resolve(id.into(), principal.clone()).await?;
+            let _opening = self.native_open.lock().await;
+            let input = if mode == SessionMode::Control {
+                if takeover {
+                    self.broker.preempt_native_control(target_id).await?;
+                }
+                let sink = provider
+                    .acquire_input(id.into(), principal.clone(), takeover)
+                    .await?;
+                Some(crate::frames::NativeInputLease::new(sink))
+            } else {
+                None
+            };
             if !principal.admitted(mode) {
                 return Err(RemoteDesktopError::new("remote_desktop_forbidden"));
             }
@@ -612,6 +658,8 @@ impl RemoteDesktopHost {
                     hub: self.frames.clone(),
                     target_id: target_id.into(),
                     source,
+                    input,
+                    principal: principal.id().into(),
                 },
                 if principal.is_local() {
                     Attachment::Loopback
@@ -627,7 +675,7 @@ impl RemoteDesktopHost {
                     target_id: target_id.into(),
                     binding_id: binding_id.into(),
                     mode,
-                    takeover: false,
+                    takeover,
                     revision,
                 },
                 bridge,
@@ -857,6 +905,9 @@ fn save(
             .map_err(|_| RemoteDesktopError::new("remote_desktop_credential_unavailable"))?;
     }
     let target = RemoteTarget {
+        kind: crate::target::TargetKind::External,
+        provider: None,
+        read_only: false,
         id: draft.id.clone().unwrap_or_else(new_id),
         name: draft.name.trim().to_owned(),
         bindings,
@@ -1563,7 +1614,65 @@ mod tests {
         );
     }
     pub(crate) struct NativeProvider(pub Arc<dyn crate::frames::FrameSource>);
+    struct UnavailableProvider;
+    impl crate::frames::NativeFrameProvider for UnavailableProvider {
+        fn list(
+            &self,
+            _: Principal,
+        ) -> crate::frames::FrameFuture<Vec<crate::frames::NativeTargetSummary>> {
+            Box::pin(async { Err(RemoteDesktopError::new("remote_desktop_native_unavailable")) })
+        }
+        fn resolve(
+            &self,
+            _: String,
+            _: Principal,
+        ) -> crate::frames::FrameFuture<Arc<dyn crate::frames::FrameSource>> {
+            Box::pin(async { Err(RemoteDesktopError::new("remote_desktop_native_unavailable")) })
+        }
+    }
+    #[tokio::test]
+    async fn failed_native_enumeration_preserves_external_and_other_native_targets() {
+        let f = fixture();
+        let external = f
+            .host
+            .save_target(
+                &me(),
+                draft(vec![binding_draft("nas.lan", 5900, Adapter::Vnc, true)]),
+            )
+            .await
+            .unwrap();
+        let source = crate::frames::tests::gate_source(
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            false,
+        );
+        f.host
+            .register_native_frames("sandbox", Arc::new(UnavailableProvider))
+            .unwrap();
+        f.host
+            .register_native_frames("managed-desktop", Arc::new(NativeProvider(source)))
+            .unwrap();
+        let page = f.host.list_targets_for(&me(), None, None).await.unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert!(page.items.iter().any(|row| row.id == external.id));
+        assert!(page.items.iter().any(|row| row.id == "managed-desktop:a"));
+    }
     impl crate::frames::NativeFrameProvider for NativeProvider {
+        fn list(
+            &self,
+            principal: Principal,
+        ) -> crate::frames::FrameFuture<Vec<crate::frames::NativeTargetSummary>> {
+            Box::pin(async move {
+                if principal.id() == "device:foreign" {
+                    return Ok(vec![]);
+                }
+                Ok(vec![crate::frames::NativeTargetSummary {
+                    id: "a".into(),
+                    label: "Desktop A".into(),
+                    provider: crate::frames::NativeProviderKind::Docker,
+                    selkies: false,
+                }])
+            })
+        }
         fn resolve(
             &self,
             _: String,
@@ -1574,6 +1683,205 @@ mod tests {
                 source.authorize().await?;
                 Ok(source)
             })
+        }
+    }
+    #[tokio::test]
+    async fn native_targets_are_listed_without_persisting_them() {
+        let f = fixture();
+        let source = crate::frames::tests::gate_source(
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            false,
+        );
+        for kind in ["sandbox", "managed-desktop"] {
+            f.host
+                .register_native_frames(kind, Arc::new(NativeProvider(source.clone())))
+                .unwrap();
+        }
+        let page = f.host.list_targets(None, None).await.unwrap();
+        assert_eq!(page.items.len(), 2);
+        assert!(page
+            .items
+            .iter()
+            .all(|target| target.kind == crate::target::TargetKind::Native && target.read_only));
+        let foreign = Principal::device("foreign", Arc::new(|_| true));
+        assert!(f
+            .host
+            .list_targets_for(&foreign, None, None)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        let observer = Principal::device("observer", Arc::new(|mode| mode == SessionMode::View));
+        assert_eq!(
+            f.host
+                .list_targets_for(&observer, Some(1), None)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+        assert_eq!(
+            f.host
+                .open_session(&observer, "sandbox:a", "native", SessionMode::Control, true)
+                .await
+                .unwrap_err()
+                .code,
+            "remote_desktop_forbidden"
+        );
+        assert!(!f._dir.path().join(crate::target::STORE_FILE).exists());
+    }
+
+    struct NativeControlProvider {
+        source: Arc<dyn crate::frames::FrameSource>,
+        released: Arc<std::sync::atomic::AtomicUsize>,
+        inputs: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    struct NativeSink {
+        principal: Principal,
+        released: Arc<std::sync::atomic::AtomicUsize>,
+        inputs: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl crate::frames::NativeInputSink for NativeSink {
+        fn fence(&self) -> u64 {
+            42
+        }
+        fn input(&self, input: crate::frames::NativeInput) -> crate::frames::NativeInputFuture {
+            let allowed = self.principal.admitted(SessionMode::Control);
+            let inputs = self.inputs.clone();
+            Box::pin(async move {
+                if !allowed {
+                    return Err(crate::frames::NativeInputError::fatal(
+                        RemoteDesktopError::new("remote_desktop_forbidden"),
+                    ));
+                }
+                if input.frame_id == uuid::Uuid::nil().to_string() {
+                    return Err(crate::frames::NativeInputError::refused(
+                        "remote_desktop_input_stale_frame",
+                    ));
+                }
+                inputs.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+        fn renew(&self) -> crate::frames::FrameFuture<()> {
+            Box::pin(async { Ok(()) })
+        }
+        fn release(&self) -> crate::frames::FrameFuture<()> {
+            let released = self.released.clone();
+            Box::pin(async move {
+                released.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+    }
+    impl crate::frames::NativeFrameProvider for NativeControlProvider {
+        fn list(
+            &self,
+            _: Principal,
+        ) -> crate::frames::FrameFuture<Vec<crate::frames::NativeTargetSummary>> {
+            Box::pin(async { Ok(vec![]) })
+        }
+        fn resolve(
+            &self,
+            _: String,
+            _: Principal,
+        ) -> crate::frames::FrameFuture<Arc<dyn crate::frames::FrameSource>> {
+            let source = self.source.clone();
+            Box::pin(async move { Ok(source) })
+        }
+        fn acquire_input(
+            &self,
+            _: String,
+            principal: Principal,
+            takeover: bool,
+        ) -> crate::frames::FrameFuture<Arc<dyn crate::frames::NativeInputSink>> {
+            let sink = NativeSink {
+                principal,
+                released: self.released.clone(),
+                inputs: self.inputs.clone(),
+            };
+            Box::pin(async move {
+                if !takeover || !sink.principal.admitted(SessionMode::Control) {
+                    return Err(crate::frames::invalid());
+                }
+                Ok(Arc::new(sink) as Arc<dyn crate::frames::NativeInputSink>)
+            })
+        }
+    }
+    #[tokio::test]
+    async fn native_control_dispatches_fenced_input_and_releases_on_close_and_takeover() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        use tokio::io::AsyncWriteExt;
+        for kind in ["sandbox", "managed-desktop"] {
+            let f = fixture();
+            let released = Arc::new(AtomicUsize::new(0));
+            let inputs = Arc::new(AtomicUsize::new(0));
+            f.host
+                .register_native_frames(
+                    kind,
+                    Arc::new(NativeControlProvider {
+                        source: crate::frames::tests::gate_source(
+                            Arc::new(AtomicBool::new(true)),
+                            false,
+                        ),
+                        released: released.clone(),
+                        inputs: inputs.clone(),
+                    }),
+                )
+                .unwrap();
+            let principal = Principal::device("phone", Arc::new(|_| true));
+            let target = format!("{kind}:a");
+            assert!(f
+                .host
+                .open_session(&principal, &target, "native", SessionMode::Control, false)
+                .await
+                .is_err());
+            let first = f
+                .host
+                .open_session(&principal, &target, "native", SessionMode::Control, true)
+                .await
+                .unwrap();
+            let (mut viewer, pipe) = tokio::io::duplex(crate::bridge::MAX_FRAME_BYTES);
+            f.host
+                .attach_viewer(&principal, &first.session_id, Box::new(pipe))
+                .unwrap();
+            let frame = crate::frames::read_frame(&mut viewer).await.unwrap();
+            let header = crate::frames::FrameHeader::decode(&frame).unwrap();
+            // Both malformed-but-bounded messages and stale proofs are refused
+            // per input. A later valid input must still reach the same sink.
+            for body in [
+                serde_json::json!({"action":{"kind":"buttonDown"}}),
+                serde_json::json!({"frameId":uuid::Uuid::nil().to_string(),"action":{"kind":"pressKey","chord":"Tab"}}),
+            ] {
+                let bytes = serde_json::to_vec(&body).unwrap();
+                viewer.write_u32(bytes.len() as u32).await.unwrap();
+                viewer.write_all(&bytes).await.unwrap();
+            }
+            let json = serde_json::to_vec(&json!({"frameId":header.frame_id.to_string(), "action":{"kind":"pressKey","chord":"ctrl+Tab"}})).unwrap();
+            viewer.write_u32(json.len() as u32).await.unwrap();
+            viewer.write_all(&json).await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while inputs.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let second = f
+                .host
+                .open_session(&principal, &target, "native", SessionMode::Control, true)
+                .await
+                .unwrap();
+            assert_eq!(released.load(Ordering::SeqCst), 1);
+            f.host.close_session(&principal, &second.session_id);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while released.load(Ordering::SeqCst) != 2 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
         }
     }
     #[tokio::test]
@@ -1636,13 +1944,10 @@ mod tests {
             );
             f.host.close_session(&p, &opened.session_id);
         }
-        assert!(f
-            .host
-            .list_targets(None, None)
-            .await
-            .unwrap()
-            .items
-            .is_empty());
+        assert_eq!(
+            f.host.list_targets(None, None).await.unwrap().items.len(),
+            2
+        );
         assert!(source.calls.load(Ordering::SeqCst) == 0);
         assert!(!f._dir.path().join(crate::target::STORE_FILE).exists());
     }

@@ -217,5 +217,39 @@
     "launchServerInvalid": "请以主机名或 IP 地址填写 ID 服务器，可附带端口。",
     "launchUriInvalid": "Host 返回了 Cognia 不会打开的 RustDesk 链接。",
     "launcherUnknown": "此提供方要求的应用 Cognia 无法启动。"
+  },
+  "native": {
+    "touch": {
+      "surfaceLabel": "触控板：拖动移动指针，轻点单击，双指轻点右键，双指拖动滚动，长按后拖动",
+      "trackpad": "触控板",
+      "direct": "触摸",
+      "switchToDirect": "当前为触控板模式，切换为直接触摸",
+      "switchToTrackpad": "当前为直接触摸模式，切换为触控板"
+    },
+    "keys": {
+      "barLabel": "特殊按键",
+      "ctrl": "Ctrl",
+      "alt": "Alt",
+      "meta": "Super",
+      "esc": "Esc",
+      "tab": "Tab",
+      "left": "左方向键",
+      "up": "上方向键",
+      "down": "下方向键",
+      "right": "右方向键",
+      "ctrlAltDel": "Ctrl+Alt+Del",
+      "keyboard": "键盘",
+      "keyboardInput": "输入以向远程屏幕发送按键"
+    },
+    "title": "原生桌面",
+    "readOnly": "由所属服务管理",
+    "docker": "Docker 沙箱",
+    "e2b": "E2B 托管桌面",
+    "takeControl": "接管控制",
+    "release": "释放控制",
+    "close": "关闭桌面",
+    "loading": "正在连接桌面…",
+    "screen": "原生桌面屏幕",
+    "selkies": "Selkies（仅限本机桌面）"
   }
 }

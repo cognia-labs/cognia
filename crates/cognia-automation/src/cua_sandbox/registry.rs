@@ -114,6 +114,20 @@ async fn connect_desktop_ready(
 }
 
 impl CuaSandboxRegistry {
+    /// Original ids held by this registry. Never reverse Docker's lossy name
+    /// normalization; inspect/admission at the frame provider filters live CUA.
+    pub(crate) async fn native_connection_ids(&self) -> Vec<String> {
+        let mut ids: std::collections::BTreeSet<_> =
+            self.clients.lock().await.keys().cloned().collect();
+        ids.extend(self.desktops.lock().await.keys().cloned());
+        ids.into_iter()
+            .filter(|id| {
+                !id.starts_with("managed:")
+                    && !id.starts_with("lume:")
+                    && !id.starts_with("lume-binding:")
+            })
+            .collect()
+    }
     pub(crate) async fn managed_operation(
         &self,
         connection_id: &str,

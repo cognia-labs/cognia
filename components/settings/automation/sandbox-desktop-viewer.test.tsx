@@ -1,3 +1,25 @@
+jest.mock("next-intl", () => {
+  const messages = {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    automation: require("@/i18n/messages/en/automation.json"),
+  }
+  return {
+    NextIntlClientProvider: ({ children }: { children: React.ReactNode }) => children,
+    useTranslations:
+      (namespace: string) => (key: string, values?: Record<string, string | number>) => {
+        const value = `${namespace}.${key}`
+          .split(".")
+          .reduce<unknown>(
+            (at, part) =>
+              at && typeof at === "object" ? (at as Record<string, unknown>)[part] : undefined,
+            messages
+          )
+        return typeof value === "string"
+          ? value.replace(/\{(\w+)\}/g, (_, name: string) => String(values?.[name] ?? `{${name}}`))
+          : key
+      },
+  }
+})
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import messages from "@/i18n/messages/en/automation.json"
@@ -349,6 +371,21 @@ test("managed mobile observation explicitly disables control", () => {
     false,
     expect.objectContaining({ streaming: false })
   )
+})
+
+test("a phone can explicitly take control of a qualified managed desktop", () => {
+  const userAgent = jest.spyOn(navigator, "userAgent", "get").mockReturnValue("iPhone")
+  const model = state({ status: { qualified: true, state: "observer", canAcquire: true } })
+  useDesktop.mockReturnValue(model)
+  render(
+    <NextIntlClientProvider locale="en" messages={{ automation: messages }}>
+      <SandboxDesktopViewer connectionId="managed-phone" enabled openDesktop={jest.fn()} />
+    </NextIntlClientProvider>
+  )
+  expect(screen.getByRole("button", { name: "Take control" })).toBeEnabled()
+  fireEvent.click(screen.getByRole("button", { name: "Take control" }))
+  expect(model.acquire).toHaveBeenCalledWith(true)
+  userAgent.mockRestore()
 })
 
 test("managed take-control gesture requests explicit native takeover from observer mode", () => {

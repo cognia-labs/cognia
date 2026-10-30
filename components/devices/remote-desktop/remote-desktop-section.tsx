@@ -71,6 +71,8 @@ import type {
 
 import { DeviceSection } from "../device-section"
 import { RemoteDesktopTargetDialog, type DialogState } from "./remote-desktop-target-dialog"
+import { NativeDesktopViewer } from "./native-desktop-viewer"
+import { SandboxDesktopViewer } from "@/components/settings/automation/sandbox-desktop-viewer"
 
 export interface RemoteDesktopSectionProps {
   /** The Host whose targets these are. */
@@ -81,7 +83,12 @@ export interface RemoteDesktopSectionProps {
   launchDeps?: RemoteDesktopLaunchDeps
 }
 
-export function RemoteDesktopSection({
+export function RemoteDesktopSection({ host, ...props }: RemoteDesktopSectionProps) {
+  const key = JSON.stringify([host.kind, host.kind === "remote" ? host.hostRef : null])
+  return <RemoteDesktopSectionForHost key={key} host={host} {...props} />
+}
+
+function RemoteDesktopSectionForHost({
   host,
   hostLabel,
   deps,
@@ -100,6 +107,9 @@ export function RemoteDesktopSection({
   const outdated = error?.code === "remote_desktop_host_outdated"
   const [dialog, setDialog] = useState<DialogState | null>(null)
   const [deleting, setDeleting] = useState<RemoteDesktopTarget | null>(null)
+  const [native, setNative] = useState<{ target: RemoteDesktopTarget; selkies: boolean } | null>(
+    null
+  )
   const launcher = useRemoteDesktopLaunch(host, launchDeps)
 
   const errorText = (caught: unknown) => {
@@ -185,28 +195,52 @@ export function RemoteDesktopSection({
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="truncate font-medium">{target.name}</span>
-                <div
-                  className="flex shrink-0 items-center gap-1"
-                  role="group"
-                  aria-label={t("section.actionsLabel", { name: target.name })}
-                >
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      setDialog({ kind: "edit", target, bindingId: target.bindings[0]?.id })
-                    }
+                {target.kind === "native" || target.readOnly ? (
+                  <Badge variant="outline">{t("native.readOnly")}</Badge>
+                ) : (
+                  <div
+                    className="flex shrink-0 items-center gap-1"
+                    role="group"
+                    aria-label={t("section.actionsLabel", { name: target.name })}
                   >
-                    <PencilIcon className="size-3.5" />
-                    {t("section.edit")}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setDeleting(target)}>
-                    <Trash2Icon className="size-3.5" />
-                    {t("section.delete")}
-                  </Button>
-                </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setDialog({ kind: "edit", target, bindingId: target.bindings[0]?.id })
+                      }
+                    >
+                      <PencilIcon className="size-3.5" />
+                      {t("section.edit")}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setDeleting(target)}>
+                      <Trash2Icon className="size-3.5" />
+                      {t("section.delete")}
+                    </Button>
+                  </div>
+                )}
               </div>
               {target.bindings.map((binding) => {
+                if (target.kind === "native") {
+                  const selkies = binding.id === "selkies"
+                  return (
+                    <div key={binding.id} className="flex flex-wrap items-center gap-2 text-sm">
+                      <span>
+                        {selkies
+                          ? t("native.selkies")
+                          : t(target.provider === "docker" ? "native.docker" : "native.e2b")}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!binding.enabled || (selkies && remote)}
+                        onClick={() => setNative({ target, selkies })}
+                      >
+                        {t("section.openViewOnly")}
+                      </Button>
+                    </div>
+                  )
+                }
                 const provider = providers.find((entry) => entry.providerId === binding.providerId)
                 const providerName = provider
                   ? provider.definition.name
@@ -322,6 +356,29 @@ export function RemoteDesktopSection({
             </li>
           ))}
         </ul>
+        {native ? (
+          <div className="rounded border p-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span>{native.target.name}</span>
+              <Button size="sm" variant="ghost" onClick={() => setNative(null)}>
+                {t("native.close")}
+              </Button>
+            </div>
+            {native.selkies && host.kind === "local" ? (
+              <SandboxDesktopViewer
+                key={native.target.id}
+                connectionId={native.target.id.slice("sandbox:".length)}
+                enabled
+              />
+            ) : (
+              <NativeDesktopViewer
+                key={native.target.id}
+                host={host}
+                targetId={native.target.id as `sandbox:${string}` | `managed-desktop:${string}`}
+              />
+            )}
+          </div>
+        ) : null}
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-muted-foreground text-xs">{t("section.unmanagedNote")}</p>

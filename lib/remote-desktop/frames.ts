@@ -4,6 +4,28 @@
  * can have fewer pixels after the Host's size-cap downscaling.
  */
 import { RemoteDesktopError } from "./host-client"
+import type { Point, UiAction } from "@/lib/automation/types"
+
+/** Mirrors NativeInput in frames.rs. The lease/fence stays Host-owned. */
+export type NativeUiAction = Extract<
+  UiAction,
+  { kind: "click" | "drag" | "scroll" | "pressKey" | "typeText" }
+>
+export interface NativeControlInput {
+  point?: Point | null
+  action: NativeUiAction
+  frameId: string
+}
+export function encodeNativeInput(input: NativeControlInput): Uint8Array {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.frameId))
+    invalid()
+  const json = new TextEncoder().encode(JSON.stringify(input))
+  if (json.length === 0 || json.length > 32 * 1024) invalid()
+  const bytes = new Uint8Array(4 + json.length)
+  new DataView(bytes.buffer).setUint32(0, json.length)
+  bytes.set(json, 4)
+  return bytes
+}
 
 export const NATIVE_FRAME_HEADER_BYTES = 64
 export const NATIVE_FRAME_MAX_BYTES = 1024 * 1024

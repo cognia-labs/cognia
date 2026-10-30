@@ -5870,8 +5870,23 @@
           "release": "The release could not be confirmed. Control expires automatically within 15 seconds.",
           "session": "The account or Host connection changed. Close and reopen the desktop to observe again; take control explicitly when ready."
         },
+        "keys": {
+          "alt": "Alt",
+          "barLabel": "Special keys",
+          "ctrl": "Ctrl",
+          "ctrlAltDel": "Ctrl+Alt+Del",
+          "down": "Down arrow",
+          "esc": "Esc",
+          "keyboard": "Keyboard",
+          "keyboardInput": "Type to send keys to the remote screen",
+          "left": "Left arrow",
+          "meta": "Super",
+          "right": "Right arrow",
+          "tab": "Tab",
+          "up": "Up arrow"
+        },
         "loading": "Connecting to the desktop…",
-        "mobileObservation": "Mobile supports observation only. Desktop input is disabled.",
+        "mobileObservation": "This viewer is observation only.",
         "otherController": "Another user has control",
         "qualificationRequired": "Cloud desktop viewing and control require a separately authorized GUI smoke test.",
         "quarantined": "Input cleanup uncertain; control unavailable",
@@ -5891,6 +5906,13 @@
         "textLabel": "Text to type in the sandbox",
         "textPlaceholder": "Compose or paste text here, including Chinese input.",
         "title": "Desktop",
+        "touch": {
+          "direct": "Touch",
+          "surfaceLabel": "Trackpad: drag to move the pointer, tap to click, tap with two fingers to right-click, drag with two fingers to scroll, press and hold to drag",
+          "switchToDirect": "Trackpad mode. Switch to direct touch",
+          "switchToTrackpad": "Direct touch mode. Switch to trackpad",
+          "trackpad": "Trackpad"
+        },
         "unavailable": "Start this sandbox in the desktop app to view its screen."
       },
       "empty": "No sandboxes configured yet.",
@@ -40868,6 +40890,40 @@
       "viewerFailed": "The viewer stopped unexpectedly.",
       "viewerInvalid": "The provider's viewer is not valid.",
       "viewerRequiresWebview": "Only built-in providers may render their viewer in the app; this one must use a sandboxed view."
+    },
+    "native": {
+      "close": "Close desktop",
+      "docker": "Docker sandbox",
+      "e2b": "E2B managed desktop",
+      "keys": {
+        "alt": "Alt",
+        "barLabel": "Special keys",
+        "ctrl": "Ctrl",
+        "ctrlAltDel": "Ctrl+Alt+Del",
+        "down": "Down arrow",
+        "esc": "Esc",
+        "keyboard": "Keyboard",
+        "keyboardInput": "Type to send keys to the remote screen",
+        "left": "Left arrow",
+        "meta": "Super",
+        "right": "Right arrow",
+        "tab": "Tab",
+        "up": "Up arrow"
+      },
+      "loading": "Connecting to the desktop…",
+      "readOnly": "Managed by its owning service",
+      "release": "Release control",
+      "screen": "Native desktop screen",
+      "selkies": "Selkies (local desktop only)",
+      "takeControl": "Take control",
+      "title": "Native desktop",
+      "touch": {
+        "direct": "Touch",
+        "surfaceLabel": "Trackpad: drag to move the pointer, tap to click, tap with two fingers to right-click, drag with two fingers to scroll, press and hold to drag",
+        "switchToDirect": "Trackpad mode. Switch to direct touch",
+        "switchToTrackpad": "Direct touch mode. Switch to trackpad",
+        "trackpad": "Trackpad"
+      }
     },
     "section": {
       "actionsLabel": "Actions for {name}",
