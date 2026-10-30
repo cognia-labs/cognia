@@ -7,6 +7,7 @@ export type VaultState = "unavailable" | "locked" | "unlocked"
 export type RuntimeConnectionState = "online" | "connecting" | "offline"
 
 export interface HostRuntimeSnapshot {
+  botAutomation?: true
   /** False when the client and host have no compatible manifest version. */
   compatible: boolean
   /** Exact command operations advertised as implemented and healthy. */

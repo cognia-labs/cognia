@@ -56,6 +56,18 @@ function job(id: string, over: Partial<OutboundJobRow> = {}): OutboundJobRow {
 }
 
 describe("syncOutboundQueue", () => {
+  it("retains old mirrored sends while a provider result remains outstanding", async () => {
+    const row = job("pending-audit", {
+      createdAt: 1,
+      status: "delivery_unknown",
+      pendingReceipt: { id: "audit", acceptedAt: 1 },
+    })
+    await applyOutboundQueueRows([row], 30 * 86400_000)
+    expect(await getDb().outboundQueue.get(row.id)).toMatchObject({
+      pendingReceipt: row.pendingReceipt,
+      syncedFromHost: true,
+    })
+  })
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()

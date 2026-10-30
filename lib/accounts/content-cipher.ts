@@ -149,13 +149,17 @@ export class AccountContentCipher implements AccountContentCipherContract {
       key,
       toBufferSource(decodeBase64Url(captured.ciphertext))
     )
-    const json = new TextDecoder().decode(plaintext)
-    const value = JSON.parse(json, reviveBinary) as T
-    // A lock during WebCrypto must not repopulate the cleared plaintext cache.
-    if (table === "sessionList" && field === "payload" && this.key === key) {
-      this.cacheSessionListPayload(aad, captured, json)
+    try {
+      if (this.key !== key) throw new Error("Account content cipher is locked.")
+      const json = new TextDecoder().decode(plaintext)
+      const value = JSON.parse(json, reviveBinary) as T
+      if (table === "sessionList" && field === "payload") {
+        this.cacheSessionListPayload(aad, captured, json)
+      }
+      return value
+    } finally {
+      new Uint8Array(plaintext).fill(0)
     }
-    return value
   }
 
   /** An authenticated cache hit needs neither WebCrypto nor a transaction hold. */

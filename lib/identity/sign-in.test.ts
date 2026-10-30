@@ -122,6 +122,22 @@ describe("resolveIdentityFromClaims", () => {
 })
 
 describe("bindSignedInIdentity", () => {
+  it("keeps a signed-out profile's canonical owner when the original subject returns", async () => {
+    const registry = await freshRegistry("canonical-owner-resume")
+    const first = await bindSignedInIdentity(session({}), {
+      localAccountId: "acct_alpha",
+      registry,
+    })
+    await registry.reconcileUserId("acct_alpha", "usr_canonical0000000000000")
+    await registry.signOut("acct_alpha")
+    const resumed = await bindSignedInIdentity(session({}), {
+      localAccountId: "acct_alpha",
+      registry,
+    })
+    expect(resumed.binding.userId).toBe("usr_canonical0000000000000")
+    expect(resumed.user.id).toBe(resumed.binding.userId)
+    expect(resumed.binding.legacyUserIds).toContain(first.user.id)
+  })
   it("binds an official-account person under the subject the issuer minted", async () => {
     const registry = await freshRegistry("official-subject")
     const official: LogtoSession = {

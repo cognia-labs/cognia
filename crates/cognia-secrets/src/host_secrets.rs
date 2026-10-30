@@ -326,36 +326,66 @@ pub fn set(
     writer: Option<SecretWriter>,
     now_ms: i64,
 ) -> Result<(), String> {
-    validate_name(kind, name)?;
-    validate_value(value)?;
+    set_many_if_current(kind, &[(name, value)], &[], writer, now_ms)
+}
+
+/// Publish related credentials and index revisions in one store transaction.
+/// Expectations are captured by `snapshot`; `None` requires an absent secret.
+pub fn set_many_if_current(
+    kind: HostSecretKind,
+    values: &[(&str, &str)],
+    expected: &[(&str, Option<&str>)],
+    writer: Option<SecretWriter>,
+    now_ms: i64,
+) -> Result<(), String> {
+    for (name, value) in values {
+        validate_name(kind, name)?;
+        validate_value(value)?;
+    }
     let _guard = INDEX_LOCK.lock();
-    let mut record = load_record(kind, name)?.unwrap_or_default();
-    record.set_at = Some(now_ms);
-    record.set_by = writer;
-    // Every actual write is a generation, even when the value is unchanged.
-    record.revision = Some(new_revision());
-    let index_name = index_account(kind, name);
-    let encoded =
-        serde_json::to_string(&record).map_err(|error| format!("host secret index: {error}"))?;
-    let mut mutations: Vec<_> = record
-        .dependent_secrets
-        .iter()
-        .filter(|dependency| dependency.reset_on_write)
-        .map(|dependency| SecretMutation::Delete {
-            service: &dependency.service,
-            account: &dependency.account,
-        })
-        .collect();
-    mutations.push(SecretMutation::Set {
-        service: kind.service(),
-        account: name,
-        value,
-    });
-    mutations.push(SecretMutation::Set {
-        service: INDEX_SERVICE,
-        account: &index_name,
-        value: &encoded,
-    });
+    for (name, revision) in expected {
+        validate_name(kind, name)?;
+        let exists = secret_store::get(kind.service(), name)?.is_some();
+        let actual = if exists {
+            load_record(kind, name)?.and_then(|record| record.revision)
+        } else {
+            None
+        };
+        if exists != revision.is_some() || actual.as_deref() != *revision {
+            return Err("host_secret_revision_changed".into());
+        }
+    }
+    let mut records = Vec::with_capacity(values.len());
+    for (name, value) in values {
+        let mut record = load_record(kind, name)?.unwrap_or_default();
+        record.set_at = Some(now_ms);
+        record.set_by = writer.clone();
+        record.revision = Some(new_revision());
+        let encoded = serde_json::to_string(&record)
+            .map_err(|error| format!("host secret index: {error}"))?;
+        records.push((*name, *value, index_account(kind, name), encoded, record));
+    }
+    let mut mutations = Vec::new();
+    for (_, _, _, _, record) in &records {
+        for dependency in record.dependent_secrets.iter().filter(|d| d.reset_on_write) {
+            mutations.push(SecretMutation::Delete {
+                service: &dependency.service,
+                account: &dependency.account,
+            });
+        }
+    }
+    for (name, value, index_name, encoded, _) in &records {
+        mutations.push(SecretMutation::Set {
+            service: kind.service(),
+            account: name,
+            value,
+        });
+        mutations.push(SecretMutation::Set {
+            service: INDEX_SERVICE,
+            account: index_name,
+            value: encoded,
+        });
+    }
     secret_store::apply_batch(&mutations)
 }
 
@@ -394,6 +424,13 @@ pub fn snapshot(kind: HostSecretKind, name: &str) -> Result<Option<HostSecretSna
         }
     };
     Ok(Some(HostSecretSnapshot { value, revision }))
+}
+
+/// Dependency invalidation removes a value without erasing its write history.
+pub fn has_recorded_write(kind: HostSecretKind, name: &str) -> Result<bool, String> {
+    validate_name(kind, name)?;
+    let _guard = INDEX_LOCK.lock();
+    Ok(load_record(kind, name)?.is_some_and(|record| record.revision.is_some()))
 }
 
 /// Read a value for the host's own use. Never return it to a device.
@@ -547,6 +584,19 @@ mod tests {
         })
     }
 
+    #[test]
+    fn recorded_write_survives_dependency_value_invalidation() {
+        let kind = HostSecretKind::Connector;
+        let name = "fixture-lineage-write-history";
+        assert!(!has_recorded_write(kind, name).unwrap());
+        set(kind, name, "lineage", None, 1).unwrap();
+        secret_store::delete(kind.service(), name).unwrap();
+        assert!(has_recorded_write(kind, name).unwrap());
+        assert!(snapshot(kind, name).unwrap().is_none());
+        delete(kind, name).unwrap();
+        assert!(!has_recorded_write(kind, name).unwrap());
+    }
+
     fn entry(kind: HostSecretKind, name: &str) -> Option<HostSecretEntry> {
         list()
             .unwrap()
@@ -590,6 +640,45 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("old-epoch")
+        );
+    }
+
+    #[test]
+    fn conditional_pair_write_checks_all_revisions_and_rolls_back_index_failure() {
+        let kind = HostSecretKind::Connector;
+        let first = "pair-conditional:first";
+        let second = "pair-conditional:second";
+        set(kind, first, "old-first", None, 1).unwrap();
+        set(kind, second, "old-second", None, 1).unwrap();
+        let revision = snapshot(kind, first).unwrap().unwrap().revision;
+        assert!(
+            set_many_if_current(kind, &[(first, "new")], &[(first, Some("stale"))], None, 2)
+                .is_err()
+        );
+        secret_store::fail_next_mutation_for_test(INDEX_SERVICE, &index_account(kind, second));
+        assert!(
+            set_many_if_current(
+                kind,
+                &[(first, "new-first"), (second, "new-second")],
+                &[(first, Some(&revision))],
+                None,
+                2
+            )
+            .is_err()
+        );
+        assert_eq!(get(kind, first).unwrap().as_deref(), Some("old-first"));
+        assert_eq!(get(kind, second).unwrap().as_deref(), Some("old-second"));
+        assert_eq!(snapshot(kind, first).unwrap().unwrap().revision, revision);
+        secret_store::set(kind.service(), "pair-legacy:token", "legacy").unwrap();
+        assert!(
+            set_many_if_current(
+                kind,
+                &[("pair-legacy:token", "new")],
+                &[("pair-legacy:token", None)],
+                None,
+                3
+            )
+            .is_err()
         );
     }
 

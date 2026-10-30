@@ -17,6 +17,8 @@ import {
   type OfficialDeployment,
 } from "@/lib/identity/official-deployment"
 import { getActiveLogtoSession } from "@/lib/logto/app-session"
+import { readCloudSessionState } from "@/lib/identity/cloud-session"
+import type { UserBindingRegistry } from "@/lib/identity/user-binding"
 import { decodeJwtPayload, stringClaim } from "@/lib/security/jwt-payload"
 
 export interface SyncSession {
@@ -35,6 +37,7 @@ export interface SyncSessionDeps {
   deployment?: OfficialDeployment | null
   syncUrl?: string
   getSession?: typeof getActiveLogtoSession
+  registry?: Pick<UserBindingRegistry, "get">
 }
 
 function personOf(accessToken: string): string | null {
@@ -48,8 +51,18 @@ export async function officialSyncSession(deps: SyncSessionDeps = {}): Promise<S
   if (!deployment) return null
   const localAccountId = deps.localAccountId ?? getActiveAccountId()
   const getSession = deps.getSession ?? getActiveLogtoSession
-  const session = await getSession({ localAccountId })
-  if (!session || !isOfficialIssuer(session.issuer, deployment)) return null
+  const readState = () =>
+    readCloudSessionState({
+      localAccountId,
+      registry: deps.registry,
+      resolve: async () => {
+        const session = await getSession({ localAccountId })
+        return session ? { status: "active" as const, session } : { status: "none" as const }
+      },
+    })
+  const state = await readState()
+  if (state.status !== "active" || !isOfficialIssuer(state.session.issuer, deployment)) return null
+  const session = state.session
   const userId = personOf(session.accessToken)
   if (!userId) return null
   return {
@@ -59,8 +72,10 @@ export async function officialSyncSession(deps: SyncSessionDeps = {}): Promise<S
     spaceId: await spaceIdFor(deployment.issuer, userId),
     syncUrl: deps.syncUrl ?? officialSyncUrl(),
     async accessToken() {
-      const current = await getSession({ localAccountId })
-      if (!current || !isOfficialIssuer(current.issuer, deployment)) return null
+      const latest = await readState()
+      if (latest.status !== "active" || !isOfficialIssuer(latest.session.issuer, deployment))
+        return null
+      const current = latest.session
       // A sign-in as someone else since must not act on this person's space.
       return personOf(current.accessToken) === userId ? current.accessToken : null
     },

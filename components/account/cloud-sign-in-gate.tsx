@@ -82,6 +82,7 @@ import {
 } from "@/lib/identity/cloud-sign-in-flow"
 import { isShareViewerRoute } from "@/lib/share/viewer-context"
 import { useAccountStore } from "@/stores/account/account-store"
+import { captureAccountScope } from "@/lib/accounts/active-account-id"
 
 import { type LogtoSession, type OidcIssuerKind } from "@/lib/logto/client"
 import type { SocialProvider } from "@/lib/identity/deployment-discovery"
@@ -150,8 +151,10 @@ export function forgetOfflineChoice(localAccountId: string): void {
 }
 
 async function defaultSignOut(localAccountId: string): Promise<void> {
-  await signOutFromLogto({ localAccountId })
-  await completeSignOut({ localAccountId })
+  await signOutFromLogto({
+    localAccountId,
+    afterClear: (context) => completeSignOut({ localAccountId, ...context }),
+  })
 }
 
 export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
@@ -229,7 +232,7 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
   )
 
   const settle = useCallback(
-    async (session: LogtoSession) => {
+    async (session: LogtoSession, capturedScope?: () => void) => {
       const deployment = deploymentRef.current
       if (!deployment) return
       sessionRef.current = session
@@ -243,9 +246,13 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
       setView({ kind: "settling" })
       setPhase("screen")
       try {
+        const assertCurrent = capturedScope ?? captureAccountScope(localAccountId ?? undefined)
+        assertCurrent()
         const result = await (depsRef.current.settle ?? settleAfterSignIn)(deployment, session, {
           localAccountId: localAccountId ?? undefined,
+          assertCurrent,
         })
+        assertCurrent()
         if (result.outcome === "adopted") {
           setPhase("pass")
         } else if (result.outcome === "choose") {
@@ -493,15 +500,17 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     const { drivers, redirectUri, clientKind } = driversFor(authConfigIssuerKind(deployment.config))
     setView({ kind: "signing-in" })
     try {
+      const assertCurrent = captureAccountScope(localAccountId)
       const session = await (deps.signIn ?? signInWithDeployment)(
         deployment,
         method,
         drivers,
         { redirectUri, clientKind },
-        { localAccountId }
+        { localAccountId, assertCurrent }
       )
+      assertCurrent()
       setBusy(false)
-      await settle(session)
+      await settle(session, assertCurrent)
     } catch (cause) {
       // The web popup was reserved inside the click; a sign-in that failed
       // before opening it must not leave a blank window behind.
@@ -524,12 +533,14 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     const { drivers, redirectUri, clientKind } = driversFor(deployment.issuerKind)
     setView({ kind: "signing-in" })
     try {
+      const assertCurrent = captureAccountScope(localAccountId)
       await (deps.signInOfficial ?? signInToOfficialAccount)(
         deployment,
         drivers,
         { redirectUri, clientKind, socialProvider: provider },
-        { localAccountId }
+        { localAccountId, assertCurrent }
       )
+      assertCurrent()
       recordOfficialPromptDecision(localAccountId, "signed-in")
       setBusy(false)
       setPhase("pass")
@@ -557,13 +568,21 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
   }
 
   const withSession = (
-    work: (deployment: ReadyDeployment, session: LogtoSession) => Promise<unknown>
+    work: (
+      deployment: ReadyDeployment,
+      session: LogtoSession,
+      scope: { localAccountId: string; assertCurrent: () => void }
+    ) => Promise<unknown>
   ) =>
     act(async () => {
       const deployment = deploymentRef.current
       const session = sessionRef.current
-      if (!deployment || !session) throw new CloudSignInError("reauth-required", "no session")
-      await work(deployment, session)
+      if (!deployment || !session || !localAccountId) {
+        throw new CloudSignInError("reauth-required", "no session")
+      }
+      const assertCurrent = captureAccountScope(localAccountId)
+      await work(deployment, session, { localAccountId, assertCurrent })
+      assertCurrent()
       setPhase("pass")
     })
 
@@ -610,7 +629,7 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
         setPhase("pass")
       }}
       onChoose={(membership: CollabAccountMembership) =>
-        void withSession((deployment, session) =>
+        void withSession((deployment, session, scope) =>
           (deps.adopt ?? adoptOrganization)(
             deployment,
             session,
@@ -622,18 +641,18 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
                 ? { identities: view.identities }
                 : {}),
             },
-            { localAccountId }
+            scope
           )
         )
       }
       onRedeem={(token) =>
-        void withSession((deployment, session) =>
-          (deps.redeem ?? redeemInvitation)(deployment, session, token, { localAccountId })
+        void withSession((deployment, session, scope) =>
+          (deps.redeem ?? redeemInvitation)(deployment, session, token, scope)
         )
       }
       onClaim={(input) =>
-        void withSession((deployment, session) =>
-          (deps.claim ?? claimDeployment)(deployment, session, input, { localAccountId })
+        void withSession((deployment, session, scope) =>
+          (deps.claim ?? claimDeployment)(deployment, session, input, scope)
         )
       }
       onSignOut={() =>

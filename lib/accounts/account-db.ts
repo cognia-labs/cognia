@@ -73,6 +73,8 @@ export interface UserBindingRow {
    * this person rather than as a stranger. Not indexed.
    */
   legacyUserIds?: string[]
+  /** Sign-out deactivates the binding while retaining its data owner (ADR-0215). Non-indexed. */
+  signedOutAt?: number
   boundAt: number
   updatedAt: number
 }

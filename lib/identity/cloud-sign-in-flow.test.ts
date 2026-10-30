@@ -97,12 +97,14 @@ function harness(
     localAccountId: "acct_a",
     signIn: jest.fn(async () => session),
     complete: jest.fn(async () => undefined),
+    validate: jest.fn(async () => {}),
     refresh: jest.fn(async (config: { organizationId?: string }) => ({
       ...session,
       accessToken: `at-${config.organizationId}`,
       organizationId: config.organizationId,
     })),
     save: jest.fn(async () => undefined),
+    load: jest.fn(async () => session),
     registry: registry as never,
     makeClient: jest.fn(() => client),
     saveConnection: jest.fn((_: string, connection: { baseUrl: string }) => connection),
@@ -177,7 +179,11 @@ describe("signInWithDeployment", () => {
     expect(deps.signIn).toHaveBeenCalledWith(
       expect.objectContaining({ clientId: "web-app", directSignIn: "social:github" }),
       drivers,
-      { localAccountId: "acct_a" }
+      {
+        localAccountId: "acct_a",
+        beforeCommit: expect.any(Function),
+        afterCommit: expect.any(Function),
+      }
     )
     expect(deps.complete).toHaveBeenCalledWith(session, { localAccountId: "acct_a" })
   })
@@ -232,6 +238,39 @@ describe("adoptOrganization", () => {
     userId: "usr_server0000000000000000",
   }
 
+  it.each(["complete", "binding-read"])(
+    "stops settlement when the profile changes during %s",
+    async (boundary) => {
+      const { deps, registry } = harness()
+      let current = true
+      const assertCurrent = () => {
+        if (!current) throw new Error("profile changed")
+      }
+      if (boundary === "complete") {
+        deps.complete.mockImplementationOnce(async () => {
+          current = false
+        })
+      } else {
+        registry.get.mockImplementationOnce(async () => {
+          current = false
+          return {
+            localAccountId: "acct_a",
+            userId: "usr_derived00000000000000",
+            logtoSubject: "sub",
+            logtoIssuer: session.issuer,
+          }
+        })
+      }
+      await expect(
+        adoptOrganization(deployment, session, target, { ...deps, assertCurrent })
+      ).rejects.toThrow("profile changed")
+      expect(deps.reconcile).not.toHaveBeenCalled()
+      expect(registry.setOrgId).not.toHaveBeenCalled()
+      expect(deps.saveConnection).not.toHaveBeenCalled()
+      expect(deps.refreshPlane).not.toHaveBeenCalled()
+    }
+  )
+
   /**
    * The whole point of adopting: an organization token, the binding on the
    * server's ids with the derived one kept as an alias, the connection, and
@@ -251,7 +290,7 @@ describe("adoptOrganization", () => {
     )
     expect(deps.complete).toHaveBeenCalledWith(
       expect.objectContaining({ organizationId: "lorg_1" }),
-      { localAccountId: "acct_a" }
+      { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
     )
     expect(deps.reconcile).toHaveBeenCalledWith(
       {
@@ -262,9 +301,9 @@ describe("adoptOrganization", () => {
         orgId: target.orgId,
         now: 99,
       },
-      { registry }
+      { registry, assertCurrent: expect.any(Function) }
     )
-    expect(registry.setOrgId).toHaveBeenCalledWith("acct_a", target.orgId, 99)
+    expect(registry.setOrgId).toHaveBeenCalledWith("acct_a", target.orgId, 99, expect.any(Function))
     expect(deps.saveConnection).toHaveBeenCalledWith("acct_a", {
       baseUrl: "https://collab.example",
     })
@@ -318,6 +357,7 @@ describe("adoptOrganization", () => {
     expect(deps.linkIdentities).toHaveBeenCalledWith({
       userId: target.userId,
       identities: IDENTITIES,
+      assertCurrent: expect.any(Function),
     })
     expect(adopted.identityConflicts).toEqual([
       { provider: "lark", subject: "on_union", tenant: "tk_1", existingUserId: "usr_im_first" },
@@ -343,6 +383,7 @@ describe("adoptOrganization", () => {
     await adoptOrganization(deployment, session, { ...target, identities: IDENTITIES }, deps)
 
     expect(deps.attachPrincipals).toHaveBeenCalledWith({
+      assertCurrent: expect.any(Function),
       userId: target.userId,
       logtoSubject: "sub",
       identities: linked,
@@ -441,6 +482,7 @@ describe("settleAfterSignIn", () => {
     })
     // The identities travel into adoption, so the join happens on the first pass.
     expect(one.deps.linkIdentities).toHaveBeenCalledWith({
+      assertCurrent: expect.any(Function),
       userId: "usr_server0000000000000000",
       identities: IDENTITIES,
     })

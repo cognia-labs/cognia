@@ -36,6 +36,7 @@ import {
 } from "./link-signed-in-identities"
 import { attachSignInToFeishuPrincipals } from "@/lib/connectors/principal/login-link"
 import { UserBindingRegistry } from "./user-binding"
+import { assertSignedInIdentityOwner } from "./sign-in"
 
 import {
   CollabClient,
@@ -52,8 +53,12 @@ import {
   type LogtoDrivers,
   type LogtoSession,
 } from "@/lib/logto/client"
-import { saveLogtoSession } from "@/lib/logto/session-store"
-import { signInToLogto } from "@/lib/logto/app-session"
+import type { saveLogtoSession, loadLogtoSession } from "@/lib/logto/session-store"
+import {
+  signInToLogto,
+  updateLogtoSession,
+  type LogtoAuthCommitContext,
+} from "@/lib/logto/app-session"
 import { createPlatformFetch } from "@/lib/network/platform-fetch"
 import { authConfigIssuerKind } from "@/lib/tauri/companion-auth"
 
@@ -87,8 +92,11 @@ export interface CloudSignInDeps {
   localAccountId?: string
   signIn?: typeof signInToLogto
   complete?: (session: LogtoSession, deps: CompleteSignInDeps) => Promise<unknown>
+  validate?: typeof assertSignedInIdentityOwner
+  assertCurrent?: () => void
   refresh?: typeof refreshLogtoToken
   save?: typeof saveLogtoSession
+  load?: typeof loadLogtoSession
   fetchImpl?: typeof fetch
   registry?: Pick<UserBindingRegistry, "get" | "setOrgId" | "reconcileUserId">
   makeClient?: (
@@ -100,6 +108,7 @@ export interface CloudSignInDeps {
   linkIdentities?: (input: {
     userId: string
     identities: readonly CollabExternalIdentity[]
+    assertCurrent?: () => void
   }) => Promise<LinkSignedInIdentitiesReport>
   /** Writes the login's subject onto the Feishu principals the person holds. */
   attachPrincipals?: typeof attachSignInToFeishuPrincipals
@@ -180,8 +189,36 @@ export async function signInWithDeployment(
           ...options,
           ...(method.kind === "social" ? { directSignIn: method.directSignIn } : {}),
         })
-  const session = await (deps.signIn ?? signInToLogto)(config, drivers, { localAccountId })
-  await (deps.complete ?? completeSignIn)(session, { localAccountId })
+  let bound = false
+  const bind = async (candidate: LogtoSession, context?: LogtoAuthCommitContext) => {
+    const assertCurrent = context
+      ? () => {
+          deps.assertCurrent?.()
+          context.assertCurrent()
+        }
+      : deps.assertCurrent
+    assertCurrent?.()
+    await (deps.complete ?? completeSignIn)(candidate, {
+      localAccountId,
+      ...(assertCurrent ? { assertCurrent } : {}),
+      ...(context?.authRevision ? { authRevision: context.authRevision } : {}),
+    })
+    assertCurrent?.()
+    bound = true
+  }
+  const session = await (deps.signIn ?? signInToLogto)(config, drivers, {
+    localAccountId,
+    beforeCommit: async (candidate) => {
+      deps.assertCurrent?.()
+      await (deps.validate ?? assertSignedInIdentityOwner)(candidate, { localAccountId })
+      deps.assertCurrent?.()
+    },
+    afterCommit: async (candidate, context) => {
+      await bind(candidate, context)
+    },
+  })
+  // Injected sign-in drivers may return a session directly; production commits through bind above.
+  if (!bound) await bind(session)
   return session
 }
 
@@ -260,95 +297,127 @@ export async function adoptOrganization(
     )
   }
   const now = deps.now ?? Date.now
+  const registry = deps.registry ?? new UserBindingRegistry()
+  let reconciled = false
+  let logtoSubject: string | undefined
+  let identityConflicts: IdentityConflict[] = []
   // An organization token: the same session, narrowed. Logto answers the
   // refresh grant with `organization_id` only when the authorize request
   // carried the organizations scope, which `logtoConfigFor` always adds.
-  const orgSession = await (deps.refresh ?? refreshLogtoToken)(
-    {
-      issuer: session.issuer,
-      clientId: session.clientId,
-      resource: session.resource,
-      redirectUri: "",
-      organizationId: target.logtoOrganizationId,
-      scopes: session.scopes,
+  const merged = await updateLogtoSession(
+    session,
+    async () => {
+      const orgSession = await (deps.refresh ?? refreshLogtoToken)(
+        {
+          issuer: session.issuer,
+          clientId: session.clientId,
+          resource: session.resource,
+          redirectUri: "",
+          organizationId: target.logtoOrganizationId,
+          scopes: session.scopes,
+        },
+        session.refreshToken!,
+        fetchFor(deps)
+      )
+      return {
+        ...orgSession,
+        organizationId: target.logtoOrganizationId,
+        refreshToken: orgSession.refreshToken ?? session.refreshToken,
+        idToken: orgSession.idToken ?? session.idToken,
+      }
     },
-    session.refreshToken,
-    fetchFor(deps)
-  )
-  const merged: LogtoSession = {
-    ...orgSession,
-    organizationId: target.logtoOrganizationId,
-    refreshToken: orgSession.refreshToken ?? session.refreshToken,
-    idToken: orgSession.idToken ?? session.idToken,
-  }
-  await (deps.save ?? saveLogtoSession)(merged, localAccountId)
-
-  // Bind with the organization claim, then move the binding to the server's
-  // ids. The derived user id becomes a legacy alias, and every projection row
-  // written under it is rekeyed.
-  await (deps.complete ?? completeSignIn)(merged, { localAccountId })
-  const registry = deps.registry ?? new UserBindingRegistry()
-  const binding = await registry.get(localAccountId)
-  let reconciled = false
-  if (binding && binding.userId !== target.userId) {
-    await (deps.reconcile ?? reconcileUserId)(
-      {
-        localAccountId,
-        legacyUserId: binding.userId,
-        canonicalUserId: target.userId,
-        accessToken: merged.accessToken,
-        orgId: target.orgId,
-        now: now(),
-      },
-      { registry }
-    )
-    reconciled = true
-  }
-  await registry.setOrgId(localAccountId, target.orgId, now())
-
-  // The join of this login to the people the IM adapters already know.
-  // Best-effort: a failure here leaves the person adopted and unjoined.
-  let identityConflicts: IdentityConflict[] = []
-  if (target.identities && target.identities.length > 0) {
-    try {
-      const report = await (deps.linkIdentities ?? linkSignedInIdentities)({
-        userId: target.userId,
-        identities: target.identities,
-      })
-      identityConflicts = report.conflicts
-      if (identityConflicts.length > 0) {
-        console.warn(
-          "[identity] social identities already belong to another user",
-          identityConflicts
-        )
-      }
-      // The Feishu bots this person already talks to learn who they are: each
-      // principal of theirs whose union_id matches a linked Feishu identity
-      // records the login's subject.
-      const logtoSubject = binding?.logtoSubject
-      if (logtoSubject && report.linked.length > 0) {
-        const attached = await (deps.attachPrincipals ?? attachSignInToFeishuPrincipals)({
-          userId: target.userId,
-          logtoSubject,
-          identities: report.linked,
-          now: now(),
+    {
+      localAccountId,
+      ...(deps.load ? { load: deps.load } : {}),
+      ...(deps.save ? { save: deps.save } : {}),
+      beforeCommit: async (candidate) => {
+        deps.assertCurrent?.()
+        await (deps.validate ?? assertSignedInIdentityOwner)(candidate, {
+          localAccountId,
+          ...(deps.registry instanceof UserBindingRegistry ? { registry: deps.registry } : {}),
         })
-        if (attached.foreign.length > 0) {
-          console.warn(
-            "[identity] Feishu principals matching the sign-in belong to another user",
-            attached.foreign
-          )
+        deps.assertCurrent?.()
+      },
+      afterCommit: async (candidate, context) => {
+        const assertCurrent = () => {
+          deps.assertCurrent?.()
+          context.assertCurrent()
         }
-      }
-    } catch (error) {
-      console.warn("[identity] could not link the sign-in's social identities", error)
+        const authScope = {
+          assertCurrent,
+          ...(context.authRevision ? { authRevision: context.authRevision } : {}),
+        }
+        assertCurrent()
+        await (deps.complete ?? completeSignIn)(candidate, { localAccountId, ...authScope })
+        assertCurrent()
+        const binding = await registry.get(localAccountId)
+        assertCurrent()
+        logtoSubject = binding?.logtoSubject
+        if (binding && binding.userId !== target.userId) {
+          await (deps.reconcile ?? reconcileUserId)(
+            {
+              localAccountId,
+              legacyUserId: binding.userId,
+              canonicalUserId: target.userId,
+              accessToken: candidate.accessToken,
+              orgId: target.orgId,
+              now: now(),
+            },
+            { registry, ...authScope }
+          )
+          assertCurrent()
+          reconciled = true
+        }
+        await registry.setOrgId(localAccountId, target.orgId, now(), assertCurrent)
+        assertCurrent()
+        ;(deps.saveConnection ?? saveCollabConnection)(localAccountId, {
+          baseUrl: deployment.collaborationServiceUrl!,
+          ...(deployment.webOrigin ? { webOrigin: deployment.webOrigin } : {}),
+        })
+        // The join of this login to the people the IM adapters already know.
+        // Best-effort: a failure here leaves the person adopted and unjoined.
+        if (target.identities && target.identities.length > 0) {
+          try {
+            const report = await (deps.linkIdentities ?? linkSignedInIdentities)({
+              userId: target.userId,
+              identities: target.identities,
+              assertCurrent,
+            })
+            assertCurrent()
+            identityConflicts = report.conflicts
+            if (identityConflicts.length > 0) {
+              console.warn(
+                "[identity] social identities already belong to another user",
+                identityConflicts
+              )
+            }
+            // The Feishu bots this person already talks to learn who they are: each
+            // principal of theirs whose union_id matches a linked Feishu identity
+            // records the login's subject.
+            if (logtoSubject && report.linked.length > 0) {
+              const attached = await (deps.attachPrincipals ?? attachSignInToFeishuPrincipals)({
+                userId: target.userId,
+                logtoSubject,
+                identities: report.linked,
+                now: now(),
+                assertCurrent,
+              })
+              if (attached.foreign.length > 0) {
+                console.warn(
+                  "[identity] Feishu principals matching the sign-in belong to another user",
+                  attached.foreign
+                )
+              }
+            }
+          } catch (error) {
+            console.warn("[identity] could not link the sign-in's social identities", error)
+          }
+        }
+        assertCurrent()
+      },
     }
-  }
+  )
 
-  ;(deps.saveConnection ?? saveCollabConnection)(localAccountId, {
-    baseUrl: deployment.collaborationServiceUrl,
-    ...(deployment.webOrigin ? { webOrigin: deployment.webOrigin } : {}),
-  })
   await (deps.refreshPlane ?? ((id: string) => refreshCollabPlaneQuietly({ localAccountId: id })))(
     localAccountId
   )
@@ -389,6 +458,7 @@ export async function claimDeployment(
     ...(input.displayName ? { displayName: input.displayName } : {}),
     ...(input.email ? { email: input.email } : {}),
   })
+  deps.assertCurrent?.()
   return adoptOrganization(
     deployment,
     session,
@@ -420,6 +490,7 @@ export async function redeemInvitation(
     token: token.trim(),
     ...(deps.displayName ? { displayName: deps.displayName } : {}),
   })
+  deps.assertCurrent?.()
   clearPendingInvitation()
   return adoptOrganization(
     deployment,
@@ -459,6 +530,7 @@ export async function settleAfterSignIn(
     }
   }
   const standing = await resolveStanding(deployment, session, deps)
+  deps.assertCurrent?.()
   switch (standing.kind) {
     case "none":
       return { outcome: "unaffiliated" }

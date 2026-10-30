@@ -347,7 +347,8 @@
     "reauth": {
       "expired": "Your session expired.",
       "revoked": "Your session was signed out elsewhere.",
-      "binding-missing": "This profile is signed in, but not yet bound to a person."
+      "binding-missing": "This profile is signed in, but not yet bound to a person.",
+      "binding-mismatch": "This sign-in does not match the person who owns this profile. Sign in with the original account or use another profile."
     },
     "offline": {
       "body": "Your last session is kept. You can keep working offline and it will refresh once the provider is reachable."
@@ -518,6 +519,7 @@
     "switched": "Switched to {org}.",
     "switchFailed": "Could not switch: {message}",
     "signOutDone": "Signed out.",
+    "signOutFailed": "Sign-out failed: {message}",
     "revocationFailed": "Signed out locally, but the identity provider could not be told.",
     "noDeployment": "No cloud deployment is configured for this profile.",
     "signOut": "Sign out",

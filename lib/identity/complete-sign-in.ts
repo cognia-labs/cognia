@@ -32,6 +32,8 @@ import type { LogtoSession } from "@/lib/logto/client"
 import type { UserBindingRow } from "@/lib/accounts/account-db"
 
 export interface CompleteSignInDeps {
+  assertCurrent?: () => void
+  authRevision?: string
   /** Defaults to the profile this runtime is serving. */
   localAccountId?: string
   registry?: UserBindingRegistry
@@ -58,15 +60,18 @@ export async function completeSignIn(
   deps: CompleteSignInDeps = {}
 ): Promise<SignedInIdentity> {
   const localAccountId = deps.localAccountId ?? getActiveAccountId()
+  deps.assertCurrent?.()
 
   const identity = await bindSignedInIdentity(session, {
     localAccountId,
     registry: deps.registry,
     projection: deps.projection ?? identityProjection,
+    ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
     ...(deps.takeOverProfile ? { takeOverProfile: true } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.unlinkSelfBound ? { unlinkSelfBound: deps.unlinkSelfBound } : {}),
   })
+  deps.assertCurrent?.()
 
   try {
     await bindHostPerson(
@@ -79,17 +84,19 @@ export async function completeSignIn(
         accessToken: session.accessToken,
         ...(identity.org ? { orgId: identity.org.id } : {}),
       },
-      deps.host ?? {}
+      { ...deps.host, ...(deps.authRevision ? { authRevision: deps.authRevision } : {}) }
     )
   } catch (error) {
     reportHostFailure(deps, error)
   }
+  deps.assertCurrent?.()
 
   return identity
 }
 
 /**
- * Sign out: drop the binding and tell the host to forget the person.
+ * Sign out: deactivate the binding and tell the host to forget the person.
+ * Keep its owner so another Person cannot adopt the retained local data.
  *
  * Deliberately leaves the projection alone. Those rows are a cache of who
  * people ARE, not of who is signed in — clearing them would blank every name on
@@ -99,9 +106,12 @@ export async function completeSignIn(
 export async function completeSignOut(deps: CompleteSignInDeps = {}): Promise<void> {
   const localAccountId = deps.localAccountId ?? getActiveAccountId()
   const registry = deps.registry ?? new UserBindingRegistry()
+  deps.assertCurrent?.()
 
   const departing = await registry.get(localAccountId)
-  await registry.unbind(localAccountId)
+  deps.assertCurrent?.()
+  await registry.signOut(localAccountId, undefined, deps.assertCurrent)
+  deps.assertCurrent?.()
 
   // Bots this person reached only because they were signed in here stop
   // answering them. Best-effort: the sign-out itself has already happened.
@@ -110,17 +120,23 @@ export async function completeSignOut(deps: CompleteSignInDeps = {}): Promise<vo
       await (deps.unlinkSelfBound ?? unlinkSelfBoundPrincipals)({
         localAccountId,
         userId: departing.userId,
+        ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
       })
     } catch (error) {
       console.warn("[identity] could not unlink self-bound Feishu principals", error)
     }
   }
+  deps.assertCurrent?.()
 
   try {
-    await unbindHostPerson(localAccountId, deps.host ?? {})
+    await unbindHostPerson(localAccountId, {
+      ...deps.host,
+      ...(deps.authRevision ? { authRevision: deps.authRevision } : {}),
+    })
   } catch (error) {
     reportHostFailure(deps, error)
   }
+  deps.assertCurrent?.()
 }
 
 /** Who is signed into this profile, or `null`. */

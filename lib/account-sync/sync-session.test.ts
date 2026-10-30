@@ -3,9 +3,19 @@ import { spaceIdFor } from "@cognia/sync-protocol"
 import { officialDeployment } from "@/lib/identity/official-deployment"
 import type { LogtoSession } from "@/lib/logto/client"
 
-import { officialSyncSession } from "./sync-session"
+import { officialSyncSession as readOfficialSyncSession } from "./sync-session"
 
 const deployment = officialDeployment({})!
+const owner = {
+  localAccountId: "local_1",
+  userId: "usr_abc",
+  logtoSubject: "usr_abc",
+  logtoIssuer: deployment.issuer,
+  boundAt: 1,
+  updatedAt: 1,
+}
+const officialSyncSession = (deps: Parameters<typeof readOfficialSyncSession>[0] = {}) =>
+  readOfficialSyncSession({ registry: { get: async () => owner }, ...deps })
 
 function token(sub: string): string {
   const b64 = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url")
@@ -64,6 +74,32 @@ describe("officialSyncSession", () => {
     current = session("usr_other")
     expect(await result!.accessToken()).toBeNull()
     current = null
+    expect(await result!.accessToken()).toBeNull()
+  })
+
+  it("requires matching active profile ownership before choosing a space or returning tokens", async () => {
+    const getSession = async () => session("usr_abc")
+    for (const mismatch of [
+      null,
+      { ...owner, logtoSubject: "usr_someone_else" },
+      { ...owner, logtoIssuer: "https://another.test" },
+    ]) {
+      expect(
+        await officialSyncSession({
+          deployment,
+          getSession,
+          registry: { get: async () => mismatch },
+        })
+      ).toBeNull()
+    }
+    let active = true
+    const result = await officialSyncSession({
+      deployment,
+      getSession,
+      registry: { get: async () => (active ? owner : null) },
+    })
+    expect(result).not.toBeNull()
+    active = false
     expect(await result!.accessToken()).toBeNull()
   })
 })

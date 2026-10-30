@@ -1,6 +1,7 @@
 jest.mock("@/lib/keyring", () => ({
   getSecret: jest.fn(),
   setSecret: jest.fn(),
+  compareAndSetSecret: jest.fn(),
   clearSecret: jest.fn(),
   setWebKeyringPassphrase: jest.fn(),
 }))
@@ -12,7 +13,13 @@ jest.mock("@/lib/accounts/active-account-id", () => ({
   getActiveAccountId: jest.fn(() => "acct_active"),
 }))
 
-import { getSecret, setSecret, clearSecret, setWebKeyringPassphrase } from "@/lib/keyring"
+import {
+  getSecret,
+  setSecret,
+  clearSecret,
+  compareAndSetSecret,
+  setWebKeyringPassphrase,
+} from "@/lib/keyring"
 import { getInstallEncryptionPassphrase } from "@/lib/data/backup-key"
 import { isTauri } from "@/lib/tauri"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
@@ -20,6 +27,7 @@ import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import type { LogtoSession } from "./client"
 import {
   saveLogtoSession,
+  commitLogtoAuthState,
   loadLogtoSession,
   clearLogtoSession,
   clearLogtoReauthMarker,
@@ -27,6 +35,9 @@ import {
   loadLogtoReauthMarker,
   logtoKeyringFor,
   logtoReauthKeyringFor,
+  logtoAuthRevisionKeyringFor,
+  loadLogtoAuthRevision,
+  saveLogtoAuthRevision,
   markLogtoSessionForReauth,
   LEGACY_LOGTO_KEYRING,
   __resetLogtoWebPassphraseForTests,
@@ -40,6 +51,76 @@ const setPassphraseMock = setWebKeyringPassphrase as jest.Mock
 const backupKeyMock = getInstallEncryptionPassphrase as jest.Mock
 const isTauriMock = isTauri as jest.Mock
 const activeAccountMock = getActiveAccountId as jest.Mock
+
+describe("durable authentication revisions", () => {
+  it("stores a profile-scoped operation fence without replacing its session", async () => {
+    await saveLogtoAuthRevision("revision-next", "acct_fenced")
+    expect(setMock).toHaveBeenCalledWith(
+      logtoAuthRevisionKeyringFor("acct_fenced"),
+      "revision-next"
+    )
+    expect(clearMock).not.toHaveBeenCalled()
+    getMock.mockResolvedValueOnce("revision-next")
+    await expect(loadLogtoAuthRevision("acct_fenced")).resolves.toBe("revision-next")
+    expect(getMock).toHaveBeenCalledWith(logtoAuthRevisionKeyringFor("acct_fenced"), {
+      strict: true,
+    })
+  })
+
+  it("atomically compares the native revision and writes the session while clearing its marker", async () => {
+    await commitLogtoAuthState(
+      "old-revision",
+      "new-revision",
+      { kind: "session", session: sampleSession },
+      "acct_native"
+    )
+    expect(compareAndSetSecret).toHaveBeenCalledWith(
+      logtoAuthRevisionKeyringFor("acct_native"),
+      "old-revision",
+      "new-revision",
+      [
+        { key: "session:acct_native", value: JSON.stringify(sampleSession) },
+        { key: "reauth:acct_native", value: null },
+      ]
+    )
+    expect(setMock).not.toHaveBeenCalled()
+    expect(clearMock).not.toHaveBeenCalled()
+  })
+
+  it("clears session and marker in the same guarded native logout commit", async () => {
+    await commitLogtoAuthState("previous", "logout", { kind: "clear" }, "acct_native")
+    expect(compareAndSetSecret).toHaveBeenCalledWith(
+      logtoAuthRevisionKeyringFor("acct_native"),
+      "previous",
+      "logout",
+      [
+        { key: "session:acct_native", value: null },
+        { key: "reauth:acct_native", value: null },
+      ]
+    )
+  })
+
+  it("rejects a failed native comparison without separate unfenced writes", async () => {
+    jest
+      .mocked(compareAndSetSecret)
+      .mockRejectedValueOnce(new Error("secret-store condition mismatch"))
+    await expect(commitLogtoAuthState("old", "next", undefined, "acct_native")).rejects.toThrow(
+      "condition mismatch"
+    )
+    expect(setMock).not.toHaveBeenCalled()
+    expect(clearMock).not.toHaveBeenCalled()
+  })
+
+  it("propagates a failed revision read instead of treating it as a fresh profile", async () => {
+    getMock.mockRejectedValueOnce(new Error("secret store unavailable"))
+    await expect(loadLogtoAuthRevision("acct_fenced")).rejects.toThrow("secret store unavailable")
+  })
+
+  it("propagates credential deletion failure so logout cannot claim success", async () => {
+    clearMock.mockRejectedValueOnce(new Error("native deletion denied"))
+    await expect(clearLogtoSession("acct_fenced")).rejects.toThrow("native deletion denied")
+  })
+})
 
 const sampleSession: LogtoSession = {
   issuer: "https://logto.test/oidc",
@@ -87,7 +168,7 @@ describe("logto session store", () => {
 
   it("clears the stored session", async () => {
     await clearLogtoSession()
-    expect(clearMock).toHaveBeenCalledWith(ref)
+    expect(clearMock).toHaveBeenCalledWith(ref, { strict: true })
   })
 })
 
@@ -169,7 +250,7 @@ describe("one session per LocalProfile (ADR-0149)", () => {
     expect(getMock).toHaveBeenCalledWith(logtoKeyringFor("acct_other"))
 
     await clearLogtoSession("acct_other")
-    expect(clearMock).toHaveBeenCalledWith(logtoKeyringFor("acct_other"))
+    expect(clearMock).toHaveBeenCalledWith(logtoKeyringFor("acct_other"), { strict: true })
   })
 
   it("never reuses the pre-ADR-0149 global key for a profile", () => {
@@ -184,7 +265,7 @@ describe("discardLegacyGlobalLogtoSession", () => {
     // and nothing in the blob records who it belonged to.
     getMock.mockResolvedValue(JSON.stringify(sampleSession))
     expect(await discardLegacyGlobalLogtoSession()).toBe(true)
-    expect(clearMock).toHaveBeenCalledWith(LEGACY_LOGTO_KEYRING)
+    expect(clearMock).toHaveBeenCalledWith(LEGACY_LOGTO_KEYRING, { strict: true })
     expect(setMock).not.toHaveBeenCalled()
   })
 
@@ -227,7 +308,7 @@ describe("re-authentication marker", () => {
     })
     await markLogtoSessionForReauth(marker)
     expect(setMock).toHaveBeenCalledWith(reauthRef, JSON.stringify(marker))
-    expect(clearMock).toHaveBeenCalledWith(ref)
+    expect(clearMock).toHaveBeenCalledWith(ref, { strict: true })
     expect(order).toEqual(["set", "clear"])
   })
 
@@ -246,11 +327,11 @@ describe("re-authentication marker", () => {
 
   it("a fresh sign-in clears the marker, because it IS the sign-in the marker asked for", async () => {
     await saveLogtoSession(sampleSession)
-    expect(clearMock).toHaveBeenCalledWith(reauthRef)
+    expect(clearMock).toHaveBeenCalledWith(reauthRef, { strict: true })
   })
 
   it("clears the marker on its own", async () => {
     await clearLogtoReauthMarker("acct_other")
-    expect(clearMock).toHaveBeenCalledWith(logtoReauthKeyringFor("acct_other"))
+    expect(clearMock).toHaveBeenCalledWith(logtoReauthKeyringFor("acct_other"), { strict: true })
   })
 })

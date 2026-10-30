@@ -41,3 +41,16 @@ export function getActiveAccountId(): string {
   }
   return process.env.COGNIA_LOCAL_ACCOUNT_ID ?? DEFAULT_LOCAL_ACCOUNT_ID
 }
+
+/** Capture one open profile lifetime, including lock/reopen of the same account. */
+export function captureAccountScope(localAccountId = getActiveAccountId()): () => void {
+  const database = getDb()
+  const assertCurrent = () => {
+    // Check the captured handle first: a lock must not reopen the legacy DB.
+    if (!database.isOpen() || getDb() !== database || getActiveAccountId() !== localAccountId) {
+      throw new Error("The local profile changed during authentication.")
+    }
+  }
+  assertCurrent()
+  return assertCurrent
+}

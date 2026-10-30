@@ -14,6 +14,7 @@ import { isCapacitor, isTauri } from "@/lib/tauri"
 import {
   __resetPhoneKeyringForTests,
   clearSecret,
+  compareAndSetSecret,
   getSecret,
   setSecret,
   setWebKeyringPassphrase,
@@ -31,6 +32,23 @@ describe("desktop secret-store IPC", () => {
     invokeMock.mockResolvedValue("secret")
     await expect(getSecret(ref)).resolves.toBe("secret")
     expect(invokeMock).toHaveBeenCalledWith("secret_store_get", { input: ref })
+  })
+
+  it("sends a storage-level comparison and related changes through the existing set command", async () => {
+    const revision = { namespace: "logto", key: "auth-revision:acct" }
+    const changes = [
+      { key: "session:acct", value: "token" },
+      { key: "reauth:acct", value: null },
+    ]
+    await compareAndSetSecret(revision, "old", "new", changes)
+    expect(invokeMock).toHaveBeenCalledWith("secret_store_set", {
+      input: { ...revision, value: "new" },
+      condition: { expected: "old", changes },
+    })
+    invokeMock.mockRejectedValueOnce("secret-store condition mismatch")
+    await expect(compareAndSetSecret(revision, "old", "other", changes)).rejects.toBe(
+      "secret-store condition mismatch"
+    )
   })
 
   it("uses canonical set and delete commands", async () => {
@@ -145,5 +163,55 @@ describe("phone secure storage (ADR-0215 defect 6)", () => {
     await expect(getSecret(ref)).resolves.toBeNull()
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()
+  })
+
+  it("propagates a failed strict delete and keeps the stored phone credential", async () => {
+    await setSecret(ref, "retained-token")
+    plugin.remove.mockRejectedValueOnce(new Error("keystore deletion denied"))
+    await expect(clearSecret(ref, { strict: true })).rejects.toThrow("keystore deletion denied")
+    await expect(getSecret(ref)).resolves.toBe("retained-token")
+  })
+})
+
+describe("strict browser deletion", () => {
+  beforeEach(() => {
+    ;(isTauri as jest.Mock).mockReturnValue(false)
+    ;(isCapacitor as jest.Mock).mockReturnValue(false)
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+    ;(isTauri as jest.Mock).mockReturnValue(true)
+  })
+
+  it("reports a failed database open rather than claiming the secret was removed", async () => {
+    const request = { error: new Error("database unavailable") } as unknown as IDBOpenDBRequest
+    jest.spyOn(indexedDB, "open").mockImplementation(() => {
+      queueMicrotask(() => request.onerror?.call(request, new Event("error")))
+      return request
+    })
+    await expect(clearSecret(ref, { strict: true })).rejects.toThrow("database unavailable")
+    await expect(clearSecret(ref)).resolves.toBeUndefined()
+  })
+
+  it("reports an aborted delete transaction instead of claiming success", async () => {
+    const transaction = {
+      error: new Error("deletion aborted"),
+      objectStore: () => ({
+        delete: () =>
+          queueMicrotask(() => transaction.onabort?.call(transaction, new Event("abort"))),
+      }),
+    } as unknown as IDBTransaction
+    const close = jest.fn()
+    const request = {
+      result: { transaction: () => transaction, close },
+    } as unknown as IDBOpenDBRequest
+    jest.spyOn(indexedDB, "open").mockImplementation(() => {
+      queueMicrotask(() => request.onsuccess?.call(request, new Event("success")))
+      return request
+    })
+    await expect(clearSecret(ref, { strict: true })).rejects.toThrow("deletion aborted")
+    expect(close).toHaveBeenCalledTimes(1)
+    await expect(clearSecret(ref)).resolves.toBeUndefined()
   })
 })

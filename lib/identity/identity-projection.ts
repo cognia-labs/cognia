@@ -14,7 +14,14 @@
  * the server arrives it overwrites this row; the row's shape does not change.
  */
 
-import { linkExternalIdentity, putOrgMembership, upsertOrg, upsertUser } from "@/lib/db/identity"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
+import { getDb } from "@/lib/db/schema"
+import {
+  externalIdentityId,
+  orgMembershipId,
+  type ExternalIdentity,
+  type OrgMembership,
+} from "@/types/identity"
 
 import type { IdentityProjectionWriter, SignedInIdentity } from "./sign-in"
 
@@ -26,33 +33,62 @@ import type { IdentityProjectionWriter, SignedInIdentity } from "./sign-in"
  * and a reader that arrives between two parallel writes would see a membership
  * pointing at rows that are not there yet.
  */
-export async function writeIdentityProjection(identity: SignedInIdentity): Promise<void> {
+export async function writeIdentityProjection(
+  identity: SignedInIdentity,
+  assertAuthCurrent?: () => void
+): Promise<void> {
   const { user, org, orgRole, binding } = identity
-
-  await upsertUser(user)
-
-  if (org) {
-    await upsertOrg(org)
-    if (orgRole) {
-      await putOrgMembership({
-        orgId: org.id,
-        userId: user.id,
-        role: orgRole,
-        now: binding.updatedAt,
-      })
+  const db = getDb()
+  const assertCurrent = () => {
+    assertAuthCurrent?.()
+    if (!db.isOpen() || getDb() !== db || getActiveAccountId() !== binding.localAccountId) {
+      throw new Error("The local profile changed while projecting its identity.")
     }
   }
+  assertCurrent()
 
-  await linkExternalIdentity({
+  const external: ExternalIdentity = {
+    id: externalIdentityId("logto", binding.logtoSubject, binding.logtoIssuer),
     userId: user.id,
     provider: "logto",
     subject: binding.logtoSubject,
-    // The issuer identifies the Logto deployment, which is the tenant boundary
-    // for a subject: two deployments can mint the same `sub` for two people.
-    tenant: binding.logtoIssuer,
-    ...(user.displayName ? { label: user.displayName } : {}),
-    now: binding.updatedAt,
-  })
+    linkedAt: binding.updatedAt,
+  }
+  if (binding.logtoIssuer) external.tenant = binding.logtoIssuer
+  if (user.displayName) external.label = user.displayName
+
+  // A captured database and one transaction prevent a profile switch between
+  // awaits from redirecting later writes into a different person's database.
+  await db.transaction(
+    "rw",
+    [db.users, db.orgs, db.orgMemberships, db.externalIdentities],
+    async () => {
+      assertCurrent()
+      await db.users.put(user)
+      assertCurrent()
+      if (org) {
+        await db.orgs.put(org)
+        assertCurrent()
+        if (orgRole) {
+          const id = orgMembershipId(org.id, user.id)
+          const existing = await db.orgMemberships.get(id)
+          assertCurrent()
+          const membership: OrgMembership = {
+            id,
+            orgId: org.id,
+            userId: user.id,
+            role: orgRole,
+            createdAt: existing?.createdAt ?? binding.updatedAt,
+            updatedAt: binding.updatedAt,
+          }
+          await db.orgMemberships.put(membership)
+          assertCurrent()
+        }
+      }
+      await db.externalIdentities.put(external)
+      assertCurrent()
+    }
+  )
 }
 
 export const identityProjection: IdentityProjectionWriter = {

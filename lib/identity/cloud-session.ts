@@ -35,7 +35,11 @@ import {
   type LogtoAppSessionDeps,
   type LogtoSessionResolution,
 } from "@/lib/logto/app-session"
-import type { LogtoSession, LogtoSessionMetadata } from "@/lib/logto/client"
+import {
+  toLogtoSessionMetadata,
+  type LogtoSession,
+  type LogtoSessionMetadata,
+} from "@/lib/logto/client"
 
 import { readLogtoIdentity } from "./logto-claims"
 import { UserBindingRegistry } from "./user-binding"
@@ -59,7 +63,8 @@ export interface AccountIdentitySummary {
   orgRole?: OrgRole
 }
 
-export type CloudSessionReauthReason = "expired" | "revoked" | "binding-missing"
+export type CloudSessionReauthReason =
+  "expired" | "revoked" | "binding-missing" | "binding-mismatch"
 
 export type CloudSessionState =
   | { status: "signed-out" }
@@ -134,22 +139,19 @@ export async function readCloudSessionState(
     case "active": {
       const registry = deps.registry ?? new UserBindingRegistry()
       const binding = await registry.get(localAccountId)
-      if (!binding) {
+      const identity = readLogtoIdentity(resolved.session)
+      if (
+        !binding ||
+        binding.signedOutAt !== undefined ||
+        !identity ||
+        binding.logtoSubject !== identity.access.subject ||
+        binding.logtoIssuer.replace(/\/+$/, "") !== resolved.session.issuer.replace(/\/+$/, "")
+      ) {
         return {
           status: "reauth-required",
-          reason: "binding-missing",
-          sessionMetadata: {
-            issuer: resolved.session.issuer,
-            clientId: resolved.session.clientId,
-            resource: resolved.session.resource,
-            scopes: [...resolved.session.scopes],
-            ...(resolved.session.organizationId
-              ? { organizationId: resolved.session.organizationId }
-              : {}),
-            ...(resolved.session.expiresAt !== undefined
-              ? { expiresAt: resolved.session.expiresAt }
-              : {}),
-          },
+          reason:
+            !binding || binding.signedOutAt !== undefined ? "binding-missing" : "binding-mismatch",
+          sessionMetadata: toLogtoSessionMetadata(resolved.session),
         }
       }
       return {

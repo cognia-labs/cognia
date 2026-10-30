@@ -37,7 +37,7 @@ import {
   type WorkspaceRole,
 } from "@/types/identity"
 
-import { getDb } from "./schema"
+import { getDb, type CogniaDB } from "./schema"
 
 export async function upsertUser(user: User): Promise<void> {
   await getDb().users.put(user)
@@ -181,7 +181,8 @@ export interface LinkExternalIdentityInput {
  * should do.
  */
 export async function linkExternalIdentity(
-  input: LinkExternalIdentityInput
+  input: LinkExternalIdentityInput,
+  db: CogniaDB = getDb()
 ): Promise<ExternalIdentity> {
   const now = input.now ?? Date.now()
   const row: ExternalIdentity = {
@@ -193,7 +194,7 @@ export async function linkExternalIdentity(
   }
   if (input.tenant) row.tenant = input.tenant
   if (input.label) row.label = input.label
-  await getDb().externalIdentities.put(row)
+  await db.externalIdentities.put(row)
   return row
 }
 
@@ -205,9 +206,10 @@ export async function listExternalIdentities(userId: string): Promise<ExternalId
 export async function findUserIdByExternalIdentity(
   provider: ExternalIdentityProvider,
   subject: string,
-  tenant?: string
+  tenant?: string,
+  db: CogniaDB = getDb()
 ): Promise<string | undefined> {
-  const row = await getDb().externalIdentities.get(externalIdentityId(provider, subject, tenant))
+  const row = await db.externalIdentities.get(externalIdentityId(provider, subject, tenant))
   return row?.userId
 }
 

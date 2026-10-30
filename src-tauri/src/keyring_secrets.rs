@@ -43,11 +43,18 @@ fn read_with_legacy_webhook_secret(input: &SecretStoreInput) -> Result<Option<St
 }
 
 #[tauri::command]
-pub async fn secret_store_set(input: SecretStoreInput) -> Result<(), String> {
+pub async fn secret_store_set(
+    input: SecretStoreInput,
+    condition: Option<SecretStoreSetCondition>,
+) -> Result<(), String> {
     let value = input
         .value
         .ok_or_else(|| "secret-store set: value is required".to_string())?;
-    on_blocking_pool(move || set(&input.namespace, &input.key, &value)).await
+    on_blocking_pool(move || match condition {
+        Some(condition) => set_if(&input.namespace, &input.key, &value, &condition),
+        None => set(&input.namespace, &input.key, &value),
+    })
+    .await
 }
 
 #[tauri::command]
@@ -64,7 +71,7 @@ pub async fn keyring_secret_get(input: KeyringInput) -> Result<Option<String>, S
 /// Deprecated wire alias for pre-secret-store clients.
 #[tauri::command]
 pub async fn keyring_secret_set(input: KeyringInput) -> Result<(), String> {
-    secret_store_set(input).await
+    secret_store_set(input, None).await
 }
 
 /// Deprecated wire alias for pre-secret-store clients.
@@ -120,7 +127,9 @@ mod tests {
     #[tokio::test]
     async fn canonical_commands_round_trip_and_legacy_aliases_share_storage() {
         secret_store_delete(input(None)).await.unwrap();
-        secret_store_set(input(Some("canonical"))).await.unwrap();
+        secret_store_set(input(Some("canonical")), None)
+            .await
+            .unwrap();
         assert_eq!(
             keyring_secret_get(input(None)).await.unwrap().as_deref(),
             Some("canonical")
@@ -135,8 +144,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canonical_set_optionally_compares_and_commits_a_related_credential() {
+        let mut revision = input(Some("r1"));
+        revision.namespace = "secret-store-command-condition-test".into();
+        revision.key = "revision".into();
+        secret_store_delete(revision.clone()).await.unwrap();
+        let condition = SecretStoreSetCondition {
+            expected: None,
+            changes: vec![SecretStoreChange {
+                key: "session".into(),
+                value: Some("token".into()),
+            }],
+        };
+        secret_store_set(revision.clone(), Some(condition.clone()))
+            .await
+            .unwrap();
+        revision.value = Some("stale".into());
+        assert_eq!(
+            secret_store_set(revision.clone(), Some(condition))
+                .await
+                .unwrap_err(),
+            "secret-store condition mismatch"
+        );
+        assert_eq!(
+            get(&revision.namespace, "session").unwrap().as_deref(),
+            Some("token")
+        );
+        assert_eq!(
+            get(&revision.namespace, "revision").unwrap().as_deref(),
+            Some("r1")
+        );
+    }
+
+    #[tokio::test]
     async fn canonical_set_requires_a_value() {
-        let error = secret_store_set(input(None)).await.unwrap_err();
+        let error = secret_store_set(input(None), None).await.unwrap_err();
         assert_eq!(error, "secret-store set: value is required");
     }
 

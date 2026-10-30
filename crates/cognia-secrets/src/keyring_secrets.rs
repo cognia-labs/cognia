@@ -28,6 +28,24 @@ pub struct SecretStoreInput {
     pub value: Option<String>,
 }
 
+/// Optional guard for a set command. The primary input key is the revision;
+/// related writes/deletions stay in that same namespace and one transaction.
+/// Values are intentionally not Debug so tokens never enter diagnostic output.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretStoreSetCondition {
+    pub expected: Option<String>,
+    #[serde(default)]
+    pub changes: Vec<SecretStoreChange>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretStoreChange {
+    pub key: String,
+    pub value: Option<String>,
+}
+
 /// Legacy input name retained for source compatibility.
 pub type KeyringInput = SecretStoreInput;
 
@@ -102,6 +120,67 @@ pub fn set(namespace: &str, key: &str, value: &str) -> Result<(), String> {
     secret_store::set(&service, key, value)
 }
 
+/// Set the revision and related secrets only if the stored revision matches.
+/// Validation completes before any member is changed; mismatch changes nothing.
+pub fn set_if(
+    namespace: &str,
+    key: &str,
+    value: &str,
+    condition: &SecretStoreSetCondition,
+) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("keyring set: value must not be empty".into());
+    }
+    let service = resolved_service(namespace, key)?;
+    let mut mutations = Vec::with_capacity(condition.changes.len() + 1);
+    mutations.push(secret_store::SecretMutation::Set {
+        service: &service,
+        account: key,
+        value,
+    });
+    for change in &condition.changes {
+        validate_key(&change.key)?;
+        if change.key == key {
+            return Err("keyring condition: related change must not overwrite the revision".into());
+        }
+        mutations.push(match change.value.as_deref() {
+            Some("") => return Err("keyring set: value must not be empty".into()),
+            Some(value) => secret_store::SecretMutation::Set {
+                service: &service,
+                account: &change.key,
+                value,
+            },
+            None => secret_store::SecretMutation::Delete {
+                service: &service,
+                account: &change.key,
+            },
+        });
+    }
+    secret_store::apply_batch_if(
+        &mutations,
+        secret_store::SecretCondition {
+            service: &service,
+            account: key,
+            expected: condition.expected.as_deref(),
+        },
+    )
+}
+
+/// Check canonical auth metadata and retain its dedicated auth fence during a
+/// synchronous identity publication. Ordinary receipt secret I/O remains free;
+/// the operation must not invoke conditional batch APIs. Raw legacy setters and
+/// unconditional batches do not participate, so auth revisions must be changed
+/// through conditional sets.
+pub fn with_value<T>(
+    namespace: &str,
+    key: &str,
+    expected: Option<&str>,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let service = resolved_service(namespace, key)?;
+    secret_store::with_value(&service, key, expected, operation)
+}
+
 /// Remove an entry. Idempotent — missing entries return `Ok(())`.
 pub fn clear(namespace: &str, key: &str) -> Result<(), String> {
     let service = resolved_service(namespace, key)?;
@@ -122,6 +201,79 @@ mod tests {
             ("webhooks", "k")
         );
         assert_eq!(input.value, None);
+    }
+
+    #[test]
+    fn conditional_set_wire_shape_commits_related_changes_and_refuses_stale_writes() {
+        let condition: SecretStoreSetCondition = serde_json::from_value(serde_json::json!({
+            "expected": null,
+            "changes": [{ "key": "session", "value": "token" }, { "key": "reauth", "value": null }]
+        }))
+        .unwrap();
+        set_if("conditional-wire", "revision", "signed-in", &condition).unwrap();
+        assert_eq!(
+            get("conditional-wire", "session").unwrap().as_deref(),
+            Some("token")
+        );
+        let logout = SecretStoreSetCondition {
+            expected: Some("signed-in".into()),
+            changes: vec![SecretStoreChange {
+                key: "session".into(),
+                value: None,
+            }],
+        };
+        set_if("conditional-wire", "revision", "signed-out", &logout).unwrap();
+        assert_eq!(
+            set_if("conditional-wire", "revision", "late-signin", &logout).unwrap_err(),
+            "secret-store condition mismatch"
+        );
+        assert_eq!(
+            get("conditional-wire", "revision").unwrap().as_deref(),
+            Some("signed-out")
+        );
+        assert_eq!(get("conditional-wire", "session").unwrap(), None);
+    }
+
+    #[test]
+    fn guarded_identity_publication_validates_namespace_and_stored_revision() {
+        set("person-side-effect", "revision", "current").unwrap();
+        let mut published = false;
+        with_value("person-side-effect", "revision", Some("current"), || {
+            published = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(published);
+        assert!(
+            with_value::<()>("person-side-effect", "revision", Some("old"), || panic!(
+                "stale publication"
+            ))
+            .is_err()
+        );
+        assert!(with_value::<()>("", "revision", Some("current"), || panic!(
+            "invalid namespace"
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn conditional_set_validates_every_change_before_publishing_revision() {
+        let invalid = SecretStoreSetCondition {
+            expected: None,
+            changes: vec![
+                SecretStoreChange {
+                    key: "session".into(),
+                    value: Some("token".into()),
+                },
+                SecretStoreChange {
+                    key: "revision".into(),
+                    value: None,
+                },
+            ],
+        };
+        assert!(set_if("conditional-invalid", "revision", "new", &invalid).is_err());
+        assert_eq!(get("conditional-invalid", "revision").unwrap(), None);
+        assert_eq!(get("conditional-invalid", "session").unwrap(), None);
     }
 
     #[test]

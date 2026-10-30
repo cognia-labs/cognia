@@ -40,6 +40,7 @@ import {
   installDesktopSyncSource,
   projectBotDeliveryRow,
   projectBotInstallationRow,
+  projectOutboundJobRow,
   readDexieDelta,
   SESSION_USAGE_FIRST_SYNC_WINDOW_MS,
   SESSION_USAGE_PAGE_SIZE,
@@ -50,6 +51,32 @@ import {
 } from "@/lib/signaling/provisioned-turn-state"
 
 describe("readDexieDelta", () => {
+  it("carries pending provider correlation in the body-free outbound status projection", () => {
+    const pendingReceipt = { id: "audit", acceptedAt: 1 }
+    const result = projectOutboundJobRow({
+      id: "job",
+      adapterId: "a",
+      conversationKey: "matrix:a:chat",
+      status: "delivery_unknown",
+      pendingReceipt,
+      attempts: 1,
+      createdAt: 1,
+      nextAttemptAt: 0,
+      idempotencyKey: "key",
+      source: "manual",
+      request: {
+        conversationRef: { platform: "matrix", adapterId: "a" },
+        segments: [{ type: "text", text: "private body" }],
+        metadata: { idempotencyKey: "key" },
+      },
+    })
+    expect(result).toMatchObject({
+      pendingReceipt,
+      syncedFromHost: true,
+      request: { segments: [] },
+    })
+    expect(JSON.stringify(result)).not.toContain("private body")
+  })
   beforeEach(async () => {
     __resetInstalledForTests()
     resetProvisionedTurnServersForTests()
@@ -1928,4 +1955,27 @@ describe("the per-turn usage reader (sessionUsage)", () => {
     expect(ids(delta.rows)).toEqual(["turn"])
     expect(delta.has_more).toBe(false)
   })
+})
+
+it("projects automation state without cancellation receipts or credentials", () => {
+  const installation = projectBotInstallationRow({
+    id: "bot",
+    paused: true,
+    triggerInputSlots: { in: "chat" },
+    automationCancellations: { op: ["private-delivery"] },
+    credentialBindings: { chat: { adapterId: "private-account" } },
+  } as never)
+  expect(installation).toMatchObject({
+    paused: true,
+    triggerInputSlots: { in: "chat" },
+    credentialBindings: {},
+  })
+  expect(installation).not.toHaveProperty("automationCancellations")
+  const delivery = projectBotDeliveryRow({
+    id: "delivery",
+    status: "dismissed",
+    cancelledAt: 42,
+    envelope: { deliveryId: "delivery" },
+  } as never)
+  expect(delivery.cancelledAt).toBe(42)
 })

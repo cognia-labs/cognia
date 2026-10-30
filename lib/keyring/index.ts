@@ -111,7 +111,30 @@ export async function setSecret(ref: KeyringRef, value: string): Promise<void> {
   await writeWebFallback(ref, value)
 }
 
-/** Remove an entry. Idempotent; `strict: true` propagates desktop deletion failures. */
+/** A related secret in the same namespace; null deletes it. */
+export interface KeyringSecretChange {
+  key: string
+  value: string | null
+}
+
+/**
+ * Desktop storage CAS: compare the primary revision and publish it with all
+ * related credential changes under the Rust store's one mutation lock.
+ */
+export async function compareAndSetSecret(
+  ref: KeyringRef,
+  expected: string | null,
+  value: string,
+  changes: KeyringSecretChange[] = []
+): Promise<void> {
+  if (!value) throw new Error("compareAndSetSecret: value must not be empty")
+  await safeInvokeThrowing<void>("secret_store_set", {
+    input: { namespace: ref.namespace, key: ref.key, value } satisfies IpcInput,
+    condition: { expected, changes },
+  })
+}
+
+/** Remove an entry. Idempotent; `strict: true` propagates storage deletion failures. */
 export async function clearSecret(
   ref: KeyringRef,
   options: { strict?: boolean } = {}
@@ -133,10 +156,10 @@ export async function clearSecret(
         error: err instanceof Error ? err.message : err,
       })
     }
-    await deleteWebFallback(ref)
+    await deleteWebFallback(ref, options.strict)
     return
   }
-  await deleteWebFallback(ref)
+  await deleteWebFallback(ref, options.strict)
 }
 
 // ── Phone (Keychain / Keystore) ──────────────────────────────────────────────
@@ -204,9 +227,12 @@ function fallbackRowId(ref: KeyringRef): string {
   return `${ref.namespace}::${ref.key}`
 }
 
-async function openFallbackDb(): Promise<IDBDatabase | null> {
-  if (typeof indexedDB === "undefined") return null
-  return await new Promise<IDBDatabase | null>((resolve) => {
+async function openFallbackDb(strict = false): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === "undefined") {
+    if (strict) throw new Error("Keyring web fallback: IndexedDB is unavailable")
+    return null
+  }
+  return await new Promise<IDBDatabase | null>((resolve, reject) => {
     const req = indexedDB.open("cognia-keyring", 1)
     req.onupgradeneeded = () => {
       const db = req.result
@@ -215,7 +241,10 @@ async function openFallbackDb(): Promise<IDBDatabase | null> {
       }
     }
     req.onsuccess = () => resolve(req.result)
-    req.onerror = () => resolve(null)
+    req.onerror = () =>
+      strict
+        ? reject(req.error ?? new Error("Keyring database could not be opened"))
+        : resolve(null)
   })
 }
 
@@ -256,14 +285,17 @@ async function writeWebFallback(ref: KeyringRef, value: string): Promise<void> {
   }
 }
 
-async function deleteWebFallback(ref: KeyringRef): Promise<void> {
-  const db = await openFallbackDb()
+async function deleteWebFallback(ref: KeyringRef, strict = false): Promise<void> {
+  const db = await openFallbackDb(strict)
   if (!db) return
   try {
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(WEB_FALLBACK_TABLE, "readwrite")
       tx.oncomplete = () => resolve()
-      tx.onerror = () => resolve()
+      const failed = () =>
+        strict ? reject(tx.error ?? new Error("Keyring deletion failed")) : resolve()
+      tx.onerror = failed
+      tx.onabort = failed
       tx.objectStore(WEB_FALLBACK_TABLE).delete(fallbackRowId(ref))
     })
   } finally {

@@ -183,6 +183,16 @@ impl AccountSecuritySession {
         Ok(active)
     }
 
+    fn require_person_account(
+        &self,
+        requested_account: Option<&str>,
+    ) -> Result<ActiveAccountSecuritySession, String> {
+        match requested_account {
+            Some(local_account_id) => self.require_account(local_account_id),
+            None => self.require_active(),
+        }
+    }
+
     fn assert_unlock_target(&self, local_account_id: &str) -> Result<(), String> {
         if self
             .active
@@ -282,6 +292,27 @@ impl AccountSecuritySession {
             return Err("siwc_account_changed".into());
         }
         Ok(operation())
+    }
+
+    /// Commit a host person only while its profile lifetime and auth revision hold.
+    /// Both read guards surround synchronous identity writes, never token verification.
+    fn with_person_commit<T>(
+        &self,
+        active: &ActiveAccountSecuritySession,
+        auth_revision: Option<&str>,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_unlock_generation(&active.local_account_id, &active.generation, || {
+            match auth_revision {
+                Some(revision) => cognia_secrets::keyring_secrets::with_value(
+                    "logto",
+                    &format!("auth-revision:{}", active.local_account_id),
+                    Some(revision),
+                    operation,
+                ),
+                None => operation(),
+            }
+        })?
     }
 
     pub fn attach_siwc(&self, state: crate::siwc::SiwcState) {
@@ -590,6 +621,8 @@ fn account_password_rotate_inner(
 #[tauri::command]
 pub async fn account_bind_person(
     security_session: tauri::State<'_, AccountSecuritySession>,
+    local_account_id: Option<String>,
+    auth_revision: Option<String>,
     access_token: String,
     user_id: String,
     org_id: Option<String>,
@@ -601,7 +634,7 @@ pub async fn account_bind_person(
     };
     use cognia_tenant_auth::{OrgId, UserId};
 
-    let active = security_session.require_active()?;
+    let active = security_session.require_person_account(local_account_id.as_deref())?;
     // The trust anchor is HOST configuration, never an IPC argument.
     //
     // Taking `issuer`/`audience` from the renderer let the caller pick which
@@ -642,27 +675,29 @@ pub async fn account_bind_person(
         })
         .transpose()?;
 
-    match bind_person(
-        &active.local_account_id,
-        &user_id,
-        org_id.as_deref(),
-        canonical_user_id.as_deref(),
-        canonical_org_id.as_deref(),
-    ) {
-        Ok(()) => {
-            // ADR-0149 §5 step one: the devices on this profile that nobody has
-            // claimed belong to whoever just proved they hold it. Best-effort —
-            // a failure here leaves the binding standing, because the person is
-            // the fact that matters and the attribution can be redone.
-            adopt_unowned_devices(&active.local_account_id)
-                .map(|_| ())
-                .map_err(|error| {
-                    format!("person bound but device adoption must be retried: {error}")
-                })
+    security_session.with_person_commit(&active, auth_revision.as_deref(), || {
+        match bind_person(
+            &active.local_account_id,
+            &user_id,
+            org_id.as_deref(),
+            canonical_user_id.as_deref(),
+            canonical_org_id.as_deref(),
+        ) {
+            Ok(()) => {
+                // ADR-0149 §5 step one: the devices on this profile that nobody has
+                // claimed belong to whoever just proved they hold it. Best-effort —
+                // a failure here leaves the binding standing, because the person is
+                // the fact that matters and the attribution can be redone.
+                adopt_unowned_devices(&active.local_account_id)
+                    .map(|_| ())
+                    .map_err(|error| {
+                        format!("person bound but device adoption must be retried: {error}")
+                    })
+            }
+            Err(HostIdentityError::StoreUnavailable) => Ok(()),
+            Err(error) => Err(error.to_string()),
         }
-        Err(HostIdentityError::StoreUnavailable) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    })
 }
 
 /// Forget the person on this profile (sign-out). The profile binding and every
@@ -670,15 +705,19 @@ pub async fn account_bind_person(
 #[tauri::command]
 pub fn account_unbind_person(
     security_session: tauri::State<'_, AccountSecuritySession>,
+    local_account_id: Option<String>,
+    auth_revision: Option<String>,
 ) -> Result<(), String> {
     use crate::companion_api::host_identity::{unbind_person, HostIdentityError};
 
-    let active = security_session.require_active()?;
-    match unbind_person(&active.local_account_id) {
-        Ok(()) => Ok(()),
-        Err(HostIdentityError::StoreUnavailable) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
+    let active = security_session.require_person_account(local_account_id.as_deref())?;
+    security_session.with_person_commit(&active, auth_revision.as_deref(), || {
+        match unbind_person(&active.local_account_id) {
+            Ok(()) => Ok(()),
+            Err(HostIdentityError::StoreUnavailable) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    })
 }
 
 /// Read the person recorded for this profile, so the renderer can detect a
@@ -929,6 +968,90 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn person_commands_require_the_requested_profile_but_keep_legacy_calls_compatible() {
+        let session = super::AccountSecuritySession::new(None);
+        session.activate("profile-b", "fixture-verifier".into());
+        assert!(session.require_person_account(Some("profile-a")).is_err());
+        assert_eq!(
+            session
+                .require_person_account(Some("profile-b"))
+                .unwrap()
+                .local_account_id,
+            "profile-b"
+        );
+        assert_eq!(
+            session
+                .require_person_account(None)
+                .unwrap()
+                .local_account_id,
+            "profile-b"
+        );
+        session.clear();
+        assert!(session.require_person_account(Some("profile-b")).is_err());
+    }
+
+    #[test]
+    fn verified_person_commit_rejects_profile_switch_and_same_profile_reunlock() {
+        let session = super::AccountSecuritySession::new(None);
+        session.activate("profile-a", "fixture-verifier".into());
+        let pending = session.require_person_account(Some("profile-a")).unwrap();
+        session.activate("profile-b", "another-verifier".into());
+        let mut committed = false;
+        assert!(session
+            .with_unlock_generation(&pending.local_account_id, &pending.generation, || {
+                committed = true;
+            })
+            .is_err());
+        assert!(!committed);
+        session.clear();
+        session.activate("profile-a", "fixture-verifier".into());
+        assert!(session
+            .with_unlock_generation(&pending.local_account_id, &pending.generation, || {
+                committed = true;
+            })
+            .is_err());
+        assert!(!committed);
+    }
+
+    #[test]
+    fn person_commit_refuses_a_superseded_auth_revision_and_preserves_legacy_calls() {
+        let session = super::AccountSecuritySession::new(None);
+        let profile = "person-auth-revision-fixture";
+        let key = format!("auth-revision:{profile}");
+        session.activate(profile, "fixture-verifier".into());
+        let active = session.require_person_account(Some(profile)).unwrap();
+        cognia_secrets::keyring_secrets::set("logto", &key, "committed-login").unwrap();
+        assert_eq!(
+            session
+                .with_person_commit(&active, Some("committed-login"), || Ok(42))
+                .unwrap(),
+            42
+        );
+        cognia_secrets::keyring_secrets::set("logto", &key, "signed-out").unwrap();
+        let mut committed = false;
+        assert_eq!(
+            session
+                .with_person_commit(&active, Some("committed-login"), || {
+                    committed = true;
+                    Ok(())
+                })
+                .unwrap_err(),
+            "secret-store condition mismatch"
+        );
+        assert!(!committed);
+        assert_eq!(
+            session.with_person_commit(&active, None, || Ok(7)).unwrap(),
+            7
+        );
+        session.clear();
+        session.activate(profile, "fixture-verifier".into());
+        assert!(session
+            .with_person_commit(&active, Some("signed-out"), || Ok(()))
+            .is_err());
+        cognia_secrets::keyring_secrets::clear("logto", &key).unwrap();
+    }
+
     #[test]
     fn lume_account_hooks_are_safe_from_synchronous_unlock_commands() {
         let session = super::AccountSecuritySession::new(None);
@@ -1336,7 +1459,10 @@ mod tests {
             }
             false
         });
-        assert!(refused, "an unlocked account must come from the session, not the app");
+        assert!(
+            refused,
+            "an unlocked account must come from the session, not the app"
+        );
         session.activate("acct-a", "digest".into());
         let served = tauri::async_runtime::block_on(async {
             for _ in 0..50 {

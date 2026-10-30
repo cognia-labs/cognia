@@ -15,6 +15,7 @@ use std::sync::Arc;
 /// Age from completion, not creation, so long-running operations get the
 /// same replay window. See ADR-0175.
 const IDEMPOTENCY_RETENTION_SECS: i64 = 24 * 60 * 60;
+const PRIVATE_RECEIPT_OWNER: &str = "companion-legacy-receipts/v1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SecurityStoreError {
@@ -30,6 +31,8 @@ pub enum SecurityStoreError {
     InvalidSocketTicket,
     #[error("idempotency key was already used with a different request")]
     IdempotencyConflict,
+    #[error("the legacy receipt has no recoverable result")]
+    ReceiptUnavailable,
     #[error("host policy is invalid, expired, revoked, or does not cover this command")]
     InvalidPolicy,
     #[error("run state transition is invalid")]
@@ -1810,7 +1813,7 @@ impl SecurityStore {
     ) -> Result<usize, SecurityStoreError> {
         Ok(self.conn.lock().execute(
             "DELETE FROM idempotency_records
-             WHERE receipt_json IS NOT NULL AND updated_at < ?1",
+             WHERE (receipt_json IS NOT NULL OR receipt_cipher IS NOT NULL OR status = 'host-semantic') AND updated_at < ?1",
             [now.saturating_sub(IDEMPOTENCY_RETENTION_SECS)],
         )?)
     }
@@ -1819,29 +1822,60 @@ impl SecurityStore {
     /// retries and deletion fences; never retain its private response or create
     /// an operation whose receipt could bypass that domain on replay.
     pub fn bind_host_semantic_request(
-        &self, tenant_id: &str, device_id: &str, idempotency_key: &str,
-        request_hash: &str, now: i64,
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+        idempotency_key: &str,
+        request_hash: &str,
+        now: i64,
     ) -> Result<(), SecurityStoreError> {
+        self.purge_completed_idempotency_records(now)?;
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(String, String)> = tx.query_row(
-            "SELECT request_hash, status FROM idempotency_records
+        let existing: Option<(String, String)> = tx
+            .query_row(
+                "SELECT request_hash, status FROM idempotency_records
              WHERE tenant_id = ?1 AND device_id = ?2 AND idempotency_key = ?3",
-            params![tenant_id, device_id, idempotency_key],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional()?;
+                params![tenant_id, device_id, idempotency_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
         if let Some((hash, status)) = existing {
-            return if hash == request_hash && status == "host-semantic" {
-                Ok(())
-            } else { Err(SecurityStoreError::IdempotencyConflict) };
+            if hash != request_hash {
+                return Err(SecurityStoreError::IdempotencyConflict);
+            }
+            if status != "host-semantic" {
+                // A canonical command+args hash identifies failed/running old
+                // requests whose receipts cannot be recognized during upgrade.
+                tx.execute(
+                    "UPDATE runs SET status='failed', updated_at=?4
+                     WHERE tenant_id=?1 AND id=(SELECT operation_id FROM idempotency_records
+                         WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3)
+                       AND status IN ('queued','running','recovering')",
+                    params![tenant_id, device_id, idempotency_key, now],
+                )?;
+                tx.execute(
+                    "UPDATE idempotency_records SET status='host-semantic', receipt_json=NULL, receipt_cipher=NULL, receipt_owner=NULL, updated_at=?4
+                     WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3",
+                    params![tenant_id, device_id, idempotency_key, now],
+                )?;
+            }
+            tx.commit()?;
+            return Ok(());
         }
         tx.execute(
             "INSERT INTO idempotency_records
              (tenant_id, device_id, idempotency_key, request_hash, operation_id,
               status, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 'host-semantic', ?6, ?6)",
-            params![tenant_id, device_id, idempotency_key, request_hash,
-                uuid::Uuid::new_v4().to_string(), now],
+            params![
+                tenant_id,
+                device_id,
+                idempotency_key,
+                request_hash,
+                uuid::Uuid::new_v4().to_string(),
+                now
+            ],
         )?;
         tx.commit()?;
         Ok(())
@@ -1856,28 +1890,106 @@ impl SecurityStore {
         request_hash: &str,
         now: i64,
     ) -> Result<IdempotencyDecision, SecurityStoreError> {
+        self.begin_operation(
+            tenant_id,
+            device_id,
+            host_id,
+            idempotency_key,
+            request_hash,
+            None,
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_command_operation(
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+        host_id: &str,
+        idempotency_key: &str,
+        request_hash: &str,
+        command: &str,
+        now: i64,
+    ) -> Result<IdempotencyDecision, SecurityStoreError> {
+        self.begin_operation(
+            tenant_id,
+            device_id,
+            host_id,
+            idempotency_key,
+            request_hash,
+            Some(command),
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn begin_operation(
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+        host_id: &str,
+        idempotency_key: &str,
+        request_hash: &str,
+        command: Option<&str>,
+        now: i64,
+    ) -> Result<IdempotencyDecision, SecurityStoreError> {
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(String, String, Option<String>)> = tx
+        type ReplayRow = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+        );
+        let existing: Option<ReplayRow> = tx
             .query_row(
-                "SELECT request_hash, operation_id, receipt_json
+                "SELECT request_hash, operation_id, receipt_json, receipt_cipher, receipt_owner, status
                  FROM idempotency_records
                  WHERE tenant_id = ?1 AND device_id = ?2 AND idempotency_key = ?3",
                 params![tenant_id, device_id, idempotency_key],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()?;
-        if let Some((existing_hash, operation_id, receipt_json)) = existing {
+        if let Some((existing_hash, operation_id, receipt_json, cipher, owner, status)) = existing {
             if existing_hash != request_hash {
                 return Err(SecurityStoreError::IdempotencyConflict);
             }
-            return Ok(match receipt_json {
+            let receipt_json = if let Some(cipher) = cipher {
+                let attested = command
+                    .or(owner.as_deref())
+                    .ok_or(SecurityStoreError::ReceiptUnavailable)?;
+                if owner.as_deref().is_some_and(|owner| owner != attested) {
+                    return Err(SecurityStoreError::IdempotencyConflict);
+                }
+                let receipt = open_private_receipt(
+                    tenant_id,
+                    device_id,
+                    idempotency_key,
+                    &operation_id,
+                    request_hash,
+                    &cipher,
+                )?;
+                tx.execute("UPDATE idempotency_records SET receipt_owner=?4 WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3",
+                    params![tenant_id, device_id, idempotency_key, attested])?;
+                Some(receipt)
+            } else {
+                receipt_json
+            };
+            if status == "host-semantic" && receipt_json.is_none() {
+                return Err(SecurityStoreError::ReceiptUnavailable);
+            }
+            let decision = match receipt_json {
                 Some(receipt_json) => IdempotencyDecision::Completed {
                     operation_id,
                     receipt_json,
                 },
                 None => IdempotencyDecision::InProgress { operation_id },
-            });
+            };
+            tx.commit()?;
+            return Ok(decision);
         }
         let operation_id = uuid::Uuid::new_v4().to_string();
         tx.execute(
@@ -1936,42 +2048,40 @@ impl SecurityStore {
         device_id: &str,
         operation_id: &str,
     ) -> Result<Option<OperationSummary>, SecurityStoreError> {
-        let row: Option<(String, String, Option<String>, i64, i64)> = self
-            .conn
-            .lock()
-            .query_row(
-                "SELECT operation_id, status, receipt_json, created_at, updated_at
-                 FROM idempotency_records
-                 WHERE tenant_id = ?1 AND device_id = ?2 AND operation_id = ?3
-                   AND status != 'host-semantic'",
-                params![tenant_id, device_id, operation_id],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .optional()?;
-        row.map(
-            |(operation_id, status, receipt_json, created_at, updated_at)| {
-                let receipt = receipt_json
-                    .map(|value| serde_json::from_str(&value))
-                    .transpose()
-                    .map_err(|_| SecurityStoreError::InvalidRunTransition)?;
-                Ok(OperationSummary {
-                    operation_id,
-                    status,
-                    receipt,
-                    created_at,
-                    updated_at,
-                })
-            },
-        )
-        .transpose()
+        let row = self.conn.lock().query_row(
+            "SELECT status,receipt_json,receipt_cipher,receipt_owner,idempotency_key,request_hash,created_at,updated_at
+             FROM idempotency_records WHERE tenant_id=?1 AND device_id=?2 AND operation_id=?3 AND status != 'host-semantic'",
+            params![tenant_id,device_id,operation_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?,row.get::<_,i64>(6)?,row.get::<_,i64>(7)?)),
+        ).optional()?;
+        let Some((status, receipt_json, cipher, owner, key, hash, created_at, updated_at)) = row
+        else {
+            return Ok(None);
+        };
+        if cipher.is_some() && owner.is_none() {
+            return Ok(None);
+        }
+        let receipt_json = match cipher {
+            Some(cipher) => Some(open_private_receipt(
+                tenant_id,
+                device_id,
+                &key,
+                operation_id,
+                &hash,
+                &cipher,
+            )?),
+            None => receipt_json,
+        };
+        let receipt = receipt_json
+            .map(|value| serde_json::from_str(&value))
+            .transpose()
+            .map_err(|_| SecurityStoreError::InvalidRunTransition)?;
+        Ok(Some(OperationSummary {
+            operation_id: operation_id.into(),
+            status,
+            receipt,
+            created_at,
+            updated_at,
+        }))
     }
 
     /// Inspect only the routing tag, never the receipt, before resolving the
@@ -2048,7 +2158,7 @@ impl SecurityStore {
             "UPDATE idempotency_records
              SET status = ?1, receipt_json = ?2, updated_at = ?3
              WHERE tenant_id = ?4 AND device_id = ?5 AND idempotency_key = ?6
-               AND receipt_json IS NULL",
+               AND receipt_json IS NULL AND receipt_cipher IS NULL AND status != 'host-semantic'",
             params![
                 if succeeded { "succeeded" } else { "failed" },
                 receipt_json,
@@ -3287,6 +3397,7 @@ const MIGRATION_DEVICE_QUARANTINE: &str = "device-quarantine-v1";
 const MIGRATION_CLIENT_PLANE_GRANTS: &str = "client-plane-grants-v1";
 const MIGRATION_SSH_FILES_GRANT: &str = "ssh-files-grant-v1";
 const MIGRATION_HOST_EXECUTE_GRANT: &str = "host-execute-grant-v1";
+const MIGRATION_LARK_AUTH_RECEIPTS: &str = "connector-lark-auth-secret-receipts-v1";
 
 /// Steps 4-7 of the rebuild. The column list is spelled out rather than
 /// `SELECT *` so that a future column landing in a different position cannot
@@ -3372,6 +3483,7 @@ fn apply_schema_migrations(
     now: i64,
     backup_target: Option<&Path>,
 ) -> Result<(), SecurityStoreError> {
+    migrate_lark_auth_receipts(conn, now)?;
     migrate_device_status_suspended(conn, now, backup_target)?;
     migrate_host_binding_legacy(conn, now)?;
     migrate_host_binding_person(conn, now)?;
@@ -3383,6 +3495,116 @@ fn apply_schema_migrations(
     migrate_ssh_files_grant(conn, now)?;
     migrate_host_execute_grant(conn, now)?;
     Ok(())
+}
+
+/// Old receipts have no command name. Encrypt potentially confidential DTOs
+/// without inferring ownership. A matching canonical command retry can recover
+/// opaque results; typed Host-semantic retries discard them and query live state.
+fn migrate_lark_auth_receipts(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
+    const VERSION: &str = "connector-private-receipts-v2";
+    if migration_applied(conn, VERSION)? {
+        return Ok(());
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for column in ["receipt_cipher", "receipt_owner"] {
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('idempotency_records') WHERE name=?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            tx.execute_batch(&format!(
+                "ALTER TABLE idempotency_records ADD COLUMN {column} TEXT"
+            ))?;
+        }
+    }
+    {
+        let mut statement = tx.prepare("SELECT tenant_id,device_id,idempotency_key,operation_id,request_hash,receipt_json FROM idempotency_records WHERE receipt_json IS NOT NULL")?;
+        let records = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+        for record in records {
+            let (tenant, device, key, operation, hash, receipt) = record?;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&receipt) else {
+                continue;
+            };
+            let result = &value["result"];
+            if !result["authorizationEpoch"].is_string()
+                || !result["configured"].is_boolean()
+                || !result["scopes"]
+                    .as_array()
+                    .is_some_and(|scopes| scopes.iter().all(serde_json::Value::is_string))
+                || ![
+                    "accessToken",
+                    "refreshToken",
+                    "refreshRevision",
+                    "accountLabel",
+                ]
+                .iter()
+                .all(|name| {
+                    result
+                        .get(name)
+                        .is_some_and(|value| value.is_null() || value.is_string())
+                })
+            {
+                continue;
+            }
+            // Shape marks confidential data, never command ownership. Preserve
+            // opaque bytes until a canonical command+hash proves replay.
+            let cipher = cognia_secrets::secret_store::seal_durable_namespace(
+                PRIVATE_RECEIPT_OWNER,
+                &private_receipt_namespace(&tenant, &device, &key, &operation, &hash),
+                receipt.as_bytes(),
+            )
+            .map_err(SecurityStoreError::Migration)?;
+            tx.execute("UPDATE idempotency_records SET receipt_json=NULL,receipt_cipher=?4,receipt_owner=NULL
+                WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3",params![tenant,device,key,hex::encode(cipher)])?;
+        }
+    }
+    mark_migration(&tx, MIGRATION_LARK_AUTH_RECEIPTS, now)?;
+    mark_migration(&tx, VERSION, now)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn private_receipt_namespace(
+    tenant: &str,
+    device: &str,
+    key: &str,
+    operation: &str,
+    hash: &str,
+) -> String {
+    format!(
+        "companion-receipt/v1/{}",
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(&(tenant, device, key, operation, hash)).expect("string tuple")
+        ))
+    )
+}
+
+fn open_private_receipt(
+    tenant: &str,
+    device: &str,
+    key: &str,
+    operation: &str,
+    hash: &str,
+    cipher: &str,
+) -> Result<String, SecurityStoreError> {
+    let blob = hex::decode(cipher).map_err(|_| SecurityStoreError::ReceiptUnavailable)?;
+    let bytes = cognia_secrets::secret_store::open_durable_namespace(
+        PRIVATE_RECEIPT_OWNER,
+        &private_receipt_namespace(tenant, device, key, operation, hash),
+        &blob,
+    )
+    .map_err(|_| SecurityStoreError::ReceiptUnavailable)?;
+    String::from_utf8(bytes).map_err(|_| SecurityStoreError::ReceiptUnavailable)
 }
 
 fn migrate_device_person_binding(
@@ -4059,6 +4281,8 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     operation_id TEXT NOT NULL,
     status TEXT NOT NULL,
     receipt_json TEXT,
+    receipt_cipher TEXT,
+    receipt_owner TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (tenant_id, device_id, idempotency_key)
@@ -6993,6 +7217,398 @@ CREATE TABLE devices (
                 .unwrap(),
             vec!["host.admin", "host.observe", "scheduler.manage"]
         );
+    }
+
+    #[test]
+    fn upgrading_lark_auth_receipts_removes_secrets_but_preserves_retry_hashes_and_other_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("security.sqlite");
+        let store = SecurityStore::open(&path).unwrap();
+        let auth = serde_json::json!({"result": {
+            "authorizationEpoch":"old-epoch", "configured":true,
+            "accessToken":"fixture-access-secret", "refreshToken":"fixture-refresh-secret",
+            "refreshRevision":"revision", "accountLabel":"Fixture", "scopes":[]
+        }})
+        .to_string();
+        for (key, receipt) in [
+            ("auth", auth.as_str()),
+            ("ordinary", r#"{"result":{"messageId":"sent"}}"#),
+            ("malformed", "not-json"),
+        ] {
+            store.conn.lock().execute("INSERT INTO idempotency_records
+                (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
+                VALUES ('tenant','device',?1,'original-hash',?1,'succeeded',?2,100,100)", params![key,receipt]).unwrap();
+        }
+        store
+            .conn
+            .lock()
+            .execute(
+                "DELETE FROM security_migrations WHERE key IN (?1, 'connector-private-receipts-v2')",
+                ["connector-lark-auth-secret-receipts-v1"],
+            )
+            .unwrap();
+        drop(store);
+        let upgraded = SecurityStore::open(&path).unwrap();
+        let (status, receipt): (String, Option<String>) = upgraded
+            .conn
+            .lock()
+            .query_row(
+                "SELECT status, receipt_json FROM idempotency_records WHERE idempotency_key='auth'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "succeeded", "shape cannot prove command ownership");
+        assert!(receipt.is_none());
+        let cipher: Option<String> = upgraded
+            .conn
+            .lock()
+            .query_row(
+                "SELECT receipt_cipher FROM idempotency_records WHERE idempotency_key='auth'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(cipher.is_some());
+        assert!(upgraded
+            .operation("tenant", "device", "auth")
+            .unwrap()
+            .is_none());
+        upgraded
+            .bind_host_semantic_request("tenant", "device", "auth", "original-hash", 101)
+            .unwrap();
+        assert!(matches!(
+            upgraded.bind_host_semantic_request("tenant", "device", "auth", "changed", 102),
+            Err(SecurityStoreError::IdempotencyConflict)
+        ));
+        assert_eq!(
+            upgraded
+                .operation("tenant", "device", "ordinary")
+                .unwrap()
+                .unwrap()
+                .receipt
+                .unwrap()["result"]["messageId"],
+            "sent"
+        );
+        let malformed: String = upgraded
+            .conn
+            .lock()
+            .query_row(
+                "SELECT receipt_json FROM idempotency_records WHERE idempotency_key='malformed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(malformed, "not-json");
+    }
+
+    #[test]
+    fn legacy_auth_shaped_callback_preserves_exact_replay_after_owned_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-callback.sqlite");
+        let store = SecurityStore::open(&path).unwrap();
+        let receipt = r#"{"httpStatus":200,"result":{"authorizationEpoch":"document","configured":false,"accessToken":"opaque-callback-value","refreshToken":null,"refreshRevision":null,"accountLabel":null,"scopes":[],"callbackMarker":"unrelated"}}"#;
+        store.conn.lock().execute("INSERT INTO idempotency_records
+            (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
+            VALUES ('tenant','device','callback','callback-hash','callback-op','succeeded',?1,100,100)", [receipt]).unwrap();
+        store.conn.lock().execute("DELETE FROM security_migrations WHERE key IN ('connector-lark-auth-secret-receipts-v1','connector-private-receipts-v2')", []).unwrap();
+        drop(store);
+        let upgraded = SecurityStore::open(&path).unwrap();
+        assert!(upgraded
+            .operation("tenant", "device", "callback-op")
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            upgraded.begin_idempotent_operation(
+                "tenant",
+                "device",
+                "host",
+                "callback",
+                "callback-hash",
+                101
+            ),
+            Err(SecurityStoreError::ReceiptUnavailable)
+        ));
+        assert!(matches!(
+            upgraded.begin_command_operation(
+                "tenant",
+                "device",
+                "host",
+                "callback",
+                "changed",
+                "plugin_invoke_js_callback",
+                101
+            ),
+            Err(SecurityStoreError::IdempotencyConflict)
+        ));
+        let decision = upgraded
+            .begin_command_operation(
+                "tenant",
+                "device",
+                "host",
+                "callback",
+                "callback-hash",
+                "plugin_invoke_js_callback",
+                101,
+            )
+            .unwrap();
+        let IdempotencyDecision::Completed { receipt_json, .. } = decision else {
+            panic!("a completed callback must remain replayable");
+        };
+        assert_eq!(receipt_json, receipt);
+        assert_eq!(
+            upgraded
+                .operation("tenant", "device", "callback-op")
+                .unwrap()
+                .unwrap()
+                .receipt
+                .unwrap()["result"]["callbackMarker"],
+            "unrelated"
+        );
+        let (plain,cipher):(Option<String>,Option<String>) = upgraded.conn.lock().query_row("SELECT receipt_json,receipt_cipher FROM idempotency_records WHERE idempotency_key='callback'", [],|row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert!(plain.is_none());
+        assert!(!cipher.unwrap().contains("opaque-callback-value"));
+        drop(upgraded);
+        let reopened = SecurityStore::open(&path).unwrap();
+        assert!(reopened
+            .operation("tenant", "device", "callback-op")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn private_receipt_migration_rolls_back_and_authenticates_each_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("migration.sqlite");
+        let store = SecurityStore::open(&path).unwrap();
+        let receipt = r#"{ "httpStatus":200,"result":{"authorizationEpoch":"opaque","configured":false,"accessToken":null,"refreshToken":null,"refreshRevision":null,"accountLabel":null,"scopes":[]} }"#;
+        for key in ["first", "second"] {
+            store.conn.lock().execute("INSERT INTO idempotency_records
+                (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
+                VALUES ('tenant','device',?1,'hash',?1,'succeeded',?2,100,100)",params![key,receipt]).unwrap();
+        }
+        store
+            .conn
+            .lock()
+            .execute_batch(
+                "DELETE FROM security_migrations WHERE key='connector-private-receipts-v2';
+            ALTER TABLE idempotency_records DROP COLUMN receipt_cipher;
+            ALTER TABLE idempotency_records DROP COLUMN receipt_owner;
+            CREATE TRIGGER reject_private_migration BEFORE UPDATE ON idempotency_records
+            BEGIN SELECT RAISE(ABORT,'fixture migration failure'); END;",
+            )
+            .unwrap();
+        drop(store);
+        assert!(SecurityStore::open(&path).is_err());
+        let database = Connection::open(&path).unwrap();
+        assert_eq!(
+            database
+                .query_row(
+                    "SELECT count(*) FROM idempotency_records WHERE receipt_json=?1",
+                    [receipt],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+        assert!(!migration_applied(&database, "connector-private-receipts-v2").unwrap());
+        assert!(
+            migration_applied(&database, MIGRATION_LARK_AUTH_RECEIPTS).unwrap(),
+            "an already-applied v1 must not suppress the repair"
+        );
+        database
+            .execute_batch("DROP TRIGGER reject_private_migration")
+            .unwrap();
+        drop(database);
+        let upgraded = SecurityStore::open(&path).unwrap();
+        let cipher: String = upgraded
+            .conn
+            .lock()
+            .query_row(
+                "SELECT receipt_cipher FROM idempotency_records WHERE idempotency_key='first'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        upgraded
+            .conn
+            .lock()
+            .execute(
+                "UPDATE idempotency_records SET receipt_cipher=?1 WHERE idempotency_key='second'",
+                [&cipher],
+            )
+            .unwrap();
+        assert!(matches!(
+            upgraded.begin_command_operation(
+                "tenant",
+                "device",
+                "host",
+                "second",
+                "hash",
+                "plugin_invoke_js_callback",
+                101
+            ),
+            Err(SecurityStoreError::ReceiptUnavailable)
+        ));
+        assert!(upgraded
+            .operation("tenant", "device", "second")
+            .unwrap()
+            .is_none());
+        let result = upgraded
+            .begin_command_operation(
+                "tenant",
+                "device",
+                "host",
+                "first",
+                "hash",
+                "plugin_invoke_js_callback",
+                101,
+            )
+            .unwrap();
+        assert!(
+            matches!(result,IdempotencyDecision::Completed{receipt_json,..} if receipt_json==receipt)
+        );
+        assert_eq!(
+            upgraded
+                .purge_completed_idempotency_records(100 + 86_400)
+                .unwrap(),
+            0,
+            "retain the exact 24-hour boundary"
+        );
+        assert_eq!(
+            upgraded
+                .purge_completed_idempotency_records(101 + 86_400)
+                .unwrap(),
+            2,
+            "expire encrypted receipts within the existing retention policy"
+        );
+    }
+
+    #[test]
+    fn semantic_retry_bindings_expire_without_dropping_active_generic_work() {
+        let store = SecurityStore::in_memory().unwrap();
+        for index in 0..1000 {
+            store
+                .bind_host_semantic_request(
+                    "tenant",
+                    "service",
+                    &format!("snapshot-{index}"),
+                    "hash",
+                    100,
+                )
+                .unwrap();
+        }
+        store
+            .begin_idempotent_operation("tenant", "service", "host", "active", "active-hash", 100)
+            .unwrap();
+        assert!(store
+            .bind_host_semantic_request("tenant", "service", "snapshot-0", "changed", 101)
+            .is_err());
+        assert_eq!(
+            store
+                .purge_completed_idempotency_records(100 + 365 * 86_400)
+                .unwrap(),
+            1000
+        );
+        assert!(matches!(
+            store
+                .begin_idempotent_operation(
+                    "tenant",
+                    "service",
+                    "host",
+                    "active",
+                    "active-hash",
+                    100 + 365 * 86_400
+                )
+                .unwrap(),
+            IdempotencyDecision::InProgress { .. }
+        ));
+        store
+            .bind_host_semantic_request(
+                "tenant",
+                "service",
+                "snapshot-0",
+                "changed",
+                100 + 365 * 86_400,
+            )
+            .unwrap();
+        store
+            .bind_host_semantic_request("tenant", "service", "later", "hash", 100 + 730 * 86_400)
+            .unwrap();
+        let count: i64 = store
+            .conn
+            .lock()
+            .query_row(
+                "SELECT COUNT(*) FROM idempotency_records WHERE status='host-semantic'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "normal semantic traffic must sweep expired bindings"
+        );
+    }
+
+    #[test]
+    fn host_semantic_upgrade_accepts_matching_failed_or_running_retries_and_fences_late_generic_completion()
+     {
+        let store = SecurityStore::in_memory().unwrap();
+        for (key, receipt) in [
+            ("failed", Some(r#"{"error":{"code":"unavailable"}}"#)),
+            ("running", None),
+        ] {
+            store.conn.lock().execute("INSERT INTO idempotency_records
+                (tenant_id,device_id,idempotency_key,request_hash,operation_id,status,receipt_json,created_at,updated_at)
+                VALUES ('tenant','device',?1,'original-hash',?1,?1,?2,100,100)", params![key,receipt]).unwrap();
+            store
+                .conn
+                .lock()
+                .execute(
+                    "INSERT INTO runs
+                (id,tenant_id,device_id,host_id,status,request_hash,created_at,updated_at)
+                VALUES (?1,'tenant','device','host','running','original-hash',100,100)",
+                    [key],
+                )
+                .unwrap();
+            assert!(matches!(
+                store.bind_host_semantic_request("tenant", "device", key, "different", 101),
+                Err(SecurityStoreError::IdempotencyConflict)
+            ));
+            store
+                .bind_host_semantic_request("tenant", "device", key, "original-hash", 102)
+                .unwrap();
+            assert!(store.operation("tenant", "device", key).unwrap().is_none());
+            let run_status: String = store
+                .conn
+                .lock()
+                .query_row("SELECT status FROM runs WHERE id=?1", [key], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(run_status, "failed");
+            assert!(matches!(
+                store.complete_idempotent_operation(
+                    "tenant",
+                    "device",
+                    key,
+                    r#"{"result":{"accessToken":"late-secret"}}"#,
+                    true,
+                    103
+                ),
+                Err(SecurityStoreError::IdempotencyConflict)
+            ));
+            let receipt: Option<String> = store
+                .conn
+                .lock()
+                .query_row(
+                    "SELECT receipt_json FROM idempotency_records WHERE idempotency_key=?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(receipt.is_none());
+        }
     }
 
     #[test]

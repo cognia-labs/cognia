@@ -355,6 +355,27 @@ export function createAccountStore(
   dependencyOverrides: Partial<AccountStoreDependencies> = {}
 ): AccountStore {
   const runtimeTargets = new RuntimeTargetRegistry()
+  let pendingLock: Promise<void> | null = null
+  let authenticationGeneration = 0
+  let authenticationTail: Promise<unknown> = Promise.resolve()
+  const trackUnlock = <T>(operation: () => Promise<T>): Promise<T> => {
+    const generation = authenticationGeneration
+    const cleanupAtRequest = pendingLock?.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error })
+    )
+    const task = authenticationTail.then(async () => {
+      if (cleanupAtRequest) {
+        const cleanup = await cleanupAtRequest
+        if (!cleanup.ok) throw cleanup.error
+      }
+      if (pendingLock) await pendingLock
+      if (generation !== authenticationGeneration) throw new Error("Account changed during unlock")
+      return operation()
+    })
+    authenticationTail = task.catch(() => undefined)
+    return task
+  }
   const dependencies: AccountStoreDependencies = {
     registry: new LocalAccountRegistry(),
     dropAccountDatabase: dropDexieAccountDatabase,
@@ -1059,73 +1080,82 @@ export function createAccountStore(
         }
       },
 
-      unlockAccount: async (localAccountId, password, options = {}) => {
-        set({ error: null })
-        let nativeAccountActivated = false
-        try {
-          const account = await findAccount(localAccountId)
-          if (isDeviceManagedAccount(account)) {
-            if (
-              !(isTauri() || isCapacitor()) ||
-              account.id !== deviceLocalAccountId() ||
-              !(await browserVaultExists(account.id))
-            ) {
-              throw new AccountUnlockError(
-                "vault-not-provisioned",
-                "The local workspace vault is missing."
-              )
-            }
-            const deviceSecret = await desktopLocalAccountPassword()
-            if (!deviceSecret) {
-              // Not "password required": nobody ever typed one. The store
-              // answered and holds no credential for this workspace (a
-              // restored or separate store, e.g. a debug build's dev store).
-              throw new AccountUnlockError(
-                "vault-not-provisioned",
-                "The local workspace's device credential is missing from this device's credential store."
-              )
-            }
-            password = deviceSecret
+      unlockAccount: (localAccountId, password, options = {}) =>
+        trackUnlock(async () => {
+          if (pendingLock) await pendingLock
+          const revision = get().accountRevision
+          const assertCurrent = () => {
+            if (get().accountRevision !== revision) throw new Error("Account changed during unlock")
           }
-          assertPasswordProvided(password)
-          publishUnlockStage(account.id, "verifying")
-          if (shouldUseBrowserVault()) {
-            await unlockBrowserVault(account.id, password)
-          } else {
-            const ok = await verifyPassword(password, account.passwordVerifier, account.id)
-            if (!ok) {
-              throw new AccountUnlockError("invalid-password", "Invalid local account password.")
+          set({ error: null })
+          let nativeAccountActivated = false
+          try {
+            const account = await findAccount(localAccountId)
+            assertCurrent()
+            if (isDeviceManagedAccount(account)) {
+              if (
+                !(isTauri() || isCapacitor()) ||
+                account.id !== deviceLocalAccountId() ||
+                !(await browserVaultExists(account.id))
+              ) {
+                throw new AccountUnlockError(
+                  "vault-not-provisioned",
+                  "The local workspace vault is missing."
+                )
+              }
+              const deviceSecret = await desktopLocalAccountPassword()
+              if (!deviceSecret) {
+                // Not "password required": nobody ever typed one. The store
+                // answered and holds no credential for this workspace (a
+                // restored or separate store, e.g. a debug build's dev store).
+                throw new AccountUnlockError(
+                  "vault-not-provisioned",
+                  "The local workspace's device credential is missing from this device's credential store."
+                )
+              }
+              password = deviceSecret
             }
-            nativeAccountActivated = true
-            if (await browserVaultExists(account.id)) {
+            assertPasswordProvided(password)
+            publishUnlockStage(account.id, "verifying")
+            if (shouldUseBrowserVault()) {
               await unlockBrowserVault(account.id, password)
             } else {
-              const recoveryKey = await provisionBrowserVault(account.id, password)
-              set({ pendingRecoveryKey: recoveryKey, pendingRecoveryKeyAccountId: account.id })
+              const ok = await verifyPassword(password, account.passwordVerifier, account.id)
+              if (!ok) {
+                throw new AccountUnlockError("invalid-password", "Invalid local account password.")
+              }
+              nativeAccountActivated = true
+              assertCurrent()
+              if (await browserVaultExists(account.id)) {
+                await unlockBrowserVault(account.id, password)
+              } else {
+                const recoveryKey = await provisionBrowserVault(account.id, password)
+                set({ pendingRecoveryKey: recoveryKey, pendingRecoveryKeyAccountId: account.id })
+              }
             }
-          }
-          // After the password is proven and before anything opens: a store
-          // that refuses the secret fails this attempt with its own code, so
-          // the owner can untick the option and get in, rather than landing in
-          // an app that silently did not keep the choice they just made.
-          if (options.rememberOnDevice !== undefined && !isDeviceManagedAccount(account)) {
-            await applyRememberOnDevice(account.id, options.rememberOnDevice, password)
-          }
-          await activateUnlockedAccount(account.id, password)
-        } catch (error) {
-          if (nativeAccountActivated) {
-            const rollbackFailures = await rollbackNativeAccountActivation(localAccountId)
-            if (rollbackFailures.length > 0) {
-              error = new AggregateError(
-                [error, ...rollbackFailures],
-                "Account unlock failed and native rollback was incomplete."
-              )
+            // After the password is proven and before anything opens: a store
+            // that refuses the secret fails this attempt with its own code, so
+            // the owner can untick the option and get in, rather than landing in
+            // an app that silently did not keep the choice they just made.
+            if (options.rememberOnDevice !== undefined && !isDeviceManagedAccount(account)) {
+              await applyRememberOnDevice(account.id, options.rememberOnDevice, password)
             }
+            assertCurrent()
+            await activateUnlockedAccount(account.id, password, assertCurrent)
+          } catch (error) {
+            if (nativeAccountActivated) {
+              const rollbackFailures = await rollbackNativeAccountActivation(localAccountId)
+              if (rollbackFailures.length > 0) {
+                error = new AggregateError(
+                  [error, ...rollbackFailures],
+                  "Account unlock failed and native rollback was incomplete."
+                )
+              }
+            }
+            publishUnlockStage(localAccountId, "failed")
+            throw setFailure(asUnlockError(error))
           }
-          publishUnlockStage(localAccountId, "failed")
-          throw setFailure(asUnlockError(error))
-        }
-      },
+        }),
 
       setRememberOnDevice: async (localAccountId, enabled, password) => {
         set({ error: null })
@@ -1157,90 +1187,82 @@ export function createAccountStore(
         }
       },
 
-      unlockAccountWithQuickMethod: async (localAccountId, method, canonicalSecret, signal) => {
-        set({ error: null })
-        const start = get()
-        let revokeSession: (() => void) | undefined
-        const revokePendingSession = () => revokeSession?.()
-        const isCurrent = () =>
-          method !== "biometric" ||
-          (!signal?.aborted &&
+      unlockAccountWithQuickMethod: (localAccountId, method, canonicalSecret, signal) =>
+        trackUnlock(async () => {
+          if (pendingLock) await pendingLock
+          set({ error: null })
+          const start = get()
+          let revokeSession: (() => void) | undefined
+          const revokePendingSession = () => revokeSession?.()
+          const isCurrent = () =>
+            !signal?.aborted &&
             get().accountRevision === start.accountRevision &&
             get().activeAccountId === start.activeAccountId &&
-            get().unlockedAccountId === start.unlockedAccountId)
-        const assertCurrent = () => {
-          if (!isCurrent()) {
-            revokeSession?.()
-            throw new Error("Account changed during biometric unlock")
+            get().unlockedAccountId === start.unlockedAccountId
+          const assertCurrent = () => {
+            if (!isCurrent()) {
+              revokeSession?.()
+              throw new Error("Account changed during biometric unlock")
+            }
           }
-        }
-        const account = await findAccount(localAccountId)
-        assertCurrent()
-        const enrollment = (account.quickUnlock ?? []).find((entry) => entry.method === method)
-        if (!enrollment) {
-          throw setFailure(
-            new AccountUnlockError("invalid-password", "That unlock method is not enrolled.")
-          )
-        }
-
-        publishUnlockStage(account.id, "verifying")
-        try {
-          const outcome = await verifyQuickUnlock({
-            accountId: account.id,
-            enrollment,
-            canonicalSecret,
-            passwordVerifier: account.passwordVerifier,
-            ...(method === "biometric"
-              ? {
-                  isCurrent,
-                  onSessionOpened: (revoke: () => void) => {
-                    revokeSession = revoke
-                    signal?.addEventListener("abort", revokePendingSession, { once: true })
-                    if (!isCurrent()) revoke()
-                  },
-                }
-              : {}),
-          })
+          const account = await findAccount(localAccountId)
           assertCurrent()
-
-          // Persisted BEFORE the success branch runs. The attempt count is the
-          // entire protection for a 20-bit secret, so it must survive even if
-          // activation then fails.
-          const nextEnrollments = (account.quickUnlock ?? []).map((entry) =>
-            entry.method === method ? outcome.enrollment : entry
-          )
-          const stored = await dependencies.registry.updateQuickUnlock(
-            account.id,
-            nextEnrollments,
-            Date.now(),
-            method === "biometric" ? (account.quickUnlock ?? []) : undefined
-          )
-          assertCurrent()
-          set((state) => ({ accounts: upsertAccount(state.accounts, stored) }))
-
-          if (!outcome.ok) {
-            publishUnlockStage(account.id, "failed")
-            return outcome
+          const enrollment = (account.quickUnlock ?? []).find((entry) => entry.method === method)
+          if (!enrollment) {
+            throw setFailure(
+              new AccountUnlockError("invalid-password", "That unlock method is not enrolled.")
+            )
           }
 
-          await activateUnlockedAccount(
-            account.id,
-            undefined,
-            method === "biometric" ? assertCurrent : undefined,
-            () => {
+          publishUnlockStage(account.id, "verifying")
+          try {
+            const outcome = await verifyQuickUnlock({
+              accountId: account.id,
+              enrollment,
+              canonicalSecret,
+              passwordVerifier: account.passwordVerifier,
+              isCurrent,
+              onSessionOpened: (revoke: () => void) => {
+                revokeSession = revoke
+                signal?.addEventListener("abort", revokePendingSession, { once: true })
+                if (!isCurrent()) revoke()
+              },
+            })
+            assertCurrent()
+
+            // Persisted BEFORE the success branch runs. The attempt count is the
+            // entire protection for a 20-bit secret, so it must survive even if
+            // activation then fails.
+            const nextEnrollments = (account.quickUnlock ?? []).map((entry) =>
+              entry.method === method ? outcome.enrollment : entry
+            )
+            const stored = await dependencies.registry.updateQuickUnlock(
+              account.id,
+              nextEnrollments,
+              Date.now(),
+              method === "biometric" ? (account.quickUnlock ?? []) : undefined
+            )
+            assertCurrent()
+            set((state) => ({ accounts: upsertAccount(state.accounts, stored) }))
+
+            if (!outcome.ok) {
+              publishUnlockStage(account.id, "failed")
+              return outcome
+            }
+
+            await activateUnlockedAccount(account.id, undefined, assertCurrent, () => {
               signal?.removeEventListener("abort", revokePendingSession)
               revokeSession = undefined
-            }
-          )
-          return outcome
-        } catch (error) {
-          revokeSession?.()
-          publishUnlockStage(account.id, "failed")
-          throw setFailure(asUnlockError(error))
-        } finally {
-          signal?.removeEventListener("abort", revokePendingSession)
-        }
-      },
+            })
+            return outcome
+          } catch (error) {
+            revokeSession?.()
+            publishUnlockStage(account.id, "failed")
+            throw setFailure(asUnlockError(error))
+          } finally {
+            signal?.removeEventListener("abort", revokePendingSession)
+          }
+        }),
 
       enrollQuickUnlockMethod: async ({
         localAccountId,
@@ -1387,41 +1409,54 @@ export function createAccountStore(
         set((state) => ({ accounts: upsertAccount(state.accounts, stored) }))
       },
 
-      unlockAccountWithRecoveryKey: async (localAccountId, recoveryKey, newPassword) => {
-        set({ error: null })
-        try {
-          if (!shouldUseBrowserVault()) {
-            throw new AccountUnlockError(
-              "vault-not-provisioned",
-              "Desktop recovery requires the native recovery flow."
+      unlockAccountWithRecoveryKey: (localAccountId, recoveryKey, newPassword) =>
+        trackUnlock(async () => {
+          if (pendingLock) await pendingLock
+          const revision = get().accountRevision
+          const assertCurrent = () => {
+            if (get().accountRevision !== revision) throw new Error("Account changed during unlock")
+          }
+          set({ error: null })
+          try {
+            if (!shouldUseBrowserVault()) {
+              throw new AccountUnlockError(
+                "vault-not-provisioned",
+                "Desktop recovery requires the native recovery flow."
+              )
+            }
+            if (!recoveryKey.trim()) {
+              throw new AccountUnlockError(
+                "invalid-recovery-key",
+                "Vault recovery key is required."
+              )
+            }
+            assertPasswordProvided(newPassword)
+            const account = await findAccount(localAccountId)
+            assertCurrent()
+            publishUnlockStage(account.id, "verifying")
+            // Rotating the password is part of redeeming the key, not a follow-up
+            // step: unlocking alone leaves `passwordWrap` keyed to the password
+            // the user just proved they no longer have.
+            await resetBrowserVaultPasswordWithRecoveryKey(
+              account.id,
+              recoveryKey.trim(),
+              newPassword
             )
+            // A completed rewrap must update its registry verifier even when
+            // a later lock has revoked activation.
+            const passwordVerifier = await createPasswordVerifier(newPassword)
+            const updated = await dependencies.registry.updatePasswordVerifier(
+              account.id,
+              passwordVerifier
+            )
+            set((state) => ({ accounts: upsertAccount(state.accounts, updated) }))
+            assertCurrent()
+            await activateUnlockedAccount(account.id, newPassword, assertCurrent)
+          } catch (error) {
+            publishUnlockStage(localAccountId, "failed")
+            throw setFailure(asUnlockError(error))
           }
-          if (!recoveryKey.trim()) {
-            throw new AccountUnlockError("invalid-recovery-key", "Vault recovery key is required.")
-          }
-          assertPasswordProvided(newPassword)
-          const account = await findAccount(localAccountId)
-          publishUnlockStage(account.id, "verifying")
-          // Rotating the password is part of redeeming the key, not a follow-up
-          // step: unlocking alone leaves `passwordWrap` keyed to the password
-          // the user just proved they no longer have.
-          await resetBrowserVaultPasswordWithRecoveryKey(
-            account.id,
-            recoveryKey.trim(),
-            newPassword
-          )
-          const passwordVerifier = await createPasswordVerifier(newPassword)
-          const updated = await dependencies.registry.updatePasswordVerifier(
-            account.id,
-            passwordVerifier
-          )
-          set((state) => ({ accounts: upsertAccount(state.accounts, updated) }))
-          await activateUnlockedAccount(account.id, newPassword)
-        } catch (error) {
-          publishUnlockStage(localAccountId, "failed")
-          throw setFailure(asUnlockError(error))
-        }
-      },
+        }),
 
       switchAccount: async (localAccountId, password) => {
         set({ error: null })
@@ -1823,58 +1858,74 @@ export function createAccountStore(
        *    the UI still believed the account was unlocked — the one outcome a
        *    lock must never produce. A failed step is still reported.
        */
-      lock: async () => {
-        const unlockedAccountId = get().unlockedAccountId
-        // Invalidate pending native enrollment/unlock before teardown yields.
-        // Prevent a scoped runtime from being recreated while async cleanup
-        // still has the old account's database and vault selected.
-        set((state) => ({
-          accountRevision: state.accountRevision + 1,
-          locked: Boolean(unlockedAccountId) || state.locked,
-        }))
-        if (unlockedAccountId) {
-          bumpPerformanceSecurityGeneration(unlockedAccountId, "account-locked")
-        }
-        const failures: unknown[] = []
-        const attempt = async (step: () => void | Promise<void>) => {
-          try {
-            await step()
-          } catch (error) {
-            failures.push(error)
+      lock: () => {
+        if (pendingLock) return pendingLock
+        authenticationGeneration += 1
+        const operation = (async () => {
+          const failures: unknown[] = []
+          // Revoke browser crypto synchronously, before publishing the lock or
+          // yielding to subscription/plugin teardown. Keep DB closure ordered.
+          for (const revoke of [lockAccountContentCipher, lockBrowserVault]) {
+            try {
+              revoke()
+            } catch (error) {
+              failures.push(error)
+            }
           }
-        }
+          const unlockedAccountId = get().unlockedAccountId
+          // Invalidate pending native enrollment/unlock before teardown yields.
+          // Prevent a scoped runtime from being recreated while async cleanup
+          // still has the old account's database and vault selected.
+          set((state) => ({
+            accountRevision: state.accountRevision + 1,
+            locked: Boolean(unlockedAccountId) || state.locked,
+          }))
+          if (unlockedAccountId) {
+            bumpPerformanceSecurityGeneration(unlockedAccountId, "account-locked")
+          }
+          const attempt = async (step: () => void | Promise<void>) => {
+            try {
+              await step()
+            } catch (error) {
+              failures.push(error)
+            }
+          }
 
-        // First, and outside `attempt`: a lock that left the tab's remembered
-        // secret behind would be undone by the very next reload, which is the
-        // one outcome a lock must never produce. Clearing storage cannot throw
-        // in a way the helper does not already swallow.
-        forgetTabSessionUnlock()
+          // First, and outside `attempt`: a lock that left the tab's remembered
+          // secret behind would be undone by the very next reload, which is the
+          // one outcome a lock must never produce. Clearing storage cannot throw
+          // in a way the helper does not already swallow.
+          forgetTabSessionUnlock()
 
-        await attempt(() => dependencies.stopRuntimeSubscriptions())
-        if (unlockedAccountId) {
-          await attempt(() => dependencies.teardownPluginRuntime(unlockedAccountId))
-          await attempt(() => dependencies.clearSubscriptionRuntime(unlockedAccountId))
-        }
-        await attempt(() => unbindLocalAccount())
-        await attempt(() => lockAccountContentCipher())
-        await attempt(() => lockBrowserVault())
-        await attempt(() => clearActiveRuntimeTargetContext())
-        await attempt(() => clearAccountDatabaseSelection())
-        await attempt(() => dependencies.clearAccountLocalState())
+          await attempt(() => dependencies.stopRuntimeSubscriptions())
+          if (unlockedAccountId) {
+            await attempt(() => dependencies.teardownPluginRuntime(unlockedAccountId))
+            await attempt(() => dependencies.clearSubscriptionRuntime(unlockedAccountId))
+          }
+          await attempt(() => unbindLocalAccount())
+          await attempt(() => clearActiveRuntimeTargetContext())
+          await attempt(() => clearAccountDatabaseSelection())
+          await attempt(() => dependencies.clearAccountLocalState())
 
-        set((state) => ({
-          unlockedAccountId: null,
-          locked: computeLocked(state.accounts, state.activeAccountId, null),
-          error: null,
-        }))
+          set((state) => ({
+            unlockedAccountId: null,
+            locked: computeLocked(state.accounts, state.activeAccountId, null),
+            error: null,
+          }))
 
-        if (failures.length > 0) {
-          throw setFailure(
-            failures.length === 1
-              ? failures[0]
-              : new AggregateError(failures, "Account lock teardown was incomplete.")
-          )
-        }
+          if (failures.length > 0) {
+            throw setFailure(
+              failures.length === 1
+                ? failures[0]
+                : new AggregateError(failures, "Account lock teardown was incomplete.")
+            )
+          }
+        })()
+        const joined = operation.finally(() => {
+          if (pendingLock === joined) pendingLock = null
+        })
+        pendingLock = joined
+        return joined
       },
 
       acknowledgeRecoveryKey: () => {

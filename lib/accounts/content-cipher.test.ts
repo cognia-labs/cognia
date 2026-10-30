@@ -440,6 +440,7 @@ describe("AccountContentCipher", () => {
     })
 
     it("clears cached plaintext on lock and does not retain a late decrypt result", async () => {
+      let decryptedBuffer!: ArrayBuffer
       const cipher = await createCipher()
       const envelope = await cipher.encrypt("sessionList", "s1", "payload", 1, { title: "private" })
       await cipher.decrypt("sessionList", "s1", "payload", 1, envelope)
@@ -456,6 +457,7 @@ describe("AccountContentCipher", () => {
       })
       jest.spyOn(crypto.subtle, "decrypt").mockImplementationOnce(async (...args) => {
         const plaintext = await decryptActual(...args)
+        decryptedBuffer = plaintext
         await gate
         return plaintext
       })
@@ -463,7 +465,8 @@ describe("AccountContentCipher", () => {
       cipher.lock()
       expect(cache.size).toBe(0)
       release()
-      await expect(pending).resolves.toEqual({ title: "late" })
+      await expect(pending).rejects.toThrow(/locked/)
+      expect([...new Uint8Array(decryptedBuffer)].every((byte) => byte === 0)).toBe(true)
       expect(cache.size).toBe(0)
       await expect(cipher.decrypt("sessionList", "s1", "payload", 1, envelope)).rejects.toThrow(
         /locked/

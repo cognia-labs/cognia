@@ -643,6 +643,10 @@ async function createBotInstallation(
         credentialBindings: installation.credentialBindings,
         // Arrives switched off; `arm` enables it after this copy is fenced.
         enabled: false,
+        ...(installation.triggerInputSlots
+          ? { triggerInputSlots: installation.triggerInputSlots }
+          : {}),
+        ...(installation.paused !== undefined ? { paused: installation.paused } : {}),
         ...(installation.triggerOverrides
           ? { triggerOverrides: installation.triggerOverrides }
           : {}),

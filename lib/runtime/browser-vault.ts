@@ -335,7 +335,14 @@ export class BrowserVaultSession {
       key,
       toBufferSource(decodeBase64Url(secret.ciphertext))
     )
-    return new TextDecoder().decode(plaintext)
+    try {
+      // WebCrypto may complete after lock() has revoked this session. Never
+      // release a credential to a caller that lost its unlock ownership.
+      if (this.masterKey !== key) throw new Error("Browser Vault is locked.")
+      return new TextDecoder().decode(plaintext)
+    } finally {
+      new Uint8Array(plaintext).fill(0)
+    }
   }
 
   async storeSecret(name: string, value: string, now = Date.now()): Promise<void> {
@@ -365,18 +372,37 @@ export class BrowserVaultSession {
 }
 
 let activeBrowserVaultSession: BrowserVaultSession | null = null
+let vaultActivationGeneration = 0
 let browserVaultRepository: BrowserVaultRepository | null = null
+
+function assertVaultActivation(generation: number): void {
+  if (generation !== vaultActivationGeneration)
+    throw new Error("Browser Vault activation was cancelled")
+}
+
+function activateVaultSession(session: BrowserVaultSession, generation: number): void {
+  if (generation !== vaultActivationGeneration) {
+    session.lock()
+    throw new Error("Browser Vault activation was cancelled")
+  }
+  activeBrowserVaultSession?.lock()
+  activeBrowserVaultSession = session
+}
 
 export async function provisionBrowserVault(
   localAccountId: string,
   password: string,
   activate = true
 ): Promise<string> {
+  const generation = vaultActivationGeneration
   const created = await BrowserVaultSession.create(localAccountId, password)
+  if (activate && generation !== vaultActivationGeneration) {
+    created.session.lock()
+    assertVaultActivation(generation)
+  }
   await repository().put(created.record)
   if (activate) {
-    activeBrowserVaultSession?.lock()
-    activeBrowserVaultSession = created.session
+    activateVaultSession(created.session, generation)
   } else {
     created.session.lock()
   }
@@ -492,6 +518,7 @@ export async function unlockBrowserVaultWithQuickSecret(args: {
   /** Revoke only this session if its caller is cancelled before activation. */
   onSessionOpened?: (revoke: () => void) => void
 }): Promise<void> {
+  const generation = vaultActivationGeneration
   const { accountId: localAccountId, method, canonicalSecret, pepper } = args
   const record = await repository().get(localAccountId)
   if (!record) throw new Error("Browser Vault is not provisioned for this account.")
@@ -520,8 +547,7 @@ export async function unlockBrowserVaultWithQuickSecret(args: {
         session.lock()
         throw new Error("Account changed during quick unlock")
       }
-      activeBrowserVaultSession?.lock()
-      activeBrowserVaultSession = session
+      activateVaultSession(session, generation)
       args.onSessionOpened?.(() => {
         session.lock()
         if (activeBrowserVaultSession === session) activeBrowserVaultSession = null
@@ -557,11 +583,11 @@ export async function listBrowserVaultQuickUnlockMethods(
 }
 
 export async function unlockBrowserVault(localAccountId: string, password: string): Promise<void> {
+  const generation = vaultActivationGeneration
   const record = await repository().get(localAccountId)
   if (!record) throw new Error("Browser Vault is not provisioned for this account.")
   const session = await BrowserVaultSession.unlockWithPassword(record, password)
-  activeBrowserVaultSession?.lock()
-  activeBrowserVaultSession = session
+  activateVaultSession(session, generation)
 }
 
 export async function verifyBrowserVaultPassword(
@@ -585,6 +611,7 @@ export async function changeBrowserVaultPassword(
   newPassword: string,
   now = Date.now()
 ): Promise<void> {
+  const generation = vaultActivationGeneration
   const current = await repository().get(localAccountId)
   if (!current) throw new Error("Browser Vault is not provisioned for this account.")
   const currentPasswordKey = await derivePasswordKeyForRecord(current, currentPassword)
@@ -606,6 +633,7 @@ export async function changeBrowserVaultPassword(
       await importAesKey(masterBytes, ["encrypt", "decrypt"])
     )
     try {
+      assertVaultActivation(generation)
       await repository().put({
         ...current,
         version: 2,
@@ -625,8 +653,9 @@ export async function changeBrowserVaultPassword(
       session.lock()
       throw error
     }
-    activeBrowserVaultSession?.lock()
-    activeBrowserVaultSession = session
+    // A committed rewrap must not be reported as an uncommitted failure.
+    if (generation === vaultActivationGeneration) activateVaultSession(session, generation)
+    else session.lock()
   } finally {
     zeroBytes(masterBytes)
     zeroBytes(nextSalt)
@@ -654,6 +683,7 @@ export async function resetBrowserVaultPasswordWithRecoveryKey(
   newPassword: string,
   now = Date.now()
 ): Promise<void> {
+  const generation = vaultActivationGeneration
   const current = await repository().get(localAccountId)
   if (!current) throw new Error("Browser Vault is not provisioned for this account.")
   assertPassword(newPassword)
@@ -676,6 +706,7 @@ export async function resetBrowserVaultPasswordWithRecoveryKey(
         nextPasswordKey,
         wrapAad(localAccountId, "password")
       )
+      assertVaultActivation(generation)
       await repository().put({
         ...current,
         version: 2,
@@ -701,8 +732,8 @@ export async function resetBrowserVaultPasswordWithRecoveryKey(
     zeroBytes(recoveryBytes)
     zeroBytes(nextSalt)
   }
-  activeBrowserVaultSession?.lock()
-  activeBrowserVaultSession = recovered
+  if (generation === vaultActivationGeneration) activateVaultSession(recovered, generation)
+  else recovered.lock()
 }
 
 export function getActiveBrowserVault(): BrowserVaultSession | null {
@@ -710,6 +741,7 @@ export function getActiveBrowserVault(): BrowserVaultSession | null {
 }
 
 export function lockBrowserVault(): void {
+  vaultActivationGeneration += 1
   activeBrowserVaultSession?.lock()
   activeBrowserVaultSession = null
 }

@@ -30,6 +30,25 @@ function input(overrides: Partial<BindUserInput> = {}): BindUserInput {
 }
 
 describe("UserBindingRegistry", () => {
+  it.each(["bind", "signOut"])("refuses stale %s after its owner read", async (operation) => {
+    const { registry } = await freshRegistry(`stale-${operation}`)
+    await registry.bind(input())
+    const original = await registry.getOwner("acct_alpha")
+    let current = true
+    const assertCurrent = () => {
+      if (!current) throw new Error("stale auth")
+    }
+    jest.spyOn(registry, "getOwner").mockImplementationOnce(async () => {
+      current = false
+      return original
+    })
+    const mutation =
+      operation === "bind"
+        ? registry.bind(input({ displayName: "Stale name", assertCurrent }))
+        : registry.signOut("acct_alpha", 2000, assertCurrent)
+    await expect(mutation).rejects.toThrow("stale auth")
+    expect(await registry.getOwner("acct_alpha")).toEqual(original)
+  })
   it("v3 opens the userBindings store", async () => {
     const { db } = await freshRegistry("v3-store")
     await db.userBindings.put({
@@ -154,7 +173,9 @@ describe("isSameBoundUser", () => {
   }
 
   it("requires both halves to match", () => {
-    expect(isSameBoundUser(existing, input({ userId: "usr_ada", logtoSubject: "s1" }))).toBe(true)
+    expect(
+      isSameBoundUser(existing, input({ userId: "usr_ada", logtoSubject: "s1", logtoIssuer: "i" }))
+    ).toBe(true)
     expect(isSameBoundUser(existing, input({ userId: "usr_bob", logtoSubject: "s1" }))).toBe(false)
     expect(isSameBoundUser(existing, input({ userId: "usr_ada", logtoSubject: "s2" }))).toBe(false)
   })
@@ -233,5 +254,46 @@ describe("setOrgId (server-assigned org id)", () => {
     await expect(registry.setOrgId("acct_a", "org_server00000000000000000")).rejects.toMatchObject({
       code: "not-bound",
     })
+  })
+})
+
+describe("persistent profile ownership", () => {
+  it("signs out without releasing ownership or exposing an active binding", async () => {
+    const { db, registry } = await freshRegistry("retained-owner")
+    const original = await registry.bind(input({ displayName: "Ada" }))
+    await registry.signOut("acct_alpha", 2_000)
+    expect(await registry.get("acct_alpha")).toBeNull()
+    expect(await registry.listByUser("usr_ada")).toEqual([])
+    expect(await registry.listAll()).toEqual([])
+    expect(await db.userBindings.get("acct_alpha")).toMatchObject({
+      userId: original.userId,
+      boundAt: original.boundAt,
+      signedOutAt: 2_000,
+    })
+    await expect(
+      registry.bind(input({ userId: "usr_bob", logtoSubject: "bob", now: 3_000 }))
+    ).rejects.toMatchObject({ code: "already-bound-to-another-user" })
+    const resumed = await registry.bind(input({ now: 4_000 }))
+    expect(resumed.boundAt).toBe(original.boundAt)
+    expect(resumed).not.toHaveProperty("signedOutAt")
+    expect(await registry.get("acct_alpha")).toEqual(resumed)
+  })
+
+  it("keeps canonical ids and aliases when their original subject signs in again", async () => {
+    const { registry } = await freshRegistry("owner-canonical-resume")
+    await registry.bind(input())
+    await registry.reconcileUserId("acct_alpha", "usr_canonical0000000000000")
+    await registry.signOut("acct_alpha")
+    const resumed = await registry.bind(input({ now: 2_000 }))
+    expect(resumed.userId).toBe("usr_canonical0000000000000")
+    expect(resumed.legacyUserIds).toContain("usr_ada")
+  })
+
+  it("refuses the same subject minted by a different issuer", async () => {
+    const { registry } = await freshRegistry("owner-issuer")
+    await registry.bind(input())
+    await expect(
+      registry.bind(input({ logtoIssuer: "https://another-issuer.test/oidc" }))
+    ).rejects.toMatchObject({ code: "already-bound-to-another-user" })
   })
 })

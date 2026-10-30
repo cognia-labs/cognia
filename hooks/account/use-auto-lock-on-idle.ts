@@ -24,8 +24,10 @@
  *
  * - **Bounded run deferral.** A streaming or approval-waiting local turn may
  *   delay the first idle deadline by one additional lock window. At the second
- *   deadline the turn is interrupted and the account locks; background work
- *   can never keep the DEK resident forever.
+ *   deadline the turn is interrupted and the account locks. Interrupt dispatch
+ *   gets at most one second before the lock revokes the DEK; a stalled sidecar
+ *   must not keep the account open. Every continuation belongs to the initiating
+ *   account revision, so it cannot lock a subsequently opened profile.
  *
  * - **Not on overlay windows.** The desktop pet / fleet-island windows load the
  *   same layout and pass straight through `AccountGate`, so they would each run
@@ -65,6 +67,9 @@ import { useChatStore } from "@/stores/chat/chat-store"
 import { useSettingsStore } from "@/stores/settings"
 
 const ACTIVITY_EVENTS = ["pointerdown", "keydown", "pointermove", "wheel", "touchstart"] as const
+// Sending an interrupt normally only enqueues a sidecar command. Give that
+// write a brief grace period, without making the security boundary depend on it.
+const INTERRUPT_GRACE_MS = 1_000
 
 /**
  * Is the idle lock meaningful in this build?
@@ -83,6 +88,7 @@ function autoLockAppliesInThisBuild(): boolean {
 export function useAutoLockOnIdle(): void {
   const minutes = useSettingsStore((s) => s.settings?.accountAutoLockMinutes ?? 0)
   const unlockedAccountId = useAccountStore((s) => s.unlockedAccountId)
+  const accountRevision = useAccountStore((s) => s.accountRevision)
   const opensWithoutPrompt = useAccountStore((s) =>
     unlocksWithoutPrompt(s.accounts?.find((account) => account.id === s.unlockedAccountId))
   )
@@ -96,12 +102,33 @@ export function useAutoLockOnIdle(): void {
     if (isSecondaryOverlayRole(getPetWindowRole())) return
 
     const windowMs = minutes * 60_000
+    let disposed = false
+    let lockRequested = false
+    let lockCommitted = false
+    let interruptTimer: ReturnType<typeof setTimeout> | null = null
+    let interruptDeadline: number | null = null
+
+    const currentAccount = () => {
+      const state = useAccountStore.getState()
+      return !disposed &&
+        !state.locked &&
+        state.unlockedAccountId === unlockedAccountId &&
+        state.accountRevision === accountRevision
+        ? state
+        : null
+    }
 
     const clearTimer = () => {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current)
         timerRef.current = null
       }
+    }
+
+    const clearInterruptTimer = () => {
+      if (interruptTimer !== null) clearTimeout(interruptTimer)
+      interruptTimer = null
+      interruptDeadline = null
     }
 
     const blockingSessionIds = () =>
@@ -111,18 +138,39 @@ export function useAutoLockOnIdle(): void {
         )
         .map(([sessionId]) => sessionId)
 
+    const commitLock = () => {
+      clearInterruptTimer()
+      const state = currentAccount()
+      if (!state || lockCommitted) return
+      lockCommitted = true
+      void Promise.resolve(state.lock()).catch(() => undefined)
+    }
+
     const lockNow = (sessionIds: string[] = []) => {
-      if (sessionIds.length === 0) {
-        void Promise.resolve(useAccountStore.getState().lock()).catch(() => undefined)
-        return
-      }
-      void Promise.allSettled(sessionIds.map((sessionId) => interruptSession(sessionId)))
-        .then(() => useAccountStore.getState().lock())
+      if (lockRequested || !currentAccount()) return
+      lockRequested = true
+      clearTimer()
+      if (sessionIds.length === 0) return commitLock()
+
+      interruptDeadline = Date.now() + INTERRUPT_GRACE_MS
+      interruptTimer = setTimeout(commitLock, INTERRUPT_GRACE_MS)
+      void Promise.allSettled(
+        sessionIds.map(async (sessionId) => {
+          if (currentAccount()) await interruptSession(sessionId)
+        })
+      )
+        .then(commitLock)
         .catch(() => undefined)
     }
 
     const arm = () => {
       clearTimer()
+      if (!currentAccount()) return
+      if (lockRequested) {
+        // The grace timer may also have been throttled while backgrounded.
+        if (interruptDeadline !== null && Date.now() >= interruptDeadline) commitLock()
+        return
+      }
       const remaining = windowMs - (Date.now() - lastActivityRef.current)
       if (remaining <= 0) {
         // The deadline passed while we were away, so lock now — but still route
@@ -136,6 +184,7 @@ export function useAutoLockOnIdle(): void {
 
     const onExpire = () => {
       timerRef.current = null
+      if (lockRequested || !currentAccount()) return
       // Fresh activity since we armed? Wait out the remainder instead of locking.
       const idleFor = Date.now() - lastActivityRef.current
       const remaining = windowMs - idleFor
@@ -171,12 +220,14 @@ export function useAutoLockOnIdle(): void {
     window.addEventListener("focus", onVisibility)
 
     return () => {
+      disposed = true
       clearTimer()
+      clearInterruptTimer()
       for (const event of ACTIVITY_EVENTS) {
         window.removeEventListener(event, bump)
       }
       document.removeEventListener("visibilitychange", onVisibility)
       window.removeEventListener("focus", onVisibility)
     }
-  }, [minutes, unlockedAccountId, opensWithoutPrompt])
+  }, [minutes, unlockedAccountId, accountRevision, opensWithoutPrompt])
 }

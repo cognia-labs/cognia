@@ -14,9 +14,28 @@ jest.mock("next-intl", () => ({
 }))
 jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn(), warning: jest.fn() } }))
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
+jest.mock("@/lib/logto/app-session", () => ({
+  ...jest.requireActual("@/lib/logto/app-session"),
+  signOutFromLogto: jest.fn(async (deps: { afterClear?: () => Promise<void> }) => {
+    await deps.afterClear?.()
+    return {
+      hadSession: true,
+      cleared: true,
+      refreshTokenRevocation: null,
+      accessTokenRevocation: null,
+      endSessionUrl: null,
+    }
+  }),
+}))
+jest.mock("@/lib/identity/complete-sign-in", () => ({
+  ...jest.requireActual("@/lib/identity/complete-sign-in"),
+  completeSignOut: jest.fn(async () => {}),
+}))
 
 import { toast } from "sonner"
 import { openUrl } from "@/lib/native/opener"
+import { signOutFromLogto } from "@/lib/logto/app-session"
+import { completeSignOut } from "@/lib/identity/complete-sign-in"
 import { CLOUD_OFFLINE_KEY_PREFIX } from "@/components/account/cloud-sign-in-gate"
 
 jest.mock("@/components/settings/companion/cloud-deployment-card", () => ({
@@ -110,6 +129,27 @@ function deps(overrides: Partial<AccountIdentityTabDeps> = {}): AccountIdentityT
 }
 
 describe("AccountIdentityTab", () => {
+  it("reports failed credential deletion without success or deactivating identity", async () => {
+    ;(signOutFromLogto as jest.Mock).mockRejectedValueOnce(new Error("delete denied"))
+    render(<AccountIdentityTab account={account} deps={deps({ signOut: undefined })} />)
+    fireEvent.click(await screen.findByRole("button", { name: "signOut" }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("signOutFailed(delete denied)"))
+    expect(toast.success).not.toHaveBeenCalled()
+    expect(completeSignOut).not.toHaveBeenCalled()
+    expect(screen.getByTestId("account-identity-person")).toHaveTextContent("Ada")
+  })
+  it("runs default identity cleanup inside the successful credential-clear commit", async () => {
+    render(<AccountIdentityTab account={account} deps={deps({ signOut: undefined })} />)
+    fireEvent.click(await screen.findByRole("button", { name: "signOut" }))
+    await waitFor(() =>
+      expect(signOutFromLogto).toHaveBeenCalledWith({
+        localAccountId: "acct_a",
+        afterClear: expect.any(Function),
+      })
+    )
+    expect(completeSignOut).toHaveBeenCalledTimes(1)
+    expect(completeSignOut).toHaveBeenCalledWith({ localAccountId: "acct_a" })
+  })
   it("shows the person, the current organization by name, and the others with a switch", async () => {
     const d = deps()
     render(<AccountIdentityTab account={account} deps={d} />)

@@ -65,8 +65,10 @@ export interface AccountIdentityTabProps {
 }
 
 async function defaultSignOut(localAccountId: string) {
-  const report = await signOutFromLogto({ localAccountId })
-  await completeSignOut({ localAccountId })
+  const report = await signOutFromLogto({
+    localAccountId,
+    afterClear: (context) => completeSignOut({ localAccountId, ...context }),
+  })
   return { endSessionUrl: report.endSessionUrl ?? null, tokensLive: signOutLeftTokensLive(report) }
 }
 
@@ -126,6 +128,12 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
       if (report.tokensLive) toast.warning(t("revocationFailed"))
       if (report.endSessionUrl) void openUrl(report.endSessionUrl)
       await load()
+    } catch (cause) {
+      toast.error(
+        t("signOutFailed", {
+          message: cause instanceof Error ? cause.message : String(cause),
+        })
+      )
     } finally {
       setBusy(false)
     }

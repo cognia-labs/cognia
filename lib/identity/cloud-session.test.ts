@@ -143,6 +143,19 @@ describe("readCloudSessionState", () => {
     await readCloudSessionState({ resolve, localAccountId: "acct_other" })
     expect(resolve).toHaveBeenCalledWith(expect.objectContaining({ localAccountId: "acct_other" }))
   })
+
+  it.each([{ logtoSubject: "someone-else" }, { logtoIssuer: "https://another-issuer.test/oidc" }])(
+    "refuses a usable token that disagrees with profile ownership: %j",
+    async (other) => {
+      const s = session()
+      const state = await readCloudSessionState({
+        resolve: resolveAs({ status: "active", session: s }),
+        registry: { get: async () => binding(other) },
+      })
+      expect(state).toMatchObject({ status: "reauth-required", reason: "binding-mismatch" })
+      expect(JSON.stringify(state)).not.toContain(s.accessToken)
+    }
+  )
 })
 
 describe("summarizeIdentity", () => {

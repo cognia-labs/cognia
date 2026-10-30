@@ -38,18 +38,29 @@ const lockMock = jest.fn()
 let mockDeviceManaged = false
 let mockRemembered = false
 let mockUnlockedAccountId: string | null = "acct_1"
+let mockAccountRevision = 0
+let mockLocked = false
 jest.mock("@/stores/account/account-store", () => ({
   useAccountStore: Object.assign(
     (selector: (s: unknown) => unknown) =>
       selector({
         unlockedAccountId: mockUnlockedAccountId,
+        accountRevision: mockAccountRevision,
+        locked: mockLocked,
         accounts: mockDeviceManaged
           ? [{ id: mockUnlockedAccountId, protection: "device" }]
           : mockRemembered
             ? [{ id: mockUnlockedAccountId, rememberOnDevice: true }]
             : [],
       }),
-    { getState: () => ({ lock: lockMock }) }
+    {
+      getState: () => ({
+        lock: lockMock,
+        unlockedAccountId: mockUnlockedAccountId,
+        accountRevision: mockAccountRevision,
+        locked: mockLocked,
+      }),
+    }
   ),
 }))
 
@@ -76,6 +87,8 @@ beforeEach(() => {
   mockAutoLockMinutes = 5
   mockSettingsPresent = true
   mockUnlockedAccountId = "acct_1"
+  mockAccountRevision = 0
+  mockLocked = false
   mockSessions = {}
   lockMock.mockResolvedValue(undefined)
   interruptSessionMock.mockResolvedValue()
@@ -282,6 +295,114 @@ describe("useAutoLockOnIdle", () => {
       await Promise.resolve()
     })
 
+    expect(lockMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("locks within one second when a turn's interrupt never settles", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    interruptSessionMock.mockReturnValue(new Promise(() => {}))
+    renderHook(() => useAutoLockOnIdle())
+
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2 + 999))
+    expect(lockMock).not.toHaveBeenCalled()
+    await act(async () => jest.advanceTimersByTime(1))
+    expect(lockMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not lock a different profile when the old interrupt finishes", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    let finishInterrupt!: () => void
+    interruptSessionMock.mockReturnValue(new Promise((resolve) => (finishInterrupt = resolve)))
+    renderHook(() => useAutoLockOnIdle())
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2))
+
+    // The imperative account fence also covers the gap before React commits.
+    mockUnlockedAccountId = "acct_2"
+    mockAccountRevision += 1
+    await act(async () => finishInterrupt())
+    await act(async () => jest.advanceTimersByTime(1_000))
+    expect(lockMock).not.toHaveBeenCalled()
+  })
+
+  it("does not lock a new unlock of the same profile from an old interrupt", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    let finishInterrupt!: () => void
+    interruptSessionMock.mockReturnValue(new Promise((resolve) => (finishInterrupt = resolve)))
+    const { rerender } = renderHook(() => useAutoLockOnIdle())
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2))
+
+    mockAccountRevision += 1
+    rerender()
+    await act(async () => finishInterrupt())
+    await act(async () => jest.advanceTimersByTime(1_000))
+    expect(lockMock).not.toHaveBeenCalled()
+  })
+
+  it("cancels a pending idle lock on unmount", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    let finishInterrupt!: () => void
+    interruptSessionMock.mockReturnValue(new Promise((resolve) => (finishInterrupt = resolve)))
+    const { unmount } = renderHook(() => useAutoLockOnIdle())
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2))
+    unmount()
+
+    await act(async () => finishInterrupt())
+    await act(async () => jest.advanceTimersByTime(1_000))
+    expect(lockMock).not.toHaveBeenCalled()
+  })
+
+  it("shares one pending interrupt between visibility and focus notifications", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    interruptSessionMock.mockReturnValue(new Promise(() => {}))
+    renderHook(() => useAutoLockOnIdle())
+
+    await act(async () => {
+      jest.setSystemTime(Date.now() + FIVE_MINUTES + 1)
+      document.dispatchEvent(new Event("visibilitychange"))
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    expect(interruptSessionMock).toHaveBeenCalledTimes(1)
+    await act(async () => jest.advanceTimersByTime(1_000))
+    expect(lockMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not lock again when an interrupt finishes after the lock deadline", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    let finishInterrupt!: () => void
+    interruptSessionMock.mockReturnValue(new Promise((resolve) => (finishInterrupt = resolve)))
+    renderHook(() => useAutoLockOnIdle())
+
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2 + 1_000))
+    expect(lockMock).toHaveBeenCalledTimes(1)
+    await act(async () => finishInterrupt())
+    expect(lockMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("enforces an elapsed interrupt deadline on focus when its grace timer was throttled", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    interruptSessionMock.mockReturnValue(new Promise(() => {}))
+    renderHook(() => useAutoLockOnIdle())
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2))
+
+    act(() => {
+      jest.setSystemTime(Date.now() + 1_001)
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    expect(interruptSessionMock).toHaveBeenCalledTimes(1)
+    expect(lockMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("locks without waiting out the grace period when interrupt dispatch is rejected", async () => {
+    mockSessions = { s1: { status: "streaming" } }
+    interruptSessionMock.mockRejectedValue(new Error("sidecar unavailable"))
+    renderHook(() => useAutoLockOnIdle())
+
+    await act(async () => jest.advanceTimersByTime(FIVE_MINUTES * 2))
+
+    expect(lockMock).toHaveBeenCalledTimes(1)
+    await act(async () => jest.advanceTimersByTime(1_000))
     expect(lockMock).toHaveBeenCalledTimes(1)
   })
 })

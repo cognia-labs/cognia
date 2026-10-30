@@ -31,7 +31,7 @@
  *
  * It does not unlock, gate or touch the profile's data. A LocalProfile is an
  * encryption boundary that opens with its own password; the person is a fact
- * laid on top. Signing out removes the binding and leaves every local row alone.
+ * laid on top. Signing out deactivates the binding but keeps its data owner.
  */
 
 import { sha256Hex } from "@/lib/share/hash"
@@ -47,7 +47,12 @@ import {
 import type { LogtoSession } from "@/lib/logto/client"
 import { isOfficialIssuer } from "./official-deployment"
 import { readLogtoIdentity, type LogtoIdentity } from "./logto-claims"
-import { UserBindingRegistry, type BindUserInput } from "./user-binding"
+import {
+  UserBindingError,
+  UserBindingRegistry,
+  isSameBoundUser,
+  type BindUserInput,
+} from "./user-binding"
 import { unlinkSelfBoundPrincipals } from "@/lib/connectors/principal/login-link"
 
 import type { UserBindingRow } from "@/lib/accounts/account-db"
@@ -108,10 +113,11 @@ export interface SignedInIdentity {
  * rather than inlined here.
  */
 export interface IdentityProjectionWriter {
-  upsert(identity: SignedInIdentity): Promise<void>
+  upsert(identity: SignedInIdentity, assertCurrent?: () => void): Promise<void>
 }
 
 export interface BindSignedInIdentityDeps {
+  assertCurrent?: () => void
   /** Defaults to the profile this runtime is serving. */
   localAccountId: string
   registry?: UserBindingRegistry
@@ -130,6 +136,33 @@ export class SignInError extends Error {
   ) {
     super(message)
     this.name = "SignInError"
+  }
+}
+
+/** Read-only preflight: a rejected candidate cannot mutate profile or session state. */
+export async function assertSignedInIdentityOwner(
+  session: LogtoSession,
+  deps: Pick<BindSignedInIdentityDeps, "localAccountId" | "registry">
+): Promise<void> {
+  const identity = readLogtoIdentity(session)
+  if (!identity)
+    throw new SignInError("unreadable-token", "The sign-in carries no readable subject.")
+  const owner = await (deps.registry ?? new UserBindingRegistry()).getOwner(deps.localAccountId)
+  if (!owner) return
+  const userId = await expectedUserId(session.issuer, identity.access.subject)
+  if (
+    !isSameBoundUser(owner, {
+      localAccountId: deps.localAccountId,
+      userId,
+      logtoSubject: identity.access.subject,
+      logtoIssuer: session.issuer,
+    })
+  ) {
+    throw new UserBindingError(
+      "already-bound-to-another-user",
+      `Profile ${deps.localAccountId} is already bound to ${owner.userId}.`,
+      owner
+    )
   }
 }
 
@@ -189,6 +222,7 @@ export async function bindSignedInIdentity(
   const now = (deps.now ?? Date.now)()
   const registry = deps.registry ?? new UserBindingRegistry()
   const { user, org, orgRole } = await resolveIdentityFromClaims(identity, session.issuer, now)
+  deps.assertCurrent?.()
 
   const input: BindUserInput = {
     localAccountId: deps.localAccountId,
@@ -196,13 +230,16 @@ export async function bindSignedInIdentity(
     logtoSubject: identity.access.subject,
     logtoIssuer: session.issuer,
     now,
+    ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
   }
   if (org) input.orgId = org.id
   if (user.displayName) input.displayName = user.displayName
   if (user.email) input.email = user.email
 
   const previous = deps.takeOverProfile ? await registry.get(deps.localAccountId) : null
+  deps.assertCurrent?.()
   const binding = deps.takeOverProfile ? await registry.rebind(input) : await registry.bind(input)
+  deps.assertCurrent?.()
 
   // A takeover by somebody else ends the previous person's self-bound access
   // to this profile's bots; their confirmed principals stay as approved.
@@ -212,16 +249,23 @@ export async function bindSignedInIdentity(
         localAccountId: deps.localAccountId,
         userId: previous.userId,
         now,
+        ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
       })
     } catch (error) {
       console.warn("[identity] could not unlink the previous person's Feishu principals", error)
     }
   }
 
-  const resolved: SignedInIdentity = { user, binding }
+  const resolved: SignedInIdentity = {
+    user: binding.userId === user.id ? user : { ...user, id: binding.userId },
+    binding,
+  }
   if (org) resolved.org = org
   if (orgRole) resolved.orgRole = orgRole
 
-  await deps.projection?.upsert(resolved)
+  deps.assertCurrent?.()
+  if (deps.assertCurrent) await deps.projection?.upsert(resolved, deps.assertCurrent)
+  else await deps.projection?.upsert(resolved)
+  deps.assertCurrent?.()
   return resolved
 }

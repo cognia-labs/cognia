@@ -892,6 +892,7 @@ export type OutboundQueueProjectionRow = Pick<
   | "orderSeq"
   | "source"
   | "platformMessageId"
+  | "pendingReceipt"
   | "idempotencyKey"
 > & {
   request: Pick<OutboundRequest, "conversationRef" | "metadata"> & { segments: [] }
@@ -913,6 +914,7 @@ export function projectOutboundJobRow(row: OutboundJobRow): OutboundQueueProject
     ...(row.orderSeq !== undefined ? { orderSeq: row.orderSeq } : {}),
     source: row.source,
     ...(row.platformMessageId !== undefined ? { platformMessageId: row.platformMessageId } : {}),
+    ...(row.pendingReceipt ? { pendingReceipt: { ...row.pendingReceipt } } : {}),
     idempotencyKey: row.idempotencyKey,
     request: {
       conversationRef: row.request.conversationRef,
@@ -974,6 +976,8 @@ export type BotInstallationProjectionRow = Pick<
   | "workspaceId"
   | "projectId"
   | "status"
+  | "triggerInputSlots"
+  | "paused"
   | "triggerOverrides"
   | "owner"
   | "createdAt"
@@ -994,6 +998,8 @@ export function projectBotInstallationRow(row: BotInstallationRow): BotInstallat
     ...(row.workspaceId !== undefined ? { workspaceId: row.workspaceId } : {}),
     ...(row.projectId !== undefined ? { projectId: row.projectId } : {}),
     status: row.status,
+    ...(row.triggerInputSlots ? { triggerInputSlots: row.triggerInputSlots } : {}),
+    ...(row.paused !== undefined ? { paused: row.paused } : {}),
     ...(row.triggerOverrides !== undefined ? { triggerOverrides: row.triggerOverrides } : {}),
     ...(row.owner !== undefined ? { owner: row.owner } : {}),
     createdAt: row.createdAt,
@@ -1022,6 +1028,7 @@ export type BotDeliveryProjectionRow = Pick<
   | "status"
   | "attempts"
   | "lastError"
+  | "cancelledAt"
   | "runId"
   | "receivedAt"
   | "updatedAt"
@@ -1041,6 +1048,7 @@ export function projectBotDeliveryRow(row: BotEventDeliveryRow): BotDeliveryProj
     source: row.source,
     type: row.type,
     status: row.status,
+    ...(row.cancelledAt !== undefined ? { cancelledAt: row.cancelledAt } : {}),
     attempts: row.attempts,
     ...(row.lastError !== undefined ? { lastError: row.lastError } : {}),
     ...(row.runId !== undefined ? { runId: row.runId } : {}),
@@ -1131,8 +1139,7 @@ export function sessionUsageWireRow(row: SessionUsageRow): SessionUsageRow & { i
  * same rows, bounded the way heartbeats are.
  */
 async function readSessionUsageDelta(since: number): Promise<SyncDelta<unknown>> {
-  const floor =
-    since === 0 ? Math.max(0, Date.now() - SESSION_USAGE_FIRST_SYNC_WINDOW_MS) : since
+  const floor = since === 0 ? Math.max(0, Date.now() - SESSION_USAGE_FIRST_SYNC_WINDOW_MS) : since
   const page = await getDb()
     .sessionUsage.where("at")
     .above(floor)

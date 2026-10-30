@@ -134,6 +134,8 @@ const SESSION_FIELDS = {
   sandboxEnabled: "local",
   workspaceConfinementEnabled: "local",
   computerUseTarget: "local",
+  // Acceptance evidence authority names this Host's attached child session.
+  managedAcceptance: "local",
   sandboxTier: "local",
   sandboxTierFollowsDefault: "local",
   workingDir: "local",

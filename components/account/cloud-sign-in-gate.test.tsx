@@ -13,6 +13,10 @@ jest.mock("next-intl", () => ({
   useFormatter: () => ({ dateTime: (value: Date) => value.toISOString() }),
 }))
 jest.mock("next/navigation", () => ({ usePathname: () => "/" }))
+jest.mock("@/lib/accounts/active-account-id", () => ({
+  ...jest.requireActual("@/lib/accounts/active-account-id"),
+  captureAccountScope: jest.fn(() => () => {}),
+}))
 jest.mock("@/lib/pet/window-role", () => ({
   getPetWindowRole: () => "main",
   isSecondaryOverlayRole: () => false,
@@ -26,6 +30,23 @@ jest.mock("@/lib/logto/web-popup", () => ({
   }),
 }))
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
+jest.mock("@/lib/logto/app-session", () => ({
+  ...jest.requireActual("@/lib/logto/app-session"),
+  signOutFromLogto: jest.fn(async (deps: { afterClear?: () => Promise<void> }) => {
+    await deps.afterClear?.()
+    return {
+      hadSession: true,
+      cleared: true,
+      refreshTokenRevocation: null,
+      accessTokenRevocation: null,
+      endSessionUrl: null,
+    }
+  }),
+}))
+jest.mock("@/lib/identity/complete-sign-in", () => ({
+  ...jest.requireActual("@/lib/identity/complete-sign-in"),
+  completeSignOut: jest.fn(async () => {}),
+}))
 jest.mock("@/lib/logto/capacitor-drivers", () => ({
   ...jest.requireActual("@/lib/logto/capacitor-drivers"),
   createLogtoCapacitorDrivers: () => ({ flavour: "capacitor" }),
@@ -42,6 +63,8 @@ jest.mock("@/stores/account/account-store", () => ({
 }))
 
 import { CollabError } from "@/lib/collab/client"
+import { signOutFromLogto } from "@/lib/logto/app-session"
+import { completeSignOut } from "@/lib/identity/complete-sign-in"
 import { publishLogtoDeepLinkCallback } from "@/lib/logto/deep-link-callback"
 import { forgetDeploymentSource, saveDeploymentSource } from "@/lib/identity/deployment-source"
 import {
@@ -119,6 +142,41 @@ beforeEach(() => {
 })
 
 describe("CloudSignInGate", () => {
+  it("deactivates identity inside the default logout commit, without late cleanup", async () => {
+    renderGate(
+      deps({
+        signOut: undefined,
+        readState: async () => ({
+          status: "active",
+          session,
+          identity: { userId: "usr_a", logtoSubject: "s", displayName: "Ada" },
+        }),
+        settle: async () => ({ outcome: "unaffiliated" as const }),
+      })
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "signOut" }))
+    await waitFor(() =>
+      expect(signOutFromLogto).toHaveBeenCalledWith({
+        localAccountId: "acct_a",
+        afterClear: expect.any(Function),
+      })
+    )
+    expect(completeSignOut).toHaveBeenCalledTimes(1)
+    expect(completeSignOut).toHaveBeenCalledWith({ localAccountId: "acct_a" })
+  })
+
+  it("renders the reauthentication reason for a mismatched profile owner", async () => {
+    renderGate(
+      deps({
+        readState: async () => ({
+          status: "reauth-required",
+          reason: "binding-mismatch",
+          sessionMetadata: null,
+        }),
+      })
+    )
+    expect(await screen.findByText("reauth.binding-mismatch")).toBeInTheDocument()
+  })
   it("does not interrupt local development with deployment login", () => {
     const environment = jest.replaceProperty(process, "env", {
       ...process.env,
@@ -266,7 +324,7 @@ describe("CloudSignInGate", () => {
       redirectUri: `${window.location.origin}/logto/callback`,
       clientKind: "web",
     })
-    expect(flowDeps).toEqual({ localAccountId: "acct_a" })
+    expect(flowDeps).toEqual({ localAccountId: "acct_a", assertCurrent: expect.any(Function) })
     // Settled as adopted: the app paints.
     expect(await screen.findByTestId("app")).toBeInTheDocument()
   })
@@ -299,7 +357,7 @@ describe("CloudSignInGate", () => {
         deployment,
         session,
         { orgId: "org_b", logtoOrganizationId: "lb", userId: "usr_b" },
-        { localAccountId: "acct_a" }
+        { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
       )
     )
     expect(await screen.findByTestId("app")).toBeInTheDocument()
@@ -332,7 +390,7 @@ describe("CloudSignInGate", () => {
         deployment,
         session,
         { credential: "cred", orgName: "Acme" },
-        { localAccountId: "acct_a" }
+        { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
       )
     )
     expect(await screen.findByTestId("app")).toBeInTheDocument()
@@ -462,7 +520,7 @@ describe("CloudSignInGate", () => {
       { kind: "social", directSignIn: "social:github" },
       { flavour: "capacitor" },
       { redirectUri: "cognia://logto/callback", clientKind: "native" },
-      { localAccountId: "acct_a" }
+      { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
     )
   })
 
@@ -487,7 +545,7 @@ describe("CloudSignInGate", () => {
       { kind: "social", directSignIn: "social:github" },
       expect.anything(),
       { redirectUri: "cn.cognia.app:/auth/callback", clientKind: "native" },
-      { localAccountId: "acct_a" }
+      { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
     )
   })
 
@@ -635,7 +693,7 @@ describe("CloudSignInGate with the official account", () => {
         clientKind: "native",
         socialProvider: "feishu",
       },
-      { localAccountId: "acct_a" }
+      { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
     )
     expect(readOfficialPromptDecision("acct_a")).toBe("signed-in")
   })
@@ -653,7 +711,7 @@ describe("CloudSignInGate with the official account", () => {
         clientKind: "web",
         socialProvider: "github",
       },
-      { localAccountId: "acct_a" }
+      { localAccountId: "acct_a", assertCurrent: expect.any(Function) }
     )
   })
 

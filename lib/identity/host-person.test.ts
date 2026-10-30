@@ -97,6 +97,36 @@ describe("derivedPersonFromToken", () => {
 })
 
 describe("on the desktop", () => {
+  it("forwards the committed authentication revision to native bind and unbind", async () => {
+    const invokeFn = jest.fn().mockResolvedValue(undefined)
+    const deps = { invokeFn, isDesktop: desktop, authRevision: "committed-raw-revision" }
+    await bindHostPerson(
+      { localAccountId: "acct_a", userId: "usr_ada", accessToken: plainToken },
+      deps
+    )
+    await unbindHostPerson("acct_a", deps)
+    expect(invokeFn).toHaveBeenNthCalledWith(
+      1,
+      ACCOUNT_BIND_PERSON_COMMAND,
+      expect.objectContaining({ localAccountId: "acct_a", authRevision: "committed-raw-revision" })
+    )
+    expect(invokeFn).toHaveBeenNthCalledWith(2, ACCOUNT_UNBIND_PERSON_COMMAND, {
+      localAccountId: "acct_a",
+      authRevision: "committed-raw-revision",
+    })
+  })
+
+  it("surfaces a superseded authentication revision instead of reporting a host commit", async () => {
+    const invokeFn = jest.fn().mockRejectedValue(new Error("secret-store condition mismatch"))
+    const deps = { invokeFn, isDesktop: desktop, authRevision: "superseded-revision" }
+    await expect(
+      bindHostPerson({ localAccountId: "acct_a", userId: "usr_ada", accessToken: plainToken }, deps)
+    ).rejects.toThrow("secret-store condition mismatch")
+    await expect(unbindHostPerson("acct_a", deps)).rejects.toThrow(
+      "secret-store condition mismatch"
+    )
+  })
+
   it("sends the derived ids the host can verify, with the caller's ids as aliases", async () => {
     const invokeFn = jest.fn().mockResolvedValue(undefined)
     await bindHostPerson(
@@ -104,6 +134,7 @@ describe("on the desktop", () => {
       { invokeFn, isDesktop: desktop }
     )
     expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_BIND_PERSON_COMMAND, {
+      localAccountId: "acct_a",
       accessToken: orgToken,
       userId: await deriveUserId(ISSUER, "logto_ada"),
       orgId: await deriveOrgId(ISSUER, "org_logto_1"),
@@ -121,6 +152,7 @@ describe("on the desktop", () => {
       { invokeFn, isDesktop: desktop }
     )
     expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_BIND_PERSON_COMMAND, {
+      localAccountId: "acct_a",
       accessToken: official,
       userId: sub,
       orgId: null,
@@ -138,6 +170,7 @@ describe("on the desktop", () => {
       { invokeFn, isDesktop: desktop }
     )
     expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_BIND_PERSON_COMMAND, {
+      localAccountId: "acct_a",
       accessToken: orgToken,
       userId: derivedUser,
       orgId: derivedOrg,
@@ -156,6 +189,7 @@ describe("on the desktop", () => {
       { invokeFn, isDesktop: desktop }
     )
     expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_BIND_PERSON_COMMAND, {
+      localAccountId: "acct_a",
       accessToken: plainToken,
       userId: derivedUser,
       orgId: null,
@@ -185,7 +219,9 @@ describe("on the desktop", () => {
     })
 
     expect(await unbindHostPerson("acct_a", { invokeFn, isDesktop: desktop })).toBe(true)
-    expect(invokeFn).toHaveBeenNthCalledWith(1, ACCOUNT_UNBIND_PERSON_COMMAND)
+    expect(invokeFn).toHaveBeenNthCalledWith(1, ACCOUNT_UNBIND_PERSON_COMMAND, {
+      localAccountId: "acct_a",
+    })
 
     expect(await readHostPerson("acct_a", { invokeFn, isDesktop: desktop })).toEqual({
       localAccountNamespace: "acct_a",

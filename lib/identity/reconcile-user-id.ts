@@ -48,6 +48,8 @@ export interface ReconcileUserIdInput {
 }
 
 export interface ReconcileUserIdDeps {
+  assertCurrent?: () => void
+  authRevision?: string
   registry?: Pick<UserBindingRegistry, "get" | "reconcileUserId">
   host?: HostPersonDeps
   onHostMirrorFailed?: (error: unknown) => void
@@ -103,6 +105,7 @@ export async function reconcileUserId(
   report.changed = true
   const now = input.now ?? Date.now()
   const db = getDb()
+  deps.assertCurrent?.()
 
   await db.transaction(
     "rw",
@@ -117,6 +120,7 @@ export async function reconcileUserId(
       db.collabRuns,
     ],
     async () => {
+      deps.assertCurrent?.()
       // The person: merge into a row the server may already have mirrored
       // under the canonical id, never overwrite it with the older copy.
       const legacy = await db.users.get(from)
@@ -203,6 +207,7 @@ export async function reconcileUserId(
         await db.collabRuns.put({ ...row, startedBy: { ...rekeyActor(row.startedBy), id: to } })
         report.collabRuns += 1
       }
+      deps.assertCurrent?.()
     }
   )
 
@@ -211,7 +216,13 @@ export async function reconcileUserId(
   // rekeyed and the binding stale, which the next refresh repairs, whereas the
   // reverse would leave a binding pointing at rows that no longer exist.
   const registry = deps.registry ?? new UserBindingRegistry()
-  await registry.reconcileUserId(input.localAccountId, to, now)
+  deps.assertCurrent?.()
+  if (deps.assertCurrent) {
+    await registry.reconcileUserId(input.localAccountId, to, now, deps.assertCurrent)
+  } else {
+    await registry.reconcileUserId(input.localAccountId, to, now)
+  }
+  deps.assertCurrent?.()
 
   if (input.accessToken) {
     try {
@@ -222,13 +233,14 @@ export async function reconcileUserId(
           accessToken: input.accessToken,
           ...(input.orgId ? { orgId: input.orgId } : {}),
         },
-        deps.host ?? {}
+        { ...deps.host, ...(deps.authRevision ? { authRevision: deps.authRevision } : {}) }
       )
     } catch (error) {
       if (deps.onHostMirrorFailed) deps.onHostMirrorFailed(error)
       else console.warn("[identity] could not re-mirror the canonical person to the host", error)
     }
   }
+  deps.assertCurrent?.()
 
   return report
 }

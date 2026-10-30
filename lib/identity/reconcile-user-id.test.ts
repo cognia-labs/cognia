@@ -145,6 +145,41 @@ async function seedLegacyPerson() {
 }
 
 describe("reconcileUserId", () => {
+  it("rolls back canonical rekeying when authentication is interrupted", async () => {
+    await seedLegacyPerson()
+    const db = getDb()
+    const put = db.users.put.bind(db.users)
+    const bindings = registry()
+    let current = true
+    const intercepted = jest.spyOn(db.users, "put").mockImplementationOnce((user, key) =>
+      put(user, key).then((result) => {
+        current = false
+        return result
+      })
+    )
+    try {
+      await expect(
+        reconcileUserId(
+          {
+            localAccountId: "acct_a",
+            legacyUserId: LEGACY,
+            canonicalUserId: CANONICAL,
+          },
+          {
+            registry: bindings,
+            assertCurrent: () => {
+              if (!current) throw new Error("stale auth")
+            },
+          }
+        )
+      ).rejects.toThrow("stale auth")
+    } finally {
+      intercepted.mockRestore()
+    }
+    expect(await db.users.get(LEGACY)).toBeDefined()
+    expect(await db.users.get(CANONICAL)).toBeUndefined()
+    expect(bindings.reconcileUserId).not.toHaveBeenCalled()
+  })
   it("does nothing when the ids already agree", async () => {
     const reg = registry()
     const report = await reconcileUserId(
@@ -231,6 +266,7 @@ describe("reconcileUserId", () => {
     expect(report.hostRebound).toBe(true)
     // The host verifies the derived pair and keeps the server's ids as aliases.
     expect(invokeFn).toHaveBeenCalledWith("account_bind_person", {
+      localAccountId: "acct_a",
       accessToken: ACCESS_TOKEN,
       userId: await deriveUserId(ISSUER, "logto_ada"),
       orgId: await deriveOrgId(ISSUER, "org_logto_1"),

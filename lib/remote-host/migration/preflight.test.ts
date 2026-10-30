@@ -32,7 +32,14 @@ function facts(manifest: () => Promise<unknown>): HostFacts {
 const headless = facts(async () => buildLocalHostFeatureManifest({ platform: "headless" }))
 
 function item(kind: LoadedItem["kind"], id: string, overrides: Partial<LoadedItem> = {}) {
-  return { kind, id, label: id, localStatus: "active", ...overrides } as LoadedItem
+  return {
+    ...(kind === "bot-installation" ? { installation: {} } : {}),
+    kind,
+    id,
+    label: id,
+    localStatus: "active",
+    ...overrides,
+  } as LoadedItem
 }
 
 beforeEach(async () => {
@@ -170,3 +177,29 @@ describe("batch order and dependencies", () => {
     expect(resolved.find((p) => p.item.id === "waits")).toMatchObject({ ready: false })
   })
 })
+
+it("refuses to move paused or mapped Bots to hosts lacking the automation contract", async () => {
+  const manifest = buildLocalHostFeatureManifest({ platform: "headless" })
+  delete manifest.features["bots.automation"]
+  const [result] = await preflightItems(
+    [{ kind: "bot-installation", id: "b" }],
+    facts(async () => manifest),
+    { load: async () => item("bot-installation", "b", { installation: { paused: true } } as never) }
+  )
+  expect(result.blockers).toContainEqual({ kind: "host-too-old" })
+})
+
+it.each([{ paused: false }, { triggerInputSlots: {} }])(
+  "requires the new host contract even for present default fields %p",
+  async (installation) => {
+    const manifest = buildLocalHostFeatureManifest({ platform: "headless" })
+    delete manifest.features["bots.automation"]
+    const [result] = await preflightItems(
+      [{ kind: "bot-installation", id: "b" }],
+      facts(async () => manifest),
+      { load: async () => item("bot-installation", "b", { installation } as never) }
+    )
+    expect(result.ready).toBe(false)
+    expect(result.blockers).toContainEqual({ kind: "host-too-old" })
+  }
+)

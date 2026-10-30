@@ -1638,9 +1638,136 @@ describe("account store switching, locking, and lifecycle", () => {
     const locking = store.getState().lock()
     expect(store.getState().locked).toBe(true)
     expect(store.getState().unlockedAccountId).toBe("acct_alpha")
+    expect(mockLockBrowserVault).toHaveBeenCalledTimes(1)
     release()
     await locking
     expect(store.getState().unlockedAccountId).toBeNull()
+  })
+
+  it("joins lock cleanup before allowing a new unlock to activate the account", async () => {
+    const alpha = account("acct_alpha", "Alpha")
+    mockListAccounts.mockResolvedValue([alpha])
+    mockGetState.mockResolvedValue({ activeAccountId: alpha.id })
+    const store = makeStore()
+    await store.getState().load()
+    await store.getState().unlockAccount(alpha.id, "secret")
+    let release!: () => void
+    mockStopRuntimeSubscriptions.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        })
+    )
+    const locking = store.getState().lock()
+    const before = mockActivateContentCipher.mock.calls.length
+    const unlocking = store.getState().unlockAccount(alpha.id, "secret")
+    await Promise.resolve()
+    expect(mockActivateContentCipher).toHaveBeenCalledTimes(before)
+    release()
+    await Promise.all([locking, unlocking])
+    expect(store.getState()).toMatchObject({ locked: false, unlockedAccountId: alpha.id })
+  })
+
+  it("a later lock defeats an earlier unlock held inside database activation", async () => {
+    mockListAccounts.mockResolvedValue([account("acct_alpha", "Alpha")])
+    mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
+    const store = makeStore()
+    await store.getState().load()
+    let reached!: () => void
+    const ready = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let release!: () => void
+    mockPrepareDatabase.mockImplementationOnce(() => {
+      reached()
+      return new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+    const unlocking = store.getState().unlockAccount("acct_alpha", "secret")
+    const rejected = expect(unlocking).rejects.toThrow("Account changed during unlock")
+    await ready
+    await store.getState().lock()
+    release()
+    await rejected
+    expect(store.getState()).toMatchObject({ locked: true, unlockedAccountId: null })
+  })
+
+  it("an unlock waiting on failed lock cleanup stays locked and receives the failure", async () => {
+    mockListAccounts.mockResolvedValue([account("acct_alpha", "Alpha")])
+    mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
+    const store = makeStore()
+    await store.getState().load()
+    await store.getState().unlockAccount("acct_alpha", "secret")
+    let reject!: (error: Error) => void
+    mockStopRuntimeSubscriptions.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, fail) => {
+          reject = fail
+        })
+    )
+    const locking = store.getState().lock()
+    const unlock = store.getState().unlockAccount("acct_alpha", "secret")
+    const lockFailure = expect(locking).rejects.toThrow("cleanup failed")
+    const unlockFailure = expect(unlock).rejects.toThrow("cleanup failed")
+    await Promise.resolve()
+    reject(new Error("cleanup failed"))
+    await Promise.all([lockFailure, unlockFailure])
+    expect(store.getState()).toMatchObject({ locked: true, unlockedAccountId: null })
+  })
+
+  it("a queued unlock retains a cleanup failure while an older authentication is held", async () => {
+    mockListAccounts.mockResolvedValue([account("acct_alpha", "Alpha")])
+    mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
+    const store = makeStore()
+    await store.getState().load()
+    let reached!: () => void
+    const ready = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let release!: () => void
+    mockPrepareDatabase.mockImplementationOnce(() => {
+      reached()
+      return new Promise<void>((resolve) => {
+        release = resolve
+      })
+    })
+    const first = store.getState().unlockAccount("acct_alpha", "secret")
+    const firstFailure = expect(first).rejects.toThrow("Account changed during unlock")
+    await ready
+    let reject!: (error: Error) => void
+    mockStopRuntimeSubscriptions.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, fail) => {
+          reject = fail
+        })
+    )
+    const locking = store.getState().lock()
+    const second = store.getState().unlockAccount("acct_alpha", "secret")
+    const lockFailure = expect(locking).rejects.toThrow("queued cleanup failed")
+    const secondFailure = expect(second).rejects.toThrow("queued cleanup failed")
+    reject(new Error("queued cleanup failed"))
+    await lockFailure
+    release()
+    await Promise.all([firstFailure, secondFailure])
+    expect(store.getState()).toMatchObject({ locked: true, unlockedAccountId: null })
+  })
+
+  it("committed recovery updates the registry even when a later lock cancels activation", async () => {
+    mockIsTauri = false
+    mockListAccounts.mockResolvedValue([account("acct_alpha", "Alpha")])
+    mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
+    const store = makeStore()
+    await store.getState().load()
+    mockResetVaultWithRecoveryKey.mockImplementationOnce(async () => {
+      await store.getState().lock()
+    })
+    await expect(
+      store.getState().unlockAccountWithRecoveryKey("acct_alpha", "recovery", "new-secret")
+    ).rejects.toThrow("Account changed during unlock")
+    expect(mockUpdatePasswordVerifier).toHaveBeenCalledWith("acct_alpha", verifier("new-secret"))
+    expect(store.getState()).toMatchObject({ locked: true, unlockedAccountId: null })
+    expect(store.getState().accounts[0].passwordVerifier).toEqual(verifier("new-secret"))
   })
 
   it("clears the active database selection when locked", async () => {

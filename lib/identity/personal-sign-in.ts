@@ -32,7 +32,8 @@ import {
   type OfficialConfigOptions,
   type OfficialDeployment,
 } from "./official-deployment"
-import type { SignedInIdentity } from "./sign-in"
+import { assertSignedInIdentityOwner, type SignedInIdentity } from "./sign-in"
+import type { UserBindingRegistry } from "./user-binding"
 
 import { attachSignInToFeishuPrincipals } from "@/lib/connectors/principal/login-link"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
@@ -43,11 +44,15 @@ import type { LogtoDrivers, LogtoSession } from "@/lib/logto/client"
 
 export interface PersonalSignInDeps {
   localAccountId?: string
+  registry?: UserBindingRegistry
+  assertCurrent?: () => void
+  authRevision?: string
   signIn?: typeof signInToLogto
   complete?: (session: LogtoSession, deps: CompleteSignInDeps) => Promise<SignedInIdentity>
   linkIdentities?: (input: {
     userId: string
     identities: readonly CollabExternalIdentity[]
+    assertCurrent?: () => void
   }) => Promise<LinkSignedInIdentitiesReport>
   attachPrincipals?: typeof attachSignInToFeishuPrincipals
   now?: () => number
@@ -70,7 +75,13 @@ export async function settlePersonalSignIn(
 ): Promise<PersonalSignIn> {
   const localAccountId = deps.localAccountId ?? getActiveAccountId()
   const now = deps.now ?? Date.now
-  const identity = await (deps.complete ?? completeSignIn)(session, { localAccountId })
+  deps.assertCurrent?.()
+  const identity = await (deps.complete ?? completeSignIn)(session, {
+    localAccountId,
+    ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
+    ...(deps.authRevision ? { authRevision: deps.authRevision } : {}),
+  })
+  deps.assertCurrent?.()
 
   let identityConflicts: IdentityConflict[] = []
   const identities = issuerIdentities(session)
@@ -79,7 +90,9 @@ export async function settlePersonalSignIn(
       const report = await (deps.linkIdentities ?? linkSignedInIdentities)({
         userId: identity.user.id,
         identities,
+        ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
       })
+      deps.assertCurrent?.()
       identityConflicts = report.conflicts
       if (identityConflicts.length > 0) {
         console.warn("[identity] linked sign-ins already belong to another user", identityConflicts)
@@ -91,6 +104,7 @@ export async function settlePersonalSignIn(
           logtoSubject,
           identities: report.linked,
           now: now(),
+          ...(deps.assertCurrent ? { assertCurrent: deps.assertCurrent } : {}),
         })
         if (attached.foreign.length > 0) {
           console.warn(
@@ -103,6 +117,7 @@ export async function settlePersonalSignIn(
       console.warn("[identity] could not link the official account's sign-ins", error)
     }
   }
+  deps.assertCurrent?.()
   return { session, identity, identityConflicts }
 }
 
@@ -114,10 +129,37 @@ export async function signInToOfficialAccount(
   deps: PersonalSignInDeps = {}
 ): Promise<PersonalSignIn> {
   const localAccountId = deps.localAccountId ?? getActiveAccountId()
+  let committed: PersonalSignIn | undefined
+  const complete = (candidate: LogtoSession, scoped: CompleteSignInDeps) =>
+    (deps.complete ?? completeSignIn)(candidate, {
+      ...scoped,
+      ...(deps.registry ? { registry: deps.registry } : {}),
+    })
   const session = await (deps.signIn ?? signInToLogto)(
     officialLogtoConfig(deployment, options),
     drivers,
-    { localAccountId }
+    {
+      localAccountId,
+      beforeCommit: async (candidate) => {
+        deps.assertCurrent?.()
+        await assertSignedInIdentityOwner(candidate, { localAccountId, registry: deps.registry })
+        deps.assertCurrent?.()
+      },
+      afterCommit: async (candidate, context) => {
+        const assertCurrent = () => {
+          deps.assertCurrent?.()
+          context.assertCurrent()
+        }
+        assertCurrent()
+        committed = await settlePersonalSignIn(candidate, {
+          ...deps,
+          localAccountId,
+          complete,
+          assertCurrent,
+          ...(context.authRevision ? { authRevision: context.authRevision } : {}),
+        })
+      },
+    }
   )
-  return settlePersonalSignIn(session, { ...deps, localAccountId })
+  return committed ?? settlePersonalSignIn(session, { ...deps, localAccountId, complete })
 }

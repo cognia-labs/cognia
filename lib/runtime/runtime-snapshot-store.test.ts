@@ -46,6 +46,7 @@ it("uses only healthy v2 operations and explicit device grants", () => {
       .filter((operation) => operation.healthy)
       .map((operation) => operation.name),
     grants: ["agent.run"],
+    botAutomation: true,
     limits: manifest.limits,
   })
 })
@@ -263,4 +264,24 @@ it("excludes operations whose feature version the client does not support", () =
   expect(snapshot.compatible).toBe(true)
   expect(snapshot.grants).toEqual(["agent.run"])
   expect(snapshot.operations).not.toContain("skills_catalog_get")
+})
+
+it("publishes automation feature changes even when command names do not change", () => {
+  const manifest = buildLocalHostFeatureManifest({ platform: "headless" })
+  const supported = runtimeHostSnapshotFromManifest(manifest)
+  expect(supported.botAutomation).toBe(true)
+  delete manifest.features["bots.automation"]
+  const legacy = runtimeHostSnapshotFromManifest(manifest)
+  expect(legacy.botAutomation).toBeUndefined()
+  const listener = jest.fn()
+  const unsubscribe = subscribeRuntimeSnapshot(listener)
+  setRuntimeSnapshot({
+    target: null,
+    connectionState: "online",
+    vaultState: "unlocked",
+    host: legacy,
+  })
+  setRuntimeSnapshot({ ...getRuntimeSnapshot(), host: supported })
+  expect(listener).toHaveBeenCalledTimes(2)
+  unsubscribe()
 })

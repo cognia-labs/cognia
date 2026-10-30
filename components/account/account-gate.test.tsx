@@ -514,6 +514,25 @@ describe("AccountGate", () => {
     expect(screen.queryByText("child")).not.toBeInTheDocument()
   })
 
+  it("requires a new acknowledgement when a different account recovery key replaces the first", () => {
+    setGateState({ pendingRecoveryKey: "first-account-recovery" })
+    const { rerender } = render(
+      <AccountGate>
+        <div>child</div>
+      </AccountGate>
+    )
+    fireEvent.click(screen.getByRole("checkbox"))
+    expect(screen.getByRole("button", { name: "recoveryContinue" })).toBeEnabled()
+    mockState.pendingRecoveryKey = "second-account-recovery"
+    rerender(
+      <AccountGate>
+        <div>child</div>
+      </AccountGate>
+    )
+    expect(screen.getByRole("checkbox")).not.toBeChecked()
+    expect(screen.getByRole("button", { name: "recoveryContinue" })).toBeDisabled()
+  })
+
   it("copies the one-time recovery key from the recovery screen", async () => {
     const writeText = jest.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, "clipboard", {

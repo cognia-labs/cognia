@@ -30,6 +30,8 @@ import {
   getSecret,
   setSecret,
   clearSecret,
+  compareAndSetSecret,
+  type KeyringSecretChange,
   setWebKeyringPassphrase,
   type KeyringRef,
 } from "@/lib/keyring"
@@ -81,6 +83,11 @@ export function logtoReauthKeyringFor(localAccountId = getActiveAccountId()): Ke
   return { namespace: LOGTO_KEYRING_NAMESPACE, key: `reauth:${localAccountId}` }
 }
 
+/** Durable operation fence shared by windows serving this profile. Contains no token. */
+export function logtoAuthRevisionKeyringFor(localAccountId = getActiveAccountId()): KeyringRef {
+  return { namespace: LOGTO_KEYRING_NAMESPACE, key: `auth-revision:${localAccountId}` }
+}
+
 let webPassphraseProvisioned = false
 
 /**
@@ -106,6 +113,57 @@ export function __resetLogtoWebPassphraseForTests(): void {
   webPassphraseProvisioned = false
 }
 
+export async function loadLogtoAuthRevision(localAccountId?: string): Promise<string | null> {
+  await ensureWebPassphrase()
+  return getSecret(logtoAuthRevisionKeyringFor(localAccountId), { strict: true })
+}
+
+export async function saveLogtoAuthRevision(
+  revision: string,
+  localAccountId?: string
+): Promise<void> {
+  await ensureWebPassphrase()
+  await setSecret(logtoAuthRevisionKeyringFor(localAccountId), revision)
+}
+
+export type LogtoAuthMutation =
+  | { kind: "session"; session: LogtoSession }
+  | { kind: "reauth"; marker: LogtoReauthMarker }
+  | { kind: "clear" }
+
+/** Native IPC must fence inside storage, even if its JavaScript mutex aborts. */
+export function supportsAtomicLogtoAuthCommit(): boolean {
+  return isTauri()
+}
+
+/** Commit revision and credential changes together; old issued IPCs fail CAS. */
+export async function commitLogtoAuthState(
+  expectedRevision: string | null,
+  nextRevision: string,
+  mutation?: LogtoAuthMutation,
+  localAccountId?: string
+): Promise<void> {
+  const changes: KeyringSecretChange[] = []
+  if (mutation) {
+    changes.push(
+      {
+        key: logtoKeyringFor(localAccountId).key,
+        value: mutation.kind === "session" ? JSON.stringify(mutation.session) : null,
+      },
+      {
+        key: logtoReauthKeyringFor(localAccountId).key,
+        value: mutation.kind === "reauth" ? JSON.stringify(mutation.marker) : null,
+      }
+    )
+  }
+  await compareAndSetSecret(
+    logtoAuthRevisionKeyringFor(localAccountId),
+    expectedRevision,
+    nextRevision,
+    changes
+  )
+}
+
 /**
  * Persist (upsert) this profile's Logto session.
  *
@@ -118,7 +176,7 @@ export async function saveLogtoSession(
 ): Promise<void> {
   await ensureWebPassphrase()
   await setSecret(logtoKeyringFor(localAccountId), JSON.stringify(session))
-  await clearSecret(logtoReauthKeyringFor(localAccountId))
+  await clearSecret(logtoReauthKeyringFor(localAccountId), { strict: true })
 }
 
 /** Load this profile's Logto session, or `null` if none is stored / it is corrupt. */
@@ -136,7 +194,7 @@ export async function loadLogtoSession(localAccountId?: string): Promise<LogtoSe
 /** Remove this profile's Logto session (sign out). Idempotent. */
 export async function clearLogtoSession(localAccountId?: string): Promise<void> {
   await ensureWebPassphrase()
-  await clearSecret(logtoKeyringFor(localAccountId))
+  await clearSecret(logtoKeyringFor(localAccountId), { strict: true })
 }
 
 /**
@@ -150,7 +208,7 @@ export async function markLogtoSessionForReauth(
 ): Promise<void> {
   await ensureWebPassphrase()
   await setSecret(logtoReauthKeyringFor(localAccountId), JSON.stringify(marker))
-  await clearSecret(logtoKeyringFor(localAccountId))
+  await clearSecret(logtoKeyringFor(localAccountId), { strict: true })
 }
 
 /** The marker left by a refused refresh, or `null` when there is none / it is corrupt. */
@@ -179,7 +237,7 @@ export async function loadLogtoReauthMarker(
 /** Forget the re-authentication marker. Idempotent. */
 export async function clearLogtoReauthMarker(localAccountId?: string): Promise<void> {
   await ensureWebPassphrase()
-  await clearSecret(logtoReauthKeyringFor(localAccountId))
+  await clearSecret(logtoReauthKeyringFor(localAccountId), { strict: true })
 }
 
 /**
@@ -192,6 +250,6 @@ export async function discardLegacyGlobalLogtoSession(): Promise<boolean> {
   await ensureWebPassphrase()
   const raw = await getSecret(LEGACY_LOGTO_KEYRING)
   if (!raw) return false
-  await clearSecret(LEGACY_LOGTO_KEYRING)
+  await clearSecret(LEGACY_LOGTO_KEYRING, { strict: true })
   return true
 }

@@ -723,3 +723,19 @@ describe("a connector's chat schedules", () => {
     expect(call.mock.calls.filter(([name]) => name === "scheduled_task_delete")).toHaveLength(1)
   })
 })
+
+it("carries pause and per-trigger input slots when moving a Bot", async () => {
+  const call = fakeTransport()
+  await createOnHost(
+    loadedBot({ paused: true, triggerInputSlots: { in: "github" } }),
+    context(call)
+  )
+  expect(call).toHaveBeenCalledWith(
+    "bot_installation_mutate",
+    expect.objectContaining({
+      operation: "install",
+      paused: true,
+      triggerInputSlots: { in: "github" },
+    })
+  )
+})

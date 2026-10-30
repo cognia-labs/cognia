@@ -60,7 +60,9 @@ export async function sweepAgedMirroredRows(
   const victims = await table
     .where("createdAt")
     .below(now - MIRROR_TERMINAL_RETENTION_MS)
-    .filter((row) => row.syncedFromHost === true && isOutboundTerminal(row.status))
+    .filter(
+      (row) => row.syncedFromHost === true && isOutboundTerminal(row.status, row.pendingReceipt)
+    )
     .limit(MIRROR_SWEEP_BATCH)
     .toArray()
   if (victims.length === 0) return 0

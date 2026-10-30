@@ -86,7 +86,8 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
   const [password, setPassword] = useState("")
   const [actionError, setActionError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [recoverySaved, setRecoverySaved] = useState(false)
+  const [savedRecoveryKey, setSavedRecoveryKey] = useState<string | null>(null)
+  const recoverySaved = pendingRecoveryKey !== null && savedRecoveryKey === pendingRecoveryKey
   // Set by the unlock screen's "read without unlocking" action on the share
   // route. Local to this gate on purpose: it is an answer to one screen, not a
   // preference, and it only ever applies while no account is open.
@@ -227,7 +228,9 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
               id={recoverySavedId}
               checked={recoverySaved}
               disabled={submitting}
-              onCheckedChange={(checked) => setRecoverySaved(checked === true)}
+              onCheckedChange={(checked) =>
+                setSavedRecoveryKey(checked === true ? pendingRecoveryKey : null)
+              }
             />
             <Label htmlFor={recoverySavedId}>{t("recoverySaved")}</Label>
           </div>

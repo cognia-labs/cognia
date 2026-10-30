@@ -74,6 +74,41 @@ beforeEach(() => {
   __resetRunningBotGrantsForTesting()
 })
 
+it.each(["proactive", "reengagement"] as const)(
+  "never lends origin-reply authority to %s, including shadow mode",
+  async (deliveryMode) => {
+    expect(
+      await planDelivery(
+        {
+          ...delivery(ORIGIN_KEY, { kind: "origin-reply", inboundConversationKey: ORIGIN_KEY }),
+          deliveryMode,
+        },
+        deps(shadow)
+      )
+    ).toMatchObject({ action: "deny", reason: "unapproved" })
+  }
+)
+it("requires an explicit grant for proactive same-origin unattended delivery", async () => {
+  expect(
+    await planDelivery(
+      {
+        ...delivery(ORIGIN_KEY, { kind: "unattended", ownerRef: "task", sessionId: "session" }),
+        deliveryMode: "proactive",
+      },
+      deps(enforce)
+    )
+  ).toMatchObject({ action: "draft" })
+  expect(
+    await planDelivery(
+      {
+        ...delivery(ORIGIN_KEY, { kind: "human", actor: "local-user" }),
+        deliveryMode: "proactive",
+      },
+      deps(enforce)
+    )
+  ).toMatchObject({ action: "send" })
+})
+
 describe("sameChat", () => {
   it("matches a chat through any bot and any thread, on the same platform", () => {
     expect(sameChat("lark:bot-a:oc_1", "lark:bot-b:oc_1:om_thread")).toBe(true)

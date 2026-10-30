@@ -156,7 +156,11 @@ describe("signInToOfficialAccount", () => {
       socialProvider: "github",
       issuerKind: "oidc",
     })
-    expect(signIn).toHaveBeenCalledWith(expect.anything(), drivers, { localAccountId: "acct_a" })
+    expect(signIn).toHaveBeenCalledWith(expect.anything(), drivers, {
+      localAccountId: "acct_a",
+      beforeCommit: expect.any(Function),
+      afterCommit: expect.any(Function),
+    })
     expect(complete).toHaveBeenCalledTimes(1)
   })
 })

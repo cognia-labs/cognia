@@ -185,6 +185,15 @@ pub enum SecretMutation<'a> {
     },
 }
 
+/// Compare one canonical encrypted-store value while holding the mutation lock.
+/// Never Debug: the expected value can itself contain credential material.
+#[derive(Clone, Copy)]
+pub struct SecretCondition<'a> {
+    pub service: &'a str,
+    pub account: &'a str,
+    pub expected: Option<&'a str>,
+}
+
 impl SecretStore {
     /// Open (or initialize) a file-backed store. An existing file is decrypted
     /// and parsed; a missing file yields an empty store. A present-but-corrupt
@@ -304,6 +313,23 @@ impl SecretStore {
 
     fn apply_batch(&mut self, mutations: &[SecretMutation<'_>]) -> Result<(), String> {
         self.apply_batch_with(mutations, Self::persist)
+    }
+
+    fn apply_batch_if_with(
+        &mut self,
+        mutations: &[SecretMutation<'_>],
+        condition: SecretCondition<'_>,
+        persist: impl FnOnce(&Self) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if self
+            .cache
+            .get(&composite(condition.service, condition.account))
+            .map(String::as_str)
+            != condition.expected
+        {
+            return Err("secret-store condition mismatch".into());
+        }
+        self.apply_batch_with(mutations, persist)
     }
 
     fn apply_batch_with(
@@ -485,6 +511,12 @@ impl InitGate {
         }
     }
 }
+
+// Serialize guarded auth batches with synchronous identity publication without
+// retaining the credential-store lock while identity waits for SecurityStore.
+// Ordinary receipt/credential operations and unconditional batches deliberately
+// do not acquire this fence.
+static AUTH_COMMIT_FENCE: Mutex<()> = Mutex::new(());
 
 static GLOBAL: OnceLock<RwLock<SecretStore>> = OnceLock::new();
 static INIT: InitGate = InitGate::new();
@@ -1189,12 +1221,15 @@ pub fn generate_master_key() -> [u8; 32] {
 /// reading or mutating its cached secret map. The namespace authenticates the
 /// owning profile and subsystem, preventing ciphertext substitution.
 pub fn seal_namespace(namespace: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    seal_envelope(&global()?.read().key, namespace, plaintext)
+}
+
+fn seal_envelope(key: &[u8; 32], namespace: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
     use aes_gcm::aead::Payload;
     if namespace.is_empty() || namespace.len() > 1024 {
         return Err("secret-store invalid envelope namespace".into());
     }
-    let store = global()?.read();
-    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(store.key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(*key));
     let mut nonce_bytes = [0u8; 12];
     rand::fill(&mut nonce_bytes);
     let ciphertext = cipher
@@ -1213,12 +1248,15 @@ pub fn seal_namespace(namespace: &str, plaintext: &[u8]) -> Result<Vec<u8>, Stri
 
 /// Open a native envelope. No global secret-map cache is consulted or updated.
 pub fn open_namespace(namespace: &str, blob: &[u8]) -> Result<Vec<u8>, String> {
+    open_envelope(&global()?.read().key, namespace, blob)
+}
+
+fn open_envelope(key: &[u8; 32], namespace: &str, blob: &[u8]) -> Result<Vec<u8>, String> {
     use aes_gcm::aead::Payload;
     if namespace.is_empty() || namespace.len() > 1024 || blob.len() < 28 {
         return Err("secret-store invalid envelope".into());
     }
-    let store = global()?.read();
-    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(store.key));
+    let cipher = Aes256Gcm::new(&Key::<Aes256Gcm>::from(*key));
     let nonce = Nonce::try_from(&blob[..12])
         .map_err(|_| "secret-store invalid envelope nonce".to_string())?;
     cipher
@@ -1230,6 +1268,46 @@ pub fn open_namespace(namespace: &str, blob: &[u8]) -> Result<Vec<u8>, String> {
             },
         )
         .map_err(|_| "secret-store envelope authentication failed".into())
+}
+
+/// A subsystem envelope key lives in the existing encrypted map, so master-key
+/// rotation preserves independently stored ciphertext without a second vault.
+fn durable_envelope_key(
+    store: &mut SecretStore,
+    owner: &str,
+    create: bool,
+) -> Result<[u8; 32], String> {
+    const SERVICE: &str = "com.cognia.native-envelope-keys/v1";
+    if owner.is_empty() || owner.len() > 256 {
+        return Err("invalid envelope owner".into());
+    }
+    if let Some(key) = store.peek(SERVICE, owner) {
+        return parse_master_key(&key);
+    }
+    if !create {
+        return Err("envelope key is unavailable".into());
+    }
+    let key = random_key();
+    store.set(SERVICE, owner, &hex::encode(key))?;
+    Ok(key)
+}
+
+pub fn seal_durable_namespace(
+    owner: &str,
+    namespace: &str,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, String> {
+    let key = durable_envelope_key(&mut global()?.write(), owner, true)?;
+    seal_envelope(&key, namespace, plaintext)
+}
+
+pub fn open_durable_namespace(
+    owner: &str,
+    namespace: &str,
+    blob: &[u8],
+) -> Result<Vec<u8>, String> {
+    let key = durable_envelope_key(&mut global()?.write(), owner, false)?;
+    open_envelope(&key, namespace, blob)
 }
 
 // ---------------------------------------------------------------------------
@@ -1341,9 +1419,54 @@ pub fn set(service: &str, account: &str, value: &str) -> Result<(), String> {
     global()?.write().set(service, account, value)
 }
 
+/// Authorize a synchronous side effect against canonical auth metadata.
+/// Hold the auth fence through publication, but release the credential-store
+/// read lock before calling out: SecurityStore receipt code already takes its
+/// connection before accessing ordinary secrets. Conditional batches share this
+/// fence; raw legacy set/delete, unconditional batches and ordinary receipt
+/// operations do not. Auth revisions must therefore use conditional batches.
+/// The callback must not invoke a conditional batch API or wait on async work.
+pub fn with_value<T>(
+    service: &str,
+    account: &str,
+    expected: Option<&str>,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let _auth_commit = AUTH_COMMIT_FENCE.lock();
+    {
+        let store = global()?.read();
+        if store
+            .cache
+            .get(&composite(service, account))
+            .map(String::as_str)
+            != expected
+        {
+            return Err("secret-store condition mismatch".into());
+        }
+    }
+    operation()
+}
+
 /// Commit related credential, metadata and dependency changes as one
 /// encrypted-file replacement. On failure no member is published in memory.
 pub fn apply_batch(mutations: &[SecretMutation<'_>]) -> Result<(), String> {
+    apply_batch_guarded(mutations, None)
+}
+
+/// Compare and mutate under the SAME process-global store lock. A command
+/// queued before logout cannot publish its stale token after logout commits.
+/// The condition addresses canonical encrypted-store metadata, not legacy items.
+pub fn apply_batch_if(
+    mutations: &[SecretMutation<'_>],
+    condition: SecretCondition<'_>,
+) -> Result<(), String> {
+    apply_batch_guarded(mutations, Some(condition))
+}
+
+fn apply_batch_guarded(
+    mutations: &[SecretMutation<'_>],
+    condition: Option<SecretCondition<'_>>,
+) -> Result<(), String> {
     #[cfg(any(test, feature = "test-inmemory"))]
     for mutation in mutations {
         let (SecretMutation::Set {
@@ -1352,7 +1475,15 @@ pub fn apply_batch(mutations: &[SecretMutation<'_>]) -> Result<(), String> {
         | SecretMutation::Delete { service, account }) = *mutation;
         check_mutation_failure(service, account)?;
     }
-    global()?.write().apply_batch(mutations)?;
+    {
+        let _auth_commit = condition.as_ref().map(|_| AUTH_COMMIT_FENCE.lock());
+        let mut store = global()?.write();
+        if let Some(condition) = condition {
+            store.apply_batch_if_with(mutations, condition, SecretStore::persist)?;
+        } else {
+            store.apply_batch(mutations)?;
+        }
+    }
     if legacy_enabled() {
         for mutation in mutations {
             if let SecretMutation::Delete { service, account } = *mutation {
@@ -1392,6 +1523,32 @@ pub fn delete(service: &str, account: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durable_envelopes_survive_master_rotation_and_authenticate_the_row() {
+        let dir = tmp_data_dir();
+        let path = headless_store_path(&dir);
+        let mut store = SecretStore::open(path.clone(), [61; 32]).unwrap();
+        let key = durable_envelope_key(&mut store, "fixture-receipts", true).unwrap();
+        let sealed = seal_envelope(
+            &key,
+            "fixture/tenant/device/key/hash",
+            b"exact opaque receipt",
+        )
+        .unwrap();
+        drop(store);
+        rotate_master_key(&dir, [61; 32], [62; 32]).unwrap();
+        let mut rotated = SecretStore::open(path, [62; 32]).unwrap();
+        let retained = durable_envelope_key(&mut rotated, "fixture-receipts", false).unwrap();
+        assert_eq!(
+            open_envelope(&retained, "fixture/tenant/device/key/hash", &sealed).unwrap(),
+            b"exact opaque receipt"
+        );
+        assert!(open_envelope(&retained, "fixture/other-row", &sealed).is_err());
+        assert!(durable_envelope_key(&mut rotated, "missing-owner", false).is_err());
+        drop(rotated);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn scoped_envelopes_authenticate_namespace_without_mutating_secret_map() {
@@ -2139,6 +2296,214 @@ mod tests {
         );
         let reopened = SecretStore::open(path, key).unwrap();
         assert_eq!(reopened.cache, store.cache);
+    }
+
+    #[test]
+    fn guarded_identity_side_effect_checks_revision_and_excludes_auth_writes() {
+        let service = "person-guard-test";
+        set(service, "revision", "signed-in").unwrap();
+        let mut published = false;
+        with_value(service, "revision", Some("signed-in"), || {
+            assert!(
+                AUTH_COMMIT_FENCE.try_lock().is_none(),
+                "guarded auth batches must remain fenced during publication"
+            );
+            published = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(published);
+        set(service, "revision", "signed-out").unwrap();
+        let error = with_value::<()>(service, "revision", Some("signed-in"), || {
+            panic!("an old identity publication cannot run after logout")
+        })
+        .unwrap_err();
+        assert_eq!(error, "secret-store condition mismatch");
+    }
+
+    #[test]
+    fn guarded_identity_callback_allows_receipt_secret_io_while_waiting_for_its_connection() {
+        use std::sync::{mpsc, Arc};
+        use std::thread;
+        let service = "person-receipt-lock-order";
+        set(service, "revision", "current").unwrap();
+        let conn = Arc::new(Mutex::new(()));
+        let (conn_held_tx, conn_held_rx) = mpsc::channel();
+        let (write_tx, write_rx) = mpsc::channel();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let receipt_conn = Arc::clone(&conn);
+        let receipt_events = event_tx.clone();
+        let receipt = thread::spawn(move || {
+            let _conn = receipt_conn.lock();
+            conn_held_tx.send(()).unwrap();
+            write_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            // This is the real receipt path: SecurityStore.conn -> durable
+            // namespace sealing -> the secret-store's write lock.
+            let result = seal_durable_namespace("receipt-lock-order", "fixture", b"receipt")
+                .and_then(|receipt| {
+                    // A generic (unconditional) batch may also belong to a
+                    // connection holder; only auth CAS batches take the fence.
+                    apply_batch(&[SecretMutation::Set {
+                        service: "receipt-lock-order",
+                        account: "metadata",
+                        value: "saved",
+                    }])?;
+                    Ok(receipt)
+                });
+            receipt_events.send("receipt-finished").unwrap();
+            result
+        });
+        conn_held_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let publisher = thread::spawn(move || {
+            with_value(service, "revision", Some("current"), || {
+                entered_tx.send(()).unwrap();
+                let Some(_conn) = conn.try_lock_for(Duration::from_secs(2)) else {
+                    event_tx.send("connection-timeout").unwrap();
+                    return Err("identity callback blocked receipt storage".into());
+                };
+                Ok(())
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        write_tx.send(()).unwrap();
+        // Under the reversed lock order the identity callback times out first;
+        // its bounded wait then releases the lock so both workers can be joined.
+        let first_event = event_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+        let receipt_result = receipt.join().unwrap();
+        let publisher_result = publisher.join().unwrap();
+        assert_eq!(first_event, "receipt-finished");
+        assert!(receipt_result.is_ok());
+        assert!(publisher_result.is_ok());
+    }
+
+    #[test]
+    fn guarded_identity_callback_blocks_guarded_cas_until_publication_finishes() {
+        use std::sync::{mpsc, Arc};
+        use std::thread;
+        let service = "person-cas-lock-order";
+        set(service, "revision", "current").unwrap();
+        let published = Arc::new(AtomicBool::new(false));
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let mut writer = None;
+        with_value(service, "revision", Some("current"), || {
+            let published_after_write = Arc::clone(&published);
+            writer = Some(thread::spawn(move || {
+                attempt_tx.send(()).unwrap();
+                let result = apply_batch_if(
+                    &[SecretMutation::Set {
+                        service,
+                        account: "revision",
+                        value: "signed-out",
+                    }],
+                    SecretCondition {
+                        service,
+                        account: "revision",
+                        expected: Some("current"),
+                    },
+                );
+                let saw_publication = published_after_write.load(Ordering::SeqCst);
+                done_tx.send((result, saw_publication)).unwrap();
+            }));
+            attempt_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert!(matches!(
+                done_rx.recv_timeout(Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            published.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .unwrap();
+        let (result, saw_publication) = done_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        writer.unwrap().join().unwrap();
+        assert!(result.is_ok());
+        assert!(saw_publication);
+        assert_eq!(
+            get(service, "revision").unwrap().as_deref(),
+            Some("signed-out")
+        );
+    }
+
+    #[test]
+    fn guarded_batch_rejects_a_delayed_write_after_logout_without_persisting_any_member() {
+        let mut store = SecretStore::in_memory([74; 32]);
+        store.set("auth-cas", "revision", "logged-out").unwrap();
+        let changes = [
+            SecretMutation::Set {
+                service: "auth-cas",
+                account: "revision",
+                value: "late-login",
+            },
+            SecretMutation::Set {
+                service: "auth-cas",
+                account: "session",
+                value: "late-token",
+            },
+        ];
+        let condition = SecretCondition {
+            service: "auth-cas",
+            account: "revision",
+            expected: Some("old-login"),
+        };
+        let error = store
+            .apply_batch_if_with(&changes, condition, |_| {
+                panic!("rejected CAS cannot persist")
+            })
+            .unwrap_err();
+        assert_eq!(error, "secret-store condition mismatch");
+        assert_eq!(
+            store.peek("auth-cas", "revision").as_deref(),
+            Some("logged-out")
+        );
+        assert_eq!(store.peek("auth-cas", "session"), None);
+    }
+
+    #[test]
+    fn guarded_batch_publishes_revision_and_credentials_once_and_rolls_back_together() {
+        let mut store = SecretStore::in_memory([75; 32]);
+        let changes = [
+            SecretMutation::Set {
+                service: "auth-atomic",
+                account: "revision",
+                value: "first",
+            },
+            SecretMutation::Set {
+                service: "auth-atomic",
+                account: "session",
+                value: "token",
+            },
+        ];
+        let condition = SecretCondition {
+            service: "auth-atomic",
+            account: "revision",
+            expected: None,
+        };
+        let error = store
+            .apply_batch_if_with(&changes, condition, |_| Err("disk denied".into()))
+            .unwrap_err();
+        assert_eq!(error, "disk denied");
+        assert_eq!(store.peek("auth-atomic", "revision"), None);
+        assert_eq!(store.peek("auth-atomic", "session"), None);
+        let mut persists = 0;
+        store
+            .apply_batch_if_with(&changes, condition, |snapshot| {
+                persists += 1;
+                assert_eq!(
+                    snapshot.peek("auth-atomic", "revision").as_deref(),
+                    Some("first")
+                );
+                assert_eq!(
+                    snapshot.peek("auth-atomic", "session").as_deref(),
+                    Some("token")
+                );
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(persists, 1);
+        assert!(store
+            .apply_batch_if_with(&changes, condition, |_| panic!("stale missing revision"))
+            .is_err());
     }
 
     #[test]

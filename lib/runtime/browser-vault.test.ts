@@ -69,6 +69,56 @@ describe("legacy PBKDF2 (v1) vaults", () => {
   })
 })
 
+it.each(["password", "recovery"] as const)(
+  "lock rejects a late real %s unlock session",
+  async (method) => {
+    const recovery = await provisionBrowserVault(ACCOUNT_ID, "correct horse")
+    lockBrowserVault()
+    const original =
+      method === "password"
+        ? BrowserVaultSession.unlockWithPassword
+        : BrowserVaultSession.unlockWithRecoveryKey
+    let reached!: () => void
+    const ready = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let session!: BrowserVaultSession
+    const spy = jest
+      .spyOn(
+        BrowserVaultSession,
+        method === "password" ? "unlockWithPassword" : "unlockWithRecoveryKey"
+      )
+      .mockImplementation(async (record, secret) => {
+        session = await original(record, secret)
+        reached()
+        await held
+        return session
+      })
+    const before = await new BrowserVaultRepository().get(ACCOUNT_ID)
+    const work =
+      method === "password"
+        ? unlockBrowserVault(ACCOUNT_ID, "correct horse")
+        : resetBrowserVaultPasswordWithRecoveryKey(ACCOUNT_ID, recovery, "new password")
+    const rejected = expect(work).rejects.toThrow("activation was cancelled")
+    try {
+      await ready
+      lockBrowserVault()
+      release()
+      await rejected
+      expect(getActiveBrowserVault()).toBeNull()
+      expect(session.isUnlocked()).toBe(false)
+      expect(await new BrowserVaultRepository().get(ACCOUNT_ID)).toEqual(before)
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+  }
+)
+
 // A record's OWN parameters drive its derivation, so a record minted under
 // different (e.g. older, or later-hardened) settings must still validate —
 // otherwise raising the cost parameters locks every existing vault out.
@@ -320,3 +370,82 @@ describe("resetBrowserVaultPasswordWithRecoveryKey", () => {
     ).rejects.toThrow(/not provisioned/i)
   })
 })
+
+it("refuses plaintext from a real secret decryption overtaken by lock", async () => {
+  const created = await BrowserVaultSession.create(ACCOUNT_ID, "correct horse")
+  const secret = await created.session.encryptSecret(
+    "connector:bob:accessToken",
+    "private-mid-decrypt-token"
+  )
+  const realDecrypt = globalThis.crypto.subtle.decrypt.bind(globalThis.crypto.subtle)
+  let plaintextBuffer!: ArrayBuffer
+  let reached!: () => void
+  let release!: () => void
+  const decrypted = new Promise<void>((resolve) => {
+    reached = resolve
+  })
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const spy = jest
+    .spyOn(globalThis.crypto.subtle, "decrypt")
+    .mockImplementationOnce(async (...args) => {
+      const plaintext = await realDecrypt(...args)
+      plaintextBuffer = plaintext
+      reached()
+      await held
+      return plaintext
+    })
+  const reading = created.session.decryptSecret("connector:bob:accessToken", secret)
+  try {
+    await decrypted
+    created.session.lock()
+    release()
+    await expect(reading).rejects.toThrow(/locked/i)
+    expect(new Uint8Array(plaintextBuffer)).toEqual(new Uint8Array(plaintextBuffer.byteLength))
+  } finally {
+    release()
+    await reading.catch(() => undefined)
+    spy.mockRestore()
+  }
+})
+
+it.each(["change", "recovery"] as const)(
+  "lock after a committed %s rewrap preserves the new password without activating",
+  async (method) => {
+    const recovery = await provisionBrowserVault(ACCOUNT_ID, "old password")
+    const original = BrowserVaultRepository.prototype.put
+    let reached!: () => void
+    const committed = new Promise<void>((resolve) => {
+      reached = resolve
+    })
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const spy = jest
+      .spyOn(BrowserVaultRepository.prototype, "put")
+      .mockImplementationOnce(async function (this: BrowserVaultRepository, record) {
+        await original.call(this, record)
+        reached()
+        await held
+      })
+    const work =
+      method === "change"
+        ? changeBrowserVaultPassword(ACCOUNT_ID, "old password", "new password")
+        : resetBrowserVaultPasswordWithRecoveryKey(ACCOUNT_ID, recovery, "new password")
+    try {
+      await committed
+      lockBrowserVault()
+      release()
+      await expect(work).resolves.toBeUndefined()
+      expect(getActiveBrowserVault()).toBeNull()
+      await expect(unlockBrowserVault(ACCOUNT_ID, "old password")).rejects.toThrow()
+      await unlockBrowserVault(ACCOUNT_ID, "new password")
+      expect(getActiveBrowserVault()?.isUnlocked()).toBe(true)
+    } finally {
+      release()
+      spy.mockRestore()
+    }
+  }
+)

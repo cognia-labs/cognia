@@ -3,6 +3,7 @@ import {
   HOST_PROTOCOL_MIN_VERSION,
   SUPPORTED_HOST_FEATURE_VERSIONS,
   parseHostFeatureManifest,
+  supportsHostFeatureOperation,
   type HostFeatureManifest,
 } from "@/lib/platform/host-feature-manifest"
 import { getCommandDescriptor } from "@/lib/tauri/command-descriptors"
@@ -89,6 +90,9 @@ export function runtimeHostSnapshotFromManifest(
 
   return {
     compatible: true,
+    ...(supportsHostFeatureOperation(manifest, "bots.automation", "bot_installation_mutate")
+      ? { botAutomation: true as const }
+      : {}),
     operations: [...new Set(gatedOperations)],
     grants: [...new Set(grants)],
     // Carried through rather than dropped: the ceilings are the only part of
@@ -145,6 +149,7 @@ function runtimeSnapshotsEqual(left: RuntimeSnapshot, right: RuntimeSnapshot): b
     left.host?.hostStateScope?.accountId === right.host?.hostStateScope?.accountId &&
     left.host?.hostStateScope?.runtimeTargetId === right.host?.hostStateScope?.runtimeTargetId &&
     left.host?.personPartition === right.host?.personPartition &&
+    left.host?.botAutomation === right.host?.botAutomation &&
     // Small and scalar-only, like the limits: the member's agents and month.
     JSON.stringify(left.host?.personAgents ?? null) ===
       JSON.stringify(right.host?.personAgents ?? null) &&

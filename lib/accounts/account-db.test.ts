@@ -33,6 +33,30 @@ async function freshRegistry(testName: string) {
 }
 
 describe("LocalAccountRegistry", () => {
+  it("preserves existing profiles and ownership metadata without a schema upgrade", async () => {
+    const { db, registry } = await freshRegistry("owner-metadata-compatible")
+    const profile = await registry.createAccount({
+      id: "acct_preserved",
+      displayName: "Preserved",
+      passwordVerifier: verifier,
+    })
+    const owner = {
+      localAccountId: profile.id,
+      userId: "usr_original",
+      logtoSubject: "original",
+      logtoIssuer: "https://issuer.test",
+      boundAt: 1,
+      updatedAt: 2,
+      signedOutAt: 2,
+    }
+    await db.userBindings.put(owner)
+    db.close()
+    const reopened = new CogniaAccountRegistryDB(db.name)
+    expect(reopened.verno).toBe(3)
+    expect(await reopened.accounts.get(profile.id)).toEqual(profile)
+    expect(await reopened.userBindings.get(profile.id)).toEqual(owner)
+    reopened.close()
+  })
   it("bounds a native connection blocking a registry upgrade and can retry after it closes", async () => {
     const name = registryName("blocked-boot-read")
     const old = await new Promise<IDBDatabase>((resolve, reject) => {

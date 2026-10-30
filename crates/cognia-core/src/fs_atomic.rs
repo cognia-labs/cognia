@@ -199,6 +199,102 @@ fn atomic_write_with_sync(
     contents: &[u8],
     sync_file: impl FnOnce(&fs::File) -> std::io::Result<()>,
 ) -> Result<AtomicWriteResult, AtomicWriteError> {
+    atomic_write_impl(plan, contents, sync_file, false)
+}
+
+/// Credential-bearing config writes: private staging and backup files on Unix.
+/// `None` asserts the destination is absent, rather than disabling drift checks.
+pub fn atomic_write_private_with_mtime_check(
+    plan: &AtomicWritePlan,
+    contents: &[u8],
+) -> Result<AtomicWriteResult, AtomicWriteError> {
+    atomic_write_impl(plan, contents, fs::File::sync_all, true)
+}
+
+fn private_new_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
+}
+
+#[cfg(test)]
+mod private_write_tests {
+    use super::*;
+
+    #[test]
+    fn private_config_keeps_backup_and_rejects_stale_or_missing_preconditions() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        fs::write(&path, "old credential").unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let plan = AtomicWritePlan {
+            path: path.clone(),
+            expected_mtime: Some(modified),
+            tmp_suffix: "private-test".into(),
+            backup_suffix: "gateway-bak".into(),
+        };
+        let result = atomic_write_private_with_mtime_check(&plan, b"new credential").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new credential");
+        let backup = result.backup_path.unwrap();
+        assert_eq!(fs::read_to_string(&backup).unwrap(), "old credential");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(backup).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let missing = AtomicWritePlan {
+            expected_mtime: None,
+            ..plan
+        };
+        assert!(matches!(
+            atomic_write_private_with_mtime_check(&missing, b"overwrite"),
+            Err(AtomicWriteError::DriftDetected { .. })
+        ));
+        assert_eq!(fs::read_to_string(path).unwrap(), "new credential");
+    }
+
+    #[test]
+    fn private_config_creates_a_missing_destination_without_overwrite() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("new.json");
+        let plan = AtomicWritePlan {
+            path: path.clone(),
+            expected_mtime: None,
+            tmp_suffix: "private-test".into(),
+            backup_suffix: "gateway-bak".into(),
+        };
+        assert!(atomic_write_private_with_mtime_check(&plan, b"created")
+            .unwrap()
+            .backup_path
+            .is_none());
+        assert_eq!(fs::read_to_string(path).unwrap(), "created");
+    }
+}
+
+fn atomic_write_impl(
+    plan: &AtomicWritePlan,
+    contents: &[u8],
+    sync_file: impl FnOnce(&fs::File) -> std::io::Result<()>,
+    private: bool,
+) -> Result<AtomicWriteResult, AtomicWriteError> {
+    if private && plan.expected_mtime.is_none() && plan.path.exists() {
+        return Err(AtomicWriteError::DriftDetected {
+            expected: SystemTime::UNIX_EPOCH,
+            current: fs::metadata(&plan.path)?.modified()?,
+        });
+    }
     // 1. mtime drift check.
     if let Some(expected) = plan.expected_mtime {
         if plan.path.exists() {
@@ -231,7 +327,13 @@ fn atomic_write_with_sync(
             format!("{}.{}.{}", ext, plan.backup_suffix, ts)
         };
         let bp = plan.path.with_extension(suffix);
-        fs::copy(&plan.path, &bp)?;
+        if private {
+            let mut backup = private_new_file(&bp)?;
+            backup.write_all(&fs::read(&plan.path)?)?;
+            backup.sync_all()?;
+        } else {
+            fs::copy(&plan.path, &bp)?;
+        }
         Some(bp)
     } else {
         None
@@ -244,7 +346,11 @@ fn atomic_write_with_sync(
         format!("{}.{}", ext, plan.tmp_suffix)
     };
     let tmp_path = plan.path.with_extension(tmp_suffix);
-    let mut file = fs::File::create(&tmp_path)?;
+    let mut file = if private {
+        private_new_file(&tmp_path)?
+    } else {
+        fs::File::create(&tmp_path)?
+    };
     let staged = file.write_all(contents).and_then(|()| sync_file(&file));
     // Close before cleanup so a failed write/sync can release its temporary
     // file on platforms that forbid removing open files.
@@ -255,7 +361,25 @@ fn atomic_write_with_sync(
     }
 
     // 4. Rename atomically.
-    if let Err(e) = fs::rename(&tmp_path, &plan.path) {
+    // Recheck after staging: a concurrent client may have saved while the
+    // backup or fsync was running. Missing destinations publish without replace.
+    if private {
+        if let Some(expected) = plan.expected_mtime {
+            let current = fs::metadata(&plan.path)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            if !mtimes_equal(expected, current) {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(AtomicWriteError::DriftDetected { expected, current });
+            }
+        }
+    }
+    let published = if private && plan.expected_mtime.is_none() {
+        fs::hard_link(&tmp_path, &plan.path).and_then(|()| fs::remove_file(&tmp_path))
+    } else {
+        fs::rename(&tmp_path, &plan.path)
+    };
+    if let Err(e) = published {
         // Best-effort cleanup.
         let _ = fs::remove_file(&tmp_path);
         return Err(AtomicWriteError::Io(e));

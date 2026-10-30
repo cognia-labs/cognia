@@ -83,10 +83,18 @@ export async function preflightItems(
 
   let shared: MigrationBlocker[] = []
   let platform: Platform = "headless"
+  let automationSupported = false
   try {
     const manifest = await facts.manifest()
     if (!hostReceivesMigrations(manifest)) shared = [{ kind: "host-too-old" }]
-    else platform = manifest.platform
+    else {
+      platform = manifest.platform
+      automationSupported = supportsHostFeatureOperation(
+        manifest,
+        "bots.automation",
+        "bot_installation_mutate"
+      )
+    }
   } catch (error) {
     shared = [{ kind: "host-unreachable", detail: message(error) }]
   }
@@ -102,10 +110,17 @@ export async function preflightItems(
       checkedAt,
     }
     const blockers: MigrationBlocker[] = [...shared]
+    if (
+      item.kind === "bot-installation" &&
+      (item.installation.paused !== undefined ||
+        item.installation.triggerInputSlots !== undefined) &&
+      !automationSupported
+    )
+      blockers.push({ kind: "host-too-old" })
     if (isOwnedElsewhere(item.owner)) {
       blockers.push({ kind: "already-moved", hostLabel: item.owner.hostLabel })
     }
-    if (shared.length > 0 || isOwnedElsewhere(item.owner)) {
+    if (blockers.length > 0 || isOwnedElsewhere(item.owner)) {
       // Nothing more is worth asking a host that cannot take the item.
       results.push({ ...base, ready: false, blockers, notes: [], plugins: [] })
       continue

@@ -166,6 +166,7 @@ export type OutboundAuthorization =
   | ReroutedAuthorization
 
 export interface DeliveryPlanInput {
+  deliveryMode?: "reply" | "proactive" | "reengagement"
   adapterId: string
   /** Empty when the delivery names no conversation the host can check. */
   conversationKey: string
@@ -438,6 +439,8 @@ async function planUnattended(
     case "allow": {
       const authority = result.authority ?? "policy-default"
       if (!result.grant) {
+        if (env.input.deliveryMode && env.input.deliveryMode !== "reply")
+          return withheld(env, "draft", { ...receiptArgs, draftSessionId: unattended.sessionId })
         // The origin thread: needs no grant and no receipt.
         return { action: "send", authorizedBy: { authority } }
       }
@@ -545,7 +548,10 @@ export async function planDelivery(
   const env: PlanningEnv = {
     input,
     targets: deliveryTargets(input),
-    mode: readOutboundAuthorizationMode(settings),
+    mode:
+      input.deliveryMode && input.deliveryMode !== "reply"
+        ? "enforce"
+        : readOutboundAuthorizationMode(settings),
     settings,
     now: deps.now?.() ?? Date.now(),
     deps,
@@ -556,6 +562,8 @@ export async function planDelivery(
   switch (auth.kind) {
     case "origin-reply":
     case "system-notice":
+      if (input.deliveryMode && input.deliveryMode !== "reply")
+        return withheld(env, "deny", { denyReason: "unapproved" })
       return sameChat(auth.inboundConversationKey, input.conversationKey)
         ? { action: "send", authorizedBy: { authority: "policy-default" } }
         : withheld(env, "deny", { denyReason: "conversation-mismatch" })

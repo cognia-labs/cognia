@@ -1,4 +1,12 @@
-import type { LinkExternalIdentityInput } from "@/lib/db/identity"
+import { encryptedAccountDatabaseName } from "@/lib/accounts/account-db"
+import {
+  AccountContentCipher,
+  activateAccountContentCipher,
+  lockAccountContentCipher,
+} from "@/lib/accounts/content-cipher"
+import { activateAccountDatabase, clearAccountDatabaseSelection, getDb } from "@/lib/db/schema"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { linkExternalIdentity, type LinkExternalIdentityInput } from "@/lib/db/identity"
 import type { ExternalIdentity } from "@/types/identity"
 
 import { externalProviderFor, linkSignedInIdentities } from "./link-signed-in-identities"
@@ -102,4 +110,89 @@ describe("linkSignedInIdentities", () => {
     expect(report.skipped).toEqual(["google", "github"])
     expect(report.linked).toHaveLength(1)
   })
+})
+
+describe("linkSignedInIdentities profile isolation", () => {
+  const fixture = createDbTestFixture({ emptyTables: ["externalIdentities"] })
+  beforeAll(fixture.initialize)
+  beforeEach(fixture.restore)
+  afterAll(fixture.dispose)
+
+  it("keeps canonical identity keys and conflicts when using the real database transaction", async () => {
+    await linkExternalIdentity({ userId: "usr_existing", provider: "github", subject: "held" })
+    const report = await linkSignedInIdentities(
+      {
+        userId: "usr_owner",
+        identities: [
+          { provider: "github", subject: "held" },
+          {
+            provider: "feishu-web",
+            subject: "union_owner",
+            tenant: "tenant_owner",
+            label: "Owner",
+          },
+        ],
+      },
+      { now: () => 7 }
+    )
+    expect(report.conflicts).toEqual([
+      { provider: "github", subject: "held", existingUserId: "usr_existing" },
+    ])
+    expect(report.linked).toEqual([
+      {
+        id: "lark:tenant_owner:union_owner",
+        userId: "usr_owner",
+        provider: "lark",
+        subject: "union_owner",
+        tenant: "tenant_owner",
+        label: "Owner",
+        linkedAt: 7,
+      },
+    ])
+    expect(await getDb().externalIdentities.get("github::held")).toMatchObject({
+      userId: "usr_existing",
+    })
+  })
+
+  it.each(["lookup", "write"] as const)(
+    "rejects a profile switch after a real identity %s without cross-profile writes or partial links",
+    async (boundary) => {
+      const originalDb = getDb()
+      const otherId = "acct_social_other"
+      activateAccountContentCipher(
+        await AccountContentCipher.createForTesting(otherId, encryptedAccountDatabaseName(otherId))
+      )
+      const get = originalDb.externalIdentities.get.bind(originalDb.externalIdentities)
+      const put = originalDb.externalIdentities.put.bind(originalDb.externalIdentities)
+      const intercepted =
+        boundary === "lookup"
+          ? jest.spyOn(originalDb.externalIdentities, "get").mockImplementationOnce((key) =>
+              get(key).then((row) => {
+                activateAccountDatabase(otherId)
+                return row
+              })
+            )
+          : jest.spyOn(originalDb.externalIdentities, "put").mockImplementationOnce((row, key) =>
+              put(row, key).then((id) => {
+                activateAccountDatabase(otherId)
+                return id
+              })
+            )
+      try {
+        await expect(
+          linkSignedInIdentities({
+            userId: "usr_profile_a",
+            identities: [{ provider: "github", subject: "profile-a" }],
+          })
+        ).rejects.toThrow()
+        expect(await getDb().externalIdentities.toArray()).toEqual([])
+      } finally {
+        intercepted.mockRestore()
+        await getDb().delete()
+        clearAccountDatabaseSelection()
+        lockAccountContentCipher()
+      }
+      expect(await getDb().externalIdentities.toArray()).toEqual([])
+    }
+  )
 })

@@ -66,6 +66,8 @@ export interface HostCloudDeployment {
 export interface HostPersonDeps {
   invokeFn?: InvokeFn
   isDesktop?: () => boolean
+  /** Native auth revision committed for this operation; omitted by legacy callers. */
+  authRevision?: string
 }
 
 function resolve(deps: HostPersonDeps) {
@@ -116,6 +118,8 @@ export async function bindHostPerson(
   // configured Logto issuer. A renderer that supplies the trust anchor is
   // verifying the token against itself.
   await call<void>(ACCOUNT_BIND_PERSON_COMMAND, {
+    localAccountId: input.localAccountId,
+    ...(deps.authRevision !== undefined ? { authRevision: deps.authRevision } : {}),
     accessToken: input.accessToken,
     userId: derived.userId,
     orgId: derived.orgId ?? null,
@@ -131,8 +135,10 @@ export async function unbindHostPerson(
 ): Promise<boolean> {
   const { call, desktop } = resolve(deps)
   if (!desktop) return false
-  void localAccountId
-  await call<void>(ACCOUNT_UNBIND_PERSON_COMMAND)
+  await call<void>(ACCOUNT_UNBIND_PERSON_COMMAND, {
+    localAccountId,
+    ...(deps.authRevision !== undefined ? { authRevision: deps.authRevision } : {}),
+  })
   return true
 }
 

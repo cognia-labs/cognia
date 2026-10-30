@@ -5,11 +5,15 @@ import {
   findUserIdByExternalIdentity,
   listExternalIdentities,
 } from "@/lib/db/identity"
-import { getDb } from "@/lib/db/schema"
+import { activateAccountDatabase, clearAccountDatabaseSelection, getDb } from "@/lib/db/schema"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 
 import { identityProjection, writeIdentityProjection } from "./identity-projection"
 import type { SignedInIdentity } from "./sign-in"
+import { completeSignIn, completeSignOut } from "./complete-sign-in"
+import { CogniaAccountRegistryDB } from "@/lib/accounts/account-db"
+import { UserBindingRegistry } from "./user-binding"
 
 const dbFixture = createDbTestFixture()
 
@@ -40,7 +44,7 @@ function identity(overrides: Partial<SignedInIdentity> = {}): SignedInIdentity {
     },
     orgRole: "admin",
     binding: {
-      localAccountId: "acct_alpha",
+      localAccountId: getActiveAccountId(),
       userId: "usr_ada",
       orgId: "org_acme",
       logtoSubject: "logto_ada",
@@ -53,6 +57,124 @@ function identity(overrides: Partial<SignedInIdentity> = {}): SignedInIdentity {
 }
 
 describe("writeIdentityProjection", () => {
+  it("rolls back identity writes when the authentication commit is interrupted", async () => {
+    const db = getDb()
+    const put = db.users.put.bind(db.users)
+    let current = true
+    const intercepted = jest.spyOn(db.users, "put").mockImplementationOnce((user, key) =>
+      put(user, key).then((result) => {
+        current = false
+        return result
+      })
+    )
+    try {
+      await expect(
+        writeIdentityProjection(identity(), () => {
+          if (!current) throw new Error("stale auth")
+        })
+      ).rejects.toThrow("stale auth")
+    } finally {
+      intercepted.mockRestore()
+    }
+    expect(await db.users.count()).toBe(0)
+    expect(await db.externalIdentities.count()).toBe(0)
+  })
+  it("retains real content, unsent sync outbox and projected names across logout/resume", async () => {
+    const db = getDb()
+    await db
+      .table("sessions")
+      .put({ id: "preserved-session", title: "Keep conversation", createdAt: 1, updatedAt: 1 })
+    await db.table("messages").put({
+      id: "preserved-message",
+      sessionId: "preserved-session",
+      role: "user",
+      content: "Keep message",
+      createdAt: 1,
+    })
+    await db
+      .table("accountSyncOutbox")
+      .put({ table: "messages", rowId: "preserved-message", pending: "keep" })
+    const original = await Promise.all([
+      db.sessions.toArray(),
+      db.messages.toArray(),
+      db.accountSyncOutbox.toArray(),
+    ])
+    const registryDb = new CogniaAccountRegistryDB("cognia-projection-owner-preservation")
+    const registry = new UserBindingRegistry(registryDb)
+    const localAccountId = getActiveAccountId()
+    const payload = Buffer.from(JSON.stringify({ sub: "projection_owner" })).toString("base64url")
+    const signedIn = {
+      issuer: ISSUER,
+      clientId: "fixture",
+      resource: "fixture",
+      accessToken: `header.${payload}.sig`,
+      scopes: [],
+    }
+    try {
+      const first = await completeSignIn(signedIn, {
+        localAccountId,
+        registry,
+        host: { isDesktop: () => false },
+      })
+      const projected = await db.users.get(first.user.id)
+      await completeSignOut({
+        localAccountId,
+        registry,
+        host: { isDesktop: () => false },
+        unlinkSelfBound: async () => [],
+      })
+      expect(await registry.get(localAccountId)).toBeNull()
+      expect(await db.users.get(first.user.id)).toEqual(projected)
+      expect(
+        await Promise.all([
+          db.sessions.toArray(),
+          db.messages.toArray(),
+          db.accountSyncOutbox.toArray(),
+        ])
+      ).toEqual(original)
+      await completeSignIn(signedIn, { localAccountId, registry, host: { isDesktop: () => false } })
+      expect(
+        await Promise.all([
+          db.sessions.toArray(),
+          db.messages.toArray(),
+          db.accountSyncOutbox.toArray(),
+        ])
+      ).toEqual(original)
+    } finally {
+      await registryDb.delete()
+    }
+  })
+  it("rejects a late identity for another profile before writing any projection", async () => {
+    const incoming = identity()
+    await expect(
+      writeIdentityProjection({
+        ...incoming,
+        binding: { ...incoming.binding, localAccountId: "acct_another" },
+      })
+    ).rejects.toThrow(/profile changed/i)
+    expect(await getDb().users.count()).toBe(0)
+    expect(await getDb().externalIdentities.count()).toBe(0)
+  })
+
+  it("rolls back a projection if the selected database changes between writes", async () => {
+    const originalDb = getDb()
+    const put = originalDb.users.put.bind(originalDb.users)
+    const intercepted = jest.spyOn(originalDb.users, "put").mockImplementationOnce((user, key) =>
+      put(user, key).then((result) => {
+        activateAccountDatabase("acct_other")
+        return result
+      })
+    )
+    try {
+      await expect(writeIdentityProjection(identity())).rejects.toThrow()
+    } finally {
+      intercepted.mockRestore()
+      clearAccountDatabaseSelection()
+    }
+    expect(await getDb().users.count()).toBe(0)
+    expect(await getDb().orgs.count()).toBe(0)
+    expect(await getDb().externalIdentities.count()).toBe(0)
+  })
   it("mirrors the person, the org, the membership and the external identity", async () => {
     await writeIdentityProjection(identity())
 

@@ -19,6 +19,7 @@
  */
 
 import { findUserIdByExternalIdentity, linkExternalIdentity } from "@/lib/db/identity"
+import { getDb } from "@/lib/db/schema"
 import {
   EXTERNAL_IDENTITY_PROVIDERS,
   type ExternalIdentity,
@@ -59,41 +60,64 @@ export interface LinkSignedInIdentitiesDeps {
 }
 
 export async function linkSignedInIdentities(
-  input: { userId: string; identities: readonly CollabExternalIdentity[] },
+  input: {
+    userId: string
+    identities: readonly CollabExternalIdentity[]
+    assertCurrent?: () => void
+  },
   deps: LinkSignedInIdentitiesDeps = {}
 ): Promise<LinkSignedInIdentitiesReport> {
-  const find = deps.find ?? findUserIdByExternalIdentity
-  const link = deps.link ?? linkExternalIdentity
-  const now = (deps.now ?? Date.now)()
-  const report: LinkSignedInIdentitiesReport = { linked: [], conflicts: [], skipped: [] }
-  for (const identity of input.identities) {
-    const provider = externalProviderFor(identity.provider)
-    const subject = identity.subject.trim()
-    if (!provider || !subject) {
-      report.skipped.push(identity.provider)
-      continue
+  // The lookup and link belong to one profile lifetime and one transaction.
+  // Keep injected adapters independent of the browser database.
+  const db = deps.find || deps.link ? undefined : getDb()
+  const assertCurrent = () => {
+    input.assertCurrent?.()
+    if (db && (!db.isOpen() || getDb() !== db)) {
+      throw new Error("The local profile changed while linking its identities.")
     }
-    const tenant = identity.tenant?.trim() || undefined
-    const existing = await find(provider, subject, tenant)
-    if (existing && existing !== input.userId) {
-      report.conflicts.push({
-        provider,
-        subject,
-        ...(tenant ? { tenant } : {}),
-        existingUserId: existing,
-      })
-      continue
-    }
-    report.linked.push(
-      await link({
-        userId: input.userId,
-        provider,
-        subject,
-        ...(tenant ? { tenant } : {}),
-        ...(identity.label ? { label: identity.label } : {}),
-        now,
-      })
-    )
   }
+  const find =
+    deps.find ??
+    ((provider, subject, tenant) => findUserIdByExternalIdentity(provider, subject, tenant, db))
+  const link = deps.link ?? ((input) => linkExternalIdentity(input, db))
+  const now = (deps.now ?? Date.now)()
+  const linkAll = async () => {
+    const report: LinkSignedInIdentitiesReport = { linked: [], conflicts: [], skipped: [] }
+    assertCurrent()
+    for (const identity of input.identities) {
+      const provider = externalProviderFor(identity.provider)
+      const subject = identity.subject.trim()
+      if (!provider || !subject) {
+        report.skipped.push(identity.provider)
+        continue
+      }
+      const tenant = identity.tenant?.trim() || undefined
+      const existing = await find(provider, subject, tenant)
+      assertCurrent()
+      if (existing && existing !== input.userId) {
+        report.conflicts.push({
+          provider,
+          subject,
+          ...(tenant ? { tenant } : {}),
+          existingUserId: existing,
+        })
+        continue
+      }
+      report.linked.push(
+        await link({
+          userId: input.userId,
+          provider,
+          subject,
+          ...(tenant ? { tenant } : {}),
+          ...(identity.label ? { label: identity.label } : {}),
+          now,
+        })
+      )
+      assertCurrent()
+    }
+    return report
+  }
+  const report = db ? await db.transaction("rw", db.externalIdentities, linkAll) : await linkAll()
+  assertCurrent()
   return report
 }

@@ -61,6 +61,7 @@ describe("completeSignIn", () => {
     // A first sign-in binds the derived ids, so the host gets them as the
     // verifiable pair and no aliases.
     expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_BIND_PERSON_COMMAND, {
+      localAccountId: "acct_alpha",
       accessToken: signedIn.accessToken,
       userId: identity.user.id,
       orgId: identity.org!.id,
@@ -90,6 +91,7 @@ describe("completeSignIn", () => {
 
     expect(identity.user.id).toBe(sub)
     expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_BIND_PERSON_COMMAND, {
+      localAccountId: "acct_official",
       accessToken: official.accessToken,
       userId: sub,
       orgId: null,
@@ -159,7 +161,7 @@ describe("completeSignIn", () => {
 })
 
 describe("completeSignOut", () => {
-  it("drops the binding and tells the host to forget the person", async () => {
+  it("deactivates the binding, retains ownership and tells the host to forget the person", async () => {
     const registry = await freshRegistry("sign-out")
     const invokeFn = jest.fn().mockResolvedValue(undefined)
     await completeSignIn(session(), {
@@ -176,7 +178,18 @@ describe("completeSignOut", () => {
     })
 
     expect(await registry.get("acct_alpha")).toBeNull()
-    expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_UNBIND_PERSON_COMMAND)
+    expect(await registry.getOwner("acct_alpha")).toMatchObject({ logtoSubject: "logto_ada" })
+    await expect(
+      completeSignIn(session({ sub: "logto_bob" }), {
+        localAccountId: "acct_alpha",
+        registry,
+        projection: collector().projection,
+        host: { isDesktop: () => false },
+      })
+    ).rejects.toMatchObject({ code: "already-bound-to-another-user" })
+    expect(invokeFn).toHaveBeenCalledWith(ACCOUNT_UNBIND_PERSON_COMMAND, {
+      localAccountId: "acct_alpha",
+    })
   })
 
   it("unlinks the Feishu principals a self-bind admitted for the departing person", async () => {

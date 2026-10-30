@@ -46,6 +46,8 @@ export class UserBindingError extends Error {
 }
 
 export interface BindUserInput {
+  /** Refuse a transaction whose authentication commit was interrupted. */
+  assertCurrent?: () => void
   localAccountId: string
   userId: string
   orgId?: string
@@ -65,7 +67,11 @@ export interface BindUserInput {
  * some earlier bug pass silently.
  */
 export function isSameBoundUser(existing: UserBindingRow, input: BindUserInput): boolean {
-  return existing.userId === input.userId && existing.logtoSubject === input.logtoSubject
+  return (
+    (existing.userId === input.userId || existing.legacyUserIds?.includes(input.userId) === true) &&
+    existing.logtoSubject === input.logtoSubject &&
+    existing.logtoIssuer.replace(/\/+$/, "") === input.logtoIssuer.replace(/\/+$/, "")
+  )
 }
 
 function assertBindInput(input: BindUserInput): void {
@@ -104,16 +110,26 @@ export class UserBindingRegistry {
   constructor(private readonly db: CogniaAccountRegistryDB = new CogniaAccountRegistryDB()) {}
 
   async get(localAccountId: string): Promise<UserBindingRow | null> {
+    const owner = await this.getOwner(localAccountId)
+    return owner && owner.signedOutAt === undefined ? owner : null
+  }
+
+  /** Data ownership survives sign-out, but is never an active authorization. */
+  async getOwner(localAccountId: string): Promise<UserBindingRow | null> {
     return (await this.db.userBindings.get(localAccountId)) ?? null
   }
 
   /** Every profile on this machine bound to one person. Usually one; not always. */
   async listByUser(userId: string): Promise<UserBindingRow[]> {
-    return this.db.userBindings.where("userId").equals(userId).toArray()
+    return this.db.userBindings
+      .where("userId")
+      .equals(userId)
+      .filter((row) => row.signedOutAt === undefined)
+      .toArray()
   }
 
   async listAll(): Promise<UserBindingRow[]> {
-    return this.db.userBindings.toArray()
+    return this.db.userBindings.filter((row) => row.signedOutAt === undefined).toArray()
   }
 
   /**
@@ -128,7 +144,9 @@ export class UserBindingRegistry {
     let result: UserBindingRow | undefined
 
     await this.db.transaction("rw", this.db.userBindings, async () => {
-      const existing = await this.db.userBindings.get(input.localAccountId)
+      input.assertCurrent?.()
+      const existing = await this.getOwner(input.localAccountId)
+      input.assertCurrent?.()
       if (existing && !isSameBoundUser(existing, input)) {
         throw new UserBindingError(
           "already-bound-to-another-user",
@@ -136,7 +154,12 @@ export class UserBindingRegistry {
           existing
         )
       }
-      result = rowFrom(input, existing?.boundAt ?? now, now)
+      result = rowFrom(
+        existing ? { ...input, userId: existing.userId } : input,
+        existing?.boundAt ?? now,
+        now
+      )
+      if (existing?.legacyUserIds) result.legacyUserIds = [...existing.legacyUserIds]
       await this.db.userBindings.put(result)
     })
 
@@ -148,11 +171,28 @@ export class UserBindingRegistry {
     assertBindInput(input)
     const now = input.now ?? Date.now()
     const row = rowFrom(input, now, now)
+    input.assertCurrent?.()
     await this.db.userBindings.put(row)
     return row
   }
 
-  /** Sign out. Idempotent, and it never touches the profile's data. */
+  /** End this binding's active session without releasing its data ownership. */
+  async signOut(
+    localAccountId: string,
+    now = Date.now(),
+    assertCurrent?: () => void
+  ): Promise<void> {
+    await this.db.transaction("rw", this.db.userBindings, async () => {
+      assertCurrent?.()
+      const owner = await this.getOwner(localAccountId)
+      assertCurrent?.()
+      if (owner && owner.signedOutAt === undefined) {
+        await this.db.userBindings.put({ ...owner, signedOutAt: now, updatedAt: now })
+      }
+    })
+  }
+
+  /** Forget ownership only when explicitly removing the profile/account data. */
   async unbind(localAccountId: string): Promise<void> {
     await this.db.userBindings.delete(localAccountId)
   }
@@ -165,14 +205,21 @@ export class UserBindingRegistry {
    * every route is keyed on that one, so once the server has answered the
    * binding follows it. Idempotent.
    */
-  async setOrgId(localAccountId: string, orgId: string, now = Date.now()): Promise<UserBindingRow> {
+  async setOrgId(
+    localAccountId: string,
+    orgId: string,
+    now = Date.now(),
+    assertCurrent?: () => void
+  ): Promise<UserBindingRow> {
     if (!isOrgId(orgId)) {
       throw new UserBindingError("invalid-org-id", `"${orgId}" is not an org id.`)
     }
     let result: UserBindingRow | undefined
     await this.db.transaction("rw", this.db.userBindings, async () => {
+      assertCurrent?.()
       const existing = await this.db.userBindings.get(localAccountId)
-      if (!existing) {
+      assertCurrent?.()
+      if (!existing || existing.signedOutAt !== undefined) {
         throw new UserBindingError("not-bound", `Profile ${localAccountId} is not bound.`)
       }
       if (existing.orgId === orgId) {
@@ -195,7 +242,8 @@ export class UserBindingRegistry {
   async reconcileUserId(
     localAccountId: string,
     canonicalUserId: string,
-    now = Date.now()
+    now = Date.now(),
+    assertCurrent?: () => void
   ): Promise<UserBindingRow> {
     if (!isUserId(canonicalUserId)) {
       throw new UserBindingError(
@@ -205,8 +253,10 @@ export class UserBindingRegistry {
     }
     let result: UserBindingRow | undefined
     await this.db.transaction("rw", this.db.userBindings, async () => {
+      assertCurrent?.()
       const existing = await this.db.userBindings.get(localAccountId)
-      if (!existing) {
+      assertCurrent?.()
+      if (!existing || existing.signedOutAt !== undefined) {
         throw new UserBindingError("not-bound", `Profile ${localAccountId} is not bound.`)
       }
       if (existing.userId === canonicalUserId) {

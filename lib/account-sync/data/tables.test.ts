@@ -69,6 +69,11 @@ describe("account sync table policies", () => {
     expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("deliverySourceHosts")
   })
 
+  it("keeps Host-attached acceptance run authority device-local", () => {
+    expect(TABLE_POLICIES.sessions.fields.managedAcceptance).toBe("local")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("managedAcceptance")
+  })
+
   it("sync exactly the settings keys cleared as shared", () => {
     const shared = Object.entries(SETTINGS_SYNC)
       .filter(([, entry]) => entry.category === "shared")

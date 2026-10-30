@@ -24,7 +24,7 @@ import {
   upsertOrg,
   upsertUser,
 } from "./identity"
-import { getDb } from "./schema"
+import { CogniaDB, getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 
 const dbFixture = createDbTestFixture()
@@ -162,6 +162,23 @@ describe("workspace membership", () => {
 })
 
 describe("external identities", () => {
+  it("uses an explicit database for both external identity lookup and linking", async () => {
+    const owningDb = new CogniaDB("cognia-identity-explicit-owner-test")
+    await owningDb.open()
+    try {
+      await linkExternalIdentity(
+        { userId: "usr_owner", provider: "github", subject: "owned" },
+        owningDb
+      )
+      expect(await findUserIdByExternalIdentity("github", "owned", undefined, owningDb)).toBe(
+        "usr_owner"
+      )
+      expect(await findUserIdByExternalIdentity("github", "owned")).toBeUndefined()
+    } finally {
+      await owningDb.delete()
+    }
+  })
+
   it("is idempotent on provider, tenant and subject", async () => {
     await linkExternalIdentity({ userId: "usr_ada", provider: "logto", subject: "sub_1" })
     await linkExternalIdentity({

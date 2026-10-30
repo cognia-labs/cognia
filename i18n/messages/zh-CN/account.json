@@ -347,7 +347,8 @@
     "reauth": {
       "expired": "你的会话已过期。",
       "revoked": "你的会话已在别处退出。",
-      "binding-missing": "此配置文件已登录，但尚未绑定到某个人。"
+      "binding-missing": "此配置文件已登录，但尚未绑定到某个人。",
+      "binding-mismatch": "此登录身份与配置文件的所有者不一致。请使用原账号登录，或使用另一个配置文件。"
     },
     "offline": {
       "body": "上一次的会话已保留。你可以继续离线工作，连上以后会自动刷新。"
@@ -518,6 +519,7 @@
     "switched": "已切换到 {org}。",
     "switchFailed": "无法切换：{message}",
     "signOutDone": "已退出登录。",
+    "signOutFailed": "退出登录失败：{message}",
     "revocationFailed": "已在本地退出，但无法通知身份提供方。",
     "noDeployment": "此配置文件没有配置云端部署。",
     "signOut": "退出登录",
