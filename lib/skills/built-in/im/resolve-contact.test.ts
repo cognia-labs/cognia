@@ -7,6 +7,32 @@ jest.mock("./_helpers", () => ({
 import { getSharedBuiltInSkillRegistry } from "../registry"
 import "./resolve-contact"
 import { resolveChatCapableAdapter } from "./_helpers"
+import { createLarkChatManagement } from "@/lib/connectors/adapters/lark/chat-management"
+import { getUserAccessToken } from "@/lib/connectors/adapters/lark/auth"
+
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({
+    sessions: {
+      get: async () => ({
+        platformBinding: { platform: "lark", adapterId: "a1", conversationKey: "chat" },
+      }),
+    },
+  }),
+}))
+jest.mock("@/lib/db/adapter-instances", () => ({
+  getAdapterInstance: async () => ({
+    type: "lark",
+    enabled: true,
+    settings: { connectedUser: { openId: "owner" } },
+  }),
+}))
+jest.mock("../context", () => ({
+  resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "other" }] }),
+}))
+jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
+  getUserAccessToken: jest.fn(),
+  getTenantAccessToken: jest.fn(),
+}))
 
 const mResolve = resolveChatCapableAdapter as jest.Mock
 const mContacts = jest.fn()
@@ -30,6 +56,17 @@ beforeEach(() => {
 })
 
 describe("im.resolve_contact", () => {
+  it("refuses a non-owner IM name search through the real adapter path before reading a token", async () => {
+    const adapter = createLarkChatManagement("a1", async () => ({
+      appId: "app",
+      appSecret: "secret",
+    }))
+    mResolve.mockResolvedValue({ adapterId: "a1", platform: "lark", adapter })
+    await expect(skill().execute({ query: "Alice" }, { sessionId: "s" })).rejects.toMatchObject({
+      reason: "sender_not_token_owner",
+    })
+    expect(getUserAccessToken).not.toHaveBeenCalled()
+  })
   it("schema refuses an empty request (no emails/phones/query)", () => {
     expect(skill().inputSchema.safeParse({}).success).toBe(false)
     expect(skill().inputSchema.safeParse({ query: "  " }).success).toBe(false)
@@ -44,6 +81,7 @@ describe("im.resolve_contact", () => {
       emails: ["a@x.com"],
       phones: ["+861380"],
       query: "Alice",
+      skillContext: { sessionId: "s" },
     })
     expect(out).toEqual({
       candidates: [{ memberId: "ou_a", email: "a@x.com", confidence: "exact" }],
@@ -63,6 +101,7 @@ describe("im.resolve_contact", () => {
       emails: undefined,
       phones: ["+8613800000000"],
       query: undefined,
+      skillContext: { sessionId: "s" },
     })
   })
 

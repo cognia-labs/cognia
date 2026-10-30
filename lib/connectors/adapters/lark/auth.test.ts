@@ -7,6 +7,8 @@ import {
 import {
   LARK_SENDAS_SCOPES,
   LARK_DOC_READ_SCOPES,
+  LARK_TASK_SCOPES,
+  LARK_BITABLE_SCOPES,
   hasLarkDocumentSearchScope,
   mergeLarkScopes,
   getTenantAccessToken,
@@ -131,6 +133,26 @@ describe("mergeLarkScopes", () => {
 })
 
 describe("buildLarkOAuthUrl", () => {
+  it("requests the selected tracker account's user scopes explicitly", () => {
+    const url = new URL(
+      buildLarkOAuthUrl({
+        appId: "cli_tracker",
+        redirectUri: "https://relay.example/oauth/lark/callback",
+        state: "tracker-state",
+        scope: mergeLarkScopes("offline_access", LARK_TASK_SCOPES, LARK_BITABLE_SCOPES),
+      })
+    )
+    expect(url.searchParams.get("scope")?.split(" ")).toEqual(
+      expect.arrayContaining([
+        "offline_access",
+        "task:task:read",
+        "task:task:write",
+        "task:tasklist:read",
+        "task:section:read",
+        "bitable:app",
+      ])
+    )
+  })
   it("requests both mandatory user-send permissions and refresh access for send-as-user", () => {
     const url = new URL(
       buildLarkOAuthUrl({

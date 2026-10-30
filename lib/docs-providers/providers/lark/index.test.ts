@@ -269,7 +269,7 @@ describe("larkDocsProvider.search", () => {
     runWith({ post: async () => ({ docs_entities: [] }) })
     await larkDocsProvider.search?.("q", { accountId: ACCOUNT, limit: 10 })
     expect(withAuthMock).toHaveBeenCalledWith(
-      expect.objectContaining({ adapterId: ACCOUNT, requireUserIdentity: true }),
+      expect.objectContaining({ adapterId: ACCOUNT, identity: "user" }),
       expect.any(Function)
     )
   })
@@ -573,7 +573,7 @@ describe("larkDocsProvider.fetch — grids", () => {
     expect(out.format).toBe("csv")
     expect(out.title).toBe("Budget")
     expect(out.text).toBe("## Q3\na")
-    expect(withAuthMock.mock.calls[0][0]).not.toHaveProperty("requireUserIdentity", true)
+    expect(withAuthMock.mock.calls[0][0]).toHaveProperty("identity", "user")
   })
 
   it("reads a Bitable app as CSV", async () => {

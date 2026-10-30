@@ -3889,6 +3889,20 @@ export class ConnectorBus {
           throw new Error("Skill confirmation no longer belongs to this session")
         await runBuiltInSkill(skillId, skillArgs, {
           ...hydrated,
+          actingSenders: (() => {
+            const scope = event.identityScope as { unionId?: unknown } | undefined
+            return event.user.remoteUserId?.trim() &&
+              (!event.user.kind || event.user.kind === "human")
+              ? [
+                  {
+                    remoteUserId: event.user.remoteUserId,
+                    ...(typeof scope?.unionId === "string" && scope.unionId.trim()
+                      ? { unionId: scope.unionId }
+                      : {}),
+                  },
+                ]
+              : ("unknown" as const)
+          })(),
           hitlBypass: true,
           // The person in the chat confirmed this very invocation (ADR-0239).
           outboundAuthorization: { kind: "human", actor: "connector-user" },

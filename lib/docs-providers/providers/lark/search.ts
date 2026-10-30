@@ -3,8 +3,8 @@
  *
  * `POST /open-apis/suite/docs-api/search/object` is the only full-text search
  * across a user's 云文档. It accepts a `user_access_token` ONLY — the tenant
- * (bot) identity is rejected — so the call sets `requireUserIdentity` and the
- * caller surfaces `notAuthorized` when the account has no OAuth connection,
+ * (bot) identity is rejected — so the caller selects `identity: "user"` and
+ * surfaces `notAuthorized` when the account has no OAuth connection,
  * rather than letting the harness produce a confusing bot-permission error.
  *
  * Scope required on the Feishu app: one of `drive:drive`,

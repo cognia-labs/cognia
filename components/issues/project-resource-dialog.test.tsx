@@ -317,7 +317,10 @@ describe("binding a Lark tasklist", () => {
     await screen.findByTestId("resource-lark-account")
     await user.click(screen.getByTestId("resource-load-tasklists"))
     await screen.findByTestId("resource-tasklist")
-    expect(mockWithApi).toHaveBeenCalledWith({ adapterId: "cai_1" }, expect.any(Function))
+    expect(mockWithApi).toHaveBeenCalledWith(
+      { adapterId: "cai_1", identity: "user" },
+      expect.any(Function)
+    )
     await user.click(screen.getByTestId("resource-submit"))
     await waitFor(() => expect(mockAddResource).toHaveBeenCalled())
     expect(mockAddResource).toHaveBeenCalledWith("p1", {

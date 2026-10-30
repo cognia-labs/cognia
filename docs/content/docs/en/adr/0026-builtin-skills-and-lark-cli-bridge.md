@@ -221,3 +221,52 @@ registry on every turn.
 | Slash command     | `lib/slash-commands/actions/lark.ts`                               |
 | Schema            | `lib/db/schema.ts` (v43), `lib/db/connector-types.ts`              |
 | Audit             | `types/connectors/audit.ts` (6 new kinds)                          |
+
+## Amendment — 2026-10-30: personal authorization in IM turns
+
+Built-in skill context carries the acting human senders of the current turn
+(remote user id, and principal/union id when available), or `unknown`.
+Hydration shares the inbound-job lookup with confirmation actor scoping and
+includes completed messages absorbed into the same execution run. The running
+job's execution record must belong to the calling session; a missing record
+or another session's run is unknown. An in-flight live steer, an unattributed
+completed steer whose local `createdAt >= current.createdAt`, and failed
+lookups remain unknown. The window uses local intake time, not the platform's
+message timestamp. Queued messages and `steer-replay` jobs wait for the next
+turn and are ignored. Confirm-card re-fires explicitly carry the verified
+callback clicker, rather than looking up whoever happens to be running later.
+
+For a session whose persisted `platformBinding` binds it to IM, every sender
+must match the adapter's `settings.connectedUser.openId` before a Lark call
+can use that user's token. When both sides have a union id, it must also
+match. Missing ownership, unknown/empty sender sets, cross-app identities,
+and lookup failures refuse with `sender_not_token_owner`. The shared gate
+covers all Lark CLI skill reads/writes and contact-name search, including
+`/lark` calls carrying only a session id. Local sessions without a platform
+binding retain personal authorization.
+
+OAuth stamps the `authorizationEpoch` returned by native token publication
+onto `connectedUser`. The gate takes one native authorization snapshot and
+requires the metadata epoch to match it; legacy metadata without an epoch
+must match the snapshot's atomic `accountLabel` against `name || openId`.
+Missing or mismatching authorization refuses. The gate returns that verified
+snapshot's access token and epoch: CLI execution uses the verified token,
+and HTTP requests also fence refresh/retry to its epoch. With epoch-stamped
+metadata, reconnecting cannot combine the old owner's metadata with the new
+account's token during the separate metadata write. The legacy label check
+is weaker when different accounts share a display name; a completed OAuth
+connection stamps the epoch for subsequent checks.
+
+User authorization never implicitly downgrades to a tenant token. The CLI
+bridge fails with `user_not_authorized` when a preferred user token is
+missing. The OpenAPI harness requires `identity: "user" | "bot"`; user mode
+fails closed with the existing `notAuthorized` account error when its token
+is missing, invalidated or cannot be refreshed. Bot mode uses only the
+tenant identity. Docs search/fetch, Twin ingestion, and the account-selected
+issue Task/Bitable resources and their pickers explicitly use user mode.
+
+Residuals: adapter reply-as-user and `lookupAsPerson` routing are unchanged.
+Bot control-plane runs without IM-bound sessions, non-Lark platform identity
+policies, and group-audience authorization (who can see a reply even when
+the requester owns the token) are outside this amendment. Ownership alone
+does not make a group safe for personal data.

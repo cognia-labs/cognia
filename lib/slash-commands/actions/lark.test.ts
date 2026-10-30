@@ -7,8 +7,19 @@ import "fake-indexeddb/auto"
 import "@/lib/skills/built-in"
 import { dispatchLarkSubcommand, parseLarkArgs } from "./lark"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
+import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  connectorsKeyringGet: jest.fn(async (_id: string, key: string) =>
+    key === "user_token" ? "private-token" : "app-credential"
+  ),
+}))
+jest.mock("@/lib/skills/built-in/lark/capabilities", () => ({
+  ...jest.requireActual("@/lib/skills/built-in/lark/capabilities"),
+  assertLarkCliCommandAvailable: jest.fn(),
+}))
 
 beforeEach(async () => {
+  jest.clearAllMocks()
   await getDb().delete()
   __resetDbForTesting()
   getDb()
@@ -75,6 +86,31 @@ describe("parseLarkArgs", () => {
 })
 
 describe("dispatchLarkSubcommand", () => {
+  it("refuses a non-owner in an IM-bound session through the actual auth gate", async () => {
+    const binding = { platform: "lark", adapterId: "a1", conversationKey: "lark:a1:chat" }
+    await getDb().sessions.put({ id: "im-session", platformBinding: binding } as never)
+    await getDb().adapterInstances.put({
+      id: "a1",
+      type: "lark",
+      enabled: true,
+      settings: { connectedUser: { openId: "owner", name: "Alice" } },
+    } as never)
+    await getDb().connectorInboundJobs.put({
+      id: "job",
+      adapterId: "a1",
+      conversationKey: binding.conversationKey,
+      status: "running",
+      executionRunId: "slash-run",
+      event: { sender: { remoteUserId: "other" } },
+      receivedAt: 1,
+    } as never)
+    const result = await dispatchLarkSubcommand({ argv: "agenda", sessionId: "im-session" })
+    expect(result.system).toContain("sender_not_token_owner")
+    expect(result.system).toContain("Alice")
+    expect(
+      jest.mocked(connectorsKeyringGet).mock.calls.some(([, key]) => key === "user_token")
+    ).toBe(false)
+  })
   it("returns a parse_error system block on bad argv", async () => {
     const r = await dispatchLarkSubcommand({ argv: "", sessionId: "s_x" })
     expect(r.errorCode).toBe("parse_error")

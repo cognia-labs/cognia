@@ -24,13 +24,16 @@ import type {
 } from "@/types/connectors/chat-management"
 import { classifyScopeError, larkTenantRequest, larkUserRequest } from "./http"
 import type { LarkCredentials } from "./http"
+import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
+
+type LarkResolveContactsInput = ResolveContactsInput & { skillContext?: BuiltInSkillContext }
 
 export interface LarkChatManagement {
   createChat(input: CreateChatInput): Promise<CreateChatResult>
   addChatMembers(input: ChatMembersInput): Promise<ChatMembersResult>
   removeChatMembers(input: ChatMembersInput): Promise<ChatMembersResult>
   updateChat(input: UpdateChatInput): Promise<void>
-  resolveContacts(input: ResolveContactsInput): Promise<ContactCandidate[]>
+  resolveContacts(input: LarkResolveContactsInput): Promise<ContactCandidate[]>
 }
 
 async function tenantCall(
@@ -128,7 +131,7 @@ export function createLarkChatManagement(
       )
     },
 
-    async resolveContacts(input: ResolveContactsInput): Promise<ContactCandidate[]> {
+    async resolveContacts(input: LarkResolveContactsInput): Promise<ContactCandidate[]> {
       const out: ContactCandidate[] = []
       const emails = input.emails ?? []
       const phones = input.phones ?? []
@@ -171,7 +174,9 @@ export function createLarkChatManagement(
             adapterId,
             creds,
             "GET",
-            `/search/v1/user?query=${encodeURIComponent(query)}&page_size=20`
+            `/search/v1/user?query=${encodeURIComponent(query)}&page_size=20`,
+            undefined,
+            input.skillContext
           )
         } catch (err) {
           throw classifyScopeError(err, "search:user") ?? err

@@ -132,7 +132,7 @@ export const larkDocsProvider: DocsProvider = {
       const refs = await withLarkAuthedApi(
         {
           adapterId: opts.accountId,
-          requireUserIdentity: true,
+          identity: "user",
           expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
           signal: opts.signal,
           maxResponseBytes: MAX_REMOTE_DOC_RESPONSE_BYTES,
@@ -165,6 +165,7 @@ export const larkDocsProvider: DocsProvider = {
       let bodyRef = ref
       let wikiTitle = ""
       const apiOptions = {
+        identity: "user" as const,
         adapterId: opts.accountId,
         expectedAuthorizationEpoch: opts.expectedAuthorizationEpoch,
         signal: opts.signal,

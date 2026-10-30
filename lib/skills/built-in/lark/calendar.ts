@@ -70,6 +70,7 @@ function mkRead<S extends z.ZodTypeAny>(input: {
         ],
         confirmed: ctx.hitlBypass === true,
         adapterId: larkAdapterIdFromCtx(ctx),
+        context: ctx,
       }),
   }
 }
@@ -110,6 +111,7 @@ function mkWrite<S extends z.ZodTypeAny>(input: {
         ],
         confirmed: ctx.hitlBypass === true,
         adapterId: larkAdapterIdFromCtx(ctx),
+        context: ctx,
       }),
     hitlSurface: (args) => {
       const c = input.confirmSummary(args)

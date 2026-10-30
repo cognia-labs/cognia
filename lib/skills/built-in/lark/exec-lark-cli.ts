@@ -31,6 +31,7 @@
 
 import { resolveLarkAuth, type LarkAuthBridgeResult } from "./auth-bridge"
 import { runLarkCliProcess, type LarkCliProcessResult } from "./process"
+import type { BuiltInSkillContext } from "../types"
 
 const MAX_STDOUT_BYTES = 1024 * 1024 // 1 MB
 const DEFAULT_TIMEOUT_MS = 60_000
@@ -39,6 +40,7 @@ const MAX_TIMEOUT_MS = 5 * 60 * 1000
 const LARK_CLI_EXIT_HITL_REQUIRED = 10
 
 export interface ExecLarkCliInput {
+  context?: BuiltInSkillContext
   /**
    * Subcommand argv excluding the binary name. e.g.
    *   ["calendar", "+list-events", "--calendar-id", "cal_1", "--json"]
@@ -98,6 +100,7 @@ export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResul
     (await resolveLarkAuth({
       adapterId: input.adapterId,
       identity: input.identity,
+      context: input.context,
     }))
   if (!auth.ok) {
     return {

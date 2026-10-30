@@ -1,4 +1,5 @@
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
+import { LarkAccessError } from "@/lib/connectors/adapters/lark/authed-api"
 import {
   LARK_DOC_SEARCH_PATH,
   LARK_SEARCH_DOCS_TYPES,
@@ -26,6 +27,15 @@ function fakeApi(data: unknown): { api: LarkAuthedApi; calls: Call[] } {
 }
 
 describe("searchLarkDocs", () => {
+  it("preserves user authorization failures without retrying another search path", async () => {
+    const denied = new LarkAccessError("notAuthorized")
+    const post = jest.fn().mockRejectedValue(denied)
+    const get = jest.fn()
+    await expect(searchLarkDocs({ get, post }, "quarterly", 10)).rejects.toBe(denied)
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith(LARK_DOC_SEARCH_PATH, expect.any(Object))
+    expect(get).not.toHaveBeenCalled()
+  })
   it("posts the search key, the clamped count and only the readable doc types", async () => {
     const { api, calls } = fakeApi({ docs_entities: [] })
     await searchLarkDocs(api, "quarterly", 500)

@@ -8,7 +8,7 @@
 
 import { resolveLarkAuth } from "./auth-bridge"
 import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
-import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import { connectorsKeyringGet, connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken } from "@/lib/connectors/adapters/lark/auth"
 
 jest.mock("@/lib/db/adapter-instances", () => ({
@@ -17,6 +17,19 @@ jest.mock("@/lib/db/adapter-instances", () => ({
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsKeyringGet: jest.fn(),
+  connectorsLarkUserAuth: jest.fn(),
+}))
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({
+    sessions: {
+      get: async () => ({
+        platformBinding: { platform: "lark", adapterId: "lark-1", conversationKey: "chat" },
+      }),
+    },
+  }),
+}))
+jest.mock("../context", () => ({
+  resolveBuiltInSkillTurnActors: async () => ({ actingSenders: [{ remoteUserId: "alice" }] }),
 }))
 jest.mock("@/lib/connectors/adapters/lark/auth", () => ({
   getTenantAccessToken: jest.fn(),
@@ -46,6 +59,7 @@ function mkAdapter(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  jest.mocked(connectorsLarkUserAuth).mockReset()
   mockGetAdapter.mockReset()
   mockListByType.mockReset()
   mockKeyring.mockReset()
@@ -53,6 +67,62 @@ beforeEach(() => {
 })
 
 describe("resolveLarkAuth", () => {
+  it("uses the IM gate's verified token without separately reading user_token", async () => {
+    mockListByType.mockResolvedValue([mkAdapter()])
+    mockGetAdapter.mockResolvedValue(
+      mkAdapter({
+        settings: {
+          connectedUser: { openId: "alice", name: "Alice", authorizationEpoch: "auth-alice" },
+        },
+      })
+    )
+    mockKeyring.mockImplementation(async (_id: string, key: string) =>
+      key === "appId" ? "app" : key === "appSecret" ? "secret" : "bob-separate-token"
+    )
+    jest.mocked(connectorsLarkUserAuth).mockResolvedValueOnce({
+      configured: true,
+      accessToken: "alice-snapshot-token",
+      authorizationEpoch: "auth-alice",
+      accountLabel: "Alice",
+    } as never)
+    const result = await resolveLarkAuth({ context: { sessionId: "s1" } })
+    expect(result).toMatchObject({
+      ok: true,
+      env: { LARK_USER_ACCESS_TOKEN: "alice-snapshot-token" },
+    })
+    expect(mockKeyring).not.toHaveBeenCalledWith("lark-1", "user_token")
+    expect(connectorsLarkUserAuth).toHaveBeenCalledTimes(1)
+  })
+
+  it("refuses reconnect publication before connectedUser catches up", async () => {
+    mockListByType.mockResolvedValue([mkAdapter()])
+    mockGetAdapter.mockResolvedValue(
+      mkAdapter({
+        settings: {
+          connectedUser: { openId: "alice", name: "Alice", authorizationEpoch: "auth-alice" },
+        },
+      })
+    )
+    mockKeyring.mockResolvedValue("app-credential")
+    jest.mocked(connectorsLarkUserAuth).mockResolvedValueOnce({
+      configured: true,
+      accessToken: "bob-token",
+      authorizationEpoch: "auth-bob",
+      accountLabel: "Bob",
+    } as never)
+    await expect(resolveLarkAuth({ context: { sessionId: "s1" } })).resolves.toMatchObject({
+      ok: false,
+      reason: "sender_not_token_owner",
+    })
+    expect(mockKeyring).not.toHaveBeenCalledWith("lark-1", "user_token")
+    expect(mockTenantToken).not.toHaveBeenCalled()
+  })
+  it("fails closed when adapter lookup fails", async () => {
+    mockListByType.mockRejectedValue(new Error("read failed"))
+    await expect(resolveLarkAuth()).resolves.toMatchObject({ ok: false, reason: "no_adapter" })
+    expect(mockTenantToken).not.toHaveBeenCalled()
+    expect(mockKeyring).not.toHaveBeenCalled()
+  })
   it("no_adapter when no Lark row exists", async () => {
     mockListByType.mockResolvedValue([])
     const r = await resolveLarkAuth()
@@ -152,24 +222,14 @@ describe("resolveLarkAuth", () => {
     }
   })
 
-  it("falls back to bot identity when user_token absent", async () => {
+  it("fails with user_not_authorized when a preferred user token is absent", async () => {
     mockListByType.mockResolvedValue([mkAdapter()])
-    mockKeyring.mockImplementation(async (_id: string, key: string) => {
-      if (key === "appId") return "cli_test_app"
-      if (key === "appSecret") return "secret-x"
-      return undefined // no user_token
-    })
-    mockTenantToken.mockResolvedValue("tat-bbb")
-    const r = await resolveLarkAuth()
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.identity).toBe("bot")
-      expect(r.env).toEqual({
-        LARK_APP_ID: "cli_test_app",
-        LARK_APP_SECRET: "secret-x",
-        LARK_TENANT_ACCESS_TOKEN: "tat-bbb",
-      })
-    }
+    mockKeyring.mockImplementation(async (_id: string, key: string) =>
+      key === "appId" ? "cli_test_app" : key === "appSecret" ? "secret-x" : undefined
+    )
+    const r = await resolveLarkAuth({ identity: "user" })
+    expect(r).toMatchObject({ ok: false, reason: "user_not_authorized" })
+    expect(mockTenantToken).not.toHaveBeenCalled()
   })
 
   it("identity='bot' explicit override skips user_token lookup", async () => {
@@ -198,7 +258,7 @@ describe("resolveLarkAuth", () => {
       return undefined
     })
     mockTenantToken.mockRejectedValue(new Error("invalid app_secret"))
-    const r = await resolveLarkAuth()
+    const r = await resolveLarkAuth({ identity: "bot" })
     expect(r.ok).toBe(false)
     if (!r.ok) {
       expect(r.reason).toBe("tenant_token_failed")

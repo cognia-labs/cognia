@@ -150,7 +150,7 @@ export function createLarkBitableSyncProvider(
   const withApi =
     deps.withApi ??
     (<T>(adapterId: string, fn: (api: LarkAuthedApi) => Promise<T>) =>
-      withLarkAuthedApi({ adapterId }, (api) => fn(api)))
+      withLarkAuthedApi({ adapterId, identity: "user" }, (api) => fn(api)))
   const now = deps.now ?? Date.now
 
   return {

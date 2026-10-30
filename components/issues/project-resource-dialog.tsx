@@ -237,7 +237,10 @@ export function ProjectResourceDialog({
   function loadTasklists() {
     if (!selectedAccountId) return
     void loadWith(
-      () => withLarkAuthedApi({ adapterId: selectedAccountId }, (api) => listLarkTasklists(api)),
+      () =>
+        withLarkAuthedApi({ adapterId: selectedAccountId, identity: "user" }, (api) =>
+          listLarkTasklists(api)
+        ),
       (rows) => {
         setTasklists(rows)
         setTasklistGuid(rows[0]?.guid ?? "")
@@ -249,7 +252,7 @@ export function ProjectResourceDialog({
     if (!selectedAccountId || !appToken) return
     void loadWith(
       () =>
-        withLarkAuthedApi({ adapterId: selectedAccountId }, (api) =>
+        withLarkAuthedApi({ adapterId: selectedAccountId, identity: "user" }, (api) =>
           listBitableTables(api, appToken)
         ),
       (rows) => {
@@ -265,7 +268,7 @@ export function ProjectResourceDialog({
     if (!selectedAccountId || !appToken || !tableId) return
     void loadWith(
       () =>
-        withLarkAuthedApi({ adapterId: selectedAccountId }, (api) =>
+        withLarkAuthedApi({ adapterId: selectedAccountId, identity: "user" }, (api) =>
           listBitableFields(api, appToken, tableId)
         ),
       (rows) => {

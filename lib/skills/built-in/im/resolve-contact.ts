@@ -52,9 +52,15 @@ const skill: BuiltInSkill<typeof schema> = {
   execute: async (args, ctx) => {
     const resolved = await resolveChatCapableAdapter(ctx, ["contact.resolve"], args.adapterId)
     const resolveContacts = requireMethod(resolved, "resolveContacts")
-    const candidates = await withScopeCapture(resolved.adapterId, () =>
-      resolveContacts({ emails: args.emails, phones: args.phones, query: args.query })
-    )
+    // Internal host context accompanies the request through Lark's adapter seam.
+    // Other platforms continue to receive the platform-neutral contact fields.
+    const request = {
+      emails: args.emails,
+      phones: args.phones,
+      query: args.query,
+      ...(resolved.platform === "lark" ? { skillContext: ctx } : {}),
+    }
+    const candidates = await withScopeCapture(resolved.adapterId, () => resolveContacts(request))
     return { candidates }
   },
 }

@@ -6,10 +6,10 @@
  * Two channels:
  *
  *   - `"api"` (default) — native calls to open.feishu.cn via the Rust
- *     `connectors_http_request` bridge (CORS-free, Tauri only). Prefers the
+ *     `connectors_http_request` bridge (CORS-free, Tauri only). Requires the
  *     adapter's OAuth `user_access_token` so document ACLs apply as the
- *     connected user; falls back to the tenant token when no user is
- *     connected or the user token is unrecoverably invalid.
+ *     connected user; missing or unrecoverable user authorization fails
+ *     closed without selecting the tenant identity.
  *   - `"cli"` — shells to the user's installed lark-cli through the existing
  *     built-in-skill exec path (`lib/skills/built-in/lark/exec-lark-cli`).
  *     Requests Markdown through the native desktop process bridge. Other
@@ -173,6 +173,7 @@ async function fetchViaApi(
     return await withLarkAuthedApi(
       {
         adapterId: opts.adapterId,
+        identity: "user",
         httpImpl: opts.httpImpl,
         mapError: mapLarkError,
         signal: opts.signal,

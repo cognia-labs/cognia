@@ -155,3 +155,41 @@ Cancel 点击则记录 `builtin_skill_hitl_rejected` 并返回。
 | Slash command     | `lib/slash-commands/actions/lark.ts`                               |
 | Schema            | `lib/db/schema.ts`（v43）、`lib/db/connector-types.ts`             |
 | Audit             | `types/connectors/audit.ts`（6 个新 kind）                         |
+
+## 修订 — 2026-10-30：IM 对话中的个人授权
+
+内置技能上下文携带当前轮次的全部人类发送者（remoteUserId，以及可用时的
+principalId、unionId），无法确认时为 `unknown`。上下文与确认卡的操作人限制
+共用入站任务查询，并收集被同一 executionRunId 吸收的已完成消息。运行任务的
+executionRuns 记录必须属于调用技能的 sessionId；记录缺失或属于其他会话时为未知。
+尚在实时注入的 steering 消息、本地 `createdAt >= current.createdAt` 且已完成但
+未归属运行的 steer，以及查询失败均保留为未知。时间窗口使用本地入站时间，不使用
+平台消息时间戳。queued 和标记 `steer-replay` 的消息等待下一轮，不计入本轮。
+确认卡重新执行技能时显式携带经过回调权限验证的点击者，不再用届时正在运行的任务
+推断操作人。
+
+技能必须读取 session 持久化的 `platformBinding` 判断是否来自 IM。只有当前轮次
+的每位发送者都与适配器的 `settings.connectedUser.openId` 相同，才能使用其个人
+user token；双方都有 unionId 时还必须一致。缺少 connectedUser、发送者未知或
+为空、跨应用身份以及查询失败均以 `sender_not_token_owner` 拒绝。所有 Lark CLI
+技能的读写操作和联系人姓名搜索共用该检查；仅传 sessionId 的 `/lark` 也不能绕过。
+没有 platformBinding 的本地会话继续使用连接者的个人授权。
+
+OAuth 将原生 token 发布操作返回的 `authorizationEpoch` 写入 connectedUser。
+检查只获取一次原生授权快照，要求元数据 epoch 与快照一致；没有 epoch 的旧记录
+必须满足快照中与 token 原子写入的 `accountLabel` 等于 `name || openId`。授权缺失
+或不匹配时拒绝。检查返回该快照中已验证的 accessToken 和 epoch：CLI 直接使用此
+token，HTTP 请求的刷新和重试也限定在此 epoch。对已记录 epoch 的元数据，切换账户
+时即使 connectedUser 尚未完成独立写入，也不能将旧所有人的元数据与新账户的 token
+组合使用。旧记录的名称比较无法区分同名账户；完成 OAuth 连接后会记录 epoch，供
+后续检查使用。
+
+不再隐式从用户身份降级为 tenant 身份。CLI bridge 首选用户身份但缺少 user token
+时返回 `user_not_authorized`。OpenAPI harness 要求调用方明确选择
+`identity: "user" | "bot"`：用户模式在 token 缺失、失效或刷新失败时使用现有的
+`notAuthorized` 账户错误拒绝，机器人模式只使用 tenant token。文档搜索与读取、
+Twin 导入，以及按账户配置的任务清单/多维表格同步资源和选择器均显式使用用户模式。
+
+残余边界：适配器 reply-as-user 和 `lookupAsPerson` 消息路由保持原样；没有绑定
+IM 会话的 Bot 控制面运行、其他 IM 平台的身份策略，以及群聊受众权限检查均不属于
+本次修订。请求者是 token 所有人，并不代表群内所有成员都有权查看其个人数据。

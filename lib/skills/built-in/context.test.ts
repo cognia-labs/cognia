@@ -1,9 +1,15 @@
 const mockSessionGet = jest.fn()
 const mockProjectGet = jest.fn()
+const mockJobs = jest.fn()
+const mockRunGet = jest.fn()
 jest.mock("@/lib/db/schema", () => ({
   getDb: jest.fn(() => ({
     sessions: { get: (...a: unknown[]) => mockSessionGet(...a) },
     projects: { get: (...a: unknown[]) => mockProjectGet(...a) },
+    executionRuns: { get: (...a: unknown[]) => mockRunGet(...a) },
+    connectorInboundJobs: {
+      where: () => ({ equals: () => ({ toArray: () => mockJobs() }) }),
+    },
   })),
 }))
 
@@ -22,6 +28,123 @@ import { resolveBuiltInSkillContext } from "./context"
 beforeEach(() => {
   jest.clearAllMocks()
   mockGetAdapterInstance.mockResolvedValue(undefined)
+  mockJobs.mockResolvedValue([])
+  mockRunGet.mockResolvedValue({ sessionId: "s1" })
+})
+
+describe("acting IM senders", () => {
+  const binding = { platform: "lark", adapterId: "a1", conversationKey: "lark:a1:oc_1" }
+  const job = (remoteUserId: string, extra: Record<string, unknown> = {}) => ({
+    adapterId: "a1",
+    status: "running",
+    executionRunId: "run-1",
+    receivedAt: 1,
+    createdAt: 1,
+    event: {
+      sender: { remoteUserId },
+      channelData: { identityScope: { unionId: `union-${remoteUserId}` } },
+    },
+    ...extra,
+  })
+
+  beforeEach(() => mockSessionGet.mockResolvedValue({ id: "s1", platformBinding: binding }))
+
+  it("hydrates the running sender and principal", async () => {
+    mockJobs.mockResolvedValue([job("owner", { principalId: "principal-1" })])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toEqual([
+      { remoteUserId: "owner", principalId: "principal-1", unionId: "union-owner" },
+    ])
+  })
+
+  it("includes completed messages merged into the same execution, excluding earlier turns", async () => {
+    mockJobs.mockResolvedValue([
+      job("owner"),
+      job("other", { status: "completed" }),
+      job("earlier", { status: "completed", executionRunId: "old-run" }),
+    ])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toEqual([
+      { remoteUserId: "owner", unionId: "union-owner" },
+      { remoteUserId: "other", unionId: "union-other" },
+    ])
+  })
+
+  it("keeps unresolved steering handoffs unknown", async () => {
+    mockJobs.mockResolvedValue([job("owner"), job("other", { status: "steering" })])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+  })
+
+  it("does not borrow the owner's running job for another session's unattended run", async () => {
+    mockJobs.mockResolvedValue([job("owner")])
+    mockRunGet.mockResolvedValue({ sessionId: "another-session" })
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+    mockRunGet.mockResolvedValue(undefined)
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+    mockRunGet.mockRejectedValue(new Error("run lookup failed"))
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+  })
+
+  it("uses local intake time for a late-delivered unattributed steer", async () => {
+    mockJobs.mockResolvedValue([
+      job("owner", { receivedAt: 100, createdAt: 10 }),
+      job("late", {
+        status: "completed",
+        dispatchMode: "steer",
+        executionRunId: undefined,
+        receivedAt: 2,
+        createdAt: 11,
+      }),
+    ])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+  })
+
+  it("ignores replay-waiting steers but refuses live handoffs", async () => {
+    const replay = job("other", {
+      status: "steering",
+      event: { sender: { remoteUserId: "other" }, channelData: { dispatchIntent: "steer-replay" } },
+    })
+    mockJobs.mockResolvedValue([job("owner"), replay])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toEqual([
+      { remoteUserId: "owner", unionId: "union-owner" },
+    ])
+    mockJobs.mockResolvedValue([
+      job("owner"),
+      { ...replay, event: { sender: { remoteUserId: "other" } } },
+    ])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+  })
+
+  it("keeps missing run ids and unattributed completed steers unknown", async () => {
+    mockJobs.mockResolvedValue([job("owner", { executionRunId: undefined })])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+    mockJobs.mockResolvedValue([
+      job("owner"),
+      job("other", { status: "completed", dispatchMode: "steer", executionRunId: undefined }),
+    ])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+  })
+
+  it("ignores unattributed steers from earlier turns and messages queued for the next turn", async () => {
+    mockJobs.mockResolvedValue([
+      job("owner", { receivedAt: 5, createdAt: 5 }),
+      job("earlier", {
+        status: "completed",
+        dispatchMode: "steer",
+        executionRunId: undefined,
+        receivedAt: 2,
+        createdAt: 2,
+      }),
+      job("other", { status: "queued", dispatchMode: "queue", receivedAt: 6 }),
+    ])
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toEqual([
+      { remoteUserId: "owner", unionId: "union-owner" },
+    ])
+  })
+
+  it("uses unknown when no job exists or the lookup fails", async () => {
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+    mockJobs.mockRejectedValue(new Error("read failed"))
+    expect((await resolveBuiltInSkillContext("s1")).actingSenders).toBe("unknown")
+  })
 })
 
 describe("resolveBuiltInSkillContext", () => {
@@ -137,7 +260,10 @@ describe("resolveBuiltInSkillContext", () => {
 
   it("falls back to the bare context when the session lookup throws", async () => {
     mockSessionGet.mockRejectedValue(new Error("no db"))
-    expect(await resolveBuiltInSkillContext("s1")).toEqual({ sessionId: "s1" })
+    expect(await resolveBuiltInSkillContext("s1")).toEqual({
+      sessionId: "s1",
+      actingSenders: "unknown",
+    })
   })
 
   it("treats a missing override row (null) as undefined", async () => {

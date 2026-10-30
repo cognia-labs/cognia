@@ -7,7 +7,8 @@
  */
 
 import { execLarkCli, __setLarkCliBinaryForTests } from "./exec-lark-cli"
-import type { LarkAuthBridgeResult } from "./auth-bridge"
+import { resolveLarkAuth, type LarkAuthBridgeResult } from "./auth-bridge"
+jest.mock("./auth-bridge", () => ({ resolveLarkAuth: jest.fn() }))
 import { __setLarkCliProcessRunnerForTests } from "./process"
 
 const mockProcessRunner = jest.fn()
@@ -35,6 +36,19 @@ afterAll(() => {
 })
 
 describe("execLarkCli — happy path", () => {
+  it("threads the complete skill context to authentication", async () => {
+    jest.mocked(resolveLarkAuth).mockResolvedValueOnce({
+      ok: false,
+      reason: "sender_not_token_owner",
+      adapterId: "lark-1",
+      message: "sender_not_token_owner",
+    })
+    const context = { sessionId: "im-session", actingSenders: "unknown" as const }
+    const result = await execLarkCli({ args: ["calendar", "+agenda"], context })
+    expect(resolveLarkAuth).toHaveBeenCalledWith(expect.objectContaining({ context }))
+    expect(result).toMatchObject({ status: "error", message: "sender_not_token_owner" })
+    expect(mockProcessRunner).not.toHaveBeenCalled()
+  })
   it("parses JSON stdout and returns ok", async () => {
     mockProcessRunner.mockResolvedValue({
       stdout: JSON.stringify({ events: [{ id: "e1" }] }),

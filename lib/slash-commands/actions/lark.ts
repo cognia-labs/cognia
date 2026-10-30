@@ -16,6 +16,7 @@
 
 import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
 import type { BuiltInSkillResult } from "@/lib/skills/built-in/types"
+import { resolveBuiltInSkillContext } from "@/lib/skills/built-in/context"
 
 export interface SlashLarkInput {
   /** Raw argv after the `/lark ` prefix. */
@@ -106,9 +107,11 @@ export async function dispatchLarkSubcommand(input: SlashLarkInput): Promise<Sla
   // Ensure the family barrel is loaded — `index` is a no-op import once
   // the registry is populated, so subsequent calls are zero-cost.
   await import("@/lib/skills/built-in")
-  const result = await runBuiltInSkill(parsed.skillId, parsed.args, {
-    sessionId: input.sessionId,
-  })
+  const result = await runBuiltInSkill(
+    parsed.skillId,
+    parsed.args,
+    await resolveBuiltInSkillContext(input.sessionId)
+  )
   return { system: formatResult(parsed.skillId, result), errorCode: errCode(result) }
 }
 

@@ -389,7 +389,7 @@ describe("runBuiltInSkill — write tier HITL routing", () => {
     )
   })
 
-  it("scopes the confirm binding to the current turn's sender when a job is running", async () => {
+  it("keeps confirmation scoped to the running initiator after another sender is merged", async () => {
     const { enqueueConnectorInboundJob, claimConnectorInboundJob } =
       await import("@/lib/db/connector-inbound-jobs")
     const job = await enqueueConnectorInboundJob(
@@ -416,6 +416,15 @@ describe("runBuiltInSkill — write tier HITL routing", () => {
       "queue"
     )
     await claimConnectorInboundJob(job.id, { leaseOwner: "test", leaseMs: 60_000 })
+    await getDb().connectorInboundJobs.update(job.id, { executionRunId: "current-run" })
+    await getDb().connectorInboundJobs.put({
+      ...job,
+      id: `${job.id}:merged`,
+      platformMessageId: `${job.platformMessageId}:merged`,
+      status: "completed",
+      executionRunId: "current-run",
+      event: { ...job.event, sender: { ...job.event.sender, remoteUserId: "other-sender" } },
+    })
 
     registerBuiltInSkill(
       mkSkill({

@@ -157,6 +157,7 @@ describe("handleLarkOAuth — happy path", () => {
     const after = Date.now()
 
     expect(result.openId).toBe("ou_alice")
+    expect(result.authorizationEpoch).toBe("auth-b")
     expect(result.name).toBe("Alice")
     expect(result.email).toBe("alice@example.com")
     expect(result.expiresAtMs).toBeGreaterThanOrEqual(before + 7200 * 1000)
@@ -178,6 +179,14 @@ describe("handleLarkOAuth — happy path", () => {
     // Adapter row stamped with connectedUser and the credentials ref
     // gained the two new account names.
     expect(mockUpdateAdapter).toHaveBeenCalledTimes(1)
+    expect(mockUpdateAdapter).toHaveBeenCalledWith(
+      "lk-1",
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          connectedUser: expect.objectContaining({ authorizationEpoch: "auth-b" }),
+        }),
+      })
+    )
     const patch = mockUpdateAdapter.mock.calls[0][1]
     expect(patch.settings.connectedUser.openId).toBe("ou_alice")
     // Granted scopes normalized (split, deduped, sorted) and stamped.

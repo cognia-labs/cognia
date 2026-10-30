@@ -208,6 +208,7 @@ function mk<S extends z.ZodTypeAny>(input: {
             input.mutation === "destructive" &&
             (ctx.hitlBypass === true || ctx.humanConfirmed === true),
           adapterId: larkAdapterIdFromCtx(ctx),
+          context: ctx,
         })),
   }
   if (input.mutation !== "read") {
@@ -387,6 +388,7 @@ registerBuiltInSkill(
           args: argv,
           confirmed: false,
           adapterId: larkAdapterIdFromCtx(ctx),
+          context: ctx,
         })
       const anchor = args.anchorBlockId
       if (anchor) {

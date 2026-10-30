@@ -65,9 +65,20 @@ export interface BilingualString {
   "zh-CN": string
 }
 
+export interface BuiltInSkillActingSender {
+  remoteUserId: string
+  principalId?: string
+  unionId?: string
+}
+
+/** Unknown is distinct from a verified, nonempty set of turn contributors. */
+export type BuiltInSkillActingSenders = readonly BuiltInSkillActingSender[] | "unknown"
+
 export interface BuiltInSkillContext {
   /** The chat session this invocation belongs to. */
   sessionId: string
+  /** Human contributors to this turn; confirmation re-fires carry the verified clicker. */
+  actingSenders?: BuiltInSkillActingSenders
   /** Host-owned cancellation; never serialized into persisted confirmation bindings. */
   signal?: AbortSignal
   /**

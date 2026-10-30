@@ -20,6 +20,20 @@ import { appendAudit } from "./audit"
 import { resolveCallbackBinding } from "./adapters/_shared/a2ui-mapper"
 import { evaluatePolicy } from "./policy-eval"
 import type { TriggerPolicy } from "@/types/connectors/policy"
+import { resolveBuiltInSkillContext } from "@/lib/skills/built-in/context"
+import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
+import { authorizeConnectorCallback } from "./callback-authorization"
+jest.mock("./callback-authorization", () => ({
+  ...jest.requireActual("./callback-authorization"),
+  authorizeConnectorCallback: jest.fn((input) =>
+    jest.requireActual("./callback-authorization").authorizeConnectorCallback(input)
+  ),
+}))
+jest.mock("@/lib/skills/built-in/context", () => ({
+  ...jest.requireActual("@/lib/skills/built-in/context"),
+  resolveBuiltInSkillContext: jest.fn(),
+}))
+jest.mock("@/lib/skills/built-in/dispatcher", () => ({ runBuiltInSkill: jest.fn() }))
 
 // Registry, outbound and callback operations must not initialize workflow
 // execution. A static or transitive eager import evaluates this factory.
@@ -723,6 +737,44 @@ function makeCallback(over: Partial<ConnectorCallbackEvent> = {}): ConnectorCall
 }
 
 describe("ConnectorBus — passive callback observers", () => {
+  it("re-fires a confirmed skill as the clicker instead of the hydrated running sender", async () => {
+    jest
+      .mocked(authorizeConnectorCallback)
+      .mockResolvedValueOnce({ allowed: true, mode: "enforce" })
+    const binding = {
+      adapterId: "a1",
+      platform: "telegram" as const,
+      conversationKey: "telegram:a1:42",
+    }
+    jest.mocked(resolveBuiltInSkillContext).mockResolvedValueOnce({
+      sessionId: "s1",
+      imBinding: binding,
+      actingSenders: [{ remoteUserId: "different-running-sender" }],
+    })
+    jest.mocked(resolveCallbackBinding).mockResolvedValueOnce({
+      id: "callback",
+      adapterId: "a1",
+      actionId: "confirm",
+      surfaceId: "surf_1",
+      kind: "skill_invoke",
+      conversationKey: binding.conversationKey,
+      createdAt: 1,
+      payload: { skillId: "test.skill", args: {}, sessionId: "s1" },
+    })
+    jest.mocked(runBuiltInSkill).mockResolvedValueOnce({ status: "ok", data: {} })
+    await getBus().dispatchConnectorCallback(
+      makeCallback({
+        triggerId: "confirm",
+        value: "confirm",
+        conversationKey: binding.conversationKey,
+      })
+    )
+    expect(runBuiltInSkill).toHaveBeenCalledWith(
+      "test.skill",
+      {},
+      expect.objectContaining({ hitlBypass: true, actingSenders: [{ remoteUserId: "u_1" }] })
+    )
+  })
   it("notifies each resolved callback with the bound conversation key and disposes", async () => {
     const bus = getBus()
     const seen: Array<{ trigger: string; key: string | null }> = []

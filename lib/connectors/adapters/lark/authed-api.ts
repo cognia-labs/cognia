@@ -8,13 +8,8 @@
  *   1. the Rust `connectors_http_request` bridge (open.feishu.cn sends no CORS
  *      headers, so a browser fetch can never work);
  *   2. the bound adapter's app credentials out of the OS keyring;
- *   3. "run this as the connected USER, fall back to the bot" — with silent
- *      token refresh on both identities.
- *
- * Identity order matters and is not an optimization: document ACLs are
- * evaluated against the caller, so the tenant (bot) token can see strictly
- * less than the user token. The bot is a fallback for when no user is
- * connected, never a shortcut.
+ *   3. an explicitly selected user or bot identity, with refresh within that
+ *      identity only. Missing or expired user authorization never selects a bot.
  *
  * Error policy: this module throws `LarkAccessError` for the pre-flight
  * failures it can name (wrong host / no adapter / no credentials) and lets
@@ -94,25 +89,14 @@ export interface WithLarkAuthedApiOptions {
   maxResponseBytes?: number
   /** Test seam — overrides the `connectorsHttpRequest` transport. */
   httpImpl?: HttpImpl
-  /**
-   * Refuse to fall back to the bot identity.
-   *
-   * A few Lark endpoints accept ONLY a `user_access_token` — cloud-doc search
-   * (`/open-apis/suite/docs-api/search/object`) is one. Retrying those as the
-   * tenant produces a misleading permission error, so callers that know the
-   * constraint set this and get `notAuthorized` up front instead.
-   */
-  requireUserIdentity?: boolean
-  /**
-   * Applied to a failure from the authenticated call, at the same two points
-   * the original doc fetcher mapped: after an unrecoverable user-identity
-   * error, and after the tenant fallback fails. Return value is thrown as-is.
-   */
+  /** Required identity; credentials never cross from user to tenant on failure. */
+  identity: "user" | "bot"
+  /** Maps authenticated API errors; account failures retain LarkAccessError codes. */
   mapError?: (err: unknown, account: string) => unknown
 }
 
 /**
- * Resolve the best available Lark identity for `adapterId` and run `fn` with a
+ * Resolve the explicitly selected Lark identity for `adapterId` and run `fn` with a
  * JSON API bound to it.
  */
 export async function withLarkAuthedApi<T>(
@@ -120,13 +104,19 @@ export async function withLarkAuthedApi<T>(
   fn: (api: LarkAuthedApi, account: LarkAuthedApiAccount) => Promise<T>
 ): Promise<T> {
   throwIfRequestAborted(opts.signal)
+  if (opts.identity !== "user" && opts.identity !== "bot")
+    throw new LarkAccessError("notAuthorized")
   const result = await withRequestAbort(opts.signal, async () => {
     let authorizationEpoch = opts.expectedAuthorizationEpoch
     const assertCurrent = async () => {
       throwIfRequestAborted(opts.signal)
+      if (opts.identity === "bot") return
       const current = await connectorsLarkUserAuth({
         action: "snapshot",
         adapterId: opts.adapterId,
+      }).catch(() => {
+        throwIfRequestAborted(opts.signal)
+        throw new LarkAccessError("notAuthorized")
       })
       if (
         !current.configured ||
@@ -143,7 +133,7 @@ export async function withLarkAuthedApi<T>(
     }
     const httpImpl = http ?? connectorsHttpRequest
 
-    const row = await getAdapterInstance(opts.adapterId)
+    const row = await getAdapterInstance(opts.adapterId).catch(() => undefined)
     throwIfRequestAborted(opts.signal)
     if (!row || row.type !== "lark" || !row.enabled) {
       throw new LarkAccessError("noAccount")
@@ -153,7 +143,10 @@ export async function withLarkAuthedApi<T>(
     const [appId, appSecret] = await Promise.all([
       connectorsKeyringGet(opts.adapterId, "appId"),
       connectorsKeyringGet(opts.adapterId, "appSecret"),
-    ])
+    ]).catch(() => {
+      throwIfRequestAborted(opts.signal)
+      throw new LarkAccessError("notAuthorized", row.displayName)
+    })
     throwIfRequestAborted(opts.signal)
     if (!appId || !appSecret) {
       throw new LarkAccessError("notAuthorized", row.displayName)
@@ -221,29 +214,35 @@ export async function withLarkAuthedApi<T>(
       expectedAuthorizationEpoch: authorizationEpoch,
       signal: opts.signal,
     }
-    const userToken = await getUserAccessToken(opts.adapterId)
-    throwIfRequestAborted(opts.signal)
-    if (opts.requireUserIdentity && !userToken) {
-      throw new LarkAccessError("notAuthorized", row.displayName)
-    }
-    if (userToken) {
+    if (opts.identity === "user") {
+      let userToken: string | null
+      try {
+        userToken = await getUserAccessToken(opts.adapterId)
+      } catch {
+        throw new LarkAccessError("notAuthorized", row.displayName)
+      }
+      throwIfRequestAborted(opts.signal)
+      if (!userToken) throw new LarkAccessError("notAuthorized", row.displayName)
+      let lastCallError: unknown
       try {
         return await withUserTokenRefresh(ctx, async (token) => {
           await assertCurrent()
           throwIfRequestAborted(opts.signal)
-          return fn(bindApi(`Bearer ${token}`), account)
+          try {
+            return await fn(bindApi(`Bearer ${token}`), account)
+          } catch (err) {
+            lastCallError = err
+            throw err
+          }
         })
       } catch (err) {
-        await assertCurrent()
         throwIfRequestAborted(opts.signal)
-        // Fall back to the bot identity only when the user identity is
-        // unrecoverable: the token stayed invalid after the retry, or the
-        // refresh itself failed (e.g. no refresh token in the keyring).
-        const refreshFailed = err instanceof Error && err.message.includes("user token refresh")
-        if (!isLarkUserTokenInvalidation(err) && !refreshFailed) {
-          rethrow(err)
+        await assertCurrent()
+        // A failure outside fn is token capture/refresh, not an API scope error.
+        if (err !== lastCallError || isLarkUserTokenInvalidation(err)) {
+          throw new LarkAccessError("notAuthorized", row.displayName)
         }
-        if (opts.requireUserIdentity) rethrow(err)
+        return rethrow(err)
       }
     }
     try {

@@ -68,6 +68,7 @@ function mk<S extends z.ZodTypeAny>(input: {
         ],
         confirmed: ctx.hitlBypass === true,
         adapterId: larkAdapterIdFromCtx(ctx),
+        context: ctx,
       }),
   }
   if (input.mutation !== "read") {

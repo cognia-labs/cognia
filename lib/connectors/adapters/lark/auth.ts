@@ -71,9 +71,9 @@ export function hasLarkDocumentSearchScope(scopes: readonly string[]): boolean {
 
 /**
  * Scopes the issue tracker's Lark Task sync needs on the USER identity
- * (spec 2026-09-06 D10). Without them `withLarkAuthedApi` still reaches
- * tasklists the bot is a member of through the tenant token, so these are
- * requested only when the person connects an account for the tracker.
+ * (spec 2026-09-06 D10). Account-selected tracker resources explicitly use
+ * this user identity; they do not switch to bot-owned tasklists when the
+ * person's grant is absent. Requested when connecting a tracker account.
  */
 export const LARK_TASK_SCOPES =
   "task:task:read task:task:write task:tasklist:read task:section:read"

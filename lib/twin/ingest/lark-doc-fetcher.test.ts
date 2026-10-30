@@ -303,30 +303,30 @@ describe("fetchLarkDocAsRawSource — api channel", () => {
     expect(refreshUserTokenMock).toHaveBeenCalledTimes(1)
   })
 
-  it("falls back to the tenant token when no user is connected", async () => {
+  it("requires the connected user's authorization for document fetch", async () => {
     getUserAccessTokenMock.mockResolvedValue(null)
-    const http = makeHttp([
-      ["/raw_content", ok({ content: "bot body" })],
-      ["/documents/doxcn", ok({ document: { title: "T" } })],
-    ])
-    await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
-    expect(http.mock.calls[0][0].headers?.Authorization).toBe("Bearer tenant-token")
+    const http = makeHttp([])
+    await expectCode(
+      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      "larkNotAuthorized"
+    )
+    expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
+    expect(http).not.toHaveBeenCalled()
   })
 
-  it("falls back to the tenant token when refresh cannot revive the user", async () => {
+  it("refuses a failed user refresh without trying the tenant token", async () => {
     refreshUserTokenMock.mockRejectedValue(
       new Error("Lark user token refresh: no refresh token stored")
     )
-    let sawTenant = false
-    const http = jest.fn(async (req: TauriHttpRequest) => {
-      if (req.headers?.Authorization === "Bearer user-token") return larkFail(401, 99991677)
-      sawTenant = true
-      if (req.url.includes("/raw_content")) return ok({ content: "bot body" })
-      return ok({ document: { title: "T" } })
-    })
-    const doc = await fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http })
-    expect(doc.text).toBe("bot body")
-    expect(sawTenant).toBe(true)
+    const http = jest.fn(async (_request: TauriHttpRequest) => larkFail(401, 99991677))
+    await expectCode(
+      fetchLarkDocAsRawSource(DOCX_URL, { adapterId: ADAPTER, httpImpl: http }),
+      "larkNotAuthorized"
+    )
+    expect(getTenantAccessTokenMock).not.toHaveBeenCalled()
+    expect(
+      http.mock.calls.every(([request]) => request.headers?.Authorization === "Bearer user-token")
+    ).toBe(true)
   })
 
   it.each([

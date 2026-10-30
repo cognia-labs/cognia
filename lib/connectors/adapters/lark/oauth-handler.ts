@@ -72,6 +72,8 @@ export function parseLarkOAuthState(state: string): { adapterId: string; nonce: 
 
 export interface LarkConnectedUser {
   openId: string
+  /** Native token lineage; absent only on rows written before epoch stamping. */
+  authorizationEpoch?: string
   unionId?: string
   name?: string
   avatarUrl?: string
@@ -161,7 +163,7 @@ export async function handleLarkOAuth(
   const userInfo = await fetchLarkUserInfo(tokens.accessToken)
 
   // ── Step 5: persist tokens in keyring ──────────────────────────────────
-  await connectorsLarkUserAuth({
+  const authorization = await connectorsLarkUserAuth({
     action: "authorize",
     adapterId,
     expectedAuthorizationEpoch: pending.authorizationEpoch,
@@ -171,11 +173,13 @@ export async function handleLarkOAuth(
     accountLabel: userInfo.name || userInfo.openId,
     scopes: tokens.scope,
   })
+  if (!authorization.authorizationEpoch) throw new Error("lark_auth_stale")
 
   // ── Step 6: stamp connected-user metadata ─────────────────────────────
   const now = Date.now()
   const connectedUser: LarkConnectedUser = {
     openId: userInfo.openId,
+    authorizationEpoch: authorization.authorizationEpoch,
     unionId: userInfo.unionId,
     name: userInfo.name,
     avatarUrl: userInfo.avatarUrl,

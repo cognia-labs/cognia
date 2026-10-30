@@ -14,6 +14,8 @@ import { connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken, getUserAccessToken } from "./auth"
 import { LarkApiError, withTatRefresh, withUserTokenRefresh } from "./auth-retry"
 import { ChatManagementScopeError } from "@/types/connectors/chat-management"
+import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import type { BuiltInSkillContext } from "@/lib/skills/built-in/types"
 
 const LARK_API_BASE = "https://open.feishu.cn/open-apis"
 
@@ -105,12 +107,20 @@ export async function larkUserRequest(
   creds: LarkCredentials,
   method: LarkHttpMethod,
   urlPath: string,
-  body?: unknown
+  body?: unknown,
+  context?: BuiltInSkillContext
 ): Promise<unknown | null> {
-  const userToken = await getUserAccessToken(adapterId).catch(() => null)
+  const verified = await assertLarkActingIdentity(adapterId, context)
+  const userToken = verified?.accessToken ?? (await getUserAccessToken(adapterId).catch(() => null))
   if (!userToken) return null
-  return withUserTokenRefresh({ adapterId, ...creds }, (token) =>
-    rawRequest(method, urlPath, body, token)
+  let firstAttempt = true
+  return withUserTokenRefresh(
+    { adapterId, ...creds, expectedAuthorizationEpoch: verified?.authorizationEpoch },
+    (token) => {
+      const requestToken = verified && firstAttempt ? verified.accessToken : token
+      firstAttempt = false
+      return rawRequest(method, urlPath, body, requestToken)
+    }
   )
 }
 

@@ -1,3 +1,4 @@
+import { withLarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { LarkAuthedApi } from "@/lib/connectors/adapters/lark/authed-api"
 import type { IssueProject } from "@/types/issues"
 import type { IssueSyncBinding } from "../types"
@@ -210,4 +211,13 @@ describe("provider", () => {
       meta: { binding: "cai_1:tl" },
     })
   })
+})
+
+it("uses the selected account's user identity for configured resources", async () => {
+  jest.mocked(withLarkAuthedApi).mockResolvedValueOnce({ items: [], notModified: false } as never)
+  await createLarkTaskSyncProvider().pull(binding(), { full: true })
+  expect(withLarkAuthedApi).toHaveBeenCalledWith(
+    { adapterId: "cai_1", identity: "user" },
+    expect.any(Function)
+  )
 })

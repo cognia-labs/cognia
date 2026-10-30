@@ -38,6 +38,7 @@ import { append as appendAudit } from "@/lib/db/connector-audit"
 import { SKILL_INVOKE_PREFIX, SKILL_CANCEL_PREFIX } from "@/lib/connectors/hitl/callback-prefixes"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { getSharedBuiltInSkillRegistry } from "./registry"
+import { resolveBuiltInSkillTurnActors } from "./context"
 import type { BuiltInSkill, BuiltInSkillContext, BuiltInSkillResult } from "./types"
 import {
   adapterAllowsBuiltInSkill,
@@ -58,14 +59,7 @@ async function skillInvokeActorScope(
   conversationKey: string
 ): Promise<import("@/types/connectors/interaction").CallbackActorScope> {
   try {
-    const { getDb } = await import("@/lib/db/schema")
-    const jobs = await getDb()
-      .connectorInboundJobs.where("conversationKey")
-      .equals(conversationKey)
-      .filter((row) => row.status === "running")
-      .toArray()
-    const current = jobs.sort((a, b) => b.receivedAt - a.receivedAt)[0]
-    const initiatorId = current?.event.sender.remoteUserId
+    const { initiatorUserId: initiatorId } = await resolveBuiltInSkillTurnActors(conversationKey)
     return initiatorId
       ? { mode: "initiator", allowedUserIds: [initiatorId] }
       : { mode: "operators" }

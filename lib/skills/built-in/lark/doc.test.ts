@@ -384,3 +384,10 @@ describe("generated document arguments against the installed CLI", () => {
     }
   )
 })
+
+it("preserves the current IM sender context for document actions", async () => {
+  const context = { sessionId: "im-session", actingSenders: "unknown" as const }
+  const tool = skill("fetch")
+  await tool.execute(tool.inputSchema.parse({ docToken: doc }), context)
+  expect(runMock).toHaveBeenCalledWith(expect.objectContaining({ context }))
+})

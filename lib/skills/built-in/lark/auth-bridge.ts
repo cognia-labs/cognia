@@ -27,6 +27,8 @@
 import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter-instances"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { getTenantAccessToken } from "@/lib/connectors/adapters/lark/auth"
+import { assertLarkActingIdentity, LarkActingIdentityError } from "./acting-identity"
+import type { BuiltInSkillContext } from "../types"
 
 export type LarkAuthIdentity = "user" | "bot"
 
@@ -62,12 +64,18 @@ export type LarkAuthBridgeError =
   | { ok: false; reason: "adapter_disabled"; message: string; adapterId: string }
   | { ok: false; reason: "missing_app_id"; message: string; adapterId: string }
   | { ok: false; reason: "missing_app_secret"; message: string; adapterId: string }
-  | { ok: false; reason: "missing_user_token"; message: string; adapterId: string }
+  | {
+      ok: false
+      reason: "user_not_authorized" | "sender_not_token_owner"
+      message: string
+      adapterId: string
+    }
   | { ok: false; reason: "tenant_token_failed"; message: string; adapterId: string }
 
 export type LarkAuthBridgeResult = LarkAuthBridgeOk | LarkAuthBridgeError
 
 export interface ResolveLarkAuthInput {
+  context?: BuiltInSkillContext
   /**
    * Specific adapter to resolve. When omitted, the bridge picks the
    * first enabled Lark adapter (sufficient for the common single-Lark
@@ -79,8 +87,7 @@ export interface ResolveLarkAuthInput {
    *   - `"user"` — uses the OAuth user_access_token; narrower scope,
    *     attributes actions to the connected user. Default.
    *   - `"bot"` — uses the tenant_access_token; broader scope, attributes
-   *     actions to the app/bot. Falls back to bot when no user_token is
-   *     stored.
+   *     actions to the app/bot. Must be explicitly selected.
    */
   identity?: LarkAuthIdentity
 }
@@ -88,7 +95,7 @@ export interface ResolveLarkAuthInput {
 export async function resolveLarkAuth(
   input: ResolveLarkAuthInput = {}
 ): Promise<LarkAuthBridgeResult> {
-  const adapter = await pickAdapter(input.adapterId)
+  const adapter = await pickAdapter(input.adapterId).catch(() => undefined)
   if (!adapter) {
     return {
       ok: false,
@@ -130,7 +137,14 @@ export async function resolveLarkAuth(
 
   const preferred = input.identity ?? "user"
   if (preferred === "user") {
-    const userToken = await safeKeyringGet(adapter.id, "user_token")
+    let verified: Awaited<ReturnType<typeof assertLarkActingIdentity>>
+    try {
+      verified = await assertLarkActingIdentity(adapter.id, input.context)
+    } catch (err) {
+      if (!(err instanceof LarkActingIdentityError)) throw err
+      return { ok: false, reason: err.reason, message: err.message, adapterId: adapter.id }
+    }
+    const userToken = verified?.accessToken ?? (await safeKeyringGet(adapter.id, "user_token"))
     if (userToken) {
       return {
         ok: true,
@@ -143,9 +157,21 @@ export async function resolveLarkAuth(
         },
       }
     }
-    // Fall through to bot if no user_token — common when the OAuth flow
-    // hasn't been completed yet but the app credentials are valid for
-    // tenant-scope calls.
+    return {
+      ok: false,
+      reason: "user_not_authorized",
+      message: "user_not_authorized: connect Lark user OAuth before using personal Lark actions.",
+      adapterId: adapter.id,
+    }
+  }
+
+  if (preferred !== "bot") {
+    return {
+      ok: false,
+      reason: "user_not_authorized",
+      message: "user_not_authorized: unsupported Lark identity.",
+      adapterId: adapter.id,
+    }
   }
 
   // Bot identity (tenant_access_token).

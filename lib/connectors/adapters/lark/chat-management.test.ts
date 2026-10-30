@@ -104,6 +104,19 @@ describe("updateChat", () => {
 })
 
 describe("resolveContacts", () => {
+  it("threads the internal skill context to user-token name search", async () => {
+    mUser.mockResolvedValue({ data: { users: [] } })
+    const skillContext = { sessionId: "im-session", actingSenders: "unknown" as const }
+    await mgmt.resolveContacts({ query: "Alice", skillContext })
+    expect(mUser).toHaveBeenCalledWith(
+      "adapter-1",
+      expect.any(Object),
+      "GET",
+      expect.stringContaining("/search/v1/user?query=Alice"),
+      undefined,
+      skillContext
+    )
+  })
   it("resolves emails/phones via batch_get_id into exact candidates, skipping not-found rows", async () => {
     mTenant.mockResolvedValue({
       code: 0,
