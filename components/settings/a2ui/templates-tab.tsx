@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { useConfirmDialog } from "@/components/shared/confirm-dialog"
 import { toast } from "sonner"
 import { listTemplates, upsertTemplate, deleteTemplate } from "@/lib/db/a2ui-templates"
 import { getLocalizedTemplates } from "@/lib/a2ui/templates"
@@ -23,7 +24,9 @@ import { loggers } from "@cognia/logging"
 
 export function TemplatesTab() {
   const t = useTranslations("settings.a2ui.templates")
+  const tCommon = useTranslations("common")
   const ta2ui = useTranslations("a2ui")
+  const { confirm, dialog } = useConfirmDialog()
   const providerLocale = useLocale()
   const [userTemplates, setUserTemplates] = useState<A2UITemplateRow[]>([])
   const builtIns = useMemo(
@@ -85,7 +88,7 @@ export function TemplatesTab() {
   }
 
   const onDelete = async (id: string, name: string) => {
-    if (!confirm(t("confirmDelete", { name }))) return
+    if (!(await confirm({ title: t("confirmDelete", { name }), destructive: true }))) return
     await deleteTemplate(id)
     toast.success(t("toast.deleted", { name }))
     void refresh()
@@ -155,6 +158,7 @@ export function TemplatesTab() {
                   <Button
                     variant="ghost"
                     size="icon"
+                    aria-label={tCommon("delete")}
                     onClick={() => void onDelete(row.id, row.name)}
                   >
                     <Trash2Icon className="size-3.5 text-destructive" />
@@ -199,6 +203,7 @@ export function TemplatesTab() {
           </ScrollArea>
         </CardContent>
       </Card>
+      {dialog}
     </div>
   )
 }

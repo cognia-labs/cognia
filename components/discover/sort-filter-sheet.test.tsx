@@ -2,8 +2,10 @@
  * @jest-environment jsdom
  */
 
-import { render, screen } from "@testing-library/react"
+import { useState } from "react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import type { DiscoverFilter, DiscoverSort } from "@/hooks/discover/use-discover-route-state"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
@@ -16,11 +18,56 @@ jest.mock("@/hooks/use-platform", () => ({
 
 import { SortFilterSheet } from "./sort-filter-sheet"
 
+function ControlledControls() {
+  const [sort, setSort] = useState<DiscoverSort>("name")
+  const [filter, setFilter] = useState<DiscoverFilter>("all")
+  return (
+    <SortFilterSheet
+      sort={sort}
+      filter={filter}
+      onSortChange={setSort}
+      onFilterChange={setFilter}
+    />
+  )
+}
+
 beforeEach(() => {
   platform = "web"
 })
 
 describe("<SortFilterSheet />", () => {
+  it.each(["web", "mobile"])(
+    "shared controls: %s sort and filter groups select by arrow key",
+    async (target) => {
+      platform = target
+      const user = userEvent.setup()
+      render(<ControlledControls />)
+      await user.click(screen.getByRole("button", { name: "sortFilter.trigger" }))
+      const sort = screen.getByRole("radiogroup", { name: "sortFilter.sortLabel" })
+      const name = within(sort).getByRole("radio", { name: "sortFilter.sort.name" })
+      const recent = within(sort).getByRole("radio", { name: "sortFilter.sort.recent" })
+      await user.click(name)
+      await user.keyboard("{ArrowRight>}")
+      await waitFor(() => expect(recent).toHaveFocus())
+      expect(recent).toBeChecked()
+      await user.keyboard("{/ArrowRight}")
+      expect(name).toHaveAttribute("tabindex", "-1")
+      const filter = screen.getByRole("radiogroup", { name: "sortFilter.filterLabel" })
+      const all = within(filter).getByRole("radio", { name: "sortFilter.filter.all" })
+      const installed = within(filter).getByRole("radio", { name: "sortFilter.filter.installed" })
+      await user.click(all)
+      await user.keyboard("{ArrowRight>}")
+      await waitFor(() => expect(installed).toHaveFocus())
+      expect(installed).toBeChecked()
+      await user.keyboard("{/ArrowRight}")
+      await user.click(installed)
+      expect(installed).toBeChecked()
+      await user.click(screen.getByRole("button", { name: "sortFilter.reset" }))
+      expect(name).toBeChecked()
+      expect(all).toBeChecked()
+    }
+  )
+
   it("renders a Sheet on mobile and a Popover on desktop", async () => {
     const user = userEvent.setup()
     platform = "mobile"

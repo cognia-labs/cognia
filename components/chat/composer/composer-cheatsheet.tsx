@@ -12,6 +12,7 @@
 // a user can read it instead of discovering it.
 
 import { useTranslations } from "next-intl"
+import { Kbd } from "@/components/ui/kbd"
 import { composerSendKeys } from "@/lib/chat/composer-send-keys"
 import { usesAppleModifierGlyphs } from "@/lib/platform/os"
 import { useSettingsStore } from "@/stores/settings"
@@ -118,8 +119,8 @@ function RowPair({ label, children }: { label: string; children: React.ReactNode
 
 function Keycap({ children }: { children: React.ReactNode }) {
   return (
-    <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-xs leading-4">
+    <Kbd className="pointer-events-auto h-auto min-w-0 select-text rounded border bg-muted px-1.5 py-0.5 font-mono text-xs leading-4 font-normal text-foreground">
       {children}
-    </kbd>
+    </Kbd>
   )
 }

@@ -44,6 +44,9 @@ jest.mock("@/components/error/db-upgrade-blocked-dialog", () => ({
 jest.mock("@/components/providers/initializers/plugin-runtime-initializer", () => ({
   PluginRuntimeInitializer: () => <span data-testid="plugin-runtime" />,
 }))
+jest.mock("@/components/providers/initializers/account-store-initializer", () => ({
+  AccountStoreInitializer: () => <span data-testid="account-store-initializer" />,
+}))
 // These hosts render nothing while idle. Sentinels catch missing or duplicate
 // mounts in the production tree; each host's own suite exercises its behavior.
 jest.mock("@/components/plugins/dialogs/plugin-modal-root", () => ({
@@ -76,6 +79,7 @@ jest.mock("@/components/account/account-gate", () => ({
     children: React.ReactNode
     guestView: React.ReactNode
   }) => {
+    if (mockAccount === "fresh") return <span data-testid="account-create" />
     if (mockAccount === "locked") return <span data-testid="account-locked" />
     if (mockAccount === "guest") return <>{guestView}</>
     return <>{children}</>
@@ -183,6 +187,23 @@ describe("AppRuntime boot boundaries", () => {
       const markup = renderRuntime()
       expect(markup).toContain("<main>page content</main>")
       expect(markup).not.toContain('data-testid="account-locked"')
+      expect(markup).not.toContain('data-testid="recovery"')
+      expect(markup).not.toContain('data-testid="plugin-runtime"')
+      expectNoPluginHosts(markup)
+    }
+  )
+
+  it.each(["/plugin-auth/callback", "/plugin-auth/callback/", "/plugin-auth/callback.html"])(
+    "renders plugin OAuth return %s in a fresh browser without account setup or runtime boot",
+    (pathname) => {
+      mockPathname = pathname
+      mockAccount = "fresh"
+      mockRecovery = true
+      const markup = renderRuntime()
+      expect(markup).toContain("<main>page content</main>")
+      expect(markup).not.toContain('data-testid="account-create"')
+      expect(markup).not.toContain('data-testid="account-store-initializer"')
+      expect(markup).not.toContain('data-testid="window-liveness"')
       expect(markup).not.toContain('data-testid="recovery"')
       expect(markup).not.toContain('data-testid="plugin-runtime"')
       expectNoPluginHosts(markup)

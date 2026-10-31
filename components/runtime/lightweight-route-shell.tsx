@@ -14,6 +14,9 @@ const LIGHTWEIGHT_ROUTE_PREFIXES = [
   // Web sign-in returns in a fresh popup. It only validates OAuth state and
   // posts to its opener; account boot, unlock and onboarding must not hold it.
   "/logto/callback",
+  // Plugin OAuth returns can open in an external browser with no local account.
+  // Let the callback relay its result before account initialization or unlock.
+  "/plugin-auth/callback",
   "/pet-overlay",
   "/pet-popup",
   "/island",

@@ -7,6 +7,7 @@
  */
 
 import { render, screen, fireEvent } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { AiShellPanel } from "./ai-shell-panel"
 import type { UseAiShellState, UseAiShellActions } from "@/hooks/terminal/use-ai-shell"
@@ -118,6 +119,47 @@ function renderPanel(state: UseAiShellState, actions: UseAiShellActions) {
 }
 
 describe("AiShellPanel", () => {
+  it("uses a shared two-row textarea that preserves multiline drafts and trims only on submit", async () => {
+    const user = userEvent.setup()
+    const actions = makeActions()
+    renderPanel(makeState(), actions)
+    const input = screen.getByRole("textbox", { name: "Describe what you want to do…" })
+    expect(input).toHaveAttribute("data-slot", "textarea")
+    expect(input).toHaveAttribute("rows", "2")
+    await user.type(input, "  deploy{Shift>}{Enter}{/Shift}staging  ")
+    expect(input).toHaveValue("  deploy\nstaging  ")
+    expect(actions.submit).not.toHaveBeenCalled()
+    await user.keyboard("{Enter}")
+    expect(actions.submit).toHaveBeenCalledTimes(1)
+    expect(actions.submit).toHaveBeenCalledWith("deploy\nstaging")
+    expect(input).toHaveValue("")
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled()
+  })
+
+  it.each(["generating", "executing", "advisoryLoading"] as const)(
+    "keeps the draft and all send guards while %s",
+    async (busy) => {
+      const user = userEvent.setup()
+      const actions = makeActions()
+      const { rerender } = renderPanel(makeState(), actions)
+      const input = screen.getByRole("textbox")
+      await user.type(input, "deploy")
+      rerender(
+        <NextIntlClientProvider locale="en" messages={messages}>
+          <AiShellPanel state={makeState({ [busy]: true })} actions={actions} />
+        </NextIntlClientProvider>
+      )
+      expect(input).toBeDisabled()
+      expect(input).toHaveValue("deploy")
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled()
+      expect(screen.getByRole("button", { name: "Clear history" })).toBeDisabled()
+      await user.click(screen.getByRole("button", { name: "Send" }))
+      fireEvent.keyDown(input, { key: "Enter" })
+      expect(actions.submit).not.toHaveBeenCalled()
+      expect(input).toHaveValue("deploy")
+    }
+  )
+
   it("renders nothing when closed", () => {
     const { container } = renderPanel(makeState({ open: false }), makeActions())
     expect(container.innerHTML).toBe("")
@@ -190,6 +232,7 @@ describe("AiShellPanel", () => {
     fireEvent.keyDown(input, { key: "Enter", isComposing: true })
     fireEvent.keyDown(input, { key: "Enter", keyCode: 229 })
     expect(actions.submit).not.toHaveBeenCalled()
+    expect(input).toHaveValue("部署")
   })
 
   it("does not submit on Shift+Enter", () => {

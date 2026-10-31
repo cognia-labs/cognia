@@ -23,6 +23,20 @@ function make(over: Partial<Assessment> = {}): Assessment {
 }
 
 describe("AssessmentCard", () => {
+  it("uses named shared progress and updates its value and severity together", () => {
+    const { rerender } = render(<AssessmentCard assessment={make({ score: 0.42 })} />)
+    const bar = screen.getByRole("progressbar", { name: "assessments.label.context" })
+    expect(bar).toHaveAttribute("data-slot", "progress")
+    const fill = bar.querySelector('[data-slot="progress-indicator"]')
+    expect(fill).toHaveStyle({ transform: "translateX(-58%)" })
+    expect(fill).toHaveClass("bg-red-500")
+    rerender(<AssessmentCard assessment={make({ score: 0.9, level: "healthy" })} />)
+    expect(bar).toHaveAttribute("aria-valuenow", "90")
+    expect(fill).toHaveStyle({ transform: "translateX(-10%)" })
+    expect(fill).toHaveClass("bg-emerald-500")
+    expect(fill).not.toHaveClass("bg-red-500", "bg-primary")
+  })
+
   it("renders the label, level, score bar, and reasoning", () => {
     render(<AssessmentCard assessment={make()} />)
     expect(screen.getByTestId("assessment-context")).toBeInTheDocument()

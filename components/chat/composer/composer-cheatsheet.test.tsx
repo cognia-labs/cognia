@@ -7,7 +7,7 @@ jest.mock("next-intl", () => ({
     vars ? `${key}:${JSON.stringify(vars)}` : key,
 }))
 
-import { render, screen } from "@testing-library/react"
+import { act, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { ComposerCheatsheet, shortcutRows } from "./composer-cheatsheet"
 import { useSettingsStore } from "@/stores/settings"
@@ -17,6 +17,23 @@ afterEach(() => {
 })
 
 describe("ComposerCheatsheet", () => {
+  it("uses shared keycaps while responding to send and history setting changes", () => {
+    render(<ComposerCheatsheet open onOpenChange={jest.fn()} />)
+    const keycaps = () => screen.getAllByText((_, el) => el?.tagName === "KBD")
+    for (const cap of keycaps()) expect(cap).toHaveAttribute("data-slot", "kbd")
+    expect(screen.getByText("keys.send").previousElementSibling).toHaveTextContent("⏎")
+    act(() =>
+      useSettingsStore.setState({
+        settings: { composerBehavior: { sendOnEnter: false, inputHistoryRecall: false } },
+      } as never)
+    )
+    const send = screen.getByText("keys.send").previousElementSibling!
+    expect(send.querySelectorAll("kbd")).toHaveLength(2)
+    expect(send.textContent).toMatch(/^(⌘|Ctrl)⏎$/)
+    expect(screen.queryByText("keys.history")).not.toBeInTheDocument()
+    for (const cap of keycaps()) expect(cap).toHaveAttribute("data-slot", "kbd")
+  })
+
   it("renders nothing while closed, so it costs no layout", () => {
     render(<ComposerCheatsheet open={false} onOpenChange={jest.fn()} />)
     expect(screen.queryByTestId("composer-cheatsheet")).not.toBeInTheDocument()

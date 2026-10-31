@@ -7,6 +7,7 @@
  */
 
 import { useTranslations } from "next-intl"
+import { Progress } from "@/components/ui/progress"
 
 import { cn } from "@/lib/utils"
 
@@ -27,22 +28,15 @@ export function TaskProgressBar({
   const t = useTranslations("tasks")
   const pct = total > 0 ? Math.round((Math.min(done, total) / total) * 100) : 0
   return (
-    <div
+    <Progress
       className={cn("h-1.5 w-full overflow-hidden rounded-full bg-muted", className)}
-      role="progressbar"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={pct}
+      value={pct}
       aria-valuetext={t("progressLabel", { done, total })}
       data-testid="task-progress-bar"
-    >
-      <div
-        className={cn(
-          "h-full rounded-full transition-[width] motion-reduce:transition-none",
-          tone === "warning" ? "bg-amber-500" : "bg-primary"
-        )}
-        style={{ width: `${pct}%` }}
-      />
-    </div>
+      indicatorClassName={cn(
+        "rounded-full transition-transform motion-reduce:transition-none",
+        tone === "warning" ? "bg-amber-500" : "bg-primary"
+      )}
+    />
   )
 }

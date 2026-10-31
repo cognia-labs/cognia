@@ -18,6 +18,7 @@ import { BotIcon, CircleStopIcon, PlayIcon, SparklesIcon, Trash2Icon, XIcon } fr
 import { MotionPopover } from "@/components/chat/motion/motion-reveal"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
 import type { UseAiShellState, UseAiShellActions } from "@/hooks/terminal/use-ai-shell"
@@ -160,14 +161,14 @@ export function AiShellPanel({ state, actions, className }: AiShellPanelProps) {
             </Button>
           )}
           <div className="flex items-end gap-1.5">
-            <textarea
+            <Textarea
               ref={inputRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={t("inputPlaceholder")}
               aria-label={t("inputPlaceholder")}
-              className="min-w-0 flex-1 resize-none rounded-md border bg-muted/50 px-2 py-1.5 text-[11px] placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              className="field-sizing-fixed min-h-0 min-w-0 flex-1 resize-none rounded-md border bg-muted/50 px-2 py-1.5 text-[11px] shadow-none placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus-visible:ring-1 focus-visible:ring-primary md:text-[11px] dark:bg-muted/50"
               rows={2}
               disabled={state.generating || state.executing || state.advisoryLoading}
               data-testid="ai-shell-input"

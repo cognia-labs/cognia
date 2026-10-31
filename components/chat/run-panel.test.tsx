@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 import { act, render, screen, fireEvent } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { UIMessage } from "ai"
 
 import { RunPanel } from "./run-panel"
@@ -9,6 +10,9 @@ import { useChatStore, makeSessionSlice, type SessionChatSlice } from "@/stores/
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import { useSettingsStore } from "@/stores/settings"
 import { useConversationActivity } from "@/hooks/connectors/use-conversation-activity"
+import { persistMessages } from "@/lib/db/messages"
+
+jest.mock("@/lib/db/messages", () => ({ persistMessages: jest.fn(async () => {}) }))
 
 jest.mock("@/hooks/agent/use-session-plan", () => ({ useSessionPlan: () => undefined }))
 jest.mock("@/hooks/connectors/use-conversation-activity", () => ({
@@ -67,6 +71,57 @@ beforeEach(() => {
 })
 
 describe("RunPanel — expansion", () => {
+  it("keeps queue edit and remove as shared keyboard actions without submitting", async () => {
+    const user = userEvent.setup()
+    const onSubmit = jest.fn((event: React.FormEvent) => event.preventDefault())
+    seed({
+      status: "streaming",
+      steerQueue: [{ id: "e1", text: "first" }],
+      messages: [
+        {
+          id: "m1",
+          role: "user",
+          parts: [{ type: "text", text: "first" }],
+          metadata: { steer: { entryId: "e1", state: "queued" } },
+        },
+      ],
+    })
+    render(
+      <form onSubmit={onSubmit}>
+        <RunPanel sessionId={SID} />
+      </form>
+    )
+    await user.click(screen.getByRole("button", { name: "ariaManageSteer" }))
+    const edit = screen.getByRole("button", { name: "ariaEditQueued" })
+    const remove = screen.getByRole("button", { name: "ariaRemoveQueued" })
+    for (const button of [edit, remove]) {
+      expect(button).toHaveAttribute("data-slot", "button")
+      expect(button).toHaveAttribute("type", "button")
+    }
+    act(() => edit.focus())
+    await user.keyboard("{Enter}")
+    const editor = screen.getByRole("textbox")
+    await user.clear(editor)
+    await user.type(editor, "revised{Enter}")
+    expect(useChatStore.getState().sessions[SID]?.steerQueue[0].text).toBe("revised")
+    expect(useChatStore.getState().sessions[SID]?.messages[0].parts).toEqual([
+      { type: "text", text: "revised" },
+    ])
+    expect(persistMessages).toHaveBeenCalledWith(
+      SID,
+      useChatStore.getState().sessions[SID]?.messages
+    )
+    await user.click(screen.getByRole("button", { name: "ariaEditQueued" }))
+    await user.type(screen.getByRole("textbox"), " discarded{Escape}")
+    expect(useChatStore.getState().sessions[SID]?.steerQueue[0].text).toBe("revised")
+    act(() => remove.focus())
+    expect(remove).toHaveFocus()
+    await user.keyboard(" ")
+    expect(useChatStore.getState().sessions[SID]?.steerQueue).toEqual([])
+    expect(useChatStore.getState().sessions[SID]?.messages).toEqual([])
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it("keeps conversation activity collapsed in the composer panel even without an agent run", () => {
     seed({ status: "idle", messages: [] })
     jest

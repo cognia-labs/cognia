@@ -1,6 +1,8 @@
 /** @jest-environment jsdom */
 
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { getNativeSelect, selectOption } from "@/lib/testing/select-option"
 
 import type { BotWriteReadiness } from "@/hooks/bots/use-bot-control-writes"
 import type { BotConsoleRow } from "@/lib/bot/console/bot-rows"
@@ -30,10 +32,15 @@ jest.mock("@/hooks/bots/use-bot-control-writes", () => ({
 }))
 
 const setInputSlot = jest.fn()
+let mockCanAutomation = true
+let mockLifecyclePending = new Set<string>()
+let mockTouchOnly = false
+jest.mock("@/hooks/ui/use-mobile", () => ({ useIsMobile: () => false }))
+jest.mock("@/hooks/ui/use-media-query", () => ({ useMediaQuery: () => mockTouchOnly }))
 jest.mock("@/hooks/bots/use-bot-lifecycle-actions", () => ({
-  useBotLifecycleReadiness: () => ({ canAutomation: true }),
+  useBotLifecycleReadiness: () => ({ canAutomation: mockCanAutomation }),
   useBotLifecycleActions: () => ({
-    pending: new Set(),
+    pending: mockLifecyclePending,
     setInputSlot: (...args: unknown[]) => setInputSlot(...args),
   }),
 }))
@@ -42,6 +49,10 @@ import { BotTriggersSection } from "./triggers-section"
 
 beforeEach(() => {
   setBotTriggerArmed.mockClear()
+  setInputSlot.mockClear()
+  mockCanAutomation = true
+  mockLifecyclePending = new Set()
+  mockTouchOnly = false
   readiness = {
     route: "local",
     availability: { state: "available", reason: "local-host" },
@@ -288,7 +299,7 @@ it("wraps long trigger details while keeping the switch available", () => {
   expect(screen.getByRole("switch")).toBeEnabled()
 })
 
-it("binds input slots independently for each trigger", () => {
+it("binds input slots independently for each trigger", async () => {
   render(
     <BotTriggersSection
       row={row({
@@ -300,6 +311,123 @@ it("binds input slots independently for each trigger", () => {
       })}
     />
   )
-  fireEvent.change(screen.getByRole("combobox"), { target: { value: "two" } })
+  await selectOption(screen.getByRole("combobox"), "two")
   expect(setInputSlot).toHaveBeenCalledWith("boti_1", "input", "two")
+})
+
+describe.each(["desktop", "touch"] as const)("Bot slot picker on %s", (surface) => {
+  beforeEach(() => {
+    mockTouchOnly = surface === "touch"
+  })
+
+  it("uses shared Select while preserving one native form change and empty-to-null writes", async () => {
+    const changes: Array<{ value: string; native: boolean }> = []
+    const captured: string[] = []
+    const config = row({
+      requiredSlots: [
+        { id: "one", label: "One" },
+        { id: "two", label: "Two" },
+      ],
+      triggers: [
+        { id: "input", kind: "event", armed: true, acceptsAccount: true, label: "Input" },
+        {
+          id: "other",
+          kind: "event",
+          armed: true,
+          acceptsAccount: true,
+          label: "Other",
+          inputCredentialSlot: "one",
+        },
+      ],
+    })
+    const form = (slot: string | null) => (
+      <form
+        onChange={(event) => {
+          const target = event.target
+          if (!(target instanceof HTMLSelectElement)) throw new Error("Expected a select change")
+          changes.push({ value: target.value, native: true })
+        }}
+        onChangeCapture={(event) => {
+          const target = event.target
+          if (!(target instanceof HTMLSelectElement)) throw new Error("Expected a select change")
+          captured.push(target.value)
+        }}
+      >
+        <BotTriggersSection
+          row={{
+            ...config,
+            triggers: config.triggers.map((trigger) =>
+              trigger.id === "input"
+                ? { ...trigger, inputCredentialSlot: slot ?? undefined }
+                : trigger
+            ),
+          }}
+        />
+      </form>
+    )
+    const { rerender } = render(form(null))
+    const picker = screen.getByRole("combobox", { name: "Input account slot for Input" })
+    expect(picker.closest('[data-slot="native-select-wrapper"]')).not.toBeNull()
+    expect(picker).toBeInstanceOf(HTMLSelectElement)
+    const native = getNativeSelect(picker)
+    expect(native.closest<HTMLLabelElement>("label")?.control).toBe(native)
+    expect(native).toHaveValue("")
+    expect([...native.options].map((option) => option.value)).toEqual(["", "one", "two"])
+    await selectOption(picker, "two")
+    expect(setInputSlot).toHaveBeenCalledTimes(1)
+    expect(setInputSlot).toHaveBeenLastCalledWith("boti_1", "input", "two")
+    expect(changes).toEqual([{ value: "two", native: true }])
+    expect(captured).toEqual(["two"])
+    rerender(form("two"))
+    expect(getNativeSelect(picker)).toHaveValue("two")
+    expect(
+      getNativeSelect(screen.getByRole("combobox", { name: "Input account slot for Other" }))
+    ).toHaveValue("one")
+    await selectOption(picker, "")
+    expect(setInputSlot).toHaveBeenCalledTimes(2)
+    expect(setInputSlot).toHaveBeenLastCalledWith("boti_1", "input", null)
+    expect(changes).toEqual([
+      { value: "two", native: true },
+      { value: "", native: true },
+    ])
+    expect(captured).toEqual(["two", ""])
+  })
+
+  it.each(["unavailable", "pending"])("retains the disabled slot when %s", async (reason) => {
+    const user = userEvent.setup()
+    mockCanAutomation = reason !== "unavailable"
+    if (reason === "pending") mockLifecyclePending.add("input:input")
+    render(
+      <BotTriggersSection
+        row={row({
+          requiredSlots: [{ id: "one", label: "One" }],
+          triggers: [{ id: "input", kind: "event", armed: true, acceptsAccount: true }],
+        })}
+      />
+    )
+    const picker = screen.getByRole("combobox")
+    expect(picker).toBeDisabled()
+    await user.click(picker)
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+    expect(setInputSlot).not.toHaveBeenCalled()
+  })
+})
+
+it.each(["no slots", "no account input"])("omits the picker with %s", (reason) => {
+  render(
+    <BotTriggersSection
+      row={row({
+        requiredSlots: reason === "no slots" ? [] : [{ id: "one", label: "One" }],
+        triggers: [
+          {
+            id: "input",
+            kind: "event",
+            armed: true,
+            acceptsAccount: reason !== "no account input",
+          },
+        ],
+      })}
+    />
+  )
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument()
 })

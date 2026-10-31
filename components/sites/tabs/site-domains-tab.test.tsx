@@ -188,6 +188,11 @@ it("groups access choices and supports keyboard navigation", async () => {
     expect(screen.getByRole("radio", { name: /access.modes.identities/ })).toBeChecked()
   )
   await user.keyboard("{/ArrowRight}")
+  expect(
+    screen
+      .getByRole("radio", { name: /access.modes.identities/ })
+      .querySelector('[data-slot="radio-group-indicator"] svg')
+  ).toBeInTheDocument()
   expect(screen.getByLabelText("access.values")).toBeInTheDocument()
 })
 

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -537,14 +538,14 @@ function HandoffForm({ target, config }: Props) {
           {proposal.expiresAt <= now || proposal.quote.expiresAt <= now ? (
             <p>{a("quoteExpired")}</p>
           ) : null}
-          <Label className="flex items-center gap-2">
-            <input
-              type="checkbox"
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={`${id}-confirm-cost`}
               checked={confirmedCost}
-              onChange={(event) => setConfirmedCost(event.target.checked)}
+              onCheckedChange={(checked) => setConfirmedCost(checked === true)}
             />
-            {a("confirmCost")}
-          </Label>
+            <Label htmlFor={`${id}-confirm-cost`}>{a("confirmCost")}</Label>
+          </div>
         </div>
       ) : null}
       <Button size="sm" disabled={!canStart} onClick={() => void start()}>

@@ -139,6 +139,23 @@ beforeEach(() => {
 })
 
 describe("MemoryMobileBody — layout", () => {
+  it("shared controls: mobile tabs support arrows and expose the selected panel", async () => {
+    const user = userEvent.setup()
+    render(<MemoryMobileBody />)
+    const app = screen.getByRole("tab", { name: /^App memory/ })
+    const health = screen.getByRole("tab", { name: "Health" })
+    await user.click(app)
+    await user.keyboard("{ArrowRight}")
+    await waitFor(() => expect(health).toHaveFocus())
+    expect(health).toHaveAttribute("aria-selected", "true")
+    expect(app).toHaveAttribute("tabindex", "-1")
+    const panel = screen.getByRole("tabpanel", { name: "Health" })
+    expect(health).toHaveAttribute("aria-controls", panel.id)
+    await user.keyboard("{ArrowLeft}")
+    await waitFor(() => expect(app).toHaveFocus())
+    expect(screen.getByRole("tabpanel", { name: /^App memory/ })).toBeVisible()
+  })
+
   it("renders a full-bleed list with the title in a sticky header", () => {
     mockData = [mem({ text: "likes tea" }), mem({ text: "lives in Shanghai" })]
     render(<MemoryMobileBody />)
@@ -269,7 +286,9 @@ describe("MemoryMobileBody — acting on memories", () => {
     await userEvent.click(within(rows()[0]!).getByTestId("memory-touch-more"))
     await userEvent.click(screen.getByTestId("memory-touch-delete"))
     expect(mockRun).not.toHaveBeenCalled()
-    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" }))
+    await userEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete" })
+    )
     await waitFor(() =>
       expect(mockRun).toHaveBeenCalledWith({ kind: "delete", id: "a" }, expect.anything())
     )

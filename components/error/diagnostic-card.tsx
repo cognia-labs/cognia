@@ -174,10 +174,12 @@ export function DiagnosticCard({
       {hasActionRow && (
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 ps-6">
           {hasTechnical && (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="xs"
               onClick={() => setShowDetail((v) => !v)}
-              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+              className="h-auto gap-1 p-0 text-[11px] leading-[inherit] font-normal text-muted-foreground hover:text-foreground has-[>svg]:px-0"
               data-testid="diagnostic-card-detail-toggle"
               aria-expanded={showDetail}
             >
@@ -187,7 +189,7 @@ export function DiagnosticCard({
                 <ChevronRight className="size-3" aria-hidden />
               )}
               {showDetail ? tDetail("hideRaw") : tDetail("showRaw")}
-            </button>
+            </Button>
           )}
           <DiagnosticActions
             actions={diagnostic.actions}

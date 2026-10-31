@@ -13,6 +13,7 @@
 
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
+import { Button } from "@/components/ui/button"
 import type { McpResultBlock } from "@/lib/claude/parts-extensions"
 import { cn } from "@/lib/utils"
 
@@ -217,14 +218,16 @@ export function PreviewClampNote({
         {t("truncated", { shown, total })}
         {hint ? ` ${hint}` : null}
       </span>
-      <button
+      <Button
         type="button"
+        variant="link"
+        size="xs"
         onClick={onExpand}
-        className="font-medium text-primary hover:underline"
+        className="h-auto p-0 text-[11px] leading-[inherit]"
         data-testid={testId ? `${testId}-show-all` : undefined}
       >
         {t("showAll")}
-      </button>
+      </Button>
     </p>
   )
 }

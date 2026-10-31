@@ -26,7 +26,8 @@ import { useTranslations } from "next-intl"
 import { AnimatePresence, motion } from "motion/react"
 import { PlusIcon, XIcon } from "lucide-react"
 
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 import { useFlowMotion } from "@/components/chat/motion/motion-reveal"
@@ -105,34 +106,32 @@ export function ToolScopeField({
         {description ? <p className="text-[11px] text-muted-foreground">{description}</p> : null}
       </div>
 
-      <div
-        role="radiogroup"
+      <RadioGroup
+        value={mode}
+        onValueChange={(value) => selectMode(value as ToolScopeMode)}
+        orientation="horizontal"
         aria-label={label}
-        className="inline-flex rounded-md border p-0.5"
+        className="inline-flex gap-0 rounded-md border p-0.5"
         data-testid={`${testId}-mode`}
       >
         {MODES.map((m) => (
-          <Button
+          <RadioGroupItem
             key={m}
-            type="button"
-            role="radio"
-            variant="ghost"
-            size="sm"
-            aria-checked={mode === m}
-            onClick={() => selectMode(m)}
+            value={m}
             data-testid={`${testId}-mode-${m}`}
             className={cn(
-              "rounded px-2.5 py-1 text-[11px] transition-colors",
+              buttonVariants({ variant: "ghost", size: "sm" }),
+              "aspect-auto size-auto h-8 rounded border-0 px-2.5 py-1 text-[11px] shadow-none transition-colors",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               mode === m
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent/50"
+                ? "bg-primary text-primary-foreground dark:bg-primary"
+                : "text-muted-foreground hover:bg-accent/50 dark:bg-transparent"
             )}
           >
             {t(`modes.${m}`)}
-          </Button>
+          </RadioGroupItem>
         ))}
-      </div>
+      </RadioGroup>
 
       <p className="text-[11px] text-muted-foreground" data-testid={`${testId}-mode-hint`}>
         {t(`modeHints.${mode}`)}

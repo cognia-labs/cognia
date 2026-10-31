@@ -7,6 +7,7 @@
  */
 
 import { useTranslations } from "next-intl"
+import { Progress } from "@/components/ui/progress"
 
 import { cn } from "@/lib/utils"
 import type { Assessment, AssessmentLevel } from "@/lib/analysis/session-report"
@@ -36,19 +37,13 @@ export function AssessmentCard({ assessment }: { assessment: Assessment }) {
           {t(`assessments.level.${level}`)}
         </span>
       </div>
-      <div
+      <Progress
         className="h-1.5 w-full overflow-hidden rounded bg-muted"
-        role="progressbar"
-        aria-valuenow={Math.round(score * 100)}
-        aria-valuemin={0}
-        aria-valuemax={100}
+        value={Math.round(score * 100)}
+        aria-label={t(`assessments.label.${id}`)}
         data-testid="assessment-score"
-      >
-        <div
-          className={cn("h-full rounded transition-all", LEVEL_FILL[level])}
-          style={{ width: `${Math.round(score * 100)}%` }}
-        />
-      </div>
+        indicatorClassName={cn("rounded", LEVEL_FILL[level])}
+      />
       <p className="text-[11px] text-muted-foreground">
         {t(`assessments.reasoning.${reasoningKey}`, params)}
       </p>

@@ -3,6 +3,7 @@
  */
 
 import { render, screen, fireEvent } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { createDiagnostic } from "@cognia/diagnostics"
 
 import { DiagnosticCard, InlineError } from "./diagnostic-card"
@@ -11,6 +12,28 @@ const diag = (code: Parameters<typeof createDiagnostic>[0], init = {}) =>
   createDiagnostic(code, { source: "chat", now: () => 0, id: "d1", ...init })
 
 describe("DiagnosticCard", () => {
+  it("toggles technical detail with a shared keyboard action without submitting", async () => {
+    const user = userEvent.setup()
+    const onSubmit = jest.fn((event: React.FormEvent) => event.preventDefault())
+    render(
+      <form onSubmit={onSubmit}>
+        <DiagnosticCard diagnostic={diag("workspaceBusy", { message: "Raw evidence" })} />
+      </form>
+    )
+    const toggle = screen.getByRole("button", { expanded: false })
+    expect(toggle).toHaveAttribute("data-slot", "button")
+    expect(toggle).toHaveAttribute("type", "button")
+    await user.tab()
+    expect(toggle).toHaveFocus()
+    await user.keyboard("{Enter}")
+    expect(toggle).toHaveAttribute("aria-expanded", "true")
+    expect(screen.getByTestId("diagnostic-card-message")).toHaveTextContent("Raw evidence")
+    await user.keyboard(" ")
+    expect(toggle).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByTestId("diagnostic-card-technical")).not.toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it("labels the failure from the code, not from its raw text", () => {
     // The raw text here is deliberately unclassifiable, so the only source the
     // label and hint could have come from is the code.

@@ -24,6 +24,21 @@ function renderOpen() {
   return screen.getByTestId("keyboard-shortcuts-dialog")
 }
 
+test("uses shared keycaps and follows a rebound shortcut on rerender", () => {
+  const previous = chords["app.commandPalette.toggle"]
+  try {
+    const { rerender } = render(<KeyboardShortcutsDialog open onOpenChange={jest.fn()} />)
+    const row = screen.getByText("desktop.menu.view.commandPalette").closest("li")!
+    expect(row.querySelector("kbd")).toHaveAttribute("data-slot", "kbd")
+    chords["app.commandPalette.toggle"] = "⌘⇧P"
+    rerender(<KeyboardShortcutsDialog open onOpenChange={jest.fn()} />)
+    expect(row.querySelector("kbd")).toHaveTextContent("⌘⇧P")
+    expect(row).not.toHaveTextContent("⌘K")
+  } finally {
+    chords["app.commandPalette.toggle"] = previous
+  }
+})
+
 test("stays closed until asked", () => {
   render(<KeyboardShortcutsDialog open={false} onOpenChange={jest.fn()} />)
   expect(screen.queryByTestId("keyboard-shortcuts-dialog")).toBeNull()

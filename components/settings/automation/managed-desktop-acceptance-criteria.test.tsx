@@ -32,6 +32,7 @@ jest.mock("next-intl", () => {
 })
 import { useState } from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import en from "@/i18n/messages/en/managedAcceptance.json"
 import zh from "@/i18n/messages/zh-CN/managedAcceptance.json"
@@ -43,6 +44,29 @@ function Editor({ count = 1 }: { count?: number }) {
   )
   return <ManagedDesktopAcceptanceCriteria value={value} onChange={setValue} />
 }
+test.each([
+  ["en", en],
+  ["zh-CN", zh],
+] as const)(
+  "shared controls: %s screenshot checkbox supports its label and Space",
+  async (locale, messages) => {
+    const user = userEvent.setup()
+    render(
+      <NextIntlClientProvider locale={locale} messages={{ managedAcceptance: messages }}>
+        <Editor />
+      </NextIntlClientProvider>
+    )
+    const label = messages.criteria.screenshot.replace("{number}", "1")
+    const checkbox = screen.getByRole("checkbox", { name: label })
+    expect(checkbox).toHaveAttribute("data-slot", "checkbox")
+    await user.click(screen.getByText(label))
+    expect(checkbox).toBeChecked()
+    checkbox.focus()
+    await user.keyboard(" ")
+    expect(checkbox).not.toBeChecked()
+    expect(screen.getByRole("textbox")).toHaveValue("")
+  }
+)
 test.each([
   ["en", en],
   ["zh-CN", zh],

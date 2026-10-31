@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
+import { useConfirmDialog } from "@/components/shared/confirm-dialog"
 import { listEvents, clearEvents, appendEvent } from "@/lib/db/a2ui-event-history"
 import { globalEventEmitter } from "@/lib/a2ui/events"
 import { useA2UIStore } from "@/stores/a2ui"
@@ -27,6 +28,7 @@ type FilterType = "all" | "userAction" | "dataModelChange"
 
 export function DebuggerTab() {
   const t = useTranslations("settings.a2ui.debugger")
+  const { confirm, dialog } = useConfirmDialog()
   const [rows, setRows] = useState<A2UIEventHistoryRow[]>([])
   const [surfaceFilter, setSurfaceFilter] = useState<string>("__all__")
   const [typeFilter, setTypeFilter] = useState<FilterType>("all")
@@ -89,7 +91,7 @@ export function DebuggerTab() {
   })
 
   const onClear = async () => {
-    if (!confirm(t("confirmClear"))) return
+    if (!(await confirm({ title: t("confirmClear"), destructive: true }))) return
     const n = await clearEvents()
     setRows([])
     setSelected(null)
@@ -201,6 +203,7 @@ export function DebuggerTab() {
           </div>
         </CardContent>
       </Card>
+      {dialog}
     </div>
   )
 }

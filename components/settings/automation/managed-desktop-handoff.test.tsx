@@ -1,5 +1,5 @@
 // Read the new split messages directly; aggregate regeneration belongs to the orchestrator.
-const mockPiiClean = jest.fn(() => true)
+const mockPiiClean = jest.fn((_value: unknown) => true)
 jest.mock("@cognia/redact", () => ({
   ...jest.requireActual("@cognia/redact"),
   hasNoLeakingPiiDeep: (value: unknown) => mockPiiClean(value),
@@ -37,6 +37,7 @@ jest.mock("next-intl", () => {
 })
 import { selectOption } from "@/lib/testing/select-option"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import acceptance from "@/i18n/messages/en/managedAcceptance.json"
 import messages from "@/i18n/messages/en/settings/managedDesktops.json"
@@ -332,6 +333,25 @@ function notify(next: ManagedDesktopAcceptanceRun[]) {
   const calls = jest.mocked(watchManagedDesktopAcceptance).mock.calls
   calls[calls.length - 1][1](next)
 }
+test("shared controls: cost consent stays an explicit checkbox gate before starting", async () => {
+  const user = userEvent.setup()
+  await prepareLocal()
+  const checkbox = screen.getByRole("checkbox", { name: acceptance.confirmCost })
+  const start = screen.getByRole("button", { name: acceptance.start })
+  expect(checkbox).toHaveAttribute("data-slot", "checkbox")
+  expect(start).toBeDisabled()
+  await user.click(screen.getByText(acceptance.confirmCost))
+  expect(checkbox).toBeChecked()
+  expect(start).toBeEnabled()
+  expect(api.acceptanceStart).not.toHaveBeenCalled()
+  checkbox.focus()
+  await user.keyboard(" ")
+  expect(checkbox).not.toBeChecked()
+  expect(start).toBeDisabled()
+  await user.click(checkbox)
+  await user.click(start)
+  await waitFor(() => expect(api.acceptanceStart).toHaveBeenCalledTimes(1))
+})
 test("criteria that would leak personal data are refused before anything is billed", async () => {
   await prepareLocal()
   mockPiiClean.mockReturnValueOnce(false)

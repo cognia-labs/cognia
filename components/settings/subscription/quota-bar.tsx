@@ -11,6 +11,7 @@
  */
 
 import { cn } from "@/lib/utils"
+import { Progress } from "@/components/ui/progress"
 
 import type { LimitsMeterStatus } from "@/types/subscription"
 
@@ -33,18 +34,11 @@ export interface QuotaBarProps {
 
 export function QuotaBar({ pct, status, label, className }: QuotaBarProps) {
   return (
-    <div
+    <Progress
       className={cn("h-2 w-full overflow-hidden rounded-full bg-muted", className)}
-      role="progressbar"
-      aria-valuenow={pct ?? 0}
-      aria-valuemin={0}
-      aria-valuemax={100}
+      value={pct}
       aria-label={label}
-    >
-      <div
-        className={cn("h-full rounded-full transition-all duration-500", STATUS_BAR[status])}
-        style={{ width: `${pct ?? 0}%` }}
-      />
-    </div>
+      indicatorClassName={cn("rounded-full duration-500", STATUS_BAR[status])}
+    />
   )
 }

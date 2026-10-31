@@ -17,9 +17,11 @@ import { ArrowUpIcon, ChevronDownIcon } from "lucide-react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Spinner } from "@/components/ui/spinner"
+import { Textarea } from "@/components/ui/textarea"
 import { resolveLabel } from "@/lib/tray-panel/defaults"
 import type { TrayPanelAction, TrayPanelField } from "@/lib/tray-panel/types"
 import { cn } from "@/lib/utils"
+import { isImeComposing } from "@/lib/ui/ime"
 
 import { TrayPanelFieldControl } from "./tray-panel-field-control"
 import { useTrayPanelRunner } from "./tray-panel-runner"
@@ -113,7 +115,7 @@ export function TrayPanelDelegateBar({
         )}
       >
         {inline ? (
-          <textarea
+          <Textarea
             ref={textareaRef}
             rows={1}
             value={text}
@@ -123,13 +125,13 @@ export function TrayPanelDelegateBar({
             maxLength={"maxLength" in inline ? inline.maxLength : undefined}
             onChange={(event) => runner.setFieldValue(action.id, inline.id, event.target.value)}
             onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return
+              if (event.key !== "Enter" || event.shiftKey || isImeComposing(event)) return
               if (!submitOnEnter) return
               event.preventDefault()
               void runner.run(action)
             }}
             className={cn(
-              "max-h-[100px] min-h-5 w-full min-w-0 resize-none bg-transparent py-0.5 text-[13px] leading-5 outline-none placeholder:text-muted-foreground",
+              "field-sizing-fixed max-h-[100px] min-h-5 w-full min-w-0 resize-none rounded-none border-0 bg-transparent px-0 py-0.5 text-[13px] leading-5 shadow-none outline-none placeholder:text-muted-foreground focus-visible:ring-0 md:text-[13px] dark:bg-transparent",
               options.length > 0 && "col-span-2 @min-[400px]/composer:col-span-1"
             )}
           />

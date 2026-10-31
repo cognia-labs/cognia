@@ -28,6 +28,7 @@ import { useTranslations } from "next-intl"
 
 import { Badge } from "@/components/ui/badge"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Switch } from "@/components/ui/switch"
 import { useBotControlActions, useBotWriteReadiness } from "@/hooks/bots/use-bot-control-writes"
 import { BOT_WRITE_COMMANDS } from "@/lib/bot/control-writes"
@@ -103,7 +104,12 @@ function TriggerRow({
         {trigger.acceptsAccount && installation.requiredSlots.length > 0 ? (
           <label className="mt-1 flex items-center gap-2 text-xs">
             {t("automation.inputSlot")}
-            <select
+            {/* Preserve native change events, including parent form capture listeners. */}
+            <NativeSelect
+              native
+              size="sm"
+              wrapperClassName="min-w-0 flex-1"
+              className="text-xs"
               aria-label={t("automation.inputSlotAria", { name: title })}
               value={trigger.inputCredentialSlot ?? ""}
               disabled={!automation.canAutomation || lifecycle.pending.has(`input:${trigger.id}`)}
@@ -111,13 +117,13 @@ function TriggerRow({
                 void lifecycle.setInputSlot(installation.id, trigger.id, event.target.value || null)
               }
             >
-              <option value="">{t("automation.inputDefault")}</option>
+              <NativeSelectOption value="">{t("automation.inputDefault")}</NativeSelectOption>
               {installation.requiredSlots.map((slot) => (
-                <option key={slot.id} value={slot.id}>
+                <NativeSelectOption key={slot.id} value={slot.id}>
                   {slot.label}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </label>
         ) : null}
         {trigger.configFallback ? (

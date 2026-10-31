@@ -17,6 +17,7 @@ import { useTranslations } from "next-intl"
 import { ScanSearchIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { GlanceUsageTotals } from "@/lib/glance/snapshot"
 import { formatCompactTokens, formatCompactUsd } from "@/lib/usage/status-snapshot"
 import { cn } from "@/lib/utils"
@@ -44,29 +45,28 @@ function ScopeSwitch({
   labels: Record<GlanceUsageScope, string> & { group: string }
 }) {
   return (
-    <div
-      role="radiogroup"
+    <RadioGroup
+      value={scope}
+      onValueChange={(value) => onPick(value as GlanceUsageScope)}
+      orientation="horizontal"
       aria-label={labels.group}
       className="inline-flex gap-0.5 rounded-md bg-muted p-0.5"
     >
       {(["cognia", "all-tools"] as const).map((value) => (
-        <button
+        <RadioGroupItem
           key={value}
-          type="button"
-          role="radio"
-          aria-checked={scope === value}
-          onClick={() => onPick(value)}
+          value={value}
           className={cn(
-            "rounded px-1.5 text-[11px] leading-5 transition-colors",
+            "aspect-auto size-auto rounded border-0 bg-transparent px-1.5 text-[11px] leading-5 shadow-none transition-colors",
             scope === value
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
+              ? "bg-background text-foreground shadow-sm dark:bg-background"
+              : "text-muted-foreground hover:text-foreground dark:bg-transparent"
           )}
         >
           {labels[value]}
-        </button>
+        </RadioGroupItem>
       ))}
-    </div>
+    </RadioGroup>
   )
 }
 

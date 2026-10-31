@@ -17,7 +17,8 @@ import { useTranslations } from "next-intl"
 import { SlidersHorizontalIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { usePlatform } from "@/hooks/use-platform"
@@ -133,57 +134,61 @@ function SortFilterControls({
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t("sortFilter.sortLabel")}
         </h3>
-        <div
+        <RadioGroup
+          value={sort}
+          onValueChange={(value) => onSortChange(value as DiscoverSort)}
+          orientation="horizontal"
           className="flex flex-wrap gap-2"
-          role="radiogroup"
           aria-label={t("sortFilter.sortLabel")}
         >
           {DISCOVER_SORTS.map((value) => {
             const active = sort === value
             return (
-              <Button
+              <RadioGroupItem
                 key={value}
-                type="button"
-                variant={active ? "default" : "outline"}
-                size="sm"
-                role="radio"
-                aria-checked={active}
-                onClick={() => onSortChange(value)}
+                value={value}
+                className={cn(
+                  buttonVariants({ variant: active ? "default" : "outline", size: "sm" }),
+                  "aspect-auto size-auto h-8",
+                  active ? "border-0 shadow-none dark:bg-primary" : "text-foreground"
+                )}
                 data-testid={`discover-sort-${value}`}
               >
                 {t(`sortFilter.sort.${value}`)}
-              </Button>
+              </RadioGroupItem>
             )
           })}
-        </div>
+        </RadioGroup>
       </section>
       <section className="flex flex-col gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t("sortFilter.filterLabel")}
         </h3>
-        <div
+        <RadioGroup
+          value={filter}
+          onValueChange={(value) => onFilterChange(value as DiscoverFilter)}
+          orientation="horizontal"
           className="flex flex-wrap gap-2"
-          role="radiogroup"
           aria-label={t("sortFilter.filterLabel")}
         >
           {DISCOVER_FILTERS.map((value) => {
             const active = filter === value
             return (
-              <Button
+              <RadioGroupItem
                 key={value}
-                type="button"
-                variant={active ? "default" : "outline"}
-                size="sm"
-                role="radio"
-                aria-checked={active}
-                onClick={() => onFilterChange(value)}
+                value={value}
+                className={cn(
+                  buttonVariants({ variant: active ? "default" : "outline", size: "sm" }),
+                  "aspect-auto size-auto h-8",
+                  active ? "border-0 shadow-none dark:bg-primary" : "text-foreground"
+                )}
                 data-testid={`discover-filter-${value}`}
               >
                 {t(`sortFilter.filter.${value}`)}
-              </Button>
+              </RadioGroupItem>
             )
           })}
-        </div>
+        </RadioGroup>
       </section>
       <Button
         type="button"

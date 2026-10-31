@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 jest.mock("@/lib/tauri/pet-window", () => ({ showMainWindow: jest.fn() }))
@@ -102,6 +102,8 @@ describe("TrayPanelDelegateBar", () => {
     try {
       const { unmount } = render(<Bar action={delegate} />)
       const box = screen.getByRole("textbox", { name: "Task" })
+      expect(box).toHaveAttribute("data-slot", "textarea")
+      expect(box).toHaveAttribute("rows", "1")
       expect(box.style.height).toBe("24px")
       const resize = (width: number) =>
         act(() =>
@@ -117,6 +119,12 @@ describe("TrayPanelDelegateBar", () => {
       expect(box.style.height).toBe("100px")
       height.mockReturnValue(24)
       resize(300)
+      expect(box.style.height).toBe("24px")
+      height.mockReturnValue(140)
+      fireEvent.change(box, { target: { value: "line one\nline two" } })
+      expect(box.style.height).toBe("100px")
+      height.mockReturnValue(24)
+      fireEvent.change(box, { target: { value: "short" } })
       expect(box.style.height).toBe("24px")
       unmount()
       expect(disconnect).toHaveBeenCalled()
@@ -163,6 +171,79 @@ describe("TrayPanelDelegateBar", () => {
 
     await user.type(box, "{Enter}")
     await waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1))
+  })
+
+  it.each([{ isComposing: true }, { keyCode: 229 }])(
+    "does not send or swallow IME candidate confirmation (%j)",
+    async (ime) => {
+      const user = userEvent.setup()
+      render(<Bar action={delegate} />)
+      const box = screen.getByRole("textbox", { name: "Task" })
+      await user.type(box, "部署")
+      let allowed = false
+      await act(async () => {
+        allowed = fireEvent.keyDown(box, { key: "Enter", ...ime })
+      })
+      expect(allowed).toBe(true)
+      expect(sendMock).not.toHaveBeenCalled()
+      expect(box).toHaveValue("部署")
+      await user.keyboard("{Enter}")
+      await waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1))
+    }
+  )
+
+  it("retains native change events, maxLength, and Enter mapping for a custom text field", async () => {
+    const user = userEvent.setup()
+    const changes: string[] = []
+    const action: TrayPanelAction = {
+      ...delegate,
+      fields: [{ kind: "text", id: "query", label: "Query", maxLength: 8 }],
+      effect: { kind: "delegate", prompt: "{{query}}", target: "newSession", autoSend: true },
+    }
+    render(
+      <form
+        onChange={(event) => {
+          const target = event.target
+          if (!(target instanceof HTMLTextAreaElement))
+            throw new Error("Expected a textarea change")
+          changes.push(target.value)
+        }}
+      >
+        <Bar action={action} />
+      </form>
+    )
+    const box = screen.getByRole("textbox", { name: "Query" })
+    expect(box).toHaveAttribute("maxlength", "8")
+    await user.type(box, "1234567890")
+    expect(box).toHaveValue("12345678")
+    expect(changes.at(-1)).toBe("12345678")
+    await user.keyboard("{Enter}")
+    await waitFor(() =>
+      expect(sendMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          effect: expect.objectContaining({ prompt: "12345678" }),
+        })
+      )
+    )
+  })
+
+  it("keeps the required/busy send button disabled while leaving the running draft editable", async () => {
+    const user = userEvent.setup()
+    render(<Bar action={delegate} />)
+    const box = screen.getByRole("textbox", { name: "Task" })
+    const send = screen.getByRole("button", { name: "Delegate" })
+    await user.type(box, "   ")
+    expect(send).toBeDisabled()
+    await user.clear(box)
+    await user.type(box, "First draft")
+    await user.click(send)
+    await waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1))
+    expect(send).toBeDisabled()
+    expect(box).toBeEnabled()
+    await user.type(box, " revised")
+    expect(box).toHaveValue("First draft revised")
+    await user.click(send)
+    expect(sendMock).toHaveBeenCalledTimes(1)
   })
 
   it("does not send on Enter when the textarea does not submit on Enter", async () => {

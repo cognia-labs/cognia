@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-import { render, screen, within } from "@testing-library/react"
+import { render, screen, within, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { DEFAULT_GLANCE_PANEL_SETTINGS } from "@/lib/glance/presets"
@@ -255,6 +255,32 @@ describe("GlanceUsageModule", () => {
   })
 
   describe("usage scope (ADR-0165 consent)", () => {
+    it("shared controls: arrow selection preserves the All tools consent boundary", async () => {
+      const { send, user } = setup(makeUsage())
+      const cognia = screen.getByRole("radio", { name: "Cognia" })
+      const allTools = screen.getByRole("radio", { name: "All tools" })
+      await user.click(cognia)
+      await user.keyboard("{ArrowRight>}")
+      await waitFor(() => expect(allTools).toHaveFocus())
+      expect(allTools).toBeChecked()
+      await user.keyboard("{/ArrowRight}")
+      expect(cognia).toHaveAttribute("tabindex", "-1")
+      expect(screen.getByText(/reads the session files/)).toBeVisible()
+      expect(send).not.toHaveBeenCalled()
+      await user.keyboard("{ArrowLeft>}")
+      await waitFor(() => expect(cognia).toHaveFocus())
+      expect(cognia).toBeChecked()
+      await user.keyboard("{/ArrowLeft}")
+      expect(screen.queryByText(/reads the session files/)).not.toBeInTheDocument()
+      expect(send).not.toHaveBeenCalled()
+      await user.keyboard("{ArrowRight>}")
+      await screen.findByRole("button", { name: "Count all tools" })
+      await user.keyboard("{/ArrowRight}")
+      await user.click(screen.getByRole("button", { name: "Count all tools" }))
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send).toHaveBeenCalledWith({ kind: "set-usage-scope", scope: "all-tools" })
+    })
+
     it("exposes a Cognia / All tools radio group reflecting the current scope", () => {
       setup(makeUsage())
       const group = screen.getByRole("radiogroup", { name: "Count usage from" })

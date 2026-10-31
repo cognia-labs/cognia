@@ -3,7 +3,7 @@
  */
 
 import { useState } from "react"
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 
 import { ToolScopeField, toolScopeMode, toolScopeValue } from "./tool-scope-field"
@@ -62,6 +62,39 @@ describe("toolScopeValue", () => {
 })
 
 describe("ToolScopeField", () => {
+  it("shared controls: arrows preserve inherited, remembered custom, and empty tool scopes", async () => {
+    const user = userEvent.setup()
+    render(<Controlled initial={["Read", "Grep"]} />)
+    const group = screen.getByRole("radiogroup", { name: "tools" })
+    const inherit = within(group).getByRole("radio", { name: "modes.inherit" })
+    const custom = within(group).getByRole("radio", { name: "modes.custom" })
+    const none = within(group).getByRole("radio", { name: "modes.none" })
+    await user.click(custom)
+    await user.keyboard("{ArrowLeft>}")
+    await waitFor(() => expect(inherit).toHaveFocus())
+    expect(inherit).toBeChecked()
+    await user.keyboard("{/ArrowLeft}")
+    expect(custom).toHaveAttribute("tabindex", "-1")
+    expect(screen.getByTestId("serialized")).toHaveTextContent("null")
+    await user.keyboard("{ArrowRight>}")
+    await waitFor(() => expect(custom).toHaveFocus())
+    expect(custom).toBeChecked()
+    await user.keyboard("{/ArrowRight}")
+    expect(screen.getByTestId("serialized")).toHaveTextContent('["Read","Grep"]')
+    await user.keyboard("{ArrowRight>}")
+    await waitFor(() => expect(none).toHaveFocus())
+    expect(none).toBeChecked()
+    await user.keyboard("{/ArrowRight}")
+    expect(screen.getByTestId("serialized")).toHaveTextContent("[]")
+    await user.click(none)
+    expect(none).toBeChecked()
+    expect(screen.getByTestId("serialized")).toHaveTextContent("[]")
+    await user.keyboard("{ArrowLeft>}")
+    await waitFor(() => expect(custom).toHaveFocus())
+    await user.keyboard("{/ArrowLeft}")
+    expect(screen.getByTestId("serialized")).toHaveTextContent('["Read","Grep"]')
+  })
+
   it("reflects inherit as the active mode for an absent value", () => {
     render(<Controlled initial={undefined} />)
     expect(screen.getByTestId("tool-scope-mode-inherit")).toHaveAttribute("aria-checked", "true")
@@ -109,5 +142,8 @@ describe("ToolScopeField", () => {
     render(<Controlled initial={undefined} />)
     expect(screen.getByRole("radiogroup", { name: "tools" })).toBeInTheDocument()
     expect(screen.getAllByRole("radio")).toHaveLength(3)
+    for (const radio of screen.getAllByRole("radio")) {
+      expect(radio.querySelector('[data-slot="radio-group-indicator"]')).toBeNull()
+    }
   })
 })

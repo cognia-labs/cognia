@@ -39,6 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { ListSkeleton } from "@/components/mobile/discover/list-skeleton"
 import { EmptyState } from "@/components/mobile/empty-state"
@@ -176,7 +177,7 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
       </div>
     )
 
-  return (
+  const body = (
     <main
       className={cn(COMPACT_PAGE_MIN_H, "flex w-full min-w-0 flex-col bg-background safe-area-pt")}
       data-testid="mobile-memory-body"
@@ -234,21 +235,20 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
           </DropdownMenu>
         </div>
 
-        <div
-          role="tablist"
+        <TabsList
           aria-label={t("tabsLabel")}
-          className={cn("mx-4 grid gap-1 rounded-lg bg-muted p-1", tabs.length === 3 ? "grid-cols-3" : "grid-cols-2")}
+          className={cn(
+            "mx-4 grid h-auto w-auto gap-1 rounded-lg bg-muted p-1",
+            tabs.length === 3 ? "grid-cols-3" : "grid-cols-2"
+          )}
         >
           {tabs.map((candidate) => (
-            <button
+            <TabsTrigger
               key={candidate}
-              type="button"
-              role="tab"
-              aria-selected={tab === candidate}
-              onClick={() => setTab(candidate)}
+              value={candidate}
               data-testid={`mobile-memory-tab-${candidate}`}
               className={cn(
-                "flex h-8 min-w-0 items-center justify-center gap-1.5 truncate rounded-md px-2 text-sm",
+                "h-8 min-w-0 gap-1.5 truncate rounded-md border-0 px-2 text-sm",
                 tab === candidate
                   ? "bg-background font-medium text-foreground shadow-sm"
                   : "text-muted-foreground"
@@ -260,9 +260,9 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
                   {state.viewCounts.all}
                 </span>
               ) : null}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
 
         {tab === "app" ? (
           selectionMode ? (
@@ -321,13 +321,14 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
         ) : null}
       </header>
 
-      {tab === "app" ? (
+      <TabsContent value="app" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
         <PullToRefresh onRefresh={refresh} onScrollElChange={setScrollEl} className="flex-1">
           <section className="pb-4" aria-label={t("listLabel")}>
             {list}
           </section>
         </PullToRefresh>
-      ) : tab === "health" ? (
+      </TabsContent>
+      <TabsContent value="health" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
         <div className="flex min-h-0 flex-1 flex-col">
           <MemoryHealthPanel
             report={lint.report}
@@ -338,11 +339,12 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
             mirror={onHost}
           />
         </div>
-      ) : (
+      </TabsContent>
+      <TabsContent value="external" className="flex min-h-0 flex-col data-[state=inactive]:hidden">
         <div className="flex min-h-0 flex-1 flex-col">
           <ExternalMemoryTab onHost={onHost} />
         </div>
-      )}
+      </TabsContent>
 
       <Sheet
         open={tab === "app" && Boolean(state.selectedMemory)}
@@ -404,5 +406,16 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
       />
       <MemoryConsoleDialogs state={state} />
     </main>
+  )
+
+  return (
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value as MemoryConsoleTab)}
+      className="gap-0"
+      asChild
+    >
+      {body}
+    </Tabs>
   )
 }

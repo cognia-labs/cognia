@@ -441,24 +441,28 @@ function SteerQueueRow({
           hover-revealed row of controls is unreachable on the mobile shell,
           which mounts the same panel. */}
       <div className="flex shrink-0 items-center gap-0.5 text-muted-foreground/70 focus-within:text-muted-foreground group-hover/queue:text-muted-foreground">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           onClick={onEditOpen}
           aria-label={tp("ariaEditQueued")}
-          className="rounded p-0.5 hover:text-foreground"
+          className="size-4 rounded p-0.5 hover:text-foreground"
           data-testid="run-panel-queue-edit-open"
         >
           <PencilIcon className="size-3" aria-hidden />
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="icon-xs"
           onClick={onRemove}
           aria-label={tp("ariaRemoveQueued")}
-          className="rounded p-0.5 hover:text-destructive"
+          className="size-4 rounded p-0.5 hover:text-destructive"
           data-testid="run-panel-queue-remove"
         >
           <XIcon className="size-3" aria-hidden />
-        </button>
+        </Button>
       </div>
     </li>
   )

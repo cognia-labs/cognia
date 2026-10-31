@@ -11,6 +11,7 @@
 import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
+import { Kbd } from "@/components/ui/kbd"
 import {
   Dialog,
   DialogClose,
@@ -49,9 +50,9 @@ export function KeyboardShortcutsDialog({
               return (
                 <li key={row.labelKey} className="flex items-center justify-between gap-4 py-1.5">
                   <span className="text-foreground">{tMenu(row.labelKey)}</span>
-                  <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                  <Kbd className="pointer-events-auto h-auto min-w-0 select-text rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] leading-[inherit] font-normal text-muted-foreground">
                     {chord}
-                  </kbd>
+                  </Kbd>
                 </li>
               )
             })}

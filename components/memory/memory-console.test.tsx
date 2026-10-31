@@ -586,6 +586,27 @@ describe("MemoryConsole — deep link", () => {
 })
 
 describe("MemoryConsole — tabs", () => {
+  it("shared controls: arrows select tabs with one tab stop and an associated panel", async () => {
+    const user = userEvent.setup()
+    mockData = [mem()]
+    render(<MemoryConsole />)
+    const app = screen.getByRole("tab", { name: /^App memory/ })
+    const health = screen.getByRole("tab", { name: "Health" })
+    await user.click(app)
+    await user.keyboard("{ArrowRight}")
+    await waitFor(() => expect(health).toHaveFocus())
+    expect(health).toHaveAttribute("aria-selected", "true")
+    expect(health).toHaveAttribute("tabindex", "0")
+    expect(app).toHaveAttribute("tabindex", "-1")
+    const panel = screen.getByRole("tabpanel", { name: "Health" })
+    expect(health).toHaveAttribute("aria-controls", panel.id)
+    expect(screen.queryByRole("tabpanel", { name: /^App memory/ })).not.toBeInTheDocument()
+    await user.keyboard("{ArrowLeft}")
+    await waitFor(() => expect(app).toHaveFocus())
+    expect(app).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByRole("tabpanel", { name: /^App memory/ })).toBeVisible()
+  })
+
   it("switches to the external agent memory tab", async () => {
     mockData = [mem()]
     render(<MemoryConsole />)

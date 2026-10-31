@@ -22,6 +22,7 @@ import { useTranslations } from "next-intl"
 import { BrainIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
 import { MemoryBulkToolbar } from "@/components/memory/memory-bulk-toolbar"
@@ -34,7 +35,11 @@ import { MemoryToolbar } from "@/components/memory/memory-toolbar"
 import { ExternalMemoryTab } from "@/components/memory/external/external-memory-tab"
 import { MemoryHealthPanel } from "@/components/memory/memory-health-panel"
 import { useMemoryLint } from "@/hooks/memory/use-memory-lint"
-import { MEMORY_CONSOLE_TABS, useMemoryConsole } from "@/hooks/memory/use-memory-console"
+import {
+  MEMORY_CONSOLE_TABS,
+  useMemoryConsole,
+  type MemoryConsoleTab,
+} from "@/hooks/memory/use-memory-console"
 import { isEditableTarget } from "@/lib/shortcuts/dom"
 import { useGitStore } from "@/stores/git/git-store"
 import { cn } from "@/lib/utils"
@@ -111,18 +116,19 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
       description={t("subtitle")}
       navigationPlacement="inline"
       navigation={
-        <div className="flex items-center gap-1" role="tablist" aria-label={t("tabsLabel")}>
+        <TabsList
+          className="h-auto gap-1 rounded-none bg-transparent p-0"
+          aria-label={t("tabsLabel")}
+        >
           {MEMORY_CONSOLE_TABS.map((candidate) => (
-            <button
+            <TabsTrigger
               key={candidate}
-              type="button"
-              role="tab"
-              aria-selected={tab === candidate}
-              onClick={() => setTab(candidate)}
+              value={candidate}
               data-testid={`memory-tab-${candidate}`}
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm whitespace-nowrap",
+                "h-auto flex-none gap-1.5 rounded-md border-0 px-2.5 py-1 text-sm whitespace-nowrap",
                 "motion-safe:transition-colors motion-safe:duration-150",
+                "data-[state=active]:bg-muted data-[state=active]:shadow-none dark:data-[state=active]:bg-muted",
                 tab === candidate
                   ? "bg-muted text-foreground"
                   : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
@@ -134,9 +140,9 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
                   {state.viewCounts.all}
                 </Badge>
               ) : null}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
       }
       status={onHost ? <MemoryHostChip /> : <MemoryRetrievalChip />}
       summary={
@@ -213,7 +219,11 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
   )
 
   return (
-    <>
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value as MemoryConsoleTab)}
+      className="h-full min-h-0 gap-0"
+    >
       <FeaturePageShell
         storageId="memory"
         header={header}
@@ -269,7 +279,7 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
             : undefined
         }
       >
-        {isAppTab ? (
+        <TabsContent value="app" className="h-full min-h-0">
           <div className="flex h-full min-h-0 flex-col">
             {state.selectedIds.size > 0 ? (
               <MemoryBulkToolbar
@@ -313,7 +323,8 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
               />
             </div>
           </div>
-        ) : tab === "health" ? (
+        </TabsContent>
+        <TabsContent value="health" className="h-full min-h-0">
           <MemoryHealthPanel
             report={lint.report}
             loading={lint.loading}
@@ -322,12 +333,13 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
             onOpenMemory={state.openFromHealth}
             mirror={onHost}
           />
-        ) : (
+        </TabsContent>
+        <TabsContent value="external" className="h-full min-h-0">
           <ExternalMemoryTab onHost={onHost} />
-        )}
+        </TabsContent>
       </FeaturePageShell>
 
       <MemoryConsoleDialogs state={state} />
-    </>
+    </Tabs>
   )
 }

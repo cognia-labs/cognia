@@ -3,6 +3,7 @@
  */
 import * as ReactForMocks from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import type { ToolUIPart } from "ai"
 
 import {
@@ -42,6 +43,29 @@ const part = (input?: unknown, output?: unknown): ToolUIPart =>
   }) as unknown as ToolUIPart
 
 describe("WebFetchCard", () => {
+  it("expands by shared keyboard action without submitting and still copies the full body", async () => {
+    const user = userEvent.setup()
+    mockCopy.mockClear()
+    const body = `${"a".repeat(650)}TAIL`
+    const onSubmit = jest.fn((event: React.FormEvent) => event.preventDefault())
+    render(
+      <form onSubmit={onSubmit}>
+        <WebFetchCard part={part({ url: "https://example.com" }, { ok: true, body })} />
+      </form>
+    )
+    await user.click(screen.getByRole("button", { name: "Copy output" }))
+    expect(mockCopy).toHaveBeenCalledWith(body)
+    const expand = screen.getByRole("button", { name: "Show all" })
+    expect(expand).toHaveAttribute("data-slot", "button")
+    expect(expand).toHaveAttribute("type", "button")
+    await user.tab()
+    expect(expand).toHaveFocus()
+    await user.keyboard(" ")
+    expect(screen.getByTestId("mcp-webfetch-content")).toHaveTextContent("TAIL")
+    expect(screen.queryByRole("button", { name: "Show all" })).not.toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it("renders the page title and prose body without repeating the row's URL", () => {
     render(
       <WebFetchCard

@@ -16,9 +16,28 @@ describe("QuotaBar", () => {
     expect(bar).toHaveAttribute("aria-label", "Session")
   })
 
-  it("treats a missing reading as zero rather than crashing", () => {
-    render(<QuotaBar pct={null} status="unknown" label="Weekly" />)
+  it("distinguishes a missing reading from a known zero", () => {
+    const { rerender } = render(<QuotaBar pct={null} status="unknown" label="Weekly" />)
+    expect(screen.getByRole("progressbar")).not.toHaveAttribute("aria-valuenow")
+    expect(screen.getByRole("progressbar")).toHaveAttribute("data-state", "indeterminate")
+    rerender(<QuotaBar pct={0} status="ok" label="Weekly" />)
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0")
+    expect(screen.getByRole("progressbar")).toHaveAttribute("data-state", "loading")
+  })
+
+  it("uses shared progress while keeping the reading and status fill in sync", () => {
+    const { rerender } = render(<QuotaBar pct={42} status="ok" label="Session" />)
+    const bar = screen.getByRole("progressbar", { name: "Session" })
+    expect(bar).toHaveAttribute("data-slot", "progress")
+    const fill = bar.querySelector('[data-slot="progress-indicator"]')
+    expect(fill).toHaveStyle({ transform: "translateX(-58%)" })
+    expect(fill).toHaveClass("bg-emerald-500", "duration-500")
+    expect(bar).not.toHaveAttribute("indicatorClassName")
+    rerender(<QuotaBar pct={100} status="crit" label="Session" />)
+    expect(fill).toHaveStyle({ transform: "translateX(-0%)" })
+    expect(fill).toHaveClass("bg-destructive")
+    expect(fill).not.toHaveClass("bg-emerald-500", "bg-primary")
+    expect(bar).toHaveAttribute("data-state", "complete")
   })
 
   it("colours the fill by status", () => {

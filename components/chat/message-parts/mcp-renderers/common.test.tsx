@@ -1,4 +1,5 @@
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import {
   blockMediaSrc,
   dateOf,
@@ -202,6 +203,25 @@ describe("useClampedRows", () => {
 })
 
 describe("PreviewClampNote", () => {
+  it("uses a shared action button that expands by keyboard without submitting a form", async () => {
+    const user = userEvent.setup()
+    const onExpand = jest.fn()
+    const onSubmit = jest.fn((event: React.FormEvent) => event.preventDefault())
+    render(
+      <form onSubmit={onSubmit}>
+        <PreviewClampNote shown={5} total={9} onExpand={onExpand} />
+      </form>
+    )
+    const button = screen.getByRole("button", { name: "Show all" })
+    expect(button).toHaveAttribute("data-slot", "button")
+    expect(button).toHaveAttribute("type", "button")
+    await user.tab()
+    expect(button).toHaveFocus()
+    await user.keyboard("{Enter} ")
+    expect(onExpand).toHaveBeenCalledTimes(2)
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it("renders the shown/total counts, optional hint, and fires onExpand", () => {
     const onExpand = jest.fn()
     render(

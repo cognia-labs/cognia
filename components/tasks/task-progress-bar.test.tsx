@@ -11,6 +11,21 @@ jest.mock("next-intl", () => ({
 }))
 
 describe("TaskProgressBar", () => {
+  it("uses shared progress with reduced-motion support and keeps fill updates in sync", () => {
+    const { rerender } = render(<TaskProgressBar done={1} total={4} className="mt-2" />)
+    const bar = screen.getByRole("progressbar")
+    expect(bar).toHaveAttribute("data-slot", "progress")
+    expect(bar).toHaveClass("h-1.5", "mt-2")
+    const fill = bar.querySelector('[data-slot="progress-indicator"]')
+    expect(fill).toHaveStyle({ transform: "translateX(-75%)" })
+    expect(fill).toHaveClass("motion-reduce:transition-none", "bg-primary")
+    rerender(<TaskProgressBar done={4} total={4} tone="warning" />)
+    expect(bar).toHaveAttribute("aria-valuenow", "100")
+    expect(fill).toHaveStyle({ transform: "translateX(-0%)" })
+    expect(fill).toHaveClass("bg-amber-500")
+    expect(fill).not.toHaveClass("bg-primary")
+  })
+
   it("exposes the percentage and the done/total text", () => {
     render(<TaskProgressBar done={1} total={4} />)
     const bar = screen.getByRole("progressbar")

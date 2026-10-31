@@ -3,6 +3,7 @@
 import { useId } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -40,20 +41,22 @@ export function ManagedDesktopAcceptanceCriteria({
               )
             }
           />
-          <Label className="flex items-center gap-2">
-            <input
-              type="checkbox"
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={`${id}-${index}-screenshot`}
               checked={row.screenshotRequired}
-              onChange={(event) =>
+              onCheckedChange={(checked) =>
                 onChange(
                   value.map((item, i) =>
-                    i === index ? { ...item, screenshotRequired: event.target.checked } : item
+                    i === index ? { ...item, screenshotRequired: checked === true } : item
                   )
                 )
               }
             />
-            {t("screenshot", { number: index + 1 })}
-          </Label>
+            <Label htmlFor={`${id}-${index}-screenshot`}>
+              {t("screenshot", { number: index + 1 })}
+            </Label>
+          </div>
           <Button
             type="button"
             size="sm"

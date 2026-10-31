@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react"
 import { useTranslations } from "next-intl"
 import type { ToolUIPart } from "ai"
+import { Button } from "@/components/ui/button"
 import { useParsedOutput } from "./common"
 import { CodeBlock } from "@/components/chat/renderers/code-block"
 import { MarkdownRenderer } from "@/components/chat/markdown-renderer"
@@ -189,14 +190,16 @@ export function WebFetchCard({ part }: { part: ToolUIPart }) {
               <span>
                 {t("truncatedChars", { shown: FETCH_PREVIEW_CHARS, total: content.length })}
               </span>
-              <button
+              <Button
                 type="button"
+                variant="link"
+                size="xs"
                 onClick={() => setExpanded(true)}
-                className="font-medium text-primary hover:underline"
+                className="h-auto p-0 text-[10px] leading-[inherit]"
                 data-testid="mcp-webfetch-show-all"
               >
                 {tRow("preview.showAll")}
-              </button>
+              </Button>
             </p>
           )}
         </>
