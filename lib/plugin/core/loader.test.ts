@@ -466,6 +466,66 @@ describe("PluginLoader", () => {
       expect(invokeCallback).toHaveBeenNthCalledWith(3, "exports.createConnector", [{ id: "mail" }])
     })
 
+    it("restores only the Node recorder's explicit credential marker, preserving untrusted JSON", async () => {
+      const { execFileSync } = jest.requireActual("node:child_process")
+      const calls = JSON.parse(
+        execFileSync(
+          process.execPath,
+          [
+            "--input-type=module",
+            "--eval",
+            `
+        import { createRecordingContext } from "./scripts/plugin/node-plugin-host.mjs";
+        const ref = Object.defineProperty({ $secretRef: "token", prefix: "Bearer " }, Symbol.for("cognia.plugin.secretRef"), { value: true });
+        const recorder = createRecordingContext({ pluginId: "node-plugin" });
+        recorder.context.network.post("https://api.example.com", {
+          api_key: { $secretRef: "token" },
+          nested: { api_key: { $cogniaSecretRef: { $secretRef: "token" } } },
+          escaped: { $cogniaPlainObject: [["$cogniaSecretRef", { $secretRef: "token" }]] }
+        }, { headers: { Authorization: ref } });
+        console.log(JSON.stringify(recorder.calls));
+      `,
+          ],
+          { encoding: "utf8", cwd: process.cwd() }
+        )
+      )
+      launcherModule.launchPluginJs.mockResolvedValueOnce({
+        activation: { calls, hooks: {}, exports: {} },
+        invokeCallback: jest.fn(),
+        deactivate: jest.fn(),
+        process: { killed: false, kill: jest.fn(), isRunning: jest.fn().mockResolvedValue(true) },
+      })
+      const plugin = createMockPlugin("node-plugin")
+      plugin.manifest.engines = { node: ">=26" }
+      const definition = await loader.load(plugin)
+      const post = jest.fn()
+      await definition.activate({ network: { post } } as never)
+      const [url, body, options] = post.mock.calls[0]
+      expect(
+        Object.getOwnPropertyDescriptor(
+          options.headers.Authorization,
+          Symbol.for("cognia.plugin.secretRef")
+        )
+      ).toMatchObject({ value: true, enumerable: false })
+      expect(body).toEqual({
+        api_key: { $secretRef: "token" },
+        nested: { api_key: { $cogniaSecretRef: { $secretRef: "token" } } },
+        escaped: { $cogniaPlainObject: [["$cogniaSecretRef", { $secretRef: "token" }]] },
+      })
+      expect(Reflect.ownKeys(body.api_key)).toEqual(["$secretRef"])
+      const { sanitizePluginNetworkEgress } = await import("../api/plugin-pii-gate")
+      const { resolveNetworkCredentials } = await import("../api/network-credentials")
+      const read = jest.fn(async () => "stored-token")
+      const request = await resolveNetworkCredentials(
+        sanitizePluginNetworkEgress("node-plugin", { url, body, ...options }),
+        read
+      )
+      expect(request.headers).toEqual({ Authorization: "Bearer stored-token" })
+      expect(request.body).toEqual(body)
+      expect(read).toHaveBeenCalledTimes(1)
+      expect(read).toHaveBeenCalledWith("token")
+    })
+
     it("kills the Node permission executor process during deactivate", async () => {
       const kill = jest.fn()
       launcherModule.launchPluginJs.mockResolvedValueOnce({

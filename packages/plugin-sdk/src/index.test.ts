@@ -9,6 +9,13 @@ import type {
 const rootBarrel = sdk as Record<string, unknown>
 
 describe("plugin-sdk root barrel", () => {
+  it("exports the pure credential reference helper from the author root", () => {
+    expect(sdk.secretRef("token", { prefix: "Bearer " })).toEqual({
+      $secretRef: "token",
+      prefix: "Bearer ",
+    })
+  })
+
   it("re-exports the legacy define helper surface from the package root", () => {
     const helperExports = [
       "defineMcpServerPreset",

@@ -16,6 +16,7 @@ import {
   type NetworkHttpMethod,
 } from "@/lib/plugin/security/network-allowlist"
 import { sanitizePluginNetworkEgress } from "@/lib/plugin/api/plugin-pii-gate"
+import { resolveNetworkCredentials } from "@/lib/plugin/api/network-credentials"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import { getPluginSecurityPosture } from "@/lib/plugin/security/security-posture"
 import type {
@@ -1526,12 +1527,91 @@ const DB_GUARD_MAP: Partial<Record<keyof PluginDatabaseAPI, PluginPermission>> =
   transaction: "database:write",
 }
 
+const warnedLiteralCredentialFields = new Set<string>()
+
+export function __resetLiteralCredentialWarningsForTesting(): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("__resetLiteralCredentialWarningsForTesting is only callable in NODE_ENV=test")
+  }
+  warnedLiteralCredentialFields.clear()
+}
+
 function createNetworkAPI(
   pluginId: string,
   networkAccess?: PluginManifest["networkAccess"],
   isBuiltin = false
 ): PluginNetworkAPI {
   const rateLimiter = getPluginRateLimiter()
+  const secrets = createSecretsAPI(pluginId)
+  const prepareEgress = async (
+    url: string,
+    method: NetworkHttpMethod,
+    options?: NetworkRequestOptions,
+    fileContentPolicy?: UploadOptions["fileContentPolicy"]
+  ) => {
+    const literals = new Set<string>()
+    const egress = sanitizePluginNetworkEgress(
+      pluginId,
+      {
+        url,
+        headers: options?.headers,
+        query: options?.query,
+        body: options?.body,
+        piiPolicy: options?.piiPolicy,
+      },
+      {
+        oauthTokenKeys: getHostPkceTokenRequestExemptKeys(options, url),
+        isBuiltin,
+        literalCredentials: networkAccess?.literalCredentials,
+        onLiteralCredential: (position, name) => literals.add(`${position}:${name}`),
+      }
+    )
+    assertNetworkRequestAllowed(
+      pluginId,
+      egress.url,
+      method,
+      networkAccess,
+      getPluginSecurityPosture()
+    )
+    if (fileContentPolicy) {
+      if (fileContentPolicy !== "allow") {
+        throw new Error("network:upload file content is blocked; set fileContentPolicy to allow")
+      }
+      if (!options?.dataClassification) {
+        throw new Error(
+          "network:upload requires dataClassification when fileContentPolicy is allow"
+        )
+      }
+    }
+    // Only the unresolved/sanitized request is ever used for audit and warnings.
+    auditEgress(egress.url, method, options, fileContentPolicy)
+    for (const field of literals) {
+      getPermissionGuard().recordUsage(
+        pluginId,
+        fileContentPolicy ? "network:upload" : "network:fetch",
+        `literal-credential ${field}`
+      )
+      const warningKey = JSON.stringify([pluginId, field.toLowerCase()])
+      if (!warnedLiteralCredentialFields.has(warningKey)) {
+        warnedLiteralCredentialFields.add(warningKey)
+        createLogger(pluginId).warn(
+          `Literal network credential ${field}: use secretRef for stored secrets; literal fields will be inspected in the next release.`
+        )
+      }
+    }
+    const target = new URL(egress.url)
+    const guardedSecrets = createGuardedAPI(pluginId, secrets, SECRETS_GUARD_MAP, {
+      context: `Network credential for ${method} ${target.origin}${target.pathname}`,
+      // Keep the existing confirm-tier consent and ledger mirror, but give the
+      // user the sanitized network destination rather than an opaque get call.
+      onConsentGranted: async (permission) => {
+        if (isPluginGatewayAvailable()) {
+          await grantPluginPermission(pluginId, permission, "user")
+        }
+      },
+    })
+    return resolveNetworkCredentials(egress, (key) => guardedSecrets.get(key))
+  }
   const auditEgress = (
     url: string,
     method: NetworkHttpMethod,
@@ -1587,26 +1667,7 @@ function createNetworkAPI(
     if (!NETWORK_HTTP_METHODS.has(method)) {
       throw new Error(`network policy denied unsupported HTTP method: ${String(options?.method)}`)
     }
-    const egress = sanitizePluginNetworkEgress(
-      pluginId,
-      {
-        url,
-        headers: options?.headers,
-        body: options?.body,
-        piiPolicy: options?.piiPolicy,
-      },
-      { oauthTokenKeys: getHostPkceTokenRequestExemptKeys(options, url), isBuiltin }
-    )
-    // Renderer-side egress policy. The Tauri path mirrors this in Rust for
-    // defense-in-depth; this is the enforcement point in web/mobile mode.
-    assertNetworkRequestAllowed(
-      pluginId,
-      egress.url,
-      method,
-      networkAccess,
-      getPluginSecurityPosture()
-    )
-    auditEgress(egress.url, method, options)
+    const egress = await prepareEgress(url, method, options)
     const requestOptions = {
       ...options,
       method,
@@ -1615,30 +1676,33 @@ function createNetworkAPI(
     }
     delete requestOptions.dataClassification
     delete requestOptions.piiPolicy
-    if (!isPluginGatewayAvailable()) {
-      const headers = { ...(requestOptions.headers ?? {}) }
-      const body =
-        requestOptions.body === undefined || typeof requestOptions.body === "string"
-          ? requestOptions.body
-          : JSON.stringify(requestOptions.body)
-      if (body !== undefined && typeof requestOptions.body !== "string") {
-        const hasContentType = Object.keys(headers).some(
-          (header) => header.toLowerCase() === "content-type"
-        )
-        if (!hasContentType) headers["content-type"] = "application/json"
+    delete requestOptions.query
+    return egress.dispatch(async () => {
+      if (!isPluginGatewayAvailable()) {
+        const headers = { ...(requestOptions.headers ?? {}) }
+        const body =
+          requestOptions.body === undefined || typeof requestOptions.body === "string"
+            ? requestOptions.body
+            : JSON.stringify(requestOptions.body)
+        if (body !== undefined && typeof requestOptions.body !== "string") {
+          const hasContentType = Object.keys(headers).some(
+            (header) => header.toLowerCase() === "content-type"
+          )
+          if (!hasContentType) headers["content-type"] = "application/json"
+        }
+        const response = await fetch(egress.url, {
+          method,
+          headers,
+          body,
+          signal: requestOptions.signal,
+        })
+        return parseBrowserResponse<T>(response, options?.responseType)
       }
-      const response = await fetch(egress.url, {
-        method,
-        headers,
-        body,
-        signal: requestOptions.signal,
-      })
-      return parseBrowserResponse<T>(response, options?.responseType)
-    }
 
-    return invokePluginApi<NetworkResponse<T>>(pluginId, "network:fetch", {
-      url: egress.url,
-      options: requestOptions,
+      return invokePluginApi<NetworkResponse<T>>(pluginId, "network:fetch", {
+        url: egress.url,
+        options: requestOptions,
+      })
     })
   }
 
@@ -1666,52 +1730,42 @@ function createNetworkAPI(
       options?: DownloadOptions
     ): Promise<DownloadResult> => {
       rateLimiter.check(pluginId, "network:download")
-      const egress = sanitizePluginNetworkEgress(pluginId, {
-        url,
-        headers: options?.headers,
-        piiPolicy: options?.piiPolicy,
-      })
-      assertNetworkRequestAllowed(
-        pluginId,
-        egress.url,
-        "GET",
-        networkAccess,
-        getPluginSecurityPosture()
-      )
-      auditEgress(egress.url, "GET", options)
-      if (!isPluginGatewayAvailable()) {
-        const response = await fetch(egress.url, { headers: egress.headers })
-        if (!response.ok) {
-          throw new PluginGatewayError({
-            code: "NOT_SUPPORTED",
-            message: `Failed to download ${egress.url}: ${response.status} ${response.statusText}`,
-            requestId: `browser-network-download-${pluginId}`,
-            api: "network:download",
-            pluginId,
-          })
+      const egress = await prepareEgress(url, "GET", options)
+      return egress.dispatch(async () => {
+        if (!isPluginGatewayAvailable()) {
+          const response = await fetch(egress.url, { headers: egress.headers })
+          if (!response.ok) {
+            throw new PluginGatewayError({
+              code: "NOT_SUPPORTED",
+              message: `Failed to download ${egress.url}: ${response.status} ${response.statusText}`,
+              requestId: `browser-network-download-${pluginId}`,
+              api: "network:download",
+              pluginId,
+            })
+          }
+
+          const blob = await response.blob()
+          const objectUrl = URL.createObjectURL(blob)
+          const anchor = document.createElement("a")
+          anchor.href = objectUrl
+          anchor.download = destPath.split("/").pop() || "download.bin"
+          anchor.click()
+          URL.revokeObjectURL(objectUrl)
+
+          return {
+            path: destPath,
+            size: blob.size,
+            contentType: blob.type || undefined,
+          }
         }
 
-        const blob = await response.blob()
-        const objectUrl = URL.createObjectURL(blob)
-        const anchor = document.createElement("a")
-        anchor.href = objectUrl
-        anchor.download = destPath.split("/").pop() || "download.bin"
-        anchor.click()
-        URL.revokeObjectURL(objectUrl)
-
-        return {
-          path: destPath,
-          size: blob.size,
-          contentType: blob.type || undefined,
-        }
-      }
-
-      // The host streams the body into the plugin's data sandbox; `onProgress`
-      // can't cross the IPC boundary, so only the static request shape is sent.
-      return invokePluginApi<DownloadResult>(pluginId, "network:download", {
-        url: egress.url,
-        destPath,
-        headers: egress.headers,
+        // The host streams the body into the plugin's data sandbox; `onProgress`
+        // can't cross the IPC boundary, so only the static request shape is sent.
+        return invokePluginApi<DownloadResult>(pluginId, "network:download", {
+          url: egress.url,
+          destPath,
+          headers: egress.headers,
+        })
       })
     },
 
@@ -1721,38 +1775,20 @@ function createNetworkAPI(
       options?: UploadOptions
     ): Promise<NetworkResponse<unknown>> => {
       rateLimiter.check(pluginId, "network:upload")
-      const egress = sanitizePluginNetworkEgress(pluginId, {
-        url,
-        headers: options?.headers,
-        piiPolicy: options?.piiPolicy,
-      })
-      assertNetworkRequestAllowed(
-        pluginId,
-        egress.url,
-        "POST",
-        networkAccess,
-        getPluginSecurityPosture()
-      )
       const fileContentPolicy = options?.fileContentPolicy ?? "block"
-      if (fileContentPolicy !== "allow") {
-        throw new Error("network:upload file content is blocked; set fileContentPolicy to allow")
-      }
-      if (!options?.dataClassification) {
-        throw new Error(
-          "network:upload requires dataClassification when fileContentPolicy is allow"
-        )
-      }
-      auditEgress(egress.url, "POST", options, fileContentPolicy)
-      return invokePluginApi<NetworkResponse<unknown>>(pluginId, "network:upload", {
-        url: egress.url,
-        filePath,
-        headers: egress.headers,
-        // When set, the host sends multipart/form-data with this field name;
-        // otherwise the file bytes are the raw request body.
-        fieldName: options?.fieldName,
-        fileContentPolicy,
-        dataClassification: options?.dataClassification,
-      })
+      const egress = await prepareEgress(url, "POST", options, fileContentPolicy)
+      return egress.dispatch(() =>
+        invokePluginApi<NetworkResponse<unknown>>(pluginId, "network:upload", {
+          url: egress.url,
+          filePath,
+          headers: egress.headers,
+          // When set, the host sends multipart/form-data with this field name;
+          // otherwise the file bytes are the raw request body.
+          fieldName: options?.fieldName,
+          fileContentPolicy,
+          dataClassification: options?.dataClassification,
+        })
+      )
     },
   }
 }

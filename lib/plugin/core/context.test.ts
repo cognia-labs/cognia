@@ -4,6 +4,7 @@
  */
 
 import {
+  __resetLiteralCredentialWarningsForTesting,
   createGuardedBrowserAPI,
   createPluginContext,
   createFullPluginContext,
@@ -71,6 +72,8 @@ import { createWorkflowAuthorAPI } from "../api/workflow-author-api"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import * as pluginPiiGate from "@/lib/plugin/api/plugin-pii-gate"
+import { getSecret } from "@/lib/keyring"
+import { secretRef } from "@cognia/plugin-sdk"
 import {
   __resetAuthRegistryForTesting,
   __makeSession,
@@ -86,6 +89,11 @@ jest.mock("../api/workflow-author-api", () => {
 jest.mock("@/lib/plugin/api/plugin-pii-gate", () => ({
   __esModule: true,
   ...jest.requireActual("@/lib/plugin/api/plugin-pii-gate"),
+}))
+
+jest.mock("@/lib/keyring", () => ({
+  ...jest.requireActual("@/lib/keyring"),
+  getSecret: jest.fn(),
 }))
 
 // Mock Tauri invoke
@@ -3312,7 +3320,14 @@ describe("agent imperative API", () => {
     const fetchMock = jest.fn()
 
     beforeEach(() => {
+      __resetLiteralCredentialWarningsForTesting()
       mockIsTauri.mockReturnValue(false)
+      getPermissionGuard().registerPlugin("test-plugin", [
+        "network:fetch",
+        "network:upload",
+        "secrets:read",
+        "secrets:write",
+      ])
       fetchMock.mockReset()
       fetchMock.mockResolvedValue({
         ok: true,
@@ -3339,6 +3354,494 @@ describe("agent imperative API", () => {
           networkAccess: networkAccess as Plugin["manifest"]["networkAccess"],
         },
       })
+
+    it("uses frozen gate snapshots while earlier secret reads are pending", async () => {
+      const mutable = Object.defineProperty(
+        { $secretRef: "query-token", prefix: "Bearer " },
+        Symbol.for("cognia.plugin.secretRef"),
+        { value: true, configurable: true }
+      )
+      const readSecret = getSecret as jest.Mock
+      readSecret.mockImplementation(async ({ key }) => {
+        if (key === "header-token") {
+          Reflect.deleteProperty(mutable, Symbol.for("cognia.plugin.secretRef"))
+          Object.assign(mutable, {
+            $secretRef: "alice@example.com",
+            prefix: "bob@example.com ",
+            note: "carol@example.com",
+          })
+          await Promise.resolve()
+        }
+        return `stored-${key}`
+      })
+      const ctx = createPluginContext(
+        pluginWithNetworkPolicy({
+          allowedDomains: ["api.example.com"],
+          literalCredentials: "inspect",
+        }),
+        mockManager
+      )
+      await ctx.network.get("https://api.example.com", {
+        headers: { Authorization: secretRef("header-token") },
+        query: { api_key: mutable },
+      })
+      expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get("api_key")).toBe(
+        "Bearer stored-query-token"
+      )
+      expect(readSecret.mock.calls.map(([ref]) => ref.key)).toEqual(["header-token", "query-token"])
+    })
+
+    it("keeps relayed reference-shaped JSON as inspected data without reading secrets", async () => {
+      const readSecret = getSecret as jest.Mock
+      readSecret.mockClear()
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      await ctx.network.post("https://api.example.com", {
+        api_key: { $secretRef: "alice@example.com" },
+      })
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        api_key: { $secretRef: "<EMAIL_001>" },
+      })
+      expect(readSecret).not.toHaveBeenCalled()
+    })
+
+    it("audits egress and observed literals before a failed secret read", async () => {
+      const usage = jest.spyOn(getPermissionGuard(), "recordUsage")
+      const warning = jest.spyOn(console, "warn").mockImplementation(() => {})
+      const readSecret = getSecret as jest.Mock
+      readSecret.mockImplementation(async () => {
+        expect(usage).toHaveBeenCalledWith(
+          "test-plugin",
+          "network:fetch",
+          expect.stringContaining("egress GET https://api.example.com/path")
+        )
+        expect(usage).toHaveBeenCalledWith(
+          "test-plugin",
+          "network:fetch",
+          "literal-credential header:x-api-key"
+        )
+        return null
+      })
+      try {
+        const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+        await expect(
+          ctx.network.get("https://api.example.com/path", {
+            headers: { Authorization: secretRef("missing"), "x-api-key": "literal" },
+          })
+        ).rejects.toThrow(/not found/)
+        expect(readSecret).toHaveBeenCalledTimes(1)
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(JSON.stringify(usage.mock.calls)).not.toContain("missing")
+      } finally {
+        usage.mockRestore()
+        warning.mockRestore()
+      }
+    })
+
+    it.each([false, true])(
+      "refuses empty secrets before transport (gateway=%s)",
+      async (gateway) => {
+        mockIsTauri.mockReturnValue(gateway)
+        const invokeMock = invoke as jest.Mock
+        invokeMock.mockReset().mockResolvedValue({ success: true, data: "" })
+        ;(getSecret as jest.Mock).mockResolvedValue("")
+        try {
+          const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+          await expect(
+            ctx.network.get("https://api.example.com", {
+              headers: { Authorization: secretRef("empty") },
+            })
+          ).rejects.toThrow(/not found/)
+          expect(fetchMock).not.toHaveBeenCalled()
+          expect(
+            invokeMock.mock.calls.some(([, args]) => args?.request?.api?.startsWith("network:"))
+          ).toBe(false)
+        } finally {
+          invokeMock.mockReset().mockResolvedValue(null)
+        }
+      }
+    )
+
+    it.each([false, true])(
+      "gives secrets consent network context and awaits the host grant (gateway=%s)",
+      async (gateway) => {
+        mockIsTauri.mockReturnValue(gateway)
+        const guard = getPermissionGuard()
+        guard.setTier("test-plugin", "network:fetch", "silent")
+        guard.setTier("test-plugin", "secrets:read", "confirm")
+        const request = jest.spyOn(getPluginConsentBroker(), "request").mockResolvedValue(true)
+        const invokeMock = invoke as jest.Mock
+        let granted = false
+        invokeMock.mockImplementation(async (command, args) => {
+          if (command === "plugin_permission_grant") {
+            await new Promise<void>((resolve) => queueMicrotask(resolve))
+            granted = true
+            return null
+          }
+          if (args?.request?.api === "secrets:get") {
+            expect(granted).toBe(true)
+            return { success: true, data: "stored-token" }
+          }
+          return { success: true, data: { ok: true, data: {} } }
+        })
+        ;(getSecret as jest.Mock).mockResolvedValue("stored-token")
+        try {
+          const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+          await ctx.network.get("https://api.example.com/path?owner=alice@example.com", {
+            headers: { Authorization: secretRef("private-key") },
+          })
+          expect(request).toHaveBeenCalledWith({
+            pluginId: "test-plugin",
+            permission: "secrets:read",
+            reason: "Network credential for GET https://api.example.com/path",
+          })
+          expect(JSON.stringify(request.mock.calls)).not.toContain("alice@example.com")
+          expect(JSON.stringify(request.mock.calls)).not.toContain("private-key")
+          if (gateway)
+            expect(invokeMock).toHaveBeenCalledWith(
+              "plugin_permission_grant",
+              expect.objectContaining({ pluginId: "test-plugin", permission: "secrets:read" })
+            )
+        } finally {
+          request.mockRestore()
+          invokeMock.mockReset().mockResolvedValue(null)
+          guard.setTier("test-plugin", "secrets:read", "silent")
+        }
+      }
+    )
+
+    it("applies upload PII and destination checks before file policy and classification checks", async () => {
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      await expect(
+        ctx.network.upload("https://api.example.com?owner=alice@example.com", "file.txt", {
+          piiPolicy: "block",
+        })
+      ).rejects.toBeInstanceOf(pluginPiiGate.PluginPiiError)
+      await expect(ctx.network.upload("https://other.example.com", "file.txt")).rejects.toThrow(
+        /allowedDomains/
+      )
+      await expect(
+        ctx.network.upload("https://other.example.com", "file.txt", { fileContentPolicy: "allow" })
+      ).rejects.toThrow(/allowedDomains/)
+      await expect(ctx.network.upload("https://api.example.com", "file.txt")).rejects.toThrow(
+        /file content is blocked/
+      )
+      await expect(
+        ctx.network.upload("https://api.example.com", "file.txt", { fileContentPolicy: "allow" })
+      ).rejects.toThrow(/requires dataClassification/)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it.each([false, true])(
+      "resolves header, query and nested body references (gateway=%s)",
+      async (gateway) => {
+        const secret = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+        fetchMock.mockResolvedValue({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: new Headers({ "content-type": "application/json", "x-echo": secret }),
+          json: async () => ({ echo: secret }),
+        })
+        mockIsTauri.mockReturnValue(gateway)
+        const invokeMock = invoke as jest.Mock
+        invokeMock.mockImplementation(
+          async (_command: string, args: { request?: { pluginId: string; api: string } }) => {
+            if (args.request?.api === "secrets:get") {
+              expect(args.request.pluginId).toBe("test-plugin")
+              return { success: true, data: secret }
+            }
+            return { success: true, data: { ok: true, data: { echo: secret }, headers: {} } }
+          }
+        )
+        const ctx = createPluginContext(
+          pluginWithNetworkPolicy({
+            allowedDomains: ["api.example.com"],
+            literalCredentials: "inspect",
+          }),
+          mockManager
+        )
+        if (!gateway)
+          (getSecret as jest.Mock).mockImplementation(async (ref) =>
+            ref.namespace === "plugin:test-plugin" && ref.key === "network-test" ? secret : null
+          )
+        const usage = jest.spyOn(getPermissionGuard(), "recordUsage")
+        const warning = jest.spyOn(console, "warn").mockImplementation(() => {})
+        try {
+          const response = await ctx.network.post(
+            "https://api.example.com/send?owner=alice@example.com",
+            {
+              nested: { access_token: secretRef("network-test") },
+            },
+            {
+              headers: { Authorization: secretRef("network-test", { prefix: "Bearer " }) },
+              query: { api_key: secretRef("network-test"), note: "alice@example.com" },
+            }
+          )
+          const transport = gateway
+            ? invokeMock.mock.calls.find(([, args]) => args?.request?.api === "network:fetch")?.[1]
+                .request.payload
+            : { url: fetchMock.mock.calls[0][0], options: fetchMock.mock.calls[0][1] }
+          expect(new URL(transport.url).searchParams.get("api_key")).toBe(secret)
+          expect(new URL(transport.url).searchParams.get("owner")).toBe("<EMAIL_001>")
+          expect(new URL(transport.url).searchParams.get("note")).toBe("<EMAIL_001>")
+          expect(transport.options.headers.Authorization).toBe(`Bearer ${secret}`)
+          const body =
+            typeof transport.options.body === "string"
+              ? JSON.parse(transport.options.body)
+              : transport.options.body
+          expect(body).toEqual({ nested: { access_token: secret } })
+          expect(transport.options.query).toBeUndefined()
+          expect(JSON.stringify(response)).not.toContain(secret)
+          expect(JSON.stringify(usage.mock.calls)).not.toContain(secret)
+          expect(JSON.stringify(warning.mock.calls)).not.toContain(secret)
+        } finally {
+          usage.mockRestore()
+          warning.mockRestore()
+          invokeMock.mockReset().mockResolvedValue(null)
+        }
+      }
+    )
+
+    it("observes literals on every send and warns once per plugin and field per session", async () => {
+      const warning = jest.spyOn(console, "warn").mockImplementation(() => {})
+      const usage = jest.spyOn(getPermissionGuard(), "recordUsage")
+      try {
+        for (let i = 0; i < 2; i++) {
+          const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+          await ctx.network.post(
+            "https://api.example.com?access_token=alice@example.com",
+            {
+              nested: { api_key: "alice@example.com" },
+            },
+            { headers: { Authorization: "Bearer alice@example.com" } }
+          )
+        }
+        for (const field of ["header:Authorization", "query:access_token", "body:api_key"]) {
+          expect(
+            usage.mock.calls.filter((call) => call[2] === `literal-credential ${field}`)
+          ).toHaveLength(2)
+        }
+        expect(
+          warning.mock.calls.filter((call) => String(call[0]).includes("use secretRef"))
+        ).toHaveLength(3)
+        expect(JSON.stringify(usage.mock.calls)).not.toContain("alice@example.com")
+        expect(JSON.stringify(warning.mock.calls)).not.toContain("alice@example.com")
+        expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer alice@example.com")
+      } finally {
+        warning.mockRestore()
+        usage.mockRestore()
+      }
+    })
+
+    it("inspects literal credential headers and URL parameters", async () => {
+      const ctx = createPluginContext(
+        pluginWithNetworkPolicy({
+          allowedDomains: ["api.example.com"],
+          literalCredentials: "inspect",
+        }),
+        mockManager
+      )
+      await ctx.network.get("https://api.example.com?access_token=alice@example.com", {
+        headers: { Authorization: "Bearer alice@example.com" },
+      })
+      expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer <EMAIL_001>")
+      expect(new URL(fetchMock.mock.calls[0][0]).searchParams.get("access_token")).toBe(
+        "<EMAIL_001>"
+      )
+    })
+
+    it.each([false, true])(
+      "resolves download headers with a prefix (gateway=%s)",
+      async (gateway) => {
+        const secret = "xoxb-1234567890-1234567890-abcdefghijklmnop"
+        mockIsTauri.mockReturnValue(gateway)
+        const invokeMock = invoke as jest.Mock
+        invokeMock.mockImplementation(
+          async (_command: string, args: { request?: { api: string } }) => ({
+            success: true,
+            data: args.request?.api === "secrets:get" ? secret : { path: "archive.zip", size: 3 },
+          })
+        )
+        const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+        if (!gateway)
+          (getSecret as jest.Mock).mockImplementation(async (ref) =>
+            ref.namespace === "plugin:test-plugin" && ref.key === "download-test" ? secret : null
+          )
+        const click = jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {})
+        const oldCreate = URL.createObjectURL
+        const oldRevoke = URL.revokeObjectURL
+        URL.createObjectURL = jest.fn(() => "blob:test")
+        URL.revokeObjectURL = jest.fn()
+        fetchMock.mockResolvedValue({ ok: true, blob: async () => new Blob(["abc"]) })
+        try {
+          await ctx.network.download("https://api.example.com/archive.zip", "archive.zip", {
+            headers: { Authorization: secretRef("download-test", { prefix: "Bearer " }) },
+          })
+          if (gateway) {
+            expect(
+              invokeMock.mock.calls.find(
+                ([, args]) => args?.request?.api === "network:download"
+              )?.[1].request.payload.headers
+            ).toEqual({ Authorization: `Bearer ${secret}` })
+          } else {
+            expect(fetchMock).toHaveBeenCalledWith("https://api.example.com/archive.zip", {
+              headers: { Authorization: `Bearer ${secret}` },
+            })
+          }
+          expect(
+            JSON.stringify(getPermissionGuard().getAuditLog({ pluginId: "test-plugin" }))
+          ).not.toContain(secret)
+        } finally {
+          click.mockRestore()
+          URL.createObjectURL = oldCreate
+          URL.revokeObjectURL = oldRevoke
+          invokeMock.mockReset().mockResolvedValue(null)
+        }
+      }
+    )
+
+    it("resolves upload headers into plain strings at the native transport", async () => {
+      mockIsTauri.mockReturnValue(true)
+      const invokeMock = invoke as jest.Mock
+      invokeMock.mockImplementation(
+        async (_command: string, args: { request?: { api: string } }) => ({
+          success: true,
+          data:
+            args.request?.api === "secrets:get" ? "stored-upload-token" : { ok: true, data: {} },
+        })
+      )
+      try {
+        const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+        await ctx.network.upload("https://api.example.com/upload", "file.txt", {
+          headers: { "x-api-key": secretRef("upload-test") },
+          fileContentPolicy: "allow",
+          dataClassification: "internal",
+        })
+        expect(
+          invokeMock.mock.calls.find(([, args]) => args?.request?.api === "network:upload")?.[1]
+            .request.payload.headers
+        ).toEqual({ "x-api-key": "stored-upload-token" })
+      } finally {
+        invokeMock.mockReset().mockResolvedValue(null)
+      }
+    })
+
+    it("does not read any secret for a disallowed destination", async () => {
+      mockIsTauri.mockReturnValue(true)
+      const invokeMock = invoke as jest.Mock
+      invokeMock.mockClear()
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      await expect(
+        ctx.network.get("https://other.example.com", {
+          headers: { Authorization: secretRef("token") },
+        })
+      ).rejects.toThrow(/allowedDomains/)
+      expect(invokeMock.mock.calls.some(([, args]) => args?.request?.api === "secrets:get")).toBe(
+        false
+      )
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it.each([false, true])(
+      "refuses references without secrets:read before reading or dispatch (gateway=%s)",
+      async (gateway) => {
+        mockIsTauri.mockReturnValue(gateway)
+        const guard = getPermissionGuard()
+        guard.registerPlugin("test-plugin", ["network:fetch"])
+        const readSecret = getSecret as jest.Mock
+        readSecret.mockClear()
+        const invokeMock = invoke as jest.Mock
+        invokeMock.mockClear()
+        const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+        await expect(
+          ctx.network.fetch("https://api.example.com", {
+            headers: { Authorization: secretRef("token") },
+          })
+        ).rejects.toThrow(/credential reference.*could not be read/)
+        expect(readSecret).not.toHaveBeenCalled()
+        expect(
+          invokeMock.mock.calls.some(
+            ([, args]) =>
+              args?.request?.api === "secrets:get" || args?.request?.api?.startsWith("network:")
+          )
+        ).toBe(false)
+        expect(fetchMock).not.toHaveBeenCalled()
+      }
+    )
+
+    it.each([
+      { headers: { "x-note": secretRef("key") } },
+      {
+        headers: {
+          Authorization: Object.assign(secretRef("key"), { $secretRef: "", prefix: "Bearer " }),
+        },
+      },
+      { query: { note: secretRef("key") } },
+      { body: { nested: { note: secretRef("key") } } },
+      { headers: { Authorization: Object.assign(secretRef("key"), { extra: "x" }) } },
+    ])("rejects invalid references before dispatch %#", async (options) => {
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      const invokeMock = invoke as jest.Mock
+      invokeMock.mockClear()
+      await expect(ctx.network.fetch("https://api.example.com", options as never)).rejects.toThrow(
+        /credential reference/
+      )
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(invokeMock).not.toHaveBeenCalled()
+    })
+
+    it("cannot resolve a key stored only in another plugin's namespace", async () => {
+      const readSecret = getSecret as jest.Mock
+      readSecret.mockImplementation(async (ref) =>
+        ref.namespace === "plugin:another-plugin" && ref.key === "other-token"
+          ? "other-plugin-secret"
+          : null
+      )
+      const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      await expect(
+        ctx.network.get("https://api.example.com", {
+          headers: { Authorization: secretRef("other-token") },
+        })
+      ).rejects.toThrow(/credential reference.*not found/)
+      expect(readSecret).toHaveBeenCalledWith({
+        namespace: "plugin:test-plugin",
+        key: "other-token",
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it.each(["missing-key", "plugin:another-plugin:only-theirs"])(
+      "rejects an unavailable own-namespace key %s",
+      async (key) => {
+        mockIsTauri.mockReturnValue(true)
+        const invokeMock = invoke as jest.Mock
+        invokeMock.mockReset().mockResolvedValue({ success: true, data: null })
+        try {
+          const ctx = createPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+          await expect(
+            ctx.network.fetch("https://api.example.com", {
+              headers: { Authorization: secretRef(key) },
+            })
+          ).rejects.toThrow(/credential reference.*not found/)
+          expect(invokeMock).toHaveBeenCalledWith(
+            "plugin_api_invoke",
+            expect.objectContaining({
+              request: expect.objectContaining({
+                pluginId: "test-plugin",
+                api: "secrets:get",
+                payload: { key },
+              }),
+            })
+          )
+          expect(
+            invokeMock.mock.calls.some(([, args]) => args?.request?.api.startsWith("network:"))
+          ).toBe(false)
+          expect(fetchMock).not.toHaveBeenCalled()
+        } finally {
+          invokeMock.mockReset().mockResolvedValue(null)
+        }
+      }
+    )
 
     it.each(["form", "json"] as const)(
       "runs %s PKCE token exchange through permissions, allowlist, PII policy and audit",

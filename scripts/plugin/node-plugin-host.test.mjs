@@ -32,6 +32,33 @@ test("resolves ESM and transpiled CommonJS default definitions", () => {
   assert.throws(() => resolvePluginDefinition({}), /activate/)
 })
 
+test("records only branded secret refs as dedicated wire markers and escapes JSON collisions", () => {
+  const ref = Object.defineProperty(
+    { $secretRef: "token", prefix: "Bearer " },
+    Symbol.for("cognia.plugin.secretRef"),
+    { value: true }
+  )
+  const ordinary = { $secretRef: "token" }
+  const collision = { $cogniaSecretRef: ordinary }
+  const recorder = createRecordingContext({ pluginId: "demo" })
+  recorder.context.network.post(
+    "https://api.example.com",
+    { api_key: ordinary, collision },
+    { headers: { Authorization: ref } }
+  )
+  const args = JSON.parse(JSON.stringify(recorder.calls[0].args))
+  assert.deepEqual(args[2].headers.Authorization, {
+    $cogniaSecretRef: { $secretRef: "token", prefix: "Bearer " },
+  })
+  assert.deepEqual(args[1].api_key, ordinary)
+  assert.deepEqual(args[1].collision, { $cogniaPlainObject: [["$cogniaSecretRef", ordinary]] })
+  assert.deepEqual(recorder.encode({ $cogniaPlainObject: [ref] }, "collision"), {
+    $cogniaPlainObject: [
+      ["$cogniaPlainObject", [{ $cogniaSecretRef: { $secretRef: "token", prefix: "Bearer " } }]],
+    ],
+  })
+})
+
 test("rejects unsafe callback-chain property paths", () => {
   const encoded = Buffer.from(
     JSON.stringify({ root: "exports.factory", rootArgs: [], steps: [], path: ["__proto__"] })

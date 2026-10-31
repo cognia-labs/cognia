@@ -1801,6 +1801,33 @@ describe("Plugin Validation", () => {
     })
 
     describe("networkAccess", () => {
+      it.each(["observe", "inspect"])("accepts literalCredentials=%s", (literalCredentials) => {
+        expect(
+          validatePluginManifest(
+            withNetworkAccess({
+              allowedDomains: ["example.com"],
+              literalCredentials,
+            })
+          ).valid
+        ).toBe(true)
+      })
+
+      it.each(["off", "", null, true, 1, {}])(
+        "rejects literalCredentials=%p",
+        (literalCredentials) => {
+          const result = validatePluginManifest(
+            withNetworkAccess({
+              allowedDomains: ["example.com"],
+              literalCredentials,
+            })
+          )
+          expect(result.valid).toBe(false)
+          expect(result.diagnostics?.map((entry) => entry.code)).toContain(
+            "manifest.networkAccess.literalCredentials.invalid"
+          )
+        }
+      )
+
       const withNetworkAccess = (networkAccess: unknown): PluginManifest => {
         const manifest = createValidManifest() as unknown as Record<string, unknown>
         manifest.networkAccess = networkAccess

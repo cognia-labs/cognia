@@ -1054,6 +1054,8 @@ export function createGuardedAPI<T extends object>(
   api: T,
   permissionMap: Partial<Record<keyof T, PluginPermission | PluginPermission[]>>,
   options: {
+    /** Host-sanitized action context for consent and permission audit entries. */
+    context?: string
     /**
      * Method names that must NOT route through the async per-call consent
      * overlay even when their permission sits at the "confirm" tier. Use for
@@ -1080,9 +1082,11 @@ export function createGuardedAPI<T extends object>(
      * persist a ledger grant so the follow-up `plugin_api_invoke` — and future
      * calls — pass the independent Rust permission gate. Silent-tier methods
      * never reach the consent path, so the hook never fires for them. Errors
-     * thrown by the hook are swallowed (it must never break the guarded call).
+     * rejected by the hook are swallowed (it must never break the guarded call).
+     * Async mirrors settle before dispatch so the host sees the granted scope.
      */
-    onConsentGranted?: (permission: PluginPermission) => void
+    // `unknown`, not `void | Promise<void>`: existing hooks may return any value.
+    onConsentGranted?: (permission: PluginPermission) => unknown
   } = {}
 ): T {
   const guard = getPermissionGuard()
@@ -1116,7 +1120,7 @@ export function createGuardedAPI<T extends object>(
         const permissions = Array.isArray(requiredPermissions)
           ? requiredPermissions
           : [requiredPermissions]
-        const context = `API call: ${String(prop)}`
+        const context = options.context ?? `API call: ${String(prop)}`
 
         // Fast path — keep the historic synchronous gate when (a) this method
         // is consent-exempt (a sync query/helper), or (b) no required
@@ -1157,7 +1161,7 @@ export function createGuardedAPI<T extends object>(
             guard.require(pluginId, permission, context)
             if (options.onConsentGranted) {
               try {
-                options.onConsentGranted(permission)
+                await options.onConsentGranted(permission)
               } catch {
                 // The hook is best-effort (e.g. persisting a host ledger grant);
                 // never let it break the guarded call after consent succeeded.

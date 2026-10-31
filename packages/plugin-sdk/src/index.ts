@@ -2,6 +2,7 @@
 
 export type * from "./manifest"
 export type * from "./context"
+export { secretRef } from "./api/secret-ref"
 export * from "./ide"
 export type * from "./hooks"
 export type * from "./permissions"

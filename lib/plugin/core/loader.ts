@@ -126,6 +126,28 @@ function reviveNodePluginValue(value: unknown, launch: LaunchPluginJsResult): un
   if (Array.isArray(value)) return value.map((item) => reviveNodePluginValue(item, launch))
   if (!value || typeof value !== "object") return value
   const record = value as Record<string, unknown>
+  if (Object.keys(record).length === 1 && Array.isArray(record.$cogniaPlainObject)) {
+    return Object.fromEntries(
+      record.$cogniaPlainObject.map(([key, item]: [string, unknown]) => [
+        key,
+        reviveNodePluginValue(item, launch),
+      ])
+    )
+  }
+  if (
+    Object.keys(record).length === 1 &&
+    record.$cogniaSecretRef &&
+    typeof record.$cogniaSecretRef === "object" &&
+    !Array.isArray(record.$cogniaSecretRef)
+  ) {
+    const ref = Object.fromEntries(
+      Object.entries(record.$cogniaSecretRef).map(([key, item]) => [
+        key,
+        reviveNodePluginValue(item, launch),
+      ])
+    )
+    return Object.defineProperty(ref, Symbol.for("cognia.plugin.secretRef"), { value: true })
+  }
   if (typeof record.$callback === "string") {
     return async (...args: unknown[]) =>
       reviveNodePluginValue(await launch.invokeCallback(record.$callback as string, args), launch)

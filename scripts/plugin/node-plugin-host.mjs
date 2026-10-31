@@ -31,6 +31,10 @@ export function createRecordingContext({ pluginId, manifest = {}, config = {} })
     if (value === null || typeof value !== "object") return value
     if (seen.has(value)) throw new Error(`Plugin context call contains a cycle at ${callbackPath}`)
     seen.add(value)
+    // The brand is process-local. Only branded SDK values get this wire tag;
+    // ordinary JSON with marker-looking keys is escaped below.
+    const branded =
+      Object.getOwnPropertyDescriptor(value, Symbol.for("cognia.plugin.secretRef"))?.value === true
     const encoded = Array.isArray(value)
       ? value.map((item, index) => encode(item, `${callbackPath}.${index}`, callbackHandleForPath))
       : Object.fromEntries(
@@ -40,6 +44,10 @@ export function createRecordingContext({ pluginId, manifest = {}, config = {} })
           ])
         )
     seen.delete(value)
+    if (branded) return { $cogniaSecretRef: encoded }
+    if (Object.hasOwn(value, "$cogniaSecretRef") || Object.hasOwn(value, "$cogniaPlainObject")) {
+      return { $cogniaPlainObject: Object.entries(encoded) }
+    }
     return encoded
   }
 

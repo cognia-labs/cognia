@@ -55,6 +55,7 @@ export type {
   NetworkDataClassification,
   NetworkEgressPolicyOptions,
   NetworkRequestOptions,
+  PluginCredentialRef,
   NetworkResponse,
   DownloadOptions,
   DownloadProgress,

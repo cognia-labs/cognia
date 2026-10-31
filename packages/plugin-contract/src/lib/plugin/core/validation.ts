@@ -2129,6 +2129,18 @@ export function validatePluginManifest(
         allowedDomains?: unknown
         reasoning?: unknown
         rules?: unknown
+        literalCredentials?: unknown
+      }
+      if (
+        na.literalCredentials !== undefined &&
+        na.literalCredentials !== "observe" &&
+        na.literalCredentials !== "inspect"
+      ) {
+        pushError(
+          "networkAccess.literalCredentials",
+          "manifest.networkAccess.literalCredentials.invalid",
+          '"networkAccess.literalCredentials" must be "observe" or "inspect"'
+        )
       }
       let wantsAnyHost = false
       if (na.allowedDomains !== undefined) {

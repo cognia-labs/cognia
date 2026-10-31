@@ -75,6 +75,10 @@ Every Cognia plugin ships with a `cognia-plugin.json` manifest. It is the single
 
 ## Field reference
 
+| Network field                      | Values                                          | Behavior                                                                                                                                                                                                                                                                                                          |
+| ---------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `networkAccess.literalCredentials` | `"observe"` (transitional default), `"inspect"` | Observe preserves literals and records field-only audit/warnings; inspect applies the PII policy. The default flips to inspect in the next release. Use `secretRef` for stored credentials; see [network credentials](/en/docs/plugin-dev/network-credentials) ([中文](/zh/docs/plugin-dev/network-credentials)). |
+
 <TypeTable
   type={{
     schemaVersion: {
@@ -107,7 +111,8 @@ Every Cognia plugin ships with a `cognia-plugin.json` manifest. It is the single
       type: "string",
     },
     icon: {
-      description: "Packaged image path, public path, HTTP(S) or image data URL. Lucide names are also accepted.",
+      description:
+        "Packaged image path, public path, HTTP(S) or image data URL. Lucide names are also accepted.",
       type: "string",
     },
     entry: {
@@ -255,11 +260,11 @@ merging account-specific remote metadata over declared fallback fields. Successf
 not prove inference access to every listed model. The shared account panel and provider settings
 refresh action use the same model operations.
 
-| Wire protocol | Declaration | Authentication and URL behavior |
-| --- | --- | --- |
-| OpenAI Chat Completions | `protocol: "openai", apiFlavor: "chat"` | Bearer key; versioned base URL, then `/chat/completions`. |
-| OpenAI Responses | `protocol: "openai", apiFlavor: "responses"` | Bearer key; versioned base URL, then `/responses`. |
-| Anthropic Messages | `protocol: "anthropic"` | `x-api-key` and `anthropic-version`; a root base gains `/v1` once, then `/messages`. |
+| Wire protocol           | Declaration                                  | Authentication and URL behavior                                                      |
+| ----------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------ |
+| OpenAI Chat Completions | `protocol: "openai", apiFlavor: "chat"`      | Bearer key; versioned base URL, then `/chat/completions`.                            |
+| OpenAI Responses        | `protocol: "openai", apiFlavor: "responses"` | Bearer key; versioned base URL, then `/responses`.                                   |
+| Anthropic Messages      | `protocol: "anthropic"`                      | `x-api-key` and `anthropic-version`; a root base gains `/v1` once, then `/messages`. |
 
 OpenAI subscriptions default to `apiFlavor: "chat"`. `apiFlavor` is invalid on Anthropic entries.
 For a service supporting multiple wires, declare distinct entries with stable IDs and the correct

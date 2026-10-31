@@ -18,6 +18,7 @@ import {
 } from "./permission-guard"
 import type { PluginPermission as _PluginPermission } from "@/types/plugin"
 import { activatePluginRuntimeAccount, clearPluginRuntimeAccount } from "./account-runtime-gate"
+import { getPluginConsentBroker } from "./consent-broker"
 
 beforeEach(() => {
   activatePluginRuntimeAccount("acct-permission-guard-test")
@@ -481,6 +482,57 @@ describe("createGuardedAPI", () => {
 
     expect(guarded.fetchData()).toBe("data")
     expect(() => guarded.writeFile()).toThrow(PermissionError)
+  })
+
+  it("uses host action context for consent and waits for an async grant mirror", async () => {
+    guard.registerPlugin("plugin-a", ["secrets:read"])
+    guard.setTier("plugin-a", "secrets:read", "confirm")
+    const broker = getPluginConsentBroker()
+    const request = jest.spyOn(broker, "request").mockResolvedValue(true)
+    let completeMirror: () => void = () => {
+      throw new Error("mirror has not started")
+    }
+    let mirrorStarted: () => void = () => {}
+    const started = new Promise<void>((resolve) => {
+      mirrorStarted = resolve
+    })
+    const mirror = new Promise<void>((resolve) => {
+      completeMirror = resolve
+    })
+    const get = jest.fn(async () => "secret")
+    const context = "Network credential for POST https://api.example.com/send"
+    const guarded = createGuardedAPI(
+      "plugin-a",
+      { get },
+      { get: "secrets:read" },
+      {
+        context,
+        onConsentGranted: () => {
+          mirrorStarted()
+          return mirror
+        },
+      }
+    )
+    try {
+      const result = guarded.get()
+      await started
+      expect(get).not.toHaveBeenCalled()
+      expect(request).toHaveBeenCalledWith({
+        pluginId: "plugin-a",
+        permission: "secrets:read",
+        reason: context,
+      })
+      completeMirror()
+      await expect(result).resolves.toBe("secret")
+      expect(
+        guard
+          .getAuditLog({ pluginId: "plugin-a", permission: "secrets:read" })
+          .some((entry) => entry.context === context)
+      ).toBe(true)
+    } finally {
+      completeMirror()
+      request.mockRestore()
+    }
   })
 
   it("honors forbid on granted synchronous and consent-exempt APIs", () => {

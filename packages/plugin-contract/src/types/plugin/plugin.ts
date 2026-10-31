@@ -772,6 +772,8 @@ export interface PluginManifest {
   networkAccess?: {
     allowedDomains?: string[]
     rules?: PluginNetworkAccessRule[]
+    /** Literal credential transition: observe (host default) or inspect for PII. */
+    literalCredentials?: "observe" | "inspect"
     /** Why the plugin needs the declared access — shown in the consent prompt. */
     reasoning?: string
   }
@@ -3153,9 +3155,20 @@ export interface NetworkEgressPolicyOptions {
   piiPolicy?: "redact" | "block"
 }
 
+/**
+ * Host-resolved reference to this plugin's ctx.secrets namespace. Create with
+ * SDK secretRef(): plain JSON with this shape remains ordinary request data.
+ */
+export interface PluginCredentialRef {
+  $secretRef: string
+  prefix?: string
+}
+
 export interface NetworkRequestOptions extends NetworkEgressPolicyOptions {
   method?: PluginNetworkHttpMethod
-  headers?: Record<string, string>
+  headers?: Record<string, string | PluginCredentialRef>
+  /** Appended after URL sanitization; references require a credential-key parameter. */
+  query?: Record<string, string | PluginCredentialRef>
   body?: unknown
   timeout?: number
   responseType?: "json" | "text" | "blob" | "arraybuffer"
@@ -3171,7 +3184,7 @@ export interface NetworkResponse<T> {
 }
 
 export interface DownloadOptions extends NetworkEgressPolicyOptions {
-  headers?: Record<string, string>
+  headers?: Record<string, string | PluginCredentialRef>
   onProgress?: (progress: DownloadProgress) => void
 }
 
@@ -3188,7 +3201,7 @@ export interface DownloadResult {
 }
 
 export interface UploadOptions extends NetworkEgressPolicyOptions {
-  headers?: Record<string, string>
+  headers?: Record<string, string | PluginCredentialRef>
   fieldName?: string
   /**
    * Policy for the file bytes themselves. Defaults to `block` because the

@@ -8,6 +8,7 @@
     "inter-plugin-communication",
     "library-plugins",
     "native-anthropic-tools",
+    "network-credentials",
     "pet",
     "pi-packages",
     "scheduler"
