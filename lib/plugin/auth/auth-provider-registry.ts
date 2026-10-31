@@ -19,6 +19,8 @@ import {
 // Browser/Tauri Storage persists across restarts. The CLI injects its durable
 // plugin-state backing before plugins register, leaving other Storage shims
 // process-local.
+// Shares the `ctx.storage` prefix on purpose (one namespace to clear on reset);
+// `isValidPluginId` rejects ids starting with "_", so no plugin can own this key.
 const OWNER_STORAGE_KEY = "cognia-plugin-storage:__host-auth-provider-owners__"
 
 export interface AuthProviderOwnershipStore {

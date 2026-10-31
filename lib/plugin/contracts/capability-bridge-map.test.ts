@@ -31,23 +31,26 @@ import {
 import { __resetSubagentsForTesting, getSubagent } from "@/lib/plugin/registries/subagent-registry"
 import { getPluginPromptEntry } from "@/lib/prompts/plugin-prompts"
 import type { PluginCapability, PluginManifest } from "@/types/plugin"
-import { getProvider, unregisterProvidersByPlugin } from "@/lib/plugin/auth/auth-provider-registry"
+import {
+  getProvider,
+  registerAuthenticationProvider,
+  unregisterProvidersByPlugin,
+} from "@/lib/plugin/auth/auth-provider-registry"
 
-;(registerAuthenticationProvider,
-  describe("auth-provider activation ordering", () => {
-    afterEach(() => unregisterProvidersByPlugin("auth-order-test"))
+describe("auth-provider activation ordering", () => {
+  afterEach(() => unregisterProvidersByPlugin("auth-order-test"))
 
-    it("reserves declarative provider ownership until uninstall", () => {
-      const capability = OVERLAY_REGISTRY_CAPABILITIES["auth-provider"]
-      const def = { id: "declarative-owner-test", label: "Provider" }
-      capability.registerEntry(def, { pluginId: "auth-order-test" })
-      capability.unregisterAllByPlugin("auth-order-test")
-      expect(() => capability.registerEntry(def, { pluginId: "squatter" })).toThrow(
-        /owned by another plugin/
-      )
-      expect(getProvider(def.id)).toBeUndefined()
-    })
-  }))
+  it("reserves declarative provider ownership until uninstall", () => {
+    const capability = OVERLAY_REGISTRY_CAPABILITIES["auth-provider"]
+    const def = { id: "declarative-owner-test", label: "Provider" }
+    capability.registerEntry(def, { pluginId: "auth-order-test" })
+    capability.unregisterAllByPlugin("auth-order-test")
+    expect(() => capability.registerEntry(def, { pluginId: "squatter" })).toThrow(
+      /owned by another plugin/
+    )
+    expect(getProvider(def.id)).toBeUndefined()
+  })
+})
 
 describe("OVERLAY_REGISTRY_CAPABILITIES (PR-D)", () => {
   it("preserves the live provider registered before manifest contributions", () => {

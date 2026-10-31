@@ -302,11 +302,15 @@ describe("OutboundAuthorizationCard", () => {
   })
 
   it("says when nothing would change", async () => {
-    view = { ...reportView(), report: { messaging: EMPTY, github: EMPTY, browser: EMPTY } }
+    view = {
+      ...reportView(),
+      report: { messaging: EMPTY, github: EMPTY, browser: EMPTY, integration: EMPTY },
+    }
     render(<OutboundAuthorizationCard />)
     expect(screen.getByTestId("outbound-shadow-report-empty-messaging")).toBeInTheDocument()
     expect(screen.getByTestId("outbound-shadow-report-empty-github")).toBeInTheDocument()
     expect(screen.getByTestId("outbound-shadow-report-empty-browser")).toBeInTheDocument()
+    expect(screen.getByTestId("outbound-shadow-report-empty-integration")).toBeInTheDocument()
     fireEvent.click(messaging().getByRole("switch"))
     expect(await screen.findByText("No observed send would have been changed.")).toBeInTheDocument()
   })

@@ -10,6 +10,7 @@ import {
   installPluginRuntimeShims,
 } from "@/cli/src/plugin/plugin-runtime"
 import { uninstallHostPlugin } from "@/cli/src/plugin/host"
+import { isValidPluginId } from "@/lib/plugin/core/validation"
 import {
   __resetAuthRegistryForTesting,
   getProvider,
@@ -156,6 +157,14 @@ describe("host auth provider ownership", () => {
       else process.env.COGNIA_HOME = previousHome
       fs.rmSync(home, { recursive: true, force: true })
     }
+  })
+
+  it("keeps the ownership index out of every plugin's ctx.storage key", () => {
+    registerAuthenticationProvider(provider("owner"))()
+    const key = localStorage.key(0)!
+    const suffix = key.slice("cognia-plugin-storage:".length)
+    expect(key.startsWith("cognia-plugin-storage:")).toBe(true)
+    expect(isValidPluginId(suffix)).toBe(false)
   })
 
   it("fails closed on a corrupt durable index", () => {
