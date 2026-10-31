@@ -23,6 +23,7 @@ import {
   getAllPluginDexiaMeta,
   putPluginDexiaMeta,
   deletePluginDexiaMeta,
+  baselinePluginMigrationVersion,
 } from "./meta"
 
 export type RetentionMode = "keep" | "purge"
@@ -94,6 +95,17 @@ async function nextSchemaVersion(db: Dexie): Promise<number> {
   return Math.max(db.verno, nativeVerno) + 1
 }
 
+async function schemaFingerprint(dexieBlock: PluginManifestDexieBlock): Promise<string> {
+  const schemas = dexieBlock.tables
+    .map(({ name, schema }) => [name, schema] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(JSON.stringify(schemas))
+  )
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
 /**
  * Apply a plugin's declared Dexie tables to the shared CogniaDB instance.
  *
@@ -105,7 +117,8 @@ async function nextSchemaVersion(db: Dexie): Promise<number> {
 export async function applyPluginTables(
   dbSource: DexieSource,
   pluginId: string,
-  dexieBlock: PluginManifestDexieBlock
+  dexieBlock: PluginManifestDexieBlock,
+  currentVersion?: number
 ): Promise<void> {
   if (dexieBlock.tables.length > MAX_TABLES_PER_PLUGIN) {
     throw new Error(
@@ -122,6 +135,7 @@ export async function applyPluginTables(
     // so the schema is applied to the instance plugin activation will consume.
     const db = resolveDb(dbSource)
     const existing = await getPluginDexieMeta(pluginId)
+    const fingerprint = await schemaFingerprint(dexieBlock)
     const namespacedNames = dexieBlock.tables.map((t) => toNamespacedTableName(pluginId, t.name))
 
     if (existing) {
@@ -129,7 +143,7 @@ export async function applyPluginTables(
       const newSet = new Set(namespacedNames)
       const setsEqual =
         existingSet.size === newSet.size && [...existingSet].every((n) => newSet.has(n))
-      if (setsEqual) {
+      if (setsEqual && existing.schemaFingerprint === fingerprint) {
         // Defense in depth: the meta says these tables are registered, but the
         // live schema can drift away from it. `new CogniaDB(...)` re-declares
         // only the static core schema, so on a fresh process the namespaced
@@ -156,8 +170,13 @@ export async function applyPluginTables(
     await db.open()
 
     await putPluginDexiaMeta({
+      ...existing,
+      ...(!existing && currentVersion !== undefined
+        ? { appliedMigrationVersion: currentVersion }
+        : {}),
       pluginId,
       tableNames: namespacedNames,
+      schemaFingerprint: fingerprint,
       dexieVersion: nextVersion,
       appliedAt: Date.now(),
     })
@@ -191,6 +210,8 @@ export async function restorePluginTables(
   dbSource: DexieSource,
   manifestDexie: Map<string, PluginManifestDexieBlock>,
   options: {
+    /** Installed plugin majors, captured before any package replacement. */
+    installedVersions?: ReadonlyMap<string, number>
     registerMissing?: boolean
     requiredStoreNames?: readonly string[]
     recreateDatabase?: () => Dexie
@@ -255,7 +276,7 @@ export async function restorePluginTables(
           .filter(
             (entry): entry is readonly [string, PluginManifestDexieBlock] => entry[1] !== undefined
           )
-    const registrations: Array<{ pluginId: string; tableNames: string[] }> = []
+    const registrations: Array<import("./meta").PluginDexieMeta> = []
 
     for (const [pluginId, dexieBlock] of candidates) {
       if (!dexieBlock) continue // plugin gone; leave its meta for removePluginTables
@@ -268,20 +289,40 @@ export async function restorePluginTables(
         toNamespacedTableName(pluginId, table.name)
       )
       const existingMeta = metaByPluginId.get(pluginId)
+      const installedVersion = options.installedVersions?.get(pluginId)
+      const appliedMigrationVersion =
+        installedVersion === undefined
+          ? existingMeta?.appliedMigrationVersion
+          : existingMeta
+            ? await baselinePluginMigrationVersion(db, pluginId, installedVersion)
+            : installedVersion
+      const fingerprint = await schemaFingerprint(dexieBlock)
+      const schemaChanged = existingMeta?.schemaFingerprint !== fingerprint
       const existingNames = new Set(existingMeta?.tableNames ?? [])
       if (
-        !existingMeta ||
+        schemaChanged ||
         existingNames.size !== tableNames.length ||
         tableNames.some((name) => !existingNames.has(name))
       ) {
-        registrations.push({ pluginId, tableNames })
+        registrations.push({
+          ...existingMeta,
+          ...(appliedMigrationVersion !== undefined ? { appliedMigrationVersion } : {}),
+          pluginId,
+          tableNames,
+          schemaFingerprint: fingerprint,
+          dexieVersion: db.verno,
+          appliedAt: Date.now(),
+        })
       }
       for (const t of dexieBlock.tables) {
         const nsName = toNamespacedTableName(pluginId, t.name)
-        if (liveTables.has(nsName)) continue // already declared this session
+        if (liveTables.has(nsName) && !schemaChanged) continue
         patch[nsName] = t.schema
         if (!physicalStores.has(nsName)) requiresCreate = true
       }
+      // A changed declaration needs a real upgrade: adopting at the existing
+      // version lets Dexie's SchemaDiff add indexes, but never remove them.
+      if (existingMeta && schemaChanged) requiresCreate = true
     }
 
     const restored = Object.keys(patch)

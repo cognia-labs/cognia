@@ -4,6 +4,10 @@
  * Tests for Plugin Updater
  */
 
+import "fake-indexeddb/auto"
+import { getDb } from "@/lib/db/schema"
+import { runPluginMigrations } from "@/lib/plugin/dexie/migration-runner"
+
 import {
   PLUGIN_UPDATES_AVAILABLE_EVENT,
   PluginUpdater,
@@ -623,6 +627,61 @@ describe("PluginUpdater", () => {
       expect(discardStagedPluginUpdate).toHaveBeenCalledTimes(1)
       expect(backupModule.__createBackupSpy).not.toHaveBeenCalled()
       expect(commitStagedPluginUpdate).not.toHaveBeenCalled()
+    })
+
+    it("baselines legacy data at the installed version before committing an update", async () => {
+      const state = mockGetStoreState() as never as {
+        plugins: Record<
+          string,
+          { manifest: import("@/types/plugin").PluginManifest; status: string }
+        >
+      }
+      const dexie = {
+        tables: [{ name: "items", schema: "id" }],
+        migrations: [
+          { toVersion: 1, upgrade: "old" },
+          { toVersion: 2, upgrade: "upgrade" },
+        ],
+      }
+      state.plugins["plugin-a"].manifest = { ...state.plugins["plugin-a"].manifest, dexie }
+      state.plugins["plugin-a"].status = "enabled"
+      const next = { ...state.plugins["plugin-a"].manifest, version: "2.0.0" }
+      stagePluginUpdate.mockResolvedValueOnce({
+        pluginId: "plugin-a",
+        version: "2.0.0",
+        manifest: next,
+        transactionId: "legacy-update",
+        stagedPath: "/staging/plugin-a",
+        sizeBytes: 10,
+      })
+      const db = getDb()
+      await db.pluginDexieMeta.put({
+        pluginId: "plugin-a",
+        tableNames: [],
+        dexieVersion: 1,
+        appliedAt: 1,
+      })
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        expect((await db.table("pluginDexieMeta").get("plugin-a")).appliedMigrationVersion).toBe(1)
+        state.plugins["plugin-a"].manifest = next
+      })
+      const old = jest.fn(async () => {
+        throw new Error("Historical migration replayed")
+      })
+      const upgrade = jest.fn(async () => undefined)
+      managerModule.__enablePluginSpy.mockImplementationOnce(async () => {
+        await runPluginMigrations(db, "plugin-a", 2, dexie.migrations, { old, upgrade })
+      })
+      try {
+        expect(await updater.update("plugin-a", { force: true, version: "2.0.0" })).toMatchObject({
+          success: true,
+        })
+        expect(old).not.toHaveBeenCalled()
+        expect(upgrade).toHaveBeenCalledTimes(1)
+        expect((await db.table("pluginDexieMeta").get("plugin-a")).appliedMigrationVersion).toBe(2)
+      } finally {
+        await db.pluginDexieMeta.delete("plugin-a")
+      }
     })
 
     it("dry-runs the migration declaration before snapshotting a destructive schema change", async () => {

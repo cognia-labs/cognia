@@ -3,6 +3,7 @@ import type {
   IntegrationAuditEntry,
   IntegrationMigrationPlan,
   IntegrationMigrationResult,
+  IntegrationMigrationRollbackResult,
   IntegrationSubscription,
 } from "@/types/plugin/plugin-integration"
 import type { WorkflowNodeKind, WorkflowRow } from "@/types/workflow/visual"
@@ -14,6 +15,12 @@ interface MigrationBackup {
   workflows: WorkflowRow[]
   createdAccountIds: string[]
   createdSubscriptionIds: string[]
+}
+
+type MigrationRevisions = {
+  accounts: Record<string, string>
+  subscriptions: Record<string, string>
+  workflows: Record<string, number>
 }
 
 function migrationKind(migrationId: string, suffix: "backup" | "completed"): string {
@@ -177,12 +184,20 @@ export async function migrateLegacyIntegration(
       await db.integrationAccounts.bulkPut(accounts)
       await db.integrationSubscriptions.bulkPut(subscriptions)
 
+      const postMigration: MigrationRevisions = {
+        accounts: Object.fromEntries(accounts.map((row) => [row.id, row.updatedAt])),
+        subscriptions: Object.fromEntries(subscriptions.map((row) => [row.id, row.updatedAt])),
+        workflows: {},
+      }
+
       for (const workflow of affected) {
         const nodes = workflow.nodes.map((node) => {
           const target = plan.workflowKindAliases[node.type]
           return target ? { ...node, type: target as WorkflowNodeKind } : node
         })
-        await db.workflows.put({ ...workflow, nodes, updatedAt: Date.now() })
+        const updatedAt = Date.now()
+        await db.workflows.put({ ...workflow, nodes, updatedAt })
+        postMigration.workflows[workflow.id] = updatedAt
         migratedWorkflows += 1
       }
       if (
@@ -202,6 +217,7 @@ export async function migrateLegacyIntegration(
           migratedAccounts: accounts.length,
           migratedSubscriptions: subscriptions.length,
           migratedWorkflows,
+          postMigration,
         })
       )
     }
@@ -218,26 +234,13 @@ export async function migrateLegacyIntegration(
 export async function rollbackIntegrationMigration(
   pluginId: string,
   migrationId: string
-): Promise<void> {
+): Promise<IntegrationMigrationRollbackResult> {
   const db = getDb()
-  const backupEntry = await db.integrationAudit
-    .where("pluginId")
-    .equals(pluginId)
-    .filter((entry) => entry.kind === migrationKind(migrationId, "backup"))
-    .last()
-  const backup = backupEntry?.detail?.backup as MigrationBackup | undefined
-  if (!backup) throw new Error(`Integration migration "${migrationId}" has no backup`)
-
-  await db.transaction(
+  return db.transaction(
     "rw",
     [db.integrationAccounts, db.integrationSubscriptions, db.integrationAudit, db.workflows],
     async () => {
-      await db.integrationSubscriptions.bulkDelete(backup.createdSubscriptionIds)
-      await db.integrationAccounts.bulkDelete(backup.createdAccountIds)
-      await db.integrationAccounts.bulkPut(backup.accounts)
-      await db.integrationSubscriptions.bulkPut(backup.subscriptions)
-      await db.workflows.bulkPut(backup.workflows)
-      await db.integrationAudit
+      const ledger = await db.integrationAudit
         .where("pluginId")
         .equals(pluginId)
         .filter(
@@ -245,7 +248,81 @@ export async function rollbackIntegrationMigration(
             entry.kind === migrationKind(migrationId, "completed") ||
             entry.kind === migrationKind(migrationId, "backup")
         )
-        .delete()
+        .toArray()
+      const backupEntry = ledger.find(
+        (entry) => entry.kind === migrationKind(migrationId, "backup")
+      )
+      const completed = ledger.find(
+        (entry) => entry.kind === migrationKind(migrationId, "completed")
+      )
+      const backup = backupEntry?.detail?.backup as MigrationBackup | undefined
+      if (!backup) throw new Error(`Integration migration "${migrationId}" has no backup`)
+      const revisions = completed?.detail?.postMigration as MigrationRevisions | undefined
+      const restored = (completed?.detail?.restoredIds as
+        IntegrationMigrationRollbackResult["conflictedIds"] | undefined) ?? {
+        accounts: [],
+        subscriptions: [],
+        workflows: [],
+      }
+      const conflictedIds: IntegrationMigrationRollbackResult["conflictedIds"] = {
+        accounts: [],
+        subscriptions: [],
+        workflows: [],
+      }
+
+      const restore = async <T extends { id: string; updatedAt: string | number }>(
+        table: import("dexie").Table<T, string>,
+        kind: keyof MigrationRevisions,
+        ids: string[],
+        snapshots: T[]
+      ) => {
+        const originals = new Map(snapshots.map((row) => [row.id, row]))
+        for (const id of ids) {
+          if (restored[kind].includes(id)) continue
+          const current = await table.get(id)
+          const expectedRevision = revisions?.[kind]?.[id]
+          // Missing revision evidence (old backups) and user deletions are
+          // conflicts too. Never guess that an old snapshot is safe to restore.
+          if (
+            !current ||
+            expectedRevision === undefined ||
+            current.updatedAt !== expectedRevision
+          ) {
+            conflictedIds[kind].push(id)
+            continue
+          }
+          const original = originals.get(id)
+          if (original) await table.put(original)
+          else await table.delete(id)
+          restored[kind].push(id)
+        }
+      }
+      await restore(
+        db.integrationSubscriptions,
+        "subscriptions",
+        backup.createdSubscriptionIds,
+        backup.subscriptions
+      )
+      await restore(db.integrationAccounts, "accounts", backup.createdAccountIds, backup.accounts)
+      await restore(
+        db.workflows,
+        "workflows",
+        backup.workflows.map((row) => row.id),
+        backup.workflows
+      )
+
+      if (Object.values(conflictedIds).some((ids) => ids.length > 0)) {
+        // Preserve the ledger after partial rollback, both to block re-migration
+        // and to allow retry without treating already-restored rows as conflicts.
+        if (completed)
+          await db.integrationAudit.put({
+            ...completed,
+            detail: { ...completed.detail, restoredIds: restored },
+          })
+      } else {
+        await db.integrationAudit.bulkDelete(ledger.map((entry) => entry.id))
+      }
+      return { migrationId, conflictedIds }
     }
   )
 }

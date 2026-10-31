@@ -507,6 +507,16 @@ export interface IntegrationMigrationResult {
   alreadyApplied: boolean
 }
 
+export interface IntegrationMigrationRollbackResult {
+  migrationId: string
+  /** Rows edited or deleted since migration; rollback leaves them untouched. */
+  conflictedIds: {
+    accounts: string[]
+    subscriptions: string[]
+    workflows: string[]
+  }
+}
+
 export interface PluginIntegrationsAPI {
   listDefinitions(): PluginIntegrationDef[]
   listAccounts(integrationId?: string): Promise<IntegrationAccount[]>
@@ -552,5 +562,6 @@ export interface PluginIntegrationsAPI {
     deliveryId: string
   ): Promise<boolean>
   migrateLegacy(plan: IntegrationMigrationPlan): Promise<IntegrationMigrationResult>
-  rollbackMigration(migrationId: string): Promise<void>
+  /** Older hosts return void; current hosts report rows preserved due to conflicts. */
+  rollbackMigration(migrationId: string): Promise<IntegrationMigrationRollbackResult | void>
 }

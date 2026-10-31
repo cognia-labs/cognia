@@ -13,8 +13,13 @@ jest.mock("@/lib/db/schema", () => ({
 // Import AFTER mocking so the module picks up our mock.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const dexieMetaModule = require("./meta")
-const { getPluginDexieMeta, putPluginDexiaMeta, deletePluginDexiaMeta, getAllPluginDexiaMeta } =
-  dexieMetaModule
+const {
+  getPluginDexieMeta,
+  putPluginDexiaMeta,
+  deletePluginDexiaMeta,
+  getAllPluginDexiaMeta,
+  baselinePluginMigrationVersion,
+} = dexieMetaModule
 
 function makeDb() {
   const db = new Dexie(`test-meta-${Math.random().toString(36).slice(2)}`) as Dexie & {
@@ -32,6 +37,15 @@ describe("dexie-meta helpers", () => {
   afterEach(async () => {
     await testDb?.delete()
     testDb = null
+  })
+
+  it("initializes only existing legacy rows and never advances an established ledger", async () => {
+    expect(await baselinePluginMigrationVersion(testDb!, "missing", 3)).toBeUndefined()
+    expect(await getPluginDexieMeta("missing")).toBeUndefined()
+    await putPluginDexiaMeta({ pluginId: "legacy", tableNames: [], dexieVersion: 1, appliedAt: 1 })
+    expect(await baselinePluginMigrationVersion(testDb!, "legacy", 2)).toBe(2)
+    expect(await baselinePluginMigrationVersion(testDb!, "legacy", 3)).toBe(2)
+    expect((await getPluginDexieMeta("legacy"))?.appliedMigrationVersion).toBe(2)
   })
 
   describe("getPluginDexieMeta", () => {
@@ -54,6 +68,33 @@ describe("dexie-meta helpers", () => {
   })
 
   describe("putPluginDexiaMeta", () => {
+    it("does not overwrite a committed migration version with a stale schema repair", async () => {
+      const row = {
+        pluginId: "migrated",
+        tableNames: ["migrated:items"],
+        dexieVersion: 5,
+        appliedAt: 1,
+        appliedMigrationVersion: 1,
+      }
+      await putPluginDexiaMeta({ ...row, appliedMigrationVersion: 3 })
+      await putPluginDexiaMeta({ ...row, dexieVersion: 6 })
+      expect(await getPluginDexieMeta("migrated")).toMatchObject({
+        dexieVersion: 6,
+        appliedMigrationVersion: 3,
+      })
+    })
+    it("persists schema fingerprints and migration versions on the existing row", async () => {
+      const row = {
+        pluginId: "migrated",
+        tableNames: ["migrated:items"],
+        dexieVersion: 5,
+        appliedAt: 1,
+        schemaFingerprint: "sha256",
+        appliedMigrationVersion: 3,
+      }
+      await putPluginDexiaMeta(row)
+      expect(await getPluginDexieMeta("migrated")).toEqual(row)
+    })
     it("inserts and retrieves a row", async () => {
       const row: PluginDexieMeta = {
         pluginId: "test-plugin",

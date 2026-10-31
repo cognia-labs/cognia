@@ -336,7 +336,7 @@ export function createIntegrationsAPI(
     },
     async rollbackMigration(migrationId) {
       requirePermission(hasPermission, "integrations:manage", "ctx.integrations.rollbackMigration")
-      await rollbackIntegrationMigration(pluginId, migrationId)
+      return rollbackIntegrationMigration(pluginId, migrationId)
     },
   }
 }

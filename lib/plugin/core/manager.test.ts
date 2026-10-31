@@ -19,6 +19,13 @@ jest.mock("@/lib/plugin/vscode-shim/webview-restoration", () => ({
 
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
+import "fake-indexeddb/auto"
+import type { Transaction } from "dexie"
+
+jest.mock("@/lib/db/schema", () => {
+  const actual = jest.requireActual("@/lib/db/schema")
+  return { ...actual, getDb: jest.fn(actual.getDb) }
+})
 
 const builtinAssetFetcher: typeof fetch = async (input) => {
   const bytes = await readFile(join(process.cwd(), "public", String(input)))
@@ -313,6 +320,15 @@ describe("PluginManager", () => {
     expect(shouldEnablePluginDebug(localPlugin, false)).toBe(false)
     expect(shouldEnablePluginDebug(builtinPlugin, true)).toBe(false)
     expect(shouldEnablePluginDebug({ ...builtinPlugin, config: { debug: true } }, false)).toBe(true)
+  })
+
+  let releaseDbRuntime: () => void
+  beforeAll(() => {
+    releaseDbRuntime = jest.requireActual("@/lib/db/schema").__enableDbRuntimeForTesting()
+  })
+  afterAll(async () => {
+    await jest.requireActual("@/lib/db/schema").getDb().delete()
+    releaseDbRuntime()
   })
 
   beforeEach(() => {
@@ -1530,6 +1546,48 @@ describe("PluginManager", () => {
       })
     })
 
+    it.each([true, false])(
+      "baselines a legacy reinstall before replacing the package (runtime registration=%s)",
+      async (registered) => {
+        const { old, manager } = setup(registered)
+        old.manifest = {
+          ...createManifest(manifest.id),
+          version: "1.0.0",
+          dexie: { tables: [{ name: "items", schema: "id" }] },
+        }
+        const db = jest.requireMock("@/lib/db/schema").getDb()
+        if (!registered)
+          (getPlugin as jest.Mock).mockResolvedValueOnce({
+            version: "1.0.0",
+            manifest: old.manifest,
+          })
+        await db.pluginDexieMeta.put({
+          pluginId: manifest.id,
+          tableNames: [],
+          dexieVersion: 1,
+          appliedAt: 1,
+        })
+        mockInvoke.mockImplementation(async (command) => {
+          if (command === "plugin_commit_staged_update") {
+            expect((await db.pluginDexieMeta.get(manifest.id)).appliedMigrationVersion).toBe(1)
+          }
+        })
+        try {
+          await manager.installPluginFromRegistry(async () => ({
+            pluginId: manifest.id,
+            version: "2.0.0",
+            manifest: { ...old.manifest, version: "2.0.0" },
+            stagedPath: "/staging/registry",
+            transactionId: "legacy-reinstall",
+            sizeBytes: 10,
+          }))
+          expect((await db.pluginDexieMeta.get(manifest.id)).appliedMigrationVersion).toBe(1)
+        } finally {
+          await db.pluginDexieMeta.delete(manifest.id)
+        }
+      }
+    )
+
     it("persists replacement configuration before re-enabling and finalizing", async () => {
       const { store, manager, old } = setup(true)
       old.status = "enabled"
@@ -2473,6 +2531,9 @@ describe("PluginManager", () => {
       ).restorePluginDexieTables()
 
       expect(restorePluginTables.mock.calls[0][0]).toEqual(expect.any(Function))
+      expect(restorePluginTables.mock.calls[0][2].installedVersions).toEqual(
+        new Map([["db-plugin", 1]])
+      )
     })
 
     it("loads a browser-compatible builtin plugin and registers its tools", async () => {
@@ -7089,6 +7150,184 @@ describe("PluginManager", () => {
       }
       return store
     }
+
+    it.each(["fresh", "unknown", "boot", "known"] as const)(
+      "baselines migration history through the manager (%s)",
+      async (mode) => {
+        const id = "baseline-fixture"
+        const dexie = {
+          tables: [{ name: "items", schema: "id" }],
+          migrations: [
+            { toVersion: 2, upgrade: "v2" },
+            { toVersion: 3, upgrade: "v3" },
+          ],
+        }
+        const plugin = createServicePlugin(id, {
+          version: mode === "boot" ? "2.0.0" : "3.0.0",
+          dexie,
+        })
+        const store = {
+          ...createServiceStore([plugin]),
+          unloadPlugin: jest.fn(async () => {
+            store.plugins[id].status = "installed"
+          }),
+        }
+        mockGetState.mockReturnValue(store)
+        const { CogniaDB } = jest.requireActual<typeof import("@/lib/db/schema")>("@/lib/db/schema")
+        const db = new CogniaDB(`manager-baseline-${crypto.randomUUID()}`)
+        const dbMock = jest.requireMock("@/lib/db/schema").getDb as jest.Mock
+        dbMock.mockReturnValue(db)
+        const bridge = jest.requireMock("@/lib/plugin/dexie/bridge")
+        const actualBridge = jest.requireActual<typeof import("@/lib/plugin/dexie/bridge")>(
+          "@/lib/plugin/dexie/bridge"
+        )
+        bridge.applyPluginTables.mockImplementation(actualBridge.applyPluginTables)
+        bridge.restorePluginTables.mockImplementation(actualBridge.restorePluginTables)
+        const manager = new PluginManager({ pluginDirectory: "/plugins" })
+        const loader = (manager as unknown as { loader: import("./loader").PluginLoader }).loader
+        const v2 = jest.fn(async () => {
+          throw new Error("Historical migration replayed")
+        })
+        const v3 = jest.fn(async (tx: Transaction) => {
+          await tx.table(`${id}:items`).update(1, { shape: "v3" })
+        })
+        const activate = jest.fn()
+        jest.spyOn(loader, "load").mockImplementation(async (current) => {
+          const definition = { manifest: current.manifest, activate }
+          loader.restoreModule(id, definition, { v2, v3 })
+          return definition
+        })
+        try {
+          if (mode !== "fresh") {
+            await actualBridge.applyPluginTables(db, id, dexie)
+            await db.table(`${id}:items`).put({ id: 1, shape: "v2" })
+          }
+          if (mode === "boot") {
+            await (
+              manager as unknown as { restorePluginDexieTables: () => Promise<void> }
+            ).restorePluginDexieTables()
+            expect((await db.table("pluginDexieMeta").get(id)).appliedMigrationVersion).toBe(2)
+            store.plugins[id].manifest = { ...plugin.manifest, version: "3.0.0" }
+          }
+          if (mode === "known")
+            (getPlugin as jest.Mock).mockResolvedValueOnce({ lastActivatedVersion: "2.0.0" })
+          await manager.enablePlugin(id)
+          expect(v2).not.toHaveBeenCalled()
+          expect(v3).toHaveBeenCalledTimes(mode === "boot" || mode === "known" ? 1 : 0)
+          expect(activate).toHaveBeenCalledTimes(1)
+          expect((await db.table("pluginDexieMeta").get(id)).appliedMigrationVersion).toBe(3)
+        } finally {
+          await manager.unloadPlugin(id).catch(() => undefined)
+          dbMock.mockImplementation(jest.requireActual("@/lib/db/schema").getDb)
+          bridge.applyPluginTables.mockImplementation(async () => undefined)
+          bridge.restorePluginTables.mockImplementation(async () => [])
+          await db.delete()
+        }
+      }
+    )
+
+    it.each([false, true])(
+      "runs update migrations transactionally before activation (failure=%s)",
+      async (failMigration) => {
+        const plugin = createServicePlugin("migration-fixture", {
+          version: "1.0.0",
+          dexie: { tables: [{ name: "items", schema: "id, legacy" }] },
+        })
+        const id = plugin.manifest.id
+        const store = {
+          ...createServiceStore([plugin]),
+          unloadPlugin: jest.fn(async () => {
+            store.plugins[id].status = "installed"
+          }),
+        }
+        mockGetState.mockReturnValue(store)
+        const { CogniaDB } = jest.requireActual<typeof import("@/lib/db/schema")>("@/lib/db/schema")
+        const db = new CogniaDB(`manager-migration-${crypto.randomUUID()}`)
+        const dbMock = jest.requireMock("@/lib/db/schema").getDb as jest.Mock
+        dbMock.mockReturnValue(db)
+        const bridge = jest.requireMock("@/lib/plugin/dexie/bridge")
+        bridge.applyPluginTables.mockImplementation(
+          jest.requireActual("@/lib/plugin/dexie/bridge").applyPluginTables
+        )
+        const manager = new PluginManager({ pluginDirectory: "/plugins" })
+        const loader = (manager as unknown as { loader: import("./loader").PluginLoader }).loader
+        const activationVersions: string[] = []
+        const order: number[] = []
+        const backfill = jest.fn(async (tx: Transaction) => {
+          order.push(2)
+          await tx.table(`${id}:items`).update(1, { indexed: "backfilled" })
+        })
+        const finish = jest.fn(async () => {
+          order.push(3)
+          if (failMigration) throw new Error("backfill failed")
+        })
+        jest.spyOn(loader, "load").mockImplementation(async (current) => {
+          const definition = {
+            manifest: current.manifest,
+            activate: () => {
+              activationVersions.push(current.manifest.version)
+            },
+          }
+          loader.restoreModule(id, definition, { backfill, finish })
+          return definition
+        })
+        try {
+          await manager.enablePlugin(id)
+          await db.table(`${id}:items`).put({ id: 1, legacy: "old" })
+          await manager.unloadPlugin(id)
+          store.plugins[id] = {
+            ...store.plugins[id],
+            status: "installed",
+            manifest: {
+              ...plugin.manifest,
+              version: "3.0.0",
+              dexie: {
+                tables: [{ name: "items", schema: "id, indexed" }],
+                migrations: [
+                  { toVersion: 3, upgrade: "finish" },
+                  { toVersion: 2, upgrade: "backfill" },
+                ],
+              },
+            },
+          }
+          if (failMigration) {
+            await expect(manager.enablePlugin(id)).rejects.toThrow("backfill failed")
+            expect(activationVersions).toEqual(["1.0.0"])
+            expect(store.plugins[id].status).toBe("error")
+            expect(await db.table(`${id}:items`).get(1)).toEqual({ id: 1, legacy: "old" })
+            expect((await db.table("pluginDexieMeta").get(id)).appliedMigrationVersion).toBe(1)
+            finish.mockImplementation(async () => {
+              order.push(3)
+            })
+            await manager.enablePlugin(id)
+            expect(activationVersions).toEqual(["1.0.0", "3.0.0"])
+            expect(await db.table(`${id}:items`).get(1)).toMatchObject({ indexed: "backfilled" })
+            expect((await db.table("pluginDexieMeta").get(id)).appliedMigrationVersion).toBe(3)
+          } else {
+            await manager.enablePlugin(id)
+            expect(activationVersions).toEqual(["1.0.0", "3.0.0"])
+            expect(
+              await db.table(`${id}:items`).where("indexed").equals("backfilled").count()
+            ).toBe(1)
+            expect(db.table(`${id}:items`).schema.indexes.map((index) => index.name)).toEqual([
+              "indexed",
+            ])
+            await manager.unloadPlugin(id)
+            store.plugins[id].status = "installed"
+            await manager.enablePlugin(id)
+            expect(backfill).toHaveBeenCalledTimes(1)
+            expect(finish).toHaveBeenCalledTimes(1)
+            expect((await db.table("pluginDexieMeta").get(id)).appliedMigrationVersion).toBe(3)
+          }
+          expect(order).toEqual(failMigration ? [2, 3, 2, 3] : [2, 3])
+        } finally {
+          await manager.unloadPlugin(id).catch(() => undefined)
+          dbMock.mockImplementation(jest.requireActual("@/lib/db/schema").getDb)
+          bridge.applyPluginTables.mockImplementation(async () => undefined)
+          await db.delete()
+        }
+      }
+    )
 
     it("waits for a required service and activates a fresh generation when it appears", async () => {
       const provider = createServicePlugin("provider", {

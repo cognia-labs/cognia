@@ -116,6 +116,8 @@ import {
   removePluginTables,
   restorePluginTables,
 } from "@/lib/plugin/dexie/bridge"
+import { runPluginMigrations } from "@/lib/plugin/dexie/migration-runner"
+import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
 import {
   activationBreakerKey,
   getOrCreateBreaker,
@@ -2492,16 +2494,21 @@ export class PluginManager {
   private async restorePluginDexieTables(): Promise<void> {
     const store = usePluginStore.getState()
     const manifestDexie = new Map<string, PluginManifestDexieBlock>()
+    const installedVersions = new Map<string, number>()
     for (const [id, plugin] of Object.entries(store.plugins)) {
       const dexie = plugin.manifest?.dexie
-      if (dexie) manifestDexie.set(id, dexie)
+      if (dexie) {
+        manifestDexie.set(id, dexie)
+        installedVersions.set(id, Number.parseInt(plugin.manifest.version.split(".")[0], 10))
+      }
     }
     if (manifestDexie.size === 0) return
 
     try {
       const restored = await restorePluginTables(
         () => getDb() as unknown as import("dexie").default,
-        manifestDexie
+        manifestDexie,
+        { installedVersions }
       )
       if (restored.length > 0) {
         loggers.manager.info(
@@ -3564,6 +3571,17 @@ export class PluginManager {
           "The previous plugin runtime has unresolved resources; recover it before installing"
         )
       }
+      const previousVersion = previous?.manifest.version ?? previousRow?.version
+      if (
+        previousVersion &&
+        (previous?.manifest.dexie || previousRow?.manifest?.dexie || result.manifest.dexie)
+      ) {
+        await baselinePluginMigrationVersion(
+          getDb(),
+          pluginId,
+          Number.parseInt(previousVersion.split(".")[0], 10)
+        )
+      }
       // Set before invoking: a lost response can hide a successful host commit.
       committed = true
       await invoke("plugin_commit_staged_update", { pluginId, transactionId: result.transactionId })
@@ -3978,6 +3996,36 @@ export class PluginManager {
       }
       definition.activation = this.parseActivationSpec(plugin.manifest)
 
+      // loadPlugin is also a public activation entry point. Ensure its schema
+      // and pending data migrations are ready even when enablePlugin was not
+      // the caller. Never publish the new runtime before this transaction commits.
+      if (plugin.manifest.dexie) {
+        const meta = await getPluginDexieMeta(pluginId)
+        if (meta && meta.appliedMigrationVersion === undefined) {
+          const previous = await getPlugin(pluginId)
+          if (previous?.lastActivatedVersion) {
+            await baselinePluginMigrationVersion(
+              getDb(),
+              pluginId,
+              Number.parseInt(previous.lastActivatedVersion.split(".")[0], 10)
+            )
+          }
+        }
+        await applyPluginTables(
+          () => getDb(),
+          pluginId,
+          plugin.manifest.dexie,
+          Number.parseInt(plugin.manifest.version.split(".")[0], 10)
+        )
+        await runPluginMigrations(
+          getDb(),
+          pluginId,
+          Number.parseInt(plugin.manifest.version.split(".")[0], 10),
+          plugin.manifest.dexie.migrations ?? [],
+          this.loader.getModuleExports(pluginId) ?? {}
+        )
+      }
+
       // Check if debug mode is enabled for this plugin
       const enableDebug = shouldEnablePluginDebug(plugin)
 
@@ -4321,7 +4369,8 @@ export class PluginManager {
         await applyPluginTables(
           () => getDb() as unknown as import("dexie").default,
           pluginId,
-          plugin.manifest.dexie
+          plugin.manifest.dexie,
+          Number.parseInt(plugin.manifest.version.split(".")[0], 10)
         )
       }
 

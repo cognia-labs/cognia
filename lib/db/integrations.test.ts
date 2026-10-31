@@ -23,6 +23,7 @@ import {
   listIntegrationAccounts,
   listIntegrationSubscriptions,
   listRunnableIntegrationActionJobs,
+  pruneIntegrationRetention,
   setIntegrationAccountOutboundRecipients,
   updateIntegrationAccount,
   updateIntegrationSubscription,
@@ -33,6 +34,29 @@ describe("Integration persistence", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("retains migration markers and backups while pruning old audit entries", async () => {
+    const old = "2026-01-01T00:00:00.000Z"
+    await getDb().integrationAudit.bulkAdd(
+      ["migration.legacy.v1.backup", "migration.legacy.v1.completed", "action.completed"].map(
+        (kind) => ({
+          id: kind,
+          pluginId: "owner",
+          integrationId: "example",
+          kind,
+          outcome: "succeeded" as const,
+          createdAt: old,
+        })
+      )
+    )
+    expect(await pruneIntegrationRetention(Date.parse("2026-10-31T00:00:00Z"))).toMatchObject({
+      audit: 1,
+    })
+    expect((await getDb().integrationAudit.toArray()).map((row) => row.kind).sort()).toEqual([
+      "migration.legacy.v1.backup",
+      "migration.legacy.v1.completed",
+    ])
   })
 
   it("preserves immutable account identity while allowing host health updates", async () => {

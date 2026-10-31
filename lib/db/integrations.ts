@@ -740,6 +740,11 @@ export async function pruneIntegrationRetention(now = Date.now()): Promise<{
     .below(eventCutoff)
     .filter((row) => row.projectionState !== "pending")
     .delete()
-  const audit = await getDb().integrationAudit.where("createdAt").below(auditCutoff).delete()
+  const audit = await getDb()
+    .integrationAudit.where("createdAt")
+    .below(auditCutoff)
+    // These rows are the migration ledger and rollback snapshots, not disposable logs.
+    .filter((row) => !/^migration\..+\.(backup|completed)$/.test(row.kind))
+    .delete()
   return { events, audit }
 }

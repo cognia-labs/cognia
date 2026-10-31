@@ -19,10 +19,11 @@ import {
   restorePluginTables,
 } from "./bridge"
 import { getPluginDexieMeta } from "./meta"
-import { CogniaDB, CURRENT_SCHEMA } from "@/lib/db/schema"
+import { CogniaDB, CURRENT_SCHEMA, CURRENT_SCHEMA_VERSION } from "@/lib/db/schema"
 import { ensureActiveDatabaseReady, assertPluginSchemaReady } from "@/lib/db/boot"
 import { ensureSessionListReady } from "@/lib/db/session-list"
 import { assertStorageLayoutSupported, writeStorageLayoutMarker } from "@/lib/db/storage-layout"
+import { runPluginMigrations } from "./migration-runner"
 
 // We bypass CogniaDB entirely and spin up a lightweight test Dexie instance
 // that includes the pluginDexieMeta table but nothing else.
@@ -97,6 +98,21 @@ describe("applyPluginTables", () => {
     expect(db.tables.map((t) => t.name)).toContain("github-delivery:repos")
   })
 
+  it("baselines a fresh v3 install without running historical migrations", async () => {
+    const upgrade = jest.fn(async () => undefined)
+    const dexie = {
+      tables: [{ name: "items", schema: "id" }],
+      migrations: [
+        { toVersion: 2, upgrade: "upgrade" },
+        { toVersion: 3, upgrade: "upgrade" },
+      ],
+    }
+    await applyPluginTables(db, "fresh", dexie, 3)
+    expect((await getPluginDexieMeta("fresh"))?.appliedMigrationVersion).toBe(3)
+    await runPluginMigrations(db, "fresh", 3, dexie.migrations, { upgrade })
+    expect(upgrade).not.toHaveBeenCalled()
+  })
+
   it("serializes schema upgrades across tabs with a database-scoped Web Lock", async () => {
     const request = jest.fn(async (_name: string, callback: () => Promise<void>) => callback())
     Object.defineProperty(navigator, "locks", {
@@ -164,6 +180,36 @@ describe("applyPluginTables", () => {
 
     // No bump on a no-op re-apply.
     expect(versionAfterSecond).toBe(versionAfterFirst)
+  })
+
+  it("applies index additions and removals in the same session without losing data", async () => {
+    await applyPluginTables(db, "indexed", {
+      tables: [{ name: "items", schema: "id, oldIndex" }],
+    })
+    await db.table("indexed:items").put({ id: 1, oldIndex: "old", newIndex: "new" })
+    const before = await getPluginDexieMeta("indexed")
+    await applyPluginTables(db, "indexed", {
+      tables: [{ name: "items", schema: "id, newIndex" }],
+    })
+    expect(db.table("indexed:items").schema.indexes.map((index) => index.name)).toEqual([
+      "newIndex",
+    ])
+    expect(await db.table("indexed:items").where("newIndex").equals("new").count()).toBe(1)
+    expect((await getPluginDexieMeta("indexed"))?.schemaFingerprint).not.toBe(
+      before?.schemaFingerprint
+    )
+  })
+
+  it("keeps the fingerprint stable when table declarations are reordered", async () => {
+    const tables = [
+      { name: "items", schema: "id" },
+      { name: "records", schema: "id, name" },
+    ]
+    await applyPluginTables(db, "ordered", { tables })
+    const version = db.verno
+    await applyPluginTables(db, "ordered", { tables: [...tables].reverse() })
+    expect(db.verno).toBe(version)
+    expect((await getPluginDexieMeta("ordered"))?.schemaFingerprint).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it("serializes concurrent applies for different plugins (no schema clobber)", async () => {
@@ -437,6 +483,35 @@ describe("restorePluginTables", () => {
     await db.delete()
   })
 
+  it("baselines legacy metadata at installed v2 so a later v3 upgrade only runs migration 3", async () => {
+    const dexie = { tables: [{ name: "items", schema: "id" }] }
+    await applyPluginTables(db, "legacy", dexie)
+    await db.table("legacy:items").put({ id: 1, shape: "v2" })
+    await restorePluginTables(db, new Map([["legacy", dexie]]), {
+      installedVersions: new Map([["legacy", 2]]),
+    })
+    expect((await getPluginDexieMeta("legacy"))?.appliedMigrationVersion).toBe(2)
+    const old = jest.fn(async () => {
+      throw new Error("Historical migration replayed")
+    })
+    const upgrade = jest.fn(async (tx: import("dexie").Transaction) => {
+      await tx.table("legacy:items").update(1, { shape: "v3" })
+    })
+    await runPluginMigrations(
+      db,
+      "legacy",
+      3,
+      [
+        { toVersion: 2, upgrade: "old" },
+        { toVersion: 3, upgrade: "upgrade" },
+      ],
+      { old, upgrade }
+    )
+    expect(old).not.toHaveBeenCalled()
+    expect(upgrade).toHaveBeenCalledTimes(1)
+    expect(await db.table("legacy:items").get(1)).toMatchObject({ shape: "v3" })
+  })
+
   it("re-declares persisted tables missing from the live schema", async () => {
     // Prior session recorded the meta; this fresh process has no namespaced
     // store yet — exactly the github-delivery startup-activation failure.
@@ -463,6 +538,19 @@ describe("restorePluginTables", () => {
       new Map([["github-delivery", { tables: [{ name: "repos", schema: "&fullName" }] }]])
     )
     expect(restored).toEqual([])
+  })
+
+  it("restores changed indexes while retaining the applied migration version", async () => {
+    await applyPluginTables(db, "updated", { tables: [{ name: "items", schema: "id, oldIndex" }] })
+    await db.table("pluginDexieMeta").update("updated", { appliedMigrationVersion: 1 })
+    await restorePluginTables(
+      db,
+      new Map([["updated", { tables: [{ name: "items", schema: "id, newIndex" }] }]])
+    )
+    expect(db.table("updated:items").schema.indexes.map((index) => index.name)).toEqual([
+      "newIndex",
+    ])
+    expect((await getPluginDexieMeta("updated"))?.appliedMigrationVersion).toBe(1)
   })
 
   it("lands on minimumVersion so a consolidated restore matches a per-plugin snapshot", async () => {
@@ -721,7 +809,10 @@ it.each([false, true])(
   async (registerMissing) => {
     const name = `core-only-repair-${Math.random().toString(36).slice(2)}`
     const old = new Dexie(name)
-    old.version(245).stores({ pluginDexieMeta: "&pluginId", sessions: "id", storageLayout: "id" })
+    const previousVersion = CURRENT_SCHEMA_VERSION + 1
+    old
+      .version(previousVersion)
+      .stores({ pluginDexieMeta: "&pluginId", sessions: "id", storageLayout: "id" })
     await old.table("sessions").put({ id: "kept", title: "Keep source", updatedAt: 5 })
     __setTestDb(old)
     let repaired: CogniaDB | undefined
@@ -738,7 +829,7 @@ it.each([false, true])(
       })
       expect(restored).toEqual([])
       expect(repaired).toBeDefined()
-      expect(repaired!.backendDB().version).toBe(2460)
+      expect(repaired!.backendDB().version).toBe((previousVersion + 1) * 10)
       expect(Array.from(repaired!.backendDB().objectStoreNames)).toContain("sessionList")
       await ensureSessionListReady(repaired!)
       expect(await repaired!.sessionList.get("kept")).toMatchObject({

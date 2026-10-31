@@ -35,6 +35,8 @@ import { getPluginMarketplace } from "../package/marketplace"
 import { loggers } from "../core/logger"
 import { getPluginBackupManager } from "./backup"
 import { getPluginManager } from "../core/manager"
+import { getDb } from "@/lib/db/schema"
+import { baselinePluginMigrationVersion } from "@/lib/plugin/dexie/meta"
 import { codeServerClient, type CodeServerProxyArtifact } from "@/lib/codeserver/client"
 import { stageManagedIdeProxy } from "../ide/proxy-manager"
 import type { Plugin, PluginManifest } from "@/types/plugin"
@@ -480,6 +482,7 @@ export class PluginUpdater {
 
     const currentVersion = updateInfo?.currentVersion || this.getPluginVersion(pluginId) || ""
     let targetVersion = options.version || updateInfo?.latestVersion || ""
+    const installedManifest = usePluginStore.getState().plugins[pluginId]?.manifest
     const initialStatus = usePluginStore.getState().plugins[pluginId]?.status
     const shouldReactivate = new Set(["loading", "loaded", "enabling", "enabled", "suspended"]).has(
       initialStatus || ""
@@ -566,6 +569,15 @@ export class PluginUpdater {
         message: "Installing update...",
       })
 
+      // Capture the legacy data's version before refreshing the installed
+      // manifest; a later activation must only run migrations above it.
+      if (installedManifest?.dexie) {
+        await baselinePluginMigrationVersion(
+          getDb(),
+          pluginId,
+          Number.parseInt(installedManifest.version.split(".")[0], 10)
+        )
+      }
       packageMutationStarted = true
       await marketplace.commitStagedPluginUpdate(stagedUpdate)
 

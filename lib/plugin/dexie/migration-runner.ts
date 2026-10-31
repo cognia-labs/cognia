@@ -9,8 +9,10 @@
  * plugin version advances past each migration's toVersion.
  */
 
-import type { Transaction } from "dexie"
+import Dexie, { type Transaction } from "dexie"
 import type { PluginDexieMigrationDef } from "@/types/plugin"
+import type { PluginDexieMeta } from "./meta"
+import { loggers } from "@/lib/plugin/core/logger"
 
 export interface MigrationContext {
   /** The plugin manifest version before this upgrade. */
@@ -41,13 +43,71 @@ export async function runPendingMigrations(
     .sort((a, b) => a.toVersion - b.toVersion)
 
   for (const mig of pending) {
-    const fn = ctx.upgradeHandlers[mig.upgrade]
-    if (!fn) {
+    const fn = Object.hasOwn(ctx.upgradeHandlers, mig.upgrade)
+      ? ctx.upgradeHandlers[mig.upgrade]
+      : undefined
+    if (typeof fn !== "function") {
       throw new Error(
         `Migration upgrade function "${mig.upgrade}" not found in plugin exports ` +
           `(toVersion=${mig.toVersion})`
       )
     }
     await fn(tx)
+  }
+}
+
+/** Commit all backfills and their durable version together, before activation. */
+export async function runPluginMigrations(
+  db: Dexie,
+  pluginId: string,
+  currentVersion: number,
+  migrations: PluginDexieMigrationDef[],
+  moduleExports: Record<string, unknown>
+): Promise<void> {
+  const metaTable = db.table<PluginDexieMeta, string>("pluginDexieMeta")
+  const meta = await metaTable.get(pluginId)
+  if (!meta) throw new Error(`Plugin "${pluginId}" has no Dexie registration`)
+  let baselinedUnknownVersion = false
+  await db.transaction(
+    "rw",
+    [metaTable, ...meta.tableNames.map((name) => db.table(name))],
+    async (tx) => {
+      // Read inside the write transaction so concurrent windows cannot run the
+      // same pending backfill after both observed an older version.
+      const current = await metaTable.get(pluginId)
+      if (!current) throw new Error(`Plugin "${pluginId}" has no Dexie registration`)
+      if (current.appliedMigrationVersion === undefined) {
+        // Legacy data already has the installed shape. Without evidence of the
+        // old version, replaying historical transformations could corrupt it.
+        await metaTable.put({ ...current, appliedMigrationVersion: currentVersion })
+        baselinedUnknownVersion = true
+        return
+      }
+      const previousVersion = current.appliedMigrationVersion
+      if (currentVersion <= previousVersion) return
+      const upgradeHandlers: MigrationContext["upgradeHandlers"] = {}
+      for (const migration of migrations) {
+        const handler = Object.hasOwn(moduleExports, migration.upgrade)
+          ? moduleExports[migration.upgrade]
+          : undefined
+        if (typeof handler === "function") {
+          upgradeHandlers[migration.upgrade] =
+            handler as MigrationContext["upgradeHandlers"][string]
+        }
+      }
+      await Dexie.waitFor(
+        runPendingMigrations(tx, migrations, {
+          previousVersion,
+          currentVersion,
+          upgradeHandlers,
+        })
+      )
+      await metaTable.put({ ...current, appliedMigrationVersion: currentVersion })
+    }
+  )
+  if (baselinedUnknownVersion) {
+    loggers.manager.warn(
+      `[plugin:${pluginId}] Dexie migration previous version is unknown; baselined at ${currentVersion} without replaying migrations`
+    )
   }
 }

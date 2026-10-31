@@ -687,10 +687,13 @@ it("delegates account, publication and recovery operations with the calling plug
       .mockResolvedValue({} as never)
     await api.migrateLegacy({} as never)
     expect(migrate).toHaveBeenCalledWith("owner", {})
-    const rollback = jest
-      .spyOn(migrations, "rollbackIntegrationMigration")
-      .mockResolvedValue(undefined)
-    await api.rollbackMigration("migration")
+    const rollback = jest.spyOn(migrations, "rollbackIntegrationMigration").mockResolvedValue({
+      migrationId: "migration",
+      conflictedIds: { accounts: [], subscriptions: [], workflows: ["edited"] },
+    })
+    expect(await api.rollbackMigration("migration")).toMatchObject({
+      conflictedIds: { workflows: ["edited"] },
+    })
     expect(rollback).toHaveBeenCalledWith("owner", "migration")
   } finally {
     jest.restoreAllMocks()

@@ -1,8 +1,17 @@
 /** @jest-environment jsdom */
 import "fake-indexeddb/auto"
-import type { Transaction } from "dexie"
-import { runPendingMigrations, type MigrationContext } from "./migration-runner"
+import Dexie, { type Transaction } from "dexie"
+import {
+  runPendingMigrations,
+  runPluginMigrations,
+  type MigrationContext,
+} from "./migration-runner"
 import type { PluginDexieMigrationDef } from "@/types/plugin"
+import { loggers } from "@/lib/plugin/core/logger"
+
+jest.mock("@/lib/plugin/core/logger", () => ({
+  loggers: { manager: { warn: jest.fn() } },
+}))
 
 function makeTx(): Transaction {
   // jest mock — we only test that the right handlers are called
@@ -72,6 +81,16 @@ describe("runPendingMigrations", () => {
     )
   })
 
+  it("does not treat inherited object properties as exported migration handlers", async () => {
+    await expect(
+      runPendingMigrations(makeTx(), [{ toVersion: 1, upgrade: "toString" }], {
+        previousVersion: 0,
+        currentVersion: 1,
+        upgradeHandlers: {},
+      })
+    ).rejects.toThrow("not found")
+  })
+
   it("does nothing when migrations array is empty", async () => {
     await expect(
       runPendingMigrations(makeTx(), [], {
@@ -80,5 +99,80 @@ describe("runPendingMigrations", () => {
         upgradeHandlers: {},
       })
     ).resolves.toBeUndefined()
+  })
+})
+
+describe("runPluginMigrations", () => {
+  let db: Dexie
+  beforeEach(async () => {
+    db = new Dexie(`migration-ledger-${crypto.randomUUID()}`)
+    db.version(1).stores({ pluginDexieMeta: "&pluginId", "plugin:items": "id" })
+    await db.table("pluginDexieMeta").put({
+      pluginId: "plugin",
+      tableNames: ["plugin:items"],
+      dexieVersion: 1,
+      appliedAt: 1,
+      appliedMigrationVersion: 0,
+    })
+  })
+  afterEach(async () => {
+    await db.delete()
+  })
+
+  it("serializes concurrent backfills and preserves the durable ledger across reopen", async () => {
+    const upgrade = jest.fn(async (tx: Transaction) => {
+      await tx.table("plugin:items").put({ id: 1, migrated: true })
+    })
+    const migrations = [{ toVersion: 2, upgrade: "upgrade" }]
+    await Promise.all([
+      runPluginMigrations(db, "plugin", 2, migrations, { upgrade }),
+      runPluginMigrations(db, "plugin", 2, migrations, { upgrade }),
+    ])
+    db.close()
+    await db.open()
+    await runPluginMigrations(db, "plugin", 2, migrations, { upgrade })
+    expect(upgrade).toHaveBeenCalledTimes(1)
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
+  })
+
+  it("baselines legacy rows with no known previous version without replaying backfills", async () => {
+    await db.table("pluginDexieMeta").update("plugin", { appliedMigrationVersion: undefined })
+    const upgrade = jest.fn(async () => undefined)
+    await runPluginMigrations(
+      db,
+      "plugin",
+      3,
+      [
+        { toVersion: 2, upgrade: "upgrade" },
+        { toVersion: 3, upgrade: "upgrade" },
+      ],
+      { upgrade }
+    )
+    expect(upgrade).not.toHaveBeenCalled()
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(3)
+    expect(loggers.manager.warn).toHaveBeenCalledWith(
+      expect.stringContaining("previous version is unknown")
+    )
+  })
+
+  it("aborts data and ledger writes on missing handlers and permits a corrected retry", async () => {
+    const upgrade = jest.fn(async (tx: Transaction) => {
+      await tx.table("plugin:items").put({ id: 1 })
+    })
+    const migrations = [
+      { toVersion: 1, upgrade: "upgrade" },
+      { toVersion: 2, upgrade: "missing" },
+    ]
+    await expect(runPluginMigrations(db, "plugin", 2, migrations, { upgrade })).rejects.toThrow(
+      "not found"
+    )
+    expect(await db.table("plugin:items").count()).toBe(0)
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(0)
+    await runPluginMigrations(db, "plugin", 2, migrations, {
+      upgrade,
+      missing: async () => undefined,
+    })
+    expect(await db.table("plugin:items").count()).toBe(1)
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
   })
 })
