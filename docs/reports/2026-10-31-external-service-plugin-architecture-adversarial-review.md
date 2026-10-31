@@ -368,3 +368,10 @@ Host 提供通用队列、检查点持久化和任务治理；供应商业务插
 - 设计契约：ADR-0246（Proposed），`docs/content/docs/{en,zh}/adr/0246-a-business-plugin-reaches-a-service-through-a-granted-connection.md`。
 - ES-09 的 headless 持久化：cd624cccf9；复审发现的 7 个缺陷：838096514f；ES-05 维持 P3。
 - ES-23 在初次分类时遗漏，2026-10-31 补入：断连、撤权和远端删除后派生数据与用户副本的处理规则写入 ADR-0246 第 10 节，代码尚未实现。
+- 提交前审查（测试、i18n、静态导出、PII、接线五类审计 + 全量 typecheck）发现并修复：
+  - 2ad77b0470 重新生成 author-types；6281b23b4c 修复本批引入的两处类型错误，并固定 provider 所有权索引键不会与任何插件的 `ctx.storage` 键冲突。
+  - 9e64948bfd 插件列表、卡片和详情页的生命周期错误改为本地化显示，新增 `dataVersionAhead`（迁移版本领先）和 `authProviderConflict` 两类文案。
+  - 3e421eabfa ES-04 的回归：PKCE token 交换经过 redact 模式的 PII gate 后，JWT 形状或纯数字的 code、Google client_id、`sk-` 开头的 verifier 会被改写导致交换失败。现由 Host 用私有 provenance 标记自己构造的 token 请求，协议字段和 `client_secret` 原样保留，其他参数照常检查（JSON 和表单都覆盖）；飞书特例收窄为内置插件的 JSON refresh 请求，作为 ADR-0246 Host 协调刷新落地前的过渡。同一提交：全新安装回滚时释放 provider 所有权；catalog 中 `migrateLegacy`/`rollbackMigration` 的权限改为与运行时一致的 `integrations:manage`。
+  - 5843a0036b 复审补强：provenance 只对本次 flow 的 tokenUrl 生效，flow 结束即删除。宿主 realm 内篡改内置原型不在防护范围内（ADR-0126 半受信）。
+  - 13e7b855fa 补齐 9 处未被断言固定的行为（所有权索引冲突、Host provider、超时与 lease 取消、审批竞争、停用 suspended 插件、迁移 owner 标记、GitHub host 归一化、运行时初始化器切换账户）。
+- 未完成：ADR-0246 待接受；真实飞书/Google OAuth、桌面 Tauri 冒烟未做；ES-05（未标记表单体的逐字段检查）仍为 P3。另一会话在 c94a6623c4 中同时抽取了 `plugins/feishu-calendar`，与“ADR 接受前只抽取 feishu-auth”的决定不一致，需要确认。
