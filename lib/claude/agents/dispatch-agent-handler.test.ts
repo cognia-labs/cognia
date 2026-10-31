@@ -31,6 +31,21 @@ import {
 import { useSubagentRuntimeStore } from "@/stores/agent/subagent-runtime-store"
 import { requestCancelSubagentRun, liveSubagentRunCount } from "./subagent-cancel-registry"
 import type { PluginSubagentDispatchResult } from "@/types/plugin/plugin-agent-sdk"
+import { startToolExecutionRun } from "@/lib/execution/acting-authority"
+import { getExecutionRun } from "@/lib/db/execution-runs"
+
+// These routing tests have no browser database. Real journal/identity/Lark
+// behavior is exercised by dispatch-run.identity.test.ts.
+jest.mock("@/lib/execution/acting-authority", () => ({
+  startToolExecutionRun: jest.fn(async (_sessionId, options) => ({ id: options.runId })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+  activeToolExecutionRunId: jest.fn(() => undefined),
+  snapshotActingAuthority: jest.fn(async () => undefined),
+  observeActingAuthority: jest.fn(async () => ({ ok: true })),
+}))
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: jest.fn(async () => undefined),
+}))
 
 /** Spin the event loop until `pred()` is truthy or attempts run out. */
 async function waitFor<T>(pred: () => T | undefined, attempts = 100): Promise<T> {
@@ -139,6 +154,19 @@ beforeEach(() => {
 })
 
 describe("runDispatchAgentTool — call modes", () => {
+  it("forwards the Host-correlated execution run into dispatch admission", async () => {
+    jest.mocked(getExecutionRun).mockResolvedValueOnce({ id: "issuing-run" } as never)
+    await runDispatchAgentTool({
+      sessionId: "chat-1",
+      executionRunId: "issuing-run",
+      args: { subagentId: "coder", prompt: "build" },
+    })
+    expect(startToolExecutionRun).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ parentRunId: "issuing-run" })
+    )
+  })
+
   it("errors on unusable args", async () => {
     const out = await runDispatchAgentTool({ sessionId: "s", args: {} })
     expect(out).toMatch(/provide/i)

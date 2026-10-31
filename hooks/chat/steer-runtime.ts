@@ -43,8 +43,21 @@ import {
 } from "@/lib/chat/composer-restore"
 import { dispatchComposerAppend } from "@/lib/chat/composer-append"
 import { mergeContextRefs } from "@/lib/chat/mentions/merge-refs"
+import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
 import type { AttachmentManifestEntry } from "@/lib/chat/attachments/dispatch"
 import type { ContextRef } from "@/lib/chat/mentions/types"
+
+const localPersonSteers = new Set<string>()
+export function recordLocalPersonSteer(
+  sessionId: string,
+  entryId: string,
+  authorization: LocalPersonRun | undefined
+): void {
+  if (authorization !== LOCAL_PERSON_RUN) return
+  localPersonSteers.add(JSON.stringify([sessionId, entryId]))
+  if (localPersonSteers.size > 4096)
+    localPersonSteers.delete(localPersonSteers.values().next().value!)
+}
 
 /** Sessions whose imminent settle must drain the steer queue even if the turn
  * ended via interrupt/error (set by `interruptAndSteer`). A natural clean end
@@ -462,12 +475,22 @@ export async function putBackPendingSteers(
  * each entry's optimistic bubble already holds the same metadata.
  */
 export interface SteerDrainReferences {
+  localAuthorization?: LocalPersonRun
   attachmentManifest?: AttachmentManifestEntry[]
   citations?: ContextRef[]
   promptPreamble?: PromptPreambleSummary
 }
 
-function mergeSteerReferences(queue: readonly SteerEntry[]): SteerDrainReferences | undefined {
+function mergeSteerReferences(
+  queue: readonly SteerEntry[],
+  sessionId: string
+): SteerDrainReferences | undefined {
+  const localAuthorization = queue.every((entry) =>
+    localPersonSteers.has(JSON.stringify([sessionId, entry.id]))
+  )
+    ? LOCAL_PERSON_RUN
+    : undefined
+  for (const entry of queue) localPersonSteers.delete(JSON.stringify([sessionId, entry.id]))
   const citations = mergeContextRefs(
     [],
     queue.flatMap((entry) => entry.citations ?? [])
@@ -489,7 +512,12 @@ function mergeSteerReferences(queue: readonly SteerEntry[]): SteerDrainReference
         })
       )
     : undefined
-  if (citations.length === 0 && summaries.length === 0 && !attachmentManifest?.length)
+  if (
+    !localAuthorization &&
+    citations.length === 0 &&
+    summaries.length === 0 &&
+    !attachmentManifest?.length
+  )
     return undefined
   const promptPreamble: PromptPreambleSummary | undefined = summaries.length
     ? {
@@ -498,6 +526,7 @@ function mergeSteerReferences(queue: readonly SteerEntry[]): SteerDrainReference
       }
     : undefined
   return {
+    ...(localAuthorization ? { localAuthorization } : {}),
     ...(attachmentManifest?.length ? { attachmentManifest } : {}),
     ...(citations.length ? { citations } : {}),
     ...(promptPreamble ? { promptPreamble } : {}),
@@ -546,7 +575,7 @@ export function maybeDrainSteer(
   const payload = buildSteerPayload(queue)
   const webSearchContext = mergeSteerWebSearchContexts(queue.map((entry) => entry.webSearchContext))
   const replyTo = queue.find((entry) => entry.replyTo)?.replyTo
-  const references = mergeSteerReferences(queue)
+  const references = mergeSteerReferences(queue, sessionId)
   const outcome = replay(payload, webSearchContext, replyTo, references)
   if (awaitAdmission) {
     const settle = (accepted: boolean) =>

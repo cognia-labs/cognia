@@ -3,7 +3,13 @@ import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { resolveBuiltInSkillSessionBinding, resolveBuiltInSkillTurnActors } from "../context"
 import type { BuiltInSkillContext } from "../types"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
-import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
+import {
+  observeActingAuthority,
+  snapshotActingAuthority,
+  resolveRunActingIdentity,
+} from "@/lib/execution/acting-authority"
+import { getDispatchContext } from "@/lib/claude/agents/dispatch-context-registry"
+import { getSubagentApprovalRoute } from "@/lib/claude/agents/subagent-approval-routes"
 
 export interface VerifiedLarkUserAuthorization {
   accessToken: string
@@ -28,14 +34,25 @@ export async function assertLarkActingIdentity(
   ctx?: BuiltInSkillContext
 ): Promise<VerifiedLarkUserAuthorization | undefined> {
   if (!ctx) throw new LarkActingIdentityError()
-  const authoritySnapshot = snapshotActingAuthority(ctx.sessionId)
+  const authoritySnapshot = snapshotActingAuthority(ctx.sessionId, ctx.executionRunId)
   try {
-    const { binding, personalLane, rootSessionId } = await resolveBuiltInSkillSessionBinding(
-      ctx.sessionId
-    )
+    const { binding, personalLane, personalRunOnly, rootSessionId } =
+      await resolveBuiltInSkillSessionBinding(
+        ctx.hitlBypass ? (ctx.imAuthoritySessionId ?? ctx.sessionId) : ctx.sessionId
+      )
     if (!binding) {
+      // Plugin API invocations cannot borrow a desktop session's active run.
+      if (ctx.outboundAuthorization?.kind === "plugin") throw new LarkActingIdentityError()
       // Never trust ctx.personalLane or treat a missing IM binding as consent.
-      if (personalLane !== "local-session") throw new LarkActingIdentityError()
+      if (!personalRunOnly && personalLane !== "local-session") throw new LarkActingIdentityError()
+      const route = getSubagentApprovalRoute(ctx.sessionId)
+      const childId = getDispatchContext(ctx.sessionId)?.selfRunId ?? route?.runId
+      const runId = ctx.executionRunId ?? (childId ? `execution:job:${childId}` : undefined)
+      const executionSessionId =
+        route && runId === `execution:job:${route.runId}` ? route.parentSessionId : ctx.sessionId
+      const identity = await resolveRunActingIdentity(executionSessionId, runId)
+      if (identity?.trigger !== "local" || identity.authorizingPrincipal?.kind !== "local-person")
+        throw new LarkActingIdentityError()
       return
     }
     // open_ids are app-scoped: another platform or adapter cannot prove ownership.

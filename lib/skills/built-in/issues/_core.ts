@@ -77,7 +77,10 @@ async function sessionField<T>(
  * bound to a workspace must not file into whichever workspace the window
  * happens to be showing, and an IM or scheduled session has no window at all.
  */
-export async function resolveWorkspaceId(ctx: Pick<BuiltInSkillContext, "sessionId">) {
+export async function resolveWorkspaceId(
+  ctx: Pick<BuiltInSkillContext, "sessionId" | "projectId">
+) {
+  if (ctx.projectId) return ctx.projectId
   const bound = await sessionField(ctx.sessionId, (session) => session.projectId)
   if (bound) return bound
   const { useProjectStore } = await import("@/stores/project/project-store")
@@ -95,9 +98,10 @@ export async function resolveWorkspaceId(ctx: Pick<BuiltInSkillContext, "session
  * naming the wrong kind is worse than naming no id.
  */
 export async function resolveIssueActor(
-  ctx: Pick<BuiltInSkillContext, "sessionId">
+  ctx: Pick<BuiltInSkillContext, "sessionId" | "characterId">
 ): Promise<IssueActor> {
-  const characterId = await sessionField(ctx.sessionId, (session) => session.characterId)
+  const characterId =
+    ctx.characterId ?? (await sessionField(ctx.sessionId, (session) => session.characterId))
   if (!characterId) return { kind: "agent" }
   try {
     const { getCharacter } = await import("@/lib/db/characters")

@@ -302,7 +302,14 @@ async function runToolEnabled(
     runId: teamCtx.runId,
   })
   const releaseLiveControl = await onSessionCreated?.(session.id)
+  const { startToolExecutionRun, finishToolExecutionRun } =
+    await import("@/lib/execution/acting-authority")
+  let execution: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
+  let executionFailed = true
   try {
+    execution = await startToolExecutionRun(session.id, {
+      ...(teamCtx.runId ? { parentRunId: `execution:team:${teamCtx.runId}` } : {}),
+    })
     const appSettings =
       (await settingsDb.getSettings().catch(() => undefined)) ??
       useSettingsStore.getState().settings
@@ -521,6 +528,7 @@ async function runToolEnabled(
         ? lastError
         : new Error("dispatchTeammate: no routing candidate")
     }
+    executionFailed = Boolean(result.resultSubtype?.startsWith("error"))
     return { text: result.text ?? "", usage: readUsage(result) }
   } finally {
     releaseLiveControl?.()
@@ -529,7 +537,11 @@ async function runToolEnabled(
     clearKnowledgeReaderForSession(session.id)
     clearResolvedPermissionCeiling(session.id)
     clearTeamDispatchContext(session.id)
-    void sessionsDb.deleteSession(session.id).catch(() => undefined)
+    try {
+      if (execution) await finishToolExecutionRun(execution.id, executionFailed)
+    } finally {
+      void sessionsDb.deleteSession(session.id).catch(() => undefined)
+    }
   }
 }
 

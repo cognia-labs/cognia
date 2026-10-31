@@ -172,9 +172,6 @@ export async function resumePluginAgentSession(sessionId: string): Promise<Plugi
   if (!row) {
     throw new Error(`resumeSession: session "${sessionId}" not found`)
   }
-  if (row.programmaticCreator === undefined) {
-    await sessionsDb.updateSession(row.id, { programmaticCreator: "plugin-agent-sdk" })
-  }
   return buildSession(row.id, {
     ...(row.characterId ? { characterId: row.characterId } : {}),
     ...(row.workingDir ? { cwd: row.workingDir } : {}),

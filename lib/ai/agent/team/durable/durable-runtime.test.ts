@@ -267,9 +267,11 @@ describe("the app's durable AgentTeam coordinator", () => {
     expect(await getDb().executionRuns.get("run-journal")).toBeUndefined()
     const recordedIdentity = (await getDb().executionRuns.get("execution:team:run-journal"))
       ?.actingIdentity
+    // A caller-supplied "chat" origin is not host proof of a local person
+    // (ADR-0243 phase 2-0), so the run records as an external event.
     expect(recordedIdentity).toMatchObject({
       lane: "legacy",
-      trigger: "local",
+      trigger: "external-event",
       requesters: [],
       authorityRevision: 0,
     })

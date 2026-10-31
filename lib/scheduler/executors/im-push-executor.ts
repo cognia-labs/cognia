@@ -1,3 +1,4 @@
+import { sanitizeOutboundSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 /**
  * `im-push` scheduled-task executor.
  *
@@ -72,7 +73,7 @@ function normalizePayload(
       (segment) => !segment || typeof segment !== "object" || typeof segment.type !== "string"
     )
     if (invalid) return { error: "im-push task `segments` must be MessageSegment objects" }
-    segments = payload.segments
+    segments = sanitizeOutboundSegments(payload.segments)
   } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
     segments = [{ type: "text", text: payload.text }]
   }

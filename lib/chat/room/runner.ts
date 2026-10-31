@@ -1468,7 +1468,13 @@ export class RoomRunner {
     this.subCtx.set(sub, ctx)
 
     let lastError: unknown
+    // This host runner is entered by the desktop composer or authenticated paired UI.
+    // Each member turn needs its own entry record before its first tool call.
+    let executionRunId: string | undefined
+    let executionFailed = true
     try {
+      executionRunId = await deps.execution.startMemberRun?.(sub)
+      if (executionRunId) opts = { ...opts, turnId: executionRunId }
       do {
         const done = new Promise<void>((resolve, reject) => {
           this.resolvers.set(sub, { resolve, reject })
@@ -1489,6 +1495,7 @@ export class RoomRunner {
             }
           )
           controller?.complete()
+          executionFailed = false
           return
         } catch (error) {
           lastError = error
@@ -1530,14 +1537,18 @@ export class RoomRunner {
       } while (candidate)
       throw lastError instanceof Error ? lastError : new Error("Room chat has no routing candidate")
     } finally {
-      this.resolvers.delete(sub)
-      this.subCtx.delete(sub)
-      this.streams.discard(sessionId, sub)
-      this.coalescing.release(sub)
       try {
-        await deps.ipc.closeSession(sub)
-      } catch {
-        /* sub-session may already be torn down */
+        if (executionRunId) await deps.execution.finishMemberRun?.(executionRunId, executionFailed)
+      } finally {
+        this.resolvers.delete(sub)
+        this.subCtx.delete(sub)
+        this.streams.discard(sessionId, sub)
+        this.coalescing.release(sub)
+        try {
+          await deps.ipc.closeSession(sub)
+        } catch {
+          /* sub-session may already be torn down */
+        }
       }
     }
   }

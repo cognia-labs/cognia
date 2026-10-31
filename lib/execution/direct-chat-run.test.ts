@@ -4,6 +4,7 @@ import "fake-indexeddb/auto"
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { createExecutionRun, listExecutionRunEvents } from "@/lib/db/execution-runs"
+import { LOCAL_PERSON_RUN } from "./acting-authority"
 import {
   finishDirectChatExecutionRun,
   hasActiveDirectChatExecutionRun,
@@ -57,6 +58,7 @@ describe("direct chat execution run", () => {
 
   it("creates one canonical run and journals tool lifecycle through the existing producer", async () => {
     const input = {
+      localAuthorization: LOCAL_PERSON_RUN as typeof LOCAL_PERSON_RUN,
       sessionId: "session-1",
       runId: "run:session-1:1",
       projectId: "project-1",
@@ -85,6 +87,7 @@ describe("direct chat execution run", () => {
       schemaVersion: 1,
       lane: "legacy",
       trigger: "local",
+      authorizingPrincipal: { kind: "local-person" },
       requesters: [{ kind: "local-person" }],
       actingPrincipal: { kind: "local-person" },
       authorityRevision: 0,

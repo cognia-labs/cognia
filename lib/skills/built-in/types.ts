@@ -77,6 +77,8 @@ export type BuiltInSkillActingSenders = readonly BuiltInSkillActingSender[] | "u
 export interface BuiltInSkillContext {
   /** The chat session this invocation belongs to. */
   sessionId: string
+  /** Exact host execution identity, when supplied by the tool transport. */
+  executionRunId?: string
   /** Hydrated lineage hint only; personal-token gates must re-resolve host evidence. */
   personalLane?: "local-session" | "unverified"
   /** Human contributors to this turn; confirmation re-fires carry the verified clicker. */
@@ -88,6 +90,11 @@ export interface BuiltInSkillContext {
    * workspace. Filesystem-backed desktop skills are confined to this root.
    */
   workspaceRoot?: string
+  /** Execution project and actor survive a confirmation's invoking-row cleanup. */
+  projectId?: string
+  characterId?: string
+  /** Host-restored root authority for a confirmed invocation; not an execution workspace. */
+  imAuthoritySessionId?: string
   /** Platform binding when the session is connector-bound. */
   imBinding?: {
     adapterId: string

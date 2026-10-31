@@ -20,6 +20,7 @@ import type { SubAgentPriority } from "@/types/agent/sub-agent"
 import type { TeamTaskStatus } from "@/types/agent/agent-team"
 import type { StartSquadRunResult } from "@/lib/ai/agent/team/squad/start-squad-run"
 import { sha256Hex } from "@/lib/share/hash"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 const log = loggers.agent.child("team-rpc")
 
@@ -55,6 +56,7 @@ export async function handleTeamRunStart(
     const runId = `squad-companion-${await sha256Hex(JSON.stringify([callerDeviceId, launchId.toLowerCase()]))}`
     const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
     return await startSquadRun({
+      localAuthorization: LOCAL_PERSON_RUN,
       squadId: teamId,
       runId,
       goal: typeof payload.goal === "string" ? payload.goal : "",

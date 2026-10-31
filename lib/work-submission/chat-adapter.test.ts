@@ -72,6 +72,9 @@ describe("acceptChatTurn", () => {
     const receipt = await acceptChatTurn(turn, deps())
 
     expect(receipt).toMatchObject({ submissionId: "work:run-1", runId: "run-1", state: "accepted" })
+    expect((await getDb().executionRuns.get("run-1"))?.actingIdentity).toMatchObject({
+      trigger: "external-event",
+    })
     expect(await getWorkSubmission("work:run-1")).toMatchObject({
       sourceKind: "chat",
       accountId: "account-1",

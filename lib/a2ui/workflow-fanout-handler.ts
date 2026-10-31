@@ -7,10 +7,8 @@
  * it enqueues "⊘ 已取消" without writing anything. In both cases the
  * sibling binding is dropped so the user can't double-tap.
  *
- * Permission constraint: the upstream tool already enforced "the target
- * channel must be the current IM session itself" by checking the
- * session's platformBinding. The handler trusts that — it never accepts
- * a cross-channel target from a bus callback.
+ * The persisted target must match both the binding and the verified click.
+ * Stored payloads cannot grant authority to subscribe another conversation.
  */
 
 import type { ConnectorCallbackBindingRow } from "@/types/connectors/interaction"
@@ -105,11 +103,15 @@ export async function handleWorkflowFanoutCallback(
     return
   }
 
-  const conversationKey = input.conversationKey ?? payload.target.conversationKey
-  if (!conversationKey) {
-    await deleteSiblingBindings(input.adapterId, input.binding.surfaceId)
-    return
-  }
+  const conversationKey = input.conversationKey
+  if (
+    !conversationKey ||
+    input.binding.adapterId !== input.adapterId ||
+    input.binding.conversationKey !== conversationKey ||
+    payload.target.adapterId !== input.adapterId ||
+    payload.target.conversationKey !== conversationKey
+  )
+    throw new Error("Fan-out target does not match its bound conversation and click")
 
   let platform = input.platform
   try {

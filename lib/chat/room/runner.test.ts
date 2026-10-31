@@ -430,6 +430,17 @@ const textOf = (m: Msg) =>
     .join("")
 
 describe("a linear turn", () => {
+  it("records each member before its first send and closes the entry afterwards", async () => {
+    const w = createWorld({ team: { members: [{ characterId: "a" }] } })
+    const start = jest.fn(async () => "member-run")
+    const finish = jest.fn(async () => undefined)
+    w.deps.execution.startMemberRun = start
+    w.deps.execution.finishMemberRun = finish
+    w.replyWith("a", "answer")
+    await w.runner.send("question", { sessionId: ROOM })
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(finish).toHaveBeenCalledWith("member-run", false)
+  })
   it("retries a member with the selected fallback model and recomputed execution limits", async () => {
     const w = createWorld({ team: { members: [{ characterId: "a" }] } })
     w.deps.ai.resolveSendOptions = async () =>

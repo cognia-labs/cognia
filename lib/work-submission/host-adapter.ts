@@ -34,6 +34,7 @@ import {
 } from "@/lib/db/work-submissions"
 
 import { chatIdempotencyKey } from "./chat-adapter"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { planWorkSubmissionRecovery, type WorkRecoveryDeps } from "./recovery"
 import {
   acceptWorkSubmission,
@@ -89,6 +90,7 @@ export async function acceptHostStateChatTurn(
   try {
     return await acceptWorkSubmission(
       {
+        localAuthorization: LOCAL_PERSON_RUN,
         intent: {
           contractVersion: 1,
           // Same shape the renderer uses, so the two arrival paths collapse.

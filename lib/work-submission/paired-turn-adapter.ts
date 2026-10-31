@@ -142,8 +142,10 @@ export async function admitPairedChatTurn(
   const submissionId = pairedTurnSubmissionId(runId)
   const now = deps.now?.() ?? Date.now()
   try {
+    const authorityModule = await import("@/lib/execution/acting-authority")
     await acceptWorkSubmission(
       {
+        localAuthorization: authorityModule.LOCAL_PERSON_RUN,
         intent: {
           contractVersion: 1,
           idempotencyKey: `paired:${sessionId}:${runId}`,

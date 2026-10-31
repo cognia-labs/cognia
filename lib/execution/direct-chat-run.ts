@@ -17,7 +17,7 @@ import {
   recordChatSdkMessage,
 } from "@/lib/chat/canonical-sink"
 import { finishSharedSessionRun } from "@/lib/collab/shared-run-coordinator"
-import { recordedRunMetadata } from "./acting-authority"
+import { recordedRunMetadata, LOCAL_PERSON_RUN, type LocalPersonRun } from "./acting-authority"
 
 export interface StartDirectChatExecutionRunInput {
   sessionId: string
@@ -25,6 +25,7 @@ export interface StartDirectChatExecutionRunInput {
   projectId?: string
   workspaceRoot?: string
   startedAt?: number
+  localAuthorization?: LocalPersonRun
   /**
    * The turn's prompt. Reaches the canonical log only while the `prompts` debug
    * tier is armed — `messages` already stores it verbatim.
@@ -66,11 +67,19 @@ export async function startDirectChatExecutionRun(
     try {
       run = await createExecutionRun({
         id: input.runId,
-        ...recordedRunMetadata("local", {
-          runId: input.runId,
-          requesters: [{ kind: "local-person" }],
-          actingPrincipal: { kind: "local-person" },
-        }),
+        ...recordedRunMetadata(
+          input.localAuthorization === LOCAL_PERSON_RUN ? "local" : "external-event",
+          {
+            runId: input.runId,
+            ...(input.localAuthorization === LOCAL_PERSON_RUN
+              ? {
+                  requesters: [{ kind: "local-person" as const }],
+                  actingPrincipal: { kind: "local-person" as const },
+                  authorizingPrincipal: { kind: "local-person" as const },
+                }
+              : {}),
+          }
+        ),
         kind: "agent-turn",
         sourceId: input.runId,
         sessionId: input.sessionId,
@@ -221,6 +230,10 @@ export async function projectDirectChatCaptureEvent(
  */
 export function hasActiveDirectChatExecutionRun(sessionId: string): boolean {
   return activeRuns.has(sessionId)
+}
+
+export function activeDirectChatExecutionRunId(sessionId: string): string | undefined {
+  return activeRuns.get(sessionId)?.runId
 }
 
 /** Seal the current direct-chat run exactly once. */

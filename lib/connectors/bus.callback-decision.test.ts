@@ -38,6 +38,7 @@ jest.mock("@/lib/db/conversation-overrides", () => ({
   readForResolution: jest.fn(async () => null),
 }))
 jest.mock("./callback-authorization", () => ({
+  isHostRunControlCard: jest.fn(async () => true),
   authorizeConnectorCallback: jest.fn(),
   notifyCallbackDenied: jest.fn(),
   resolveLarkCallbackConversation: jest.fn(async () => null),

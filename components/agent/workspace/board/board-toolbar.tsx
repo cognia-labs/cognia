@@ -22,6 +22,8 @@ import { Toggle } from "@/components/ui/toggle"
 import { PluginExtensionSlot } from "@/components/plugins/plugin-extension-slot"
 import { cn } from "@/lib/utils"
 import { agentTeamManager } from "@/lib/ai/agent/team/agent-team"
+import { createSquadStartAttempt } from "@/lib/execution/squad-start-dispatch"
+import { detectHostProfile } from "@/lib/platform/capabilities"
 import { useTeamLiveStatus } from "@/hooks/agent-runs/use-team-live-status"
 import {
   collectFilterOptions,
@@ -199,7 +201,11 @@ export function BoardToolbar({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => void agentTeamManager.start(team.id).catch(() => undefined)}
+            onClick={() =>
+              void createSquadStartAttempt({ teamId: team.id, hostProfile: detectHostProfile() })
+                .dispatch()
+                .catch(() => undefined)
+            }
             data-testid="board-run"
           >
             <PlayIcon className="mr-1 size-3.5" />

@@ -24,6 +24,15 @@ jest.mock("./task-completion-linkage", () => ({
   dispatchScheduledTaskSettled: jest.fn(async () => {}),
 }))
 jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
+  // This integration fixture has no plugins; keep the current Host hook seam.
+  getPluginEventHooks: () => ({
+    hasAnyHook: () => false,
+    dispatchScheduledTaskCreate() {},
+    dispatchScheduledTaskUpdate() {},
+    dispatchScheduledTaskDelete() {},
+    dispatchScheduledTaskPause() {},
+    dispatchScheduledTaskResume() {},
+  }),
   getPluginLifecycleHooks: () => ({
     dispatchOnScheduledTaskStart() {},
     dispatchOnScheduledTaskComplete() {},

@@ -646,7 +646,7 @@ export async function runTeam(
   }
 
   await agentTeamManager.start(teamId, {
-    origin: options.origin ?? "plugin",
+    origin: "plugin",
     ...(options.ultracode !== undefined ? { ultracode: options.ultracode } : {}),
   })
 

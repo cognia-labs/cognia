@@ -34,6 +34,7 @@ export { DEFAULT_NESTING_MAX_DEPTH }
 
 export interface DispatchAgentToolRequest {
   sessionId: string
+  executionRunId?: string
   args: Record<string, unknown>
 }
 
@@ -122,6 +123,7 @@ export async function runDispatchAgentTool(req: DispatchAgentToolRequest): Promi
         toolsEnabled: d.toolsEnabled,
         background: d.background,
         parentSessionId: req.sessionId,
+        ...(req.executionRunId !== undefined ? { executionRunId: req.executionRunId } : {}),
         caller,
         label,
         ...(d.model ? { model: d.model } : {}),

@@ -235,6 +235,9 @@ export function drainSteerVia(sessionId: string, sendRef: React.MutableRefObject
     return send(payload, undefined, {
       sessionId,
       steerDrain: true,
+      ...(references?.localAuthorization
+        ? { localAuthorization: references.localAuthorization }
+        : {}),
       throwOnError: true,
       webSearchContext,
       ...(replyTo ? { replyTo } : {}),

@@ -53,7 +53,7 @@ describe("syncSecurityScanExecutionRun", () => {
       await syncSecurityScanExecutionRun(record())
       expect((await getExecutionRun(RUN_ID))?.actingIdentity).toMatchObject({
         lane: "legacy",
-        trigger: "local",
+        trigger: "external-event",
         requesters: [],
       })
       expect(await getExecutionRun(RUN_ID)).toMatchObject({

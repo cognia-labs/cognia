@@ -131,7 +131,7 @@ const TERMINAL_EVENT: Record<string, RunEventType> = {
 export function projectedExecutionRun(p: ProjectionPayload) {
   return {
     id: p.runId,
-    ...recordedRunMetadata(p.origin === "local" ? "local" : "external-event", { runId: p.runId }),
+    ...recordedRunMetadata("external-event", { runId: p.runId }),
     kind: "fusion" as const,
     // The fusion run IS the source: no engine run stands behind it.
     sourceId: p.runId,

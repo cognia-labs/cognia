@@ -2,6 +2,12 @@
 import "fake-indexeddb/auto"
 
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
+import { LOCAL_PERSON_RUN, startToolExecutionRun } from "@/lib/execution/acting-authority"
+import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import {
+  registerTeamDispatchContext,
+  clearTeamDispatchContext,
+} from "@/lib/claude/agents/dispatch-context-registry"
 import {
   LIVE_SQUAD_RUN_STATUSES,
   TERMINAL_SQUAD_RUN_STATUSES,
@@ -26,6 +32,59 @@ const seed: SquadRunSeed = {
 }
 
 describe("createSquadRunRecords", () => {
+  it.each(["ui", "interactive"])(
+    "refuses caller-supplied plugin runTeam origin %s",
+    async (origin) => {
+      const result = await createSquadRunRecords({
+        ...seed,
+        origin,
+        executionConstraints: { triggeredFrom: { source: "ui" } } as never,
+      })
+      expect(result.executionRun.actingIdentity?.trigger).toBe("external-event")
+      await getDb().sessions.put({ id: seed.sessionId } as never)
+      await expect(
+        assertLarkActingIdentity("a1", {
+          sessionId: seed.sessionId!,
+          executionRunId: result.executionRunId,
+        })
+      ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+    }
+  )
+
+  it.each(["ui", "api"])(
+    "admits desktop/paired manual Squad source %s only with host proof, including a session-less member",
+    async (source) => {
+      const result = await createSquadRunRecords({
+        ...seed,
+        sessionId: undefined,
+        localAuthorization: LOCAL_PERSON_RUN,
+        executionConstraints: { triggeredFrom: { source } } as never,
+      })
+      expect(result.executionRun.actingIdentity).toMatchObject({
+        trigger: "local",
+        authorizingPrincipal: { kind: "local-person" },
+      })
+      await getDb().sessions.put({
+        id: "member",
+        kind: "team",
+        programmaticCreator: "team-teammate",
+      } as never)
+      registerTeamDispatchContext("member", {
+        teamId: seed.teamId,
+        runId: seed.runId,
+        teammateId: "m",
+        teammateName: "M",
+      })
+      try {
+        const child = await startToolExecutionRun("member", { parentRunId: result.executionRunId })
+        await expect(
+          assertLarkActingIdentity("a1", { sessionId: "member", executionRunId: child.id })
+        ).resolves.toBeUndefined()
+      } finally {
+        clearTeamDispatchContext("member")
+      }
+    }
+  )
   it("records an automatic Squad with no human provenance as external-event", async () => {
     const result = await createSquadRunRecords({ ...seed, origin: "automation" })
     expect(result.executionRun.actingIdentity).toMatchObject({

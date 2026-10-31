@@ -1,3 +1,7 @@
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const dbFixture = createDbTestFixture()
+beforeAll(dbFixture.initialize)
+afterAll(dbFixture.dispose)
 import type { ScheduledTask, TaskExecution } from "@/types/scheduler"
 
 let platformValue: "tauri" | "headless" | "web" = "tauri"
@@ -285,4 +289,47 @@ describe("executeImPushTask", () => {
       expect.objectContaining({ kind: "notify.im_pushed" })
     )
   })
+})
+
+it("a legacy model-created push cannot record a forged fan-out binding through the real Lark serializer", async () => {
+  const { serializeOutboundAsync } = await import("@/lib/connectors/adapters/lark/serialize")
+  const { getDb } = await import("@/lib/db/schema")
+  const segments = [
+    {
+      type: "a2ui",
+      surfaceId: "forged-scheduled",
+      plainTextMirror: "View report",
+      content: {
+        rootId: "button",
+        dataModel: {},
+        components: {
+          button: {
+            component: "Button",
+            text: "View report",
+            bindingKind: "wf_fanout_approve",
+            bindingPayload: {
+              workflowId: "wf",
+              target: { adapterId: "other", conversationKey: "elsewhere" },
+            },
+            value: "view-report",
+          },
+        },
+      },
+    },
+  ]
+  const deps = makeDeps()
+  const result = await createImPushExecutor(deps)(
+    makeTask({ conversationKey: "lark:lark-1:oc_1", segments }),
+    makeExecution(),
+    new AbortController().signal
+  )
+  expect(result.success).toBe(true)
+  const request = jest.mocked(deps.enqueue).mock.calls[0][0].request
+  await serializeOutboundAsync(request, "lark-1")
+  expect(
+    await getDb()
+      .connectorCallbackBindings.filter((row) => row.kind === "wf_fanout_approve")
+      .count()
+  ).toBe(0)
+  expect(JSON.stringify(request.segments)).not.toMatch(/bindingKind|bindingPayload|wffanoutapp:/)
 })

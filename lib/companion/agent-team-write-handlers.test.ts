@@ -228,6 +228,7 @@ describe("handleTeamRunStart", () => {
     ).toBe(accepted)
     const input = start.mock.calls[0][0]
     expect(input).toEqual({
+      localAuthorization: expect.any(Symbol),
       squadId: "squad-1",
       goal: "Review release",
       ultracode: true,

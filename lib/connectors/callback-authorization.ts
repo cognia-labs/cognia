@@ -209,6 +209,28 @@ function conversationMatches(bindingKey: string, eventKey: string): boolean {
   return true
 }
 
+/** A signed platform envelope proves the clicker, not who authored the card. */
+export async function isHostRunControlCard(
+  event: ConnectorCallbackEvent,
+  runId: string
+): Promise<boolean> {
+  if (!event.originatingMessageId || !event.conversationKey) return false
+  const parsed = parseConversationKey(event.conversationKey)
+  const prefixedMessageId = ["slack", "telegram", "discord"].includes(event.platform)
+    ? `${parsed.remoteChatId}:${event.originatingMessageId}`
+    : undefined
+  const rows = await getDb().executionRunBindings.where("runId").equals(runId).toArray()
+  return rows.some(
+    (row) =>
+      row.adapterId === event.adapterId &&
+      row.status !== "disabled" &&
+      Boolean(row.platformMessageId) &&
+      (row.platformMessageId === event.originatingMessageId ||
+        row.platformMessageId === prefixedMessageId) &&
+      conversationMatches(row.conversationKey, event.conversationKey!)
+  )
+}
+
 /** Resolve a chat-only Feishu callback using the exact persisted card receipt.
  * Never infer a topic from the caller's action payload or a matching group alone.
  */

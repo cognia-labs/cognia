@@ -2,6 +2,11 @@
 import "fake-indexeddb/auto"
 import { waitFor } from "@testing-library/react"
 import { getDb, __resetDbForTesting } from "@/lib/db/schema"
+import * as database from "@/lib/db/schema"
+jest.mock("@/lib/db/schema", () => ({
+  ...jest.requireActual("@/lib/db/schema"),
+  getDb: jest.fn(jest.requireActual("@/lib/db/schema").getDb),
+}))
 import {
   createExecutionRun,
   getExecutionRun,
@@ -22,8 +27,17 @@ import {
   snapshotActingAuthority,
   requestersFromRunOrigin,
   runTriggerFromOrigin,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  resolveRunActingIdentity,
+  LOCAL_PERSON_RUN,
+  bindToolCallRun,
+  toolCallExecutionRunId,
+  activeToolExecutionRunId,
 } from "./acting-authority"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
+import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { subSessionId } from "@/lib/claude/team-session-id"
 
 const principal = {
   kind: "platform" as const,
@@ -49,6 +63,201 @@ const seed = (overrides: Partial<ExecutionRun> = {}): ExecutionRun => ({
 beforeEach(async () => {
   await getDb().delete()
   __resetDbForTesting()
+})
+
+it("binds the exact IPC turn and attempt without falling back on unknown or conflicting correlations", () => {
+  bindToolCallRun("correlation", "turn", "run", "attempt")
+  expect(toolCallExecutionRunId("correlation", "turn", "attempt")).toBe("run")
+  expect(toolCallExecutionRunId("correlation", "turn", "other")).toBe("")
+  expect(toolCallExecutionRunId("correlation", "other")).toBe("")
+  expect(toolCallExecutionRunId("correlation")).toBeUndefined()
+  bindToolCallRun("correlation", "turn", "replacement", "attempt")
+  expect(toolCallExecutionRunId("correlation", "turn", "attempt")).toBe("")
+})
+
+it("releases the host binding even when terminal persistence cannot read storage", async () => {
+  const run = await startToolExecutionRun("failed-storage", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  jest.mocked(database.getDb).mockImplementationOnce(() => {
+    throw new Error("storage unavailable")
+  })
+  await expect(finishToolExecutionRun(run.id)).rejects.toThrow("storage unavailable")
+  expect(activeToolExecutionRunId("failed-storage")).toBeUndefined()
+})
+
+it("rolls back local admission if its first journal append fails", async () => {
+  const db = getDb()
+  const failJournal = () => {
+    throw new Error("journal unavailable")
+  }
+  db.executionRunEvents.hook("creating", failJournal)
+  try {
+    await expect(
+      startToolExecutionRun("rejected-entry", {
+        runId: "rejected-run",
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).rejects.toThrow("journal unavailable")
+  } finally {
+    db.executionRunEvents.hook("creating").unsubscribe(failJournal)
+  }
+  expect(await getExecutionRun("rejected-run")).toBeUndefined()
+  expect(activeToolExecutionRunId("rejected-entry")).toBeUndefined()
+  expect(await resolveRunActingIdentity("rejected-entry")).toBeUndefined()
+})
+
+it("rolls back local admission if a post-create run read fails", async () => {
+  const db = getDb()
+  const failRead = (row: ExecutionRun) => {
+    if (row) throw new Error("run read unavailable")
+    return row
+  }
+  db.executionRuns.hook("reading", failRead)
+  try {
+    await expect(
+      startToolExecutionRun("rejected-read", {
+        runId: "rejected-read-run",
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+    ).rejects.toThrow("run read unavailable")
+  } finally {
+    db.executionRuns.hook("reading").unsubscribe(failRead)
+  }
+  expect(await getExecutionRun("rejected-read-run")).toBeUndefined()
+  expect(activeToolExecutionRunId("rejected-read")).toBeUndefined()
+})
+
+it.each([
+  [true, "failed"],
+  ["cancelled", "cancelled"],
+] as const)(
+  "settles minimal entries as %s and releases the host binding",
+  async (outcome, status) => {
+    const run = await startToolExecutionRun("terminal", { localAuthorization: LOCAL_PERSON_RUN })
+    expect(activeToolExecutionRunId("terminal")).toBe(run.id)
+    await finishToolExecutionRun(run.id, outcome)
+    expect((await getExecutionRun(run.id))?.status).toBe(status)
+    expect(activeToolExecutionRunId("terminal")).toBeUndefined()
+  }
+)
+
+it("admits desktop, foreground/background children and a local team conversation member through persisted roots", async () => {
+  await getDb().sessions.put({ id: "desktop" } as never)
+  const root = await startToolExecutionRun("desktop", { localAuthorization: LOCAL_PERSON_RUN })
+  await expect(
+    assertLarkActingIdentity("a1", { sessionId: "desktop", executionRunId: root.id })
+  ).resolves.toBeUndefined()
+  for (const sessionId of [
+    "background-child",
+    "foreground-child",
+    subSessionId("desktop", "member", "turn"),
+  ]) {
+    if (!sessionId.includes(":team:")) {
+      await getDb().sessions.put({
+        id: sessionId,
+        parentSessionId: "desktop",
+        kind: "subagent",
+      } as never)
+    }
+    const child = await startToolExecutionRun(sessionId, { parentRunId: root.id })
+    expect(child.actingIdentity?.rootRunId).toBe(root.id)
+    await expect(
+      assertLarkActingIdentity("a1", { sessionId, executionRunId: child.id })
+    ).resolves.toBeUndefined()
+    await finishToolExecutionRun(child.id)
+  }
+  await finishToolExecutionRun(root.id)
+})
+
+it.each(["synced-bot", "synced-plugin", "forked-programmatic"])(
+  "refuses %s even after every session creator/owner marker was lost",
+  async (sessionId) => {
+    await getDb().sessions.put({ id: sessionId } as never)
+    const run = await startToolExecutionRun(sessionId)
+    await expect(
+      assertLarkActingIdentity("a1", { sessionId, executionRunId: run.id })
+    ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+  }
+)
+
+it("refuses missing/ambiguous runs, exact mismatches, missing identities and corrupted root reads", async () => {
+  await getDb().sessions.put({ id: "desktop" } as never)
+  await expect(assertLarkActingIdentity("a1", { sessionId: "desktop" })).rejects.toMatchObject({
+    name: "LarkActingIdentityError",
+  })
+  const root = await startToolExecutionRun("desktop", { localAuthorization: LOCAL_PERSON_RUN })
+  const sibling = await startToolExecutionRun("desktop")
+  await expect(assertLarkActingIdentity("a1", { sessionId: "desktop" })).rejects.toMatchObject({
+    name: "LarkActingIdentityError",
+  })
+  await expect(
+    assertLarkActingIdentity("a1", { sessionId: "desktop", executionRunId: root.id })
+  ).resolves.toBeUndefined()
+  expect(await resolveRunActingIdentity("other-session", root.id)).toBeUndefined()
+  await expect(
+    assertLarkActingIdentity("a1", { sessionId: "desktop", executionRunId: "missing" })
+  ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+  await getDb().executionRuns.update(root.id, { actingIdentity: undefined })
+  expect(await resolveRunActingIdentity("desktop", root.id)).toBeUndefined()
+  await getDb().executionRuns.update(root.id, {
+    actingIdentity: { ...identity, rootRunId: "missing" },
+  })
+  expect(await resolveRunActingIdentity("desktop", root.id)).toBeUndefined()
+  await finishToolExecutionRun(sibling.id)
+})
+
+it("retains creator-marker refusals and prevents plugin API borrowing of a local run", async () => {
+  await getDb().sessions.put({ id: "desktop", programmaticCreator: "plugin" } as never)
+  const root = await startToolExecutionRun("desktop", { localAuthorization: LOCAL_PERSON_RUN })
+  await expect(
+    assertLarkActingIdentity("a1", { sessionId: "desktop", executionRunId: root.id })
+  ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+  await getDb().sessions.update("desktop", { programmaticCreator: undefined })
+  await expect(
+    assertLarkActingIdentity("a1", {
+      sessionId: "desktop",
+      outboundAuthorization: { kind: "plugin", pluginId: "office" },
+    })
+  ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+})
+
+it("counts projected jobs when refusing ambiguous session fallback and keeps their parent host binding", async () => {
+  await getDb().sessions.put({ id: "job-parent" } as never)
+  const root = await startToolExecutionRun("job-parent", { localAuthorization: LOCAL_PERSON_RUN })
+  const child = await startToolExecutionRun("job-parent", {
+    runId: "execution:job:sibling",
+    parentRunId: root.id,
+  })
+  expect(activeToolExecutionRunId("job-parent")).toBe(root.id)
+  await expect(assertLarkActingIdentity("a", { sessionId: "job-parent" })).rejects.toMatchObject({
+    name: "LarkActingIdentityError",
+  })
+  await expect(
+    assertLarkActingIdentity("a", { sessionId: "job-parent", executionRunId: root.id })
+  ).resolves.toBeUndefined()
+  await finishToolExecutionRun(child.id)
+  await finishToolExecutionRun(root.id)
+})
+
+it("refuses an account database switch during asynchronous run resolution", async () => {
+  const db = getDb()
+  await db.executionRuns.put(
+    seed({
+      actingIdentity: recordedRunMetadata("local", {
+        runId: "run",
+        authorizingPrincipal: { kind: "local-person" },
+      }).actingIdentity,
+    })
+  )
+  const replacement = Object.create(db) as typeof db
+  let reads = 0
+  jest.mocked(database.getDb).mockImplementation(() => (++reads <= 3 ? db : replacement))
+  try {
+    expect(await resolveRunActingIdentity("session", "run")).toBeUndefined()
+  } finally {
+    jest.mocked(database.getDb).mockImplementation(jest.requireActual("@/lib/db/schema").getDb)
+  }
 })
 
 it("records legacy roots and preserves every fixed parent identity field", () => {
@@ -96,9 +305,9 @@ it("records legacy roots and preserves every fixed parent identity field", () =>
 it.each([
   ["schedule", "schedule"],
   ["im", "requester"],
-  ["chat", "local"],
-  ["ui", "local"],
-  ["desktop", "local"],
+  ["chat", "external-event"],
+  ["ui", "external-event"],
+  ["desktop", "external-event"],
   ["bot", "external-event"],
   ["api", "external-event"],
   ["unknown", "external-event"],

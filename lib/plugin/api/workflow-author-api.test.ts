@@ -1,3 +1,37 @@
+import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
+import { serializeOutboundAsync as serializeLark } from "@/lib/connectors/adapters/lark/serialize"
+import { serializeOutboundAsync as serializeTelegram } from "@/lib/connectors/adapters/telegram/serialize"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import type { ConversationDeliveryTarget } from "@/types/connectors/event"
+jest.mock("@/lib/skills/built-in/context", () => ({ resolveBuiltInSkillSessionBinding: jest.fn() }))
+const dbFixture = createDbTestFixture()
+beforeAll(dbFixture.initialize)
+afterAll(dbFixture.dispose)
+
+function target(platform: "lark" | "telegram", threaded = false): ConversationDeliveryTarget {
+  return {
+    address: {
+      platform,
+      adapterId: "ad",
+      conversationKey: `${platform}:ad:chat`,
+      containerId: "chat",
+      scopeKind: threaded ? "thread" : "group",
+      ...(threaded ? { topicId: "123" } : {}),
+    },
+    conversationRef:
+      platform === "lark"
+        ? {
+            platform,
+            adapterId: "ad",
+            channelId: "oc_chat",
+            ...(threaded ? { threadTs: "123", threadRootMessageId: "om_anchor" } : {}),
+          }
+        : { platform, adapterId: "ad", chatId: "chat" },
+    sourceMessageId: "42",
+    refreshedAt: 1,
+  }
+}
+
 import { createWorkflowAuthorAPI } from "./workflow-author-api"
 
 // Exercise host copy without the global React next-intl mock.
@@ -107,6 +141,7 @@ jest.mock("@/lib/workflow/runtime/trigger-origin", () => ({
   resolveWorkflowTriggerOrigin: jest.fn(),
 }))
 jest.mock("@/lib/connectors/adapters/_shared/a2ui-mapper", () => ({
+  ...jest.requireActual("@/lib/connectors/adapters/_shared/a2ui-mapper"),
   recordCallbackBinding: jest.fn(),
 }))
 jest.mock("@/lib/connectors/a2ui-bridge/workflow-to-a2ui", () => ({
@@ -174,6 +209,19 @@ function installEditor(state = createState()) {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValue({
+    personalRunOnly: false,
+    rootSessionId: "root",
+    personalLane: "unverified",
+    session: undefined,
+    binding: {
+      platform: "lark",
+      adapterId: "ad",
+      conversationKey: "lark:ad:chat",
+      conversationRef: target("lark").conversationRef,
+      deliveryTarget: target("lark"),
+    },
+  })
   mockGetEditorStore.mockReturnValue(null)
   mockListEditorStores.mockReturnValue([])
   jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValue({
@@ -584,3 +632,109 @@ it("refuses plugin registration of dispatcher-only skill confirmations", async (
   ).rejects.toThrow("Only the built-in skill dispatcher")
   expect(recordCallbackBinding).not.toHaveBeenCalled()
 })
+
+it.each(["prepareWorkflowApproval", "prepareFanoutApproval"] as const)(
+  "%s refuses a session with no complete delivery address",
+  async (method) => {
+    jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValueOnce({
+      personalRunOnly: false,
+      rootSessionId: "root",
+      session: undefined,
+      binding: undefined,
+      personalLane: "unverified",
+    })
+    await expect(
+      createWorkflowAuthorAPI()[method]({
+        workflowId: "wf",
+        workflowName: "Daily",
+        triggeredFrom: {
+          source: "im",
+          sessionId: "root",
+          adapterId: "ad",
+          conversationKey: "lark:ad:chat",
+        },
+      })
+    ).rejects.toThrow("delivery target")
+    expect(enqueueGoverned).not.toHaveBeenCalled()
+    expect(holdWorkflowDispatchForApproval).not.toHaveBeenCalled()
+  }
+)
+
+it.each(["lark", "telegram"] as const)(
+  "sends both host approval cards through the real %s serializer with a recipient and thread anchor",
+  async (platform) => {
+    for (const threaded of [false, true]) {
+      const deliveryTarget = target(platform, threaded)
+      jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValue({
+        source: "im",
+        sessionId: "root",
+        adapterId: "ad",
+        conversationKey: deliveryTarget.address.conversationKey,
+      })
+      jest.mocked(resolveBuiltInSkillSessionBinding).mockResolvedValue({
+        personalRunOnly: false,
+        rootSessionId: "root",
+        session: undefined,
+        personalLane: "unverified",
+        binding: {
+          platform,
+          adapterId: "ad",
+          conversationKey: deliveryTarget.address.conversationKey,
+          conversationRef: deliveryTarget.conversationRef,
+          deliveryTarget,
+        },
+      })
+      const input = {
+        workflowId: "wf",
+        workflowName: "Daily",
+        triggeredFrom: {
+          source: "im" as const,
+          sessionId: "root",
+          adapterId: "ad",
+          conversationKey: deliveryTarget.address.conversationKey,
+        },
+      }
+      await createWorkflowAuthorAPI().prepareFanoutApproval(input)
+      const fanoutRequest = jest.mocked(enqueueGoverned).mock.calls.at(-1)![0].request
+      jest
+        .mocked(buildApprovalSurface)
+        .mockImplementation(
+          jest.requireActual("@/lib/connectors/a2ui-bridge/workflow-to-a2ui").buildApprovalSurface
+        )
+      jest.mocked(holdWorkflowDispatchForApproval).mockImplementationOnce((args) =>
+        jest
+          .requireActual("@/lib/connectors/hitl/workflow-run-approval")
+          .holdWorkflowDispatchForApproval({
+            ...args,
+            enqueue: enqueueGoverned,
+            recordBinding: jest.fn(),
+            audit: jest.fn(),
+            readWorkflow: async () => ({ name: "Daily" }),
+            resolveDependency: async () => ({
+              workflowId: "wf",
+              versionId: "v1",
+              deploymentId: "d1",
+              deploymentRevision: 1,
+            }),
+          })
+      )
+      await createWorkflowAuthorAPI().prepareWorkflowApproval(input)
+      const workflowRequest = jest.mocked(enqueueGoverned).mock.calls.at(-1)![0].request
+      for (const request of [fanoutRequest, workflowRequest]) {
+        expect(request.deliveryTarget).toEqual(deliveryTarget)
+        expect(request.conversationRef).toEqual(deliveryTarget.conversationRef)
+        if (platform === "lark") {
+          const call = await serializeLark(request, "ad")
+          if (threaded) {
+            expect(call.url).toContain("/messages/om_anchor/reply")
+            expect(call.payload.reply_in_thread).toBe(true)
+          } else expect(call.payload.receive_id).toBe("oc_chat")
+        } else {
+          const calls = await serializeTelegram(request, "ad")
+          expect(calls[0].payload.chat_id).toBe("chat")
+          if (threaded) expect(calls[0].payload.message_thread_id).toBe(123)
+        }
+      }
+    }
+  }
+)

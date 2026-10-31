@@ -112,7 +112,7 @@ async function ensureRun(
               ? "external-event"
               : input.session.platformBinding
                 ? "requester"
-                : "local",
+                : "external-event",
           { runId }
         ),
         kind: input.kind,

@@ -22,6 +22,16 @@ import {
   type SyncDevice,
 } from "./test-support"
 import type { AccountSyncCaptureState } from "./types"
+import { SYNC_SCHEMA_VERSION } from "./tables"
+import { getDb } from "@/lib/db/schema"
+import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
+import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
+import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
+
+jest.mock("@/lib/db/schema", () => {
+  const actual = jest.requireActual("@/lib/db/schema")
+  return { ...actual, getDb: jest.fn(actual.getDb) }
+})
 
 beforeEach(() => __clearAccountSyncKeyCache())
 
@@ -49,6 +59,68 @@ async function syncedView(device: SyncDevice, table: "sessions" | "characters" |
 }
 
 describe("replicating data", () => {
+  it.each(["bot", "plugin"])(
+    "refuses a synced owned %s turn after its device-local owner disappears",
+    async (kind) => {
+      const { devices } = await syncedDevices(["a", "b"])
+      const [a, b] = devices as [SyncDevice, SyncDevice]
+      try {
+        await a.db.sessions.put(
+          session("owned-turn", { agentTurnOwner: { kind, id: "owner", key: "worker" } })
+        )
+        await settleAll(devices)
+        const received = await b.db.sessions.get("owned-turn")
+        expect(received?.agentTurnOwner).toBeUndefined()
+        expect(received?.programmaticCreator).toBeUndefined()
+        jest.mocked(getDb).mockReturnValue(b.db)
+        expect((await resolveBuiltInSkillSessionBinding("owned-turn")).personalLane).toBe(
+          "local-session"
+        )
+        const run = await startToolExecutionRun("owned-turn")
+        expect(run.actingIdentity?.trigger).toBe("external-event")
+        await expect(
+          assertLarkActingIdentity("lark", { sessionId: "owned-turn", executionRunId: run.id })
+        ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+        await finishToolExecutionRun(run.id)
+      } finally {
+        jest
+          .mocked(getDb)
+          .mockReset()
+          .mockImplementation(jest.requireActual("@/lib/db/schema").getDb)
+        closeAll(devices)
+      }
+    }
+  )
+
+  it("keeps a synced plugin root out of the personal lane on the receiving device", async () => {
+    const { devices, server } = await syncedDevices(["a", "b"])
+    const [a, b] = devices as [SyncDevice, SyncDevice]
+    try {
+      await a.db.sessions.put(
+        session("plugin-root", {
+          title: "Custom title",
+          programmaticCreator: "plugin:example",
+          agentTurnOwner: { kind: "plugin", id: "example" },
+        })
+      )
+      await settleAll(devices)
+      expect(server.batches[0].ops[0].schemaVer).toBe(2)
+      const received = await b.db.sessions.get("plugin-root")
+      expect(received?.programmaticCreator).toBe("plugin:example")
+      expect(received?.agentTurnOwner).toBeUndefined()
+      jest.mocked(getDb).mockReturnValue(b.db)
+      expect((await resolveBuiltInSkillSessionBinding("plugin-root")).personalLane).toBe(
+        "unverified"
+      )
+      await expect(
+        assertLarkActingIdentity("lark", { sessionId: "plugin-root" })
+      ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+    } finally {
+      jest.mocked(getDb).mockReset().mockImplementation(jest.requireActual("@/lib/db/schema").getDb)
+      closeAll(devices)
+    }
+  })
+
   it("carries rows, settings keys and deletes to the other devices, never local fields", async () => {
     const { devices } = await syncedDevices(["a", "b"])
     const [a, b] = devices as [SyncDevice, SyncDevice]
@@ -325,7 +397,7 @@ describe("a lying server", () => {
         k: "upsert",
         f: { title: ["From the future", encodeHlc({ ms: 1, c: 0, deviceId: keys.deviceId })] },
       },
-      { schemaVer: 2, hlc: { ms: 1, c: 0 } }
+      { schemaVer: SYNC_SCHEMA_VERSION + 1, hlc: { ms: 1, c: 0 } }
     )
     await b.context.api.pushOps(keys, [op])
     const result = await a.round()

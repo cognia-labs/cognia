@@ -28,6 +28,8 @@ export function makeFakeDeps(): RoomRunnerDeps {
       recordResultUsage: async () => undefined,
     },
     execution: {
+      startMemberRun: async (sessionId) => `run:${sessionId}`,
+      finishMemberRun: async () => undefined,
       isAtCapacity: () => false,
       runWithExecutionLease: (_request, run) => run(),
       releaseChatLease: jest.fn(),

@@ -209,6 +209,28 @@ export async function sendPrompt(
   options?: SendOptions,
   delivery?: PromptDelivery
 ): Promise<void> {
+  // Bind the existing turn/attempt wire to the canonical host run before dispatch.
+  if (options?.turnId) {
+    const [
+      { bindToolCallRun, activeToolExecutionRunId },
+      { activeDirectChatExecutionRunId },
+      { getSubagentApprovalRoute },
+    ] = await Promise.all([
+      import("@/lib/execution/acting-authority"),
+      import("@/lib/execution/direct-chat-run"),
+      import("@/lib/claude/agents/subagent-approval-routes"),
+    ])
+    const route = getSubagentApprovalRoute(sessionId)
+    bindToolCallRun(
+      sessionId,
+      options.turnId,
+      (route ? `execution:job:${route.runId}` : undefined) ??
+        activeDirectChatExecutionRunId(sessionId) ??
+        activeToolExecutionRunId(sessionId) ??
+        options.execution?.identity?.runId,
+      options.execution?.identity?.attemptId
+    )
+  }
   // A mirrored row is not the execution host's transcript authority. Preserve
   // host-issued options on remote sends; frozen local replay needs a local row.
   if (turnsRunOnPairedHost()) {

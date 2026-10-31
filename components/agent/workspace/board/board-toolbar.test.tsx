@@ -7,6 +7,12 @@ import userEvent from "@testing-library/user-event"
 import { BoardToolbar } from "./board-toolbar"
 import { EMPTY_BOARD_FILTER, type BoardFilter } from "@/lib/ai/agent/team/board-model"
 import { agentTeamManager } from "@/lib/ai/agent/team/agent-team"
+import { createSquadStartAttempt } from "@/lib/execution/squad-start-dispatch"
+const dispatchStart = jest.fn(async () => ({ started: true }))
+jest.mock("@/lib/execution/squad-start-dispatch", () => ({
+  createSquadStartAttempt: jest.fn(() => ({ dispatch: () => dispatchStart() })),
+}))
+jest.mock("@/lib/platform/capabilities", () => ({ detectHostProfile: () => "desktop" }))
 import type { AgentTeam, AgentTeammate, AgentTeamTask } from "@/types/agent/agent-team"
 
 jest.mock("next-intl", () => ({
@@ -130,8 +136,9 @@ describe("BoardToolbar", () => {
   it("drives run/pause/resume from the live status", async () => {
     const user = userEvent.setup()
     renderToolbar()
-    await user.click(screen.getByTestId("board-run"))
-    expect(agentTeamManager.start).toHaveBeenCalledWith("t1")
+    await user.click(screen.getByRole("button", { name: "run" }))
+    expect(createSquadStartAttempt).toHaveBeenCalledWith({ teamId: "t1", hostProfile: "desktop" })
+    expect(dispatchStart).toHaveBeenCalledTimes(1)
   })
 
   it("shows Pause while executing and Resume while paused", async () => {

@@ -53,6 +53,7 @@ export async function resolveBuiltInSkillSessionBinding(sessionId: string) {
         rootSessionId: sessionId,
         binding: undefined,
         personalLane: "unverified" as const,
+        personalRunOnly: false,
       }
     throw error
   }
@@ -61,15 +62,20 @@ export async function resolveBuiltInSkillSessionBinding(sessionId: string) {
   let currentId = sessionId
   let personalLineageVerified = true
   const seen = new Set<string>()
+  const declaredRoots = new Set<string>()
   for (let depth = 0; depth <= MAX_SESSION_PARENT_DEPTH; depth += 1) {
     if (seen.has(currentId)) throw new Error("Built-in skill session parent cycle")
     seen.add(currentId)
+    const route = getSubagentApprovalRoute(currentId)
+    if (route?.rootSessionId !== undefined) declaredRoots.add(route.rootSessionId)
+    if (declaredRoots.size > 1 || [...declaredRoots].some((id) => !id.trim()))
+      throw new Error("Built-in skill session parent ambiguous")
     const parents = [
       current?.parentSessionId,
       current?.attachedChild?.parentSessionId,
       current?.surfaceBinding?.kind === "session" ? current.surfaceBinding.sessionId : undefined,
       decodeSubSession(currentId)?.teamSessionId,
-      getSubagentApprovalRoute(currentId)?.parentSessionId,
+      route?.parentSessionId,
     ].filter((id): id is string => id !== undefined)
     // Tool-enabled teammates have a durable row but register their lineage in
     // the host runtime. Squad runs themselves are ExecutionRuns, not sessions.
@@ -94,15 +100,24 @@ export async function resolveBuiltInSkillSessionBinding(sessionId: string) {
     const uniqueParents = [...new Set(parents)]
     if (uniqueParents.length > 1 || uniqueParents.some((id) => !id.trim()))
       throw new Error("Built-in skill session parent ambiguous")
-    const parentId = uniqueParents[0]
+    // A cleaned-up ephemeral middle can lose its own route. The surviving
+    // descendant's Host route still names its durable root. Prefer any codec
+    // or registered parent edge so conflicts and cycles cannot be skipped.
+    const declaredRoot = [...declaredRoots][0]
+    const parentId =
+      uniqueParents[0] ?? (!current && declaredRoot !== currentId ? declaredRoot : undefined)
     if (!parentId) {
+      if (!current && (seen.size > 1 || declaredRoot !== undefined))
+        throw new Error("Built-in skill session parent missing")
+      if (declaredRoot !== undefined && currentId !== declaredRoot)
+        throw new Error("Built-in skill session parent ambiguous")
       return {
         session: session ?? current,
         rootSessionId: currentId,
         binding: sessionlessTeam ? undefined : current?.platformBinding,
-        // Phase 3 of ADR-0243 will restore personal access for locally started
-        // Squads through persisted run identity. Origin/source/parentRunId are
-        // launch metadata, never proof that a run acts for the desktop owner.
+        // A session-less Squad has a run root instead of a chat root. Its host
+        // registry route permits a run lookup; it never proves personal authority.
+        personalRunOnly: sessionlessTeam,
         personalLane:
           personalLineageVerified &&
           current &&
@@ -122,9 +137,7 @@ export async function resolveBuiltInSkillSessionBinding(sessionId: string) {
     }
     if (depth === MAX_SESSION_PARENT_DEPTH)
       throw new Error("Built-in skill session parent depth exceeded")
-    const parent = await db.sessions.get(parentId)
-    if (!parent) throw new Error("Built-in skill session parent missing")
-    current = parent
+    current = await db.sessions.get(parentId)
     currentId = parentId
   }
   throw new Error("Built-in skill session parent depth exceeded")
@@ -140,6 +153,8 @@ export async function resolveBuiltInSkillContext(sessionId: string): Promise<Bui
   if (!session) return ctx
   const { getDb } = await import("@/lib/db/schema")
   const db = getDb()
+  if (session.projectId) ctx.projectId = session.projectId
+  if (session.characterId) ctx.characterId = session.characterId
   const sessionRoot = session?.workingDir?.trim()
   if (sessionRoot) {
     ctx.workspaceRoot = sessionRoot

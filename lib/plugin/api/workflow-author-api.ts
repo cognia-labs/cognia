@@ -1,3 +1,4 @@
+import type { ConversationDeliveryTarget, ConversationReference } from "@/types/connectors/event"
 import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
 import {
   WF_FANOUT_APPROVE_PREFIX,
@@ -87,6 +88,8 @@ async function resolveApprovalOrigin(requested: WorkflowTriggeredFrom): Promise<
     sessionId: string
     adapterId: string
     conversationKey: string
+    conversationRef: ConversationReference
+    deliveryTarget: ConversationDeliveryTarget
   }
 > {
   if (
@@ -104,6 +107,26 @@ async function resolveApprovalOrigin(requested: WorkflowTriggeredFrom): Promise<
     resolved.conversationKey !== requested.conversationKey
   )
     throw new Error("Workflow approval origin no longer matches its IM session")
+  const [{ resolveBuiltInSkillSessionBinding }, { getImElicitationContext }] = await Promise.all([
+    import("@/lib/skills/built-in/context"),
+    import("@/lib/connectors/hitl/im-elicitation-context"),
+  ])
+  const { binding, rootSessionId } = await resolveBuiltInSkillSessionBinding(requested.sessionId)
+  const live = getImElicitationContext(rootSessionId)
+  const origin = live ?? binding
+  const deliveryTarget = origin?.deliveryTarget
+  const conversationRef = deliveryTarget?.conversationRef
+  if (
+    origin?.adapterId !== requested.adapterId ||
+    origin.conversationKey !== requested.conversationKey ||
+    live?.drafting ||
+    !deliveryTarget?.address.containerId?.trim() ||
+    deliveryTarget.address.adapterId !== requested.adapterId ||
+    deliveryTarget.address.conversationKey !== requested.conversationKey ||
+    conversationRef?.adapterId !== requested.adapterId ||
+    conversationRef.platform !== deliveryTarget.address.platform
+  )
+    throw new Error("Workflow approval delivery target is unavailable or incomplete")
   // The Host's live sender and conversation are authoritative, never a plugin's copy.
   return {
     ...resolved,
@@ -111,6 +134,8 @@ async function resolveApprovalOrigin(requested: WorkflowTriggeredFrom): Promise<
     sessionId: requested.sessionId,
     adapterId: requested.adapterId,
     conversationKey: requested.conversationKey,
+    conversationRef,
+    deliveryTarget,
   }
 }
 
@@ -267,7 +292,8 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
         triggeredFrom,
         adapterId: adapter.id,
         conversationKey: triggeredFrom.conversationKey,
-        conversationRef: { platform, adapterId: adapter.id },
+        conversationRef: triggeredFrom.conversationRef,
+        deliveryTarget: triggeredFrom.deliveryTarget,
         initiatorUserId: triggeredFrom.initiator?.remoteUserId,
         permissionCeiling,
         deliverCard: true,
@@ -283,13 +309,10 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
     prepareFanoutApproval: async ({ workflowId, workflowName, triggeredFrom: requestedOrigin }) => {
       const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
       const { adapterId, conversationKey } = triggeredFrom
-      const [{ enqueueGoverned }, { buildA2UISegment }, { parseConversationKey }] =
-        await Promise.all([
-          import("@/lib/connectors/delivery-gateway"),
-          import("@/lib/connectors/a2ui-bridge/a2ui-to-segments"),
-          import("@/types/connectors/event"),
-        ])
-      const { platform } = parseConversationKey(conversationKey)
+      const [{ enqueueGoverned }, { buildA2UISegment }] = await Promise.all([
+        import("@/lib/connectors/delivery-gateway"),
+        import("@/lib/connectors/a2ui-bridge/a2ui-to-segments"),
+      ])
       const bindingId = crypto.randomUUID()
       const surfaceId = `wffanout:${bindingId}`
       const payload = {
@@ -356,7 +379,11 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
         source: "ai-run",
         authorization: { kind: "system-notice", inboundConversationKey: conversationKey },
         request: {
-          conversationRef: { platform, adapterId },
+          conversationRef: triggeredFrom.conversationRef,
+          deliveryTarget: triggeredFrom.deliveryTarget,
+          ...(triggeredFrom.deliveryTarget.address.topicId
+            ? { threadId: triggeredFrom.deliveryTarget.address.topicId }
+            : {}),
           segments: [buildA2UISegment(surfaceId, surface)],
           metadata: { idempotencyKey: surfaceId },
         },

@@ -65,6 +65,7 @@ export interface ChatTurnScope {
 }
 
 export interface AcceptChatTurnInput extends ChatTurnIdentity {
+  localAuthorization?: import("@/lib/execution/acting-authority").LocalPersonRun
   /** Exactly what the model will receive, captured at the content freeze point. */
   content: unknown
   visibleMessageIds: string[]
@@ -125,6 +126,7 @@ export async function acceptChatTurn(
   try {
     return await acceptWorkSubmission(
       {
+        localAuthorization: input.localAuthorization,
         intent: {
           contractVersion: 1,
           idempotencyKey: chatIdempotencyKey(input.sessionId, input.messageId),

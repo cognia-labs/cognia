@@ -10,6 +10,7 @@ import {
   asideProviderHistoryMode,
   asideContextForRegenerate,
   resolveChatTurnAttemptIdentity,
+  localChatRunAuthorization,
   resolveNativeExternalSessionId,
   useClaudeChat,
   userPromptText,
@@ -20,8 +21,27 @@ import {
 } from "./use-claude-chat-controller"
 import type { SendContentBlock, SendOptions } from "@cognia/agent-config-types"
 import { gateWorkbenchProviderPayload } from "@/lib/context-workbench/provider-payload"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 
 describe("Claude chat controller seam", () => {
+  it("requires a positive host gesture and refuses automation even if it carries a gesture", () => {
+    expect(localChatRunAuthorization()).toBeUndefined()
+    expect(
+      localChatRunAuthorization({ localAuthorization: Symbol("host-local-person-run") as never })
+    ).toBeUndefined()
+    expect(localChatRunAuthorization({ localAuthorization: LOCAL_PERSON_RUN })).toBe(
+      LOCAL_PERSON_RUN
+    )
+    expect(
+      localChatRunAuthorization({
+        localAuthorization: LOCAL_PERSON_RUN,
+        automatedTurn: "coordinator",
+      })
+    ).toBeUndefined()
+    expect(
+      localChatRunAuthorization({ localAuthorization: LOCAL_PERSON_RUN, backgroundDelivery: {} })
+    ).toBeUndefined()
+  })
   it("exports the public hook implementation", () => {
     expect(typeof useClaudeChat).toBe("function")
     expect(useClaudeChat.name).toBe("useClaudeChat")

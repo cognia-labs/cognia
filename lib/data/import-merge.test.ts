@@ -48,6 +48,12 @@ beforeEach(async () => {
 describe("mergeImportedSession (pure)", () => {
   const incoming = makeConv("import:codex:s1", { title: "Fresh", updatedAt: 9000 }).session
 
+  it("preserves programmatic provenance when re-import has no creator marker", () => {
+    const existing = { ...incoming, programmaticCreator: "plugin:example" }
+    expect(mergeImportedSession(incoming, existing).programmaticCreator).toBe("plugin:example")
+    expect(mergeImportedSession(existing, undefined).programmaticCreator).toBe("plugin:example")
+  })
+
   it("returns incoming verbatim when there is no existing row", () => {
     expect(mergeImportedSession(incoming, undefined)).toBe(incoming)
   })

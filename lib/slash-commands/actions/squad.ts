@@ -246,6 +246,7 @@ async function commandRun(ctx: SlashContext, rest: string): Promise<SquadCommand
   const session = await loadSession(ctx.activeSessionId!)
   const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
   const result = await startSquadRun({
+    localAuthorization: (await import("@/lib/execution/acting-authority")).LOCAL_PERSON_RUN,
     squadId: squad.id,
     goal,
     origin: "chat",

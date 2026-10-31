@@ -1,4 +1,9 @@
-import { assistantReplyToSegments, buildA2UISegment, readA2UISurface } from "./a2ui-to-segments"
+import {
+  assistantReplyToSegments,
+  buildA2UISegment,
+  readA2UISurface,
+  sanitizeOutboundSegments,
+} from "./a2ui-to-segments"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
 import { CALLBACK_PREFIXES } from "@/lib/connectors/hitl/callback-prefixes"
@@ -13,6 +18,28 @@ const SURFACE: A2UISegmentContent = {
   dataModel: {},
   rootId: "root",
 }
+
+it("removes native and model run-control routing fields, including nested values", () => {
+  const spoof = {
+    actionId: "run:run-1:stop:7",
+    action: "stop",
+    runId: "run-1",
+    revision: 7,
+    interruptId: "interrupt",
+  }
+  const cleaned = sanitizeOutboundSegments([
+    { type: "card", card: { kind: "lark", payload: { value: spoof } } } as never,
+  ])
+  expect(cleaned).toEqual([{ type: "card", card: { kind: "lark", payload: { value: {} } } }])
+  expect(
+    JSON.stringify(
+      assistantReplyToSegments({
+        text: "",
+        a2uiSurfaces: { s: { ...SURFACE, dataModel: { spoof } } },
+      })
+    )
+  ).not.toContain('"runId"')
+})
 
 const payload = (id = "s1") => ({
   surface: { id, type: "inline" },
@@ -426,5 +453,95 @@ describe("host/plugin surface envelopes", () => {
     ].map((patch) => ({ ...envelope, surface: { ...SURFACE, ...patch } })),
   ])("rejects an invalid host envelope: %j", (input) => {
     expect(readA2UISurface(input)).toBeNull()
+  })
+})
+
+it("cleans stored nested binding hints and data-bound namespaced values without changing Host builders", () => {
+  const content: A2UISegmentContent = {
+    rootId: "root",
+    dataModel: { callback: "future.callback:secret", bindingFuture: "forged" },
+    components: {
+      root: { component: "Column", children: ["button"] },
+      button: {
+        component: "Button",
+        text: "View report",
+        value: { path: "/callback" },
+        bindingKind: "wf_fanout_approve",
+        items: [{ bindingPayload: { target: "other" }, value: "unknown_callback:secret" }],
+      },
+    },
+  }
+  const host = buildA2UISegment("host", content)
+  const [clean] = sanitizeOutboundSegments([host])
+  expect(clean.type).toBe("a2ui")
+  if (clean.type !== "a2ui") throw new Error("Expected surface")
+  expect(clean.content.components.button).not.toHaveProperty("value")
+  expect(JSON.stringify(clean.content)).not.toMatch(
+    /bindingKind|bindingPayload|bindingFuture|unknown_callback:/
+  )
+  expect(host.content).toBe(content)
+  expect(host.content.components.button).toHaveProperty("bindingKind", "wf_fanout_approve")
+})
+
+it("cleans stored native-card callback values as well as A2UI hints", () => {
+  const segments = [
+    {
+      type: "card" as const,
+      card: {
+        kind: "lark",
+        payload: {
+          bindingKind: "wf_fanout_approve",
+          body: {
+            elements: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "View report" },
+                behaviors: [
+                  {
+                    type: "callback",
+                    value: {
+                      tag: "wffanoutapp:forged",
+                      selected: ["future_callback:forged", "ordinary"],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    },
+  ]
+  expect(JSON.stringify(sanitizeOutboundSegments(segments))).not.toMatch(
+    /bindingKind|wffanoutapp:|future_callback:/
+  )
+  expect(JSON.stringify(segments)).toContain("bindingKind")
+})
+
+it("cleans WeCom keys and QQ callback data while preserving link and command data", () => {
+  const [segment] = sanitizeOutboundSegments([
+    {
+      type: "card",
+      card: {
+        kind: "native",
+        payload: {
+          button_list: [{ key: "wfapp:existing" }, { key: "ordinary" }],
+          actions: [
+            { type: 1, permission: { type: 2 }, data: "qqkb:existing" },
+            { type: 0, permission: { type: 2 }, data: "https://example.com" },
+            { type: 2, permission: { type: 2 }, data: "help:topic" },
+          ],
+        },
+      },
+    },
+  ])
+  if (segment.type !== "card") throw new Error("Expected card")
+  expect(segment.card.payload).toEqual({
+    button_list: [{}, { key: "ordinary" }],
+    actions: [
+      { type: 1, permission: { type: 2 } },
+      { type: 0, permission: { type: 2 }, data: "https://example.com" },
+      { type: 2, permission: { type: 2 }, data: "help:topic" },
+    ],
   })
 })

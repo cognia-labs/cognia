@@ -33,6 +33,8 @@ import { dispatchIssueSubcommand } from "./actions/issue"
 import { handleBestOfN } from "./actions/best-of-n"
 import { dispatchSquadSubcommand } from "./actions/squad"
 import { dispatchPetSubcommand } from "./actions/pet"
+import { dispatchLarkSubcommand } from "./actions/lark"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { dispatchLoopSubcommand } from "./actions/loop"
 import { dispatchRememberCommand } from "./actions/remember"
 import { dispatchMemorySubcommand } from "./actions/memory"
@@ -92,6 +94,22 @@ function buildHelpText(commands: SlashCommand[]): string {
 }
 
 export const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
+  {
+    name: "lark",
+    description: "Use your personal Lark calendar, documents, tasks, wiki or base.",
+    scope: "builtin",
+    category: "system",
+    argumentHint: "<agenda|events|docs|tasks|wiki|base> [args]",
+    handler: async (ctx) => {
+      if (!ctx.activeSessionId) return
+      const result = await dispatchLarkSubcommand({
+        argv: ctx.args,
+        sessionId: ctx.activeSessionId,
+        localAuthorization: LOCAL_PERSON_RUN,
+      })
+      ctx.pushSystemMessage(result.system)
+    },
+  },
   {
     name: "clear",
     description: "Start a fresh chat session, archiving the current one.",

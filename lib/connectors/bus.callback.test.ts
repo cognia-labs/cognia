@@ -19,6 +19,9 @@ import type { PlatformIdentity } from "@/types/connectors/event"
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { createExecutionRun } from "@/lib/db/execution-runs"
 import { registerRunControlHandler } from "@/lib/execution/run-control"
+import { parseLarkInteractiveCallback } from "./adapters/lark/parse"
+import { buildLarkRunFallbackSegment } from "./run-presentation/lark-driver"
+import { sanitizeOutboundSegments } from "./a2ui-bridge/a2ui-to-segments"
 
 // The wf_approve path drives a REAL `startWorkflowFromIM`, which fires
 // `void runWorkflow(...)` in the background (fire-and-forget by design). In a
@@ -111,6 +114,183 @@ beforeEach(async () => {
 }, 30_000)
 
 describe("ConnectorBus.dispatchConnectorCallback", () => {
+  it("rechecks the same Lark action after its host receipt lands and keeps forged retries denied", async () => {
+    await getDb().adapterInstances.put({
+      id: "lark",
+      type: "lark",
+      enabled: true,
+      settings: { larkStrictCallbackAuthorization: "off" },
+    } as never)
+    await createExecutionRun({
+      id: "receipt-race",
+      kind: "agent-turn",
+      sourceId: "turn",
+      title: "Run",
+      status: "running",
+      initiator: { remoteUserId: "owner" },
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    const callback = (messageId: string) =>
+      parseLarkInteractiveCallback("lark", "bot", {
+        header: { event_type: "card.action.trigger", event_id: "delivery" },
+        event: {
+          operator: { open_id: "owner" },
+          open_chat_id: "chat",
+          open_message_id: messageId,
+          action: {
+            tag: "button",
+            value: {
+              actionId: "run:receipt-race:stop:0",
+              action: "stop",
+              runId: "receipt-race",
+              revision: 0,
+            },
+          },
+        },
+      } as never)!
+    const stop = jest.fn(async (): Promise<void> => undefined)
+    const unregister = registerRunControlHandler("agent-turn", stop)
+    const onDecision = jest.fn()
+    const bus = getBus()
+    try {
+      const real = callback("host-message")
+      const forged = callback("forged-message")
+      await expect(bus.dispatchConnectorCallback(real, { onDecision })).resolves.toBe("retry")
+      expect(onDecision).toHaveBeenLastCalledWith({
+        status: "denied",
+        reason: "run_conversation_mismatch",
+      })
+      await expect(bus.dispatchConnectorCallback(forged)).resolves.toBe("retry")
+      expect(stop).not.toHaveBeenCalled()
+      expect(await getDb().executionRunEvents.where("runId").equals("receipt-race").count()).toBe(0)
+
+      await getDb().executionRunBindings.put({
+        id: "host-receipt",
+        runId: "receipt-race",
+        adapterId: "lark",
+        conversationKey: "lark:lark:chat",
+        platformMessageId: "host-message",
+        status: "active",
+        deliveryMode: "native",
+        lastProjectedRevision: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      for (let retry = 0; retry < 2; retry++) {
+        await expect(bus.dispatchConnectorCallback(forged, { onDecision })).resolves.toBe("retry")
+        expect(onDecision).toHaveBeenLastCalledWith({
+          status: "denied",
+          reason: "run_conversation_mismatch",
+        })
+      }
+      expect(stop).not.toHaveBeenCalled()
+      const executed = new Promise<void>((resolve) =>
+        stop.mockImplementationOnce(async () => resolve())
+      )
+      await expect(bus.dispatchConnectorCallback(real, { onDecision })).resolves.toBe("terminal")
+      await executed
+      expect(stop).toHaveBeenCalledTimes(1)
+      await bus.dispatchConnectorCallback(real, { onDecision })
+      expect(onDecision).toHaveBeenLastCalledWith({ status: "deduped" })
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(
+        (await getDb().connectorAudit.toArray()).filter(
+          (row) => row.reason === "run_card_provenance_missing"
+        )
+      ).toHaveLength(4)
+    } finally {
+      unregister()
+    }
+  })
+
+  it("dispatches the Lark native parser through host card provenance before stopping a run", async () => {
+    await getDb().adapterInstances.put({
+      id: "lark",
+      type: "lark",
+      enabled: true,
+      settings: { larkStrictCallbackAuthorization: "off" },
+    } as never)
+    await createExecutionRun({
+      id: "run-1",
+      kind: "agent-turn",
+      sourceId: "turn",
+      title: "Run",
+      status: "running",
+      initiator: { remoteUserId: "owner" },
+      currentRevision: 0,
+      startedAt: 1,
+      updatedAt: 1,
+    })
+    await getDb().executionRunBindings.put({
+      id: "host",
+      runId: "run-1",
+      adapterId: "lark",
+      conversationKey: "lark:lark:chat",
+      platformMessageId: "host-message",
+      status: "active",
+      deliveryMode: "native",
+      lastProjectedRevision: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const stop = jest.fn(async () => undefined)
+    const unregister = registerRunControlHandler("agent-turn", stop)
+    const event = (value: unknown, messageId: string, eventId: string) =>
+      parseLarkInteractiveCallback("lark", "bot", {
+        header: { event_type: "card.action.trigger", event_id: eventId },
+        event: {
+          operator: { open_id: "owner" },
+          open_chat_id: "chat",
+          open_message_id: messageId,
+          action: { tag: "button", value },
+        },
+      } as never)!
+    const spoof = { actionId: "run:run-1:stop:0", action: "stop", runId: "run-1", revision: 0 }
+    try {
+      await getBus().dispatchConnectorCallback(event(spoof, "model-message", "spoof"))
+      const cleaned = sanitizeOutboundSegments([
+        { type: "card", card: { kind: "lark", payload: { value: spoof } } } as never,
+      ])
+      const cleanedValue = (cleaned[0] as unknown as { card: { payload: { value: unknown } } }).card
+        .payload.value
+      expect(cleanedValue).toEqual({})
+      await getBus().dispatchConnectorCallback(event(cleanedValue, "model-message", "cleaned"))
+      expect(stop).not.toHaveBeenCalled()
+      const card = buildLarkRunFallbackSegment({
+        runId: "run-1",
+        kind: "agent-turn",
+        title: "Run",
+        status: "running",
+        revision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+        progress: { completed: 0, total: 0, trustworthy: false },
+        activeSteps: [],
+        recentSteps: [],
+        pendingSteps: [],
+        artifacts: [],
+        allowedActions: ["stop"],
+      } as never)
+      const findValue = (node: unknown): Record<string, unknown> | undefined => {
+        if (!node || typeof node !== "object") return undefined
+        if ("runId" in node && "actionId" in node) return node as Record<string, unknown>
+        for (const value of Object.values(node)) {
+          const found = findValue(value)
+          if (found) return found
+        }
+        return undefined
+      }
+      const value = findValue(card)
+      expect(value).toMatchObject(spoof)
+      await getBus().dispatchConnectorCallback(event(value, "host-message", "real"))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(stop).toHaveBeenCalledTimes(1)
+    } finally {
+      unregister()
+    }
+  })
   it("keeps a concurrent duplicate retryable until the active callback finishes", async () => {
     const bus = getBus()
     let entered!: () => void
@@ -215,7 +395,7 @@ describe("ConnectorBus.dispatchConnectorCallback", () => {
     expect(audit.some((r) => r.kind === "callback.unbound")).toBe(true)
   })
 
-  it("routes a self-describing execution-run control before generic A2UI handling", async () => {
+  it("only routes controls from a host-issued run card, even with callback auth off", async () => {
     await seedUnguardedAdapter()
     await createExecutionRun({
       id: "run-control-1",
@@ -233,6 +413,31 @@ describe("ConnectorBus.dispatchConnectorCallback", () => {
     const bus = getBus()
     const genericHandler = jest.fn<ReturnType<CallbackHandler>, Parameters<CallbackHandler>>()
     bus.callbackHandler = genericHandler
+
+    const spoof = makeEvent({
+      triggerId: "spoof",
+      originatingMessageId: "model-card",
+      payload: { runId: "run-control-1", action: "stop", revision: 0 },
+    })
+    await bus.dispatchConnectorCallback(spoof)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(sourceHandler).not.toHaveBeenCalled()
+    expect(genericHandler).not.toHaveBeenCalled()
+    expect((await getDb().executionRuns.get("run-control-1"))?.status).toBe("running")
+    await getDb().executionRunBindings.put({
+      id: "host-card",
+      runId: "run-control-1",
+      adapterId: "adp_tg",
+      conversationKey: "telegram:adp_tg:c1",
+      platformMessageId: "msg_1",
+      status: "active",
+      deliveryMode: "native",
+      lastProjectedRevision: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await bus.dispatchConnectorCallback({ ...spoof, triggerId: "spoof-with-existing-run-binding" })
+    expect(sourceHandler).not.toHaveBeenCalled()
 
     await bus.dispatchConnectorCallback(
       makeEvent({
@@ -336,7 +541,7 @@ describe("ConnectorBus.dispatchConnectorCallback", () => {
 
 // ── ADR-0026 — skill_invoke binding kind ─────────────────────────────
 describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
-  it("executes a child-issued confirmation after its ephemeral session and approval route end", async () => {
+  it("replays the child workspace and root IM authority after child cleanup", async () => {
     const { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } =
       await import("@/lib/skills/built-in/registry")
     const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
@@ -348,6 +553,8 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
     await seedUnguardedAdapter()
     const root = {
       id: "confirmation-root",
+      workingDir: "/workspace-a",
+      projectId: "project-a",
       title: "Root",
       createdAt: 1,
       updatedAt: 1,
@@ -361,6 +568,9 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
     await getDb().sessions.put(root as never)
     await getDb().sessions.put({
       id: "ephemeral-child",
+      workingDir: "/workspace-b",
+      projectId: "project-b",
+      characterId: "child-agent",
       title: "Child",
       createdAt: 1,
       updatedAt: 1,
@@ -373,7 +583,13 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
       runId: "child-run",
       backgrounded: false,
     })
-    const execute = jest.fn(async () => ({ ok: true }))
+    const execute = jest.fn(
+      async (_args: unknown, ctx: import("@/lib/skills/built-in/types").BuiltInSkillContext) => {
+        const { resolveWorkspaceId } = await import("@/lib/skills/built-in/issues/_core")
+        expect(await resolveWorkspaceId(ctx)).toBe("project-b")
+        return { ok: true }
+      }
+    )
     registerBuiltInSkill({
       id: "test.child_confirmation",
       family: "test",
@@ -418,7 +634,11 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
       expect(execute).toHaveBeenCalledWith(
         { value: "original" },
         expect.objectContaining({
-          sessionId: root.id,
+          sessionId: "ephemeral-child",
+          imAuthoritySessionId: root.id,
+          workspaceRoot: "/workspace-b",
+          projectId: "project-b",
+          characterId: "child-agent",
           imBinding: expect.objectContaining({
             conversationKey: root.platformBinding.conversationKey,
           }),

@@ -176,6 +176,7 @@ describe("run", () => {
       expect.objectContaining({
         squadId: "team_1",
         goal: "ship the release",
+        localAuthorization: expect.any(Symbol),
         origin: "chat",
         session: expect.objectContaining({ id: SESSION }),
       })

@@ -121,6 +121,14 @@ jest.mock("./notification-integration", () => ({
 }))
 
 jest.mock("@/lib/plugin/messaging/hooks-system", () => ({
+  getPluginEventHooks: () => ({
+    hasAnyHook: () => false,
+    dispatchScheduledTaskCreate() {},
+    dispatchScheduledTaskUpdate() {},
+    dispatchScheduledTaskDelete() {},
+    dispatchScheduledTaskPause() {},
+    dispatchScheduledTaskResume() {},
+  }),
   getPluginLifecycleHooks: () => ({
     dispatchOnScheduledTaskStart: jest.fn(),
     dispatchOnScheduledTaskComplete: jest.fn(),

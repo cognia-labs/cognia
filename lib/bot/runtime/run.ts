@@ -84,9 +84,7 @@ export function recordedBotRunMetadata(delivery: BotEventDeliveryRow) {
       ? "schedule"
       : envelope.source === "connector"
         ? "requester"
-        : envelope.source === "manual" || envelope.source === "desktop"
-          ? "local"
-          : "external-event",
+        : "external-event",
     {
       runId: botRunId(delivery.id),
       requesters: requester ? [requester] : [],

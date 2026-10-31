@@ -1,6 +1,9 @@
 jest.mock("@/lib/execution/acting-authority", () => ({
   ...jest.requireActual("@/lib/execution/acting-authority"),
   observeTenantServiceData: jest.fn(),
+  resolveRunActingIdentity: (sessionId: string) => mockRunIdentity(sessionId),
+  snapshotActingAuthority: async () => undefined,
+  observeActingAuthority: async () => undefined,
 }))
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
 /**
@@ -34,6 +37,12 @@ jest.mock("@/lib/db/schema", () => ({
     },
   }),
 }))
+// The personal lane needs the executing run's recorded local identity (ADR-0243 phase 2-0).
+const mockRunIdentity = jest.fn(async (sessionId: string): Promise<unknown> =>
+  sessionId === "desktop" || sessionId === "local"
+    ? { trigger: "local", authorizingPrincipal: { kind: "local-person" } }
+    : undefined
+)
 jest.mock("../context", () => ({
   ...jest.requireActual("../context"),
   resolveBuiltInSkillSessionBinding: jest.fn(),
@@ -98,6 +107,19 @@ beforeEach(() => {
 })
 
 describe("resolveLarkAuth", () => {
+  it("refuses a local session whose executing run is not a local person's", async () => {
+    mockRunIdentity.mockResolvedValueOnce({ trigger: "external-event" })
+    mockListByType.mockResolvedValue([mkAdapter()])
+    mockKeyring.mockImplementation(async (_id: string, key: string) =>
+      key === "user_token" ? "owner-token" : "app-credential"
+    )
+    await expect(resolveLarkAuth({ context: localContext })).resolves.toMatchObject({
+      ok: false,
+      reason: "sender_not_token_owner",
+    })
+    expect(mockKeyring).not.toHaveBeenCalledWith("lark-1", "user_token")
+  })
+
   it("refuses the personal lane without a session before reading the owner's token", async () => {
     mockGetAdapter.mockResolvedValue(mkAdapter())
     mockKeyring.mockImplementation(async (_id: string, key: string) =>

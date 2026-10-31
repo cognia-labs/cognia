@@ -86,6 +86,10 @@ describe("acceptHostStateChatTurn", () => {
       runId: "hoststate:action-1",
       state: "accepted",
     })
+    expect((await getDb().executionRuns.get("hoststate:action-1"))?.actingIdentity).toMatchObject({
+      trigger: "local",
+      authorizingPrincipal: { kind: "local-person" },
+    })
     expect(await getWorkSubmission("work:hoststate:action-1")).toMatchObject({
       accountId: "account-1",
       runtimeTargetId: "target-1",

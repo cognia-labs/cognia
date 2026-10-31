@@ -82,6 +82,9 @@ import {
 } from "@/lib/task-workspace/managed-workspace"
 import { ensureExecutionPortLease } from "@/lib/task-workspace/execution-port-lease"
 import type { WorkspacePortLease } from "@/lib/task-workspace/types"
+import { branchSessionAtMessage } from "@/lib/chat/branch-session"
+import { startToolExecutionRun, finishToolExecutionRun } from "@/lib/execution/acting-authority"
+import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
 
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
@@ -200,6 +203,7 @@ jest.mock("@/lib/memory/lifecycle/claim-deletion-closure", () => ({
   revokeClaimsForDeletedSession: (sessionId: string) => mockRevokeClaimsForSession(sessionId),
 }))
 jest.mock("@/lib/chat/search/indexer", () => ({
+  markSessionDirty: jest.fn(),
   markSessionRemoved: (sessionId: string) => markSessionRemovedMock(sessionId),
 }))
 
@@ -618,6 +622,29 @@ describe("createSession — external-agent default model", () => {
 })
 
 describe("forkSessionFromParent", () => {
+  it("refuses personal authority after a plain branch then SDK fork loses its programmatic creator", async () => {
+    const root = await createSession({
+      title: "Automation",
+      sdkSessionId: "sdk-programmatic",
+      programmaticCreator: "plugin:example",
+    })
+    const branch = await branchSessionAtMessage({
+      sourceId: root.id,
+      visibleMessages: [{ id: "cut", role: "user", parts: [{ type: "text", text: "continue" }] }],
+      messageId: "cut",
+      mode: "direct",
+    })
+    await updateSession(branch.id, { sdkSessionId: "sdk-branch" })
+    const fork = await forkSessionFromParent(branch.id)
+    expect(fork.programmaticCreator).toBeUndefined()
+    const run = await startToolExecutionRun(fork.id)
+    expect(run.actingIdentity?.trigger).toBe("external-event")
+    await expect(
+      assertLarkActingIdentity("lark", { sessionId: fork.id, executionRunId: run.id })
+    ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+    await finishToolExecutionRun(run.id)
+  })
+
   it("persists creator provenance and preserves it across SDK forks", async () => {
     const parent = await createSession({
       title: "Renamed plugin session",

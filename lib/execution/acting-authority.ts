@@ -1,4 +1,4 @@
-/** ADR-0243 recording adapters. No result from this module grants or refuses execution. */
+/** ADR-0243 recorded authority and identity resolution. */
 import {
   checkActingAuthority,
   meetRunAuthority,
@@ -23,13 +23,161 @@ export function runTriggerFromOrigin(origin: { source: string } | undefined): Ru
       return "schedule"
     case "im":
       return "requester"
-    case "ui":
-    case "chat":
-    case "desktop":
-      return "local"
     default:
       return "external-event"
   }
+}
+
+/** Origin labels are caller data. Only a host UI admission may supply this symbol. */
+export const LOCAL_PERSON_RUN = Symbol("host-local-person-run")
+export type LocalPersonRun = typeof LOCAL_PERSON_RUN
+
+const activeToolRuns = new Map<string, string>()
+const toolCallRuns = new Map<string, string>()
+const toolCallKey = (sessionId: string, turnId: string, attemptId?: string) =>
+  JSON.stringify([sessionId, turnId, attemptId ?? null])
+export const activeToolExecutionRunId = (sessionId: string) => activeToolRuns.get(sessionId)
+
+/** Bound by the host send, before the sidecar can emit a tool call. Never read from tool args. */
+export function bindToolCallRun(
+  sessionId: string,
+  turnId: string | undefined,
+  runId: string | undefined,
+  attemptId?: string
+): void {
+  if (!turnId) return
+  const key = toolCallKey(sessionId, turnId, attemptId)
+  const existing = toolCallRuns.get(key)
+  toolCallRuns.set(key, existing !== undefined && existing !== runId ? "" : (runId ?? ""))
+  if (toolCallRuns.size > 4096) toolCallRuns.delete(toolCallRuns.keys().next().value!)
+}
+
+/** A correlated but unknown turn must not fall back to a newer active run. */
+export function toolCallExecutionRunId(
+  sessionId: string,
+  turnId?: string,
+  attemptId?: string
+): string | undefined {
+  if (!turnId) return attemptId === undefined ? undefined : ""
+  return toolCallRuns.get(toolCallKey(sessionId, turnId, attemptId)) ?? ""
+}
+
+/** Minimal entry record for host skill/member paths without a chat journal. */
+export async function startToolExecutionRun(
+  sessionId: string,
+  options: {
+    runId?: string
+    parentRunId?: string
+    localAuthorization?: LocalPersonRun
+    title?: string
+  } = {}
+): Promise<ExecutionRun> {
+  const db = getDb()
+  const { appendRunEventInsideTransaction, semanticRunEvent } =
+    await import("@/lib/db/execution-runs")
+  if (getDb() !== db) throw new Error("Tool execution database changed")
+  const id = options.runId ?? `execution:tool:${crypto.randomUUID()}`
+  const local = options.localAuthorization === LOCAL_PERSON_RUN
+  const now = Date.now()
+  const job = id.startsWith("execution:job:")
+  const run = await db.transaction(
+    "rw",
+    db.executionRuns,
+    db.executionRunEvents,
+    db.notificationProjectionWork,
+    async () => {
+      const existing = await db.executionRuns.get(id)
+      if (existing) return existing
+      const parent = options.parentRunId
+        ? await db.executionRuns.get(options.parentRunId)
+        : undefined
+      await db.executionRuns.add({
+        id,
+        sessionId,
+        kind: job ? "job" : "agent-turn",
+        sourceId: job ? id.slice("execution:job:".length) : id,
+        title: options.title ?? "Tool execution",
+        status: "running",
+        currentRevision: 0,
+        startedAt: now,
+        updatedAt: now,
+        ...(options.parentRunId ? { parentRunId: options.parentRunId } : {}),
+        ...recordedRunMetadata(options.parentRunId ? "child" : local ? "local" : "external-event", {
+          runId: id,
+          parent,
+          ...(local
+            ? {
+                authorizingPrincipal: { kind: "local-person" },
+                requesters: [{ kind: "local-person" }],
+              }
+            : {}),
+        }),
+      })
+      await appendRunEventInsideTransaction(
+        db,
+        id,
+        semanticRunEvent("run.started", {}, { ts: now, sourceEventId: `tool-entry:${id}` })
+      )
+      const admitted = await db.executionRuns.get(id)
+      if (!admitted || getDb() !== db) throw new Error("Tool execution database changed")
+      return admitted
+    }
+  )
+  if (!job) activeToolRuns.set(sessionId, id)
+  return run
+}
+
+export async function finishToolExecutionRun(
+  runId: string,
+  failed: boolean | "cancelled" = false
+): Promise<void> {
+  const { getExecutionRun, runEventJournal, semanticRunEvent } =
+    await import("@/lib/db/execution-runs")
+  try {
+    const run = await getExecutionRun(runId)
+    if (!run) return
+    if (["completed", "failed", "cancelled"].includes(run.status)) return
+    await runEventJournal.append(
+      runId,
+      semanticRunEvent(
+        failed === "cancelled" ? "run.cancelled" : failed ? "run.failed" : "run.completed",
+        {},
+        { sourceEventId: `tool-entry:${runId}:finished` }
+      )
+    )
+  } finally {
+    for (const [sessionId, activeRunId] of activeToolRuns) {
+      if (activeRunId === runId) activeToolRuns.delete(sessionId)
+    }
+  }
+}
+
+/** Resolve the executing run, never choose the newest of several candidates. */
+export async function resolveRunActingIdentity(sessionId: string, runId?: string) {
+  const db = getDb()
+  const run = await resolveExecutingRun(sessionId, runId)
+  if (getDb() !== db || !run?.actingIdentity) return undefined
+  const root = await identityRoot(db, run)
+  return getDb() === db ? root?.actingIdentity : undefined
+}
+
+export async function resolveExecutingRun(sessionId: string, runId?: string) {
+  const db = getDb()
+  const { getExecutionRun, listExecutionRuns } = await import("@/lib/db/execution-runs")
+  const candidates =
+    runId !== undefined
+      ? [await getExecutionRun(runId)]
+      : await listExecutionRuns({
+          sessionId,
+          statuses: ["queued", "running", "waiting", "paused"],
+          limit: 2,
+        })
+  if (candidates.length !== 1 || !candidates[0]) return undefined
+  const run = candidates[0]
+  if (run.sessionId !== sessionId || !run.actingIdentity) return undefined
+  if (!["queued", "running", "waiting", "paused"].includes(run.status)) return undefined
+  if (getDb() !== db) return undefined
+  return run
 }
 
 /** Explicit roots are one hop; bounded parent traversal supports earlier phase-1 rows. */

@@ -30,6 +30,7 @@ import {
   semanticRunEvent,
 } from "@/lib/db/execution-runs"
 import type { BackgroundTaskJournalRecord } from "@/lib/background-tasks/registry-core"
+import type { DispatchParentProvenance } from "@/lib/claude/agents/dispatch-run"
 import type { ExecutionRunStatus } from "@/types/execution/run"
 import {
   getDispatchContext,
@@ -38,7 +39,8 @@ import {
 import {
   authorityFromPermissionCeiling,
   recordedRunMetadata,
-  snapshotActingAuthority,
+  resolveExecutingRun,
+  activeToolExecutionRunId,
 } from "./acting-authority"
 
 export function jobExecutionRunId(sourceRunId: string): string {
@@ -71,28 +73,45 @@ const TERMINAL_EVENT = {
 } as const
 
 /** Project one background-task row. Safe to call repeatedly with the same row. */
-export async function syncJobExecutionRun(record: BackgroundTaskJournalRecord): Promise<void> {
+export async function syncJobExecutionRun(
+  record: BackgroundTaskJournalRecord & DispatchParentProvenance
+): Promise<void> {
   const runId = jobExecutionRunId(record.runId)
   const status = runStatusFor(record.status)
   const existing = await getExecutionRun(runId)
 
   if (!existing) {
     const caller = record.recovery?.caller
-    const parentSubagentId =
-      caller?.parentSubagentId ?? getDispatchContext(record.sessionId)?.selfRunId
-    const parentId = parentSubagentId
-      ? jobExecutionRunId(parentSubagentId)
-      : (await snapshotActingAuthority(record.sessionId))?.runId
+    const provenance = (record.recovery ?? record) as DispatchParentProvenance
+    // Projection can win the race with dispatch startup. Subagents must use
+    // the admission pin here too, including when replayed after a reload.
+    let parentId = provenance.parentExecutionRunId
+    if (record.kind !== "subagent") {
+      const { activeDirectChatExecutionRunId } = await import("./direct-chat-run")
+      const parentSubagentId =
+        caller?.parentSubagentId ?? getDispatchContext(record.sessionId)?.selfRunId
+      parentId = parentSubagentId
+        ? jobExecutionRunId(parentSubagentId)
+        : (
+            await resolveExecutingRun(
+              record.sessionId,
+              activeDirectChatExecutionRunId(record.sessionId) ??
+                activeToolExecutionRunId(record.sessionId)
+            )
+          )?.id
+    }
+    const parent = parentId ? await getExecutionRun(parentId).catch(() => undefined) : undefined
     await createExecutionRun({
       id: runId,
       ...recordedRunMetadata("child", {
         runId,
-        parent: parentId ? await getExecutionRun(parentId).catch(() => undefined) : undefined,
+        parent,
         authority: authorityFromPermissionCeiling(
           caller?.parentCeiling ?? getResolvedPermissionCeiling(record.sessionId)
         ),
       }),
       kind: "job",
+      ...(parent ? { parentRunId: parent.id } : {}),
       sourceId: record.runId,
       sessionId: record.sessionId,
       title: record.subagentId,

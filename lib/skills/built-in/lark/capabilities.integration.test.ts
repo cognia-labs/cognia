@@ -13,6 +13,12 @@ jest.mock("@/lib/connectors/adapters/lark/auth", () => ({ getTenantToken: jest.f
 jest.mock("@/lib/execution/acting-authority", () => ({
   observeTenantServiceData: jest.fn(),
   snapshotActingAuthority: jest.fn(async () => undefined),
+  // The desktop run is a local person's, the proof the personal lane requires.
+  resolveRunActingIdentity: jest.fn(async (sessionId: string) =>
+    sessionId === "desktop"
+      ? { trigger: "local", authorizingPrincipal: { kind: "local-person" } }
+      : undefined
+  ),
 }))
 jest.mock("@/lib/db/schema", () => ({
   getDb: () => ({

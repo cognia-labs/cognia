@@ -172,6 +172,14 @@ describe("runBotDelivery", () => {
     expect(metadata.actingIdentity?.authorizingPrincipal).toBeUndefined()
   })
 
+  it.each(["manual", "desktop"] as const)("keeps a %s Bot run non-local", async (source) => {
+    const { delivery } = await seed()
+    expect(
+      recordedBotRunMetadata({ ...delivery, envelope: { ...delivery.envelope, source } })
+        .actingIdentity?.trigger
+    ).toBe("external-event")
+  })
+
   it("records a connector sender as a requester using the existing envelope projection", async () => {
     const { delivery } = await seed()
     const metadata = recordedBotRunMetadata({

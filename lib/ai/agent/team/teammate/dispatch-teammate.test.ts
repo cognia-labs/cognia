@@ -1,4 +1,9 @@
 import { dispatchTeammate, ExternalRuntimeUnavailableError } from "./dispatch-teammate"
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "member-run" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
 import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
 import { negotiateCapabilityProfile } from "@/lib/ai/agent/external/capability/capability-profile"
 import type { TeamRunContext } from "../team-run-context"

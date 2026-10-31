@@ -5,6 +5,7 @@ import { getDb } from "@/lib/db/schema"
 import type { Transport } from "@/lib/tauri/transport-types"
 import type { SyncDelta } from "../types"
 import { syncSessions } from "./sessions"
+import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
 
 function transportFor(rows: unknown[]): Transport {
   const delta: SyncDelta<unknown> = { rows, deleted_ids: [], next_since: 20 }
@@ -17,6 +18,36 @@ function transportFor(rows: unknown[]): Transport {
 describe("syncSessions managed workspace boundary", () => {
   beforeEach(async () => {
     await getDb().sessions.clear()
+  })
+
+  it.each([false, true])("keeps paired-Host creator provenance (managed: %s)", async (managed) => {
+    await syncSessions(
+      transportFor([
+        {
+          id: "plugin",
+          title: "Custom title",
+          kind: "direct",
+          programmaticCreator: "plugin:example",
+          createdAt: 1,
+          updatedAt: 20,
+          ...(managed
+            ? {
+                executionContext: {
+                  location: "managedWorktree",
+                  projectId: "",
+                  projectRoot: "/remote/private",
+                  workspaceBinding: { kind: "managed", workspaceId: "mw:plugin" },
+                  managedWorkspace: { availability: "available", localRoot: "/remote/private" },
+                  taskWorkspace: { taskId: "task:plugin", workspaceKey: "mw:plugin" },
+                },
+              }
+            : {}),
+        },
+      ]),
+      { since: 0 }
+    )
+    expect((await getDb().sessions.get("plugin"))?.programmaticCreator).toBe("plugin:example")
+    expect((await resolveBuiltInSkillSessionBinding("plugin")).personalLane).toBe("unverified")
   })
 
   it("marks a managed workspace from another device as missing instead of guessing a path", async () => {
@@ -119,6 +150,7 @@ describe("syncSessions managed workspace boundary", () => {
       projectRoot: "/local/workspace",
       workspaceBinding: { kind: "managed", workspaceId: "workspace" },
       managedWorkspace: { availability: "available", localRoot: "/local/workspace" },
+      taskWorkspace: { taskId: "task:managed", workspaceKey: "workspace" },
     }
     const table = getDb().sessions
     await table.put({

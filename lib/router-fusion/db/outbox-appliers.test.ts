@@ -208,7 +208,10 @@ describe("account database outbox appliers", () => {
 
     it("creates the cockpit's run for work no local engine started", async () => {
       expect(
-        await accountDatabaseAppliers.execution_run_projection(projection("queued"), NO_ARTIFACTS)
+        await accountDatabaseAppliers.execution_run_projection(
+          projection("queued", { origin: "local" }),
+          NO_ARTIFACTS
+        )
       ).toBe("applied")
       const run = await getExecutionRun("run-9")
       expect(run?.actingIdentity).toMatchObject({
@@ -224,7 +227,7 @@ describe("account database outbox appliers", () => {
         sessionId: "session-9",
         title: "Summarise the release notes",
         status: "queued",
-        origin: "gateway-api",
+        origin: "local",
         originActor: { keyId: "key-a", keyName: "CI robot" },
       })
       // No local engine wrote this run, so its whole history is these effects.

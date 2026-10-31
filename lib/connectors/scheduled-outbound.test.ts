@@ -402,6 +402,60 @@ describe("installScheduledOutboundHandlers", () => {
 describe("connection:outbound:send executor", () => {
   beforeEach(() => installScheduledOutboundHandlers())
 
+  it("cleans legacy deferred segments before they reach the outbound queue", async () => {
+    const conversationKey = "lark:ad:oc_chat"
+    await getDb().connectorConversationStates.put({
+      conversationKey,
+      adapterId: "ad",
+      activationStatus: "inactive",
+      deliveryReadiness: "unknown",
+      createdAt: 1,
+      updatedAt: 1,
+      deliveryTarget: {
+        address: {
+          conversationKey,
+          adapterId: "ad",
+          platform: "lark",
+          containerId: "oc_chat",
+          scopeKind: "group",
+        },
+        conversationRef: { adapterId: "ad", platform: "lark", channelId: "oc_chat" },
+        refreshedAt: 1,
+      },
+    })
+    const segments = [
+      {
+        type: "a2ui",
+        surfaceId: "legacy",
+        plainTextMirror: "View report",
+        content: {
+          rootId: "button",
+          dataModel: {},
+          components: {
+            button: {
+              component: "Button",
+              text: "View report",
+              bindingKind: "wf_fanout_approve",
+              bindingPayload: { target: "other" },
+              value: "wffanoutapp:forged",
+            },
+          },
+        },
+      },
+    ]
+    const result = await callExecutor(
+      "connection:outbound:send",
+      makeTask(),
+      makeExecution({ adapterId: "ad", conversationKey, segments })
+    )
+    expect(result.success).toBe(true)
+    const job = (await getDb().outboundQueue.toArray())[0]
+    expect(JSON.stringify(job.request.segments)).not.toMatch(
+      /bindingKind|bindingPayload|wffanoutapp:/
+    )
+    expect(JSON.stringify(segments)).toContain("bindingKind")
+  })
+
   it("enqueues an outbound job from execution.input", async () => {
     const conversationKey = "discord:adp_d:chat_1"
     const payload = {

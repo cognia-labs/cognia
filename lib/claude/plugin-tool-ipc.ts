@@ -160,6 +160,7 @@ export interface PluginToolExecRequest {
   name: string
   args: Record<string, unknown>
   turnId?: string
+  runId?: string
   attemptId?: string
   sandboxRuntimeRef?: string
   /** Cooperative cancellation for direct renderer callers such as live voice. */
@@ -1078,8 +1079,13 @@ async function runPluginToolExec(
       // model only held on the slash-command path.
       const { resolveBuiltInSkillContext } = await import("@/lib/skills/built-in/context")
       const skillCtx = await resolveBuiltInSkillContext(request.sessionId)
+      const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+      const executionRunId =
+        request.runId ??
+        toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId)
       const result = await runBuiltInSkill(builtIn.id, request.args, {
         ...skillCtx,
+        ...(executionRunId !== undefined ? { executionRunId } : {}),
         signal: request.abortSignal,
         outboundAuthorization: toolCallAuthorization(request),
       })
@@ -1133,9 +1139,14 @@ async function runPluginToolExec(
     // registered dispatch context.
     if (request.name === DISPATCH_AGENT_TOOL_NAME || request.name === TASK_TOOL_NAME) {
       const { runDispatchAgentTool } = await import("@/lib/claude/agents/dispatch-agent-handler")
+      const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+      const executionRunId =
+        request.runId ??
+        toolCallExecutionRunId(request.sessionId, request.turnId, request.attemptId)
       const result = await runDispatchAgentTool({
         sessionId: request.sessionId,
         args: request.args,
+        ...(executionRunId !== undefined ? { executionRunId } : {}),
       })
       return { ...baseResponse, result: assertSafePluginToolResult(result) }
     }

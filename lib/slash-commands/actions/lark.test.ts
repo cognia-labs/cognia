@@ -8,6 +8,7 @@ import "@/lib/skills/built-in"
 import { dispatchLarkSubcommand, parseLarkArgs } from "./lark"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/connectors/tauri/commands", () => ({
   connectorsKeyringGet: jest.fn(async (_id: string, key: string) =>
     key === "user_token" ? "private-token" : "app-credential"
@@ -86,6 +87,27 @@ describe("parseLarkArgs", () => {
 })
 
 describe("dispatchLarkSubcommand", () => {
+  it("records a fixed local root only for the host-issued slash admission", async () => {
+    await getDb().sessions.put({ id: "slash-person" } as never)
+    await dispatchLarkSubcommand({
+      argv: "agenda",
+      sessionId: "slash-person",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    const [local] = await getDb().executionRuns.where("sessionId").equals("slash-person").toArray()
+    expect(local.actingIdentity).toMatchObject({
+      trigger: "local",
+      rootRunId: local.id,
+      authorizingPrincipal: { kind: "local-person" },
+    })
+    expect(local.status).toBe("failed")
+    await dispatchLarkSubcommand({ argv: "agenda", sessionId: "slash-person" })
+    const automated = (
+      await getDb().executionRuns.where("sessionId").equals("slash-person").toArray()
+    ).find((run) => run.id !== local.id)
+    expect(automated?.actingIdentity?.trigger).toBe("external-event")
+  })
+
   it("refuses a non-owner in an IM-bound session through the actual auth gate", async () => {
     const binding = { platform: "lark", adapterId: "a1", conversationKey: "lark:a1:chat" }
     await getDb().sessions.put({ id: "im-session", platformBinding: binding } as never)

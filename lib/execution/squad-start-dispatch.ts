@@ -7,6 +7,7 @@ import { HostConsentRequiredError, issueHostAdminLease } from "@/lib/tauri/admin
 import { getCompanionConfigGeneration } from "@/lib/tauri/transport-companion"
 import { transport } from "@/lib/tauri/transport-instance"
 import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import { LOCAL_PERSON_RUN } from "./acting-authority"
 
 export type SquadStartOutcome = Omit<StartSquadRunResult, "reason"> & {
   reason?:
@@ -54,6 +55,7 @@ export function createSquadStartAttempt(input: SquadStartDispatch) {
       if (!remote) {
         const { startSquadRun } = await import("@/lib/ai/agent/team/squad/start-squad-run")
         return await startSquadRun({
+          localAuthorization: LOCAL_PERSON_RUN,
           squadId: teamId,
           runId: launchId,
           goal: goal ?? "",

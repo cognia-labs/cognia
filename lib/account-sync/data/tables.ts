@@ -39,7 +39,7 @@ export type FieldPolicy = "sync" | "local" | "key"
  * added or starts syncing. An op from a higher version is parked until this
  * build is updated, so an older build never drops what it cannot read.
  */
-export const SYNC_SCHEMA_VERSION = 1
+export const SYNC_SCHEMA_VERSION = 2
 
 export interface TablePolicy {
   table: SyncedTableName
@@ -64,6 +64,8 @@ const SESSION_FIELDS = {
   kind: "sync",
   visibility: "sync",
   origin: "sync",
+  // Provenance is portable; the marker grants no ownership of plugin turns.
+  programmaticCreator: "sync",
   characterId: "sync",
   disabledSkillIds: "sync",
   trialSkillId: "sync",

@@ -68,7 +68,7 @@ export async function syncSecurityScanExecutionRun(record: SecurityScanRunRecord
   if (!existing) {
     await createExecutionRun({
       id: runId,
-      ...recordedRunMetadata("local", { runId }),
+      ...recordedRunMetadata("external-event", { runId }),
       kind: "security-scan",
       sourceId: record.runId,
       // The target is the one piece of scan detail that must cross: a row

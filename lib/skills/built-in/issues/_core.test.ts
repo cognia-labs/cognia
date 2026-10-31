@@ -65,6 +65,12 @@ function makeIssue(over: Record<string, unknown> = {}) {
 }
 
 describe("resolveWorkspaceId", () => {
+  it("keeps the persisted execution project after the child row is gone", async () => {
+    expect(await resolveWorkspaceId({ sessionId: "gone-child", projectId: "child-project" })).toBe(
+      "child-project"
+    )
+  })
+
   it("prefers the calling session's workspace over the window's active one", async () => {
     // An IM or scheduled session has no window, and a session bound to one
     // workspace must not file into whichever the desktop happens to be showing.

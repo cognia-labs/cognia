@@ -61,6 +61,16 @@ function workflowRun(overrides: Partial<WorkflowRunRow> = {}): WorkflowRunRow {
 }
 
 describe("workflow execution bridge", () => {
+  it("does not infer local authority from a manual trigger or a UI origin supplied by a plugin", async () => {
+    await syncWorkflowExecutionRun(
+      workflowRun({ triggerKind: "trigger.manual", triggeredBy: { source: "ui" } }),
+      [],
+      []
+    )
+    expect(
+      (await getDb().executionRuns.get("execution:workflow:wf-run-1"))?.actingIdentity?.trigger
+    ).toBe("external-event")
+  })
   it.each([
     "trigger.webhook",
     "trigger.integration.event",

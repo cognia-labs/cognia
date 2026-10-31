@@ -992,8 +992,16 @@ export async function applyBackupPackage(
       if (opts.includeSessions) {
         for (const session of env.sessions ?? []) {
           const id = sessionMapping.get(session.id) ?? session.id
+          const row = { ...session, id }
+          // Older backups lack the marker. Keep known provenance on overwrite
+          // and duplicate restores instead of promoting a plugin root to local.
+          if (row.programmaticCreator === undefined) {
+            const existing = await db.sessions.get(session.id)
+            if (existing?.programmaticCreator !== undefined)
+              row.programmaticCreator = existing.programmaticCreator
+          }
           await applyCollection<ChatSession>({
-            rows: [{ ...session, id }],
+            rows: [row],
             table: db.sessions,
             kind: "sessions",
             opts,

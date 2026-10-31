@@ -236,6 +236,9 @@ export async function holdWorkflowDispatchForApproval(
         request: {
           conversationRef: input.conversationRef,
           ...(input.deliveryTarget ? { deliveryTarget: input.deliveryTarget } : {}),
+          ...(input.deliveryTarget?.address.topicId
+            ? { threadId: input.deliveryTarget.address.topicId }
+            : {}),
           segments: [buildA2UISegment(surfaceId, surface)],
           metadata: { idempotencyKey: newIdempotencyKey() },
         },

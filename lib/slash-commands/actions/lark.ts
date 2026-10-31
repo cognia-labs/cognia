@@ -17,8 +17,14 @@
 import { runBuiltInSkill } from "@/lib/skills/built-in/dispatcher"
 import type { BuiltInSkillResult } from "@/lib/skills/built-in/types"
 import { resolveBuiltInSkillContext } from "@/lib/skills/built-in/context"
+import {
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  type LocalPersonRun,
+} from "@/lib/execution/acting-authority"
 
 export interface SlashLarkInput {
+  localAuthorization?: LocalPersonRun
   /** Raw argv after the `/lark ` prefix. */
   argv: string
   /** ChatSession id — threaded into the skill context. */
@@ -107,12 +113,23 @@ export async function dispatchLarkSubcommand(input: SlashLarkInput): Promise<Sla
   // Ensure the family barrel is loaded — `index` is a no-op import once
   // the registry is populated, so subsequent calls are zero-cost.
   await import("@/lib/skills/built-in")
-  const result = await runBuiltInSkill(
-    parsed.skillId,
-    parsed.args,
-    await resolveBuiltInSkillContext(input.sessionId)
-  )
-  return { system: formatResult(parsed.skillId, result), errorCode: errCode(result) }
+  let run: Awaited<ReturnType<typeof startToolExecutionRun>> | undefined
+  let failed = true
+  try {
+    run = await startToolExecutionRun(input.sessionId, {
+      localAuthorization: input.localAuthorization,
+    })
+    const result = await runBuiltInSkill(parsed.skillId, parsed.args, {
+      ...(await resolveBuiltInSkillContext(input.sessionId)),
+      executionRunId: run.id,
+    })
+    failed = result.status !== "ok"
+    return { system: formatResult(parsed.skillId, result), errorCode: errCode(result) }
+  } catch (error) {
+    return { system: errorBlock(error), errorCode: "error" }
+  } finally {
+    if (run) await finishToolExecutionRun(run.id, failed)
+  }
 }
 
 // ---------------------------------------------------------------------------

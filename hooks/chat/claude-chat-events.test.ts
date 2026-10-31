@@ -588,7 +588,10 @@ describe("Claude chat event seam", () => {
     expect(isTeamSubSession("team::char::member")).toBe(true)
   })
 
-  it("replays a drained steer with the citations and preamble it was typed with", () => {
+  it("replays a drained steer with its host admission, citations and preamble", async () => {
+    const { recordLocalPersonSteer } = await import("./steer-runtime")
+    const authority = await import("@/lib/execution/acting-authority")
+    recordLocalPersonSteer("s7", "q1", authority.LOCAL_PERSON_RUN)
     // The queued entry is the only carrier of the reference metadata on a
     // replay — the optimistic bubble was appended when the steer was typed.
     const citations = [{ kind: "entity" as const, id: "session:s9", label: "Sprint" }]
@@ -615,6 +618,7 @@ describe("Claude chat event seam", () => {
       expect.objectContaining({
         sessionId: "s7",
         steerDrain: true,
+        localAuthorization: authority.LOCAL_PERSON_RUN,
         citations,
         promptPreamble,
       })

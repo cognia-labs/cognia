@@ -52,6 +52,40 @@ async function seedBindingPair() {
 afterAll(dbFixture.dispose)
 
 describe("handleWorkflowFanoutCallback", () => {
+  it.each([
+    "target-conversation",
+    "target-adapter",
+    "click-conversation",
+    "click-adapter",
+    "missing-click",
+  ])("refuses a mismatched fan-out destination: %s", async (mismatch) => {
+    const { adapterId, conversationKey } = await seedBindingPair()
+    const binding = (await getDb()
+      .connectorCallbackBindings.where("[adapterId+actionId]")
+      .equals([adapterId, "wffanoutapp:abc"])
+      .first())!
+    if (mismatch === "target-conversation")
+      (binding.payload!.target as Record<string, unknown>).conversationKey = "lark:other:elsewhere"
+    if (mismatch === "target-adapter")
+      (binding.payload!.target as Record<string, unknown>).adapterId = "other"
+    await expect(
+      handleWorkflowFanoutCallback({
+        binding,
+        cancelled: false,
+        platform: "lark",
+        adapterId: mismatch === "click-adapter" ? "other" : adapterId,
+        conversationKey:
+          mismatch === "missing-click"
+            ? undefined
+            : mismatch === "click-conversation"
+              ? "elsewhere"
+              : conversationKey,
+      })
+    ).rejects.toThrow("does not match")
+    expect(await getDb().workflowFanoutSubscriptions.count()).toBe(0)
+    expect(await getDb().outboundQueue.count()).toBe(0)
+  })
+
   it("approve path writes the fan-out subscription + drops both bindings + sends confirmation", async () => {
     const { adapterId, surfaceId, conversationKey } = await seedBindingPair()
     const approveBinding = (await getDb()

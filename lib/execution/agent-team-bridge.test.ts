@@ -107,7 +107,7 @@ describe("AgentTeam ExecutionRun bridge", () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]?.actingIdentity).toMatchObject({
       lane: "legacy",
-      trigger: "local",
+      trigger: "external-event",
       requesters: [],
       authorityRevision: 0,
     })

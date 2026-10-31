@@ -149,9 +149,10 @@ export function parseTemplateCardEvent(
 
   const parsed = parseActionId(eventKey)
   const userId = body.from?.userid ?? "unknown"
-  const conversationKey = body.chatid
-    ? buildConversationKey("wecom", adapterId, body.chatid)
-    : undefined
+  // Match the inbound message address: only a trusted single-chat sender can
+  // stand in for an omitted chatid. A group sender never identifies the chat.
+  const chatId = body.chatid || (body.chattype === "single" ? body.from?.userid : undefined)
+  const conversationKey = chatId ? buildConversationKey("wecom", adapterId, chatId) : undefined
 
   return {
     platform: "wecom",

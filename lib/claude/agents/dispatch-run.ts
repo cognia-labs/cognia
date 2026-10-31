@@ -19,7 +19,11 @@ import {
   observeActingAuthority,
   snapshotActingAuthority,
   type ActingAuthoritySnapshot,
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  activeToolExecutionRunId,
 } from "@/lib/execution/acting-authority"
+import { activeDirectChatExecutionRunId } from "@/lib/execution/direct-chat-run"
 import { captureBackgroundDispatchRecovery } from "@/lib/background-tasks/redispatch"
 import { admitBackgroundDispatch } from "@/lib/db/background-tasks"
 import type { ExternalSessionPermissionSpec } from "@/lib/ai/agent/external/policy/permission-cascade"
@@ -246,15 +250,22 @@ function newRunId(): string {
   }
 }
 
+/** Dispatch-owned provenance, persisted alongside the frozen recovery inputs. */
+export interface DispatchParentProvenance {
+  parentExecutionRunId?: string
+}
+
 export interface StartDispatchRunParams {
   /** Verified safe restart; retains the original child session and frozen input. */
-  recovery?: BackgroundDispatchRecovery
+  recovery?: BackgroundDispatchRecovery & DispatchParentProvenance
   subagentId: string
   prompt: string
   toolsEnabled: boolean
   background: boolean
   /** The chat session that issued the dispatch (runtime-store bucketing + journal). */
   parentSessionId: string
+  /** Host-correlated run that issued this tool call; an empty id is unverified. */
+  executionRunId?: string
   /**
    * The root of `parentSessionId`, when the caller already knows it (a
    * re-dispatch reads it from the journal). Resolved from the live routes
@@ -292,6 +303,17 @@ export interface DispatchRunHandle {
  */
 export async function startDispatchRun(p: StartDispatchRunParams): Promise<DispatchRunHandle> {
   let effectiveCaller = structuredClone(p.caller)
+  // Snapshot before any asynchronous work: admission must never borrow a later turn.
+  // Recovery/resume deliberately skip live lookup, including for legacy records.
+  let parentExecutionRunId = p.recovery
+    ? p.recovery.parentExecutionRunId
+    : p.resumeOfRunId
+      ? undefined
+      : (p.executionRunId ??
+        (effectiveCaller.parentSubagentId
+          ? `execution:job:${effectiveCaller.parentSubagentId}`
+          : (activeDirectChatExecutionRunId(p.parentSessionId) ??
+            activeToolExecutionRunId(p.parentSessionId))))
   const childRunId = p.runId ?? newRunId()
   const label = p.label ?? p.subagentId
   // Every run (foreground OR background) gets a controller so the chat card's
@@ -326,6 +348,12 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     import("@/lib/claude/agents/subagents"),
     loadNesting(),
   ])
+  if (!p.recovery && p.resumeOfRunId) {
+    const { getBackgroundTaskRecord } = await import("@/lib/db/background-tasks")
+    const prior = await getBackgroundTaskRecord(p.resumeOfRunId).catch(() => undefined)
+    const provenance = (prior?.recovery ?? prior) as DispatchParentProvenance | undefined
+    parentExecutionRunId = provenance?.parentExecutionRunId
+  }
   // Prefer the inline def (projected ids like `template:x` / `pluginId:y` are
   // not resolvable by the registry's `getSubagent`); fall back to the raw id.
   let resolved = getDispatchableSubagentDef(p.subagentId)
@@ -462,7 +490,7 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     errorEnvelope: { ...envelope, code: "aborted", retryable: false },
   })
 
-  const runWithRetries = async (): Promise<PluginSubagentDispatchResult> => {
+  const runWithRetriesCore = async (): Promise<PluginSubagentDispatchResult> => {
     let attempt = 0
     for (;;) {
       attempt += 1
@@ -510,9 +538,35 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
     host: "renderer" as const,
     startedAt: Date.now(),
     toolsEnabled: p.toolsEnabled,
+    ...(parentExecutionRunId ? { parentExecutionRunId } : {}),
     ...(p.model ? { model: p.model } : {}),
     ...(p.resumeOfRunId ? { resumeOfRunId: p.resumeOfRunId } : {}),
     ...(p.resumeAttempt !== undefined ? { resumeAttempt: p.resumeAttempt } : {}),
+  }
+
+  const runWithRetries = async () => {
+    const { getExecutionRun } = await import("@/lib/db/execution-runs")
+    // Finished parents retain the root's fixed identity. Missing/unreadable pins
+    // start an unparented, nonlocal run; never consult the session's active run.
+    const parent = parentExecutionRunId
+      ? await getExecutionRun(parentExecutionRunId).catch(() => undefined)
+      : undefined
+    const run = await startToolExecutionRun(p.parentSessionId, {
+      runId: `execution:job:${childRunId}`,
+      title: p.subagentId,
+      ...(parent ? { parentRunId: parent.id } : {}),
+    })
+    let terminal: boolean | "cancelled" = true
+    try {
+      const result = await runWithRetriesCore()
+      terminal =
+        result.finishReason === "cancelled"
+          ? "cancelled"
+          : Boolean(result.errorEnvelope || result.rejection || result.finishReason === "error")
+      return result
+    } finally {
+      await finishToolExecutionRun(run.id, terminal)
+    }
   }
 
   if (p.background) {
@@ -525,7 +579,11 @@ export async function startDispatchRun(p: StartDispatchRunParams): Promise<Dispa
         target: typeof target === "string" ? resolved : target,
         toolsEnabled: p.toolsEnabled,
       })
-      recovery = { ...recovery, phase: "accepted" }
+      recovery = {
+        ...recovery,
+        ...(parentExecutionRunId ? { parentExecutionRunId } : {}),
+        phase: "accepted",
+      }
       effectiveCaller = recovery.caller
       target = recovery.target
       const admission = await admitBackgroundDispatch(

@@ -109,6 +109,7 @@ describe("local-to-shared chat conversion", () => {
   afterAll(dbFixture.dispose)
 
   it("binds the local session only after every event and activation succeed", async () => {
+    await getDb().sessions.update("local_1", { programmaticCreator: "plugin:example" })
     let sequence = 0
     const client = {
       identity: jest.fn().mockResolvedValue({ userId: "user_1", orgId: "org_1" }),
@@ -166,6 +167,7 @@ describe("local-to-shared chat conversion", () => {
       baseRevision: 1,
     })
     expect(result.importedMessageCount).toBe(2)
+    expect((await getDb().sessions.get("local_1"))?.programmaticCreator).toBe("plugin:example")
     expect((await getDb().sessions.get("local_1"))?.collaboration).toEqual({
       orgId: "org_1",
       workspaceId: "workspace_1",

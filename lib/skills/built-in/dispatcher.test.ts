@@ -130,6 +130,8 @@ describe("hidden children inherit dispatcher IM gates", () => {
       kind: "subagent",
       visibility: "embedded",
       parentSessionId: "s_x",
+      workingDir: "/workspace-b",
+      projectId: "project-b",
       createdAt: 0,
       updatedAt: 0,
     })
@@ -175,6 +177,11 @@ describe("hidden children inherit dispatcher IM gates", () => {
       expect(row.skillConfirmationNonce).toMatch(/^[a-f0-9]{32}$/)
       expect(row.actionId.endsWith(`:${row.skillConfirmationNonce}`)).toBe(true)
       expect(row.payload?.sessionId).toBe("s_x")
+      expect(row.payload?.executionContext).toEqual({
+        sessionId: "child",
+        workspaceRoot: "/workspace-b",
+        projectId: "project-b",
+      })
       expect(row.conversationKey).toBe(imBinding.conversationKey)
     }
   })

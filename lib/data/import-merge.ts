@@ -43,6 +43,8 @@ type Db = ReturnType<typeof getDb>
  * its already-cleared seed is never revisited.)
  */
 const PRESERVED_DECORATIONS = [
+  // A source re-parse cannot turn a programmatic root into a local UI entry.
+  "programmaticCreator",
   "sdkSessionId",
   "sdkSessionStorage",
   "forkedFromSdkSessionId",

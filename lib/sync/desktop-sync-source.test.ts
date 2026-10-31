@@ -207,10 +207,18 @@ describe("readDexieDelta", () => {
     const db = getDb()
     await db.sessions.bulkPut([
       { id: "s1", title: "old", kind: "direct", createdAt: 0, updatedAt: 1 } as never,
-      { id: "s2", title: "new", kind: "direct", createdAt: 0, updatedAt: 10 } as never,
+      {
+        id: "s2",
+        title: "new",
+        kind: "direct",
+        programmaticCreator: "plugin:example",
+        createdAt: 0,
+        updatedAt: 10,
+      } as never,
     ])
     const delta = await readDexieDelta("sessions", 5)
     expect(delta.rows.map((r) => (r as { id: string }).id)).toEqual(["s2"])
+    expect(delta.rows[0]).toMatchObject({ programmaticCreator: "plugin:example" })
     expect(delta.next_since).toBe(10)
   })
 

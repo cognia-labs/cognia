@@ -196,10 +196,13 @@ describe("createPluginAgentSession", () => {
 })
 
 describe("resumePluginAgentSession", () => {
-  it("returns a handle for an existing session", async () => {
+  it("resumes a desktop session without changing its row", async () => {
+    const row = Object.freeze({ id: "s1", characterId: "c1", title: "Desktop conversation" })
+    mockGet.mockResolvedValue(row as never)
     const session = await resumePluginAgentSession("s1")
     expect(session.id).toBe("s1")
-    expect(updateSession).toHaveBeenCalledWith("s1", { programmaticCreator: "plugin-agent-sdk" })
+    expect(updateSession).not.toHaveBeenCalled()
+    expect(row).toEqual({ id: "s1", characterId: "c1", title: "Desktop conversation" })
   })
 
   it("retains an existing creator marker", async () => {
@@ -208,9 +211,14 @@ describe("resumePluginAgentSession", () => {
     expect(updateSession).not.toHaveBeenCalled()
   })
 
-  it("does not resume if legacy provenance cannot be persisted", async () => {
-    jest.mocked(updateSession).mockRejectedValueOnce(new Error("write failed"))
-    await expect(resumePluginAgentSession("s1")).rejects.toThrow("write failed")
+  it("needs no write permission to resume and read history", async () => {
+    jest.mocked(updateSession).mockImplementationOnce(async () => {
+      throw new Error("write forbidden")
+    })
+    const session = await resumePluginAgentSession("s1")
+    await expect(session.history()).resolves.toEqual([])
+    expect(updateSession).not.toHaveBeenCalled()
+    jest.mocked(updateSession).mockReset()
   })
 
   it("throws when the session does not exist", async () => {

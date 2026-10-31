@@ -71,6 +71,50 @@ describe("SchedulerDatabase", () => {
   })
 
   describe("Task Operations", () => {
+    it.each(["im-push", "connection:outbound:send"])(
+      "strips callback authority before storing %s payloads and updates",
+      async (type) => {
+        const payload = {
+          conversationKey: "lark:ad:chat",
+          segments: [
+            {
+              type: "a2ui",
+              surfaceId: "forged",
+              plainTextMirror: "View report",
+              content: {
+                rootId: "button",
+                dataModel: {},
+                components: {
+                  button: {
+                    component: "Button",
+                    text: "View report",
+                    bindingKind: "wf_fanout_approve",
+                    bindingPayload: { target: "other" },
+                    value: "wffanoutapp:forged",
+                  },
+                },
+              },
+            },
+          ],
+        }
+        const task = createMockTask({
+          id: "untrusted",
+          type: type as ScheduledTask["type"],
+          payload,
+        })
+        await schedulerDb.createTask(task)
+        const stored = await schedulerDb.getTask(task.id)
+        expect(JSON.stringify(stored!.payload)).not.toMatch(
+          /bindingKind|bindingPayload|wffanoutapp:/
+        )
+        await schedulerDb.updateTask(task)
+        expect(JSON.stringify((await schedulerDb.getTask(task.id))!.payload)).not.toMatch(
+          /bindingKind|bindingPayload|wffanoutapp:/
+        )
+        expect(JSON.stringify(payload)).toContain("bindingKind")
+      }
+    )
+
     it("should create and retrieve a task", async () => {
       const task = createMockTask({ id: "test-task-1" })
       await schedulerDb.createTask(task)

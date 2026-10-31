@@ -1,7 +1,13 @@
 jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
   snapshotActingAuthority: jest.fn(async () => undefined),
   observeActingAuthority: jest.fn(async () => ({ ok: true })),
 }))
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: jest.fn(),
+  listExecutionRuns: jest.fn(),
+}))
+import { getExecutionRun, listExecutionRuns } from "@/lib/db/execution-runs"
 import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/schema", () => ({ getDb: jest.fn() }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
@@ -10,6 +16,7 @@ jest.mock("../context", () => ({
   resolveBuiltInSkillTurnActors: jest.fn(),
 }))
 jest.mock("@/lib/connectors/tauri/commands", () => ({
+  connectorsKeyringGet: jest.fn(async () => "owner-token"),
   connectorsLarkUserAuth: jest.fn(),
   connectorsHttpRequest: jest.fn(),
 }))
@@ -27,6 +34,21 @@ import {
 } from "@/lib/claude/agents/subagent-approval-routes"
 
 const sessionGet = jest.fn()
+const runGet = jest.fn()
+const localRun = {
+  id: "desktop-run",
+  sessionId: "s1",
+  status: "running",
+  actingIdentity: {
+    schemaVersion: 1,
+    rootRunId: "desktop-run",
+    lane: "legacy",
+    trigger: "local",
+    authorizingPrincipal: { kind: "local-person" },
+    requesters: [],
+    authorityRevision: 0,
+  },
+}
 const binding = { platform: "lark", adapterId: "a1", conversationKey: "chat" }
 
 beforeEach(() => {
@@ -38,7 +60,12 @@ beforeEach(() => {
     authorizationEpoch: "auth-owner",
     accountLabel: "Alice",
   } as never)
-  jest.mocked(getDb).mockReturnValue({ sessions: { get: sessionGet } } as never)
+  jest
+    .mocked(getDb)
+    .mockReturnValue({ sessions: { get: sessionGet }, executionRuns: { get: runGet } } as never)
+  jest.mocked(listExecutionRuns).mockResolvedValue([localRun] as never)
+  jest.mocked(getExecutionRun).mockImplementation(async (id) => runGet(id))
+  runGet.mockImplementation(async (id) => (id === localRun.id ? localRun : undefined))
   sessionGet.mockResolvedValue({ platformBinding: binding })
   jest.mocked(getAdapterInstance).mockResolvedValue({
     type: "lark",
@@ -204,6 +231,65 @@ it("allows local sessions without a platform binding", async () => {
   expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
 })
 
+it("allows the HTTP personal-token path inside the recorded desktop run", async () => {
+  sessionGet.mockResolvedValue({ id: "s1" })
+  jest.mocked(connectorsHttpRequest).mockResolvedValueOnce({
+    status: 200,
+    body: JSON.stringify({ code: 0, data: { ok: true } }),
+  } as never)
+  await expect(
+    larkUserRequest("a1", { appId: "app", appSecret: "secret" }, "GET", "/test", undefined, {
+      sessionId: "s1",
+    })
+  ).resolves.toMatchObject({ code: 0, data: { ok: true } })
+})
+
+it.each([[], [localRun, { ...localRun, id: "sibling" }]].map((runs) => ({ runs })))(
+  "refuses absent or ambiguous active runs: %j",
+  async ({ runs }) => {
+    sessionGet.mockResolvedValue({ id: "s1" })
+    jest.mocked(listExecutionRuns).mockResolvedValue(runs as never)
+    await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).rejects.toMatchObject({
+      name: "LarkActingIdentityError",
+    })
+  }
+)
+
+it.each(["external-event", "schedule", "child", "requester"])(
+  "refuses synced Bot/plugin and forked programmatic sessions with a %s run",
+  async (trigger) => {
+    sessionGet.mockResolvedValue({ id: "s1" })
+    jest
+      .mocked(listExecutionRuns)
+      .mockResolvedValue([
+        { ...localRun, actingIdentity: { ...localRun.actingIdentity, trigger } },
+      ] as never)
+    await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).rejects.toMatchObject({
+      name: "LarkActingIdentityError",
+    })
+  }
+)
+
+it("requires a recorded local authorizer and fails closed on run read failures", async () => {
+  sessionGet.mockResolvedValue({ id: "s1" })
+  jest.mocked(listExecutionRuns).mockResolvedValue([
+    {
+      ...localRun,
+      actingIdentity: { ...localRun.actingIdentity, authorizingPrincipal: undefined },
+    },
+  ] as never)
+  await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).rejects.toMatchObject({
+    name: "LarkActingIdentityError",
+  })
+  jest.mocked(listExecutionRuns).mockRejectedValueOnce(new Error("read failed"))
+  await expect(
+    larkUserRequest("a1", { appId: "app", appSecret: "secret" }, "GET", "/test", undefined, {
+      sessionId: "s1",
+    })
+  ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+  expect(connectorsHttpRequest).not.toHaveBeenCalled()
+})
+
 it("refuses an absent context before reading the personal authorization", async () => {
   await expect(assertLarkActingIdentity("a1")).rejects.toMatchObject({
     name: "LarkActingIdentityError",
@@ -349,4 +435,27 @@ it("does not wait for the observe-only personal-token check", async () => {
     accessToken: "owner-token",
     authorizationEpoch: "auth-owner",
   })
+})
+
+it("checks the root authority on a confirmed child replay after child cleanup", async () => {
+  sessionGet.mockImplementation(async (id: string) =>
+    id === "root" ? { platformBinding: binding } : undefined
+  )
+  await expect(
+    assertLarkActingIdentity("a1", {
+      sessionId: "gone-child",
+      imAuthoritySessionId: "root",
+      workspaceRoot: "/workspace-b",
+      hitlBypass: true,
+      actingSenders: [{ remoteUserId: "owner", unionId: "union-owner" }],
+    })
+  ).resolves.toMatchObject({ accessToken: "owner-token" })
+  expect(sessionGet).toHaveBeenCalledWith("root")
+  await expect(
+    assertLarkActingIdentity("a1", {
+      sessionId: "gone-child",
+      imAuthoritySessionId: "root",
+      actingSenders: [{ remoteUserId: "owner" }],
+    })
+  ).rejects.toMatchObject({ reason: "sender_not_token_owner" })
 })

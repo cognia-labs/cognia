@@ -42,6 +42,14 @@ function imSession(): ChatSession {
 }
 
 describe("delegation runs", () => {
+  it("does not infer a local person from an unbound session", async () => {
+    const { runId } = await acceptDelegation({
+      delegationId: "external",
+      title: "Automatic",
+      session: { id: "plain" } as ChatSession,
+    })
+    expect((await getExecutionRun(runId))?.actingIdentity?.trigger).toBe("external-event")
+  })
   it("does not infer attempt replacement from timestamps or unrelated obligations", () => {
     const base = { kind: "workflow", currentRevision: 0, startedAt: 1, updatedAt: 1 } as const
     const children: import("@/types/execution/run").ExecutionRun[] = [

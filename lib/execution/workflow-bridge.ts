@@ -32,7 +32,6 @@ function recordedWorkflowTrigger(row: WorkflowRunRow): RunTriggerV1 {
     // triggeredBySource defaults to "ui" even for automatic events; it is an
     // index value, not evidence that a person started this run.
     const origin = row.triggeredBy
-    if (!origin && row.triggerKind === "trigger.manual") return "local"
     return runTriggerFromOrigin(origin)
   }
   // Webhooks, integration/system events and unknown automatic trigger kinds.

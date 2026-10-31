@@ -90,6 +90,33 @@ async function seedSession(opts: { sessionId: string; bindToIM?: boolean }): Pro
         }
       : {}),
   })
+  if (opts.bindToIM) {
+    // A production connector persists both fields from its inbound event.
+    const session = (await getDb().sessions.get(opts.sessionId))!
+    const conversationRef = {
+      platform: "wecom" as const,
+      adapterId: "wecom:a",
+      chatId: "room",
+      chatType: "group",
+    }
+    await getDb().sessions.update(opts.sessionId, {
+      platformBinding: {
+        ...session.platformBinding!,
+        conversationRef,
+        deliveryTarget: {
+          address: {
+            platform: "wecom",
+            adapterId: "wecom:a",
+            conversationKey: "wecom:wecom:a:room",
+            containerId: "room",
+            scopeKind: "group",
+          },
+          conversationRef,
+          refreshedAt: Date.now(),
+        },
+      },
+    })
+  }
 }
 
 configureWorkflowApi(createWorkflowAuthorAPI() as never)

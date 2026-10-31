@@ -1,5 +1,7 @@
 "use client"
 
+import { LOCAL_PERSON_RUN, type LocalPersonRun } from "@/lib/execution/acting-authority"
+
 import { publishChatLifecycleEvent } from "@/lib/chat/lifecycle-events"
 import { waitForModelSelection } from "@/lib/chat/model-selection"
 
@@ -501,6 +503,19 @@ export interface ExternalTurnOmissions {
   attachments: number[]
   /** Such blocks outside the attachments, which no manifest names. */
   unnamed: number
+}
+
+/** Only a host person gesture can mint a local run; automation never inherits the gesture. */
+export function localChatRunAuthorization(options?: {
+  localAuthorization?: LocalPersonRun
+  automatedTurn?: unknown
+  backgroundDelivery?: unknown
+}): LocalPersonRun | undefined {
+  return options?.localAuthorization === LOCAL_PERSON_RUN &&
+    options.automatedTurn === undefined &&
+    options.backgroundDelivery === undefined
+    ? LOCAL_PERSON_RUN
+    : undefined
 }
 
 export function resolveChatTurnAttemptIdentity(input: {
@@ -1508,6 +1523,7 @@ export function useClaudeChat() {
       content: SendContent,
       opts?: SendOptions,
       callOptions?: {
+        localAuthorization?: LocalPersonRun
         /** Skip the optimistic user-message append. Used by `regenerate` so we
          *  don't duplicate the user turn when re-issuing the SDK request. */
         sharedRequest?: { messageId: string; queueItemId: string; takeover?: boolean }
@@ -1631,6 +1647,7 @@ export function useClaudeChat() {
         turnRoute?: TurnRoute | null
       }
     ) => {
+      const localAuthorization = localChatRunAuthorization(callOptions)
       const sessionId = callOptions?.sessionId ?? useChatStore.getState().activeSessionId
       // Branch bookkeeping this send arms for the turn it starts: a
       // regenerate's pending reply tag, and an edit's owner entry plus the
@@ -2037,6 +2054,11 @@ export function useClaudeChat() {
           // `steer` metadata rides along into Dexie so a restart can tell a
           // delivered follow-up from one that never arrived.
           const entryId = crypto.randomUUID()
+          ;(await import("./steer-runtime")).recordLocalPersonSteer(
+            sessionId,
+            entryId,
+            localAuthorization
+          )
           const steerMeta: SteerMessageMeta = { entryId, state: "queued" }
           // The normal send path's reference stamp, applied here too: a steer
           // still cites what its chips/tokens named, whether it is delivered
@@ -2406,6 +2428,7 @@ export function useClaudeChat() {
       // other send pays nothing; the hand-off below re-checks with the final
       // content and options.
       const hostStateForeseen =
+        localAuthorization !== undefined &&
         !session?.characterId?.startsWith("vscode-chat:") &&
         !isSessionAside &&
         !opts &&
@@ -3105,6 +3128,7 @@ export function useClaudeChat() {
       // foresee as host-state) is dispatched here, where its run is created:
       // host-state sends never stamp (ADR-0188 B1).
       const hostStateEligible =
+        localAuthorization !== undefined &&
         sendOptions.execution?.runtimeAdapter !== "vscode-chat" &&
         !isSessionAside &&
         hostStateSendEligible({
@@ -3344,6 +3368,7 @@ export function useClaudeChat() {
             import("@/lib/execution/agent-team-bridge"),
           ])
           const result = await startSquadRun({
+            ...(localAuthorization ? { localAuthorization } : {}),
             squadId,
             ...(callOptions?.backgroundDelivery
               ? { runId: callOptions.backgroundDelivery.id }
@@ -3811,6 +3836,7 @@ export function useClaudeChat() {
         routedExternalAgentId || participantBinding
           ? null
           : await acceptChatTurn({
+              ...(localAuthorization ? { localAuthorization } : {}),
               sessionId,
               runId: executionRunId,
               messageId: userMsg.id,
@@ -4064,6 +4090,7 @@ export function useClaudeChat() {
       }
       try {
         await startDirectChatExecutionRun({
+          ...(localAuthorization ? { localAuthorization } : {}),
           sessionId,
           runId: executionRunId,
           // The canonical log's `user-input` event, clipped from the front: the
@@ -6323,7 +6350,7 @@ export function useClaudeChat() {
     return registerChatSendBridge((text, targetSessionId, automatedTurn) => {
       void sendRef.current?.(text, undefined, {
         sessionId: targetSessionId,
-        ...(automatedTurn ? { automatedTurn } : {}),
+        ...(automatedTurn ? { automatedTurn } : { localAuthorization: LOCAL_PERSON_RUN }),
       })
     })
   }, [])
@@ -7153,6 +7180,7 @@ export function useClaudeChat() {
       const promptPreamble = readPromptPreambleSummary(edited.metadata)
       warnNotResent(notResent)
       await send(carryPromptPreamble(edited.parts, editedContent, attachmentCount), undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
         sessionId,
         ...(editedManifest?.length ? { attachmentManifest: editedManifest } : {}),
         citations: chipCitationsOf(edited.metadata),
@@ -7231,6 +7259,7 @@ export function useClaudeChat() {
         warnNotResent(rebuilt.unavailable)
       }
       await send(content, undefined, {
+        localAuthorization: LOCAL_PERSON_RUN,
         skipUserAppend: true,
         sessionId,
         ...(manifest?.length ? { attachmentManifest: manifest } : {}),
@@ -7247,8 +7276,14 @@ export function useClaudeChat() {
     regenerateRef.current = regenerate
   }, [regenerate])
 
+  const sendFromLocalPerson = useCallback(
+    (...args: Parameters<typeof send>) =>
+      send(args[0], args[1], { ...args[2], localAuthorization: LOCAL_PERSON_RUN }),
+    [send]
+  )
+
   return {
-    send,
+    send: sendFromLocalPerson,
     stop,
     interruptAndSteer,
     flushSteer,

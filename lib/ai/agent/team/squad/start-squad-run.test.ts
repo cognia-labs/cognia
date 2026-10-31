@@ -95,6 +95,12 @@ const start = (h: Harness, extra: Record<string, unknown> = {}) =>
   )
 
 describe("startSquadRun: fast failures", () => {
+  it("threads a host-only authorization through atomic run admission", async () => {
+    const { LOCAL_PERSON_RUN } = await import("@/lib/execution/acting-authority")
+    const h = harness()
+    await start(h, { localAuthorization: LOCAL_PERSON_RUN })
+    expect(h.seeds[0].localAuthorization).toBe(LOCAL_PERSON_RUN)
+  })
   it("refuses with runtime_not_ready when the bootstrap has not finished, touching nothing", async () => {
     const h = harness()
     const result = await startSquadRun(

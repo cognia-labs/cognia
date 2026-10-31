@@ -153,6 +153,7 @@ import {
   authorizeConnectorCallback,
   notifyCallbackDenied,
   resolveLarkCallbackConversation,
+  isHostRunControlCard,
 } from "./callback-authorization"
 import { invalidatePersistSnapshot, stampSessionLastMessage } from "@/lib/db/messages"
 import { assertLocalMutationAllowed } from "@/lib/collab/shared-session-access"
@@ -3042,7 +3043,12 @@ export class ConnectorBus {
     event: ConnectorCallbackEvent,
     options?: { onDecision?: (decision: ConnectorCallbackDecision) => void }
   ): Promise<"terminal" | "retry"> {
-    const flightKey = `${event.adapterId}:${event.triggerId}`
+    // A copied run action on another message must not consume the real card's click.
+    const dedupId =
+      typeof event.payload?.runId === "string" && event.originatingMessageId
+        ? JSON.stringify([event.triggerId, event.originatingMessageId])
+        : event.triggerId
+    const flightKey = `${event.adapterId}:${dedupId}`
     let terminal = false
     let decisionSent = false
     const decide = (decision: ConnectorCallbackDecision) => {
@@ -3064,7 +3070,7 @@ export class ConnectorBus {
         decide({ status: "in_flight" })
         return "retry"
       }
-      const duplicate = await isRecordedInbound(event.adapterId, event.triggerId, "callback")
+      const duplicate = await isRecordedInbound(event.adapterId, dedupId, "callback")
       if (this.callbackInFlight.has(flightKey)) {
         decide({ status: "in_flight" })
         return "retry"
@@ -3091,9 +3097,7 @@ export class ConnectorBus {
         terminal = await this.runConnectorCallback(event, decide)
       } finally {
         if (terminal) {
-          await recordAndCheckInbound(event.adapterId, event.triggerId, "callback").catch(
-            () => undefined
-          )
+          await recordAndCheckInbound(event.adapterId, dedupId, "callback").catch(() => undefined)
         }
         this.callbackInFlight.delete(flightKey)
       }
@@ -3190,7 +3194,10 @@ export class ConnectorBus {
       "steer",
     ])
     const isRunControl =
-      Boolean(runId) && Number.isInteger(runRevision) && RUN_CONTROL_ACTIONS.has(runAction)
+      Boolean(runId) &&
+      Number.isInteger(runRevision) &&
+      runRevision >= 0 &&
+      RUN_CONTROL_ACTIONS.has(runAction)
 
     const cardConversation = await resolveLarkCallbackConversation(
       event,
@@ -3200,6 +3207,23 @@ export class ConnectorBus {
     if (cardConversation) {
       event = { ...event, conversationKey: cardConversation }
       resolvedConversationKey = cardConversation
+    }
+
+    // Mandatory provenance, independent of the optional callback actor-policy mode.
+    // A model/native card can copy run fields but cannot choose its platform message id.
+    if (isRunControl && !(await isHostRunControlCard(event, runId))) {
+      decide({ status: "denied", reason: "run_conversation_mismatch" })
+      await appendAudit({
+        adapterId: event.adapterId,
+        kind: "callback.forbidden",
+        at: now,
+        conversationKey: event.conversationKey,
+        reason: "run_card_provenance_missing",
+      }).catch(() => undefined)
+      // A visible Host card can be clicked before its send receipt is stored.
+      // Deny now without consuming its stable action id; every retry must prove
+      // provenance again, so a forged message remains denied.
+      return false
     }
 
     // ── Step 2.6: unified callback authorization (plan 2026-07-24 Phase 2)
@@ -3912,8 +3936,40 @@ export class ConnectorBus {
           hydrated.imBinding.conversationKey !== resolvedConversationKey
         )
           throw new Error("Skill confirmation no longer belongs to this session")
+        const execution = resolvedBinding.payload?.["executionContext"]
+        if (
+          execution !== undefined &&
+          (!execution ||
+            typeof execution !== "object" ||
+            Array.isArray(execution) ||
+            typeof (execution as Record<string, unknown>).sessionId !== "string" ||
+            !(execution as Record<string, string>).sessionId.trim() ||
+            ["workspaceRoot", "projectId", "characterId"].some(
+              (key) =>
+                (execution as Record<string, unknown>)[key] !== undefined &&
+                typeof (execution as Record<string, unknown>)[key] !== "string"
+            ))
+        )
+          throw new Error("Skill confirmation execution context is invalid")
+        const invoking = execution as
+          | {
+              sessionId: string
+              workspaceRoot?: string
+              projectId?: string
+              characterId?: string
+            }
+          | undefined
         await runBuiltInSkill(skillId, skillArgs, {
           ...hydrated,
+          ...(invoking
+            ? {
+                sessionId: invoking.sessionId,
+                workspaceRoot: invoking.workspaceRoot,
+                projectId: invoking.projectId,
+                characterId: invoking.characterId,
+              }
+            : {}),
+          imAuthoritySessionId: sessionId,
           actingSenders: (() => {
             const scope = event.identityScope as { unionId?: unknown } | undefined
             return event.user.remoteUserId?.trim() &&

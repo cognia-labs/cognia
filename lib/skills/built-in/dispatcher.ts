@@ -345,7 +345,17 @@ export async function runBuiltInSkill(
             conversationKey: ctx.imBinding.conversationKey,
             createdAt: now,
             expiresAt: now + SKILL_INVOKE_TTL_MS,
-            payload: { skillId: skill.id, args: validArgs as never, sessionId: rootSessionId },
+            payload: {
+              skillId: skill.id,
+              args: validArgs as never,
+              sessionId: rootSessionId,
+              executionContext: {
+                sessionId: ctx.sessionId,
+                ...(ctx.workspaceRoot ? { workspaceRoot: ctx.workspaceRoot } : {}),
+                ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+                ...(ctx.characterId ? { characterId: ctx.characterId } : {}),
+              },
+            },
             skillConfirmationNonce: value.slice(value.lastIndexOf(":") + 1),
             actorScope: scope,
             allowedActions: [action],

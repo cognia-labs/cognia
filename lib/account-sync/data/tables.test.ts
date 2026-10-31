@@ -2,6 +2,7 @@ import { SETTINGS_SYNC } from "@cognia/agent-config-types/settings-sync"
 import { ACCOUNT_SYNC_TABLES, DATA_TABLE_CATALOG } from "@/lib/data-governance/table-catalog"
 
 import {
+  SYNC_SCHEMA_VERSION,
   SYNCED_SETTINGS_KEYS,
   SYNCED_TABLES,
   TABLE_POLICIES,
@@ -11,6 +12,13 @@ import {
 } from "./tables"
 
 describe("account sync table policies", () => {
+  it("syncs creator provenance under schema 2 without transferring plugin ownership", () => {
+    expect(SYNC_SCHEMA_VERSION).toBe(2)
+    expect(TABLE_POLICIES.sessions.fields.programmaticCreator).toBe("sync")
+    expect(syncedFields(TABLE_POLICIES.sessions)).toContain("programmaticCreator")
+    expect(syncedFields(TABLE_POLICIES.sessions)).not.toContain("agentTurnOwner")
+  })
+
   it("cover exactly the tables the data catalog marks account-e2e, with the same class", () => {
     const catalog = [...DATA_TABLE_CATALOG]
       .filter((entry) => entry.accountSync.mode === "account-e2e")

@@ -36,6 +36,7 @@ import {
   teamPermissionCeiling,
 } from "../../external/policy/permission-cascade"
 import type { SquadReadiness, SquadReadinessBlocker } from "@/lib/agent-team/squad-readiness"
+import type { LocalPersonRun } from "@/lib/execution/acting-authority"
 
 /** A request for human sign-off on the lead's plan, raised mid-run. */
 export interface SquadPlanApprovalRequest {
@@ -49,6 +50,7 @@ export type SquadPlanApprovalDelegate = (
 ) => Promise<unknown> | unknown
 
 export interface StartSquadRunInput {
+  localAuthorization?: LocalPersonRun
   squadId: string
   /** Seeded as the Squad's objective. A blank goal leaves the existing one. */
   goal: string
@@ -126,6 +128,7 @@ export interface SquadStoreLike {
 }
 
 export interface SquadRunRecordsSeed {
+  localAuthorization?: LocalPersonRun
   runId: string
   teamId: string
   objective: string
@@ -400,6 +403,7 @@ export async function startSquadRun(
   ) as AgentTeamExecutionConstraints
   try {
     const records = await (deps.createRunRecords ?? defaultCreateRunRecords)({
+      localAuthorization: input.localAuthorization,
       runId,
       teamId: squadId,
       objective: input.goal.trim() || squad.task || squadName || squadId,

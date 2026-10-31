@@ -552,6 +552,17 @@ describe("web-mode rejection", () => {
 })
 
 describe("Claude session commands", () => {
+  it("binds an existing sidecar turn and attempt to the host execution identity", async () => {
+    const { toolCallExecutionRunId } = await import("@/lib/execution/acting-authority")
+    callSpy.mockResolvedValueOnce(undefined)
+    await sendPrompt("ipc-authority", "hello", {
+      turnId: "host-turn",
+      execution: { identity: { runId: "host-run", attemptId: "host-attempt" } },
+    } as never)
+    expect(toolCallExecutionRunId("ipc-authority", "host-turn", "host-attempt")).toBe("host-run")
+    expect(toolCallExecutionRunId("ipc-authority", "host-turn", "stale-attempt")).toBe("")
+  })
+
   it("passes durable restored messages through the outbound PII gate", async () => {
     callSpy.mockResolvedValueOnce(undefined)
     const initialConversation = [{ role: "user", content: "saved" }]

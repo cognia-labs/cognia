@@ -15,6 +15,7 @@ import {
 import { createOpOriginChecker } from "./op-origin"
 import { closeAll, sealedOp, syncedDevices, verifiedKeys, type SyncDevice } from "./test-support"
 import type { AccountSyncCaptureState, AccountSyncCursorState } from "./types"
+import { SYNC_SCHEMA_VERSION } from "./tables"
 
 beforeEach(() => __clearAccountSyncKeyCache())
 
@@ -205,7 +206,7 @@ describe("applyBatches", () => {
     const before = await depsFor()
     const future = await fromB(
       { t: "sessions", id: "future", k: "upsert", f: { title: ["Future", at(1_000)] } },
-      { schemaVer: 2 }
+      { schemaVer: SYNC_SCHEMA_VERSION + 1 }
     )
     await rotateKeys(a.context, await a.keys())
     __clearAccountSyncKeyCache()

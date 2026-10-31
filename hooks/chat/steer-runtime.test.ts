@@ -77,6 +77,7 @@ import {
   mergeSteerWebSearchContexts,
   mergeSteerWebSearchIntoLastSend,
   maybeDrainSteer,
+  recordLocalPersonSteer,
   promoteAcceptedSteers,
   sessionExternalLane,
   sessionStatusOf,
@@ -84,6 +85,7 @@ import {
   setSteerMessageState,
   steerArmed,
 } from "./steer-runtime"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import { steerMetaOf, type SteerState } from "@/lib/claude/steer"
 import {
   composeTurnText,
@@ -486,6 +488,28 @@ describe("discardPendingSteer", () => {
 })
 
 describe("maybeDrainSteer", () => {
+  it("preserves host admission only when every drained entry was admitted by the UI", () => {
+    state.sessions.s1 = { steerQueue: [{ id: "local", text: "next" }] }
+    recordLocalPersonSteer("s1", "local", LOCAL_PERSON_RUN)
+    const replay = jest.fn()
+    maybeDrainSteer("s1", replay)
+    expect(replay.mock.calls[0][3]?.localAuthorization).toBe(LOCAL_PERSON_RUN)
+
+    state.sessions.s1 = { steerQueue: [{ id: "local", text: "reused" }] }
+    maybeDrainSteer("s1", replay)
+    expect(replay.mock.calls[1][3]?.localAuthorization).toBeUndefined()
+
+    state.sessions.s1 = {
+      steerQueue: [
+        { id: "host", text: "person" },
+        { id: "auto", text: "automation" },
+      ],
+    }
+    recordLocalPersonSteer("s1", "host", LOCAL_PERSON_RUN)
+    maybeDrainSteer("s1", replay)
+    expect(replay.mock.calls[2][3]?.localAuthorization).toBeUndefined()
+  })
+
   it("no-ops on an empty queue but always disarms", () => {
     steerArmed.add("s1")
     const replay = jest.fn()

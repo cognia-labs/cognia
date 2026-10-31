@@ -7,6 +7,7 @@ import type { WorkSubmissionIntentV1 } from "@cognia/agent-config-types/work-sub
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import { listExecutionRunEvents } from "@/lib/db/execution-runs"
+import { LOCAL_PERSON_RUN } from "@/lib/execution/acting-authority"
 import {
   getExecutionContextBundle,
   getWorkInputBatch,
@@ -77,7 +78,10 @@ describe("acceptWorkSubmission", () => {
   })
 
   it("commits the submission, frozen input, run, and opening event together", async () => {
-    const receipt = await acceptWorkSubmission(acceptInput(), deps)
+    const receipt = await acceptWorkSubmission(
+      acceptInput({ localAuthorization: LOCAL_PERSON_RUN }),
+      deps
+    )
 
     expect(receipt).toEqual({
       contractVersion: WORK_SUBMISSION_CONTRACT_VERSION,
@@ -97,6 +101,7 @@ describe("acceptWorkSubmission", () => {
     expect((await getDb().executionRuns.get("run-1"))?.actingIdentity).toMatchObject({
       lane: "legacy",
       trigger: "local",
+      authorizingPrincipal: { kind: "local-person", accountId: "account-1" },
       requesters: [{ kind: "local-person", accountId: "account-1" }],
       actingPrincipal: { kind: "local-person", accountId: "account-1" },
     })

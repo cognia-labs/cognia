@@ -1547,6 +1547,7 @@ export interface PluginToolExecEvent {
   name: string
   args: Record<string, unknown>
   turnId?: string
+  runId?: string
   attemptId?: string
   sandboxRuntimeRef?: string
 }

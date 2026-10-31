@@ -254,6 +254,42 @@ webhook 的事件触发者没有主体（`lib/bot/sources/integration-event.ts`�
 
 ## 实现状态
 
+Phase 2-0 fix 9（2026-10-31）：Lark 个人 token 现在要求执行工具的 run 所记录的 identity root 同时具备 `trigger: local` 与 `local-person` authorizing principal；既有 IM owner 检查不变。会话 binding、creator 标记与 plugin 调用上下文仍只能拒绝，不能授予权限。Host 发送时将既有 IPC turn/attempt 绑定到准确 run；未知关联拒绝，没有关联时要求所有 kind 中恰好一个活跃 run。identity、root、读取缺失或 account/target 切换均拒绝。子任务继承固定 root。Host 使用内存 symbol 授予本地入口证明，调用者提供的 origin 不能制造 local 权限。已认证的 paired chat 与手动 Squad UI 操作代表配对用户，获得相同 Host 证明；remote Run API 不获得。保留 account sync creator 字段及 schema bump。非可信 native/model 内容会移除 run-control 路由字段；bus 独立要求持久化的 Host run-card binding，并匹配 adapter、conversation 与平台 message。伪造回调不能占用真实卡片的去重键。
+
+### Fix 9 writer 审计
+
+| Writer | Trigger | 原因 |
+| --- | --- | --- |
+| `direct-chat-run.ts` | 仅 Host 证明为 `local`，否则 `external-event` | 桌面发送、编辑、重新生成和手动排队消息携带证明；自动续跑不能创建证明。 |
+| `acting-authority.ts:startToolExecutionRun` | Host `local`、继承 root 的 `child`，否则 `external-event` | slash command 与本地 room member 的最小入口记录；前后台工具子任务继承准确记录的 parent。 |
+| `work-submission/service.ts` | 获证明的 `local`、connector `requester`、内部 `child`，否则 `external-event` | Chat adapter 转发证明；已认证 paired-turn 与 HostState chat 入口签发证明，source 标签与 remote Run API 输入不能。 |
+| `squad-run-records.ts` | 获证明的 `local`、继承的 `child` 或按 origin 分类 | 桌面手动 Start、手动 `/squad`、已认证 paired 手动 Start 签发证明。Plugin `runTeam` 强制 plugin origin，传入 `ui` 也无效。 |
+| `agent-team-bridge.ts`、`durable-runtime.ts`、`legacy-run-history.ts` | `requester`、`schedule`，否则 `external-event` | Origin 投影不能创建 local 证明；已有 canonical run 保留其固定 identity。 |
+| `workflow-bridge.ts` | `requester`、`schedule`、`child`，否则 `external-event` | 类似手动的 origin 不足以证明用户，包括自动启动的 workflow。 |
+| `agent-state-bridge.ts`、`delegation.ts` | `requester`、`schedule`，否则 `external-event` | 无 binding 的 goal、plan、delegation 不推断本地用户。 |
+| `bot/runtime/run.ts` | `requester`、`schedule`，否则 `external-event` | Bot 的 manual/desktop trigger 仍属于 Bot 自动化。 |
+| `security-scan-bridge.ts`、Fusion `outbox-appliers.ts` | `external-event` | Plugin scan 与调用者提供的投影 origin 不能制造证明。 |
+| `connectors/runtime.ts` | `requester` 或继承的 `child` | 来自 inbound sender 或明确 recovery parent。 |
+| `job-bridge.ts`、`managed-desktop-results.ts`、`db/execution-runs.ts` | 继承 root 或未证明的 `child` | 仅记录中的 parent 传递 identity；缺失 parent 不授予 local 权限。 |
+| `unattended-park.ts` | `schedule` 或 `child` | 私有入口调用者仅为 schedule 或继承的 unattended 工作。 |
+| `recordRunAuthority` | 不变 | 仅收紧记录的 ceiling，不创建 identity 或 local trigger。 |
+
+### Fix 9 合法个人使用路径
+
+- 桌面 chat 发送、编辑重发和重新生成创建获证明的 direct-chat run。自动 goal、loop、background delivery 使用没有本地证明的核心发送函数。
+- 活跃 turn 中手动排队的消息在内存中保留证明直到 drain。混合队列或重启恢复后缺少证明时拒绝个人权限；用户明确重新发送可建立新 run。
+- 前台与后台子任务使用准确 caller root；IPC 关联指向 canonical job run。
+- 本地 team conversation member 在 dispatch 前建立最小本地入口，并在 cleanup 时结算。
+- 桌面手动 Squad Start、composer 启动的 Squad、手动 `/squad` 与已认证 paired 手动 Start 创建获证明的 Squad root，teammate 继承它。
+- 手动 `/lark` 已接入 Host composer 并建立最小本地入口；model/plugin slash 调用不能提供 symbol。
+- 桌面 skill 使用 tool IPC 入口及准确 run context，plugin skill 不能借用桌面会话。已认证 paired chat 与 room UI 采用同一用户授权判断。
+
+验证：42 个改动相关 suite、1573 个测试通过，覆盖持久化 run、实际 sync/branch/fork 路径、生产 callback codec 与完整 bus dispatch 回归。最小 Host 入口与首条 journal event 原子提交，入口失败不遗留活跃权限记录。验收限制：必跑的既有 `lark/auth-bridge.test.ts` 正向 fixture 没有 execution run，且不在允许修改的 Lark 文件集合中；已安装 Lark CLI dry run 需要当前不可用的 keychain，现有依赖图也缺少 package。扩展 plugin 检查还报告了范围外 `public/_cognia/builtin-plugins/` 中缺失的 staged artifact，以及未改动的 compatibility/catalog 测试失败，随后进程耗尽 Node heap。未声称真实 provider 或 native UI 验收通过。
+
+Phase 2-0 fix 8（2026-10-31）：原生回调清理新增 WeCom `button_list[].key` 与 QQ 回调 `action.data`，同时覆盖 Lark `value.actionId`、Slack `action_id`/`callback_id`、Discord `custom_id` 和 Telegram `callback_data`。回归使用真实 serializer 与 callback parser；Slack、Discord、Telegram、WeChat、DingTalk、Matrix、OneBot 按既有契约降级或拒绝 opaque card。WeChat personal 数字回复与 QQ C2C 回调保留可信发送者地址；WeCom 私聊缺少 `chatid` 时使用 `from.userid`，不放宽会话权限检查。Lark/Slack 回调缺少聊天地址时仍无法证明权限；Discord 要求 channel，Telegram 要求锚定消息。account sync 在 `SYNC_SCHEMA_VERSION = 2` 下保留 `programmaticCreator`（遵循 ADR-0215 的版本超前暂存规则）；固定版本的 `@cognia/sync-protocol` 接受正整数 schema version 与任意带时钟字段，因此无需修改 cognia-services wire contract 或更新 pin。paired-Host 投影、备份恢复、会话重新导入、shared 转换保留非本地来源；旧备份覆盖和重新导入不能抹去已知标记。同步或恢复后的 plugin 根会话仍拒绝个人权限通道。无需 Dexie 版本变更；真实 provider 投递尚未验证。
+
+Phase 2-0 fix 7（2026-10-31）：Host 的 workflow/fan-out 审批从触发会话解析完整 conversationRef 与 deliveryTarget，保留 topic 锚点，缺失地址时拒绝发送。血缘解析通过 Host codec/route 穿过无行成员与已清理的中间节点，并验证根行、冲突、循环和深度。scheduler 的任务及执行输入持久化、`im-push` 与延迟 `connection:outbound:send` 发送均清理 model/tool 的回调提示与命名空间值；digest 回复沿用相同清理。fan-out 目标必须同时匹配绑定和点击会话。确认绑定保存调用方 session、workspace root、project 与 character；重放重新读取根 IM 权限并核验点击者，子行清理后 Lark 个人令牌检查仍使用根权限。无需新增索引或 Dexie 版本。本地回归覆盖生产 Lark/Telegram serializer，尚未验证真实 provider 投递；缺少执行快照的历史确认仍沿用其记录的根上下文。
+
 Phase 1A 在 `ExecutionRun` 上以 observe mode 记录执行身份和已解析的运行权限。凭证选择和既有拒绝逻辑保持不变；权限修订不匹配只记录私有事件，不阻止执行。子运行保留父运行的固定身份（包括原始触发类型）；父身份不可用时记录 `child` 触发类型，不推测主体。权限强制执行和共享预算池记账仍属于后续阶段。
 
 新身份通过 `rootRunId` 标记根运行；子运行保留创建时的身份快照，实时观察和发起人吸收则读写根运行。元数据记录不改变 `updatedAt`，相同值不重复写入，并随运行的下一次实际更新同步到其他设备。缺少已知人工来源的自动入口记录为 `external-event`。

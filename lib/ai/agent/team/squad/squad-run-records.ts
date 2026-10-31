@@ -3,6 +3,8 @@ import {
   recordedRunMetadata,
   requestersFromRunOrigin,
   runTriggerFromOrigin,
+  LOCAL_PERSON_RUN,
+  type LocalPersonRun,
 } from "@/lib/execution/acting-authority"
 /**
  * The two rows a Squad run is made of, created together or not at all.
@@ -35,6 +37,7 @@ export const TERMINAL_SQUAD_RUN_STATUSES: ReadonlySet<AgentTeamRunStatus> =
   new Set<AgentTeamRunStatus>(["completed", "failed", "cancelled", "terminated"])
 
 export interface SquadRunSeed {
+  localAuthorization?: LocalPersonRun
   runId: string
   teamId: string
   objective: string
@@ -183,11 +186,16 @@ export async function createSquadRunRecords(seed: SquadRunSeed): Promise<SquadRu
           ...recordedRunMetadata(
             seed.parentRunId
               ? "child"
-              : runTriggerFromOrigin(
-                  seed.executionConstraints?.triggeredFrom ?? { source: seed.origin }
-                ),
+              : seed.localAuthorization === LOCAL_PERSON_RUN
+                ? "local"
+                : runTriggerFromOrigin(
+                    seed.executionConstraints?.triggeredFrom ?? { source: seed.origin }
+                  ),
             {
               runId: executionRunId,
+              ...(seed.localAuthorization === LOCAL_PERSON_RUN
+                ? { authorizingPrincipal: { kind: "local-person" as const } }
+                : {}),
               parent: seed.parentRunId ? await db.executionRuns.get(seed.parentRunId) : undefined,
               requesters: requestersFromRunOrigin(seed.executionConstraints?.triggeredFrom),
               authority: authorityFromPermissionCeiling(

@@ -48,7 +48,11 @@ import type { SendOptions } from "@cognia/agent-config-types"
 
 import { appendRunEventInsideTransaction, semanticRunEvent } from "@/lib/db/execution-runs"
 import { getDb, withDbReopenRetry } from "@/lib/db/schema"
-import { recordedRunMetadata } from "@/lib/execution/acting-authority"
+import {
+  recordedRunMetadata,
+  LOCAL_PERSON_RUN,
+  type LocalPersonRun,
+} from "@/lib/execution/acting-authority"
 import {
   bindExecutionContextBundle,
   countOpenWorkSubmissions,
@@ -103,6 +107,7 @@ export interface FrozenExecutionContext {
 }
 
 export interface AcceptWorkSubmissionInput {
+  localAuthorization?: LocalPersonRun
   intent: WorkSubmissionIntentV1
   runId: string
   turnId: string
@@ -291,12 +296,15 @@ export async function acceptWorkSubmission(
                     intent.source.kind
                   )
                 ? "child"
-                : intent.source.kind === "chat" || intent.source.kind === "cli"
+                : input.localAuthorization === LOCAL_PERSON_RUN
                   ? "local"
                   : "external-event",
             {
               runId: input.runId,
-              ...(intent.source.kind === "chat" || intent.source.kind === "cli"
+              ...(input.localAuthorization === LOCAL_PERSON_RUN
+                ? { authorizingPrincipal: { kind: "local-person" as const, accountId } }
+                : {}),
+              ...(input.localAuthorization === LOCAL_PERSON_RUN
                 ? {
                     requesters: [{ kind: "local-person", accountId }],
                     actingPrincipal: { kind: "local-person", accountId },

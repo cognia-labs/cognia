@@ -72,6 +72,10 @@ describe("admitPairedChatTurn", () => {
       admitted: true,
       submissionId: "work:paired:request-1",
     })
+    expect((await getDb().executionRuns.get("paired:request-1"))?.actingIdentity).toMatchObject({
+      trigger: "local",
+      authorizingPrincipal: { kind: "local-person" },
+    })
 
     // The user's turn is on the Host under the client's own id, so the
     // transcript the client pages back lines up with what it showed.

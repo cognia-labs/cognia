@@ -10,6 +10,9 @@ import {
 } from "./a2ui-mapper"
 import type { A2UIMessageSegment } from "@/types/connectors/segment"
 import type { WeComInboundEventBody } from "./protocol"
+import { parseWeComMessage } from "./parse"
+import { authorizeConnectorCallback } from "@/lib/connectors/callback-authorization"
+import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 
 function surface(): A2UIMessageSegment {
   return {
@@ -94,6 +97,80 @@ describe("parseActionId", () => {
 })
 
 describe("parseTemplateCardEvent", () => {
+  it("authorizes a private approval without chatid using the inbound sender address", async () => {
+    const conversationKey = parseWeComMessage("adp", "self", {
+      aibotid: "self",
+      msgid: "inbound",
+      chattype: "single",
+      from: { userid: "u_alice" },
+      msgtype: "text",
+      text: { content: "Run workflow" },
+    })!.conversationKey
+    await recordCallbackBinding({
+      adapterId: "adp",
+      actionId: "wfapp:private",
+      surfaceId: "approval",
+      kind: "wf_approve",
+      conversationKey,
+      actorScope: { mode: "initiator", allowedUserIds: ["u_alice"] },
+      allowedActions: ["approve"],
+    })
+    const binding = (await getDb().connectorCallbackBindings.toArray())[0]
+    const callback = parseTemplateCardEvent("adp", "self", {
+      aibotid: "self",
+      chattype: "single",
+      from: { userid: "u_alice" },
+      msgtype: "event",
+      event: { eventtype: "template_card_event", template_card: { event_key: binding.actionId } },
+    })!
+    const adapter: AdapterInstanceRow = {
+      id: "adp",
+      type: "wecom",
+      displayName: "WeCom",
+      enabled: true,
+      transportMode: "gateway",
+      settings: { larkStrictCallbackAuthorization: "enforce" },
+      credentialsRef: { keyringService: "test", accounts: [] },
+      trigger: { rules: [], blockers: [], storeUnmatchedInDraftMode: false },
+      defaultMode: "auto",
+      mediaModelPolicy: "local_extract_only",
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    expect(callback.conversationKey).toBe(conversationKey)
+    expect(
+      await authorizeConnectorCallback({
+        event: callback,
+        adapterRow: adapter,
+        binding,
+        kindClass: "wf_approve",
+        resolvedConversationKey: conversationKey,
+      })
+    ).toMatchObject({ allowed: true, mode: "enforce" })
+    expect(
+      await authorizeConnectorCallback({
+        event: { ...callback, conversationKey: "wecom:adp:other" },
+        adapterRow: adapter,
+        binding,
+        kindClass: "wf_approve",
+        resolvedConversationKey: conversationKey,
+      })
+    ).toMatchObject({ allowed: false, reason: "conversation_mismatch" })
+  })
+
+  it.each(["group", undefined] as const)(
+    "does not infer a missing %s chat from its sender",
+    (chattype) => {
+      expect(
+        parseTemplateCardEvent("adp", "self", {
+          ...event("wfapp:private"),
+          chatid: undefined,
+          chattype,
+        })?.conversationKey
+      ).toBeUndefined()
+    }
+  )
+
   function event(eventKey?: string): WeComInboundEventBody {
     return {
       aibotid: "self",

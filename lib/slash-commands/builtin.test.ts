@@ -46,6 +46,7 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
       "doctor",
       "report",
       "export",
+      "lark",
     ]) {
       expect(names).toContain(expected)
     }

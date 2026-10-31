@@ -177,6 +177,16 @@ jest.mock("@/lib/execution/admit", () => ({
     runWithExecutionLeaseMock(...args),
 }))
 
+// Each member turn opens a host-local run record (ADR-0243); the hook suite stays
+// below the acting-authority layer, which its own suite covers.
+const startToolExecutionRunMock = jest.fn(async (sessionId: string) => ({ id: `run:${sessionId}` }))
+const finishToolExecutionRunMock = jest.fn(async () => undefined)
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: (sessionId: string) => startToolExecutionRunMock(sessionId),
+  finishToolExecutionRun: () => finishToolExecutionRunMock(),
+}))
+
 const acquireChatLeaseMock = jest.fn().mockResolvedValue(undefined)
 const releaseChatLeaseMock = jest.fn()
 jest.mock("@/lib/execution/chat-lease", () => ({

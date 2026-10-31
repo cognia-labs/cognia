@@ -30,6 +30,11 @@ import { acquireChatLease, releaseChatLease } from "@/lib/execution/chat-lease"
 import { recordChatToolApprovalDecision } from "@/lib/policy/action-review/chat-tool-channel"
 import { pendingRecoveryPhase } from "@/lib/usage/compaction-metrics"
 import type { RoomRunnerDeps } from "./runner-deps"
+import {
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  LOCAL_PERSON_RUN,
+} from "@/lib/execution/acting-authority"
 
 export interface ProductionRoomDepsOptions {
   /** Debounce for the streaming Dexie write. Defaults to 250ms, 0 under test. */
@@ -66,6 +71,9 @@ export function createProductionRoomDeps(opts: ProductionRoomDepsOptions = {}): 
       },
     },
     execution: {
+      startMemberRun: async (sessionId) =>
+        (await startToolExecutionRun(sessionId, { localAuthorization: LOCAL_PERSON_RUN })).id,
+      finishMemberRun: finishToolExecutionRun,
       isAtCapacity: (kind, sessionId) => getExecutionBroker().isAtCapacity(kind, sessionId),
       runWithExecutionLease: (request, run) => runWithExecutionLease(request as never, run),
       releaseChatLease,

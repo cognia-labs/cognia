@@ -6,8 +6,22 @@ const mockTeamGet = jest.fn()
 const mockTeamRunGet = jest.fn()
 const mockTeamContext = jest.fn()
 jest.mock("@/lib/claude/agents/dispatch-context-registry", () => ({
+  ...jest.requireActual("@/lib/claude/agents/dispatch-context-registry"),
   getTeamDispatchContext: (...args: unknown[]) => mockTeamContext(...args),
 }))
+const mockListRuns = jest.fn()
+jest.mock("@/lib/db/execution-runs", () => ({
+  getExecutionRun: (id: string) => mockRunGet(id),
+  listExecutionRuns: (...args: unknown[]) => mockListRuns(...args),
+}))
+const mockDb = {
+  sessions: { get: (...a: unknown[]) => mockSessionGet(...a) },
+  projects: { get: (...a: unknown[]) => mockProjectGet(...a) },
+  executionRuns: { get: (...a: unknown[]) => mockRunGet(...a) },
+  agentTeams: { get: (...a: unknown[]) => mockTeamGet(...a) },
+  agentTeamRuns: { get: (...a: unknown[]) => mockTeamRunGet(...a) },
+  connectorInboundJobs: { where: () => ({ equals: () => ({ toArray: () => mockJobs() }) }) },
+}
 jest.mock("@/lib/db/schema", () => ({
   getDb: jest.fn(() => ({
     sessions: { get: (...a: unknown[]) => mockSessionGet(...a) },
@@ -54,12 +68,32 @@ import {
 
 beforeEach(() => {
   jest.clearAllMocks()
+  jest.mocked(getDb).mockReturnValue(mockDb as never)
+  mockListRuns.mockResolvedValue([])
   mockTeamContext.mockReturnValue(undefined)
   __clearAllSubagentApprovalRoutesForTesting()
   mockGetAdapterInstance.mockResolvedValue(undefined)
   mockJobs.mockResolvedValue([])
   mockRunGet.mockResolvedValue({ sessionId: "s1" })
 })
+
+function localRunForSession() {
+  mockListRuns.mockImplementation(async ({ sessionId }) => [
+    {
+      id: "local-run",
+      sessionId,
+      status: "running",
+      actingIdentity: {
+        schemaVersion: 1,
+        trigger: "local",
+        authorizingPrincipal: { kind: "local-person" },
+        requesters: [],
+        authorityRevision: 0,
+        lane: "legacy",
+      },
+    },
+  ])
+}
 
 describe("acting IM senders", () => {
   const binding = { platform: "lark", adapterId: "a1", conversationKey: "lark:a1:oc_1" }
@@ -393,6 +427,7 @@ describe("resolveBuiltInSkillContext", () => {
   })
 
   it("keeps a child of a verified local root local", async () => {
+    localRunForSession()
     mockSessionGet.mockImplementation(async (id) =>
       id === "child" ? { parentSessionId: "root", kind: "subagent" } : { id: "root" }
     )
@@ -406,6 +441,7 @@ describe("resolveBuiltInSkillContext", () => {
   it.each(["desktop", "background-child"])(
     "allows the personal token through a real local root: %s",
     async (sessionId) => {
+      localRunForSession()
       mockSessionGet.mockImplementation(async (id) =>
         id === "background-child"
           ? { id, kind: "subagent", parentSessionId: "desktop", visibility: "embedded" }
@@ -509,7 +545,9 @@ describe("resolveBuiltInSkillContext", () => {
   it.each([{ sessionId: "missing" }, { triggeredFrom: { sessionId: "missing" } }])(
     "refuses a team run naming a missing session: %j",
     async (executionConstraints) => {
-      mockTeamContext.mockReturnValue({ teamId: "team", runId: "run" })
+      mockTeamContext.mockImplementation((id: string) =>
+        id === "teammate" ? { teamId: "team", runId: "run" } : undefined
+      )
       mockSessionGet.mockImplementation(async (id) =>
         id === "teammate" ? { id, kind: "team" } : undefined
       )
@@ -705,6 +743,7 @@ describe("resolveBuiltInSkillContext", () => {
 
 // A persisted desktop team root proves the same local authority as a direct chat.
 it("allows a local team member to use the personal lane through its persisted root", async () => {
+  localRunForSession()
   mockSessionGet.mockImplementation(async (id) =>
     id === "local-team" ? { id, kind: "team" } : undefined
   )
@@ -712,4 +751,40 @@ it("allows a local team member to use the personal lane through its persisted ro
   const context = await resolveBuiltInSkillContext(subSessionId("local-team", "member", "turn"))
   expect(context.personalLane).toBe("local-session")
   await expect(assertLarkActingIdentity("a1", context)).resolves.toBeUndefined()
+})
+
+describe("row-less middle lineage", () => {
+  const binding = { platform: "lark", adapterId: "a1", conversationKey: "lark:a1:oc_1" }
+  it.each(["root::char::member::turn", "cleaned-middle"])(
+    "resolves a grandchild through %s to the durable root",
+    async (middle) => {
+      mockSessionGet.mockImplementation(async (id: string) =>
+        id === "root" ? { id, platformBinding: binding } : undefined
+      )
+      registerSubagentApprovalRoute("grandchild", {
+        parentSessionId: middle,
+        rootSessionId: "root",
+        subagentId: "worker",
+        runId: "child-run",
+        backgrounded: true,
+      })
+      expect((await resolveBuiltInSkillContext("grandchild")).imBinding).toEqual(binding)
+      mockSessionGet.mockResolvedValue(undefined)
+      await expect(resolveBuiltInSkillContext("grandchild")).rejects.toThrow("parent missing")
+    }
+  )
+
+  it("refuses an approval root that conflicts with decoded ancestry", async () => {
+    mockSessionGet.mockImplementation(async (id: string) =>
+      ["root", "other"].includes(id) ? { id, platformBinding: binding } : undefined
+    )
+    registerSubagentApprovalRoute("grandchild", {
+      parentSessionId: "other::char::member::turn",
+      rootSessionId: "root",
+      subagentId: "worker",
+      runId: "child-run",
+      backgrounded: false,
+    })
+    await expect(resolveBuiltInSkillContext("grandchild")).rejects.toThrow("parent ambiguous")
+  })
 })

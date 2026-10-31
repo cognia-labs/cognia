@@ -122,6 +122,13 @@ function plan(overrides: Partial<AgentPlan> = {}): AgentPlan {
 }
 
 describe("agent state execution bridge", () => {
+  it("does not authorize a local person from an unbound goal session", async () => {
+    await syncGoalExecutionRun(goal(), { ...session(), platformBinding: undefined })
+    expect(
+      (await getDb().executionRuns.get(agentStateExecutionRunId("goal", "goal-1")))?.actingIdentity
+        ?.trigger
+    ).toBe("external-event")
+  })
   afterEach(() => __resetAgentStateExecutionBridgeForTesting())
 
   beforeEach(async () => {

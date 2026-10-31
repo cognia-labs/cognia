@@ -5,6 +5,10 @@
  */
 
 import "fake-indexeddb/auto"
+import ts from "typescript"
+import { createSlackRunPresentationDriver } from "./run-presentation/slack-driver"
+import { parseSlackInteractivePayload } from "./adapters/slack/parse"
+import type { RunProjectionSnapshot } from "@/types/execution/run"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import type { AdapterInstanceRow } from "@/lib/db/connector-types"
 import type {
@@ -16,9 +20,111 @@ import {
   resolveLarkCallbackConversation,
   normalizeRequestedAction,
   notifyCallbackDenied,
+  isHostRunControlCard,
 } from "./callback-authorization"
 
 const T0 = 1_753_000_000_000
+
+it("requires a host message, adapter and enabled binding for run controls", async () => {
+  const callback = {
+    adapterId: "a",
+    conversationKey: "lark:a:chat",
+    originatingMessageId: "message",
+  } as ConnectorCallbackEvent
+  expect(await isHostRunControlCard(callback, "run")).toBe(false)
+  await getDb().executionRunBindings.put({
+    id: "unpublished",
+    runId: "run",
+    adapterId: "a",
+    conversationKey: "lark:a:chat",
+    status: "active",
+    deliveryMode: "native",
+    createdAt: 1,
+    updatedAt: 1,
+  } as never)
+  expect(await isHostRunControlCard(callback, "run")).toBe(false)
+  await getDb().executionRunBindings.put({
+    id: "host-card",
+    runId: "run",
+    adapterId: "a",
+    conversationKey: "lark:a:chat",
+    platformMessageId: "message",
+    lastProjectedRevision: 7,
+    status: "active",
+    deliveryMode: "native",
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  expect(await isHostRunControlCard(callback, "run")).toBe(true)
+  expect(await isHostRunControlCard({ ...callback, adapterId: "other" }, "run")).toBe(false)
+  expect(
+    await isHostRunControlCard({ ...callback, originatingMessageId: "model-card" }, "run")
+  ).toBe(false)
+  await getDb().executionRunBindings.update("host-card", { status: "disabled" })
+  expect(await isHostRunControlCard(callback, "run")).toBe(false)
+})
+
+it("matches a host Slack driver's message reference to the real interactive callback codec", async () => {
+  const driver = createSlackRunPresentationDriver(async () => ({ ok: true, ts: "123.4" }))
+  const ref = await driver.open(
+    {
+      adapterId: "slack-1",
+      conversationKey: "slack:slack-1:C1",
+      sourceMessageId: "111.2",
+      deliveryTarget: {
+        address: {
+          platform: "slack",
+          adapterId: "slack-1",
+          conversationKey: "slack:slack-1:C1",
+          scopeKind: "thread",
+          containerId: "C1",
+        },
+        sourceMessageId: "111.2",
+      },
+    } as never,
+    {
+      runId: "run",
+      kind: "agent-turn",
+      title: "Chat",
+      status: "running",
+      revision: 1,
+      startedAt: 1,
+      updatedAt: 1,
+      progress: { completed: 0, total: 0, trustworthy: false },
+      activeSteps: [],
+      recentSteps: [],
+      pendingSteps: [],
+      pendingStepCount: 0,
+      elapsedMs: 0,
+      artifacts: [],
+      allowedActions: ["stop"],
+    } as RunProjectionSnapshot
+  )
+  await getDb().executionRunBindings.put({
+    id: "slack-card",
+    runId: "run",
+    adapterId: "slack-1",
+    conversationKey: "slack:slack-1:C1",
+    platformMessageId: ref.platformMessageId,
+    status: "active",
+    deliveryMode: "native",
+    createdAt: 1,
+    updatedAt: 1,
+  } as never)
+  const callback = parseSlackInteractivePayload("slack-1", "bot", {
+    type: "block_actions",
+    user: { id: "person" },
+    channel: { id: "C1" },
+    container: { message_ts: "123.4", channel_id: "C1" },
+    actions: [{ action_id: "control", type: "button", value: "stop" }],
+  })!
+  expect(ref.platformMessageId).toBe("C1:123.4")
+  expect(callback.originatingMessageId).toBe("123.4")
+  expect(await isHostRunControlCard(callback, "run")).toBe(true)
+  expect(await isHostRunControlCard({ ...callback, originatingMessageId: "456.7" }, "run")).toBe(
+    false
+  )
+})
 
 function adapterRow(settings: Record<string, unknown> = {}): AdapterInstanceRow {
   return {
@@ -429,8 +535,8 @@ describe("high-privilege binding writers", () => {
     { kind: "skill_invoke", file: "lib/skills/built-in/dispatcher.ts" },
     { kind: "wf_approve", file: "lib/connectors/hitl/workflow-run-approval.ts" },
     { kind: "wf_cancel", file: "lib/connectors/hitl/workflow-run-approval.ts" },
-    { kind: "wf_fanout_approve", file: "plugins/workflow-ai/src/tools/run-by-name-tools.ts" },
-    { kind: "wf_fanout_cancel", file: "plugins/workflow-ai/src/tools/run-by-name-tools.ts" },
+    { kind: "wf_fanout_approve", file: "lib/plugin/api/workflow-author-api.ts" },
+    { kind: "wf_fanout_cancel", file: "lib/plugin/api/workflow-author-api.ts" },
   ]
 
   it.each(CONSUME_ONCE_SOURCES)(
@@ -440,27 +546,42 @@ describe("high-privilege binding writers", () => {
       const path = await import("node:path")
       const source = await fs.readFile(path.join(process.cwd(), file), "utf8")
 
-      // The `kind: "…"` literal and an `actorScope` must both appear in the
-      // same binding-record argument object. Call sites spell the function
-      // either directly or through an injected `recordBinding` dep.
-      if (file.endsWith("workflow-run-approval.ts")) {
-        expect(source).toContain(`"${kind}"`)
-        const start = source.indexOf("recordBinding({")
-        expect(start).toBeGreaterThan(-1)
-        const object = source.slice(start, source.indexOf("})", start))
-        expect(object).toContain("kind,")
-        expect(object).toContain("actorScope")
-        return
+      // Parse complete argument objects: nested execution snapshots can contain
+      // `})` before actorScope, and loop-based writers bind kind dynamically.
+      const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
+      const bindings: ts.ObjectLiteralExpression[] = []
+      const dynamicKind =
+        file.endsWith("workflow-run-approval.ts") || file.endsWith("workflow-author-api.ts")
+      expect(source).toContain(`"${kind}"`)
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          ["recordCallbackBinding", "recordBinding"].includes(node.expression.text)
+        ) {
+          const argument = node.arguments[0]
+          if (argument && ts.isObjectLiteralExpression(argument)) {
+            const kindProperty = argument.properties.find(
+              (property) => property.name?.getText(ast) === "kind"
+            )
+            if (
+              kindProperty &&
+              (dynamicKind ||
+                (ts.isPropertyAssignment(kindProperty) &&
+                  ts.isStringLiteral(kindProperty.initializer) &&
+                  kindProperty.initializer.text === kind))
+            )
+              bindings.push(argument)
+          }
+        }
+        ts.forEachChild(node, visit)
       }
-      const kindIndex = source.indexOf(`kind: "${kind}"`)
-      expect(kindIndex).toBeGreaterThan(-1)
-      const objectEnd = source.indexOf("})", kindIndex)
-      const objectStart = Math.max(
-        source.lastIndexOf("recordCallbackBinding({", kindIndex),
-        source.lastIndexOf("recordBinding({", kindIndex)
-      )
-      expect(objectStart).toBeGreaterThan(-1)
-      expect(source.slice(objectStart, objectEnd)).toContain("actorScope")
+      visit(ast)
+      expect(bindings.length).toBeGreaterThan(0)
+      for (const object of bindings)
+        expect(
+          object.properties.some((property) => property.name?.getText(ast) === "actorScope")
+        ).toBe(true)
     }
   )
 

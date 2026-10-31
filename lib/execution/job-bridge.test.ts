@@ -1,13 +1,10 @@
 /** @jest-environment jsdom */
-import {
-  registerDispatchContext,
-  clearDispatchContext,
-} from "@/lib/claude/agents/dispatch-context-registry"
 import { getDb } from "@/lib/db/schema"
 import { getExecutionRun, listExecutionRunEvents } from "@/lib/db/execution-runs"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 import type { BackgroundTaskJournalRecord } from "@/lib/background-tasks/registry-core"
 import { jobExecutionRunId, syncJobExecutionRun } from "./job-bridge"
+import { startToolExecutionRun, finishToolExecutionRun, LOCAL_PERSON_RUN } from "./acting-authority"
 
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
@@ -32,6 +29,43 @@ function record(overrides: Partial<BackgroundTaskJournalRecord> = {}): Backgroun
 }
 
 const eventTypes = async () => (await listExecutionRunEvents(RUN_ID)).map((event) => event.type)
+
+it("projects the pinned finished parent before dispatch without borrowing a new local turn", async () => {
+  await startToolExecutionRun("sess-1", { runId: "original-automated" })
+  await finishToolExecutionRun("original-automated")
+  await startToolExecutionRun("sess-1", {
+    runId: "new-local",
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  try {
+    await syncJobExecutionRun({ ...record(), parentExecutionRunId: "original-automated" })
+    expect(await getExecutionRun(RUN_ID)).toMatchObject({
+      parentRunId: "original-automated",
+      actingIdentity: { trigger: "external-event", rootRunId: "original-automated" },
+    })
+  } finally {
+    await finishToolExecutionRun("new-local")
+  }
+})
+
+it.each([undefined, "missing-parent"])(
+  "does not borrow a local run when the saved parent is %s",
+  async (parentExecutionRunId) => {
+    await startToolExecutionRun("sess-1", {
+      runId: "new-local",
+      localAuthorization: LOCAL_PERSON_RUN,
+    })
+    try {
+      await syncJobExecutionRun({ ...record(), parentExecutionRunId })
+      const child = await getExecutionRun(RUN_ID)
+      expect(child?.parentRunId).toBeUndefined()
+      expect(child?.actingIdentity?.authorizingPrincipal).toBeUndefined()
+      expect(child?.actingIdentity?.trigger).toBe("child")
+    } finally {
+      await finishToolExecutionRun("new-local")
+    }
+  }
+)
 
 it("projects a running background task as a job run", async () => {
   await syncJobExecutionRun(record())
@@ -123,13 +157,14 @@ it("offers only open_details once the task has settled", async () => {
   expect(run?.latestSnapshot?.allowedActions).toEqual(["open_details"])
 })
 
-it("inherits from its active caller and never from a newer projected sibling", async () => {
+it("inherits from its pinned caller and never from a newer projected sibling", async () => {
   const actingIdentity = {
     schemaVersion: 1 as const,
     rootRunId: "parent",
     lane: "legacy" as const,
     trigger: "local" as const,
     requesters: [{ kind: "local-person" as const }],
+    authorizingPrincipal: { kind: "local-person" as const },
     authorityRevision: 2,
   }
   const authority = {
@@ -137,16 +172,8 @@ it("inherits from its active caller and never from a newer projected sibling", a
     permissionMode: "plan" as const,
     pools: { rootRunId: "parent", costUsd: 1 },
   }
-  await getDb().executionRuns.add({
-    id: "parent",
-    kind: "agent-turn",
-    sourceId: "parent",
-    sessionId: "sess-1",
-    title: "Caller",
-    status: "running",
-    currentRevision: 0,
-    startedAt: 1,
-    updatedAt: 1,
+  await startToolExecutionRun("sess-1", { runId: "parent", localAuthorization: LOCAL_PERSON_RUN })
+  await getDb().executionRuns.update("parent", {
     actingIdentity,
     authority,
   })
@@ -161,12 +188,13 @@ it("inherits from its active caller and never from a newer projected sibling", a
     startedAt: 2,
     updatedAt: 2,
   })
-  await syncJobExecutionRun(record())
+  await syncJobExecutionRun({ ...record(), parentExecutionRunId: "parent" })
   expect((await getExecutionRun(RUN_ID))?.actingIdentity).toEqual(actingIdentity)
   expect((await getExecutionRun(RUN_ID))?.authority).toEqual(authority)
+  await finishToolExecutionRun("parent")
 })
 
-it("inherits a nested foreground job's parent through the existing live dispatch context", async () => {
+it("inherits a nested foreground job's pinned parent without a live dispatch context", async () => {
   const identity = {
     schemaVersion: 1 as const,
     rootRunId: jobExecutionRunId("parent-job"),
@@ -189,17 +217,10 @@ it("inherits a nested foreground job's parent through the existing live dispatch
     actingIdentity: identity,
     authority,
   })
-  registerDispatchContext("ephemeral-parent", {
-    depth: 1,
-    maxDepth: 3,
-    parentChain: ["parent"],
-    selfRunId: "parent-job",
+  await syncJobExecutionRun({
+    ...record({ sessionId: "ephemeral-parent", mode: "foreground" }),
+    parentExecutionRunId: jobExecutionRunId("parent-job"),
   })
-  try {
-    await syncJobExecutionRun(record({ sessionId: "ephemeral-parent", mode: "foreground" }))
-    expect((await getExecutionRun(RUN_ID))?.actingIdentity).toEqual(identity)
-    expect((await getExecutionRun(RUN_ID))?.authority).toEqual(authority)
-  } finally {
-    clearDispatchContext("ephemeral-parent")
-  }
+  expect((await getExecutionRun(RUN_ID))?.actingIdentity).toEqual(identity)
+  expect((await getExecutionRun(RUN_ID))?.authority).toEqual(authority)
 })

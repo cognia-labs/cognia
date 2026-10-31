@@ -78,6 +78,16 @@ jest.mock("@/lib/claude/sdk-subagent-bridge", () => ({
 }))
 
 import { createProductionRoomDeps } from "./production-deps"
+import {
+  startToolExecutionRun,
+  finishToolExecutionRun,
+  LOCAL_PERSON_RUN,
+} from "@/lib/execution/acting-authority"
+jest.mock("@/lib/execution/acting-authority", () => ({
+  ...jest.requireActual("@/lib/execution/acting-authority"),
+  startToolExecutionRun: jest.fn(async () => ({ id: "member-run" })),
+  finishToolExecutionRun: jest.fn(async () => undefined),
+}))
 
 beforeEach(() => {
   jest.clearAllMocks()
@@ -117,6 +127,12 @@ it("binds the Dexie readers and writers the hook always used", async () => {
 
 it("routes admission through the broker, the lease helper and the slot key", async () => {
   const deps = createProductionRoomDeps()
+  expect(await deps.execution.startMemberRun?.("member")).toBe("member-run")
+  expect(startToolExecutionRun).toHaveBeenCalledWith("member", {
+    localAuthorization: LOCAL_PERSON_RUN,
+  })
+  await deps.execution.finishMemberRun?.("member-run", false)
+  expect(finishToolExecutionRun).toHaveBeenCalledWith("member-run", false)
   expect(deps.execution.isAtCapacity("ai-turn", "room-1")).toBe(true)
   expect(isAtCapacity).toHaveBeenCalledWith("ai-turn", "room-1")
   const request = { kind: "team", label: "l", sessionId: "room-1", exempt: true } as const

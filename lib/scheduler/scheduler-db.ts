@@ -1,3 +1,4 @@
+import { sanitizeScheduledOutboundPayload } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
 /**
  * Scheduler persistence.
  *
@@ -629,7 +630,10 @@ function serializeTask(task: ScheduledTask): DBScheduledTask {
       runAt: task.trigger.runAt?.toISOString(),
     }),
     eventType: task.trigger.type === "event" ? (task.trigger.eventType ?? "") : "",
-    payload: task.payload !== undefined ? JSON.stringify(task.payload) : undefined,
+    payload:
+      task.payload !== undefined
+        ? JSON.stringify(sanitizeScheduledOutboundPayload(task.payload))
+        : undefined,
     config: JSON.stringify(task.config),
     notification: JSON.stringify(task.notification),
     createdBy: JSON.stringify(task.createdBy ?? { kind: "user" }),
@@ -808,7 +812,9 @@ function serializeExecution(execution: TaskExecution): DBTaskExecution {
     taskName: execution.taskName,
     taskType: execution.taskType,
     status: execution.status,
-    input: execution.input ? JSON.stringify(execution.input) : undefined,
+    input: execution.input
+      ? JSON.stringify(sanitizeScheduledOutboundPayload(execution.input))
+      : undefined,
     output: execution.output ? JSON.stringify(execution.output) : undefined,
     error: execution.error,
     retryAttempt: execution.retryAttempt,

@@ -870,7 +870,7 @@ describe("runTeam", () => {
       id: "t1",
       status: "completed",
     })
-    const res = await runTeam("t1", { ultracode: true })
+    const res = await runTeam("t1", { ultracode: true, origin: "ui" as never })
     expect(mockTeam.start).toHaveBeenCalledWith("t1", { origin: "plugin", ultracode: true })
     expect(res).toEqual({ teamId: "t1", status: "completed" })
   })

@@ -127,7 +127,7 @@ export async function acceptDelegation(
             ? "external-event"
             : input.session?.platformBinding
               ? "requester"
-              : "local",
+              : "external-event",
         {
           runId,
           ...(input.session?.platformBinding && input.initiator?.remoteUserId

@@ -52,6 +52,7 @@ it("uses the existing local launcher with an interactive origin and the gesture 
   })
   await expect(attempt.dispatch()).resolves.toEqual(accepted)
   expect(local).toHaveBeenCalledWith({
+    localAuthorization: expect.any(Symbol),
     squadId: "a",
     runId: attempt.launchId,
     goal: "Review",

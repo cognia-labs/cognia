@@ -72,6 +72,29 @@ describe("buildWorkflowHoldSummary", () => {
 })
 
 describe("holdWorkflowDispatchForApproval", () => {
+  it("preserves the persisted topic anchor on the delivered card", async () => {
+    const args = input({
+      deliveryTarget: {
+        address: {
+          platform: "telegram",
+          adapterId: "tg",
+          conversationKey: "telegram:tg:chat:123",
+          scopeKind: "thread",
+          containerId: "chat",
+          topicId: "123",
+        },
+        conversationRef: { platform: "telegram", adapterId: "tg", chatId: "chat" },
+        refreshedAt: 1,
+      },
+    })
+    await holdWorkflowDispatchForApproval(args)
+    expect(args.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({ deliveryTarget: args.deliveryTarget, threadId: "123" }),
+      })
+    )
+  })
+
   it("looks up the card description from the pinned version, not the editable workflow", async () => {
     const args = input()
     await holdWorkflowDispatchForApproval(args)

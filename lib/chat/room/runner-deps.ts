@@ -70,6 +70,8 @@ export interface RoomRunnerDb {
 }
 
 export interface RoomRunnerExecution {
+  startMemberRun?: (sessionId: string) => Promise<string>
+  finishMemberRun?: (runId: string, failed: boolean) => Promise<void>
   isAtCapacity: (kind: "ai-turn", sessionId: string) => boolean
   runWithExecutionLease: <T>(
     request: {

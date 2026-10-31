@@ -7,6 +7,9 @@ import "fake-indexeddb/auto"
 import { applyBackupPackage } from "./apply-package"
 import { getDb, whenSeeded, __resetDbForTesting } from "@/lib/db/schema"
 import type { BackupPackageV3, BackupPayloadV3 } from "./types"
+import { buildBackupPackage } from "./build-package"
+import { resolveBuiltInSkillSessionBinding } from "@/lib/skills/built-in/context"
+import { assertLarkActingIdentity } from "@/lib/skills/built-in/lark/acting-identity"
 
 function pkg(payload: BackupPayloadV3): BackupPackageV3 {
   return {
@@ -39,6 +42,76 @@ beforeEach(async () => {
 })
 
 describe("applyBackupPackage — merge strategies", () => {
+  it.each(["overwrite", "duplicate"] as const)(
+    "keeps a restored plugin root out of the personal lane (%s)",
+    async (mergeStrategy) => {
+      const db = getDb()
+      await db.sessions.put({
+        id: "plugin-root",
+        title: "Custom title",
+        kind: "direct",
+        programmaticCreator: "plugin:example",
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      const backup = await buildBackupPackage({ includeSessions: true, includeApiKey: false })
+      expect(
+        backup.payload.sessions?.find((row) => row.id === "plugin-root")?.programmaticCreator
+      ).toBe("plugin:example")
+      if (mergeStrategy === "overwrite") await db.sessions.delete("plugin-root")
+      await applyBackupPackage(backup, {
+        mergeStrategy,
+        includeSessions: true,
+        includeApiKey: false,
+      })
+      const rows = await db.sessions.toArray()
+      expect(rows).toHaveLength(mergeStrategy === "duplicate" ? 2 : 1)
+      for (const restored of rows) {
+        expect(restored.programmaticCreator).toBe("plugin:example")
+        expect((await resolveBuiltInSkillSessionBinding(restored.id)).personalLane).toBe(
+          "unverified"
+        )
+        await expect(
+          assertLarkActingIdentity("lark", { sessionId: restored.id })
+        ).rejects.toMatchObject({ name: "LarkActingIdentityError" })
+      }
+    }
+  )
+
+  it.each(["overwrite", "duplicate"] as const)(
+    "does not erase known provenance with an older backup (%s)",
+    async (mergeStrategy) => {
+      await getDb().sessions.put({
+        id: "plugin-root",
+        title: "Custom title",
+        kind: "direct",
+        programmaticCreator: "plugin:example",
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      await applyBackupPackage(
+        pkg({
+          sessions: [
+            {
+              id: "plugin-root",
+              title: "Older title",
+              kind: "direct",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+        }),
+        { mergeStrategy, includeSessions: true, includeApiKey: false }
+      )
+      const rows = await getDb().sessions.toArray()
+      expect(rows).toHaveLength(mergeStrategy === "duplicate" ? 2 : 1)
+      for (const row of rows) {
+        expect(row.programmaticCreator).toBe("plugin:example")
+        expect((await resolveBuiltInSkillSessionBinding(row.id)).personalLane).toBe("unverified")
+      }
+    }
+  )
+
   it("restores canonical comments without degrading non-canvas resources", async () => {
     await applyBackupPackage(
       pkg({
