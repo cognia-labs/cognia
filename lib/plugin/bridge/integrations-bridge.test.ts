@@ -20,6 +20,14 @@ import {
   approveIntegrationActionJob,
   executeIntegrationAction,
 } from "@/lib/integrations/action-runner"
+import { getIntegrationAccount } from "@/lib/db/integrations"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import { authorizeExternalCapability } from "@/lib/external-services/grants"
+
+jest.mock("@/lib/db/integrations", () => ({
+  getIntegrationAccount: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({ getConnectionManager: jest.fn() }))
 
 jest.mock("@/lib/integrations/action-runner", () => ({
   executeIntegrationAction: jest.fn(),
@@ -58,6 +66,32 @@ describe("Integration manifest bridge", () => {
     __resetIntegrationRegistryForTesting()
     __resetRegistryForTesting()
     __resetPluginCatalogForTesting()
+    jest.mocked(getIntegrationAccount).mockResolvedValue(undefined)
+  })
+
+  it("passes consumer identity and current connection revision to bridge authorization", async () => {
+    const tool = await chatAction("read", "supported")
+    jest.mocked(getIntegrationAccount).mockResolvedValue({ connectionId: "auth-ref" } as never)
+    const getConnection = jest.fn(async () => ({ revision: 3, ownerPluginId: "provider-owner" }))
+    jest.mocked(getConnectionManager).mockReturnValue({ getConnection } as never)
+    await tool.execute({ accountId: "acct-1" }, { sessionId: "session" } as never)
+    expect(getConnection).toHaveBeenCalledWith("auth-ref")
+    expect(authorizeExternalCapability).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          consumerPluginId: "example-delivery",
+          connectionRevision: 3,
+        }),
+      })
+    )
+    getConnection.mockResolvedValue({ revision: 3, ownerPluginId: "example-delivery" })
+    jest.mocked(authorizeExternalCapability).mockClear()
+    await tool.execute({ accountId: "acct-1" }, { sessionId: "session" } as never)
+    // The provider owner skips the consumer grant, never the write confirmation.
+    const ownerCall = jest.mocked(authorizeExternalCapability).mock.calls.at(-1)?.[0]
+    expect(ownerCall?.context).not.toHaveProperty("consumerPluginId")
+    expect(ownerCall?.context).not.toHaveProperty("connectionRevision")
+    await unregisterIntegrationsForPlugin("example-delivery")
   })
 
   it("resolves handlers and auto-materializes typed Workflow action nodes", async () => {

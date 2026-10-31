@@ -11,15 +11,25 @@ export interface CapabilityAuthorizationContext {
   accountId?: string
   workflowId?: string
   sessionId?: string
+  consumerPluginId?: string
+  connectionRevision?: number
   resourceScopes?: Array<{ kind: string; value: string }>
   now?: string
 }
 
 export type CapabilityAuthorizationDecision =
-  | { decision: "allow"; reason: "read-default" | "scoped-grant"; grantId?: string }
+  | {
+      decision: "allow"
+      reason: "read-default" | "scoped-grant"
+      grantId?: string
+    }
   | {
       decision: "ask"
-      reason: "unknown-capability" | "write-confirmation" | "destructive-confirmation"
+      reason:
+        | "unknown-capability"
+        | "write-confirmation"
+        | "destructive-confirmation"
+        | "consumer-grant-required"
     }
   | {
       decision: "deny"
@@ -50,10 +60,28 @@ export function grantCoversOperation(
   grant: CapabilityGrant,
   capability: Pick<ExternalCapability, "capabilityId" | "operationId" | "risk">,
   connection: Pick<ServiceConnection, "id" | "providerFingerprint">,
-  context: Pick<CapabilityAuthorizationContext, "accountId" | "workflowId" | "sessionId" | "now">
+  context: Pick<
+    CapabilityAuthorizationContext,
+    "accountId" | "workflowId" | "sessionId" | "now" | "consumerPluginId" | "connectionRevision"
+  >
 ): boolean {
   if (grant.connectionId !== connection.id) return false
   if (grant.providerFingerprint !== connection.providerFingerprint) return false
+  if (grant.consumerPluginId !== undefined && grant.consumerPluginId !== context.consumerPluginId)
+    return false
+  if (
+    grant.connectionRevision !== undefined &&
+    grant.connectionRevision !== context.connectionRevision
+  )
+    return false
+  // Connection-backed access is always bound to one consumer at one exact revision.
+  if (
+    context.connectionRevision !== undefined &&
+    (!context.consumerPluginId ||
+      grant.consumerPluginId !== context.consumerPluginId ||
+      grant.connectionRevision !== context.connectionRevision)
+  )
+    return false
   const now = Date.parse(context.now ?? new Date().toISOString())
   if (grant.expiresAt && Date.parse(grant.expiresAt) <= now) return false
   const operationId = capability.operationId ?? capability.capabilityId
@@ -108,13 +136,16 @@ export function authorizeExternalCapability(input: {
   if (context.surface && !connection.enabledSurfaces.includes(context.surface)) {
     return { decision: "deny", reason: "surface-disabled" }
   }
-  if (capability.risk === "read") return { decision: "allow", reason: "read-default" }
+  if (capability.risk === "read" && context.connectionRevision === undefined)
+    return { decision: "allow", reason: "read-default" }
 
   const matchingGrant = grants.find((grant) => grantMatches(grant, capability, connection, context))
   if (matchingGrant) {
     return { decision: "allow", reason: "scoped-grant", grantId: matchingGrant.id }
   }
   if (!context.interactive) return { decision: "deny", reason: "grant-required" }
+  if (context.connectionRevision !== undefined)
+    return { decision: "ask", reason: "consumer-grant-required" }
   return capability.risk === "destructive"
     ? { decision: "ask", reason: "destructive-confirmation" }
     : { decision: "ask", reason: "write-confirmation" }

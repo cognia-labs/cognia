@@ -54,7 +54,7 @@ it("uses the CLI backend override and restores platform defaults with null", asy
   }))
   const lock = jest.fn((name: string, task: (assertHeld: () => void) => Promise<unknown>) =>
     withNamedLock(name, task, { mode: "in-process" })
-  ) as jest.MockedFunction<typeof withAuthLock>
+  ) as unknown as jest.MockedFunction<typeof withAuthLock>
   setHostAuthBackend({ storeFor, lock })
   try {
     const secrets = new HostAuthSecrets("override", { native: false })

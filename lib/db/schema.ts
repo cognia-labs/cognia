@@ -436,7 +436,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 250
+export const CURRENT_SCHEMA_VERSION = 251
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1096,6 +1096,8 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   ...ACTION_REVIEW_AUTH_SCHEMA,
   authConnections: "&id, &identityKey, lineageId, providerId, status",
   authAttempts: "&state, expiresAt",
+  capabilityGrants:
+    "&id, connectionId, providerFingerprint, accountId, workflowId, sessionId, expiresAt, [connectionId+providerFingerprint], consumerPluginId, [connectionId+consumerPluginId]",
 }
 
 let databaseConnectionSequence = 0

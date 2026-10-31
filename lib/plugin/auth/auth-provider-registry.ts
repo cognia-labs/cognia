@@ -90,6 +90,18 @@ function writeOwners(owners: Map<string, string>): void {
   }
 }
 
+/** Persistent Host ownership wins over a live registration; null denotes a Host provider. */
+export function getAuthProviderOwner(providerId: string): string | null | undefined {
+  const owners = parseOwners(
+    ownershipStore
+      ? ownershipStore.read()
+      : typeof localStorage === "undefined"
+        ? null
+        : localStorage.getItem(OWNER_STORAGE_KEY)
+  )
+  return owners.get(providerId) ?? getProvider(providerId)?.pluginId
+}
+
 /** Host registrations bind an id in host Storage, including declarative contributions. */
 export function registerAuthenticationProvider(provider: AuthenticationProvider): () => void {
   const existing = getProvider(provider.id)

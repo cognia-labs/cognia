@@ -3,6 +3,8 @@ import { withNamedLock } from "@/lib/locks/named-lock"
 import {
   AuthConnectionManager,
   ConnectionIdentityConflict,
+  ConnectionUnavailableError,
+  ConnectionRevisionChanged,
   AUTH_REFRESH_TIMEOUT_MS,
   AUTH_REVOKE_TIMEOUT_MS,
   AuthRefreshRejected,
@@ -62,12 +64,14 @@ function fixture() {
   )
   const makeManager = (
     useManifest = false,
-    lock?: typeof import("./connection-credentials").withAuthLock
+    lock?: typeof import("./connection-credentials").withAuthLock,
+    now?: () => number
   ) =>
     new AuthConnectionManager({
       store,
       credentials,
       lock,
+      now,
       provider: (id) => providers.get(id),
       providerIdentity: useManifest
         ? undefined
@@ -99,6 +103,44 @@ function fixture() {
   providers.set(provider.id, provider)
   return { rows, tokens, provider, providers, credentials, manager: makeManager(), makeManager }
 }
+
+it("exposes Host metadata only for a connected connection with its original provider", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  expect(await f.manager.getConnection(ref)).toMatchObject({
+    id: ref,
+    ownerPluginId: "owner",
+    revision: 1,
+  })
+  expect(JSON.stringify(await f.manager.getConnection(ref))).not.toMatch(/accessToken|refreshToken/)
+  for (const status of ["needs-reauth", "provider-unavailable", "tombstoned", "revoked"] as const) {
+    f.rows.set(ref, { ...f.rows.get(ref)!, status })
+    await expect(f.manager.getConnection(ref)).rejects.toMatchObject({
+      name: "ConnectionUnavailableError",
+      reason: status,
+    })
+  }
+  f.rows.set(ref, { ...f.rows.get(ref)!, status: "connected" })
+  f.providers.clear()
+  await expect(f.manager.getConnection(ref)).rejects.toBeInstanceOf(ConnectionUnavailableError)
+  f.rows.clear()
+  await expect(f.manager.getConnection(ref)).rejects.toMatchObject({ reason: "unknown" })
+})
+
+it("fences a revision change during asynchronous provider validation", async () => {
+  const f = fixture()
+  const ref = await f.manager.createConnectionFromCredentials(f.provider, fresh)
+  const get = f.providers.get.bind(f.providers)
+  const lookup = jest.spyOn(f.providers, "get").mockImplementationOnce((id) => {
+    f.rows.set(ref, { ...f.rows.get(ref)!, revision: 2 })
+    return get(id)
+  })
+  try {
+    await expect(f.manager.getConnection(ref, 1)).rejects.toBeInstanceOf(ConnectionRevisionChanged)
+  } finally {
+    lookup.mockRestore()
+  }
+})
 
 it("two tab managers sharing storage make exactly one lineage refresh", async () => {
   const f = fixture()
@@ -258,6 +300,19 @@ it("keeps needs-reauth across temporary provider loss and disconnect is idempote
   await f.manager.disconnect(ref)
   const row = f.rows.get(ref)
   await f.manager.disconnect(ref)
+  expect(f.rows.get(ref)).toEqual(row)
+})
+
+it("keeps a repeated local disconnect's timestamp stable across different clock ticks", async () => {
+  const f = fixture()
+  let time = 1
+  const manager = f.makeManager(false, undefined, () => time)
+  const ref = await manager.createConnectionFromCredentials(f.provider, fresh)
+  time = 2
+  await manager.disconnect(ref)
+  const row = structuredClone(f.rows.get(ref))
+  time = 3
+  await manager.disconnect(ref)
   expect(f.rows.get(ref)).toEqual(row)
 })
 

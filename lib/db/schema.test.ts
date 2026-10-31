@@ -5476,12 +5476,49 @@ it("v250 adds unique Host connections and attempt expiry metadata", async () => 
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(250)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(current.authConnections.schema.idxByName.identityKey.unique).toBe(true)
     expect(Object.keys(current.authConnections.schema.idxByName)).toEqual(
       expect.arrayContaining(["lineageId", "providerId", "status"])
     )
     expect(current.authAttempts.schema.idxByName.expiresAt).toBeDefined()
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
+it("v251 indexes consumer grants and preserves legacy grants without backfill", async () => {
+  expect(CURRENT_SCHEMA_VERSION).toBe(251)
+  const name = "cognia-consumer-grants-v251-upgrade"
+  const old = new Dexie(name)
+  old.version(250).stores({
+    ...CURRENT_SCHEMA,
+    capabilityGrants:
+      "&id, connectionId, providerFingerprint, accountId, workflowId, sessionId, expiresAt, [connectionId+providerFingerprint]",
+  })
+  await old.open()
+  await old.table("capabilityGrants").put({
+    id: "legacy",
+    connectionId: "service",
+    providerFingerprint: "fp",
+    operationPatterns: ["*"],
+  })
+  old.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(251)
+    expect(current.capabilityGrants.schema.idxByName.consumerPluginId).toBeDefined()
+    expect(
+      current.capabilityGrants.schema.idxByName["[connectionId+consumerPluginId]"].keyPath
+    ).toEqual(["connectionId", "consumerPluginId"])
+    expect(await current.capabilityGrants.get("legacy")).toEqual({
+      id: "legacy",
+      connectionId: "service",
+      providerFingerprint: "fp",
+      operationPatterns: ["*"],
+    })
   } finally {
     current.close()
     await Dexie.delete(name)

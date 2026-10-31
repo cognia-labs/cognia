@@ -10,6 +10,7 @@ import {
 import {
   appendIntegrationAudit,
   bindIntegrationAccountProviderOwner,
+  bindIntegrationAccountConnection,
   cancelIntegrationActionJobRecord,
   claimIntegrationActionJob,
   createIntegrationAccount,
@@ -39,6 +40,37 @@ describe("Integration persistence", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it("creates and narrowly binds connection-backed accounts without changing legacy handles", async () => {
+    const input = {
+      integrationId: "example",
+      providerId: "oauth",
+      authSessionId: "legacy",
+      remoteAccountId: "user",
+      label: "User",
+    }
+    const legacy = await createIntegrationAccount("consumer", input)
+    expect(legacy.connectionId).toBeUndefined()
+    const connected = await createIntegrationAccount("consumer", {
+      ...input,
+      authSessionId: "connected-session",
+      remoteAccountId: "other-user",
+      connectionId: "ref-1",
+    })
+    expect((await getIntegrationAccount("consumer", connected.id))?.connectionId).toBe("ref-1")
+    await expect(bindIntegrationAccountConnection("other", legacy.id, "ref-2")).rejects.toThrow(
+      "not found"
+    )
+    await expect(bindIntegrationAccountConnection("consumer", legacy.id, " ")).rejects.toThrow(
+      "connection"
+    )
+    await bindIntegrationAccountConnection("consumer", legacy.id, "ref-2")
+    await updateIntegrationAccount("consumer", legacy.id, { connectionId: "forged" } as never)
+    expect(await getIntegrationAccount("consumer", legacy.id)).toMatchObject({
+      connectionId: "ref-2",
+      authSessionId: "legacy",
+    })
   })
 
   it.each([null, "provider-owner"])(

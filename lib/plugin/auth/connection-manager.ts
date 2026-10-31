@@ -68,6 +68,17 @@ export class ConnectionUnavailableError extends Error {
     this.name = "ConnectionUnavailableError"
   }
 }
+/** A stale response or credential resolution must never cross a connection revision. */
+export class ConnectionRevisionChanged extends Error {
+  constructor(
+    readonly connectionRef: string,
+    readonly revision: number,
+    readonly currentRevision?: number
+  ) {
+    super("Auth connection revision changed; discard the result and authorize again")
+    this.name = "ConnectionRevisionChanged"
+  }
+}
 
 export interface AuthConnectionStore {
   get: typeof getAuthConnection
@@ -193,6 +204,28 @@ export class AuthConnectionManager {
   onDidChange(listener: (metadata: AuthConnectionMetadata) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+  /** Host-only connection lookup for injection and revision fences; never exposes credentials. */
+  async getConnection(
+    ref: AuthConnectionRef,
+    expectedRevision?: number
+  ): Promise<AuthConnectionRow> {
+    const read = async () => {
+      const row = await this.store.get(ref)
+      if (expectedRevision !== undefined && row?.revision !== expectedRevision)
+        throw new ConnectionRevisionChanged(ref, expectedRevision, row?.revision)
+      if (!row) throw new ConnectionUnavailableError("unknown")
+      if (row.status !== "connected") throw new ConnectionUnavailableError(row.status)
+      return row
+    }
+    const before = await read()
+    const provider = await this.requireProvider(before)
+    // Provider ownership may await a manifest read. Re-read after that await,
+    // so a disconnect or scope change during validation cannot pass the fence.
+    const current = await read()
+    if (!sameProvider(current, before) || this.provider(current.providerId) !== provider)
+      throw new ConnectionUnavailableError("provider-unavailable")
+    return current
   }
   private async publish(row: AuthConnectionRow): Promise<void> {
     await this.store.put(row)
@@ -482,7 +515,7 @@ export class AuthConnectionManager {
             revision: row.revision + Number(!terminal(row)),
           },
           "tombstoned",
-          this.now()
+          row.status === "tombstoned" ? row.updatedAt : this.now()
         )
       )
     })
@@ -508,12 +541,11 @@ export class AuthConnectionManager {
       // Keep failed/unavailable revocations retryable, including their tokens.
       // A deliberate local-only disconnect discards its secret immediately.
       if (!legacySessionId && (revoked || !options.revoke)) await this.credentials.delete(ref)
+      const status = revoked || row.status === "revoked" ? "revoked" : "tombstoned"
+      // Cleanup/revocation stays retryable, but repeating an already-published
+      // terminal state does not change its metadata or disconnect timestamp.
       await this.publish(
-        tombstoneAuthConnection(
-          row,
-          revoked || row.status === "revoked" ? "revoked" : "tombstoned",
-          this.now()
-        )
+        tombstoneAuthConnection(row, status, row.status === status ? row.updatedAt : this.now())
       )
     })
     if (failure) throw failure

@@ -6,6 +6,8 @@ import {
   type PluginAuthProvider,
 } from "./auth-api"
 import { sanitizePluginNetworkEgress } from "./plugin-pii-gate"
+import { loggers } from "@cognia/logging"
+import { ConsumerTokenReadDenied } from "@/lib/plugin/auth/consumer-token-read-policy"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
 const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
@@ -210,6 +212,57 @@ describe("createAuthAPI", () => {
     resetPermissionGuard()
   })
   afterEach(() => __resetAuthRegistryForTesting())
+
+  it.each(["getSession", "getSessions"] as const)(
+    "transitions non-owner %s with one audit per call and one process warning",
+    async (method) => {
+      const owner = createAuthAPI("owner", allow)
+      owner.registerProvider(fakeProvider({ id: `transition-${method}` }))
+      const api = createAuthAPI(`transition-consumer-${method}`, allow)
+      const warn = jest.spyOn(loggers.plugin, "warn").mockImplementation(() => {})
+      try {
+        const result = await api[method](`transition-${method}`, [])
+        expect(method === "getSession" ? result : (result as AuthSession[])[0]).toMatchObject({
+          accessToken: "tok",
+        })
+        const audit = getPermissionGuard().getAuditLog({
+          pluginId: `transition-consumer-${method}`,
+          action: "check",
+        })
+        expect(audit).toHaveLength(1)
+        expect(JSON.stringify(audit)).not.toContain('"tok"')
+        await api[method](`transition-${method}`, [])
+        expect(warn).toHaveBeenCalledTimes(1)
+        expect(
+          getPermissionGuard().getAuditLog({
+            pluginId: `transition-consumer-${method}`,
+            action: "check",
+          })
+        ).toHaveLength(2)
+        await owner[method](`transition-${method}`, [])
+        expect(
+          getPermissionGuard().getAuditLog({ pluginId: "owner", action: "check" })
+        ).toHaveLength(0)
+      } finally {
+        warn.mockRestore()
+      }
+    }
+  )
+
+  it.each(["getSession", "getSessions"] as const)(
+    "deny policy withholds non-owner %s by throwing a typed error",
+    async (method) => {
+      const owner = createAuthAPI("owner", allow, "deny")
+      owner.registerProvider(fakeProvider())
+      await expect(
+        createAuthAPI("consumer", allow, "deny")[method]("acme", [])
+      ).rejects.toBeInstanceOf(ConsumerTokenReadDenied)
+      const result = await owner[method]("acme", [])
+      expect(method === "getSession" ? result : (result as AuthSession[])[0]).toMatchObject({
+        accessToken: "tok",
+      })
+    }
+  )
 
   describe("permission gating", () => {
     it("requires auth:consume to subscribe", () => {

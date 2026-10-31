@@ -68,6 +68,7 @@ async function projectIntegrationAccount(account: IntegrationAccount): Promise<v
       const providerFingerprint = await sha256Hex(
         JSON.stringify({
           providerId: account.providerId,
+          ...(account.connectionId !== undefined ? { connectionId: account.connectionId } : {}),
           approvedOrigins: account.approvedOrigins ?? [],
           capabilities,
         })
@@ -87,7 +88,13 @@ async function projectIntegrationAccount(account: IntegrationAccount): Promise<v
             ? "needs-auth"
             : "connected",
         providerFingerprint,
-        providerRef: { kind: "integration", accountId: account.id },
+        providerRef: {
+          kind: "integration",
+          accountId: account.id,
+          ...(account.connectionId !== undefined
+            ? { authConnectionRef: account.connectionId }
+            : {}),
+        },
         enabledSurfaces: existing?.enabledSurfaces ?? provider.surfaces,
         createdAt: existing?.createdAt ?? account.createdAt,
         updatedAt: account.updatedAt,
@@ -106,6 +113,11 @@ export async function createIntegrationAccount(
   pluginId: string,
   input: IntegrationAccountInput
 ): Promise<IntegrationAccount> {
+  if (
+    input.connectionId !== undefined &&
+    (typeof input.connectionId !== "string" || !input.connectionId.trim())
+  )
+    throw new Error("Integration account connection reference is required")
   const now = nowIso()
   const provider = getProvider(input.providerId)
   const row: IntegrationAccount = {
@@ -115,6 +127,7 @@ export async function createIntegrationAccount(
     providerId: input.providerId,
     ...(provider ? { providerOwnerPluginId: provider.pluginId } : {}),
     authSessionId: input.authSessionId,
+    ...(input.connectionId !== undefined ? { connectionId: input.connectionId } : {}),
     remoteAccountId: input.remoteAccountId,
     approvedOrigins: normalizeApprovedOrigins(input.approvedOrigins),
     label: input.label,
@@ -198,10 +211,31 @@ export async function updateIntegrationAccount(
       id: existing.id,
       pluginId: existing.pluginId,
       providerOwnerPluginId: existing.providerOwnerPluginId,
+      connectionId: existing.connectionId,
       updatedAt: nowIso(),
     }
     await db.integrationAccounts.put(updated)
     return updated
+  })
+  await projectIntegrationAccount(row)
+  return row
+}
+
+/** Host migration writer; ordinary account patches cannot change the connection binding. */
+export async function bindIntegrationAccountConnection(
+  pluginId: string,
+  accountId: string,
+  connectionId: string
+): Promise<IntegrationAccountRow> {
+  if (typeof connectionId !== "string" || !connectionId.trim())
+    throw new Error("Integration account connection reference is required")
+  const db = getDb()
+  const row = await db.transaction("rw", db.integrationAccounts, async () => {
+    const existing = await getIntegrationAccount(pluginId, accountId)
+    if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
+    const row = { ...existing, connectionId, updatedAt: nowIso() }
+    await db.integrationAccounts.put(row)
+    return row
   })
   await projectIntegrationAccount(row)
   return row

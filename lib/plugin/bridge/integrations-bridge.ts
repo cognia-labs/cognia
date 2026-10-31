@@ -27,6 +27,9 @@ import {
   extractCapabilityResourceScopes,
 } from "@/lib/external-services/grants"
 import { listCapabilityGrants, listServiceConnections } from "@/lib/db/external-services"
+import { getIntegrationAccount } from "@/lib/db/integrations"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 
 const workflowDisposers = new Map<string, Array<() => void>>()
 
@@ -69,6 +72,15 @@ async function authorizeIntegrationAction(input: {
   if (!connection) {
     return { decision: "deny", reason: "connection-unavailable" }
   }
+  const account = await getIntegrationAccount(input.pluginId, input.accountId)
+  const authConnection =
+    account?.connectionId !== undefined
+      ? await getConnectionManager().getConnection(account.connectionId as AuthConnectionRef)
+      : undefined
+  // The provider owner needs no consumer grant (ADR-0246 §3), but its writes
+  // still go through the ordinary confirmation path below.
+  const consumerConnection =
+    authConnection && authConnection.ownerPluginId !== input.pluginId ? authConnection : undefined
   const extracted = capability
     ? extractCapabilityResourceScopes(capability, input.args)
     : { ok: false as const, reason: "Unknown capability" }
@@ -81,6 +93,9 @@ async function authorizeIntegrationAction(input: {
     grants: await listCapabilityGrants(connection.id),
     context: {
       interactive: input.interactive,
+      ...(consumerConnection
+        ? { consumerPluginId: input.pluginId, connectionRevision: consumerConnection.revision }
+        : {}),
       surface: input.surface,
       accountId: input.accountId,
       sessionId: input.sessionId,

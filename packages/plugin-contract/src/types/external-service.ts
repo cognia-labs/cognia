@@ -28,7 +28,12 @@ export type ServiceConnectionStatus =
 
 export type ServiceConnectionProviderRef =
   | { kind: "mcp"; serverId: string }
-  | { kind: "integration"; accountId: string }
+  | {
+      kind: "integration"
+      accountId: string
+      /** Host projection binding; stale projections cannot authorize a rebound account. */
+      authConnectionRef?: string
+    }
   | { kind: "openapi"; accountId: string; importId: string }
   | {
       kind: "browser"

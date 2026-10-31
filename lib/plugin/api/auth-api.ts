@@ -20,6 +20,11 @@ import { createAttempt } from "@/lib/plugin/auth/auth-attempts"
 import { acceptCallback, registerAuthCallbackWaiter } from "@/lib/plugin/auth/callback-acceptor"
 import { runPkceAuthFlow } from "@/lib/plugin/auth/auth-pkce-flow"
 import {
+  DEFAULT_CONSUMER_TOKEN_READ_POLICY,
+  enforceConsumerTokenReadPolicy,
+  type ConsumerTokenReadPolicy,
+} from "@/lib/plugin/auth/consumer-token-read-policy"
+import {
   invokePluginApi,
   isPluginGatewayAvailable,
   PluginGatewayError,
@@ -74,7 +79,11 @@ function requirePermission(
   }
 }
 
-export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): PluginAuthAPI {
+export function createAuthAPI(
+  pluginId: string,
+  options: CreateAuthAPIOptions,
+  tokenReadPolicy: ConsumerTokenReadPolicy = DEFAULT_CONSUMER_TOKEN_READ_POLICY
+): PluginAuthAPI {
   const { hasPermission } = options
   return {
     async exchangeConfidential(request) {
@@ -104,6 +113,7 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
       const session = await registryGetSession(providerId, scopes, sessionOptions)
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
+      if (session) enforceConsumerTokenReadPolicy(pluginId, providerId, tokenReadPolicy)
       return session
     },
     async getSessions(providerId, scopes) {
@@ -112,6 +122,7 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       if (!provider) throw new Error(`No auth provider registered for id "${providerId}"`)
       const sessions = await provider.getSessions(scopes, { silent: true })
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSessions")
+      if (sessions.length) enforceConsumerTokenReadPolicy(pluginId, providerId, tokenReadPolicy)
       return sessions
     },
     onDidChangeSessions(listener, providerId) {

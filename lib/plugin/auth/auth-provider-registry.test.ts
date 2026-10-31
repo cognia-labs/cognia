@@ -15,6 +15,7 @@ import {
   __resetAuthRegistryForTesting,
   claimAuthProviderOwnership,
   getProvider,
+  getAuthProviderOwner,
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
   setAuthProviderOwnershipStore,
@@ -49,6 +50,9 @@ describe("host auth provider ownership", () => {
     registerAuthenticationProvider(provider("owner"))()
     registerAuthenticationProvider(provider("other", "other-provider"))()
     __resetAuthRegistryForTesting()
+    expect(getAuthProviderOwner("acme")).toBe("owner")
+    expect(getAuthProviderOwner("other-provider")).toBe("other")
+    expect(getAuthProviderOwner("missing")).toBeUndefined()
     expect(() => registerAuthenticationProvider(provider("squatter"))).toThrow(
       /owned by another plugin/
     )

@@ -7,6 +7,7 @@ import {
   getOpenApiImport,
   invalidateCapabilityGrants,
   listCapabilityGrants,
+  listConsumerGrants,
   listServiceConnections,
   putCapabilityGrant,
   putOpenApiImport,
@@ -79,6 +80,39 @@ describe("external service persistence", () => {
     )
     expect(await invalidateCapabilityGrants("connection-1", "fingerprint-2")).toBe(2)
   })
+
+  it("queries consumer grants by connection and consumer, excluding expired grants", async () => {
+    await putServiceConnection(connection())
+    await putServiceConnection(connection({ id: "connection-2" }))
+    for (const entry of [
+      grant({ consumerPluginId: "consumer", connectionRevision: 2 }),
+      grant({ id: "other", consumerPluginId: "other" }),
+      grant({ id: "legacy" }),
+      grant({ id: "other-connection", connectionId: "connection-2", consumerPluginId: "consumer" }),
+      grant({ id: "expired", consumerPluginId: "consumer", expiresAt: "2000-01-01T00:00:00Z" }),
+    ])
+      await putCapabilityGrant(entry)
+    expect(await listConsumerGrants("connection-1", "consumer")).toEqual([
+      expect.objectContaining({ id: "grant-1", connectionRevision: 2 }),
+    ])
+  })
+
+  it.each(["", " ", 42, null])("rejects invalid consumerPluginId %s", async (consumerPluginId) => {
+    await putServiceConnection(connection())
+    await expect(putCapabilityGrant(grant({ consumerPluginId } as never))).rejects.toThrow(
+      "consumerPluginId"
+    )
+  })
+
+  it.each([0, -1, 1.5, NaN, Infinity, "2", null])(
+    "rejects invalid connectionRevision %s",
+    async (connectionRevision) => {
+      await putServiceConnection(connection())
+      await expect(putCapabilityGrant(grant({ connectionRevision } as never))).rejects.toThrow(
+        "connectionRevision"
+      )
+    }
+  )
 
   it("persists reviewed OpenAPI imports and atomically removes plugin control-plane state", async () => {
     await putServiceConnection(connection())

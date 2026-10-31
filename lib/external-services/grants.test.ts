@@ -53,6 +53,52 @@ function grant(overrides: Partial<CapabilityGrant> = {}): CapabilityGrant {
 }
 
 describe("external capability grants", () => {
+  it.each(["read", "write", "destructive"] as const)(
+    "requires a consumer and exact revision for connection-backed %s",
+    (risk) => {
+      const context = {
+        interactive: false,
+        consumerPluginId: "consumer",
+        connectionRevision: 2,
+      }
+      const matching = grant({
+        consumerPluginId: "consumer",
+        connectionRevision: 2,
+        accountId: undefined,
+        workflowId: undefined,
+        resourceScopes: undefined,
+        allowDestructive: true,
+      })
+      for (const grants of [
+        [],
+        [{ ...matching, consumerPluginId: undefined }],
+        [{ ...matching, consumerPluginId: "other" }],
+        [{ ...matching, connectionRevision: undefined }],
+        [{ ...matching, connectionRevision: 1 }],
+        [{ ...matching, connectionRevision: 3 }],
+      ]) {
+        expect(
+          authorizeExternalCapability({ capability: capability(risk), connection, grants, context })
+        ).toEqual({ decision: "deny", reason: "grant-required" })
+      }
+      expect(
+        authorizeExternalCapability({
+          capability: capability(risk),
+          connection,
+          grants: [matching],
+          context,
+        })
+      ).toEqual({ decision: "allow", reason: "scoped-grant", grantId: matching.id })
+      expect(
+        authorizeExternalCapability({
+          capability: capability(risk),
+          connection,
+          grants: [],
+          context: { ...context, interactive: true },
+        })
+      ).toEqual({ decision: "ask", reason: "consumer-grant-required" })
+    }
+  )
   it("allows trusted reads without a grant", () => {
     expect(
       authorizeExternalCapability({
@@ -72,6 +118,72 @@ describe("external capability grants", () => {
         context: { interactive: false },
       })
     ).toEqual({ decision: "deny", reason: "unknown-capability" })
+  })
+
+  it("keeps unknown, unavailable, mismatched and disabled-surface decisions", () => {
+    const input = {
+      capability: capability("read"),
+      connection,
+      grants: [],
+      context: { interactive: true },
+    }
+    expect(authorizeExternalCapability({ ...input, capability: undefined })).toEqual({
+      decision: "ask",
+      reason: "unknown-capability",
+    })
+    expect(
+      authorizeExternalCapability({ ...input, connection: { ...connection, status: "needs-auth" } })
+    ).toEqual({ decision: "deny", reason: "connection-unavailable" })
+    for (const changed of [{ serviceId: "other" }, { providerId: "other" }])
+      expect(
+        authorizeExternalCapability({ ...input, capability: { ...capability("read"), ...changed } })
+      ).toEqual({ decision: "deny", reason: "connection-mismatch" })
+    expect(
+      authorizeExternalCapability({
+        ...input,
+        connection: { ...connection, enabledSurfaces: [] },
+        context: { interactive: false, surface: "chat" },
+      })
+    ).toEqual({ decision: "deny", reason: "surface-disabled" })
+    expect(authorizeExternalCapability({ ...input, capability: capability("write") })).toEqual({
+      decision: "ask",
+      reason: "write-confirmation",
+    })
+  })
+
+  it("retains account/resource/surface restrictions for connection-backed reads", () => {
+    const context = {
+      interactive: false,
+      consumerPluginId: "consumer",
+      connectionRevision: 1,
+      accountId: "account-1",
+      workflowId: "workflow-1",
+    }
+    const matching = grant({ consumerPluginId: "consumer", connectionRevision: 1 })
+    expect(
+      authorizeExternalCapability({
+        capability: capability("read"),
+        connection,
+        grants: [matching],
+        context,
+      })
+    ).toEqual({ decision: "deny", reason: "grant-required" })
+    expect(
+      authorizeExternalCapability({
+        capability: capability("read"),
+        connection,
+        grants: [matching],
+        context: { ...context, resourceScopes: [{ kind: "repository", value: "other" }] },
+      })
+    ).toEqual({ decision: "deny", reason: "grant-required" })
+    expect(
+      authorizeExternalCapability({
+        capability: capability("read"),
+        connection,
+        grants: [matching],
+        context: { ...context, resourceScopes: [{ kind: "repository", value: "acme/app" }] },
+      })
+    ).toEqual({ decision: "allow", reason: "scoped-grant", grantId: "grant-1" })
   })
 
   it("allows a workflow write only with matching fingerprint, operation, account, and resource", () => {
@@ -146,7 +258,57 @@ describe("grantCoversOperation", () => {
     ).toBe(true)
   })
 
+  it("matches explicit consumer/revision bindings and exact, wildcard or capability-only operations", () => {
+    const candidate = grant({
+      consumerPluginId: "consumer",
+      connectionRevision: 2,
+      operationPatterns: ["*"],
+    })
+    expect(
+      grantCoversOperation(candidate, capability("write"), connection, {
+        ...context,
+        consumerPluginId: "consumer",
+        connectionRevision: 2,
+      })
+    ).toBe(true)
+    expect(
+      grantCoversOperation(candidate, capability("write"), connection, {
+        ...context,
+        consumerPluginId: "consumer",
+        connectionRevision: 3,
+      })
+    ).toBe(false)
+    expect(
+      grantCoversOperation(candidate, capability("write"), connection, {
+        ...context,
+        consumerPluginId: "other",
+        connectionRevision: 2,
+      })
+    ).toBe(false)
+    expect(
+      grantCoversOperation(
+        grant({ operationPatterns: ["updateIssue"] }),
+        { ...capability("write"), operationId: undefined },
+        connection,
+        context
+      )
+    ).toBe(true)
+    expect(
+      grantCoversOperation(grant(), capability("write"), { ...connection, id: "other" }, context)
+    ).toBe(false)
+    expect(
+      grantCoversOperation(
+        grant({ operationPatterns: ["issue.*.bad"] }),
+        capability("write"),
+        connection,
+        context
+      )
+    ).toBe(false)
+  })
+
   it.each([
+    ["another consumer", grant({ consumerPluginId: "consumer" }), context],
+    ["another revision", grant({ connectionRevision: 2 }), context],
     ["another operation", grant({ operationPatterns: ["pull.*"] }), context],
     ["another account", grant(), { ...context, accountId: "account-2" }],
     ["another workflow", grant(), { accountId: "account-1" }],

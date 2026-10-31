@@ -231,6 +231,12 @@ export type IntegrationEventNormalizer = (
   | Promise<IntegrationEventEnvelope | IntegrationEventEnvelope[]>
 
 export interface IntegrationRequestInit {
+  /**
+   * Connection-backed raw requests require a consumer grant for
+   * <integrationId>.request.<UPPERCASE_METHOD> (default GET).
+   * GET, HEAD and OPTIONS are reads; other methods are writes.
+   * Action handler requests use the action's operationId, or <integrationId>.<actionId>.
+   */
   method?: string
   headers?: Record<string, string>
   body?: string
@@ -343,6 +349,11 @@ export interface IntegrationAccount {
   integrationId: string
   providerId: string
   authSessionId: string
+  /**
+   * Opaque Host auth connection reference, set only for connection-backed accounts.
+   * Legacy accounts omit it and continue using authSessionId.
+   */
+  connectionId?: string
   remoteAccountId: string
   /**
    * Host-stamped auth provider owner; null identifies a host provider.
@@ -368,6 +379,8 @@ export interface IntegrationAccountInput {
   integrationId: string
   providerId: string
   authSessionId: string
+  /** Set only when binding a Host auth connection; legacy accounts omit it. */
+  connectionId?: string
   remoteAccountId: string
   approvedOrigins?: string[]
   label: string

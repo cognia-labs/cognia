@@ -3,7 +3,21 @@ import type {
   IntegrationActionHandler,
   IntegrationActionHandlerContext,
   IntegrationActionJob,
+  IntegrationAccount,
 } from "@/types/plugin/plugin-integration"
+import type { ExternalCapability } from "@/types/external-service"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import {
+  getConnectionManager,
+  ConnectionUnavailableError,
+  ConnectionRevisionChanged,
+} from "@/lib/plugin/auth/connection-manager"
+export { ConnectionRevisionChanged } from "@/lib/plugin/auth/connection-manager"
+import { listConsumerGrants, listServiceConnections } from "@/lib/db/external-services"
+import {
+  authorizeExternalCapability,
+  extractCapabilityResourceScopes,
+} from "@/lib/external-services/grants"
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
 import { liveQuery } from "dexie"
 import { loggers } from "@cognia/logging"
@@ -80,6 +94,107 @@ export interface IntegrationJobAnswer {
 }
 
 const READ_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "OPTIONS"])
+
+/** Safe prompt payload for ADR-0246 phase 3b; never includes credentials or request bodies. */
+export class ConsumerGrantRequired extends Error {
+  constructor(
+    readonly connectionRef: string,
+    readonly consumerPluginId: string,
+    readonly operation: string,
+    readonly revision: number
+  ) {
+    super("A consumer grant is required for this connection operation")
+    this.name = "ConsumerGrantRequired"
+  }
+}
+
+interface RequestOperation {
+  actionId: string
+  input: Record<string, unknown>
+}
+
+/**
+ * Runs before credential resolution, again at dispatch, and for queued handlers.
+ * Action operations use operationId or <integrationId>.<actionId>. Raw requests
+ * use <integrationId>.request.<UPPERCASE_METHOD>, with GET/HEAD/OPTIONS as reads.
+ * These are the same exact/prefix-wildcard operationPatterns as action grants.
+ */
+async function authorizeAccountConnection(
+  account: IntegrationAccount,
+  method: string,
+  operation?: RequestOperation,
+  expectedRevision?: number
+) {
+  if (account.connectionId === undefined) return undefined
+  const manager = getConnectionManager()
+  let connection
+  try {
+    connection = await manager.getConnection(
+      account.connectionId as AuthConnectionRef,
+      expectedRevision
+    )
+    if (
+      connection.providerId !== account.providerId ||
+      (account.providerOwnerPluginId !== undefined &&
+        connection.ownerPluginId !== account.providerOwnerPluginId)
+    )
+      throw new ConnectionUnavailableError("provider-owner-changed")
+  } catch (error) {
+    // A revision race is not an outage: the caller re-authorizes at the new revision.
+    if (error instanceof ConnectionUnavailableError)
+      await updateIntegrationAccount(account.pluginId, account.id, { health: "revoked" })
+    throw error
+  }
+  // Availability is authoritative on the Host connection. A previous outage
+  // marked the projection needs-auth; restore it before checking its grants.
+  if (account.health === "revoked")
+    await updateIntegrationAccount(account.pluginId, account.id, { health: "unknown" })
+  if (connection.ownerPluginId === account.pluginId) return connection
+  const definition = getRegisteredIntegration(account.pluginId, account.integrationId)?.definition
+  const action =
+    operation && definition?.actions.find((candidate) => candidate.id === operation.actionId)
+  const operationId = operation
+    ? (action?.operationId ?? `${account.integrationId}.${operation.actionId}`)
+    : `${account.integrationId}.request.${method.toUpperCase()}`
+  const required = () =>
+    new ConsumerGrantRequired(connection.id, account.pluginId, operationId, connection.revision)
+  if (operation && !action) throw required()
+  const projections = (await listServiceConnections({ pluginId: account.pluginId })).filter(
+    (candidate) =>
+      candidate.providerRef.kind === "integration" &&
+      candidate.providerRef.accountId === account.id &&
+      candidate.providerRef.authConnectionRef === account.connectionId
+  )
+  for (const projection of projections) {
+    const capability: ExternalCapability = {
+      pluginId: account.pluginId,
+      serviceId: projection.serviceId,
+      providerId: projection.providerId,
+      capabilityId: operation?.actionId ?? operationId,
+      operationId,
+      kind: "action",
+      risk: action ? action.risk : READ_METHODS.has(method.toUpperCase()) ? "read" : "write",
+      scopeSelectors: action?.scopeSelectors,
+      surfaces: projection.enabledSurfaces,
+    }
+    const scopes = extractCapabilityResourceScopes(capability, operation?.input)
+    if (!scopes.ok) continue
+    const authorization = authorizeExternalCapability({
+      capability,
+      connection: projection,
+      grants: await listConsumerGrants(projection.id, account.pluginId),
+      context: {
+        interactive: false,
+        accountId: account.id,
+        consumerPluginId: account.pluginId,
+        connectionRevision: connection.revision,
+        resourceScopes: scopes.scopes,
+      },
+    })
+    if (authorization.decision === "allow") return connection
+  }
+  throw required()
+}
 
 /** An error the outbound policy raised: retrying cannot change it. */
 class OutboundPolicyError extends Error {
@@ -177,6 +292,7 @@ type AuthenticatedRequestExecutor = <T>(
     body?: string
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
+    operation?: RequestOperation
   }
 ) => Promise<{ status: number; headers: Record<string, string>; data: T }>
 
@@ -258,6 +374,7 @@ async function defaultAuthenticatedRequest<T>(
     body?: string
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
+    operation?: RequestOperation
   } = {}
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
@@ -283,8 +400,19 @@ async function defaultAuthenticatedRequest<T>(
   if (!allowed.includes(url.origin)) {
     throw new Error(`Integration request origin "${url.origin}" is not allowlisted`)
   }
+  const connection = await authorizeAccountConnection(
+    account,
+    (init.method ?? "GET").toUpperCase(),
+    init.operation
+  )
   const provider = getProvider(account.providerId)
-  if (!provider) throw new Error(`Auth provider "${account.providerId}" is not registered`)
+  if (!provider) {
+    if (connection) {
+      await updateIntegrationAccount(pluginId, connectorAccountId, { health: "revoked" })
+      throw new ConnectionUnavailableError("provider-unavailable")
+    }
+    throw new Error(`Auth provider "${account.providerId}" is not registered`)
+  }
   const assertProviderOwner = async () => {
     if (
       getProvider(account.providerId) !== provider ||
@@ -302,13 +430,14 @@ async function defaultAuthenticatedRequest<T>(
           recoveryAction: "reconnect",
         },
       })
+      if (connection) throw new ConnectionUnavailableError("provider-unavailable")
       throw new Error(message)
     }
   }
   await assertProviderOwner()
-  const sessions = await provider.getSessions(undefined, { silent: true })
+  const sessions = connection ? [] : await provider.getSessions(undefined, { silent: true })
   const session = sessions.find((candidate) => candidate.id === account.authSessionId)
-  if (!session) {
+  if (!connection && !session) {
     await updateIntegrationAccount(pluginId, connectorAccountId, { health: "revoked" })
     throw new Error(`Credential handle for account "${connectorAccountId}" is unavailable`)
   }
@@ -321,12 +450,20 @@ async function defaultAuthenticatedRequest<T>(
   }
   const headers = new Headers(init.headers)
   const requestAuth = strategy.requestAuth ?? { type: "bearer" as const }
-  const credential = provider.resolveRequestCredential
-    ? await provider.resolveRequestCredential(session.id, {
-        connectorAccountId,
-        origin: url.origin,
-      })
-    : { accessToken: session.accessToken }
+  const credential = connection
+    ? await getConnectionManager()
+        .getCredentials(connection.id)
+        .catch(async (error: unknown) => {
+          if (error instanceof ConnectionUnavailableError)
+            await updateIntegrationAccount(pluginId, connectorAccountId, { health: "revoked" })
+          throw error
+        })
+    : provider.resolveRequestCredential
+      ? await provider.resolveRequestCredential(session!.id, {
+          connectorAccountId,
+          origin: url.origin,
+        })
+      : { accessToken: session!.accessToken }
   await assertProviderOwner()
   // Legacy accounts adopt the first successfully resolved provider owner
   // (trust on first use); subsequent resolutions must retain that binding.
@@ -344,8 +481,16 @@ async function defaultAuthenticatedRequest<T>(
   } else {
     headers.set(requestAuth.name, `${requestAuth.prefix ?? ""}${credential.accessToken}`)
   }
+  if (connection) await getConnectionManager().getConnection(connection.id, connection.revision)
   await init.beforeSend?.()
   await assertProviderOwner()
+  if (connection)
+    await authorizeAccountConnection(
+      account,
+      (init.method ?? "GET").toUpperCase(),
+      init.operation,
+      connection.revision
+    )
   if (init.signal?.aborted) throw new Error("Action cancelled or timed out")
   const response = await proxyFetch(url, {
     method: init.method,
@@ -353,6 +498,8 @@ async function defaultAuthenticatedRequest<T>(
     body: init.body,
     signal: init.signal,
   })
+  // Fence before parsing, and after body consumption: either may await the network.
+  if (connection) await getConnectionManager().getConnection(connection.id, connection.revision)
   const responseHeaders = Object.fromEntries(response.headers.entries())
   await updateIntegrationAccount(pluginId, connectorAccountId, {
     health: response.status === 401 || response.status === 403 ? "degraded" : "healthy",
@@ -361,6 +508,7 @@ async function defaultAuthenticatedRequest<T>(
   const data = contentType.includes("application/json")
     ? ((await response.json()) as T)
     : ((await response.text()) as T)
+  if (connection) await getConnectionManager().getConnection(connection.id, connection.revision)
   return { status: response.status, headers: responseHeaders, data }
 }
 
@@ -374,6 +522,7 @@ async function authenticatedRequest<T>(
     body?: string
     signal?: AbortSignal
     beforeSend?: () => Promise<void>
+    operation?: RequestOperation
   }
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
   if (
@@ -412,19 +561,32 @@ export async function authenticatedIntegrationRequest<T>(
     body?: string
   }
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
+  // Snapshot public fields before any await. Runtime callers cannot supply
+  // the Host-only action operation or change the method after write planning.
+  const request = init
+    ? {
+        method: init.method,
+        headers: init.headers ? { ...init.headers } : undefined,
+        body: init.body,
+      }
+    : undefined
   await planAuthenticatedRequest(
     pluginId,
     connectorAccountId,
     input,
-    (init?.method ?? "GET").toUpperCase(),
+    (request?.method ?? "GET").toUpperCase(),
     { kind: "plugin", pluginId }
   )
-  return authenticatedRequest<T>(pluginId, connectorAccountId, input, init)
+  return authenticatedRequest<T>(pluginId, connectorAccountId, input, request)
 }
 
 async function assertApprovedPublicationHead(
   binding: Awaited<ReturnType<typeof assertBotIntegrationAction>>,
-  requestInit?: { signal: AbortSignal; beforeSend: () => Promise<void> }
+  requestInit?: {
+    signal?: AbortSignal
+    beforeSend?: () => Promise<void>
+    operation?: RequestOperation
+  }
 ): Promise<void> {
   if (!binding.approvedPublication) return
   if (!binding.repository) throw new Error("Approved publication has no repository scope")
@@ -475,7 +637,9 @@ export async function executeIntegrationAction(
       input,
       input.approval?.interruptId
     )
-    await assertApprovedPublicationHead(binding)
+    await assertApprovedPublicationHead(binding, {
+      operation: { actionId: input.actionId, input: input.input },
+    })
     if (input.accountId && input.accountId !== binding.account.id)
       throw new Error("Bot action account does not match its binding")
     pluginId = binding.account.pluginId
@@ -512,6 +676,7 @@ export async function executeIntegrationAction(
     throw new Error(`Integration action "${input.actionId}" requires an idempotency key`)
   }
   assertActionInput(action.inputSchema, input.input)
+  await authorizeAccountConnection(account, "GET", { actionId: action.id, input: input.input })
 
   // A replay of an existing job keeps that job's plan.
   const existing = input.idempotencyKey
@@ -775,7 +940,11 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
       throw new Error("Action execution claim is no longer active")
     }
   }
-  const readRequestInit = { signal: controller.signal, beforeSend: () => assertActiveClaim() }
+  const readRequestInit = {
+    signal: controller.signal,
+    beforeSend: () => assertActiveClaim(),
+    operation: { actionId: job.actionId, input: job.input },
+  }
   // Dexie observes cancellations/reclaims from other windows as well.
   const subscription = liveQuery(() => getIntegrationActionJob(jobId)).subscribe({
     next: (current) => {
@@ -855,6 +1024,11 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
     }
 
     const jobAccount = await getIntegrationAccount(job.pluginId, job.accountId)
+    if (jobAccount)
+      await authorizeAccountConnection(jobAccount, "GET", {
+        actionId: job.actionId,
+        input: job.input,
+      })
     const context: IntegrationActionHandlerContext = {
       pluginId: job.pluginId,
       integrationId: job.integrationId,
@@ -892,6 +1066,7 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
           ...init,
           signal: controller.signal,
           beforeSend: () => assertActiveClaim(!READ_METHODS.has(method)),
+          operation: { actionId: job.actionId, input: job.input },
         })
       },
       ...(jobAccount ? { apiBaseUrl: await integrationApiBaseUrl(jobAccount) } : {}),
@@ -937,6 +1112,9 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
     const message = error instanceof Error ? error.message : String(error)
     const retryable =
       !(error instanceof OutboundPolicyError) &&
+      !(error instanceof ConsumerGrantRequired) &&
+      !(error instanceof ConnectionUnavailableError) &&
+      !(error instanceof ConnectionRevisionChanged) &&
       action?.idempotency !== "none" &&
       attempts < job.maxAttempts
     const nextAttemptAt = retryable

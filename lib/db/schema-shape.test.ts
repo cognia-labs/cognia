@@ -8,9 +8,8 @@
 //
 //   - the store set Dexie actually creates matches the governance catalog,
 //   - `null` ("drop this table") entries survive as keys but not as tables,
-//   - exactly one Dexie version is declared, which is the whole point. Dexie
-//     re-parses every version declared so far on each `stores()` call, and the
-//     old chain cost ~4.7s of pure index parsing per fresh connection,
+//   - the frozen baseline/backfill declarations are retained, followed by one
+//     current declaration; new index changes do not grow the historical chain,
 //   - `CURRENT_SCHEMA_VERSION` is what the opened database reports.
 
 import "fake-indexeddb/auto"
@@ -32,11 +31,13 @@ function tableNames(db: CogniaDB): string[] {
   return db.tables.map((table) => table.name).sort()
 }
 
-it("declares exactly one Dexie version", () => {
+it("retains the frozen versions followed by one current declaration", () => {
   const db = new CogniaDB("schema-shape-single-version")
-  // The performance property. If this ever reports more than one, something
-  // reintroduced a version chain and every fresh connection pays to parse it.
-  expect((db as unknown as { _versions: unknown[] })._versions).toHaveLength(1)
+  expect(
+    (db as unknown as { _versions: Array<{ _cfg: { version: number } }> })._versions.map(
+      (version) => version._cfg.version
+    )
+  ).toEqual([240, 241, 242, 247, 248, 249, CURRENT_SCHEMA_VERSION])
   expect(db.verno).toBe(CURRENT_SCHEMA_VERSION)
   db.close()
 })
@@ -97,6 +98,9 @@ it("preserves the compound indexes hot paths depend on", () => {
   )
   expect(indexesOf("mobileOutboundQueue")).toEqual(
     expect.arrayContaining(["[status+nextAttemptAt]"])
+  )
+  expect(indexesOf("capabilityGrants")).toEqual(
+    expect.arrayContaining(["consumerPluginId", "[connectionId+consumerPluginId]"])
   )
   db.close()
 })

@@ -113,6 +113,18 @@ export async function putCapabilityGrant(grant: CapabilityGrant): Promise<Capabi
   if (grant.operationPatterns.length === 0) {
     throw new Error("Capability grant requires at least one operation pattern")
   }
+  if (
+    grant.consumerPluginId !== undefined &&
+    (typeof grant.consumerPluginId !== "string" || !grant.consumerPluginId.trim())
+  ) {
+    throw new Error("Capability grant consumerPluginId must be non-empty")
+  }
+  if (
+    grant.connectionRevision !== undefined &&
+    (!Number.isSafeInteger(grant.connectionRevision) || grant.connectionRevision < 1)
+  ) {
+    throw new Error("Capability grant connectionRevision must be a positive integer")
+  }
   const connection = await getServiceConnection(grant.connectionId)
   if (!connection) throw new Error(`Service connection "${grant.connectionId}" was not found`)
   if (connection.providerFingerprint !== grant.providerFingerprint) {
@@ -131,6 +143,19 @@ export async function listCapabilityGrants(
   return rows.filter(
     (row) => options.includeExpired || row.expiresAt === undefined || row.expiresAt > now
   )
+}
+
+/** Active grants for one business plugin on its projected service connection. */
+export async function listConsumerGrants(
+  connectionId: string,
+  consumerPluginId: string
+): Promise<CapabilityGrant[]> {
+  const now = nowIso()
+  return getDb()
+    .capabilityGrants.where("[connectionId+consumerPluginId]")
+    .equals([connectionId, consumerPluginId])
+    .filter((grant) => grant.expiresAt === undefined || grant.expiresAt > now)
+    .toArray()
 }
 
 export async function invalidateCapabilityGrants(
