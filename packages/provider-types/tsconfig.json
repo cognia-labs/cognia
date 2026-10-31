@@ -8,7 +8,9 @@
     // tsconfig); scope the overrides to this package's build.
     "incremental": false,
     "ignoreDeprecations": "6.0",
-    "paths": {}
+    "paths": {
+      "@cognia/brand-assets": ["../brand-assets/src/index.ts"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist"]

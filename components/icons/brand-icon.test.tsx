@@ -7,6 +7,16 @@ import { RUNTIME_OPTIONS } from "@/components/agent/workspace/runtime-options"
 import { EXTERNAL_AGENT_PRESETS } from "@/lib/ai/agent/external/config/presets"
 
 describe("BrandIcon", () => {
+  it.each(["constructor", "__proto__"])(
+    "renders the monogram fallback for reserved ID %s",
+    (id) => {
+      render(<BrandIcon id={id} decorative={false} />)
+      expect(brandIconAsset(id)).toBeNull()
+      expect(screen.getByRole("img", { name: id })).toHaveTextContent(
+        id === "constructor" ? "C" : "P"
+      )
+    }
+  )
   it.each([
     ["aider", "/icons/brands/aider-color.png"],
     ["droid", "/icons/brands/factory-color.svg"],

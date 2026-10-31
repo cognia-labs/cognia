@@ -1,0 +1,32 @@
+{
+  "name": "@cognia/brand-assets",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Portable brand resource paths and aliases shared by provider metadata and UI renderers. No React, Next.js, or model runtime dependencies.",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "cognia-source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=26.0.0"
+  }
+}

@@ -1,8 +1,8 @@
 import { defineConfig } from "tsup"
 
 // provider-types is pure type/constant definitions. Once the real source is
-// moved in (Stage 1) it has zero `@/` imports, so tsup needs no alias plugin —
-// the only external is zod (the parameter-schema validators).
+// moved in (Stage 1) it has zero `@/` imports. Inline the dependency-free brand
+// catalog so compiled metadata stays portable; zod validators remain external.
 export default defineConfig({
   // Build every module (not just the barrel) so subpath imports
   // (`@cognia/provider-types/circuit-breaker`, …) resolve from dist too and the
@@ -14,4 +14,5 @@ export default defineConfig({
   clean: true,
   target: "es2017",
   external: ["zod", /^@cognia\/provider-/],
+  noExternal: ["@cognia/brand-assets"],
 })

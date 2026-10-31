@@ -1,12 +1,20 @@
 import { render, screen } from "@testing-library/react"
 
 import { ProviderIcon } from "./provider-icon"
+import { getProviderIconPath } from "@cognia/provider-types/provider-icons"
 import {
   registerPluginSubscriptionProvider,
   unregisterSubscriptionProvidersByPlugin,
 } from "@/lib/subscription/core/provider-registry"
 
 describe("ProviderIcon", () => {
+  it.each(["openai", "qwen", "opencode-go", "zhipu"])(
+    "renders the same local resource as Provider metadata for %s",
+    (id) => {
+      render(<ProviderIcon providerId={id} label={id} decorative={false} />)
+      expect(screen.getByRole("img", { name: id })).toHaveAttribute("src", getProviderIconPath(id))
+    }
+  )
   it("uses a subscription plugin's declared brand without deriving it from its namespace", () => {
     const id = registerPluginSubscriptionProvider(
       {

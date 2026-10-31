@@ -38,6 +38,10 @@ describe("models-dev-id-map", () => {
       expect(resolveModelsDevProviderId("vllm")).toBeUndefined()
       expect(resolveModelsDevProviderId("totally-unknown")).toBeUndefined()
     })
+
+    it.each(["constructor", "__proto__", "toString"])("ignores inherited keys for %s", (id) => {
+      expect(resolveModelsDevProviderId(id)).toBeUndefined()
+    })
   })
 
   describe("resolveOurProviderId", () => {

@@ -2,11 +2,15 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "target": "ES2022",
+    // Keep the assignment semantics used by the pinned native bridges while
+    // allowing modern syntax (including BigInt) during CLI type checking.
+    "useDefineForClassFields": false,
     "tsBuildInfoFile": "../.cache/typecheck/cli.tsbuildinfo",
     // TypeScript replaces inherited paths, so retain the canonical root aliases.
     // dev-cli.test.mjs verifies this parity.
     "paths": {
       "@/*": ["../*"],
+      "@cognia/brand-assets": ["../packages/brand-assets/src/index.ts"],
       "@cognia/eval-core": ["../packages/eval-core/src/index.ts"],
       "@cognia/eval-core/*": ["../packages/eval-core/src/*"],
       "@cognia/router-fusion": ["../packages/router-fusion/src/index.ts"],
