@@ -364,17 +364,36 @@ describe("removePluginTables", () => {
     await db.delete()
   })
 
-  it("removes the meta row in retain mode (keeps the store)", async () => {
-    await applyPluginTables(db, "github-delivery", {
-      tables: [{ name: "repos", schema: "++id" }],
-    })
-
+  it("review regression: retains migration history and migrates kept data once on reinstall", async () => {
+    await applyPluginTables(
+      db,
+      "github-delivery",
+      {
+        tables: [{ name: "repos", schema: "++id" }],
+      },
+      1
+    )
+    await db.table("github-delivery:repos").put({ id: 1, shape: "v1" })
+    const before = await getPluginDexieMeta("github-delivery")
     await removePluginTables(db, "github-delivery", "keep")
-
     const meta = await getPluginDexieMeta("github-delivery")
-    expect(meta).toBeUndefined()
-    // The store is still in the schema (data preserved).
+    expect(meta).toMatchObject({
+      appliedMigrationVersion: 1,
+      schemaFingerprint: before?.schemaFingerprint,
+    })
     expect(db.tables.map((t) => t.name)).toContain("github-delivery:repos")
+    const dexie = {
+      tables: [{ name: "repos", schema: "++id, shape" }],
+      migrations: [{ toVersion: 2, upgrade: "upgrade" }],
+    }
+    await applyPluginTables(db, "github-delivery", dexie, 2)
+    const upgrade = jest.fn(async (tx: import("dexie").Transaction) => {
+      await tx.table("github-delivery:repos").update(1, { shape: "v2" })
+    })
+    await runPluginMigrations(db, "github-delivery", 2, dexie.migrations, { upgrade })
+    await runPluginMigrations(db, "github-delivery", 2, dexie.migrations, { upgrade })
+    expect(upgrade).toHaveBeenCalledTimes(1)
+    expect(await db.table("github-delivery:repos").get(1)).toMatchObject({ shape: "v2" })
   })
 
   it("is a no-op for a plugin with no registered tables", async () => {
@@ -406,6 +425,19 @@ describe("clearPluginTables", () => {
   afterEach(async () => {
     db.close()
     await Dexie.delete(db.name)
+  })
+
+  it("review regression: clearing migrated data permits an older package to activate again", async () => {
+    const dexie = { tables: [{ name: "items", schema: "id" }] }
+    await applyPluginTables(db, "migrated", dexie, 2)
+    await db.table("migrated:items").put({ id: 1, shape: "v2" })
+    await expect(runPluginMigrations(db, "migrated", 1, [], {})).rejects.toMatchObject({
+      name: "PluginDataVersionError",
+    })
+    await clearPluginTables(db, "migrated")
+    await runPluginMigrations(db, "migrated", 1, [], {})
+    expect(await db.table("migrated:items").count()).toBe(0)
+    expect((await getPluginDexieMeta("migrated"))?.appliedMigrationVersion).toBe(1)
   })
 
   it("erases every row but keeps the stores and the meta row", async () => {

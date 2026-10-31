@@ -49,13 +49,17 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
     },
     async getSession(providerId, scopes, sessionOptions) {
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
-      return registryGetSession(providerId, scopes, sessionOptions)
+      const session = await registryGetSession(providerId, scopes, sessionOptions)
+      requirePermission(hasPermission, "auth:consume", "ctx.auth.getSession")
+      return session
     },
     async getSessions(providerId, scopes) {
       requirePermission(hasPermission, "auth:consume", "ctx.auth.getSessions")
       const provider = getProvider(providerId)
       if (!provider) throw new Error(`No auth provider registered for id "${providerId}"`)
-      return provider.getSessions(scopes, { silent: true })
+      const sessions = await provider.getSessions(scopes, { silent: true })
+      requirePermission(hasPermission, "auth:consume", "ctx.auth.getSessions")
+      return sessions
     },
     onDidChangeSessions(listener, providerId) {
       requirePermission(hasPermission, "auth:consume", "ctx.auth.onDidChangeSessions")
@@ -89,9 +93,11 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       const { network } = options
       if (!network)
         throw new Error("ctx.auth.createPkceFlow requires the host-governed network transport.")
-      return runPkceAuthFlow({
+      const result = await runPkceAuthFlow({
         ...config,
         fetchImpl: async (input, init) => {
+          requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
+          requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
           const response = await network.fetch(String(input), {
             method: "POST",
             headers: Object.fromEntries(new Headers(init?.headers).entries()),
@@ -111,6 +117,9 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
           )
         },
       })
+      requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
+      requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
+      return result
     },
   }
 }

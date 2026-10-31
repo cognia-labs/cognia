@@ -71,7 +71,7 @@ function resolveDb(source: DexieSource): Dexie {
  * `new CogniaDB(...)` (e.g. 104). But plugin-table bumps advance the *physical*
  * IndexedDB native version above that ceiling and persist across reloads (and a
  * "keep"-mode disable leaves the physical store — and the elevated native
- * version — in place while dropping the meta row). Declaring `db.verno + 1` can
+ * version — in place). Declaring `db.verno + 1` can
  * therefore land on, or below, a version the physical DB already passed. Dexie
  * then sees the code schema as a superset of the stored schema at an equal-or-
  * lower version number, logs
@@ -401,7 +401,9 @@ export async function removePluginTables(
       await db.open()
     }
 
-    await deletePluginDexiaMeta(pluginId)
+    // Retained data must retain its schema fingerprint and migration baseline
+    // too, so reinstalling a newer package runs the pending transformations.
+    if (retentionMode === "purge") await deletePluginDexiaMeta(pluginId)
   })
 }
 
@@ -413,8 +415,9 @@ export async function removePluginTables(
  * `uninstallPlugin(id, { purgeData: true })`, which uninstalled the plugin
  * outright (runtime, files, permissions, secrets) behind a dialog that
  * promised "the plugin itself will not be uninstalled". Clearing the stores
- * instead keeps that promise: no schema bump, no meta change, and the plugin
- * resumes against empty tables. Dropping the stores is what
+ * instead keeps that promise: no schema bump, and the plugin resumes against
+ * empty tables. Its migration floor is reset because there is no longer any
+ * migrated data requiring a newer package. Dropping the stores is what
  * `removePluginTables(..., "purge")` on the uninstall path does.
  *
  * Runs under the schema lock so a concurrent purge-mode removal cannot drop a
@@ -436,7 +439,7 @@ export async function clearPluginTables(
   return runSchemaMutationExclusive(dbName, async () => {
     const db = resolveDb(dbSource)
     const meta = await getPluginDexieMeta(pluginId)
-    if (!meta || meta.tableNames.length === 0) return []
+    if (!meta) return []
     if (!db.isOpen()) await db.open()
 
     const declared = new Set(db.tables.map((table) => table.name))
@@ -444,14 +447,14 @@ export async function clearPluginTables(
     const live = meta.tableNames.filter((name) => declared.has(name))
     const undeclared = meta.tableNames.filter((name) => !declared.has(name) && physical.has(name))
 
-    if (live.length > 0) {
-      await db.transaction("rw", live, async () => {
-        await Promise.all(live.map((name) => db.table(name).clear()))
-      })
-    }
     if (undeclared.length > 0) {
       await clearNativeStores(db.backendDB(), undeclared)
     }
+    const metaTable = db.table("pluginDexieMeta")
+    await db.transaction("rw", [metaTable, ...live.map((name) => db.table(name))], async () => {
+      await Promise.all(live.map((name) => db.table(name).clear()))
+      await metaTable.update(pluginId, { appliedMigrationVersion: 0 })
+    })
     return [...live, ...undeclared]
   })
 }

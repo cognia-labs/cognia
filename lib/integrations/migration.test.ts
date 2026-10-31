@@ -192,6 +192,44 @@ it("preserves edited rows and reports conflicts while restoring the remaining sn
   )
 })
 
+it("review regression: preserves the account referenced by a conflicted subscription", async () => {
+  const db = getDb()
+  await migrateLegacyIntegration("owner", {
+    id: "kept-reference",
+    integrationId: "example",
+    accounts: [
+      {
+        id: "account",
+        integrationId: "example",
+        providerId: "oauth",
+        authSessionId: "session",
+        remoteAccountId: "user",
+        label: "User",
+      },
+    ],
+    subscriptions: [
+      { id: "subscription", integrationId: "example", accountId: "account", eventTypes: [] },
+    ],
+    workflowKindAliases: {},
+  })
+  await db.integrationSubscriptions.update("subscription", {
+    enabled: false,
+    updatedAt: "user-edit",
+  })
+  for (let attempt = 0; attempt < 2; attempt++) {
+    expect((await rollbackIntegrationMigration("owner", "kept-reference")).conflictedIds).toEqual({
+      accounts: ["account"],
+      subscriptions: ["subscription"],
+      workflows: [],
+    })
+    expect(await db.integrationAccounts.get("account")).toBeDefined()
+    expect(await db.integrationSubscriptions.get("subscription")).toMatchObject({
+      accountId: "account",
+      enabled: false,
+    })
+  }
+})
+
 it("restores existing account and subscription snapshots without rewriting unrelated rows", async () => {
   const db = getDb()
   const account = {

@@ -8,6 +8,7 @@ import type {
 } from "@/types/plugin/plugin-integration"
 import type { WorkflowNodeKind, WorkflowRow } from "@/types/workflow/visual"
 import { getDb } from "@/lib/db/schema"
+import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
 
 interface MigrationBackup {
   accounts: IntegrationAccount[]
@@ -162,6 +163,7 @@ export async function migrateLegacyIntegration(
       )
       const accounts: IntegrationAccount[] = plan.accounts.map((account) => ({
         ...account,
+        providerOwnerPluginId: getProvider(account.providerId)?.pluginId,
         pluginId,
         enabled: account.enabled ?? true,
         health: "unknown",
@@ -279,6 +281,17 @@ export async function rollbackIntegrationMigration(
         const originals = new Map(snapshots.map((row) => [row.id, row]))
         for (const id of ids) {
           if (restored[kind].includes(id)) continue
+          if (
+            kind === "accounts" &&
+            (await db.integrationSubscriptions
+              .where("accountId")
+              .equals(id)
+              .filter((subscription) => !restored.subscriptions.includes(subscription.id))
+              .count()) > 0
+          ) {
+            conflictedIds.accounts.push(id)
+            continue
+          }
           const current = await table.get(id)
           const expectedRevision = revisions?.[kind]?.[id]
           // Missing revision evidence (old backups) and user deletions are

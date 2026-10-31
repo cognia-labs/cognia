@@ -14,6 +14,31 @@ import type { PluginDexieMigrationDef } from "@/types/plugin"
 import type { PluginDexieMeta } from "./meta"
 import { loggers } from "@/lib/plugin/core/logger"
 
+/** A package rollback cannot roll back already committed plugin data. */
+export class PluginDataVersionError extends Error {
+  constructor(
+    readonly pluginId: string,
+    readonly currentVersion: number,
+    readonly appliedMigrationVersion: number
+  ) {
+    super(
+      `Plugin "${pluginId}" data was migrated to v${appliedMigrationVersion}; ` +
+        `update to v${appliedMigrationVersion} or later, or clear plugin data before activating v${currentVersion}`
+    )
+    this.name = "PluginDataVersionError"
+  }
+}
+
+export function assertPluginDataVersion(
+  pluginId: string,
+  currentVersion: number,
+  appliedMigrationVersion: number | undefined
+): void {
+  if (appliedMigrationVersion !== undefined && currentVersion < appliedMigrationVersion) {
+    throw new PluginDataVersionError(pluginId, currentVersion, appliedMigrationVersion)
+  }
+}
+
 export interface MigrationContext {
   /** The plugin manifest version before this upgrade. */
   previousVersion: number
@@ -84,7 +109,8 @@ export async function runPluginMigrations(
         return
       }
       const previousVersion = current.appliedMigrationVersion
-      if (currentVersion <= previousVersion) return
+      assertPluginDataVersion(pluginId, currentVersion, previousVersion)
+      if (currentVersion === previousVersion) return
       const upgradeHandlers: MigrationContext["upgradeHandlers"] = {}
       for (const migration of migrations) {
         const handler = Object.hasOwn(moduleExports, migration.upgrade)

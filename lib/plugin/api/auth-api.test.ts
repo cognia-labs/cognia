@@ -142,6 +142,74 @@ describe("createAuthAPI", () => {
     )
   })
 
+  it.each(["getSession", "getSessions"] as const)(
+    "review regression: %s withholds a provider result after auth:consume is revoked",
+    async (method) => {
+      let allowed = true
+      const api = createAuthAPI("p", { hasPermission: () => allowed })
+      api.registerProvider(
+        fakeProvider({
+          getSessions: async () => {
+            allowed = false
+            return [
+              __makeSession({
+                accessToken: "secret",
+                account: { id: "u", label: "U" },
+                scopes: [],
+              }),
+            ]
+          },
+        })
+      )
+      await expect(api[method]("acme", [])).rejects.toThrow(/auth:consume/)
+    }
+  )
+
+  it.each(["auth:provide", "network:fetch"])(
+    "review regression: blocks PKCE dispatch when %s is revoked during the callback",
+    async (permission) => {
+      const revoked = new Set<string>()
+      const fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        data: { access_token: "secret" },
+      })
+      const api = createAuthAPI("p", { hasPermission: (p) => !revoked.has(p), network: { fetch } })
+      await expect(
+        api.createPkceFlow({
+          ...pkceConfig(),
+          waitForCode: async () => {
+            revoked.add(permission)
+            return { code: "code", state: "state" }
+          },
+        })
+      ).rejects.toThrow(permission)
+      expect(fetch).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(["auth:provide", "network:fetch"])(
+    "review regression: withholds PKCE tokens when %s is revoked during exchange",
+    async (permission) => {
+      const revoked = new Set<string>()
+      const fetch = jest.fn().mockImplementation(async () => {
+        revoked.add(permission)
+        return {
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: {},
+          data: { access_token: "secret" },
+        }
+      })
+      const api = createAuthAPI("p", { hasPermission: (p) => !revoked.has(p), network: { fetch } })
+      await expect(api.createPkceFlow(pkceConfig())).rejects.toThrow(permission)
+      expect(fetch).toHaveBeenCalledTimes(1)
+    }
+  )
+
   it("filters session notifications by provider without relying on session ids", async () => {
     const api = createAuthAPI("p", allow)
     const session = __makeSession({

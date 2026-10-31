@@ -135,6 +135,21 @@ describe("runPluginMigrations", () => {
     expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
   })
 
+  it("refuses a package below the committed data version without running handlers", async () => {
+    await runPluginMigrations(db, "plugin", 2, [], {})
+    const upgrade = jest.fn(async () => undefined)
+    await expect(
+      runPluginMigrations(db, "plugin", 1, [{ toVersion: 1, upgrade: "upgrade" }], { upgrade })
+    ).rejects.toMatchObject({
+      name: "PluginDataVersionError",
+      pluginId: "plugin",
+      currentVersion: 1,
+      appliedMigrationVersion: 2,
+    })
+    expect(upgrade).not.toHaveBeenCalled()
+    expect((await db.table("pluginDexieMeta").get("plugin")).appliedMigrationVersion).toBe(2)
+  })
+
   it("baselines legacy rows with no known previous version without replaying backfills", async () => {
     await db.table("pluginDexieMeta").update("plugin", { appliedMigrationVersion: undefined })
     const upgrade = jest.fn(async () => undefined)

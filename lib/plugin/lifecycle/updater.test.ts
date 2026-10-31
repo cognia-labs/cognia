@@ -684,6 +684,54 @@ describe("PluginUpdater", () => {
       }
     })
 
+    it("review regression: surfaces migrated data incompatibility after restoring the old package", async () => {
+      const state = mockGetStoreState() as never as {
+        plugins: Record<
+          string,
+          { manifest: import("@/types/plugin").PluginManifest; status: string; error?: string }
+        >
+      }
+      const previous = state.plugins["plugin-a"].manifest
+      state.plugins["plugin-a"].status = "enabled"
+      commitStagedPluginUpdate.mockImplementationOnce(async () => {
+        state.plugins["plugin-a"].manifest = { ...previous, version: "2.0.0" }
+      })
+      const db = getDb()
+      managerModule.__enablePluginSpy.mockImplementationOnce(async () => {
+        await db
+          .table("pluginDexieMeta")
+          .put({ pluginId: "plugin-a", tableNames: [], appliedMigrationVersion: 1 })
+        await runPluginMigrations(db, "plugin-a", 2, [], {})
+        throw new Error("v2 activation failed")
+      })
+      backupModule.__restoreBackupSpy.mockImplementationOnce(async () => {
+        state.plugins["plugin-a"].manifest = previous
+        return { success: true }
+      })
+      try {
+        const result = await updater.update("plugin-a", { force: true, version: "2.0.0" })
+        expect(result).toMatchObject({
+          success: false,
+          requiresRestart: false,
+          error: expect.stringMatching(
+            /data was migrated to v2.*update to v2 or later.*clear plugin data/i
+          ),
+          rollback: {
+            attempted: true,
+            succeeded: false,
+            error: expect.stringContaining("PluginDataVersionError"),
+          },
+        })
+        expect(state.plugins["plugin-a"]).toMatchObject({
+          status: "error",
+          error: expect.stringContaining("data was migrated to v2"),
+        })
+        expect(managerModule.__enablePluginSpy).toHaveBeenCalledTimes(1)
+      } finally {
+        await db.pluginDexieMeta.delete("plugin-a")
+      }
+    })
+
     it("dry-runs the migration declaration before snapshotting a destructive schema change", async () => {
       const state = mockGetStoreState() as never as {
         plugins: Record<string, { manifest: Record<string, unknown>; status: string }>

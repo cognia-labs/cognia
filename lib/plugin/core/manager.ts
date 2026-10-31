@@ -116,7 +116,11 @@ import {
   removePluginTables,
   restorePluginTables,
 } from "@/lib/plugin/dexie/bridge"
-import { runPluginMigrations } from "@/lib/plugin/dexie/migration-runner"
+import {
+  assertPluginDataVersion,
+  PluginDataVersionError,
+  runPluginMigrations,
+} from "@/lib/plugin/dexie/migration-runner"
 import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
 import {
   activationBreakerKey,
@@ -3999,8 +4003,13 @@ export class PluginManager {
       // loadPlugin is also a public activation entry point. Ensure its schema
       // and pending data migrations are ready even when enablePlugin was not
       // the caller. Never publish the new runtime before this transaction commits.
+      const meta = await getPluginDexieMeta(pluginId)
+      assertPluginDataVersion(
+        pluginId,
+        Number.parseInt(plugin.manifest.version.split(".")[0], 10),
+        meta?.appliedMigrationVersion
+      )
       if (plugin.manifest.dexie) {
-        const meta = await getPluginDexieMeta(pluginId)
         if (meta && meta.appliedMigrationVersion === undefined) {
           const previous = await getPlugin(pluginId)
           if (previous?.lastActivatedVersion) {
@@ -4365,6 +4374,11 @@ export class PluginManager {
       // relies on at boot is only written by applyPluginTables, which never runs
       // if loadPlugin already threw — so the tables are never restored on any
       // later boot either. Applying tables first breaks that deadlock.
+      assertPluginDataVersion(
+        pluginId,
+        Number.parseInt(plugin.manifest.version.split(".")[0], 10),
+        (await getPluginDexieMeta(pluginId))?.appliedMigrationVersion
+      )
       if (plugin.manifest.dexie) {
         await applyPluginTables(
           () => getDb() as unknown as import("dexie").default,
@@ -4535,6 +4549,7 @@ export class PluginManager {
         }
         window.dispatchEvent(new CustomEvent(PLUGIN_ENABLE_FAILED_EVENT, { detail }))
       }
+      if (error instanceof PluginDataVersionError) throw error
       throw new PluginEnableError(pluginId, error)
     }
   }

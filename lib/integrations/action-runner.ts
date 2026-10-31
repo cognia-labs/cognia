@@ -9,6 +9,7 @@ import { liveQuery } from "dexie"
 import { loggers } from "@cognia/logging"
 import {
   appendIntegrationAudit,
+  bindIntegrationAccountProviderOwner,
   cancelIntegrationActionJobRecord,
   claimIntegrationActionJob,
   enqueueIntegrationActionJob,
@@ -284,6 +285,27 @@ async function defaultAuthenticatedRequest<T>(
   }
   const provider = getProvider(account.providerId)
   if (!provider) throw new Error(`Auth provider "${account.providerId}" is not registered`)
+  const assertProviderOwner = async () => {
+    if (
+      getProvider(account.providerId) !== provider ||
+      (account.providerOwnerPluginId !== undefined &&
+        account.providerOwnerPluginId !== provider.pluginId)
+    ) {
+      const message = `Auth provider owner changed for account "${connectorAccountId}"; reconnect the account`
+      await updateIntegrationAccount(pluginId, connectorAccountId, {
+        health: "revoked",
+        status: {
+          health: "revoked",
+          code: "provider-owner-changed",
+          message,
+          checkedAt: new Date().toISOString(),
+          recoveryAction: "reconnect",
+        },
+      })
+      throw new Error(message)
+    }
+  }
+  await assertProviderOwner()
   const sessions = await provider.getSessions(undefined, { silent: true })
   const session = sessions.find((candidate) => candidate.id === account.authSessionId)
   if (!session) {
@@ -305,12 +327,25 @@ async function defaultAuthenticatedRequest<T>(
         origin: url.origin,
       })
     : { accessToken: session.accessToken }
+  await assertProviderOwner()
+  // Legacy accounts adopt the first successfully resolved provider owner
+  // (trust on first use); subsequent resolutions must retain that binding.
+  if (account.providerOwnerPluginId === undefined) {
+    const bound = await bindIntegrationAccountProviderOwner(
+      pluginId,
+      connectorAccountId,
+      provider.pluginId
+    )
+    account.providerOwnerPluginId = bound.providerOwnerPluginId
+    await assertProviderOwner()
+  }
   if (requestAuth.type === "bearer") {
     headers.set("authorization", `Bearer ${credential.accessToken}`)
   } else {
     headers.set(requestAuth.name, `${requestAuth.prefix ?? ""}${credential.accessToken}`)
   }
   await init.beforeSend?.()
+  await assertProviderOwner()
   if (init.signal?.aborted) throw new Error("Action cancelled or timed out")
   const response = await proxyFetch(url, {
     method: init.method,
@@ -686,19 +721,33 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
   if (!(await isIntegrationRuntimeOwner())) return candidate
   const running = runningPerAccount.get(candidate.accountId) ?? 0
   if (running >= MAX_ACCOUNT_CONCURRENCY) return candidate
+  runningPerAccount.set(candidate.accountId, running + 1)
+  const releaseSlot = () => {
+    const remaining = (runningPerAccount.get(candidate.accountId) ?? 1) - 1
+    if (remaining > 0) runningPerAccount.set(candidate.accountId, remaining)
+    else runningPerAccount.delete(candidate.accountId)
+  }
   const registered = getRegisteredIntegration(candidate.pluginId, candidate.integrationId)
   const action = registered?.definition.actions.find((entry) => entry.id === candidate.actionId)
-  const job = await claimIntegrationActionJob(jobId, {
-    owner: claimOwner,
-    leaseMs: (action?.timeoutMs ?? 30_000) + 5_000,
-    idempotent: action?.idempotency === "supported" || action?.idempotency === "required",
-  })
-  if (!job) return (await getIntegrationActionJob(jobId))!
+  let claimedJob: IntegrationActionJob | undefined
+  try {
+    claimedJob = await claimIntegrationActionJob(jobId, {
+      owner: claimOwner,
+      leaseMs: (action?.timeoutMs ?? 30_000) + 5_000,
+    })
+  } catch (error) {
+    releaseSlot()
+    throw error
+  }
+  if (!claimedJob) {
+    releaseSlot()
+    return (await getIntegrationActionJob(jobId))!
+  }
+  const job = claimedJob
   const claimToken = job.claimToken!
   const condition = { claimToken }
   const controller = new AbortController()
   runningControllers.set(jobId, controller)
-  runningPerAccount.set(job.accountId, (runningPerAccount.get(job.accountId) ?? 0) + 1)
   const cancelClaim = (error: string) =>
     cancelIntegrationActionJobRecord(jobId, { error }, claimToken)
   const reportCancellationFailure = (error: unknown) =>
@@ -925,10 +974,7 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
     subscription.unsubscribe()
     unsubscribeRegistry()
     if (runningControllers.get(jobId) === controller) runningControllers.delete(jobId)
-    runningPerAccount.set(
-      job.accountId,
-      Math.max(0, (runningPerAccount.get(job.accountId) ?? 1) - 1)
-    )
+    releaseSlot()
   }
 }
 

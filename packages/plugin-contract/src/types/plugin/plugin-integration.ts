@@ -344,6 +344,12 @@ export interface IntegrationAccount {
   providerId: string
   authSessionId: string
   remoteAccountId: string
+  /**
+   * Host-stamped auth provider owner; null identifies a host provider.
+   * Legacy accounts without this field adopt the current owner on their first
+   * successful credential resolution (trust on first use).
+   */
+  providerOwnerPluginId?: string | null
   /** Host-approved additional origins, used for explicit self-hosted installations. */
   approvedOrigins?: string[]
   label: string
@@ -427,8 +433,12 @@ export interface IntegrationActionJob {
   claimToken?: string
   claimOwner?: string
   claimLeaseExpiresAt?: string
-  /** Persisted before dispatch, since abort cannot undo a remote write. */
-  remoteWriteStartedAt?: string
+  /**
+   * Persisted before dispatch, since abort cannot undo a remote write.
+   * null is a durable claim marker proving no write was dispatched yet;
+   * absent on legacy running jobs whose remote outcome cannot be established.
+   */
+  remoteWriteStartedAt?: string | null
   remoteOutcome?: "unknown"
   output?: unknown
   error?: string

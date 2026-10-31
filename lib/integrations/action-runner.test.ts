@@ -7,6 +7,7 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import * as botBinding from "@/lib/plugin/api/bot-integration-binding"
 import {
   createIntegrationAccount,
+  claimIntegrationActionJob,
   cancelIntegrationActionJobRecord,
   cancelIntegrationActionJobsByPlugin,
   enqueueIntegrationActionJob,
@@ -14,7 +15,10 @@ import {
   setIntegrationAccountOutboundRecipients,
 } from "@/lib/db/integrations"
 import { putCapabilityGrant, putServiceConnection } from "@/lib/db/external-services"
-import { registerAuthenticationProvider } from "@/lib/plugin/auth/auth-provider-registry"
+import {
+  registerAuthenticationProvider,
+  releaseAuthProviderOwnership,
+} from "@/lib/plugin/auth/auth-provider-registry"
 import {
   __resetIntegrationRegistryForTesting,
   registerIntegrationDefinitions,
@@ -94,7 +98,8 @@ describe("Integration action runner", () => {
       updated: input.issueId,
     }),
     allowedOrigins = ["https://api.example.test"],
-    idempotency: "required" | "supported" = "required"
+    idempotency: "required" | "supported" = "required",
+    providerId = "example-oauth"
   ) {
     registerIntegrationDefinitions({
       pluginId: "example-delivery",
@@ -107,7 +112,7 @@ describe("Integration action runner", () => {
               id: "oauth",
               type: "oauth2",
               label: "OAuth",
-              providerId: "example-oauth",
+              providerId,
             },
           ],
           resourceKinds: ["issue"],
@@ -150,7 +155,7 @@ describe("Integration action runner", () => {
     })
     const account = await createIntegrationAccount("example-delivery", {
       integrationId: "example",
-      providerId: "example-oauth",
+      providerId,
       authSessionId: "opaque",
       remoteAccountId: "acct",
       label: "Example account",
@@ -358,23 +363,141 @@ describe("Integration action runner", () => {
     ).toMatchObject({ detail: { jobId: job.id, remoteOutcome: "unknown" } })
   })
 
-  it("recovers an action declared idempotent with a new claim token", async () => {
+  it.each(["supported", "required"] as const)(
+    "review regression: never replays an expired dispatched write with idempotency %s",
+    async (idempotency) => {
+      const handler = jest.fn(async () => ({ updated: true }))
+      const account = await setup(handler, ["https://api.example.test"], idempotency)
+      const job = await queue(account.id)
+      await getDb().integrationActionJobs.update(job.id, {
+        status: "running",
+        claimToken: "crashed",
+        claimOwner: "old-window",
+        claimLeaseExpiresAt: new Date(Date.now() - 1000).toISOString(),
+        remoteWriteStartedAt: new Date().toISOString(),
+      })
+      const [recovered] = await drainIntegrationActionJobs()
+      expect(recovered).toMatchObject({ status: "cancelled", remoteOutcome: "unknown" })
+      expect(handler).not.toHaveBeenCalled()
+    }
+  )
+
+  it("review regression: recovers an expired claim with no dispatched write exactly once", async () => {
     const handler = jest.fn(async () => ({ updated: true }))
-    const account = await setup(handler, ["https://api.example.test"], "supported")
+    const account = await setup(handler)
     const job = await queue(account.id)
-    await getDb().integrationActionJobs.update(job.id, {
-      status: "running",
-      claimToken: "crashed",
-      claimOwner: "old-window",
-      claimLeaseExpiresAt: new Date(Date.now() - 1000).toISOString(),
-      remoteWriteStartedAt: new Date().toISOString(),
-      idempotencyKey: undefined,
+    const claimed = await claimIntegrationActionJob(job.id, {
+      owner: "old-window",
+      leaseMs: 1000,
     })
-    const [recovered] = await drainIntegrationActionJobs()
-    expect(recovered).toMatchObject({ status: "succeeded", attempts: 1 })
-    expect(recovered.claimToken).not.toBe("crashed")
+    await getDb().integrationActionJobs.update(job.id, {
+      claimLeaseExpiresAt: new Date(Date.now() - 1000).toISOString(),
+    })
+    await Promise.all([drainIntegrationActionJobs(), drainIntegrationActionJobs()])
+    const recovered = await getIntegrationActionJob(job.id)
+    expect(recovered).toMatchObject({ status: "succeeded", attempts: 2 })
+    expect(recovered?.claimToken).not.toBe(claimed?.claimToken)
     expect(handler).toHaveBeenCalledTimes(1)
   })
+
+  it("review regression: recovers a non-idempotent action only when no write was dispatched", async () => {
+    const account = await setup()
+    const job = await queue(account.id, "issue.delete")
+    await claimIntegrationActionJob(
+      job.id,
+      { owner: "old-window", leaseMs: 1000 },
+      Date.now() - 2000
+    )
+    const [recovered] = await drainIntegrationActionJobs()
+    expect(recovered).toMatchObject({ status: "succeeded", attempts: 2, output: { deleted: true } })
+  })
+
+  it("review regression: reserves the account cap before concurrent durable claims", async () => {
+    let active = 0
+    let peak = 0
+    const account = await setup(async () => {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      active -= 1
+      return { updated: true }
+    })
+    for (let index = 0; index < 9; index++) {
+      const job = await queue(account.id)
+      await getDb().integrationActionJobs.update(job.id, { idempotencyKey: undefined })
+    }
+    await drainIntegrationActionJobs()
+    expect(peak).toBeGreaterThan(1)
+    expect(peak).toBeLessThanOrEqual(4)
+    while ((await getDb().integrationActionJobs.where("status").equals("queued").count()) > 0) {
+      await drainIntegrationActionJobs()
+    }
+    expect(await getDb().integrationActionJobs.where("status").equals("succeeded").count()).toBe(9)
+  })
+
+  it.each([false, true])(
+    "review regression: refuses a retained account after its provider owner is replaced (legacy=%s)",
+    async (legacy) => {
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+      const session = {
+        id: "opaque",
+        accessToken: "host-secret",
+        account: { id: "acct", label: "Account" },
+        scopes: [],
+      }
+      const provider = {
+        id: "review-oauth",
+        label: "Provider",
+        getSessions: jest.fn(async () => [session]),
+        createSession: async () => session,
+        removeSession: async () => undefined,
+      }
+      registerAuthenticationProvider({ ...provider, pluginId: "provider-a" })
+      const account = await setup(undefined, ["https://api.example.test"], "required", provider.id)
+      if (legacy)
+        await getDb().integrationAccounts.update(account.id, { providerOwnerPluginId: undefined })
+      else expect(account).toMatchObject({ providerOwnerPluginId: "provider-a" })
+      const fetchMock = jest.spyOn(global, "fetch").mockResolvedValue({
+        status: 200,
+        headers: new Headers({ "content-type": "application/json" }),
+        json: async () => ({ ok: true }),
+      } as Response)
+      try {
+        await authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          "https://api.example.test/items"
+        )
+        expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
+          providerOwnerPluginId: "provider-a",
+        })
+        releaseAuthProviderOwnership("provider-a")
+        const replacement = jest.fn(async () => [session])
+        registerAuthenticationProvider({
+          ...provider,
+          pluginId: "provider-b",
+          getSessions: replacement,
+        })
+        await expect(
+          authenticatedIntegrationRequest(
+            "example-delivery",
+            account.id,
+            "https://api.example.test/items"
+          )
+        ).rejects.toThrow(/provider.*owner.*changed/i)
+        expect(replacement).not.toHaveBeenCalled()
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(await getDb().integrationAccounts.get(account.id)).toMatchObject({
+          providerOwnerPluginId: "provider-a",
+          health: "revoked",
+          status: { code: "provider-owner-changed", recoveryAction: "reconnect" },
+        })
+      } finally {
+        releaseAuthProviderOwnership("provider-a")
+        releaseAuthProviderOwnership("provider-b")
+      }
+    }
+  )
 
   it("queues secondary-window approval for the owner drain without executing there", async () => {
     const handler = jest.fn(async () => ({ updated: true }))

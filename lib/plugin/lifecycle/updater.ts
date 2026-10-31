@@ -36,7 +36,8 @@ import { loggers } from "../core/logger"
 import { getPluginBackupManager } from "./backup"
 import { getPluginManager } from "../core/manager"
 import { getDb } from "@/lib/db/schema"
-import { baselinePluginMigrationVersion } from "@/lib/plugin/dexie/meta"
+import { baselinePluginMigrationVersion, getPluginDexieMeta } from "@/lib/plugin/dexie/meta"
+import { assertPluginDataVersion } from "@/lib/plugin/dexie/migration-runner"
 import { codeServerClient, type CodeServerProxyArtifact } from "@/lib/codeserver/client"
 import { stageManagedIdeProxy } from "../ide/proxy-manager"
 import type { Plugin, PluginManifest } from "@/types/plugin"
@@ -663,6 +664,22 @@ export class PluginUpdater {
           } else {
             packageRestored = true
             await this.refreshRuntimePlugins()
+            try {
+              assertPluginDataVersion(
+                pluginId,
+                Number.parseInt(currentVersion.split(".")[0], 10),
+                (await getPluginDexieMeta(pluginId))?.appliedMigrationVersion
+              )
+            } catch (versionError) {
+              const message = String(versionError)
+              usePluginStore.setState((state) => ({
+                plugins: {
+                  ...state.plugins,
+                  [pluginId]: { ...state.plugins[pluginId], status: "error", error: message },
+                },
+              }))
+              throw versionError
+            }
             // Once teardown began, never resurrect the old runtime object
             // graph. The package is restored, while desired intent remains in
             // the lifecycle record for an explicit retry/restart.

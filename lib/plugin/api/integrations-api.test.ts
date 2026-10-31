@@ -116,7 +116,15 @@ describe("ctx.integrations", () => {
     ).rejects.toThrow('requires the "integrations:manage" permission')
   })
 
-  it.each(["approvedOrigins", "authSessionId", "providerId", "pluginId", "id", "health"])(
+  it.each([
+    "approvedOrigins",
+    "authSessionId",
+    "providerId",
+    "providerOwnerPluginId",
+    "pluginId",
+    "id",
+    "health",
+  ])(
     "rejects a forged plugin account patch for %s without applying allowed fields",
     async (key) => {
       const api = createIntegrationsAPI("example-delivery", () => true)

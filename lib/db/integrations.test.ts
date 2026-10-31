@@ -9,6 +9,7 @@ import {
 } from "@/lib/external-services/catalog"
 import {
   appendIntegrationAudit,
+  bindIntegrationAccountProviderOwner,
   cancelIntegrationActionJobRecord,
   claimIntegrationActionJob,
   createIntegrationAccount,
@@ -29,11 +30,73 @@ import {
   updateIntegrationSubscription,
   updateIntegrationActionJob,
 } from "./integrations"
+import {
+  registerAuthenticationProvider,
+  releaseAuthProviderOwnership,
+} from "@/lib/plugin/auth/auth-provider-registry"
 
 describe("Integration persistence", () => {
   beforeEach(async () => {
     await getDb().delete()
     __resetDbForTesting()
+  })
+
+  it.each([null, "provider-owner"])(
+    "stamps the current provider owner %s when creating an account",
+    async (owner) => {
+      const dispose = registerAuthenticationProvider({
+        id: "review-provider",
+        pluginId: owner,
+        label: "Provider",
+        getSessions: async () => [],
+        createSession: async () => {
+          throw new Error("not used")
+        },
+        removeSession: async () => undefined,
+      })
+      try {
+        const account = await createIntegrationAccount("consumer", {
+          integrationId: "example",
+          providerId: "review-provider",
+          authSessionId: "session",
+          remoteAccountId: "user",
+          label: "User",
+          providerOwnerPluginId: "forged-owner",
+        } as unknown as Parameters<typeof createIntegrationAccount>[1])
+        expect(account.providerOwnerPluginId).toBe(owner)
+        expect((await getDb().integrationAccounts.get(account.id))?.providerOwnerPluginId).toBe(
+          owner
+        )
+      } finally {
+        dispose()
+        if (owner) releaseAuthProviderOwnership(owner)
+      }
+    }
+  )
+
+  it("pins a legacy account once under competing owner adoptions and health updates", async () => {
+    const account = await createIntegrationAccount("consumer", {
+      integrationId: "example",
+      providerId: "legacy-provider",
+      authSessionId: "session",
+      remoteAccountId: "user",
+      label: "User",
+    })
+    const [first, second] = await Promise.all([
+      bindIntegrationAccountProviderOwner("consumer", account.id, "provider-a"),
+      bindIntegrationAccountProviderOwner("consumer", account.id, "provider-b"),
+      updateIntegrationAccount("consumer", account.id, { health: "healthy" }),
+    ])
+    expect(second.providerOwnerPluginId).toBe(first.providerOwnerPluginId)
+    expect((await getDb().integrationAccounts.get(account.id))?.providerOwnerPluginId).toBe(
+      first.providerOwnerPluginId
+    )
+    await updateIntegrationAccount("consumer", account.id, {
+      providerOwnerPluginId: "forged",
+    } as unknown as Parameters<typeof updateIntegrationAccount>[2])
+    expect((await getDb().integrationAccounts.get(account.id))?.providerOwnerPluginId).toBe(
+      first.providerOwnerPluginId
+    )
   })
 
   it("retains migration markers and backups while pruning old audit entries", async () => {
@@ -399,7 +462,7 @@ describe("Integration persistence", () => {
     })
   }
 
-  const lease = { owner: "window-1", leaseMs: 1000, idempotent: true }
+  const lease = { owner: "window-1", leaseMs: 1000 }
 
   it("claims atomically, rejects early retries and fences stale executor writes and audits", async () => {
     const job = await queuedJob()
@@ -443,13 +506,13 @@ describe("Integration persistence", () => {
     expect(await getDb().integrationAudit.count()).toBe(0)
   })
 
-  it("finds expired/legacy leases and cancels non-idempotent recovery with an audit", async () => {
+  it("review regression: cancels legacy running rows with no dispatch evidence", async () => {
     const job = await queuedJob()
     await updateIntegrationActionJob(job.id, { status: "running" })
     expect(await listRunnableIntegrationActionJobs()).toEqual([
       expect.objectContaining({ id: job.id }),
     ])
-    expect(await claimIntegrationActionJob(job.id, { ...lease, idempotent: false })).toBeUndefined()
+    expect(await claimIntegrationActionJob(job.id, lease)).toBeUndefined()
     expect(await getIntegrationActionJob(job.id)).toMatchObject({
       status: "cancelled",
       remoteOutcome: "unknown",

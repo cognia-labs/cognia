@@ -27,6 +27,7 @@ import {
 } from "./external-services"
 import { listExternalCapabilities, listExternalServices } from "@/lib/external-services/catalog"
 import { sha256Hex } from "@/lib/share/hash"
+import { getProvider } from "@/lib/plugin/auth/auth-provider-registry"
 
 function nowIso(): string {
   return new Date().toISOString()
@@ -106,11 +107,13 @@ export async function createIntegrationAccount(
   input: IntegrationAccountInput
 ): Promise<IntegrationAccount> {
   const now = nowIso()
+  const provider = getProvider(input.providerId)
   const row: IntegrationAccount = {
     id: crypto.randomUUID(),
     pluginId,
     integrationId: input.integrationId,
     providerId: input.providerId,
+    ...(provider ? { providerOwnerPluginId: provider.pluginId } : {}),
     authSessionId: input.authSessionId,
     remoteAccountId: input.remoteAccountId,
     approvedOrigins: normalizeApprovedOrigins(input.approvedOrigins),
@@ -185,18 +188,40 @@ export async function updateIntegrationAccount(
     >
   >
 ): Promise<IntegrationAccountRow> {
-  const existing = await getIntegrationAccount(pluginId, accountId)
-  if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
-  const row = {
-    ...existing,
-    ...withoutRecipientList(patch),
-    id: existing.id,
-    pluginId: existing.pluginId,
-    updatedAt: nowIso(),
-  }
-  await getDb().integrationAccounts.put(row)
+  const db = getDb()
+  const row = await db.transaction("rw", db.integrationAccounts, async () => {
+    const existing = await getIntegrationAccount(pluginId, accountId)
+    if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
+    const updated = {
+      ...existing,
+      ...withoutRecipientList(patch),
+      id: existing.id,
+      pluginId: existing.pluginId,
+      providerOwnerPluginId: existing.providerOwnerPluginId,
+      updatedAt: nowIso(),
+    }
+    await db.integrationAccounts.put(updated)
+    return updated
+  })
   await projectIntegrationAccount(row)
   return row
+}
+
+/** Atomically pin a legacy account once; concurrent resolutions cannot rebind it. */
+export async function bindIntegrationAccountProviderOwner(
+  pluginId: string,
+  accountId: string,
+  providerOwnerPluginId: string | null
+): Promise<IntegrationAccountRow> {
+  const db = getDb()
+  return db.transaction("rw", db.integrationAccounts, async () => {
+    const existing = await getIntegrationAccount(pluginId, accountId)
+    if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
+    if (existing.providerOwnerPluginId !== undefined) return existing
+    const row = { ...existing, providerOwnerPluginId, updatedAt: nowIso() }
+    await db.integrationAccounts.put(row)
+    return row
+  })
 }
 
 /**
@@ -644,7 +669,7 @@ export async function cancelIntegrationActionJobsByPlugin(pluginId: string): Pro
 /** One durable winner, including retry due-time and crashed executor recovery. */
 export async function claimIntegrationActionJob(
   jobId: string,
-  options: { owner: string; leaseMs: number; idempotent: boolean },
+  options: { owner: string; leaseMs: number },
   now = Date.now()
 ): Promise<IntegrationActionJob | undefined> {
   const db = getDb()
@@ -654,9 +679,10 @@ export async function claimIntegrationActionJob(
     const at = new Date(now).toISOString()
     if (job.status === "running") {
       if (job.claimLeaseExpiresAt && job.claimLeaseExpiresAt > at) return undefined
-      // Legacy running rows have no dispatch marker. Conservatively assume a
-      // remote write may have escaped the crashed process as well.
-      if (!options.idempotent) {
+      // New claims explicitly persist an unset marker. Missing evidence on a
+      // legacy running row cannot prove that no remote write was dispatched.
+      // Enqueue deduplication says nothing about remote replay safety.
+      if (job.remoteWriteStartedAt !== null) {
         await cancelIntegrationActionJobRecord(
           jobId,
           {
@@ -676,6 +702,7 @@ export async function claimIntegrationActionJob(
       claimToken: crypto.randomUUID(),
       claimOwner: options.owner,
       claimLeaseExpiresAt: new Date(now + options.leaseMs).toISOString(),
+      remoteWriteStartedAt: null,
       error: undefined,
       nextAttemptAt: undefined,
       updatedAt: at,
