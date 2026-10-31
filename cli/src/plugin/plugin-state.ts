@@ -5,6 +5,7 @@
  */
 import nodeFs from "node:fs"
 import path from "node:path"
+import type { AuthProviderOwnershipStore } from "@/lib/plugin/auth/auth-provider-registry"
 import {
   PluginLifecycleRevisionError,
   type PluginLifecycleRecord,
@@ -34,31 +35,50 @@ export interface CliPluginStateDocument {
   version: 2
   disabled: string[]
   lifecycle: Record<string, PluginLifecycleRecord>
+  /** Serialized host-owned provider bindings, separate from plugin lifecycle. */
+  authProviderOwners?: string
 }
 
 function emptyDocument(): CliPluginStateDocument {
   return { version: 2, disabled: [], lifecycle: {} }
 }
 
+// Ownership reads and every write must propagate corruption: recovering an
+// empty document while mutating lifecycle would silently erase owner bindings.
+function loadPluginState(home: string, fs: PluginStateFs): CliPluginStateDocument {
+  const file = pluginStatePath(home)
+  if (!fs.exists(file)) return emptyDocument()
+  const parsed = JSON.parse(fs.readText(file)) as {
+    disabled?: unknown
+    lifecycle?: unknown
+    authProviderOwners?: string
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Plugin state storage is invalid")
+  }
+  const disabled = Array.isArray(parsed.disabled)
+    ? parsed.disabled.filter((id): id is string => typeof id === "string")
+    : []
+  const lifecycle =
+    parsed.lifecycle && typeof parsed.lifecycle === "object"
+      ? (parsed.lifecycle as Record<string, PluginLifecycleRecord>)
+      : {}
+  return {
+    version: 2,
+    disabled,
+    lifecycle,
+    ...(Object.hasOwn(parsed, "authProviderOwners")
+      ? { authProviderOwners: parsed.authProviderOwners }
+      : {}),
+  }
+}
+
 export function readPluginState(
   home: string,
   fs: PluginStateFs = defaultFs
 ): CliPluginStateDocument {
-  const file = pluginStatePath(home)
-  if (!fs.exists(file)) return emptyDocument()
   try {
-    const parsed = JSON.parse(fs.readText(file)) as {
-      disabled?: unknown
-      lifecycle?: unknown
-    }
-    const disabled = Array.isArray(parsed.disabled)
-      ? parsed.disabled.filter((id): id is string => typeof id === "string")
-      : []
-    const lifecycle =
-      parsed.lifecycle && typeof parsed.lifecycle === "object"
-        ? (parsed.lifecycle as Record<string, PluginLifecycleRecord>)
-        : {}
-    return { version: 2, disabled, lifecycle }
+    return loadPluginState(home, fs)
   } catch {
     return emptyDocument()
   }
@@ -66,6 +86,28 @@ export function readPluginState(
 
 function writePluginState(home: string, document: CliPluginStateDocument, fs: PluginStateFs): void {
   fs.writeText(pluginStatePath(home), JSON.stringify(document, null, 2))
+}
+
+/** Read through on every operation; corrupt or inaccessible ownership fails closed. */
+export function createCliAuthProviderOwnershipStore(
+  home: string,
+  fs: PluginStateFs = defaultFs
+): AuthProviderOwnershipStore {
+  return {
+    read() {
+      const value = loadPluginState(home, fs).authProviderOwners
+      if (value === undefined) return null
+      if (typeof value !== "string") {
+        throw new Error("Auth provider ownership storage is invalid")
+      }
+      return value
+    },
+    write(value) {
+      const document = loadPluginState(home, fs)
+      document.authProviderOwners = value
+      writePluginState(home, document, fs)
+    },
+  }
 }
 
 export function readDisabledPlugins(home: string, fs: PluginStateFs = defaultFs): Set<string> {
@@ -78,7 +120,7 @@ export function setPluginDisabled(
   disabled: boolean,
   fs: PluginStateFs = defaultFs
 ): Set<string> {
-  const document = readPluginState(home, fs)
+  const document = loadPluginState(home, fs)
   const set = new Set(document.disabled)
   if (disabled) set.add(id)
   else set.delete(id)
@@ -116,7 +158,7 @@ export function createCliPluginLifecycleStateAdapter(
       )
     },
     async write(pluginId, expectedRevision, patch) {
-      const document = readPluginState(home, fs)
+      const document = loadPluginState(home, fs)
       const current =
         document.lifecycle[pluginId] ??
         ({

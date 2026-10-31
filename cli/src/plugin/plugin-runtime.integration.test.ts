@@ -8,7 +8,11 @@
  * without stalling on the consent broker. Isolated in its own file so the global
  * plugin-manager singleton it creates does not leak into other suites.
  */
-import { ensurePluginRuntime, __resetPluginRuntimeForTesting } from "./plugin-runtime"
+import {
+  ensurePluginRuntime,
+  __resetPluginRuntimeForTesting,
+  installPluginRuntimeShims,
+} from "./plugin-runtime"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -37,6 +41,7 @@ describe("plugin runtime (real bootstrap)", () => {
     } catch {
       // best-effort
     }
+    __resetPluginRuntimeForTesting()
     if (previousCogniaHome === undefined) delete process.env.COGNIA_HOME
     else process.env.COGNIA_HOME = previousCogniaHome
     fs.rmSync(testHome, { recursive: true, force: true })
@@ -100,5 +105,65 @@ describe("plugin runtime (real bootstrap)", () => {
     // It executes (returns) rather than stalling on the consent gate; the tool's
     // own result may be an error on this host, which is fine — we assert no stall.
     expect(exec).toBe("executed")
+  }, 30000)
+
+  it("releases durable ownership when the external uninstall flow removes a plugin", async () => {
+    expect((await ensurePluginRuntime()).ok).toBe(true)
+    const { usePluginStore } = await import("@/stores/plugin-runtime")
+    const { createNodePluginRuntimeAdapter } = await import("../serve/plugin-runtime-adapter")
+    const { __resetAuthRegistryForTesting, getProvider, registerAuthenticationProvider } =
+      await import("@/lib/plugin/auth/auth-provider-registry")
+    const manifest = {
+      id: "external-auth-owner",
+      name: "External auth owner",
+      version: "1.0.0",
+      description: "External uninstall fixture",
+      type: "frontend" as const,
+      main: "index.js",
+      capabilities: [],
+      permissions: [],
+    }
+    usePluginStore
+      .getState()
+      .discoverPlugin(manifest, "local", path.join(testHome, "plugins", manifest.id))
+    const provider = {
+      id: "external-auth-provider",
+      label: "External auth provider",
+      pluginId: manifest.id,
+      getSessions: async () => [],
+      createSession: async () => {
+        throw new Error("No interactive session in this fixture")
+      },
+      removeSession: async () => {},
+    }
+    try {
+      registerAuthenticationProvider(provider)
+      expect(() => registerAuthenticationProvider({ ...provider, pluginId: "squatter" })).toThrow(
+        /owned by another plugin/
+      )
+
+      const unloadPlugin = jest.fn(async () => {})
+      const adapter = createNodePluginRuntimeAdapter({
+        manager: async () => ({
+          registerDiskPlugin: async () => {},
+          loadPlugin: async () => {},
+          enablePlugin: async () => {},
+          unloadPlugin,
+        }),
+      })
+      await adapter.reconcile({ action: "uninstalled", pluginId: manifest.id })
+      expect(unloadPlugin).toHaveBeenCalledWith(manifest.id)
+      expect(usePluginStore.getState().plugins[manifest.id]).toBeUndefined()
+      expect(getProvider(provider.id)).toBeUndefined()
+
+      // Restart the ownership backing to prove release reached disk too.
+      __resetPluginRuntimeForTesting()
+      installPluginRuntimeShims({})
+      expect(() =>
+        registerAuthenticationProvider({ ...provider, pluginId: "squatter" })
+      ).not.toThrow()
+    } finally {
+      __resetAuthRegistryForTesting()
+    }
   }, 30000)
 })

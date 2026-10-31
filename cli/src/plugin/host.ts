@@ -8,6 +8,7 @@
  */
 import nodeFsPromises from "node:fs/promises"
 import path from "node:path"
+import { releaseAuthProviderOwnership } from "@/lib/plugin/auth/auth-provider-registry"
 
 import { discoverPlugins, type PluginFs } from "./discover-plugins"
 import type { PluginManifest } from "@/types/plugin"
@@ -113,12 +114,13 @@ export async function uninstallHostPlugin(
   id: string,
   dir: string,
   deps: {
-    manager: HostManager
+    manager: Pick<HostManager, "unloadPlugin">
     rm?: (p: string, opts: { recursive: boolean; force: boolean }) => Promise<void>
   }
 ): Promise<void> {
   await deps.manager.unloadPlugin(id)
   await (deps.rm ?? ((p, o) => nodeFsPromises.rm(p, o)))(dir, { recursive: true, force: true })
+  releaseAuthProviderOwnership(id)
 }
 
 /**

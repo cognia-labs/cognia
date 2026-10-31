@@ -16,14 +16,29 @@ import {
 // returns a disposer synchronously. No Dexie schema change is needed. Read on
 // every registration (no in-memory ownership cache); deactivation never deletes
 // it. Storage errors fail closed rather than allowing an id to be reassigned.
-// Browser/Tauri Storage persists across restarts. Headless installs the memory
-// Storage shim in lib/headless/node-indexeddb.ts, so its bindings last only for
-// the process lifetime. CLI-side durable ownership is a separate ES-09 job.
+// Browser/Tauri Storage persists across restarts. The CLI injects its durable
+// plugin-state backing before plugins register, leaving other Storage shims
+// process-local.
 const OWNER_STORAGE_KEY = "cognia-plugin-storage:__host-auth-provider-owners__"
 
+export interface AuthProviderOwnershipStore {
+  read(): string | null
+  write(value: string): void
+}
+
+let ownershipStore: AuthProviderOwnershipStore | null = null
+
+/** Host-only synchronous backing; null restores the browser Storage default. */
+export function setAuthProviderOwnershipStore(store: AuthProviderOwnershipStore | null): void {
+  ownershipStore = store
+}
+
 function readOwners(): Map<string, string> {
-  if (typeof localStorage === "undefined") return new Map()
-  const raw = localStorage.getItem(OWNER_STORAGE_KEY)
+  const raw = ownershipStore
+    ? ownershipStore.read()
+    : typeof localStorage === "undefined"
+      ? null
+      : localStorage.getItem(OWNER_STORAGE_KEY)
   if (raw === null) return new Map()
   const entries: unknown = JSON.parse(raw)
   if (!Array.isArray(entries)) throw new Error("Auth provider ownership storage is invalid")
@@ -45,6 +60,17 @@ function readOwners(): Map<string, string> {
   return owners
 }
 
+function writeOwners(owners: Map<string, string>): void {
+  const value = JSON.stringify([...owners])
+  if (ownershipStore) {
+    ownershipStore.write(value)
+  } else {
+    if (typeof localStorage === "undefined")
+      throw new Error("Auth provider ownership storage is unavailable")
+    localStorage.setItem(OWNER_STORAGE_KEY, value)
+  }
+}
+
 /** Host registrations bind an id in host Storage, including declarative contributions. */
 export function registerAuthenticationProvider(provider: AuthenticationProvider): () => void {
   const existing = getProvider(provider.id)
@@ -63,10 +89,8 @@ export function claimAuthProviderOwnership(providerId: string, pluginId: string 
     throw new Error(`Auth provider "${providerId}" is owned by another plugin.`)
   }
   if (pluginId !== null && owner === undefined) {
-    if (typeof localStorage === "undefined")
-      throw new Error("Auth provider ownership storage is unavailable")
     owners.set(providerId, pluginId)
-    localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify([...owners]))
+    writeOwners(owners)
   }
 }
 
@@ -80,6 +104,6 @@ export function releaseAuthProviderOwnership(pluginId: string): void {
       changed = true
     }
   }
-  if (changed) localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify([...owners]))
+  if (changed) writeOwners(owners)
   unregisterProvidersByPlugin(pluginId)
 }

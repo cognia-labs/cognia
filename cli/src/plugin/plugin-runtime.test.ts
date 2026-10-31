@@ -23,6 +23,8 @@ function makeStore(statuses: Record<string, string>) {
 }
 
 describe("installPluginRuntimeShims", () => {
+  afterEach(() => __resetPluginRuntimeForTesting())
+
   it("installs Map-backed storages, event no-ops, and seeds the plugin policy", () => {
     const g: Record<string, unknown> = {}
     installPluginRuntimeShims(g)

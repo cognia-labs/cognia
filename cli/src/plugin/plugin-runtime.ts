@@ -24,11 +24,19 @@
 import os from "node:os"
 
 import { isHeadlessHost } from "@/lib/platform/detect"
+import {
+  releaseAuthProviderOwnership,
+  setAuthProviderOwnershipStore,
+} from "@/lib/plugin/auth/auth-provider-registry"
 
 import { installFakeIndexedDb } from "../db/bootstrap"
 import { resolveHome } from "../config/load"
 import { pluginDiscoveryRoots } from "./discover-plugins"
-import { createCliPluginLifecycleStateAdapter, readDisabledPlugins } from "./plugin-state"
+import {
+  createCliAuthProviderOwnershipStore,
+  createCliPluginLifecycleStateAdapter,
+  readDisabledPlugins,
+} from "./plugin-state"
 
 export { pluginDiscoveryRoots }
 
@@ -135,6 +143,9 @@ export function installPluginRuntimeShims(
 ): void {
   installStorageShim(g, "localStorage")
   installStorageShim(g, "sessionStorage")
+  setAuthProviderOwnershipStore(
+    createCliAuthProviderOwnershipStore(resolveHome(process.env, os.homedir()))
+  )
   if (typeof g.CustomEvent !== "function") {
     g.CustomEvent = class {
       type: string
@@ -192,6 +203,7 @@ export interface PluginRuntimeDeps {
 }
 
 let cached: Promise<PluginRuntimeResult> | null = null
+let stopObservingUninstalls: (() => void) | null = null
 
 /**
  * Register the CLI's OS-tier sandbox executor with the shared bridge.
@@ -283,6 +295,15 @@ async function bootstrap(deps: PluginRuntimeDeps): Promise<PluginRuntimeResult> 
             scopedRealms: false,
           },
         })
+        // Native/external uninstalls bypass PluginManager.uninstallPlugin but
+        // remove the store projection and emit this terminal lifecycle event.
+        const { usePluginStore } = await import("@/stores/plugin-runtime")
+        stopObservingUninstalls?.()
+        stopObservingUninstalls = usePluginStore
+          .getState()
+          .addEventListener("plugin:uninstalled", (event) => {
+            if (event.type === "plugin:uninstalled") releaseAuthProviderOwnership(event.pluginId)
+          })
       })
     await initManager()
 
@@ -411,4 +432,7 @@ export function ensurePluginRuntime(deps: PluginRuntimeDeps = {}): Promise<Plugi
 export function __resetPluginRuntimeForTesting(): void {
   cached = null
   forcedDisabled.clear()
+  stopObservingUninstalls?.()
+  stopObservingUninstalls = null
+  setAuthProviderOwnershipStore(null)
 }

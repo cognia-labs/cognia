@@ -1,12 +1,21 @@
 /** @jest-environment jsdom */
 
 import Dexie from "dexie"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { installFakeIndexedDb } from "@/lib/headless/node-indexeddb"
+import {
+  __resetPluginRuntimeForTesting,
+  installPluginRuntimeShims,
+} from "@/cli/src/plugin/plugin-runtime"
+import { uninstallHostPlugin } from "@/cli/src/plugin/host"
 import {
   __resetAuthRegistryForTesting,
   getProvider,
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
+  setAuthProviderOwnershipStore,
   type AuthenticationProvider,
 } from "./auth-provider-registry"
 
@@ -23,10 +32,14 @@ const provider = (pluginId: string | null, id = "acme"): AuthenticationProvider 
 
 describe("host auth provider ownership", () => {
   beforeEach(() => {
+    setAuthProviderOwnershipStore(null)
     localStorage.clear()
     __resetAuthRegistryForTesting()
   })
-  afterEach(() => __resetAuthRegistryForTesting())
+  afterEach(() => {
+    __resetAuthRegistryForTesting()
+    setAuthProviderOwnershipStore(null)
+  })
 
   it("survives registry restarts and protects unrelated owners during uninstall", () => {
     registerAuthenticationProvider(provider("owner"))()
@@ -54,12 +67,52 @@ describe("host auth provider ownership", () => {
     }
   })
 
-  it("retains headless ownership only for the process lifetime", async () => {
+  it("uses the injected store synchronously and restores the browser default", () => {
+    let owners: string | null = null
+    setAuthProviderOwnershipStore({
+      read: () => owners,
+      write: (value) => {
+        owners = value
+      },
+    })
+    registerAuthenticationProvider(provider("owner"))()
+    expect(owners).toBe(JSON.stringify([["acme", "owner"]]))
+    expect(localStorage.length).toBe(0)
+    __resetAuthRegistryForTesting()
+    expect(() => registerAuthenticationProvider(provider("squatter"))).toThrow(
+      /owned by another plugin/
+    )
+
+    setAuthProviderOwnershipStore(null)
+    registerAuthenticationProvider(provider("browser-owner"))()
+    expect(localStorage.length).toBe(1)
+  })
+
+  it.each(["read", "write"])("fails closed if the injected store cannot %s", (operation) => {
+    setAuthProviderOwnershipStore({
+      read: () => {
+        if (operation === "read") throw new Error("Disk unavailable")
+        return null
+      },
+      write: () => {
+        throw new Error("Disk unavailable")
+      },
+    })
+    expect(() => registerAuthenticationProvider(provider("owner"))).toThrow("Disk unavailable")
+    expect(getProvider("acme")).toBeUndefined()
+    expect(localStorage.length).toBe(0)
+  })
+
+  it("restores headless ownership from disk until the CLI uninstalls the owner", async () => {
     const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!
     const dependencies = { ...Dexie.dependencies }
+    const previousHome = process.env.COGNIA_HOME
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-auth-owners-"))
+    process.env.COGNIA_HOME = home
     try {
       const firstProcess: Record<string, unknown> = {}
       await installFakeIndexedDb(firstProcess)
+      installPluginRuntimeShims(firstProcess)
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
         value: firstProcess.localStorage,
@@ -70,19 +123,38 @@ describe("host auth provider ownership", () => {
         /owned by another plugin/
       )
 
-      // A new headless process installs fresh in-memory Storage (ES-09 follow-up).
+      // Fresh process globals and registry; only plugin-state.json is shared.
+      __resetPluginRuntimeForTesting()
       const nextProcess: Record<string, unknown> = {}
       await installFakeIndexedDb(nextProcess)
+      installPluginRuntimeShims(nextProcess)
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
         value: nextProcess.localStorage,
       })
       __resetAuthRegistryForTesting()
+      expect(() => registerAuthenticationProvider(provider("squatter"))).toThrow(
+        /owned by another plugin/
+      )
+      expect(getProvider("acme")).toBeUndefined()
+
+      const dir = path.join(home, "plugins", "owner")
+      fs.mkdirSync(dir, { recursive: true })
+      await uninstallHostPlugin("owner", dir, {
+        manager: { unloadPlugin: async () => {} },
+      })
+      expect(fs.existsSync(dir)).toBe(false)
+      __resetPluginRuntimeForTesting()
+      installPluginRuntimeShims({})
       expect(() => registerAuthenticationProvider(provider("squatter"))).not.toThrow()
       expect(getProvider("acme")?.pluginId).toBe("squatter")
     } finally {
+      __resetPluginRuntimeForTesting()
       Object.defineProperty(globalThis, "localStorage", storageDescriptor)
       Object.assign(Dexie.dependencies, dependencies)
+      if (previousHome === undefined) delete process.env.COGNIA_HOME
+      else process.env.COGNIA_HOME = previousHome
+      fs.rmSync(home, { recursive: true, force: true })
     }
   })
 

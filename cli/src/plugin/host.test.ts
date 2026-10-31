@@ -4,6 +4,12 @@ import nodeFsP from "node:fs/promises"
 import path from "node:path"
 import type { PluginManifest } from "@/types/plugin"
 import {
+  __resetAuthRegistryForTesting,
+  getProvider,
+  registerAuthenticationProvider,
+  setAuthProviderOwnershipStore,
+} from "@/lib/plugin/auth/auth-provider-registry"
+import {
   listHostPlugins,
   reloadPlugin,
   registerDiskPlugins,
@@ -152,6 +158,33 @@ describe("reloadPlugin", () => {
 })
 
 describe("uninstallHostPlugin", () => {
+  beforeEach(() => {
+    let owners: string | null = null
+    setAuthProviderOwnershipStore({
+      read: () => owners,
+      write: (value) => {
+        owners = value
+      },
+    })
+    __resetAuthRegistryForTesting()
+  })
+  afterEach(() => {
+    __resetAuthRegistryForTesting()
+    setAuthProviderOwnershipStore(null)
+  })
+
+  const registerOwner = (pluginId: string) =>
+    registerAuthenticationProvider({
+      id: "acme",
+      label: "Acme",
+      pluginId,
+      getSessions: async () => [],
+      createSession: async () => {
+        throw new Error("No interactive session in this fixture")
+      },
+      removeSession: async () => {},
+    })
+
   it("unloads then removes the plugin directory", async () => {
     const mgr = fakeManager()
     const removed: string[] = []
@@ -169,6 +202,36 @@ describe("uninstallHostPlugin", () => {
     nodeFs.writeFileSync(path.join(dir, "plugin.json"), "{}")
     await uninstallHostPlugin("demo", dir, { manager: mgr })
     expect(nodeFs.existsSync(dir)).toBe(false)
+  })
+
+  it("releases active and persisted ownership only after files are removed", async () => {
+    registerOwner("demo")
+    await uninstallHostPlugin("demo", "/plugins/demo", {
+      manager: fakeManager(),
+      rm: async () => {
+        expect(() => registerOwner("squatter")).toThrow(/owned by another plugin/)
+      },
+    })
+    expect(getProvider("acme")).toBeUndefined()
+    expect(() => registerOwner("squatter")).not.toThrow()
+  })
+
+  it.each(["unload", "remove"])("retains ownership when %s fails", async (step) => {
+    registerOwner("demo")()
+    const manager = fakeManager()
+    if (step === "unload") {
+      manager.unloadPlugin = async () => {
+        throw new Error("Uninstall failed")
+      }
+    }
+    const rm = jest.fn(async () => {
+      if (step === "remove") throw new Error("Uninstall failed")
+    })
+    await expect(uninstallHostPlugin("demo", "/plugins/demo", { manager, rm })).rejects.toThrow(
+      "Uninstall failed"
+    )
+    if (step === "unload") expect(rm).not.toHaveBeenCalled()
+    expect(() => registerOwner("squatter")).toThrow(/owned by another plugin/)
   })
 })
 
