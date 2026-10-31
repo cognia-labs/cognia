@@ -216,7 +216,11 @@ export function useAiCommitMessage(rootDir: string): UseAiCommitMessageResult {
       setCommitDraft(rootDir, message)
       return message
     } catch (err) {
-      if (err instanceof CommitAgentAbortedError || controller.signal.aborted) return null
+      if (
+        err instanceof CommitAgentAbortedError ||
+        (target.kind === "model" && controller.signal.aborted)
+      )
+        return null
       const message = err instanceof Error ? err.message : String(err)
       setError(message)
       toast.error(t("commit.ai.failed"), { description: message })

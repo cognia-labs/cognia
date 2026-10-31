@@ -51,6 +51,7 @@ jest.mock("@/lib/ai/agent/external/manager", () => ({
 
 const mockResolveRemotePermission = jest.fn(async () => ({ resolved: true }))
 jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-run-client", () => ({
+  remoteExternalDecisionOrigin: () => ({ kind: "remote", hostId: "host-A" }),
   resolveRemotePermission: (...args: unknown[]) => mockResolveRemotePermission(...(args as [])),
 }))
 
@@ -198,8 +199,36 @@ describe("supersedePendingApprovals", () => {
     state.sessions.s1 = { pendingApprovals: [approval({ requestId })] }
     const count = await supersedePendingApprovals("s1")
     expect(count).toBe(1)
-    expect(mockResolveRemotePermission).toHaveBeenCalledWith("dec-9", "deny")
+    expect(mockResolveRemotePermission).toHaveBeenCalledWith("dec-9", "deny", {
+      kind: "remote",
+      hostId: "host-A",
+    })
     expect(mockRespondToPermission).not.toHaveBeenCalled()
+  })
+
+  it("keeps a remote approval pending when the pinned Host cannot be reached", async () => {
+    const requestId = registerExternalApproval({
+      agentId: "codex",
+      chatSessionId: "s1",
+      remoteDecisionId: "dec-offline",
+      event: { sessionId: "codex-sess", request: { id: "agent-req" } } as never,
+    })!.requestId
+    state.sessions.s1 = { pendingApprovals: [approval({ requestId })] }
+    mockResolveRemotePermission.mockRejectedValueOnce(
+      Object.assign(new Error("offline"), { reason: "host-unreachable" })
+    )
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      expect(await supersedePendingApprovals("s1")).toBe(0)
+      expect(state.sessions.s1.pendingApprovals[0].status).toBe("pending")
+      expect(warn).toHaveBeenCalledWith(
+        "approval supersede failed",
+        expect.objectContaining({ error: expect.objectContaining({ reason: "host-unreachable" }) })
+      )
+      expect(mockRespondToPermission).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it("leaves the entry pending when the shared-session bridge vetoes the deny", async () => {

@@ -10,6 +10,7 @@ import {
   hostSupportsCogniaModelTurns,
   hostSupportsAttachmentTurns,
   admitRemoteExternalRun,
+  callApprovedHostConfigCommand,
   createRemoteHostConfig,
   deleteRemoteHostConfig,
   duplicateRemoteHostConfig,
@@ -24,6 +25,7 @@ import {
   type RemoteHostConfigDeps,
 } from "./remote-host-configs"
 import type { HostFeatureManifest } from "@/lib/platform/host-feature-manifest"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 
 const ALL_OPS = Object.values(HOST_CONFIG_COMMANDS)
 
@@ -59,6 +61,17 @@ function setup(over: Partial<RemoteHostConfigDeps> = {}, reply: unknown = {}) {
       leaseOperations.push(operations)
       return { token: "lease-1", operations, expiresAt: Date.now() + 60_000 }
     },
+    captureOrigin: () => ({ kind: "local" }),
+    openTarget: async () => ({
+      transport: {
+        call: async (command, payload) => {
+          calls.push({ command, payload })
+          return reply as never
+        },
+      },
+      assertCurrent() {},
+      close() {},
+    }),
     ...over,
   })
 }
@@ -179,6 +192,89 @@ describe("the refusal is structured and never a fallback", () => {
 })
 
 describe("commands", () => {
+  it.each([HOST_CONFIG_COMMANDS.run, HOST_CONFIG_COMMANDS.sessionMutate])(
+    "refuses %s after the routed event origin changes during approval",
+    async (operation) => {
+      let activeHost = "host-A"
+      let approved!: () => void
+      let issuing!: () => void
+      const issued = new Promise<void>((resolve) => {
+        issuing = resolve
+      })
+      const targetCall = jest.fn(async () => ({}) as never)
+      const close = jest.fn()
+      setup({
+        captureOrigin: () => ({ kind: "remote", hostId: activeHost }),
+        openTarget: async () => ({ transport: { call: targetCall }, assertCurrent() {}, close }),
+        issueAdminLease: async (operations) => {
+          issuing()
+          await new Promise<void>((resolve) => {
+            approved = resolve
+          })
+          return { token: "lease-A", operations, expiresAt: Date.now() + 60_000 }
+        },
+      })
+      const pending = callApprovedHostConfigCommand(operation)
+      const failure = expect(pending).rejects.toMatchObject({ reason: "host-changed" })
+      await issued
+      activeHost = "host-B"
+      approved()
+      await failure
+      expect(targetCall).not.toHaveBeenCalled()
+      expect(calls).toEqual([])
+      expect(close).toHaveBeenCalledTimes(1)
+    }
+  )
+
+  it("keeps the mutation on the Host that issued its lease across an active-Host switch", async () => {
+    let activeHost = "host-A"
+    const hostCalls: Array<{ host: string; command: string; payload?: Record<string, unknown> }> =
+      []
+    const openTarget = jest.fn(async (origin: TaskWorkspaceOrigin) => {
+      const host = origin.kind === "remote" ? origin.hostId : "local"
+      return {
+        transport: {
+          call: async (command: string, payload?: Record<string, unknown>) => {
+            hostCalls.push({ host, command, payload })
+            return {} as never
+          },
+        },
+        assertCurrent() {},
+        close() {},
+      }
+    })
+    setup({
+      captureOrigin: () => ({ kind: "remote", hostId: activeHost }),
+      openTarget,
+      issueAdminLease: async (operations, _ttl, target) => {
+        await target!.call("host_admin_lease_issue", { operations })
+        activeHost = "host-B"
+        return { token: "lease-A", operations, expiresAt: Date.now() + 60_000 }
+      },
+      call: async (command, payload) => {
+        hostCalls.push({ host: activeHost, command, payload })
+        return {} as never
+      },
+    })
+    await callApprovedHostConfigCommand(HOST_CONFIG_COMMANDS.update, { configId: "cfg" })
+    expect(hostCalls).toEqual([
+      {
+        host: "host-A",
+        command: "host_admin_lease_issue",
+        payload: { operations: [HOST_CONFIG_COMMANDS.update] },
+      },
+      {
+        host: "host-A",
+        command: HOST_CONFIG_COMMANDS.update,
+        payload: { configId: "cfg", adminLease: "lease-A" },
+      },
+    ])
+    expect(openTarget).toHaveBeenCalledWith(
+      { kind: "remote", hostId: "host-A" },
+      HOST_CONFIG_COMMANDS.update
+    )
+  })
+
   it("lists", async () => {
     setup({ hasLocalAuthority: () => true }, { configs: [{ configId: "eac_1" }] })
     await expect(listRemoteHostConfigs()).resolves.toEqual([{ configId: "eac_1" }])

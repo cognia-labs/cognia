@@ -103,6 +103,7 @@ const mockResolveRemotePermission = jest.fn(async (..._args: unknown[]) => ({
 }))
 jest.mock("@/lib/ai/agent/external/runtimes/remote/remote-run-client", () => ({
   resolveRemotePermission: (...args: unknown[]) => mockResolveRemotePermission(...args),
+  remoteExternalDecisionOrigin: () => ({ kind: "remote", hostId: "host-A" }),
   resolveRemoteElicitation: jest.fn(async () => ({ resolved: true })),
 }))
 
@@ -459,7 +460,10 @@ describe("respondAcpFleetPermission", () => {
     })
 
     expect(await respondAcpFleetPermission(requestId, "allow")).toBe(true)
-    expect(mockResolveRemotePermission).toHaveBeenCalledWith("remote-7", "allow")
+    expect(mockResolveRemotePermission).toHaveBeenCalledWith("remote-7", "allow", {
+      kind: "remote",
+      hostId: "host-A",
+    })
     expect(managerMock.respondToPermission).not.toHaveBeenCalled()
   })
 

@@ -437,5 +437,41 @@ describe("useAiCommitMessage", () => {
       })
       expect(mockSetCommitDraft).toHaveBeenCalledWith("/repo", "fix: host")
     })
+
+    it("waits for Host cancellation and surfaces a failed delivery instead of a quiet abort", async () => {
+      mockRuntimeRef = {
+        kind: "host",
+        configId: "c1",
+        revision: "r1",
+        lifecycleGeneration: 1,
+        name: "Host",
+      }
+      mockExecuteHost.mockImplementation(() => new Promise(() => {}))
+      let failCancel!: (error: Error) => void
+      const cancellation = new Promise<void>((_resolve, reject) => {
+        failCancel = reject
+      })
+      void cancellation.catch(() => undefined)
+      mockInterruptHost.mockReturnValueOnce(cancellation)
+      const { result } = renderHook(() => useAiCommitMessage("/repo"))
+      let pending!: Promise<string | null>
+      await act(async () => {
+        pending = result.current.generate()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      await act(async () => {
+        result.current.cancel()
+      })
+      expect(result.current.generating).toBe(true)
+      expect(mockInterruptHost).toHaveBeenCalledTimes(1)
+      const error = Object.assign(new Error("offline"), { reason: "host-unreachable" })
+      await act(async () => {
+        failCancel(error)
+        expect(await pending).toBeNull()
+      })
+      expect(result.current.error).toBe("offline")
+      expect(mockToast.error).toHaveBeenCalledWith("commit.ai.failed", { description: "offline" })
+      expect(mockSetCommitDraft).not.toHaveBeenCalled()
+    })
   })
 })

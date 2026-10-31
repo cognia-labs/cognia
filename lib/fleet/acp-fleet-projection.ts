@@ -1130,9 +1130,13 @@ export async function respondAcpFleetPermission(
     const remoteDecisionId = getExternalApprovalTarget(requestId)?.remoteDecisionId
     const respond = remoteDecisionId
       ? async () => {
-          const { resolveRemotePermission } =
+          const { resolveRemotePermission, remoteExternalDecisionOrigin } =
             await import("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
-          const outcome = await resolveRemotePermission(remoteDecisionId, decision)
+          const outcome = await resolveRemotePermission(
+            remoteDecisionId,
+            decision,
+            remoteExternalDecisionOrigin(remoteDecisionId)
+          )
           if (!outcome.resolved && outcome.reason === "wrong-device") {
             throw new Error("This device is not the one that was asked.")
           }

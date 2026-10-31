@@ -382,8 +382,13 @@ export async function deliverExternalElicitation(
 ): Promise<void> {
   try {
     if (entry.remoteDecisionId) {
-      const { resolveRemoteElicitation } = await import("../runtimes/remote/remote-run-client")
-      const outcome = await resolveRemoteElicitation(entry.remoteDecisionId, response)
+      const { resolveRemoteElicitation, remoteExternalDecisionOrigin } =
+        await import("../runtimes/remote/remote-run-client")
+      const outcome = await resolveRemoteElicitation(
+        entry.remoteDecisionId,
+        response,
+        remoteExternalDecisionOrigin(entry.remoteDecisionId)
+      )
       if (options.strict && !outcome.resolved) {
         throw new Error(`External elicitation response was not accepted: ${outcome.reason}`)
       }

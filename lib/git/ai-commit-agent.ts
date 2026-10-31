@@ -164,7 +164,7 @@ export async function runCommitMessageAgent(
     input.onText?.(streamed)
   }
 
-  let cancel: () => void
+  let cancel: () => void | Promise<void>
   let run: Promise<ExternalAgentResult | null>
   if (target.kind === "external") {
     run = deps.executeExternal(input.prompt, {
@@ -193,27 +193,40 @@ export async function runCommitMessageAgent(
       onEvent,
       newRunId: () => runId,
     })
-    cancel = () => void deps.interruptHost(runId)
+    cancel = () => deps.interruptHost(runId)
   }
 
-  // Cancelling answers at once: the UI must not wait on an agent that is still
-  // winding down. The run's own result, when it lands, is dropped.
+  // Wait for Host stop delivery before reporting cancellation. A terminal event
+  // may arrive first; once aborting, the delivery result remains authoritative.
+  let aborting = false
+  let rejectAbort!: (error: unknown) => void
   const aborted = new Promise<never>((_, reject) => {
-    if (!input.signal) return
-    input.signal.addEventListener(
-      "abort",
-      () => {
-        cancel()
-        reject(new CommitAgentAbortedError())
-      },
-      { once: true }
-    )
+    rejectAbort = reject
   })
-
-  const result = await Promise.race([run, aborted])
-  if (!result) throw new CommitAgentFailedError("The selected agent is not available")
-  if (!result.success) {
-    throw new CommitAgentFailedError(result.error ?? "The selected agent did not finish")
+  const abort = () => {
+    if (aborting) return
+    aborting = true
+    void Promise.resolve()
+      .then(cancel)
+      .then(() => rejectAbort(new CommitAgentAbortedError()), rejectAbort)
   }
-  return result.finalResponse || streamed
+  input.signal?.addEventListener("abort", abort, { once: true })
+  if (input.signal?.aborted) abort()
+  const observedRun = run.then(
+    (value) => (aborting ? aborted : value),
+    (error: unknown) => {
+      if (aborting) return aborted
+      throw error
+    }
+  )
+  try {
+    const result = await Promise.race([observedRun, aborted])
+    if (!result) throw new CommitAgentFailedError("The selected agent is not available")
+    if (!result.success) {
+      throw new CommitAgentFailedError(result.error ?? "The selected agent did not finish")
+    }
+    return result.finalResponse || streamed
+  } finally {
+    input.signal?.removeEventListener("abort", abort)
+  }
 }

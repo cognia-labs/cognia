@@ -41,6 +41,7 @@ import type { ExternalAgentConfigStamp } from "@/types/agent/external-agent-conf
 
 import {
   cancelRemoteExternalTurn,
+  remoteExternalRunOrigin,
   stageRemoteRunAttachments,
   startRemoteExternalTurn,
   subscribeRemoteExternalRun,
@@ -260,9 +261,7 @@ export async function executeOnRemoteHostAgent(
 ): Promise<RemoteExternalAgentResult | null> {
   // This run plane targets the selected Host. Freeze its identity before any
   // attachment/approval wait, and refuse a route change before dispatch.
-  const workspaceOrigin = options.workspaceCapture
-    ? (options.workspaceCapture.origin ?? captureTaskWorkspaceOrigin())
-    : undefined
+  const workspaceOrigin = options.workspaceCapture?.origin ?? captureTaskWorkspaceOrigin()
   const databaseScope = options.workspaceCapture ? captureCodeAdoptionDatabaseScope() : undefined
   // A Host built before per-turn Cognia selection closes its request schema
   // against the field, and cannot resume a gateway task it was never asked to
@@ -309,80 +308,85 @@ export async function executeOnRemoteHostAgent(
     settle = resolve
   })
 
-  const stop = subscribeRemoteExternalRun(runId, {
-    onEvent: (event, frame) => {
-      if (frame?.terminal) {
-        workspace = frame.workspace
-        workspaceUnavailable = frame.workspaceUnavailable
-      }
-      if (event.type === "session_start" && (event as { sessionId?: string }).sessionId) {
-        externalSessionId = (event as { sessionId: string }).sessionId
-      }
-      if (TEXT_EVENTS.has(event.type)) text += deltaText(event)
-      recordHostModelReport(options, event, externalSessionId)
-      options.onEvent?.(event)
-    },
-    onGap: options.onGap,
-    onAttachmentsWithheld: (withheld) =>
-      options.onAttachmentsWithheld?.({
-        reason: withheld.reason,
-        ...(withheld.model ? { model: withheld.model } : {}),
-      }),
-    onTerminal: (terminal, error) => {
-      const finish = () =>
-        settle({
-          runId,
-          success: terminal === "completed",
-          sessionId: externalSessionId,
-          finalResponse: text,
-          // Empty rather than reconstructed: the host already rendered the turn
-          // into parts through the event stream, and these three fields exist for
-          // callers that consume a completed transcript. Rebuilding them from the
-          // frames would be a second, divergent renderer.
-          messages: [],
-          steps: [],
-          toolCalls: [],
-          duration: Date.now() - startedAt,
-          ...(workspace ? { workspace } : {}),
-          ...(workspaceUnavailable ? { workspaceUnavailable } : {}),
-          ...(terminal === "completed" ? {} : { error: error ?? terminal }),
-        })
-      if (workspaceOrigin && databaseScope) {
-        const record = async () => {
-          if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
-          if (workspace && !workspaceUnavailable) {
-            try {
-              await recordWorkspaceTurn(options, workspace, workspaceOrigin, databaseScope)
-              return
-            } catch {
-              if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
-              workspaceUnavailable = "capture-failed"
-            }
-          }
-          if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
-          workspaceUnavailable ??= "no-workspace"
-          await recordUnavailableWorkspaceTurn(
-            options,
-            workspaceUnavailable,
-            workspaceOrigin,
-            databaseScope,
-            workspace
-          )
+  const stop = subscribeRemoteExternalRun(
+    runId,
+    {
+      onEvent: (event, frame) => {
+        if (frame?.terminal) {
+          workspace = frame.workspace
+          workspaceUnavailable = frame.workspaceUnavailable
         }
-        void record()
-          .catch(() => {
-            if (isCodeAdoptionDatabaseScopeCurrent(databaseScope))
-              workspaceUnavailable = "capture-failed"
+        if (event.type === "session_start" && (event as { sessionId?: string }).sessionId) {
+          externalSessionId = (event as { sessionId: string }).sessionId
+        }
+        if (TEXT_EVENTS.has(event.type)) text += deltaText(event)
+        recordHostModelReport(options, event, externalSessionId)
+        options.onEvent?.(event)
+      },
+      onGap: options.onGap,
+      onAttachmentsWithheld: (withheld) =>
+        options.onAttachmentsWithheld?.({
+          reason: withheld.reason,
+          ...(withheld.model ? { model: withheld.model } : {}),
+        }),
+      onTerminal: (terminal, error) => {
+        const finish = () =>
+          settle({
+            runId,
+            success: terminal === "completed",
+            sessionId: externalSessionId,
+            finalResponse: text,
+            // Empty rather than reconstructed: the host already rendered the turn
+            // into parts through the event stream, and these three fields exist for
+            // callers that consume a completed transcript. Rebuilding them from the
+            // frames would be a second, divergent renderer.
+            messages: [],
+            steps: [],
+            toolCalls: [],
+            duration: Date.now() - startedAt,
+            ...(workspace ? { workspace } : {}),
+            ...(workspaceUnavailable ? { workspaceUnavailable } : {}),
+            ...(terminal === "completed" ? {} : { error: error ?? terminal }),
           })
-          .finally(() => {
-            if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) workspaceUnavailable = undefined
-            finish()
-          })
-      } else {
-        finish()
-      }
+        if (workspaceOrigin && databaseScope) {
+          const record = async () => {
+            if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+            if (workspace && !workspaceUnavailable) {
+              try {
+                await recordWorkspaceTurn(options, workspace, workspaceOrigin, databaseScope)
+                return
+              } catch {
+                if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+                workspaceUnavailable = "capture-failed"
+              }
+            }
+            if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope)) return
+            workspaceUnavailable ??= "no-workspace"
+            await recordUnavailableWorkspaceTurn(
+              options,
+              workspaceUnavailable,
+              workspaceOrigin,
+              databaseScope,
+              workspace
+            )
+          }
+          void record()
+            .catch(() => {
+              if (isCodeAdoptionDatabaseScopeCurrent(databaseScope))
+                workspaceUnavailable = "capture-failed"
+            })
+            .finally(() => {
+              if (!isCodeAdoptionDatabaseScopeCurrent(databaseScope))
+                workspaceUnavailable = undefined
+              finish()
+            })
+        } else {
+          finish()
+        }
+      },
     },
-  })
+    workspaceOrigin
+  )
 
   try {
     // Subscribed is not the same as delivered: wait for the host to
@@ -401,6 +405,7 @@ export async function executeOnRemoteHostAgent(
     }
     const started = await startRemoteExternalTurn({
       runId,
+      origin: workspaceOrigin,
       chatSessionId: options.chatSessionId,
       stamp: options.stamp,
       prompt,
@@ -430,14 +435,9 @@ export async function executeOnRemoteHostAgent(
 /**
  * Stop a remote turn.
  *
- * Best-effort and never throws: this runs on an interrupt path where the user
- * has already moved on, and the host's own disconnect handling ends an
- * abandoned run regardless.
+ * A delivery failure is not proof that the original Host stopped. Propagate it
+ * so callers can distinguish a successful stop from an unreachable executor.
  */
 export async function interruptRemoteHostAgent(runId: string): Promise<void> {
-  try {
-    await cancelRemoteExternalTurn(runId)
-  } catch {
-    // See the docstring.
-  }
+  await cancelRemoteExternalTurn(runId, remoteExternalRunOrigin(runId))
 }

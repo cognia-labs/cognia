@@ -2,6 +2,7 @@ import type { ExternalAgentEvent } from "@/types/agent/external-agent"
 
 const started: Array<Record<string, unknown>> = []
 const cancelled: string[] = []
+let cancelError: Error | undefined
 const stop = jest.fn()
 let handlers:
   | {
@@ -34,8 +35,10 @@ jest.mock("./remote-run-client", () => ({
   },
   cancelRemoteExternalTurn: async (runId: string) => {
     cancelled.push(runId)
+    if (cancelError) throw cancelError
     return true
   },
+  remoteExternalRunOrigin: () => mockWorkspaceOrigin,
   stageRemoteRunAttachments: async (runId: string, images: unknown[]) => {
     stagedFor.push({ runId, count: images.length })
     if (stageFails) throw new Error("attachment_too_many")
@@ -100,6 +103,7 @@ beforeEach(() => {
   mockDatabaseName = "account-A"
   started.length = 0
   cancelled.length = 0
+  cancelError = undefined
   handlers = undefined
   subscribedRunId = undefined
   startReply = { started: true, runId: "run-1" }
@@ -315,6 +319,16 @@ it("refuses a Host/account change during the subscription wait before dispatch",
   await expect(run).rejects.toThrow(/target changed/)
   expect(started).toEqual([])
   expect(mockPersistWorkspaceTurn).not.toHaveBeenCalled()
+})
+
+it("pins dispatch even when workspace capture is disabled", async () => {
+  const origin = { kind: "remote" as const, hostId: "host-A" }
+  mockWorkspaceOrigin = origin
+  const run = executeOnRemoteHostAgent("go", { stamp: STAMP, chatSessionId: "chat-1" })
+  await Promise.resolve()
+  expect(started[0]).toMatchObject({ origin })
+  handlers?.onTerminal("completed")
+  await run
 })
 
 // The Host reports the session's options at the end of each turn. This client
@@ -672,6 +686,10 @@ describe("interruptRemoteHostAgent", () => {
   it("cancels the run", async () => {
     await interruptRemoteHostAgent("run-1")
     expect(cancelled).toEqual(["run-1"])
+  })
+  it("propagates a typed cancellation failure to its caller", async () => {
+    cancelError = Object.assign(new Error("offline"), { reason: "host-unreachable" })
+    await expect(interruptRemoteHostAgent("run-1")).rejects.toBe(cancelError)
   })
 })
 

@@ -1,11 +1,28 @@
 import type { HostFeatureManifest } from "@/lib/platform/host-feature-manifest"
 import type { ExternalAgentEvent } from "@/types/agent/external-agent"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
+
+jest.mock("@/lib/remote-host/management-channel", () => ({
+  acquireManagementChannel: jest.fn(),
+}))
 
 const calls: Array<{ command: string; payload: unknown }> = []
 let subscriber: ((frame: unknown) => void) | undefined
 let subscribedTopic: string | undefined
 const unsubscribe = jest.fn()
 let reply: unknown = {}
+const localCalls: Array<{ command: string; payload: unknown }> = []
+let localFailure: Error | undefined
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  ...jest.requireActual("@/lib/tauri/transport-instance"),
+  localTransport: {
+    call: async (command: string, payload: unknown) => {
+      localCalls.push({ command, payload })
+      if (localFailure) throw localFailure
+      return reply
+    },
+  },
+}))
 
 jest.mock("@/lib/tauri", () => ({
   transport: {
@@ -44,8 +61,12 @@ import {
   HostConfigsUnsupportedError,
   __setRemoteHostConfigDepsForTests,
 } from "./remote-host-configs"
+import { acquireManagementChannel } from "@/lib/remote-host/management-channel"
+import { useRemoteHostStore } from "@/stores/remote-host/remote-host-store"
 import {
   createRemoteSessionOperationsClient,
+  __resetRemoteRunOriginsForTests,
+  remoteExternalDecisionOrigin,
   watchRemoteSession,
   EXTERNAL_RUN_EVENT_TOPIC,
   REMOTE_RUN_COMMANDS,
@@ -85,6 +106,10 @@ function watch() {
 let restoreDeps: (() => void) | undefined
 
 beforeEach(() => {
+  localCalls.length = 0
+  localFailure = undefined
+  __resetRemoteRunOriginsForTests()
+  jest.mocked(acquireManagementChannel).mockReset()
   calls.length = 0
   subscriber = undefined
   subscribedTopic = undefined
@@ -141,10 +166,17 @@ describe("host support", () => {
   // write, and the lease has to ride along or the host refuses it again.
   it("carries an approval lease when a paired client starts the turn", async () => {
     const leaseOperations: string[][] = []
+    const origin: TaskWorkspaceOrigin = { kind: "remote", hostId: "companion:host-A" }
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { id: origin.hostId },
+      transport: jest.requireMock("@/lib/tauri").transport,
+      release: jest.fn(),
+    } as never)
     restoreDeps?.()
     restoreDeps = __setRemoteHostConfigDepsForTests({
       hasLocalAuthority: () => false,
       isRemoteHostActive: () => false,
+      captureOrigin: () => origin,
       getRuntimeSnapshot: (() => ({
         host: { compatible: true, operations: Object.values(REMOTE_RUN_COMMANDS) },
       })) as never,
@@ -158,6 +190,7 @@ describe("host support", () => {
     await expect(
       startRemoteExternalTurn({
         runId: "run-1",
+        origin,
         chatSessionId: "chat-1",
         stamp: { configId: "eac_1", revision: "eacr_1", lifecycleGeneration: 1 },
         prompt: "hi",
@@ -166,6 +199,45 @@ describe("host support", () => {
 
     expect(leaseOperations).toEqual([[REMOTE_RUN_COMMANDS.run]])
     expect(calls[0].payload).toMatchObject({ adminLease: "lease-run" })
+    expect(acquireManagementChannel).toHaveBeenCalledWith(origin.hostId)
+  })
+
+  it("does not start a run on A if its routed listener moves to B during approval", async () => {
+    const origin: TaskWorkspaceOrigin = { kind: "remote", hostId: "host-A" }
+    let active = origin
+    const targetCall = jest.fn(async () => ({ started: true, runId: "run-1" }) as never)
+    const restore = __setRemoteHostConfigDepsForTests({
+      captureOrigin: () => active,
+      isRemoteHostActive: () => true,
+      activeHostFeatureManifest: () =>
+        ({
+          schemaVersion: 1,
+          features: {
+            "external-agent.host-configs": { version: 1, operations: [REMOTE_RUN_COMMANDS.run] },
+          },
+        }) as unknown as HostFeatureManifest,
+      openTarget: async () => ({ transport: { call: targetCall }, assertCurrent() {}, close() {} }),
+      issueAdminLease: async (operations) => {
+        await Promise.resolve()
+        active = { kind: "remote", hostId: "host-B" }
+        return { token: "lease-A", operations, expiresAt: 1 }
+      },
+    })
+    try {
+      await expect(
+        startRemoteExternalTurn({
+          runId: "run-1",
+          origin,
+          chatSessionId: "chat-1",
+          prompt: "hi",
+          stamp: { configId: "cfg", revision: "r1", lifecycleGeneration: 1 },
+        })
+      ).rejects.toMatchObject({ reason: "host-changed" })
+      expect(targetCall).not.toHaveBeenCalled()
+      expect(calls).toEqual([])
+    } finally {
+      restore()
+    }
   })
 })
 
@@ -466,19 +538,233 @@ describe("the turn's images", () => {
 })
 
 describe("control", () => {
+  const origin: TaskWorkspaceOrigin = { kind: "remote", hostId: "host-A" }
+  const local: TaskWorkspaceOrigin = { kind: "local" }
+
+  it("delivers local-origin controls directly to desktop IPC after selecting a remote Host", async () => {
+    const restore = __setRemoteHostConfigDepsForTests({
+      isRemoteHostActive: () => true,
+      captureOrigin: () => ({ kind: "remote", hostId: "host-B" }),
+      activeHostFeatureManifest: () => null,
+    })
+    try {
+      reply = { cancelled: true }
+      await expect(cancelRemoteExternalTurn("local-run", local)).resolves.toBe(true)
+      reply = { resolved: true }
+      await expect(resolveRemotePermission("local-run:p", "allow", local)).resolves.toEqual({
+        resolved: true,
+      })
+      await expect(
+        resolveRemoteElicitation("local-run:q", { requestId: "q", action: "cancel" }, local)
+      ).resolves.toEqual({ resolved: true })
+      expect(localCalls.map(({ command }) => command)).toEqual([
+        REMOTE_RUN_COMMANDS.cancel,
+        REMOTE_RUN_COMMANDS.resolve,
+        REMOTE_RUN_COMMANDS.resolve,
+      ])
+      expect(calls).toEqual([])
+      expect(acquireManagementChannel).not.toHaveBeenCalled()
+    } finally {
+      restore()
+    }
+  })
+
+  it("delivers cancel and both decisions to the originating Host after a switch", async () => {
+    const hostCall = jest.fn(async (command: string) =>
+      command === REMOTE_RUN_COMMANDS.cancel ? { cancelled: true } : { resolved: true }
+    )
+    const release = jest.fn()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: {
+        id: "host-A",
+        featureManifest: {
+          schemaVersion: 1,
+          features: {
+            "external-agent.host-configs": {
+              version: 1,
+              operations: Object.values(REMOTE_RUN_COMMANDS),
+            },
+          },
+        },
+      },
+      transport: { call: hostCall },
+      release,
+    } as never)
+    const restore = __setRemoteHostConfigDepsForTests({
+      captureOrigin: () => ({ kind: "remote", hostId: "host-B" }),
+    })
+    try {
+      await expect(cancelRemoteExternalTurn("run-1", origin)).resolves.toBe(true)
+      await expect(resolveRemotePermission("run-1:req", "allow", origin)).resolves.toEqual({
+        resolved: true,
+      })
+      await expect(
+        resolveRemoteElicitation("run-1:q", { requestId: "q", action: "cancel" }, origin)
+      ).resolves.toEqual({ resolved: true })
+      expect(hostCall.mock.calls.map(([command]) => command)).toEqual([
+        REMOTE_RUN_COMMANDS.cancel,
+        REMOTE_RUN_COMMANDS.resolve,
+        REMOTE_RUN_COMMANDS.resolve,
+      ])
+      expect(jest.mocked(acquireManagementChannel).mock.calls.map(([host]) => host)).toEqual([
+        "host-A",
+        "host-A",
+        "host-A",
+      ])
+      expect(release).toHaveBeenCalledTimes(3)
+      expect(calls).toEqual([])
+    } finally {
+      restore()
+    }
+  })
+
+  it("reports an unreachable pinned Host without falling back to the active Host", async () => {
+    jest.mocked(acquireManagementChannel).mockRejectedValueOnce(new Error("offline"))
+    await expect(cancelRemoteExternalTurn("run-1", origin)).rejects.toMatchObject({
+      reason: "host-unreachable",
+    })
+    expect(calls).toEqual([])
+  })
+
+  it("retains dispatch provenance for callers holding only run and decision ids", async () => {
+    let active = origin
+    const hostCall = jest.fn(async (command: string) => {
+      if (command === REMOTE_RUN_COMMANDS.run) return { started: true, runId: "capture:1" }
+      if (command === REMOTE_RUN_COMMANDS.cancel) return { cancelled: true }
+      return { resolved: true }
+    })
+    const manifest = {
+      schemaVersion: 1,
+      features: {
+        "external-agent.host-configs": {
+          version: 1,
+          operations: Object.values(REMOTE_RUN_COMMANDS),
+        },
+      },
+    } as unknown as HostFeatureManifest
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: { id: "host-A", featureManifest: manifest },
+      transport: { call: hostCall },
+      release: jest.fn(),
+    } as never)
+    const restore = __setRemoteHostConfigDepsForTests({
+      captureOrigin: () => active,
+      isRemoteHostActive: () => true,
+      activeHostFeatureManifest: () => manifest,
+      issueAdminLease: async (operations) => ({ token: "lease-A", operations, expiresAt: 1 }),
+    })
+    const stop = subscribeRemoteExternalRun("capture:1", { onEvent() {}, onTerminal() {} }, origin)
+    try {
+      await startRemoteExternalTurn({
+        runId: "capture:1",
+        chatSessionId: "chat",
+        prompt: "hi",
+        stamp: { configId: "config", revision: "r1", lifecycleGeneration: 1 },
+      })
+      subscriber?.(
+        frame({
+          runId: "capture:1",
+          event: { type: "permission_request", request: { id: "req:x" } } as ExternalAgentEvent,
+        })
+      )
+      subscriber?.(
+        frame({
+          runId: "capture:1",
+          seq: 2,
+          event: { type: "elicitation_request", request: { id: "q:y" } } as ExternalAgentEvent,
+        })
+      )
+      active = { kind: "remote", hostId: "host-B" }
+      await expect(cancelRemoteExternalTurn("capture:1")).resolves.toBe(true)
+      await expect(resolveRemotePermission("capture:1:req:x", "allow")).resolves.toEqual({
+        resolved: true,
+      })
+      await expect(
+        resolveRemoteElicitation("capture:1:q:y", { requestId: "q:y", action: "cancel" })
+      ).resolves.toEqual({ resolved: true })
+      expect(hostCall.mock.calls.map(([command]) => command)).toEqual([
+        REMOTE_RUN_COMMANDS.run,
+        REMOTE_RUN_COMMANDS.cancel,
+        REMOTE_RUN_COMMANDS.resolve,
+        REMOTE_RUN_COMMANDS.resolve,
+      ])
+      expect(calls).toEqual([])
+      stop()
+      await expect(cancelRemoteExternalTurn("capture:1")).rejects.toMatchObject({
+        reason: "host-changed",
+      })
+      expect(() => remoteExternalDecisionOrigin("capture:1:req:x")).toThrow()
+      expect(hostCall).toHaveBeenCalledTimes(4)
+    } finally {
+      stop()
+      restore()
+    }
+  })
+
+  it("refuses a switched companion Host before opening or calling a channel", async () => {
+    const restore = __setRemoteHostConfigDepsForTests({
+      captureOrigin: () => ({ kind: "remote", hostId: "companion:host-B" }),
+    })
+    try {
+      const pairedOrigin: TaskWorkspaceOrigin = { kind: "remote", hostId: "companion:host-A" }
+      await expect(cancelRemoteExternalTurn("run-1", pairedOrigin)).rejects.toMatchObject({
+        reason: "host-changed",
+      })
+      await expect(
+        resolveRemotePermission("run-1:req", "deny", pairedOrigin)
+      ).rejects.toMatchObject({ reason: "host-changed" })
+      expect(acquireManagementChannel).not.toHaveBeenCalled()
+      expect(calls).toEqual([])
+    } finally {
+      restore()
+    }
+  })
+
+  it("releases an unreachable channel and preserves the typed failure for both decisions", async () => {
+    const release = jest.fn()
+    jest.mocked(acquireManagementChannel).mockResolvedValue({
+      host: {
+        id: "host-A",
+        featureManifest: {
+          schemaVersion: 1,
+          features: {
+            "external-agent.host-configs": {
+              version: 1,
+              operations: [REMOTE_RUN_COMMANDS.resolve],
+            },
+          },
+        },
+      },
+      transport: {
+        call: jest.fn(async () => {
+          throw new Error("offline")
+        }),
+      },
+      release,
+    } as never)
+    await expect(resolveRemotePermission("run-1:req", "deny", origin)).rejects.toMatchObject({
+      reason: "host-unreachable",
+    })
+    await expect(
+      resolveRemoteElicitation("run-1:q", { requestId: "q", action: "cancel" }, origin)
+    ).rejects.toMatchObject({ reason: "host-unreachable" })
+    expect(release).toHaveBeenCalledTimes(2)
+    expect(calls).toEqual([])
+  })
+
   it("reports whether the cancel is what ended the run", async () => {
     reply = { cancelled: true }
-    await expect(cancelRemoteExternalTurn("run-1")).resolves.toBe(true)
+    await expect(cancelRemoteExternalTurn("run-1", local)).resolves.toBe(true)
     reply = { cancelled: false }
-    await expect(cancelRemoteExternalTurn("run-1")).resolves.toBe(false)
+    await expect(cancelRemoteExternalTurn("run-1", local)).resolves.toBe(false)
   })
 
   it("answers a permission", async () => {
     reply = { resolved: true }
-    await expect(resolveRemotePermission("run-1:req-1", "allow")).resolves.toEqual({
+    await expect(resolveRemotePermission("run-1:req-1", "allow", local)).resolves.toEqual({
       resolved: true,
     })
-    expect(calls[0]).toEqual({
+    expect(localCalls[0]).toEqual({
       command: REMOTE_RUN_COMMANDS.resolve,
       payload: { decisionId: "run-1:req-1", decision: "allow" },
     })
@@ -486,8 +772,8 @@ describe("control", () => {
 
   it("answers an elicitation without sending a request id", async () => {
     reply = { resolved: true }
-    await resolveRemoteElicitation("run-1:el-1", { requestId: "x", action: "cancel" })
-    expect(calls[0].payload).toMatchObject({
+    await resolveRemoteElicitation("run-1:el-1", { requestId: "x", action: "cancel" }, local)
+    expect(localCalls[0].payload).toMatchObject({
       decisionId: "run-1:el-1",
       elicitation: { action: "cancel" },
     })
@@ -495,12 +781,12 @@ describe("control", () => {
 
   it("distinguishes an expired question from someone else's", async () => {
     reply = { resolved: false, reason: "wrong-device" }
-    await expect(resolveRemotePermission("d", "deny")).resolves.toEqual({
+    await expect(resolveRemotePermission("d", "deny", local)).resolves.toEqual({
       resolved: false,
       reason: "wrong-device",
     })
     reply = { resolved: false }
-    await expect(resolveRemotePermission("d", "deny")).resolves.toEqual({
+    await expect(resolveRemotePermission("d", "deny", local)).resolves.toEqual({
       resolved: false,
       reason: "unknown",
     })
@@ -537,6 +823,23 @@ describe("remote native session facade", () => {
     chatSessionId: "chat",
     externalSessionId: "native",
   }
+  it("does not open a shell watcher on a replacement origin when the transport object is unchanged", async () => {
+    const initialHost = useRemoteHostStore.getState().activeHostId
+    useRemoteHostStore.setState({ activeHostId: "host-A" })
+    const client = createRemoteSessionOperationsClient(target)
+    useRemoteHostStore.setState({ activeHostId: "host-B" })
+    try {
+      await expect(
+        client.executeSessionShell("host", "native", "pwd", {
+          onPermissionRequest: async (request) => ({ requestId: request.id, granted: false }),
+        })
+      ).rejects.toMatchObject({ reason: "host-changed" })
+      expect(calls).toEqual([])
+      expect(subscribedTopic).toBeUndefined()
+    } finally {
+      useRemoteHostStore.setState({ activeHostId: initialHost })
+    }
+  })
   it("separates native inspection from mutation and refuses old Hosts before transport", async () => {
     const client = createRemoteSessionOperationsClient(target)
     reply = { value: ["child"] }
@@ -622,6 +925,51 @@ describe("remote native session facade", () => {
       createRemoteSessionOperationsClient(target).getSessionOperationCapabilities("host", "native")
     ).resolves.toEqual({ steering: "supported" })
     expect(calls.at(-1)?.command).toBe("external_agent_session_query")
+  })
+
+  it("rejects a pending shell when its permission answer cannot reach the pinned Host", async () => {
+    reply = { value: { session: { id: "native" } } }
+    let answer!: (response: { requestId: string; granted: boolean }) => void
+    const onPermissionRequest = jest.fn(
+      () =>
+        new Promise<{ requestId: string; granted: boolean }>((resolve) => {
+          answer = resolve
+        })
+    )
+    const shell = createRemoteSessionOperationsClient(target).executeSessionShell(
+      "host",
+      "native",
+      "pwd",
+      { onPermissionRequest }
+    )
+    const failure = expect(shell).rejects.toMatchObject({ reason: "host-unreachable" })
+    await new Promise((resolve) => setImmediate(resolve))
+    const watchId = (calls[0].payload as { action: { watchId: string } }).action.watchId
+    subscriber?.(
+      frame({
+        runId: watchId,
+        event: { type: "permission_request", request: { id: "req" } } as ExternalAgentEvent,
+      })
+    )
+    const beforeSwitch = calls.length
+    localFailure = new Error("local IPC disconnected")
+    const restore = __setRemoteHostConfigDepsForTests({
+      isRemoteHostActive: () => true,
+      captureOrigin: () => ({ kind: "remote", hostId: "host-B" }),
+      activeHostFeatureManifest: () => null,
+    })
+    try {
+      answer({ requestId: "req", granted: true })
+      await failure
+      expect(calls).toHaveLength(beforeSwitch)
+      expect(localCalls.at(-1)).toMatchObject({
+        command: REMOTE_RUN_COMMANDS.resolve,
+        payload: { decision: "allow" },
+      })
+      expect(acquireManagementChannel).not.toHaveBeenCalled()
+    } finally {
+      restore()
+    }
   })
 })
 

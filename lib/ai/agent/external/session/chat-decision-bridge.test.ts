@@ -479,6 +479,7 @@ jest.mock("../manager", () => ({
   }),
 }))
 jest.mock("../runtimes/remote/remote-run-client", () => ({
+  remoteExternalDecisionOrigin: () => ({ kind: "remote", hostId: "host-A" }),
   resolveRemoteElicitation: (...args: unknown[]) => mockRemoteElicitation(...args),
 }))
 
@@ -520,11 +521,26 @@ describe("elicitation delivery failures", () => {
       response,
       { strict: true }
     )
-    expect(remote ? mockRemoteElicitation : mockLocalElicitation).toHaveBeenCalledWith(
-      remote ? "decision" : "agent",
-      response
-    )
+    if (remote)
+      expect(mockRemoteElicitation).toHaveBeenCalledWith("decision", response, {
+        kind: "remote",
+        hostId: "host-A",
+      })
+    else expect(mockLocalElicitation).toHaveBeenCalledWith("agent", response)
   })
+  it.each(["host-changed", "host-unreachable"])(
+    "surfaces %s through strict delivery",
+    async (reason) => {
+      const error = Object.assign(new Error("offline"), { reason })
+      mockRemoteElicitation.mockRejectedValueOnce(error)
+      await expect(
+        deliverExternalElicitation({ ...entry, remoteDecisionId: "decision" }, response, {
+          strict: true,
+        })
+      ).rejects.toBe(error)
+      expect(mockLocalElicitation).not.toHaveBeenCalled()
+    }
+  )
 })
 
 it("keeps remote decision provenance and tolerates missing optional tool/session data", () => {

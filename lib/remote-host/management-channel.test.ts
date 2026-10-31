@@ -1,6 +1,11 @@
 /** @jest-environment jsdom */
 
 import type { RemoteHostTarget } from "@/lib/remote-host/target-transport"
+import {
+  clearActiveRuntimeTargetContext,
+  getActiveRuntimeTargetContext,
+  setActiveRuntimeTargetContext,
+} from "@/lib/runtime/runtime-target-context"
 
 // Whether the app is still connected to a `/pair` Host is the target module's
 // question (it reads the live runtime target); the channel only asks it.
@@ -65,8 +70,46 @@ function timers() {
 }
 
 beforeEach(() => {
+  clearActiveRuntimeTargetContext()
   __resetManagementChannelsForTests()
   useRemoteHostStore.setState({ hosts: [host()], activeHostId: null })
+})
+
+afterEach(() => {
+  __resetManagementChannelsForTests()
+  clearActiveRuntimeTargetContext()
+})
+
+it("reopens a companion channel after A to B to A without waiting for idle expiry", async () => {
+  pairedCurrent = true
+  setActiveRuntimeTargetContext("account-A", "box-A", 100)
+  const opened: ReturnType<typeof target>[] = []
+  const openTarget = jest.fn(async () => {
+    const generation = getActiveRuntimeTargetContext()?.routingGeneration
+    const next = target(host({ id: "companion:box-A" }))
+    ;(next.value.transport.call as jest.Mock).mockImplementation(async () => {
+      if (getActiveRuntimeTargetContext()?.routingGeneration !== generation)
+        throw new Error("Paired Host box-A connection changed")
+      return { cancelled: true }
+    })
+    opened.push(next)
+    return next.value
+  })
+  const clock = timers()
+  const deps = { openTarget, ...clock }
+  ;(await acquireManagementChannel("companion:box-A", deps)).release()
+  expect(clock.count()).toBe(1)
+  setActiveRuntimeTargetContext("account-A", "box-B", 101)
+  setActiveRuntimeTargetContext("account-A", "box-A", 102)
+  await expect(
+    withManagementChannel(
+      "companion:box-A",
+      ({ transport }) => transport.call("external_agent_cancel_run", { runId: "run-A" }),
+      deps
+    )
+  ).resolves.toEqual({ cancelled: true })
+  expect(openTarget).toHaveBeenCalledTimes(2)
+  expect(opened[0].close).toHaveBeenCalledTimes(1)
 })
 
 it("opens one connection per host and shares it between leases", async () => {

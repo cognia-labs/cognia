@@ -102,9 +102,13 @@ async function denyThroughChannel(
     const remoteDecisionId = getExternalApprovalTarget(requestId)?.remoteDecisionId
     const respond = remoteDecisionId
       ? async () => {
-          const { resolveRemotePermission } =
+          const { resolveRemotePermission, remoteExternalDecisionOrigin } =
             await import("@/lib/ai/agent/external/runtimes/remote/remote-run-client")
-          const outcome = await resolveRemotePermission(remoteDecisionId, "deny")
+          const outcome = await resolveRemotePermission(
+            remoteDecisionId,
+            "deny",
+            remoteExternalDecisionOrigin(remoteDecisionId)
+          )
           // `unknown` means the host already decided — nothing left to wait
           // for; `wrong-device` is a genuine routing failure.
           if (!outcome.resolved && outcome.reason === "wrong-device") {

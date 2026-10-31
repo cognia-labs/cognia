@@ -25,7 +25,14 @@
  */
 
 import { transport } from "@/lib/tauri"
+import { localTransport } from "@/lib/tauri/transport-instance"
+import { isHeadlessHost } from "@/lib/platform/detect"
 import { issueHostAdminLease } from "@/lib/tauri/admin-lease"
+import { acquireManagementChannel } from "@/lib/remote-host/management-channel"
+import { captureTaskWorkspaceOrigin, sameTaskWorkspaceOrigin } from "@/lib/task-workspace/origin"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
+import type { Transport } from "@/lib/tauri/transport-types"
+import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 import { activeHostFeatureManifest } from "@/stores/remote-host/remote-host-store"
 import { hasCapability } from "@/lib/platform/capabilities"
 import { getRuntimeSnapshot } from "@/lib/runtime/runtime-snapshot-store"
@@ -139,6 +146,29 @@ export class HostConfigsUnsupportedError extends Error {
   }
 }
 
+/** Delivery failed without ever redirecting the operation to another Host. */
+export class HostConfigTargetError extends Error {
+  constructor(
+    readonly reason: "host-changed" | "host-unreachable",
+    readonly origin?: TaskWorkspaceOrigin,
+    options?: ErrorOptions
+  ) {
+    super(
+      reason === "host-changed"
+        ? "External session target changed"
+        : new HostConfigsUnsupportedError("no-host").message,
+      options
+    )
+    this.name = "HostConfigTargetError"
+  }
+}
+
+interface HostConfigTarget {
+  transport: Pick<Transport, "call">
+  assertCurrent(): void
+  close(): void
+}
+
 /** Injectable seams so routing is testable without shell globals. */
 export interface RemoteHostConfigDeps {
   isRemoteHostActive: () => boolean
@@ -147,6 +177,11 @@ export interface RemoteHostConfigDeps {
   activeHostFeatureManifest: () => HostFeatureManifest | null
   call: <T>(command: string, payload?: Record<string, unknown>) => Promise<T>
   issueAdminLease: typeof issueHostAdminLease
+  captureOrigin: () => TaskWorkspaceOrigin
+  openTarget: (
+    origin: TaskWorkspaceOrigin,
+    operation: HostConfigCommand
+  ) => Promise<HostConfigTarget>
 }
 
 const defaultDeps: RemoteHostConfigDeps = {
@@ -161,6 +196,8 @@ const defaultDeps: RemoteHostConfigDeps = {
   activeHostFeatureManifest,
   call: (command, payload) => transport.call(command, payload ?? {}),
   issueAdminLease: issueHostAdminLease,
+  captureOrigin: captureTaskWorkspaceOrigin,
+  openTarget: openHostConfigTarget,
 }
 
 let deps: RemoteHostConfigDeps = defaultDeps
@@ -230,6 +267,77 @@ export async function callHostConfigCommand<T>(
 
 const call = callHostConfigCommand
 
+/** Open a Host-bound channel; the active route is only consulted for guards. */
+async function openHostConfigTarget(
+  origin: TaskWorkspaceOrigin,
+  operation: HostConfigCommand
+): Promise<HostConfigTarget> {
+  if (origin.kind === "local") {
+    // A local run remains owned by this desktop even while its router drives
+    // another Host. Headless callers already have an in-process transport.
+    return {
+      transport: isHeadlessHost() ? transport : localTransport,
+      assertCurrent() {},
+      close() {},
+    }
+  }
+  const initialContext = getActiveRuntimeTargetContext()
+  const assertCurrent = () => {
+    if (
+      (origin.accountId && getActiveRuntimeTargetContext()?.accountId !== origin.accountId) ||
+      (origin.hostId.startsWith("companion:") &&
+        (!sameTaskWorkspaceOrigin(origin, deps.captureOrigin()) ||
+          getActiveRuntimeTargetContext()?.routingGeneration !== initialContext?.routingGeneration))
+    )
+      throw new HostConfigTargetError("host-changed", origin)
+  }
+  assertCurrent()
+  const pairedAvailability = origin.hostId.startsWith("companion:")
+    ? hostConfigsAvailability(operation)
+    : undefined
+  let lease: Awaited<ReturnType<typeof acquireManagementChannel>>
+  try {
+    lease = await acquireManagementChannel(origin.hostId)
+  } catch (error) {
+    assertCurrent()
+    throw new HostConfigTargetError("host-unreachable", origin, { cause: error })
+  }
+  try {
+    assertCurrent()
+    const manifest = lease.host.featureManifest
+    const availability = manifest
+      ? supportsHostFeatureOperation(manifest, HOST_CONFIGS_FEATURE, operation)
+        ? { ok: true as const }
+        : { ok: false as const, reason: "unsupported" as const }
+      : (pairedAvailability ?? { ok: false as const, reason: "manifest-missing" as const })
+    if (!availability.ok) throw new HostConfigsUnsupportedError(availability.reason, operation)
+    return { transport: lease.transport, assertCurrent, close: lease.release }
+  } catch (error) {
+    lease.release()
+    throw error
+  }
+}
+
+/** Run controls name their dispatch origin and never consult the active Host's capabilities. */
+export async function callHostConfigCommandAtOrigin<T>(
+  origin: TaskWorkspaceOrigin,
+  operation: HostConfigCommand,
+  payload: Record<string, unknown>
+): Promise<T> {
+  const target = await deps.openTarget(origin, operation)
+  try {
+    target.assertCurrent()
+    return await target.transport.call<T>(operation, payload)
+  } catch (error) {
+    if (error instanceof HostConfigTargetError || error instanceof HostConfigsUnsupportedError)
+      throw error
+    target.assertCurrent()
+    throw new HostConfigTargetError("host-unreachable", origin, { cause: error })
+  } finally {
+    target.close()
+  }
+}
+
 /**
  * Every `approval: "interactive"` command on this feature: the configuration
  * writes, and the two that start a run.
@@ -246,14 +354,32 @@ const call = callHostConfigCommand
  */
 export async function callApprovedHostConfigCommand<T>(
   operation: HostConfigCommand,
-  payload: Record<string, unknown> = {}
+  payload: Record<string, unknown> = {},
+  origin: TaskWorkspaceOrigin = deps.captureOrigin()
 ): Promise<T> {
+  if (!sameTaskWorkspaceOrigin(origin, deps.captureOrigin()))
+    throw new HostConfigTargetError("host-changed", origin)
   const availability = hostConfigsAvailability(operation)
   if (!availability.ok) throw new HostConfigsUnsupportedError(availability.reason, operation)
   const localAuthority = deps.hasLocalAuthority() && !deps.isRemoteHostActive()
   if (localAuthority) return deps.call<T>(operation, payload)
-  const lease = await deps.issueAdminLease([operation])
-  return deps.call<T>(operation, { ...payload, adminLease: lease.token })
+  const target = await deps.openTarget(origin, operation)
+  try {
+    target.assertCurrent()
+    const lease = await deps.issueAdminLease([operation], undefined, target.transport)
+    target.assertCurrent()
+    // These operations are observed through the routed event subscription,
+    // which moves on a Host switch. Do not launch work with its listener gone.
+    if (
+      (operation === HOST_CONFIG_COMMANDS.run ||
+        operation === HOST_CONFIG_COMMANDS.sessionMutate) &&
+      !sameTaskWorkspaceOrigin(origin, deps.captureOrigin())
+    )
+      throw new HostConfigTargetError("host-changed", origin)
+    return await target.transport.call<T>(operation, { ...payload, adminLease: lease.token })
+  } finally {
+    target.close()
+  }
 }
 
 /**

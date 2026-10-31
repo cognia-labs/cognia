@@ -16,6 +16,8 @@
  */
 
 import { getActiveRemoteTransport } from "@/lib/tauri/transport-routing"
+import { captureTaskWorkspaceOrigin, sameTaskWorkspaceOrigin } from "@/lib/task-workspace/origin"
+import type { TaskWorkspaceOrigin } from "@/lib/task-workspace/types"
 import type { ExternalAgentManager } from "../../manager"
 import type { RemoteSessionTarget, RemoteSessionOperation } from "./remote-run-service"
 import { transport } from "@/lib/tauri"
@@ -41,18 +43,48 @@ import {
   HOST_CONFIG_COMMANDS,
   HOST_CONFIG_CAPABILITIES,
   HostNativeSubagentUpdateRequiredError,
+  HostConfigTargetError,
   hostConfigsAvailability,
   callApprovedHostConfigCommand,
   callHostConfigCommand,
+  callHostConfigCommandAtOrigin,
 } from "./remote-host-configs"
 
 export { EXTERNAL_RUN_EVENT_TOPIC }
 export type { RemoteAttachmentsWithheldFrame, RemoteRunAttachment, RemoteRunFrame }
 
+// Subscription ownership bounds the lifetime of these pins. In particular,
+// capture callers that only retain a run/decision id still use the dispatch
+// origin; a missing pin is an error, never permission to consult active routing.
+interface RunOriginPin {
+  origin: TaskWorkspaceOrigin
+  refs: number
+  decisions: Set<string>
+}
+const runOrigins = new Map<string, RunOriginPin>()
+const decisionOrigins = new Map<string, RunOriginPin>()
+
+export function remoteExternalRunOrigin(runId: string): TaskWorkspaceOrigin {
+  const origin = runOrigins.get(runId)?.origin
+  if (!origin) throw new HostConfigTargetError("host-changed")
+  return { ...origin }
+}
+
+export function remoteExternalDecisionOrigin(decisionId: string): TaskWorkspaceOrigin {
+  const origin = decisionOrigins.get(decisionId)?.origin
+  if (!origin) throw new HostConfigTargetError("host-changed")
+  return { ...origin }
+}
+
+export function __resetRemoteRunOriginsForTests(): void {
+  runOrigins.clear()
+  decisionOrigins.clear()
+}
+
 /**
  * Named from the shared table rather than re-spelled, so the run plane and the
  * configuration plane cannot drift on a command name — and so every call below
- * goes through `callHostConfigCommand`, which checks the host handshake for
+ * goes through the host-config client, which checks the target's handshake for
  * this operation before it reaches the transport. Calling `transport.call`
  * directly would answer a host too old to run turns with an "unknown command"
  * instead of the structured "this host does not support it" every sibling
@@ -94,12 +126,20 @@ export interface RemoteRunSubscription {
  */
 export function subscribeRemoteExternalRun(
   runId: string,
-  handlers: RemoteRunSubscription
+  handlers: RemoteRunSubscription,
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): () => void {
+  const pin = runOrigins.get(runId) ?? {
+    origin: { ...origin },
+    refs: 0,
+    decisions: new Set<string>(),
+  }
+  pin.refs += 1
+  runOrigins.set(runId, pin)
   let lastSeq = 0
   let settled = false
 
-  return transport.subscribe<RemoteRunFrame>(EXTERNAL_RUN_EVENT_TOPIC, (frame) => {
+  const unsubscribe = transport.subscribe<RemoteRunFrame>(EXTERNAL_RUN_EVENT_TOPIC, (frame) => {
     if (!frame || frame.runId !== runId) return
     // A terminal frame is authoritative and singular. Anything after it is a
     // replay of a run this client has already finished rendering.
@@ -107,6 +147,19 @@ export function subscribeRemoteExternalRun(
     if (frame.seq <= lastSeq) return
     if (frame.seq > lastSeq + 1) handlers.onGap?.(lastSeq + 1, frame.seq)
     lastSeq = frame.seq
+
+    const event = frame.event
+    const requestId =
+      event.type === "permission_request"
+        ? (event.request.requestId ?? event.request.id)
+        : event.type === "elicitation_request"
+          ? event.request.id
+          : undefined
+    if (requestId) {
+      const decisionId = `${runId}:${requestId}`
+      pin.decisions.add(decisionId)
+      decisionOrigins.set(decisionId, pin)
+    }
 
     if (frame.operationResult) handlers.onOperationResult?.(frame.operationResult)
     else if (frame.attachmentsWithheld) handlers.onAttachmentsWithheld?.(frame.attachmentsWithheld)
@@ -116,6 +169,19 @@ export function subscribeRemoteExternalRun(
       handlers.onTerminal(frame.terminal, frame.error)
     }
   })
+  let stopped = false
+  return () => {
+    if (stopped) return
+    stopped = true
+    unsubscribe()
+    pin.refs -= 1
+    if (pin.refs === 0 && runOrigins.get(runId) === pin) {
+      runOrigins.delete(runId)
+      for (const decisionId of pin.decisions) {
+        if (decisionOrigins.get(decisionId) === pin) decisionOrigins.delete(decisionId)
+      }
+    }
+  }
 }
 
 /**
@@ -185,6 +251,8 @@ export async function stageRemoteRunAttachments(
 
 export async function startRemoteExternalTurn(input: {
   runId: string
+  /** Client-only authority captured before any dispatch wait; never sent on the wire. */
+  origin?: TaskWorkspaceOrigin
   chatSessionId: string
   stamp: ExternalAgentConfigStamp
   prompt: string
@@ -217,6 +285,10 @@ export async function startRemoteExternalTurn(input: {
    */
   attachments?: readonly RemoteRunAttachment[]
 }): Promise<RemoteTurnStart> {
+  const origin = input.origin ?? runOrigins.get(input.runId)?.origin ?? captureTaskWorkspaceOrigin()
+  const pin = runOrigins.get(input.runId)
+  if (pin && !sameTaskWorkspaceOrigin(origin, pin.origin))
+    throw new HostConfigTargetError("host-changed", origin)
   // Starting a turn is an interactive approval, like the configuration writes
   // beside it. `callHostConfigCommand` checks the handshake but attaches no
   // lease, and the host refuses an interactive command that arrives without
@@ -226,32 +298,36 @@ export async function startRemoteExternalTurn(input: {
     runId?: string
     agentId?: string
     refusal?: RunAdmissionRefusal
-  }>(REMOTE_RUN_COMMANDS.run, {
-    runId: input.runId,
-    chatSessionId: input.chatSessionId,
-    prompt: input.prompt,
-    stamp: { ...input.stamp },
-    // Every optional axis is omitted rather than sent as null. The request
-    // schema is `additionalProperties: false` and the host reads a missing key
-    // as "inherit", so an explicit null would be both a 422 and a lie.
-    ...(input.model ? { model: input.model } : {}),
-    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
-    ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
-    ...(input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {}),
-    ...(input.externalSessionId ? { externalSessionId: input.externalSessionId } : {}),
-    // The one axis where `null` is sent: it is the explicit "native models"
-    // instruction, which the Host must not confuse with "inherit".
-    ...(input.cogniaModel !== undefined ? { cogniaModel: copyBinding(input.cogniaModel) } : {}),
-    ...(input.attachments?.length
-      ? {
-          attachments: input.attachments.map(({ ref, name, mediaType }) => ({
-            ref,
-            name,
-            mediaType,
-          })),
-        }
-      : {}),
-  })
+  }>(
+    REMOTE_RUN_COMMANDS.run,
+    {
+      runId: input.runId,
+      chatSessionId: input.chatSessionId,
+      prompt: input.prompt,
+      stamp: { ...input.stamp },
+      // Every optional axis is omitted rather than sent as null. The request
+      // schema is `additionalProperties: false` and the host reads a missing key
+      // as "inherit", so an explicit null would be both a 422 and a lie.
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
+      ...(input.allowedTools !== undefined ? { allowedTools: input.allowedTools } : {}),
+      ...(input.externalSessionId ? { externalSessionId: input.externalSessionId } : {}),
+      // The one axis where `null` is sent: it is the explicit "native models"
+      // instruction, which the Host must not confuse with "inherit".
+      ...(input.cogniaModel !== undefined ? { cogniaModel: copyBinding(input.cogniaModel) } : {}),
+      ...(input.attachments?.length
+        ? {
+            attachments: input.attachments.map(({ ref, name, mediaType }) => ({
+              ref,
+              name,
+              mediaType,
+            })),
+          }
+        : {}),
+    },
+    origin
+  )
 
   if (result.started && result.runId) {
     return { started: true, runId: result.runId, agentId: result.agentId ?? "" }
@@ -269,10 +345,15 @@ export async function startRemoteExternalTurn(input: {
  * it*. `false` means the host had nothing to stop, which is the ordinary answer
  * when the turn finished a moment earlier.
  */
-export async function cancelRemoteExternalTurn(runId: string): Promise<boolean> {
-  const result = await callHostConfigCommand<{ cancelled: boolean }>(REMOTE_RUN_COMMANDS.cancel, {
-    runId,
-  })
+export async function cancelRemoteExternalTurn(
+  runId: string,
+  origin: TaskWorkspaceOrigin = remoteExternalRunOrigin(runId)
+): Promise<boolean> {
+  const result = await callHostConfigCommandAtOrigin<{ cancelled: boolean }>(
+    origin,
+    REMOTE_RUN_COMMANDS.cancel,
+    { runId }
+  )
   return result.cancelled === true
 }
 
@@ -282,21 +363,27 @@ export type RemoteDecisionOutcome =
 /** Answer a permission the running agent is blocked on. */
 export async function resolveRemotePermission(
   decisionId: string,
-  decision: ApprovalDecision
+  decision: ApprovalDecision,
+  origin: TaskWorkspaceOrigin = remoteExternalDecisionOrigin(decisionId)
 ): Promise<RemoteDecisionOutcome> {
-  return resolve({ decisionId, decision })
+  return resolve(origin, { decisionId, decision })
 }
 
 /** Answer an elicitation. The host stamps the request id, so it is not sent. */
 export async function resolveRemoteElicitation(
   decisionId: string,
-  response: AcpElicitationResponse
+  response: AcpElicitationResponse,
+  origin: TaskWorkspaceOrigin = remoteExternalDecisionOrigin(decisionId)
 ): Promise<RemoteDecisionOutcome> {
-  return resolve({ decisionId, elicitation: response })
+  return resolve(origin, { decisionId, elicitation: response })
 }
 
-async function resolve(payload: Record<string, unknown>): Promise<RemoteDecisionOutcome> {
-  const result = await callHostConfigCommand<{ resolved: boolean; reason?: string }>(
+async function resolve(
+  origin: TaskWorkspaceOrigin,
+  payload: Record<string, unknown>
+): Promise<RemoteDecisionOutcome> {
+  const result = await callHostConfigCommandAtOrigin<{ resolved: boolean; reason?: string }>(
+    origin,
     REMOTE_RUN_COMMANDS.resolve,
     payload
   )
@@ -340,8 +427,11 @@ export type RemoteSessionOperationsClient = Pick<
 export async function callRemoteSessionOperation<T>(
   target: RemoteSessionTarget,
   action: RemoteSessionOperation,
-  requestId = crypto.randomUUID()
+  requestId = crypto.randomUUID(),
+  origin: TaskWorkspaceOrigin = captureTaskWorkspaceOrigin()
 ): Promise<T> {
+  if (!sameTaskWorkspaceOrigin(origin, captureTaskWorkspaceOrigin()))
+    throw new HostConfigTargetError("host-changed", origin)
   if (
     (action.operation === "nativeSubagents" || action.operation === "nativeSubagentModel") &&
     !hostConfigsAvailability(HOST_CONFIG_CAPABILITIES.nativeSubagentControl).ok
@@ -363,10 +453,14 @@ export async function callRemoteSessionOperation<T>(
     "unwatch",
   ]
   const read = reads.includes(action.operation)
-  const result = await (read ? callHostConfigCommand : callApprovedHostConfigCommand)<{ value: T }>(
-    read ? HOST_CONFIG_COMMANDS.sessionQuery : HOST_CONFIG_COMMANDS.sessionMutate,
-    { ...target, stamp: { ...target.stamp }, requestId, action }
-  )
+  const payload = { ...target, stamp: { ...target.stamp }, requestId, action }
+  const result = read
+    ? await callHostConfigCommand<{ value: T }>(HOST_CONFIG_COMMANDS.sessionQuery, payload)
+    : await callApprovedHostConfigCommand<{ value: T }>(
+        HOST_CONFIG_COMMANDS.sessionMutate,
+        payload,
+        origin
+      )
   return result.value
 }
 
@@ -377,20 +471,24 @@ export async function watchRemoteSession(
   purpose: "transcript" | "presentation" | "shell" = "transcript"
 ) {
   const identity = getActiveRemoteTransport()
+  const origin = captureTaskWorkspaceOrigin()
   const watchId = crypto.randomUUID()
   let closed = false
   const assertTarget = () => {
-    if (getActiveRemoteTransport() !== identity)
-      throw new Error("External session belongs to a different Host")
+    if (
+      getActiveRemoteTransport() !== identity ||
+      !sameTaskWorkspaceOrigin(origin, captureTaskWorkspaceOrigin())
+    )
+      throw new HostConfigTargetError("host-changed", origin)
   }
-  const unsubscribe = subscribeRemoteExternalRun(watchId, handlers)
+  const unsubscribe = subscribeRemoteExternalRun(watchId, handlers, origin)
   let timer: ReturnType<typeof setInterval> | undefined
   try {
     await whenRemoteRunChannelSubscribed()
     assertTarget()
     const initial = await callRemoteSessionOperation<{
       session: import("@/types/agent/external-agent").ExternalAgentSession
-    }>(target, { operation: "watch", watchId, purpose }, watchId)
+    }>(target, { operation: "watch", watchId, purpose }, watchId, origin)
     timer = setInterval(() => {
       if (closed) return
       try {
@@ -400,12 +498,15 @@ export async function watchRemoteSession(
         void close()
         return
       }
-      void callRemoteSessionOperation(target, { operation: "watch", watchId, purpose }).catch(
-        (error) => {
-          handlers.onTerminal("failed", String(error))
-          void close()
-        }
-      )
+      void callRemoteSessionOperation(
+        target,
+        { operation: "watch", watchId, purpose },
+        undefined,
+        origin
+      ).catch((error) => {
+        handlers.onTerminal("failed", String(error))
+        void close()
+      })
     }, 60_000)
     ;(timer as { unref?: () => void }).unref?.()
     return { watchId, session: initial.session, close }
@@ -419,9 +520,12 @@ export async function watchRemoteSession(
     if (timer) clearInterval(timer)
     unsubscribe()
     if (getActiveRemoteTransport() === identity)
-      await callRemoteSessionOperation(target, { operation: "unwatch", watchId }).catch(
-        () => undefined
-      )
+      await callRemoteSessionOperation(
+        target,
+        { operation: "unwatch", watchId },
+        undefined,
+        origin
+      ).catch(() => undefined)
   }
 }
 
@@ -430,14 +534,16 @@ export function createRemoteSessionOperationsClient(
   target: RemoteSessionTarget
 ): RemoteSessionOperationsClient {
   const identity = getActiveRemoteTransport()
+  const origin = captureTaskWorkspaceOrigin()
   const call = <T>(agentId: string, sessionId: string, action: RemoteSessionOperation) => {
     if (
       getActiveRemoteTransport() !== identity ||
-      agentId !== target.stamp.configId ||
-      sessionId !== target.externalSessionId
+      !sameTaskWorkspaceOrigin(origin, captureTaskWorkspaceOrigin())
     )
+      return Promise.reject(new HostConfigTargetError("host-changed", origin))
+    if (agentId !== target.stamp.configId || sessionId !== target.externalSessionId)
       return Promise.reject(new Error("External session target changed"))
-    return callRemoteSessionOperation<T>(target, action)
+    return callRemoteSessionOperation<T>(target, action, undefined, origin)
   }
   return {
     getNativeSubagents: (a, s) => call(a, s, { operation: "nativeSubagents" }),
@@ -490,6 +596,8 @@ export function createRemoteSessionOperationsClient(
         ? call(a, s, { operation: "steer", text })
         : Promise.reject(new Error("A native session id is required for steering")),
     executeSessionShell: async (a, s, command, options) => {
+      if (!sameTaskWorkspaceOrigin(origin, captureTaskWorkspaceOrigin()))
+        throw new HostConfigTargetError("host-changed", origin)
       if (
         getActiveRemoteTransport() !== identity ||
         a !== target.stamp.configId ||
@@ -515,18 +623,20 @@ export function createRemoteSessionOperationsClient(
             if (event.type !== "permission_request") return
             void options
               .onPermissionRequest(event.request)
-              .then((response) =>
-                resolveRemotePermission(
+              .catch(() => ({ granted: false }))
+              .then(async (response) => {
+                const outcome = await resolveRemotePermission(
                   `${frame.runId}:${event.request.requestId ?? event.request.id}`,
-                  response.granted ? (response.rememberChoice ? "allow_always" : "allow") : "deny"
+                  response.granted
+                    ? "rememberChoice" in response && response.rememberChoice
+                      ? "allow_always"
+                      : "allow"
+                    : "deny",
+                  origin
                 )
-              )
-              .catch(() =>
-                resolveRemotePermission(
-                  `${frame.runId}:${event.request.requestId ?? event.request.id}`,
-                  "deny"
-                )
-              )
+                if (!outcome.resolved) throw new Error("External session target changed")
+              })
+              .catch(rejectResult)
           },
           onOperationResult: (reply) => {
             if (reply.requestId !== requestId) return
@@ -551,7 +661,8 @@ export function createRemoteSessionOperationsClient(
             excludeFromContext: options.excludeFromContext,
             watchId: watcher.watchId,
           },
-          requestId
+          requestId,
+          origin
         )
         return await result
       } finally {

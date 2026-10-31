@@ -229,6 +229,100 @@ describe("runCommitMessageAgent", () => {
     expect(d.interruptHost).toHaveBeenCalledWith(runId)
   })
 
+  it.each([false, true])(
+    "waits for interrupt delivery and preserves its failure (run settles: %s)",
+    async (settles) => {
+      const controller = new AbortController()
+      let failCancel!: (error: Error) => void
+      let finishRun!: (value: ExternalAgentResult) => void
+      const cancellation = new Promise<void>((_resolve, reject) => {
+        failCancel = reject
+      })
+      // The old fire-and-forget implementation would otherwise leak this rejection.
+      void cancellation.catch(() => undefined)
+      const d = deps({
+        executeHost: () =>
+          new Promise((resolve) => {
+            finishRun = resolve
+          }),
+        interruptHost: jest.fn(() => cancellation),
+      })
+      let settled = false
+      const run = runCommitMessageAgent(
+        { kind: "host", stamp: { configId: "c", revision: "r", lifecycleGeneration: 1 } },
+        { ...input, signal: controller.signal },
+        d
+      )
+      void run.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        }
+      )
+      const error = Object.assign(new Error("offline"), { reason: "host-unreachable" })
+      const failure = expect(run).rejects.toBe(error)
+      void failure.catch(() => undefined)
+      controller.abort()
+      if (settles) finishRun(result({ success: false, error: "cancelled" }))
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(settled).toBe(false)
+      failCancel(error)
+      await failure
+    }
+  )
+
+  it("reports cancellation only after a successful interrupt acknowledgement", async () => {
+    const controller = new AbortController()
+    let confirm!: () => void
+    let finishRun!: (value: ExternalAgentResult) => void
+    const d = deps({
+      executeHost: () =>
+        new Promise((resolve) => {
+          finishRun = resolve
+        }),
+      interruptHost: () =>
+        new Promise<void>((resolve) => {
+          confirm = resolve
+        }),
+    })
+    const run = runCommitMessageAgent(
+      { kind: "host", stamp: { configId: "c", revision: "r", lifecycleGeneration: 1 } },
+      { ...input, signal: controller.signal },
+      d
+    )
+    let settled = false
+    void run.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      }
+    )
+    const cancelled = expect(run).rejects.toBeInstanceOf(CommitAgentAbortedError)
+    controller.abort()
+    finishRun(result())
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(settled).toBe(false)
+    confirm()
+    await cancelled
+  })
+
+  it("does not issue a stop after a Host run has already finished", async () => {
+    const controller = new AbortController()
+    const d = deps()
+    await runCommitMessageAgent(
+      { kind: "host", stamp: { configId: "c", revision: "r", lifecycleGeneration: 1 } },
+      { ...input, signal: controller.signal },
+      d
+    )
+    controller.abort()
+    await Promise.resolve()
+    expect(d.interruptHost).not.toHaveBeenCalled()
+  })
+
   it("refuses to start when already cancelled", async () => {
     const controller = new AbortController()
     controller.abort()

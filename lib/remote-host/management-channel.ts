@@ -22,6 +22,7 @@ import {
   type RemoteHostTarget,
 } from "@/lib/remote-host/target-transport"
 import type { Transport } from "@/lib/tauri/transport-types"
+import { getActiveRuntimeTargetContext } from "@/lib/runtime/runtime-target-context"
 import { useRemoteHostStore, type RemoteHost } from "@/stores/remote-host/remote-host-store"
 
 /**
@@ -52,6 +53,8 @@ interface Entry {
   closed: boolean
   /** The pairing the connection was opened with, once known. */
   deviceId?: string
+  /** A /pair transport expires when its route generation changes, even A→B→A. */
+  routingGeneration?: number
 }
 
 /**
@@ -60,8 +63,13 @@ interface Entry {
  * ones is refused as unauthorized, which a probe would read as a revocation.
  */
 function isStale(hostRef: string, entry: Entry): boolean {
-  if (entry.deviceId === undefined) return false
   const pairedHostId = pairedHostIdOf(hostRef)
+  if (
+    pairedHostId &&
+    entry.routingGeneration !== getActiveRuntimeTargetContext()?.routingGeneration
+  )
+    return true
+  if (entry.deviceId === undefined) return false
   if (pairedHostId) return !isPairedHostTargetCurrent(pairedHostId, entry.deviceId)
   const host = useRemoteHostStore.getState().hosts.find((candidate) => candidate.id === hostRef)
   return !host || host.config.deviceId !== entry.deviceId
@@ -108,11 +116,15 @@ export async function acquireManagementChannel(
     entry = undefined
   }
   if (!entry || entry.closed) {
+    const routingGeneration = pairedHostIdOf(hostRef)
+      ? getActiveRuntimeTargetContext()?.routingGeneration
+      : undefined
     const created: Entry = {
       target: (deps.openTarget ?? openRemoteHostTarget)(hostRef),
       refs: 0,
       idleTimer: undefined,
       closed: false,
+      routingGeneration,
     }
     channels.set(hostRef, created)
     created.target.then(
