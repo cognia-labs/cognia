@@ -377,18 +377,9 @@ fn is_path_within_roots(path: &str, roots: &[String]) -> bool {
 
 /// [`is_path_within_roots`] over roots already canonicalized and non-empty.
 fn is_within_canonical_roots(path: &str, canonical_roots: &[PathBuf]) -> bool {
-    let target = PathBuf::from(path);
-    let mut probe: &Path = target.as_path();
-    let canonical = loop {
-        if let Ok(c) = probe.canonicalize() {
-            break c;
-        }
-        match probe.parent() {
-            Some(p) if !p.as_os_str().is_empty() => probe = p,
-            _ => return false,
-        }
-    };
-    starts_with_any_canonical_root(&canonical, canonical_roots)
+    canonicalize_deepest_existing_ancestor(Path::new(path))
+        .map(|canonical| starts_with_any_canonical_root(&canonical, canonical_roots))
+        .unwrap_or(false)
 }
 
 /// Origin of a raw fs command. `Local` = the renderer, whose paths come from a
@@ -432,6 +423,26 @@ fn enforce_check_path(path: &str, op: &str, origin: FsOrigin) -> Result<(), Stri
             "{op}: path is outside the workspace roots this device may use: {path}"
         ),
     })
+}
+
+/// Bound a remote caller's confinement roots by the Host's registered roots.
+/// Canonicalize both sides, including platform prefixes and symlink aliases;
+/// the caller may narrow the registry, but cannot expand it. An empty or
+/// unresolvable registry always refuses remote access.
+pub fn confine_remote_allowed_roots(requested_roots: &[String]) -> Result<Vec<PathBuf>, String> {
+    let registered = canonicalize_roots(&allowed_roots_snapshot());
+    let effective: Vec<PathBuf> = canonicalize_roots(requested_roots)
+        .into_iter()
+        .filter(|root| starts_with_any_canonical_root(root, &registered))
+        .collect();
+    if effective.is_empty() {
+        log::warn!(
+            target: FS_AUDIT_LOG_TARGET,
+            "fs_enforce_denial op=confine_remote_allowed_roots origin=Remote — no requested root is inside registered roots (blocked)"
+        );
+        return Err("no requested roots are inside the registered workspace roots".into());
+    }
+    Ok(effective)
 }
 
 /// Register a dialog-chosen path so a subsequent confined/raw write to it is
@@ -495,11 +506,26 @@ pub async fn write_text_file(path: String, content: String) -> Result<(), String
 pub fn write_text_file_impl(path: String, content: String, origin: FsOrigin) -> Result<(), String> {
     enforce_check_path(&path, "write_text_file", origin)?;
     let p = PathBuf::from(&path);
+    if origin == FsOrigin::Remote {
+        reject_symlinked_final(&p)?;
+    }
     if let Some(parent) = p.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|e| format!("canonicalize {}: {}", parent.display(), e))?;
+            enforce_check_path(
+                &canonical_parent.to_string_lossy(),
+                "write_text_file",
+                origin,
+            )?;
         }
+    }
+    enforce_check_path(&path, "write_text_file", origin)?;
+    if origin == FsOrigin::Remote {
+        reject_symlinked_final(&p)?;
     }
     std::fs::write(&p, content).map_err(|e| format!("write {}: {}", path, e))
 }
@@ -1338,13 +1364,12 @@ pub fn fs_write_workspace_file(
         .canonicalize()
         .map_err(|e| format!("canonicalize root {}: {}", root, e))?;
     let target = root_path.join(&rel_path);
-    // The target file may not exist yet, so canonicalize its *parent* (which
-    // may not exist yet) by walking up to the deepest existing ancestor before
-    // creating anything. A denied traversal must not leave directories behind.
+    // Check the entire target, including unresolved traversal in its basename,
+    // before creating anything. A denied traversal must not leave directories.
     let parent = target
         .parent()
         .ok_or_else(|| format!("invalid target path: {}", target.display()))?;
-    let canonical_existing = canonicalize_deepest_existing_ancestor(parent)?;
+    let canonical_existing = canonicalize_deepest_existing_ancestor(&target)?;
     if !canonical_existing.starts_with(&root_path) {
         log::warn!(
             "fs_workspace_write_denied path={} root={} resolved_ancestor={}",
@@ -1835,9 +1860,24 @@ pub fn fs_stat_workspace_file(root: String, rel_path: String) -> Result<Workspac
         .canonicalize()
         .map_err(|e| format!("canonicalize root {}: {}", root, e))?;
     let target = root_path.join(&rel_path);
+    let metadata = std::fs::symlink_metadata(&target);
     // Range-check the deepest existing ancestor so a not-yet-existing path is
     // still confined to the workspace.
-    let check = canonicalize_deepest_existing_ancestor(&target)?;
+    let check = if metadata
+        .as_ref()
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+        && target.canonicalize().is_err()
+    {
+        // Stat reports the link itself, even when its destination cannot
+        // resolve. Only this read-only case may check the link's parent;
+        // writes and mkdirs must refuse the unresolvable link.
+        let parent = target
+            .parent()
+            .ok_or_else(|| format!("invalid target path: {}", target.display()))?;
+        canonicalize_deepest_existing_ancestor(parent)?
+    } else {
+        canonicalize_deepest_existing_ancestor(&target)?
+    };
     if !check.starts_with(&root_path) {
         return Err(format!(
             "path escapes workspace: {} (root {})",
@@ -1845,7 +1885,7 @@ pub fn fs_stat_workspace_file(root: String, rel_path: String) -> Result<Workspac
             root_path.display()
         ));
     }
-    match std::fs::symlink_metadata(&target) {
+    match metadata {
         Ok(meta) => Ok(WorkspaceStat {
             exists: true,
             is_dir: meta.is_dir(),
@@ -2049,21 +2089,49 @@ fn canonicalize_roots(allowed_roots: &[String]) -> Vec<PathBuf> {
 }
 
 /// True when `candidate` is one of, or a descendant of, any canonical root.
+/// Known limit: containment checks and filesystem mutations are check-then-use;
+/// concurrent path replacement can still race them without fd-relative I/O.
 fn starts_with_any_canonical_root(candidate: &Path, roots: &[PathBuf]) -> bool {
     roots.iter().any(|r| candidate.starts_with(r))
 }
 
+/// Resolve the existing ancestry without discarding traversal in a missing
+/// suffix. Only normal components may be appended to the canonical ancestor;
+/// `missing/..` must be refused before any mkdir makes that traversal resolvable.
 fn canonicalize_deepest_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
     let mut existing = path;
-    while !existing.exists() {
-        match existing.parent() {
-            Some(p) if !p.as_os_str().is_empty() => existing = p,
-            _ => break,
+    loop {
+        match existing.canonicalize() {
+            Ok(canonical) => return Ok(canonical),
+            Err(error) => {
+                // A dangling or looping symlink exists even when its target
+                // cannot resolve. Never discard it as a missing suffix.
+                match std::fs::symlink_metadata(existing) {
+                    Ok(_) => {
+                        return Err(format!("canonicalize {}: {error}", existing.display()));
+                    }
+                    Err(metadata_error)
+                        if metadata_error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(metadata_error) => {
+                        return Err(format!("inspect {}: {metadata_error}", existing.display()));
+                    }
+                }
+                if !matches!(
+                    existing.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                ) {
+                    return Err(format!(
+                        "cannot resolve path without traversal: {}: {error}",
+                        path.display()
+                    ));
+                }
+                existing = existing
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .ok_or_else(|| format!("canonicalize {}: {error}", path.display()))?;
+            }
         }
     }
-    existing
-        .canonicalize()
-        .map_err(|e| format!("canonicalize {}: {}", existing.display(), e))
 }
 
 /// Reject writing through a symlinked final component. The TS lexical
@@ -2124,6 +2192,13 @@ pub fn validate_confined_path(path: &str, allowed_roots: &[String]) -> Result<Pa
 
 fn resolve_confined_target(path: &str, allowed_roots: &[String]) -> Result<PathBuf, String> {
     let roots = canonicalize_roots(allowed_roots);
+    resolve_confined_target_with_canonical_roots(path, &roots)
+}
+
+fn resolve_confined_target_with_canonical_roots(
+    path: &str,
+    roots: &[PathBuf],
+) -> Result<PathBuf, String> {
     if roots.is_empty() {
         return Err("no allowed roots configured".into());
     }
@@ -2132,8 +2207,8 @@ fn resolve_confined_target(path: &str, allowed_roots: &[String]) -> Result<PathB
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| format!("invalid target path: {}", target.display()))?;
-    let canonical_existing = canonicalize_deepest_existing_ancestor(parent)?;
-    if !starts_with_any_canonical_root(&canonical_existing, &roots) {
+    let canonical_existing = canonicalize_deepest_existing_ancestor(&target)?;
+    if !starts_with_any_canonical_root(&canonical_existing, roots) {
         log::warn!(
             "fs_confined_write_denied path={} resolved_ancestor={}",
             target.display(),
@@ -2148,7 +2223,7 @@ fn resolve_confined_target(path: &str, allowed_roots: &[String]) -> Result<PathB
     let canonical_parent = parent
         .canonicalize()
         .map_err(|e| format!("canonicalize {}: {}", parent.display(), e))?;
-    if !starts_with_any_canonical_root(&canonical_parent, &roots) {
+    if !starts_with_any_canonical_root(&canonical_parent, roots) {
         log::warn!(
             "fs_confined_write_denied path={} resolved_parent={}",
             target.display(),
@@ -2178,7 +2253,18 @@ pub fn write_text_file_confined(
     content: String,
     allowed_roots: Vec<String>,
 ) -> Result<(), String> {
-    let final_path = resolve_confined_target(&path, &allowed_roots)?;
+    let roots = canonicalize_roots(&allowed_roots);
+    write_text_file_confined_with_canonical_roots(&path, &content, &roots)
+}
+
+/// Host-internal write with already canonical, authorized roots. Do not
+/// resolve those roots again: a replaced directory must not widen authority.
+pub fn write_text_file_confined_with_canonical_roots(
+    path: &str,
+    content: &str,
+    roots: &[PathBuf],
+) -> Result<(), String> {
+    let final_path = resolve_confined_target_with_canonical_roots(path, roots)?;
     std::fs::write(&final_path, content).map_err(|e| format!("write {}: {}", path, e))
 }
 
@@ -2189,12 +2275,21 @@ pub fn write_text_file_confined(
 #[cfg_attr(feature = "tauri-host", tauri::command)]
 pub fn ensure_dir_confined(path: String, allowed_roots: Vec<String>) -> Result<(), String> {
     let roots = canonicalize_roots(&allowed_roots);
+    ensure_dir_confined_with_canonical_roots(&path, &roots)
+}
+
+/// Host-internal mkdir with already canonical, authorized roots; see
+/// [`write_text_file_confined_with_canonical_roots`].
+pub fn ensure_dir_confined_with_canonical_roots(
+    path: &str,
+    roots: &[PathBuf],
+) -> Result<(), String> {
     if roots.is_empty() {
         return Err("no allowed roots configured".into());
     }
-    let target = PathBuf::from(&path);
+    let target = PathBuf::from(path);
     let canonical_existing = canonicalize_deepest_existing_ancestor(target.as_path())?;
-    if !starts_with_any_canonical_root(&canonical_existing, &roots) {
+    if !starts_with_any_canonical_root(&canonical_existing, roots) {
         return Err(format!(
             "path escapes the allowed roots: {}",
             canonical_existing.display()
@@ -2205,7 +2300,7 @@ pub fn ensure_dir_confined(path: String, allowed_roots: Vec<String>) -> Result<(
     let canonical = target
         .canonicalize()
         .map_err(|e| format!("canonicalize {}: {}", path, e))?;
-    if !starts_with_any_canonical_root(&canonical, &roots) {
+    if !starts_with_any_canonical_root(&canonical, roots) {
         return Err(format!(
             "path escapes the allowed roots: {}",
             canonical.display()
@@ -3193,6 +3288,290 @@ mod tests {
         write_text_file_confined(target.to_string_lossy().to_string(), "hi".into(), roots).unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn assert_unresolved_traversal_is_refused(
+        name: &str,
+        operation: impl Fn(&Path, &Path) -> Result<(), String>,
+    ) {
+        for (index, relative) in [
+            "missing/../../x",
+            "missing/../../outside/nested/file.txt",
+            "missing/./../../outside/nested/file.txt",
+            "missing/../inside/file.txt",
+            "missing/..",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let sandbox = make_sandbox(&format!("{name}-unresolved-{index}"));
+            let root = sandbox.join("root");
+            std::fs::create_dir(&root).unwrap();
+            let result = operation(&root, &root.join(relative));
+            let root_unchanged = std::fs::read_dir(&root).unwrap().count() == 0;
+            let outside_unchanged = std::fs::read_dir(&sandbox).unwrap().count() == 1;
+            std::fs::remove_dir_all(&sandbox).unwrap();
+            assert!(result.is_err(), "{name} accepted {relative}");
+            assert!(root_unchanged, "{name} created a directory for {relative}");
+            assert!(outside_unchanged, "{name} escaped the root for {relative}");
+        }
+    }
+
+    #[test]
+    fn remote_write_rejects_unresolved_traversal_without_creating_directories() {
+        assert_unresolved_traversal_is_refused("raw-write", |root, target| {
+            add_allowed_root(root.to_string_lossy().into_owned());
+            write_text_file_impl(
+                target.to_string_lossy().into_owned(),
+                "x".into(),
+                FsOrigin::Remote,
+            )
+        });
+    }
+
+    #[test]
+    fn remote_mkdir_rejects_unresolved_traversal_without_creating_directories() {
+        assert_unresolved_traversal_is_refused("raw-mkdir", |root, target| {
+            add_allowed_root(root.to_string_lossy().into_owned());
+            ensure_dir_impl(target.to_string_lossy().into_owned(), FsOrigin::Remote)
+        });
+    }
+
+    #[test]
+    fn confined_write_rejects_unresolved_traversal_without_creating_directories() {
+        assert_unresolved_traversal_is_refused("confined-write", |root, target| {
+            write_text_file_confined(
+                target.to_string_lossy().into_owned(),
+                "x".into(),
+                vec![root.to_string_lossy().into_owned()],
+            )
+        });
+    }
+
+    #[test]
+    fn confined_mkdir_rejects_unresolved_traversal_without_creating_directories() {
+        assert_unresolved_traversal_is_refused("confined-mkdir", |root, target| {
+            ensure_dir_confined(
+                target.to_string_lossy().into_owned(),
+                vec![root.to_string_lossy().into_owned()],
+            )
+        });
+    }
+
+    #[test]
+    fn workspace_write_rejects_unresolved_traversal_without_creating_directories() {
+        assert_unresolved_traversal_is_refused("workspace-write", |root, target| {
+            fs_write_workspace_file(
+                root.to_string_lossy().into_owned(),
+                target
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+                "x".into(),
+                None,
+                None,
+                None,
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_and_mkdirs_refuse_dangling_and_looping_symlinks_without_mutation() {
+        for operation in [
+            "raw-write",
+            "raw-mkdir",
+            "confined-write",
+            "confined-mkdir",
+            "workspace-write",
+        ] {
+            for kind in [
+                "dangling-final",
+                "dangling-intermediate",
+                "loop-final",
+                "loop-intermediate",
+            ] {
+                let sandbox = make_sandbox(&format!("{operation}-{kind}"));
+                let root = sandbox.join("root");
+                let outside = sandbox.join("outside");
+                std::fs::create_dir(&root).unwrap();
+                std::fs::create_dir(&outside).unwrap();
+                let link = root.join("link");
+                if kind.starts_with("dangling") {
+                    std::os::unix::fs::symlink(outside.join("missing"), &link).unwrap();
+                } else {
+                    std::os::unix::fs::symlink(root.join("other"), &link).unwrap();
+                    std::os::unix::fs::symlink(&link, root.join("other")).unwrap();
+                }
+                let target = if kind.ends_with("intermediate") {
+                    link.join("new/entry")
+                } else {
+                    link
+                };
+                let root_name = root.to_string_lossy().into_owned();
+                add_allowed_root(root_name.clone());
+                let path = target.to_string_lossy().into_owned();
+                let ancestry = canonicalize_deepest_existing_ancestor(&target);
+                let result = match operation {
+                    "raw-write" => write_text_file_impl(path, "x".into(), FsOrigin::Remote),
+                    "raw-mkdir" => ensure_dir_impl(path, FsOrigin::Remote),
+                    "confined-write" => write_text_file_confined(path, "x".into(), vec![root_name]),
+                    "confined-mkdir" => ensure_dir_confined(path, vec![root_name]),
+                    "workspace-write" => fs_write_workspace_file(
+                        root_name,
+                        target
+                            .strip_prefix(&root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned(),
+                        "x".into(),
+                        None,
+                        None,
+                        None,
+                    )
+                    .map(|_| ())
+                    .map_err(|error| error.to_string()),
+                    _ => unreachable!(),
+                };
+                let outside_unchanged = std::fs::read_dir(&outside).unwrap().count() == 0;
+                let expected_links = if kind.starts_with("loop") { 2 } else { 1 };
+                let root_unchanged = std::fs::read_dir(&root).unwrap().count() == expected_links;
+                std::fs::remove_dir_all(sandbox).unwrap();
+                assert!(result.is_err(), "{operation} accepted {kind}");
+                assert!(ancestry.is_err(), "ancestor walk accepted {kind}");
+                assert!(outside_unchanged, "{operation} escaped through {kind}");
+                assert!(root_unchanged, "{operation} created directories for {kind}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn remote_raw_write_refuses_final_symlinks_even_within_the_root() {
+        let root = make_sandbox("raw-final-symlink");
+        let original = root.join("original.txt");
+        let link = root.join("link");
+        std::fs::write(&original, "keep").unwrap();
+        std::os::unix::fs::symlink(&original, &link).unwrap();
+        add_allowed_root(root.to_string_lossy().into_owned());
+        let path = link.to_string_lossy().into_owned();
+        let result = write_text_file_impl(path.clone(), "remote".into(), FsOrigin::Remote);
+        let content = std::fs::read_to_string(&original).unwrap();
+        let local = write_text_file_impl(path, "local".into(), FsOrigin::Local);
+        let local_content = std::fs::read_to_string(&original).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(result.is_err());
+        assert_eq!(content, "keep");
+        local.unwrap();
+        assert_eq!(local_content, "local");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_operations_do_not_resolve_authorized_roots_again() {
+        for operation in ["write", "mkdir"] {
+            let sandbox = make_sandbox(&format!("confined-root-replaced-{operation}"));
+            let root = sandbox.join("registered");
+            let narrow = root.join("narrow");
+            let outside = sandbox.join("outside");
+            std::fs::create_dir_all(&narrow).unwrap();
+            std::fs::create_dir(&outside).unwrap();
+            add_allowed_root(root.to_string_lossy().into_owned());
+            let roots =
+                confine_remote_allowed_roots(&[narrow.to_string_lossy().into_owned()]).unwrap();
+            std::fs::rename(&narrow, root.join("original")).unwrap();
+            std::os::unix::fs::symlink(&outside, &narrow).unwrap();
+            let target = narrow.join("new/entry").to_string_lossy().into_owned();
+            let result = if operation == "write" {
+                write_text_file_confined_with_canonical_roots(&target, "x", &roots)
+            } else {
+                ensure_dir_confined_with_canonical_roots(&target, &roots)
+            };
+            let outside_unchanged = std::fs::read_dir(&outside).unwrap().count() == 0;
+            std::fs::remove_dir_all(sandbox).unwrap();
+            assert!(
+                result.is_err(),
+                "{operation} re-resolved a replaced authorized root"
+            );
+            assert!(
+                outside_unchanged,
+                "{operation} mutated a replaced authorized root"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_reject_symlinked_ancestors_without_creating_directories() {
+        let sandbox = make_sandbox("write-symlink-ancestor");
+        let root = sandbox.join("root");
+        let outside = sandbox.join("outside");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let roots = vec![root.to_string_lossy().into_owned()];
+        add_allowed_root(roots[0].clone());
+        let target = root
+            .join("link/missing/file.txt")
+            .to_string_lossy()
+            .into_owned();
+        assert!(write_text_file_impl(target.clone(), "x".into(), FsOrigin::Remote).is_err());
+        assert!(write_text_file_confined(target.clone(), "x".into(), roots.clone()).is_err());
+        assert!(ensure_dir_confined(target, roots).is_err());
+        assert!(fs_write_workspace_file(
+            root.to_string_lossy().into_owned(),
+            "link/missing/file.txt".into(),
+            "x".into(),
+            None,
+            None,
+            None,
+        )
+        .is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_dir_all(sandbox).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_accept_canonical_aliases_and_resolvable_parent_components() {
+        let sandbox = make_sandbox("write-resolvable-parent");
+        let root = sandbox.join("root");
+        let alias = sandbox.join("alias");
+        std::fs::create_dir_all(root.join("existing")).unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let roots = vec![alias.to_string_lossy().into_owned()];
+        add_allowed_root(roots[0].clone());
+        let target = |name: &str| {
+            alias
+                .join("existing/../nested")
+                .join(name)
+                .to_string_lossy()
+                .into_owned()
+        };
+        write_text_file_impl(target("raw.txt"), "raw".into(), FsOrigin::Remote).unwrap();
+        write_text_file_confined(target("confined.txt"), "confined".into(), roots.clone()).unwrap();
+        ensure_dir_confined(target("directory"), roots).unwrap();
+        fs_write_workspace_file(
+            alias.to_string_lossy().into_owned(),
+            "existing/../nested/workspace.txt".into(),
+            "workspace".into(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        for name in ["raw", "confined", "workspace"] {
+            assert_eq!(
+                std::fs::read_to_string(root.join(format!("nested/{name}.txt"))).unwrap(),
+                name
+            );
+        }
+        assert!(root.join("nested/directory").is_dir());
+        std::fs::remove_dir_all(sandbox).unwrap();
     }
 
     #[test]

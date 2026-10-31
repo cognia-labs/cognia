@@ -213,6 +213,26 @@ async fn run_transfer_io<T: Send + 'static>(
     .map_err(RpcError::internal)
 }
 
+/// Desktop confinement uses the Host's registered-root registry. A headless
+/// Host instead owns a spawn policy and never runs renderer registration.
+fn confine_host_allowed_roots(
+    requested_roots: &[String],
+    policy: Option<&cognia_external_agent::presets::SpawnPolicy>,
+) -> Result<Vec<std::path::PathBuf>, String> {
+    let Some(policy) = policy else {
+        return cognia_files::files::confine_remote_allowed_roots(requested_roots);
+    };
+    let effective: Vec<std::path::PathBuf> = requested_roots
+        .iter()
+        .filter_map(|root| policy.validate_workspace_root(root).ok())
+        .map(std::path::PathBuf::from)
+        .collect();
+    if effective.is_empty() {
+        return Err("no requested roots are inside the Host's workspace policy".into());
+    }
+    Ok(effective)
+}
+
 pub(super) async fn dispatch(
     name: &str,
     args: Value,
@@ -262,8 +282,16 @@ pub(super) async fn dispatch(
             let path: String = required(&args, "path")?;
             let content: String = required(&args, "content")?;
             let allowed_roots: Vec<String> = required(&args, "allowedRoots")?;
+            let policy = host
+                .headless()
+                .map(|services| services.spawn_policy.clone());
             tokio::task::spawn_blocking(move || {
-                cognia_files::files::write_text_file_confined(path, content, allowed_roots)
+                let allowed_roots = confine_host_allowed_roots(&allowed_roots, policy.as_ref())?;
+                cognia_files::files::write_text_file_confined_with_canonical_roots(
+                    &path,
+                    &content,
+                    &allowed_roots,
+                )
             })
             .await
             .map_err(|e| RpcError::internal(e.to_string()))?
@@ -283,8 +311,12 @@ pub(super) async fn dispatch(
         "ensure_dir_confined" => {
             let path: String = required(&args, "path")?;
             let allowed_roots: Vec<String> = required(&args, "allowedRoots")?;
+            let policy = host
+                .headless()
+                .map(|services| services.spawn_policy.clone());
             tokio::task::spawn_blocking(move || {
-                cognia_files::files::ensure_dir_confined(path, allowed_roots)
+                let allowed_roots = confine_host_allowed_roots(&allowed_roots, policy.as_ref())?;
+                cognia_files::files::ensure_dir_confined_with_canonical_roots(&path, &allowed_roots)
             })
             .await
             .map_err(|e| RpcError::internal(e.to_string()))?
@@ -1665,6 +1697,284 @@ pub(super) async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn headless_host_with_workspace_root(
+        root: &std::path::Path,
+    ) -> std::sync::Arc<crate::headless::HeadlessServices> {
+        let mut host = crate::headless::HeadlessServices::stub_for_tests();
+        std::sync::Arc::get_mut(&mut host).unwrap().spawn_policy =
+            cognia_external_agent::presets::SpawnPolicy::new(root.to_path_buf(), false);
+        host
+    }
+
+    #[test]
+    fn confined_rpc_desktop_roots_still_use_the_registered_registry() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = sandbox.path().join("registered");
+        let narrow = root.join("narrow");
+        let outside = sandbox.path().join("outside");
+        std::fs::create_dir_all(&narrow).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        cognia_files::files::add_allowed_root(root.to_string_lossy().into_owned());
+        let outside = outside.to_string_lossy().into_owned();
+        let narrow = narrow.to_string_lossy().into_owned();
+        let filesystem_root = sandbox
+            .path()
+            .ancestors()
+            .last()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let effective =
+            confine_host_allowed_roots(&[narrow.clone(), outside.clone()], None).unwrap();
+        assert_eq!(
+            effective,
+            vec![std::path::Path::new(&narrow).canonicalize().unwrap()]
+        );
+        for roots in [
+            vec![outside],
+            vec![filesystem_root],
+            vec![],
+            vec![root.join("missing").to_string_lossy().into_owned()],
+        ] {
+            assert!(confine_host_allowed_roots(&roots, None).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_rpc_keeps_canonical_roots_after_validation_for_both_hosts() {
+        for headless in [false, true] {
+            for command in ["write_text_file_confined", "ensure_dir_confined"] {
+                let sandbox = tempfile::tempdir().unwrap();
+                let root = sandbox.path().join("registered");
+                let narrow = root.join("narrow");
+                let outside = sandbox.path().join("outside");
+                std::fs::create_dir_all(&narrow).unwrap();
+                std::fs::create_dir(&outside).unwrap();
+                let policy = if headless {
+                    Some(cognia_external_agent::presets::SpawnPolicy::new(
+                        root.clone(),
+                        false,
+                    ))
+                } else {
+                    cognia_files::files::add_allowed_root(root.to_string_lossy().into_owned());
+                    None
+                };
+                let roots = confine_host_allowed_roots(
+                    &[narrow.to_string_lossy().into_owned()],
+                    policy.as_ref(),
+                )
+                .unwrap();
+                std::fs::rename(&narrow, root.join("original")).unwrap();
+                std::os::unix::fs::symlink(&outside, &narrow).unwrap();
+                let target = narrow.join("new/entry").to_string_lossy().into_owned();
+                let result = if command == "write_text_file_confined" {
+                    cognia_files::files::write_text_file_confined_with_canonical_roots(
+                        &target, "x", &roots,
+                    )
+                } else {
+                    cognia_files::files::ensure_dir_confined_with_canonical_roots(&target, &roots)
+                };
+                assert!(
+                    result.is_err(),
+                    "{command} widened authority (headless={headless})"
+                );
+                assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn confined_rpc_headless_roots_use_policy_without_renderer_registration() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let workspaces = sandbox.path().join("workspaces");
+        let root = workspaces.join("project");
+        let outside = sandbox.path().join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let state = super::super::tests::test_state();
+        let host = headless_host_with_workspace_root(&workspaces);
+
+        for command in ["write_text_file_confined", "ensure_dir_confined"] {
+            let filesystem_root = sandbox.path().ancestors().last().unwrap().to_path_buf();
+            for requested_root in [&outside, &filesystem_root] {
+                let result = dispatch(
+                    command,
+                    json!({
+                        "path": outside.join(command).join("entry"),
+                        "content": "x",
+                        "allowedRoots": [requested_root],
+                    }),
+                    &state,
+                    &host,
+                    "confined-device",
+                    None,
+                    None,
+                )
+                .await;
+                assert!(
+                    result.is_err(),
+                    "{command} accepted a root outside the policy"
+                );
+                assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+            }
+
+            // Relative roots must use the canonical path returned by the
+            // policy, rather than resolving against the Host process's cwd.
+            for (index, requested_root) in [root.to_string_lossy().into_owned(), "project".into()]
+                .into_iter()
+                .enumerate()
+            {
+                let target = root.join(format!("{command}-{index}")).join("entry");
+                let result = dispatch(
+                    command,
+                    json!({
+                        "path": target,
+                        "content": "x",
+                        "allowedRoots": [requested_root],
+                    }),
+                    &state,
+                    &host,
+                    "confined-device",
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(result.unwrap(), Value::Null);
+                if command == "write_text_file_confined" {
+                    assert_eq!(std::fs::read_to_string(target).unwrap(), "x");
+                } else {
+                    assert!(target.is_dir());
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn confined_rpc_roots_are_bounded_by_the_host_and_keep_the_requester_limit() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = sandbox.path().join("registered");
+        let narrow = root.join("narrow");
+        let outside = sandbox.path().join("outside");
+        std::fs::create_dir_all(&narrow).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        cognia_files::files::add_allowed_root(root.to_string_lossy().into_owned());
+        let state = super::super::tests::test_state();
+        let host = headless_host_with_workspace_root(&root);
+
+        for command in ["write_text_file_confined", "ensure_dir_confined"] {
+            let filename = format!("{command}/file.txt");
+            let denied_target = outside.join(&filename);
+            let filesystem_root = sandbox.path().ancestors().last().unwrap().to_path_buf();
+            for requested_roots in [
+                vec![outside.clone()],
+                vec![sandbox.path().to_path_buf()],
+                vec![filesystem_root],
+                vec![root.join("missing")],
+                vec![],
+            ] {
+                let result = dispatch(
+                    command,
+                    json!({
+                        "path": denied_target,
+                        "content": "x",
+                        "allowedRoots": requested_roots,
+                    }),
+                    &state,
+                    &host,
+                    "confined-device",
+                    None,
+                    None,
+                )
+                .await;
+                assert!(result.is_err(), "{command} trusted a caller-supplied root");
+                assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+            }
+
+            // Even a registered target is refused when it is outside the
+            // requester's narrower roots; invalid roots cannot widen them.
+            let sibling = root.join(&filename);
+            let result = dispatch(
+                command,
+                json!({
+                    "path": sibling,
+                    "content": "x",
+                    "allowedRoots": [narrow, outside],
+                }),
+                &state,
+                &host,
+                "confined-device",
+                None,
+                None,
+            )
+            .await;
+            assert!(result.is_err(), "{command} ignored the narrower root");
+            assert!(!sibling.exists());
+            assert!(!sibling.parent().unwrap().exists());
+
+            let allowed_target = narrow.join(filename);
+            let result = dispatch(
+                command,
+                json!({
+                    "path": allowed_target,
+                    "content": "x",
+                    "allowedRoots": [narrow, outside],
+                }),
+                &state,
+                &host,
+                "confined-device",
+                None,
+                None,
+            )
+            .await;
+            assert_eq!(result.unwrap(), Value::Null);
+            if command == "write_text_file_confined" {
+                assert_eq!(std::fs::read_to_string(allowed_target).unwrap(), "x");
+            } else {
+                assert!(allowed_target.is_dir());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn confined_rpc_roots_are_checked_after_resolving_symlink_aliases() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let root = sandbox.path().join("registered");
+        let outside = sandbox.path().join("outside");
+        let alias = sandbox.path().join("alias");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&root, &alias).unwrap();
+        let escape = root.join("escape");
+        std::os::unix::fs::symlink(&outside, &escape).unwrap();
+        cognia_files::files::add_allowed_root(root.to_string_lossy().into_owned());
+        let state = super::super::tests::test_state();
+        let host = headless_host_with_workspace_root(&root);
+        for command in ["write_text_file_confined", "ensure_dir_confined"] {
+            for (requested_root, permitted) in [(&escape, false), (&alias, true)] {
+                let target = requested_root.join(command).join("nested");
+                let result = dispatch(
+                    command,
+                    json!({
+                        "path": target,
+                        "content": "x",
+                        "allowedRoots": [requested_root],
+                    }),
+                    &state,
+                    &host,
+                    "confined-device",
+                    None,
+                    None,
+                )
+                .await;
+                assert_eq!(result.is_ok(), permitted, "{command}: {result:?}");
+                assert_eq!(target.exists(), permitted);
+            }
+            assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        }
+    }
 
     #[test]
     fn best_of_n_remote_selection_never_dispatches_caller_identity() {
