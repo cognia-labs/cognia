@@ -1,10 +1,37 @@
 {
-  "version": 1,
-  "note": "Provider-initializer runtime effects the headless brain must NOT run (ADR-0059). Rows name SYMBOLS, never whole files: one initializer routinely mixes brain work with a genuinely renderer-bound effect, and a file-level excuse would silence both. Every reason must say WHY the brain is the wrong host — a physical boundary, or a host-split pair whose brain half is registered in lib/headless/runtimes/. 'Not ported yet' is not a reason; that is debt, and it belongs in the registry instead.",
+  "version": 2,
+  "note": "Provider-initializer runtime effects the headless brain does not run (ADR-0059, ADR-0250 B6). Since B6 the gate checks every @/lib symbol an initializer calls inside an effect, whatever its name. `initializers` are DECISIONS: rows name SYMBOLS, never whole files (one initializer routinely mixes brain work with a renderer-bound effect, and a file-level excuse would silence both), and every reason says WHY the brain is the wrong host: a physical boundary, or a host-split pair whose brain half is registered in lib/headless/runtimes/. 'Not ported yet' is not a reason. `uiOnly` names, by module, symbols that only paint, listen to or lay out the renderer; a module that imports only React/DOM and touches React or the DOM is recognised without a row. `pending` is DEBT: host-neutral work the brain should run and does not yet, with the ADR-0250 phase that moves it. `pendingCeiling` is its symbol count; the gate fails when pending grows above it, and when it shrinks until the ceiling is lowered to match.",
   "initializers": {
     "components/providers/initializers/anthropic-usage-scheduler-initializer.tsx": {
       "symbols": ["startUsageScheduler"],
       "reason": "Polls Anthropic quota through lib/subscription/core/transport, whose whole command family (subscription_get_active, subscription_get_account, ...) is target:client / transports:[\"internal\"] in protocol/companion-commands.json and local-only in protocol/headless-command-dispositions.json. The brain does not read that vault at all: its provider credentials arrive through the claude_set_* arms (R7), which is why lib/headless/runtimes/initializers.ts already excludes subscription-initializer for the same reason. Exposing quota probing to the brain is a subscription-vault decision, not a wiring one."
+    },
+    "components/providers/initializers/boot-capability-route-activator.tsx": {
+      "symbols": ["resolveRouteBootCapabilities"],
+      "reason": "Maps the renderer's App Router pathname and ?section= (lib/boot/route-capabilities.ts ROUTE_PREFIXES) to the lazily split React initializer bundles that ensureBootCapability mounts. The brain has no routes and no deferred bundles. Its roster (lib/headless/runtimes/index.ts) imports and starts every registered runtime at boot, so there is no capability to activate on navigation."
+    },
+    "components/providers/initializers/boot-profile-startup-probe.tsx": {
+      "symbols": ["probeConfiguredBootCapabilities"],
+      "reason": "The main-profile probe (lib/boot/startup-probe.ts) reads plugins, adapters, jobs and schedules only to decide which renderer bundles (plugin-runtime, integrations, workflow-automation ...) ensureBootCapability should mount without waiting for a route. The brain has no boot profile or code-split initializer bundles: lib/headless/runtimes/index.ts registers the scheduler, connector-runtime, plugin-runtime, memory-job-worker and the rest unconditionally."
+    },
+    "components/providers/initializers/chat-copilot-initializer.tsx": {
+      "symbols": [
+        "claimConsentSurface",
+        "createScreenCopilotController",
+        "draftForScreen",
+        "onChatCopilotIntent",
+        "readChatScreen",
+        "repairSelectionToolbarPermission"
+      ],
+      "reason": "The ADR-0194 §8 screen copilot reads other applications' windows through desktop screen capture/AX (lib/reply-copilot/screen/run-screen-copilot.ts), drives the native chat-copilot overlay window (lib/reply-copilot/screen/overlay-client.ts), claims the desktop consent prompt surface (lib/automation/consent-routing.ts) and opens macOS Screen Recording settings (lib/tauri/selection-toolbar.ts). These are ADR-0059 D7 desktop-awareness and native-window boundaries. A brain has no screen, no foreign windows and no overlay."
+    },
+    "components/providers/initializers/cli-sync-initializer.tsx": {
+      "symbols": ["maybeAutoPushToCli"],
+      "reason": "lib/cli-bridge/auto-push.ts pushes the desktop's agent config, provider credentials and input history into the local cognia CLI home on the same machine. It returns early off Tauri and goes through the src-tauri cli_bridge (ADR-0078). The brain is itself the headless CLI process reading its own home and server secret store, so there is no second local CLI home for it to seed."
+    },
+    "components/providers/initializers/cloud-identity-initializer.tsx": {
+      "symbols": ["discardLegacyGlobalLogtoSession"],
+      "reason": "Deletes the pre-ADR-0149 global Logto blob from the desktop keyring (lib/logto/session-store.ts LEGACY_LOGTO_KEYRING). Only a desktop profile upgraded from that era ever held it. lib/headless/runtimes/index.ts already records cloud-identity-initializer as renderer keyring hygiene: the brain keeps its own file-backed session in cli/src/serve/collab-reader.ts and never had the legacy key."
     },
     "components/providers/initializers/code-adoption-tracker-initializer.tsx": {
       "symbols": ["startCodeAdoptionTracker"],
@@ -14,85 +41,319 @@
       "symbols": ["startCodexUsageScheduler"],
       "reason": "The Codex half of the same decision as anthropic-usage-scheduler-initializer: it resolves the active account through subscription_get_active, which is target:client / internal-transport and local-only in the dispositions ledger. The brain's Codex credentials come from the server secret store via claude_set_*, not from the interactive desktop vault this loop probes."
     },
+    "components/providers/initializers/connector-host-writes-initializer.tsx": {
+      "symbols": ["createHostAdapterInstanceWriter", "setAdapterInstanceRemoteWriter"],
+      "reason": "The CLIENT half of ADR-0224 connector writes. A phone or paired browser that drives a Host routes its connection-form writes through that Host's adapter_instance_mutate under the credential lease (lib/connectors/host-instance-writer.ts). The brain IS the receiving Host. Its connector runtime is registered as connector-runtime in lib/headless/runtimes/connector-runtime.ts, and installing the remote writer there would route the Host's own writes back to itself."
+    },
+    "components/providers/initializers/context-keys-initializer.tsx": {
+      "symbols": ["setContextKey", "setContextKeys"],
+      "reason": "Projects renderer state into the plugin when-clause key store: active chat session, streaming status, selected guild, active project, the pathname as route.<seg>, and the OS. Those keys gate UI slots, commands and view containers in the WebView. lib/headless/runtimes/index.ts already lists context-keys as WebView chrome/UI state. A brain has no active pane, route or guild to project."
+    },
     "components/providers/initializers/deferred-boot-initializers-impl.tsx": {
       "symbols": ["startRendererWorkOutbox", "installDefaultPhantomRunGuard"],
       "reason": "The renderer half of ADR-0125 durable work submission: it drains the browser-local queue of work this client originated. The brain is the receiving authority, not a submitter, and runs the server half — registered as `work-submission-outbox` in lib/headless/runtimes/initializers.ts. Running both in one process would have the brain drain its own inbox back into itself. installDefaultPhantomRunGuard repairs renderer chat-store projections using this client's HostState replica and mobile outbox (lib/chat/phantom-run-runtime.ts). Those are not the authoritative host turn state. The brain already starts HostStateService through desktop-message-source / desktop-write-source; that service acquires the host lease and settles orphaned turns before serving. Installing the renderer projection repair there would add a second lifecycle writer using client evidence instead of the host authority."
     },
+    "components/providers/initializers/developer-mode-initializer.tsx": {
+      "symbols": ["migrateDeveloperMode"],
+      "reason": "A one-way migration of the renderer's legacy localStorage flag cognia.plugins.developerMode into pluginSettings (lib/plugin/devtools/developer-mode.ts readLegacyDeveloperModeFlag returns false without window). The brain never had that browser localStorage, so there is no legacy signal to fold in. Developer mode gates renderer devtools/Creator surfaces the brain does not render."
+    },
     "components/providers/initializers/dock-pages-lifecycle-initializer.tsx": {
-      "symbols": ["startDockPageSync", "subscribeDockPageLifecycle"],
-      "reason": "Both keep the desktop chat dock's page tabs in step with Cognia's local Chromium (ADR-0214): startDockPageSync mirrors the shared Tauri-hosted Chromium session's pages into renderer dock tabs, and subscribeDockPageLifecycle closes a conversation's pages when the user switches the renderer's active conversation away. The brain hosts no local Chromium (the desktop shell supervises the runtime behind browser_local_rpc) and has no dock or active conversation to follow, so there is nothing for either to mirror or close."
+      "symbols": [
+        "startDockPageSync",
+        "subscribeDockPageLifecycle",
+        "configureAgentPageOwnership",
+        "primeLocalBrowserRouting"
+      ],
+      "reason": "Both keep the desktop chat dock's page tabs in step with Cognia's local Chromium (ADR-0214): startDockPageSync mirrors the shared Tauri-hosted Chromium session's pages into renderer dock tabs, and subscribeDockPageLifecycle closes a conversation's pages when the user switches the renderer's active conversation away. The brain hosts no local Chromium (the desktop shell supervises the runtime behind browser_local_rpc) and has no dock or active conversation to follow, so there is nothing for either to mirror or close. The same ADR-0214 local-Chromium boundary as startDockPageSync. configureAgentPageOwnership points agent page routing at the renderer's on-screen conversation (useChatStore activeSessionId), and primeLocalBrowserRouting reads whether Cognia's own Chromium (crates/cognia-local-browser) is installed. The brain hosts no local Chromium (the desktop shell supervises browser_local_rpc) and has no on-screen conversation."
+    },
+    "components/providers/initializers/fleet-history-sink-initializer.tsx": {
+      "symbols": ["fleetMonitorRestore", "islandRestore"],
+      "reason": "lib/tauri/fleet.ts wraps the src-tauri fleet_monitor_restore / island_restore commands. The first re-arms the desktop-local hook ingress and token file that externally launched coding agents on this machine POST to. The second reopens the always-on-top island overlay window. Both are desktop-machine boundaries (local agent hook scripts, native overlay window), and the brain has neither the local agents nor a window server."
+    },
+    "components/providers/initializers/glance-publisher-initializer.tsx": {
+      "symbols": [
+        "getIslandProjection",
+        "normalizeGlancePanelSettings",
+        "onGlanceRequest",
+        "onGlanceSubscription",
+        "openIslandWindow",
+        "parseGlanceRequest",
+        "requestIslandFocus",
+        "runGlancePluginAction",
+        "sendGlanceResult",
+        "sendGlanceSnapshot"
+      ],
+      "reason": "Builds GlanceSnapshotV1 from React hook sources in the main window and pushes it to the tray-panel window over glance://, focusing the island overlay on Fleet clicks (ADR-0225 §7). The paired-phone half is a recorded protocol decision: protocol/companion-response-schemas.json returns `headless_host` for glance_* from a brain that builds no glance. lib/headless/runtimes/plugin-runtime.ts installs only the visibility hook and states it does not advertise headless glance snapshot support."
+    },
+    "components/providers/initializers/island-initializer.tsx": {
+      "symbols": [
+        "executeIslandAction",
+        "onIslandActionIntent",
+        "onIslandDetailRequest",
+        "onIslandStateRequest",
+        "projectIslandState",
+        "publishIslandProjection",
+        "sendIslandActionResult",
+        "sendIslandFocusRow",
+        "sendIslandState",
+        "takePendingIslandFocus"
+      ],
+      "reason": "The main-window half of the task control island. It projects Fleet, attention and chat-store state into IslandState for the least-privilege native overlay window over island:// events (lib/island/client.ts), and executes the overlay's intents through renderer controls and the router (lib/island/main-window-controls.ts). The island is a tray/overlay window, which is a recorded physical boundary. A brain has no overlay to feed and no window to receive intents from."
     },
     "components/providers/initializers/issue-tracker-initializer.tsx": {
       "symbols": ["installCollabRefreshScheduler", "installIssueNotificationCommands"],
       "reason": "Registers the `issue.open` notification command, whose whole body is a Next App Router `router.push`. Navigation is an act on a UI surface the brain does not have; the paired device that RECEIVES the notification installs this command in its own renderer. Host-neutral issue tracking is registered as `issue-tracker` in lib/headless/runtimes/issue-tracker.ts; the change feed and notification sync share lib/headless/runtimes/collab-runtime.ts across both hosts. installCollabRefreshScheduler is the BROWSER half of the collab pull: it gates every tick on document.visibilityState, re-runs on window focus, and returns a no-op when either global is missing, so registering it in a brain would add a runtime that starts cleanly and refreshes nothing. The brain half is registered as `collab-refresh` in lib/headless/runtimes/collab-refresh.ts and runs the same host-neutral requestCollabRefresh on the same collabRefreshDelay backoff, without a visibility question it has no way to ask."
     },
+    "components/providers/initializers/managed-desktop-alerts-initializer.tsx": {
+      "symbols": ["startManagedDesktopAlerts"],
+      "reason": "A caller-scoped watcher (lib/automation/managed-desktop-alerts.ts). Every connected shell reads its Host's managed_desktop_monitor and raises ADR-0233 §5 alerts in its own notification centre: the desktop for itself, a phone or paired browser for the /pair Host it drives. The brain is the watched Host. lib/headless/runtimes/index.ts records that the managed-desktop lifecycle and its reconciler are owned by the native Host service in cognia-automation, so the brain would only double the clients' alerts."
+    },
     "components/providers/initializers/managed-ide-broker-initializer.tsx": {
       "symbols": ["attachManagedIdeBroker"],
       "reason": "The Tauri-event-bound entry point; the brain uses the sibling attachManagedIdeBrokerTransport (lib/plugin/ide/broker-runtime.ts:1184) with the companion transport plus content upload/redeem, registered as `managed-ide-broker` in lib/headless/runtimes/managed-ide-broker.ts. One subsystem, two host-specific attach points — not a gap."
+    },
+    "components/providers/initializers/media-generation-initializer.tsx": {
+      "symbols": ["startVideoJobReconciler"],
+      "reason": "ADR-0205 deliberately separates the renderer's durable Dexie video queue from the caller-driven CLI/headless API. videos.get / videos.content pass an explicit provider snapshot to the in-memory engine (lib/ai/operations/handlers/video-job-bridge.ts); the default VideoJobHost.getSnapshot throws because this host has no implicit provider settings. This renderer sweeper calls engine.poll without a snapshot, which would settle generating headless jobs as failed, not advance them. The renderer installs its own snapshot, asset and Dexie adapters before sweeping; the brain must retain the explicit-request polling contract recorded in lib/headless/runtimes/index.ts."
     },
     "components/providers/initializers/online-eval-initializer.tsx": {
       "symbols": ["startOnlineEvalScheduler"],
       "reason": "Drains the online-evaluation queue that the `eval-online` log transport fills. That transport exists only once `bootstrapLogger` configures the renderer transport graph, which the headless roster deliberately does not do. The producer is therefore absent in the brain, and the worker additionally reads spans back out of the Dexie `agentTraces` table that the renderer-side agent-trace transport populates. Registering the consumer alone would start a worker with nothing to consume and no span store to read. Register it together with a headless span feed, never before."
     },
+    "components/providers/initializers/plugin-runtime-initializer.tsx": {
+      "symbols": ["resolvePluginRuntimeBootstrap"],
+      "reason": "Resolves the renderer's plugin runtime profile (browser, mobile or Tauri main window; secondary windows such as pet and tray are refused) from the WebView's window label and appDataDir (lib/plugin/core/bootstrap.ts). Host-split pair: the brain boots the canonical Node PluginManager through createNodePluginRuntimeAdapter (cli/src/serve/plugin-runtime-adapter.ts) and ensurePluginRuntime, registered as plugin-runtime in lib/headless/runtimes/plugin-runtime.ts."
+    },
+    "components/providers/initializers/provider-oauth-refresh-initializer.tsx": {
+      "symbols": ["jitterCadenceMs", "refreshExpiringOAuthCredentials"],
+      "reason": "The brain holds no OAuth credential to renew (verified for ADR-0250 B6; the audit left it open). refreshExpiringOAuthCredentials (lib/ai/providers/oauth-credential-refresh.ts) renews the oauthRefreshToken kept in providerSettings, which is desktop-only and never syncs; a brain's provider credentials are the static API keys a paired owner seals on the host (lib/headless/runtimes/host-provider-keys.ts, lib/host-secrets/), which carry no OAuth token pair. Sealing OAuth credentials to a host is a credentials decision that must land before this does. jitterCadenceMs only spreads the renderer windows' sweep ticks."
+    },
+    "components/providers/initializers/pwa-badge-initializer.tsx": {
+      "symbols": [
+        "subscribeUnreadSessions",
+        "applyAppBadge",
+        "countMobileUnread",
+        "getUnreadSessionsSnapshot"
+      ],
+      "reason": "This subscription paints navigator.setAppBadge for the installed browser window and starts only while its display-mode media query is standalone. A headless process has no PWA icon or window media query to update. These belong to the same navigator.setAppBadge paint as the excluded subscribeUnreadSessions. They read the window's unread snapshot (lib/chat/unread-sessions.ts), count it like the mobile badges and paint the installed PWA icon (lib/pwa/app-badge.ts), and the effect only starts under detectPlatform()==='web' with display-mode: standalone. A headless process has no PWA icon or window media query."
+    },
+    "components/providers/initializers/remote-host-keys-initializer.tsx": {
+      "symbols": ["followRemoteHostKeys"],
+      "reason": "The CLIENT half of ADR-0224 A6 (lib/host-secrets/remote-host-keys-follower.ts). It follows which providers the /pair Host this app drives holds a sealed key for, so the model picker can list them. The brain is that Host. Its half, loading the sealed keys into the provider-settings overlay, is registered as host-provider-keys in lib/headless/runtimes/host-provider-keys.ts."
+    },
+    "components/providers/initializers/remote-host-liveness-initializer.tsx": {
+      "symbols": ["startHostLivenessLoop"],
+      "reason": "Gated on the desktop `always-on` capability. It probes the OTHER paired remote hosts this desktop holds but is not driving, over their management channels (lib/remote-host/liveness.ts), and writes stores/remote-host/remote-host-store for the ADR-0136 timing authority. A brain is a Host. It does not pair to other hosts, holds no remote-host store and runs no client-side timing authority."
+    },
     "components/providers/initializers/remote-notification-initializer.tsx": {
       "symbols": ["installRemoteNotificationListener"],
       "reason": "The CLIENT side of `notification://remote` — it ingests frames a headless server publishes into this device's Notification Center. The brain is the publisher (lib/notifications/runtime.ts -> remote_notification_publish) and must not subscribe to itself. Already recorded in the roster doc at lib/headless/runtimes/index.ts."
+    },
+    "components/providers/initializers/renderer-perf-initializer.tsx": {
+      "symbols": ["subscribePerformanceSecurityBarrier"],
+      "reason": "These subscriptions scope the document's RendererPerformanceCollector and browser OperationPerformanceRecorder to the renderer's active routing target and synchronously clear its measurements on account lock/switch. They own WebView sampling and browser-local performance storage, not host execution or security policy. A brain has no document or renderer routing surface to sample or clear; its process metrics are registered separately as performance-runtime."
     },
     "components/providers/initializers/router-fusion-initializer.tsx": {
       "symbols": ["startBreakerPersistence"],
       "reason": "Persists Router + Fusion breaker trips (ADR-0188) through lib/router-fusion/settings/save-router-fusion-settings.ts, which writes via the settings store's save path, and announces them through the window's notification center. The brain never loads that store, so running it there would write through an empty store. A trip the brain records still takes the surface out for the life of the brain process; it just does not survive a restart. Recovery and retention, the initializer's other two jobs, ARE registered for the brain in lib/headless/runtimes/router-fusion.ts, reading the account row directly, because since B2 the brain hosts Run API, passthrough and workflow runs of its own."
     },
     "components/providers/initializers/selection-toolbar-initializer.tsx": {
-      "symbols": ["subscribeQuickActions", "watchSelectionSpeech"],
-      "reason": "Reads the OS-level text selection through the desktop selection-perception bus (ADR-0093/0095). Desktop selection awareness is one of ADR-0059 D7's recorded physical boundaries: there is no OS selection to observe in a container. subscribeQuickActions keeps the selection overlay's action list in step with the plugin quick-action registry. It exists to repaint a native always-on-top window over whatever application currently owns the OS text selection, which is the same recorded ADR-0059 D7 physical boundary as watchSelectionSpeech above. A brain has no window server to paint on and no selection to act on, so the subscription would fire into nothing."
+      "symbols": [
+        "subscribeQuickActions",
+        "watchSelectionSpeech",
+        "SelectionQuickActionError",
+        "classifySelection",
+        "executePluginSelectionQuickAction",
+        "getCurrentSelectionCandidate",
+        "listQuickActions",
+        "pluginActionIsEligible",
+        "speakSelection",
+        "stopSelectionSpeech",
+        "takePendingSelectionStage"
+      ],
+      "reason": "Reads the OS-level text selection through the desktop selection-perception bus (ADR-0093/0095). Desktop selection awareness is one of ADR-0059 D7's recorded physical boundaries: there is no OS selection to observe in a container. subscribeQuickActions keeps the selection overlay's action list in step with the plugin quick-action registry. It exists to repaint a native always-on-top window over whatever application currently owns the OS text selection, which is the same recorded ADR-0059 D7 physical boundary as watchSelectionSpeech above. A brain has no window server to paint on and no selection to act on, so the subscription would fire into nothing. Every symbol serves the native selection toolbar over the OS text selection (ADR-0093/0095). They read the current selection candidate and staged selection from the desktop perception bus (lib/tauri/selection-toolbar.ts), classify it, build and run the plugin quick-action catalogue for the overlay window (lib/selection/plugin-actions.ts, action-layout.ts) and speak or stop speaking it (lib/tts/speak-selection.ts). Desktop selection awareness is a recorded ADR-0059 D7 physical boundary: a brain has no OS selection and no overlay window."
     },
     "components/providers/initializers/selection-toolbar-restore-initializer.tsx": {
-      "symbols": ["startSelectionToolbar"],
-      "reason": "Restores the always-on-top native selection-toolbar window (ADR-0093). A recorded physical boundary in ADR-0059 D7 — the brain has no window server to place an overlay on."
+      "symbols": ["startSelectionToolbar", "migrateSelectionToolbarMode"],
+      "reason": "Restores the always-on-top native selection-toolbar window (ADR-0093). A recorded physical boundary in ADR-0059 D7 — the brain has no window server to place an overlay on. Folds the legacy enabled flag in the desktop Tauri store prefs into the toolbar mode just before startSelectionToolbar restores the always-on-top native toolbar (lib/selection/preferences.ts, lib/tauri/store.ts). This is the same ADR-0059 D7 window/selection boundary as the excluded startSelectionToolbar. The brain has neither those Tauri prefs nor a window server."
+    },
+    "components/providers/initializers/session-focus-initializer.tsx": {
+      "symbols": ["retryTitleIfNeeded"],
+      "reason": "The retry (lib/ai/generation/title-retry.ts) is an in-memory tracker of title failures from this renderer's own runTitleTask calls. It fires only when the person re-focuses a conversation (useChatStore activeSessionId) or on Capacitor app resume. lib/headless/runtimes/index.ts already records session-focus-initializer as renderer focus lifecycle. A brain has no focus or resume event to trigger it."
     },
     "components/providers/initializers/session-import-watch-initializer.tsx": {
-      "symbols": ["startSessionImportWatch"],
-      "reason": "Owns the OS filesystem watch over desktop external-agent history roots. Its session_import_watch_start / session_import_watch_stop commands are target:client, capability:client.local, transports:[\"internal\"] in protocol/companion-commands.json and local-only in protocol/headless-command-dispositions.json. A brain has no Tauri event source or those per-user desktop history paths to watch."
+      "symbols": [
+        "startSessionImportWatch",
+        "retargetSessionImportWatch",
+        "stopSessionImportWatch"
+      ],
+      "reason": "Owns the OS filesystem watch over desktop external-agent history roots. Its session_import_watch_start / session_import_watch_stop commands are target:client, capability:client.local, transports:[\"internal\"] in protocol/companion-commands.json and local-only in protocol/headless-command-dispositions.json. A brain has no Tauri event source or those per-user desktop history paths to watch. These are the retarget and stop halves of the same OS filesystem watch as the excluded startSessionImportWatch. session_import_watch_* is target:client, capability:client.local and internal-only in protocol/companion-commands.json, and local-only in protocol/headless-command-dispositions.json. Retargeting follows the renderer's active workspace (useProjectStore), and the watched paths are per-user desktop agent history roots."
+    },
+    "components/providers/initializers/shared-chat-lifecycle-initializer.tsx": {
+      "symbols": [
+        "subscribeCollabConnection",
+        "connectSharedSessionStream",
+        "listAndCacheSharedSessions",
+        "recoverSharedSessionRun",
+        "suspendSharedSessionRuns"
+      ],
+      "reason": "Owns the paired renderer client: subscriptions track its visible/open chat panes, local Dexie cache, window focus and document visibility, and restart when that client changes its paired endpoint. The authoritative collab service owns shared sessions and run queues; a headless brain has no pane selection or browser endpoint to mirror and must not duplicate the renderer stream owner. The same paired-renderer client as subscribeCollabConnection. Discovery is gated on document.visibilityState and the renderer's active workspace. Streams are opened per open or retained pane. recover/suspend only fence and republish shared-run leases this device's renderer took: activeRuns are populated solely by hooks/chat/use-claude-chat-controller.ts (lib/collab/shared-run-coordinator.ts). The brain pulls collab caches via collab-refresh and collab-runtime in lib/headless/runtimes/."
     },
     "components/providers/initializers/sites-initializer.tsx": {
       "symbols": ["bootSites", "installSiteNotificationCommands"],
       "reason": "bootSites is host-neutral by construction and lives in lib/sites/boot.ts precisely so a headless host could run it, but CloudflareSitesService reaches its provider tokens through createLocalKeyringStore (lib/credentials/keyring-store.ts:242), which THROWS off Tauri rather than degrading. Running it in a brain would throw once per owned Site and recover none of them. Giving KeyringStore a headless implementation is a credentials decision about where a cloud install's provider tokens live, not a registration, and it must land before this does. installSiteNotificationCommands is the `site.open` twin of the issue tracker's exclusion above: its whole body is a Next App Router router.push, and navigation acts on a UI surface the brain does not have."
+    },
+    "components/providers/initializers/storage-persistence-initializer.tsx": {
+      "symbols": ["requestPersistentStorage"],
+      "reason": "Calls navigator.storage.persist() so the browser will not evict the origin's IndexedDB under pressure (lib/storage/persistence-request.ts). lib/headless/runtimes/index.ts already records storage-persistence as a browser API. A brain's account database is a server file, and there is no browser origin quota to protect."
+    },
+    "components/providers/initializers/subscription-initializer.tsx": {
+      "symbols": ["deferUntilSecretStoreReady", "subscriptionInitOnce"],
+      "reason": "Runs Rust subscription_init over the interactive desktop subscription vault (v1 keyring to v2) and re-runs it after the person unlocks the secret store (lib/credentials/secret-store-readiness.ts). lib/headless/runtimes/initializers.ts already excludes subscription-initializer because the brain's provider credentials arrive via the claude_set_* arms (R7). The subscription_* family is target:client / internal-transport and local-only in protocol/headless-command-dispositions.json."
+    },
+    "components/providers/initializers/telemetry-session-initializer.tsx": {
+      "symbols": ["trackAppLaunched", "trackScreenViewed"],
+      "reason": "ADR-0074 app-session events measure a person's interactive app session: app.launched with a first-launch stamp kept in renderer localStorage (lib/telemetry/app-session.ts), and app.screen.viewed per App Router pathname. A supervised brain restart is not a user session and the brain has no routes. Its behavior telemetry consent and sinks are registered separately as behavior-telemetry in lib/headless/runtimes/behavior-telemetry.ts."
+    },
+    "components/providers/initializers/template-platform-initializer.tsx": {
+      "symbols": ["refreshTemplateOwners"],
+      "reason": "Refreshes the in-memory template-owner snapshot that the renderer's ⌘K global search provider reads synchronously in its belongs predicate (lib/global-search/providers/library.ts templateBelongsToWorkspace). Global search is a renderer surface (ADR-0129, components/global-search/). The brain exposes no global search command, so nothing there reads this snapshot."
+    },
+    "components/providers/initializers/terminal-boot-initializer.tsx": {
+      "symbols": ["rehydrateTerminals"],
+      "reason": "Reattaches this renderer's terminal dock tabs to the PTY sessions that survived a WebView reload (lib/terminal/rehydrate.ts). The PTYs themselves live in the native terminal host (crates/cognia-terminal) and outlive any renderer; what is rehydrated is dock-tab UI state. A brain has no dock tabs to restore, and web and Capacitor clients reattach to a host's sessions through lib/terminal/boot-reattach.ts."
+    },
+    "components/providers/initializers/tray-panel-initializer.tsx": {
+      "symbols": [
+        "handleTrayUsageCommand",
+        "migrateTrayPanelActions",
+        "onTrayPanelRequest",
+        "sendTrayPanelResult"
+      ],
+      "reason": "The main-window half of the native tray quick panel. It listens for tray-panel://run from the panel window and answers it (lib/tauri/tray-panel.ts), handles the tray's usage-dock command (lib/tray/dispatcher.ts), and imports the action catalogue once from the desktop Tauri store into settings (lib/tray-panel/migrate-actions.ts, ADR-0225 §10). Tray windows are a recorded physical boundary. The brain has no tray, panel window or Tauri store prefs."
+    },
+    "components/providers/initializers/update-center-initializer.tsx": {
+      "symbols": [
+        "subscribeFlexibleUpdateDownloaded",
+        "getAppUpdateInfo",
+        "getGooglePlayServicesStatus",
+        "getUpdateCoordinator",
+        "readUpdateCenterSettings"
+      ],
+      "reason": "This effect is guarded by native Android and Google Play Services availability. It listens to the Capacitor/Play in-app-update downloaded event and offers a Sonner toast opening the consented Update Center action. A headless host has no Android activity, Play download or renderer toast; ADR-0224 host updates are owned by cognia-server's verified catalog and idle-time updater, not this mobile app subscription. getAppUpdateInfo and getGooglePlayServicesStatus are the Capacitor/Play in-app-update probes, already excluded with subscribeFlexibleUpdateDownloaded. The sweep is a consent-driven discovery for the renderer Update Center: it installs nothing and its only output is a Sonner toast that opens the center, and its coordinator includes the client-side host adapter (lib/updates/adapters/host-adapter.ts). ADR-0224 host updates are owned by cognia-server's verified catalog and idle-time updater."
+    },
+    "components/providers/initializers/usage-dock-initializer.tsx": {
+      "symbols": [
+        "closeUsageDock",
+        "onUsageDockOpenFull",
+        "onUsageDockStateRequest",
+        "openUsageDock",
+        "sendUsageDockState"
+      ],
+      "reason": "The main-window half of the Capacity Dock (ADR-0165 Phase 2). It opens and closes the native dock window, seeds it over usage-dock:// events and routes its open-full click into the router (lib/usage-dock/client.ts). The dock is a native overlay window, which is a recorded physical boundary. A brain has no window to open and no renderer router to navigate."
     },
     "components/providers/initializers/vector-credential-migration-initializer.tsx": {
       "symbols": ["registerExistingTwinVectorBackend"],
       "reason": "Both effects in this initializer are a one-time desktop migration, and the initializer says so with its own isTauri() guard. registerExistingTwinVectorBackend re-registers a Twin vector backend from settings that migrateVectorCredentials just moved out of localStorage and into the OS keyring, and its own body opens with `if (!isTauri()) return` (lib/db/twin-runtime-settings.ts:121), so registering it in a brain would install a runtime whose first statement is a return. A brain's vector backend is configured through the server secret store, never migrated out of a browser's localStorage, because it never had one."
     },
     "components/providers/initializers/webview-heartbeat-initializer.tsx": {
-      "symbols": ["startWebviewHeartbeat"],
-      "reason": "Proves the Tauri WebView is still painting so the watchdog can recover a wedged renderer. A headless brain has no WebView; its liveness is the supervisor's ready probe and /healthz in cognia-server, which is a different mechanism, not a missing port of this one."
+      "symbols": ["startWebviewHeartbeat", "takeWhiteScreenRecoveryNotice"],
+      "reason": "Proves the Tauri WebView is still painting so the watchdog can recover a wedged renderer. A headless brain has no WebView; its liveness is the supervisor's ready probe and /healthz in cognia-server, which is a different mechanism, not a missing port of this one. This is the other half of the excluded startWebviewHeartbeat. It asks the Rust WebView watchdog (src-tauri/src/webview_watchdog.rs via lib/tauri/webview-watchdog.ts) whether this page load was an automatic white-screen recovery, then toasts the person. A brain has no WebView to blank or recover; its liveness is the supervisor's ready probe and /healthz."
+    },
+    "components/providers/initializers/window-show-initializer.tsx": {
+      "symbols": ["refreshHostMode"],
+      "reason": "Reads the always-on host-mode bootHidden flag (lib/tauri/host-mode.ts) only to decide whether to reveal the hidden Tauri main window after first paint. lib/headless/runtimes/index.ts records window-liveness as revealing and heartbeating the Tauri main window. A headless or cloud runtime has no native window to show or keep hidden."
     },
     "components/providers/initializers/worker-runtime-initializer.tsx": {
       "symbols": ["attachTauriWorkerRuntime"],
       "reason": "The desktop half attaches a @tauri-apps/api/core Channel to companion_worker_attach_channel. The brain half is the bridge-owned WorkerRpcPool created only after the authenticated bridge connects in cli/src/serve/serve-command.ts, where installRemoteWorkerRuntime is paired with bridge and pool teardown. lib/headless/runtimes/index.ts records this dependency-bound bootstrap exception; a registry import cannot construct that live bridge channel."
+    }
+  },
+  "uiOnly": {
+    "@/lib/artifacts/park-idle-dock": {
+      "symbols": ["parkIdleArtifactDock"],
+      "reason": "Folds the renderer's artifact dock column away on a conversation switch when nothing is showing (artifactDockLayoutStore.dockCollapsed). This is purely renderer layout state."
     },
-    "components/providers/initializers/pwa-badge-initializer.tsx": {
-      "symbols": ["subscribeUnreadSessions"],
-      "reason": "This subscription paints navigator.setAppBadge for the installed browser window and starts only while its display-mode media query is standalone. A headless process has no PWA icon or window media query to update."
+    "@/lib/glance/layout-edit": {
+      "symbols": ["withEditedEntries", "withPreset"],
+      "reason": "Pure layout-edit functions over glance entry lists (ADR-0225 §12), shared by the tray panel's edit mode and the settings editor. They return normalized arrays and touch no host state."
     },
-    "components/providers/initializers/pwa-lifecycle-initializer.tsx": {
-      "symbols": ["attachInstallListeners"],
-      "reason": "Captures browser beforeinstallprompt/appinstalled events and service-worker controller changes for the interactive PWA install/update UI. These window and navigator events do not exist in the headless brain."
+    "@/lib/glance/owner-routes": {
+      "symbols": ["glanceOwnerHref"],
+      "reason": "Pure mapping from a glance owner surface to a main-window App Router href, used by the tray glance request executor to navigate the renderer. No host work."
     },
-    "components/providers/initializers/shared-chat-lifecycle-initializer.tsx": {
-      "symbols": ["subscribeCollabConnection"],
-      "reason": "Owns the paired renderer client: subscriptions track its visible/open chat panes, local Dexie cache, window focus and document visibility, and restart when that client changes its paired endpoint. The authoritative collab service owns shared sessions and run queues; a headless brain has no pane selection or browser endpoint to mirror and must not duplicate the renderer stream owner."
+    "@/lib/plugin/context-keys/derive-context-keys": {
+      "symbols": ["deriveContextKeys"],
+      "reason": "Pure projection of renderer facts (isTauri, OS, active chat, streaming, guild, project, plugin ids) into flat when-clause booleans. It does no host work and only feeds the excluded renderer context-key store."
     },
-    "components/providers/initializers/media-generation-initializer.tsx": {
-      "symbols": ["startVideoJobReconciler"],
-      "reason": "ADR-0205 deliberately separates the renderer's durable Dexie video queue from the caller-driven CLI/headless API. videos.get / videos.content pass an explicit provider snapshot to the in-memory engine (lib/ai/operations/handlers/video-job-bridge.ts); the default VideoJobHost.getSnapshot throws because this host has no implicit provider settings. This renderer sweeper calls engine.poll without a snapshot, which would settle generating headless jobs as failed, not advance them. The renderer installs its own snapshot, asset and Dexie adapters before sweeping; the brain must retain the explicit-request polling contract recorded in lib/headless/runtimes/index.ts."
+    "@/lib/updates/open-update-center": {
+      "symbols": ["openUpdateCenter"],
+      "reason": "Asks the settings shell to navigate to the Updates section and highlight a row via in-process listeners. It is a UI navigation seam with no host work."
+    }
+  },
+  "pendingCeiling": 21,
+  "pending": {
+    "components/providers/initializers/background-task-initializer.tsx": {
+      "symbols": ["setRendererBackgroundSettleListener"],
+      "phase": "phase 2",
+      "reason": "The brain can run background dispatch_agent subagents (lib/claude/plugin-tool-ipc.ts -> lib/claude/agents/dispatch-agent-handler.ts -> renderer-subagent-registry). With no settle listener, a settled run is never re-injected into its parent session and never notified. Delivery lives in hooks/chat/background-result-runtime.ts, bound to the renderer steer runtime and chat-hook send, so the brain needs a host-side delivery through its own work submission. That means moving the delivery authority off the renderer chat store."
     },
-    "components/providers/initializers/renderer-perf-initializer.tsx": {
-      "symbols": ["subscribePerformanceSecurityBarrier", "subscribeRuntimeTargetContext"],
-      "reason": "These subscriptions scope the document's RendererPerformanceCollector and browser OperationPerformanceRecorder to the renderer's active routing target and synchronously clear its measurements on account lock/switch. They own WebView sampling and browser-local performance storage, not host execution or security policy. A brain has no document or renderer routing surface to sample or clear; its process metrics are registered separately as performance-runtime."
+    "components/providers/initializers/best-of-n-recovery-initializer.tsx": {
+      "symbols": ["recoverBestOfNRunsOnStartup"],
+      "phase": "phase 1",
+      "reason": "Plugins start best-of-N groups through ctx.team (lib/plugin/api/team-api.ts), and plugins run on the brain's Node PluginManager, so the brain can own a group. After a brain restart nothing claims a lapsed owner lease, parks interrupted attempts or gives back a held integration (lib/best-of-n/restart-recovery.ts): only this desktop initializer does. The recovery is host-neutral lease and integration work and belongs in a lib/headless/runtimes/ registration."
     },
-    "components/providers/initializers/update-center-initializer.tsx": {
-      "symbols": ["subscribeFlexibleUpdateDownloaded"],
-      "reason": "This effect is guarded by native Android and Google Play Services availability. It listens to the Capacitor/Play in-app-update downloaded event and offers a Sonner toast opening the consented Update Center action. A headless host has no Android activity, Play download or renderer toast; ADR-0224 host updates are owned by cognia-server's verified catalog and idle-time updater, not this mobile app subscription."
+    "components/providers/initializers/chat-middleware-flag-initializer.tsx": {
+      "symbols": ["setChatMiddlewareExecutionEnabled"],
+      "phase": "phase 1",
+      "reason": "lib/claude/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API). Nothing seeds the flag in the brain, so a user who enabled AppSettings.developer.chatMiddlewareExecution gets around-middlewares skipped on brain-hosted turns. The brain needs a runtime that reads the account settings row and keeps the flag in sync."
+    },
+    "components/providers/initializers/harness-evolution-initializer.tsx": {
+      "symbols": [
+        "defaultFailureTriggerDeps",
+        "enqueueRunForFailure",
+        "installHarnessNotificationActions",
+        "installLiveToolRules",
+        "recoverOrphanedHarnessRuns"
+      ],
+      "phase": "phase 1",
+      "reason": "In ADR-0237 background mode, a harness failure queues a replay run for the scheduled sweep. The initializer itself defers to the host (hostOwnsSessionState: 'the host sees the same failure and owns the runs'), yet the brain registers no harness evolution runtime at all: no failure trigger, live tool rules or orphan recovery. The brain needs a failure feed from its own turn outcomes into lib/harness/runtime/failure-trigger.ts."
+    },
+    "components/providers/initializers/models-dev-catalog-initializer.tsx": {
+      "symbols": ["initializeProviderCatalog"],
+      "phase": "phase 1",
+      "reason": "Seeds the bundled models.dev snapshot into the account database and refreshes it when older than 7 days (lib/ai/providers/models-dev-sync.ts). This is host-neutral catalog maintenance. A cloud brain with no desktop ever attached keeps an empty or stale provider catalog for the models it routes."
+    },
+    "components/providers/initializers/openrouter-catalog-initializer.tsx": {
+      "symbols": ["refreshOpenRouterCatalogIfStale"],
+      "phase": "phase 1",
+      "reason": "Primes and refreshes the persisted OpenRouter live-models catalog when it is missing or older than 24h (lib/ai/providers/openrouter-catalog-sync.ts). This is host-neutral network plus account-DB work, and the brain's own OpenRouter turns depend on it."
+    },
+    "components/providers/initializers/plugin-runtime-initializer.tsx": {
+      "symbols": ["setPluginSecurityPostureSource", "seedBundledPluginsOnHost"],
+      "phase": "phase 1",
+      "reason": "Without a source, getPluginSecurityPosture() (lib/plugin/security/security-posture.ts) returns 'balanced' in the brain. A user's strict pluginSecurityPosture, which denies network:fetch without declared allowedDomains, is therefore not enforced for plugins the brain's Node PluginManager runs. lib/headless/runtimes/plugin-runtime.ts should install a source that reads the account settings. seedBundledPluginsOnHost: the installer-bundled packages (RepoWiki, ADR-0146) are staged only into src-tauri/resources/plugins and installed through the Tauri plugin_install_from_directory command; the cognia-server bundle stages no desktop-plugins section, so a brain-only account never receives them. Seeding needs a native install path plus the section in the server bundle."
+    },
+    "components/providers/initializers/provider-cost-mirror-initializer.tsx": {
+      "symbols": ["rebuildProviderCostDaily", "setBudgetMirrorSink"],
+      "phase": "phase 1",
+      "reason": "The brain's provider-cost-mirror runtime (lib/headless/runtimes/initializers.ts) only hydrates the mirror once. It never installs the usage-ledger budget sink, so after the first committed turn the routing engine's dailyCostBudget check reads stale totals. It also never runs the one-time providerCostDaily projection rebuild (ADR-0165), whose marker lives in renderer localStorage, so the brain needs a durable marker."
+    },
+    "components/providers/initializers/routing-runtime-initializer.tsx": {
+      "symbols": ["rebuildCompatibilityProjection", "installDesktopCertificationRuntime"],
+      "phase": "phase 1",
+      "reason": "The brain's routing-runtime registration installs only the adapters. It never hydrates the agent certification store from its CLI home (installCertificationRuntime has no caller under cli/src or lib/headless) and never rebuilds the agentCompatibilityRecords projection. Engine certification gates on brain-hosted runs therefore see no evidence, even though the brain is itself a CLI process with that home. installDesktopCertificationRuntime is the desktop half of that pair (it reads the CLI home through the desktop shell); it stays pending with the brain half rather than excluded, because the brain half is not registered yet."
+    },
+    "components/providers/initializers/template-platform-initializer.tsx": {
+      "symbols": [
+        "createLegacyTemplateSources",
+        "isUnifiedTemplatePlatformEnabled",
+        "migrateLegacyTemplates",
+        "refreshBuiltInTemplateOverlays",
+        "refreshCatalogOnlyTemplateAdapters"
+      ],
+      "phase": "phase 1",
+      "reason": "The brain registers only template-trust-reconciliation (hydrateCatalog). The journaled legacy migration, the built-in overlay refresh, catalog-only adapters and backfillInstanceWorkspaces never run there, so a brain-only account's template catalog lacks built-in overlays and migrated instances. The work is account-DB plus catalog work; the legacy readers also touch the agent-team, custom-mode and subagent-runtime stores (lib/templates/legacy-sources.ts)."
     }
   }
 }
