@@ -78,7 +78,7 @@ A person delegates work from one device to a workspace on another of their devic
 | V5  | R2     | Fix implementation reviewed by a second model                                                          | other-model  | Codex gpt-6.1-sol xhigh implemented; Claude reviewed the diff and found R6, fixed in a follow-up | Static review                                            | passed  |
 | V6  | R6     | Headless confined write on the real box                                                                | real-env     | -                                                                                                | ADR-0224 box                                             | planned |
 | V7  | R3     | Pinned-host tests: switch then cancel/resolve; admin lease across await                                | tool         | `pnpm test` on 6 suites: 215 passed (Claude rerun, 2026-10-31)                                   | Mocks; local-origin runs are refused, not delivered (X3) | passed  |
-| V8  | R4     | Import safety tests across codex, claude-code, opencode, pi adapters and apply                         | tool         | Codex run: 14 suites / 76 tests passed; Claude rerun pending after the allow-rule follow-up      | Unit level                                               | planned |
+| V8  | R4     | Import safety tests across codex, claude-code, opencode, pi adapters and apply                         | tool         | Claude rerun: 17 suites / 110 tests passed after the allow-rule follow-up; committed 5672b87ab7  | Unit level                                               | passed  |
 | V9  | R5     | Interrupt epoch binding tests                                                                          | tool         | -                                                                                                | Part of M1a/M1b                                          | planned |
 
 ## Decisions
@@ -97,13 +97,14 @@ A person delegates work from one device to a workspace on another of their devic
 
 ## Residual risks
 
-| ID  | Residual                                                                                                             | From   | Why still open             | Next action                    | Status |
-| --- | -------------------------------------------------------------------------------------------------------------------- | ------ | -------------------------- | ------------------------------ | ------ |
-| X1  | Recovery double execution is proven only at mechanism level                                                          | R1, V2 | No real two-worker run yet | M1a rig run                    | open   |
-| X2  | Windows path prefixes in containment are not exercised                                                               | V3     | macOS-only tests           | Windows CI or VM run before GA | open   |
-| X3  | A run that started on this machine cannot be cancelled while a remote Host is selected (refused with `host-changed`) | V7     | Fix scope kept narrow      | Fold into M1a target pinning   | open   |
-| X4  | Fence grace and propagation numbers unknown                                                                          | Q1     | Not measured               | Measure on the rig             | open   |
-| X5  | Keeping a switched-away run live may not fit the management channel                                                  | Q2     | Not traced                 | Spike in M1a                   | open   |
+| ID  | Residual                                                                                                             | From                   | Why still open                           | Next action                        | Status |
+| --- | -------------------------------------------------------------------------------------------------------------------- | ---------------------- | ---------------------------------------- | ---------------------------------- | ------ |
+| X1  | Recovery double execution is proven only at mechanism level                                                          | R1, V2                 | No real two-worker run yet               | M1a rig run                        | open   |
+| X2  | Windows path prefixes in containment are not exercised                                                               | V3                     | macOS-only tests                         | Windows CI or VM run before GA     | open   |
+| X3  | A run that started on this machine cannot be cancelled while a remote Host is selected (refused with `host-changed`) | V7                     | Fix scope kept narrow                    | Fold into M1a target pinning       | closed |
+| X4  | Fence grace and propagation numbers unknown                                                                          | Q1                     | Not measured                             | Measure on the rig                 | open   |
+| X6  | Path checks and filesystem mutations are check-then-use; a concurrent local symlink swap can still race them         | R2, adversarial review | Needs fd-relative I/O (openat / cap-std) | Track with ADR-0245 implementation | open   |
+| X5  | Keeping a switched-away run live may not fit the management channel                                                  | Q2                     | Not traced                               | Spike in M1a                       | open   |
 
 ## Outcome
 
