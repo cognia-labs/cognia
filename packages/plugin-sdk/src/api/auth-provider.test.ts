@@ -6,6 +6,22 @@ import type {
   AuthenticationProvider,
   PluginAuthProvider,
   PluginAuthProviderDef,
+  AuthAttemptContext,
+  AuthCallbackParams,
+  AuthConnectionChangeEvent,
+  AuthConnectionGrantDecision,
+  AuthConnectionGrantRequest,
+  AuthConnectionIdentity,
+  AuthConnectionMetadata,
+  AuthConnectionProviderIdentity,
+  AuthConnectionRef,
+  AuthConnectionStatus,
+  AuthCredentialSet,
+  AuthIdentityDescription,
+  AuthLineageContext,
+  AuthMethod,
+  AuthPrincipalKind,
+  PluginAuthConnectionsAPI,
 } from "./auth-provider"
 
 describe("plugin-sdk api/auth-provider", () => {
@@ -32,7 +48,23 @@ describe("plugin-sdk api/auth-provider", () => {
         | AuthenticationProvider
         | AuthSession
         | AuthSessionOptions
-        | AuthSessionChangeEvent,
+        | AuthSessionChangeEvent
+        | AuthAttemptContext
+        | AuthCallbackParams
+        | AuthConnectionChangeEvent
+        | AuthConnectionGrantDecision
+        | AuthConnectionGrantRequest
+        | AuthConnectionIdentity
+        | AuthConnectionMetadata
+        | AuthConnectionProviderIdentity
+        | AuthConnectionRef
+        | AuthConnectionStatus
+        | AuthCredentialSet
+        | AuthIdentityDescription
+        | AuthLineageContext
+        | AuthMethod
+        | AuthPrincipalKind
+        | PluginAuthConnectionsAPI,
     >(): void => undefined
 
     expect(assertTypes).toBeDefined()

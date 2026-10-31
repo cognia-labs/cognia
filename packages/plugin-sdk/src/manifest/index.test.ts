@@ -12,6 +12,8 @@ import type {
   PluginAgentTeamTemplateDef,
   PluginAiProviderDef,
   PluginAuthProviderDef,
+  AuthMethod,
+  AuthPrincipalKind,
   PluginBalanceAdapterDef,
   PluginBinaryRequirement,
   PluginCharacterPackDef,
@@ -63,6 +65,32 @@ import type {
 } from "./index"
 
 describe("plugin-sdk: manifest", () => {
+  it("accepts auth method, principal and endpoint declarations from the manifest barrel", () => {
+    const method: AuthMethod = "client-credentials"
+    const principal: AuthPrincipalKind = "bot"
+    const provider: PluginAuthProviderDef = {
+      id: "acme-auth",
+      label: "Acme",
+      methods: [method],
+      principals: [principal],
+      tokenEndpoints: [{ url: "https://auth.example/token", clientSecret: "basic" }],
+      revocationEndpoints: ["https://auth.example/revoke"],
+      issuers: ["https://auth.example"],
+    }
+    const result = manifest.validatePluginManifest({
+      id: "acme",
+      name: "Acme",
+      version: "1.0.0",
+      type: "frontend",
+      description: "Example auth provider",
+      main: "index.js",
+      capabilities: ["auth-provider"],
+      permissions: ["auth:provide"],
+      authProviders: [provider],
+    })
+    expect(result.errors).toEqual([])
+  })
+
   it("accepts versioned RPC contracts and dedicated JS modules through the author manifest", () => {
     const library: PluginLibraryContract = {
       rpc: {

@@ -104,7 +104,11 @@ export type { PluginManifestJson } from "../define/define-plugin"
 
 export type { PluginAgentTeamTemplateDef } from "@cognia/plugin-contract/types/plugin/plugin-agent-team-template"
 export type { PluginAiProviderDef } from "@cognia/plugin-contract/types/plugin/plugin-ai-provider"
-export type { PluginAuthProviderDef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+export type {
+  AuthMethod,
+  AuthPrincipalKind,
+  PluginAuthProviderDef,
+} from "@cognia/plugin-contract/types/plugin/plugin-auth"
 export type { PluginBalanceAdapterDef } from "@cognia/plugin-contract/types/plugin/plugin-balance-adapter"
 export type { PluginCharacterPackDef } from "@cognia/plugin-contract/types/plugin/plugin-character-pack"
 export type { PluginChatMiddlewareDef } from "@cognia/plugin-contract/types/plugin/plugin-chat-middleware"

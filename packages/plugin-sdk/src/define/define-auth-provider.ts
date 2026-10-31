@@ -3,18 +3,20 @@
  *
  * Pure typesafety pass-through for the provider object a plugin registers via
  * `ctx.auth.registerProvider(...)`. The matching `manifest.authProviders[]`
- * entry is just `{ id, label }` and needs no helper.
+ * entry declares the id, label and supported methods/principals and needs no helper.
+ * The Host decides when to exchange, refresh, revoke or describe credentials
+ * (ADR-0246 §5). The provider never schedules refresh itself.
  *
  * Usage:
  *   ctx.auth.registerProvider(defineAuthProvider({
  *     id: "acme",
  *     label: "Acme",
- *     getSessions: async () => [],
- *     createSession: async (scopes) => {
- *       const tokens = await ctx.auth.createPkceFlow({ ... })
- *       return __makeSession({ accessToken: tokens.accessToken, account, scopes })
- *     },
- *     removeSession: async () => {},
+ *     getSessions: (scopes, options) => sessions.list(scopes, options),
+ *     createSession: (scopes, options) => sessions.create(scopes, options),
+ *     removeSession: (id) => sessions.remove(id),
+ *     exchange: (attempt, callback) => acme.exchange(attempt, callback),
+ *     refresh: (lineage) => acme.refresh(lineage.credentials),
+ *     describe: (credentials) => acme.describeIdentity(credentials),
  *   }))
  */
 
