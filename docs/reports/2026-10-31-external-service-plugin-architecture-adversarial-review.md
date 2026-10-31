@@ -374,4 +374,4 @@ Host 提供通用队列、检查点持久化和任务治理；供应商业务插
   - 3e421eabfa ES-04 的回归：PKCE token 交换经过 redact 模式的 PII gate 后，JWT 形状或纯数字的 code、Google client_id、`sk-` 开头的 verifier 会被改写导致交换失败。现由 Host 用私有 provenance 标记自己构造的 token 请求，协议字段和 `client_secret` 原样保留，其他参数照常检查（JSON 和表单都覆盖）；飞书特例收窄为内置插件的 JSON refresh 请求，作为 ADR-0246 Host 协调刷新落地前的过渡。同一提交：全新安装回滚时释放 provider 所有权；catalog 中 `migrateLegacy`/`rollbackMigration` 的权限改为与运行时一致的 `integrations:manage`。
   - 5843a0036b 复审补强：provenance 只对本次 flow 的 tokenUrl 生效，flow 结束即删除。宿主 realm 内篡改内置原型不在防护范围内（ADR-0126 半受信）。
   - 13e7b855fa 补齐 9 处未被断言固定的行为（所有权索引冲突、Host provider、超时与 lease 取消、审批竞争、停用 suspended 插件、迁移 owner 标记、GitHub host 归一化、运行时初始化器切换账户）。
-- 未完成：ADR-0246 待接受；真实飞书/Google OAuth、桌面 Tauri 冒烟未做；ES-05（未标记表单体的逐字段检查）仍为 P3。另一会话在 c94a6623c4 中同时抽取了 `plugins/feishu-calendar`，与“ADR 接受前只抽取 feishu-auth”的决定不一致，需要确认。
+- 未完成：ADR-0246 待接受；真实飞书/Google OAuth、桌面 Tauri 冒烟未做；ES-05（未标记表单体的逐字段检查）仍为 P3。另一会话在 c94a6623c4 中同时抽取了 `plugins/feishu-calendar`；2026-10-31 确认保留，作为冻结规则的例外记入 ADR-0246（它是第 4 步的日历消费者，目前经 integration 账户访问飞书，第 4 步迁移到连接引用和消费者授权；不构成其他抽取的先例）。

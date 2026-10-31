@@ -141,6 +141,8 @@ Reconnecting the same account (same connection identity, §2) restores live reop
 
 Until this ADR is accepted, no capability other than `feishu-auth` is extracted into a plugin.
 
+One exception was accepted on 2026-10-31: `feishu-calendar` (c94a6623c4), the step-4 consumer, was extracted early and is kept. It reaches Feishu through an integration account bound to a `feishu-auth` session (`ctx.integrations.authenticatedRequest`), not through a connection reference and consumer grant. Step 4 moves it onto this contract. It is not a precedent: any other extraction still waits for acceptance.
+
 ## Implementation status
 
-Not started. Prerequisite fixes from the review are in: b119bd3f9e and cd624cccf9 (ES-01/02/03/04/09), cb9ac351a0 (ES-06), bad783b824 (ES-13/14), 52f21fa704 (ES-18–21), 5ee04bcdb8 (ES-22), and 838096514f (fixes from a review of those commits). §10 was added on 2026-10-31 for ES-23, which the first triage missed.
+Not started. Prerequisite fixes from the review are in: b119bd3f9e and cd624cccf9 (ES-01/02/03/04/09), cb9ac351a0 (ES-06), bad783b824 (ES-13/14), 52f21fa704 (ES-18–21), 5ee04bcdb8 (ES-22), and 838096514f (fixes from a review of those commits); 3e421eabfa and 5843a0036b keep host-built PKCE token fields intact through the plugin PII gate. `feishu-calendar` runs ahead of step 4 under the exception above. §10 was added on 2026-10-31 for ES-23, which the first triage missed.
