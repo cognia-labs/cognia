@@ -43,7 +43,7 @@ import { applySystemPromptTemplate, type AppliedTemplate } from "./system-prompt
 import { selectFewShotSamples } from "./few-shot-selector"
 import { keywordSearch } from "./bm25-index"
 import { rerank, type RerankCandidate, type RerankerOptions } from "./reranker"
-import { buildExpandedKeywordQuery } from "@/lib/ai/retrieval/query-expansion"
+import { buildExpandedKeywordQuery } from "@cognia/rag/keyword-expansion"
 import { filterByGrade } from "@/lib/ai/retrieval/corrective-filter"
 import { hasNoLeakingPii } from "@cognia/redact"
 import type { LanguageModel } from "ai"

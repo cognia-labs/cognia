@@ -1,6 +1,7 @@
 export * from "./async-mutex"
 export * from "./backoff"
 export * from "./bounded-buffer"
+export * from "./extract-json"
 export * from "./lru-cache"
 export * from "./recency-list"
 export * from "./with-timeout"

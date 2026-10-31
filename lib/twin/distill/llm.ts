@@ -419,8 +419,7 @@ export function createLlmClient(config: LlmConfig): LlmClient {
 export const createAnthropicLlmClient = createLlmClient
 
 /**
- * Re-exported from `@cognia/eval-core` — the eval scorers need it inside a
- * zero-`@/` package, and two copies of a JSON extractor is how they drift.
- * Distill callers import it from here exactly as before.
+ * The domain-neutral parser is shared by evaluation and memory through
+ * `@cognia/primitives`. Distill callers keep their existing entry point.
  */
-export { extractJson } from "@cognia/eval-core/json"
+export { extractJson } from "@cognia/primitives/extract-json"

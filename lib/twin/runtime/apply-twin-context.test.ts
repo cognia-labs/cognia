@@ -64,7 +64,7 @@ import {
 import { __resetTwinBm25Cache, keywordSearch } from "./bm25-index"
 import { createTwin, setTwinEmbeddingIndex } from "@/lib/db/twins"
 import type { TwinEmbeddingPlan } from "./twin-embedding-status"
-import { buildExpandedKeywordQuery } from "@/lib/ai/retrieval/query-expansion"
+import { buildExpandedKeywordQuery } from "@cognia/rag/keyword-expansion"
 import { generateHypotheticalAnswer } from "@cognia/rag/query-expansion"
 import type { Character } from "@cognia/agent-config-types"
 import type { IVectorStore, VectorSearchResult, SearchOptions } from "@cognia/vector/store"

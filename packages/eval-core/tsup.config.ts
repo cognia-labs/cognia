@@ -8,4 +8,6 @@ export default defineConfig({
   clean: true,
   target: "es2018",
   external: ["zod"],
+  // Source-only primitives must ship as compiled code, not a node_modules TS import.
+  noExternal: ["@cognia/primitives"],
 })

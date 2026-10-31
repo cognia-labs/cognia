@@ -19,7 +19,7 @@
  */
 
 import type { EvalJudgeClient } from "./judge-client"
-import { extractJson } from "../json"
+import { extractJson } from "@cognia/primitives/extract-json"
 import type { EvalCase, EvalSample, Score, Scorer } from "../domain/eval"
 
 export type RagMetric = "faithfulness" | "answer-relevancy" | "context-precision" | "context-recall"

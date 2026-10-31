@@ -18,7 +18,7 @@
  */
 
 import type { EvalJudgeClient } from "./judge-client"
-import { extractJson } from "../json"
+import { extractJson } from "@cognia/primitives/extract-json"
 import type { EvalCase, EvalDimension, EvalSample, Score, Scorer } from "../domain/eval"
 
 const JUDGE_SYSTEM_PROMPT =

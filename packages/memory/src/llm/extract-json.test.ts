@@ -1,6 +1,33 @@
 import { extractJson } from "./extract-json"
+import { extractJson as extractEvalJson } from "@cognia/eval-core/json"
+import { extractJson as extractSharedJson } from "@cognia/primitives/extract-json"
 
-describe("extractJson", () => {
+describe.each([
+  ["memory", extractJson],
+  ["eval-core", extractEvalJson],
+  ["primitives", extractSharedJson],
+] as const)("%s extractJson shared behavior", (_name, parse) => {
+  it.each<[string, unknown]>([
+    [
+      'prefix {"items":[{"text":"braces } [ and \\\"quotes\\\""}],"ok":true} suffix',
+      { items: [{ text: 'braces } [ and "quotes"' }], ok: true },
+    ],
+    ['prefix [1,{"nested":[null,false]}] suffix', [1, { nested: [null, false] }]],
+    ['{"first":1} and {"second":2}', { first: 1 }],
+    ['{"outside":true}\n```JSON\n{"fenced":true}\n```', { fenced: true }],
+    ["```json\nnull\n```", null],
+  ])("preserves nested values and first-candidate/fence precedence for %s", (text, expected) => {
+    expect(parse(text)).toEqual(expected)
+  })
+
+  it("does not silently skip malformed JSON or recover from an invalid fence", () => {
+    expect(() => parse('{"bad":} then {"good":true}')).toThrow(SyntaxError)
+    expect(() => parse('```json\n{"bad":}\n``` then {"good":true}')).toThrow(SyntaxError)
+    expect(() => parse("true")).toThrow("extractJson: no JSON object or array found in response")
+  })
+})
+
+describe("memory extractJson", () => {
   it("parses a bare JSON object", () => {
     expect(extractJson<{ a: number }>('{"a":1}')).toEqual({ a: 1 })
   })

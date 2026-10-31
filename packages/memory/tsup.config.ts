@@ -3,7 +3,8 @@ import { defineConfig } from "tsup"
 // @cognia/memory is a truly-standalone core: after extraction it has ZERO `@/`
 // app imports (the DB/LLM/settings couplings stay app-side and are passed in via
 // the existing deps interfaces). The only externals are peer libs (`ai`, `zod`)
-// and the sibling `@cognia/*` packages. A green build here is the invariant that
+// and compiled sibling `@cognia/*` packages. Source-only primitives are bundled.
+// A green build here is the invariant that
 // guards against a future `@/` leak sneaking back in.
 export default defineConfig({
   // Build every module (not just the barrel) so subpath imports
@@ -15,5 +16,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: "es2017",
-  external: ["ai", "zod", /^@cognia\//],
+  external: ["ai", "zod", /^@cognia\/(?!primitives(?:\/|$))/],
+  noExternal: ["@cognia/primitives"],
 })

@@ -30,7 +30,7 @@ import {
   memoryRetrievalDegraded,
   type MemoryRetrievalOutcome,
 } from "../control-plane/retrieval-telemetry"
-import { buildExpandedKeywordQuery } from "./query-expansion"
+import { buildExpandedKeywordQuery } from "@cognia/rag/keyword-expansion"
 import {
   governanceScoreFor,
   recencyHalfLifeDaysForType,
