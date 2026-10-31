@@ -65,7 +65,11 @@ import { evaluatePluginBundle } from "./evaluate-plugin-bundle"
 import { getPluginSignatureVerifier } from "@/lib/plugin/security/signature"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
 import { createAuthAPI } from "@/lib/plugin/api/auth-api"
-import { __resetAuthRegistryForTesting } from "@/lib/plugin/auth/auth-provider-registry"
+import {
+  __resetAuthRegistryForTesting,
+  claimAuthProviderOwnership,
+  setAuthProviderOwnershipStore,
+} from "@/lib/plugin/auth/auth-provider-registry"
 import { getMessageBus, SystemEvents, resetMessageBus } from "@/lib/plugin/messaging/message-bus"
 import { getPluginIPC, resetPluginIPC } from "@/lib/plugin/messaging/ipc"
 import {
@@ -1706,6 +1710,57 @@ describe("PluginManager", () => {
       )
     })
 
+    it.each(["fresh", "update", "metadata-only"])(
+      "preserves provider ownership only for a pre-existing install on %s rollback",
+      async (kind) => {
+        const { store, old, manager } = setup(kind === "update")
+        if (kind === "metadata-only") {
+          ;(getPlugin as jest.Mock).mockResolvedValueOnce({
+            id: manifest.id,
+            version: old.manifest.version,
+            manifest: old.manifest,
+          })
+        }
+        let owners: string | null = null
+        setAuthProviderOwnershipStore({
+          read: () => owners,
+          write: (value) => {
+            owners = value
+          },
+        })
+        const provider = {
+          id: "rollback-auth",
+          label: "Auth",
+          getSessions: async () => [],
+          createSession: jest.fn(),
+          removeSession: async () => {},
+        }
+        try {
+          if (kind !== "fresh") claimAuthProviderOwnership(provider.id, manifest.id)
+          store.installPlugin.mockImplementationOnce(async () => {
+            createAuthAPI(manifest.id, { hasPermission: () => true }).registerProvider(provider)()
+            throw new Error("provider install failed")
+          })
+          await expect(
+            manager.installWasmPluginFromLocalFile("/tmp/p.zip", decision)
+          ).rejects.toThrow("provider install failed")
+          if (kind === "fresh") {
+            expect(store.plugins[manifest.id]).toBeUndefined()
+            expect(() => claimAuthProviderOwnership(provider.id, "new-owner")).not.toThrow()
+          } else {
+            if (kind === "update") expect(store.plugins[manifest.id].manifest.version).toBe("1.0.0")
+            expect(() => claimAuthProviderOwnership(provider.id, "new-owner")).toThrow(
+              /owned by another plugin/
+            )
+            expect(() => claimAuthProviderOwnership(provider.id, manifest.id)).not.toThrow()
+          }
+        } finally {
+          __resetAuthRegistryForTesting()
+          setAuthProviderOwnershipStore(null)
+        }
+      }
+    )
+
     it("restores grants even when metadata rollback fails", async () => {
       const { store, manager } = setup(true)
       store.installPlugin.mockRejectedValueOnce(new Error("registration failed"))
@@ -1975,6 +2030,51 @@ describe("PluginManager", () => {
         pluginId: "public-rollback",
       })
     })
+
+    it.each([false, true])(
+      "public rollback releases ownership only after a fresh install (previous=%s)",
+      async (previous) => {
+        const store = makeStore()
+        const manifest = createManifest("public-auth-rollback")
+        if (previous)
+          store.discoverPlugin(
+            { ...manifest, version: "0.1.0" },
+            "local",
+            "/plugins/public-auth-rollback"
+          )
+        mockGetState.mockReturnValue(store)
+        mockInvoke.mockImplementation(async (command) =>
+          command === "plugin_stage_from_directory"
+            ? { manifest, path: "/plugins/public-auth-rollback", transactionId: "public-auth-txn" }
+            : undefined
+        )
+        let owners: string | null = null
+        setAuthProviderOwnershipStore({
+          read: () => owners,
+          write: (value) => {
+            owners = value
+          },
+        })
+        try {
+          const manager = new PluginManager({ pluginDirectory: "/plugins" })
+          if (previous) claimAuthProviderOwnership("public-rollback-auth", manifest.id)
+          await manager.installPlugin("/tmp/public-auth-rollback")
+          claimAuthProviderOwnership("public-rollback-auth", manifest.id)
+          await manager.rollbackInstallation(manifest.id, "config persist failed")
+          expect(store.plugins[manifest.id]).toBeUndefined()
+          if (previous)
+            expect(() => claimAuthProviderOwnership("public-rollback-auth", "new-owner")).toThrow(
+              /owned by another plugin/
+            )
+          else
+            expect(() =>
+              claimAuthProviderOwnership("public-rollback-auth", "new-owner")
+            ).not.toThrow()
+        } finally {
+          setAuthProviderOwnershipStore(null)
+        }
+      }
+    )
 
     it("public rollbackInstallation is a no-op when the plugin row no longer exists", async () => {
       const store = makeStore()

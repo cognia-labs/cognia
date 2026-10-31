@@ -925,6 +925,9 @@ export class PluginManager {
   private registeredSlashCommandsByPlugin: Map<string, string[]> = new Map()
   private activationInFlight: Set<string> = new Set()
   private activationCompletions = new Map<string, Promise<void>>()
+  // The post-install config rollback hook has no transaction snapshot. Retain
+  // only confirmed fresh installs so it never releases a replacement's owner.
+  private freshInstallRollbacks = new Set<string>()
   /**
    * In-flight `enablePlugin` promises keyed by plugin id. Dedupes concurrent
    * enables of the same plugin (e.g. a shared dependency enabled by two
@@ -3304,6 +3307,10 @@ export class PluginManager {
           viaManager: false,
           rememberRemoval: false,
         })
+        if (this.freshInstallRollbacks.has(pluginId)) {
+          releaseAuthProviderOwnership(pluginId)
+          this.freshInstallRollbacks.delete(pluginId)
+        }
       } catch (err) {
         loggers.manager.warn(`[plugin:${pluginId}] rollback: store cleanup failed`, err)
       }
@@ -3554,6 +3561,7 @@ export class PluginManager {
       if (blockedBy.length > 0) throw new PluginDependencyInUseError(pluginId, blockedBy)
       previouslyRemoved = Boolean(store.removedPlugins?.[pluginId])
       previousRow = await getPlugin(pluginId)
+      this.freshInstallRollbacks.delete(pluginId)
       priorGrants = {
         pluginId,
         grantedPermissions: [...getPermissionGuard().getPluginPermissions(pluginId)],
@@ -3602,6 +3610,7 @@ export class PluginManager {
         pluginId,
         transactionId: result.transactionId,
       })
+      if (!previous && !previousRow) this.freshInstallRollbacks.add(pluginId)
       return { plugin: usePluginStore.getState().plugins[pluginId] ?? plugin, result }
     } catch (error) {
       const failures: string[] = []
@@ -3682,6 +3691,7 @@ export class PluginManager {
                 viaManager: false,
                 rememberRemoval: false,
               })
+              if (!previousRow) releaseAuthProviderOwnership(pluginId)
               getPermissionGuard().unregisterPlugin(pluginId)
             }
             if (previouslyRemoved) {
@@ -4953,6 +4963,7 @@ export class PluginManager {
         }
 
         releaseAuthProviderOwnership(pluginId)
+        this.freshInstallRollbacks.delete(pluginId)
         await this.revokePluginPermissions(pluginId, plugin.manifest.permissions || [])
         getPermissionGuard().unregisterPlugin(pluginId)
         if (plugin.manifest.type === "wasm") {

@@ -11422,7 +11422,7 @@ API_NAMESPACE_CONTRACTS = [
                 "id": "integrations.migrateLegacy",
                 "name": "migrateLegacy",
                 "requiredPermissions": [
-                    "integrations:execute",
+                    "integrations:manage",
                 ],
                 "consentTier": "policy",
                 "risk": "high",
@@ -11492,7 +11492,7 @@ API_NAMESPACE_CONTRACTS = [
                 "id": "integrations.rollbackMigration",
                 "name": "rollbackMigration",
                 "requiredPermissions": [
-                    "integrations:execute",
+                    "integrations:manage",
                 ],
                 "consentTier": "policy",
                 "risk": "high",

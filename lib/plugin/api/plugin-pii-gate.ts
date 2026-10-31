@@ -26,6 +26,12 @@ export interface PluginNetworkEgressOutput {
   body?: unknown
 }
 
+/** Trusted host facts, supplied separately from plugin-facing network options. */
+export interface PluginNetworkEgressContext {
+  oauthTokenKeys?: ReadonlySet<string>
+  isBuiltin?: boolean
+}
+
 const CREDENTIAL_KEYS = new Set([
   "authorization",
   "proxy-authorization",
@@ -120,30 +126,31 @@ function sanitizeValue(
   return value
 }
 
-/** Feishu transport compatibility boundary: only the shared authentication
- * provider's exact token exchange may preserve protocol credential fields.
- * It remains subject to permission and network policy checks at the caller.
- * Ordinary plugins, other endpoints and unrelated fields retain the PII gate. */
 function sanitizeNetworkBody(
   pluginId: string,
   url: string,
   body: unknown,
-  policy: PluginEgressPiiPolicy
+  policy: PluginEgressPiiPolicy,
+  host: PluginNetworkEgressContext
 ): unknown {
   if (body && typeof body === "object" && !Array.isArray(body)) {
     const fields = body as Record<string, unknown>
-    if (
+    // Interim compatibility boundary until ADR-0246's host-coordinated refresh
+    // lands: only the bundled Feishu provider's exact JSON refresh request.
+    // Permissions, allowlist and audit remain enforced by the caller.
+    const exemptKeys =
+      host.oauthTokenKeys ??
+      (host.isBuiltin &&
       pluginId === "feishu-auth" &&
       url === "https://open.feishu.cn/open-apis/authen/v2/oauth/token" &&
-      ["authorization_code", "refresh_token", "client_credentials"].includes(
-        String(fields.grant_type)
-      )
-    ) {
-      const credentials = new Set(["client_secret", "refresh_token", "code", "code_verifier"])
+      fields.grant_type === "refresh_token"
+        ? new Set(["client_secret", "refresh_token"])
+        : undefined)
+    if (exemptKeys) {
       return Object.fromEntries(
         Object.entries(fields).map(([key, value]) => [
           key,
-          credentials.has(key) && typeof value === "string"
+          exemptKeys.has(key) && typeof value === "string"
             ? value
             : sanitizeValue(pluginId, "ctx.network.body", value, policy, key),
         ])
@@ -193,7 +200,8 @@ function sanitizeUrl(pluginId: string, url: string, policy: PluginEgressPiiPolic
  */
 export function sanitizePluginNetworkEgress(
   pluginId: string,
-  input: PluginNetworkEgressInput
+  input: PluginNetworkEgressInput,
+  host: PluginNetworkEgressContext = {}
 ): PluginNetworkEgressOutput {
   const policy = input.piiPolicy ?? "redact"
   const headers = input.headers
@@ -204,16 +212,40 @@ export function sanitizePluginNetworkEgress(
     : undefined
 
   let body = input.body
-  if (typeof body === "string") {
+  const oauthTokenKeys = host.oauthTokenKeys
+  const contentType = oauthTokenKeys
+    ? Object.entries(input.headers ?? {})
+        .find(([key]) => key.toLowerCase() === "content-type")?.[1]
+        .split(";")[0]
+        .trim()
+        .toLowerCase()
+    : undefined
+  if (
+    oauthTokenKeys &&
+    typeof body === "string" &&
+    contentType === "application/x-www-form-urlencoded"
+  ) {
+    // Only host-built PKCE forms use decoded, per-key inspection. Unmarked
+    // forms retain the existing whole-string behavior (ES-05 is deferred).
+    const fields = new URLSearchParams(body)
+    body = new URLSearchParams(
+      [...fields].map(([key, value]) => [
+        key,
+        oauthTokenKeys.has(key)
+          ? value
+          : (sanitizeValue(pluginId, "ctx.network.body", value, policy, key) as string),
+      ])
+    ).toString()
+  } else if (typeof body === "string") {
     const rawBody = body
     try {
       const parsed = JSON.parse(rawBody) as unknown
-      body = JSON.stringify(sanitizeNetworkBody(pluginId, input.url, parsed, policy))
+      body = JSON.stringify(sanitizeNetworkBody(pluginId, input.url, parsed, policy, host))
     } catch {
       body = sanitizeString(pluginId, "ctx.network.body", rawBody, policy)
     }
   } else if (body !== undefined) {
-    body = sanitizeNetworkBody(pluginId, input.url, body, policy)
+    body = sanitizeNetworkBody(pluginId, input.url, body, policy, host)
   }
 
   return {

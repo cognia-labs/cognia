@@ -11,7 +11,13 @@ import {
 } from "./context"
 import type { Plugin, PluginManifest } from "@/types/plugin"
 import type { PluginManager } from "./manager"
+import { generateCodeVerifier } from "@cognia/provider-core/providers/oauth"
 import { invoke } from "@tauri-apps/api/core"
+
+jest.mock("@cognia/provider-core/providers/oauth", () => {
+  const actual = jest.requireActual("@cognia/provider-core/providers/oauth")
+  return { ...actual, generateCodeVerifier: jest.fn(actual.generateCodeVerifier) }
+})
 import { isTauri } from "@/lib/native/utils"
 import { getPermissionGuard, resetPermissionGuard, PermissionError } from "@/lib/plugin/security"
 import { executeAgent } from "@/lib/ai/agent/agent-executor"
@@ -3356,14 +3362,14 @@ describe("agent imperative API", () => {
           const config = {
             authorizeUrl: "https://api.example.com/authorize",
             tokenUrl: "https://api.example.com/token",
-            clientId: "client",
+            clientId: "10123456789-abc.apps.googleusercontent.com",
             scopes: [],
             redirectUri: "http://localhost/callback",
             state: "state",
             openUrl: jest.fn(),
             waitForCode: async () => ({ code: "code", state: "state" }),
             tokenRequestEncoding,
-            extraTokenParams: { note: "Contact person@example.com" },
+            extraTokenParams: { token: "person@example.com", note: "Contact person@example.com" },
           }
           await expect(ctx.auth.createPkceFlow(config)).rejects.toThrow(/network:fetch/)
           expect(fetchMock).not.toHaveBeenCalled()
@@ -3378,11 +3384,35 @@ describe("agent imperative API", () => {
               headers: { "Content-Type": "application/json" },
             })
           )
-          await expect(ctx.auth.createPkceFlow(config)).resolves.toMatchObject({
-            accessToken: "token",
-          })
-          expect(fetchMock).toHaveBeenCalledTimes(1)
-          const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+          const verifier = `sk-${"a".repeat(43)}`
+          const codes = [
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+            "1234567890",
+            "13812345678",
+          ]
+          for (const code of codes) {
+            jest.mocked(generateCodeVerifier).mockReturnValueOnce(verifier)
+            await expect(
+              ctx.auth.createPkceFlow({
+                ...config,
+                waitForCode: async () => ({ code, state: "state" }),
+              })
+            ).resolves.toMatchObject({ accessToken: "token" })
+            const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
+            const body =
+              tokenRequestEncoding === "json"
+                ? JSON.parse(init.body as string)
+                : Object.fromEntries(new URLSearchParams(init.body as string))
+            expect(body).toMatchObject({
+              code,
+              client_id: config.clientId,
+              code_verifier: verifier,
+              token: "<EMAIL_001>",
+              note: "Contact <EMAIL_001>",
+            })
+          }
+          expect(fetchMock).toHaveBeenCalledTimes(codes.length)
+          const [url, init] = fetchMock.mock.calls.at(-1)! as [string, RequestInit]
           expect(url).toBe(config.tokenUrl)
           expect(new Headers(init.headers).get("Content-Type")).toBe(
             tokenRequestEncoding === "json"
@@ -3394,7 +3424,7 @@ describe("agent imperative API", () => {
               ? JSON.parse(init.body as string)
               : Object.fromEntries(new URLSearchParams(init.body as string))
           expect(body).toMatchObject({ grant_type: "authorization_code" })
-          expect(sanitizer).toHaveBeenCalledTimes(1)
+          expect(sanitizer).toHaveBeenCalledTimes(codes.length)
           expect(sanitizer).toHaveBeenCalledWith(
             "pkce-auth-test",
             expect.objectContaining({
@@ -3412,13 +3442,20 @@ describe("agent imperative API", () => {
                       note: "Contact person@example.com",
                     })
                   : expect.stringContaining("note=Contact+person%40example.com"),
-            })
+            }),
+            expect.objectContaining({ oauthTokenKeys: expect.any(Set) })
           )
-          // ES-05: the existing gate does not decode urlencoded string bodies.
-          // Form PKCE proves governed sanitizer invocation; JSON also proves redaction.
-          if (tokenRequestEncoding === "json") {
-            expect(JSON.stringify(body)).not.toContain("person@example.com")
-          }
+          expect(JSON.stringify(body)).not.toContain("person@example.com")
+          await ctx.auth.createPkceFlow({
+            ...config,
+            extraTokenParams: { code: "person@example.com" },
+          })
+          const overriddenInit = fetchMock.mock.calls.at(-1)![1] as RequestInit
+          const overriddenBody =
+            tokenRequestEncoding === "json"
+              ? JSON.parse(overriddenInit.body as string)
+              : Object.fromEntries(new URLSearchParams(overriddenInit.body as string))
+          expect(overriddenBody.code).toBe("<EMAIL_001>")
           expect(guard.getAuditLog({ pluginId: "pkce-auth-test" })).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
@@ -3428,11 +3465,133 @@ describe("agent imperative API", () => {
           )
           guard.revoke("pkce-auth-test", "network:fetch")
           await expect(ctx.auth.createPkceFlow(config)).rejects.toThrow(/network:fetch/)
-          expect(fetchMock).toHaveBeenCalledTimes(1)
-          expect(sanitizer).toHaveBeenCalledTimes(1)
+          expect(fetchMock).toHaveBeenCalledTimes(codes.length + 1)
+          expect(sanitizer).toHaveBeenCalledTimes(codes.length + 1)
         } finally {
           sanitizer.mockRestore()
         }
+      }
+    )
+
+    it("does not honor forged PKCE provenance in plugin-facing network options", async () => {
+      getPermissionGuard().registerPlugin("test-plugin", ["network:fetch"])
+      getPermissionGuard().grant("test-plugin", "network:fetch", { grantedBy: "user" })
+      const ctx = createFullPluginContext(pluginWithEgress(["api.example.com"]), mockManager)
+      const keys = new Set(["code"])
+      await ctx.network.fetch("https://api.example.com/token", {
+        method: "POST",
+        body: { code: "person@example.com" },
+        headers: { "x-host-oauth-token-request": "true" },
+        hostOAuthTokenRequest: true,
+        oauthTokenKeys: keys,
+        isBuiltin: true,
+        [Symbol("hostOAuthTokenRequest")]: keys,
+        [Symbol.for("hostOAuthTokenRequest")]: keys,
+      } as Parameters<typeof ctx.network.fetch>[1])
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ code: "<EMAIL_001>" })
+      // A Proxy can answer a lookup for an unknown private Symbol. It still
+      // cannot manufacture provenance registered in the host's WeakMap.
+      await ctx.network.fetch(
+        "https://api.example.com/token",
+        new Proxy(
+          {
+            method: "POST" as const,
+            body: { code: "person@example.com" },
+          },
+          {
+            get: (target, key, receiver) =>
+              typeof key === "symbol" ? keys : Reflect.get(target, key, receiver),
+          }
+        )
+      )
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ code: "<EMAIL_001>" })
+    })
+
+    it.each(["method", "namespace"])(
+      "keeps host PKCE provenance private when a plugin replaces its network %s",
+      async (replacement) => {
+        const guard = getPermissionGuard()
+        guard.registerPlugin("pkce-intercept-test", ["auth:provide", "network:fetch"])
+        guard.grant("pkce-intercept-test", "network:fetch", { grantedBy: "user" })
+        const ctx = createFullPluginContext(
+          createMockPlugin({
+            manifest: {
+              ...mockManifest,
+              id: "pkce-intercept-test",
+              permissions: ["auth:provide", "network:fetch"],
+              networkAccess: { allowedDomains: ["api.example.com"] },
+            },
+          }),
+          mockManager
+        )
+        const originalFetch = ctx.network.fetch
+        const interceptor = jest.fn((url: string, options: Parameters<typeof originalFetch>[1]) =>
+          originalFetch(url, { ...options, body: { code: "person@example.com" } })
+        )
+        if (replacement === "method") Reflect.set(ctx.network, "fetch", interceptor)
+        else Reflect.set(ctx, "network", { fetch: interceptor })
+        fetchMock.mockResolvedValue(
+          new Response(JSON.stringify({ access_token: "token" }), {
+            headers: { "content-type": "application/json" },
+          })
+        )
+        await expect(
+          ctx.auth.createPkceFlow({
+            authorizeUrl: "https://api.example.com/authorize",
+            tokenUrl: "https://api.example.com/token",
+            clientId: "client",
+            scopes: [],
+            redirectUri: "http://localhost/callback",
+            state: "state",
+            openUrl: () => {},
+            waitForCode: async () => ({ code: "provider-code", state: "state" }),
+            tokenRequestEncoding: "json",
+          })
+        ).resolves.toMatchObject({ accessToken: "token" })
+        expect(interceptor).not.toHaveBeenCalled()
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ code: "provider-code" })
+        expect(guard.getAuditLog({ pluginId: "pkce-intercept-test" })).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              context: expect.stringContaining("egress POST https://api.example.com/token"),
+            }),
+          ])
+        )
+      }
+    )
+
+    it.each(["builtin", "local", "git", "marketplace"] as const)(
+      "limits the interim Feishu refresh exception after PKCE to host source %s",
+      async (source) => {
+        const plugin = createMockPlugin({
+          source,
+          manifest: {
+            ...mockManifest,
+            id: "feishu-auth",
+            networkAccess: { allowedDomains: ["open.feishu.cn"] },
+          },
+        })
+        initializePluginPermissions("feishu-auth", ["network:fetch"])
+        getPermissionGuard().registerPlugin("feishu-auth", ["network:fetch"])
+        getPermissionGuard().grant("feishu-auth", "network:fetch", { grantedBy: "user" })
+        const ctx = createFullPluginContext(plugin, mockManager)
+        await ctx.network.post(
+          "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+          {
+            grant_type: "refresh_token",
+            refresh_token: "person@example.com",
+            client_secret: "sk-proj-abcdefghijklmnopqrstuvwx",
+            code: "person@example.com",
+          },
+          { isBuiltin: true } as Parameters<typeof ctx.network.post>[2]
+        )
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+          grant_type: "refresh_token",
+          refresh_token: source === "builtin" ? "person@example.com" : "<EMAIL_001>",
+          client_secret:
+            source === "builtin" ? "sk-proj-abcdefghijklmnopqrstuvwx" : "<API_KEY_001>",
+          code: "<EMAIL_001>",
+        })
       }
     )
 

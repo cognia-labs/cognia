@@ -161,7 +161,7 @@ import { createAgentConfigAPI } from "../api/agent-config-api"
 import { createWorkspaceAPI } from "../api/workspace-api"
 import { createModalAPI } from "../api/modal-api"
 import { createWebviewAPI } from "../api/webview-api"
-import { createAuthAPI } from "../api/auth-api"
+import { createAuthAPI, getHostPkceTokenRequestExemptKeys } from "../api/auth-api"
 import { createUriAPI } from "../api/uri-api"
 import { createRemoteDesktopAPI } from "../api/remote-desktop-api"
 import { createChatAPI } from "../api/chat-api"
@@ -285,7 +285,7 @@ export function createPluginContext(
     python: plugin.manifest.type !== "frontend" ? createPythonAPI(pluginId, manager) : undefined,
     network: guardNativeApi(
       pluginId,
-      createNetworkAPI(pluginId, plugin.manifest.networkAccess),
+      createNetworkAPI(pluginId, plugin.manifest.networkAccess, plugin.source === "builtin"),
       NETWORK_GUARD_MAP
     ),
     fs: guardNativeApi(pluginId, createFileSystemAPI(pluginId), FS_GUARD_MAP, [
@@ -461,7 +461,7 @@ export function createFullPluginContext(
     auth: createAuthAPI(pluginId, {
       hasPermission: (permission) =>
         permissionsAPI.hasPermission(permission as IntrospectablePluginPermission),
-      network: { fetch: (url, options) => scopedContext.network.fetch(url, options) },
+      network: { fetch: (url, options) => authNetworkFetch(url, options) },
     }),
     uri: createUriAPI(pluginId),
     remoteDesktop: createRemoteDesktopAPI(pluginId, {
@@ -533,6 +533,10 @@ export function createFullPluginContext(
     governedContext,
     manager.isPluginLedgerV2Enabled?.() === false ? {} : PLUGIN_RESOURCE_EFFECTS
   ) as FullPluginContext
+  // Capture every host guard before publishing the mutable plugin context.
+  // Re-reading ctx.network would let a plugin intercept and replay genuine
+  // PKCE provenance by replacing fetch (or the entire namespace).
+  const authNetworkFetch: PluginNetworkAPI["fetch"] = scopedContext.network.fetch
   return scopedContext
 }
 
@@ -1524,7 +1528,8 @@ const DB_GUARD_MAP: Partial<Record<keyof PluginDatabaseAPI, PluginPermission>> =
 
 function createNetworkAPI(
   pluginId: string,
-  networkAccess?: PluginManifest["networkAccess"]
+  networkAccess?: PluginManifest["networkAccess"],
+  isBuiltin = false
 ): PluginNetworkAPI {
   const rateLimiter = getPluginRateLimiter()
   const auditEgress = (
@@ -1582,12 +1587,16 @@ function createNetworkAPI(
     if (!NETWORK_HTTP_METHODS.has(method)) {
       throw new Error(`network policy denied unsupported HTTP method: ${String(options?.method)}`)
     }
-    const egress = sanitizePluginNetworkEgress(pluginId, {
-      url,
-      headers: options?.headers,
-      body: options?.body,
-      piiPolicy: options?.piiPolicy,
-    })
+    const egress = sanitizePluginNetworkEgress(
+      pluginId,
+      {
+        url,
+        headers: options?.headers,
+        body: options?.body,
+        piiPolicy: options?.piiPolicy,
+      },
+      { oauthTokenKeys: getHostPkceTokenRequestExemptKeys(options), isBuiltin }
+    )
     // Renderer-side egress policy. The Tauri path mirrors this in Rust for
     // defense-in-depth; this is the enforcement point in web/mobile mode.
     assertNetworkRequestAllowed(

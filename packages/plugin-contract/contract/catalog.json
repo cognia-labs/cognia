@@ -7854,7 +7854,7 @@
         {
           "id": "integrations.migrateLegacy",
           "name": "migrateLegacy",
-          "requiredPermissions": ["integrations:execute"],
+          "requiredPermissions": ["integrations:manage"],
           "consentTier": "policy",
           "risk": "high",
           "idempotent": false,
@@ -7914,7 +7914,7 @@
         {
           "id": "integrations.rollbackMigration",
           "name": "rollbackMigration",
-          "requiredPermissions": ["integrations:execute"],
+          "requiredPermissions": ["integrations:manage"],
           "consentTier": "policy",
           "risk": "high",
           "idempotent": false,

@@ -1,6 +1,18 @@
 /** @jest-environment jsdom */
 
-import { createAuthAPI, type PluginAuthProvider } from "./auth-api"
+import {
+  createAuthAPI,
+  getHostPkceTokenRequestExemptKeys,
+  type PluginAuthProvider,
+} from "./auth-api"
+import { sanitizePluginNetworkEgress } from "./plugin-pii-gate"
+import { generateCodeVerifier } from "@cognia/provider-core/providers/oauth"
+import type { NetworkRequestOptions } from "@/types/plugin"
+
+jest.mock("@cognia/provider-core/providers/oauth", () => {
+  const actual = jest.requireActual("@cognia/provider-core/providers/oauth")
+  return { ...actual, generateCodeVerifier: jest.fn(actual.generateCodeVerifier) }
+})
 import {
   __resetAuthRegistryForTesting,
   __makeSession,
@@ -140,6 +152,108 @@ describe("createAuthAPI", () => {
     await expect(createAuthAPI("p", allow).createPkceFlow(pkceConfig())).rejects.toThrow(
       /host-governed network transport/
     )
+  })
+
+  describe.each(["form", "json"] as const)("host PKCE %s provenance", (tokenRequestEncoding) => {
+    function transport() {
+      const bodies: Record<string, string>[] = []
+      const fetch = jest
+        .fn()
+        .mockImplementation(async (url: string, options: NetworkRequestOptions) => {
+          // Host wrappers may clone options. Symbol provenance must survive the
+          // spread without becoming a public string-keyed network option.
+          const forwarded = { ...options }
+          const egress = sanitizePluginNetworkEgress(
+            "provider",
+            { url, ...forwarded },
+            {
+              oauthTokenKeys: getHostPkceTokenRequestExemptKeys(forwarded),
+            }
+          )
+          bodies.push(
+            typeof egress.body === "string"
+              ? Object.fromEntries(new URLSearchParams(egress.body))
+              : (egress.body as Record<string, string>)
+          )
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            headers: {},
+            data: { access_token: "secret" },
+          }
+        })
+      return { fetch, bodies }
+    }
+
+    it("preserves code, client id and verifier shapes while sanitizing extra parameters", async () => {
+      const { fetch, bodies } = transport()
+      const api = createAuthAPI("provider", { ...allow, network: { fetch } })
+      const clientId = "10123456789-abc.apps.googleusercontent.com"
+      for (const code of [
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl",
+        "1234567890",
+        "13812345678",
+      ]) {
+        const verifier = `sk-${"a".repeat(43)}`
+        jest.mocked(generateCodeVerifier).mockReturnValueOnce(verifier)
+        await api.createPkceFlow({
+          ...pkceConfig(),
+          tokenRequestEncoding,
+          clientId,
+          waitForCode: async () => ({ code, state: "state" }),
+          extraTokenParams: { token: "alice@example.com", secret: "bob@example.com" },
+        })
+        expect(bodies.at(-1)).toEqual({
+          grant_type: "authorization_code",
+          code,
+          client_id: clientId,
+          redirect_uri: "http://localhost/callback",
+          code_verifier: verifier,
+          token: "<EMAIL_001>",
+          secret: "<EMAIL_001>",
+        })
+      }
+    })
+
+    it.each(["grant_type", "code", "redirect_uri", "client_id", "code_verifier"])(
+      "does not exempt an extraTokenParams override of %s",
+      async (key) => {
+        const { fetch, bodies } = transport()
+        await createAuthAPI("provider", { ...allow, network: { fetch } }).createPkceFlow({
+          ...pkceConfig(),
+          tokenRequestEncoding,
+          extraTokenParams: { [key]: "alice@example.com" },
+        })
+        expect(bodies[0][key]).toBe("<EMAIL_001>")
+      }
+    )
+
+    it("keeps a confidential client's secret verbatim and still inspects other extras", async () => {
+      const { fetch, bodies } = transport()
+      const clientSecret = `sk-${"b".repeat(40)}`
+      await createAuthAPI("provider", { ...allow, network: { fetch } }).createPkceFlow({
+        ...pkceConfig(),
+        tokenRequestEncoding,
+        extraTokenParams: { client_secret: clientSecret, audience: "alice@example.com" },
+      })
+      expect(bodies[0].client_secret).toBe(clientSecret)
+      expect(bodies[0].audience).toBe("<EMAIL_001>")
+    })
+
+    it("snapshots token overrides before plugin callbacks run", async () => {
+      const { fetch, bodies } = transport()
+      const extraTokenParams = { code: "alice@example.com" }
+      await createAuthAPI("provider", { ...allow, network: { fetch } }).createPkceFlow({
+        ...pkceConfig(),
+        tokenRequestEncoding,
+        extraTokenParams,
+        openUrl: () => {
+          Reflect.deleteProperty(extraTokenParams, "code")
+        },
+      })
+      expect(bodies[0].code).toBe("<EMAIL_001>")
+    })
   })
 
   it.each(["getSession", "getSessions"] as const)(
