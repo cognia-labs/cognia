@@ -68,6 +68,56 @@ describe("host auth provider ownership", () => {
     }
   })
 
+  it("fails closed when the durable index assigns one provider conflicting owners", () => {
+    const write = jest.fn()
+    setAuthProviderOwnershipStore({
+      read: () =>
+        JSON.stringify([
+          ["acme", "owner"],
+          ["acme", "other-owner"],
+        ]),
+      write,
+    })
+
+    expect(() => registerAuthenticationProvider(provider("owner"))).toThrow(
+      "has conflicting owners"
+    )
+    expect(getProvider("acme")).toBeUndefined()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it("does not persist host ownership and refuses a plugin while the host provider is live", () => {
+    const read = jest.fn(() => null)
+    const write = jest.fn()
+    setAuthProviderOwnershipStore({ read, write })
+    const host = provider(null)
+    const dispose = registerAuthenticationProvider(host)
+    try {
+      expect(read).toHaveBeenCalledTimes(1)
+      expect(write).not.toHaveBeenCalled()
+      expect(() => registerAuthenticationProvider(provider("squatter"))).toThrow(
+        "owned by another plugin"
+      )
+      expect(getProvider("acme")).toBe(host)
+      expect(write).not.toHaveBeenCalled()
+    } finally {
+      dispose()
+    }
+  })
+
+  it("fails closed without an injected store or localStorage", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage")!
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, value: undefined })
+    try {
+      expect(() => registerAuthenticationProvider(provider("owner"))).toThrow(
+        "storage is unavailable"
+      )
+      expect(getProvider("acme")).toBeUndefined()
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", descriptor)
+    }
+  })
+
   it("uses the injected store synchronously and restores the browser default", () => {
     let owners: string | null = null
     setAuthProviderOwnershipStore({

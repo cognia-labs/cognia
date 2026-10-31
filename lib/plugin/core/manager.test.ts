@@ -93,6 +93,7 @@ import { __resetPluginActivationProgressStoreForTesting } from "@/stores/plugin-
 import { PluginActivationConflictError, PluginLifecycleCoordinator } from "./lifecycle-coordinator"
 import { InMemoryPluginLifecycleStateAdapter, type PluginDirtyDiagnostic } from "./lifecycle-state"
 import { clearPythonLogs, getPythonLogs } from "@/lib/plugin/python/log-buffer"
+import { loggers } from "@/lib/plugin/core/logger"
 
 const mockTransportCall = jest.fn()
 const mockTransportSubscribe = jest.fn()
@@ -3648,38 +3649,99 @@ describe("PluginManager", () => {
       ])
     })
 
-    it("cancels the plugin's integration jobs on disable", async () => {
-      const { cancelIntegrationActionJobsByPlugin } = jest.requireMock("@/lib/db/integrations")
-      jest.mocked(cancelIntegrationActionJobsByPlugin).mockClear()
-      const store = {
-        plugins: {
-          "job-owner": {
-            manifest: createManifest("job-owner"),
-            status: "enabled",
-            source: "local",
-            path: "/plugins/job-owner",
-            config: {},
-          },
-        } as Record<string, Plugin>,
-        disablePlugin: jest.fn(async (pluginId: string) => {
-          const plugin = store.plugins[pluginId]
-          store.plugins[pluginId] = { ...plugin, status: "disabled" } as Plugin
-        }),
-        unregisterPluginTool: jest.fn(),
-        unregisterPluginComponent: jest.fn(),
-        unregisterPluginMode: jest.fn(),
-        unregisterPluginCommand: jest.fn(),
-        setPluginError: jest.fn(),
-        setPluginStatus: jest.fn(),
+    it.each(["enabled", "suspended"] as const)(
+      "cancels the %s plugin's integration jobs on disable",
+      async (status) => {
+        const { cancelIntegrationActionJobsByPlugin } = jest.requireMock("@/lib/db/integrations")
+        jest.mocked(cancelIntegrationActionJobsByPlugin).mockClear()
+        const store = {
+          plugins: {
+            "job-owner": {
+              manifest: createManifest("job-owner"),
+              status,
+              source: "local",
+              path: "/plugins/job-owner",
+              config: {},
+            },
+          } as Record<string, Plugin>,
+          disablePlugin: jest.fn(async (pluginId: string) => {
+            const plugin = store.plugins[pluginId]
+            store.plugins[pluginId] = { ...plugin, status: "disabled" } as Plugin
+          }),
+          unregisterPluginTool: jest.fn(),
+          unregisterPluginComponent: jest.fn(),
+          unregisterPluginMode: jest.fn(),
+          unregisterPluginCommand: jest.fn(),
+          setPluginError: jest.fn(),
+          setPluginStatus: jest.fn((pluginId: string, nextStatus: Plugin["status"]) => {
+            store.plugins[pluginId] = { ...store.plugins[pluginId], status: nextStatus }
+          }),
+        }
+        mockGetState.mockReturnValue(store)
+        mockInvoke.mockResolvedValue(undefined)
+
+        const manager = new PluginManager({ pluginDirectory: "/plugins" })
+        await manager.disablePlugin("job-owner")
+
+        expect(cancelIntegrationActionJobsByPlugin).toHaveBeenCalledWith("job-owner")
+        expect(cancelIntegrationActionJobsByPlugin).toHaveBeenCalledTimes(1)
+        expect(store.plugins["job-owner"].status).toBe("disabled")
+        expect(mockInvoke).toHaveBeenCalledWith("plugin_set_status", {
+          pluginId: "job-owner",
+          status: "disabled",
+        })
       }
-      mockGetState.mockReturnValue(store)
-      mockInvoke.mockResolvedValue(undefined)
+    )
 
-      const manager = new PluginManager({ pluginDirectory: "/plugins" })
-      await manager.disablePlugin("job-owner")
-
-      expect(cancelIntegrationActionJobsByPlugin).toHaveBeenCalledWith("job-owner")
-    })
+    it.each(["enabled", "suspended"] as const)(
+      "logs cancellation failure and still disables a %s plugin",
+      async (status) => {
+        const { cancelIntegrationActionJobsByPlugin } = jest.requireMock("@/lib/db/integrations")
+        const failure = new Error("Integration jobs database unavailable")
+        jest.mocked(cancelIntegrationActionJobsByPlugin).mockClear().mockRejectedValueOnce(failure)
+        const warn = jest.spyOn(loggers.manager, "warn").mockImplementation(() => undefined)
+        const store = {
+          plugins: {
+            "job-owner": {
+              manifest: createManifest("job-owner"),
+              status,
+              source: "local",
+              path: "/plugins/job-owner",
+              config: {},
+            },
+          } as Record<string, Plugin>,
+          disablePlugin: jest.fn(async (pluginId: string) => {
+            store.plugins[pluginId] = { ...store.plugins[pluginId], status: "disabled" }
+          }),
+          unregisterPluginTool: jest.fn(),
+          unregisterPluginComponent: jest.fn(),
+          unregisterPluginMode: jest.fn(),
+          unregisterPluginCommand: jest.fn(),
+          setPluginError: jest.fn(),
+          setPluginStatus: jest.fn((pluginId: string, nextStatus: Plugin["status"]) => {
+            store.plugins[pluginId] = { ...store.plugins[pluginId], status: nextStatus }
+          }),
+        }
+        mockGetState.mockReturnValue(store)
+        mockInvoke.mockResolvedValue(undefined)
+        const manager = new PluginManager({ pluginDirectory: "/plugins" })
+        try {
+          await expect(manager.disablePlugin("job-owner")).resolves.toBeUndefined()
+          expect(cancelIntegrationActionJobsByPlugin).toHaveBeenCalledTimes(1)
+          expect(warn).toHaveBeenCalledWith(
+            "[plugin:job-owner] integration job cancellation failed:",
+            failure
+          )
+          expect(store.plugins["job-owner"].status).toBe("disabled")
+          expect(mockInvoke).toHaveBeenCalledWith("plugin_set_status", {
+            pluginId: "job-owner",
+            status: "disabled",
+          })
+        } finally {
+          warn.mockRestore()
+        }
+      }
+    )
 
     it("should call plugin deactivate and unregister contributions", async () => {
       const manifest = {

@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react"
+import { act, render, waitFor } from "@testing-library/react"
 import { detectPlatform } from "@/lib/platform/detect"
 import { startIntegrationRuntime } from "@/lib/integrations/runtime"
 import { isIntegrationRuntimeOwner } from "@/lib/integrations/runtime-owner"
@@ -64,4 +64,56 @@ it("waits for an unlocked account and disposes when the owner account locks", as
   store.mockImplementation((selector) => selector({ unlockedAccountId: null, accountRevision: 1 }))
   rerender(<IntegrationRuntimeInitializer />)
   expect(disposeRuntime).toHaveBeenCalledTimes(1)
+})
+
+it("replaces the runtime once per unlocked account switch and revision change", async () => {
+  mockedDetectPlatform.mockReturnValue("tauri")
+  const disposers = [jest.fn(), jest.fn(), jest.fn()]
+  for (const dispose of disposers) mockedStartRuntime.mockResolvedValueOnce(dispose)
+  const store = useAccountStore as unknown as jest.Mock
+  const { rerender, unmount } = render(<IntegrationRuntimeInitializer />)
+  await waitFor(() => expect(mockedStartRuntime).toHaveBeenCalledTimes(1))
+
+  store.mockImplementation((selector) =>
+    selector({ unlockedAccountId: "account-2", accountRevision: 0 })
+  )
+  rerender(<IntegrationRuntimeInitializer />)
+  await waitFor(() => expect(mockedStartRuntime).toHaveBeenCalledTimes(2))
+  expect(disposers[0]).toHaveBeenCalledTimes(1)
+  expect(disposers[1]).not.toHaveBeenCalled()
+
+  store.mockImplementation((selector) =>
+    selector({ unlockedAccountId: "account-2", accountRevision: 1 })
+  )
+  rerender(<IntegrationRuntimeInitializer />)
+  await waitFor(() => expect(mockedStartRuntime).toHaveBeenCalledTimes(3))
+  expect(disposers[1]).toHaveBeenCalledTimes(1)
+  expect(disposers[2]).not.toHaveBeenCalled()
+
+  rerender(<IntegrationRuntimeInitializer />)
+  expect(mockedStartRuntime).toHaveBeenCalledTimes(3)
+  expect(isIntegrationRuntimeOwner).toHaveBeenCalledTimes(3)
+  unmount()
+  for (const dispose of disposers) expect(dispose).toHaveBeenCalledTimes(1)
+})
+
+it("immediately disposes a runtime that finishes starting after unmount", async () => {
+  mockedDetectPlatform.mockReturnValue("tauri")
+  let finishStart!: (dispose: () => void) => void
+  const starting = new Promise<() => void>((resolve) => {
+    finishStart = resolve
+  })
+  mockedStartRuntime.mockReturnValueOnce(starting)
+  const dispose = jest.fn()
+  const { unmount } = render(<IntegrationRuntimeInitializer />)
+  await waitFor(() => expect(mockedStartRuntime).toHaveBeenCalledTimes(1))
+  unmount()
+  expect(dispose).not.toHaveBeenCalled()
+
+  await act(async () => {
+    finishStart(dispose)
+    await starting
+  })
+  expect(dispose).toHaveBeenCalledTimes(1)
+  expect(mockedStartRuntime).toHaveBeenCalledTimes(1)
 })

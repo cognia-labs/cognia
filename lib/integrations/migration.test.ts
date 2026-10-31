@@ -5,11 +5,61 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import type { WorkflowNodeKind } from "@/types/workflow/visual"
 import { migrateLegacyIntegration, rollbackIntegrationMigration } from "./migration"
 import { pruneIntegrationRetention } from "@/lib/db/integrations"
+import {
+  getProvider,
+  registerAuthenticationProvider,
+  releaseAuthProviderOwnership,
+} from "@/lib/plugin/auth/auth-provider-registry"
 
 beforeEach(async () => {
   await getDb().delete()
   __resetDbForTesting()
 })
+
+it.each(["migration-provider-owner", null, undefined])(
+  "stamps migrated accounts with the live provider owner %s",
+  async (owner) => {
+    const providerId = "migration-owner-provider"
+    const dispose =
+      owner === undefined
+        ? undefined
+        : registerAuthenticationProvider({
+            id: providerId,
+            pluginId: owner,
+            label: "Migration provider",
+            getSessions: async () => [],
+            createSession: async () => {
+              throw new Error("not used")
+            },
+            removeSession: async () => undefined,
+          })
+    try {
+      if (owner === undefined) expect(getProvider(providerId)).toBeUndefined()
+      await migrateLegacyIntegration("migration-consumer", {
+        id: "provider-owner",
+        integrationId: "example",
+        accounts: [
+          {
+            id: "migrated-account",
+            integrationId: "example",
+            providerId,
+            authSessionId: "opaque",
+            remoteAccountId: "remote",
+            label: "Migrated account",
+          },
+        ],
+        subscriptions: [],
+        workflowKindAliases: {},
+      })
+      const account = await getDb().integrationAccounts.get("migrated-account")
+      expect(account).toBeDefined()
+      expect(account?.providerOwnerPluginId).toBe(owner)
+    } finally {
+      dispose?.()
+      if (owner) releaseAuthProviderOwnership(owner)
+    }
+  }
+)
 
 it("migrates accounts, subscriptions, and workflow aliases transactionally and idempotently", async () => {
   const db = getDb()

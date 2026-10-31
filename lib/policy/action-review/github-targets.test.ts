@@ -146,7 +146,12 @@ describe("githubWebHost", () => {
   it("is github.com for the public API and the server's own host for GitHub Enterprise", () => {
     expect(githubWebHost()).toBe("github.com")
     expect(githubWebHost("https://api.github.com")).toBe("github.com")
+    expect(githubWebHost("https://www.github.com")).toBe("github.com")
+    expect(githubWebHost("https://www.github.com:8443")).toBe("github.com:8443")
+    expect(githubWebHost("https://www.github.com:443")).toBe("github.com")
     expect(githubWebHost("https://GHE.corp.io/api/v3")).toBe("ghe.corp.io")
+    expect(githubWebHost("https://ghe.example.com:8443/api/v3")).toBe("ghe.example.com:8443")
+    expect(githubWebHost("https://ghe.example.com:443/api/v3")).toBe("ghe.example.com")
     expect(githubWebHost("not a url")).toBe("github.com")
   })
 })
