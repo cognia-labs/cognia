@@ -27,6 +27,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 
+import { setAuthProviderOwnershipStore } from "@/lib/plugin/auth/auth-provider-registry"
 import { validatePluginManifest } from "@/lib/plugin/core/validation"
 import {
   OVERLAY_REGISTRY_CAPABILITIES,
@@ -115,6 +116,9 @@ const EXPECTED_WARNINGS: Record<string, readonly string[]> = {
   // packs are declared there (not only on the TS module manifest).
   "cognia-character-seeds": [],
   "cognia-glance-example": [],
+  // The calendar integration (with its handlers) lives on the TypeScript module
+  // manifest overlay, so the raw JSON has no `integrations` field.
+  "feishu-calendar": ["field_missing:integrations"],
   "cognia-goal-insights": [],
   // Python tools are `@tool` functions the host discovers at load, so the
   // plugin tags itself `python` rather than `tools` (which gates `tools[]`).
@@ -237,6 +241,20 @@ function warningToken(code: string, message: string): string {
 }
 
 describe("first-party plugin manifest sweep", () => {
+  // Auth-provider registration claims a durable owner, which fails closed when
+  // no store is installed (node has no localStorage). The sweep only needs a
+  // process-local one.
+  beforeAll(() => {
+    let owners: string | null = null
+    setAuthProviderOwnershipStore({
+      read: () => owners,
+      write: (value) => {
+        owners = value
+      },
+    })
+  })
+  afterAll(() => setAuthProviderOwnershipStore(null))
+
   it("discovers at least one plugin (sanity check)", () => {
     expect(plugins.length).toBeGreaterThan(0)
   })
