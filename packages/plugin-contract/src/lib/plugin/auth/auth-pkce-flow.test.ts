@@ -161,3 +161,21 @@ describe("runPkceAuthFlow", () => {
     expect(result.expiresAt).toBeUndefined()
   })
 })
+
+it("uses the Host attempt's prepared state/verifier/challenge consistently", async () => {
+  const prepared = {
+    state: "host-state",
+    codeVerifier: "host-verifier",
+    codeChallenge: "host-challenge",
+  }
+  const config = baseConfig({
+    waitForCode: jest.fn(async ({ state }) => ({ code: "code", state })),
+  })
+  await runPkceAuthFlow(config, prepared)
+  const opened = new URL((config.openUrl as jest.Mock).mock.calls[0][0])
+  expect(opened.searchParams.get("state")).toBe(prepared.state)
+  expect(opened.searchParams.get("code_challenge")).toBe(prepared.codeChallenge)
+  expect(
+    new URLSearchParams((config.fetchImpl as jest.Mock).mock.calls[0][1].body).get("code_verifier")
+  ).toBe(prepared.codeVerifier)
+})

@@ -7,7 +7,9 @@ export * from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 import {
   getProvider,
   registerAuthenticationProvider as registerProvider,
-  unregisterProvidersByPlugin,
+  unregisterProvidersByPlugin as unregisterByPlugin,
+  unregisterAuthenticationProvider as unregisterProvider,
+  listProviders,
   type AuthenticationProvider,
 } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 
@@ -80,7 +82,12 @@ export function registerAuthenticationProvider(provider: AuthenticationProvider)
     throw new Error(`Auth provider "${provider.id}" is owned by another plugin.`)
   }
   claimAuthProviderOwnership(provider.id, provider.pluginId)
-  return registerProvider(provider)
+  const dispose = registerProvider(provider)
+  coordinateProviderAvailability(provider.id)
+  return () => {
+    dispose()
+    coordinateProviderAvailability(provider.id)
+  }
 }
 
 /** Declarative and imperative registration share the same persistent binding. */
@@ -96,16 +103,53 @@ export function claimAuthProviderOwnership(providerId: string, pluginId: string 
   }
 }
 
+/** All teardown entry points reconcile connection availability. */
+export function unregisterAuthenticationProvider(providerId: string): void {
+  unregisterProvider(providerId)
+  coordinateProviderAvailability(providerId)
+}
+
+export function unregisterProvidersByPlugin(pluginId: string): number {
+  const ids = listProviders()
+    .filter((provider) => provider.pluginId === pluginId)
+    .map((provider) => provider.id)
+  const removed = unregisterByPlugin(pluginId)
+  for (const id of ids) coordinateProviderAvailability(id)
+  return removed
+}
+
 /** Terminal uninstall only, independent of whether plugin tables are kept. */
 export function releaseAuthProviderOwnership(pluginId: string): void {
   const owners = readOwners()
   let changed = false
+  const affected: string[] = []
   for (const [providerId, owner] of owners) {
     if (owner === pluginId) {
+      affected.push(providerId)
       owners.delete(providerId)
       changed = true
     }
   }
   if (changed) writeOwners(owners)
   unregisterProvidersByPlugin(pluginId)
+  for (const id of affected) coordinateProviderAvailability(id)
+}
+
+/** Registration/disposal is already a runtime seam; no second bootstrap owner. */
+const availability = new Map<string, Promise<void>>()
+function coordinateProviderAvailability(providerId: string): void {
+  const pending = (availability.get(providerId) ?? Promise.resolve())
+    .then(async () => {
+      const { getConnectionManager } = await import("./connection-manager")
+      // Serialize teardown and registration, then read the latest owner. An older
+      // removal cannot finish after a replacement's restore and mark it missing.
+      const manager = getConnectionManager()
+      if (getProvider(providerId)) await manager.restoreProvider(providerId)
+      else await manager.markProviderUnavailable(providerId)
+    })
+    .catch(() => console.warn("Auth provider connection availability could not be reconciled"))
+  availability.set(providerId, pending)
+  void pending.then(() => {
+    if (availability.get(providerId) === pending) availability.delete(providerId)
+  })
 }

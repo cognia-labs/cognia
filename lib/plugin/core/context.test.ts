@@ -73,6 +73,34 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import * as pluginPiiGate from "@/lib/plugin/api/plugin-pii-gate"
 import { getSecret } from "@/lib/keyring"
+
+// createPkceFlow records a single-use Host auth attempt (ADR-0246 §6). Its
+// replay receipt normally lives in Dexie; keep it in memory for this suite.
+jest.mock("@/lib/plugin/auth/auth-attempts", () => {
+  const actual = jest.requireActual("@/lib/plugin/auth/auth-attempts")
+  const rows = new Map<string, { state: string; expiresAt: number }>()
+  const { HostAuthSecrets } = jest.requireActual("@/lib/plugin/auth/connection-credentials")
+  // jsdom has neither navigator.locks nor IndexedDB; the suite is single-context.
+  const lock = (_name: string, task: (assertHeld: () => void) => Promise<unknown>) => task(() => {})
+  const store = new actual.AuthAttemptStore(
+    new HostAuthSecrets("auth-attempts", { native: false, lock }),
+    {
+      get: async (state: string) => rows.get(state),
+      put: async (row: { state: string; expiresAt: number }) => rows.set(row.state, row),
+      expired: async (now: number) => [...rows.values()].filter((row) => row.expiresAt <= now),
+      delete: async (state: string) => rows.delete(state),
+    },
+    Date.now,
+    lock
+  )
+  return {
+    ...actual,
+    getAuthAttemptStore: () => store,
+    createAttempt: (input: unknown) => store.createAttempt(input),
+    consumeAttempt: (state: string, binding: unknown) => store.consumeAttempt(state, binding),
+    cancelAttempt: (state: string) => store.cancelAttempt(state),
+  }
+})
 import { secretRef } from "@cognia/plugin-sdk"
 import {
   __resetAuthRegistryForTesting,
@@ -3870,7 +3898,7 @@ describe("agent imperative API", () => {
             redirectUri: "http://localhost/callback",
             state: "state",
             openUrl: jest.fn(),
-            waitForCode: async () => ({ code: "code", state: "state" }),
+            waitForCode: async ({ state }: { state: string }) => ({ code: "code", state }),
             tokenRequestEncoding,
             extraTokenParams: { token: "person@example.com", note: "Contact person@example.com" },
           }
@@ -3898,7 +3926,7 @@ describe("agent imperative API", () => {
             await expect(
               ctx.auth.createPkceFlow({
                 ...config,
-                waitForCode: async () => ({ code, state: "state" }),
+                waitForCode: async ({ state }) => ({ code, state }),
               })
             ).resolves.toMatchObject({ accessToken: "token" })
             const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
@@ -4047,7 +4075,7 @@ describe("agent imperative API", () => {
             redirectUri: "http://localhost/callback",
             state: "state",
             openUrl: () => {},
-            waitForCode: async () => ({ code: "provider-code", state: "state" }),
+            waitForCode: async ({ state }) => ({ code: "provider-code", state }),
             tokenRequestEncoding: "json",
           })
         ).resolves.toMatchObject({ accessToken: "token" })

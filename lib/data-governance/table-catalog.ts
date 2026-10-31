@@ -91,6 +91,8 @@ export const CORE_TABLE_NAMES = [
   "approvedBinaries",
   "artifactVersions",
   "artifacts",
+  "authConnections",
+  "authAttempts",
   "automationAuditLog",
   "backgroundTasks",
   "backupHistory",
@@ -1087,9 +1089,17 @@ QUEUE_TABLES.add("accountSyncOutbox")
 QUEUE_TABLES.add("accountSyncInbox")
 QUEUE_TABLES.add("accountSyncState")
 
-const SECRET_TABLES = new Set<CoreTableName>(["tts_provider_keys"])
+const SECRET_TABLES = new Set<CoreTableName>([
+  "tts_provider_keys",
+  "authConnections",
+  "authAttempts",
+])
 
-const SECRET_EXTERNALIZED_TABLES = new Set<CoreTableName>(["tts_provider_keys"])
+const SECRET_EXTERNALIZED_TABLES = new Set<CoreTableName>([
+  "tts_provider_keys",
+  "authConnections",
+  "authAttempts",
+])
 
 const AUTO_INCREMENT_METADATA_TABLES = new Set<CoreTableName>([
   "chatInputHistory",
@@ -1376,6 +1386,16 @@ function backupFor(
   name: CoreTableName,
   role: DataTableRole
 ): DataTableCatalogEntry["backupPolicy"] {
+  if (name === "authAttempts")
+    return {
+      mode: "ephemeral",
+      reason: "Single-use Host attempts expire after ten minutes; never restored or synced.",
+    }
+  if (name === "authConnections")
+    return {
+      mode: "device-local",
+      reason: "Host connection references and secret-store credentials belong to this device.",
+    }
   if (PORTABLE_BACKUP_TABLES.has(name)) {
     return { mode: "portable", reason: "User-owned data represented by BackupPayloadV3." }
   }
@@ -1412,6 +1432,14 @@ const WORKFLOW_APP_ROW_EXPIRY: DataRetentionPolicy = {
 }
 
 const RETENTION_OVERRIDES: Partial<Record<CoreTableName, DataRetentionPolicy>> = {
+  authAttempts: {
+    mode: "ttl",
+    days: 10 / 1440,
+    enforcement: "domain",
+    executorId: "auth-attempts",
+    reason:
+      "lib/plugin/auth/auth-attempts sweeps expired secrets and metadata on create and consume.",
+  },
   harnessEvolutionRuns: {
     mode: "cap",
     enforcement: "domain",
@@ -1998,7 +2026,7 @@ function createEntry(name: CoreTableName): DataTableCatalogEntry {
       : "account"
   return {
     name,
-    owner: ownerFor(name),
+    owner: name === "authConnections" || name === "authAttempts" ? "plugin-auth" : ownerFor(name),
     role,
     sensitivity,
     contentProtection: contentProtectionFor(name, sensitivity, accountScope),

@@ -6,6 +6,18 @@ import {
   type PluginAuthProvider,
 } from "./auth-api"
 import { sanitizePluginNetworkEgress } from "./plugin-pii-gate"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+const dbFixture = createDbTestFixture()
+beforeAll(dbFixture.initialize)
+beforeEach(dbFixture.restore)
+afterAll(dbFixture.dispose)
+
+jest.mock("@/lib/plugin/auth/auth-attempts", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/auth-attempts"),
+  cancelAttempt: jest.fn(jest.requireActual("@/lib/plugin/auth/auth-attempts").cancelAttempt),
+}))
+import { cancelAttempt } from "@/lib/plugin/auth/auth-attempts"
+
 import { generateCodeVerifier } from "@cognia/provider-core/providers/oauth"
 import type { NetworkRequestOptions } from "@/types/plugin"
 
@@ -32,7 +44,7 @@ function pkceConfig(): PluginPkceFlowConfig {
     scopes: [],
     state: "state",
     openUrl: jest.fn(),
-    waitForCode: async () => ({ code: "code", state: "state" }),
+    waitForCode: async ({ state }) => ({ code: "code", state }),
   }
 }
 
@@ -54,6 +66,88 @@ function fakeProvider(over?: Partial<PluginAuthProvider>): PluginAuthProvider {
 
 const allow = { hasPermission: () => true }
 const deny = { hasPermission: () => false }
+
+it("consumes a Host attempt on legacy plugin callback routes even when the old driver owns its state", async () => {
+  const { routePluginDeepLink } = await import("@/lib/plugin/uri/route-deep-link")
+  const fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    data: { access_token: "token" },
+  })
+  let sentState = ""
+  const result = await createAuthAPI("legacy-owner", {
+    ...allow,
+    network: { fetch },
+  }).createPkceFlow({
+    ...pkceConfig(),
+    state: "legacy-driver-state",
+    waitForCode: () => new Promise(() => {}),
+    openUrl: async (raw) => {
+      sentState = new URL(raw).searchParams.get("state")!
+      await routePluginDeepLink(
+        `cognia://plugin/legacy-owner/oauth-callback?state=${sentState}&code=old-route-code`
+      )
+    },
+  })
+  expect(sentState).toMatch(/^[a-f0-9]{64}$/)
+  expect(result.accessToken).toBe("token")
+  const { consumeAttempt } = await import("@/lib/plugin/auth/auth-attempts")
+  await expect(
+    consumeAttempt(sentState, {
+      providerId: "legacy-owner",
+      clientId: "client",
+      issuer: "https://auth.example.com",
+    })
+  ).rejects.toMatchObject({ reason: "already-consumed" })
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+it("rejects replayed driver state before a token exchange", async () => {
+  const fetch = jest.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    headers: {},
+    data: { access_token: "token" },
+  })
+  const api = createAuthAPI("owner", { ...allow, network: { fetch } })
+  let firstState = ""
+  await api.createPkceFlow({
+    ...pkceConfig(),
+    waitForCode: async ({ state }) => {
+      firstState = state
+      return { code: "first", state }
+    },
+  })
+  await expect(
+    api.createPkceFlow({
+      ...pkceConfig(),
+      waitForCode: async () => ({ code: "replay", state: firstState }),
+    })
+  ).rejects.toThrow("state mismatch")
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+it("cancels the attempt when aborted and drops a late callback", async () => {
+  const { acceptCallback } = await import("@/lib/plugin/auth/callback-acceptor")
+  const controller = new AbortController()
+  const fetch = jest.fn()
+  let state = ""
+  const flow = createAuthAPI("owner", { ...allow, network: { fetch } }).createPkceFlow({
+    ...pkceConfig(),
+    signal: controller.signal,
+    openUrl: (raw) => {
+      state = new URL(raw).searchParams.get("state")!
+      controller.abort()
+    },
+    waitForCode: () => new Promise(() => {}),
+  })
+  await expect(flow).rejects.toThrow("cancelled")
+  expect(await acceptCallback({ state, code: "late" }, "deep-link")).toBe(false)
+  expect(fetch).not.toHaveBeenCalled()
+})
 
 describe("createAuthAPI", () => {
   beforeEach(() => {
@@ -201,7 +295,7 @@ describe("createAuthAPI", () => {
           ...pkceConfig(),
           tokenRequestEncoding,
           clientId,
-          waitForCode: async () => ({ code, state: "state" }),
+          waitForCode: async ({ state }) => ({ code, state }),
           extraTokenParams: { token: "alice@example.com", secret: "bob@example.com" },
         })
         expect(bodies.at(-1)).toEqual({
@@ -322,9 +416,9 @@ describe("createAuthAPI", () => {
       await expect(
         api.createPkceFlow({
           ...pkceConfig(),
-          waitForCode: async () => {
+          waitForCode: async ({ state }) => {
             revoked.add(permission)
-            return { code: "code", state: "state" }
+            return { code: "code", state }
           },
         })
       ).rejects.toThrow(permission)
@@ -451,4 +545,41 @@ describe("createAuthAPI", () => {
     await new Promise((r) => queueMicrotask(() => r(null)))
     expect(events.length).toBeGreaterThan(0)
   })
+})
+
+it.each([true, false])(
+  "PKCE cleanup never replaces the result or original exchange error, success=%s",
+  async (success) => {
+    const original = new Error("exchange offline")
+    const fetch = success
+      ? jest.fn().mockResolvedValue({
+          status: 200,
+          statusText: "OK",
+          headers: {},
+          data: { access_token: "token" },
+        })
+      : jest.fn().mockRejectedValue(original)
+    jest.mocked(cancelAttempt).mockRejectedValueOnce(new Error("cleanup offline"))
+    const pending = createAuthAPI("cleanup-owner", { ...allow, network: { fetch } }).createPkceFlow(
+      pkceConfig()
+    )
+    if (success) await expect(pending).resolves.toMatchObject({ accessToken: "token" })
+    else await expect(pending).rejects.toBe(original)
+  }
+)
+
+it("PKCE rejects storage failure promptly instead of waiting for attempt expiry", async () => {
+  const { getAuthAttemptStore } = await import("@/lib/plugin/auth/auth-attempts")
+  const failure = new Error("attempt storage offline")
+  const attemptStore = getAuthAttemptStore()
+  const consume = jest.spyOn(attemptStore, "consumeAttempt").mockRejectedValueOnce(failure)
+  const fetch = jest.fn()
+  try {
+    await expect(
+      createAuthAPI("storage-owner", { ...allow, network: { fetch } }).createPkceFlow(pkceConfig())
+    ).rejects.toBe(failure)
+    expect(fetch).not.toHaveBeenCalled()
+  } finally {
+    consume.mockRestore()
+  }
 })

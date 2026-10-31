@@ -190,6 +190,14 @@ export function PluginRuntimeInitializer({
 
         const { initializePluginManager } = await import("@/lib/plugin/core/manager")
         await initializePluginManager(resolution.config)
+        // Providers have registered during manager boot; recover interrupted
+        // disconnects in the background so a slow vendor revoke never delays
+        // the plugin runtime becoming ready.
+        void import("@/lib/plugin/auth/connection-manager")
+          .then(({ sweepTombstoned }) => sweepTombstoned())
+          .catch((error) =>
+            log.warn("plugin-runtime: auth tombstone cleanup unavailable", { error })
+          )
         window.__cogniaPluginRuntimeReady = true
         markBootCapabilityReady("plugin-runtime")
         log.info("plugin-runtime: initialized", { profile: resolution.config.runtimeProfile })

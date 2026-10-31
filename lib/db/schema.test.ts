@@ -5465,3 +5465,25 @@ it("v249 adds the receipt authorization index and keeps existing receipts", asyn
     await Dexie.delete(name)
   }
 })
+
+it("v250 adds unique Host connections and attempt expiry metadata", async () => {
+  const name = "cognia-auth-v250-upgrade"
+  const old = new Dexie(name)
+  const { authConnections: _connections, authAttempts: _attempts, ...previous } = CURRENT_SCHEMA
+  old.version(249).stores(previous)
+  await old.open()
+  old.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(250)
+    expect(current.authConnections.schema.idxByName.identityKey.unique).toBe(true)
+    expect(Object.keys(current.authConnections.schema.idxByName)).toEqual(
+      expect.arrayContaining(["lineageId", "providerId", "status"])
+    )
+    expect(current.authAttempts.schema.idxByName.expiresAt).toBeDefined()
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})

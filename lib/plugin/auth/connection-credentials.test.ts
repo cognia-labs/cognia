@@ -1,0 +1,253 @@
+jest.mock("@/lib/accounts/active-account-id", () => ({
+  getActiveAccountId: jest.fn(() => "acct-a"),
+}))
+jest.mock("@/lib/credentials/keyring-store", () => {
+  const namespaces = new Map<string, Map<string, string>>()
+  return {
+    createKeyringStore: jest.fn((namespace: string) => {
+      let values = namespaces.get(namespace)
+      if (!values) {
+        values = new Map()
+        namespaces.set(namespace, values)
+      }
+      const store = values
+      return {
+        load: async (key: string) => store.get(key) ?? null,
+        save: async (key: string, value: string) => {
+          store.set(key, value)
+        },
+        delete: async (key: string) => {
+          store.delete(key)
+        },
+        isPersistent: () => true,
+      }
+    }),
+  }
+})
+jest.mock("@/lib/runtime/browser-vault", () => ({
+  getActiveBrowserVault: jest.fn(() => null),
+}))
+import { createKeyringStore } from "@/lib/credentials/keyring-store"
+import { getActiveBrowserVault } from "@/lib/runtime/browser-vault"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
+import {
+  ConnectionCredentialStore,
+  CredentialRevisionConflict,
+  CredentialStoreDegraded,
+  HostAuthSecrets,
+} from "./connection-credentials"
+import { withNamedLock } from "@/lib/locks/named-lock"
+
+function fixture(persistent = true) {
+  const rows = new Map<string, string>()
+  const store = {
+    load: async (id: string) => rows.get(id) ?? null,
+    save: async (id: string, value: string) => {
+      rows.set(id, value)
+    },
+    delete: async (id: string) => {
+      rows.delete(id)
+    },
+    isPersistent: () => persistent,
+  }
+  const lock: typeof import("./connection-credentials").withAuthLock = (name, task) =>
+    withNamedLock(name, task, { mode: "in-process" })
+  const secrets = new HostAuthSecrets("auth-connections", { store, native: false, lock })
+  return { rows, credentials: new ConnectionCredentialStore(secrets) }
+}
+
+it("CAS rejects stale revisions and commits rotated tokens together", async () => {
+  const { rows, credentials } = fixture()
+  const first = await credentials.read("ref")
+  const fresh = { accessToken: "a", refreshToken: "r", scopes: [] }
+  await credentials.commit("ref", first, fresh)
+  await expect(credentials.commit("ref", first, fresh)).rejects.toBeInstanceOf(
+    CredentialRevisionConflict
+  )
+  expect(JSON.parse(rows.get("ref")!)).toEqual({ revision: 1, credentials: fresh })
+  const tombstone = await credentials.tombstone("ref", await credentials.read("ref"))
+  await expect(credentials.commit("ref", tombstone, fresh)).rejects.toBeInstanceOf(
+    CredentialRevisionConflict
+  )
+  await credentials.delete("ref")
+  expect(await credentials.read("ref")).toEqual({ raw: null, revision: 0 })
+})
+
+it("reports locked Browser Vault persistence as a typed degraded state", async () => {
+  const { credentials, rows } = fixture(false)
+  expect(credentials.isPersistent()).toBe(false)
+  await expect(credentials.read("ref")).rejects.toMatchObject({
+    reason: "non-persistent-until-vault-unlock",
+  })
+  await expect(
+    credentials.commit("ref", { raw: null, revision: 0 }, { accessToken: "a", scopes: [] })
+  ).rejects.toBeInstanceOf(CredentialStoreDegraded)
+  expect(rows.size).toBe(0)
+})
+
+it("native CAS uses the exact raw read and only translates condition mismatches", async () => {
+  const cas = jest
+    .fn()
+    .mockRejectedValueOnce("secret-store condition mismatch")
+    .mockRejectedValueOnce(new Error("offline"))
+  const secrets = new HostAuthSecrets("auth-connections", { native: true, cas })
+  await expect(secrets.compareAndSet("ref", "raw", "next")).rejects.toBeInstanceOf(
+    CredentialRevisionConflict
+  )
+  expect(cas).toHaveBeenCalledWith({ namespace: "auth-connections", key: "ref" }, "raw", "next")
+  await expect(secrets.compareAndSet("ref", "raw", "next")).rejects.toThrow("offline")
+})
+
+it("reports a vault locking during CAS before writing an ephemeral credential", async () => {
+  let persistent = true
+  const save = jest.fn()
+  const store = {
+    load: async () => {
+      persistent = false
+      return null
+    },
+    save,
+    delete: async () => {},
+    isPersistent: () => persistent,
+  }
+  const secrets = new HostAuthSecrets("auth-connections", {
+    store,
+    native: false,
+    lock: (name, task) => withNamedLock(name, task, { mode: "in-process" }),
+  })
+  await expect(
+    new ConnectionCredentialStore(secrets).commit(
+      "ref",
+      { raw: null, revision: 0 },
+      { accessToken: "token", scopes: [] }
+    )
+  ).rejects.toBeInstanceOf(CredentialStoreDegraded)
+  expect(save).not.toHaveBeenCalled()
+})
+
+it("refuses to write when the browser vault switches profiles during the CAS read", async () => {
+  const vault = { localAccountId: "acct-a" }
+  jest
+    .mocked(getActiveBrowserVault)
+    .mockImplementation(() => vault as unknown as ReturnType<typeof getActiveBrowserVault>)
+  const rows = new Map<string, string>()
+  const save = jest.fn(async (key: string, value: string) => {
+    rows.set(key, value)
+  })
+  const store = {
+    load: async (key: string) => {
+      // The credential read is in flight when another profile's vault opens.
+      if (key === "ref") vault.localAccountId = "acct-b"
+      return rows.get(key) ?? null
+    },
+    save,
+    delete: async (key: string) => {
+      rows.delete(key)
+    },
+    isPersistent: () => true,
+  }
+  const secrets = new HostAuthSecrets("auth-connections:acct-a", {
+    store,
+    native: false,
+    accountId: "acct-a",
+    lock: (name, task) => withNamedLock(name, task, { mode: "in-process" }),
+  })
+  try {
+    await expect(secrets.compareAndSet("ref", null, "value")).rejects.toThrow(
+      "The local profile changed during authentication"
+    )
+    expect(save.mock.calls.map(([key]) => key)).not.toContain("ref")
+  } finally {
+    jest.mocked(getActiveBrowserVault).mockImplementation(() => null)
+  }
+})
+
+it("default credential stores isolate the same ref in active-account namespaces", async () => {
+  jest.mocked(getActiveAccountId).mockReturnValue("acct-a")
+  const a = new ConnectionCredentialStore()
+  await a.commit("shared-ref", await a.read("shared-ref"), { accessToken: "a", scopes: [] })
+  jest.mocked(getActiveAccountId).mockReturnValue("acct-b")
+  const b = new ConnectionCredentialStore()
+  expect((await b.read("shared-ref")).credentials).toBeUndefined()
+  await b.commit("shared-ref", await b.read("shared-ref"), { accessToken: "b", scopes: [] })
+  expect((await a.read("shared-ref")).credentials?.accessToken).toBe("a")
+  expect((await b.read("shared-ref")).credentials?.accessToken).toBe("b")
+  expect(createKeyringStore).toHaveBeenCalledWith("auth-connections:acct-a")
+  expect(createKeyringStore).toHaveBeenCalledWith("auth-connections:acct-b")
+})
+
+it("native account inventories fence deletion and retain orphan keys after a failed credential CAS", async () => {
+  const rows = new Map<string, string>()
+  const cas = jest.fn(
+    async (_ref: { namespace: string; key: string }, expected: string | null, value: string) => {
+      expect(_ref.namespace).toBe("auth-connections:inactive")
+      if ((rows.get(_ref.key) ?? null) !== expected)
+        throw new Error("secret-store condition mismatch")
+      rows.set(_ref.key, value)
+    }
+  )
+  const secrets = new HostAuthSecrets("auth-connections:inactive", {
+    native: true,
+    accountId: "inactive",
+    cas,
+    lock: (name, task) => withNamedLock(name, task, { mode: "in-process" }),
+    store: {
+      load: async (key) => rows.get(key) ?? null,
+      save: async () => {
+        throw new Error("must use native CAS")
+      },
+      delete: async (key) => {
+        rows.delete(key)
+      },
+      isPersistent: () => true,
+    },
+  })
+  await secrets.compareAndSet("ref", null, "token")
+  await expect(secrets.compareAndSet("orphan", "stale", "unused")).rejects.toBeInstanceOf(
+    CredentialRevisionConflict
+  )
+  expect(await secrets.beginDeletion()).toEqual(["ref", "orphan"])
+  await secrets.delete("ref")
+  await secrets.delete("orphan")
+  await expect(secrets.compareAndSet("ref", null, "late-token")).rejects.toThrow("deleted")
+  expect(rows.get("ref")).toBeUndefined()
+  expect(JSON.parse(rows.get("__host_auth_keys__")!)).toEqual({ keys: [], deleting: true })
+})
+
+it("serializes secret deletion with recreation so the new key remains enumerable", async () => {
+  const rows = new Map<string, string>()
+  let removed!: () => void
+  let release!: () => void
+  const deleted = new Promise<void>((resolve) => {
+    removed = resolve
+  })
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const secrets = new HostAuthSecrets("auth-connections:recreate", {
+    native: false,
+    accountId: "recreate",
+    lock: (name, task) => withNamedLock(name, task, { mode: "in-process" }),
+    store: {
+      load: async (key) => rows.get(key) ?? null,
+      save: async (key, value) => {
+        rows.set(key, value)
+      },
+      delete: async (key) => {
+        rows.delete(key)
+        removed()
+        await gate
+      },
+      isPersistent: () => true,
+    },
+  })
+  await secrets.compareAndSet("ref", null, "old")
+  const deleting = secrets.delete("ref")
+  await deleted
+  const recreating = secrets.compareAndSet("ref", null, "new")
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  release()
+  await Promise.all([deleting, recreating])
+  expect(await secrets.read("ref")).toBe("new")
+  expect(await secrets.beginDeletion()).toEqual(["ref"])
+})

@@ -23,6 +23,11 @@ jest.mock("@/lib/plugin/core/bootstrap", () => ({
   resolvePluginRuntimeBootstrap: (...args: unknown[]) => mockResolveBootstrap(...args),
 }))
 
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  sweepTombstoned: jest.fn(async () => {}),
+}))
+import { sweepTombstoned } from "@/lib/plugin/auth/connection-manager"
+
 const mockInitializeManager = jest.fn()
 jest.mock("@/lib/plugin/core/manager", () => ({
   initializePluginManager: (...args: unknown[]) => mockInitializeManager(...args),
@@ -31,6 +36,19 @@ jest.mock("@/lib/plugin/core/manager", () => ({
 const mockInstallPackWarningRefreshWiring = jest.fn()
 jest.mock("@/lib/plugin/character-pack/warning-refresh-wiring", () => ({
   installPackWarningRefreshWiring: () => mockInstallPackWarningRefreshWiring(),
+}))
+
+// Keep the initializer test at the existing lifecycle seam rather than loading
+// the unrelated chat/execution runtime through the headless hook aggregator.
+jest.mock("@/lib/headless/runtimes/plugin-runtime", () => ({
+  startPluginHookSources: () => {
+    const external = mockInstallExternalAgentConfigHookSource()
+    const glance = mockInstallGlanceVisibilityHookSource()
+    return () => {
+      external()
+      glance()
+    }
+  },
 }))
 
 const mockExternalAgentHookTeardown = jest.fn()
@@ -103,6 +121,7 @@ describe("PluginRuntimeInitializer", () => {
 
   beforeEach(() => {
     jest.clearAllMocks()
+    jest.mocked(sweepTombstoned).mockResolvedValue(undefined)
     mockInitializeManager.mockResolvedValue(undefined)
     mockInstallPackWarningRefreshWiring.mockReturnValue(warningRefreshTeardown)
     mockPluginRuntimeRequested = true
@@ -386,6 +405,7 @@ describe("PluginRuntimeInitializer", () => {
 
     mockPluginRuntimeRequested = false
     rerender(<PluginRuntimeInitializer />)
+    jest.mocked(sweepTombstoned).mockResolvedValue(undefined)
     mockInitializeManager.mockResolvedValue(undefined)
     mockPluginRuntimeRequested = true
     rerender(<PluginRuntimeInitializer />)
@@ -461,5 +481,38 @@ describe("PluginRuntimeInitializer", () => {
     await waitFor(() => expect(mockInitializeManager).toHaveBeenCalledTimes(1))
     rerender(<PluginRuntimeInitializer />)
     await waitFor(() => expect(mockInitializeManager).toHaveBeenCalledTimes(1))
+  })
+  it("sweeps once after providers register, and cleanup failure does not fail boot", async () => {
+    mockDetectPlatform.mockReturnValue("web")
+    mockResolveBootstrap.mockReturnValue({
+      shouldInitialize: true,
+      config: { runtimeProfile: "browser" },
+    })
+    const order: string[] = []
+    mockInitializeManager.mockImplementationOnce(async () => {
+      order.push("providers")
+    })
+    jest.mocked(sweepTombstoned).mockImplementationOnce(async () => {
+      order.push("sweep")
+      throw new Error("keyring locked")
+    })
+    const { rerender } = render(<PluginRuntimeInitializer />)
+    await waitFor(() => expect(window.__cogniaPluginRuntimeReady).toBe(true))
+    await waitFor(() => expect(order).toEqual(["providers", "sweep"]))
+    rerender(<PluginRuntimeInitializer />)
+    expect(sweepTombstoned).toHaveBeenCalledTimes(1)
+    expect(mockMarkBootCapabilityFailed).not.toHaveBeenCalled()
+  })
+  it("does not hold plugin readiness on a slow tombstone sweep", async () => {
+    mockDetectPlatform.mockReturnValue("web")
+    mockResolveBootstrap.mockReturnValue({
+      shouldInitialize: true,
+      config: { runtimeProfile: "browser" },
+    })
+    // A vendor revoke that never answers.
+    jest.mocked(sweepTombstoned).mockImplementationOnce(() => new Promise<void>(() => {}))
+    render(<PluginRuntimeInitializer />)
+    await waitFor(() => expect(window.__cogniaPluginRuntimeReady).toBe(true))
+    await waitFor(() => expect(sweepTombstoned).toHaveBeenCalledTimes(1))
   })
 })

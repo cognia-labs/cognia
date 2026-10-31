@@ -6,6 +6,7 @@
 // For each plugin URL it lazy-activates the plugin (`onUri:<id>` activation)
 // then dispatches to its registered handler. No-op outside Tauri.
 
+import { startHostAuthCallbackListeners } from "@/lib/plugin/auth/callback-acceptor"
 import { useEffect } from "react"
 import { isTauri } from "@/lib/tauri"
 import { onDeepLink, getLaunchDeepLink } from "@/lib/tauri/deep-link"
@@ -14,7 +15,8 @@ import { routePluginDeepLink } from "@/lib/plugin/uri/route-deep-link"
 
 export function PluginDeepLinkRouter() {
   useEffect(() => {
-    if (!isTauri()) return
+    const stopCallbacks = startHostAuthCallbackListeners()
+    if (!isTauri()) return stopCallbacks
     let unlisten: (() => void) | null = null
     let cancelled = false
 
@@ -34,6 +36,7 @@ export function PluginDeepLinkRouter() {
     })()
 
     return () => {
+      stopCallbacks()
       cancelled = true
       safeUnlisten(unlisten)
     }

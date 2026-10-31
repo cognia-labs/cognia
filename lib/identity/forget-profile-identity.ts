@@ -23,6 +23,7 @@
  * session" instead of either lying or refusing.
  */
 
+import { forgetProfileAuthSecrets } from "@/lib/plugin/auth/connection-manager"
 import { forgetCollabConnection } from "@/lib/collab/connection"
 import {
   signOutFromLogto,
@@ -38,6 +39,8 @@ import { UserBindingRegistry } from "./user-binding"
 export const PROFILE_CLOUD_IDENTITY_STEPS = [
   /** Revoke at the issuer and clear the keyring session and marker. */
   "session",
+  /** Revoke plugin grants and erase this profile's connection/attempt secrets. */
+  "plugin-auth",
   /** Drop the registry's profile-to-person row. */
   "binding",
   /** Forget which collaboration server this profile talked to. */
@@ -68,6 +71,7 @@ export interface ProfileCloudIdentityCleanup {
 }
 
 export interface ForgetProfileCloudIdentityDeps {
+  forgetAuthSecrets?: typeof forgetProfileAuthSecrets
   registry?: Pick<UserBindingRegistry, "unbind">
   signOut?: (deps: LogtoAppSessionDeps) => Promise<LogtoSignOutReport>
   forgetConnection?: (localAccountId: string) => void
@@ -116,6 +120,16 @@ export async function forgetProfileCloudIdentity(
   } catch (error) {
     fail("session", error)
     // The clear did not run, so whatever was stored is still stored.
+    tokensMayRemainLive = true
+  }
+
+  try {
+    const auth = await (deps.forgetAuthSecrets ?? forgetProfileAuthSecrets)(localAccountId)
+    tokensMayRemainLive ||= auth.tokensMayRemainLive
+    if (auth.failures.length) fail("plugin-auth", new Error(auth.failures.join("; ")))
+    else steps["plugin-auth"] = { status: "done" }
+  } catch (error) {
+    fail("plugin-auth", error)
     tokensMayRemainLive = true
   }
 

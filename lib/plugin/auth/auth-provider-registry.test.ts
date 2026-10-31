@@ -17,6 +17,8 @@ import {
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
   setAuthProviderOwnershipStore,
+  unregisterAuthenticationProvider,
+  unregisterProvidersByPlugin,
   type AuthenticationProvider,
 } from "./auth-provider-registry"
 
@@ -226,4 +228,81 @@ describe("host auth provider ownership", () => {
     )
     expect(getProvider("acme")).toBeUndefined()
   })
+})
+
+jest.mock("./connection-manager", () => ({
+  getConnectionManager: () => ({
+    restoreProvider: mockRestoreProvider,
+    markProviderUnavailable: mockMarkProviderUnavailable,
+  }),
+}))
+const mockRestoreProvider = jest.fn(async (_id: string) => {})
+const mockMarkProviderUnavailable = jest.fn(async (_id: string) => {})
+
+it("coordinates registration, returned disposer and both explicit teardown APIs", async () => {
+  setAuthProviderOwnershipStore({ read: () => null, write: () => {} })
+  __resetAuthRegistryForTesting()
+  mockRestoreProvider.mockClear()
+  mockMarkProviderUnavailable.mockClear()
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  }
+  const dispose = registerAuthenticationProvider(provider("owner", "lifecycle"))
+  await flush()
+  expect(mockRestoreProvider).toHaveBeenCalledWith("lifecycle")
+  dispose()
+  await flush()
+  expect(mockMarkProviderUnavailable).toHaveBeenCalledWith("lifecycle")
+  registerAuthenticationProvider(provider("owner", "explicit"))
+  await flush()
+  unregisterAuthenticationProvider("explicit")
+  await flush()
+  expect(mockMarkProviderUnavailable).toHaveBeenCalledWith("explicit")
+  registerAuthenticationProvider(provider("owner", "by-plugin"))
+  await flush()
+  unregisterProvidersByPlugin("owner")
+  await flush()
+  expect(mockMarkProviderUnavailable).toHaveBeenCalledWith("by-plugin")
+  __resetAuthRegistryForTesting()
+  setAuthProviderOwnershipStore(null)
+})
+
+it("serializes a pending unregister before a provider replacement restore", async () => {
+  setAuthProviderOwnershipStore({ read: () => null, write: () => {} })
+  __resetAuthRegistryForTesting()
+  let entered!: () => void
+  let release!: () => void
+  const started = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  mockMarkProviderUnavailable.mockImplementation(async (id) => {
+    if (id === "serialized") {
+      entered()
+      await barrier
+    }
+  })
+  const flush = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+  }
+  registerAuthenticationProvider(provider("owner", "serialized"))
+  await flush()
+  const previous = mockRestoreProvider.mock.calls.filter(([id]) => id === "serialized").length
+  unregisterAuthenticationProvider("serialized")
+  await started
+  registerAuthenticationProvider(provider("owner", "serialized"))
+  await flush()
+  expect(mockRestoreProvider.mock.calls.filter(([id]) => id === "serialized")).toHaveLength(
+    previous
+  )
+  release()
+  await flush()
+  expect(mockRestoreProvider.mock.calls.filter(([id]) => id === "serialized")).toHaveLength(
+    previous + 1
+  )
+  mockMarkProviderUnavailable.mockImplementation(async () => {})
+  __resetAuthRegistryForTesting()
+  setAuthProviderOwnershipStore(null)
 })

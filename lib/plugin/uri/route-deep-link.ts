@@ -27,8 +27,12 @@ function activateForUri(pluginId: string): Promise<void> {
 
 /** True when the link reached a handler; false for a non-plugin link or no handler. */
 export async function routePluginDeepLink(raw: string): Promise<boolean> {
+  const { routeHostAuthCallback, acceptPluginAuthCallback } =
+    await import("@/lib/plugin/auth/callback-acceptor")
+  if (await routeHostAuthCallback(raw)) return true
   const parsed = parseDeepLink(raw)
   if (!parsed) return false
+  if (await acceptPluginAuthCallback(parsed.pluginId, parsed.path, parsed.query)) return true
   await activateForUri(parsed.pluginId)
   return dispatchUri(parsed)
 }
@@ -39,6 +43,8 @@ export async function routePluginDeepLink(raw: string): Promise<boolean> {
  * to an uninstalled plugin, or one that registered no handler, as unknown.
  */
 export async function hasPluginDeepLinkHandler(raw: string): Promise<boolean> {
+  const { isHostAuthCallback } = await import("@/lib/plugin/auth/callback-acceptor")
+  if (isHostAuthCallback(raw)) return true
   const parsed = parseDeepLink(raw)
   if (!parsed) return false
   await activateForUri(parsed.pluginId)

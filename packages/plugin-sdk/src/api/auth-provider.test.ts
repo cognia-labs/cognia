@@ -27,6 +27,7 @@ import type {
 describe("plugin-sdk api/auth-provider", () => {
   it("exposes the authoring helper, registry functions, and PKCE helpers", () => {
     expect(typeof sdk.defineAuthProvider).toBe("function")
+    expect(new sdk.AuthRefreshRejected()).toMatchObject({ code: "invalid_grant" })
     expect(typeof sdk.registerAuthenticationProvider).toBe("function")
     expect(typeof sdk.unregisterAuthenticationProvider).toBe("function")
     expect(typeof sdk.unregisterProvidersByPlugin).toBe("function")

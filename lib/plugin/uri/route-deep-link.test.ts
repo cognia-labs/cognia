@@ -57,3 +57,29 @@ it("shares one activation between concurrent lookups of the same plugin", async 
   ])
   expect(handleActivationEvent).toHaveBeenCalledTimes(1)
 })
+
+jest.mock("@/lib/plugin/auth/auth-attempts", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/auth-attempts"),
+  consumeAttempt: jest.fn(async (state: string) => ({ state })),
+  cancelAttempt: jest.fn(async () => {}),
+}))
+it("dispatches Host auth callbacks without activating a plugin and retains old plugin handlers", async () => {
+  const { registerAuthCallbackWaiter } = await import("@/lib/plugin/auth/callback-acceptor")
+  const waiter = registerAuthCallbackWaiter("host-state", {
+    providerId: "p",
+    clientId: "c",
+    issuer: "https://issuer",
+  })
+  expect(await hasPluginDeepLinkHandler("cognia://auth/callback?state=host-state&code=c")).toBe(
+    true
+  )
+  expect(await routePluginDeepLink("cognia://auth/callback?state=host-state&code=c")).toBe(true)
+  expect((await waiter.promise).callback.code).toBe("c")
+  expect(handleActivationEvent).not.toHaveBeenCalled()
+  const oldHandler = jest.fn()
+  registerUriHandler("feishu-auth", oldHandler)
+  expect(
+    await routePluginDeepLink("cognia://plugin/feishu-auth/oauth-callback?state=old&code=c")
+  ).toBe(true)
+  expect(oldHandler).toHaveBeenCalled()
+})

@@ -48,14 +48,13 @@ export default function PluginAuthCallbackPage() {
   const params = new URLSearchParams(search ?? "")
   const state = params.get("state") ?? ""
   const nativeParams = new URLSearchParams()
-  for (const key of ["code", "state", "error"] as const) {
+  for (const key of ["code", "state", "error", "error_description"] as const) {
     const value = params.get(key)
     if (value) nativeParams.set(key, value)
   }
   const nativeReturn =
-    /^cognia-plugin:feishu-auth:[a-f0-9]{32}$/.test(state) &&
-    (params.get("code") || params.get("error"))
-      ? `cognia://plugin/feishu-auth/oauth-callback?${nativeParams.toString()}`
+    state && (params.get("code") || params.get("error"))
+      ? `cognia://auth/callback?${nativeParams.toString()}`
       : null
 
   useEffect(() => {
@@ -63,7 +62,13 @@ export default function PluginAuthCallbackPage() {
     const code = params.get("code")
     const state = params.get("state")
     const error = params.get("error")
-    const payload = { __pluginAuth: true as const, code, state, error }
+    const payload = {
+      __pluginAuth: true as const,
+      code,
+      state,
+      error,
+      error_description: params.get("error_description"),
+    }
 
     try {
       window.opener?.postMessage(payload, window.location.origin)

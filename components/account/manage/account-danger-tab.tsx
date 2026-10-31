@@ -34,6 +34,7 @@ const CLOUD_IDENTITY_STEP_KEY: Record<ProfileCloudIdentityStep, string> = {
   binding: "binding",
   "collab-connection": "collabConnection",
   "host-person": "hostPerson",
+  "plugin-auth": "pluginAuth",
 }
 
 export interface AccountDangerTabProps {

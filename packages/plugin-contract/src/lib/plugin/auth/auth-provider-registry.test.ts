@@ -205,45 +205,22 @@ describe("auth provider registry", () => {
     })
   })
 
-  describe("persistence", () => {
-    it("persists newly-created sessions to the secrets adapter", async () => {
-      const adapter = makeMemorySecretsAdapter()
+  describe("deprecated inert persistence", () => {
+    it("never calls the legacy adapter for create, hydrate or remove", async () => {
+      const adapter = { get: jest.fn(), set: jest.fn(), delete: jest.fn(), list: jest.fn() }
       setSecretsAdapter(adapter)
-      registerAuthenticationProvider(makeProvider())
-      const session = await getSession("github", ["x"], { createIfNone: true })
-      expect(session).toBeDefined()
-      const keys = await adapter.list("auth:github:")
-      expect(keys).toHaveLength(1)
-      const raw = await adapter.get(keys[0]!)
-      expect(JSON.parse(raw!)).toMatchObject({ accessToken: "gho_test_token" })
-    })
-
-    it("hydrateFromSecrets re-reads persisted sessions", async () => {
-      const adapter = makeMemorySecretsAdapter()
-      const fakeSession: AuthSession = {
-        id: "abc",
-        accessToken: "tok",
-        account: { id: "1", label: "u" },
-        scopes: ["x"],
-      }
-      await adapter.set(`auth:github:${fakeSession.id}`, JSON.stringify(fakeSession))
-      setSecretsAdapter(adapter)
-      const count = await hydrateFromSecrets()
-      expect(count).toBe(1)
-    })
-
-    it("hydrateFromSecrets returns 0 with no adapter installed", async () => {
-      setSecretsAdapter(null)
-      const count = await hydrateFromSecrets()
-      expect(count).toBe(0)
-    })
-
-    it("hydrateFromSecrets tolerates malformed entries", async () => {
-      const adapter = makeMemorySecretsAdapter()
-      await adapter.set("auth:bad", "not-json")
-      setSecretsAdapter(adapter)
-      const count = await hydrateFromSecrets()
-      expect(count).toBe(0)
+      const session = __makeSession({
+        accessToken: "secret",
+        account: { id: "u", label: "U" },
+        scopes: [],
+      })
+      registerAuthenticationProvider(
+        makeProvider({ getSessions: async () => [session], createSession: async () => session })
+      )
+      await getSession("github", [], { forceNewSession: true })
+      expect(await hydrateFromSecrets()).toBe(0)
+      await removeSession("github", session.id)
+      for (const fn of Object.values(adapter)) expect(fn).not.toHaveBeenCalled()
     })
   })
 
@@ -310,5 +287,27 @@ describe("waitForProvider", () => {
     } finally {
       jest.useRealTimers()
     }
+  })
+})
+
+it("a stale provider disposer cannot unregister its replacement", () => {
+  __resetAuthRegistryForTesting()
+  const first = registerAuthenticationProvider(makeProvider())
+  const replacement = makeProvider()
+  registerAuthenticationProvider(replacement)
+  first()
+  expect(getProvider(replacement.id)).toBe(replacement)
+  __resetAuthRegistryForTesting()
+})
+
+it("exports a structured refresh rejection without depending on message text", async () => {
+  const { AuthRefreshRejected } = await import("./auth-provider-registry")
+  const failure = new AuthRefreshRejected("Vendor-specific description")
+  expect((await import("../api/auth-api")).AuthRefreshRejected).toBe(AuthRefreshRejected)
+  expect(failure).toBeInstanceOf(Error)
+  expect(failure).toMatchObject({
+    name: "AuthRefreshRejected",
+    code: "invalid_grant",
+    message: "Vendor-specific description",
   })
 })

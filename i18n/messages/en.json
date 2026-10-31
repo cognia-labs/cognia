@@ -1847,6 +1847,7 @@
         "binding": "profile link",
         "collabConnection": "collaboration server",
         "hostPerson": "host record",
+        "pluginAuth": "service connection credentials",
         "session": "sign-in tokens"
       },
       "confirmDelete": "Confirm delete",

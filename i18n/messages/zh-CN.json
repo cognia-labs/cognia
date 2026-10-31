@@ -1847,6 +1847,7 @@
         "binding": "档案关联",
         "collabConnection": "协作服务器",
         "hostPerson": "宿主记录",
+        "pluginAuth": "服务连接凭据",
         "session": "登录令牌"
       },
       "confirmDelete": "确认删除",

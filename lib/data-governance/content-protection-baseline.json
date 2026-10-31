@@ -35,6 +35,8 @@
   "approvedBinaries": "metadata-only",
   "artifactVersions": "encrypted-content",
   "artifacts": "encrypted-content",
+  "authAttempts": "secret-externalized",
+  "authConnections": "secret-externalized",
   "automationAuditLog": "encrypted-content",
   "backgroundTasks": "metadata-only",
   "backupHistory": "metadata-only",

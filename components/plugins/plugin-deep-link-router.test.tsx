@@ -100,3 +100,22 @@ describe("PluginDeepLinkRouter", () => {
     expect(deepLinkHandler).toBeNull()
   })
 })
+
+jest.mock("@/lib/plugin/auth/auth-attempts", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/auth-attempts"),
+  consumeAttempt: jest.fn(async (state: string) => ({ state })),
+  cancelAttempt: jest.fn(async () => {}),
+}))
+it("routes cold and live Host callbacks through the same acceptor", async () => {
+  const { registerAuthCallbackWaiter } = await import("@/lib/plugin/auth/callback-acceptor")
+  const binding = { providerId: "p", clientId: "c", issuer: "https://issuer" }
+  const cold = registerAuthCallbackWaiter("cold-state", binding)
+  launchUrls = ["cognia://auth/callback?state=cold-state&code=cold"]
+  render(<PluginDeepLinkRouter />)
+  await flush()
+  expect((await cold.promise).callback.code).toBe("cold")
+  const live = registerAuthCallbackWaiter("live-state", binding)
+  deepLinkHandler?.(["cognia://auth/callback?state=live-state&code=live"])
+  expect((await live.promise).callback.code).toBe("live")
+  expect(handleActivationEvent).not.toHaveBeenCalled()
+})

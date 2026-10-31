@@ -18,6 +18,7 @@
 // re-exported below so `@/lib/db/schema` stays the stable import surface.
 
 import Dexie, { type Table } from "dexie"
+import type { AuthConnectionRow } from "./auth-connections"
 import {
   backfillMessageSyncRevision,
   createMessageSyncRevisionMiddleware,
@@ -435,7 +436,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 249
+export const CURRENT_SCHEMA_VERSION = 250
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1093,6 +1094,8 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   ...SCHEMA_V247,
   ...MEDIA_PACK_SCHEMA,
   ...ACTION_REVIEW_AUTH_SCHEMA,
+  authConnections: "&id, &identityKey, lineageId, providerId, status",
+  authAttempts: "&state, expiresAt",
 }
 
 let databaseConnectionSequence = 0
@@ -1711,8 +1714,13 @@ export class CogniaDB extends Dexie {
     this.version(242).stores({}).upgrade(backfillSessionList)
     this.version(247).stores(SCHEMA_V247)
     this.version(248).stores(MEDIA_PACK_SCHEMA)
-    this.version(CURRENT_SCHEMA_VERSION).stores(ACTION_REVIEW_AUTH_SCHEMA)
+    this.version(249).stores(ACTION_REVIEW_AUTH_SCHEMA)
+    this.version(CURRENT_SCHEMA_VERSION).stores(CURRENT_SCHEMA)
   }
+
+  // v250 — Host auth metadata; credential material stays in the secret store.
+  authConnections!: Table<AuthConnectionRow, string>
+  authAttempts!: Table<{ state: string; expiresAt: number }, string>
 
   messageSyncClock!: Table<MessageSyncClock, "singleton">
 

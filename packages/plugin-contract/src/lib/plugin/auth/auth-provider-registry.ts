@@ -7,13 +7,9 @@
  *   2. `vscode.authentication.getSession(providerId, scopes, options)`
  *      → `getSession(providerId, scopes, options)` here.
  *
- * Sessions are persisted via the existing `ctx.secrets` API (OS keyring on
- * desktop, IndexedDB-encrypted fallback on web) — we never write the raw
- * `accessToken` to disk in plain text.
- *
- * The registry is in-memory; the on-disk side lives in `secrets:` namespaced
- * entries keyed by `auth:<providerId>:<sessionId>`. On boot the consumer
- * (`createAuthenticationApi`) calls `hydrateFromSecrets()` to repopulate.
+ * The registry keeps legacy sessions in their providers. The Host connection
+ * store owns durable credentials, revisions, refresh and revocation (ADR-0246).
+ * The old secrets-adapter exports remain inert compatibility APIs.
  *
  * A built-in GitHub provider lives at `auth-providers/github.ts` (registered
  * by the renderer's bootstrap, not here) — it reuses the claude-subscription
@@ -28,6 +24,20 @@ import type {
   AuthIdentityDescription,
   AuthLineageContext,
 } from "../../../types/plugin/plugin-auth"
+
+/** A provider's structured, permanent rejection of the stored refresh grant. */
+export class AuthRefreshRejected extends Error {
+  readonly code = "invalid_grant"
+  constructor(message = "The refresh grant was rejected") {
+    super(message)
+    this.name = "AuthRefreshRejected"
+  }
+}
+
+/** Refresh is bounded by the Host; providers should abort their I/O on signal. */
+export interface AuthRefreshContext extends AuthLineageContext {
+  signal?: AbortSignal
+}
 
 export interface AuthSession {
   /** Stable id assigned when the session was created. */
@@ -96,8 +106,13 @@ export interface AuthenticationProvider {
   removeSession: (sessionId: string) => Promise<void>
   /** Exchange an accepted callback for credentials. Only the Host calls this (ADR-0246 §5, §6). */
   exchange?(attempt: AuthAttemptContext, callback: AuthCallbackParams): Promise<AuthCredentialSet>
-  /** Refresh a lineage. The Host decides when, under its lineage lock; never schedule refresh yourself (ADR-0246 §5). */
-  refresh?(lineage: AuthLineageContext): Promise<AuthCredentialSet>
+  /**
+   * Refresh under the Host's lineage lock (ADR-0246 §5). Honor signal for the
+   * Host timeout. Throw AuthRefreshRejected or { code/error: "invalid_grant" }
+   * for permanent rejection; message text is never classified. Other failures
+   * remain retryable. Never schedule refresh yourself.
+   */
+  refresh?(lineage: AuthRefreshContext): Promise<AuthCredentialSet>
   /** Revoke a lineage at the vendor. The Host calls this after writing its revocation barrier (ADR-0246 §5). */
   revoke?(lineage: AuthLineageContext): Promise<void>
   /** Describe the remote identity behind fresh credentials, for the Host's connection record (ADR-0246 §2). */
@@ -125,15 +140,11 @@ const providers = new Map<string, AuthenticationProvider>()
 
 const sessionListeners = new Set<(event: AuthSessionChangeEvent) => void>()
 
-let secretsAdapter: SecretsAdapter | null = null
-
 /**
- * Wire the cognia secrets API (`ctx.secrets`) so we can persist sessions
- * across restarts. The renderer's bootstrap calls this once per session.
+ * @deprecated Inert compatibility API. Host connections own persistence;
+ * installing an adapter never reads, writes or deletes legacy session tokens.
  */
-export function setSecretsAdapter(adapter: SecretsAdapter | null): void {
-  secretsAdapter = adapter
-}
+export function setSecretsAdapter(_adapter: SecretsAdapter | null): void {}
 
 function emit(event: AuthSessionChangeEvent): void {
   queueMicrotask(() => {
@@ -159,7 +170,9 @@ export function registerAuthenticationProvider(provider: AuthenticationProvider)
   const waiters = providerWaiters.get(provider.id)
   providerWaiters.delete(provider.id)
   for (const resolve of waiters ?? []) resolve(provider)
-  return () => unregisterAuthenticationProvider(provider.id)
+  return () => {
+    if (providers.get(provider.id) === provider) unregisterAuthenticationProvider(provider.id)
+  }
 }
 
 /**
@@ -234,7 +247,6 @@ export async function getSession(
   }
   if (options.createIfNone || options.forceNewSession) {
     const session = await provider.createSession(scopes, options)
-    await persistSession(providerId, session)
     emit({ providerId, added: [session], removed: [], changed: [] })
     return session
   }
@@ -248,9 +260,6 @@ export async function removeSession(providerId: string, sessionId: string): Prom
   const existing = await provider.getSessions(undefined, { silent: true })
   const session = existing.find((s) => s.id === sessionId)
   await provider.removeSession(sessionId)
-  if (secretsAdapter) {
-    await secretsAdapter.delete(secretKey(providerId, sessionId)).catch(() => {})
-  }
   if (session) {
     emit({ providerId, added: [], removed: [session], changed: [] })
   }
@@ -261,25 +270,9 @@ export function onDidChangeSessions(listener: (event: AuthSessionChangeEvent) =>
   return () => sessionListeners.delete(listener)
 }
 
-/**
- * Hydrate every persisted session from the secrets store on boot. Returns
- * the count rehydrated. Safe to call multiple times — idempotent.
- */
+/** @deprecated Inert: Host connections replace session hydration. Always returns 0. */
 export async function hydrateFromSecrets(): Promise<number> {
-  if (!secretsAdapter) return 0
-  const keys = await secretsAdapter.list("auth:")
-  let hydrated = 0
-  for (const key of keys) {
-    try {
-      const raw = await secretsAdapter.get(key)
-      if (!raw) continue
-      JSON.parse(raw) as AuthSession // shape check
-      hydrated += 1
-    } catch {
-      // Skip malformed entries — defensive but rare.
-    }
-  }
-  return hydrated
+  return 0
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -290,19 +283,6 @@ function scopesMatch(actual: string[], requested: readonly string[]): boolean {
   if (requested.length === 0) return true
   const set = new Set(actual)
   return requested.every((s) => set.has(s))
-}
-
-function secretKey(providerId: string, sessionId: string): string {
-  return `auth:${providerId}:${sessionId}`
-}
-
-async function persistSession(providerId: string, session: AuthSession): Promise<void> {
-  if (!secretsAdapter) return
-  try {
-    await secretsAdapter.set(secretKey(providerId, session.id), JSON.stringify(session))
-  } catch (err) {
-    console.warn(`Failed to persist auth session for "${providerId}":`, err)
-  }
 }
 
 export function __makeSession(input: {
@@ -322,5 +302,4 @@ export function __resetAuthRegistryForTesting(): void {
   providers.clear()
   providerWaiters.clear()
   sessionListeners.clear()
-  secretsAdapter = null
 }

@@ -1,3 +1,7 @@
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  forgetProfileAuthSecrets: jest.fn(async () => ({ failures: [], tokensMayRemainLive: false })),
+}))
+import { forgetProfileAuthSecrets } from "@/lib/plugin/auth/connection-manager"
 jest.mock("@/lib/collab/connection", () => ({ forgetCollabConnection: jest.fn() }))
 jest.mock("@/lib/logto/app-session", () => ({
   signOutFromLogto: jest.fn(),
@@ -142,3 +146,29 @@ describe("forgetProfileCloudIdentity", () => {
     expect(result.failures).toEqual([])
   })
 })
+
+it("clears the explicitly deleted profile's plugin auth secrets, including inactive profiles", async () => {
+  await forgetProfileCloudIdentity("inactive", { hostBound: false })
+  expect(forgetProfileAuthSecrets).toHaveBeenCalledWith("inactive")
+})
+
+it.each(["report", "throw"])(
+  "reports plugin auth cleanup failure without stopping deletion: %s",
+  async (mode) => {
+    const failure = new Error("auth keyring offline")
+    const forgetAuthSecrets =
+      mode === "throw"
+        ? jest.fn().mockRejectedValue(failure)
+        : jest.fn().mockResolvedValue({ failures: [failure.message], tokensMayRemainLive: true })
+    const unbind = jest.fn()
+    const result = await forgetProfileCloudIdentity("deleted", {
+      forgetAuthSecrets,
+      registry: { unbind },
+      hostBound: true,
+    })
+    expect(result.steps["plugin-auth"]).toEqual({ status: "failed", error: failure.message })
+    expect(result.tokensMayRemainLive).toBe(true)
+    expect(unbind).toHaveBeenCalledWith("deleted")
+    expect(unbindHost).toHaveBeenCalledWith("deleted", undefined)
+  }
+)

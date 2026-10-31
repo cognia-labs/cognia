@@ -249,6 +249,7 @@ function cleanCloudIdentity(localAccountId: string): ProfileCloudIdentityCleanup
     localAccountId,
     steps: {
       session: { status: "done" },
+      "plugin-auth": { status: "done" },
       binding: { status: "done" },
       "collab-connection": { status: "done" },
       "host-person": { status: "skipped", reason: "not-bound-on-host" },

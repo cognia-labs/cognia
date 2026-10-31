@@ -47,7 +47,11 @@ export interface PkceFlowConfig {
    * / organization.
    */
   extraTokenParams?: Record<string, string>
-  /** Random state. Injectable for tests; defaults to a PKCE verifier. */
+  /**
+   * Random state. Injectable for tests; defaults to a PKCE verifier.
+   * `ctx.auth.createPkceFlow` ignores it: the Host issues a single-use attempt
+   * state (ADR-0246 §6) and passes it to `waitForCode`, which must echo it.
+   */
   state?: string
 }
 
@@ -58,10 +62,13 @@ export interface PkceTokenResult {
   raw: Record<string, unknown>
 }
 
-export async function runPkceAuthFlow(config: PkceFlowConfig): Promise<PkceTokenResult> {
-  const verifier = generateCodeVerifier()
-  const challenge = await generateCodeChallenge(verifier)
-  const state = config.state ?? generateCodeVerifier()
+export async function runPkceAuthFlow(
+  config: PkceFlowConfig,
+  prepared?: { state: string; codeVerifier: string; codeChallenge: string }
+): Promise<PkceTokenResult> {
+  const verifier = prepared?.codeVerifier ?? generateCodeVerifier()
+  const challenge = prepared?.codeChallenge ?? (await generateCodeChallenge(verifier))
+  const state = prepared?.state ?? config.state ?? generateCodeVerifier()
 
   const authUrl = new URL(config.authorizeUrl)
   authUrl.searchParams.set("response_type", "code")

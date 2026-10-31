@@ -8,6 +8,7 @@
 export { defineAuthProvider } from "../define/define-auth-provider"
 
 export {
+  AuthRefreshRejected,
   registerAuthenticationProvider,
   unregisterAuthenticationProvider,
   unregisterProvidersByPlugin,

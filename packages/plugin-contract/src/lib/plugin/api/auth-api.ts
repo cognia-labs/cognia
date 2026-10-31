@@ -1,7 +1,12 @@
 /**
  * The plugin contract's share of `lib/plugin/api/auth-api.ts`, which re-exports these.
  */
-import type { AuthSession, AuthSessionOptions } from "../auth/auth-provider-registry"
+import type {
+  AuthSession,
+  AuthSessionOptions,
+  AuthRefreshContext,
+} from "../auth/auth-provider-registry"
+export { AuthRefreshRejected } from "../auth/auth-provider-registry"
 import type { PkceFlowConfig, PkceTokenResult } from "../auth/auth-pkce-flow"
 import type {
   AuthAttemptContext,
@@ -35,8 +40,13 @@ export interface PluginAuthProvider {
   removeSession(sessionId: string): Promise<void>
   /** Exchange an accepted callback for credentials. Only the Host calls this (ADR-0246 §5, §6). */
   exchange?(attempt: AuthAttemptContext, callback: AuthCallbackParams): Promise<AuthCredentialSet>
-  /** Refresh a lineage. The Host decides when, under its lineage lock; never schedule refresh yourself (ADR-0246 §5). */
-  refresh?(lineage: AuthLineageContext): Promise<AuthCredentialSet>
+  /**
+   * Refresh under the Host's lineage lock (ADR-0246 §5). Honor signal for the
+   * Host timeout. Throw AuthRefreshRejected or { code/error: "invalid_grant" }
+   * for permanent rejection; message text is never classified. Other failures
+   * remain retryable. Never schedule refresh yourself.
+   */
+  refresh?(lineage: AuthRefreshContext): Promise<AuthCredentialSet>
   /** Revoke a lineage at the vendor. The Host calls this after writing its revocation barrier (ADR-0246 §5). */
   revoke?(lineage: AuthLineageContext): Promise<void>
   /** Describe the remote identity behind fresh credentials, for the Host's connection record (ADR-0246 §2). */

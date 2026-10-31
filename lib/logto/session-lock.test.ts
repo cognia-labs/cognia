@@ -125,3 +125,35 @@ it("surfaces unavailable storage instead of silently dropping cross-context excl
     open.mockRestore()
   }
 })
+
+it("preserves unserialized allowInProcess fallback and invalidates guards", async () => {
+  const original = globalThis.indexedDB
+  Object.defineProperty(globalThis, "indexedDB", { value: undefined, configurable: true })
+  const gate = deferred<void>()
+  let guard!: () => void
+  try {
+    const first = withLogtoSessionLock(
+      "injected",
+      async (held) => {
+        guard = held
+        await gate.promise
+      },
+      { locks: null, allowInProcess: true }
+    )
+    try {
+      await expect(
+        withLogtoSessionLock("injected", async () => "immediate", {
+          locks: null,
+          allowInProcess: true,
+          waitMs: 1,
+        })
+      ).resolves.toBe("immediate")
+    } finally {
+      gate.resolve()
+      await first
+    }
+    expect(guard).toThrow("no longer held")
+  } finally {
+    Object.defineProperty(globalThis, "indexedDB", { value: original, configurable: true })
+  }
+})

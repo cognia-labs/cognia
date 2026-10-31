@@ -82,6 +82,17 @@ registerHeadlessRuntime({
     try {
       await runtime.start()
 
+      // Providers registered during start; finish disconnects a crash
+      // interrupted (ADR-0246 §5), in the background.
+      void import("@/lib/plugin/auth/connection-manager")
+        .then(({ sweepTombstoned }) => sweepTombstoned())
+        .catch((error) =>
+          ctx.log(
+            "warn",
+            `auth tombstone cleanup unavailable: ${error instanceof Error ? error.message : String(error)}`
+          )
+        )
+
       // Keep character-pack warnings in step with the theme-pack registry. Pure
       // in-process registry subscription — no Tauri, no DOM — but it booted only
       // from `PluginRuntimeInitializer`, so on a cloud host pack warnings went

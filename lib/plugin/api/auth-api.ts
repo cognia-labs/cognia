@@ -16,7 +16,10 @@ import {
   getProvider,
   onDidChangeSessions as registryOnDidChange,
 } from "@/lib/plugin/auth/auth-provider-registry"
+import { createAttempt } from "@/lib/plugin/auth/auth-attempts"
+import { acceptCallback, registerAuthCallbackWaiter } from "@/lib/plugin/auth/callback-acceptor"
 import { runPkceAuthFlow } from "@/lib/plugin/auth/auth-pkce-flow"
+export { AuthRefreshRejected } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 import type {
   CreateAuthAPIOptions,
   PluginAuthAPI,
@@ -117,6 +120,11 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
           "ctx.auth.createPkceFlow does not allow fetchImpl; use the host-governed transport."
         )
       }
+      config = {
+        ...config,
+        scopes: [...config.scopes],
+        extraAuthParams: { ...config.extraAuthParams },
+      }
       requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
       const { network } = options
       if (!network)
@@ -134,36 +142,101 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       // user text, on the same footing as the gate's CREDENTIAL_KEYS. Every
       // other plugin-supplied extra token parameter stays inspected.
       if (typeof extraTokenParams.client_secret === "string") exemptKeys.add("client_secret")
+      // The helper is owned by this plugin; its unchanged public config has no
+      // provider id. Bind the attempt to that owner and the exact client/issuer.
+      const binding = {
+        providerId: pluginId,
+        clientId: config.clientId,
+        issuer: new URL(config.authorizeUrl).origin,
+      }
+      const attempt = await createAttempt({
+        ...binding,
+        method: "oauth-pkce",
+        redirectUri: config.redirectUri,
+        scopes: config.scopes,
+      })
+      const waiter = registerAuthCallbackWaiter(attempt.state, binding, attempt.expiresAt)
+      // openUrl may fail before the callback driver is entered.
+      void waiter.promise.catch(() => {})
+      const abort = () => {
+        void waiter.cancel().catch(() => {})
+      }
+      signal?.addEventListener("abort", abort, { once: true })
       const provenance = {}
       hostPkceTokenRequests.set(provenance, {
         tokenUrl,
         keys: Object.freeze([...exemptKeys]),
       })
-      const result = await runPkceAuthFlow({
-        ...config,
-        tokenUrl,
-        extraTokenParams,
-        fetchImpl: async (input, init) => {
-          requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
-          requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
-          const request = {
-            method: "POST" as const,
-            headers: Object.fromEntries(new Headers(init?.headers).entries()),
-            body: tokenRequestEncoding === "json" ? JSON.parse(init?.body as string) : init?.body,
-            signal,
-            [HOST_PKCE_TOKEN_REQUEST]: provenance,
-          }
-          const response = await network.fetch(String(input), request)
-          return new Response(
-            typeof response.data === "string" ? response.data : JSON.stringify(response.data),
-            {
-              status: response.status,
-              statusText: response.statusText,
-              headers: response.headers,
+      if (signal?.aborted) abort()
+      const result = await runPkceAuthFlow(
+        {
+          ...config,
+          tokenUrl,
+          extraTokenParams,
+          openUrl: (url) => {
+            signal?.throwIfAborted()
+            return config.openUrl(url)
+          },
+          extraAuthParams: Object.fromEntries(
+            Object.entries(config.extraAuthParams ?? {}).filter(
+              ([key]) =>
+                ![
+                  "state",
+                  "client_id",
+                  "redirect_uri",
+                  "code_challenge",
+                  "code_challenge_method",
+                  "response_type",
+                ].includes(key)
+            )
+          ),
+          waitForCode: async (params) => {
+            const driver = Promise.resolve()
+              .then(() => config.waitForCode(params))
+              .then(async (callback) => {
+                if (callback.state !== attempt.state)
+                  throw new Error("OAuth state mismatch — possible CSRF; aborting")
+                await acceptCallback(callback, "pkce-driver")
+                return waiter.promise
+              })
+            const accepted = await Promise.race([waiter.promise, driver])
+            if (accepted.callback.error)
+              throw new Error(`OAuth authorization failed: ${accepted.callback.error}`)
+            if (!accepted.callback.code) throw new Error("OAuth callback missing code")
+            return { code: accepted.callback.code, state: accepted.callback.state }
+          },
+          fetchImpl: async (input, init) => {
+            requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
+            requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
+            signal?.throwIfAborted()
+            const request = {
+              method: "POST" as const,
+              headers: Object.fromEntries(new Headers(init?.headers).entries()),
+              body: tokenRequestEncoding === "json" ? JSON.parse(init?.body as string) : init?.body,
+              signal,
+              [HOST_PKCE_TOKEN_REQUEST]: provenance,
             }
-          )
+            const response = await network.fetch(String(input), request)
+            return new Response(
+              typeof response.data === "string" ? response.data : JSON.stringify(response.data),
+              {
+                status: response.status,
+                statusText: response.statusText,
+                headers: response.headers,
+              }
+            )
+          },
         },
-      }).finally(() => hostPkceTokenRequests.delete(provenance))
+        {
+          state: attempt.state,
+          codeVerifier: attempt.codeVerifier!,
+          codeChallenge: attempt.codeChallenge!,
+        }
+      ).finally(async () => {
+        hostPkceTokenRequests.delete(provenance)
+        signal?.removeEventListener("abort", abort)
+        await waiter.cancel().catch(() => console.warn("Auth callback cleanup failed"))
+      })
       requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
       requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
       return result

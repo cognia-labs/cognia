@@ -1,0 +1,752 @@
+import type {
+  AuthConnectionIdentity,
+  AuthConnectionMetadata,
+  AuthConnectionProviderIdentity,
+  AuthConnectionRef,
+  AuthCredentialSet,
+  AuthIdentityDescription,
+  AuthLineageContext,
+} from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import {
+  getProvider,
+  AuthRefreshRejected,
+  type AuthenticationProvider,
+  type AuthSession,
+} from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
+import { getDb } from "@/lib/db/schema"
+import { getPlugin } from "@/lib/db/plugins"
+import {
+  authConnectionIdentityKey,
+  findAuthConnection,
+  getAuthConnection,
+  listAuthConnections,
+  putAuthConnection,
+  tombstoneAuthConnection,
+  type AuthConnectionRow,
+} from "@/lib/db/auth-connections"
+import {
+  ConnectionCredentialStore,
+  CredentialRevisionConflict,
+  withAuthLock,
+  accountAuthSecrets,
+  AuthProfileDeleted,
+  type CredentialSnapshot,
+} from "./connection-credentials"
+
+export { AuthRefreshRejected }
+
+export const AUTH_REFRESH_TIMEOUT_MS = 30_000
+export const AUTH_REVOKE_TIMEOUT_MS = 30_000
+
+/** Cleanup must not keep startup or profile deletion waiting forever. */
+async function boundedRevoke(task: () => Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(task),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Auth revocation timed out")),
+          AUTH_REVOKE_TIMEOUT_MS
+        )
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export class ConnectionIdentityConflict extends Error {
+  constructor() {
+    super("This remote identity already belongs to another auth provider")
+    this.name = "ConnectionIdentityConflict"
+  }
+}
+export class ConnectionUnavailableError extends Error {
+  constructor(readonly reason: string) {
+    super(`Auth connection unavailable: ${reason}`)
+    this.name = "ConnectionUnavailableError"
+  }
+}
+
+export interface AuthConnectionStore {
+  get: typeof getAuthConnection
+  find: typeof findAuthConnection
+  list: typeof listAuthConnections
+  put: typeof putAuthConnection
+}
+interface ManagerOptions {
+  store?: AuthConnectionStore
+  credentials?: ConnectionCredentialStore
+  lock?: typeof withAuthLock
+  provider?: typeof getProvider
+  providerIdentity?: (provider: AuthenticationProvider) => Promise<AuthConnectionProviderIdentity>
+  now?: () => number
+}
+
+/** Manifest ownership comes from the installed Host row, never provider-supplied data. */
+async function providerIdentity(
+  provider: AuthenticationProvider
+): Promise<AuthConnectionProviderIdentity> {
+  if (provider.pluginId === null)
+    return { providerId: provider.id, ownerPluginId: null, publisher: null, contractMajor: 1 }
+  const plugin = await getPlugin(provider.pluginId)
+  if (!plugin) throw new ConnectionUnavailableError("provider-manifest-missing")
+  const manifest = plugin.manifest
+  const author = manifest.author as string | { name?: string; publicKey?: string } | undefined
+  const version = (manifest.providesServices as Record<string, string> | undefined)?.[
+    `auth.${provider.id}`
+  ]
+  const contractMajor = version === undefined ? 1 : Number(version.split(".")[0])
+  if (!Number.isSafeInteger(contractMajor) || contractMajor < 1)
+    throw new ConnectionUnavailableError("provider-contract-invalid")
+  return {
+    providerId: provider.id,
+    ownerPluginId: provider.pluginId,
+    publisher: typeof author === "string" ? author : (author?.publicKey ?? author?.name ?? null),
+    contractMajor,
+  }
+}
+
+function identityOf(row: AuthConnectionRow): AuthConnectionIdentity {
+  return {
+    provider: {
+      providerId: row.providerId,
+      ownerPluginId: row.ownerPluginId,
+      publisher: row.publisher,
+      contractMajor: row.contractMajor,
+    },
+    issuer: row.issuer,
+    clientId: row.clientId,
+    tenantId: row.tenantId,
+    principal: { id: row.principalId, kind: row.principalKind },
+  }
+}
+function metadata(row: AuthConnectionRow): AuthConnectionMetadata {
+  return {
+    ref: row.id,
+    providerId: row.providerId,
+    accountLabel: row.accountLabel,
+    principalKind: row.principalKind,
+    issuer: row.issuer,
+    tenantLabel: row.tenantLabel,
+    scopes: [...row.scopes],
+    status: row.status,
+    revision: row.revision,
+  }
+}
+function sameProvider(row: AuthConnectionRow, owner: AuthConnectionProviderIdentity): boolean {
+  return (
+    row.providerId === owner.providerId &&
+    row.ownerPluginId === owner.ownerPluginId &&
+    row.publisher === owner.publisher &&
+    row.contractMajor === owner.contractMajor
+  )
+}
+function terminal(row: AuthConnectionRow): boolean {
+  return row.status === "revoked" || row.status === "tombstoned"
+}
+function scopesChanged(a: string[], b: string[]): boolean {
+  return JSON.stringify([...new Set(a)].sort()) !== JSON.stringify([...new Set(b)].sort())
+}
+function needsRefresh(credentials: AuthCredentialSet, minValidityMs: number, now: number): boolean {
+  return (
+    credentials.expiresAt !== undefined &&
+    (!Number.isFinite(Date.parse(credentials.expiresAt)) ||
+      Date.parse(credentials.expiresAt) <= now + minValidityMs)
+  )
+}
+function invalidGrant(error: unknown): boolean {
+  if (error instanceof AuthRefreshRejected) return true
+  const value = error as { code?: unknown; error?: unknown } | null
+  return value?.code === "invalid_grant" || value?.error === "invalid_grant"
+}
+
+/** Host authority. Each instance may be a different tab; only storage CAS decides commits. */
+export class AuthConnectionManager {
+  private readonly store: AuthConnectionStore
+  private readonly credentials: ConnectionCredentialStore
+  private readonly lock: typeof withAuthLock
+  private readonly provider: typeof getProvider
+  private readonly owner: NonNullable<ManagerOptions["providerIdentity"]>
+  private readonly now: () => number
+  private readonly listeners = new Set<(metadata: AuthConnectionMetadata) => void>()
+  constructor(options: ManagerOptions = {}) {
+    const database = options.store ? undefined : getDb()
+    this.store = options.store ?? {
+      get: (ref) => database!.authConnections.get(ref),
+      find: (key) => database!.authConnections.where("identityKey").equals(key).first(),
+      list: (providerId) =>
+        providerId
+          ? database!.authConnections.where("providerId").equals(providerId).toArray()
+          : database!.authConnections.toArray(),
+      put: async (row) => {
+        await database!.authConnections.put(row)
+      },
+    }
+    this.credentials = options.credentials ?? new ConnectionCredentialStore()
+    this.lock = options.lock ?? withAuthLock
+    this.provider = options.provider ?? getProvider
+    this.owner = options.providerIdentity ?? providerIdentity
+    this.now = options.now ?? Date.now
+  }
+  onDidChange(listener: (metadata: AuthConnectionMetadata) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+  private async publish(row: AuthConnectionRow): Promise<void> {
+    await this.store.put(row)
+    for (const listener of this.listeners) {
+      try {
+        listener(metadata(row))
+      } catch {
+        console.warn("Auth connection listener failed")
+      }
+    }
+  }
+  private async requireRow(ref: AuthConnectionRef): Promise<AuthConnectionRow> {
+    const row = await this.store.get(ref)
+    if (!row || terminal(row)) throw new ConnectionUnavailableError(row?.status ?? "unknown")
+    return row
+  }
+  private async requireProvider(row: AuthConnectionRow): Promise<AuthenticationProvider> {
+    const provider = this.provider(row.providerId)
+    if (
+      !provider ||
+      !sameProvider(row, await this.owner(provider)) ||
+      this.provider(row.providerId) !== provider
+    )
+      throw new ConnectionUnavailableError("provider-unavailable")
+    return provider
+  }
+  private mutate<T>(ref: string, task: () => Promise<T>): Promise<T> {
+    return this.lock(`cognia-auth-connection:${ref}`, task, "connection")
+  }
+  async createConnectionFromCredentials(
+    provider: AuthenticationProvider,
+    credentials: AuthCredentialSet
+  ): Promise<AuthConnectionRef> {
+    const registered = this.provider(provider.id)
+    if (registered !== provider || !registered.describe)
+      throw new ConnectionUnavailableError("provider-not-registered-or-no-describe")
+    const description = await registered.describe(credentials)
+    if (
+      !description ||
+      !description.issuer ||
+      !description.clientId ||
+      !description.principal?.id ||
+      !["user", "bot", "service"].includes(description.principal.kind) ||
+      !Array.isArray(description.scopes) ||
+      description.scopes.some((scope) => typeof scope !== "string")
+    )
+      throw new ConnectionUnavailableError("provider-description-invalid")
+    return this.connect(registered, description, credentials)
+  }
+  private async connect(
+    provider: AuthenticationProvider,
+    description: AuthIdentityDescription,
+    credentials?: AuthCredentialSet,
+    legacySessionId?: string
+  ): Promise<AuthConnectionRef> {
+    const owner = await this.owner(provider)
+    const identityKey = authConnectionIdentityKey(description)
+    return this.lock(
+      "cognia-auth-connections:identity",
+      async () => {
+        const existing = await this.store.find(identityKey)
+        if (existing && !sameProvider(existing, owner)) throw new ConnectionIdentityConflict()
+        const ref = existing?.id ?? (crypto.randomUUID() as AuthConnectionRef)
+        return this.mutate(ref, async () => {
+          if (this.provider(provider.id) !== provider)
+            throw new ConnectionUnavailableError("provider-unavailable")
+          const current = await this.store.get(ref)
+          if (current && terminal(current)) throw new ConnectionUnavailableError(current.status)
+          const scopes = [...new Set(description.scopes)].sort()
+          const row: AuthConnectionRow = {
+            ...owner,
+            id: ref,
+            issuer: description.issuer,
+            clientId: description.clientId,
+            tenantId: description.tenantId,
+            tenantLabel: description.tenantLabel,
+            principalId: description.principal.id,
+            principalKind: description.principal.kind,
+            accountLabel: description.accountLabel,
+            scopes,
+            revision: current
+              ? current.revision + Number(scopesChanged(current.scopes, scopes))
+              : 1,
+            credentialRevision: current?.credentialRevision ?? 0,
+            lineageId: current?.lineageId ?? crypto.randomUUID(),
+            status: "connected",
+            identityKey,
+            legacySessionId,
+            createdAt: current?.createdAt ?? this.now(),
+            updatedAt: this.now(),
+          }
+          if (credentials) {
+            const previous = await this.credentials.read(ref)
+            const next = await this.credentials.commit(
+              ref,
+              previous,
+              { ...credentials, scopes },
+              {
+                ref,
+                lineageId: row.lineageId,
+                identity: identityOf(row),
+              }
+            )
+            row.credentialRevision = next.revision
+          }
+          if (this.provider(provider.id) !== provider) {
+            row.status = "provider-unavailable"
+            row.unavailableStatus = "connected"
+          }
+          await this.publish(row)
+          return ref
+        })
+      },
+      "identity"
+    )
+  }
+  async getCredentials(
+    ref: AuthConnectionRef,
+    options: { minValidityMs?: number } = {}
+  ): Promise<AuthCredentialSet> {
+    let row = await this.requireRow(ref)
+    let provider = await this.requireProvider(row)
+    if (row.legacySessionId) {
+      const session = (await provider.getSessions(undefined, { silent: true })).find(
+        (session) => session.id === row.legacySessionId
+      )
+      if (!session) throw new ConnectionUnavailableError("legacy-session-missing")
+      const resolved = provider.resolveRequestCredential
+        ? await provider.resolveRequestCredential(session.id, {
+            connectorAccountId: ref,
+            origin: row.issuer,
+          })
+        : session
+      await this.requireRow(ref)
+      return {
+        accessToken: resolved.accessToken,
+        expiresAt: "expiresAt" in resolved ? resolved.expiresAt : undefined,
+        scopes: [...session.scopes],
+      }
+    }
+    const read = async () => {
+      const snapshot = await this.credentials.read(ref)
+      if (snapshot.tombstoned || !snapshot.credentials)
+        throw new ConnectionUnavailableError("credentials-removed")
+      return snapshot as typeof snapshot & { credentials: AuthCredentialSet }
+    }
+    let snapshot = await read()
+    const minValidityMs = Math.max(0, options.minValidityMs ?? 0)
+    if (!needsRefresh(snapshot.credentials, minValidityMs, this.now())) return snapshot.credentials
+    return this.lock(
+      `cognia-auth-lineage:${row.lineageId}`,
+      async () => {
+        row = await this.requireRow(ref)
+        provider = await this.requireProvider(row)
+        snapshot = await read()
+        if (!needsRefresh(snapshot.credentials, minValidityMs, this.now()))
+          return snapshot.credentials
+        if (!provider.refresh || row.status === "needs-reauth")
+          throw new ConnectionUnavailableError("needs-reauth")
+        const context: AuthLineageContext = {
+          ref,
+          lineageId: row.lineageId,
+          credentialRevision: snapshot.revision,
+          identity: identityOf(row),
+          credentials: snapshot.credentials,
+        }
+        let refreshed: AuthCredentialSet
+        try {
+          refreshed = await this.refresh(provider, context)
+        } catch (error) {
+          if (invalidGrant(error))
+            await this.mutate(ref, async () => {
+              const current = await this.store.get(ref)
+              const latest = await this.credentials.read(ref)
+              if (current && !terminal(current) && latest.raw === snapshot.raw)
+                await this.publish({ ...current, status: "needs-reauth", updatedAt: this.now() })
+            })
+          throw error
+        }
+        refreshed = {
+          ...refreshed,
+          refreshToken: refreshed.refreshToken ?? snapshot.credentials.refreshToken,
+        }
+        try {
+          return await this.mutate(ref, async () => {
+            const current = await this.requireRow(ref)
+            let available = true
+            try {
+              await this.requireProvider(current)
+            } catch {
+              available = false
+            }
+            let committed
+            try {
+              // Persist a rotated refresh token even when its provider just
+              // unregistered. The CAS still enforces the disconnect barrier.
+              committed = await this.credentials.commit(ref, snapshot, refreshed)
+            } catch (error) {
+              if (!(error instanceof CredentialRevisionConflict)) throw error
+              await this.requireRow(ref)
+              const winner = await read()
+              if (!available) throw new ConnectionUnavailableError("provider-unavailable")
+              return winner.credentials
+            }
+            await this.publish({
+              ...current,
+              credentialRevision: committed.revision,
+              scopes: [...refreshed.scopes],
+              revision: current.revision + Number(scopesChanged(current.scopes, refreshed.scopes)),
+              status: available ? "connected" : "provider-unavailable",
+              unavailableStatus: available ? undefined : "connected",
+              updatedAt: this.now(),
+            })
+            if (!available) throw new ConnectionUnavailableError("provider-unavailable")
+            return refreshed
+          })
+        } catch (error) {
+          // Disconnect may have won while the vendor was rotating. Its old
+          // token cannot revoke this newly issued lineage on our behalf.
+          if (error instanceof AuthProfileDeleted) {
+            await this.revokeBestEffort(provider, { ...context, credentials: refreshed })
+            throw new ConnectionUnavailableError("profile-deleted")
+          }
+          const current = await this.store.get(ref)
+          // A terminal row is already sufficient evidence. The secret store
+          // may have locked during logout; reading it must not skip revocation
+          // or replace the original connection-unavailable error.
+          if (!current || terminal(current)) {
+            await this.revokeBestEffort(provider, { ...context, credentials: refreshed })
+          } else {
+            const latest = await this.credentials.read(ref)
+            if (latest.tombstoned)
+              await this.revokeBestEffort(provider, { ...context, credentials: refreshed })
+          }
+          throw error
+        }
+      },
+      "lineage"
+    )
+  }
+  async disconnect(ref: AuthConnectionRef, options: { revoke?: boolean } = {}): Promise<void> {
+    let context: AuthLineageContext | undefined
+    let provider: AuthenticationProvider | undefined
+    let legacySessionId: string | undefined
+    let disconnected = false
+    await this.mutate(ref, async () => {
+      const row = await this.store.get(ref)
+      if (!row || row.status === "revoked") return
+      disconnected = true
+      try {
+        provider = await this.requireProvider(row)
+      } catch {
+        provider = undefined
+      }
+      legacySessionId = row.legacySessionId
+      let previous = legacySessionId
+        ? ({ raw: null, revision: 0 } as import("./connection-credentials").CredentialSnapshot)
+        : await this.credentials.read(ref)
+      if (!legacySessionId && !previous.tombstoned && !terminal(row)) {
+        for (;;) {
+          try {
+            await this.credentials.tombstone(ref, previous)
+            break
+          } catch (error) {
+            if (!(error instanceof CredentialRevisionConflict)) throw error
+            previous = await this.credentials.read(ref)
+            if (previous.tombstoned) break
+          }
+        }
+      }
+      if (previous.credentials)
+        context = {
+          ref,
+          lineageId: row.lineageId,
+          credentialRevision: previous.revision,
+          identity: identityOf(row),
+          credentials: previous.credentials,
+        }
+      await this.publish(
+        tombstoneAuthConnection(
+          {
+            ...row,
+            credentialRevision: Math.max(
+              row.credentialRevision,
+              previous.revision + Number(!previous.tombstoned && !terminal(row))
+            ),
+            revision: row.revision + Number(!terminal(row)),
+          },
+          "tombstoned",
+          this.now()
+        )
+      )
+    })
+    if (!disconnected) return
+    let revoked = false
+    let failure: unknown
+    try {
+      if (options.revoke && provider) {
+        if (context && provider.revoke) {
+          await boundedRevoke(() => provider!.revoke!(context!))
+          revoked = true
+        } else if (legacySessionId) {
+          await boundedRevoke(() => provider!.removeSession(legacySessionId!))
+          revoked = true
+        }
+      }
+    } catch (error) {
+      failure = error
+    }
+    await this.mutate(ref, async () => {
+      const row = await this.store.get(ref)
+      if (!row || !terminal(row)) return
+      // Keep failed/unavailable revocations retryable, including their tokens.
+      // A deliberate local-only disconnect discards its secret immediately.
+      if (!legacySessionId && (revoked || !options.revoke)) await this.credentials.delete(ref)
+      await this.publish(
+        tombstoneAuthConnection(
+          row,
+          revoked || row.status === "revoked" ? "revoked" : "tombstoned",
+          this.now()
+        )
+      )
+    })
+    if (failure) throw failure
+  }
+  /** Recover secrets left behind by an interrupted disconnect, once at boot. */
+  async sweepTombstoned(): Promise<void> {
+    for (const row of await this.store.list()) {
+      if (row.status !== "tombstoned") continue
+      try {
+        try {
+          await this.disconnect(row.id, { revoke: true })
+        } finally {
+          // Startup recovery also discards tokens if the vendor is unavailable.
+          await this.mutate(row.id, () => this.credentials.delete(row.id))
+        }
+      } catch {
+        console.warn("Auth tombstone cleanup failed")
+      }
+    }
+  }
+  private async revokeBestEffort(
+    provider: AuthenticationProvider,
+    context: AuthLineageContext
+  ): Promise<void> {
+    try {
+      if (provider.revoke) await boundedRevoke(() => provider.revoke!(context))
+    } catch {
+      console.warn("Auth lineage revocation failed")
+    }
+  }
+  private async refresh(
+    provider: AuthenticationProvider,
+    context: AuthLineageContext
+  ): Promise<AuthCredentialSet> {
+    const controller = new AbortController()
+    let timedOut = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const pending = Promise.resolve().then(() =>
+      provider.refresh!({ ...context, signal: controller.signal })
+    )
+    // Providers that ignore AbortSignal may finish after the lock is released.
+    // Never commit such a result; best-effort revoke the credentials instead.
+    void pending.then(
+      async (credentials) => {
+        if (timedOut)
+          await this.revokeBestEffort(provider, {
+            ...context,
+            credentials: {
+              ...credentials,
+              refreshToken: credentials.refreshToken ?? context.credentials.refreshToken,
+            },
+          })
+      },
+      () => {}
+    )
+    try {
+      return await Promise.race([
+        pending,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true
+            const error = new Error("Auth refresh timed out")
+            error.name = "AuthRefreshTimeout"
+            controller.abort(error)
+            reject(error)
+          }, AUTH_REFRESH_TIMEOUT_MS)
+        }),
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  async markProviderUnavailable(providerId: string): Promise<void> {
+    for (const row of await this.store.list(providerId))
+      await this.mutate(row.id, async () => {
+        const current = await this.store.get(row.id)
+        if (current && !terminal(current))
+          await this.publish({
+            ...current,
+            unavailableStatus:
+              current.status === "needs-reauth"
+                ? "needs-reauth"
+                : (current.unavailableStatus ?? "connected"),
+            status: "provider-unavailable",
+            updatedAt: this.now(),
+          })
+      })
+  }
+  async restoreProvider(providerId: string): Promise<void> {
+    for (const row of await this.store.list(providerId))
+      await this.mutate(row.id, async () => {
+        const current = await this.store.get(row.id)
+        if (current?.status !== "provider-unavailable") return
+        try {
+          await this.requireProvider(current)
+        } catch {
+          return
+        }
+        const snapshot = current.legacySessionId
+          ? undefined
+          : await this.credentials.read(current.id)
+        await this.publish({
+          ...current,
+          status:
+            current.unavailableStatus === "needs-reauth"
+              ? "needs-reauth"
+              : current.legacySessionId || (snapshot?.credentials && !snapshot.tombstoned)
+                ? "connected"
+                : "needs-reauth",
+          unavailableStatus: undefined,
+          updatedAt: this.now(),
+        })
+      })
+  }
+  async ensureLegacyConnection(
+    providerId: string,
+    session: AuthSession
+  ): Promise<AuthConnectionRef> {
+    const provider = this.provider(providerId)
+    if (!provider) throw new ConnectionUnavailableError("provider-unavailable")
+    if (provider.describe)
+      throw new Error("Host-managed providers must create connections from credentials")
+    return this.connect(
+      provider,
+      {
+        issuer: `provider:${providerId}`,
+        clientId: "legacy",
+        principal: { id: JSON.stringify([session.account.id, session.id]), kind: "user" },
+        accountLabel: session.account.label,
+        scopes: session.scopes,
+      },
+      undefined,
+      session.id
+    )
+  }
+}
+
+const managers = new WeakMap<object, AuthConnectionManager>()
+export function getConnectionManager(): AuthConnectionManager {
+  const database = getDb()
+  let manager = managers.get(database)
+  if (!manager) {
+    manager = new AuthConnectionManager()
+    managers.set(database, manager)
+  }
+  return manager
+}
+export const createConnectionFromCredentials = (
+  provider: AuthenticationProvider,
+  credentials: AuthCredentialSet
+) => getConnectionManager().createConnectionFromCredentials(provider, credentials)
+export const getCredentials = (ref: AuthConnectionRef, options?: { minValidityMs?: number }) =>
+  getConnectionManager().getCredentials(ref, options)
+export const disconnect = (ref: AuthConnectionRef, options?: { revoke?: boolean }) =>
+  getConnectionManager().disconnect(ref, options)
+export const markProviderUnavailable = (providerId: string) =>
+  getConnectionManager().markProviderUnavailable(providerId)
+export const ensureLegacyConnection = (providerId: string, session: AuthSession) =>
+  getConnectionManager().ensureLegacyConnection(providerId, session)
+export const onDidChange = (listener: (metadata: AuthConnectionMetadata) => void) =>
+  getConnectionManager().onDidChange(listener)
+
+export const sweepTombstoned = () => getConnectionManager().sweepTombstoned()
+
+export interface ProfileAuthCleanupReport {
+  failures: string[]
+  tokensMayRemainLive: boolean
+}
+
+/** Profile deletion can address inactive accounts without opening their DB. */
+export async function forgetProfileAuthSecrets(
+  accountId: string,
+  options: {
+    secrets?: typeof accountAuthSecrets
+    provider?: typeof getProvider
+    providerIdentity?: typeof providerIdentity
+  } = {}
+): Promise<ProfileAuthCleanupReport> {
+  const report: ProfileAuthCleanupReport = { failures: [], tokensMayRemainLive: false }
+  for (const kind of ["auth-connections", "auth-attempts"] as const) {
+    try {
+      const secrets = (options.secrets ?? accountAuthSecrets)(kind, accountId)
+      const keys = await secrets.beginDeletion()
+      for (const key of keys) {
+        try {
+          if (kind === "auth-connections") {
+            const raw = await secrets.read(key)
+            if (raw) {
+              const record = JSON.parse(raw) as CredentialSnapshot
+              if (record.credentials) {
+                const lineage = record.lineage
+                const expected = lineage?.identity.provider
+                const provider = expected && (options.provider ?? getProvider)(expected.providerId)
+                const owner =
+                  provider && (await (options.providerIdentity ?? providerIdentity)(provider))
+                if (
+                  provider?.revoke &&
+                  lineage &&
+                  owner &&
+                  expected &&
+                  owner.providerId === expected.providerId &&
+                  owner.ownerPluginId === expected.ownerPluginId &&
+                  owner.publisher === expected.publisher &&
+                  owner.contractMajor === expected.contractMajor
+                ) {
+                  const context = {
+                    ...lineage,
+                    credentialRevision: record.revision,
+                    credentials: record.credentials,
+                  }
+                  await boundedRevoke(() => provider.revoke!(context))
+                } else {
+                  throw new Error("Auth provider unavailable for profile revocation")
+                }
+              }
+            }
+          }
+        } catch {
+          report.failures.push(`${kind}: revocation unavailable`)
+          report.tokensMayRemainLive = true
+        } finally {
+          try {
+            await secrets.delete(key)
+          } catch {
+            report.failures.push(`${kind}: secret deletion failed`)
+            report.tokensMayRemainLive = true
+          }
+        }
+      }
+    } catch {
+      report.failures.push(`${kind}: secret inventory unavailable`)
+      report.tokensMayRemainLive = true
+    }
+  }
+  return report
+}

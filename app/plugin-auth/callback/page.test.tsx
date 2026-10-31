@@ -44,6 +44,39 @@ describe("PluginAuthCallbackPage", () => {
     )
   })
 
+  it("forwards the same generic error details through BroadcastChannel and the native link", () => {
+    const originalChannel = globalThis.BroadcastChannel
+    const postMessage = jest.fn()
+    Object.defineProperty(globalThis, "BroadcastChannel", {
+      value: jest.fn(() => ({ postMessage, close: jest.fn() })),
+      configurable: true,
+    })
+    window.history.replaceState(
+      {},
+      "",
+      "/plugin-auth/callback?state=any-state&error=denied&error_description=No%20consent"
+    )
+    try {
+      render(<PluginAuthCallbackPage />)
+      expect(postMessage).toHaveBeenCalledWith({
+        __pluginAuth: true,
+        state: "any-state",
+        code: null,
+        error: "denied",
+        error_description: "No consent",
+      })
+      expect(screen.getByRole("link", { name: "returnToApp" })).toHaveAttribute(
+        "href",
+        "cognia://auth/callback?state=any-state&error=denied&error_description=No+consent"
+      )
+    } finally {
+      Object.defineProperty(globalThis, "BroadcastChannel", {
+        value: originalChannel,
+        configurable: true,
+      })
+    }
+  })
+
   it("does not throw when there is no opener", () => {
     Object.defineProperty(window, "opener", { value: null, configurable: true })
     window.history.replaceState({}, "", "/plugin-auth/callback?code=c&state=s")
@@ -73,27 +106,30 @@ describe("PluginAuthCallbackPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("missing")
   })
 
-  it("offers a native return link only for a valid plugin OAuth state", () => {
+  it("offers the generic Host callback link for arbitrary provider state", () => {
     window.history.replaceState(
       {},
       "",
-      "/plugin-auth/callback?code=abc&state=cognia-plugin%3Afeishu-auth%3A0123456789abcdef0123456789abcdef"
+      "/plugin-auth/callback?code=abc&state=generic-provider-state"
     )
     render(<PluginAuthCallbackPage />)
     const link = screen.getByRole("link", { name: "returnToApp" })
     expect(link).toHaveAttribute(
       "href",
-      "cognia://plugin/feishu-auth/oauth-callback?code=abc&state=cognia-plugin%3Afeishu-auth%3A0123456789abcdef0123456789abcdef"
+      "cognia://auth/callback?code=abc&state=generic-provider-state"
     )
   })
 
-  it("never turns arbitrary state into a native return target", () => {
+  it("keeps the Host route fixed when state contains another plugin target", () => {
     window.history.replaceState(
       {},
       "",
       "/plugin-auth/callback?code=abc&state=cognia-plugin%3Aother-plugin%3Aevil"
     )
     render(<PluginAuthCallbackPage />)
-    expect(screen.queryByRole("link")).toBeNull()
+    expect(screen.getByRole("link")).toHaveAttribute(
+      "href",
+      "cognia://auth/callback?code=abc&state=cognia-plugin%3Aother-plugin%3Aevil"
+    )
   })
 })
