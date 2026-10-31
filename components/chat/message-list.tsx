@@ -14,6 +14,7 @@ import { LongPress } from "@/components/interactions/long-press"
 import { MessageActionSheet } from "@/components/mobile/chat/message-action-sheet"
 import { selectionFeedback } from "@/lib/capacitor/haptics"
 import { deleteMessage as deleteMessageOnDesktop } from "@/lib/claude/ipc"
+import { isHostUnavailableError } from "@/lib/companion/host-unavailable"
 import { deleteStoredMessage } from "@/lib/db/messages"
 import { useChatStore } from "@/stores/chat"
 import { useSettingsStore } from "@/stores/settings"
@@ -297,33 +298,45 @@ export function MessageList({
   // Mobile per-message delete (long-press sheet). Three-way fan-out: the
   // in-memory store slice (what the list renders), the phone's Dexie mirror,
   // and the desktop's authoritative Dexie via the `message_delete` RPC. The
-  // RPC leg is best-effort — sync-down reconciles a missed delete later.
-  const handleDeleteMessage = useCallback(async (message: UIMessage) => {
-    const store = useChatStore.getState()
-    const metaSessionId = (message.metadata as { sessionId?: unknown } | undefined)?.sessionId
-    const sid =
-      typeof metaSessionId === "string" ? metaSessionId : (store.activeSessionId ?? undefined)
-    if (!sid) return
-    const slice = store.sessions[sid]
-    const current = slice?.messages ?? (sid === store.activeSessionId ? store.messages : undefined)
-    if (current) {
-      store.setSessionMessages(
-        sid,
-        current.filter((m) => m.id !== message.id)
-      )
-    }
-    try {
-      await deleteStoredMessage(message.id)
-    } catch {
-      // Local mirror miss (e.g. not yet persisted) — the store removal above
-      // already updated the visible list.
-    }
-    try {
-      await deleteMessageOnDesktop(sid, message.id)
-    } catch {
-      // Desktop unreachable / standalone mode — best-effort by design.
-    }
-  }, [])
+  // host leg goes first: when the host answers that its brain is away
+  // (`HOST_UNAVAILABLE`, ADR-0250 §4) nothing was deleted there, so nothing is
+  // deleted here either and the sheet reports it, instead of the message
+  // vanishing locally and coming back on the next sync. Any other failure
+  // (standalone mode, host unreachable) stays best-effort, as before.
+  const handleDeleteMessage = useCallback(
+    async (message: UIMessage) => {
+      const store = useChatStore.getState()
+      const metaSessionId = (message.metadata as { sessionId?: unknown } | undefined)?.sessionId
+      const sid =
+        typeof metaSessionId === "string" ? metaSessionId : (store.activeSessionId ?? undefined)
+      if (!sid) return
+      try {
+        await deleteMessageOnDesktop(sid, message.id)
+      } catch (error) {
+        if (isHostUnavailableError(error)) throw new Error(tActions("hostUnavailable"))
+        // Desktop unreachable / standalone mode — best-effort by design.
+      }
+      // Re-read after the host round trip: messages that arrived, changed or
+      // went while it was in flight must survive this removal.
+      const latest = useChatStore.getState()
+      const slice = latest.sessions[sid]
+      const current =
+        slice?.messages ?? (sid === latest.activeSessionId ? latest.messages : undefined)
+      if (current) {
+        latest.setSessionMessages(
+          sid,
+          current.filter((m) => m.id !== message.id)
+        )
+      }
+      try {
+        await deleteStoredMessage(message.id)
+      } catch {
+        // Local mirror miss (e.g. not yet persisted) — the store removal above
+        // already updated the visible list.
+      }
+    },
+    [tActions]
+  )
 
   const thinking = thinkingMode(messages, status)
   const showThinking = thinking !== null

@@ -2971,6 +2971,7 @@
     "description": "{count, plural, =1 {This message will be permanently deleted.} other {These # messages will be permanently deleted.}} Branch variants hanging off them go too. This can't be undone.",
     "done": "{count, plural, =1 {Deleted 1 message.} other {Deleted # messages.}}",
     "error": "Couldn't delete those messages.",
+    "hostUnavailable": "Your host is offline, so nothing was deleted. Try again once it's back.",
     "title": "Delete from this message on?"
   },
   "turnAdmission": {

@@ -19,6 +19,13 @@ use super::security_store::OperationSummary;
 /// The ledger states that mean the operation will not change again.
 pub const TERMINAL_STATUSES: &[&str] = &["succeeded", "failed", "cancelled"];
 
+/// The ledger state of an operation the host refused before it wrote anything
+/// (ADR-0250 §4, `release_unexecuted_operation`). It is answered as done with
+/// a retryable `HOST_UNAVAILABLE` error, the same refusal the attempt itself
+/// got, so a poller that joined it stops waiting and resubmits. Resubmitting
+/// under the same idempotency key restarts this operation under its own id.
+pub const RELEASED_STATUS: &str = "released";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Operation {
@@ -70,9 +77,22 @@ impl Operation {
 
 impl From<OperationSummary> for Operation {
     fn from(summary: OperationSummary) -> Self {
-        let done = TERMINAL_STATUSES.contains(&summary.status.as_str());
+        let released = summary.status == RELEASED_STATUS;
+        let done = released || TERMINAL_STATUSES.contains(&summary.status.as_str());
         let (result, error) = match (done, summary.receipt) {
             (true, Some(receipt)) => split_receipt(receipt, &summary.operation_id),
+            _ if released => (
+                None,
+                Some(
+                    Problem::new(
+                        503,
+                        "HOST_UNAVAILABLE",
+                        "the host's brain is not connected; nothing was written",
+                    )
+                    .retryable(true)
+                    .with_operation_id(&summary.operation_id),
+                ),
+            ),
             _ => (None, None),
         };
         Self {
@@ -207,6 +227,22 @@ mod tests {
         assert!(value.get("result").is_none());
         let back: Operation = serde_json::from_value(value).unwrap();
         assert_eq!(back, operation);
+    }
+
+    /// A poller that joined an attempt the host then released must not wait
+    /// for good: it is told the refusal, retryable, and resubmits.
+    #[test]
+    fn a_released_operation_is_done_with_a_retryable_refusal() {
+        let released = Operation::from(summary(RELEASED_STATUS, None));
+        assert!(released.done);
+        assert_eq!(released.result, None);
+        let error = released
+            .error
+            .expect("a released operation carries its refusal");
+        assert_eq!(error.status, 503);
+        assert_eq!(error.code, "HOST_UNAVAILABLE");
+        assert!(error.retryable);
+        assert_eq!(error.operation_id.as_deref(), Some("op-1"));
     }
 
     #[test]

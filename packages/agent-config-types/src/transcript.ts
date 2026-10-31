@@ -19,6 +19,11 @@ export type TranscriptErrorCode =
   | "TURN_NOT_FOUND"
   | "TURN_NOT_COMPLETED"
   | "MEDIA_NOT_FOUND"
+  /**
+   * A write refused because the host's authority (its brain) is not
+   * connected; nothing was written (ADR-0250 §4). Retryable.
+   */
+  | "HOST_UNAVAILABLE"
 
 export interface TranscriptCapabilitiesV1 {
   version: typeof TRANSCRIPT_PROTOCOL_VERSION

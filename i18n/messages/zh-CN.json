@@ -11002,6 +11002,7 @@
       "description": "{count, plural, =1 {将永久删除这条消息。} other {将永久删除这 # 条消息。}} 挂在它们下面的分支变体也会一并删除。此操作不可撤销。",
       "done": "{count, plural, other {已删除 # 条消息。}}",
       "error": "无法删除这些消息。",
+      "hostUnavailable": "主机当前离线，没有删除任何内容。请在主机恢复后重试。",
       "title": "从这条消息起全部删除？"
     },
     "turnAdmission": {
@@ -29509,6 +29510,7 @@
       "editFailed": "重新发送失败：{message}",
       "editInputAria": "编辑消息内容",
       "editResend": "重新发送",
+      "hostUnavailable": "主机当前离线，请在主机恢复后重试。",
       "longPressHint": "长按消息查看操作",
       "quote": "引用",
       "readAloud": "朗读",

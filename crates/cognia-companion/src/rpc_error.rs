@@ -177,6 +177,20 @@ impl RpcError {
                 StatusCode::BAD_REQUEST,
                 Json(Self::new(detail.clone(), detail)),
             ),
+            // ADR-0250 §4: the host's authority (its brain) is not
+            // connected, so the write was refused rather than landed in a
+            // fallback store. Retryable: the same intent succeeds once the
+            // brain is back.
+            "HOST_UNAVAILABLE" => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(
+                    Self::new(
+                        detail.clone(),
+                        "the host's brain is not connected; nothing was written",
+                    )
+                    .retryable(),
+                ),
+            ),
             "TRANSCRIPT_STORE_ERROR" => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(Self::new(detail.clone(), detail).retryable()),
@@ -286,5 +300,20 @@ mod tests {
         assert!(RpcError::service_unavailable("booting".into()).1.retryable);
         assert!(!RpcError::forbidden("no").1.retryable);
         assert!(!RpcError::headless_unsupported("x").1.retryable);
+    }
+
+    /// A write refused because the brain is away is a retryable 503 with its
+    /// own code, so a client can queue the intent instead of dropping it.
+    #[test]
+    fn host_unavailable_is_a_retryable_503_with_its_own_code() {
+        let (status, Json(error)) = RpcError::transcript("HOST_UNAVAILABLE".into());
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code, "HOST_UNAVAILABLE");
+        assert!(error.retryable);
+        assert_eq!(
+            crate::data_plane::HOST_UNAVAILABLE,
+            "HOST_UNAVAILABLE",
+            "the data plane and the envelope must spell the code the same way"
+        );
     }
 }

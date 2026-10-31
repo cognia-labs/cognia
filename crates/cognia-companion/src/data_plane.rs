@@ -8,8 +8,11 @@
 //!   resolution via the `companion_message_response` Tauri command. The
 //!   authoritative store is the WebView's Dexie database.
 //!
-//! - `Direct(Arc<dyn AppStore>)` — the headless flow. Calls the store
-//!   directly. The server IS the canonical store.
+//! - `Direct(Arc<dyn AppStore>)` — the headless `cognia-server` with no
+//!   brain connected. It serves reads from the SQLite store and refuses every
+//!   write with [`HOST_UNAVAILABLE`] (ADR-0250 §4): the brain's store is the
+//!   only authority, and a write accepted here would never be reconciled
+//!   into it when the brain came back.
 //!
 //! Each `DataPlane` method returns `serde_json::Value` because that's the
 //! shape the RPC handler ultimately serializes — keeping the return type
@@ -25,8 +28,16 @@
 //!    Dexie is the canonical store.
 //! 2. The **desktop WebView** (`AppHandle` present) — today's flow.
 //! 3. The **headless `AppStore`** installed via [`install_headless_store`]
-//!    by the `cognia-server` binary at boot — serves degraded reads/writes
-//!    while the brain is down or restarting.
+//!    by the `cognia-server` binary at boot — serves degraded reads while the
+//!    brain is down or restarting. Writes are refused with
+//!    [`HOST_UNAVAILABLE`] (retryable): a client keeps what the person did as
+//!    an intent and replays it once the brain is back, instead of the host
+//!    landing it in a store nothing reconciles.
+//!
+//! Only `cognia-server` installs that store, so only a headless host whose
+//! brain is not connected (and that is not serving a person partition,
+//! which picks no plane at all) reaches `Direct`. The desktop always has its
+//! WebView renderer and never does.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -56,6 +67,25 @@ pub fn install_headless_store(store: Option<Arc<dyn AppStore>>) {
 
 pub fn headless_store() -> Option<Arc<dyn AppStore>> {
     HEADLESS_STORE.read().clone()
+}
+
+/// The transcript error code a `Direct` write answers with: the host's
+/// authority (its brain) is not connected, so nothing was written. Mapped to
+/// a retryable 503 by `RpcError::transcript`.
+pub const HOST_UNAVAILABLE: &str = "HOST_UNAVAILABLE";
+
+/// Only a `Direct` refusal may claim nothing was written: `remote_execution`
+/// gives that operation back for a retry instead of recording it. A brain
+/// answering a bridged write with the same code is not trusted to have written
+/// nothing, so it is recorded as a store error (retryable, replayed) instead.
+fn bridged<T>(result: Result<T, String>) -> Result<T, String> {
+    result.map_err(|error| {
+        if error == HOST_UNAVAILABLE {
+            "TRANSCRIPT_STORE_ERROR".to_string()
+        } else {
+            error
+        }
+    })
 }
 
 /// Dispatch target for one RPC invocation.
@@ -160,7 +190,7 @@ impl DataPlane {
         role: Option<String>,
     ) -> Result<Value, String> {
         match self {
-            DataPlane::Bridge { bridge, transport } => {
+            DataPlane::Bridge { bridge, transport } => bridged(
                 Arc::clone(bridge)
                     .send_message(
                         transport.as_ref(),
@@ -169,21 +199,9 @@ impl DataPlane {
                         role,
                         DEFAULT_TIMEOUT,
                     )
-                    .await
-            }
-            DataPlane::Direct(store) => {
-                let role = role.as_deref().unwrap_or("user");
-                let normalized = if role == "assistant" {
-                    "assistant"
-                } else {
-                    "user"
-                };
-                let row = store
-                    .create_message(&session_id, &content, normalized)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(json!({ "message_id": row.id }))
-            }
+                    .await,
+            ),
+            DataPlane::Direct(_) => Err(HOST_UNAVAILABLE.to_string()),
         }
     }
 
@@ -194,7 +212,7 @@ impl DataPlane {
         updates: Value,
     ) -> Result<Value, String> {
         match self {
-            DataPlane::Bridge { bridge, transport } => {
+            DataPlane::Bridge { bridge, transport } => bridged(
                 Arc::clone(bridge)
                     .update_message(
                         transport.as_ref(),
@@ -203,23 +221,9 @@ impl DataPlane {
                         updates,
                         DEFAULT_TIMEOUT,
                     )
-                    .await
-            }
-            DataPlane::Direct(store) => {
-                // Direct path only honors content updates today. Other fields
-                // (role, attachments, etc.) need follow-up store methods.
-                let content = updates
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        "headless update_message currently requires `content` only".to_string()
-                    })?;
-                store
-                    .update_message_content(&message_id, content)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok(Value::Null)
-            }
+                    .await,
+            ),
+            DataPlane::Direct(_) => Err(HOST_UNAVAILABLE.to_string()),
         }
     }
 
@@ -229,17 +233,13 @@ impl DataPlane {
         message_id: String,
     ) -> Result<Value, String> {
         match self {
-            DataPlane::Bridge { bridge, transport } => Arc::clone(bridge)
-                .delete_message(transport.as_ref(), session_id, message_id, DEFAULT_TIMEOUT)
-                .await
-                .map(|_| Value::Null),
-            DataPlane::Direct(store) => {
-                store
-                    .delete_message(&message_id)
+            DataPlane::Bridge { bridge, transport } => bridged(
+                Arc::clone(bridge)
+                    .delete_message(transport.as_ref(), session_id, message_id, DEFAULT_TIMEOUT)
                     .await
-                    .map_err(|e| e.to_string())?;
-                Ok(Value::Null)
-            }
+                    .map(|_| Value::Null),
+            ),
+            DataPlane::Direct(_) => Err(HOST_UNAVAILABLE.to_string()),
         }
     }
 
@@ -854,53 +854,80 @@ mod tests {
         assert!(DataPlane::pick(&state).is_none());
     }
 
-    #[tokio::test]
-    async fn direct_path_round_trip() {
-        let store = SqliteAppStore::in_memory().expect("open");
-        let dp = DataPlane::Direct(store.clone() as Arc<dyn AppStore>);
+    /// Only the `Direct` arm may say nothing was written; the same code from a
+    /// bridged brain becomes a store error, which is recorded and replayed.
+    #[test]
+    fn a_bridged_host_unavailable_is_not_trusted_as_unwritten() {
+        assert_eq!(
+            bridged::<Value>(Err(HOST_UNAVAILABLE.to_string())),
+            Err("TRANSCRIPT_STORE_ERROR".to_string())
+        );
+        assert_eq!(
+            bridged::<Value>(Err("SESSION_NOT_FOUND".to_string())),
+            Err("SESSION_NOT_FOUND".to_string())
+        );
+        assert_eq!(bridged(Ok(Value::Null)), Ok(Value::Null));
+    }
 
-        // Seed a session.
+    /// ADR-0250 §4: with no brain connected the host serves reads from its
+    /// SQLite store and refuses every write. Before, all three writes landed
+    /// in that store and were never reconciled into the brain's.
+    #[tokio::test]
+    async fn direct_path_refuses_writes_and_serves_reads() {
+        let store = SqliteAppStore::in_memory().expect("open");
         store
             .upsert_session("s1", "Hello", "direct")
             .await
             .expect("upsert");
+        let existing = store
+            .create_message("s1", "written while the brain was up", "user")
+            .await
+            .expect("seed");
+        let dp = DataPlane::Direct(store.clone() as Arc<dyn AppStore>);
 
         let send = dp
             .send_message("s1".into(), "hi from phone".into(), Some("user".into()))
             .await
-            .expect("send");
-        let msg_id = send["message_id"].as_str().unwrap().to_string();
+            .expect_err("a degraded host must not accept a send");
+        assert_eq!(send, HOST_UNAVAILABLE);
+        let update = dp
+            .update_message(
+                "s1".into(),
+                existing.id.clone(),
+                json!({ "content": "edited" }),
+            )
+            .await
+            .expect_err("a degraded host must not accept an edit");
+        assert_eq!(update, HOST_UNAVAILABLE);
+        let update_other = dp
+            .update_message(
+                "s1".into(),
+                existing.id.clone(),
+                json!({ "role": "assistant" }),
+            )
+            .await
+            .expect_err("nor an edit of another field");
+        assert_eq!(update_other, HOST_UNAVAILABLE);
+        let delete = dp
+            .delete_message("s1".into(), existing.id.clone())
+            .await
+            .expect_err("a degraded host must not accept a delete");
+        assert_eq!(delete, HOST_UNAVAILABLE);
 
+        // Nothing changed, and reads still answer.
         let page = dp
             .get_messages_by_session("s1".into(), None, None)
             .await
-            .expect("get");
+            .expect("reads stay available");
         let rows = page["rows"].as_array().unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["content"].as_str().unwrap(), "hi from phone");
-
-        dp.update_message("s1".into(), msg_id.clone(), json!({ "content": "edited" }))
-            .await
-            .expect("update");
-        let page = dp
-            .get_messages_by_session("s1".into(), None, None)
-            .await
-            .expect("get-after");
         assert_eq!(
-            page["rows"].as_array().unwrap()[0]["content"]
-                .as_str()
-                .unwrap(),
-            "edited"
+            rows[0]["content"].as_str().unwrap(),
+            "written while the brain was up"
         );
-
-        dp.delete_message("s1".into(), msg_id)
-            .await
-            .expect("delete");
-        let page = dp
-            .get_messages_by_session("s1".into(), None, None)
-            .await
-            .expect("get-after-del");
-        assert!(page["rows"].as_array().unwrap().is_empty());
+        let sessions = dp.list_sessions(10, 0, None).await.expect("list");
+        assert_eq!(sessions["total"].as_u64().unwrap(), 1);
+        assert!(dp.transcript_capabilities().await.is_ok());
     }
 
     #[tokio::test]
@@ -912,17 +939,6 @@ mod tests {
         let page = dp.list_sessions(10, 0, None).await.expect("list");
         assert_eq!(page["total"].as_u64().unwrap(), 1);
         assert_eq!(page["rows"].as_array().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn direct_path_update_without_content_errors() {
-        let store = SqliteAppStore::in_memory().expect("open");
-        let dp = DataPlane::Direct(store as Arc<dyn AppStore>);
-        let err = dp
-            .update_message("s".into(), "m".into(), json!({ "role": "assistant" }))
-            .await
-            .expect_err("should error");
-        assert!(err.contains("content"));
     }
 
     #[tokio::test]
