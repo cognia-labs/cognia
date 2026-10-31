@@ -109,6 +109,199 @@ describe("Plugin Validation", () => {
       expect(result.errors).toHaveLength(0)
     })
 
+    describe("authProviders (ADR-0246)", () => {
+      const provider = () => ({ id: "acme-auth", label: "Acme" })
+      const validate = (authProviders: unknown) =>
+        validatePluginManifest({ ...createValidManifest(), authProviders })
+
+      it("accepts legacy declarations and every supported method and principal", () => {
+        expect(validate([provider()]).errors).toEqual([])
+        expect(validate([]).errors).toEqual([])
+        expect(
+          validate([
+            {
+              ...provider(),
+              methods: [
+                "oauth-pkce",
+                "oauth-confidential",
+                "client-credentials",
+                "device-code",
+                "api-key",
+              ],
+              principals: ["user", "bot", "service"],
+              tokenEndpoints: [
+                { url: "https://auth.example/token" },
+                { url: "https://auth.example/form", clientSecret: "form" },
+                { url: "https://auth.example/json", clientSecret: "json" },
+                { url: "https://auth.example/basic", clientSecret: "basic" },
+                { url: "https://auth.example/public", clientSecret: "none" },
+              ],
+              revocationEndpoints: ["https://auth.example/revoke"],
+              issuers: [
+                "https://auth.example",
+                "https://auth.example:8443/",
+                "HTTPS://AUTH.EXAMPLE",
+              ],
+            },
+            { id: "other.auth_1", label: "Other" },
+          ]).errors
+        ).toEqual([])
+      })
+
+      it.each([null, {}, "providers", 1])("rejects non-array declarations %p", (value) => {
+        expect(validate(value).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.invalid_type" })
+        )
+      })
+
+      it.each([null, [], "provider", 1])("rejects non-object entries %p", (value) => {
+        expect(validate([value]).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.invalid_item" })
+        )
+      })
+
+      it.each([undefined, null, 1, ""])("rejects a missing id %p", (id) => {
+        expect(validate([{ ...provider(), id }]).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.id.missing" })
+        )
+      })
+
+      it.each([" ", "Acme", "-acme", "acme-", "acme/auth"])("rejects invalid id %p", (id) => {
+        expect(validate([{ ...provider(), id }]).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.id.invalid" })
+        )
+      })
+
+      it("rejects duplicate provider ids", () => {
+        expect(validate([provider(), provider()]).diagnostics).toContainEqual(
+          expect.objectContaining({
+            field: "authProviders[1].id",
+            code: "manifest.authProviders.id.duplicate",
+          })
+        )
+      })
+
+      it.each([undefined, null, 1, "", "  "])("rejects an empty or invalid label %p", (label) => {
+        expect(validate([{ ...provider(), label }]).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.label.missing" })
+        )
+      })
+
+      it.each([
+        ["methods", null, "invalid_type"],
+        ["methods", "oauth-pkce", "invalid_type"],
+        ["methods", ["oauth"], "invalid"],
+        ["methods", [1], "invalid"],
+        ["methods", ["oauth-pkce", "oauth-pkce"], "duplicate"],
+        ["principals", null, "invalid_type"],
+        ["principals", "user", "invalid_type"],
+        ["principals", ["admin"], "invalid"],
+        ["principals", [null], "invalid"],
+        ["principals", ["user", "user"], "duplicate"],
+        ["tokenEndpoints", null, "invalid_type"],
+        ["tokenEndpoints", {}, "invalid_type"],
+        ["tokenEndpoints", [null], "invalid_item"],
+        ["tokenEndpoints", [[]], "invalid_item"],
+        ["tokenEndpoints", ["https://auth.example/token"], "invalid_item"],
+        ["revocationEndpoints", null, "invalid_type"],
+        ["revocationEndpoints", "https://auth.example/revoke", "invalid_type"],
+        ["issuers", null, "invalid_type"],
+        ["issuers", "https://auth.example", "invalid_type"],
+      ])("rejects malformed %s value %p", (field, value, problem) => {
+        const result = validate([{ ...provider(), [field as string]: value }])
+        expect(result.valid).toBe(false)
+        expect(result.diagnostics).toContainEqual(
+          expect.objectContaining({ code: `manifest.authProviders.${field}.${problem}` })
+        )
+      })
+
+      it.each([
+        undefined,
+        null,
+        1,
+        "",
+        "relative/token",
+        "//auth.example/token",
+        "https:auth.example/token",
+        "ftp://auth.example/token",
+        "http://auth.example/token",
+        "http://localhost.example/token",
+        "http://127.0.0.2/token",
+        "https://user@auth.example/token",
+        "https://user:secret@auth.example/token",
+        "https://auth.example/token?q=1",
+        "https://auth.example/token?",
+        "https://auth.example/token#fragment",
+        "https://auth.example/token#",
+        "https://",
+        "https://auth.example:invalid/token",
+        " https://auth.example/token",
+        "https://auth.example/with space",
+        "https://auth.example\\token",
+      ])("rejects unsafe token and revocation endpoint %p", (url) => {
+        expect(validate([{ ...provider(), tokenEndpoints: [{ url }] }]).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.tokenEndpoints.url.invalid" })
+        )
+        expect(
+          validate([{ ...provider(), revocationEndpoints: [url] }]).diagnostics
+        ).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.revocationEndpoints.invalid" })
+        )
+      })
+
+      it.each([
+        "http://localhost:3000/token",
+        "http://127.0.0.1:8080/token",
+        "HTTPS://AUTH.EXAMPLE/token",
+      ])("accepts loopback HTTP endpoints %s", (url) => {
+        expect(
+          validate([{ ...provider(), tokenEndpoints: [{ url }], revocationEndpoints: [url] }])
+            .errors
+        ).toEqual([])
+      })
+
+      it.each([null, 1, "", "header", "FORM"])(
+        "rejects unknown clientSecret mode %p",
+        (clientSecret) => {
+          expect(
+            validate([
+              {
+                ...provider(),
+                tokenEndpoints: [{ url: "https://auth.example/token", clientSecret }],
+              },
+            ]).diagnostics
+          ).toContainEqual(
+            expect.objectContaining({
+              code: "manifest.authProviders.tokenEndpoints.clientSecret.invalid",
+            })
+          )
+        }
+      )
+
+      it.each([
+        null,
+        1,
+        "",
+        "/issuer",
+        "https:auth.example",
+        "http://auth.example",
+        "http://localhost",
+        "https://auth.example/tenant",
+        "https://auth.example/tenant/..",
+        "https://auth.example/.",
+        "https://user@auth.example",
+        "https://user:secret@auth.example",
+        "https://auth.example?q=1",
+        "https://auth.example?",
+        "https://auth.example#fragment",
+        "https://auth.example#",
+      ])("rejects invalid issuer origin %p", (issuer) => {
+        expect(validate([{ ...provider(), issuers: [issuer] }]).diagnostics).toContainEqual(
+          expect.objectContaining({ code: "manifest.authProviders.issuers.invalid" })
+        )
+      })
+    })
+
     describe("runtime library declarations", () => {
       const libraryManifest = (): PluginManifest => ({
         ...createValidManifest(),

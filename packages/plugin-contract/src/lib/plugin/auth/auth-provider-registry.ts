@@ -21,6 +21,13 @@
  */
 
 import { nanoid } from "nanoid"
+import type {
+  AuthAttemptContext,
+  AuthCallbackParams,
+  AuthCredentialSet,
+  AuthIdentityDescription,
+  AuthLineageContext,
+} from "../../../types/plugin/plugin-auth"
 
 export interface AuthSession {
   /** Stable id assigned when the session was created. */
@@ -87,6 +94,14 @@ export interface AuthenticationProvider {
   ) => Promise<ResolvedAuthRequestCredential>
   /** Revoke a session. Idempotent. */
   removeSession: (sessionId: string) => Promise<void>
+  /** Exchange an accepted callback for credentials. Only the Host calls this (ADR-0246 §5, §6). */
+  exchange?(attempt: AuthAttemptContext, callback: AuthCallbackParams): Promise<AuthCredentialSet>
+  /** Refresh a lineage. The Host decides when, under its lineage lock; never schedule refresh yourself (ADR-0246 §5). */
+  refresh?(lineage: AuthLineageContext): Promise<AuthCredentialSet>
+  /** Revoke a lineage at the vendor. The Host calls this after writing its revocation barrier (ADR-0246 §5). */
+  revoke?(lineage: AuthLineageContext): Promise<void>
+  /** Describe the remote identity behind fresh credentials, for the Host's connection record (ADR-0246 §2). */
+  describe?(credentials: AuthCredentialSet): Promise<AuthIdentityDescription>
 }
 
 export interface AuthRequestCredentialContext {

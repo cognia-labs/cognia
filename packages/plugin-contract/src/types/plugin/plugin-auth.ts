@@ -1,15 +1,149 @@
 // Native auth/OAuth provider contribution (C1). A plugin declares
-// `manifest.authProviders[]` (id + label, for validation + the consent UI) and
+// `manifest.authProviders[]` (declarations for validation + the consent UI) and
 // supplies the live provider object imperatively at activation via
 // `ctx.auth.registerProvider(...)` — mirroring `ctx.quickActions.register`.
 // The richer provider/session/API types live in `lib/plugin/api/auth-api.ts`
 // and `lib/plugin/auth/auth-provider-registry.ts`.
+
+/** ADR-0243 credential lanes: user → delegated or bound person; bot/service → service. */
+export type AuthPrincipalKind = "user" | "bot" | "service"
+
+/** Authentication methods a provider may support. */
+export type AuthMethod =
+  "oauth-pkce" | "oauth-confidential" | "client-credentials" | "device-code" | "api-key"
+
+/** Provider ownership and contract version recorded on a Host connection. */
+export interface AuthConnectionProviderIdentity {
+  providerId: string
+  /** `null` identifies a Host provider. */
+  ownerPluginId: string | null
+  publisher: string | null
+  contractMajor: number
+}
+
+/** Stable remote identity of a Host-owned connection (ADR-0246 §2). */
+export interface AuthConnectionIdentity {
+  provider: AuthConnectionProviderIdentity
+  issuer: string
+  clientId: string
+  tenantId?: string
+  principal: { id: string; kind: AuthPrincipalKind }
+}
+
+/** Availability and lifecycle state of a Host-owned connection. */
+export type AuthConnectionStatus =
+  "connected" | "needs-reauth" | "provider-unavailable" | "revoked" | "tombstoned"
+
+/** Opaque, Host-issued reference. Plugins never construct or parse it. */
+export type AuthConnectionRef = string & { readonly __authConnectionRef: true }
+
+/** The only connection shape business plugins see: no tokens or client id. */
+export interface AuthConnectionMetadata {
+  ref: AuthConnectionRef
+  providerId: string
+  accountLabel: string
+  principalKind: AuthPrincipalKind
+  issuer: string
+  tenantLabel?: string
+  scopes: string[]
+  status: AuthConnectionStatus
+  revision: number
+}
+
+/** Connection notifications expose metadata only. */
+export interface AuthConnectionChangeEvent {
+  added: AuthConnectionMetadata[]
+  removed: AuthConnectionMetadata[]
+  changed: AuthConnectionMetadata[]
+}
+
+/** Operations and optional scopes requested by a business plugin. */
+export interface AuthConnectionGrantRequest {
+  operations: string[]
+  scopes?: string[]
+}
+
+/** Host decision authorizing one consumer at one connection revision. */
+export type AuthConnectionGrantDecision =
+  | {
+      granted: true
+      ref: AuthConnectionRef
+      connectionRevision: number
+      operations: string[]
+      scopes: string[]
+    }
+  | {
+      granted: false
+      reason: "denied" | "dismissed" | "connection-unavailable" | "scopes-unavailable"
+    }
+
+/** Credential material visible only to the providing plugin, never business plugins. */
+export interface AuthCredentialSet {
+  accessToken: string
+  refreshToken?: string
+  expiresAt?: string
+  scopes: string[]
+  extra?: Record<string, string>
+}
+
+/** Host-bound attempt supplied only to the providing plugin for an exchange. */
+export interface AuthAttemptContext {
+  attemptId: string
+  providerId: string
+  method: AuthMethod
+  clientId: string
+  issuer: string
+  redirectUri?: string
+  codeVerifier?: string
+  scopes: string[]
+}
+
+/** Authorization callback supplied to the providing plugin after Host acceptance. */
+export interface AuthCallbackParams {
+  state: string
+  code?: string
+  error?: string
+  errorDescription?: string
+}
+
+/** Credential lineage supplied only to the providing plugin by the Host. */
+export interface AuthLineageContext {
+  ref: AuthConnectionRef
+  lineageId: string
+  credentialRevision: number
+  identity: AuthConnectionIdentity
+  credentials: AuthCredentialSet
+}
+
+/** Remote identity described by the providing plugin for Host connection storage. */
+export interface AuthIdentityDescription {
+  issuer: string
+  clientId: string
+  tenantId?: string
+  tenantLabel?: string
+  principal: { id: string; kind: AuthPrincipalKind }
+  accountLabel: string
+  scopes: string[]
+}
 
 export interface PluginAuthProviderDef {
   /** Stable provider id, e.g. `"github"`, `"acme"`. */
   id: string
   /** Human-readable label shown in the consent UI. */
   label: string
+  /** Authentication methods supported by this provider. */
+  methods?: AuthMethod[]
+  /** Remote principal kinds supported by this provider. */
+  principals?: AuthPrincipalKind[]
+  /**
+   * Endpoints the Host may call on the provider's behalf for confidential exchanges.
+   * They must also be allowed by networkAccess, checked by the runtime.
+   */
+  tokenEndpoints?: Array<{ url: string; clientSecret?: "none" | "form" | "json" | "basic" }>
+  /** Endpoints the Host may use to revoke credentials. */
+  revocationEndpoints?: string[]
+  /** Allowed HTTPS issuer origins. */
+  issuers?: string[]
 }
 
 /** Public session metadata. Credentials are only returned by explicit session reads. */

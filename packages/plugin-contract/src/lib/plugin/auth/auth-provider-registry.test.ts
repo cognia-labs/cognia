@@ -72,6 +72,28 @@ describe("auth provider registry", () => {
   })
 
   describe("provider registration", () => {
+    it("retains optional Host-coordinated callbacks without invoking them on registration", () => {
+      const credentials = { accessToken: "t", scopes: ["read"] }
+      const provider = makeProvider({
+        exchange: jest.fn(async () => credentials),
+        refresh: jest.fn(async () => credentials),
+        revoke: jest.fn(async () => {}),
+        describe: jest.fn(async () => ({
+          issuer: "https://auth.example",
+          clientId: "acme-client",
+          principal: { id: "u", kind: "user" as const },
+          accountLabel: "Acme user",
+          scopes: ["read"],
+        })),
+      })
+      const dispose = registerAuthenticationProvider(provider)
+      expect(getProvider(provider.id)).toBe(provider)
+      for (const key of ["exchange", "refresh", "revoke", "describe"] as const) {
+        expect(provider[key]).not.toHaveBeenCalled()
+      }
+      dispose()
+    })
+
     it("registers and lists a provider", () => {
       const dispose = registerAuthenticationProvider(makeProvider())
       expect(listProviders().map((p) => p.id)).toEqual(["github"])

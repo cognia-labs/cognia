@@ -3,13 +3,22 @@
  */
 import type { AuthSession, AuthSessionOptions } from "../auth/auth-provider-registry"
 import type { PkceFlowConfig, PkceTokenResult } from "../auth/auth-pkce-flow"
-import type { PluginAuthSessionChangeEvent } from "../../../types/plugin/plugin-auth"
+import type {
+  AuthAttemptContext,
+  AuthCallbackParams,
+  AuthConnectionChangeEvent,
+  AuthConnectionGrantDecision,
+  AuthConnectionGrantRequest,
+  AuthConnectionMetadata,
+  AuthConnectionRef,
+  AuthCredentialSet,
+  AuthIdentityDescription,
+  AuthLineageContext,
+  PluginAuthSessionChangeEvent,
+} from "../../../types/plugin/plugin-auth"
 import type { PluginNetworkAPI } from "../../../types/plugin/plugin"
 
-export type {
-  PluginAuthSessionChangeEvent,
-  PluginAuthSessionMetadata,
-} from "../../../types/plugin/plugin-auth"
+export type * from "../../../types/plugin/plugin-auth"
 
 /** The host supplies the governed transport; plugins cannot override it. */
 export type PluginPkceFlowConfig = Omit<PkceFlowConfig, "fetchImpl">
@@ -24,6 +33,37 @@ export interface PluginAuthProvider {
   ): Promise<AuthSession[]>
   createSession(scopes: readonly string[], options?: AuthSessionOptions): Promise<AuthSession>
   removeSession(sessionId: string): Promise<void>
+  /** Exchange an accepted callback for credentials. Only the Host calls this (ADR-0246 §5, §6). */
+  exchange?(attempt: AuthAttemptContext, callback: AuthCallbackParams): Promise<AuthCredentialSet>
+  /** Refresh a lineage. The Host decides when, under its lineage lock; never schedule refresh yourself (ADR-0246 §5). */
+  refresh?(lineage: AuthLineageContext): Promise<AuthCredentialSet>
+  /** Revoke a lineage at the vendor. The Host calls this after writing its revocation barrier (ADR-0246 §5). */
+  revoke?(lineage: AuthLineageContext): Promise<void>
+  /** Describe the remote identity behind fresh credentials, for the Host's connection record (ADR-0246 §2). */
+  describe?(credentials: AuthCredentialSet): Promise<AuthIdentityDescription>
+}
+
+/** Consumer connection API, wired as `ctx.auth.connections` in ADR-0246 phase 3. */
+export interface PluginAuthConnectionsAPI {
+  /** Select a connection matching the consumer's provider, service and scopes. */
+  get(request: {
+    providerId?: string
+    service?: string
+    scopes?: readonly string[]
+    interactive?: boolean
+  }): Promise<AuthConnectionMetadata | undefined>
+  /** List connection metadata without exposing credentials. */
+  list(filter?: { providerId?: string; service?: string }): Promise<AuthConnectionMetadata[]>
+  /** Ask the Host to authorize this consumer at the connection's current revision. */
+  requestGrant(
+    ref: AuthConnectionRef,
+    request: AuthConnectionGrantRequest
+  ): Promise<AuthConnectionGrantDecision>
+  /** Observe connection metadata changes, optionally for one provider. */
+  onDidChange(
+    listener: (event: AuthConnectionChangeEvent) => void,
+    filter?: { providerId?: string }
+  ): () => void
 }
 
 export interface PluginAuthAPI {

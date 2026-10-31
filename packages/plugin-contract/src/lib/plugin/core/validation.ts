@@ -969,6 +969,158 @@ function validateIntegrations(
   })
 }
 
+/** Manifest endpoints are absolute HTTPS URLs, with HTTP allowed only on loopback. */
+function isAuthProviderUrl(value: unknown, originOnly = false): boolean {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value) || /[\s\\?#]/.test(value)) {
+    return false
+  }
+  try {
+    const url = new URL(value)
+    const secure = url.protocol === "https:"
+    const loopback = url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname)
+    return (
+      (secure || (!originOnly && loopback)) &&
+      !url.username &&
+      !url.password &&
+      (!originOnly || /^https:\/\/[^/]+\/?$/i.test(value))
+    )
+  } catch {
+    return false
+  }
+}
+
+function validateAuthProviders(raw: unknown, pushError: PushDiagnostic): void {
+  if (raw === undefined) return
+  if (!Array.isArray(raw)) {
+    pushError(
+      "authProviders",
+      "manifest.authProviders.invalid_type",
+      '"authProviders" must be an array if provided'
+    )
+    return
+  }
+
+  const seenIds = new Set<string>()
+  for (const [index, provider] of raw.entries()) {
+    const field = `authProviders[${index}]`
+    if (!isPlainObject(provider)) {
+      pushError(field, "manifest.authProviders.invalid_item", `${field} must be an object`)
+      continue
+    }
+    if (typeof provider.id !== "string" || provider.id.length === 0) {
+      pushError(`${field}.id`, "manifest.authProviders.id.missing", `${field}.id is required`)
+    } else if (!ID_PATTERN.test(provider.id)) {
+      pushError(`${field}.id`, "manifest.authProviders.id.invalid", `${field}.id is invalid`)
+    } else if (seenIds.has(provider.id)) {
+      pushError(`${field}.id`, "manifest.authProviders.id.duplicate", `${field}.id is duplicated`)
+    } else {
+      seenIds.add(provider.id)
+    }
+    if (typeof provider.label !== "string" || provider.label.trim().length === 0) {
+      pushError(
+        `${field}.label`,
+        "manifest.authProviders.label.missing",
+        `${field}.label requires a non-empty string`
+      )
+    }
+
+    for (const [key, allowed] of [
+      [
+        "methods",
+        ["oauth-pkce", "oauth-confidential", "client-credentials", "device-code", "api-key"],
+      ],
+      ["principals", ["user", "bot", "service"]],
+    ] as const) {
+      const values = provider[key]
+      if (values === undefined) continue
+      if (!Array.isArray(values)) {
+        pushError(
+          `${field}.${key}`,
+          `manifest.authProviders.${key}.invalid_type`,
+          `${field}.${key} must be an array`
+        )
+        continue
+      }
+      const seen = new Set<string>()
+      for (const [valueIndex, value] of values.entries()) {
+        const path = `${field}.${key}[${valueIndex}]`
+        if (typeof value !== "string" || !(allowed as readonly string[]).includes(value)) {
+          pushError(path, `manifest.authProviders.${key}.invalid`, `${path} is unknown`)
+        } else if (seen.has(value)) {
+          pushError(path, `manifest.authProviders.${key}.duplicate`, `${path} is duplicated`)
+        } else {
+          seen.add(value)
+        }
+      }
+    }
+
+    if (provider.tokenEndpoints !== undefined) {
+      if (!Array.isArray(provider.tokenEndpoints)) {
+        pushError(
+          `${field}.tokenEndpoints`,
+          "manifest.authProviders.tokenEndpoints.invalid_type",
+          `${field}.tokenEndpoints must be an array`
+        )
+      } else {
+        for (const [endpointIndex, endpoint] of provider.tokenEndpoints.entries()) {
+          const path = `${field}.tokenEndpoints[${endpointIndex}]`
+          if (!isPlainObject(endpoint)) {
+            pushError(
+              path,
+              "manifest.authProviders.tokenEndpoints.invalid_item",
+              `${path} must be an object`
+            )
+            continue
+          }
+          if (!isAuthProviderUrl(endpoint.url)) {
+            pushError(
+              `${path}.url`,
+              "manifest.authProviders.tokenEndpoints.url.invalid",
+              `${path}.url must be an absolute HTTPS URL (HTTP only for localhost/127.0.0.1) without credentials, query or fragment`
+            )
+          }
+          if (
+            endpoint.clientSecret !== undefined &&
+            (typeof endpoint.clientSecret !== "string" ||
+              !["none", "form", "json", "basic"].includes(endpoint.clientSecret))
+          ) {
+            pushError(
+              `${path}.clientSecret`,
+              "manifest.authProviders.tokenEndpoints.clientSecret.invalid",
+              `${path}.clientSecret must be one of: none, form, json, basic`
+            )
+          }
+        }
+      }
+    }
+
+    for (const key of ["revocationEndpoints", "issuers"] as const) {
+      const values = provider[key]
+      if (values === undefined) continue
+      if (!Array.isArray(values)) {
+        pushError(
+          `${field}.${key}`,
+          `manifest.authProviders.${key}.invalid_type`,
+          `${field}.${key} must be an array`
+        )
+        continue
+      }
+      for (const [valueIndex, value] of values.entries()) {
+        if (!isAuthProviderUrl(value, key === "issuers")) {
+          const path = `${field}.${key}[${valueIndex}]`
+          pushError(
+            path,
+            `manifest.authProviders.${key}.invalid`,
+            key === "issuers"
+              ? `${path} must be an HTTPS origin without credentials, query or fragment`
+              : `${path} must be an absolute HTTPS URL (HTTP only for localhost/127.0.0.1) without credentials, query or fragment`
+          )
+        }
+      }
+    }
+  }
+}
+
 const EXTERNAL_SERVICE_KINDS = new Set(["mcp", "integration", "openapi", "browser"])
 
 const EXTERNAL_SERVICE_SURFACES = new Set(["chat", "workflow", "inbox"])
@@ -2894,6 +3046,7 @@ export function validatePluginManifest(
   validateDeclarativeTrayItems(m as unknown as PluginManifest, pushError)
   validateDeclarativeGlanceModules(m as unknown as PluginManifest, pushError)
   validateIntegrations(m as unknown as PluginManifest, pushError)
+  validateAuthProviders(m.authProviders, pushError)
   validateExternalServices(m as unknown as PluginManifest, pushError)
   validateWorkflowKindAliases(m as unknown as PluginManifest, pushError)
   validatePetContributions(m as unknown as PluginManifest, pushError)

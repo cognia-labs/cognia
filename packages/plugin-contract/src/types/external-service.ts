@@ -66,6 +66,10 @@ export interface CapabilityGrantResourceScope {
 export interface CapabilityGrant {
   id: string
   connectionId: string
+  /** Business plugin authorized by this grant (ADR-0246 §1); absent on legacy own-account grants. */
+  consumerPluginId?: string
+  /** Auth connection revision at issuance; never covers a later revision. Absent on legacy grants. */
+  connectionRevision?: number
   providerFingerprint: string
   operationPatterns: string[]
   accountId?: string
