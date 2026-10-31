@@ -1165,6 +1165,58 @@ fn network_http_client(url: &str) -> std::result::Result<reqwest::Client, Plugin
         .map_err(|e| PluginApiError::internal(format!("network: http client init: {e}")))
 }
 
+/// Per-hop egress check for redirects. A redirect is a new request to a new
+/// URL, so it passes the same allowlist as the first one; the denial is kept so
+/// callers can surface it as PERMISSION_DENIED instead of a transport error.
+struct RedirectGuard<'a> {
+    state: &'a PluginRuntimeState,
+    plugin_id: &'a str,
+    denied: std::sync::Mutex<Option<PluginApiError>>,
+}
+
+impl<'a> RedirectGuard<'a> {
+    fn new(state: &'a PluginRuntimeState, plugin_id: &'a str) -> Self {
+        Self {
+            state,
+            plugin_id,
+            denied: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn authorize(&self, url: &url::Url, method: &str) -> std::result::Result<(), String> {
+        guard_network_request(self.state, self.plugin_id, url.as_str(), method).map_err(|error| {
+            let message = error.message.clone();
+            *self.denied.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
+            message
+        })
+    }
+
+    /// The recorded hop denial wins over the transport error it caused.
+    fn error(&self, op: &str, error: String) -> PluginApiError {
+        self.denied
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .unwrap_or_else(|| PluginApiError::internal(format!("{op}: {error}")))
+    }
+}
+
+/// Send a plugin download/upload request with checked redirects: every hop is
+/// re-authorized and a cross-origin hop drops all credential headers.
+async fn send_plugin_request(
+    guard: &RedirectGuard<'_>,
+    op: &str,
+    request: reqwest::Request,
+) -> std::result::Result<reqwest::Response, PluginApiError> {
+    cognia_net::guarded_http::send_with_checked_redirects(
+        request,
+        |_| Ok(reqwest::Client::builder().user_agent("cognia-plugin-network/0.1")),
+        |next| guard.authorize(next.url(), next.method().as_str()),
+    )
+    .await
+    .map_err(|error| guard.error(op, error))
+}
+
 /// Optional `headers` map a plugin may attach to a download/upload request.
 fn payload_headers(payload: &Value) -> HashMap<String, String> {
     payload
@@ -1206,9 +1258,12 @@ async fn handle_network(
                 timeout_ms: None,
                 allow_invalid_certificates: None,
             };
-            let resp = cognia_net::http_client::http_request(req)
-                .await
-                .map_err(|e| PluginApiError::internal(format!("network:fetch: {e}")))?;
+            let guard = RedirectGuard::new(state, plugin_id);
+            let resp = cognia_net::http_client::http_request_checked(req, |url, method| {
+                guard.authorize(url, method)
+            })
+            .await
+            .map_err(|e| guard.error("network:fetch", e))?;
             let ok = (200..300).contains(&resp.status);
             Ok(json!({
                 "ok": ok,
@@ -1232,10 +1287,11 @@ async fn handle_network(
             for (k, v) in payload_headers(payload) {
                 req = req.header(k, v);
             }
-            let resp = req
-                .send()
-                .await
+            let request = req
+                .build()
                 .map_err(|e| PluginApiError::internal(format!("network:download: {e}")))?;
+            let guard = RedirectGuard::new(state, plugin_id);
+            let resp = send_plugin_request(&guard, "network:download", request).await?;
             if !resp.status().is_success() {
                 return Err(PluginApiError::internal(format!(
                     "network:download: HTTP {}",
@@ -1322,10 +1378,11 @@ async fn handle_network(
                 }
                 None => req.body(bytes),
             };
-            let resp = req
-                .send()
-                .await
+            let request = req
+                .build()
                 .map_err(|e| PluginApiError::internal(format!("network:upload: {e}")))?;
+            let guard = RedirectGuard::new(state, plugin_id);
+            let resp = send_plugin_request(&guard, "network:upload", request).await?;
             let status = resp.status().as_u16();
             let headers: HashMap<String, String> = resp
                 .headers()
@@ -2538,6 +2595,240 @@ mod tests {
             .code,
             "PERMISSION_DENIED"
         );
+    }
+
+    /// The proxy policy fails closed until hydrated; production does that at
+    /// startup, these loopback tests establish it once (same as Open VSX).
+    fn init_proxy() {
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            cognia_net::proxy_config::apply_current(
+                cognia_net::proxy_config::ProxyConfig::default(),
+            )
+            .expect("initialize proxy policy for plugin network tests");
+        });
+    }
+
+    /// One-shot loopback HTTP server: answers each connection with `response`
+    /// (connection closed) and records the raw request text it received.
+    async fn loopback_server(response: String) -> (std::net::SocketAddr, Arc<Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut raw = Vec::new();
+                let mut buf = [0_u8; 4096];
+                loop {
+                    let n = stream.read(&mut buf).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    raw.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&raw).to_string();
+                    if let Some(head_end) = text.find("\r\n\r\n") {
+                        let length = text[..head_end]
+                            .lines()
+                            .find_map(|line| {
+                                let (name, value) = line.split_once(':')?;
+                                name.eq_ignore_ascii_case("content-length")
+                                    .then(|| value.trim().parse::<usize>().ok())?
+                            })
+                            .unwrap_or(0);
+                        if raw.len() >= head_end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                record
+                    .lock()
+                    .push(String::from_utf8_lossy(&raw).to_string());
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        });
+        (addr, seen)
+    }
+
+    fn redirect_to(status: u16, location: &str) -> String {
+        format!(
+            "HTTP/1.1 {status} Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn ok_text(body: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn credential_headers() -> Value {
+        json!({
+            "Authorization": "Bearer secret-token",
+            "X-Api-Key": "secret-key",
+            "Api-Key": "secret-key",
+            "Access-Token": "secret-token",
+            "X-Goog-Api-Key": "secret-key",
+            "Accept": "text/plain"
+        })
+    }
+
+    fn assert_no_credentials(raw_request: &str) {
+        let lower = raw_request.to_ascii_lowercase();
+        for header in [
+            "authorization:",
+            "x-api-key:",
+            "api-key:",
+            "access-token:",
+            "x-goog-api-key:",
+            "referer:",
+        ] {
+            assert!(
+                !lower.contains(header),
+                "{header} followed the redirect: {raw_request}"
+            );
+        }
+        assert!(
+            !raw_request.contains("secret-"),
+            "a credential value leaked: {raw_request}"
+        );
+        assert!(lower.contains("accept: text/plain"));
+    }
+
+    #[tokio::test]
+    async fn fetch_redirects_drop_credentials_across_origins() {
+        init_proxy();
+        let tmp = TempDir::new().unwrap();
+        let state = seeded_state(&tmp);
+        state.set_network_allowlist("demo", vec!["127.0.0.1".into()]);
+        let (second, second_seen) = loopback_server(ok_text("done")).await;
+        let (first, first_seen) =
+            loopback_server(redirect_to(302, &format!("http://{second}/end"))).await;
+        let response = handle_network(
+            &state,
+            "demo",
+            "fetch",
+            &json!({
+                "url": format!("http://{first}/start"),
+                "options": { "method": "GET", "headers": credential_headers() }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["status"], 200);
+        assert_eq!(response["data"], "done");
+        assert!(first_seen.lock()[0]
+            .to_ascii_lowercase()
+            .contains("x-api-key: secret-key"));
+        assert_no_credentials(&second_seen.lock()[0]);
+    }
+
+    #[tokio::test]
+    async fn fetch_refuses_a_redirect_outside_the_allowlist_without_contacting_it() {
+        init_proxy();
+        let tmp = TempDir::new().unwrap();
+        let state = seeded_state(&tmp);
+        state.set_network_allowlist("demo", vec!["127.0.0.1".into()]);
+        let (second, second_seen) = loopback_server(ok_text("never")).await;
+        // `localhost` reaches the same loopback server but is not allowlisted.
+        let (first, _) = loopback_server(redirect_to(
+            307,
+            &format!("http://localhost:{}/end", second.port()),
+        ))
+        .await;
+        let error = handle_network(
+            &state,
+            "demo",
+            "fetch",
+            &json!({
+                "url": format!("http://{first}/start"),
+                "options": { "method": "GET", "headers": credential_headers() }
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "PERMISSION_DENIED");
+        assert!(error.message.contains("localhost"));
+        assert!(second_seen.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn download_redirects_drop_credentials_and_recheck_the_allowlist() {
+        init_proxy();
+        let tmp = TempDir::new().unwrap();
+        let state = seeded_state(&tmp);
+        state.set_network_allowlist("demo", vec!["127.0.0.1".into()]);
+        let (second, second_seen) = loopback_server(ok_text("file-bytes")).await;
+        let (first, _) = loopback_server(redirect_to(302, &format!("http://{second}/file"))).await;
+        let result = handle_network(
+            &state,
+            "demo",
+            "download",
+            &json!({
+                "url": format!("http://{first}/file"),
+                "destPath": "out.bin",
+                "headers": credential_headers()
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["size"], "file-bytes".len());
+        assert_no_credentials(&second_seen.lock()[0]);
+
+        let (blocked, blocked_seen) = loopback_server(ok_text("never")).await;
+        let (first, _) = loopback_server(redirect_to(
+            302,
+            &format!("http://localhost:{}/file", blocked.port()),
+        ))
+        .await;
+        let error = handle_network(
+            &state,
+            "demo",
+            "download",
+            &json!({ "url": format!("http://{first}/file"), "destPath": "out2.bin" }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, "PERMISSION_DENIED");
+        assert!(blocked_seen.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn upload_307_replays_the_body_without_credentials_across_origins() {
+        init_proxy();
+        let tmp = TempDir::new().unwrap();
+        let state = seeded_state(&tmp);
+        state.set_network_allowlist("demo", vec!["127.0.0.1".into()]);
+        crate::contained_path::write_plugin_file(
+            &state.plugin_dir("demo"),
+            &data_handle_path("payload.bin").unwrap().to_string_lossy(),
+            b"upload-body",
+        )
+        .unwrap();
+        let (second, second_seen) = loopback_server(ok_text("stored")).await;
+        let (first, _) = loopback_server(redirect_to(307, &format!("http://{second}/store"))).await;
+        let response = handle_network(
+            &state,
+            "demo",
+            "upload",
+            &json!({
+                "url": format!("http://{first}/upload"),
+                "filePath": "payload.bin",
+                "headers": credential_headers(),
+                "fileContentPolicy": "allow",
+                "dataClassification": "internal"
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["status"], 200);
+        let received = second_seen.lock()[0].clone();
+        assert!(received.starts_with("POST /store "));
+        assert!(received.ends_with("upload-body"));
+        assert_no_credentials(&received);
     }
 
     #[tokio::test]

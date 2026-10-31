@@ -566,6 +566,135 @@ fn is_redirect(status: StatusCode) -> bool {
     matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308)
 }
 
+/// Header names that carry credentials. reqwest's own cross-host cleanup only
+/// covers `Authorization`, `Cookie`, `Proxy-Authorization` and
+/// `WWW-Authenticate`; API-key style headers (`x-api-key`, `access-token`,
+/// vendor `X-…-Token` variants) would otherwise follow a redirect to any host.
+const CREDENTIAL_HEADER_NAMES: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "cookie",
+    "cookie2",
+    "www-authenticate",
+    "x-api-key",
+    "api-key",
+    "apikey",
+    "api_key",
+    "access-token",
+    "access_token",
+    "private-token",
+];
+const CREDENTIAL_HEADER_MARKERS: &[&str] = &[
+    "auth",
+    "token",
+    "secret",
+    "key",
+    "session",
+    "cookie",
+    "password",
+    "signature",
+    "credential",
+];
+
+/// True for a header name that may carry a credential: the explicit list above
+/// plus any name containing a credential marker (`X-Goog-Api-Key`,
+/// `X-Auth-Token`, `X-Amz-Security-Token`, …). Over-matching only drops a
+/// header on a cross-origin hop, which is the safe direction.
+pub fn is_credential_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    CREDENTIAL_HEADER_NAMES.contains(&name.as_str())
+        || CREDENTIAL_HEADER_MARKERS
+            .iter()
+            .any(|marker| name.contains(marker))
+}
+
+/// Remove every credential header (see [`is_credential_header`]).
+pub fn strip_credential_headers(headers: &mut reqwest::header::HeaderMap) {
+    let names: Vec<_> = headers
+        .keys()
+        .filter(|name| is_credential_header(name.as_str()))
+        .cloned()
+        .collect();
+    for name in names {
+        headers.remove(name);
+    }
+}
+
+/// Send `request`, following redirects by hand so every hop is checked.
+///
+/// For each redirect: the target must be HTTP(S); a cross-origin hop loses all
+/// credential headers and the `Referer` (the previous URL may carry a
+/// credential in its query); `authorize_hop` sees the next request (method,
+/// URL, remaining headers) before anything is sent to it, so callers re-apply
+/// their own egress policy per hop. `make_builder` is called per hop so proxy
+/// routing follows the hop's URL; the client is always built with automatic
+/// redirects off. A body that cannot be replayed (a streamed multipart upload)
+/// is refused on a 307/308, which would have to resend it. Error text never
+/// includes a URL.
+pub async fn send_with_checked_redirects<F, A>(
+    mut request: Request,
+    make_builder: F,
+    authorize_hop: A,
+) -> Result<Response, String>
+where
+    F: Fn(&str) -> Result<ClientBuilder, String>,
+    A: Fn(&Request) -> Result<(), String>,
+{
+    for hop in 0..=MAX_REDIRECTS {
+        let replay = request.try_clone();
+        let (method, url, headers) = (
+            request.method().clone(),
+            request.url().clone(),
+            request.headers().clone(),
+        );
+        let builder =
+            make_builder(request.url().as_str())?.redirect(reqwest::redirect::Policy::none());
+        let client = crate::proxy_config::managed_client(builder, request.url().as_str())
+            .map_err(|error| format!("client build failed: {error}"))?;
+        let response = client.execute(request).await.map_err(request_failed)?;
+        if !is_redirect(response.status()) {
+            return Ok(response);
+        }
+        let Some(target) = response
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| response.url().join(value).ok())
+        else {
+            return Ok(response);
+        };
+        if hop == MAX_REDIRECTS {
+            return Err("request failed: too many redirects".into());
+        }
+        if !matches!(target.scheme(), "http" | "https") {
+            return Err("request failed: redirect to a non-HTTP(S) URL".into());
+        }
+        let status = response.status();
+        let mut next = match replay {
+            Some(next) => next,
+            None if matches!(status.as_u16(), 307 | 308) => return Err(
+                "request failed: a 307/308 redirect would resend a body that cannot be replayed"
+                    .into(),
+            ),
+            // 301/302/303 turn this into a bodyless GET in prepare_redirect.
+            None => {
+                let mut next = Request::new(method, url);
+                *next.headers_mut() = headers;
+                next
+            }
+        };
+        let cross_origin = next.url().origin() != target.origin();
+        prepare_redirect(&mut next, status, target);
+        if cross_origin {
+            strip_credential_headers(next.headers_mut());
+            next.headers_mut().remove(REFERER);
+        }
+        authorize_hop(&next)?;
+        request = next;
+    }
+    unreachable!("redirect limit returns before the loop ends")
+}
+
 fn prepare_redirect(request: &mut Request, status: StatusCode, target: Url) {
     if (status == StatusCode::SEE_OTHER && request.method() != Method::HEAD)
         || (matches!(status.as_u16(), 301 | 302) && request.method() != Method::GET)
@@ -1601,5 +1730,237 @@ mod tests {
             }
         }
         assert_eq!(proxy.received_requests().await.unwrap().len(), 1);
+    }
+
+    async fn redirect_pair(status: u16) -> (MockServer, MockServer) {
+        let first = MockServer::start().await;
+        let second = MockServer::start().await;
+        Mock::given(path("/start"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Location", format!("{}/end", second.uri())),
+            )
+            .mount(&first)
+            .await;
+        Mock::given(path("/same"))
+            .respond_with(
+                ResponseTemplate::new(status)
+                    .insert_header("Location", format!("{}/end", first.uri())),
+            )
+            .mount(&first)
+            .await;
+        for server in [&first, &second] {
+            Mock::given(path("/end"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("done"))
+                .mount(server)
+                .await;
+        }
+        (first, second)
+    }
+
+    fn credential_request(url: String) -> Request {
+        crate::proxy_config::ensure_crypto_provider();
+        reqwest::Client::new()
+            .get(url)
+            .header("Authorization", "Bearer secret-token")
+            .header("X-Api-Key", "secret-key")
+            .header("Api-Key", "secret-key")
+            .header("Access-Token", "secret-token")
+            .header("access_token", "secret-token")
+            .header("X-Goog-Api-Key", "secret-key")
+            .header("X-Auth-Token", "secret-token")
+            .header("Cookie", "sid=secret")
+            .header("Accept", "application/json")
+            .header("X-Trace-Id", "trace-1")
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn credential_header_names_cover_api_key_and_token_variants() {
+        for name in [
+            "Authorization",
+            "proxy-authorization",
+            "Cookie",
+            "x-api-key",
+            "API-KEY",
+            "apikey",
+            "api_key",
+            "access-token",
+            "access_token",
+            "Private-Token",
+            "X-Goog-Api-Key",
+            "X-Auth-Token",
+            "X-Amz-Security-Token",
+            "X-Client-Secret",
+            "X-Session-Id",
+            "X-Signature",
+        ] {
+            assert!(is_credential_header(name), "{name} must be stripped");
+        }
+        for name in [
+            "Accept",
+            "Content-Type",
+            "User-Agent",
+            "X-Trace-Id",
+            "Keep-Alive",
+        ] {
+            assert!(!is_credential_header(name), "{name} must be kept");
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_origin_redirects_drop_every_credential_header_and_the_referer() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let (first, second) = redirect_pair(302).await;
+        let authorized = std::sync::Mutex::new(Vec::new());
+        let response = send_with_checked_redirects(
+            credential_request(format!("{}/start", first.uri())),
+            |_| Ok(reqwest::Client::builder()),
+            |next| {
+                authorized
+                    .lock()
+                    .unwrap()
+                    .push((next.method().clone(), next.url().to_string()));
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            *authorized.lock().unwrap(),
+            vec![(Method::GET, format!("{}/end", second.uri()))]
+        );
+        let received = second.received_requests().await.unwrap();
+        assert_eq!(received.len(), 1);
+        for name in [
+            "authorization",
+            "x-api-key",
+            "api-key",
+            "access-token",
+            "access_token",
+            "x-goog-api-key",
+            "x-auth-token",
+            "cookie",
+            "referer",
+        ] {
+            assert!(!received[0].headers.contains_key(name), "{name} leaked");
+        }
+        assert_eq!(received[0].headers["accept"], "application/json");
+        assert_eq!(received[0].headers["x-trace-id"], "trace-1");
+        // The first hop still carried them.
+        assert_eq!(
+            first.received_requests().await.unwrap()[0].headers["x-api-key"],
+            "secret-key"
+        );
+        crate::proxy_config::reset_uninitialized();
+    }
+
+    #[tokio::test]
+    async fn same_origin_redirects_keep_credential_headers() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let (first, _second) = redirect_pair(307).await;
+        let response = send_with_checked_redirects(
+            credential_request(format!("{}/same", first.uri())),
+            |_| Ok(reqwest::Client::builder()),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let received = first.received_requests().await.unwrap();
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[1].headers["x-api-key"], "secret-key");
+        assert_eq!(received[1].headers["authorization"], "Bearer secret-token");
+        crate::proxy_config::reset_uninitialized();
+    }
+
+    #[tokio::test]
+    async fn a_refused_hop_is_never_contacted() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let (first, second) = redirect_pair(302).await;
+        let error = send_with_checked_redirects(
+            credential_request(format!("{}/start", first.uri())),
+            |_| Ok(reqwest::Client::builder()),
+            |_| Err("hop denied".into()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "hop denied");
+        assert!(second.received_requests().await.unwrap().is_empty());
+        crate::proxy_config::reset_uninitialized();
+    }
+
+    #[tokio::test]
+    async fn non_http_redirects_and_unreplayable_307_bodies_are_refused() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let server = MockServer::start().await;
+        Mock::given(path("/file"))
+            .respond_with(
+                ResponseTemplate::new(302).insert_header("Location", "file:///etc/passwd"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/upload"))
+            .respond_with(ResponseTemplate::new(307).insert_header("Location", "/end"))
+            .mount(&server)
+            .await;
+        Mock::given(path("/see-other"))
+            .respond_with(ResponseTemplate::new(303).insert_header("Location", "/end"))
+            .mount(&server)
+            .await;
+        Mock::given(path("/end"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let error = send_with_checked_redirects(
+            reqwest::Client::new()
+                .get(format!("{}/file", server.uri()))
+                .build()
+                .unwrap(),
+            |_| Ok(reqwest::Client::builder()),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("non-HTTP(S)"));
+
+        let streamed = |url: String| {
+            let chunks: Vec<Result<Vec<u8>, std::io::Error>> = vec![Ok(b"payload".to_vec())];
+            reqwest::Client::new()
+                .post(url)
+                .body(reqwest::Body::wrap_stream(futures_util::stream::iter(
+                    chunks,
+                )))
+                .build()
+                .unwrap()
+        };
+        let error = send_with_checked_redirects(
+            streamed(format!("{}/upload", server.uri())),
+            |_| Ok(reqwest::Client::builder()),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("cannot be replayed"));
+
+        // 303 turns the unreplayable POST into a bodyless GET, which is fine.
+        let response = send_with_checked_redirects(
+            streamed(format!("{}/see-other", server.uri())),
+            |_| Ok(reqwest::Client::builder()),
+            |next| {
+                assert_eq!(next.method(), Method::GET);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        crate::proxy_config::reset_uninitialized();
     }
 }

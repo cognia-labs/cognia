@@ -202,26 +202,8 @@ pub async fn http_request_with_limit(
     if max_bytes.is_some_and(|limit| limit == 0 || limit > 20 * 1024 * 1024) {
         return Err("invalid_response_byte_limit".into());
     }
-    // Extract host for rate-limit keying.
     let parsed = url::Url::parse(&req.url).map_err(|e| format!("invalid URL: {e}"))?;
-    let host = parsed.host_str().unwrap_or("").to_string();
-
-    // Cheap SSRF deny-list — see the module header for the trust model. Only
-    // the link-local metadata endpoint is blocked; localhost must stay
-    // reachable (OneBot forward-WS, local dev flows).
-    if host == "169.254.169.254" {
-        return Err(
-            "requests to the link-local metadata endpoint (169.254.169.254) are not allowed"
-                .to_string(),
-        );
-    }
-
-    if let Err(retry_after) = check_rate_limit(&host) {
-        return Err(format!(
-            "rate limit exceeded for host: {host}; retry after ~{}ms",
-            retry_after.as_millis().max(1)
-        ));
-    }
+    admit_host(&parsed)?;
 
     let timeout = req.timeout_duration();
     let builder = Client::builder()
@@ -248,7 +230,85 @@ pub async fn http_request_with_limit(
         .send()
         .await
         .map_err(|e| format!("request failed: {e}"))?;
+    read_response(resp, max_bytes).await
+}
 
+/// Like [`http_request`], but redirects are followed by hand: every hop passes
+/// the link-local deny-list, the per-host rate limit and `authorize_hop`
+/// (target URL and the method the hop will use) before it is contacted, and a
+/// cross-origin hop drops every credential header and the `Referer` (see
+/// [`crate::guarded_http::send_with_checked_redirects`]). For callers that hand
+/// a caller-supplied credential header to a per-caller egress allowlist, such
+/// as plugin `network:fetch`; [`http_request`] keeps reqwest's own redirects.
+pub async fn http_request_checked<A>(
+    req: HttpRequest,
+    authorize_hop: A,
+) -> Result<HttpResponse, String>
+where
+    A: Fn(&url::Url, &str) -> Result<(), String>,
+{
+    let parsed = url::Url::parse(&req.url).map_err(|e| format!("invalid URL: {e}"))?;
+    admit_host(&parsed)?;
+    let timeout = req.timeout_duration();
+    let accept_invalid = req.accept_invalid_certificates();
+    let method = req.validated_method()?;
+
+    proxy_config::ensure_crypto_provider();
+    let mut builder = Client::new().request(method, parsed);
+    if let Some(headers) = &req.headers {
+        for (k, v) in headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+    }
+    if let Some(body) = req.body {
+        builder = builder.body(body);
+    }
+    let request = builder
+        .build()
+        .map_err(|e| format!("request failed: {}", e.without_url()))?;
+
+    let resp = crate::guarded_http::send_with_checked_redirects(
+        request,
+        |_| {
+            Ok(Client::builder()
+                .timeout(timeout)
+                .danger_accept_invalid_certs(accept_invalid))
+        },
+        |next| {
+            admit_host(next.url())?;
+            authorize_hop(next.url(), next.method().as_str())
+        },
+    )
+    .await?;
+    read_response(resp, None).await
+}
+
+/// Cheap SSRF deny-list and per-host rate limit, applied to every host this
+/// module contacts (the first URL and, in [`http_request_checked`], each hop).
+/// See the module header for the trust model. Only the link-local metadata
+/// endpoint is blocked; localhost must stay reachable (OneBot forward-WS, local
+/// dev flows).
+fn admit_host(url: &url::Url) -> Result<(), String> {
+    let host = url.host_str().unwrap_or("").to_string();
+    if host == "169.254.169.254" {
+        return Err(
+            "requests to the link-local metadata endpoint (169.254.169.254) are not allowed"
+                .to_string(),
+        );
+    }
+    if let Err(retry_after) = check_rate_limit(&host) {
+        return Err(format!(
+            "rate limit exceeded for host: {host}; retry after ~{}ms",
+            retry_after.as_millis().max(1)
+        ));
+    }
+    Ok(())
+}
+
+async fn read_response(
+    resp: reqwest::Response,
+    max_bytes: Option<usize>,
+) -> Result<HttpResponse, String> {
     let status = resp.status().as_u16();
     let headers: HashMap<String, String> = resp
         .headers()
@@ -281,6 +341,58 @@ pub async fn http_request_with_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn checked_requests_authorize_each_hop_and_refuse_the_metadata_endpoint() {
+        let _guard = crate::proxy_config::NETWORK_ENV_TEST.lock().await;
+        crate::proxy_config::apply_current(crate::proxy_config::ProxyConfig::default()).unwrap();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/moved"))
+            .respond_with(wiremock::ResponseTemplate::new(303).insert_header("Location", "/done"))
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::path("/metadata"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(302)
+                    .insert_header("Location", "http://169.254.169.254/latest/meta-data"),
+            )
+            .mount(&server)
+            .await;
+        wiremock::Mock::given(wiremock::matchers::path("/done"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("ok"))
+            .mount(&server)
+            .await;
+        let request = |path: &str| HttpRequest {
+            url: format!("{}{path}", server.uri()),
+            method: "POST".into(),
+            headers: Some(HashMap::from([("x-api-key".into(), "secret".into())])),
+            body: Some("{}".into()),
+            timeout_ms: None,
+            allow_invalid_certificates: None,
+        };
+        let hops = std::sync::Mutex::new(Vec::new());
+        let response = http_request_checked(request("/moved"), |url, method| {
+            hops.lock()
+                .unwrap()
+                .push((url.path().to_string(), method.to_string()));
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert_eq!((response.status, response.body.as_str()), (200, "ok"));
+        assert_eq!(
+            *hops.lock().unwrap(),
+            vec![("/done".to_string(), "GET".to_string())]
+        );
+
+        let error = http_request_checked(request("/metadata"), |_, _| {
+            panic!("the metadata hop must be refused before authorization")
+        })
+        .await
+        .unwrap_err();
+        assert!(error.contains("169.254.169.254"));
+        crate::proxy_config::reset_uninitialized();
+    }
 
     #[tokio::test]
     async fn bounded_connector_body_preserves_utf8_and_rejects_declared_overflow() {
