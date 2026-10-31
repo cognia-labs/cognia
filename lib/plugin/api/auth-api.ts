@@ -19,6 +19,11 @@ import {
 import { createAttempt } from "@/lib/plugin/auth/auth-attempts"
 import { acceptCallback, registerAuthCallbackWaiter } from "@/lib/plugin/auth/callback-acceptor"
 import { runPkceAuthFlow } from "@/lib/plugin/auth/auth-pkce-flow"
+import {
+  invokePluginApi,
+  isPluginGatewayAvailable,
+  PluginGatewayError,
+} from "@/lib/plugin/core/transport"
 export { AuthRefreshRejected } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 import type {
   CreateAuthAPIOptions,
@@ -29,6 +34,8 @@ export type {
   CreateAuthAPIOptions,
   PluginAuthAPI,
   PluginAuthProvider,
+  ConfidentialExchangeRequest,
+  ConfidentialExchangeResponse,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
 
 // Host-only provenance, never a public network option or a wire header. The
@@ -70,6 +77,21 @@ function requirePermission(
 export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): PluginAuthAPI {
   const { hasPermission } = options
   return {
+    async exchangeConfidential(request) {
+      requirePermission(hasPermission, "auth:provide", "ctx.auth.exchangeConfidential")
+      requirePermission(hasPermission, "network:fetch", "ctx.auth.exchangeConfidential")
+      if (!isPluginGatewayAvailable()) {
+        throw new PluginGatewayError({
+          code: "NOT_SUPPORTED",
+          message: "Confidential token exchange requires a trusted Host.",
+          details: { reason: "confidential-exchange-unavailable" },
+          requestId: "",
+          api: "auth:exchange",
+          pluginId,
+        })
+      }
+      return invokePluginApi(pluginId, "auth:exchange", request)
+    },
     registerProvider(provider) {
       requirePermission(hasPermission, "auth:provide", "ctx.auth.registerProvider")
       const existing = getProvider(provider.id)

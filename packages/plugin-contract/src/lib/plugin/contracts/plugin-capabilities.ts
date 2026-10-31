@@ -1792,12 +1792,15 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     support: "supported",
     manifestFields: ["authProviders"],
     runtimeBinding:
-      "ctx.auth.registerProvider + auth-provider-registry (native backing) + auth-secrets-adapter (secrets-persisted) + auth-pkce-flow",
+      "ctx.auth.registerProvider + auth-provider-registry (native backing) + auth-secrets-adapter (secrets-persisted) + auth-pkce-flow + ctx.auth.exchangeConfidential (trusted auth:exchange gateway)",
     hostBindings: [
       "lib/plugin/api/auth-api.ts",
       "lib/plugin/auth/auth-provider-registry.ts",
       "lib/plugin/auth/auth-secrets-adapter.ts",
       "lib/plugin/auth/auth-pkce-flow.ts",
+      "lib/plugin/auth/client-secrets.ts",
+      "crates/cognia-plugin-runtime/src/api_bridge.rs",
+      "crates/cognia-net/src/oauth_exchange.rs",
       "lib/plugin/core/context.ts",
     ],
     typescriptSdk: [
@@ -1809,6 +1812,7 @@ export const PLUGIN_CAPABILITY_CONTRACTS: readonly PluginCapabilityContract[] = 
     requiredTests: [
       "lib/plugin/api/auth-api.test.ts",
       "lib/plugin/auth/auth-secrets-adapter.test.ts",
+      "lib/plugin/auth/client-secrets.test.ts",
       "packages/plugin-contract/src/lib/plugin/auth/auth-pkce-flow.test.ts",
     ],
   },

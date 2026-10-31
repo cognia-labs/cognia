@@ -142,6 +142,39 @@ fn manifest_meta(dir: &Path) -> Option<(PathBuf, u64, u64)> {
     })
 }
 
+#[derive(Clone)]
+pub(crate) struct CachedInstalledManifest {
+    signature: (PathBuf, u64, u64),
+    manifest: Value,
+}
+
+/// Read installed declarations using the same filename resolution as command
+/// hooks. Renderer-supplied declarations never authorize credential exchange.
+pub(crate) fn installed_manifest(runtime: &PluginRuntimeState, plugin_id: &str) -> Option<Value> {
+    let install_path = runtime
+        .plugins
+        .read()
+        .get(plugin_id)?
+        .snapshot
+        .install_path
+        .clone();
+    let signature = manifest_meta(Path::new(&install_path))?;
+    if let Some(cached) = runtime.installed_manifest_cache.read().get(plugin_id) {
+        if cached.signature == signature {
+            return Some(cached.manifest.clone());
+        }
+    }
+    let manifest = serde_json::from_slice::<Value>(&std::fs::read(&signature.0).ok()?).ok()?;
+    runtime.installed_manifest_cache.write().insert(
+        plugin_id.to_string(),
+        CachedInstalledManifest {
+            signature,
+            manifest: manifest.clone(),
+        },
+    );
+    Some(manifest)
+}
+
 /// Merge every enabled plugin's `commandHooks` block under the user's groups.
 /// Call BEFORE `builtin::apply_builtin_hooks` so the final order is
 /// user → plugin → builtin.
@@ -282,6 +315,40 @@ mod tests {
 
     fn install_plugin(state: &PluginRuntimeState, id: &str, manifest: Value, status: &str) {
         install_plugin_file(state, id, manifest, status, "manifest.json")
+    }
+
+    #[test]
+    fn installed_manifest_reuses_alias_resolution_and_invalidates_on_rewrite() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let state = PluginRuntimeState::new(tmp.path().to_path_buf());
+        install_plugin_file(
+            &state,
+            "oauth-manifest",
+            json!({"authProviders": [{"id": "first"}]}),
+            "enabled",
+            "plugin.json",
+        );
+        assert_eq!(
+            installed_manifest(&state, "oauth-manifest").unwrap()["authProviders"][0]["id"],
+            "first"
+        );
+        std::fs::write(
+            state.plugin_dir("oauth-manifest").join("plugin.json"),
+            json!({"authProviders": [{"id": "replacement-provider"}]}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            installed_manifest(&state, "oauth-manifest").unwrap()["authProviders"][0]["id"],
+            "replacement-provider"
+        );
+        std::fs::write(
+            state.plugin_dir("oauth-manifest").join("manifest.json"),
+            "invalid JSON",
+        )
+        .unwrap();
+        assert!(installed_manifest(&state, "oauth-manifest").is_none());
+        state.plugins.write().remove("oauth-manifest");
+        assert!(installed_manifest(&state, "oauth-manifest").is_none());
     }
 
     /// Runtime installs write `manifest.json`; `plugin.json` covers the

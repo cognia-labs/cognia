@@ -67,6 +67,61 @@ function fakeProvider(over?: Partial<PluginAuthProvider>): PluginAuthProvider {
 const allow = { hasPermission: () => true }
 const deny = { hasPermission: () => false }
 
+jest.mock("@/lib/plugin/core/transport", () => ({
+  ...jest.requireActual("@/lib/plugin/core/transport"),
+  isPluginGatewayAvailable: jest.fn(() => true),
+  invokePluginApi: jest.fn(),
+}))
+import {
+  invokePluginApi,
+  isPluginGatewayAvailable,
+  PluginGatewayError,
+} from "@/lib/plugin/core/transport"
+
+describe("confidential exchange", () => {
+  const request = {
+    providerId: "acme",
+    tokenUrl: "https://acme.test/token",
+    params: { grant_type: "client_credentials" },
+    clientId: "client",
+    placement: "basic" as const,
+  }
+  beforeEach(() => {
+    jest.mocked(isPluginGatewayAvailable).mockReturnValue(true)
+  })
+  it("uses the trusted gateway and returns only the token response", async () => {
+    const response = { status: 200, body: { access_token: "token" } }
+    jest.mocked(invokePluginApi).mockResolvedValueOnce(response)
+    await expect(createAuthAPI("owner", allow).exchangeConfidential(request)).resolves.toEqual(
+      response
+    )
+    expect(invokePluginApi).toHaveBeenLastCalledWith("owner", "auth:exchange", request)
+  })
+  it.each(["auth:provide", "network:fetch"])(
+    "requires %s before calling the gateway",
+    async (permission) => {
+      jest.mocked(invokePluginApi).mockClear()
+      await expect(
+        createAuthAPI("owner", { hasPermission: (p) => p !== permission }).exchangeConfidential(
+          request
+        )
+      ).rejects.toThrow(permission)
+      expect(invokePluginApi).not.toHaveBeenCalled()
+    }
+  )
+  it("fails closed without a trusted runtime", async () => {
+    jest.mocked(isPluginGatewayAvailable).mockReturnValue(false)
+    jest.mocked(invokePluginApi).mockClear()
+    const result = createAuthAPI("owner", allow).exchangeConfidential(request)
+    await expect(result).rejects.toBeInstanceOf(PluginGatewayError)
+    await expect(result).rejects.toMatchObject({
+      code: "NOT_SUPPORTED",
+      details: { reason: "confidential-exchange-unavailable" },
+    })
+    expect(invokePluginApi).not.toHaveBeenCalled()
+  })
+})
+
 it("consumes a Host attempt on legacy plugin callback routes even when the old driver owns its state", async () => {
   const { routePluginDeepLink } = await import("@/lib/plugin/uri/route-deep-link")
   const fetch = jest.fn().mockResolvedValue({

@@ -193,6 +193,8 @@ pub struct PluginRuntimeState {
     /// each manifest's mtime+len, so ledger or file changes recompute
     /// automatically — no explicit invalidation wiring required.
     pub command_hooks_cache: Arc<RwLock<Option<CachedCommandHooks>>>,
+    pub(crate) installed_manifest_cache:
+        Arc<RwLock<HashMap<String, command_hooks::CachedInstalledManifest>>>,
 }
 
 /// True when `program` matches an entry in `allowlist` by file stem.
@@ -244,6 +246,7 @@ impl PluginRuntimeState {
             managed_ide_connections: Arc::new(RwLock::new(HashMap::new())),
             shell_allowlist: Arc::new(RwLock::new(HashMap::new())),
             command_hooks_cache: Arc::new(RwLock::new(None)),
+            installed_manifest_cache: Arc::new(RwLock::new(HashMap::new())),
         };
         let recovery = marketplace::recover_update_transactions_for_state(&state);
         if recovery.recovered_transactions > 0 || recovery.discarded_transactions > 0 {

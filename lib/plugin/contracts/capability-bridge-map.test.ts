@@ -38,6 +38,13 @@ import {
 } from "@/lib/plugin/auth/auth-provider-registry"
 
 describe("auth-provider activation ordering", () => {
+  it("keeps confidential endpoint authorization on the Rust gateway", () => {
+    expect(OVERLAY_REGISTRY_CAPABILITIES["auth-provider"].manifestField).toBe("authProviders")
+    // The overlay registers providers, with no renderer endpoint push channel.
+    expect(Object.keys(OVERLAY_REGISTRY_CAPABILITIES["auth-provider"])).not.toContain(
+      "tokenEndpoints"
+    )
+  })
   afterEach(() => unregisterProvidersByPlugin("auth-order-test"))
 
   it("reserves declarative provider ownership until uninstall", () => {

@@ -147,4 +147,33 @@ describe("Rust CLI ↔ TS validator parity", () => {
     const offenders = [...advertised].filter((p) => !valid.has(p))
     expect(offenders).toEqual([])
   })
+
+  it("advertises the confidential exchange and write-only Host configuration ops", () => {
+    const rows = [
+      ...API_BRIDGE.matchAll(
+        /cap\(\s*"(auth:[^"]+)"\s*,\s*(true|false)\s*,\s*(true|false)\s*,\s*&\[([^\]]*)\]/g
+      ),
+    ]
+    expect(
+      rows.map(([, api, supported, highRisk, permissions]) => ({
+        api,
+        supported: supported === "true",
+        highRisk: highRisk === "true",
+        permissions: [...permissions.matchAll(/"([^"]+)"/g)].map(([, permission]) => permission),
+      }))
+    ).toEqual([
+      {
+        api: "auth:exchange",
+        supported: true,
+        highRisk: true,
+        permissions: ["auth:provide", "network:fetch"],
+      },
+      ...["setClientSecret", "clearClientSecret", "hasClientSecret"].map((op) => ({
+        api: `auth:${op}`,
+        supported: true,
+        highRisk: true,
+        permissions: ["auth:provide"],
+      })),
+    ])
+  })
 })

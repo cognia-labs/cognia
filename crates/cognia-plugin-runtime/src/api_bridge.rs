@@ -716,6 +716,178 @@ fn secret_namespace(plugin_id: &str) -> String {
     format!("plugin:{plugin_id}")
 }
 
+pub(crate) fn client_secret_namespace(plugin_id: &str) -> String {
+    format!("plugin-auth-client:{plugin_id}")
+}
+
+/// Enumerate the Host namespace, including providers removed by an upgrade.
+pub(crate) fn clear_client_secrets(plugin_id: &str) -> std::result::Result<(), String> {
+    let namespace = client_secret_namespace(plugin_id);
+    let service = format!("com.cognia.{namespace}/v1");
+    for key in cognia_secrets::secret_store::list_accounts(&service)? {
+        cognia_secrets::keyring_secrets::clear(&namespace, &key)?;
+    }
+    Ok(())
+}
+
+fn declared_auth_provider(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    provider_id: &str,
+) -> std::result::Result<Value, PluginApiError> {
+    crate::command_hooks::installed_manifest(state, plugin_id)
+        .and_then(|manifest| {
+            manifest
+                .get("authProviders")?
+                .as_array()?
+                .iter()
+                .find(|provider| provider.get("id").and_then(Value::as_str) == Some(provider_id))
+                .cloned()
+        })
+        .ok_or_else(|| {
+            PluginApiError::permission_denied(
+                "auth provider is not declared in the installed manifest",
+            )
+        })
+}
+
+fn authorize_token_endpoint(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    provider: &Value,
+    token_url: &str,
+    placement: cognia_net::oauth_exchange::ClientSecretPlacement,
+) -> std::result::Result<(), PluginApiError> {
+    let target =
+        url::Url::parse(token_url).map_err(|_| PluginApiError::invalid("invalid token URL"))?;
+    if !target.username().is_empty() || target.password().is_some() || target.fragment().is_some() {
+        return Err(PluginApiError::invalid("invalid token URL"));
+    }
+    let allowed = provider
+        .get("tokenEndpoints")
+        .and_then(Value::as_array)
+        .is_some_and(|endpoints| {
+            endpoints.iter().any(|endpoint| {
+                let declared = endpoint
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .and_then(|url| url::Url::parse(url).ok());
+                let declared_placement = endpoint
+                    .get("clientSecret")
+                    .cloned()
+                    .unwrap_or(json!("none"));
+                declared.is_some_and(|url| {
+                    url.scheme() == target.scheme()
+                && url.host() == target.host()
+                && url.port_or_known_default() == target.port_or_known_default()
+                && url.path() == target.path()
+                // Query fields can change a vendor's exchange target as well.
+                && url.query() == target.query()
+                && url.username().is_empty() && url.password().is_none() && url.fragment().is_none()
+                }) && serde_json::from_value::<cognia_net::oauth_exchange::ClientSecretPlacement>(
+                    declared_placement,
+                )
+                .ok()
+                    == Some(placement)
+            })
+        });
+    if !allowed {
+        return Err(PluginApiError::permission_denied(
+            "token endpoint or secret placement is not declared",
+        ));
+    }
+    guard_network_request(state, plugin_id, token_url, "POST")
+}
+
+async fn handle_auth(
+    state: &PluginRuntimeState,
+    plugin_id: &str,
+    op: &str,
+    payload: &Value,
+) -> std::result::Result<Value, PluginApiError> {
+    use cognia_net::oauth_exchange::{
+        confidential_token_exchange, ClientSecretPlacement, ConfidentialExchangeRequest,
+        TokenBodyEncoding,
+    };
+    let provider_id = payload_str(payload, "providerId")?;
+    let provider = declared_auth_provider(state, plugin_id, &provider_id)?;
+    let namespace = client_secret_namespace(plugin_id);
+    let store_error = |error| PluginApiError::from_secret_store("auth client secret", error);
+    match op {
+        "setClientSecret" => {
+            let value = payload_str(payload, "value")?;
+            cognia_secrets::keyring_secrets::set(&namespace, &provider_id, &value)
+                .map_err(store_error)?;
+            Ok(Value::Null)
+        }
+        "clearClientSecret" => {
+            cognia_secrets::keyring_secrets::clear(&namespace, &provider_id)
+                .map_err(store_error)?;
+            Ok(Value::Null)
+        }
+        "hasClientSecret" => Ok(Value::Bool(
+            cognia_secrets::keyring_secrets::get(&namespace, &provider_id)
+                .map_err(store_error)?
+                .is_some(),
+        )),
+        "exchange" => {
+            if !state.has_permission(plugin_id, "network:fetch") {
+                return Err(PluginApiError::permission_denied(
+                    "auth:exchange requires permission network:fetch",
+                ));
+            }
+            let token_url = payload_str(payload, "tokenUrl")?;
+            let placement: ClientSecretPlacement =
+                serde_json::from_value(payload.get("placement").cloned().unwrap_or(Value::Null))
+                    .map_err(|_| PluginApiError::invalid("invalid client secret placement"))?;
+            authorize_token_endpoint(state, plugin_id, &provider, &token_url, placement)?;
+            let params =
+                serde_json::from_value(payload.get("params").cloned().unwrap_or(Value::Null))
+                    .map_err(|_| PluginApiError::invalid("token params must be a string map"))?;
+            let client_id = payload_str(payload, "clientId")?;
+            let client_secret = if placement == ClientSecretPlacement::None {
+                None
+            } else {
+                Some(
+                    cognia_secrets::keyring_secrets::get(&namespace, &provider_id)
+                        .map_err(store_error)?
+                        .ok_or_else(|| PluginApiError {
+                            code: "NOT_FOUND".into(),
+                            message: "OAuth client secret is not configured".into(),
+                            details: Some(json!({"reason": "client-secret-missing"})),
+                        })?,
+                )
+            };
+            let response = confidential_token_exchange(ConfidentialExchangeRequest {
+                token_url,
+                params,
+                client_id,
+                client_secret,
+                placement,
+                body_encoding: if placement == ClientSecretPlacement::Json {
+                    TokenBodyEncoding::Json
+                } else {
+                    TokenBodyEncoding::Form
+                },
+                timeout: std::time::Duration::from_secs(30),
+            })
+            .await
+            .map_err(|error| {
+                PluginApiError::new(
+                    if error == cognia_net::oauth_exchange::ConfidentialExchangeError::Timeout {
+                        "TIMEOUT"
+                    } else {
+                        "INVALID_REQUEST"
+                    },
+                    error.to_string(),
+                )
+            })?;
+            Ok(json!({"status": response.status, "body": response.body}))
+        }
+        _ => Err(PluginApiError::not_supported(&format!("auth:{op}"))),
+    }
+}
+
 fn handle_secrets(
     plugin_id: &str,
     op: &str,
@@ -1586,6 +1758,9 @@ fn required_permission(domain: &str, op: &str) -> Option<&'static str> {
         }
         ("secrets", "get") => Some("secrets:read"),
         ("secrets", "set" | "delete") => Some("secrets:write"),
+        ("auth", "exchange" | "setClientSecret" | "clearClientSecret" | "hasClientSecret") => {
+            Some("auth:provide")
+        }
         ("managedIdeSecrets", "get" | "keys") => Some("secrets:read"),
         ("managedIdeSecrets", "set" | "delete") => Some("secrets:write"),
         ("clipboard", "readText" | "hasText") => Some("clipboard:read"),
@@ -1630,6 +1805,7 @@ async fn dispatch(
             .map_err(|error| PluginApiError::new(&error.code, error.message)),
         "fs" => handle_fs(state, plugin_id, op, payload),
         "secrets" => handle_secrets(plugin_id, op, payload),
+        "auth" => handle_auth(state, plugin_id, op, payload).await,
         "managedIdeState" => handle_managed_ide_state(state, plugin_id, op, payload),
         "managedIdeSecrets" => handle_managed_ide_secrets(state, plugin_id, op, payload),
         "clipboard" => match app {
@@ -1995,6 +2171,15 @@ fn capability_table() -> Vec<PluginApiCapability> {
         cap("secrets:get", true, true, &["secrets:read"]),
         cap("secrets:set", true, true, &["secrets:write"]),
         cap("secrets:delete", true, true, &["secrets:write"]),
+        cap(
+            "auth:exchange",
+            true,
+            true,
+            &["auth:provide", "network:fetch"],
+        ),
+        cap("auth:setClientSecret", true, true, &["auth:provide"]),
+        cap("auth:clearClientSecret", true, true, &["auth:provide"]),
+        cap("auth:hasClientSecret", true, true, &["auth:provide"]),
         cap("managedIdeState:get", true, false, &[]),
         cap("managedIdeState:set", true, false, &[]),
         cap("managedIdeState:delete", true, false, &[]),
@@ -2084,7 +2269,7 @@ pub async fn plugin_set_network_allowlist(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PluginRecord, PluginRuntimeSnapshot, PluginRuntimeState};
+    use crate::{PermissionGrant, PluginRecord, PluginRuntimeSnapshot, PluginRuntimeState};
     use tempfile::TempDir;
 
     fn seeded_state(tmp: &TempDir) -> PluginRuntimeState {
@@ -2106,6 +2291,268 @@ mod tests {
             },
         );
         state
+    }
+
+    fn auth_state(tmp: &TempDir) -> PluginRuntimeState {
+        let state = seeded_state(tmp);
+        std::fs::write(
+            state.plugin_dir("demo").join("manifest.json"),
+            json!({
+                "authProviders": [{"id": "oauth", "tokenEndpoints": [
+                    {"url": "https://vendor.test/token", "clientSecret": "basic"},
+                    {"url": "https://vendor.test/public", "clientSecret": "none"}
+                ]}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        state.permissions.write().insert(
+            "demo".into(),
+            ["auth:provide", "network:fetch", "secrets:read"]
+                .into_iter()
+                .map(|permission| PermissionGrant {
+                    plugin_id: "demo".into(),
+                    permission: permission.into(),
+                    granted_by: "test".into(),
+                    granted_at: chrono::Utc::now().to_rfc3339(),
+                    expires_at: None,
+                })
+                .collect(),
+        );
+        state.set_network_allowlist("demo", vec!["vendor.test".into()]);
+        state
+    }
+
+    #[tokio::test]
+    async fn confidential_auth_permissions_and_missing_secret_are_typed() {
+        let tmp = TempDir::new().unwrap();
+        let state = auth_state(&tmp);
+        let payload = json!({"providerId": "oauth", "tokenUrl": "https://vendor.test/token", "params": {}, "clientId": "id", "placement": "basic"});
+        let error = dispatch(None, &state, "demo", "auth:exchange", &payload)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "NOT_FOUND");
+        assert_eq!(
+            error.details,
+            Some(json!({"reason": "client-secret-missing"}))
+        );
+        for permission in ["auth:provide", "network:fetch"] {
+            let saved = state.permissions.read().get("demo").unwrap().clone();
+            state
+                .permissions
+                .write()
+                .get_mut("demo")
+                .unwrap()
+                .retain(|grant| grant.permission != permission);
+            assert_eq!(
+                dispatch(None, &state, "demo", "auth:exchange", &payload)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "PERMISSION_DENIED"
+            );
+            state.permissions.write().insert("demo".into(), saved);
+        }
+        for op in ["setClientSecret", "clearClientSecret", "hasClientSecret"] {
+            state.permissions.write().insert("demo".into(), vec![]);
+            assert_eq!(
+                dispatch(None, &state, "demo", &format!("auth:{op}"), &payload)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "PERMISSION_DENIED"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn confidential_auth_secret_is_write_only_and_uninstall_clears_removed_providers() {
+        let tmp = TempDir::new().unwrap();
+        let state = auth_state(&tmp);
+        let input = json!({"providerId": "oauth", "value": "private-client-secret"});
+        assert!(
+            dispatch(None, &state, "demo", "auth:setClientSecret", &input)
+                .await
+                .unwrap()
+                .is_null()
+        );
+        assert_eq!(
+            dispatch(None, &state, "demo", "auth:hasClientSecret", &input)
+                .await
+                .unwrap(),
+            true
+        );
+        assert!(handle_secrets("demo", "get", &json!({"key": "oauth"}))
+            .unwrap()
+            .is_null());
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&client_secret_namespace("demo"), "oauth")
+                .unwrap()
+                .as_deref(),
+            Some("private-client-secret")
+        );
+        for op in ["setClientSecret", "clearClientSecret", "hasClientSecret"] {
+            assert_eq!(
+                dispatch(
+                    None,
+                    &state,
+                    "demo",
+                    &format!("auth:{op}"),
+                    &json!({"providerId": "foreign", "value": "secret"})
+                )
+                .await
+                .unwrap_err()
+                .code,
+                "PERMISSION_DENIED"
+            );
+        }
+        dispatch(None, &state, "demo", "auth:clearClientSecret", &input)
+            .await
+            .unwrap();
+        assert_eq!(
+            dispatch(None, &state, "demo", "auth:hasClientSecret", &input)
+                .await
+                .unwrap(),
+            false
+        );
+        dispatch(None, &state, "demo", "auth:setClientSecret", &input)
+            .await
+            .unwrap();
+        // A removed provider is still erased, while another plugin is untouched.
+        cognia_secrets::keyring_secrets::set(
+            &client_secret_namespace("demo"),
+            "removed-provider",
+            "old-secret",
+        )
+        .unwrap();
+        cognia_secrets::keyring_secrets::set(
+            &client_secret_namespace("other"),
+            "oauth",
+            "other-secret",
+        )
+        .unwrap();
+        crate::lifecycle::plugin_uninstall_for_state(&state, "demo".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&client_secret_namespace("demo"), "oauth")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(
+                &client_secret_namespace("demo"),
+                "removed-provider"
+            )
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            cognia_secrets::keyring_secrets::get(&client_secret_namespace("other"), "oauth")
+                .unwrap()
+                .as_deref(),
+            Some("other-secret")
+        );
+        clear_client_secrets("other").unwrap();
+    }
+
+    #[test]
+    fn confidential_auth_matches_installed_endpoint_placement_and_egress() {
+        use cognia_net::oauth_exchange::ClientSecretPlacement as Placement;
+        let tmp = TempDir::new().unwrap();
+        let state = auth_state(&tmp);
+        let provider = declared_auth_provider(&state, "demo", "oauth").unwrap();
+        assert!(authorize_token_endpoint(
+            &state,
+            "demo",
+            &provider,
+            "https://vendor.test/token",
+            Placement::Basic
+        )
+        .is_ok());
+        for (url, placement) in [
+            ("http://vendor.test/token", Placement::Basic),
+            ("https://vendor.test:444/token", Placement::Basic),
+            ("https://evil.test/token", Placement::Basic),
+            ("https://vendor.test/other", Placement::Basic),
+            ("https://vendor.test/token", Placement::Form),
+            ("https://vendor.test/token?target=other", Placement::Basic),
+        ] {
+            assert_eq!(
+                authorize_token_endpoint(&state, "demo", &provider, url, placement)
+                    .unwrap_err()
+                    .code,
+                "PERMISSION_DENIED"
+            );
+        }
+        state.set_network_allowlist("demo", vec![]);
+        assert_eq!(
+            authorize_token_endpoint(
+                &state,
+                "demo",
+                &provider,
+                "https://vendor.test/token",
+                Placement::Basic
+            )
+            .unwrap_err()
+            .code,
+            "PERMISSION_DENIED"
+        );
+        state.set_network_allowlist("demo", vec!["vendor.test".into()]);
+        state.set_network_rules(
+            "demo",
+            vec![NetworkAccessRule {
+                domain: "vendor.test".into(),
+                methods: vec!["GET".into()],
+                paths: vec!["/token".into()],
+            }],
+        );
+        assert_eq!(
+            authorize_token_endpoint(
+                &state,
+                "demo",
+                &provider,
+                "https://vendor.test/token",
+                Placement::Basic
+            )
+            .unwrap_err()
+            .code,
+            "PERMISSION_DENIED"
+        );
+        assert_eq!(
+            authorize_token_endpoint(
+                &state,
+                "demo",
+                &json!({"id": "oauth"}),
+                "https://vendor.test/token",
+                Placement::Basic
+            )
+            .unwrap_err()
+            .code,
+            "PERMISSION_DENIED"
+        );
+    }
+
+    #[test]
+    fn confidential_auth_capability_and_permission_contract() {
+        let capabilities = capability_table();
+        let exchange = capabilities
+            .iter()
+            .find(|cap| cap.api == "auth:exchange")
+            .unwrap();
+        assert!(exchange.supported && exchange.high_risk);
+        assert_eq!(
+            exchange.required_permissions,
+            ["auth:provide", "network:fetch"]
+        );
+        for op in [
+            "exchange",
+            "setClientSecret",
+            "clearClientSecret",
+            "hasClientSecret",
+        ] {
+            assert_eq!(required_permission("auth", op), Some("auth:provide"));
+        }
     }
 
     fn ide_scope(user_id: &str, host_id: &str, workspace_root: &str, area: &str) -> Value {

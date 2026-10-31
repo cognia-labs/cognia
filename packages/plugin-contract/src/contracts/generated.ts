@@ -340,6 +340,9 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   "ctx.auth.createPkceFlow": {
     kind: "none",
   },
+  "ctx.auth.exchangeConfidential": {
+    kind: "none",
+  },
   "ctx.auth.getSession": {
     kind: "none",
   },
@@ -3284,5 +3287,49 @@ export const PLUGIN_API_WIRE_OPS = {
     scopeBinding: "plugin",
     executionPlacement: "host-service",
     introducedIn: "0.1.0",
+  },
+  "auth:exchange": {
+    id: "auth:exchange",
+    idempotent: false,
+    resourceEffect: {
+      kind: "none",
+    },
+    requiredPermissions: ["auth:provide", "network:fetch"],
+    scopeBinding: "plugin",
+    executionPlacement: "host-service",
+    introducedIn: "1.7.0",
+  },
+  "auth:setClientSecret": {
+    id: "auth:setClientSecret",
+    idempotent: false,
+    resourceEffect: {
+      kind: "none",
+    },
+    requiredPermissions: ["auth:provide"],
+    scopeBinding: "plugin",
+    executionPlacement: "host-service",
+    introducedIn: "1.7.0",
+  },
+  "auth:clearClientSecret": {
+    id: "auth:clearClientSecret",
+    idempotent: false,
+    resourceEffect: {
+      kind: "none",
+    },
+    requiredPermissions: ["auth:provide"],
+    scopeBinding: "plugin",
+    executionPlacement: "host-service",
+    introducedIn: "1.7.0",
+  },
+  "auth:hasClientSecret": {
+    id: "auth:hasClientSecret",
+    idempotent: true,
+    resourceEffect: {
+      kind: "none",
+    },
+    requiredPermissions: ["auth:provide"],
+    scopeBinding: "plugin",
+    executionPlacement: "host-service",
+    introducedIn: "1.7.0",
   },
 } as const

@@ -1354,7 +1354,10 @@ pub async fn plugin_uninstall_for_state(
     stop_node_plugin_process(state, &plugin_id, None).await?;
     let install_path = state.plugin_dir(&plugin_id);
     let host_state_path = state.plugin_host_state_dir(&plugin_id);
+    let secret_owner = plugin_id.clone();
     tokio::task::spawn_blocking(move || {
+        crate::api_bridge::clear_client_secrets(&secret_owner)
+            .map_err(|_| PluginError::Internal("plugin client secret cleanup failed".into()))?;
         if install_path.exists() {
             fs::remove_dir_all(&install_path)?;
         }
@@ -1373,6 +1376,7 @@ pub async fn plugin_uninstall_for_state(
     .map_err(|error| PluginError::Internal(format!("plugin uninstall task failed: {error}")))??;
     state.plugins.write().remove(&plugin_id);
     state.permissions.write().remove(&plugin_id);
+    state.installed_manifest_cache.write().remove(&plugin_id);
     Ok(())
 }
 

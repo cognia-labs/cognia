@@ -4955,6 +4955,21 @@ API_NAMESPACE_CONTRACTS = [
                 },
             },
             {
+                "id": "auth.exchangeConfidential",
+                "name": "exchangeConfidential",
+                "requiredPermissions": [
+                    "auth:provide",
+                    "network:fetch",
+                ],
+                "consentTier": "confirm",
+                "risk": "high",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
                 "id": "auth.getSession",
                 "name": "getSession",
                 "requiredPermissions": [

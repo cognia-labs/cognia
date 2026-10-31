@@ -288,7 +288,7 @@ where
 /// See the module header for the trust model. Only the link-local metadata
 /// endpoint is blocked; localhost must stay reachable (OneBot forward-WS, local
 /// dev flows).
-fn admit_host(url: &url::Url) -> Result<(), String> {
+pub(crate) fn admit_host(url: &url::Url) -> Result<(), String> {
     let host = url.host_str().unwrap_or("").to_string();
     if host == "169.254.169.254" {
         return Err(

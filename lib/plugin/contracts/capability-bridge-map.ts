@@ -516,8 +516,10 @@ export const OVERLAY_REGISTRY_CAPABILITIES = {
     unregisterAllByPlugin: unregisterViewContainersByPlugin,
   }),
   "auth-provider": defineOverlayCapability<PluginAuthProviderDef>({
-    // C1. The declarative `authProviders[]` entries are metadata (id + label
-    // for validation / consent UI). Activation can run before contributions:
+    // C1. The declarative `authProviders[]` entries describe providers for
+    // validation / consent UI. Rust reads tokenEndpoints from the installed
+    // manifest to authorize auth:exchange; this overlay grants no endpoint.
+    // Activation can run before contributions:
     // preserve its same-owner live provider instead of replacing it with metadata.
     manifestField: "authProviders",
     registerEntry: (def, ctx) => {

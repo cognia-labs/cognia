@@ -2380,6 +2380,18 @@
           }
         },
         {
+          "id": "auth.exchangeConfidential",
+          "name": "exchangeConfidential",
+          "requiredPermissions": ["auth:provide", "network:fetch"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
+        },
+        {
           "id": "auth.getSession",
           "name": "getSession",
           "requiredPermissions": ["auth:consume"],
@@ -14839,6 +14851,50 @@
       "scopeBinding": "plugin",
       "executionPlacement": "host-service",
       "introducedIn": "0.1.0"
+    },
+    {
+      "id": "auth:exchange",
+      "idempotent": false,
+      "resourceEffect": {
+        "kind": "none"
+      },
+      "requiredPermissions": ["auth:provide", "network:fetch"],
+      "scopeBinding": "plugin",
+      "executionPlacement": "host-service",
+      "introducedIn": "1.7.0"
+    },
+    {
+      "id": "auth:setClientSecret",
+      "idempotent": false,
+      "resourceEffect": {
+        "kind": "none"
+      },
+      "requiredPermissions": ["auth:provide"],
+      "scopeBinding": "plugin",
+      "executionPlacement": "host-service",
+      "introducedIn": "1.7.0"
+    },
+    {
+      "id": "auth:clearClientSecret",
+      "idempotent": false,
+      "resourceEffect": {
+        "kind": "none"
+      },
+      "requiredPermissions": ["auth:provide"],
+      "scopeBinding": "plugin",
+      "executionPlacement": "host-service",
+      "introducedIn": "1.7.0"
+    },
+    {
+      "id": "auth:hasClientSecret",
+      "idempotent": true,
+      "resourceEffect": {
+        "kind": "none"
+      },
+      "requiredPermissions": ["auth:provide"],
+      "scopeBinding": "plugin",
+      "executionPlacement": "host-service",
+      "introducedIn": "1.7.0"
     }
   ]
 }

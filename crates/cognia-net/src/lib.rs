@@ -31,6 +31,7 @@ pub mod http_download;
 pub mod inbound_policy;
 pub mod ndjson_stream;
 pub mod net_meter;
+pub mod oauth_exchange;
 pub mod outbound_pii;
 mod pinned_http;
 pub mod proxy_config;

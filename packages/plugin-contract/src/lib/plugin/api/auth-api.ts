@@ -28,6 +28,20 @@ export type * from "../../../types/plugin/plugin-auth"
 /** The host supplies the governed transport; plugins cannot override it. */
 export type PluginPkceFlowConfig = Omit<PkceFlowConfig, "fetchImpl">
 
+/** The trusted Host injects its client secret; it never crosses into ctx. */
+export interface ConfidentialExchangeRequest {
+  providerId: string
+  tokenUrl: string
+  params: Record<string, string>
+  clientId: string
+  placement: "none" | "form" | "json" | "basic"
+}
+
+export interface ConfidentialExchangeResponse {
+  status: number
+  body: Record<string, unknown>
+}
+
 /** Provider object a plugin registers via `ctx.auth.registerProvider`. */
 export interface PluginAuthProvider {
   id: string
@@ -94,6 +108,10 @@ export interface PluginAuthAPI {
   ): () => void
   /** Run an OAuth 2.0 + PKCE flow (`auth:provide` + `network:fetch`). Returns the raw tokens. */
   createPkceFlow(config: PluginPkceFlowConfig): Promise<PkceTokenResult>
+  /** Exchange at a declared token endpoint (`auth:provide` + `network:fetch`).
+   * Requires desktop or an always-on Host; otherwise NOT_SUPPORTED (ES-33).
+   */
+  exchangeConfidential(request: ConfidentialExchangeRequest): Promise<ConfidentialExchangeResponse>
 }
 
 export interface CreateAuthAPIOptions {
