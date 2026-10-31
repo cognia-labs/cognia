@@ -244,6 +244,7 @@
     "0246-a-business-plugin-reaches-a-service-through-a-granted-connection",
     "0247-long-lived-work-carries-a-mandate-and-follows-its-threads",
     "0248-a-person-is-never-queued-behind-automated-work",
-    "0249-a-background-jobs-completion-reaches-the-agent"
+    "0249-a-background-jobs-completion-reaches-the-agent",
+    "0250-the-runtime-is-a-headless-kernel-the-desktop-embeds"
   ]
 }
