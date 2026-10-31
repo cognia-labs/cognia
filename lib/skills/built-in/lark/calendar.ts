@@ -17,9 +17,14 @@
 
 import { z } from "zod"
 
-import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill } from "../types"
-import { argsToFlags, buildConfirmSurface, larkAdapterIdFromCtx, runLarkCli } from "./_helpers"
+import {
+  argsToFlags,
+  buildConfirmSurface,
+  larkAdapterIdFromCtx,
+  registerLarkSkill,
+  runLarkCli,
+} from "./_helpers"
 
 const FAMILY = "lark.calendar"
 const PLATFORMS = ["lark"] as const
@@ -127,7 +132,7 @@ function mkWrite<S extends z.ZodTypeAny>(input: {
 
 // ---- read skills ---------------------------------------------------------
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkRead({
     id: "lark.calendar.agenda_today",
     mcpToolName: "lark_calendar_agenda_today",
@@ -141,7 +146,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkRead({
     id: "lark.calendar.list_calendars",
     mcpToolName: "lark_calendar_list_calendars",
@@ -166,7 +171,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkRead({
     id: "lark.calendar.list_events",
     mcpToolName: "lark_calendar_list_events",
@@ -198,7 +203,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkRead({
     id: "lark.calendar.freebusy",
     mcpToolName: "lark_calendar_freebusy",
@@ -218,7 +223,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkRead({
     id: "lark.calendar.search_rooms",
     mcpToolName: "lark_calendar_search_rooms",
@@ -253,7 +258,7 @@ registerBuiltInSkill(
 
 // ---- write skills (HITL) -------------------------------------------------
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkWrite({
     id: "lark.calendar.create_event",
     mcpToolName: "lark_calendar_create_event",
@@ -298,7 +303,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkWrite({
     id: "lark.calendar.update_event",
     mcpToolName: "lark_calendar_update_event",
@@ -337,7 +342,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkWrite({
     id: "lark.calendar.rsvp",
     mcpToolName: "lark_calendar_rsvp",
@@ -365,7 +370,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkWrite({
     id: "lark.calendar.book_room",
     mcpToolName: "lark_calendar_book_room",
@@ -395,7 +400,7 @@ registerBuiltInSkill(
 
 // ---- destructive skills (opt-in + HITL) ----------------------------------
 
-registerBuiltInSkill(
+registerLarkSkill(
   mkWrite({
     id: "lark.calendar.delete_event",
     mcpToolName: "lark_calendar_delete_event",

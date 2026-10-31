@@ -1,0 +1,99 @@
+# Evidence ledger: Feishu Calendar Integration and shared authentication
+
+- Status: verifying
+- Lane: standard
+- Created: 2026-10-31
+- Updated: 2026-10-31
+- Related: ADR-0009, ADR-0026; docs/content/docs/plugin-dev/integrations.mdx
+
+## Original request
+
+> 实现一个飞书日历的 Integration 插件，接好 OAuth、日历读写和增量同步，复用现有能力并补齐测试；研究飞书基础认证作为库插件供日历依赖。
+
+## Knowledge
+
+| ID  | Statement                                                                                                                                                  | State    | Basis                                                                                   | Depends on |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------- | ---------- |
+| G1  | Implement OAuth, calendar operations, durable incremental sync and tests, and investigate reusable Feishu authentication.                                  | Agreed   | User request, 2026-10-31                                                                | -          |
+| O1  | Integration SDK already provides accounts, authenticated requests, action jobs, events, resource providers and workflow projection.                        | Verified | Current plugin-integration contract and integrations bridge, 2026-10-31                 | -          |
+| O2  | Required plugin dependencies activate first; library modules receive consumer contexts and should not own shared credentials.                              | Observed | Dependency research of manager and library loader, 2026-10-31                           | -          |
+| O3  | Feishu event listing supports page_token then sync_token; error 190008 invalidates a cursor. Time-window filters cannot be combined with sync/page tokens. | Verified | https://open.feishu.cn/document/server-docs/calendar-v4/calendar-event/list, 2026-10-31 | -          |
+| O4  | Before this change, calendar tools used desktop lark-cli and no standalone calendar Integration plugin existed.                                            | Observed | Initial lib/skills/built-in/lark/calendar.ts and plugins inventory, 2026-10-31          | -          |
+| O5  | Two curated standalone packages now load with manifest parity and account-bound public API handlers.                                                       | Verified | package.test.ts and generated builtin catalog, 2026-10-31                               | O1, O2     |
+
+## Problem frame
+
+Deliver an installable Feishu Calendar Integration using the existing host brokers (O1), with a shared provider plugin rather than per-consumer credential ownership (O2). Read/write actions and incremental synchronization must work through registered runtime entry points, persist checkpoints only after successful processing, and recover expired cursors (O3). Existing IM and lark-cli tools remain available (O4). Native push-event ingress is outside this requested polling-based increment; real OAuth/provider acceptance remains a separate observable requirement.
+
+## Complexity profile
+
+| Dimension    | Rating | Why / what would resolve it                                                                                              |
+| ------------ | ------ | ------------------------------------------------------------------------------------------------------------------------ |
+| scale        | medium | Two service plugins plus targeted host auth lifecycle and distribution wiring.                                           |
+| technical    | medium | Feishu PKCE, token rotation, pagination and sync invalidation require protocol checks.                                   |
+| coupling     | medium | Existing auth registry, dependency lifecycle, action runner and scheduler.                                               |
+| requirement  | low    | User specified OAuth, read/write, incremental sync and reusable foundation.                                              |
+| verification | high   | Deterministic contract/fault tests are local; real OAuth requires a configured Feishu application and interactive login. |
+| risk         | high   | Credential exposure, wrong-account writes and lost or duplicated sync events.                                            |
+
+## Risks
+
+| ID  | Risk (impact)                                                                                 | Severity | Source                                                  | Claim                                                                                                   | Refuted by                                                                                 |
+| --- | --------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| R1  | Auth sessions leak, rotate incorrectly or cross account boundaries.                           | high     | ADR-0026; lens:STRIDE; existing auth registry           | Secrets stay in provider-owned secure storage and requests use host authentication.                     | Tokens in ordinary storage/logs or one account using another session.                      |
+| R2  | Partial sync, duplicate pages or expired cursors lose events.                                 | high     | Official Feishu list API; failure-injection lens        | Cursor commit follows durable event processing; replay is deduplicated and cursor expiry resets safely. | Failed publish advances cursor or restart silently skips updates.                          |
+| R3  | Plugin is built but never enabled, or dependency/provider lifecycle overwrites live auth.     | high     | Cognia risk catalog; dependency exploration             | Distribution, dependency activation, provider registration and scheduler reach actual handlers.         | Plugin cannot be discovered, placeholder replaces provider, or sync has no runtime caller. |
+| R4  | Malformed requests, wrong identifiers or API error envelopes produce incorrect remote writes. | high     | Official Feishu API; existing Integration action runner | Boundary validation and brokered writes preserve policy and idempotency.                                | HTTP-200 error treated as success or invalid time range reaches Feishu.                    |
+
+## Verification obligations
+
+| ID  | Risk           | Method                                                                                                       | Independence   | Evidence                                                                                                                                                            | Coverage                                                                                                                                                      | Status  |
+| --- | -------------- | ------------------------------------------------------------------------------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| V1  | R1             | OAuth lifecycle, secure storage, state/PKCE and refresh/logout fault cases.                                  | tool           | Final focused Jest: 16 suites / 322 tests passed; .cache/feishu-calendar-tests-final.json                                                                           | Provider expiry, rotation, invalid grant, transient errors, multiaccount, logout races; excludes live consent.                                                | passed  |
+| V2  | R2             | Full/incremental/restart/pagination/expiry/partial-publish/cancellation/concurrency tests.                   | tool           | sync.test.ts and actual scheduler-argument regression in index.test.ts passed in final Jest run                                                                     | Failed publish retains cursor, stable replay IDs, tombstone dedup, wildcard discovery, calendar identity, lifecycle/task cancellation, same-instance overlap. | passed  |
+| V3  | R3             | Dependency/provider, actual AppRuntime, standalone package and scheduled-handler tests; artifact generation. | tool           | package.test.ts loads both standalone bundles; node scripts/build/stage-plugin-artifacts.mjs --web-only exit 0; author-types:check and plugin:contract:check exit 0 | Discovery, dependency metadata, named exports, scheduler registration; fresh-account callback bypasses account/recovery/plugin boot.                          | passed  |
+| V4  | R4             | Calendar validation, URL encoding, API envelopes and broker handler tests.                                   | tool           | api.test.ts, Integration bridge and invocation regression suites passed in final Jest run                                                                           | Native time/date/zone validation, patch clears, attendee operations, stable creation job key, fresh reads and per-invocation retry identity.                  | passed  |
+| V5  | R1, R3         | Real Feishu OAuth and calendar round trip.                                                                   | real-env       | Not executed: no task-specific Feishu app/callback deployment/user login supplied                                                                                   | Actual native opener, consent, keychain and remote calendar acceptance remain unknown.                                                                        | blocked |
+| V6  | R1, R2, R3, R4 | Focused source review, scoped lint/typecheck, i18n and author gates.                                         | fresh-reviewer | PII/wiring/i18n/static/test-gap reviewers closed scoped findings; scoped ESLint and tsc exit 0; i18n build/check/lint/sort and plugin:author-imports exit 0         | Changed source/import graph and public contracts; excludes repository-wide baseline failures below.                                                           | passed  |
+| V7  | R3, R4         | Repository-wide lint/typecheck/static-export/co-location gates.                                              | tool           | pnpm lint exit 1; pnpm typecheck exit 2; lint:static-export and audit:colocated-tests exit 1                                                                        | Gates ran; diagnostics concern unrelated paths listed below.                                                                                                  | blocked |
+| V8  | R3             | Production application build and full native shell acceptance.                                               | real-env       | Not run: approximately 1.5 GiB free and existing global gate failures; standalone package builds succeeded                                                          | No production Next/Tauri acceptance claim.                                                                                                                    | blocked |
+
+## Decisions
+
+| ID  | Date       | Decision                                                                                                                                                                                                                                            | Action    | Based on           | Reversal trigger                                                                                     |
+| --- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
+| D1  | 2026-10-31 | Reuse Integration brokers and required dependency activation; implement shared auth as a provider plugin and sync as resumable polling. New plugin modules are necessary because built-in lark-cli tools cannot be imported by Marketplace plugins. | implement | G1, O1, O2, O3, O4 | Public SDK cannot support secure OAuth callback, or dependency ownership prevents brokered sessions. |
+| D2  | 2026-10-31 | Use an explicit HTTP(S) hosted callback and native return link; fix existing account-gating of the callback, provider placeholder overwrite, and session-wide chat idempotency. Behavioral regressions were observed before repairs.                | implement | G1, O1, O2         | Callback isolation, provider identity or invocation retry tests fail.                                |
+| D3  | 2026-10-31 | Preserve OAuth protocol credential fields only for feishu-auth at the exact Feishu token URL. An initial generic token-path exemption was disproved by the PII reviewer and narrowed; ordinary plugins and URL variants still redact.               | harden    | G1, O1             | Negative egress tests admit arbitrary plugin or endpoint data.                                       |
+
+## Residual risks
+
+| ID  | Residual                                                                                        | From | Why still open                                                                                                                       | Next action                                                                                                                        | Status |
+| --- | ----------------------------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| X1  | Real provider consent and calendar writes need a configured Feishu application.                 | V5   | No task-specific application or user consent session supplied.                                                                       | Configure App ID/Secret and registered deployed /plugin-auth/callback, then sign in in Desktop and exercise a disposable calendar. | open   |
+| X2  | Repository-wide gates are not green.                                                            | V7   | Unrelated sandbox test types, generated cli/.cache lint output, Node-only agent adapter imports, and a missing Rust co-located test. | Owners resolve the listed existing diagnostics, then rerun full gates.                                                             | open   |
+| X3  | Production and real native shell behavior remain unverified.                                    | V8   | Disk space is constrained and global gates fail.                                                                                     | Provide sufficient build space and resolve existing blockers before full Next/Tauri acceptance.                                    | open   |
+| X4  | Sync coordination covers one active plugin instance, not independent processes sharing storage. | R2   | Public plugin storage has no compare-and-swap lease; no multi-process deployment was exercised.                                      | Keep desktop plugin single-owner; add a host atomic lease before enabling concurrent independent sync hosts.                       | open   |
+
+## Outcome
+
+| ID  | Signal                                                                                  | How / when measured                                                           | Result                                                                                                                       | Status  |
+| --- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------- |
+| M1  | Calendar plugin can authorize, read/write and synchronize without private host imports. | Plugin lifecycle/protocol/package tests and real-provider smoke               | Local implementation verified; real-provider smoke pending.                                                                  | pending |
+| M2  | Calendar depends on shared Feishu auth without owning copied tokens.                    | Dependency/provider lifecycle tests, package manifests and independent review | Required provider dependency and host credential broker verified; library modules reserved for pure consumer-scoped helpers. | met     |
+
+## Implementation and verification notes
+
+- New installable modules live in `plugins/feishu-auth/` and `plugins/feishu-calendar/` because Marketplace plugins cannot import private built-in lark-cli modules. Existing Integration actions/accounts/events, native auth registry, PKCE helper, scheduler, secrets and package builder are reused.
+- Both manifests explicitly block non-Tauri activation. The headless roster records desktop ownership. The generic account form still creates a new consent session when adding an account; automatic cross-service account selection is not claimed.
+- Standalone installable ZIPs: `.cache/feishu-calendar-packages/feishu-auth-1.0.0.zip` and `.cache/feishu-calendar-packages/feishu-calendar-1.0.0.zip`. Package loader tests validate generated manifests and exported handlers.
+- Scoped tsc projects: `.cache/feishu-calendar-api-research/tsconfig-integration.json`, `tsconfig.callback-shell.json`, and `tsconfig-idempotency.json` (the latter scope's command/results are in `idempotency-typecheck.log`). Scoped ESLint output: `.cache/feishu-calendar-eslint-final.log` (empty; exit 0). No coverage command ran.
+- Browser component check used the actual callback component with `NextIntlClientProvider` in an isolated local preview at `127.0.0.1:3187`: Chinese success and denial render correctly; valid state produces the native return link, invalid state does not. This is not a full app or native browser-return smoke. Actual AppRuntime fresh-account isolation is covered separately by regression tests (10 failures before fix, 70 passing tests across the three repaired suites).
+- Source investigation of pinned `tauri-plugin-opener 2.7.2` found desktop `.open_path` and `.open_url` methods delegate to the same opener. No speculative Rust edit was made; real native launch remains in V5.
+
+### Global gate diagnostics
+
+- `pnpm typecheck`: four errors in `hooks/automation/use-sandbox-desktop.test.ts:62` and `lib/sandbox/session-runtime.test.ts:173,242,262`; no task-scoped diagnostics. Full log: `.cache/feishu-calendar-typecheck.log`.
+- `pnpm lint`: 1,399 errors / 29,750 warnings from existing generated files under `cli/.cache/plugin-extraction-js/`; task-scoped ESLint passes. Full log: `.cache/feishu-calendar-lint.log`.
+- `pnpm lint:static-export`: 14 Node-only imports in `packages/agent-codebuff/src/{native-process,node-bridge}.ts` and `packages/agent-crush/src/node-bridge.ts`.
+- `pnpm audit:colocated-tests`: missing in-file tests in `crates/cognia-automation/src/cua_sandbox/lume/workspace.rs`. The scoped test-gap auditor found no remaining missing/stale tests for this task.

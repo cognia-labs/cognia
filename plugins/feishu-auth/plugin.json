@@ -1,0 +1,75 @@
+{
+  "id": "feishu-auth",
+  "name": "Feishu Authentication",
+  "nameKey": "manifest.name",
+  "version": "1.0.0",
+  "type": "frontend",
+  "description": "Shared Feishu OAuth provider for service plugins. Credentials and refresh tokens remain in this provider's secure storage.",
+  "descriptionKey": "manifest.description",
+  "author": "Cognia Official",
+  "license": "MIT",
+  "minAppVersion": "0.1.0",
+  "engines": {
+    "cognia": ">=0.1.0"
+  },
+  "main": "src/index.ts",
+  "capabilities": ["auth-provider"],
+  "permissions": [
+    "auth:provide",
+    "secrets:read",
+    "secrets:write",
+    "network:fetch",
+    "shell:execute"
+  ],
+  "authProviders": [
+    {
+      "id": "feishu-user-oauth",
+      "label": "Feishu user OAuth"
+    }
+  ],
+  "networkAccess": {
+    "allowedDomains": ["open.feishu.cn"],
+    "rules": [
+      {
+        "domain": "open.feishu.cn",
+        "methods": ["POST"],
+        "paths": ["/open-apis/authen/v2/oauth/token"]
+      },
+      {
+        "domain": "open.feishu.cn",
+        "methods": ["GET"],
+        "paths": ["/open-apis/authen/v1/user_info"]
+      }
+    ]
+  },
+  "runtimeCompatibility": {
+    "tauri": {
+      "availability": "supported",
+      "entrypoint": "src/index.ts"
+    },
+    "headless": {
+      "availability": "blocked",
+      "reason": "Interactive Feishu OAuth currently requires the Cognia desktop host and a hosted HTTPS callback page."
+    },
+    "browser": {
+      "availability": "blocked",
+      "reason": "This confidential-client provider keeps the app secret in the desktop keychain and uses the system browser."
+    },
+    "mobile": {
+      "availability": "blocked",
+      "reason": "Interactive Feishu OAuth currently requires the Cognia desktop host."
+    }
+  },
+  "i18n": {
+    "locales": {
+      "en": {
+        "manifest.name": "Feishu Authentication",
+        "manifest.description": "Shared Feishu OAuth provider with provider-owned secure token storage and refresh."
+      },
+      "zh-CN": {
+        "manifest.name": "飞书认证",
+        "manifest.description": "供飞书服务插件依赖的共享 OAuth 认证，统一安全保存和刷新凭证。"
+      }
+    }
+  }
+}

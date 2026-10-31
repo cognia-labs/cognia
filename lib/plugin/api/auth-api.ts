@@ -45,6 +45,10 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
   return {
     registerProvider(provider) {
       requirePermission(hasPermission, "auth:provide", "ctx.auth.registerProvider")
+      const existing = getProvider(provider.id)
+      if (existing && existing.pluginId !== pluginId) {
+        throw new Error(`Auth provider "${provider.id}" is owned by another plugin.`)
+      }
       return registerAuthenticationProvider({ ...provider, pluginId })
     },
     async getSession(providerId, scopes, sessionOptions) {

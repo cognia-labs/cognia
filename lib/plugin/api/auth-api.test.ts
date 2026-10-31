@@ -263,6 +263,14 @@ describe("createAuthAPI", () => {
     expect(p).toMatchObject({ id: "acme", pluginId: "plugin-a" })
   })
 
+  it("cannot replace an authentication provider owned by another plugin", () => {
+    const owner = createAuthAPI("provider-owner", allow)
+    owner.registerProvider(fakeProvider())
+    const intruder = createAuthAPI("another-plugin", allow)
+    expect(() => intruder.registerProvider(fakeProvider())).toThrow(/owned by another plugin/)
+    expect(listProviders()[0].pluginId).toBe("provider-owner")
+  })
+
   it("getSessions delegates to the provider (silent)", async () => {
     const api = createAuthAPI("p", allow)
     const getSessions = jest.fn(async () => [

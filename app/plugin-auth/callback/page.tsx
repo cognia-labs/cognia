@@ -45,6 +45,18 @@ export default function PluginAuthCallbackPage() {
   const t = useTranslations("plugins.auth.callback")
   const search = useSyncExternalStore(NEVER_CHANGES, readSearch, readServerSearch)
   const outcome = outcomeOf(search)
+  const params = new URLSearchParams(search ?? "")
+  const state = params.get("state") ?? ""
+  const nativeParams = new URLSearchParams()
+  for (const key of ["code", "state", "error"] as const) {
+    const value = params.get(key)
+    if (value) nativeParams.set(key, value)
+  }
+  const nativeReturn =
+    /^cognia-plugin:feishu-auth:[a-f0-9]{32}$/.test(state) &&
+    (params.get("code") || params.get("error"))
+      ? `cognia://plugin/feishu-auth/oauth-callback?${nativeParams.toString()}`
+      : null
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -96,6 +108,11 @@ export default function PluginAuthCallbackPage() {
         <p role="status" className="text-sm text-muted-foreground">
           {t("working")}
         </p>
+      )}
+      {nativeReturn && (
+        <a className="text-sm underline" href={nativeReturn}>
+          {t("returnToApp")}
+        </a>
       )}
     </main>
   )

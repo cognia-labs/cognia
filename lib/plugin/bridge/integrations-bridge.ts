@@ -218,9 +218,9 @@ export async function registerIntegrationsForPlugin(
                   idempotencyKey:
                     typeof idempotencyKey === "string" && idempotencyKey.length > 0
                       ? idempotencyKey
-                      : action.idempotency === "none"
+                      : action.risk === "read" || action.idempotency === "none"
                         ? undefined
-                        : `${context.sessionId ?? "chat"}:${action.id}`,
+                        : `${context.invocationId ?? crypto.randomUUID()}:${action.id}`,
                   source: "chat",
                 },
                 {

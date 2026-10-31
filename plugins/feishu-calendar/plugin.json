@@ -1,0 +1,74 @@
+{
+  "id": "feishu-calendar",
+  "name": "Feishu Calendar",
+  "nameKey": "manifest.name",
+  "version": "1.0.0",
+  "description": "Feishu calendar reads, governed event writes and durable incremental synchronization using shared Feishu OAuth.",
+  "descriptionKey": "manifest.description",
+  "type": "frontend",
+  "main": "src/index.ts",
+  "author": "Cognia Official",
+  "license": "MIT",
+  "minAppVersion": "0.1.0",
+  "engines": {
+    "cognia": ">=0.1.0"
+  },
+  "dependencies": {
+    "feishu-auth": "^1.0.0"
+  },
+  "capabilities": ["integrations", "scheduler"],
+  "permissions": [
+    "integrations:read",
+    "integrations:events",
+    "integrations:execute",
+    "integrations:manage"
+  ],
+  "runtimeCompatibility": {
+    "tauri": {
+      "availability": "supported",
+      "entrypoint": "src/index.ts"
+    },
+    "browser": {
+      "availability": "blocked",
+      "reason": "Connecting a Feishu OAuth account requires the desktop host."
+    },
+    "mobile": {
+      "availability": "blocked",
+      "reason": "Connecting a Feishu OAuth account requires the desktop host."
+    },
+    "headless": {
+      "availability": "blocked",
+      "reason": "Interactive Feishu authorization currently requires the desktop host."
+    }
+  },
+  "scheduledTasks": [
+    {
+      "name": "Synchronize subscribed Feishu calendars",
+      "description": "Incrementally read enabled calendar subscriptions and publish changes through the Integration event broker.",
+      "handler": "syncSubscribedCalendars",
+      "trigger": {
+        "type": "interval",
+        "seconds": 300
+      },
+      "defaultEnabled": true,
+      "retry": {
+        "maxAttempts": 2,
+        "delaySeconds": 30
+      },
+      "timeout": 240,
+      "tags": ["feishu", "calendar", "sync"]
+    }
+  ],
+  "i18n": {
+    "locales": {
+      "en": {
+        "manifest.name": "Feishu Calendar",
+        "manifest.description": "Feishu calendar reads, governed event writes and durable incremental synchronization using shared Feishu OAuth."
+      },
+      "zh-CN": {
+        "manifest.name": "飞书日历",
+        "manifest.description": "复用飞书认证，提供日历查询、受权限控制的日程读写和持久化增量同步。"
+      }
+    }
+  }
+}

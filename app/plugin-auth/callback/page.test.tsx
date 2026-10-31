@@ -72,4 +72,28 @@ describe("PluginAuthCallbackPage", () => {
     render(<PluginAuthCallbackPage />)
     expect(screen.getByRole("alert")).toHaveTextContent("missing")
   })
+
+  it("offers a native return link only for a valid plugin OAuth state", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/plugin-auth/callback?code=abc&state=cognia-plugin%3Afeishu-auth%3A0123456789abcdef0123456789abcdef"
+    )
+    render(<PluginAuthCallbackPage />)
+    const link = screen.getByRole("link", { name: "returnToApp" })
+    expect(link).toHaveAttribute(
+      "href",
+      "cognia://plugin/feishu-auth/oauth-callback?code=abc&state=cognia-plugin%3Afeishu-auth%3A0123456789abcdef0123456789abcdef"
+    )
+  })
+
+  it("never turns arbitrary state into a native return target", () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/plugin-auth/callback?code=abc&state=cognia-plugin%3Aother-plugin%3Aevil"
+    )
+    render(<PluginAuthCallbackPage />)
+    expect(screen.queryByRole("link")).toBeNull()
+  })
 })

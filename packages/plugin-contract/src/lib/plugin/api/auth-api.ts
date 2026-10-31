@@ -22,7 +22,7 @@ export interface PluginAuthProvider {
     scopes: readonly string[] | undefined,
     options: AuthSessionOptions
   ): Promise<AuthSession[]>
-  createSession(scopes: readonly string[]): Promise<AuthSession>
+  createSession(scopes: readonly string[], options?: AuthSessionOptions): Promise<AuthSession>
   removeSession(sessionId: string): Promise<void>
 }
 

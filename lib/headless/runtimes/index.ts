@@ -84,6 +84,11 @@
  *
  * ## Deliberately NOT registered (lifecycle owned elsewhere or UI-only)
  *
+ * - `feishu-auth` / `feishu-calendar` — desktop plugin-owned confidential OAuth,
+ *   native browser return and subscription polling. Their manifests explicitly
+ *   block headless activation; no callback listener or token-store clone is
+ *   installed by this roster.
+ *
  * - `vscode-webview-restoration` — PluginManager installs panel persistence and
  *   serializer recovery only in the Tauri renderer. Headless has no extension
  *   rail or iframe; a native Node invoker does not make a UI surface available.

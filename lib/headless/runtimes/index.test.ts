@@ -56,6 +56,8 @@ describe("headless runtime roster", () => {
       expect(names).not.toContain("media-generation")
       expect(names).not.toContain("phantom-run-guard")
       expect(names).not.toContain("twin-job-worker")
+      expect(names).not.toContain("feishu-auth")
+      expect(names).not.toContain("feishu-calendar")
       expect(new Set(names).size).toBe(names.length)
     })
   })
