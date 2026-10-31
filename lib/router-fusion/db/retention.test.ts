@@ -109,7 +109,9 @@ function effect(runId: string, status: FusionOutboxRow["status"]): FusionOutboxR
     attempts: 0,
     lastError: null,
     createdAt: OLD,
-    appliedAt: status === "pending" ? null : OLD,
+    nextAttemptAt: OLD,
+    appliedAt: status === "applied" || status === "skipped" ? OLD : null,
+    deadletteredAt: status === "deadletter" ? OLD : null,
   }
 }
 
@@ -207,6 +209,10 @@ describe("pruneFusionDatabase", () => {
     [
       "an outbox effect not yet applied",
       (db: FusionDB) => db.fusionOutbox.put(effect("pinned", "pending")),
+    ],
+    [
+      "a dead-lettered effect requiring operator inspection",
+      (db: FusionDB) => db.fusionOutbox.put(effect("pinned", "deadletter")),
     ],
     [
       "a session lock",

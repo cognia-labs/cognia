@@ -59,7 +59,7 @@ const RUN_TRAIL: DataRetentionPolicy = {
   days: ROUTER_FUSION_RUN_TRAIL_DAYS,
   enforcement: "domain",
   reason:
-    "Reaped by lib/router-fusion/db/retention.ts with the run, once the run is terminal, ended longer ago than the window, and holds no money or pending effect.",
+    "Reaped by lib/router-fusion/db/retention.ts with the run, once the run is terminal, ended longer ago than the window, and holds no money or pending or dead-lettered effect.",
 }
 
 function entry(
@@ -186,7 +186,7 @@ export const ROUTER_FUSION_TABLE_CATALOG: readonly DataTableCatalogEntry[] = [
     retentionPolicy: {
       ...RUN_TRAIL,
       reason:
-        "Applied and skipped effects go with their run; a pending effect keeps its run from being reaped until it is replayed.",
+        "Applied and skipped effects go with their run; pending and dead-lettered effects keep their run from being reaped for replay or operator inspection.",
     },
   }),
   entry("fusionIdempotency", {

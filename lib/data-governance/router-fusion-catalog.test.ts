@@ -59,6 +59,15 @@ describe("Router + Fusion governance catalog", () => {
     })
   })
 
+  it("keeps pending and dead-lettered effects with their runs for inspection", () => {
+    expect(routerFusionTablePolicy("fusionOutbox")?.retentionPolicy.reason).toMatch(
+      /pending.*dead.?letter/i
+    )
+    expect(routerFusionTablePolicy("fusionRuns")?.retentionPolicy.reason).toMatch(
+      /pending.*dead.?letter/i
+    )
+  })
+
   it("encrypts model output and keeps it for the content window only", () => {
     expect(routerFusionTablePolicy("fusionArtifacts")).toMatchObject({
       sensitivity: "confidential",

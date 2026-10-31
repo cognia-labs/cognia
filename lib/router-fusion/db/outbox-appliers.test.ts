@@ -2,15 +2,22 @@
 import "fake-indexeddb/auto"
 
 import {
+  AccountContentCipher,
+  activateAccountContentCipher,
+  __resetAccountContentCipherForTesting,
+} from "@/lib/accounts/content-cipher"
+import {
   createExecutionRun,
   getExecutionRun,
   listExecutionRunEvents,
 } from "@/lib/db/execution-runs"
-import { __resetDbForTesting, getDb } from "@/lib/db/schema"
+import { __resetDbForTesting, activateAccountDatabase, getDb } from "@/lib/db/schema"
 
 import { createSession, getSession } from "@/lib/db/sessions"
 
-import type { OutboxContext } from "./outbox"
+import { __resetFusionStoreForTesting, currentFusionStore } from "../chat/store-provider"
+import { __resetFusionDbForTesting } from "./fusion-db"
+import { drainFusionOutbox, type OutboxContext } from "./outbox"
 import {
   accountDatabaseAppliers,
   fusionApprovalInterrupt,
@@ -57,6 +64,7 @@ function usageEffect(overrides: Record<string, unknown> = {}): FusionOutboxRow {
     attempts: 0,
     lastError: null,
     createdAt: 1,
+    nextAttemptAt: 1,
     appliedAt: null,
   }
 }
@@ -95,6 +103,72 @@ describe("account database outbox appliers", () => {
     const rows = await getDb().sessionUsage.where("sessionId").equals("rf:run-1").toArray()
     expect(rows).toHaveLength(1)
     expect(rows[0].costUsd).toBeCloseTo(0.012345)
+  })
+
+  it("does not wake account A's pending effects into account B after a real account switch", async () => {
+    let clock = 1_000
+    const wakes: Array<{ delayMs: number; fire: () => void }> = []
+    activateAccountDatabase("fusion-wake-a")
+    const accountA = getDb()
+    activateAccountContentCipher(
+      await AccountContentCipher.createForTesting("fusion-wake-a", accountA.name)
+    )
+    const store = await currentFusionStore()
+    try {
+      const session = await createSession({ title: "A", model: "gpt-5-mini" })
+      const rows: FusionOutboxRow[] = [
+        { ...usageEffect(), nextAttemptAt: clock + 15_000 },
+        {
+          ...usageEffect(),
+          effectId: "session:run-1:input",
+          kind: "session_message",
+          payload: {
+            runId: "run-1",
+            sessionId: session.id,
+            phase: "input",
+            inputArtifactId: "input",
+          },
+          createdAt: 2,
+          nextAttemptAt: clock + 15_000,
+        },
+      ]
+      await store.db.fusionOutbox.bulkAdd(rows)
+      const options = {
+        ...store.outboxContext(),
+        now: () => clock,
+        scheduleWake: (delayMs: number, fire: () => void) => {
+          wakes.push({ delayMs, fire })
+          return () => {}
+        },
+      }
+      await drainFusionOutbox(store.db, accountDatabaseAppliers, options)
+      expect(wakes.map((wake) => wake.delayMs)).toEqual([15_000])
+
+      activateAccountDatabase("fusion-wake-b")
+      const accountB = getDb()
+      activateAccountContentCipher(
+        await AccountContentCipher.createForTesting("fusion-wake-b", accountB.name)
+      )
+      expect(accountA.isOpen()).toBe(false)
+      expect(store.db.isOpen()).toBe(true)
+      clock += 15_000
+      wakes[0].fire()
+      // Join the actual wake rather than launching an independent drain.
+      await drainFusionOutbox(store.db, accountDatabaseAppliers, options)
+
+      expect(await accountB.sessionUsage.count()).toBe(0)
+      expect(await accountB.messages.count()).toBe(0)
+      expect(await store.db.fusionOutbox.bulkGet(rows.map((row) => row.effectId))).toEqual(rows)
+      expect(wakes).toHaveLength(1)
+      await accountB.delete()
+    } finally {
+      await store.db.delete()
+      await accountA.delete()
+      __resetFusionStoreForTesting()
+      __resetFusionDbForTesting()
+      __resetDbForTesting()
+      __resetAccountContentCipherForTesting()
+    }
   })
 
   it("annotates a live execution run once and skips a missing or sealed one", async () => {

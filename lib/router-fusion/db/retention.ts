@@ -18,7 +18,8 @@
  *   rows — in one transaction per batch, re-checked inside it. A run is kept
  *   while it still pins money (a held or uncertain reservation, an attempt that
  *   is not final) or has an outbox effect not yet applied: late usage must
- *   still find its attempt, and a pending effect must still find its run.
+ *   still find its attempt, and a pending or dead-lettered effect must still
+ *   find its run for replay or operator inspection.
  * - Idempotency keys: past their own `expiresAt`, after which the same key
  *   starts a new run rather than replaying a reaped one.
  * - Config snapshots: older than the window and compiled into no retained run.
@@ -192,7 +193,7 @@ async function pruneRunBatch(
         const pendingEffects = await db.fusionOutbox
           .where("runId")
           .equals(runId)
-          .filter((effect) => effect.status === "pending")
+          .filter((effect) => effect.status === "pending" || effect.status === "deadletter")
           .count()
         const locks = await db.fusionSessionLocks.where("runId").equals(runId).count()
         if (openAttempts + openReservations + pendingEffects + locks > 0) {

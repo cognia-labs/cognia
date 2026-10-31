@@ -66,6 +66,7 @@ import type { RouterFusionSurface } from "@cognia/router-fusion/settings/switche
 
 import type { FusionContentCodec } from "./content-codec"
 import type { FusionDB } from "./fusion-db"
+import type { DrainOptions, OutboxContext } from "./outbox"
 import { ARTIFACT_CONTENT_TTL_MS } from "./retention"
 import { fusionRunSummaryOf } from "./run-summary"
 import type {
@@ -217,6 +218,8 @@ export interface FusionStoreDeps {
   codec: FusionContentCodec
   now?: () => number
   newId?: () => string
+  /** Injected by account-backed stores; false stops outbox drains and their wakes. */
+  targetMatches?: DrainOptions["targetMatches"]
 }
 
 export interface CreateRunInput {
@@ -341,6 +344,7 @@ export class FusionLedgerStore {
   private readonly codec: FusionContentCodec
   private readonly now: () => number
   private readonly newId: () => string
+  private readonly targetMatches: DrainOptions["targetMatches"]
   private readonly configs = new Map<string, CompiledFusionConfig>()
 
   constructor(deps: FusionStoreDeps) {
@@ -349,6 +353,7 @@ export class FusionLedgerStore {
     this.contentCodec = deps.codec
     this.now = deps.now ?? (() => Date.now())
     this.newId = deps.newId ?? uuid
+    this.targetMatches = deps.targetMatches
   }
 
   // ── shared transaction helpers ─────────────────────────────────────────────
@@ -432,6 +437,7 @@ export class FusionLedgerStore {
     payload: Record<string, unknown>
   ): Promise<void> {
     if (await this.db.fusionOutbox.get(effectId)) return
+    const createdAt = this.now()
     await this.db.fusionOutbox.add({
       effectId,
       runId: run.runId,
@@ -440,8 +446,10 @@ export class FusionLedgerStore {
       status: "pending",
       attempts: 0,
       lastError: null,
-      createdAt: this.now(),
+      createdAt,
+      nextAttemptAt: createdAt,
       appliedAt: null,
+      deadletteredAt: null,
     })
   }
 
@@ -2208,11 +2216,12 @@ export class FusionLedgerStore {
     return pending?.runId ?? null
   }
 
-  /** What an outbox drain needs from this store: its artifacts, decrypted. */
-  outboxContext(): { readArtifact: (artifactId: string) => Promise<string | null> } {
+  /** Decrypted artifacts and the live account-pair guard, retained by due wakes. */
+  outboxContext(): OutboxContext & Pick<DrainOptions, "targetMatches"> {
     const artifacts = this.artifactStore(null)
     return {
       readArtifact: async (artifactId) => (await artifacts.get(artifactId))?.content ?? null,
+      targetMatches: this.targetMatches,
     }
   }
 

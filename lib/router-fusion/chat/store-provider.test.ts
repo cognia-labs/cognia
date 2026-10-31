@@ -53,6 +53,7 @@ describe("currentFusionStore", () => {
       attempts: 0,
       lastError: null,
       createdAt: 1,
+      nextAttemptAt: 1,
       appliedAt: null,
     })
     await expect(drainAccountOutbox(store)).resolves.toMatchObject({ applied: 1, failed: 0 })
@@ -65,5 +66,22 @@ describe("currentFusionStore", () => {
       name: "RouterFusionInfrastructureError",
       code: "db_unavailable",
     })
+  })
+
+  it("carries a live, nonthrowing account-pair guard into every outbox context", async () => {
+    let mainName: string | null = "main-guard-a"
+    const store = await currentFusionStore({
+      mainDatabaseName: () => {
+        if (!mainName) throw new Error("no active account database")
+        return mainName
+      },
+    })
+    const context = store.outboxContext()
+    expect(typeof context.targetMatches).toBe("function")
+    expect(context.targetMatches?.()).toBe(true)
+    mainName = "main-guard-b"
+    expect(context.targetMatches?.()).toBe(false)
+    mainName = null
+    expect(context.targetMatches?.()).toBe(false)
   })
 })

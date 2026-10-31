@@ -451,7 +451,8 @@ export async function executeFusionRun(
   // Apply what creation and start queued (the cockpit row, the input in the
   // session) now rather than at the end: a run that only appears in
   // `/agent-runs` once it has finished can never be stopped from there. A
-  // failed apply stays pending for the seal's drain; it never stops the run.
+  // failed apply backs off without stopping the run; the seal's answer waits
+  // behind pending input, and both drains retain the store's account-pair guard.
   await drainFusionOutbox(store.db, deps.appliers, store.outboxContext()).catch(() => undefined)
 
   // A delegate run holds two worktrees while it works. They are given back
