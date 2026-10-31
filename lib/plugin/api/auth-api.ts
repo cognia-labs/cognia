@@ -31,16 +31,25 @@ export type {
 // Host-only provenance, never a public network option or a wire header. The
 // enumerable symbol survives host option spreads. The WeakMap also rejects
 // Proxy options that answer lookups for unknown symbols with forged values.
+// Each entry covers one flow's token URL and is deleted when the flow ends, so
+// a captured provenance object exempts nothing elsewhere or afterwards. Code
+// in the host realm that patches built-ins is outside this boundary
+// (ADR-0126: frontend plugins are semi-trusted).
 const HOST_PKCE_TOKEN_REQUEST = Symbol("hostOAuthTokenRequest")
-const hostPkceTokenRequests = new WeakMap<object, ReadonlySet<string>>()
+const hostPkceTokenRequests = new WeakMap<
+  object,
+  { readonly tokenUrl: string; readonly keys: readonly string[] }
+>()
 type HostPkceRequest = { [HOST_PKCE_TOKEN_REQUEST]?: object }
 
 /** Read only at the host network gate; the marker itself is not exported. */
 export function getHostPkceTokenRequestExemptKeys(
-  options?: object
+  options: object | undefined,
+  url: string
 ): ReadonlySet<string> | undefined {
   const provenance = (options as HostPkceRequest | undefined)?.[HOST_PKCE_TOKEN_REQUEST]
-  return provenance ? hostPkceTokenRequests.get(provenance) : undefined
+  const entry = provenance ? hostPkceTokenRequests.get(provenance) : undefined
+  return entry && entry.tokenUrl === url ? new Set(entry.keys) : undefined
 }
 
 function requirePermission(
@@ -115,7 +124,7 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       // Snapshot once so callbacks cannot change which fields the host builds
       // versus those a plugin overrides while authorization is in flight.
       const extraTokenParams = { ...config.extraTokenParams }
-      const { tokenRequestEncoding, signal } = config
+      const { tokenRequestEncoding, signal, tokenUrl } = config
       const exemptKeys = new Set(
         ["grant_type", "code", "redirect_uri", "client_id", "code_verifier"].filter(
           (key) => !Object.hasOwn(extraTokenParams, key)
@@ -126,9 +135,13 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       // other plugin-supplied extra token parameter stays inspected.
       if (typeof extraTokenParams.client_secret === "string") exemptKeys.add("client_secret")
       const provenance = {}
-      hostPkceTokenRequests.set(provenance, exemptKeys)
+      hostPkceTokenRequests.set(provenance, {
+        tokenUrl,
+        keys: Object.freeze([...exemptKeys]),
+      })
       const result = await runPkceAuthFlow({
         ...config,
+        tokenUrl,
         extraTokenParams,
         fetchImpl: async (input, init) => {
           requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
@@ -150,7 +163,7 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
             }
           )
         },
-      })
+      }).finally(() => hostPkceTokenRequests.delete(provenance))
       requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
       requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
       return result

@@ -167,7 +167,7 @@ describe("createAuthAPI", () => {
             "provider",
             { url, ...forwarded },
             {
-              oauthTokenKeys: getHostPkceTokenRequestExemptKeys(forwarded),
+              oauthTokenKeys: getHostPkceTokenRequestExemptKeys(forwarded, url),
             }
           )
           bodies.push(
@@ -239,6 +239,34 @@ describe("createAuthAPI", () => {
       })
       expect(bodies[0].client_secret).toBe(clientSecret)
       expect(bodies[0].audience).toBe("<EMAIL_001>")
+    })
+
+    it("scopes captured provenance to this flow's token URL and lifetime", async () => {
+      let captured: NetworkRequestOptions | undefined
+      let duringFlow: { sameUrl?: ReadonlySet<string>; otherUrl?: ReadonlySet<string> } = {}
+      const fetch = jest
+        .fn()
+        .mockImplementation(async (url: string, options: NetworkRequestOptions) => {
+          captured = { ...options }
+          duringFlow = {
+            sameUrl: getHostPkceTokenRequestExemptKeys(captured, url),
+            otherUrl: getHostPkceTokenRequestExemptKeys(captured, "https://collector.example/"),
+          }
+          return {
+            ok: true,
+            status: 200,
+            statusText: "OK",
+            headers: {},
+            data: { access_token: "secret" },
+          }
+        })
+      await createAuthAPI("provider", { ...allow, network: { fetch } }).createPkceFlow({
+        ...pkceConfig(),
+        tokenRequestEncoding,
+      })
+      expect(duringFlow.sameUrl?.has("code")).toBe(true)
+      expect(duringFlow.otherUrl).toBeUndefined()
+      expect(getHostPkceTokenRequestExemptKeys(captured, pkceConfig().tokenUrl)).toBeUndefined()
     })
 
     it("snapshots token overrides before plugin callbacks run", async () => {

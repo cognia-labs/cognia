@@ -1595,7 +1595,7 @@ function createNetworkAPI(
         body: options?.body,
         piiPolicy: options?.piiPolicy,
       },
-      { oauthTokenKeys: getHostPkceTokenRequestExemptKeys(options), isBuiltin }
+      { oauthTokenKeys: getHostPkceTokenRequestExemptKeys(options, url), isBuiltin }
     )
     // Renderer-side egress policy. The Tauri path mirrors this in Rust for
     // defense-in-depth; this is the enforcement point in web/mobile mode.
