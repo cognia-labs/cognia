@@ -12,6 +12,8 @@ function verdict(value: unknown): PermissionVerdict | undefined {
 }
 
 function normalizeRuleset(value: unknown): Ruleset {
+  // Keep a global auto-approval policy visible as an unsupported safety draft.
+  if (value === "allow") return { "*": "allow" }
   const out: Ruleset = {}
   for (const [tool, rule] of Object.entries(record(value))) {
     const direct = verdict(rule)

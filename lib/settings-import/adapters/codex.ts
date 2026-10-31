@@ -45,11 +45,7 @@ export function settingsFromCodex(
         "approvalPolicy",
         "permissionMode",
         current.permissionMode,
-        mode,
-        {
-          warnings:
-            mode === "bypassPermissions" ? ["This imports Codex's no-approval policy."] : [],
-        }
+        mode
       )
     )
   }

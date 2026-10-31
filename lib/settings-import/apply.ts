@@ -1,6 +1,12 @@
 import type { AppSettings } from "@cognia/agent-config-types"
 import type { ClaudeSettings } from "@/lib/claude/settings"
-import type { SettingsImportDraft, SettingsImportMergeStrategy, SettingsSnapshot } from "./types"
+import {
+  sanitizeImportedToolRules,
+  settingsImportSafetyWarning,
+  type SettingsImportDraft,
+  type SettingsImportMergeStrategy,
+  type SettingsSnapshot,
+} from "./types"
 
 export interface ApplySettingsImportDeps {
   currentSettings: () => SettingsSnapshot
@@ -45,7 +51,20 @@ export async function applySettingsImport(
   for (const draft of drafts) {
     if (!selected.has(draft.id)) continue
     warnings.push(...draft.warnings)
-    if (!draft.supported || draft.shared || draft.target === "unsupported") {
+    const safetyWarning = settingsImportSafetyWarning(draft.target, draft.incoming)
+    if (safetyWarning) warnings.push(safetyWarning)
+    const toolRules =
+      draft.target === "agentPermissions.toolRules"
+        ? sanitizeImportedToolRules(draft.incoming)
+        : undefined
+    if (toolRules) warnings.push(...toolRules.warnings)
+    if (
+      safetyWarning ||
+      !draft.supported ||
+      draft.shared ||
+      draft.target === "unsupported" ||
+      (toolRules && Object.keys(toolRules.rules).length === 0)
+    ) {
       skipped += 1
       continue
     }
@@ -62,11 +81,11 @@ export async function applySettingsImport(
       applied += 1
       continue
     }
-    if (draft.target === "agentPermissions.toolRules") {
+    if (toolRules) {
       patch.agentPermissions = {
         ...current.agentPermissions,
         ...patch.agentPermissions,
-        toolRules: draft.incoming as NonNullable<AppSettings["agentPermissions"]>["toolRules"],
+        toolRules: toolRules.rules,
       }
       applied += 1
       continue

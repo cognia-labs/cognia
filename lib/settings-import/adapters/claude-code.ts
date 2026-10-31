@@ -72,6 +72,18 @@ export function settingsFromClaudeCode(
       )
     )
   }
+  if (source.permissions?.defaultMode === "bypassPermissions") {
+    drafts.push(
+      settingsDraft(
+        "claude-code",
+        "permissions",
+        "defaultMode",
+        "permissionMode",
+        current.permissionMode,
+        source.permissions.defaultMode
+      )
+    )
+  }
   drafts.push(
     settingsDraft("claude-code", "hooks", "hooks", "claudeHooks", source.hooks, source.hooks, {
       shared: true,

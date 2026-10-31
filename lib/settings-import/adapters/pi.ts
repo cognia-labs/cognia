@@ -46,7 +46,11 @@ const UNSUPPORTED: Array<[key: string, group: "model" | "sandbox" | "env" | "ui"
   ["retry", "env", "Pi's provider retry policy has no Cognia equivalent."],
   ["steeringMode", "env", "Steering queue behaviour is owned by the Pi runtime."],
   ["followUpMode", "env", "Follow-up queue behaviour is owned by the Pi runtime."],
-  ["defaultProjectTrust", "sandbox", "Pi project trust is not a Cognia sandbox setting."],
+  [
+    "defaultProjectTrust",
+    "sandbox",
+    "Pi project trust is not a Cognia sandbox setting and was not imported. Configure workspace confinement manually in Cognia's sandbox settings.",
+  ],
   ["externalEditor", "ui", "Pi's external editor command is Pi-only."],
   ["theme", "ui", "Pi themes are not Cognia themes."],
   ["markdown", "ui", "Pi's markdown rendering options are Pi-only."],

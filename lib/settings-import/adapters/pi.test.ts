@@ -121,6 +121,13 @@ describe("settingsFromPi", () => {
     }
   })
 
+  it("does not import project trust and explains how to configure confinement manually", () => {
+    const [policy] = settingsFromPi({}, { defaultProjectTrust: "trusted" })
+    expect(policy).toMatchObject({ target: "unsupported", supported: false })
+    expect(policy.warnings.join(" ")).toContain("not imported")
+    expect(policy.warnings.join(" ")).toContain("manually")
+  })
+
   it("stamps every draft with the pi source", () => {
     for (const draft of settingsFromPi({}, PI_SETTINGS)) {
       expect(draft.source).toBe("pi")

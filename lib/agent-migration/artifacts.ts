@@ -260,7 +260,13 @@ async function defaultApplyDeps(): Promise<ArtifactApplyDeps> {
         plan.projectId,
         { signal }
       )
-      return { imported: result.sessions, warnings: [] }
+      return {
+        imported: result.sessions,
+        warnings: (result.failures ?? []).map(
+          (failure) =>
+            `${failure.ref.sourceId}:${failure.ref.originalSessionId}: ${failure.message ?? failure.code}`
+        ),
+      }
     },
     applyMcp: async (vendor, strategy) =>
       normalizeMcpResult(
