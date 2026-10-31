@@ -21,6 +21,7 @@ An adversarial review (ledger: `docs/reports/2026-10-31-external-service-plugin-
 - **Refresh, rotation and logout have no cross-window owner.** Google's Rust controller (`crates/cognia-connectors/src/google_docs_auth.rs`) uses nonce compare-and-swap and a disconnect fence, in one process. The Feishu base plugin under development dedups refresh in a per-instance `Map`. The plugin auth registry has no lock (ES-10).
 - **Callbacks are validated per consumer.** The Rust relays (`axum_app.rs`) forward `code`/`state` without validation; each consumer checks state. Single use, binding to client and issuer, cancellation and late callbacks are not one rule (ES-11).
 - **The auth method range is unstated** (ES-12), **the base-plugin upgrade order** (ES-15) and **owner takeover** (ES-16) are not accepted contracts, and **"a library plugin serves business plugins"** has no definition of interface version, account scope, permission propagation or invalidation (ES-36).
+- **Data outlives access.** Remote documents reach search indexes, RAG embeddings, chat attachments, dock snapshots and history. Nothing says what happens to them when a connection is disconnected, its access is revoked, or the remote item is deleted (ES-23).
 
 The plugin trust posture stays as ADR-0126 defines it: frontend plugins are semi-trusted and run in the Host realm. This ADR is about an honest contract between plugins and the Host, not a sandbox.
 
@@ -100,6 +101,19 @@ Each base plugin declares the methods and runtimes it supports in its manifest `
 - Built-in accounts move through `ctx.integrations.migrateLegacy`. Its completion marker and backup survive audit pruning, and rollback keeps rows edited after migration and reports them (ES-20/21).
 - Every migration batch ships a table: old entry point → public interface → new plugin → data and reference migration → behaviour test → explicitly unsupported (ES-32). An old and a new implementation never own the same refresh, sync or write at the same time.
 
+### 10. Data after disconnect, revocation or remote deletion
+
+Online access and copies the user chose to keep are separate decisions:
+
+| Data | Disconnect or revocation | Remote item deleted or access lost |
+| --- | --- | --- |
+| **In-flight reads** | Aborted. Every read carries the connection revision; a result that returns after the revision changed is dropped. | Fails; the item is marked unavailable. |
+| **Background sync, watches, webhooks** | Stopped and their cursors released (the sync lease ends). Nothing keeps using the old credentials. | The item is removed from the synced set at the next sync (tombstone). |
+| **Derived data** (search index entries, RAG chunks and embeddings, link previews, cached metadata) | Removed for that connection. It was built from online access, so it does not outlive it. | Removed at the next sync. |
+| **User-kept copies** (an attachment the user added to a message, a dock snapshot, a saved artifact, a quoted excerpt in history) | Kept. Each carries provenance: provider, connection, remote id and the time it was captured. It shows "source disconnected" and cannot be refreshed or reopened live until a connection to the same account is restored. | Kept, marked "source deleted or no longer accessible". |
+
+Reconnecting the same account (same connection identity, §2) restores live reopen for kept copies; derived data is rebuilt by the next sync, not restored. Purging a plugin's data (uninstall with "also wipe stored data") removes its derived data; user-kept copies are the user's and are removed only by the user. A business plugin's consumer grant being revoked stops its reads and syncs the same way, without touching other consumers of the same connection.
+
 ## Considered options
 
 - **Consented token reads for business plugins.** Simpler for plugin authors, but every consumer becomes a credential holder, and revoking one consumer cannot be enforced. Rejected.
@@ -120,7 +134,7 @@ Each base plugin declares the methods and runtimes it supports in its manifest `
 
 1. **Contract types.** Connection tuple and reference, connection revision, `CapabilityGrant.consumerPluginId` and `connectionRevision`, provider tuple on connections. Plugin-contract catalog and mirrors.
 2. **Host coordination.** Lineage lock, revision CAS and revocation barrier in the auth registry; attempt records and single-use callback acceptance; headless store.
-3. **Consumer grants.** Authorization checks, selection and binding UI, grant prompts, connection-keyed external-services view.
+3. **Consumer grants.** Authorization checks, selection and binding UI, grant prompts, connection-keyed external-services view, and the §10 rules: revision-checked reads, sync stop on disconnect, derived-data purge, provenance on kept copies.
 4. **Feishu vertical.** `feishu-auth` as the first base plugin (PKCE desktop, tenant and bot principals), one business plugin (calendar) as consumer, with the ES-32 behaviour table.
 5. **Google as a Host provider.** The Rust controller exposed through the same contract; Docs and backup as two consumers of one connection.
 6. **Batch extraction** of further capabilities, each with its behaviour table and rollback evidence.
@@ -129,4 +143,4 @@ Until this ADR is accepted, no capability other than `feishu-auth` is extracted 
 
 ## Implementation status
 
-Not started. Prerequisite fixes from the review are in: b119bd3f9e (ES-01/02/03/04/09), cb9ac351a0 (ES-06), bad783b824 (ES-13/14), 52f21fa704 (ES-18–21), 5ee04bcdb8 (ES-22).
+Not started. Prerequisite fixes from the review are in: b119bd3f9e and cd624cccf9 (ES-01/02/03/04/09), cb9ac351a0 (ES-06), bad783b824 (ES-13/14), 52f21fa704 (ES-18–21), 5ee04bcdb8 (ES-22), and 838096514f (fixes from a review of those commits). §10 was added on 2026-10-31 for ES-23, which the first triage missed.
