@@ -2,6 +2,8 @@
   "activation": "{pluginName} 激活失败",
   "adapter": "{pluginName} 的插件适配器运行失败",
   "codes": {
+    "authProviderConflict": "登录提供方“{provider}”已被另一个插件占用。请先卸载那个插件。",
+    "dataVersionAhead": "它的数据已被 {applied} 版升级。请将插件更新到 {applied} 版或更高版本，或先清除它的数据，再运行 {current} 版。",
     "dependencyInUse": "其他插件依赖它：{dependents}。请先停用或卸载这些插件。",
     "dependencyMissing": "它依赖尚未启用的插件：{dependencies}。",
     "dirtyRuntime": "它上次运行没有正常退出。请先在插件详情中重试清理。",

@@ -722,9 +722,10 @@ describe("PluginUpdater", () => {
             error: expect.stringContaining("PluginDataVersionError"),
           },
         })
+        // The bare message, so the plugin error classifier can localize it.
         expect(state.plugins["plugin-a"]).toMatchObject({
           status: "error",
-          error: expect.stringContaining("data was migrated to v2"),
+          error: expect.stringMatching(/^Plugin "plugin-a" data was migrated to v2;/),
         })
         expect(managerModule.__enablePluginSpy).toHaveBeenCalledTimes(1)
       } finally {

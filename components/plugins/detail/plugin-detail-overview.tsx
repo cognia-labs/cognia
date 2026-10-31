@@ -51,6 +51,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { usePluginRow } from "@/hooks/plugins"
+import { usePluginErrorMessage } from "@/hooks/plugins/use-plugin-error-message"
 import { usePluginStore } from "@/stores/plugin-runtime/plugin-store"
 import type {
   PluginStatus,
@@ -110,6 +111,9 @@ export function PluginDetailOverview({ pluginId, onFilterApplied }: PluginDetail
   const lastKnownGoodVerification = usePluginStore(
     (s) => s.plugins[pluginId]?.lastKnownGoodVerification
   )
+  // The manager's errors are English; known shapes render localized and the
+  // raw text stays underneath for support.
+  const describePluginError = usePluginErrorMessage()
 
   if (rowState.state === "loading") {
     return (
@@ -123,6 +127,7 @@ export function PluginDetailOverview({ pluginId, onFilterApplied }: PluginDetail
     return <p className="text-sm text-muted-foreground">{t("notFound")}</p>
   }
   const plugin = rowState.row
+  const lastError = plugin.error ? describePluginError(plugin.error) : null
 
   if (view === "manifest") {
     return (
@@ -187,7 +192,15 @@ export function PluginDetailOverview({ pluginId, onFilterApplied }: PluginDetail
             <CircleAlertIcon className="size-3.5" aria-hidden />
             {t("metaError")}
           </div>
-          <div className="mt-0.5 text-xs break-words text-destructive">{plugin.error}</div>
+          <div className="mt-0.5 text-xs break-words text-destructive">{lastError}</div>
+          {lastError !== plugin.error ? (
+            <div
+              className="mt-0.5 font-mono text-[11px] break-words text-muted-foreground"
+              data-testid="plugin-detail-last-error-raw"
+            >
+              {plugin.error}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

@@ -48,6 +48,7 @@ import { CircleAlertIcon, ShieldCheckIcon, TriangleAlertIcon } from "lucide-reac
 import type { PluginRow } from "@/lib/db/plugin-types"
 import { useLocalizedPluginText } from "@/hooks/plugins/use-localized-plugin-text"
 import { isPluginRowErrored } from "@/hooks/plugins/use-plugins"
+import { usePluginErrorMessage } from "@/hooks/plugins/use-plugin-error-message"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
@@ -112,6 +113,7 @@ export const PluginLibraryRow = memo(function PluginLibraryRow({
   // Lifecycle-aware: `status` alone missed every runtime failure, which is
   // recorded on the lifecycle (the filter and the card use the same rule).
   const errored = isPluginRowErrored(plugin)
+  const describePluginError = usePluginErrorMessage()
   const isLoading =
     plugin.status === "loading" || plugin.status === "enabling" || plugin.status === "updating"
   const signatureState: SignatureState = (() => {
@@ -318,7 +320,9 @@ export const PluginLibraryRow = memo(function PluginLibraryRow({
           {errored && plugin.error && (
             <span className="flex min-w-0 items-center gap-0.5 text-destructive">
               <CircleAlertIcon className="size-3 shrink-0" />
-              <span className="line-clamp-1">{plugin.error}</span>
+              <span className="line-clamp-1" title={plugin.error}>
+                {describePluginError(plugin.error)}
+              </span>
             </span>
           )}
         </div>

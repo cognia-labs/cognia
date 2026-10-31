@@ -177,6 +177,21 @@ describe("PluginDetailOverview", () => {
     expect(callout.className).not.toContain("rounded")
   })
 
+  it("localizes a known lifecycle error and keeps the raw text underneath", () => {
+    const raw =
+      'PluginDataVersionError: Plugin "alpha" data was migrated to v3; update to v3 or later, or clear plugin data before activating v2'
+    mockPlugin = makePlugin({ error: raw, status: "error" })
+    render(<PluginDetailOverview pluginId="alpha" />)
+    expect(screen.getByTestId("plugin-detail-last-error")).toHaveTextContent("dataVersionAhead")
+    expect(screen.getByTestId("plugin-detail-last-error-raw")).toHaveTextContent(raw)
+  })
+
+  it("shows an unrecognized error once, without a duplicate raw line", () => {
+    mockPlugin = makePlugin({ error: "boom", status: "error" })
+    render(<PluginDetailOverview pluginId="alpha" />)
+    expect(screen.queryByTestId("plugin-detail-last-error-raw")).not.toBeInTheDocument()
+  })
+
   it("offers no unconditional Rollback button (the header menu gates it)", () => {
     render(<PluginDetailOverview pluginId="alpha" />)
     expect(screen.queryByLabelText("rollbackAria:Alpha")).toBeNull()

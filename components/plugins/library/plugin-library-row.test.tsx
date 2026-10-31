@@ -177,6 +177,20 @@ describe("PluginLibraryRow", () => {
     expect(screen.getByText("load failed")).toBeInTheDocument()
   })
 
+  it("localizes a known lifecycle error and keeps the raw text as its title", () => {
+    const h = handlers()
+    const raw = 'Auth provider "feishu" is owned by another plugin.'
+    render(
+      <PluginLibraryRow
+        plugin={{ ...baseRow, status: "error", error: raw }}
+        selected={false}
+        active={false}
+        {...h}
+      />
+    )
+    expect(screen.getByText("authProviderConflict")).toHaveAttribute("title", raw)
+  })
+
   it("tags errored rows with data-errored and a destructive tint", () => {
     const h = handlers()
     const { container } = render(

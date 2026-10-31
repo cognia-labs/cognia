@@ -671,7 +671,8 @@ export class PluginUpdater {
                 (await getPluginDexieMeta(pluginId))?.appliedMigrationVersion
               )
             } catch (versionError) {
-              const message = String(versionError)
+              const message =
+                versionError instanceof Error ? versionError.message : String(versionError)
               usePluginStore.setState((state) => ({
                 plugins: {
                   ...state.plugins,

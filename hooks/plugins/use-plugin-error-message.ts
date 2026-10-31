@@ -32,6 +32,8 @@ export type PluginErrorCode =
   | "signature"
   | "invalidManifest"
   | "uninstallMirrored"
+  | "dataVersionAhead"
+  | "authProviderConflict"
 
 export interface ClassifiedPluginError {
   code: PluginErrorCode | null
@@ -80,7 +82,27 @@ const PATTERNS: ReadonlyArray<{
   },
   { code: "signature", test: /^Signature verification failed/ },
   { code: "invalidManifest", test: /^Invalid plugin manifest/ },
+  {
+    // `PluginDataVersionError` (lib/plugin/dexie/migration-runner.ts).
+    code: "dataVersionAhead",
+    test: /^Plugin "[^"]+" data was migrated to v(\d+); update to v\d+ or later, or clear plugin data before activating v(\d+)$/,
+    values: (m) => ({ applied: m[1] ?? "", current: m[2] ?? "" }),
+  },
+  {
+    // lib/plugin/auth/auth-provider-registry.ts ownership guard.
+    code: "authProviderConflict",
+    test: /^Auth provider "([^"]+)" is owned by another plugin/,
+    values: (m) => ({ provider: m[1] ?? "" }),
+  },
 ]
+
+/**
+ * The store keeps `String(error)`, so persisted messages carry the class name
+ * (`Error: …`, `PluginDataVersionError: …`). Patterns match the bare message.
+ */
+function stripErrorName(message: string): string {
+  return message.replace(/^(?:[A-Z][A-Za-z]*)?Error: /, "")
+}
 
 /** Error classes this layer raises itself carry their code directly. */
 function ownCode(error: unknown): PluginErrorCode | null {
@@ -95,8 +117,9 @@ export function classifyPluginError(error: unknown): ClassifiedPluginError {
   const message = error instanceof Error ? error.message : String(error ?? "")
   const own = ownCode(error)
   if (own) return { code: own, message, values: {} }
+  const bare = stripErrorName(message)
   for (const pattern of PATTERNS) {
-    const match = message.match(pattern.test)
+    const match = bare.match(pattern.test)
     if (match) return { code: pattern.code, message, values: pattern.values?.(match) ?? {} }
   }
   return { code: null, message, values: {} }

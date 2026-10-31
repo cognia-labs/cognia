@@ -39,6 +39,32 @@ describe("classifyPluginError", () => {
     expect(classifyPluginError(new Error(message))).toEqual({ code, message, values })
   })
 
+  it.each([
+    [
+      'Plugin "a" data was migrated to v3; update to v3 or later, or clear plugin data before activating v2',
+      "dataVersionAhead",
+      { applied: "3", current: "2" },
+    ],
+    [
+      'Auth provider "feishu" is owned by another plugin.',
+      "authProviderConflict",
+      { provider: "feishu" },
+    ],
+  ])("classifies lifecycle guard %s", (message, code, values) => {
+    expect(classifyPluginError(new Error(message))).toEqual({ code, message, values })
+  })
+
+  it("matches messages the store persisted with their class name", () => {
+    const stored =
+      'PluginDataVersionError: Plugin "a" data was migrated to v3; update to v3 or later, or clear plugin data before activating v2'
+    expect(classifyPluginError(stored)).toEqual({
+      code: "dataVersionAhead",
+      message: stored,
+      values: { applied: "3", current: "2" },
+    })
+    expect(classifyPluginError("Error: Plugin not found: x").code).toBe("notFound")
+  })
+
   it("accepts a bare message string", () => {
     expect(classifyPluginError("Plugin not found: x").code).toBe("notFound")
   })

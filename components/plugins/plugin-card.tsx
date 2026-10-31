@@ -21,6 +21,7 @@ import { useLocalizedPluginText } from "@/hooks/plugins/use-localized-plugin-tex
 import { ShieldCheckIcon, AlertTriangleIcon, CircleAlertIcon } from "lucide-react"
 import type { PluginRow } from "@/lib/db/plugin-types"
 import { isPluginRowErrored } from "@/hooks/plugins/use-plugins"
+import { usePluginErrorMessage } from "@/hooks/plugins/use-plugin-error-message"
 import { DANGEROUS_PERMISSIONS } from "@/lib/plugin/security/permission-guard"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
@@ -72,6 +73,7 @@ export const PluginCard = memo(function PluginCard({
   // card the filter shows as errored also looks errored.
   const errored = isPluginRowErrored(plugin)
   const errorMessage = plugin.error ?? plugin.lifecycle?.lastError
+  const describePluginError = usePluginErrorMessage()
   const isLoading = status === "loading" || status === "enabling" || status === "updating"
   const permissions = (plugin.manifest as { permissions?: string[] })?.permissions ?? []
   const permissionCount = permissions.length
@@ -224,7 +226,9 @@ export const PluginCard = memo(function PluginCard({
       {errored && errorMessage && (
         <div className="flex items-start gap-1 text-xs text-destructive">
           <CircleAlertIcon className="mt-0.5 size-3 shrink-0" />
-          <span className="line-clamp-2">{errorMessage}</span>
+          <span className="line-clamp-2" title={errorMessage}>
+            {describePluginError(errorMessage)}
+          </span>
         </div>
       )}
     </Card>

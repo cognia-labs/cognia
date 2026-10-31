@@ -310,4 +310,14 @@ describe("PluginCard", () => {
     expect(screen.getByText("activation threw")).toBeInTheDocument()
     expect(screen.getAllByText("error").length).toBeGreaterThan(0)
   })
+
+  it("localizes a known lifecycle error and keeps the raw text as its title", () => {
+    const cb = callbacks()
+    const raw =
+      'Plugin "test" data was migrated to v3; update to v3 or later, or clear plugin data before activating v2'
+    render(
+      <PluginCard plugin={{ ...baseRow, status: "error", error: raw }} selected={false} {...cb} />
+    )
+    expect(screen.getByText("dataVersionAhead")).toHaveAttribute("title", raw)
+  })
 })

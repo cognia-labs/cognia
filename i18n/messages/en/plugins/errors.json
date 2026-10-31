@@ -2,6 +2,8 @@
   "activation": "Couldn't activate {pluginName}",
   "adapter": "Plugin adapter failed for {pluginName}",
   "codes": {
+    "authProviderConflict": "Another plugin already owns the sign-in provider \"{provider}\". Uninstall that plugin first.",
+    "dataVersionAhead": "Its data was upgraded by version {applied}. Update the plugin to version {applied} or later, or clear its data before running version {current}.",
     "dependencyInUse": "Other plugins depend on it: {dependents}. Disable or uninstall them first.",
     "dependencyMissing": "It needs plugins that aren't enabled: {dependencies}.",
     "dirtyRuntime": "Its last run didn't shut down cleanly. Retry the cleanup from the plugin's details first.",
