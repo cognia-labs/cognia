@@ -156,30 +156,110 @@ export function validateCronExpression(expression: string): { valid: boolean; er
  * always-on daemon accepts classic 5/6-field schedules. Keeping this boundary
  * explicit prevents the editor from accepting a trigger the daemon cannot arm.
  */
+const WORKFLOW_CRON_MACROS = new Set(["@yearly", "@monthly", "@weekly", "@daily", "@hourly"])
+const WORKFLOW_MONTH_NAMES = [
+  ["jan", "january"],
+  ["feb", "february"],
+  ["mar", "march"],
+  ["apr", "april"],
+  ["may"],
+  ["jun", "june"],
+  ["jul", "july"],
+  ["aug", "august"],
+  ["sep", "september"],
+  ["oct", "october"],
+  ["nov", "november"],
+  ["dec", "december"],
+]
+const WORKFLOW_WEEKDAY_NAMES = [
+  ["sun", "sunday"],
+  ["mon", "monday"],
+  ["tue", "tues", "tuesday"],
+  ["wed", "wednesday"],
+  ["thu", "thurs", "thursday"],
+  ["fri", "friday"],
+  ["sat", "saturday"],
+]
+
+/** Expand the daemon grammar to numeric fields without changing the general parser. */
+function workflowCronFields(expression: string): number[][] {
+  const trimmed = expression.trim()
+  // Match parse_workflow_schedule's case-sensitive modifier guard, including JUL.
+  if (!trimmed || /[L#]/.test(trimmed)) throw new Error("Unsupported workflow cron expression")
+  if (trimmed.startsWith("@") && !WORKFLOW_CRON_MACROS.has(trimmed)) {
+    throw new Error("Unsupported workflow cron macro")
+  }
+  const fields = expandMacro(trimmed).split(/\s+/)
+  if (fields.length === 5) fields.unshift("0")
+  if (fields.length !== 6) throw new Error("Workflow cron requires 5 or 6 fields")
+  const bounds = [
+    [0, 59],
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [1, 7],
+  ]
+  return fields.map((field, index) => {
+    const standardWeekday = index === 5 && !/[a-z]/i.test(field) && field !== "*"
+    const [min, max] = standardWeekday ? [0, 7] : bounds[index]
+    const names = index === 4 ? WORKFLOW_MONTH_NAMES : index === 5 ? WORKFLOW_WEEKDAY_NAMES : []
+    const valueOf = (value: string): number => {
+      const number = /^\d+$/.test(value)
+        ? Number(value)
+        : names.findIndex((aliases) => aliases.includes(value.toLowerCase())) + 1
+      if (number < min || number > max || (!/^\d+$/.test(value) && number === 0)) {
+        throw new Error("Invalid workflow cron field")
+      }
+      return number
+    }
+    const values = new Set<number>()
+    for (const segment of field.split(",")) {
+      const match = /^(\*|\?|\d+|[a-z]+)(?:-(\d+|[a-z]+))?(?:\/(\d+))?$/i.exec(segment)
+      if (!match) throw new Error("Invalid workflow cron field")
+      const [, base, end, stepText] = match
+      const step = stepText === undefined ? 1 : Number(stepText)
+      if (step < 1 || (!standardWeekday && step > max))
+        throw new Error("Invalid workflow cron step")
+      if (
+        base === "?" &&
+        ((index !== 3 && !(index === 5 && !standardWeekday)) || end !== undefined)
+      )
+        throw new Error("Invalid workflow cron wildcard")
+      if (/^[a-z]+$/i.test(base) && stepText !== undefined && !end)
+        throw new Error("Invalid named workflow cron step")
+      if (end && (base === "*" || base === "?")) throw new Error("Invalid workflow cron range")
+      if (end && /^\d+$/.test(base) !== /^\d+$/.test(end))
+        throw new Error("Invalid workflow cron range")
+      const start = base === "*" || base === "?" ? min : valueOf(base)
+      const last = end
+        ? valueOf(end)
+        : base === "*" || base === "?"
+          ? standardWeekday
+            ? 6
+            : max
+          : stepText && !standardWeekday
+            ? max
+            : start
+      if (start > last) throw new Error("Invalid workflow cron range")
+      for (let value = start; value <= last; value += step) {
+        values.add(index === 5 ? (standardWeekday ? value % 7 : value - 1) : value)
+      }
+    }
+    return [...values].sort((a, b) => a - b)
+  })
+}
+
 export function validateWorkflowCronExpression(expression: string): {
   valid: boolean
   error?: string
 } {
-  const general = validateCronExpression(expression)
-  if (!general.valid) return general
-
-  const trimmed = expression.trim()
-  if (/[L#]/i.test(trimmed)) {
-    return {
-      valid: false,
-      error: "Workflow cron does not support L or # modifiers",
-    }
+  try {
+    workflowCronFields(expression)
+    return { valid: true }
+  } catch (error) {
+    return { valid: false, error: error instanceof Error ? error.message : "Invalid workflow cron" }
   }
-
-  const expanded = expandMacro(trimmed)
-  const fieldCount = expanded.split(/\s+/).length
-  if (fieldCount !== 5 && fieldCount !== 6) {
-    return {
-      valid: false,
-      error: "Workflow cron requires 5 or 6 fields",
-    }
-  }
-  return { valid: true }
 }
 
 /**
@@ -210,15 +290,19 @@ export function getNextCronTime(
  *
  * `endDate` bounds the walk: a yearly expression asked for thousands of fires
  * inside a two-week window returns none instead of walking thousands of years.
+ * `workflow` uses the daemon dialect; other callers retain the general dialect.
  */
 export function getNextCronTimes(
   expression: string,
   count: number,
   fromDate: Date = new Date(),
   timezone?: string,
-  endDate?: Date
+  endDate?: Date,
+  dialect: "general" | "workflow" = "general"
 ): Date[] {
   if (count <= 0) return []
+  if (dialect === "workflow")
+    return getNextWorkflowCronTimes(expression, count, fromDate, timezone, endDate)
   if (usesNearestWeekday(expression)) return []
   try {
     const interval = CronExpressionParser.parse(expression, {
@@ -227,6 +311,86 @@ export function getNextCronTimes(
       tz: timezone ?? localTimezone(),
     })
     return interval.take(count).map((d) => d.toDate())
+  } catch {
+    return []
+  }
+}
+
+const wallClockFormats = new Map<string, Intl.DateTimeFormat>()
+
+/** A sortable wall-clock reading of `date` in `timeZone`: `YYYY-MM-DD HH:MM:SS`. */
+function wallClock(date: Date, timeZone: string): string {
+  let format = wallClockFormats.get(timeZone)
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+    wallClockFormats.set(timeZone, format)
+  }
+  const part = Object.fromEntries(format.formatToParts(date).map((p) => [p.type, p.value]))
+  return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}:${part.second}`
+}
+
+/**
+ * Rust uses DOM/DOW intersection, skips nonexistent DST wall times, and walks
+ * wall-clock times strictly after the anchor's (`next_fire_after` in
+ * cron_daemon.rs): inside a repeated fall-back hour a wall time already
+ * reached does not fire again, while one still ahead of the anchor's wall
+ * clock fires at its first instant after the anchor.
+ */
+function getNextWorkflowCronTimes(
+  expression: string,
+  count: number,
+  fromDate: Date,
+  timezone?: string,
+  endDate?: Date
+): Date[] {
+  try {
+    const fields = workflowCronFields(expression)
+    const normalized = fields.map((values, index) =>
+      values.length === [60, 60, 24, 31, 12, 7][index] ? "*" : values.join(",")
+    )
+    // Iterate DOM alone to avoid the general parser's DOM/DOW union. Skip a
+    // whole local day when DOW disagrees, even for second-granularity crons.
+    normalized[5] = "*"
+    const zone = timezone ?? localTimezone()
+    const interval = CronExpressionParser.parse(normalized.join(" "), {
+      currentDate: fromDate,
+      endDate: endDate ?? new Date("2101-01-02T00:00:00Z"),
+      tz: zone,
+    })
+    const result: Date[] = []
+    let lastWall = wallClock(fromDate, zone)
+    while (result.length < count && interval.hasNext()) {
+      const next = interval.next()
+      if (next.getFullYear() > 2100) break
+      if (!fields[5].includes(next.getDay())) {
+        next.setHours(23)
+        next.setMinutes(59)
+        next.setSeconds(59)
+        interval.reset(next)
+        continue
+      }
+      if (
+        fields[2].includes(next.getHours()) &&
+        fields[1].includes(next.getMinutes()) &&
+        fields[0].includes(next.getSeconds())
+      ) {
+        const wall = wallClock(next.toDate(), zone)
+        if (wall > lastWall) {
+          lastWall = wall
+          result.push(next.toDate())
+        }
+      }
+    }
+    return result
   } catch {
     return []
   }

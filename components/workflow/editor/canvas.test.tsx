@@ -7,11 +7,14 @@ import { useContextWorkbenchStore } from "@/stores/context-workbench/context-wor
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { WorkflowEditorCanvas } from "./canvas"
+import { runSingleNode } from "@/lib/workflow/runtime/run-single-node"
 import { runWorkflow } from "@/lib/workflow/runtime/orchestrator"
 import { toast } from "sonner"
 import type { VisualWorkflow } from "@/types/workflow/visual"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
 import { createWorkflow, getWorkflow } from "@/lib/db/workflows"
+import { unsyncWorkflowTriggers } from "@/lib/workflow/runtime/webhook-bridge"
+import canvasToastMessages from "@/i18n/messages/en/workflows/canvasToast.json"
 import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
 import { useAppShortcutDispatcher } from "@/hooks/shortcuts/use-app-shortcut-dispatcher"
 import { __resetAppRuntimeForTesting } from "@/lib/shortcuts/app-runtime"
@@ -72,6 +75,24 @@ jest.mock("@/lib/workflow/runtime/orchestrator", () => ({
 }))
 jest.mock("@/lib/workflow/runtime/run-single-node", () => ({
   runSingleNode: jest.fn(async () => ({ status: "succeeded" })),
+}))
+// Overlay split-source translations in this suite until the orchestrator
+// regenerates the production aggregate.
+jest.mock("@/i18n/messages/en.json", () => {
+  const messages = jest.requireActual("@/i18n/messages/en.json")
+  return {
+    ...messages,
+    workflows: {
+      ...messages.workflows,
+      canvasToast: jest.requireActual("@/i18n/messages/en/workflows/canvasToast.json"),
+    },
+  }
+})
+jest.mock("@/lib/workflow/runtime/webhook-bridge", () => ({
+  ...jest.requireActual("@/lib/workflow/runtime/webhook-bridge"),
+  unsyncWorkflowTriggers: jest.fn(
+    jest.requireActual("@/lib/workflow/runtime/webhook-bridge").unsyncWorkflowTriggers
+  ),
 }))
 jest.mock("sonner", () => ({
   toast: Object.assign(jest.fn(), {
@@ -502,6 +523,45 @@ describe("WorkflowEditorCanvas — save toast", () => {
   beforeEach(() => {
     ;(toast.success as jest.Mock).mockClear()
     ;(toast.warning as jest.Mock).mockClear()
+  })
+
+  it.each(["run", "single step"])(
+    "reports failed trigger registration during %s autosave and continues execution",
+    async (mode) => {
+      jest.mocked(runWorkflow).mockClear()
+      jest.mocked(runSingleNode).mockClear()
+      jest.mocked(toast.error).mockClear()
+      const { getEditorStore } = await import("@/lib/workflow/editor/store-registry")
+      const wf = await createWorkflow({ name: "Autosave registration" })
+      const sample = { ...buildSample(), id: wf.id, nodes: [buildSample().nodes[0]], edges: [] }
+      renderWithProviders(<WorkflowEditorCanvas workflow={sample} />)
+      const store = getEditorStore(wf.id)!
+      act(() => store.getState().setName("Saved autosave registration"))
+      jest.mocked(unsyncWorkflowTriggers).mockRejectedValueOnce(new Error("native unavailable"))
+      if (mode === "run") fireEvent.click(screen.getByRole("button", { name: "Run" }))
+      else act(() => store.getState().requestRunSingleStep(sample.nodes[0].id))
+      await waitFor(() =>
+        expect(toast.error).toHaveBeenCalledWith(canvasToastMessages.triggerRegistrationFailed)
+      )
+      expect((await getWorkflow(wf.id))?.name).toBe("Saved autosave registration")
+      expect(store.getState().dirty).toBe(false)
+      await waitFor(() => expect(mode === "run" ? runWorkflow : runSingleNode).toHaveBeenCalled())
+    }
+  )
+
+  it("shows a localized registration error while preserving the successful save", async () => {
+    const wf = await createWorkflow({ name: "registration toast" })
+    const sample = { ...buildSample(), id: wf.id }
+    renderWithProviders(<WorkflowEditorCanvas workflow={sample} />)
+    const { getEditorStore } = await import("@/lib/workflow/editor/store-registry")
+    act(() => getEditorStore(wf.id)!.getState().setName("Edited registration toast"))
+    jest.mocked(unsyncWorkflowTriggers).mockRejectedValueOnce(new Error("native unavailable"))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(canvasToastMessages.triggerRegistrationFailed)
+    )
+    expect((await getWorkflow(wf.id))?.name).toBe("Edited registration toast")
+    expect(toast.success).not.toHaveBeenCalled()
   })
 
   it("reports a clean save once the required param is filled, despite a stale validation cache", async () => {

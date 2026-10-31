@@ -149,6 +149,11 @@ fn parse_standard_weekday(value: &str) -> Result<u8, String> {
     }
 }
 
+/// The first fire strictly after `anchor`. Inside a repeated (fall-back)
+/// hour the local iterator maps an ambiguous wall time to its earlier
+/// instant, which can already be behind `anchor`; that slot fired, so it is
+/// skipped rather than returned as a fire in the past. A wall time therefore
+/// fires once per day, on its first instant.
 fn next_fire_after(
     schedule: &Schedule,
     timezone: Option<Tz>,
@@ -157,12 +162,12 @@ fn next_fire_after(
     match timezone {
         Some(timezone) => schedule
             .after(&anchor.with_timezone(&timezone))
-            .next()
-            .map(|next| next.with_timezone(&Utc)),
+            .map(|next| next.with_timezone(&Utc))
+            .find(|next| *next > anchor),
         None => schedule
             .after(&anchor.with_timezone(&Local))
-            .next()
-            .map(|next| next.with_timezone(&Utc)),
+            .map(|next| next.with_timezone(&Utc))
+            .find(|next| *next > anchor),
     }
 }
 
@@ -354,6 +359,44 @@ mod tests {
         timezone: String,
         anchor_utc: String,
         next_utc: Vec<String>,
+    }
+
+    #[test]
+    fn workflow_cron_shared_vectors() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../protocol/workflow-cron-vectors.json"
+        ))
+        .unwrap();
+        for case in vectors["cases"].as_array().unwrap() {
+            let expression = case["expression"].as_str().unwrap();
+            let parsed = parse_workflow_schedule(expression);
+            assert_eq!(
+                parsed.is_err(),
+                case["reject"].as_bool().unwrap_or(false),
+                "{}",
+                case["name"]
+            );
+            if let Ok(schedule) = parsed {
+                let timezone = case["timezone"].as_str().unwrap_or("UTC").parse().unwrap();
+                let mut anchor = DateTime::parse_from_rfc3339(case["from"].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&Utc);
+                let expected = case["next"].as_array().unwrap();
+                assert_eq!(expected.len(), 3);
+                for expected in expected {
+                    let next = next_fire_after(&schedule, Some(timezone), anchor).unwrap();
+                    assert_eq!(
+                        next,
+                        DateTime::parse_from_rfc3339(expected.as_str().unwrap())
+                            .unwrap()
+                            .with_timezone(&Utc),
+                        "{}",
+                        case["name"]
+                    );
+                    anchor = next;
+                }
+            }
+        }
     }
 
     fn daemon_with_recorder() -> (CronDaemon, RecordingEmitter) {

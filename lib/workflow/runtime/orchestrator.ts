@@ -30,6 +30,7 @@ import { generateTraceId } from "@cognia/logging"
 import { getDb } from "@/lib/db/schema"
 import { resolveScopeProjectId } from "@/lib/db/project-scope"
 import { DEFAULT_MAX_CONCURRENCY } from "@/types/workflow/visual"
+import type { PersistRunStateInput } from "@/types/workflow/visual"
 import { validateWorkflow, type ValidatedVisualWorkflow } from "@/lib/workflow/definition/validate"
 import { getPluginEventHooks } from "@/lib/plugin/messaging/hooks-system"
 import { generateWorkflowRunTitle } from "@/lib/workflow/runtime/run-title"
@@ -57,6 +58,7 @@ import { runLoopContainer } from "./loop-container"
 import { buildErrorOutput, resolveNodeFailure } from "./node-failure"
 import { isJoinCancel, JoinCancelError, losingBranchScope } from "./branch-scope"
 import { getDefaultSecretResolver } from "./secret-resolver-keyring"
+import { recordMirrorPersistFailure } from "./trigger-registration-health"
 import { ackRunCompleted, persistRunState } from "./tauri-bridge"
 import { registerRun, unregisterRun, WorkflowRunCancelledError } from "./run-cancel-registry"
 import {
@@ -124,6 +126,16 @@ const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set(["succeeded", "failed
 export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowResult> {
   const { workflow, trigger } = input
   const runId = input.runId ?? "run_" + nanoid(12)
+  const persistMirror = async (state: PersistRunStateInput): Promise<void> => {
+    try {
+      await persistRunState(state)
+    } catch (error) {
+      if (recordMirrorPersistFailure(state.runId, state.workflowId, error)) {
+        console.warn(`Workflow ${state.runId} crash-resume mirror is behind`, error)
+      }
+    }
+  }
+
   const logger = createRunLogger(runId)
   let completionBotProvenance = input.securityContext?.botProvenance
   let completionSecurityContext = input.securityContext
@@ -305,7 +317,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   const finishExistingTerminal = async (row: WorkflowRunRow): Promise<RunWorkflowResult> => {
     if (timeoutHandle) clearTimeout(timeoutHandle)
     if (input.signal) input.signal.removeEventListener("abort", externalAbort)
-    await persistRunState({ runId, workflowId: workflow.id, status: row.status })
+    await persistMirror({ runId, workflowId: workflow.id, status: row.status })
     await ackRunCompleted(runId)
     await releaseRunResources(runId)
     return { runId, status: row.status, error: row.error, output: row.output }
@@ -348,7 +360,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     return { runId, status: "running" }
   }
 
-  await persistRunState({
+  await persistMirror({
     runId,
     workflowId: workflow.id,
     status: "running",
@@ -381,7 +393,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     }
     runRow = await commitOutcome(runRow)
     if (runRow.status !== "failed") return finishExistingTerminal(runRow)
-    await persistRunState({ runId, workflowId: workflow.id, status: "failed" })
+    await persistMirror({ runId, workflowId: workflow.id, status: "failed" })
     getPluginEventHooks().dispatchWorkflowError(workflow.id, new Error(message))
     getPluginEventHooks().dispatchWorkflowComplete(workflow.id, false)
     emitCompletionFanout("failed", { error: { message, nodeId, code } })
@@ -466,7 +478,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     runRow = { ...runRow, status: "failed", completedAt: Date.now(), error: { message } }
     runRow = await commitOutcome(runRow)
     if (runRow.status !== "failed") return finishExistingTerminal(runRow)
-    await persistRunState({ runId, workflowId: workflow.id, status: "failed" })
+    await persistMirror({ runId, workflowId: workflow.id, status: "failed" })
     // Plugin host hook: cycle / sort failure during run preparation.
     const sortError = err instanceof Error ? err : new Error(message)
     getPluginEventHooks().dispatchWorkflowError(workflow.id, sortError)
@@ -539,7 +551,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
       runRow = { ...runRow, status: "failed", completedAt: Date.now(), error: { message } }
       runRow = await commitOutcome(runRow)
       if (runRow.status !== "failed") return finishExistingTerminal(runRow)
-      await persistRunState({ runId, workflowId: workflow.id, status: "failed" })
+      await persistMirror({ runId, workflowId: workflow.id, status: "failed" })
       getPluginEventHooks().dispatchWorkflowError(workflow.id, new Error(message))
       getPluginEventHooks().dispatchWorkflowComplete(workflow.id, false)
       if (timeoutHandle) clearTimeout(timeoutHandle)
@@ -770,7 +782,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
           cancelLosingBranches(stepId)
         }
         runRow = { ...runRow, lastCompletedStepId: stepId }
-        await persistRunState({
+        await persistMirror({
           runId,
           workflowId: workflow.id,
           status: "running",
@@ -1046,7 +1058,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
     // Small-model "work content" title for this run — fire-and-forget. A failed
     // run still describes real work, so it gets a title too.
     void generateWorkflowRunTitle(runId)
-    await persistRunState({
+    await persistMirror({
       runId,
       workflowId: workflow.id,
       status: "failed",
@@ -1114,7 +1126,7 @@ export async function runWorkflow(input: RunWorkflowInput): Promise<RunWorkflowR
   runRow = await commitOutcome(runRow)
   if (runRow.status !== "succeeded") return finishExistingTerminal(runRow)
   await logger.runCompleted(finalOutput)
-  await persistRunState({ runId, workflowId: workflow.id, status: "succeeded" })
+  await persistMirror({ runId, workflowId: workflow.id, status: "succeeded" })
   await ackRunCompleted(runId)
   // Small-model "work content" title for this run — fire-and-forget.
   void generateWorkflowRunTitle(runId)

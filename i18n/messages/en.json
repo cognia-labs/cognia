@@ -30668,6 +30668,7 @@
         "selectMode": "Select multiple nodes",
         "snapOff": "Snap to grid: off",
         "snapOn": "Snap to grid: on",
+        "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup.",
         "undo": "Undo"
       },
       "empty": "No workflows yet",
@@ -65911,7 +65912,8 @@
       "running": "Running…",
       "saveFailed": "Failed to save workflow",
       "savedOk": "Workflow saved",
-      "startFailed": "Failed to start run"
+      "startFailed": "Failed to start run",
+      "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup."
     },
     "capabilities": {
       "names": {
@@ -67331,7 +67333,8 @@
             "monthly": "Monthly (1st, 9:00)",
             "weekdays": "Weekdays at 9:00",
             "weekly": "Weekly (Mon 9:00)"
-          }
+          },
+          "unsupportedWorkflowExpression": "This schedule is not supported by workflow triggers."
         },
         "cronExpression": {
           "hint": "Five fields: minute hour day month weekday. Use *  for any value.",

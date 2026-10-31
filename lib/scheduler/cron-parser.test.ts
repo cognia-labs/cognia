@@ -17,6 +17,7 @@ import {
   matchesCronExpression,
   validateWorkflowCronExpression,
 } from "./cron-parser"
+import workflowVectors from "@/protocol/workflow-cron-vectors.json"
 import dialectContract from "@/test-fixtures/scheduler/cron-dialect.json"
 
 /** Read the wall-clock hour of `date` in a given IANA zone. */
@@ -341,5 +342,22 @@ describe("Cron Parser", () => {
     it("should return false for invalid expressions", () => {
       expect(matchesCronExpression("invalid", new Date())).toBe(false)
     })
+  })
+})
+
+describe("workflow cron shared vectors", () => {
+  it.each(workflowVectors.cases)("$name", (vector) => {
+    expect(validateWorkflowCronExpression(vector.expression).valid).toBe(!vector.reject)
+    if (vector.reject) return
+    expect(
+      getNextCronTimes(
+        vector.expression,
+        3,
+        new Date(vector.from),
+        vector.timezone ?? "UTC",
+        undefined,
+        "workflow"
+      ).map((date) => date.toISOString())
+    ).toEqual(vector.next?.map((value) => new Date(value).toISOString()))
   })
 })

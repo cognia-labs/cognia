@@ -32,9 +32,7 @@ import {
 } from "@/lib/workflow/runtime/issue-event-trigger"
 import { installApprovalNotificationActions } from "@/lib/workflow/runtime/approval-notify"
 import { isTauri } from "@/lib/tauri"
-import { listWorkflows } from "@/lib/db/workflows"
-import { resolveWorkflowDeployment } from "@/lib/db/workflow-deployments"
-import { syncWorkflowTriggers, unsyncWorkflowTriggers } from "@/lib/workflow/runtime/webhook-bridge"
+import { reconcileWorkflowTriggerRegistrations } from "@/lib/workflow/runtime/reconcile-trigger-registrations"
 import {
   disposePluginTriggerLifecycle,
   initPluginTriggerLifecycle,
@@ -205,24 +203,9 @@ export function WorkflowRuntimeProvider({ children }: { children?: React.ReactNo
       }
 
       try {
-        const all = await listWorkflows()
-        if (cancelled) return
-        const active = all.filter((workflow) => !workflow.isTemplate && !workflow.isBuiltIn)
-        await Promise.allSettled(
-          active.map(async (workflow) => {
-            const deployed = await resolveWorkflowDeployment(workflow.id)
-            if (deployed) {
-              await syncWorkflowTriggers(deployed.workflow, {
-                signal: startupController.signal,
-              })
-            } else {
-              await unsyncWorkflowTriggers(workflow)
-            }
-          })
-        )
-        if (cancelled) return
-        log.info?.("workflow runtime: synced trigger registrations to Rust", {
-          count: active.filter((workflow) => workflow.published?.deploymentId).length,
+        await reconcileWorkflowTriggerRegistrations({
+          signal: startupController.signal,
+          log: (level, message) => log[level]?.(message),
         })
       } catch (err) {
         log.warn?.("workflow runtime: initial trigger sync failed", {

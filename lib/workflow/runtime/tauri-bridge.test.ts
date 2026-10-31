@@ -264,6 +264,75 @@ describe("tauri-bridge native calls (headless brain)", () => {
     expect(call).toHaveBeenLastCalledWith("workflow_ack_completed", { runId: "run_1" })
   })
 
+  it("rejects required calls with a typed command error on the native plane", async () => {
+    const cause = new Error("host unavailable")
+    const bridge = await loadHeadlessBridge(jest.fn().mockRejectedValue(cause))
+    const calls = [
+      [
+        "workflow_register_trigger",
+        () =>
+          bridge.registerTrigger({
+            workflowId: "wf",
+            triggerId: "t",
+            kind: "trigger.cron",
+            cron: "@daily",
+            enabled: true,
+          }),
+      ],
+      [
+        "workflow_persist_run_state",
+        () => bridge.persistRunState({ runId: "r", workflowId: "wf", status: "running" }),
+      ],
+      ["workflow_unregister_trigger", () => bridge.unregisterTrigger("wf", "t")],
+      [
+        "workflow_waitpoint_create",
+        () => bridge.createNativeWorkflowWaitpoint({ id: "w" } as never),
+      ],
+      ["workflow_waitpoint_get", () => bridge.getNativeWorkflowWaitpoint("w")],
+      ["workflow_waitpoint_list_pending", () => bridge.listNativePendingWorkflowWaitpoints()],
+      [
+        "workflow_waitpoint_decide",
+        () =>
+          bridge.decideNativeWorkflowWaitpoint("w", {
+            outcome: "approved",
+            resolvedAt: 1,
+            respondedBy: "test",
+          }),
+      ],
+      [
+        "workflow_wait_event_persist",
+        () => bridge.persistNativeWorkflowWaitEvent({ id: "e" } as never),
+      ],
+      ["workflow_webhook_respond", () => bridge.respondToWebhook("c", { status: 200, body: "ok" })],
+    ] as const
+    for (const [command, invoke] of calls) {
+      await expect(invoke()).rejects.toBeInstanceOf(bridge.WorkflowNativeCallError)
+      await expect(invoke()).rejects.toMatchObject({ command, cause })
+    }
+  })
+
+  it("still publishes authoritative run transitions when the mirror write fails", async () => {
+    const bridge = await loadHeadlessBridge(jest.fn().mockRejectedValue(new Error("disk full")))
+    const { notifyCompanionsOfRunState } = await import("./companion-run-events")
+    const state = { runId: "r", workflowId: "wf", status: "running" as const }
+    await expect(bridge.persistRunState(state)).rejects.toBeInstanceOf(
+      bridge.WorkflowNativeCallError
+    )
+    expect(notifyCompanionsOfRunState).toHaveBeenCalledWith(state)
+  })
+
+  it("tolerates bounded acknowledgements and housekeeping failures", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    try {
+      const bridge = await loadHeadlessBridge(jest.fn().mockRejectedValue(new Error("unavailable")))
+      await expect(bridge.ackFileWatch("wf", "t")).resolves.toBeUndefined()
+      await expect(bridge.ackRunCompleted("r")).resolves.toBeUndefined()
+      await expect(bridge.pruneNativeWorkflowWaitEvents(1)).resolves.toBeNull()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it("reads the in-flight rows back from the host's mirror", async () => {
     const rows = [{ runId: "run_1", workflowId: "wf_1", snapshot: {}, startedAt: 1 }]
     const call = jest.fn(async () => rows)
@@ -281,10 +350,11 @@ describe("tauri-bridge native calls (headless brain)", () => {
     const bridge = await loadHeadlessBridge(call)
     await expect(bridge.getWebhookUrl("wf", "trg")).resolves.toBeNull()
     await expect(bridge.getWebhookUrl("wf", "trg")).resolves.toBeNull()
-    await expect(bridge.reloadInFlightRuns()).resolves.toEqual([])
-    expect(warn).toHaveBeenCalledTimes(2)
+    await expect(bridge.reloadInFlightRuns()).rejects.toMatchObject({
+      command: "workflow_reload_in_flight_runs",
+    })
+    expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0][0]).toContain("workflow_get_webhook_url")
-    expect(warn.mock.calls[1][0]).toContain("workflow_reload_in_flight_runs")
     warn.mockRestore()
   })
 })

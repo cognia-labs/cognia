@@ -51,6 +51,15 @@ jest.mock("@/lib/background-tasks/redispatch", () => ({
   startBackgroundTaskRecovery: () => mockStartBackgroundRecovery(),
 }))
 
+jest.mock("@/lib/workflow/runtime/reconcile-trigger-registrations", () => ({
+  ...jest.requireActual("@/lib/workflow/runtime/reconcile-trigger-registrations"),
+  reconcileWorkflowTriggerRegistrations: jest.fn(
+    jest.requireActual("@/lib/workflow/runtime/reconcile-trigger-registrations")
+      .reconcileWorkflowTriggerRegistrations
+  ),
+}))
+import { reconcileWorkflowTriggerRegistrations } from "@/lib/workflow/runtime/reconcile-trigger-registrations"
+
 const EXPECTED = [
   "scheduler",
   "workflow-runtime",
@@ -105,6 +114,7 @@ describe("initializer batch headless smoke", () => {
     const { useExternalAgentStore } = await import("@/stores/agent/external-agent-store")
     expect(useExternalAgentStore.getState().getAllAgents()).toEqual([])
     const result = await bootstrapHeadlessRuntimes(makeCtx())
+    expect(reconcileWorkflowTriggerRegistrations).toHaveBeenCalled()
     expect(result.status()).toContainEqual(
       expect.objectContaining({
         name: "external-agent",

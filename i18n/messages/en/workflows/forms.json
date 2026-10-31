@@ -979,7 +979,8 @@
         "monthly": "Monthly (1st, 9:00)",
         "weekdays": "Weekdays at 9:00",
         "weekly": "Weekly (Mon 9:00)"
-      }
+      },
+      "unsupportedWorkflowExpression": "This schedule is not supported by workflow triggers."
     },
     "cronExpression": {
       "hint": "Five fields: minute hour day month weekday. Use *  for any value.",

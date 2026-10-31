@@ -1,3 +1,12 @@
+jest.mock("./tauri-bridge", () => ({
+  ...jest.requireActual("./tauri-bridge"),
+  persistRunState: jest.fn(jest.requireActual("./tauri-bridge").persistRunState),
+}))
+import { persistRunState } from "./tauri-bridge"
+import {
+  getWorkflowTriggerHealth,
+  resetWorkflowTriggerHealthForTest,
+} from "./trigger-registration-health"
 jest.mock("@/lib/db/project-scope", () => {
   const actual = jest.requireActual("@/lib/db/project-scope")
   return { ...actual, resolveScopeProjectId: jest.fn(actual.resolveScopeProjectId) }
@@ -2248,4 +2257,33 @@ it("honors a foreign executor cancellation fence after its lease expires", async
     cancelRequestedAt: 100,
   })
   expect(await listRunEvents(runId)).toEqual([])
+})
+
+it("continues a run when its crash-resume mirror fails and logs only once per run", async () => {
+  resetWorkflowTriggerHealthForTest()
+  const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+  jest.mocked(persistRunState).mockRejectedValue(new Error("mirror disk full"))
+  try {
+    const result = await runWorkflow({ workflow: buildWorkflow([], []), trigger })
+    expect(result.status).toBe("succeeded")
+    expect((await getDb().workflowRuns.get(result.runId))?.status).toBe("succeeded")
+    expect(getWorkflowTriggerHealth().lastMirrorPersistFailure).toMatchObject({
+      runId: result.runId,
+      workflowId: "wf_x",
+      error: "mirror disk full",
+    })
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes("crash-resume mirror"))
+    ).toHaveLength(1)
+    const second = await runWorkflow({ workflow: buildWorkflow([], []), trigger })
+    expect(second.status).toBe("succeeded")
+    expect(
+      warn.mock.calls.filter(([message]) => String(message).includes("crash-resume mirror"))
+    ).toHaveLength(2)
+  } finally {
+    jest
+      .mocked(persistRunState)
+      .mockImplementation(jest.requireActual("./tauri-bridge").persistRunState)
+    warn.mockRestore()
+  }
 })

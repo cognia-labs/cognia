@@ -67,6 +67,7 @@
     "orientationLock": "锁定横屏",
     "orientationUnlock": "允许竖屏",
     "publicationInvalidated": "工作流已保存，但因可调用接口发生变化而自动下架。请重新发布以开放新契约。",
+    "triggerRegistrationFailed": "工作流已保存，但触发器注册失败。启动时将重新尝试注册。",
     "redo": "重做",
     "run": "运行",
     "runHistory": "运行历史",

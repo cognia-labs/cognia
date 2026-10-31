@@ -12,5 +12,6 @@
   "running": "Running…",
   "saveFailed": "Failed to save workflow",
   "savedOk": "Workflow saved",
-  "startFailed": "Failed to start run"
+  "startFailed": "Failed to start run",
+  "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup."
 }

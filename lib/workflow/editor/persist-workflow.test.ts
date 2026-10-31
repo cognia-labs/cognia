@@ -150,3 +150,16 @@ describe("persistEditorWorkflow", () => {
     expect(store.temporal.getState().pastStates).toHaveLength(historyLength)
   })
 })
+
+it("marks the persisted editor saved and forwards registration failure separately", async () => {
+  const store = createEditorStore(buildWorkflow("trigger.manual"))
+  store.getState().setName("Edited")
+  replaceWorkflow.mockResolvedValueOnce({
+    workflow: store.getState().toWorkflow(),
+    publicationInvalidated: false,
+    triggerRegistration: { ok: false, error: "offline" },
+  } as never)
+  const result = await persistEditorWorkflow(store)
+  expect(store.getState().dirty).toBe(false)
+  expect(result.triggerRegistration).toEqual({ ok: false, error: "offline" })
+})

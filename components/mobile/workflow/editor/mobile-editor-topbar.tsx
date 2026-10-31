@@ -135,8 +135,11 @@ export function MobileEditorTopbar({
     if (saving) return
     setSaving(true)
     try {
-      const { issueCount, publicationInvalidated } = await persistEditorWorkflow(store)
-      if (publicationInvalidated) {
+      const { issueCount, publicationInvalidated, triggerRegistration } =
+        await persistEditorWorkflow(store)
+      if (triggerRegistration && !triggerRegistration.ok) {
+        toast.error(t("triggerRegistrationFailed"))
+      } else if (publicationInvalidated) {
         toast.warning(t("publicationInvalidated"))
       } else {
         toast.success(issueCount > 0 ? t("savedWithIssues", { count: issueCount }) : t("saved"))
