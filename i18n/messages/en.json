@@ -35194,9 +35194,9 @@
       "routing": "Opening…"
     },
     "delete": {
-      "body": "\"{name}\" will be stopped and removed from this device, including its files, tools and scheduled jobs. You can install it again later.",
+      "body": "\"{name}\" will be stopped and removed from this device, including its files, tools and scheduled jobs. Its connected accounts, saved credentials, browser profiles and integration history are removed too, so you will need to sign in again after reinstalling.",
       "cancel": "Cancel",
-      "cascadeHint": "Also delete the plugin's stored data, permission grants and analytics counters. Without this, its data is kept so a reinstall can pick up where it left off.",
+      "cascadeHint": "Also delete the plugin's stored data, permission grants and analytics counters. Without this, its stored data is kept so a reinstall can reuse it. Accounts and credentials are removed either way.",
       "cascadeLabel": "Also wipe stored data",
       "confirm": "Uninstall",
       "confirming": "Uninstalling…",
