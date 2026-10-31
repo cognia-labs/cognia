@@ -1,3 +1,8 @@
+/** @jest-environment jsdom */
+// jsdom + fake-indexeddb: the default live state reads the kernel's own
+// tables (executionRuns, workSubmissions) through getDb.
+import "fake-indexeddb/auto"
+
 jest.mock("@/lib/scheduler/task-scheduler", () => ({
   registerTaskExecutor: jest.fn(),
   getTaskScheduler: jest.fn(),
@@ -25,6 +30,8 @@ import { setSessionsArchived } from "@/lib/chat/session-archive-writes"
 import { hostOwnsSessionState } from "@/lib/db/mobile-outbound-queue"
 import { listSessions } from "@/lib/db/sessions"
 import { getSettings } from "@/lib/db/settings"
+import { __resetDbForTesting, getDb } from "@/lib/db/schema"
+import type { WorkSubmissionRow } from "@/lib/db/work-submissions"
 import { getTaskScheduler, registerTaskExecutor } from "@/lib/scheduler/task-scheduler"
 import { isMaintenanceTask } from "@/lib/scheduler/maintenance-tasks"
 import { useChatStore } from "@/stores/chat/chat-store"
@@ -165,6 +172,121 @@ describe("runConversationAutoArchive", () => {
     })
     // An errored turn is not in flight: the conversation is idle.
     expect(setSessionsArchived).toHaveBeenCalledWith(["old", "errored"], true)
+  })
+
+  // ADR-0250 §5, convergence 0b B7. The sweep runs on the headless brain,
+  // whose chat store is empty: what is running there lives only in the
+  // kernel's tables. A conversation with a live ExecutionRun or an unsettled
+  // work submission is not idle, whatever its timestamps say.
+  describe("on a host whose chat store is empty (the brain)", () => {
+    beforeEach(async () => {
+      await __resetDbForTesting()
+      jest.mocked(getSettings).mockResolvedValue({
+        conversationArchive: { autoArchiveAfterDays: 7 },
+      } as Awaited<ReturnType<typeof getSettings>>)
+      jest.mocked(hostOwnsSessionState).mockReturnValue(false)
+      jest.mocked(useChatStore.getState).mockReturnValue({
+        activeSessionId: null,
+        sessions: {},
+        openSessionIds: [],
+        paneIdsBySession: {},
+        backgroundHolds: {},
+        splitSessionId: null,
+      } as unknown as ReturnType<typeof useChatStore.getState>)
+    })
+
+    const run = (id: string, sessionId: string | undefined, status: string) => ({
+      id,
+      kind: "agent-turn",
+      sourceId: sessionId ?? id,
+      ...(sessionId ? { sessionId } : {}),
+      title: id,
+      status,
+      currentRevision: 0,
+      startedAt: old,
+      updatedAt: old,
+    })
+
+    const submission = (id: string, sessionId: string, dispatchState: string) =>
+      ({
+        id,
+        accountId: "account-1",
+        idempotencyKey: `chat:${sessionId}:${id}`,
+        runId: `run-${id}`,
+        turnId: `turn-${id}`,
+        sessionId,
+        sourceKind: "chat",
+        sourceId: sessionId,
+        dispatchState,
+        nextAttemptAt: old,
+        attemptCount: 0,
+        createdAt: old,
+        updatedAt: old,
+      }) as unknown as WorkSubmissionRow
+
+    it("keeps conversations the kernel is still running or owes a dispatch", async () => {
+      const db = getDb()
+      await db.executionRuns.bulkAdd([
+        run("r-running", "running", "running"),
+        run("r-waiting", "waiting", "waiting"),
+        run("r-paused", "paused", "paused"),
+        run("r-recovery", "recovery", "recovery_required"),
+        run("r-queued", "queued", "queued"),
+        run("r-done", "done", "completed"),
+        run("r-failed", "failed", "failed"),
+        run("r-sessionless", undefined, "running"),
+      ] as never)
+      await db.workSubmissions.bulkAdd([
+        submission("s-pending", "submitted", "pending"),
+        submission("s-claimed", "claimed", "claimed"),
+        submission("s-settled", "settled", "settled"),
+      ])
+      // A HostState turn the durable ledger never recorded (backlog_full, or
+      // a pending action re-dispatched after a restart) is live all the same.
+      const channel = (sessionId: string, turn: string) => ({
+        channel: `session:${sessionId}`,
+        hostGeneration: 1,
+        hostSeq: 1,
+        revision: 1,
+        digest: "d",
+        updatedAt: old,
+        state: { kind: "session", channel: `session:${sessionId}`, sessionId, turn },
+      })
+      await db.hostStateChannels.bulkAdd([
+        channel("host-running", "running"),
+        channel("host-deciding", "awaiting-decision"),
+        channel("host-completed", "completed"),
+        { ...channel("index", "running"), state: { kind: "session-index" } },
+      ] as never)
+      jest
+        .mocked(listSessions)
+        .mockResolvedValue(
+          [
+            "running",
+            "waiting",
+            "paused",
+            "recovery",
+            "queued",
+            "done",
+            "failed",
+            "submitted",
+            "claimed",
+            "settled",
+            "host-running",
+            "host-deciding",
+            "host-completed",
+            "idle",
+          ].map((id) => session(id))
+        )
+
+      await expect(runConversationAutoArchive({ now: () => NOW })).resolves.toMatchObject({
+        archived: 5,
+      })
+      expect(setSessionsArchived).toHaveBeenCalledWith(
+        ["done", "failed", "settled", "host-completed", "idle"],
+        true
+      )
+    })
   })
 
   it("asks the shared routing predicate whether the Host owns the rows", async () => {
