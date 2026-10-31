@@ -434,8 +434,15 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0_u8; 4096];
-            stream.read(&mut request).await.unwrap();
+            // A GET has no body: consume the whole request head, however the
+            // client splits it across reads, before answering.
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert!(read > 0, "client closed before sending the request head");
+                request.extend_from_slice(&chunk[..read]);
+            }
             stream.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n7\r\npayload\r\n0\r\n\r\n").await.unwrap();
         });
         let req = HttpRequest {
