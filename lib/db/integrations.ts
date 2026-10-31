@@ -187,7 +187,13 @@ export async function updateIntegrationAccount(
 ): Promise<IntegrationAccountRow> {
   const existing = await getIntegrationAccount(pluginId, accountId)
   if (!existing) throw new Error(`Integration account "${accountId}" was not found`)
-  const row = { ...existing, ...withoutRecipientList(patch), updatedAt: nowIso() }
+  const row = {
+    ...existing,
+    ...withoutRecipientList(patch),
+    id: existing.id,
+    pluginId: existing.pluginId,
+    updatedAt: nowIso(),
+  }
   await getDb().integrationAccounts.put(row)
   await projectIntegrationAccount(row)
   return row

@@ -2370,7 +2370,7 @@
         {
           "id": "auth.createPkceFlow",
           "name": "createPkceFlow",
-          "requiredPermissions": ["auth:provide"],
+          "requiredPermissions": ["auth:provide", "network:fetch"],
           "consentTier": "confirm",
           "risk": "high",
           "idempotent": false,
@@ -2406,7 +2406,7 @@
         {
           "id": "auth.onDidChangeSessions",
           "name": "onDidChangeSessions",
-          "requiredPermissions": [],
+          "requiredPermissions": ["auth:consume"],
           "consentTier": "none",
           "risk": "low",
           "idempotent": false,

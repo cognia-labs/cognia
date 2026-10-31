@@ -4944,6 +4944,7 @@ API_NAMESPACE_CONTRACTS = [
                 "name": "createPkceFlow",
                 "requiredPermissions": [
                     "auth:provide",
+                    "network:fetch",
                 ],
                 "consentTier": "confirm",
                 "risk": "high",
@@ -4984,7 +4985,9 @@ API_NAMESPACE_CONTRACTS = [
             {
                 "id": "auth.onDidChangeSessions",
                 "name": "onDidChangeSessions",
-                "requiredPermissions": [],
+                "requiredPermissions": [
+                    "auth:consume",
+                ],
                 "consentTier": "none",
                 "risk": "low",
                 "idempotent": False,

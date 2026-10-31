@@ -226,6 +226,19 @@ describe("auth provider registry", () => {
   })
 
   describe("listeners", () => {
+    it("tags internal events with the provider while retaining the host session", async () => {
+      registerAuthenticationProvider(makeProvider())
+      const listener = jest.fn()
+      onDidChangeSessions(listener)
+      const session = await getSession("github", ["repo"], { createIfNone: true })
+      expect(listener).toHaveBeenCalledWith({
+        providerId: "github",
+        added: [session],
+        removed: [],
+        changed: [],
+      })
+      expect(listener.mock.calls[0][0].added[0].accessToken).toBe("gho_test_token")
+    })
     it("survives a listener that throws", async () => {
       const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
       try {

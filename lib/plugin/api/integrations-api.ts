@@ -84,7 +84,26 @@ export function createIntegrationsAPI(
     },
     async updateAccount(connectorAccountId, patch) {
       requirePermission(hasPermission, "integrations:manage", "ctx.integrations.updateAccount")
-      return toPluginAccount(await updateIntegrationAccount(pluginId, connectorAccountId, patch))
+      if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+        throw new Error("ctx.integrations.updateAccount requires an object patch")
+      }
+      const updates: Partial<Pick<IntegrationAccount, "label" | "enabled">> = {}
+      for (const key of Reflect.ownKeys(patch)) {
+        if (key !== "label" && key !== "enabled") {
+          throw new Error(
+            `ctx.integrations.updateAccount: unsupported patch key "${String(key)}"; only label and enabled may be changed`
+          )
+        }
+        const value = patch[key]
+        if (key === "label") {
+          if (typeof value !== "string") throw new Error("Account label must be a string")
+          updates.label = value
+        } else {
+          if (typeof value !== "boolean") throw new Error("Account enabled must be a boolean")
+          updates.enabled = value
+        }
+      }
+      return toPluginAccount(await updateIntegrationAccount(pluginId, connectorAccountId, updates))
     },
     async removeAccount(connectorAccountId) {
       requirePermission(hasPermission, "integrations:manage", "ctx.integrations.removeAccount")

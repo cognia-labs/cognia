@@ -20,6 +20,7 @@ import { runPkceAuthFlow } from "@/lib/plugin/auth/auth-pkce-flow"
 import type {
   CreateAuthAPIOptions,
   PluginAuthAPI,
+  PluginAuthSessionMetadata,
 } from "@cognia/plugin-contract/lib/plugin/api/auth-api"
 export type {
   CreateAuthAPIOptions,
@@ -34,7 +35,7 @@ function requirePermission(
 ): void {
   if (!hasPermission(permission)) {
     throw new Error(
-      `${method} requires the "${permission}" permission — declare it in the plugin manifest.`
+      `${method} requires the "${permission}" permission to be granted and not revoked.`
     )
   }
 }
@@ -56,12 +57,60 @@ export function createAuthAPI(pluginId: string, options: CreateAuthAPIOptions): 
       if (!provider) throw new Error(`No auth provider registered for id "${providerId}"`)
       return provider.getSessions(scopes, { silent: true })
     },
-    onDidChangeSessions(listener) {
-      return registryOnDidChange(listener)
+    onDidChangeSessions(listener, providerId) {
+      requirePermission(hasPermission, "auth:consume", "ctx.auth.onDidChangeSessions")
+      return registryOnDidChange((event) => {
+        if (
+          !hasPermission("auth:consume") ||
+          (providerId !== undefined && event.providerId !== providerId)
+        )
+          return
+        const metadata = (session: PluginAuthSessionMetadata): PluginAuthSessionMetadata => ({
+          id: session.id,
+          account: { id: session.account.id, label: session.account.label },
+          scopes: [...session.scopes],
+        })
+        listener({
+          providerId: event.providerId,
+          added: event.added.map(metadata),
+          removed: event.removed.map(metadata),
+          changed: event.changed.map(metadata),
+        })
+      })
     },
     async createPkceFlow(config) {
       requirePermission(hasPermission, "auth:provide", "ctx.auth.createPkceFlow")
-      return runPkceAuthFlow(config)
+      if ("fetchImpl" in config) {
+        throw new Error(
+          "ctx.auth.createPkceFlow does not allow fetchImpl; use the host-governed transport."
+        )
+      }
+      requirePermission(hasPermission, "network:fetch", "ctx.auth.createPkceFlow")
+      const { network } = options
+      if (!network)
+        throw new Error("ctx.auth.createPkceFlow requires the host-governed network transport.")
+      return runPkceAuthFlow({
+        ...config,
+        fetchImpl: async (input, init) => {
+          const response = await network.fetch(String(input), {
+            method: "POST",
+            headers: Object.fromEntries(new Headers(init?.headers).entries()),
+            body:
+              config.tokenRequestEncoding === "json"
+                ? JSON.parse(init?.body as string)
+                : init?.body,
+            signal: config.signal,
+          })
+          return new Response(
+            typeof response.data === "string" ? response.data : JSON.stringify(response.data),
+            {
+              status: response.status,
+              statusText: response.statusText,
+              headers: response.headers,
+            }
+          )
+        },
+      })
     },
   }
 }

@@ -34,6 +34,10 @@ export interface PkceFlowConfig {
   }>
   /** Injectable fetch (defaults to global). */
   fetchImpl?: typeof fetch
+  /** Token endpoint body encoding; JSON endpoints use the same governed transport. */
+  tokenRequestEncoding?: "form" | "json"
+  /** Cancel the token request when the owning provider's flow is cancelled. */
+  signal?: AbortSignal
   /** Extra authorize-URL params (e.g. `access_type=offline`). */
   extraAuthParams?: Record<string, string>
   /**
@@ -94,8 +98,18 @@ export async function runPkceAuthFlow(config: PkceFlowConfig): Promise<PkceToken
   }
   const res = await fetchImpl(config.tokenUrl, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: body.toString(),
+    headers: {
+      "Content-Type":
+        config.tokenRequestEncoding === "json"
+          ? "application/json"
+          : "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body:
+      config.tokenRequestEncoding === "json"
+        ? JSON.stringify(Object.fromEntries(body))
+        : body.toString(),
+    signal: config.signal,
   })
   if (!res.ok) {
     throw new Error(`OAuth token exchange failed: ${res.status} ${res.statusText}`)

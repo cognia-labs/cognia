@@ -63,6 +63,18 @@ import { getPluginConsentBroker } from "../security/consent-broker"
 import { createElement } from "react"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
+import * as pluginPiiGate from "@/lib/plugin/api/plugin-pii-gate"
+import {
+  __resetAuthRegistryForTesting,
+  __makeSession,
+  getSession as getRegistrySession,
+} from "@/lib/plugin/auth/auth-provider-registry"
+
+// Keep the real sanitizer while exposing a mutable call-through spy seam.
+jest.mock("@/lib/plugin/api/plugin-pii-gate", () => ({
+  __esModule: true,
+  ...jest.requireActual("@/lib/plugin/api/plugin-pii-gate"),
+}))
 
 // Mock Tauri invoke
 jest.mock("@tauri-apps/api/core", () => ({
@@ -407,6 +419,72 @@ describe("createPluginContext", () => {
     const context = createPluginContext(plugin, mockManager)
 
     expect(context.pluginId).toBe("test-plugin")
+  })
+
+  it("honors auth revocations and optional runtime grants on an existing context", async () => {
+    const guard = getPermissionGuard()
+    guard.registerPlugin("test-plugin", ["auth:consume", "auth:provide"])
+    const ctx = createFullPluginContext(
+      createMockPlugin({
+        manifest: { ...mockManifest, permissions: ["auth:consume", "auth:provide"] },
+      }),
+      mockManager
+    )
+    const session = __makeSession({
+      accessToken: "secret",
+      account: { id: "u", label: "U" },
+      scopes: [],
+    })
+    const dispose = ctx.auth.registerProvider({
+      id: "context-auth",
+      label: "Auth",
+      getSessions: async () => [],
+      createSession: async () => session,
+      removeSession: async () => {},
+    })
+    try {
+      const listener = jest.fn()
+      ctx.auth.onDidChangeSessions(listener)
+      await ctx.auth.getSession("context-auth", [], { createIfNone: true })
+      expect(listener).toHaveBeenCalledTimes(1)
+      guard.revoke("test-plugin", "auth:consume")
+      await expect(ctx.auth.getSession("context-auth", [])).rejects.toThrow(/auth:consume/)
+      await expect(ctx.auth.getSessions("context-auth")).rejects.toThrow(/auth:consume/)
+      expect(() => ctx.auth.onDidChangeSessions(jest.fn())).toThrow(/auth:consume/)
+      await getRegistrySession("context-auth", [], { forceNewSession: true })
+      expect(listener).toHaveBeenCalledTimes(1)
+      guard.revoke("test-plugin", "auth:provide")
+      expect(() =>
+        ctx.auth.registerProvider({
+          id: "denied",
+          label: "Denied",
+          getSessions: async () => [],
+          createSession: async () => session,
+          removeSession: async () => {},
+        })
+      ).toThrow(/auth:provide/)
+
+      const optional = createFullPluginContext(
+        createMockPlugin({
+          manifest: {
+            ...mockManifest,
+            permissions: [],
+            optionalPermissions: ["auth:consume", "auth:provide"],
+          },
+        }),
+        mockManager
+      )
+      guard.grant("test-plugin", "auth:consume", { grantedBy: "user" })
+      guard.grant("test-plugin", "auth:provide", { grantedBy: "user" })
+      await optional.auth.getSession("context-auth", [], { forceNewSession: true })
+      expect(listener).toHaveBeenCalledTimes(2)
+      guard.revoke("test-plugin", "auth:consume")
+      await getRegistrySession("context-auth", [], { forceNewSession: true })
+      expect(listener).toHaveBeenCalledTimes(2)
+    } finally {
+      dispose()
+      __resetAuthRegistryForTesting()
+    }
   })
 
   it("tags ctx.logger as the plugin log source, debug session or not", () => {
@@ -3237,6 +3315,108 @@ describe("agent imperative API", () => {
           networkAccess: networkAccess as Plugin["manifest"]["networkAccess"],
         },
       })
+
+    it.each(["form", "json"] as const)(
+      "runs %s PKCE token exchange through permissions, allowlist, PII policy and audit",
+      async (tokenRequestEncoding) => {
+        const sanitizer = jest.spyOn(pluginPiiGate, "sanitizePluginNetworkEgress")
+        try {
+          const guard = getPermissionGuard()
+          guard.registerPlugin("pkce-auth-test", ["auth:provide"])
+          const ctx = createFullPluginContext(
+            createMockPlugin({
+              manifest: {
+                ...mockManifest,
+                id: "pkce-auth-test",
+                permissions: ["auth:provide"],
+                optionalPermissions: ["network:fetch"],
+                networkAccess: { allowedDomains: ["api.example.com"] },
+              },
+            }),
+            mockManager
+          )
+          const config = {
+            authorizeUrl: "https://api.example.com/authorize",
+            tokenUrl: "https://api.example.com/token",
+            clientId: "client",
+            scopes: [],
+            redirectUri: "http://localhost/callback",
+            state: "state",
+            openUrl: jest.fn(),
+            waitForCode: async () => ({ code: "code", state: "state" }),
+            tokenRequestEncoding,
+            extraTokenParams: { note: "Contact person@example.com" },
+          }
+          await expect(ctx.auth.createPkceFlow(config)).rejects.toThrow(/network:fetch/)
+          expect(fetchMock).not.toHaveBeenCalled()
+          guard.grant("pkce-auth-test", "network:fetch", { grantedBy: "user" })
+          await expect(
+            ctx.auth.createPkceFlow({ ...config, tokenUrl: "https://outside.test/token" })
+          ).rejects.toThrow(/network|allowlist|domain/i)
+          expect(fetchMock).not.toHaveBeenCalled()
+          sanitizer.mockClear()
+          fetchMock.mockResolvedValue(
+            new Response(JSON.stringify({ access_token: "token" }), {
+              headers: { "Content-Type": "application/json" },
+            })
+          )
+          await expect(ctx.auth.createPkceFlow(config)).resolves.toMatchObject({
+            accessToken: "token",
+          })
+          expect(fetchMock).toHaveBeenCalledTimes(1)
+          const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+          expect(url).toBe(config.tokenUrl)
+          expect(new Headers(init.headers).get("Content-Type")).toBe(
+            tokenRequestEncoding === "json"
+              ? "application/json"
+              : "application/x-www-form-urlencoded"
+          )
+          const body =
+            tokenRequestEncoding === "json"
+              ? JSON.parse(init.body as string)
+              : Object.fromEntries(new URLSearchParams(init.body as string))
+          expect(body).toMatchObject({ grant_type: "authorization_code" })
+          expect(sanitizer).toHaveBeenCalledTimes(1)
+          expect(sanitizer).toHaveBeenCalledWith(
+            "pkce-auth-test",
+            expect.objectContaining({
+              url: config.tokenUrl,
+              headers: expect.objectContaining({
+                "content-type":
+                  tokenRequestEncoding === "json"
+                    ? "application/json"
+                    : "application/x-www-form-urlencoded",
+              }),
+              body:
+                tokenRequestEncoding === "json"
+                  ? expect.objectContaining({
+                      grant_type: "authorization_code",
+                      note: "Contact person@example.com",
+                    })
+                  : expect.stringContaining("note=Contact+person%40example.com"),
+            })
+          )
+          // ES-05: the existing gate does not decode urlencoded string bodies.
+          // Form PKCE proves governed sanitizer invocation; JSON also proves redaction.
+          if (tokenRequestEncoding === "json") {
+            expect(JSON.stringify(body)).not.toContain("person@example.com")
+          }
+          expect(guard.getAuditLog({ pluginId: "pkce-auth-test" })).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                context: expect.stringContaining("egress POST https://api.example.com/token"),
+              }),
+            ])
+          )
+          guard.revoke("pkce-auth-test", "network:fetch")
+          await expect(ctx.auth.createPkceFlow(config)).rejects.toThrow(/network:fetch/)
+          expect(fetchMock).toHaveBeenCalledTimes(1)
+          expect(sanitizer).toHaveBeenCalledTimes(1)
+        } finally {
+          sanitizer.mockRestore()
+        }
+      }
+    )
 
     it("allows a fetch to a declared domain (and its subdomains)", async () => {
       const ctx = createPluginContext(pluginWithEgress(["example.com"]), mockManager)

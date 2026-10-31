@@ -24,6 +24,24 @@ function baseConfig(over?: Partial<PkceFlowConfig>): PkceFlowConfig {
 }
 
 describe("runPkceAuthFlow", () => {
+  it("supports JSON token endpoints and forwards cancellation through the injected transport", async () => {
+    const controller = new AbortController()
+    const config = baseConfig({
+      tokenRequestEncoding: "json",
+      signal: controller.signal,
+      extraTokenParams: { client_secret: "secret" },
+    })
+    await runPkceAuthFlow(config)
+    const [, init] = (config.fetchImpl as jest.Mock).mock.calls[0] as [string, RequestInit]
+    expect(init.headers).toMatchObject({ "Content-Type": "application/json" })
+    expect(JSON.parse(init.body as string)).toMatchObject({
+      grant_type: "authorization_code",
+      code: "the-code",
+      client_id: "client-123",
+      client_secret: "secret",
+    })
+    expect(init.signal).toBe(controller.signal)
+  })
   it("builds an authorize URL with PKCE params and opens it", async () => {
     const config = baseConfig()
     await runPkceAuthFlow(config)

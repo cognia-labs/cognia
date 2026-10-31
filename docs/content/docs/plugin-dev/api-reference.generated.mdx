@@ -16,7 +16,7 @@ Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.agentConfig` | 7 | `agent-config:read`, `agent-config:write` | frontend, hybrid | sensitive |
 | `ctx.ai` | 7 | `ai:chat`, `ai:embed` | frontend, hybrid, python | sensitive |
 | `ctx.artifact` | 12 | `artifact:write`, `artifact:read` | frontend, hybrid | internal |
-| `ctx.auth` | 5 | `auth:provide`, `auth:consume` | frontend, hybrid | secret |
+| `ctx.auth` | 5 | `auth:provide`, `network:fetch`, `auth:consume` | frontend, hybrid | secret |
 | `ctx.automation` | 27 | `automation:read`, `automation:screenshot`, `automation:click`, `automation:pointer`, `automation:type`, `automation:window` | frontend, hybrid | internal |
 | `ctx.backup` | 6 | `backup:read`, `backup:write` | frontend, hybrid | internal |
 | `ctx.bots` | 16 | `agent:control` | frontend, hybrid, python | sensitive |
@@ -210,10 +210,10 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 
 | Method | Permissions | Risk | Idempotent | Runtimes |
 | --- | --- | --- | --- | --- |
-| `auth.createPkceFlow` | `auth:provide` | high | No | frontend, hybrid |
+| `auth.createPkceFlow` | `auth:provide`, `network:fetch` | high | No | frontend, hybrid |
 | `auth.getSession` | `auth:consume` | medium | No | frontend, hybrid |
 | `auth.getSessions` | `auth:consume` | medium | Yes | frontend, hybrid |
-| `auth.onDidChangeSessions` | None | low | No | frontend, hybrid |
+| `auth.onDidChangeSessions` | `auth:consume` | low | No | frontend, hybrid |
 | `auth.registerProvider` | `auth:provide` | medium | No | frontend, hybrid |
 
 ## `ctx.automation`

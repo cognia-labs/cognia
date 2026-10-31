@@ -66,6 +66,7 @@ import {
 } from "@/lib/plugin/core/plugins-policy-storage"
 import { emitPluginConfigChange } from "@/lib/plugin/api/config-api"
 import { clearPluginSecrets } from "@/lib/plugin/api/secrets-api"
+import { releaseAuthProviderOwnership } from "@/lib/plugin/auth/auth-provider-registry"
 import { createWorkspaceAPI } from "@/lib/plugin/api/workspace-api"
 
 /** How often the idle sweep runs (only active when a plugin opts into idleSuspend). */
@@ -4870,6 +4871,7 @@ export class PluginManager {
           )
         }
 
+        releaseAuthProviderOwnership(pluginId)
         await this.revokePluginPermissions(pluginId, plugin.manifest.permissions || [])
         getPermissionGuard().unregisterPlugin(pluginId)
         if (plugin.manifest.type === "wasm") {

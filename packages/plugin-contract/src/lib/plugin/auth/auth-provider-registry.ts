@@ -34,6 +34,7 @@ export interface AuthSession {
 }
 
 export interface AuthSessionChangeEvent {
+  providerId: string
   added: AuthSession[]
   removed: AuthSession[]
   changed: AuthSession[]
@@ -219,7 +220,7 @@ export async function getSession(
   if (options.createIfNone || options.forceNewSession) {
     const session = await provider.createSession(scopes, options)
     await persistSession(providerId, session)
-    emit({ added: [session], removed: [], changed: [] })
+    emit({ providerId, added: [session], removed: [], changed: [] })
     return session
   }
   return undefined
@@ -236,7 +237,7 @@ export async function removeSession(providerId: string, sessionId: string): Prom
     await secretsAdapter.delete(secretKey(providerId, sessionId)).catch(() => {})
   }
   if (session) {
-    emit({ added: [], removed: [session], changed: [] })
+    emit({ providerId, added: [], removed: [session], changed: [] })
   }
 }
 

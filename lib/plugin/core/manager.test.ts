@@ -57,6 +57,8 @@ import { PluginServiceRegistry } from "./service-registry"
 import { evaluatePluginBundle } from "./evaluate-plugin-bundle"
 import { getPluginSignatureVerifier } from "@/lib/plugin/security/signature"
 import { getPermissionGuard } from "@/lib/plugin/security/permission-guard"
+import { createAuthAPI } from "@/lib/plugin/api/auth-api"
+import { __resetAuthRegistryForTesting } from "@/lib/plugin/auth/auth-provider-registry"
 import { getMessageBus, SystemEvents, resetMessageBus } from "@/lib/plugin/messaging/message-bus"
 import { getPluginIPC, resetPluginIPC } from "@/lib/plugin/messaging/ipc"
 import {
@@ -3292,6 +3294,59 @@ describe("PluginManager", () => {
   })
 
   describe("uninstallPlugin", () => {
+    it.each([false, true])(
+      "releases provider ownership on uninstall with purgeData=%s",
+      async (purgeData) => {
+        const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage")
+        const values = new Map<string, string>()
+        Object.defineProperty(globalThis, "localStorage", {
+          configurable: true,
+          value: {
+            getItem: (key: string) => values.get(key) ?? null,
+            setItem: (key: string, value: string) => values.set(key, value),
+          },
+        })
+        try {
+          const provider = {
+            id: "uninstall-auth",
+            label: "Auth",
+            getSessions: async () => [],
+            createSession: jest.fn(),
+            removeSession: async () => {},
+          }
+          createAuthAPI("to-remove", { hasPermission: () => true }).registerProvider(provider)()
+          expect(() =>
+            createAuthAPI("new-owner", { hasPermission: () => true }).registerProvider(provider)
+          ).toThrow(/owned by another plugin/)
+          mockGetState.mockReturnValue({
+            plugins: {
+              "to-remove": {
+                manifest: createManifest("to-remove"),
+                status: "installed",
+                source: "local",
+                path: "/plugins/to-remove",
+                config: {},
+              },
+            },
+            uninstallPlugin: jest.fn(async () => undefined),
+            setPluginError: jest.fn(),
+            setPluginStatus: jest.fn(),
+          })
+          mockInvoke.mockResolvedValue(undefined)
+          await new PluginManager({ pluginDirectory: "/plugins" }).uninstallPlugin("to-remove", {
+            purgeData,
+          })
+          expect(() =>
+            createAuthAPI("new-owner", { hasPermission: () => true }).registerProvider(provider)
+          ).not.toThrow()
+        } finally {
+          __resetAuthRegistryForTesting()
+          if (original) Object.defineProperty(globalThis, "localStorage", original)
+          else Reflect.deleteProperty(globalThis, "localStorage")
+        }
+      }
+    )
+
     it("should call plugin_uninstall and then store.uninstallPlugin with skipFileRemoval=true", async () => {
       const { removePluginTables } = jest.requireMock("@/lib/plugin/dexie/bridge") as {
         removePluginTables: jest.Mock

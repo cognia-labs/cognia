@@ -459,7 +459,9 @@ export function createFullPluginContext(
     modal: createModalAPI(pluginId),
     webview: createWebviewAPI(pluginId, plugin.manifest.networkAccess),
     auth: createAuthAPI(pluginId, {
-      hasPermission: (p) => (plugin.manifest.permissions ?? []).includes(p as never),
+      hasPermission: (permission) =>
+        permissionsAPI.hasPermission(permission as IntrospectablePluginPermission),
+      network: { fetch: (url, options) => scopedContext.network.fetch(url, options) },
     }),
     uri: createUriAPI(pluginId),
     remoteDesktop: createRemoteDesktopAPI(pluginId, {

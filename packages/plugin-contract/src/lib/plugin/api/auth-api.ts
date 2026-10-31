@@ -1,12 +1,18 @@
 /**
  * The plugin contract's share of `lib/plugin/api/auth-api.ts`, which re-exports these.
  */
-import type {
-  AuthSession,
-  AuthSessionChangeEvent,
-  AuthSessionOptions,
-} from "../auth/auth-provider-registry"
+import type { AuthSession, AuthSessionOptions } from "../auth/auth-provider-registry"
 import type { PkceFlowConfig, PkceTokenResult } from "../auth/auth-pkce-flow"
+import type { PluginAuthSessionChangeEvent } from "../../../types/plugin/plugin-auth"
+import type { PluginNetworkAPI } from "../../../types/plugin/plugin"
+
+export type {
+  PluginAuthSessionChangeEvent,
+  PluginAuthSessionMetadata,
+} from "../../../types/plugin/plugin-auth"
+
+/** The host supplies the governed transport; plugins cannot override it. */
+export type PluginPkceFlowConfig = Omit<PkceFlowConfig, "fetchImpl">
 
 /** Provider object a plugin registers via `ctx.auth.registerProvider`. */
 export interface PluginAuthProvider {
@@ -31,12 +37,17 @@ export interface PluginAuthAPI {
   ): Promise<AuthSession | undefined>
   /** List existing sessions for a provider, silent (`auth:consume`). */
   getSessions(providerId: string, scopes?: readonly string[]): Promise<AuthSession[]>
-  /** Observe session add/remove/change across all providers. */
-  onDidChangeSessions(listener: (event: AuthSessionChangeEvent) => void): () => void
-  /** Run an OAuth 2.0 + PKCE flow (`auth:provide`). Returns the raw tokens. */
-  createPkceFlow(config: PkceFlowConfig): Promise<PkceTokenResult>
+  /** Observe session metadata (`auth:consume`), optionally for one provider. */
+  onDidChangeSessions(
+    listener: (event: PluginAuthSessionChangeEvent) => void,
+    providerId?: string
+  ): () => void
+  /** Run an OAuth 2.0 + PKCE flow (`auth:provide` + `network:fetch`). Returns the raw tokens. */
+  createPkceFlow(config: PluginPkceFlowConfig): Promise<PkceTokenResult>
 }
 
 export interface CreateAuthAPIOptions {
   hasPermission: (permission: string) => boolean
+  /** Host-owned, permission-guarded plugin network API. */
+  network?: Pick<PluginNetworkAPI, "fetch">
 }

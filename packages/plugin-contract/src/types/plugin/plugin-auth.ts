@@ -11,3 +11,18 @@ export interface PluginAuthProviderDef {
   /** Human-readable label shown in the consent UI. */
   label: string
 }
+
+/** Public session metadata. Credentials are only returned by explicit session reads. */
+export interface PluginAuthSessionMetadata {
+  id: string
+  account: { id: string; label: string }
+  scopes: string[]
+}
+
+/** Plugin-facing change notification; never includes tokens or provider extension fields. */
+export interface PluginAuthSessionChangeEvent {
+  providerId: string
+  added: PluginAuthSessionMetadata[]
+  removed: PluginAuthSessionMetadata[]
+  changed: PluginAuthSessionMetadata[]
+}

@@ -1,3 +1,5 @@
+/** @jest-environment jsdom */
+
 import { getSubscriptionProvider } from "@/lib/subscription/core/provider-registry"
 import { glancePluginModules } from "@/lib/glance/plugin-registry"
 import { pluginEntryId } from "@/types/glance/layout"
@@ -29,6 +31,22 @@ import {
 import { __resetSubagentsForTesting, getSubagent } from "@/lib/plugin/registries/subagent-registry"
 import { getPluginPromptEntry } from "@/lib/prompts/plugin-prompts"
 import type { PluginCapability, PluginManifest } from "@/types/plugin"
+import { getProvider, unregisterProvidersByPlugin } from "@/lib/plugin/auth/auth-provider-registry"
+
+describe("auth-provider ownership", () => {
+  afterEach(() => unregisterProvidersByPlugin("auth-order-test"))
+
+  it("reserves declarative provider ownership until uninstall", () => {
+    const capability = OVERLAY_REGISTRY_CAPABILITIES["auth-provider"]
+    const def = { id: "declarative-owner-test", label: "Provider" }
+    capability.registerEntry(def, { pluginId: "auth-order-test" })
+    capability.unregisterAllByPlugin("auth-order-test")
+    expect(() => capability.registerEntry(def, { pluginId: "squatter" })).toThrow(
+      /owned by another plugin/
+    )
+    expect(getProvider(def.id)).toBeUndefined()
+  })
+})
 
 describe("OVERLAY_REGISTRY_CAPABILITIES (PR-D)", () => {
   it("covers exactly the capabilities the dispatch loop expects", () => {

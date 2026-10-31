@@ -32,6 +32,32 @@ describe("Integration persistence", () => {
     __resetDbForTesting()
   })
 
+  it("preserves immutable account identity while allowing host health updates", async () => {
+    const account = await createIntegrationAccount("owner", {
+      integrationId: "example",
+      providerId: "oauth",
+      authSessionId: "session",
+      remoteAccountId: "user",
+      label: "User",
+    })
+    const updated = await updateIntegrationAccount("owner", account.id, {
+      id: "forged",
+      pluginId: "squatter",
+      label: "Renamed",
+      health: "healthy",
+      ingressEndpoint: "https://ingress.example.com/hook",
+    } as Parameters<typeof updateIntegrationAccount>[2])
+    expect(updated).toMatchObject({
+      id: account.id,
+      pluginId: "owner",
+      label: "Renamed",
+      health: "healthy",
+      ingressEndpoint: "https://ingress.example.com/hook",
+    })
+    expect(await getDb().integrationAccounts.get("forged")).toBeUndefined()
+    expect(await getIntegrationAccount("owner", account.id)).toEqual(updated)
+  })
+
   it("isolates accounts and subscriptions by owning plugin", async () => {
     const github = await createIntegrationAccount("github-delivery", {
       integrationId: "github",

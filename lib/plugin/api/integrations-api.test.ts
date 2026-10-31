@@ -116,6 +116,44 @@ describe("ctx.integrations", () => {
     ).rejects.toThrow('requires the "integrations:manage" permission')
   })
 
+  it.each(["approvedOrigins", "authSessionId", "providerId", "pluginId", "id", "health"])(
+    "rejects a forged plugin account patch for %s without applying allowed fields",
+    async (key) => {
+      const api = createIntegrationsAPI("example-delivery", () => true)
+      const account = await api.createAccount({
+        integrationId: "example",
+        providerId: "oauth",
+        authSessionId: "session",
+        remoteAccountId: "user",
+        label: "User",
+      })
+      const before = await getDb().integrationAccounts.get(account.id)
+      await expect(
+        api.updateAccount(account.id, { label: "Changed", [key]: "forged" })
+      ).rejects.toThrow(/unsupported/i)
+      expect(await getDb().integrationAccounts.get(account.id)).toEqual(before)
+    }
+  )
+
+  it.each([null, [], "label", 1, { label: false }, { enabled: "yes" }])(
+    "rejects invalid account patches without changing persistence: %j",
+    async (patch) => {
+      const api = createIntegrationsAPI("example-delivery", () => true)
+      const account = await api.createAccount({
+        integrationId: "example",
+        providerId: "oauth",
+        authSessionId: "session",
+        remoteAccountId: "user",
+        label: "User",
+      })
+      const before = await getDb().integrationAccounts.get(account.id)
+      await expect(
+        api.updateAccount(account.id, patch as unknown as Parameters<typeof api.updateAccount>[1])
+      ).rejects.toThrow()
+      expect(await getDb().integrationAccounts.get(account.id)).toEqual(before)
+    }
+  )
+
   it("manages only the calling plugin's accounts through opaque handles", async () => {
     const api = createIntegrationsAPI("example-delivery", () => true)
     const account = await api.createAccount({
@@ -161,11 +199,13 @@ describe("ctx.integrations", () => {
 
     const [seen] = await api.listAccounts()
     expect(seen).not.toHaveProperty("outboundRecipients")
-    // A patch that casts the list in is dropped, and the result hides it too.
-    const updated = await api.updateAccount(account.id, {
-      label: "Renamed",
-      outboundRecipients: [],
-    } as Parameters<typeof api.updateAccount>[1])
+    await expect(
+      api.updateAccount(account.id, {
+        label: "Renamed",
+        outboundRecipients: [],
+      } as Parameters<typeof api.updateAccount>[1])
+    ).rejects.toThrow(/unsupported.*outboundRecipients/i)
+    const updated = await api.updateAccount(account.id, { label: "Renamed" })
     expect(updated).toMatchObject({ label: "Renamed" })
     expect(updated).not.toHaveProperty("outboundRecipients")
     expect((await getDb().integrationAccounts.get(account.id))?.outboundRecipients).toEqual(listed)
@@ -189,7 +229,7 @@ describe("ctx.integrations", () => {
   })
 
   it.each(["typescript", "python"])(
-    "does not interpret %s account patch keys as Dexie paths",
+    "rejects unknown %s account patch keys including Dexie paths",
     async (runtime) => {
       const api = createIntegrationsAPI("example-delivery", () => true)
       const account = await api.createAccount({
@@ -227,17 +267,16 @@ describe("ctx.integrations", () => {
           },
           { getContext: () => ({ integrations: api }) as PluginContext }
         )
-        expect(outcome.ok).toBe(true)
+        expect(outcome.ok).toBe(false)
       } else {
-        await api.updateAccount(account.id, patch)
+        await expect(api.updateAccount(account.id, patch)).rejects.toThrow(/unsupported/i)
       }
 
       const stored = await getDb().integrationAccounts.get(account.id)
-      expect(stored).toMatchObject({ label: "Renamed", authSessionId: "opaque-session-id" })
+      expect(stored).toMatchObject({ label: "One", authSessionId: "opaque-session-id" })
       expect(stored?.outboundRecipients).toEqual(recipients)
       expect(stored).not.toHaveProperty("settings")
-      // put() stores these as literal properties; it never applies them as paths.
-      expect(Object.keys(stored ?? {})).toContain("settings.token")
+      expect(Object.keys(stored ?? {})).not.toContain("settings.token")
     }
   )
 
