@@ -69,7 +69,12 @@ import { useSettingsStore } from "@/stores/settings"
 
 /** Every category has a switch, in this order. */
 type SwitchedCategory = OutboundCategory
-const SWITCHED_CATEGORIES: readonly SwitchedCategory[] = ["messaging", "github", "browser"]
+const SWITCHED_CATEGORIES: readonly SwitchedCategory[] = [
+  "messaging",
+  "github",
+  "browser",
+  "integration",
+]
 
 /** The order outcomes are listed in: most disruptive last. */
 const OUTCOME_ORDER: readonly ShadowHeldOutcome[] = ["ask", "draft", "park", "deny"]
@@ -369,11 +374,17 @@ export function OutboundAuthorizationCard() {
                                   count: bucket.recipients,
                                   sends: bucket.sends,
                                 })
-                              : t("unrecognized", {
-                                  count: bucket.recipients,
-                                  sends: bucket.sends,
-                                  account: view.adapterNames.get(bucket.channel) ?? bucket.channel,
-                                })}
+                              : category === "integration"
+                                ? t("unrecognizedIntegrationRequests", {
+                                    count: bucket.recipients,
+                                    sends: bucket.sends,
+                                  })
+                                : t("unrecognized", {
+                                    count: bucket.recipients,
+                                    sends: bucket.sends,
+                                    account:
+                                      view.adapterNames.get(bucket.channel) ?? bucket.channel,
+                                  })}
                         </li>
                       ))}
                     </ul>

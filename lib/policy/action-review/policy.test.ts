@@ -395,12 +395,33 @@ describe("planActionReview: a mode per category", () => {
     expect(readOutboundAuthorizationMode(settings)).toBe("enforce")
     expect(readOutboundAuthorizationMode(settings, "github")).toBe("enforce")
     expect(readOutboundAuthorizationMode(settings, "browser")).toBe("shadow")
+    expect(readOutboundAuthorizationMode(settings, "integration")).toBe("shadow")
+    expect(
+      readOutboundAuthorizationMode(
+        {
+          agentPermissions: {
+            outboundAuthorizationByCategory: { integration: "enforce" },
+          },
+        },
+        "integration"
+      )
+    ).toBe("enforce")
+    expect(
+      readOutboundAuthorizationMode(
+        {
+          agentPermissions: {
+            outboundAuthorizationByCategory: { integration: "ask" },
+          },
+        },
+        "integration"
+      )
+    ).toBe("shadow")
     expect(
       readOutboundCategoryModes({ agentPermissions: { outboundAuthorization: "enforce" } })
-    ).toEqual({ github: "shadow", browser: "shadow" })
+    ).toEqual({ github: "shadow", browser: "shadow", integration: "shadow" })
     expect(
       readOutboundCategoryModes({ agentPermissions: { outboundAuthorizationByCategory: 3 } })
-    ).toEqual({ github: "shadow", browser: "shadow" })
+    ).toEqual({ github: "shadow", browser: "shadow", integration: "shadow" })
     expect(categoryMode({ mode: "enforce" }, "github")).toBe("shadow")
   })
 })

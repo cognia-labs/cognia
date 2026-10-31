@@ -8,6 +8,7 @@ import type { IntegrationActionDef, PluginIntegrationDef } from "@/types/plugin/
 import {
   githubActionTargets,
   githubRequestTargets,
+  githubRequestApiBaseUrl,
   githubToolCallTargets,
   githubWebHost,
   githubWriteActionOf,
@@ -190,6 +191,33 @@ describe("githubRequestTargets", () => {
     ]) {
       expect(githubRequestTargets(url)).toEqual([unknownGithubTarget()])
     }
+  })
+})
+
+describe("githubRequestApiBaseUrl", () => {
+  it("identifies public API and web hosts without trusting an integration id", () => {
+    for (const host of ["api.github.com", "github.com", "www.github.com"]) {
+      expect(githubRequestApiBaseUrl(`https://${host}/repos/acme/web/pulls`)).toBe(
+        `https://${host}`
+      )
+    }
+    expect(
+      githubRequestApiBaseUrl("https://api.github.com.evil.test/repos/acme/web")
+    ).toBeUndefined()
+    expect(githubRequestApiBaseUrl("not a url")).toBeUndefined()
+  })
+
+  it("recognizes only the configured Enterprise host and keeps its API root", () => {
+    const base = "https://ghe.corp.io:8443/api/v3"
+    expect(githubRequestApiBaseUrl(`${base}/repos/acme/web/pulls`, base)).toBe(base)
+    expect(githubRequestApiBaseUrl("https://ghe.corp.io:8443/acme/web", base)).toBe(base)
+    expect(
+      githubRequestApiBaseUrl("https://other.test/api/v3/repos/acme/web", base)
+    ).toBeUndefined()
+    expect(githubRequestApiBaseUrl("https://ghe.corp.io/repos/acme/web", base)).toBeUndefined()
+    expect(githubRequestApiBaseUrl("https://api.github.com/repos/acme/web", base)).toBe(
+      "https://api.github.com"
+    )
   })
 })
 

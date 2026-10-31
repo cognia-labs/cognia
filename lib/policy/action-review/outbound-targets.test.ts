@@ -321,7 +321,7 @@ describe("siteTarget (ADR-0239 phase 2)", () => {
 })
 
 describe("outboundCategoryOf", () => {
-  it("sorts targets into the three modes", () => {
+  it("sorts targets into their independently controlled categories", () => {
     expect(outboundCategoryOf(conversationTarget(GROUP)!)).toBe("messaging")
     expect(outboundCategoryOf(mailTarget("a@b.co")!)).toBe("messaging")
     expect(outboundCategoryOf(publicTarget("deploy_site"))).toBe("messaging")
@@ -330,6 +330,7 @@ describe("outboundCategoryOf", () => {
     // A GitHub write whose repository could not be named is still a GitHub write.
     expect(outboundCategoryOf({ kind: "unknown", channel: "github" })).toBe("github")
     expect(outboundCategoryOf({ kind: "unknown", channel: "browser" })).toBe("browser")
+    expect(outboundCategoryOf({ kind: "unknown", channel: "integration" })).toBe("integration")
     expect(outboundCategoryOf(unknownGithubTarget())).toBe("github")
   })
 })

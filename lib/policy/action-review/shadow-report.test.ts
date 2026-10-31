@@ -155,7 +155,7 @@ describe("buildShadowReport", () => {
       ],
     })
     const empty = { groups: [], totals: {}, sends: 0 }
-    expect(report).toEqual({ messaging: empty, github: empty, browser: empty })
+    expect(report).toEqual({ messaging: empty, github: empty, browser: empty, integration: empty })
   })
 
   it("counts recipients it cannot name per channel, without a way to allow them", () => {

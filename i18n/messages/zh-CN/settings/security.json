@@ -64,7 +64,7 @@
   "title": "安全与隐私",
   "outboundAuthorization": {
     "title": "外发授权",
-    "description": "无人值守的运行可以不经询问就发消息、发邮件、写入 GitHub 或在浏览器里提交给谁。每一类都从只观察的影子模式开始。",
+    "description": "无人值守的运行可以不经询问就发消息、发邮件、写入 GitHub、在浏览器里提交或通过集成修改哪些目标。每一类都从只观察的影子模式开始。",
     "observeOnly": "仅观察",
     "remoteHost": "本机正在驱动一台配对的 Host，运行和记录都在 Host 上。请在 Host 上修改此设置。",
     "modeSaveFailed": "无法保存该设置",
@@ -119,6 +119,15 @@
       "enable": "执行"
     },
     "categories": {
+      "integration": {
+        "label": "对集成请求执行",
+        "shadowHelp": "关闭：检查并记录经过认证的集成写入，不改变任何结果。GitHub 请求使用自己的设置。",
+        "enforceHelp": "开启：未经授权的直接集成写入会在发送前被阻止。直接请求无法等待批准。",
+        "reportDescription": "最近 {days} 天内观察到的、开启执行后会被阻止的集成写入。GitHub 写入显示在自己的报告中。",
+        "reportEmpty": "观察到的集成写入均不会被阻止。",
+        "confirmTitle": "对集成请求执行外发授权？",
+        "confirmBehaviour": "未经授权的直接认证集成写入会在发送前被阻止，包括操作和工作流中的请求。其他类别保留各自的设置。"
+      },
       "messaging": {
         "label": "对消息与邮件执行",
         "shadowHelp": "关闭：每次发送都会检查并记录，但不改变任何结果。开启后，未经授权的发送会被拦下。",
@@ -154,6 +163,7 @@
     "allowNamedInto": "在 {list} 上允许 {name}",
     "unrecognizedRepositories": "本设备无法识别 {count} 个仓库（{sends} 次写入）。请在集成中把它们加入某个 GitHub 账号的名单。",
     "unrecognizedSites": "{count, plural, other {# 个站点}}本机无法识别（{sends, plural, other {# 次提交}}）。请在下方的站点名单中添加。",
+    "unrecognizedIntegrationRequests": "本机无法识别 {count} 个集成请求目标（{sends} 次写入）。直接请求无法等待批准。",
     "sites": {
       "title": "浏览器提交可到达的站点",
       "description": "agent 在浏览器里向这些站点提交（表单、注册、发帖）时，无论来自聊天、定时任务还是 workflow，都不再询问。Bot 自己的名单也可以列站点，只对该 Bot 生效。输入的地址按整个站点列入。"

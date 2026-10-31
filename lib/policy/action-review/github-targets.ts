@@ -53,8 +53,8 @@ export function isGithubWriteAction({
 
 /**
  * True when an integration talks to GitHub: its id is `github`, or one of its
- * actions is a GitHub operation. A raw request through one of its accounts
- * that is not a read is a GitHub write.
+ * actions is a GitHub operation. Raw requests are classified separately by
+ * their actual host ({@link githubRequestApiBaseUrl}).
  */
 export function isGithubIntegration(definition: {
   id: string
@@ -95,11 +95,40 @@ export function isGithubWriteCall(toolName: string, input: unknown): boolean {
 export function githubWebHost(apiBaseUrl?: string): string {
   if (!apiBaseUrl) return "github.com"
   try {
-    const host = new URL(apiBaseUrl).host.toLowerCase()
-    return host === "api.github.com" ? "github.com" : host
+    const url = new URL(apiBaseUrl)
+    return ["api.github.com", "www.github.com"].includes(url.hostname)
+      ? `github.com${url.port ? `:${url.port}` : ""}`
+      : url.host.toLowerCase()
   } catch {
     return "github.com"
   }
+}
+
+/**
+ * The GitHub API root for this request's host, independent of integration id.
+ * Public API/web hosts are always recognized. An Enterprise host is recognized
+ * from the account's configured API root, retaining its path and port. A write
+ * outside that root still belongs to GitHub but has an unknown repository.
+ */
+export function githubRequestApiBaseUrl(url: string, apiBaseUrl?: string): string | undefined {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return undefined
+  }
+  if (!["https:", "http:"].includes(parsed.protocol)) return undefined
+  if (["api.github.com", "github.com", "www.github.com"].includes(parsed.hostname)) {
+    return parsed.origin
+  }
+  if (apiBaseUrl) {
+    try {
+      if (parsed.host === new URL(apiBaseUrl).host) return apiBaseUrl
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
 }
 
 /**

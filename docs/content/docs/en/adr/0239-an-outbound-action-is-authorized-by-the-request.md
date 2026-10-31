@@ -270,6 +270,14 @@ A read-only Codex audit of phases 1, 2a and 2b looked for bypasses and duplicate
 
 - A plugin's reply to or edit of a message the host has no record of is still refused when Lark hides the message from the bot and no person is connected (or the person cannot read it either; granting `im:message.group_msg` lifts it), and in a Lark open-id conversation when it is the bot's own message in a single chat the host never sent to through that conversation and in whose last 250 messages the person did not write. One that stays unplaceable now (the bot never comes back) ends dead-lettered at the attempt limit.
 
+## Integration requests (2026-10-31)
+
+Every raw authenticated integration request other than `GET`, `HEAD` or `OPTIONS` is planned at the shared broker boundary in `action-runner.ts`, including requests from plugin code and action handlers used by agents or workflows. Classification follows the actual URL host: `api.github.com`, `github.com`, `www.github.com` and any GitHub Enterprise host in the account configuration or the configured deployment registry use the existing GitHub path, regardless of integration id. Enterprise repository extraction retains the configured API root; paths outside it remain unknown GitHub targets.
+
+Other raw writes use the independent `integration` category (`agentPermissions.outboundAuthorizationByCategory.integration`), defaulting to `shadow`. Shadow mode lets the request proceed and records the plan on a receipt and in the shadow report. `enforce` applies holds and refusals before transport; a synchronous request cannot wait for a person, so a hold fails with `outbound_held`. Existing action approval does not implicitly authorize an unplanned raw request inside its handler.
+
+Generic request receipts record the plugin, integration, account, method and URL origin plus path, never query values, URL credentials, fragment or body. Generic targets have no recipient grant contract and remain unknown targets bound to that account and request; they cannot inherit GitHub repository grants. Settings → Security has a separate switch and report for integration requests. The existing receipt table is reused without a schema change.
+
 ## Consequences
 
 - Sending to anyone other than the requester's own thread asks the first time in interactive chat, and later only when no grant covers it. Replying where you were asked stays silent.

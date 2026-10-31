@@ -65,13 +65,18 @@ export interface OutboundTarget {
 }
 
 /**
- * The three kinds of outbound action, each with its own shadow or enforce
+ * The kinds of outbound action, each with its own shadow or enforce
  * mode: messaging (phase 1: connector deliveries, messages, mail, shares),
- * GitHub writes and browser submissions (phase 2).
+ * GitHub writes, browser submissions and other raw integration writes.
  */
-export type OutboundCategory = "messaging" | "github" | "browser"
+export type OutboundCategory = "messaging" | "github" | "browser" | "integration"
 
-export const OUTBOUND_CATEGORIES: readonly OutboundCategory[] = ["messaging", "github", "browser"]
+export const OUTBOUND_CATEGORIES: readonly OutboundCategory[] = [
+  "messaging",
+  "github",
+  "browser",
+  "integration",
+]
 
 /** The category a target's mode is read from: by kind, else by channel. */
 export function outboundCategoryOf(
@@ -79,6 +84,7 @@ export function outboundCategoryOf(
 ): OutboundCategory {
   if (target.kind === "repository" || target.channel === "github") return "github"
   if (target.kind === "site" || target.channel === "browser") return "browser"
+  if (target.channel === "integration") return "integration"
   return "messaging"
 }
 

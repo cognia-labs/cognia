@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import "fake-indexeddb/auto"
+import type { IntegrationActionHandlerContext } from "@/types/plugin/plugin-integration"
 
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import * as botBinding from "@/lib/plugin/api/bot-integration-binding"
@@ -12,6 +13,9 @@ import { putCapabilityGrant, putServiceConnection } from "@/lib/db/external-serv
 import { registerAuthenticationProvider } from "@/lib/plugin/auth/auth-provider-registry"
 import { __resetIntegrationRegistryForTesting, registerIntegrationDefinitions } from "./registry"
 import { pushHeldIntegrationJob, withdrawHeldIntegrationJob } from "./outbound-hold"
+import { buildShadowReport } from "@/lib/policy/action-review/shadow-report"
+import { configuredGithubHosts } from "./github-auth"
+import { parseGithubHost } from "@/lib/github/host"
 import {
   approveIntegrationActionJob,
   authenticatedIntegrationRequest,
@@ -39,9 +43,15 @@ jest.mock("./outbound-hold", () => ({
   withdrawHeldIntegrationJob: jest.fn(),
 }))
 
+jest.mock("./github-auth", () => ({
+  ...jest.requireActual("./github-auth"),
+  configuredGithubHosts: jest.fn(async () => []),
+}))
+
 describe("Integration action runner", () => {
   beforeEach(async () => {
     outboundSettings = { agentPermissions: {} }
+    jest.mocked(configuredGithubHosts).mockReset().mockResolvedValue([])
     jest.mocked(pushHeldIntegrationJob).mockClear()
     jest.mocked(withdrawHeldIntegrationJob).mockClear()
     jest.mocked(botBinding.assertBotIntegrationAction).mockReset()
@@ -63,9 +73,13 @@ describe("Integration action runner", () => {
   })
 
   async function setup(
-    updateHandler: (input: Record<string, unknown>) => Promise<unknown> = async (input) => ({
+    updateHandler: (
+      input: Record<string, unknown>,
+      context: IntegrationActionHandlerContext
+    ) => Promise<unknown> = async (input) => ({
       updated: input.issueId,
-    })
+    }),
+    allowedOrigins = ["https://api.example.test"]
   ) {
     registerIntegrationDefinitions({
       pluginId: "example-delivery",
@@ -109,7 +123,7 @@ describe("Integration action runner", () => {
               idempotency: "none",
             },
           ],
-          allowedOrigins: ["https://api.example.test"],
+          allowedOrigins,
         },
       ],
       handlers: {
@@ -615,6 +629,174 @@ describe("Integration action runner", () => {
     expect(request).not.toHaveBeenCalled()
   })
 
+  describe("raw integration write authorization", () => {
+    const enforceIntegration = {
+      agentPermissions: { outboundAuthorizationByCategory: { integration: "enforce" } },
+    }
+    const url = "https://api.example.test/calendar/events/1?view=private-query#private-fragment"
+
+    it("observes a calendar DELETE with metadata and a shadow report, without query or body", async () => {
+      const account = await setup()
+      const request = jest.fn().mockResolvedValue({ status: 204, headers: {}, data: {} })
+      setIntegrationAuthenticatedRequestExecutorForTesting(request)
+      await expect(
+        authenticatedIntegrationRequest("example-delivery", account.id, url, {
+          method: "delete",
+          body: '{"event":"private-body"}',
+        })
+      ).resolves.toMatchObject({ status: 204 })
+      expect(request).toHaveBeenCalledTimes(1)
+      const receipts = await getDb().actionReviewReceipts.toArray()
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
+        request: {
+          origin: { scope: "integration" },
+          subject: {
+            ref: "plugin:example-delivery",
+            title: "DELETE",
+            input: {
+              integrationAccount: { pluginId: "example-delivery", accountId: account.id },
+              integrationRequest: {
+                integrationId: "example",
+                method: "DELETE",
+                url: "https://api.example.test/calendar/events/1",
+              },
+            },
+            targets: [{ channel: "integration", fingerprint: expect.any(String) }],
+          },
+          plan: { outcome: "park", enforced: false },
+        },
+        decision: { outcome: "allow" },
+      })
+      expect(JSON.stringify(receipts)).not.toMatch(/private-query|private-fragment|private-body/)
+      const report = buildShadowReport({
+        receipts,
+        candidates: [],
+        botLists: new Map(),
+        adapterLists: new Map(),
+      })
+      expect(report.integration).toMatchObject({ sends: 1, totals: { park: 1 } })
+      expect(report.github.sends).toBe(0)
+    })
+
+    it("blocks a calendar DELETE before fetching under integration enforcement", async () => {
+      outboundSettings = enforceIntegration
+      const account = await setup()
+      const request = jest.fn()
+      setIntegrationAuthenticatedRequestExecutorForTesting(request)
+      await expect(
+        authenticatedIntegrationRequest("example-delivery", account.id, url, { method: "DELETE" })
+      ).rejects.toThrow(/^outbound_held/)
+      expect(request).not.toHaveBeenCalled()
+      expect(await getDb().actionReviewReceipts.toArray()).toEqual([
+        expect.objectContaining({
+          request: expect.objectContaining({ plan: { outcome: "park", enforced: true } }),
+          decision: expect.objectContaining({ outcome: "deny" }),
+        }),
+      ])
+    })
+
+    it.each([undefined, "GET", "head", "OPTIONS"])("never plans a read (%s)", async (method) => {
+      outboundSettings = enforceIntegration
+      const account = await setup()
+      await expect(
+        authenticatedIntegrationRequest("example-delivery", account.id, url, { method })
+      ).resolves.toMatchObject({ status: 200 })
+      expect(await getDb().actionReviewReceipts.toArray()).toEqual([])
+    })
+
+    it("routes a non-GitHub-id integration's api.github.com POST through GitHub policy", async () => {
+      outboundSettings = {
+        agentPermissions: { outboundAuthorizationByCategory: { github: "enforce" } },
+      }
+      const account = await setup(undefined, ["https://api.github.com"])
+      const request = jest.fn()
+      setIntegrationAuthenticatedRequestExecutorForTesting(request)
+      await expect(
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          "https://api.github.com/repos/acme/web/pulls",
+          { method: "POST" }
+        )
+      ).rejects.toThrow(/^outbound_held/)
+      expect(request).not.toHaveBeenCalled()
+      const receipts = await getDb().actionReviewReceipts.toArray()
+      expect(receipts[0]).toMatchObject({
+        request: {
+          origin: { scope: "github", channel: "github-delivery" },
+          subject: { targets: [{ channel: "github", fingerprint: expect.any(String) }] },
+          plan: { enforced: true, outcome: "park" },
+        },
+      })
+      // GitHub receipts retain the existing fingerprint-only recipient contract.
+      expect(JSON.stringify(receipts)).not.toContain("acme/web")
+    })
+
+    it("uses GitHub policy for a generic provider writing to a configured Enterprise host", async () => {
+      outboundSettings = {
+        agentPermissions: {
+          outboundAuthorizationByCategory: { github: "enforce", integration: "shadow" },
+        },
+      }
+      const host = parseGithubHost("https://ghe.corp.test:8443/api/v3")!
+      jest.mocked(configuredGithubHosts).mockResolvedValue([host])
+      const account = await setup(undefined, [new URL(host.apiBaseUrl).origin])
+      const request = jest.fn()
+      setIntegrationAuthenticatedRequestExecutorForTesting(request)
+      await expect(
+        authenticatedIntegrationRequest(
+          "example-delivery",
+          account.id,
+          `${host.apiBaseUrl}/repos/acme/web/pulls`,
+          { method: "POST" }
+        )
+      ).rejects.toThrow(/^outbound_held/)
+      expect(request).not.toHaveBeenCalled()
+      expect((await getDb().actionReviewReceipts.toArray())[0]).toMatchObject({
+        request: {
+          origin: { scope: "github" },
+          subject: { targets: [{ channel: "github", fingerprint: expect.any(String) }] },
+          plan: { enforced: true, outcome: "park" },
+        },
+      })
+    })
+
+    it.each([
+      undefined,
+      { kind: "tool-call", sessionId: "s1" },
+      {
+        kind: "workflow",
+        workflowId: "wf1",
+        runId: "wr1",
+      },
+    ] as const)("also blocks handler requests for caller %j without retrying", async (caller) => {
+      outboundSettings = enforceIntegration
+      const request = jest.fn()
+      setIntegrationAuthenticatedRequestExecutorForTesting(request)
+      const account = await setup(async (_input, context) =>
+        context.authenticatedRequest(url, { method: "DELETE" })
+      )
+      const held = await executeIntegrationAction(
+        "example-delivery",
+        {
+          integrationId: "example",
+          accountId: account.id,
+          actionId: "issue.update",
+          input: {},
+          idempotencyKey: "calendar-delete",
+        },
+        caller
+      )
+      const failed = await approveIntegrationActionJob(held.id)
+      expect(failed).toMatchObject({
+        status: "failed",
+        error: expect.stringMatching(/^outbound_held/),
+      })
+      expect(request).not.toHaveBeenCalled()
+    })
+  })
+
   describe("outbound authorization of GitHub writes (ADR-0239 phase 2)", () => {
     const enforceGithub = {
       agentPermissions: { outboundAuthorizationByCategory: { github: "enforce" } },
@@ -960,7 +1142,7 @@ describe("Integration action runner", () => {
       })
     })
 
-    it("leaves writes through other integrations unplanned", async () => {
+    it("keeps action approval separate and observes other integrations' raw writes", async () => {
       outboundSettings = enforceGithub
       const account = await setup()
       const job = await executeIntegrationAction("example-delivery", {
@@ -982,7 +1164,14 @@ describe("Integration action runner", () => {
           }
         )
       ).resolves.toMatchObject({ status: 200 })
-      expect(await receipts()).toEqual([])
+      expect(await receipts()).toEqual([
+        expect.objectContaining({
+          request: expect.objectContaining({
+            origin: expect.objectContaining({ scope: "integration" }),
+            plan: { outcome: "park", enforced: false },
+          }),
+        }),
+      ])
     })
 
     describe("raw requests", () => {

@@ -3,7 +3,21 @@
 // shape so the file isn't excluded from the coverage corpus.
 
 import { DEFAULT_BACKUP_AUTO_SCHEDULE, isPluginToolExecEvent } from "./index"
-import type { ClaudeEvent, SendContentBlock, SendOptions } from "./index"
+import type { AppSettings, ClaudeEvent, SendContentBlock, SendOptions } from "./index"
+
+describe("AppSettings outbound categories", () => {
+  it("carries integration's independent shadow/enforce switch", () => {
+    const modes: NonNullable<
+      NonNullable<AppSettings["agentPermissions"]>["outboundAuthorizationByCategory"]
+    > = {
+      github: "enforce",
+      browser: "shadow",
+      integration: "enforce",
+    }
+    expect(modes.integration).toBe("enforce")
+    expect(modes.browser).toBe("shadow")
+  })
+})
 
 describe("SendContentBlock", () => {
   it("accepts text, image, and document base64 blocks", () => {

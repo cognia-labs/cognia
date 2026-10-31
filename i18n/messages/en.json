@@ -57070,6 +57070,15 @@
             "reportEmpty": "Nothing would change: every observed GitHub write went to a repository someone allowed.",
             "shadowHelp": "Off: every GitHub write by a run, a workflow, a plugin, a Bot or a gh command is checked and recorded, and none is changed. This is separate from messages and email."
           },
+          "integration": {
+            "confirmBehaviour": "Direct authenticated integration writes without authorization will be blocked before they are sent, including requests made inside actions and workflows. Other categories keep their own settings.",
+            "confirmTitle": "Enforce outbound authorization for integration requests?",
+            "enforceHelp": "On: a direct integration write without authorization is blocked before it is sent. Direct requests cannot wait for approval.",
+            "label": "Enforce for integration requests",
+            "reportDescription": "Integration writes observed in the last {days} days that enforcement would have blocked. GitHub writes appear in their own report.",
+            "reportEmpty": "No observed integration write would have been blocked.",
+            "shadowHelp": "Off: authenticated integration writes are checked and recorded, and none is changed. GitHub requests keep their own setting."
+          },
           "messaging": {
             "confirmBehaviour": "Unattended sends to a recipient nobody allowed will be drafted or wait for approval instead of going out, and a person's refusal holds for the rest of that request.",
             "confirmTitle": "Enforce outbound authorization for messages and email?",
@@ -57093,7 +57102,7 @@
             "park": "{count} held for approval"
           }
         },
-        "description": "Who an unattended run may message, email, write to on GitHub or submit to in the browser without asking. Each kind starts in shadow mode, which only observes.",
+        "description": "Who an unattended run may message, email, write to on GitHub, submit to in the browser or change through an integration without asking. Each kind starts in shadow mode, which only observes.",
         "intoAccount": "Adds to the {name} account's list",
         "intoAdapter": "Adds to {name}'s list",
         "intoBot": "Adds to {name}'s list",
@@ -57137,6 +57146,7 @@
         },
         "title": "Outbound authorization",
         "unrecognized": "{count, plural, one {# recipient} other {# recipients}} via {account} this device cannot name ({sends, plural, one {# send} other {# sends}}). Add them in the Bot's or the connection's settings.",
+        "unrecognizedIntegrationRequests": "{count, plural, one {# integration request target} other {# integration request targets}} this device cannot name ({sends, plural, one {# write} other {# writes}}). Direct requests cannot wait for approval.",
         "unrecognizedRepositories": "{count, plural, one {# repository} other {# repositories}} this device cannot name ({sends, plural, one {# write} other {# writes}}). Add them to a GitHub account's list in Integrations.",
         "unrecognizedSites": "{count, plural, one {# site} other {# sites}} this device cannot name ({sends, plural, one {# submission} other {# submissions}}). Add them to the site list below.",
         "via": "via {account}"

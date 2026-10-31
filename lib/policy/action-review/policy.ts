@@ -31,7 +31,7 @@
  * ({@link originMatchFingerprint}), while grants and the fence match the
  * whole repository.
  *
- * Each category (messaging, GitHub, browser) has its own mode. A plan is
+ * Each category (messaging, GitHub, browser, integration) has its own mode. A plan is
  * enforced when any of its targets is in an enforced category: one action is
  * one send, so it is held to the strictest of the modes it touches.
  * - The model. `ActionReviewRequest.recommendation` is never read here.
@@ -62,8 +62,8 @@ import {
  * - `enforce`: callers act on the plan.
  *
  * The settings that choose it, `agentPermissions.outboundAuthorization` for
- * messaging and `agentPermissions.outboundAuthorizationByCategory` for GitHub
- * and the browser, are written only by the Settings → Security card, which
+ * messaging and `agentPermissions.outboundAuthorizationByCategory` for GitHub,
+ * browser and integration, are written only by the Settings → Security card, which
  * labels `shadow` "observe only" and asks before switching to `enforce`.
  */
 export type OutboundAuthorizationMode = "shadow" | "enforce"
@@ -71,7 +71,7 @@ export type OutboundAuthorizationMode = "shadow" | "enforce"
 /**
  * The mode a category runs in: `enforce` only when its setting says exactly
  * that, anything else observes. Messaging reads
- * `agentPermissions.outboundAuthorization` (phase 1); GitHub and the browser
+ * `agentPermissions.outboundAuthorization` (phase 1); the other categories
  * read `agentPermissions.outboundAuthorizationByCategory.<category>`, so
  * enforcing messaging never enforces them. Read structurally so a settings
  * object from any source (the app store, the CLI) can be passed.
@@ -98,13 +98,14 @@ function readCategoryMode(byCategory: unknown, category: OutboundCategory): unkn
   return (byCategory as Record<string, unknown>)[category]
 }
 
-/** The GitHub and browser modes, for {@link ActionReviewPlanContext.modes}. */
+/** The non-messaging modes, for {@link ActionReviewPlanContext.modes}. */
 export function readOutboundCategoryModes(
   settings: { agentPermissions?: unknown } | null | undefined
 ): Partial<Record<OutboundCategory, OutboundAuthorizationMode>> {
   return {
     github: readOutboundAuthorizationMode(settings, "github"),
     browser: readOutboundAuthorizationMode(settings, "browser"),
+    integration: readOutboundAuthorizationMode(settings, "integration"),
   }
 }
 
@@ -116,7 +117,7 @@ export interface ActionReviewPlanContext {
   mode: OutboundAuthorizationMode
   /**
    * The other categories' modes. A category absent here observes: a context
-   * built without them never enforces GitHub or browser writes.
+   * built without them never enforces GitHub, browser or integration writes.
    */
   modes?: Partial<Record<Exclude<OutboundCategory, "messaging">, OutboundAuthorizationMode>>
   /** No person is watching the run (a schedule, a Bot, a background turn). */

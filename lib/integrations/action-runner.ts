@@ -31,9 +31,9 @@ import {
 } from "@/lib/plugin/api/bot-integration-binding"
 import {
   githubActionTargets,
+  githubRequestApiBaseUrl,
   githubRequestTargets,
   githubWebHost,
-  isGithubIntegration,
   isGithubWriteAction,
 } from "@/lib/policy/action-review/github-targets"
 import type { OutboundTarget } from "@/lib/policy/action-review/outbound-targets"
@@ -101,11 +101,11 @@ async function githubJobTargets(job: IntegrationActionJob): Promise<OutboundTarg
 }
 
 /**
- * Plan a raw request that is not a read, through a GitHub integration's
- * account, and act on the plan: record its receipt, and throw when the policy
- * holds or refuses it. A synchronous request cannot wait for a person.
+ * Plan every raw request that is not a read, and act on the plan: record its
+ * receipt, and throw when the policy holds or refuses it. A synchronous
+ * request cannot wait for a person.
  */
-async function planGithubRequest(
+async function planAuthenticatedRequest(
   pluginId: string,
   connectorAccountId: string,
   input: string,
@@ -115,13 +115,43 @@ async function planGithubRequest(
   if (READ_METHODS.has(method)) return
   const account = await getIntegrationAccount(pluginId, connectorAccountId)
   const registered = account ? getRegisteredIntegration(pluginId, account.integrationId) : undefined
-  if (!account || !registered || !isGithubIntegration(registered.definition)) return
-  const apiBaseUrl = await integrationApiBaseUrl(account)
-  const host = githubWebHost(apiBaseUrl)
+  if (!account || !registered) throw new Error("Integration request account is unavailable")
+  let apiBaseUrl = githubRequestApiBaseUrl(input, await integrationApiBaseUrl(account))
+  if (!apiBaseUrl) {
+    // A plugin can reach a known Enterprise host through a different provider
+    // account. Classification follows the destination, not that provider.
+    const { configuredGithubHosts } = await import("./github-auth")
+    apiBaseUrl = (await configuredGithubHosts())
+      .map((host) => githubRequestApiBaseUrl(input, host.apiBaseUrl))
+      .find((base) => base !== undefined)
+  }
+  const url = new URL(input)
+  const requestUrl = `${url.origin}${url.pathname}`
+  const category = apiBaseUrl ? "github" : "integration"
   const decision = await planIntegrationWrite({
-    targets: githubRequestTargets(input, apiBaseUrl),
+    category,
+    targets: apiBaseUrl
+      ? githubRequestTargets(input, apiBaseUrl)
+      : [
+          {
+            kind: "unknown",
+            channel: "integration",
+            // No generic recipient contract exists yet. Bind the fingerprint to
+            // this exact account and request, without query, fragment or body.
+            recipient: JSON.stringify([
+              pluginId,
+              account.integrationId,
+              account.id,
+              method,
+              requestUrl,
+            ]),
+          },
+        ],
     operation: method,
-    host,
+    ...(apiBaseUrl ? { host: githubWebHost(apiBaseUrl) } : {}),
+    ...(category === "integration"
+      ? { request: { integrationId: account.integrationId, method, url: requestUrl } }
+      : {}),
     authorization,
     account: { pluginId, accountId: account.id },
   })
@@ -317,10 +347,9 @@ async function authenticatedRequest<T>(
 /**
  * Host-owned authenticated fetch boundary used by `ctx.integrations`.
  *
- * A request through a GitHub integration's account that is not a read is a
- * GitHub write the plugin's own code makes, and is planned first (ADR-0239
- * phase 2): its repository comes from the `/repos/<owner>/<repo>/…` path, and
- * a write the policy holds or refuses fails here.
+ * Every non-read request is planned first (ADR-0239). GitHub API/web hosts use
+ * GitHub policy; other services use the integration category. A write the
+ * policy holds or refuses fails before the authenticated transport runs.
  */
 export async function authenticatedIntegrationRequest<T>(
   pluginId: string,
@@ -332,7 +361,7 @@ export async function authenticatedIntegrationRequest<T>(
     body?: string
   }
 ): Promise<{ status: number; headers: Record<string, string>; data: T }> {
-  await planGithubRequest(
+  await planAuthenticatedRequest(
     pluginId,
     connectorAccountId,
     input,
@@ -711,7 +740,7 @@ export async function runIntegrationActionJob(jobId: string): Promise<Integratio
         // planned in the job's origin (ADR-0239 phase 2).
         const method = (init?.method ?? "GET").toUpperCase()
         if (!READ_METHODS.has(method)) {
-          await planGithubRequest(job.pluginId, job.accountId, input, method, {
+          await planAuthenticatedRequest(job.pluginId, job.accountId, input, method, {
             kind: "job",
             jobId,
             ...(job.outbound ? { outbound: job.outbound } : {}),

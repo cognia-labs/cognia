@@ -4805,11 +4805,11 @@ export interface AppSettings {
      */
     outboundAuthorization?: "shadow" | "enforce"
     /**
-     * The same switch for the ADR-0239 phase 2 categories: GitHub writes and
-     * browser submissions. Each is absent, so `"shadow"`, until a person
-     * confirms it in Settings → Security; enforcing messaging above never
-     * enforces these, so turning it on earlier does not start holding GitHub
-     * or browser writes on upgrade. `"shadow"` is intentionally inert, pinned
+     * The same switch for the other ADR-0239 categories: GitHub writes,
+     * browser submissions and raw integration writes. Each is absent, so
+     * `"shadow"`, until a person confirms it in Settings → Security; enforcing messaging above never
+     * enforces these, so turning it on earlier does not start holding GitHub,
+     * browser or integration writes on upgrade. `"shadow"` is intentionally inert, pinned
      * by `lib/policy/action-review/shadow-mode.test.ts` like the messaging
      * mode. Read only through `readOutboundAuthorizationMode(settings,
      * category)`, which treats any other value as `"shadow"`.
@@ -4818,10 +4818,13 @@ export interface AppSettings {
      * (`lib/browser/submission-gate.ts`): in `"enforce"` a submission to a
      * site nothing listed is asked about or parked, and one a person refused
      * is held.
+     * `integration` covers non-read raw authenticated requests to other
+     * services. GitHub API/web hosts use `github`, regardless of integration id.
      */
     outboundAuthorizationByCategory?: {
       github?: "shadow" | "enforce"
       browser?: "shadow" | "enforce"
+      integration?: "shadow" | "enforce"
     }
     /**
      * The global site list (ADR-0239 phase 2b): the sites any browser

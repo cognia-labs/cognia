@@ -63,6 +63,113 @@ const write = (
 
 const installation = { id: "boti_1", humanRevision: 2 }
 
+describe("generic integration requests", () => {
+  const target = { kind: "unknown", channel: "integration", recipient: "calendar-request" } as const
+  const request = {
+    category: "integration" as const,
+    targets: [target],
+    operation: "DELETE",
+    account: { pluginId: "calendar", accountId: "acct1" },
+    request: {
+      integrationId: "calendar",
+      method: "DELETE",
+      url: "https://name:secret@calendar.test/events/1?view=private#fragment",
+    },
+    authorization: { kind: "plugin", pluginId: "calendar" } as IntegrationAuthorization,
+  }
+
+  it.each([shadow, messagingOnly, enforce])(
+    "defaults to shadow independently of other modes: %j",
+    async (settings) => {
+      const githubGrants = jest.fn(async () => [])
+      const decision = await planIntegrationWrite(request, deps(settings, {}, { githubGrants }))
+      expect(decision).toMatchObject({
+        action: "proceed",
+        receipt: {
+          request: {
+            origin: { channel: "generic", scope: "integration" },
+            subject: { input: { integrationRequest: { url: "https://calendar.test/events/1" } } },
+            plan: { outcome: "park", enforced: false },
+          },
+        },
+      })
+      expect(isActionReviewRequest(decision.receipt!.request)).toBe(true)
+      expect(JSON.stringify(decision.receipt)).not.toMatch(/secret|private|fragment/)
+      expect(githubGrants).not.toHaveBeenCalled()
+    }
+  )
+
+  it("enforces a refusal fence and observes the same refusal in shadow mode", async () => {
+    const prefix = actionReviewAuthKeyPrefix("deny", "root-1", "epoch-1")
+    const keys = { [prefix]: [`${prefix}${outboundFingerprint(target)}`] }
+    const input = {
+      ...request,
+      authorization: {
+        kind: "tool-call",
+        pluginId: "calendar",
+        sessionId: "s1",
+      } as const,
+    }
+    const enforced = await planIntegrationWrite(
+      input,
+      deps(
+        {
+          agentPermissions: {
+            outboundAuthorizationByCategory: { integration: "enforce" },
+          },
+        },
+        keys
+      )
+    )
+    expect(enforced).toMatchObject({
+      action: "deny",
+      receipt: {
+        request: { plan: { outcome: "deny", enforced: true } },
+        decision: { outcome: "deny", authority: "policy-deny" },
+      },
+    })
+    const observed = await planIntegrationWrite(input, deps(shadow, keys))
+    expect(observed).toMatchObject({
+      action: "proceed",
+      receipt: { request: { plan: { outcome: "deny", enforced: false } } },
+    })
+  })
+
+  it.each(["shadow", "enforce"] as const)(
+    "records a safe receipt when planning fails in %s mode",
+    async (mode) => {
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+      try {
+        const decision = await planIntegrationWrite(
+          {
+            ...request,
+            authorization: { kind: "tool-call", pluginId: "calendar", sessionId: "s1" },
+          },
+          deps(
+            { agentPermissions: { outboundAuthorizationByCategory: { integration: mode } } },
+            {},
+            {
+              listAuthKeys: async () => {
+                throw new Error("db unavailable")
+              },
+            }
+          )
+        )
+        expect(decision).toMatchObject({
+          action: mode === "enforce" ? "park" : "proceed",
+          receipt: {
+            request: { plan: { outcome: "park", enforced: mode === "enforce" } },
+            decision: { outcome: mode === "enforce" ? "deny" : "allow" },
+          },
+        })
+        expect(JSON.stringify(decision.receipt)).not.toMatch(/secret|private|fragment/)
+      } finally {
+        warn.mockRestore()
+      }
+    }
+  )
+})
+
 beforeEach(() => {
   __resetAuthorizedToolCallsForTesting()
   __resetRunningBotGrantsForTesting()

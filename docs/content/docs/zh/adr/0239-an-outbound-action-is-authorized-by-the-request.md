@@ -270,6 +270,14 @@ ADR-0070 否决了把 IM 绑定的运行当作 `external-send`：从某个线程
 
 - 插件回复或编辑宿主没有记录的消息时，以下情况仍会被拒绝：飞书对 bot 隐藏该消息且没有连接个人身份（或个人身份同样读不到；为应用开通 `im:message.group_msg` 即可解除）；在飞书 open id 会话中，该消息是 bot 自己发的，所在单聊宿主从未经该会话发过消息，且对方在最近 250 条消息里没有发过言。一直无法判断落点（bot 不再运行）的投递，在达到尝试上限后进入死信。
 
+## 集成请求（2026-10-31）
+
+除 `GET`、`HEAD`、`OPTIONS` 外，所有原始认证集成请求均在 `action-runner.ts` 的共享代理边界进行规划，包括插件直调，以及 agent 或 workflow 使用的操作处理器内发出的请求。类别按实际 URL host 判断：`api.github.com`、`github.com`、`www.github.com` 和账户或已配置部署注册表中的 GitHub Enterprise host 走既有 GitHub 路径，不依赖 integration id。Enterprise 仓库解析保留配置的 API root；root 以外的路径仍属于未知 GitHub 目标。
+
+其他原始写入使用独立的 `integration` 类别（`agentPermissions.outboundAuthorizationByCategory.integration`），默认 `shadow`。影子模式允许请求继续，并将规划记录到 receipt 和影子报告；`enforce` 在传输前执行暂停或拒绝。同步请求无法等待人工审批，因此被暂停时以 `outbound_held` 失败。既有 action 审批不会自动授权处理器内尚未规划的原始请求。
+
+通用请求的 receipt 记录 plugin、integration、account、method 和 URL 的 origin 与 path，不记录查询值、URL 凭证、fragment 或 body。通用目标尚无收件人授权契约，保持为绑定到账户与请求的未知目标，不能继承 GitHub 仓库授权。设置 → 安全提供独立的集成请求开关与报告。复用现有 receipt 表，不修改 schema。
+
 ## 影响
 
 - 交互聊天中，发给请求人所在线程以外的任何人，第一次会询问，之后只在没有授予覆盖时询问。回复到提问的地方依然静默。

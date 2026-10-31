@@ -206,7 +206,7 @@ describe("buildActionReviewPlanContext", () => {
     expect(context.policyGrants).toEqual(new Map([[outboundFingerprint(GROUP), "bot:b1"]]))
   })
 
-  it("reads the GitHub and browser modes on their own (ADR-0239 phase 2)", async () => {
+  it("reads each non-messaging mode independently, defaulting to shadow", async () => {
     const build = (agentPermissions: object) =>
       buildActionReviewPlanContext({
         origin: {},
@@ -217,9 +217,10 @@ describe("buildActionReviewPlanContext", () => {
     expect((await build({ outboundAuthorization: "enforce" })).modes).toEqual({
       github: "shadow",
       browser: "shadow",
+      integration: "shadow",
     })
     expect((await build({ outboundAuthorizationByCategory: { github: "enforce" } })).modes).toEqual(
-      { github: "enforce", browser: "shadow" }
+      { github: "enforce", browser: "shadow", integration: "shadow" }
     )
   })
 

@@ -1,8 +1,8 @@
 /**
  * The integration chokepoint of the outbound policy (ADR-0239 phase 2).
  *
- * Every GitHub write that goes through the host's integration broker is planned
- * here before it happens: an action job (`executeIntegrationAction`) before it
+ * Every raw non-read request and GitHub write through the integration broker
+ * is planned here before it happens: an action job (`executeIntegrationAction`) before it
  * is queued, and a raw authenticated request (`authenticatedIntegrationRequest`)
  * that is not a read before it is sent. The caller says who is asking, as an
  * {@link IntegrationAuthorization}; this module checks that claim and, where it
@@ -38,19 +38,21 @@
  * - `deny`: a person refused one of the recipients for the current request
  *   (the fence). The write fails with `outbound_fenced`.
  *
- * Only GitHub writes are planned, in the GitHub category's mode
- * (`agentPermissions.outboundAuthorizationByCategory.github`). Shadow mode
- * changes nothing: a write enforcement would have held or refused proceeds
+ * GitHub writes use the GitHub category; other raw writes use `integration`.
+ * Each reads its own `agentPermissions.outboundAuthorizationByCategory` mode.
+ * Shadow mode changes nothing: a write enforcement would have held or refused proceeds
  * with a receipt saying so.
  *
  * ## Receipts
  *
- * `github-delivery` channel, subject kind `integration-action`, its `ref` the
- * asker (`bot:<id>`, `workflow:<id>`, `plugin:<id>`, `tool-call:<session>`).
+ * `github-delivery` (GitHub) or `generic` (integration) channel, subject kind
+ * `integration-action`, its `ref` the asker (`bot:<id>`, `workflow:<id>`,
+ * `plugin:<id>`, `tool-call:<session>`).
  * Enforce mode records every hold and refusal, and every write a grant or a
  * person allowed; shadow mode records only what enforcement would have
  * changed. The recipient itself is never stored: only its fingerprint, and
- * the title names the operation, not the repository.
+ * the title names the operation. Generic raw requests also record their
+ * sanitized origin and path, without query values, URL credentials, fragment or body.
  */
 
 import {
@@ -180,10 +182,14 @@ export type IntegrationAuthorization =
     }
 
 export interface IntegrationWritePlanInput {
+  /** Raw writes outside GitHub use `integration`; existing GitHub producers omit it. */
+  category?: "github" | "integration"
   /** Where the write lands (`githubActionTargets`, `githubRequestTargets`). */
   targets: readonly OutboundTarget[]
   /** What is written, for the receipt: `github.openPr`, or a request's `POST`. */
   operation: string
+  /** Raw request metadata only. Receipts strip query, fragment and URL credentials. */
+  request?: { integrationId: string; method: string; url: string }
   /** The account's GitHub web host (`githubWebHost`), for a Bot event's thread. */
   host?: string
   authorization: IntegrationAuthorization
@@ -304,14 +310,18 @@ export function integrationReceipt(
     requestId?: string
     /** The integration account the write goes through, for the shadow report's list. */
     account?: IntegrationWritePlanInput["account"]
+    category?: IntegrationWritePlanInput["category"]
+    request?: IntegrationWritePlanInput["request"]
   }
 ): IntegrationReceipt {
   const requestId = args.requestId ?? `integration:${crypto.randomUUID()}`
+  const category = args.category ?? "github"
+  const requestUrl = args.request ? new URL(args.request.url) : undefined
   return outboundReceipt({
     requestId,
     origin: {
-      channel: "github-delivery",
-      scope: "github",
+      channel: category === "github" ? "github-delivery" : "generic",
+      scope: category,
       ...(args.sessionId ? { sessionId: args.sessionId } : {}),
       // Nobody is asked at the broker; a held job is answered elsewhere.
       headless: true,
@@ -325,14 +335,27 @@ export function integrationReceipt(
       ref: args.outbound.ownerRef,
       title: args.operation,
       targets: args.targets.map(toReviewTarget),
-      // Ids only, no write input: which account's list would hold these.
-      ...(args.account
+      // Account ids and raw request metadata only, never headers or body.
+      ...(args.account || args.request
         ? {
             input: {
-              integrationAccount: {
-                pluginId: args.account.pluginId,
-                accountId: args.account.accountId,
-              },
+              ...(args.account
+                ? {
+                    integrationAccount: {
+                      pluginId: args.account.pluginId,
+                      accountId: args.account.accountId,
+                    },
+                  }
+                : {}),
+              ...(args.request && requestUrl
+                ? {
+                    integrationRequest: {
+                      integrationId: args.request.integrationId,
+                      method: args.request.method,
+                      url: `${requestUrl.origin}${requestUrl.pathname}`,
+                    },
+                  }
+                : {}),
             },
           }
         : {}),
@@ -357,6 +380,8 @@ function receiptFor(env: PlanningEnv, args: ReceiptArgs): IntegrationReceipt {
     now: env.now,
     requestId: `integration:${env.deps.newRequestId?.() ?? crypto.randomUUID()}`,
     ...(env.input.account ? { account: env.input.account } : {}),
+    ...(env.input.request ? { request: env.input.request } : {}),
+    category: env.input.category,
   })
 }
 
@@ -403,7 +428,7 @@ function withheld(
         plan: outcome,
         outcome: "allow",
         authority: "policy-default",
-        reason: `written: GitHub outbound authorization is in shadow mode; enforcement would have ${
+        reason: `written: ${env.input.category === "integration" ? "integration" : "GitHub"} outbound authorization is in shadow mode; enforcement would have ${
           outcome === "park" ? "held it for a person" : "refused it"
         } (${what})`,
       }),
@@ -442,7 +467,7 @@ async function accountGrants(
   scope: { workflowId?: string; sessionId?: string }
 ): Promise<OutboundPolicyGrantList[]> {
   const { account, action, host } = env.input
-  if (!account) return []
+  if (!account || env.input.category === "integration") return []
   return (env.deps.githubGrants ?? configuredGithubGrants)({
     account,
     ...(action
@@ -488,7 +513,7 @@ async function planUnattended(
       ...(env.deps.listAuthKeys ? { listAuthKeys: env.deps.listAuthKeys } : {}),
     })
     result = planActionReview(
-      { verdict: "ask", targets: env.input.targets, category: "github" },
+      { verdict: "ask", targets: env.input.targets, category: env.input.category ?? "github" },
       context
     )
   } catch (error) {
@@ -497,7 +522,9 @@ async function planUnattended(
     // write waits for a person rather than going out on a failure.
     console.warn("[outbound] integration planning failed", error)
     const outbound = outboundOf(unattended.ownerRef, origin)
-    if (env.mode === "shadow") return { action: "proceed", outbound }
+    if (env.mode === "shadow" && env.input.category !== "integration") {
+      return { action: "proceed", outbound }
+    }
     return withheld(env, "park", {
       outbound,
       ...(unattended.sessionId ? { sessionId: unattended.sessionId } : {}),
@@ -562,7 +589,7 @@ async function defaultWorkflowRunTrigger(
   return (await getDb().workflowRuns.get(runId))?.triggeredBy
 }
 
-/** Plan one GitHub write. See the module comment for what each authorization means. */
+/** Plan one integration write. See the module comment for each authorization. */
 export async function planIntegrationWrite(
   input: IntegrationWritePlanInput,
   deps: PlanIntegrationDeps = {}
@@ -570,7 +597,7 @@ export async function planIntegrationWrite(
   const settings = await (deps.settings ?? readAppSettings)()
   const env: PlanningEnv = {
     input,
-    mode: readOutboundAuthorizationMode(settings, "github"),
+    mode: readOutboundAuthorizationMode(settings, input.category ?? "github"),
     settings,
     now: deps.now?.() ?? Date.now(),
     deps,
@@ -596,7 +623,7 @@ export async function planIntegrationWrite(
       }
       // In shadow mode a permission shortcut can answer the call without
       // asking, so a missing record says nothing about what enforcement does.
-      if (calls.length === 0 && env.mode === "shadow") {
+      if (calls.length === 0 && env.mode === "shadow" && input.category !== "integration") {
         return { action: "proceed", outbound: { ownerRef } }
       }
       return planUnattended(env, {

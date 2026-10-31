@@ -56,6 +56,19 @@ function reportView(): ShadowReportView {
       messaging: messagingReport(),
       github: githubReport(),
       browser: browserReport(),
+      integration: {
+        groups: [
+          {
+            sender: { kind: "plugin", id: "calendar" },
+            rows: [],
+            unrecognized: [{ channel: "integration", recipients: 2, sends: 2, lastAt: 20 }],
+            sends: 2,
+            lastAt: 20,
+          },
+        ],
+        totals: { park: 2 },
+        sends: 2,
+      },
     },
     adapterNames: new Map([["bot-a", "Team bot"]]),
     taskNames: new Map([["t1", "Morning digest"]]),
@@ -313,11 +326,12 @@ describe("OutboundAuthorizationCard", () => {
 
   it("has a switch per category, each observing only until enforced", () => {
     render(<OutboundAuthorizationCard />)
-    expect(screen.getAllByRole("switch")).toHaveLength(3)
+    expect(screen.getAllByRole("switch")).toHaveLength(4)
     expect(screen.getByText("Enforce for messages and email")).toBeInTheDocument()
     expect(screen.getByText("Enforce for GitHub writes")).toBeInTheDocument()
     expect(screen.getByText("Enforce for browser submissions")).toBeInTheDocument()
-    for (const category of ["messaging", "github", "browser"]) {
+    expect(screen.getByText("Enforce for integration requests")).toBeInTheDocument()
+    for (const category of ["messaging", "github", "browser", "integration"]) {
       expect(
         screen.getByTestId(`outbound-authorization-observe-only-${category}`)
       ).toBeInTheDocument()
@@ -325,6 +339,32 @@ describe("OutboundAuthorizationCard", () => {
     // The site list is in effect: nothing labels it otherwise.
     expect(screen.queryByText(/Not yet in effect/)).not.toBeInTheDocument()
     expect(screen.getByLabelText("https://example.com")).toBeEnabled()
+  })
+
+  it("confirms integration enforcement with its own report and preserves other modes", async () => {
+    mockedSettings = {
+      agentPermissions: { outboundAuthorizationByCategory: { github: "enforce" } },
+    }
+    render(<OutboundAuthorizationCard />)
+    const section = within(screen.getByTestId("outbound-authorization-integration"))
+    expect(section.getByText("Plugin: calendar")).toBeInTheDocument()
+    expect(section.getByTestId("outbound-shadow-unrecognized")).toHaveTextContent(
+      "2 integration request targets this device cannot name (2 writes)"
+    )
+    fireEvent.click(section.getByRole("switch"))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(
+      within(dialog).getByText("Enforce outbound authorization for integration requests?")
+    ).toBeInTheDocument()
+    expect(within(dialog).getByText("2 held for approval")).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByTestId("outbound-authorization-confirm"))
+    await waitFor(() =>
+      expect(saveMock).toHaveBeenCalledWith({
+        agentPermissions: {
+          outboundAuthorizationByCategory: { github: "enforce", integration: "enforce" },
+        },
+      })
+    )
   })
 
   it("lists browser submissions by asker and site, and says what the check cannot see", () => {
