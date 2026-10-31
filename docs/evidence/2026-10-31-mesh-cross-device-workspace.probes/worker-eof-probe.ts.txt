@@ -1,0 +1,58 @@
+import assert from "node:assert/strict"
+import { setImmediate } from "node:timers/promises"
+import { PassThrough } from "node:stream"
+
+import { createAgentRpcServer } from "../../../cli/src/agent/rpc/server"
+
+async function probe() {
+  const input = new PassThrough()
+  const output = new PassThrough()
+  const events: string[] = []
+  let startTurn!: () => void
+  let finishTurn!: () => void
+  const started = new Promise<void>((resolve) => { startTurn = resolve })
+  const allowedToFinish = new Promise<void>((resolve) => { finishTurn = resolve })
+  const server = createAgentRpcServer({
+    input,
+    output,
+    diagnostic: new PassThrough(),
+    service: {
+      methods: ["turn/run"],
+      capabilities: [],
+      async handle() {
+        events.push("turn_started")
+        startTurn()
+        await allowedToFinish
+        events.push("side_effect_after_eof")
+        return { ok: true } as never
+      },
+      async close() { events.push("service_closed") },
+    },
+    hostVersion: "probe",
+    runtimeVersion: "probe",
+    instanceId: "probe",
+  })
+  const serving = server.serve()
+  for (const frame of [
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: {
+      client: { name: "probe", version: "1" }, protocolVersions: [2], capabilities: [], limits: {},
+    } },
+    { jsonrpc: "2.0", method: "initialized", params: {} },
+    { jsonrpc: "2.0", id: 2, method: "turn/run", params: { sessionId: "probe", input: "probe" } },
+  ]) input.write(`${JSON.stringify(frame)}\n`)
+  await started
+  input.end()
+  await setImmediate()
+  assert.deepEqual(events, ["turn_started"])
+  finishTurn()
+  await serving
+  assert.deepEqual(events, ["turn_started", "side_effect_after_eof", "service_closed"])
+  process.stdout.write(`${JSON.stringify({
+    passed: true,
+    scope: "Real RPC server, controlled service handler; no remote device or model",
+    events,
+    conclusion: "EOF drains an admitted turn before closing the service; this is a mechanism check, not a severity judgment",
+  }, null, 2)}\n`)
+}
+
+probe().catch((error) => { console.error(error); process.exitCode = 1 })

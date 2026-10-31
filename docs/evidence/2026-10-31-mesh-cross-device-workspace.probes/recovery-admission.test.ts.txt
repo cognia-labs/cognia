@@ -1,0 +1,83 @@
+import "fake-indexeddb/auto"
+
+import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
+import { createDurableTeamCoordinator } from "@/lib/ai/agent/team/durable/durable-runtime"
+import { beginDurableDispatch } from "@/lib/ai/agent/team/durable/durable-dispatch"
+import { controlDurableRun } from "@/lib/ai/agent/team/durable/durable-control"
+import type { AgentTeam } from "@/types/agent/agent-team"
+
+const team = {
+  id: "audit-team", name: "Audit", task: "Audit", leadId: "lead",
+  config: {
+    maxTeammates: 2, maxConcurrentTeammates: 1, executionMode: "coordinated",
+    runtimeVersion: "durable-v2", writeMode: "single-writer",
+    repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+  },
+} as AgentTeam
+
+let disable: (() => void) | undefined
+
+beforeEach(async () => {
+  disable = __enableDbRuntimeForTesting()
+  await getDb().delete()
+  __resetDbForTesting()
+})
+
+afterEach(async () => {
+  await getDb().delete()
+  __resetDbForTesting()
+  disable?.()
+})
+
+it.each([false, true])("cross-host retry with settled tool result = %s", async (settled) => {
+  const runId = `audit-recovery-${settled}`
+  const coordinator = createDurableTeamCoordinator()
+  await coordinator.prepareRun(team, runId)
+  const dispatch = await beginDurableDispatch({
+    coordinator, team, runId, teammateId: "mate", taskId: "task",
+    access: "write", repositoryId: "primary",
+  })
+  const store = coordinator.store
+  await store.updateChild(dispatch.childRunId, {
+    hostRef: "device:a", remoteSessionId: "remote-a", dispatchLeaseId: "dispatch-a",
+    dispatchLeaseExpiresAt: Date.now() + 60_000,
+  })
+  await store.appendTrajectory({
+    runId, childRunId: dispatch.childRunId, kind: "remote_event", correlationId: "call-1",
+    payload: { event: { kind: "tool-call", toolName: "Write", toolCallId: "tool-1" } },
+    createdAt: Date.now(),
+  })
+  dispatch.capture({ type: "tool-call", id: "tool-1", toolName: "Write", input: { path: "a.txt" } })
+  await dispatch.flush()
+  if (settled) {
+    await store.appendTrajectory({
+      runId, childRunId: dispatch.childRunId, kind: "remote_event", correlationId: "result-1",
+      payload: { event: { kind: "tool-result", toolName: "Write", toolCallId: "tool-1" } },
+      createdAt: Date.now(),
+    })
+    dispatch.capture({ type: "tool-result", id: "tool-1", toolName: "Write", result: "written", isError: false })
+    await dispatch.flush()
+  }
+  // No terminal remote event or executor stop confirmation is supplied.
+  await dispatch.fail(new Error("worker connection closed after authorization revocation"))
+  const checkpoint = await store.getLatestCheckpoint(dispatch.childRunId)
+  const failed = await store.getChild(dispatch.childRunId)
+  if (settled) {
+    expect(checkpoint?.replay).toBe("safe")
+    expect(failed?.status).toBe("failed")
+    const retried = await coordinator.retryChild(dispatch.childRunId, "device:b")
+    expect(retried.waitingReason).toBe("retry_host:device:b")
+    expect(retried.remoteSessionId).toBe("remote-a")
+    expect((await store.getRun(runId))?.status).toBe("recovering")
+    // Direct retry keeps the old session id, which can make downstream
+    // sessions.open(old-id) fail on the other Host. Explicit run resume is a
+    // different path; this check does not establish that its UI is eligible.
+    await controlDurableRun(runId, "resume", { coordinator })
+    expect((await store.getChild(dispatch.childRunId))?.remoteSessionId).toBeUndefined()
+    expect((await store.getRun(runId))?.status).toBe("running")
+  } else {
+    expect(checkpoint?.replay).toBe("needs_input")
+    expect(failed?.status).toBe("needs_input")
+    await expect(coordinator.retryChild(dispatch.childRunId, "device:b")).rejects.toThrow("safe checkpoint")
+  }
+})

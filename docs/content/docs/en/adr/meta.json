@@ -238,6 +238,9 @@
     "0240-a-generated-surface-streams-answers-and-computes",
     "0241-a-shared-run-streams-to-its-members",
     "0242-the-browser-companion-names-the-capabilities-it-adds",
-    "0243-a-run-acts-for-someone-and-says-who"
+    "0243-a-run-acts-for-someone-and-says-who",
+    "0244-a-remote-run-has-stopped-only-when-its-worker-says-so",
+    "0245-a-paired-device-is-granted-workspaces-not-a-host",
+    "0246-a-business-plugin-reaches-a-service-through-a-granted-connection"
   ]
 }
