@@ -90,6 +90,7 @@
   "collabPlans": "encrypted-content",
   "collabRuns": "encrypted-content",
   "collabWorkspaces": "encrypted-content",
+  "connectionBindings": "metadata-only",
   "connectorAttachments": "encrypted-content",
   "connectorAudit": "metadata-only",
   "connectorCallbackBindings": "encrypted-content",

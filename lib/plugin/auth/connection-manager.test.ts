@@ -15,6 +15,8 @@ import { authConnectionIdentityKey, type AuthConnectionRow } from "@/lib/db/auth
 import type { AuthenticationProvider } from "./auth-provider-registry"
 import type { AuthCredentialSet } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 import { getPlugin } from "@/lib/db/plugins"
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
 
@@ -103,6 +105,39 @@ function fixture() {
   providers.set(provider.id, provider)
   return { rows, tokens, provider, providers, credentials, manager: makeManager(), makeManager }
 }
+
+it("atomically removes all default-store bindings when a connection becomes terminal", async () => {
+  const dbFixture = createDbTestFixture()
+  await dbFixture.initialize()
+  try {
+    const f = fixture()
+    const manager = new AuthConnectionManager({
+      credentials: f.credentials,
+      provider: (id) => f.providers.get(id),
+      providerIdentity: async (provider) => ({
+        providerId: provider.id,
+        ownerPluginId: provider.pluginId,
+        publisher: "pub",
+        contractMajor: 1,
+      }),
+    })
+    const ref = await manager.createConnectionFromCredentials(f.provider, fresh)
+    await getDb().connectionBindings.bulkPut(
+      ["one", "two"].map((consumerPluginId) => ({
+        consumerPluginId,
+        providerId: f.provider.id,
+        connectionRef: ref,
+        createdAt: 1,
+        updatedAt: 1,
+      }))
+    )
+    await manager.disconnect(ref)
+    expect(await getDb().connectionBindings.count()).toBe(0)
+    expect((await getDb().authConnections.get(ref))?.status).toBe("tombstoned")
+  } finally {
+    await dbFixture.dispose()
+  }
+})
 
 it("exposes Host metadata only for a connected connection with its original provider", async () => {
   const f = fixture()
@@ -200,6 +235,7 @@ it("enforces identity uniqueness, reuses same-provider refs, and bumps scope rev
     })
   ).toBe(ref)
   expect(f.rows.get(ref)).toMatchObject({ revision: 2, credentialRevision: 2 })
+  expect(listener.mock.calls.map(([, kind]) => kind)).toEqual(["added", "changed"])
   expect(JSON.stringify(listener.mock.calls)).not.toMatch(
     /accessToken|refreshToken|clientId|lineageId/
   )

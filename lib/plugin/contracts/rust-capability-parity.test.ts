@@ -14,6 +14,8 @@ import { CANONICAL_PLUGIN_CAPABILITIES, PLUGIN_CAPABILITY_CONTRACTS } from "./pl
 import {
   CANONICAL_PLUGIN_PERMISSIONS,
   CANONICAL_PLUGIN_TYPES,
+  PLUGIN_API_NAMESPACE_CONTRACTS,
+  PLUGIN_API_WIRE_OP_CONTRACTS,
 } from "@cognia/plugin-contract/contracts/catalog"
 
 const REPO_ROOT = join(__dirname, "..", "..", "..")
@@ -175,5 +177,19 @@ describe("Rust CLI ↔ TS validator parity", () => {
         permissions: ["auth:provide"],
       })),
     ])
+  })
+
+  it("keeps connection selection and grants on the renderer/Host surface", () => {
+    const auth = PLUGIN_API_NAMESPACE_CONTRACTS.find((namespace) => namespace.id === "auth")!
+    for (const method of ["get", "list", "requestGrant", "onDidChange"]) {
+      expect(auth.methods.find((entry) => entry.id === `auth.connections.${method}`)).toMatchObject(
+        {
+          requiredPermissions: ["auth:consume"],
+        }
+      )
+      expect(PLUGIN_API_WIRE_OP_CONTRACTS[`auth:connections.${method}`]).toBeUndefined()
+      expect(API_BRIDGE).not.toContain(`\"auth:connections.${method}\"`)
+    }
+    expect(auth.transport).toBe("direct")
   })
 })

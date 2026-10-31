@@ -519,6 +519,8 @@ export const OVERLAY_REGISTRY_CAPABILITIES = {
     // C1. The declarative `authProviders[]` entries describe providers for
     // validation / consent UI. Rust reads tokenEndpoints from the installed
     // manifest to authorize auth:exchange; this overlay grants no endpoint.
+    // ctx.auth.connections is renderer/Host-owned (selection, metadata, grants),
+    // wired by createAuthAPI, not an additional Rust gateway operation.
     // Activation can run before contributions:
     // preserve its same-owner live provider instead of replacing it with metadata.
     manifestField: "authProviders",

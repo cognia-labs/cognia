@@ -36,8 +36,19 @@ import {
   registerAuthenticationProvider,
   unregisterProvidersByPlugin,
 } from "@/lib/plugin/auth/auth-provider-registry"
+import { PLUGIN_CAPABILITY_CONTRACTS } from "./plugin-capabilities"
 
 describe("auth-provider activation ordering", () => {
+  it("routes the connection consumer API through its Host API and prompt host", () => {
+    const auth = PLUGIN_CAPABILITY_CONTRACTS.find((entry) => entry.id === "auth-provider")!
+    expect(auth.hostBindings).toEqual(
+      expect.arrayContaining([
+        "lib/plugin/auth/connections-api.ts",
+        "components/plugins/auth/plugin-connection-prompt-host.tsx",
+      ])
+    )
+    expect(OVERLAY_REGISTRY_CAPABILITIES["auth-provider"].manifestField).toBe("authProviders")
+  })
   it("keeps confidential endpoint authorization on the Rust gateway", () => {
     expect(OVERLAY_REGISTRY_CAPABILITIES["auth-provider"].manifestField).toBe("authProviders")
     // The overlay registers providers, with no renderer endpoint push channel.

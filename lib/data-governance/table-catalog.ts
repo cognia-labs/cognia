@@ -92,6 +92,7 @@ export const CORE_TABLE_NAMES = [
   "artifactVersions",
   "artifacts",
   "authConnections",
+  "connectionBindings",
   "authAttempts",
   "automationAuditLog",
   "backgroundTasks",
@@ -2026,7 +2027,10 @@ function createEntry(name: CoreTableName): DataTableCatalogEntry {
       : "account"
   return {
     name,
-    owner: name === "authConnections" || name === "authAttempts" ? "plugin-auth" : ownerFor(name),
+    owner:
+      name === "authConnections" || name === "authAttempts" || name === "connectionBindings"
+        ? "plugin-auth"
+        : ownerFor(name),
     role,
     sensitivity,
     contentProtection: contentProtectionFor(name, sensitivity, accountScope),

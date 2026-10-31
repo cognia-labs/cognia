@@ -104,6 +104,10 @@ function grantMatches(
   if (!grantCoversOperation(grant, capability, connection, context)) return false
 
   const requestedScopes = context.resourceScopes ?? []
+  // A consumer grant (ADR-0246 §1) authorizes a business plugin's operations
+  // and OAuth scopes on one connection; without resource scopes it covers every
+  // resource of those operations. Legacy grants stay resource-bound.
+  if (grant.consumerPluginId !== undefined && (grant.resourceScopes?.length ?? 0) === 0) return true
   if ((grant.resourceScopes?.length ?? 0) > 0 && requestedScopes.length === 0) return false
   for (const requested of requestedScopes) {
     const allowed = grant.resourceScopes?.find((scope) => scope.kind === requested.kind)

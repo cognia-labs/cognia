@@ -38,6 +38,9 @@ export { AuthRefreshRejected }
 export const AUTH_REFRESH_TIMEOUT_MS = 30_000
 export const AUTH_REVOKE_TIMEOUT_MS = 30_000
 
+export type AuthConnectionChangeKind = "added" | "changed" | "removed"
+type ConnectionListener = (metadata: AuthConnectionMetadata, kind: AuthConnectionChangeKind) => void
+
 /** Cleanup must not keep startup or profile deletion waiting forever. */
 async function boundedRevoke(task: () => Promise<void>): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -181,7 +184,7 @@ export class AuthConnectionManager {
   private readonly provider: typeof getProvider
   private readonly owner: NonNullable<ManagerOptions["providerIdentity"]>
   private readonly now: () => number
-  private readonly listeners = new Set<(metadata: AuthConnectionMetadata) => void>()
+  private readonly listeners = new Set<ConnectionListener>()
   constructor(options: ManagerOptions = {}) {
     const database = options.store ? undefined : getDb()
     this.store = options.store ?? {
@@ -192,7 +195,16 @@ export class AuthConnectionManager {
           ? database!.authConnections.where("providerId").equals(providerId).toArray()
           : database!.authConnections.toArray(),
       put: async (row) => {
-        await database!.authConnections.put(row)
+        await database!.transaction(
+          "rw",
+          database!.authConnections,
+          database!.connectionBindings,
+          async () => {
+            await database!.authConnections.put(row)
+            if (terminal(row))
+              await database!.connectionBindings.where("connectionRef").equals(row.id).delete()
+          }
+        )
       },
     }
     this.credentials = options.credentials ?? new ConnectionCredentialStore()
@@ -201,7 +213,7 @@ export class AuthConnectionManager {
     this.owner = options.providerIdentity ?? providerIdentity
     this.now = options.now ?? Date.now
   }
-  onDidChange(listener: (metadata: AuthConnectionMetadata) => void): () => void {
+  onDidChange(listener: ConnectionListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
@@ -227,11 +239,14 @@ export class AuthConnectionManager {
       throw new ConnectionUnavailableError("provider-unavailable")
     return current
   }
-  private async publish(row: AuthConnectionRow): Promise<void> {
+  private async publish(
+    row: AuthConnectionRow,
+    kind: AuthConnectionChangeKind = terminal(row) ? "removed" : "changed"
+  ): Promise<void> {
     await this.store.put(row)
     for (const listener of this.listeners) {
       try {
-        listener(metadata(row))
+        listener(metadata(row), kind)
       } catch {
         console.warn("Auth connection listener failed")
       }
@@ -335,7 +350,7 @@ export class AuthConnectionManager {
             row.status = "provider-unavailable"
             row.unavailableStatus = "connected"
           }
-          await this.publish(row)
+          await this.publish(row, current ? "changed" : "added")
           return ref
         })
       },

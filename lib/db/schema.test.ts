@@ -5489,7 +5489,7 @@ it("v250 adds unique Host connections and attempt expiry metadata", async () => 
 })
 
 it("v251 indexes consumer grants and preserves legacy grants without backfill", async () => {
-  expect(CURRENT_SCHEMA_VERSION).toBe(251)
+  expect(CURRENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(251)
   const name = "cognia-consumer-grants-v251-upgrade"
   const old = new Dexie(name)
   old.version(250).stores({
@@ -5508,7 +5508,7 @@ it("v251 indexes consumer grants and preserves legacy grants without backfill", 
   const current = new CogniaDB(name)
   try {
     await current.open()
-    expect(current.verno).toBe(251)
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
     expect(current.capabilityGrants.schema.idxByName.consumerPluginId).toBeDefined()
     expect(
       current.capabilityGrants.schema.idxByName["[connectionId+consumerPluginId]"].keyPath
@@ -5519,6 +5519,63 @@ it("v251 indexes consumer grants and preserves legacy grants without backfill", 
       providerFingerprint: "fp",
       operationPatterns: ["*"],
     })
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
+it("v252 adds account-local consumer connection bindings", async () => {
+  const current = new CogniaDB("cognia-connection-bindings-v252")
+  try {
+    await current.open()
+    expect(CURRENT_SCHEMA_VERSION).toBe(252)
+    const table = current.table("connectionBindings")
+    expect(table.schema.primKey.keyPath).toEqual(["consumerPluginId", "providerId"])
+    expect(table.schema.idxByName.connectionRef.keyPath).toBe("connectionRef")
+    expect(
+      current.integrationAccounts.schema.idxByName["[pluginId+integrationId+connectionId]"].unique
+    ).toBe(false)
+    expect(
+      current.integrationAccounts.schema.idxByName["[pluginId+integrationId+remoteAccountId]"]
+        .unique
+    ).toBe(false)
+  } finally {
+    current.close()
+    await Dexie.delete(current.name)
+  }
+})
+
+it("v252 preserves v251 accounts that already share a connection ref", async () => {
+  const name = "cognia-connection-accounts-v252-upgrade"
+  const previous = new Dexie(name)
+  previous.version(251).stores({
+    ...CURRENT_SCHEMA,
+    connectionBindings: null,
+    integrationAccounts:
+      "&id, pluginId, &[pluginId+integrationId+remoteAccountId], [pluginId+integrationId], providerId, enabled, health, updatedAt",
+  })
+  await previous.open()
+  await previous.table("integrationAccounts").bulkPut(
+    ["one", "two"].map((id) => ({
+      id,
+      pluginId: "consumer",
+      integrationId: "calendar",
+      remoteAccountId: id,
+      connectionId: "shared-ref",
+    }))
+  )
+  previous.close()
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(await current.integrationAccounts.count()).toBe(2)
+    expect(
+      await current.integrationAccounts
+        .where("[pluginId+integrationId+connectionId]")
+        .equals(["consumer", "calendar", "shared-ref"])
+        .count()
+    ).toBe(2)
   } finally {
     current.close()
     await Dexie.delete(name)

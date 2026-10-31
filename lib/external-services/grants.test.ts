@@ -186,6 +186,39 @@ describe("external capability grants", () => {
     ).toEqual({ decision: "allow", reason: "scoped-grant", grantId: "grant-1" })
   })
 
+  it("lets an unscoped consumer grant cover every resource, but keeps legacy grants resource-bound", () => {
+    const context = {
+      interactive: false,
+      consumerPluginId: "consumer",
+      connectionRevision: 1,
+      accountId: "account-1",
+      workflowId: "workflow-1",
+      resourceScopes: [{ kind: "repository", value: "any/repo" }],
+    }
+    const consumer = grant({
+      consumerPluginId: "consumer",
+      connectionRevision: 1,
+      resourceScopes: undefined,
+    })
+    expect(
+      authorizeExternalCapability({
+        capability: capability("read"),
+        connection,
+        grants: [consumer],
+        context,
+      })
+    ).toEqual({ decision: "allow", reason: "scoped-grant", grantId: "grant-1" })
+    const { consumerPluginId: _consumer, connectionRevision: _revision, ...legacyContext } = context
+    expect(
+      authorizeExternalCapability({
+        capability: capability("write"),
+        connection,
+        grants: [grant({ resourceScopes: undefined })],
+        context: legacyContext,
+      })
+    ).toEqual({ decision: "deny", reason: "grant-required" })
+  })
+
   it("allows a workflow write only with matching fingerprint, operation, account, and resource", () => {
     expect(
       authorizeExternalCapability({

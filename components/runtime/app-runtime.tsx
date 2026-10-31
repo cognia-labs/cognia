@@ -70,6 +70,7 @@ import { ConnectorDeepLinkRouter } from "@/components/connectors/connector-deep-
 import { PluginModalRoot } from "@/components/plugins/dialogs/plugin-modal-root"
 import { PluginConsentOverlay } from "@/components/plugins/dialogs/plugin-consent-overlay"
 import { PluginPermissionRequestHost } from "@/components/plugins/plugin-permission-request-host"
+import { PluginConnectionPromptHost } from "@/components/plugins/auth/plugin-connection-prompt-host"
 import { PluginUpdateToaster } from "@/components/plugins/plugin-update-toaster"
 import { PluginEnableFailureToaster } from "@/components/plugins/plugin-enable-failure-toaster"
 import { PluginErrorToaster } from "@/components/plugins/plugin-error-toaster"
@@ -411,6 +412,7 @@ export function AppRuntime({ children }: { children: React.ReactNode }) {
                              * plugin can ask from any page, so this belongs at
                              * the root rather than on /plugins. */}
                             <PluginPermissionRequestHost />
+                            <PluginConnectionPromptHost />
                             {/* "Notify only" auto-update dispatched an event
                              * nothing listened for, so the cadence the Policy
                              * tab presents as the default told the user

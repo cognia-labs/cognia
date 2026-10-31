@@ -285,6 +285,14 @@ describe("ledger restore over built-in plugin tables", () => {
       )
       expect(getDb().verno).toBe(CURRENT_SCHEMA_VERSION + 1)
       await getDb().table(table).put({ id: "row-1" })
+      const binding = {
+        consumerPluginId: "calendar",
+        providerId: "vendor",
+        connectionRef: "host-ref",
+        createdAt: 1,
+        updatedAt: 1,
+      }
+      await getDb().table("connectionBindings").put(binding)
       await first.compact()
       await first.close()
 
@@ -300,6 +308,7 @@ describe("ledger restore over built-in plugin tables", () => {
       })
       expect(getDb().verno).toBe(CURRENT_SCHEMA_VERSION + 1)
       expect(await getDb().table(table).get("row-1")).toEqual({ id: "row-1" })
+      expect(await getDb().table("connectionBindings").get(["calendar", "vendor"])).toEqual(binding)
       await second.close()
     } finally {
       await getDb()

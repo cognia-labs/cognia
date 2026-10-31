@@ -69,6 +69,13 @@ function fakeProvider(over?: Partial<PluginAuthProvider>): PluginAuthProvider {
 const allow = { hasPermission: () => true }
 const deny = { hasPermission: () => false }
 
+it("wires all four connection methods through the auth:consume gate", async () => {
+  const connections = createAuthAPI("consumer", deny).connections
+  expect(Object.keys(connections).sort()).toEqual(["get", "list", "onDidChange", "requestGrant"])
+  await expect(connections.list()).rejects.toThrow("auth:consume")
+  expect(() => connections.onDidChange(() => {})).toThrow("auth:consume")
+})
+
 jest.mock("@/lib/plugin/core/transport", () => ({
   ...jest.requireActual("@/lib/plugin/core/transport"),
   isPluginGatewayAvailable: jest.fn(() => true),

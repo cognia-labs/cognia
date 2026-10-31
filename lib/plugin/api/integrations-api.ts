@@ -1,3 +1,4 @@
+import { AuthConnectionApiError, connectionAccess } from "@/lib/plugin/auth/connection-access"
 import type {
   IntegrationAccount,
   IntegrationAccountRef,
@@ -77,8 +78,54 @@ export function createIntegrationsAPI(
     },
     async createAccount(input: IntegrationAccountInput): Promise<IntegrationAccount> {
       requirePermission(hasPermission, "integrations:manage", "ctx.integrations.createAccount")
+      input = {
+        ...input,
+        ...(input.approvedOrigins ? { approvedOrigins: [...input.approvedOrigins] } : {}),
+      }
       if (!getRegisteredIntegration(pluginId, input.integrationId)) {
+        if (input.connectionId !== undefined)
+          throw new AuthConnectionApiError(
+            "integration-unregistered",
+            "Integration is not registered"
+          )
         throw new Error(`Integration "${input.integrationId}" is not registered`)
+      }
+      if (input.connectionId !== undefined) {
+        if (typeof input.connectionId !== "string" || !input.connectionId.trim())
+          throw new AuthConnectionApiError("connection-unavailable", "Connection is unavailable")
+        const check = () =>
+          requirePermission(hasPermission, "integrations:manage", "ctx.integrations.createAccount")
+        const { connected, checked } = connectionAccess(pluginId, check)
+        const row = await connected(
+          input.connectionId as import("@cognia/plugin-contract/types/plugin/plugin-auth").AuthConnectionRef
+        )
+        if (!row)
+          throw new AuthConnectionApiError("connection-unavailable", "Connection is unavailable")
+        const definition = getRegisteredIntegration(pluginId, input.integrationId)?.definition
+        if (!definition)
+          throw new AuthConnectionApiError(
+            "integration-unregistered",
+            "Integration is not registered"
+          )
+        if (
+          row.providerId !== input.providerId ||
+          !definition.authStrategies.some((strategy) => strategy.providerId === row.providerId)
+        )
+          throw new AuthConnectionApiError(
+            "provider-mismatch",
+            "Integration provider does not match the connection"
+          )
+        return toPluginAccount(
+          await checked(() =>
+            createIntegrationAccount(pluginId, {
+              ...input,
+              connectionId: row.id,
+              authSessionId: row.legacySessionId ?? row.id,
+              remoteAccountId: row.principalId,
+              label: row.accountLabel,
+            })
+          )
+        )
       }
       return toPluginAccount(await createIntegrationAccount(pluginId, input))
     },

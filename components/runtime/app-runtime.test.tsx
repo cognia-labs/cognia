@@ -58,6 +58,9 @@ jest.mock("@/components/plugins/dialogs/plugin-consent-overlay", () => ({
 jest.mock("@/components/plugins/plugin-permission-request-host", () => ({
   PluginPermissionRequestHost: () => <span data-testid="plugin-permission-request-host" />,
 }))
+jest.mock("@/components/plugins/auth/plugin-connection-prompt-host", () => ({
+  PluginConnectionPromptHost: () => <span data-testid="plugin-connection-prompt-host" />,
+}))
 jest.mock("@/components/plugins/plugin-enable-failure-toaster", () => ({
   PluginEnableFailureToaster: () => <span data-testid="plugin-enable-failure-toaster" />,
 }))
@@ -94,6 +97,7 @@ const pluginHosts = [
   "plugin-modal-root",
   "plugin-consent-overlay",
   "plugin-permission-request-host",
+  "plugin-connection-prompt-host",
   "plugin-enable-failure-toaster",
 ]
 

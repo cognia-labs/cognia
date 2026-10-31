@@ -15,6 +15,20 @@ import { setIntegrationAccountOutboundRecipients } from "@/lib/db/integrations"
 import { createIntegrationsAPI, toPluginAccount } from "./integrations-api"
 import { routePythonHostRequest } from "@/lib/plugin/python/host-request-router"
 import type { PluginContext } from "@/types/plugin/plugin"
+import { getAuthConnection, type AuthConnectionRow } from "@/lib/db/auth-connections"
+import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
+import {
+  registerAuthenticationProvider,
+  __resetAuthRegistryForTesting,
+} from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
+import { getConnectionManager } from "@/lib/plugin/auth/connection-manager"
+
+jest.mock("@/lib/plugin/auth/connection-manager", () => ({
+  ...jest.requireActual("@/lib/plugin/auth/connection-manager"),
+  getConnectionManager: jest.fn(
+    jest.requireActual("@/lib/plugin/auth/connection-manager").getConnectionManager
+  ),
+}))
 
 // Mutable namespace seams retain the real implementations unless a boundary test spies on one.
 jest.mock("@/lib/db/integrations", () => ({
@@ -114,6 +128,109 @@ describe("ctx.integrations", () => {
         label: "One",
       })
     ).rejects.toThrow('requires the "integrations:manage" permission')
+  })
+
+  it("validates connectionId visibility, status, provider and registration and stamps Host identity", async () => {
+    __resetAuthRegistryForTesting()
+    localStorage.clear()
+    const getConnection = jest.fn((ref: AuthConnectionRef) => getAuthConnection(ref))
+    jest.mocked(getConnectionManager).mockReturnValue({ getConnection } as never)
+    registerAuthenticationProvider({
+      id: "oauth",
+      pluginId: "example-delivery",
+      label: "OAuth",
+      getSessions: async () => [],
+      createSession: async () => {
+        throw new Error("unused")
+      },
+      removeSession: async () => {},
+    })
+    registerIntegrationDefinitions({
+      pluginId: "example-delivery",
+      definitions: [
+        {
+          id: "example",
+          label: "Example",
+          authStrategies: [{ id: "oauth", label: "OAuth", type: "oauth2", providerId: "oauth" }],
+          resourceKinds: [],
+          eventTypes: [],
+          actions: [],
+        },
+      ],
+      handlers: {},
+    })
+    const row: AuthConnectionRow = {
+      id: "ref" as AuthConnectionRef,
+      providerId: "oauth",
+      ownerPluginId: "example-delivery",
+      publisher: null,
+      contractMajor: 1,
+      issuer: "https://issuer.test",
+      clientId: "client",
+      principalId: "host-principal",
+      principalKind: "user",
+      accountLabel: "Host account",
+      scopes: ["read"],
+      revision: 1,
+      credentialRevision: 1,
+      lineageId: "lineage",
+      identityKey: "identity",
+      status: "connected",
+      legacySessionId: "host-legacy-session",
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    await getDb().authConnections.put(row)
+    const api = createIntegrationsAPI("example-delivery", () => true)
+    const input = {
+      integrationId: "example",
+      providerId: "oauth",
+      connectionId: "ref",
+      authSessionId: "forged",
+      remoteAccountId: "forged",
+      label: "Forged",
+    }
+    try {
+      expect(await api.createAccount(input)).toMatchObject({
+        connectionId: "ref",
+        authSessionId: "host-legacy-session",
+        remoteAccountId: "host-principal",
+        label: "Host account",
+      })
+      getConnection.mockImplementationOnce(async (ref) => {
+        input.connectionId = "invisible-ref"
+        return getAuthConnection(ref)
+      })
+      expect(await api.createAccount(input)).toMatchObject({ connectionId: "ref" })
+      input.connectionId = "ref"
+      await expect(api.createAccount({ ...input, providerId: "different" })).rejects.toMatchObject({
+        code: "provider-mismatch",
+      })
+      await expect(api.createAccount({ ...input, integrationId: "missing" })).rejects.toMatchObject(
+        { code: "integration-unregistered" }
+      )
+      await expect(api.createAccount({ ...input, connectionId: "missing" })).rejects.toMatchObject({
+        code: "connection-unavailable",
+      })
+      await getDb().authConnections.update("ref", { status: "revoked" })
+      await expect(api.createAccount(input)).rejects.toMatchObject({
+        code: "connection-unavailable",
+      })
+      await getDb().authConnections.update("ref", {
+        status: "connected",
+        ownerPluginId: "unrelated",
+      })
+      await expect(api.createAccount(input)).rejects.toMatchObject({
+        code: "connection-unavailable",
+      })
+    } finally {
+      __resetAuthRegistryForTesting()
+      jest
+        .mocked(getConnectionManager)
+        .mockImplementation(
+          jest.requireActual("@/lib/plugin/auth/connection-manager").getConnectionManager
+        )
+    }
   })
 
   it.each([

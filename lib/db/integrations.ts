@@ -65,13 +65,15 @@ async function projectIntegrationAccount(account: IntegrationAccount): Promise<v
         risk: capability.risk,
         inputSchema: capability.inputSchema,
       }))
-      const providerFingerprint = await sha256Hex(
-        JSON.stringify({
-          providerId: account.providerId,
-          ...(account.connectionId !== undefined ? { connectionId: account.connectionId } : {}),
-          approvedOrigins: account.approvedOrigins ?? [],
-          capabilities,
-        })
+      const providerFingerprint = await Dexie.waitFor(
+        sha256Hex(
+          JSON.stringify({
+            providerId: account.providerId,
+            ...(account.connectionId !== undefined ? { connectionId: account.connectionId } : {}),
+            approvedOrigins: account.approvedOrigins ?? [],
+            capabilities,
+          })
+        )
       )
       const id = `integration:${account.id}:${service.definition.id}:${provider.id}`
       const existing = await getDb().serviceConnections.get(id)
@@ -137,14 +139,37 @@ export async function createIntegrationAccount(
     createdAt: now,
     updatedAt: now,
   }
-  await getDb().integrationAccounts.add(row)
-  try {
+  const db = getDb()
+  // Serialize find/create with its projection across tabs and both public
+  // entry points. No caller can observe a half-created bound account.
+  return db.transaction("rw", db.integrationAccounts, db.serviceConnections, async () => {
+    if (input.connectionId !== undefined) {
+      const existing = await db.integrationAccounts
+        .where("[pluginId+integrationId]")
+        .equals([pluginId, input.integrationId])
+        .filter(
+          (account) =>
+            account.connectionId === input.connectionId && account.providerId === input.providerId
+        )
+        .first()
+      if (existing) {
+        await projectIntegrationAccount(existing)
+        return existing
+      }
+    } else if (
+      await db.integrationAccounts
+        .where("[pluginId+integrationId+remoteAccountId]")
+        .equals([pluginId, input.integrationId, input.remoteAccountId])
+        .first()
+    ) {
+      // Preserve the old unique-index behavior for legacy callers. Bound
+      // accounts use the connection identity rather than a bare principal id.
+      throw new Dexie.ConstraintError("Integration account already exists for this remote account")
+    }
+    await db.integrationAccounts.add(row)
     await projectIntegrationAccount(row)
-  } catch (error) {
-    await getDb().integrationAccounts.delete(row.id)
-    throw error
-  }
-  return row
+    return row
+  })
 }
 
 export async function listIntegrationAccounts(

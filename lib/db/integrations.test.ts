@@ -73,6 +73,44 @@ describe("Integration persistence", () => {
     })
   })
 
+  it("atomically reuses a connection-backed account under concurrent creation", async () => {
+    const input = {
+      integrationId: "example",
+      providerId: "vendor",
+      connectionId: "ref",
+      authSessionId: "ref",
+      remoteAccountId: "user",
+      label: "Account",
+    }
+    const [first, second] = await Promise.all([
+      createIntegrationAccount("consumer", input),
+      createIntegrationAccount("consumer", input),
+    ])
+    expect(first.id).toBe(second.id)
+    expect(await listIntegrationAccounts("consumer")).toHaveLength(1)
+    expect((await createIntegrationAccount("other", input)).id).not.toBe(first.id)
+    expect(
+      (await createIntegrationAccount("consumer", { ...input, integrationId: "other" })).id
+    ).not.toBe(first.id)
+    expect(
+      (await createIntegrationAccount("consumer", { ...input, connectionId: "other-ref" })).id
+    ).not.toBe(first.id)
+  })
+
+  it("preserves legacy duplicate-account rejection", async () => {
+    const input = {
+      integrationId: "example",
+      providerId: "vendor",
+      authSessionId: "session",
+      remoteAccountId: "user",
+      label: "Account",
+    }
+    await createIntegrationAccount("consumer", input)
+    await expect(createIntegrationAccount("consumer", input)).rejects.toMatchObject({
+      name: "ConstraintError",
+    })
+  })
+
   it.each([null, "provider-owner"])(
     "stamps the current provider owner %s when creating an account",
     async (owner) => {

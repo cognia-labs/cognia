@@ -56,7 +56,7 @@ describe("DataTableCatalog", () => {
     const catalog = DATA_TABLE_CATALOG.map((entry) => entry.name).sort()
 
     expect(catalog).toEqual(actual)
-    expect(new Set(CORE_TABLE_NAMES).size).toBe(395)
+    expect(new Set(CORE_TABLE_NAMES).size).toBe(396)
     db.close()
   })
 
@@ -684,6 +684,13 @@ it("retains desktop cleanup intents until Host acknowledgment without sync or po
 })
 
 it("keeps Host auth metadata device-local and secrets externalized", () => {
+  expect(policyForTable("connectionBindings")).toMatchObject({
+    owner: "plugin-auth",
+    accountScope: "account",
+    backupPolicy: { mode: "device-local" },
+    accountSync: { mode: "none" },
+    deleteCascade: { account: true },
+  })
   expect(policyForTable("authConnections")).toMatchObject({
     contentProtection: "secret-externalized",
     backupPolicy: { mode: "device-local" },

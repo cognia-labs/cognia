@@ -34472,6 +34472,28 @@
         "missing": "No authorization response arrived. Close this window and start sign-in again from the plugin.",
         "returnToApp": "Return to Cognia",
         "working": "Completing sign-in…"
+      },
+      "connections": {
+        "accountLabel": "Account:",
+        "accountScopes": "Available scopes: {scopes}",
+        "approve": "Allow access",
+        "chooseAccount": "Use {account} at {issuer}",
+        "decline": "Decline",
+        "destructive": "Destructive",
+        "dismiss": "Close",
+        "grantDescription": "Review the access requested for {account}.",
+        "grantTitle": "Allow {plugin} to use this connection?",
+        "issuer": "Issuer: {issuer}",
+        "issuerLabel": "Issuer:",
+        "noScopes": "None",
+        "operation": "{integration}: {operation}",
+        "pickerDescription": "Your choice is saved for this plugin on this device.",
+        "pickerTitle": "Choose an account for {plugin}",
+        "readOperations": "Read operations",
+        "scopesLabel": "Requested scopes",
+        "tenant": "Organization: {tenant}",
+        "tenantLabel": "Organization:",
+        "writeOperations": "Write operations"
       }
     },
     "backup": {

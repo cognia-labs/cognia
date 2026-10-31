@@ -4970,6 +4970,62 @@ API_NAMESPACE_CONTRACTS = [
                 },
             },
             {
+                "id": "auth.connections.get",
+                "name": "connections.get",
+                "requiredPermissions": [
+                    "auth:consume",
+                ],
+                "consentTier": "confirm",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
+                "id": "auth.connections.list",
+                "name": "connections.list",
+                "requiredPermissions": [
+                    "auth:consume",
+                ],
+                "consentTier": "policy",
+                "risk": "medium",
+                "idempotent": True,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
+                "id": "auth.connections.requestGrant",
+                "name": "connections.requestGrant",
+                "requiredPermissions": [
+                    "auth:consume",
+                ],
+                "consentTier": "confirm",
+                "risk": "medium",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
+            {
+                "id": "auth.connections.onDidChange",
+                "name": "connections.onDidChange",
+                "requiredPermissions": [
+                    "auth:consume",
+                ],
+                "consentTier": "none",
+                "risk": "low",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "returned-disposer",
+                },
+            },
+            {
                 "id": "auth.getSession",
                 "name": "getSession",
                 "requiredPermissions": [

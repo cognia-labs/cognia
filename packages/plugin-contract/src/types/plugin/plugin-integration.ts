@@ -348,6 +348,9 @@ export interface IntegrationAccount {
   pluginId: string
   integrationId: string
   providerId: string
+  /** For connection-backed accounts: the legacy session id when present, otherwise
+   * the opaque connection ref. The Host fills this field; injection uses connectionId.
+   */
   authSessionId: string
   /**
    * Opaque Host auth connection reference, set only for connection-backed accounts.

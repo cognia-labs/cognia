@@ -19,6 +19,7 @@ import {
 import { createAttempt } from "@/lib/plugin/auth/auth-attempts"
 import { acceptCallback, registerAuthCallbackWaiter } from "@/lib/plugin/auth/callback-acceptor"
 import { runPkceAuthFlow } from "@/lib/plugin/auth/auth-pkce-flow"
+import { createAuthConnectionsAPI } from "@/lib/plugin/auth/connections-api"
 import {
   DEFAULT_CONSUMER_TOKEN_READ_POLICY,
   enforceConsumerTokenReadPolicy,
@@ -86,6 +87,7 @@ export function createAuthAPI(
 ): PluginAuthAPI {
   const { hasPermission } = options
   return {
+    connections: createAuthConnectionsAPI(pluginId, hasPermission),
     async exchangeConfidential(request) {
       requirePermission(hasPermission, "auth:provide", "ctx.auth.exchangeConfidential")
       requirePermission(hasPermission, "network:fetch", "ctx.auth.exchangeConfidential")

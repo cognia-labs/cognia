@@ -343,6 +343,18 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   "ctx.auth.exchangeConfidential": {
     kind: "none",
   },
+  "ctx.auth.connections.get": {
+    kind: "none",
+  },
+  "ctx.auth.connections.list": {
+    kind: "none",
+  },
+  "ctx.auth.connections.requestGrant": {
+    kind: "none",
+  },
+  "ctx.auth.connections.onDidChange": {
+    kind: "returned-disposer",
+  },
   "ctx.auth.getSession": {
     kind: "none",
   },

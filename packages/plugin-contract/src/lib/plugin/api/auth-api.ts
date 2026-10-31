@@ -67,7 +67,13 @@ export interface PluginAuthProvider {
   describe?(credentials: AuthCredentialSet): Promise<AuthIdentityDescription>
 }
 
-/** Consumer connection API, wired as `ctx.auth.connections` in ADR-0246 phase 3. */
+/**
+ * Consumer connection API (`auth:consume`). A connection is visible only to its
+ * provider owner or a consumer declaring a required/optional service provided
+ * by that owner. Host providers require an explicit Host provider/service map;
+ * that map starts empty until the built-in Lark/Google providers adopt this
+ * contract (ADR-0246 P5/P6). Invisible references behave exactly like absent ones.
+ */
 export interface PluginAuthConnectionsAPI {
   /** Select a connection matching the consumer's provider, service and scopes. */
   get(request: {
@@ -91,6 +97,8 @@ export interface PluginAuthConnectionsAPI {
 }
 
 export interface PluginAuthAPI {
+  /** Credential-free, Host-selected connections and consumer grants. */
+  connections: PluginAuthConnectionsAPI
   /** Register an authentication provider (`auth:provide`). Returns a disposer. */
   registerProvider(provider: PluginAuthProvider): () => void
   /** Get (or interactively create) a session for a provider (`auth:consume`). */
