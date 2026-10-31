@@ -156,6 +156,18 @@ describe("approvals and jobs", () => {
     render(<IntegrationsHub />)
     expect(screen.getByText(/Held by outbound authorization/)).toBeInTheDocument()
   })
+
+  it("warns about an unknown remote outcome on a cancelled job", async () => {
+    mockJobs = [job({ status: "cancelled", remoteOutcome: "unknown" })]
+    await act(async () => {
+      render(<IntegrationsHub />)
+    })
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Remote outcome unknown. Check the service before trying again."
+    )
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument()
+  })
 })
 
 const GITHUB_ENTRY = {

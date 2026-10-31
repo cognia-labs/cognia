@@ -69,6 +69,7 @@ jest.mock("@/stores/plugin-runtime/plugin-store", () => ({
       plugins: {
         "github-comment-bot": { manifest: { dependencies: { "github-delivery": ">=3.0.0" } } },
       },
+      getAllModes: () => [],
     }),
   },
 }))

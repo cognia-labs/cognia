@@ -9,6 +9,8 @@ import {
 } from "@/lib/external-services/catalog"
 import {
   appendIntegrationAudit,
+  cancelIntegrationActionJobRecord,
+  claimIntegrationActionJob,
   createIntegrationAccount,
   createIntegrationSubscription,
   enqueueIntegrationActionJob,
@@ -20,6 +22,7 @@ import {
   listAllIntegrationAccounts,
   listIntegrationAccounts,
   listIntegrationSubscriptions,
+  listRunnableIntegrationActionJobs,
   setIntegrationAccountOutboundRecipients,
   updateIntegrationAccount,
   updateIntegrationSubscription,
@@ -46,7 +49,7 @@ describe("Integration persistence", () => {
       label: "Renamed",
       health: "healthy",
       ingressEndpoint: "https://ingress.example.com/hook",
-    } as Parameters<typeof updateIntegrationAccount>[2])
+    } as unknown as Parameters<typeof updateIntegrationAccount>[2])
     expect(updated).toMatchObject({
       id: account.id,
       pluginId: "owner",
@@ -355,6 +358,104 @@ describe("Integration persistence", () => {
       output: { ok: true },
     })
     await expect(getDb().integrationAudit.count()).resolves.toBe(1)
+  })
+
+  async function queuedJob() {
+    return enqueueIntegrationActionJob({
+      pluginId: "example",
+      integrationId: "example",
+      accountId: "account",
+      actionId: "write",
+      input: {},
+      status: "queued",
+      risk: "write",
+      attempts: 0,
+      maxAttempts: 5,
+      source: "manual",
+    })
+  }
+
+  const lease = { owner: "window-1", leaseMs: 1000, idempotent: true }
+
+  it("claims atomically, rejects early retries and fences stale executor writes and audits", async () => {
+    const job = await queuedJob()
+    const now = Date.now()
+    await updateIntegrationActionJob(job.id, {
+      status: "retry_wait",
+      nextAttemptAt: new Date(now + 500).toISOString(),
+    })
+    expect(await claimIntegrationActionJob(job.id, lease, now)).toBeUndefined()
+    const claims = await Promise.all([
+      claimIntegrationActionJob(job.id, lease, now + 500),
+      claimIntegrationActionJob(job.id, { ...lease, owner: "window-2" }, now + 500),
+    ])
+    expect(claims.filter(Boolean)).toHaveLength(1)
+    const first = claims.find(Boolean)!
+    expect(first).toMatchObject({ status: "running", attempts: 1, claimToken: expect.any(String) })
+    expect(await claimIntegrationActionJob(job.id, lease, now + 1499)).toBeUndefined()
+    const replacement = await claimIntegrationActionJob(
+      job.id,
+      { ...lease, owner: "recovery" },
+      now + 1500
+    )
+    expect(replacement?.claimToken).not.toBe(first.claimToken)
+    for (const status of ["succeeded", "failed", "retry_wait"] as const) {
+      expect(
+        await updateIntegrationActionJob(
+          job.id,
+          { status, output: "stale" },
+          {
+            claimToken: first.claimToken,
+            audit: {
+              pluginId: "example",
+              integrationId: "example",
+              kind: "stale",
+              outcome: "succeeded",
+            },
+          }
+        )
+      ).toEqual(replacement)
+    }
+    expect(await getDb().integrationAudit.count()).toBe(0)
+  })
+
+  it("finds expired/legacy leases and cancels non-idempotent recovery with an audit", async () => {
+    const job = await queuedJob()
+    await updateIntegrationActionJob(job.id, { status: "running" })
+    expect(await listRunnableIntegrationActionJobs()).toEqual([
+      expect.objectContaining({ id: job.id }),
+    ])
+    expect(await claimIntegrationActionJob(job.id, { ...lease, idempotent: false })).toBeUndefined()
+    expect(await getIntegrationActionJob(job.id)).toMatchObject({
+      status: "cancelled",
+      remoteOutcome: "unknown",
+    })
+    expect(await getDb().integrationAudit.toArray()).toEqual([
+      expect.objectContaining({
+        kind: "action.write.cancelled",
+        detail: { jobId: job.id, remoteOutcome: "unknown" },
+      }),
+    ])
+    expect(await listRunnableIntegrationActionJobs()).toEqual([])
+  })
+
+  it("serializes dispatch markers and cancellation and cannot resurrect a cancelled row", async () => {
+    const job = await queuedJob()
+    const claimed = await claimIntegrationActionJob(job.id, lease)
+    const condition = { claimToken: claimed!.claimToken }
+    await updateIntegrationActionJob(
+      job.id,
+      { remoteWriteStartedAt: new Date().toISOString() },
+      condition
+    )
+    const cancelled = await cancelIntegrationActionJobRecord(job.id)
+    expect(cancelled.remoteOutcome).toBe("unknown")
+    expect(await updateIntegrationActionJob(job.id, { status: "succeeded" }, condition)).toEqual(
+      cancelled
+    )
+    expect(await updateIntegrationActionJob(job.id, { status: "queued" })).toEqual(cancelled)
+    expect(await cancelIntegrationActionJobRecord(job.id)).toEqual(cancelled)
+    expect(await getDb().integrationAudit.count()).toBe(1)
   })
 
   it("finds a job by its account and idempotency key", async () => {

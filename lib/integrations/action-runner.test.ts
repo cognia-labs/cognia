@@ -7,20 +7,31 @@ import { __resetDbForTesting, getDb } from "@/lib/db/schema"
 import * as botBinding from "@/lib/plugin/api/bot-integration-binding"
 import {
   createIntegrationAccount,
+  cancelIntegrationActionJobRecord,
+  cancelIntegrationActionJobsByPlugin,
+  enqueueIntegrationActionJob,
+  getIntegrationActionJob,
   setIntegrationAccountOutboundRecipients,
 } from "@/lib/db/integrations"
 import { putCapabilityGrant, putServiceConnection } from "@/lib/db/external-services"
 import { registerAuthenticationProvider } from "@/lib/plugin/auth/auth-provider-registry"
-import { __resetIntegrationRegistryForTesting, registerIntegrationDefinitions } from "./registry"
+import {
+  __resetIntegrationRegistryForTesting,
+  registerIntegrationDefinitions,
+  unregisterIntegrationsByPlugin,
+} from "./registry"
 import { pushHeldIntegrationJob, withdrawHeldIntegrationJob } from "./outbound-hold"
 import { buildShadowReport } from "@/lib/policy/action-review/shadow-report"
 import { configuredGithubHosts } from "./github-auth"
 import { parseGithubHost } from "@/lib/github/host"
+import { isIntegrationRuntimeOwner } from "./runtime-owner"
 import {
   approveIntegrationActionJob,
   authenticatedIntegrationRequest,
   cancelIntegrationActionJob,
   executeIntegrationAction,
+  drainIntegrationActionJobs,
+  runIntegrationActionJob,
   resolveIntegrationActionAvailability,
   setGithubIssueLoopDesktopHostAvailableForTesting,
   setGithubIssueLoopExecutorForTesting,
@@ -43,6 +54,8 @@ jest.mock("./outbound-hold", () => ({
   withdrawHeldIntegrationJob: jest.fn(),
 }))
 
+jest.mock("./runtime-owner", () => ({ isIntegrationRuntimeOwner: jest.fn(async () => true) }))
+
 jest.mock("./github-auth", () => ({
   ...jest.requireActual("./github-auth"),
   configuredGithubHosts: jest.fn(async () => []),
@@ -51,6 +64,7 @@ jest.mock("./github-auth", () => ({
 describe("Integration action runner", () => {
   beforeEach(async () => {
     outboundSettings = { agentPermissions: {} }
+    jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(true)
     jest.mocked(configuredGithubHosts).mockReset().mockResolvedValue([])
     jest.mocked(pushHeldIntegrationJob).mockClear()
     jest.mocked(withdrawHeldIntegrationJob).mockClear()
@@ -79,7 +93,8 @@ describe("Integration action runner", () => {
     ) => Promise<unknown> = async (input) => ({
       updated: input.issueId,
     }),
-    allowedOrigins = ["https://api.example.test"]
+    allowedOrigins = ["https://api.example.test"],
+    idempotency: "required" | "supported" = "required"
   ) {
     registerIntegrationDefinitions({
       pluginId: "example-delivery",
@@ -112,7 +127,7 @@ describe("Integration action runner", () => {
               handler: "updateIssue",
               inputSchema: { type: "object" },
               risk: "write",
-              idempotency: "required",
+              idempotency,
             },
             {
               id: "issue.delete",
@@ -142,6 +157,245 @@ describe("Integration action runner", () => {
     })
     return account
   }
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((done) => {
+      resolve = done
+    })
+    return { promise, resolve }
+  }
+
+  async function queue(accountId: string, actionId = "issue.update") {
+    return enqueueIntegrationActionJob({
+      pluginId: "example-delivery",
+      integrationId: "example",
+      accountId,
+      actionId,
+      input: {},
+      status: "queued",
+      risk: "write",
+      attempts: 0,
+      maxAttempts: 5,
+      idempotencyKey: "once",
+      source: "manual",
+    })
+  }
+
+  it("claims one queued job once when two executors race", async () => {
+    const handler = jest.fn(async () => ({ updated: true }))
+    const account = await setup(handler)
+    const job = await queue(account.id)
+    await Promise.all([runIntegrationActionJob(job.id), runIntegrationActionJob(job.id)])
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(await getIntegrationActionJob(job.id)).toMatchObject({
+      status: "succeeded",
+      attempts: 1,
+    })
+  })
+
+  it("keeps cancellation terminal when a handler ignores abort and resolves late", async () => {
+    const entered = deferred<void>()
+    const release = deferred<void>()
+    const account = await setup(async () => {
+      entered.resolve()
+      await release.promise
+      return { updated: true }
+    })
+    const job = await queue(account.id)
+    const execution = runIntegrationActionJob(job.id)
+    await entered.promise
+    await cancelIntegrationActionJob(job.id)
+    release.resolve()
+    expect(await execution).toMatchObject({ status: "cancelled" })
+    expect(await getIntegrationActionJob(job.id)).toMatchObject({ status: "cancelled" })
+    expect(
+      await getDb()
+        .integrationAudit.filter((entry) => entry.outcome === "succeeded")
+        .count()
+    ).toBe(0)
+  })
+
+  it.each(["GET", "POST"])(
+    "passes the signal to fetch and records ambiguity only for writes (%s)",
+    async (method) => {
+      const dispatched = deferred<AbortSignal | null | undefined>()
+      const response = deferred<Response>()
+      let handlerSignal: AbortSignal | undefined
+      const account = await setup(async (_input, context) => {
+        handlerSignal = context.signal
+        return context.authenticatedRequest("https://api.example.test/issues", { method })
+      })
+      const dispose = registerAuthenticationProvider({
+        id: "example-oauth",
+        label: "Example",
+        pluginId: "example-delivery",
+        getSessions: async () => [
+          {
+            id: "opaque",
+            accessToken: "secret",
+            account: { id: "acct", label: "Example" },
+            scopes: [],
+          },
+        ],
+        createSession: async () => {
+          throw new Error("not used")
+        },
+        removeSession: async () => undefined,
+      })
+      setIntegrationAuthenticatedRequestExecutorForTesting()
+      const originalFetch = global.fetch
+      const fetchMock = jest.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        dispatched.resolve(init?.signal)
+        return response.promise
+      })
+      global.fetch = fetchMock
+      try {
+        const job = await queue(account.id)
+        const execution = runIntegrationActionJob(job.id)
+        const signal = await dispatched.promise
+        expect(signal).toBe(handlerSignal)
+        expect(signal?.aborted).toBe(false)
+        const cancelled = await cancelIntegrationActionJob(job.id)
+        expect(signal?.aborted).toBe(true)
+        expect(cancelled.remoteOutcome).toBe(method === "POST" ? "unknown" : undefined)
+        response.resolve({
+          status: 200,
+          headers: new Headers(),
+          text: async () => "ok",
+        } as Response)
+        expect(await execution).toMatchObject({ status: "cancelled" })
+        const audit = await getDb()
+          .integrationAudit.where("kind")
+          .equals("action.issue.update.cancelled")
+          .first()
+        expect(audit?.detail?.remoteOutcome).toBe(method === "POST" ? "unknown" : undefined)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+      } finally {
+        global.fetch = originalFetch
+        dispose()
+      }
+    }
+  )
+
+  it("aborts running work on unregister; disable cancels queued and held work", async () => {
+    const entered = deferred<IntegrationActionHandlerContext>()
+    const release = deferred<void>()
+    const handler = jest.fn(async (_input, context: IntegrationActionHandlerContext) => {
+      entered.resolve(context)
+      await release.promise
+      await expect(
+        context.authenticatedRequest("https://api.example.test/issues", { method: "POST" })
+      ).rejects.toThrow(/cancelled|claim/)
+      return { updated: true }
+    })
+    const account = await setup(handler)
+    const active = await queue(account.id)
+    const queued = await enqueueIntegrationActionJob({ ...active, idempotencyKey: "queued" })
+    const held = await enqueueIntegrationActionJob({
+      ...active,
+      idempotencyKey: "held",
+      status: "awaiting_approval",
+    })
+    const unrelated = await enqueueIntegrationActionJob({
+      ...active,
+      pluginId: "other",
+      idempotencyKey: "other",
+    })
+    const execution = runIntegrationActionJob(active.id)
+    const context = await entered.promise
+    unregisterIntegrationsByPlugin("example-delivery")
+    expect(context.signal.aborted).toBe(true)
+    release.resolve()
+    expect(await execution).toMatchObject({ status: "cancelled" })
+    // Unregister also runs on every re-activation, so the durable queue survives it.
+    expect(await getIntegrationActionJob(queued.id)).toMatchObject({ status: "queued" })
+    expect(await getIntegrationActionJob(held.id)).toMatchObject({ status: "awaiting_approval" })
+    // Disabling the plugin (manager.cancelIntegrationJobsOnDisable) cancels the rest.
+    await cancelIntegrationActionJobsByPlugin("example-delivery")
+    expect(await getIntegrationActionJob(queued.id)).toMatchObject({ status: "cancelled" })
+    expect(await getIntegrationActionJob(held.id)).toMatchObject({ status: "cancelled" })
+    expect(await getIntegrationActionJob(unrelated.id)).toMatchObject({ status: "queued" })
+  })
+
+  it("observes cancellation persisted by another window and aborts its in-flight request", async () => {
+    const dispatched = deferred<AbortSignal>()
+    setIntegrationAuthenticatedRequestExecutorForTesting(
+      async (_pluginId, _accountId, _input, init) => {
+        const signal = init!.signal!
+        dispatched.resolve(signal)
+        return new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("Request aborted")), {
+            once: true,
+          })
+        })
+      }
+    )
+    const account = await setup(async (_input, context) =>
+      context.authenticatedRequest("https://api.example.test/issues")
+    )
+    const job = await queue(account.id)
+    const execution = runIntegrationActionJob(job.id)
+    const signal = await dispatched.promise
+    await cancelIntegrationActionJobRecord(job.id)
+    expect(await execution).toMatchObject({ status: "cancelled" })
+    expect(signal.aborted).toBe(true)
+  })
+
+  it("does not replay an expired non-idempotent job", async () => {
+    const account = await setup()
+    const job = await queue(account.id, "issue.delete")
+    await getDb().integrationActionJobs.update(job.id, {
+      status: "running",
+      claimToken: "crashed",
+      claimOwner: "old-window",
+      claimLeaseExpiresAt: new Date(Date.now() - 1000).toISOString(),
+    })
+    const [recovered] = await drainIntegrationActionJobs()
+    expect(recovered).toMatchObject({ status: "cancelled", remoteOutcome: "unknown", attempts: 0 })
+    expect(
+      await getDb().integrationAudit.where("kind").equals("action.issue.delete.cancelled").first()
+    ).toMatchObject({ detail: { jobId: job.id, remoteOutcome: "unknown" } })
+  })
+
+  it("recovers an action declared idempotent with a new claim token", async () => {
+    const handler = jest.fn(async () => ({ updated: true }))
+    const account = await setup(handler, ["https://api.example.test"], "supported")
+    const job = await queue(account.id)
+    await getDb().integrationActionJobs.update(job.id, {
+      status: "running",
+      claimToken: "crashed",
+      claimOwner: "old-window",
+      claimLeaseExpiresAt: new Date(Date.now() - 1000).toISOString(),
+      remoteWriteStartedAt: new Date().toISOString(),
+      idempotencyKey: undefined,
+    })
+    const [recovered] = await drainIntegrationActionJobs()
+    expect(recovered).toMatchObject({ status: "succeeded", attempts: 1 })
+    expect(recovered.claimToken).not.toBe("crashed")
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
+
+  it("queues secondary-window approval for the owner drain without executing there", async () => {
+    const handler = jest.fn(async () => ({ updated: true }))
+    const account = await setup(handler)
+    const awaiting = await executeIntegrationAction("example-delivery", {
+      integrationId: "example",
+      accountId: account.id,
+      actionId: "issue.update",
+      input: {},
+      idempotencyKey: "owner",
+    })
+    jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(false)
+    expect(await approveIntegrationActionJob(awaiting.id)).toMatchObject({ status: "queued" })
+    expect(await drainIntegrationActionJobs()).toEqual([])
+    expect(handler).not.toHaveBeenCalled()
+    jest.mocked(isIntegrationRuntimeOwner).mockResolvedValue(true)
+    expect(await drainIntegrationActionJobs()).toEqual([
+      expect.objectContaining({ status: "succeeded" }),
+    ])
+    expect(handler).toHaveBeenCalledTimes(1)
+  })
 
   it("executes read actions immediately through the host request boundary", async () => {
     const account = await setup()

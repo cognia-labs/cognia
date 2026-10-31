@@ -1095,6 +1095,11 @@ export function IntegrationsHub() {
                     {job.status === "awaiting_approval" && job.outbound?.held && (
                       <p className="text-muted-foreground">{t("approvals.heldByOutbound")}</p>
                     )}
+                    {job.remoteOutcome === "unknown" && (
+                      <p role="alert" className="text-amber-600 dark:text-amber-400">
+                        {t("approvals.remoteOutcomeUnknown")}
+                      </p>
+                    )}
                   </div>
                   <div className="flex gap-2">
                     {job.status === "awaiting_approval" && (

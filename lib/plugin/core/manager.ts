@@ -4490,6 +4490,21 @@ export class PluginManager {
     }
   }
 
+  /**
+   * A disabled plugin's queued, held and running integration jobs are
+   * cancelled (ES-14); a running executor sees the persisted state and aborts.
+   * Only disable does this: activation re-registers contributions and must not
+   * drop a durable queue, and uninstall deletes the plugin's jobs outright.
+   */
+  private async cancelIntegrationJobsOnDisable(pluginId: string): Promise<void> {
+    try {
+      const { cancelIntegrationActionJobsByPlugin } = await import("@/lib/db/integrations")
+      await cancelIntegrationActionJobsByPlugin(pluginId)
+    } catch (error) {
+      loggers.manager.warn(`[plugin:${pluginId}] integration job cancellation failed:`, error)
+    }
+  }
+
   async disablePlugin(pluginId: string, reason: string = "manual"): Promise<void> {
     try {
       await this.withLifecycleLock(pluginId, () => this.disablePluginInner(pluginId, reason))
@@ -4515,6 +4530,7 @@ export class PluginManager {
       if (blockedBy.length > 0) throw new PluginDependencyInUseError(pluginId, blockedBy)
       const { suspendPluginExternalServices } = await import("@/lib/external-services/lifecycle")
       await suspendPluginExternalServices(pluginId)
+      await this.cancelIntegrationJobsOnDisable(pluginId)
       store.setPluginStatus?.(pluginId, "disabled")
       await this.syncBackendStatus(pluginId, "disabled")
       await this.setActualState(pluginId, "inactive", { dirty: undefined, lastError: undefined })
@@ -4559,6 +4575,7 @@ export class PluginManager {
         await this.unregisterPluginContributions(pluginId)
         const { suspendPluginExternalServices } = await import("@/lib/external-services/lifecycle")
         await suspendPluginExternalServices(pluginId)
+        await this.cancelIntegrationJobsOnDisable(pluginId)
 
         // Drop plugin-provided i18n bundles so the merged messages object no
         // longer surfaces `plugin.<id>.*` keys after disable.

@@ -86,6 +86,11 @@ import { clearPythonLogs, getPythonLogs } from "@/lib/plugin/python/log-buffer"
 const mockTransportCall = jest.fn()
 const mockTransportSubscribe = jest.fn()
 
+jest.mock("@/lib/db/integrations", () => ({
+  ...jest.requireActual("@/lib/db/integrations"),
+  cancelIntegrationActionJobsByPlugin: jest.fn(async () => undefined),
+}))
+
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: jest.fn(),
 }))
@@ -3480,6 +3485,39 @@ describe("PluginManager", () => {
       expect(getPackWarnings("dependent-pack")).toEqual([
         { code: "missing-skill", missingId: "owned-skill" },
       ])
+    })
+
+    it("cancels the plugin's integration jobs on disable", async () => {
+      const { cancelIntegrationActionJobsByPlugin } = jest.requireMock("@/lib/db/integrations")
+      jest.mocked(cancelIntegrationActionJobsByPlugin).mockClear()
+      const store = {
+        plugins: {
+          "job-owner": {
+            manifest: createManifest("job-owner"),
+            status: "enabled",
+            source: "local",
+            path: "/plugins/job-owner",
+            config: {},
+          },
+        } as Record<string, Plugin>,
+        disablePlugin: jest.fn(async (pluginId: string) => {
+          const plugin = store.plugins[pluginId]
+          store.plugins[pluginId] = { ...plugin, status: "disabled" } as Plugin
+        }),
+        unregisterPluginTool: jest.fn(),
+        unregisterPluginComponent: jest.fn(),
+        unregisterPluginMode: jest.fn(),
+        unregisterPluginCommand: jest.fn(),
+        setPluginError: jest.fn(),
+        setPluginStatus: jest.fn(),
+      }
+      mockGetState.mockReturnValue(store)
+      mockInvoke.mockResolvedValue(undefined)
+
+      const manager = new PluginManager({ pluginDirectory: "/plugins" })
+      await manager.disablePlugin("job-owner")
+
+      expect(cancelIntegrationActionJobsByPlugin).toHaveBeenCalledWith("job-owner")
     })
 
     it("should call plugin deactivate and unregister contributions", async () => {

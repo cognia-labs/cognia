@@ -423,6 +423,13 @@ export interface IntegrationActionJob {
   attempts: number
   maxAttempts: number
   nextAttemptAt?: string
+  /** Host-owned execution lease. A fresh token fences every executor write. */
+  claimToken?: string
+  claimOwner?: string
+  claimLeaseExpiresAt?: string
+  /** Persisted before dispatch, since abort cannot undo a remote write. */
+  remoteWriteStartedAt?: string
+  remoteOutcome?: "unknown"
   output?: unknown
   error?: string
   /** Host-stamped requester for cross-plugin Bot actions. */
