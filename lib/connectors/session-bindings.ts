@@ -251,6 +251,7 @@ export async function createPlatformSession(
     platformConversationKey: event.conversationKey,
     createdAt: now,
     updatedAt: now,
+    programmaticCreator: "connector",
   }
   await getDb().sessions.add(session)
   return session

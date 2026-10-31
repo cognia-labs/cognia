@@ -52,6 +52,7 @@ import { registerRunningAdapter, __resetLifecycleForTesting } from "./lifecycle"
 import { getBus, __resetBusForTesting } from "./bus"
 import type { NormalizedInboundEvent } from "@/types/connectors/event"
 import type { MessageSegment } from "@/types/connectors/segment"
+import { buildApprovalSurface } from "./a2ui-bridge/workflow-to-a2ui"
 import type { RouteDecision } from "./mode-router"
 import type { ResolvedBinding } from "./policy-resolve"
 import type { AgentExecutionSendSpec } from "@cognia/agent-config-types/agent-execution"
@@ -1892,6 +1893,41 @@ describe("installRuntime — ai-run (happy path)", () => {
       }),
     ])
   })
+
+  it.each(["valid", "other-surface", "consumed", "expired", "missing", "other-adapter"])(
+    "strips model-relayed workflow values regardless of persisted binding (%s)",
+    async (state) => {
+      const surface = buildApprovalSurface({ bindingId: "runtime-relay", workflowName: "Daily" })
+      const result = { surfaceId: "runtime:relay", surface }
+      jest.mocked(DEFAULT_RUN_AND_CAPTURE).mockImplementationOnce(async () => {
+        if (state !== "missing") {
+          const adapterId = state === "other-adapter" ? "another-adapter" : "adapter_1"
+          await getDb().connectorCallbackBindings.add({
+            id: `${adapterId}:wfapp:runtime-relay`,
+            adapterId,
+            actionId: "wfapp:runtime-relay",
+            kind: "wf_approve",
+            surfaceId: state === "other-surface" ? "another-surface" : result.surfaceId,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + (state === "expired" ? -1 : 60_000),
+            ...(state === "consumed" ? { consumedAt: 0 } : {}),
+          })
+        }
+        return {
+          text: JSON.stringify(result),
+          messageId: "runtime-relay",
+          a2uiSurfaces: {},
+          a2uiSurfaceOrder: [],
+        }
+      })
+      await callHandler(makeEvent({ conversationKey: "telegram:adapter_1:chat_ai" }), "ai-run")
+      const [job] = await getDb().outboundQueue.toArray()
+      const [segment] = job.request.segments
+      if (segment.type !== "a2ui") throw new Error("Missing surface")
+      expect(segment.content.components.approve).not.toHaveProperty("value")
+      expect(segment.content.components.cancel).not.toHaveProperty("value")
+    }
+  )
 
   it("writes an outbound.ai_run_enqueued audit entry with the message id", async () => {
     const event = makeEvent({ conversationKey: "telegram:adapter_1:chat_ai" })

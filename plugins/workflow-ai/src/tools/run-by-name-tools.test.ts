@@ -9,22 +9,57 @@ import { getDb } from "@/lib/db/schema"
 import { publishWorkflow } from "@/lib/workflow/publish/publish-workflow"
 import { createWorkflow, updateWorkflow } from "@/lib/db/workflows"
 import { createWorkflowAuthorAPI } from "@/lib/plugin/api/workflow-author-api"
-import { buildFanoutApprovalSurface, buildRunByNameTools } from "./run-by-name-tools"
+
+// Exercise host copy without the global React next-intl mock.
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  getRuntimeTranslator: jest.fn(async (namespace: string) => {
+    if (namespace !== "workflows.approvals") throw new Error(`Unexpected namespace: ${namespace}`)
+    const { getSettings } = await import("@/lib/db/settings")
+    const locale = (await getSettings())?.language === "zh-CN" ? "zh-CN" : "en"
+    const messages = jest.requireActual(`@/i18n/messages/${locale}/workflows/approvals.json`)
+    return (key: string, values?: Record<string, unknown>) => {
+      const template = key.split(".").reduce((value, part) => value[part], messages)
+      return template.replace(/\{(\w+)\}/g, (_: string, name: string) =>
+        String(values?.[name] ?? "")
+      )
+    }
+  }),
+}))
+import { buildRunByNameTools } from "./run-by-name-tools"
 import { configureWorkflowApi } from "../store-bridge"
 import manifestJson from "../../plugin.json"
 
-type Locale = keyof typeof manifestJson.i18n.locales
+import { saveSettings } from "@/lib/db/settings"
+import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import { resolveCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 
-/** `ctx.i18n.t` over the plugin's own bundle, failing loudly on a missing key. */
-function translator(locale: Locale = "en") {
-  const bundle = manifestJson.i18n.locales[locale] as Record<string, string>
-  return (key: string, params?: Record<string, string | number>) => {
-    const value = bundle[key]
-    if (value === undefined) throw new Error(`missing ${locale} key ${key}`)
-    return value.replace(/\{(\w+)\}/g, (match, name: string) =>
-      params?.[name] !== undefined ? String(params[name]) : match
-    )
+async function queuedCard(surfaceId: string) {
+  const jobs = await getDb().outboundQueue.toArray()
+  expect(jobs).toHaveLength(1)
+  expect(jobs[0]).toMatchObject({
+    adapterId: "wecom:a",
+    conversationKey: "wecom:wecom:a:room",
+    source: "ai-run",
+  })
+  const card = jobs[0].request.segments.find((segment) => segment.type === "a2ui")
+  if (!card || card.type !== "a2ui") throw new Error("Missing host-sent card")
+  expect(card.surfaceId).toBe(surfaceId)
+  for (const component of ["approve", "cancel"]) {
+    const value = (card.content.components[component] as { value: string }).value
+    const binding = await resolveCallbackBinding("wecom:a", value)
+    expect(binding).toMatchObject({
+      surfaceId,
+      componentId: component,
+      conversationKey: jobs[0].conversationKey,
+    })
   }
+  const [relayed] = assistantReplyToSegments({
+    text: JSON.stringify({ surfaceId, surface: card.content }),
+  })
+  if (relayed.type !== "a2ui") throw new Error("Missing relayed card")
+  expect(relayed.content.components.approve).not.toHaveProperty("value")
+  expect(relayed.content.components.cancel).not.toHaveProperty("value")
+  return card
 }
 
 async function seedSession(opts: { sessionId: string; bindToIM?: boolean }): Promise<void> {
@@ -58,7 +93,7 @@ async function seedSession(opts: { sessionId: string; bindToIM?: boolean }): Pro
 }
 
 configureWorkflowApi(createWorkflowAuthorAPI() as never)
-const tools = buildRunByNameTools(translator())
+const tools = buildRunByNameTools()
 const listTool = tools.find((t) => t.name === "wf_list_workflows")!
 const runByNameTool = tools.find((t) => t.name === "wf_run_workflow_by_name")!
 const subscribeTool = tools.find((t) => t.name === "wf_subscribe_workflow_fanout")!
@@ -193,8 +228,10 @@ describe("wf_run_workflow_by_name", () => {
     }
     expect(result.ok).toBe(true)
     expect(result.workflowName).toBe("Published version")
-    expect(JSON.stringify(result.surface)).toContain("PUBLISHED_BEHAVIOR")
-    expect(JSON.stringify(result.surface)).not.toContain("UNPUBLISHED_BEHAVIOR")
+    expect(result).not.toHaveProperty("surface")
+    const [job] = await getDb().outboundQueue.toArray()
+    expect(JSON.stringify(job.request.segments)).toContain("PUBLISHED_BEHAVIOR")
+    expect(JSON.stringify(job.request.segments)).not.toContain("UNPUBLISHED_BEHAVIOR")
     const binding = (await listCallbackBindings()).find((row) => row.kind === "wf_approve")
     expect(binding?.payload).toMatchObject({
       workflowName: "Published version",
@@ -202,7 +239,7 @@ describe("wf_run_workflow_by_name", () => {
     })
   })
 
-  it("on success, returns surface + writes wf_approve / wf_cancel bindings", async () => {
+  it("sends one host card with wf_approve / wf_cancel bindings and returns only an acknowledgement", async () => {
     await seedSession({ sessionId: "s1", bindToIM: true })
     const wf = await createWorkflow({
       name: "Daily Standup",
@@ -222,8 +259,11 @@ describe("wf_run_workflow_by_name", () => {
     expect(result.ok).toBe(true)
     expect(result.workflowId).toBe(wf.id)
     expect(result.surfaceId.startsWith("wfsurf:")).toBe(true)
-    const approve = result.surface.components.approve as { value: string }
-    const cancel = result.surface.components.cancel as { value: string }
+    expect(result).toMatchObject({ sent: true })
+    expect(result).not.toHaveProperty("surface")
+    const card = await queuedCard(result.surfaceId)
+    const approve = card.content.components.approve as { value: string }
+    const cancel = card.content.components.cancel as { value: string }
     expect(approve.value.startsWith("wfapp:")).toBe(true)
     expect(cancel.value.startsWith("wfcan:")).toBe(true)
 
@@ -243,7 +283,7 @@ describe("wf_run_workflow_by_name", () => {
         sessionId: "s1",
       },
     })
-    expect(result.instruction).toContain("Attach the returned `surface`")
+    expect(result.instruction).toContain("Do not re-emit")
     // No running inbound job in this harness → operators-only actor scope
     // (plan 2026-07-24 Phase 2).
     expect(approveBinding?.actorScope).toEqual({ mode: "operators" })
@@ -313,7 +353,7 @@ describe("wf_subscribe_workflow_fanout", () => {
     expect(ambiguous.error?.code).toBe("workflow-ambiguous")
   })
 
-  it("writes wf_fanout_approve + wf_fanout_cancel bindings + returns the surface", async () => {
+  it("sends one host fan-out card with working bindings and returns only an acknowledgement", async () => {
     await seedSession({ sessionId: "s1", bindToIM: true })
     const wf = await createWorkflow({ name: "Deploy Pipeline" })
     const result = (await subscribeTool.execute({ name: "Deploy Pipeline" }, ctx("s1"))) as {
@@ -323,15 +363,25 @@ describe("wf_subscribe_workflow_fanout", () => {
       surfaceId: string
       instruction: string
     }
-    expect(result.ok).toBe(true)
+    expect(result).toMatchObject({ ok: true, sent: true })
     expect(result.workflowId).toBe(wf.id)
     expect(result.surfaceId.startsWith("wffanout:")).toBe(true)
+    expect(result).not.toHaveProperty("surface")
+    expect(result.instruction).toContain("Do not re-emit")
+    await queuedCard(result.surfaceId)
 
     const bindings = await listCallbackBindings()
     const approve = bindings.find((b) => b.kind === "wf_fanout_approve")
     const cancel = bindings.find((b) => b.kind === "wf_fanout_cancel")
-    expect(approve).toBeDefined()
-    expect(cancel).toBeDefined()
+    expect(approve).toMatchObject({
+      actorScope: { mode: "operators" },
+      allowedActions: ["approve", "cancel"],
+    })
+    expect(cancel).toMatchObject({
+      actorScope: { mode: "operators" },
+      allowedActions: ["approve", "cancel"],
+      payload: approve?.payload,
+    })
     expect(approve?.payload).toMatchObject({
       workflowId: wf.id,
       workflowName: "Deploy Pipeline",
@@ -344,19 +394,22 @@ describe("wf_subscribe_workflow_fanout", () => {
   })
 })
 
-describe("fan-out approval card copy", () => {
-  const input = { workflowName: "Deploy", approveActionId: "a", cancelActionId: "c" }
-
-  it("renders the card in the user's language from the plugin bundle", () => {
-    const en = buildFanoutApprovalSurface(input, translator("en"))
-    expect(en.title).toBe("Subscribe to “Deploy”")
-    expect(JSON.stringify(en.components)).toContain('"text":"Approve"')
-    expect(en.widget?.fallbackText).toContain("Reply 1 to approve / 2 to cancel")
-    expect(en.widget?.fallbackText).not.toMatch(/[\u4e00-\u9fff]/)
-
-    const zh = buildFanoutApprovalSurface(input, translator("zh-CN"))
-    expect(zh.title).toBe("订阅「Deploy」")
-    expect(zh.widget?.fallbackText).toContain("回复 1 同意 / 2 取消")
+describe("host fan-out approval card copy", () => {
+  it.each([
+    ["en", "Subscribe to “Deploy”", "Reply 1 to approve / 2 to cancel"],
+    ["zh-CN", "订阅「Deploy」", "回复 1 同意 / 2 取消"],
+  ] as const)("uses the host %s bundle", async (language, title, hint) => {
+    await seedSession({ sessionId: "s1", bindToIM: true })
+    await saveSettings({ language })
+    await createWorkflow({ name: "Deploy" })
+    const result = (await subscribeTool.execute({ name: "Deploy" }, ctx("s1"))) as {
+      ok: boolean
+      surfaceId: string
+    }
+    expect(result).toMatchObject({ ok: true, sent: true })
+    const card = await queuedCard(result.surfaceId)
+    expect(card.content.title).toBe(title)
+    expect(card.plainTextMirror).toContain(hint)
   })
 
   it("ships every en key in zh-CN", () => {

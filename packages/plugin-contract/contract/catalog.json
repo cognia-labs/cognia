@@ -13828,6 +13828,18 @@
           "resourceEffect": {
             "kind": "none"
           }
+        },
+        {
+          "id": "workflow.prepareFanoutApproval",
+          "name": "prepareFanoutApproval",
+          "requiredPermissions": ["connectors:send"],
+          "consentTier": "confirm",
+          "risk": "high",
+          "idempotent": false,
+          "cancellable": false,
+          "resourceEffect": {
+            "kind": "none"
+          }
         }
       ]
     },

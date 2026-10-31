@@ -228,6 +228,7 @@ export interface VerifiedFreshAgentTurnDeps {
     partial: Pick<ChatSession, "title" | "systemPrompt" | "permissionMode"> & {
       workingDir?: string
       projectId?: string
+      programmaticCreator?: string
     }
   ) => Promise<{ id: string }>
   getSession: (sessionId: string) => Promise<ChatSession | undefined>
@@ -321,6 +322,7 @@ export async function runVerifiedFreshAgentTurn(
 
   const created = await d.createSession({
     title: verificationSessionTitle(input.mainSessionTitle),
+    programmaticCreator: "verification-agent",
     systemPrompt: system.text,
     permissionMode: "plan",
     ...(cwd ? { workingDir: cwd } : {}),

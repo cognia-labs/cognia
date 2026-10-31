@@ -903,7 +903,11 @@ describe("startControlledTrial", () => {
 
     await expect(startControlledTrial("skill-1")).resolves.toBe("session-1")
     expect(createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "direct", disabledSkillIds: ["other-a", "other-b"] })
+      expect.objectContaining({
+        kind: "direct",
+        disabledSkillIds: ["other-a", "other-b"],
+        programmaticCreator: "skill-trial",
+      })
     )
     expect(store().trialSessionId).toBe("session-1")
   })

@@ -212,6 +212,59 @@ describe("HostStateService", () => {
     __resetDbForTesting()
   })
 
+  it("marks new rows hydrated from a Host index without relabeling existing local sessions", async () => {
+    const indexChannel = sessionIndexChannel(scope.runtimeTargetId)
+    const state = {
+      kind: "session-index" as const,
+      channel: indexChannel,
+      revision: 1,
+      sessions: [
+        {
+          sessionId: "host-created",
+          title: "Remote",
+          transcriptRevision: 0,
+          conversation: "present",
+          turn: "idle",
+          revision: 1,
+        },
+        {
+          sessionId: "session-1",
+          title: "Local",
+          transcriptRevision: 0,
+          conversation: "present",
+          turn: "idle",
+          revision: 1,
+        },
+      ],
+    }
+    const transport: Transport = {
+      subscribe: () => () => undefined,
+      call: async (command) =>
+        command === "host_state_status"
+          ? (writableStatus as never)
+          : ({
+              channel: indexChannel,
+              hostId,
+              hostGeneration: 4,
+              cutHostSeq: 8,
+              revision: 1,
+              digest: hostStateDigest(state as never),
+              state,
+            } as never),
+    }
+    const sync = await installHostStateSync({
+      transport,
+      ...scope,
+      channels: async () => [indexChannel],
+    })
+    try {
+      expect((await getDb().sessions.get("host-created"))?.programmaticCreator).toBe("host-state")
+      expect((await getDb().sessions.get("session-1"))?.programmaticCreator).toBeUndefined()
+    } finally {
+      sync.stop()
+    }
+  })
+
   it("P6c status and submit admit only opted-in chat and cancellation", async () => {
     const { initializePersonChat } = await import("@/lib/headless/person-chat")
     initializePersonChat("person-brain", { COGNIA_PERSON_CHAT: "tool-less" })

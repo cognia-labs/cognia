@@ -595,7 +595,10 @@ export function ExposeTestGlobals(): null {
           const { persistMessages } = await import("@/lib/db/messages")
           const { buildPerfConversation, createNoiseImageDataUrl } =
             await import("./chat-perf-fixtures")
-          const session = await createSession({ title: draft.title ?? "Anchors spec" })
+          const session = await createSession({
+            title: draft.title ?? "Anchors spec",
+            programmaticCreator: "dev-fixture",
+          })
           const longEdge = draft.media?.imageLongEdge ?? 1568
           const { messages, imageBytes } = buildPerfConversation({
             sessionId: session.id,
@@ -673,7 +676,10 @@ export function ExposeTestGlobals(): null {
           if (!useAccountStore.getState().unlockedAccountId) {
             throw new Error("Staged conversation: the account did not unlock within 20s")
           }
-          const session = await createSession({ title: script.title })
+          const session = await createSession({
+            title: script.title,
+            programmaticCreator: "dev-fixture",
+          })
           const conversation = createStagedConversation(session.id, script, {
             persist: (sessionId, upserts) =>
               commitMessageDelta(sessionId, { upserts: upserts as never }),

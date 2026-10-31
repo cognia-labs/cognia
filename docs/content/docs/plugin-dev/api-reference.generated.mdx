@@ -94,7 +94,7 @@ Contract `1.7.0`; protocol `2.0.0`. The public author surface is `ctx.*`. Runtim
 | `ctx.vector` | 13 | `vector:write`, `vector:read` | frontend, hybrid | internal |
 | `ctx.webview` | 1 | None | frontend, hybrid | internal |
 | `ctx.window` | 4 | None | frontend, hybrid | internal |
-| `ctx.workflow` | 26 | `canvas:write`, `canvas:run`, `workflow:read`, `connectors:send`, `session:read` | frontend, hybrid | internal |
+| `ctx.workflow` | 27 | `canvas:write`, `canvas:run`, `workflow:read`, `connectors:send`, `session:read` | frontend, hybrid | internal |
 | `ctx.workspace` | 11 | `filesystem:read`, `network:fetch`, `git:read`, `filesystem:write`, `git:write`, `integrations:execute` | frontend, hybrid, python | internal |
 | `ctx.nodeRuntime` | 5 | `filesystem:read`, `filesystem:write`, `shell:execute`, `network:fetch` | frontend, hybrid, python | internal |
 | `ctx.libraries` | 1 | `ipc:call` | frontend, hybrid | internal |
@@ -1424,6 +1424,7 @@ Canonical error-code taxonomy raised by adapter runtimes (CLI tools, OpenAPI int
 | `workflow.runWorkflow` | `canvas:run` | high | No | frontend, hybrid |
 | `workflow.stageProposal` | `canvas:write` | medium | No | frontend, hybrid |
 | `workflow.prepareWorkflowApproval` | `connectors:send` | high | No | frontend, hybrid |
+| `workflow.prepareFanoutApproval` | `connectors:send` | high | No | frontend, hybrid |
 
 ## `ctx.workspace`
 

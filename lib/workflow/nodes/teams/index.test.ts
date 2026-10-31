@@ -1,5 +1,6 @@
 import "."
 import { getExecutor } from "../registry"
+import { createSession } from "@/lib/db/sessions"
 
 describe("team-nodes registration", () => {
   it.each([
@@ -31,6 +32,7 @@ jest.mock("@/lib/db/characters", () => ({
 jest.mock("@/lib/db/sessions", () => ({
   ...jest.requireActual("@/lib/db/sessions"),
   listSessions: jest.fn(async () => []),
+  createSession: jest.fn(async () => ({ id: "workflow-created" })),
 }))
 jest.mock("@/lib/db/messages", () => ({
   ...jest.requireActual("@/lib/db/messages"),
@@ -39,6 +41,23 @@ jest.mock("@/lib/db/messages", () => ({
 }))
 
 describe("action.character.send", () => {
+  it("marks a newly created character conversation before persisting its message", async () => {
+    mockGetCharacter.mockResolvedValue({ id: "c1", name: "Ada" })
+    const result = await getExecutor("action.character.send" as never, 1)!.execute({
+      params: { characterId: "c1", content: "status please" },
+      workflowId: "wf1",
+      runId: "run1",
+      stepId: "new",
+    } as never)
+    expect(createSession).toHaveBeenCalledWith({
+      title: "Ada (workflow)",
+      characterId: "c1",
+      programmaticCreator: "workflow",
+    })
+    expect(result.output).toMatchObject({ sessionId: "workflow-created" })
+    expect(mockPersistMessages).toHaveBeenCalledWith("workflow-created", expect.any(Array))
+  })
+
   it("marks the message it posts as a workflow's, never the person's (ADR-0239)", async () => {
     mockGetCharacter.mockResolvedValue({ id: "c1", name: "Ada" })
     const executor = getExecutor("action.character.send" as never, 1)!

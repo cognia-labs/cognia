@@ -1,40 +1,8 @@
-/**
- * Workflow-AI plugin — by-name run tools for IM-triggered execution.
- *
- *   • wf_list_workflows         enumerate workflows the user can target by name
- *   • wf_run_workflow_by_name   look up by name + emit an A2UI Approve surface
- *
- * These live next to `run-tools.ts` (which targets the open editor) because
- * they share the same plugin registration path; the *executors* take a
- * different code path:
- *
- *   - `wf_run_workflow` reads the editor store (`resolveStore`) and calls
- *     the orchestrator directly with `requiresApproval: true` — the
- *     desktop SDK pops a permission modal.
- *
- *   - `wf_run_workflow_by_name` runs from an IM chat session (no editor
- *     open). The desktop permission modal is invisible to the IM user.
- *     Instead the tool emits an A2UI Approve / Cancel surface back to the
- *     model; the bus dispatcher (`lib/connectors/bus.ts:dispatchConnectorCallback`)
- *     short-circuits the `wf_approve` callback kind and calls
- *     `startWorkflowFromIM` without a model re-prompt. `requiresApproval`
- *     is therefore `false` on this tool — the in-chat A2UI buttons are
- *     the approval gate.
- *
- * The model is instructed (via tool description) to attach the returned
- * `surface` to its reply. The plugin-tools sidecar bridge forwards
- * structured tool results to the assistant turn; the assistant then
- * decides whether to render the surface — which it should for any
- * successful resolution.
- */
+/** Workflow library tools ask the host to send approval cards directly. */
 
 import { definePluginTool, type PluginToolRegistration } from "@cognia/plugin-sdk"
-import type { A2UISegmentContent, WorkflowSummary } from "@cognia/plugin-sdk/api/workflow-run"
+import type { WorkflowSummary } from "@cognia/plugin-sdk/api/workflow-run"
 import { formatToolError, getWorkflowApi } from "../store-bridge"
-
-function newBindingId(): string {
-  return "wfb_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10)
-}
 
 function summariesToBullets(candidates: WorkflowSummary[]): string {
   return candidates
@@ -42,10 +10,7 @@ function summariesToBullets(candidates: WorkflowSummary[]): string {
     .join("\n")
 }
 
-/** The plugin's `ctx.i18n.t` — the fan-out card is user-facing IM copy. */
-export type WorkflowAiTranslate = (key: string, params?: Record<string, string | number>) => string
-
-export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistration[] {
+export function buildRunByNameTools(): PluginToolRegistration[] {
   return [
     definePluginTool({
       name: "wf_list_workflows",
@@ -82,7 +47,7 @@ export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistrat
       definition: {
         name: "wf_run_workflow_by_name",
         description:
-          "Resolve a workflow by display name and prepare it for execution from an IM chat. Returns an A2UI Approve/Cancel surface descriptor the agent MUST attach to its reply — the user's tap on Approve starts the actual run. When the name is ambiguous or unknown, returns a structured error with candidate names so the agent can re-prompt. Does NOT start the workflow itself; the in-chat A2UI gate is the approval step.",
+          "Resolve a workflow by display name and prepare it for execution from an IM chat. The host sends the Approve/Cancel card directly; the agent MUST NOT re-emit it — the user's tap on Approve starts the actual run. When the name is ambiguous or unknown, returns a structured error with candidate names so the agent can re-prompt. Does NOT start the workflow itself; the in-chat A2UI gate is the approval step.",
         category: "workflow",
         requiresApproval: false,
         parametersSchema: {
@@ -145,26 +110,21 @@ export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistrat
           // Type narrowing: `lookup.ok === true` past this point.
           if (!lookup.ok) throw new Error("unreachable")
           const { workflowId } = lookup
-          const {
-            workflowName: resolvedName,
-            surfaceId,
-            surface,
-          } = await getWorkflowApi().prepareWorkflowApproval({
-            workflowId,
-            runParams: (args.runParams as Record<string, unknown>) ?? {},
-            triggeredFrom,
-          })
+          const { workflowName: resolvedName, surfaceId } =
+            await getWorkflowApi().prepareWorkflowApproval({
+              workflowId,
+              runParams: (args.runParams as Record<string, unknown>) ?? {},
+              triggeredFrom,
+            })
 
           return {
             ok: true,
             workflowId,
             workflowName: resolvedName,
             surfaceId,
-            // The agent attaches `surface` to its reply via the standard
-            // A2UI surface emission path (the sidecar bridge wraps it).
-            surface,
+            sent: true,
             instruction:
-              "Attach the returned `surface` to your reply so the user sees the Approve/Cancel card. Do not start the workflow yourself — the user must tap Approve.",
+              "The host sent the Approve/Cancel card. Do not re-emit it. The user must tap Approve to start the workflow.",
           }
         } catch (err) {
           return formatToolError(err)
@@ -176,7 +136,7 @@ export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistrat
       definition: {
         name: "wf_subscribe_workflow_fanout",
         description:
-          "Subscribe the CURRENT IM session to receive workflow run progress for a given workflow (by name). Every future run of that workflow will mirror its step events + terminal status into this conversation. Returns an A2UI Approve/Cancel surface the agent MUST attach to its reply — the actual subscription row is written only after the user taps Approve. Permissioning: the target conversation is hard-bound to this session — the tool cannot subscribe other channels (operator must use the Settings UI for cross-channel mirroring).",
+          "Subscribe the CURRENT IM session to receive workflow run progress for a given workflow (by name). Every future run of that workflow will mirror its step events + terminal status into this conversation. The host sends the Approve/Cancel card directly; the agent MUST NOT re-emit it — the actual subscription row is written only after the user taps Approve. Permissioning: the target conversation is hard-bound to this session — the tool cannot subscribe other channels (operator must use the Settings UI for cross-channel mirroring).",
         category: "workflow",
         requiresApproval: false,
         parametersSchema: {
@@ -231,63 +191,20 @@ export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistrat
           if (!lookup.ok) throw new Error("unreachable")
           const { workflowId, name: resolvedName } = lookup
 
-          const bindingId = newBindingId()
-          const approveActionId = "wffanoutapp:" + bindingId
-          const cancelActionId = "wffanoutcan:" + bindingId
-          const surfaceId = "wffanout:" + bindingId
-
-          // Permission gate: target conversation is the CURRENT session's
-          // platformBinding. The Claude tool cannot subscribe cross-channel
-          // — cross-channel mirroring goes through the Settings UI.
-          const payload = {
+          const { surfaceId } = await getWorkflowApi().prepareFanoutApproval({
             workflowId,
             workflowName: resolvedName,
-            target: {
-              adapterId: triggeredFrom.adapterId!,
-              conversationKey: triggeredFrom.conversationKey!,
-            },
-            createdBy: "claude-tool",
-          }
-
-          const actorScope = getWorkflowApi().approvalActorScope(triggeredFrom)
-          await Promise.all([
-            getWorkflowApi().recordCallbackBinding({
-              adapterId: triggeredFrom.adapterId!,
-              actionId: approveActionId,
-              kind: "wf_fanout_approve",
-              surfaceId,
-              componentId: "approve",
-              conversationKey: triggeredFrom.conversationKey,
-              payload,
-              actorScope,
-              allowedActions: ["approve", "cancel"],
-            }),
-            getWorkflowApi().recordCallbackBinding({
-              adapterId: triggeredFrom.adapterId!,
-              actionId: cancelActionId,
-              kind: "wf_fanout_cancel",
-              surfaceId,
-              componentId: "cancel",
-              conversationKey: triggeredFrom.conversationKey,
-              payload,
-              actorScope,
-              allowedActions: ["approve", "cancel"],
-            }),
-          ])
-
-          const surface = buildFanoutApprovalSurface(
-            { workflowName: resolvedName, approveActionId, cancelActionId },
-            t
-          )
+            triggeredFrom,
+          })
 
           return {
             ok: true,
             workflowId,
             workflowName: resolvedName,
             surfaceId,
-            surface,
+            sent: true,
             instruction:
-              "Attach the returned `surface` to your reply so the user sees the Approve/Cancel card. Do not write the subscription yourself — the user must tap Approve.",
+              "The host sent the Approve/Cancel card. Do not re-emit it. The user must tap Approve to subscribe.",
           }
         } catch (err) {
           return formatToolError(err)
@@ -295,61 +212,6 @@ export function buildRunByNameTools(t: WorkflowAiTranslate): PluginToolRegistrat
       },
     }),
   ]
-}
-
-/**
- * Build the fan-out Approve/Cancel card. Mirrors `buildApprovalSurface`
- * shape so the existing per-adapter mappers (Lark interactive_message,
- * WeCom template_card, wechat-personal numeric mirror) render it
- * identically — just with different copy.
- */
-export function buildFanoutApprovalSurface(
-  input: {
-    workflowName: string
-    approveActionId: string
-    cancelActionId: string
-  },
-  t: WorkflowAiTranslate
-): A2UISegmentContent {
-  const title = t("fanout.title", { name: input.workflowName })
-  const summary = t("fanout.summary")
-  const approveLabel = t("fanout.approve")
-  const cancelLabel = t("fanout.cancel")
-  const components: Record<string, unknown> = {
-    root: {
-      component: "Card",
-      title,
-      children: ["summary", "actions"],
-    },
-    summary: { component: "Text", text: summary },
-    actions: { component: "Row", children: ["approve", "cancel"] },
-    approve: {
-      component: "Button",
-      text: approveLabel,
-      action: "approve",
-      value: input.approveActionId,
-    },
-    cancel: {
-      component: "Button",
-      text: cancelLabel,
-      action: "cancel",
-      value: input.cancelActionId,
-    },
-  }
-  const mirrorLines = [
-    `# ${title}`,
-    summary,
-    `[${approveLabel}] [${cancelLabel}]`,
-    t("fanout.replyHint"),
-  ]
-  return {
-    components,
-    dataModel: {},
-    rootId: "root",
-    surfaceType: "inline",
-    title,
-    widget: { fallbackText: mirrorLines.join("\n") },
-  }
 }
 
 function clampInt(raw: unknown, fallback: number, min: number, max: number): number {

@@ -1,4 +1,24 @@
 import { spawnSync } from "node:child_process"
+import { resolveLarkAuth } from "./auth-bridge"
+import { getAdapterInstance } from "@/lib/db/adapter-instances"
+import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
+import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
+
+jest.mock("@/lib/db/adapter-instances", () => ({
+  getAdapterInstance: jest.fn(),
+  listAdapterInstancesByType: jest.fn(),
+}))
+jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsKeyringGet: jest.fn() }))
+jest.mock("@/lib/connectors/adapters/lark/auth", () => ({ getTenantToken: jest.fn() }))
+jest.mock("@/lib/execution/acting-authority", () => ({
+  observeTenantServiceData: jest.fn(),
+  snapshotActingAuthority: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/db/schema", () => ({
+  getDb: () => ({
+    sessions: { get: async (id: string) => (id === "desktop" ? { id } : undefined) },
+  }),
+}))
 import {
   __resetLarkCliCapabilityCacheForTests,
   CERTIFIED_LARK_CLI_VERSION,
@@ -9,12 +29,50 @@ import { __setLarkCliProcessRunnerForTests } from "./process"
 const binary = process.env.LARK_CLI_BIN || "lark-cli"
 const detected = spawnSync(binary, ["--version"], { encoding: "utf8" })
 const integrationIt = detected.status === 0 ? it : it.skip
+let integrationEnv: NodeJS.ProcessEnv
 
-beforeAll(() => {
+async function selectedAuth(identity: "user" | "bot") {
+  jest.mocked(getAdapterInstance).mockResolvedValue({
+    id: "school",
+    type: "lark",
+    enabled: true,
+    displayName: "School",
+    settings: {},
+  } as never)
+  jest
+    .mocked(connectorsKeyringGet)
+    .mockImplementation(async (_id, key) =>
+      key === "appId"
+        ? "cli_cognia_school_probe"
+        : key === "appSecret"
+          ? "nonsecret-app-secret"
+          : "nonsecret-user-token"
+    )
+  jest.mocked(getTenantToken).mockResolvedValue("nonsecret-tenant-token")
+  const auth = await resolveLarkAuth({
+    adapterId: "school",
+    identity,
+    context: { sessionId: "desktop" },
+  })
+  if (!auth.ok) throw new Error(auth.message)
+  return auth
+}
+
+beforeAll(async () => {
+  integrationEnv = {
+    ...process.env,
+    ...(await selectedAuth("user")).env,
+    LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
+    LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
+    HTTP_PROXY: "http://127.0.0.1:9",
+    HTTPS_PROXY: "http://127.0.0.1:9",
+    ALL_PROXY: "http://127.0.0.1:9",
+    NO_PROXY: "",
+  }
   __setLarkCliProcessRunnerForTests(async (command, args, options) => {
     const result = spawnSync(command, [...args], {
       encoding: "utf8",
-      env: { ...process.env, ...options.env },
+      env: { ...integrationEnv, ...options.env },
       maxBuffer: options.maxOutputBytes,
       timeout: options.timeoutMs,
     })
@@ -33,6 +91,41 @@ beforeAll(() => {
 })
 
 afterAll(() => __setLarkCliProcessRunnerForTests(null))
+
+integrationIt.each(["user", "bot"] as const)(
+  "uses the selected %s account despite ambient CLI selectors",
+  async (identity) => {
+    const auth = await selectedAuth(identity)
+    const result = spawnSync(binary, ["whoami", "--as", identity], {
+      encoding: "utf8",
+      env: {
+        ...integrationEnv,
+        LARKSUITE_CLI_APP_ID: "cli_wrong_account",
+        LARKSUITE_CLI_USER_ACCESS_TOKEN: "wrong-user-token",
+        LARKSUITE_CLI_TENANT_ACCESS_TOKEN: "wrong-tenant-token",
+        LARKSUITE_CLI_PROFILE: "wrong-account",
+        LARKSUITE_CLI_CONFIG_DIR: "/nonexistent/cognia-lark-probe",
+        LARKSUITE_CLI_AUTH_PROXY: "http://127.0.0.1:9",
+        LARKSUITE_CLI_PROXY_KEY: "wrong-proxy-key",
+        LARKSUITE_CLI_TENANT_ACCESS_TOKEN_SOURCE: "credential-store",
+        LARKSUITE_CLI_DEFAULT_AS: identity === "user" ? "bot" : "user",
+        LARKSUITE_CLI_STRICT_MODE: identity === "user" ? "bot" : "user",
+        LARKSUITE_CLI_BRAND: "lark",
+        ...auth.env,
+      },
+      timeout: 15_000,
+    })
+    expect({ status: result.status, stderr: result.stderr }).toMatchObject({ status: 0 })
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      appId: "cli_cognia_school_probe",
+      identity,
+      brand: "feishu",
+    })
+    expect(result.stdout).not.toContain("nonsecret-app-secret")
+    expect(result.stdout).not.toContain("nonsecret-user-token")
+    expect(result.stdout).not.toContain("nonsecret-tenant-token")
+  }
+)
 
 integrationIt("probes every certified command and required flag", async () => {
   __resetLarkCliCapabilityCacheForTests()
@@ -92,7 +185,10 @@ integrationIt("accepts the certified native Sheets dry-run contracts", () => {
     ["sheets", "+workbook-export", "--spreadsheet-token", "sht_test", "--file-extension", "xlsx"],
   ]
   for (const args of cases) {
-    const result = spawnSync(binary, [...args, "--dry-run"], { encoding: "utf8" })
+    const result = spawnSync(binary, [...args, "--dry-run"], {
+      encoding: "utf8",
+      env: integrationEnv,
+    })
     expect({ args: args.join(" "), status: result.status, stderr: result.stderr }).toMatchObject({
       status: 0,
     })
@@ -399,7 +495,10 @@ integrationIt("accepts dry-run argument contracts for all 43 registered Lark ski
   expect(cases).toHaveLength(43)
 
   for (const [skillId, args] of cases) {
-    const result = spawnSync(binary, [...args, "--dry-run"], { encoding: "utf8" })
+    const result = spawnSync(binary, [...args, "--dry-run"], {
+      encoding: "utf8",
+      env: integrationEnv,
+    })
     const scopeBlocked = result.status === 3 && result.stderr.includes('"subtype": "missing_scope"')
     if (result.status !== 0 && !scopeBlocked) {
       throw new Error(

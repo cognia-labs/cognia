@@ -9,10 +9,15 @@
 
 import { z } from "zod"
 
-import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillMutation } from "../types"
 import type { BuiltInSkillImAccess } from "../types"
-import { argsToFlags, buildConfirmSurface, larkAdapterIdFromCtx, runLarkCli } from "./_helpers"
+import {
+  argsToFlags,
+  buildConfirmSurface,
+  larkAdapterIdFromCtx,
+  registerLarkSkill,
+  runLarkCli,
+} from "./_helpers"
 
 const FAMILY = "lark.wiki"
 const PLATFORMS = ["lark"] as const
@@ -80,7 +85,7 @@ function mk<S extends z.ZodTypeAny>(input: {
   return skill
 }
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.wiki.search_nodes",
     mcpToolName: "lark_wiki_search_nodes",
@@ -108,7 +113,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.wiki.read_node",
     mcpToolName: "lark_wiki_read_node",
@@ -127,7 +132,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.wiki.create_node",
     mcpToolName: "lark_wiki_create_node",
@@ -161,7 +166,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.wiki.move_node",
     mcpToolName: "lark_wiki_move_node",

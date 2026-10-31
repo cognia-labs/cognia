@@ -600,6 +600,32 @@ describe("invokePluginTool", () => {
     expect(execute).toHaveBeenCalledTimes(2)
   })
 
+  it("keeps a host invocation identity across retries and creates a new one for the next call", async () => {
+    const execute = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("ECONNRESET"))
+      .mockResolvedValue({ ok: true })
+    __setInvokePluginToolDepsForTesting(
+      makeDeps({
+        plugins: {
+          "plug-a": { status: "enabled", resilience: { retryable: true, maxRetries: 1 } },
+        },
+        tools: [makeTool({ execute })],
+        sandboxRefs: { "sess-1": "sandbox-runtime:current" },
+      })
+    )
+
+    await invokePluginTool("plug-a", "demo_tool", {}, { sessionId: "sess-1" })
+    await invokePluginTool("plug-a", "demo_tool", {}, { sessionId: "sess-1" })
+
+    const identities = execute.mock.calls.map(([, context]) => context.invocationId)
+    expect(identities).toHaveLength(3)
+    expect(identities[0]).toEqual(expect.any(String))
+    expect(identities[0]).not.toHaveLength(0)
+    expect(identities[1]).toBe(identities[0])
+    expect(identities[2]).not.toBe(identities[0])
+  })
+
   it("does not re-run the permission consent gate on a retry", async () => {
     const execute = jest
       .fn()

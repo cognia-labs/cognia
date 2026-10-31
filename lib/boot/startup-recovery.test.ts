@@ -217,6 +217,9 @@ it("renders translations as text and escapes HTML script terminators and Unicode
 it.each([
   "/status",
   "/logto/callback/",
+  "/plugin-auth/callback",
+  "/plugin-auth/callback/",
+  "/plugin-auth/callback.html",
   "/pet-overlay.html",
   "/pet-popup",
   "/island",
@@ -234,6 +237,13 @@ it.each([
 
 it("does not mistake an application route with a lightweight prefix for an overlay", () => {
   window.history.replaceState(null, "", "/status-settings")
+  execute()
+  jest.advanceTimersByTime(STARTUP_RECOVERY_TIMEOUT_MS)
+  expect(screen.getByRole("alert")).toBeInTheDocument()
+})
+
+it("retains startup recovery for plugin callback look-alike routes", () => {
+  window.history.replaceState(null, "", "/plugin-auth/callback-settings")
   execute()
   jest.advanceTimersByTime(STARTUP_RECOVERY_TIMEOUT_MS)
   expect(screen.getByRole("alert")).toBeInTheDocument()

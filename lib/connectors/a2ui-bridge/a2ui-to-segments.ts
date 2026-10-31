@@ -19,10 +19,17 @@ import type {
 import { generatePlainTextMirror } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
 import { parseA2UIInput } from "@/lib/a2ui/parser"
-import { deepMerge, isA2UIDataModel, isSafeDataModelKey } from "@/lib/a2ui/data-model"
+import {
+  deepMerge,
+  getValueByPath,
+  isA2UIDataModel,
+  isSafeDataModelKey,
+} from "@/lib/a2ui/data-model"
 import { getComponentChildReferences, hasComponentReferenceCycle } from "@/lib/a2ui/component-tree"
 import { applyA2UIComputedFields, mergeA2UIComputedFields } from "@/lib/a2ui/computed"
 import type { A2UIComponent, A2UIComputedFields } from "@/types/a2ui/schema"
+import { isA2UIPreviewSurfaceId } from "@/lib/a2ui/parser"
+import { isA2UIComputedFields } from "@/lib/a2ui/computed"
 
 /**
  * Minimal shape of a captured assistant reply we need to read. Kept
@@ -55,16 +62,30 @@ export interface AssistantReplyForExtraction {
  * `[{type: "markdown", md: text}]` (or `[{type: "text", text}]` for an
  * empty/whitespace-only reply — we still want to fire the outbound so
  * the user knows the assistant responded).
+ * Model and tool output never carries host callback authority.
  */
 export function assistantReplyToSegments(reply: AssistantReplyForExtraction): MessageSegment[] {
-  const segments: MessageSegment[] = []
+  return extractReplySegments(reply).map((segment) =>
+    segment.type === "a2ui"
+      ? buildA2UISegment(segment.surfaceId, withoutBindingHints(segment.content), reply.telemetry)
+      : segment
+  )
+}
+
+type ExtractedReplySegment =
+  | Exclude<MessageSegment, A2UIMessageSegment>
+  | Pick<A2UIMessageSegment, "type" | "surfaceId" | "content">
+
+/** Extract presentation without consulting any callback authority. */
+function extractReplySegments(reply: AssistantReplyForExtraction): ExtractedReplySegment[] {
+  const segments: ExtractedReplySegment[] = []
   const surfaces = reply.a2uiSurfaces ?? {}
   const order = reply.a2uiSurfaceOrder ?? Object.keys(surfaces)
 
   for (const surfaceId of order) {
     const content = surfaces[surfaceId]
     if (!content) continue
-    segments.push(buildA2UISegment(surfaceId, content, reply.telemetry))
+    segments.push({ type: "a2ui", surfaceId, content })
   }
 
   const emittedIds = new Set(segments.map((segment) => (segment as A2UIMessageSegment).surfaceId))
@@ -75,7 +96,7 @@ export function assistantReplyToSegments(reply: AssistantReplyForExtraction): Me
     for (const [surfaceId, content] of parsed) {
       // Tool snapshots are authoritative when the assistant also prints the surface.
       if (!emittedIds.has(surfaceId)) {
-        segments.push(buildA2UISegment(surfaceId, content, reply.telemetry))
+        segments.push({ type: "a2ui", surfaceId, content })
         emittedIds.add(surfaceId)
       }
     }
@@ -107,12 +128,51 @@ export function assistantReplyToSegments(reply: AssistantReplyForExtraction): Me
   return segments
 }
 
+function resolvedComponentValue(
+  raw: Record<string, unknown>,
+  content: A2UISegmentContent
+): unknown {
+  const value = raw.value
+  return value && typeof value === "object" && "path" in value && typeof value.path === "string"
+    ? getValueByPath(content.dataModel, value.path)
+    : value
+}
+
+/** Model and tool output cannot reuse host-issued callback bindings. */
+function withoutBindingHints(content: A2UISegmentContent): A2UISegmentContent {
+  return {
+    ...content,
+    components: Object.fromEntries(
+      Object.entries(content.components).map(([id, component]) => {
+        if (!component || typeof component !== "object") return [id, component]
+        const raw = component as Record<string, unknown>
+        const resolvedValue = resolvedComponentValue(raw, content)
+        // Pending tool results include the host's action id. Models must not
+        // relabel that existing confirmation as an innocent-looking button.
+        const reusesHostBinding =
+          typeof resolvedValue === "string" && /^[a-zA-Z_][a-zA-Z0-9_.-]*:/.test(resolvedValue)
+        return [
+          id,
+          Object.fromEntries(
+            Object.entries(raw).filter(
+              ([key]) => !key.startsWith("binding") && !(key === "value" && reusesHostBinding)
+            )
+          ),
+        ]
+      })
+    ),
+  }
+}
+
 /** Parse only complete JSON payloads; malformed output remains visible as markdown. */
 function parseReplySurfaces(text: string): Map<string, A2UISegmentContent> | null {
   const trimmed = text.trim()
   if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null
   try {
-    const parsed = parseA2UIInput(JSON.parse(trimmed))
+    const input: unknown = JSON.parse(trimmed)
+    const surface = readA2UISurface(input)
+    if (surface) return new Map([[surface.surfaceId, surface.content]])
+    const parsed = parseA2UIInput(input)
     if (!parsed.messages.length || parsed.errors.length) return null
     const surfaces = new Map<string, A2UISegmentContent>()
     for (const message of parsed.messages) {
@@ -218,4 +278,54 @@ export function buildA2UISegment(
     content,
     plainTextMirror,
   }
+}
+
+function record(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+/** Read the host/plugin content shape, either directly or in its tool-result envelope. */
+export function readA2UISurface(
+  value: unknown
+): { surfaceId: string; content: A2UISegmentContent } | null {
+  if (!record(value)) return null
+  const { surfaceId, ...body } = value
+  const content = record(value.surface) ? value.surface : body
+  if (
+    typeof surfaceId !== "string" ||
+    !surfaceId.trim() ||
+    !isSafeDataModelKey(surfaceId) ||
+    isA2UIPreviewSurfaceId(surfaceId) ||
+    typeof content.rootId !== "string" ||
+    !isA2UIDataModel(content.components) ||
+    !isA2UIDataModel(content.dataModel) ||
+    (content.surfaceType !== undefined &&
+      !["inline", "dialog", "panel", "fullscreen"].includes(content.surfaceType as string)) ||
+    [content.title, content.catalogId].some(
+      (field) => field !== undefined && typeof field !== "string"
+    ) ||
+    (content.widget !== undefined && !isA2UIDataModel(content.widget)) ||
+    (content.computed !== undefined && !isA2UIComputedFields(content.computed))
+  )
+    return null
+  const components = content.components
+  if (!Object.hasOwn(components, content.rootId)) return null
+  for (const [id, component] of Object.entries(components)) {
+    if (
+      !record(component) ||
+      typeof component.component !== "string" ||
+      !component.component ||
+      (component.id !== undefined && component.id !== id)
+    )
+      return null
+  }
+  const typed = components as Record<string, A2UIComponent>
+  if (
+    hasComponentReferenceCycle(typed, content.rootId) ||
+    Object.values(typed).some((component) =>
+      getComponentChildReferences(component).some((ref) => !Object.hasOwn(typed, ref.id))
+    )
+  )
+    return null
+  return { surfaceId, content: content as unknown as A2UISegmentContent }
 }

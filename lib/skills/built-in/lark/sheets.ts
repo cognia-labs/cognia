@@ -12,10 +12,15 @@
 
 import { z } from "zod"
 
-import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillMutation } from "../types"
 import type { BuiltInSkillImAccess } from "../types"
-import { argsToFlags, buildConfirmSurface, larkAdapterIdFromCtx, runLarkCli } from "./_helpers"
+import {
+  argsToFlags,
+  buildConfirmSurface,
+  larkAdapterIdFromCtx,
+  registerLarkSkill,
+  runLarkCli,
+} from "./_helpers"
 
 const FAMILY = "lark.sheets"
 const PLATFORMS = ["lark"] as const
@@ -87,7 +92,7 @@ function mk<S extends z.ZodTypeAny>(input: {
   return skill
 }
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.list_sheets",
     mcpToolName: "lark_sheets_list_sheets",
@@ -106,7 +111,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.read_range",
     mcpToolName: "lark_sheets_read_range",
@@ -126,7 +131,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.find",
     mcpToolName: "lark_sheets_find",
@@ -159,7 +164,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.create",
     mcpToolName: "lark_sheets_create",
@@ -215,7 +220,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.write_range",
     mcpToolName: "lark_sheets_write_range",
@@ -250,7 +255,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.append_rows",
     mcpToolName: "lark_sheets_append_rows",
@@ -292,7 +297,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.sheets.export",
     mcpToolName: "lark_sheets_export",

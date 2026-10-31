@@ -98,6 +98,7 @@ describe("executeGoalTask", () => {
     // The session names the task and run that opened it.
     expect(createSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        programmaticCreator: "scheduler-goal",
         origin: {
           kind: "scheduled-task",
           taskId: "task_1",

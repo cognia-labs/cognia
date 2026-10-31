@@ -360,6 +360,8 @@ export async function recordCallbackBinding(input: {
    * HITL bypass; `"modal_open"` may carry the platform view payload.
    */
   payload?: Record<string, unknown>
+  /** Only the built-in skill dispatcher issues this; not a component hint. */
+  skillConfirmationNonce?: string
   // Callback authorization guard fields (plan 2026-07-24 Phase 2). Optional
   // pass-throughs — absent fields leave the guard on its per-kind legacy
   // fallbacks (see lib/connectors/callback-authorization.ts).
@@ -379,6 +381,7 @@ export async function recordCallbackBinding(input: {
     createdAt,
     expiresAt: input.expiresAt ?? createdAt + DEFAULT_CALLBACK_BINDING_TTL_MS,
     payload: input.payload,
+    skillConfirmationNonce: input.skillConfirmationNonce,
     accountId: input.accountId,
     actorScope: input.actorScope,
     allowedActions: input.allowedActions,

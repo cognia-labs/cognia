@@ -357,6 +357,7 @@ async function runAgenticEditorTurn(
   const d = deps.agentic
   const session = await d.createSession({
     title: `Harness editor ${input.label}`,
+    programmaticCreator: "harness-editor",
     memoryLearn: false,
     visibility: "embedded",
     workingDir: input.root,

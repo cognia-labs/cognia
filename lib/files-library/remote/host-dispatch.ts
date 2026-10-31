@@ -433,7 +433,8 @@ async function attach(
     }
   }
   if (!sessionId) {
-    sessionId = (await createSession({ title: request.title })).id
+    sessionId = (await createSession({ title: request.title, programmaticCreator: "remote-files" }))
+      .id
     created = true
   }
   if (entry.kind === "artifact" || entry.kind === "canvas") {

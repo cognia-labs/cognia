@@ -180,6 +180,7 @@ async function ensureLocalProjection(
 
   const row: ChatSession = {
     id: `shared:${sharedChatCacheKey(remote.orgId, remote.id, endpoint)}`,
+    programmaticCreator: "shared-chat",
     projectId: remote.workspaceId,
     title: remote.title,
     kind: "direct",

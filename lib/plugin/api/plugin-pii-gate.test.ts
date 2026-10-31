@@ -39,6 +39,46 @@ describe("assertNoLeakingPii", () => {
 })
 
 describe("sanitizePluginNetworkEgress", () => {
+  it("preserves OAuth token exchange credentials while still redacting other fields", () => {
+    const result = sanitizePluginNetworkEgress("feishu-auth", {
+      url: "https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+      body: {
+        grant_type: "refresh_token",
+        client_secret: "sk-proj-abcdefghijklmnopqrstuv",
+        refresh_token: "alice@example.com",
+        note: "alice@example.com",
+      },
+    })
+    expect(result.body).toEqual({
+      grant_type: "refresh_token",
+      client_secret: "sk-proj-abcdefghijklmnopqrstuv",
+      refresh_token: "alice@example.com",
+      note: "<EMAIL_001>",
+    })
+  })
+
+  it("does not exempt OAuth-named fields in ordinary requests", () => {
+    const result = sanitizePluginNetworkEgress("feishu-auth", {
+      url: "https://api.example.com/messages",
+      body: { grant_type: "refresh_token", refresh_token: "alice@example.com" },
+    })
+    expect(result.body).toEqual({ grant_type: "refresh_token", refresh_token: "<EMAIL_001>" })
+  })
+
+  it.each([
+    ["ordinary-plugin", "https://open.feishu.cn/open-apis/authen/v2/oauth/token"],
+    ["ordinary-plugin", "https://example.com/token"],
+    ["feishu-auth", "https://example.com/token"],
+    ["feishu-auth", "https://open.feishu.cn/open-apis/authen/v2/oauth/token?other=1"],
+    ["feishu-auth", "https://open.feishu.cn/open-apis/authen/v2/oauth/token#other"],
+    ["feishu-auth", "https://person@open.feishu.cn/open-apis/authen/v2/oauth/token"],
+  ])("does not classify credentials outside Feishu transport ownership: %s %s", (pluginId, url) => {
+    const result = sanitizePluginNetworkEgress(pluginId, {
+      url,
+      body: { grant_type: "authorization_code", code: "alice@example.com" },
+    })
+    expect(result.body).toEqual({ grant_type: "authorization_code", code: "<EMAIL_001>" })
+  })
   it("redacts PII deeply while preserving explicit credential fields", () => {
     const result = sanitizePluginNetworkEgress("sre", {
       url: "https://api.example.com/logs?owner=alice@example.com",

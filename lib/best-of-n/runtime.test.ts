@@ -275,7 +275,11 @@ it("runs an external candidate in its own workspace root and keeps its cost unkn
     })
   )
   expect(sessions.add).toHaveBeenCalledWith(
-    expect.objectContaining({ providerOverride: "cognia:external-agent:codex-1", model: "gpt-5" })
+    expect.objectContaining({
+      providerOverride: "cognia:external-agent:codex-1",
+      model: "gpt-5",
+      programmaticCreator: "best-of-n",
+    })
   )
   expect(dispatch.complete).toHaveBeenCalledWith(expect.objectContaining({ text: "external done" }))
   expect(dispatch.complete).toHaveBeenCalledWith(

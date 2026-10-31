@@ -135,6 +135,7 @@ export function createBestOfNExecution(): BestOfNExecution {
       const session: ChatSession = {
         id: candidate.childSessionId,
         title: `Best-of-N ${candidate.index + 1}`,
+        programmaticCreator: "best-of-n",
         kind: "direct",
         characterId: character.id,
         // An external candidate's runtime is part of its identity, so the

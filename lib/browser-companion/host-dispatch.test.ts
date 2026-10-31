@@ -1,4 +1,7 @@
 /** @jest-environment jsdom */
+jest.mock("@/lib/chat/start-session", () => ({
+  startNewSession: jest.fn(async () => ({ id: "browser-created" })),
+}))
 import type { StoredMessage } from "@cognia/agent-config-types"
 import { getDb } from "@/lib/db/schema"
 import { saveSettings } from "@/lib/db/settings"
@@ -356,5 +359,24 @@ describe("agent mode on each kind of Host", () => {
       allowed: false,
       connected: false,
     })
+  })
+})
+
+it("keeps the browser creator marker through the production session adapter", async () => {
+  const { startNewSession } = await import("@/lib/chat/start-session")
+  const deps = createBrowserCompanionDeps({}, async () => {
+    throw new Error("Session creation must not resolve HostState")
+  })
+  await expect(
+    deps.createSession({
+      title: "Browser request",
+      projectId: "ws",
+      programmaticCreator: "browser-companion",
+    })
+  ).resolves.toEqual({ id: "browser-created" })
+  expect(startNewSession).toHaveBeenLastCalledWith({
+    title: "Browser request",
+    projectId: "ws",
+    programmaticCreator: "browser-companion",
   })
 })

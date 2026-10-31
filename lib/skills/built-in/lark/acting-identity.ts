@@ -1,6 +1,6 @@
 /** Shared ownership check for CLI skills and the adapter's user-token HTTP path. */
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
-import { resolveBuiltInSkillTurnActors } from "../context"
+import { resolveBuiltInSkillSessionBinding, resolveBuiltInSkillTurnActors } from "../context"
 import type { BuiltInSkillContext } from "../types"
 import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
 import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
@@ -27,15 +27,17 @@ export async function assertLarkActingIdentity(
   adapterId: string,
   ctx?: BuiltInSkillContext
 ): Promise<VerifiedLarkUserAuthorization | undefined> {
-  // Adapter/control-plane callers without a session are outside the IM skill lane.
-  if (!ctx) return
+  if (!ctx) throw new LarkActingIdentityError()
   const authoritySnapshot = snapshotActingAuthority(ctx.sessionId)
   try {
-    const { getDb } = await import("@/lib/db/schema")
-    const session = await getDb().sessions.get(ctx.sessionId)
-    if (!session) throw new LarkActingIdentityError()
-    const binding = session.platformBinding
-    if (!binding) return
+    const { binding, personalLane, rootSessionId } = await resolveBuiltInSkillSessionBinding(
+      ctx.sessionId
+    )
+    if (!binding) {
+      // Never trust ctx.personalLane or treat a missing IM binding as consent.
+      if (personalLane !== "local-session") throw new LarkActingIdentityError()
+      return
+    }
     // open_ids are app-scoped: another platform or adapter cannot prove ownership.
     if (binding.platform !== "lark" || binding.adapterId !== adapterId || !binding.conversationKey)
       throw new LarkActingIdentityError()
@@ -62,7 +64,7 @@ export async function assertLarkActingIdentity(
     // Otherwise refresh the job view so a newly steered sender cannot use stale context.
     const senders = ctx.hitlBypass
       ? (ctx.actingSenders ?? "unknown")
-      : (await resolveBuiltInSkillTurnActors(binding.conversationKey, adapterId, ctx.sessionId))
+      : (await resolveBuiltInSkillTurnActors(binding.conversationKey, adapterId, rootSessionId))
           .actingSenders
     if (
       senders === "unknown" ||

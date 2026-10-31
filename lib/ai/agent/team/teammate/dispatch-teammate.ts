@@ -279,6 +279,7 @@ async function runToolEnabled(
   // `kind: "team"` makes resolveSendOptions union the team-context subagents.
   const session = await sessionsDb.createSession({
     title: `Ultracode — ${teammate.name}`,
+    programmaticCreator: "team-teammate",
     kind: "team",
     characterId: character.id,
     ...(cwd ? { workingDir: cwd } : {}),

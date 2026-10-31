@@ -131,6 +131,7 @@ async function projectEventToInbox(
     (await createSession({
       title,
       integrationBinding: binding,
+      programmaticCreator: "integration-event",
     }))
   if (existing && existing.title !== title) await updateSession(existing.id, { title })
   const messages = await listMessages(session.id)

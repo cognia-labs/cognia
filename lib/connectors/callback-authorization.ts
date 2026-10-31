@@ -324,11 +324,15 @@ export async function authorizeConnectorCallback(
     return deny("binding_consumed")
   }
 
-  // 4. Conversation match (only when both sides carry a key).
+  // 4. A bound callback needs conversation evidence on both sides. Unbound
+  // run controls have their own durable conversation check below.
   const conversationMatched =
-    binding?.conversationKey && event.conversationKey
-      ? conversationMatches(binding.conversationKey, event.conversationKey)
-      : true
+    !binding ||
+    Boolean(
+      binding.conversationKey &&
+      event.conversationKey &&
+      conversationMatches(binding.conversationKey, event.conversationKey)
+    )
   if (!conversationMatched) return deny("conversation_mismatch")
 
   // 5. Principal registry (Lark + larkPrincipalRegistry on; otherwise the

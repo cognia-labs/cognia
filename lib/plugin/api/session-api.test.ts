@@ -3,9 +3,21 @@
  */
 
 import { createSessionAPI } from "./session-api"
+import { createSession } from "@/lib/db/sessions"
 import { getPermissionGuard, resetPermissionGuard } from "@/lib/plugin/security"
 import { resetPluginConsentBroker } from "@/lib/plugin/security/consent-broker"
 import type { Session, UIMessage } from "@/types"
+
+jest.mock("@/lib/db/sessions", () => ({
+  createSession: jest.fn(async (options) => ({
+    id: "persisted-session",
+    title: options.title ?? "New chat",
+    kind: "direct",
+    createdAt: 1,
+    updatedAt: 1,
+    ...options,
+  })),
+}))
 
 // Mock session store
 const mockSessions: Session[] = []
@@ -71,6 +83,10 @@ jest.mock("@/stores/chat/session-store", () => ({
         delete mockMessages[id]
       }),
     })),
+    setState: jest.fn((update) => {
+      const next = update({ sessions: mockSessions })
+      mockSessions.splice(0, mockSessions.length, ...next.sessions)
+    }),
     subscribe: jest.fn((callback) => {
       mockSubscribers.push(callback)
       return () => {
@@ -266,8 +282,18 @@ describe("Session API", () => {
         mode: "agent",
       })
 
-      expect(session.id).toBeDefined()
+      expect(session.id).toBe("persisted-session")
       expect(session.title).toBe("New Session")
+      expect(session.mode).toBe("agent")
+      expect(createSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          programmaticCreator: `plugin:${testPluginId}`,
+        })
+      )
+      expect(mockSessions[0]).toMatchObject({
+        id: session.id,
+        programmaticCreator: `plugin:${testPluginId}`,
+      })
       expect(mockSessions.length).toBe(1)
     })
 
@@ -278,6 +304,14 @@ describe("Session API", () => {
 
       expect(session.mode).toBe("chat")
     })
+  })
+
+  it("does not publish a session when durable creation fails", async () => {
+    jest.mocked(createSession).mockRejectedValueOnce(new Error("persistence failed"))
+    await expect(createSessionAPI(testPluginId).createSession()).rejects.toThrow(
+      "persistence failed"
+    )
+    expect(mockSessions).toEqual([])
   })
 
   describe("updateSession", () => {

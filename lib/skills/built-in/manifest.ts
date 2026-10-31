@@ -97,11 +97,11 @@ export function buildBuiltInSkillManifest(
   const families = input.families ? new Set(input.families) : null
   for (const skill of registry.list()) {
     if (families && !families.has(skill.family)) continue
+    if (!passPlatformFilter(skill, input.imBinding?.platform, isImSession)) continue
     if (skill.id in LARK_CLI_CAPABILITY_MANIFEST) {
       if (!getCachedLarkCliCapabilityDiagnostics()) void probeLarkCliCapabilities()
       if (!isLarkSkillCapabilityAvailable(skill.id)) continue
     }
-    if (!passPlatformFilter(skill, input.imBinding?.platform, isImSession)) continue
     if (!passImAccessFilter(skill, isImSession, input.imOverrideRow)) continue
     if (!passAllowedListFilter(skill, input.imOverrideRow?.allowedBuiltInSkillIds)) continue
     if (!adapterAllowsBuiltInSkill(input.imAdapterRow, skill)) continue

@@ -365,6 +365,7 @@ export async function invokePluginTool(
   }
 
   const context: PluginToolContext = {
+    invocationId: operationId,
     sessionId: options.sessionId,
     messageId: options.messageId,
     sandboxRuntimeRef,

@@ -9,12 +9,24 @@ it("registers the certified Lark Sheets skill family", () => {
   expect(skills.every((skill) => skill.platforms.includes("lark"))).toBe(true)
 })
 
-it("passes the turn context to Lark authentication", async () => {
+it("routes the chosen connection while preserving the turn context", async () => {
   const skill = getSharedBuiltInSkillRegistry().get("lark.sheets.read_range")!
   const context = { sessionId: "im-session", actingSenders: "unknown" as const }
   await skill.execute(
-    skill.inputSchema.parse({ spreadsheetToken: "sheet", sheetId: "tab", range: "A1:B2" }),
+    skill.inputSchema.parse({
+      spreadsheetToken: "sheet",
+      sheetId: "tab",
+      range: "A1:B2",
+      adapterId: "cai_school",
+    }),
     context
   )
-  expect(runLarkCli).toHaveBeenCalledWith(expect.objectContaining({ context }))
+  expect(runLarkCli).toHaveBeenCalledWith(
+    expect.objectContaining({
+      adapterId: "cai_school",
+      context: { ...context, larkAdapterId: "cai_school" },
+    })
+  )
+  expect((runLarkCli as jest.Mock).mock.calls[0][0].args).not.toContain("--adapter-id")
+  expect(context).not.toHaveProperty("larkAdapterId")
 })

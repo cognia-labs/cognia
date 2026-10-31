@@ -22,6 +22,14 @@ import {
 } from "./plugin-tool-ipc"
 import { __setPetToolDepsForTesting } from "./pet-builtin-tools"
 import { __setMediaToolDepsForTesting } from "./media-builtin-tools"
+import { assistantReplyToSegments } from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import {
+  recordCallbackBinding,
+  resolveCallbackBinding,
+} from "@/lib/connectors/adapters/_shared/a2ui-mapper"
+import { buildApprovalSurface } from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
+import { createWorkflowAuthorAPI } from "@/lib/plugin/api/workflow-author-api"
+import { holdWorkflowDispatchForApproval } from "@/lib/connectors/hitl/workflow-run-approval"
 import type { VectorToolRunDeps } from "./vector-builtin-tools"
 import type { ProjectHistoryToolDeps } from "./project-history-tool"
 // Static imports so these share the SAME module instance the top-level
@@ -43,6 +51,32 @@ jest.mock("@/lib/plugin/api/project-api", () => {
   const actual = jest.requireActual("@/lib/plugin/api/project-api")
   return { ...actual, createInvocationProjectAPI: jest.fn(actual.createInvocationProjectAPI) }
 })
+jest.mock("@/lib/connectors/adapters/_shared/a2ui-mapper", () => ({
+  ...jest.requireActual("@/lib/connectors/adapters/_shared/a2ui-mapper"),
+  resolveCallbackBinding: jest.fn(),
+  recordCallbackBinding: jest.fn(async () => undefined),
+}))
+jest.mock("@/lib/workflow/library/lookup", () => ({
+  findWorkflowByName: jest.fn(async () => ({ ok: true, workflowId: "wf", name: "Daily report" })),
+}))
+jest.mock("@/lib/workflow/runtime/trigger-origin", () => ({
+  resolveWorkflowTriggerOrigin: jest.fn(async () => ({
+    source: "im",
+    adapterId: "relay-adapter",
+    conversationKey: "lark:relay-adapter:chat",
+  })),
+  approvalActorScope: jest.fn(() => ({ mode: "operators" })),
+}))
+jest.mock("@/lib/connectors/hitl/workflow-run-approval", () => ({
+  holdWorkflowDispatchForApproval: jest.fn(),
+}))
+jest.mock("@/lib/db/adapter-instances", () => ({
+  getAdapterInstance: jest.fn(async () => ({ id: "relay-adapter" })),
+}))
+jest.mock("@/lib/db/conversation-overrides", () => ({ readForResolution: jest.fn() }))
+jest.mock("@/lib/connectors/im-permission-ceiling", () => ({
+  buildImPermissionCeiling: jest.fn(async () => ({})),
+}))
 
 // Default `resolveWebToolDeps` reads the settings store and lazily imports the
 // utility-model client, the fetch-extractor and the search cache. Mock all four
@@ -172,7 +206,20 @@ function makeRequest(overrides?: Partial<PluginToolExecRequest>): PluginToolExec
 }
 
 describe("handlePluginToolExec", () => {
-  afterEach(() => {
+  beforeEach(() => {
+    jest.mocked(resolveCallbackBinding).mockReset()
+    jest.mocked(recordCallbackBinding).mockReset().mockResolvedValue(undefined)
+    jest.mocked(holdWorkflowDispatchForApproval).mockResolvedValue({
+      held: true,
+      workflowName: "Daily report",
+      surfaceId: "workflow:relay-run",
+      surface: buildApprovalSurface({ bindingId: "relay-run", workflowName: "Daily report" }),
+    })
+  })
+  afterEach(async () => {
+    const { __setInvokePluginToolDepsForTesting } =
+      await import("@/lib/plugin/core/invoke-plugin-tool")
+    __setInvokePluginToolDepsForTesting(null)
     __setPluginToolResolverForTesting(null)
     __setWebToolDepsForTesting(null)
     __setSpawnTaskToolDepsForTesting(null)
@@ -180,6 +227,38 @@ describe("handlePluginToolExec", () => {
     __setTemplateToolDepsForTesting(null)
     __setProjectCoordinatorToolDepsForTesting(null)
     __setFilespaceToolDepsForTesting(null)
+  })
+
+  it.each(["arbitrary-plugin", "sandbox_bash", "wf_run_workflow_by_name"])(
+    "strips relayed approval values after %s output",
+    async (name) => {
+      const surface = buildApprovalSurface({ bindingId: "real", workflowName: "Daily" })
+      const result = { surfaceId: "workflow:real", surface }
+      __setPluginToolResolverForTesting({
+        getTool: () => ({
+          pluginId: name,
+          execute: async () =>
+            name === "sandbox_bash" ? { stdout: JSON.stringify(result) } : result,
+        }),
+      })
+      const response = await handlePluginToolExec(makeRequest({ name }))
+      expect(response.error).toBeUndefined()
+      const [segment] = assistantReplyToSegments({ text: JSON.stringify(result) })
+      if (segment.type !== "a2ui") throw new Error("Missing surface")
+      expect(segment.content.components.approve).not.toHaveProperty("value")
+      expect(segment.content.components.cancel).not.toHaveProperty("value")
+      expect(resolveCallbackBinding).not.toHaveBeenCalled()
+    }
+  )
+
+  it("rejects plugin output that fails the PII gate", async () => {
+    __setPluginToolResolverForTesting({
+      getTool: () => ({
+        pluginId: "plugin",
+        execute: async () => ({ text: "Contact alice@example.com" }),
+      }),
+    })
+    expect((await handlePluginToolExec(makeRequest())).error).toMatch(/PII redaction gate/)
   })
 
   it("binds the project API to the trusted invocation session and disposes on success or error", async () => {
@@ -612,6 +691,39 @@ describe("handlePluginToolExec — unified invokePluginTool path", () => {
     }
   }
 
+  it("keeps production plugin output presentation-only", async () => {
+    const { __setInvokePluginToolDepsForTesting } =
+      await import("@/lib/plugin/core/invoke-plugin-tool")
+    const surface = buildApprovalSurface({ bindingId: "production", workflowName: "Daily" })
+    const result = { surfaceId: "production:surface", surface }
+    const { deps } = makeSeamDeps({
+      executeImpl: jest.fn(async () => {
+        const api = createWorkflowAuthorAPI()
+        for (const [prefix, kind] of [
+          ["wfapp:", "wf_approve"],
+          ["wfcan:", "wf_cancel"],
+        ] as const) {
+          await api.recordCallbackBinding({
+            adapterId: "relay-adapter",
+            surfaceId: result.surfaceId,
+            actionId: `${prefix}production`,
+            kind,
+            payload: {},
+            actorScope: { mode: "operators" },
+          })
+        }
+        return result
+      }),
+    })
+    __setInvokePluginToolDepsForTesting(deps as never)
+    expect(
+      (await handlePluginToolExec(makeRequest({ args: { sessionId: "forged" } }))).result
+    ).toEqual(result)
+    const [segment] = assistantReplyToSegments({ text: JSON.stringify(result) })
+    if (segment.type !== "a2ui") throw new Error("Missing surface")
+    expect(segment.content.components.approve).not.toHaveProperty("value")
+  })
+
   it("routes through invokePluginTool with sessionId + plugin config", async () => {
     const { __setInvokePluginToolDepsForTesting } =
       await import("@/lib/plugin/core/invoke-plugin-tool")
@@ -767,6 +879,32 @@ describe("handlePluginToolExec — built-in skill fallback", () => {
     __setPluginToolResolverForTesting(null)
     const { __resetSharedBuiltInSkillRegistry } = await import("@/lib/skills/built-in/registry")
     __resetSharedBuiltInSkillRegistry()
+  })
+
+  it("never registers surfaces returned by built-in skills", async () => {
+    __setPluginToolResolverForTesting({ getTool: () => undefined })
+    const { registerBuiltInSkill } = await import("@/lib/skills/built-in/registry")
+    const { z } = await import("zod")
+    const surface = buildApprovalSurface({ bindingId: "skill-result", workflowName: "Daily" })
+    const result = { surfaceId: "skill:surface", surface }
+    registerBuiltInSkill({
+      id: "fallback.surface",
+      family: "fallback",
+      label: { en: "Surface", "zh-CN": "Surface" },
+      description: { en: "Surface", "zh-CN": "Surface" },
+      platforms: "any",
+      mutation: "read",
+      imAccess: "always",
+      mcpToolName: "fallback_surface",
+      inputSchema: z.object({}),
+      execute: async () => result,
+    })
+    expect(
+      (await handlePluginToolExec(makeRequest({ name: "fallback_surface", args: {} }))).result
+    ).toMatchObject({
+      status: "ok",
+      data: result,
+    })
   })
 
   it("routes an mcpToolName to the built-in skill dispatcher when plugin registry has no match", async () => {

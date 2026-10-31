@@ -50,7 +50,7 @@ export function createStartupRecoveryScript(messages: StartupRecoveryMessages): 
   if (window.__COGNIA_STARTUP_RECOVERY__) return;
   // Match the lightweight route shell, including static-export .html URLs.
   var path = window.location.pathname;
-  var routes = ['/status', '/logto/callback', '/pet-overlay', '/pet-popup', '/island', '/selection-toolbar', '/tray-panel', '/recorder-controller', '/prototype'];
+  var routes = ['/status', '/logto/callback', '/plugin-auth/callback', '/pet-overlay', '/pet-popup', '/island', '/selection-toolbar', '/tray-panel', '/recorder-controller', '/prototype'];
   if (config.e2e) routes.push('/e2e/plugin-ui-surfaces');
   for (var i = 0; i < routes.length; i++) {
     var route = routes[i];

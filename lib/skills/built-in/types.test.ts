@@ -11,3 +11,12 @@ it("represents unknown senders separately from a set of verified contributors", 
     { remoteUserId: "open-id", principalId: "principal-id", unionId: "union-id" },
   ])
 })
+
+it("keeps an explicit Lark routing request separate from the IM binding", () => {
+  const context: BuiltInSkillContext = {
+    sessionId: "desktop",
+    larkAdapterId: "cai_school",
+  }
+  expect(context.larkAdapterId).toBe("cai_school")
+  expect(context.imBinding).toBeUndefined()
+})

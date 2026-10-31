@@ -618,6 +618,39 @@ describe("createSession — external-agent default model", () => {
 })
 
 describe("forkSessionFromParent", () => {
+  it("persists creator provenance and preserves it across SDK forks", async () => {
+    const parent = await createSession({
+      title: "Renamed plugin session",
+      sdkSessionId: "plugin-sdk-session",
+      programmaticCreator: "plugin:example",
+      agentTurnOwner: { kind: "plugin", id: "example", key: "worker" },
+    })
+    const persisted = await getDb().sessions.get(parent.id)
+    expect(persisted?.programmaticCreator).toBe("plugin:example")
+    const fork = await forkSessionFromParent(parent.id)
+    expect(fork).toMatchObject({
+      programmaticCreator: "plugin:example",
+      agentTurnOwner: parent.agentTurnOwner,
+    })
+  })
+
+  it.each([
+    { title: "Plugin Agent Session" },
+    {
+      title: "Legacy IM",
+      platformBinding: {
+        platform: "lark",
+        adapterId: "ad",
+        conversationKey: "lark:ad:chat",
+        conversationRef: { platform: "lark", adapterId: "ad" },
+      },
+    },
+  ])("keeps a legacy nonlocal SDK fork marked: %j", async (seed) => {
+    const parent = await createSession({ ...seed, sdkSessionId: "legacy-sdk" })
+    const fork = await forkSessionFromParent(parent.id)
+    expect(fork.programmaticCreator).toBe("nonlocal-fork")
+  })
+
   it("inherits the parent's message display override", async () => {
     const parent = await createSession({
       title: "Parent",

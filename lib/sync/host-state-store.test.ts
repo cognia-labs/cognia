@@ -658,6 +658,7 @@ describe("HostState durable store", () => {
         now: 23,
       })
       await expect(getDb().sessions.get("session-new")).resolves.toMatchObject({
+        programmaticCreator: "host-state",
         agentRuntimeId: "claude-agent-acp",
       })
     })

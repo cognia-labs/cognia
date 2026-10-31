@@ -281,6 +281,13 @@ jest.mock("@/lib/task-workspace/execution-port-lease", () => ({
   ensureExecutionPortLease: jest.fn(),
 }))
 
+jest.mock("@/lib/skills/built-in/lark/capabilities", () => ({
+  ...jest.requireActual<typeof import("@/lib/skills/built-in/lark/capabilities")>(
+    "@/lib/skills/built-in/lark/capabilities"
+  ),
+  probeLarkCliCapabilities: jest.fn(),
+}))
+
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
   isNativeMobile: jest.fn(() => false),
@@ -303,6 +310,13 @@ import {
   setRemoteHostKeyedProviders,
 } from "@/lib/host-secrets/remote-host-keys"
 import { ensureExecutionPortLease } from "@/lib/task-workspace/execution-port-lease"
+import {
+  CERTIFIED_LARK_CLI_VERSION,
+  getCachedLarkCliCapabilityDiagnostics,
+  probeLarkCliCapabilities,
+  __setLarkCliCapabilityDiagnosticsForTests,
+  type LarkCliCapabilityDiagnostics,
+} from "@/lib/skills/built-in/lark/capabilities"
 import { isNativeMobile } from "@/lib/platform/detect"
 import { createManagedWorkspaceContext } from "@/lib/task-workspace/managed-workspace"
 import { buildAgentModeSessionUpdate } from "@/lib/agent/mode-session-update"
@@ -421,6 +435,21 @@ const mBuildModeUpdate = buildAgentModeSessionUpdate as jest.Mock
 const mResolveAccountId = resolveAccountId as jest.Mock
 const mResolveAccountEnv = resolveAccountEnv as jest.Mock
 const mResolveProxyEnv = resolveProxyEnv as jest.Mock
+const mProbeLarkCliCapabilities = jest.mocked(probeLarkCliCapabilities)
+
+function larkCliDiagnostics(
+  fields: Partial<LarkCliCapabilityDiagnostics> = {}
+): LarkCliCapabilityDiagnostics {
+  return {
+    certifiedVersion: CERTIFIED_LARK_CLI_VERSION,
+    detectedVersion: CERTIFIED_LARK_CLI_VERSION,
+    ready: true,
+    missingCommands: [],
+    missingFlags: {},
+    affectedSkillIds: [],
+    ...fields,
+  }
+}
 
 function makeChar(p: Partial<Character> = {}): Character {
   return {
@@ -466,6 +495,13 @@ const toolNames = (opts: Awaited<ReturnType<typeof resolveSendOptions>>): string
 
 beforeEach(() => {
   jest.clearAllMocks()
+  __setLarkCliCapabilityDiagnosticsForTests(undefined)
+  mProbeLarkCliCapabilities.mockReset().mockImplementation(async () => {
+    const diagnostics =
+      getCachedLarkCliCapabilityDiagnostics() ?? larkCliDiagnostics({ ready: false })
+    __setLarkCliCapabilityDiagnosticsForTests(diagnostics)
+    return diagnostics
+  })
   jest.mocked(ensureExecutionPortLease).mockReset().mockResolvedValue(null)
   // Sane defaults so the function doesn't error when a test forgets to set
   // an expectation.
@@ -4307,6 +4343,130 @@ describe("resolveSendOptions — surface-aware built-in skills", () => {
   })
 })
 
+describe("resolveSendOptions — Lark CLI manifest readiness", () => {
+  beforeEach(() => {
+    _resetImPromptMemosForTest()
+  })
+
+  const larkContext = () => ({
+    session: makeSession({
+      id: "lark-readiness",
+      platformBinding: {
+        adapterId: "lark-readiness-adapter",
+        platform: "lark" as const,
+        conversationKey: "lark:readiness",
+        conversationRef: {
+          platform: "lark",
+          adapterId: "lark-readiness-adapter",
+          channelId: "readiness",
+        },
+      },
+    }),
+  })
+
+  it.each(["bound", "desktop"] as const)(
+    "waits for a cold probe before exposing Lark tools on the first %s turn",
+    async (surface) => {
+      let releaseProbe!: (diagnostics: LarkCliCapabilityDiagnostics) => void
+      const probeResult = new Promise<LarkCliCapabilityDiagnostics>((resolve) => {
+        releaseProbe = resolve
+      })
+      let announceProbe!: () => void
+      const probeStarted = new Promise<void>((resolve) => {
+        announceProbe = resolve
+      })
+      mProbeLarkCliCapabilities.mockImplementation(() => {
+        announceProbe()
+        return probeResult
+      })
+      let settled = false
+      const resolution = resolveSendOptions(
+        surface === "bound" ? larkContext() : { character: makeChar({ enableBuiltInSkills: true }) }
+      ).then((options) => {
+        settled = true
+        return options
+      })
+      const diagnostics = larkCliDiagnostics()
+      try {
+        await Promise.race([probeStarted, resolution])
+        expect(mProbeLarkCliCapabilities).toHaveBeenCalledTimes(1)
+        expect(settled).toBe(false)
+        __setLarkCliCapabilityDiagnosticsForTests(diagnostics)
+        releaseProbe(diagnostics)
+        expect(toolNames(await resolution)).toContain("lark_doc_fetch")
+      } finally {
+        __setLarkCliCapabilityDiagnosticsForTests(diagnostics)
+        releaseProbe(diagnostics)
+        await resolution
+      }
+    }
+  )
+
+  it("rebuilds an empty manifest after refreshed CLI diagnostics become ready", async () => {
+    const context = larkContext()
+    __setLarkCliCapabilityDiagnosticsForTests(
+      larkCliDiagnostics({ ready: false, detectedVersion: "1.0.97" })
+    )
+    expect(toolNames(await resolveSendOptions(context))).not.toContain("lark_doc_fetch")
+
+    __setLarkCliCapabilityDiagnosticsForTests(larkCliDiagnostics())
+    expect(toolNames(await resolveSendOptions(context))).toContain("lark_doc_fetch")
+  })
+
+  it("refreshes the manifest when the affected skill set changes", async () => {
+    const context = larkContext()
+    __setLarkCliCapabilityDiagnosticsForTests(
+      larkCliDiagnostics({ affectedSkillIds: ["lark.doc.fetch"] })
+    )
+    const first = toolNames(await resolveSendOptions(context))
+    expect(first).toContain("lark_doc_search")
+    expect(first).not.toContain("lark_doc_fetch")
+
+    __setLarkCliCapabilityDiagnosticsForTests(larkCliDiagnostics())
+    expect(toolNames(await resolveSendOptions(context))).toContain("lark_doc_fetch")
+  })
+
+  it("does not probe Lark for a session bound to another platform", async () => {
+    const options = await resolveSendOptions({
+      character: makeChar({ enableBuiltInSkills: true }),
+      session: makeSession({
+        id: "telegram-readiness",
+        platformBinding: {
+          adapterId: "telegram-readiness-adapter",
+          platform: "telegram",
+          conversationKey: "telegram:readiness",
+          conversationRef: {
+            platform: "telegram",
+            adapterId: "telegram-readiness-adapter",
+            chatId: 1,
+          },
+        },
+      }),
+    })
+    expect(toolNames(options).some((name) => name.startsWith("lark_"))).toBe(false)
+    expect(mProbeLarkCliCapabilities).not.toHaveBeenCalled()
+  })
+
+  it("does not probe Lark for a desktop turn without built-in skills", async () => {
+    await resolveSendOptions({ character: makeChar(), session: makeSession({ id: "no-lark" }) })
+    expect(mProbeLarkCliCapabilities).not.toHaveBeenCalled()
+  })
+
+  it("does not probe Lark when a scheduler-only turn also preloads conversion tools", async () => {
+    const options = await resolveSendOptions({
+      character: makeChar(),
+      session: makeSession({ id: "scheduler-with-conversion" }),
+      interactiveChat: true,
+      activeProject: makeProject([{ path: "/work/project", isPrimary: true }]),
+      appSettings: { selfInvokeTools: { skill: true } } as AppSettings,
+    })
+    expect(toolNames(options)).toEqual(
+      expect.arrayContaining(["scheduler_list_tasks", "plugin_conversion_inspect"])
+    )
+    expect(mProbeLarkCliCapabilities).not.toHaveBeenCalled()
+  })
+})
+
 describe("resolveSendOptions — scheduler family for interactive chat", () => {
   const SCHEDULE_TOOLS = ["scheduler_list_tasks", "scheduler_create_task", "scheduler_delete_task"]
 
@@ -4336,6 +4496,7 @@ describe("resolveSendOptions — scheduler family for interactive chat", () => {
     // The scheduler family alone, not Lark / IM / issues along with it.
     expect(toolNames(opts).some((name) => name.startsWith("lark_"))).toBe(false)
     expect(toolNames(opts).some((name) => name.startsWith("issue_"))).toBe(false)
+    expect(mProbeLarkCliCapabilities).not.toHaveBeenCalled()
   })
 
   it("does not narrow the turn's allowlist to the nine tools it added", async () => {

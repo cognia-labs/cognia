@@ -443,6 +443,7 @@ async function resolveOrCreateSession(
   const isTeam = !!payload.teamId
   const session = await createSession({
     title: payload.sessionTitle ?? `${task.name} (scheduled)`,
+    programmaticCreator: "scheduler",
     kind: isTeam ? "team" : "direct",
     characterId: options.characterId,
     teamId: payload.teamId,

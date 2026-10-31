@@ -632,6 +632,7 @@ describe("ExposeTestGlobals", () => {
 
     // Read back in transcript order, which is what a reload of the session shows.
     const { listMessages } = await import("@/lib/db/messages")
+    expect((await getDb().sessions.get(sessionId))?.programmaticCreator).toBe("dev-fixture")
     const stored = await listMessages(sessionId)
     expect(stored.map((m) => m.id)).toEqual(["u1", "a1"])
     const storedParts = stored[1].parts as Array<Record<string, unknown>>

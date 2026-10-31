@@ -9,9 +9,19 @@ it("registers the certified Lark Base skill family", () => {
   expect(skills.every((skill) => skill.platforms.includes("lark"))).toBe(true)
 })
 
-it("passes the turn context to Lark authentication", async () => {
+it("routes the chosen connection while preserving the turn context", async () => {
   const skill = getSharedBuiltInSkillRegistry().get("lark.base.list_tables")!
   const context = { sessionId: "im-session", actingSenders: "unknown" as const }
-  await skill.execute(skill.inputSchema.parse({ appToken: "app" }), context)
-  expect(runLarkCli).toHaveBeenCalledWith(expect.objectContaining({ context }))
+  await skill.execute(
+    skill.inputSchema.parse({ appToken: "app", adapterId: "cai_school" }),
+    context
+  )
+  expect(runLarkCli).toHaveBeenCalledWith(
+    expect.objectContaining({
+      adapterId: "cai_school",
+      context: { ...context, larkAdapterId: "cai_school" },
+    })
+  )
+  expect((runLarkCli as jest.Mock).mock.calls[0][0].args).not.toContain("--adapter-id")
+  expect(context).not.toHaveProperty("larkAdapterId")
 })

@@ -120,6 +120,39 @@ function sanitizeValue(
   return value
 }
 
+/** Feishu transport compatibility boundary: only the shared authentication
+ * provider's exact token exchange may preserve protocol credential fields.
+ * It remains subject to permission and network policy checks at the caller.
+ * Ordinary plugins, other endpoints and unrelated fields retain the PII gate. */
+function sanitizeNetworkBody(
+  pluginId: string,
+  url: string,
+  body: unknown,
+  policy: PluginEgressPiiPolicy
+): unknown {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const fields = body as Record<string, unknown>
+    if (
+      pluginId === "feishu-auth" &&
+      url === "https://open.feishu.cn/open-apis/authen/v2/oauth/token" &&
+      ["authorization_code", "refresh_token", "client_credentials"].includes(
+        String(fields.grant_type)
+      )
+    ) {
+      const credentials = new Set(["client_secret", "refresh_token", "code", "code_verifier"])
+      return Object.fromEntries(
+        Object.entries(fields).map(([key, value]) => [
+          key,
+          credentials.has(key) && typeof value === "string"
+            ? value
+            : sanitizeValue(pluginId, "ctx.network.body", value, policy, key),
+        ])
+      )
+    }
+  }
+  return sanitizeValue(pluginId, "ctx.network.body", body, policy)
+}
+
 function sanitizeUrl(pluginId: string, url: string, policy: PluginEgressPiiPolicy): string {
   let parsed: URL
   try {
@@ -175,12 +208,12 @@ export function sanitizePluginNetworkEgress(
     const rawBody = body
     try {
       const parsed = JSON.parse(rawBody) as unknown
-      body = JSON.stringify(sanitizeValue(pluginId, "ctx.network.body", parsed, policy))
+      body = JSON.stringify(sanitizeNetworkBody(pluginId, input.url, parsed, policy))
     } catch {
       body = sanitizeString(pluginId, "ctx.network.body", rawBody, policy)
     }
   } else if (body !== undefined) {
-    body = sanitizeValue(pluginId, "ctx.network.body", body, policy)
+    body = sanitizeNetworkBody(pluginId, input.url, body, policy)
   }
 
   return {

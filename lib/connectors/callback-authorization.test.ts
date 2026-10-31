@@ -100,6 +100,23 @@ afterEach(async () => {
 })
 
 describe("authorizeConnectorCallback", () => {
+  it.each([
+    { bindingKey: "lark:lk-1:oc_1", eventKey: undefined },
+    { bindingKey: undefined, eventKey: "lark:lk-1:oc_1" },
+    { bindingKey: undefined, eventKey: undefined },
+    { bindingKey: "", eventKey: "" },
+  ])("requires conversation evidence on both sides: %j", async ({ bindingKey, eventKey }) => {
+    const decision = await authorize({
+      binding: binding({
+        kind: "callback_query",
+        conversationKey: bindingKey,
+        actorScope: { mode: "conversation" },
+      }),
+      event: callbackEvent({ conversationKey: eventKey }),
+    })
+    expect(decision).toMatchObject({ allowed: false, reason: "conversation_mismatch" })
+  })
+
   it("mode off: allows everything without evaluation", async () => {
     const decision = await authorize({
       adapterRow: adapterRow({ larkStrictCallbackAuthorization: "off" }),

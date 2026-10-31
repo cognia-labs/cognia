@@ -98,6 +98,7 @@ export async function executeGoalTask(
   } else {
     const session = await createSession({
       title: payload.sessionTitle ?? `${task.name} (scheduled goal)`,
+      programmaticCreator: "scheduler-goal",
       kind: "direct",
       characterId: payload.characterId,
       ...scheduledSessionAttribution(task, execution.id),

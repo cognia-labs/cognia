@@ -180,6 +180,7 @@ registerNodeExecutor({
       if (!sessionId) {
         const created = await createSession({
           title: `${character.name} (workflow)`,
+          programmaticCreator: "workflow",
           characterId,
         })
         sessionId = created.id

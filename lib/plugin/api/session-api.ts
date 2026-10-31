@@ -73,8 +73,16 @@ export function createSessionAPI(pluginId: string): PluginSessionAPI {
     },
 
     createSession: async (options = {}) => {
-      const store = useSessionStore.getState()
-      const session = store.createSession(options)
+      const { createSession } = await import("@/lib/db/sessions")
+      const row = await createSession({
+        title: options.title,
+        characterId: options.characterId,
+        teamId: options.teamId,
+        projectId: options.projectId,
+        programmaticCreator: `plugin:${pluginId}`,
+      })
+      const session: Session = { ...row, mode: options.mode ?? "chat", branches: [] }
+      useSessionStore.setState((state) => ({ sessions: [session, ...state.sessions] }))
       logger.info(`Created session: ${session.id}`)
       return session
     },

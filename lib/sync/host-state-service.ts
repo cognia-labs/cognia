@@ -1110,6 +1110,7 @@ async function persistConfirmedState(
           return {
             ...(existing ?? {
               id: summary.sessionId,
+              programmaticCreator: "host-state",
               title: summary.title ?? "New conversation",
               titleAuto: !summary.title,
               createdAt: now,

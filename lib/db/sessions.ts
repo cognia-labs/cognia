@@ -966,6 +966,16 @@ export async function forkSessionFromParent(parentId: string): Promise<ChatSessi
   }
   return createSession({
     title: `${parent.title} (fork)`,
+    programmaticCreator:
+      parent.programmaticCreator ??
+      (parent.platformBinding ||
+      parent.collaboration ||
+      ["Plugin Agent", "Plugin Agent Session"].includes(parent.title)
+        ? "nonlocal-fork"
+        : undefined),
+    agentTurnOwner: parent.agentTurnOwner,
+    origin: parent.origin,
+    integrationBinding: parent.integrationBinding,
     // Load-bearing, and it was missing: `listScopedSessions` reads through the
     // `[projectId+updatedAt]` index, so a fork stamped with the UI-active
     // workspace instead of the parent's is filed under the wrong conversation

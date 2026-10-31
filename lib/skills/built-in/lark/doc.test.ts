@@ -30,6 +30,27 @@ it("registers the certified Lark Docs skill family", () => {
   expect(skills.every((skill) => skill.platforms.includes("lark"))).toBe(true)
 })
 
+it("routes custom document upload execution without leaking account selection to CLI flags", async () => {
+  const tool = skill("upload_image")
+  const context = { sessionId: "desktop", humanConfirmed: true }
+  await tool.execute(
+    tool.inputSchema.parse({
+      docToken: doc,
+      imagePath: "/tmp/lesson.png",
+      adapterId: "cai_school",
+    }),
+    context
+  )
+  expect(runMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      adapterId: "cai_school",
+      context: { ...context, larkAdapterId: "cai_school" },
+    })
+  )
+  expect(runMock.mock.calls[0][0].args).not.toContain("--adapter-id")
+  expect(context).not.toHaveProperty("larkAdapterId")
+})
+
 describe("document edit contracts", () => {
   it("sends the requested Markdown format and revision without an unsupported --yes flag", async () => {
     await execute("update", {

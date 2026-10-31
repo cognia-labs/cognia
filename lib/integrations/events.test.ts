@@ -149,6 +149,7 @@ describe("Integration event publication", () => {
     const sessions = await getDb().sessions.toArray()
     expect(sessions).toHaveLength(1)
     expect(sessions[0]).toMatchObject({
+      programmaticCreator: "integration-event",
       title: "Fix the integration",
       integrationBinding: {
         pluginId: "example-delivery",

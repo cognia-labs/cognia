@@ -31,6 +31,7 @@ describe("startSeededSession", () => {
     await startSeededSession({ title: "T", characterId: "char-1", projectId: "proj-1" })
     expect(startNewSession).toHaveBeenCalledWith({
       title: "T",
+      programmaticCreator: "plugin-seed",
       characterId: "char-1",
       projectId: "proj-1",
     })
@@ -64,6 +65,6 @@ describe("startSeededSession", () => {
 
   it("does not pass the seed text through as a session field", async () => {
     await startSeededSession({ seedUserMessage: "hi", title: "T" })
-    expect(startNewSession).toHaveBeenCalledWith({ title: "T" })
+    expect(startNewSession).toHaveBeenCalledWith({ title: "T", programmaticCreator: "plugin-seed" })
   })
 })

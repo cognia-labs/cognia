@@ -1,7 +1,7 @@
 import { createPluginAgentSession, resumePluginAgentSession } from "./session"
 import { executeAgent } from "@/lib/ai/agent/agent-executor"
 import { listMessages, persistMessages } from "@/lib/db/messages"
-import { createSession, getSession, deleteSession } from "@/lib/db/sessions"
+import { createSession, getSession, updateSession, deleteSession } from "@/lib/db/sessions"
 
 jest.mock("@/lib/ai/agent/agent-executor", () => {
   // The execution service dispatches through the rail functions, not
@@ -32,6 +32,7 @@ jest.mock("@/lib/db/sessions", () => ({
   __esModule: true,
   createSession: jest.fn(),
   getSession: jest.fn(),
+  updateSession: jest.fn(async () => undefined),
   deleteSession: jest.fn(),
 }))
 
@@ -65,7 +66,11 @@ describe("createPluginAgentSession", () => {
   it("creates a durable session and exposes its id", async () => {
     const session = await createPluginAgentSession({ title: "T", characterId: "c1" })
     expect(mockCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "T", characterId: "c1" })
+      expect.objectContaining({
+        title: "T",
+        characterId: "c1",
+        programmaticCreator: "plugin-agent-sdk",
+      })
     )
     expect(session.id).toBe("s1")
   })
@@ -194,6 +199,18 @@ describe("resumePluginAgentSession", () => {
   it("returns a handle for an existing session", async () => {
     const session = await resumePluginAgentSession("s1")
     expect(session.id).toBe("s1")
+    expect(updateSession).toHaveBeenCalledWith("s1", { programmaticCreator: "plugin-agent-sdk" })
+  })
+
+  it("retains an existing creator marker", async () => {
+    mockGet.mockResolvedValue({ id: "s1", programmaticCreator: "workflow" } as never)
+    await resumePluginAgentSession("s1")
+    expect(updateSession).not.toHaveBeenCalled()
+  })
+
+  it("does not resume if legacy provenance cannot be persisted", async () => {
+    jest.mocked(updateSession).mockRejectedValueOnce(new Error("write failed"))
+    await expect(resumePluginAgentSession("s1")).rejects.toThrow("write failed")
   })
 
   it("throws when the session does not exist", async () => {

@@ -388,7 +388,10 @@ describe("use in chat", () => {
       sessionId: "s-new",
       created: true,
     })
-    expect((createSession as jest.Mock).mock.calls[0][0]).toEqual({ title: "Chat about it" })
+    expect((createSession as jest.Mock).mock.calls[0][0]).toEqual({
+      title: "Chat about it",
+      programmaticCreator: "remote-files",
+    })
   })
 
   it("refuses a conversation that no longer takes messages", async () => {

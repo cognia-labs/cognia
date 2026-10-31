@@ -194,6 +194,7 @@ describe("runProbe", () => {
     expect(ctx.harnessOverlay?.snapshotId).toBe("snap-1")
     expect(ctx.session?.workingDir).toBe("/app/harness-evolution/run-1/base1/work")
     expect(ctx.session?.visibility).toBe("embedded")
+    expect(ctx.session?.programmaticCreator).toBe("harness-probe")
     expect(ctx.session?.memoryLearn).toBe(false)
     expect(ctx.activeProject?.roots[0].path).toBe("/app/harness-evolution/run-1/base1/work")
     expect(ctx.capabilityGrants?.[0].tools?.deny).toContain("mcp__cognia-plugin-tools__pet_say")

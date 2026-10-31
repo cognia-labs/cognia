@@ -1,6 +1,6 @@
 import type { AgentTraceSpan } from "@/types/agent-trace/span"
 import type { EvalCase } from "@/types/eval/eval"
-import { assembleSampleFromSpans, createChatTarget } from "./chat"
+import { assembleSampleFromSpans, createChatTarget, defaultChatTargetDeps } from "./chat"
 
 function span(overrides: Partial<AgentTraceSpan>): AgentTraceSpan {
   const id = overrides.id ?? "sp_" + Math.random().toString(36).slice(2)
@@ -335,4 +335,25 @@ describe("createChatTarget", () => {
       })
     )
   })
+})
+
+jest.mock("@/lib/db/sessions", () => ({
+  createSession: jest.fn(async () => {
+    throw new Error("stop at session creation")
+  }),
+}))
+
+it("marks the real evaluation dependency's session before running a provider", async () => {
+  const { createSession } = await import("@/lib/db/sessions")
+  await expect(
+    defaultChatTargetDeps().runTurn({
+      prompt: "test",
+      providerId: "anthropic",
+      model: "test",
+      character: { id: "eval", name: "Eval" } as never,
+    })
+  ).rejects.toThrow("stop at session creation")
+  expect(createSession).toHaveBeenCalledWith(
+    expect.objectContaining({ programmaticCreator: "evaluation" })
+  )
 })

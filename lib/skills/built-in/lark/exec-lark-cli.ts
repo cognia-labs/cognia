@@ -56,8 +56,8 @@ export interface ExecLarkCliInput {
   /** Override the auth bridge identity (defaults to user). */
   identity?: "user" | "bot"
   /**
-   * Explicit adapter id. When omitted, the auth bridge picks the first
-   * enabled Lark adapter.
+   * Explicit Cognia connection. IM calls stay on their bound adapter;
+   * local calls without a selection require a single enabled connection.
    */
   adapterId?: string
   /**
@@ -88,6 +88,7 @@ export type LarkCliResult =
         | "timeout"
         | "json_parse_failed"
         | "output_truncated"
+        | "invalid_account_selection"
       message: string
       exitCode?: number
       stderr?: string
@@ -113,12 +114,15 @@ export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResul
 
   const binary = locateLarkCliBinary()
 
-  const argv: string[] = [...input.args]
-  // lark-cli expects the identity flag up front. We bias to user-scope
-  // when the bridge selected `"user"`; bot-scope falls through to the
-  // tenant_access_token path the CLI reads from env.
-  if (!argv.includes("--as")) {
-    argv.unshift("--as", auth.identity)
+  const argv = accountBoundArgs(input.args, auth.identity)
+  if (!argv) {
+    return {
+      status: "error",
+      reason: "invalid_account_selection",
+      message:
+        "Lark CLI identity must match the selected Cognia connection. Select a connection with adapterId, not --profile or another --as identity.",
+      adapterId: auth.adapterId,
+    }
   }
   if (input.confirmed && !argv.includes("--yes")) {
     argv.push("--yes")
@@ -161,6 +165,50 @@ export async function execLarkCli(input: ExecLarkCliInput): Promise<LarkCliResul
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// These are the valueless switches emitted by the certified skill builders.
+// Other flags take a value, which must remain data even when it looks like
+// --profile or --as=bot (for example a document's literal content).
+const SWITCH_FLAGS = new Set([
+  "--yes",
+  "--dry-run",
+  "--match-case",
+  "--match-entire-cell",
+  "--complete",
+  "--help",
+  "-h",
+  "--version",
+  "-v",
+])
+
+function accountBoundArgs(args: readonly string[], identity: "user" | "bot"): string[] | undefined {
+  const command: string[] = []
+  let identityCount = 0
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === "--") {
+      command.push(...args.slice(i))
+      break
+    }
+    if (arg === "--profile" || arg.startsWith("--profile=")) return
+    if (arg === "--as" || arg.startsWith("--as=")) {
+      const requested = arg === "--as" ? args[++i] : arg.slice("--as=".length)
+      identityCount += 1
+      if (requested !== identity || identityCount > 1) return
+      continue
+    }
+    command.push(arg)
+    if (
+      arg.startsWith("--") &&
+      !arg.includes("=") &&
+      !SWITCH_FLAGS.has(arg) &&
+      i + 1 < args.length
+    ) {
+      command.push(args[++i])
+    }
+  }
+  return ["--as", identity, ...command]
+}
 
 /** Test escape hatch. */
 export function __setLarkCliBinaryForTests(path: string | null): void {

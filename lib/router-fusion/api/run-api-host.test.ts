@@ -213,6 +213,7 @@ describe("sessionPort", () => {
       titleAuto: true,
       origin: { kind: "gateway-api", keyId: "key-a", keyName: "CI robot" },
     })
+    expect(createdSessions.at(-1)?.programmaticCreator).toBe("run-api")
   })
 
   it("names a local caller rather than leaving the origin half-written", async () => {

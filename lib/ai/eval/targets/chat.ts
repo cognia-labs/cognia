@@ -354,6 +354,7 @@ export function defaultChatTargetDeps(scope?: EvalPersistenceScope): ChatTargetD
       const session = await sessionsDb.createSession(
         {
           title: "Eval Run",
+          programmaticCreator: "evaluation",
           characterId: character.id,
           memoryLearn: false,
           ...(cwd ? { workingDir: cwd } : {}),

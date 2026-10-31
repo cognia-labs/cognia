@@ -130,6 +130,7 @@ describe("runVerifiedFreshAgentTurn", () => {
     expect(calls.createSession).toEqual([
       {
         title: "Verify: Fix the flake",
+        programmaticCreator: "verification-agent",
         systemPrompt: VERIFIER_PROMPT.defaultBody,
         permissionMode: "plan",
         workingDir: "/repo",

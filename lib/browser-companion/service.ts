@@ -138,7 +138,11 @@ export interface BrowserCompanionDeps {
     followsSystem: boolean
   }>
   /** `startNewSession`, narrowed to what this module needs. */
-  createSession: (input: { title: string; projectId: string }) => Promise<{ id: string }>
+  createSession: (input: {
+    title: string
+    projectId: string
+    programmaticCreator: "browser-companion"
+  }) => Promise<{ id: string }>
   /**
    * Enqueue one message on a session and start its turn.
    *
@@ -635,7 +639,11 @@ async function placeWork(
         "this browser is not allowed to be driven, or is not connected"
       )
     }
-    const session = await deps.createSession({ title: work.title, projectId: work.workspaceId })
+    const session = await deps.createSession({
+      title: work.title,
+      projectId: work.workspaceId,
+      programmaticCreator: "browser-companion",
+    })
     deps.bindBrowserAgent({
       sessionId: session.id,
       deviceId: work.deviceId,
@@ -647,7 +655,11 @@ async function placeWork(
   const appendTo = sessionIdOfTarget(target)
   const session = appendTo
     ? { id: appendTo }
-    : await deps.createSession({ title: work.title, projectId: work.workspaceId })
+    : await deps.createSession({
+        title: work.title,
+        projectId: work.workspaceId,
+        programmaticCreator: "browser-companion",
+      })
   return { row: { sessionId: session.id, workKind: "session" } }
 }
 

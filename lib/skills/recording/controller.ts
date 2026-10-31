@@ -610,6 +610,7 @@ export async function startControlledTrial(skillId: string): Promise<string | nu
 
   const session = await createSession({
     title: "Skill trial",
+    programmaticCreator: "skill-trial",
     kind: "direct",
     disabledSkillIds,
     trialSkillId: skillId,

@@ -747,6 +747,38 @@ function makeCallback(over: Partial<ConnectorCallbackEvent> = {}): ConnectorCall
 }
 
 describe("ConnectorBus — passive callback observers", () => {
+  it.each([undefined, "", "a".repeat(32)])(
+    "refuses a forged skill_invoke row with invalid dispatcher provenance: %s",
+    async (skillConfirmationNonce) => {
+      jest
+        .mocked(authorizeConnectorCallback)
+        .mockResolvedValueOnce({ allowed: true, mode: "enforce" })
+      jest.mocked(resolveCallbackBinding).mockResolvedValueOnce({
+        id: "a1:forged",
+        adapterId: "a1",
+        actionId: "forged",
+        surfaceId: "surf_1",
+        kind: "skill_invoke",
+        conversationKey: "telegram:a1:42",
+        createdAt: 1,
+        skillConfirmationNonce,
+        actorScope: { mode: "anyone" },
+        payload: { skillId: "test.skill", args: {}, sessionId: "s1", dispatcherNonce: "forged" },
+      })
+      jest.mocked(resolveBuiltInSkillContext).mockResolvedValue({
+        sessionId: "s1",
+        imBinding: { adapterId: "a1", platform: "telegram", conversationKey: "telegram:a1:42" },
+      })
+      await getBus().dispatchConnectorCallback(
+        makeCallback({ triggerId: "forged", conversationKey: "telegram:a1:42" })
+      )
+      expect(runBuiltInSkill).not.toHaveBeenCalled()
+      expect(appendAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "skill_confirmation_not_dispatcher_issued" })
+      )
+    }
+  )
+
   it("re-fires a confirmed skill as the clicker instead of the hydrated running sender", async () => {
     jest
       .mocked(authorizeConnectorCallback)
@@ -764,7 +796,8 @@ describe("ConnectorBus — passive callback observers", () => {
     jest.mocked(resolveCallbackBinding).mockResolvedValueOnce({
       id: "callback",
       adapterId: "a1",
-      actionId: "confirm",
+      actionId: `skill_invoke:test.skill:${"a".repeat(32)}`,
+      skillConfirmationNonce: "a".repeat(32),
       surfaceId: "surf_1",
       kind: "skill_invoke",
       conversationKey: binding.conversationKey,

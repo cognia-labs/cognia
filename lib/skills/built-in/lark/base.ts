@@ -13,10 +13,15 @@
 
 import { z } from "zod"
 
-import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillMutation } from "../types"
 import type { BuiltInSkillImAccess } from "../types"
-import { argsToFlags, buildConfirmSurface, larkAdapterIdFromCtx, runLarkCli } from "./_helpers"
+import {
+  argsToFlags,
+  buildConfirmSurface,
+  larkAdapterIdFromCtx,
+  registerLarkSkill,
+  runLarkCli,
+} from "./_helpers"
 
 const FAMILY = "lark.base"
 const PLATFORMS = ["lark"] as const
@@ -89,7 +94,7 @@ function mk<S extends z.ZodTypeAny>(input: {
   return skill
 }
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.search",
     mcpToolName: "lark_base_search",
@@ -108,7 +113,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.list_tables",
     mcpToolName: "lark_base_list_tables",
@@ -125,7 +130,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.list_records",
     mcpToolName: "lark_base_list_records",
@@ -164,7 +169,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.read_record",
     mcpToolName: "lark_base_read_record",
@@ -186,7 +191,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.append_records",
     mcpToolName: "lark_base_append_records",
@@ -221,7 +226,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.update_record",
     mcpToolName: "lark_base_update_record",
@@ -255,7 +260,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.create_field",
     mcpToolName: "lark_base_create_field",
@@ -301,7 +306,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.base.delete_record",
     mcpToolName: "lark_base_delete_record",

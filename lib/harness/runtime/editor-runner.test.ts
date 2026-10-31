@@ -268,6 +268,7 @@ describe("runEditorSession (agentic)", () => {
     expect(grant.subagents).toEqual({ only: [] })
     expect(contexts[1].character?.systemPrompt).toMatch(/NOTES\.md/)
     expect(contexts[1].session?.visibility).toBe("embedded")
+    expect(contexts[1].session?.programmaticCreator).toBe("harness-editor")
     expect(deleted).toEqual(["ed1"])
     expect(state.removed).toEqual(["harness-evolution/run-1/dom1/editor-1"])
   })

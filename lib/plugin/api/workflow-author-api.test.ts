@@ -1,5 +1,21 @@
 import { createWorkflowAuthorAPI } from "./workflow-author-api"
 
+// Exercise host copy without the global React next-intl mock.
+jest.mock("@/lib/i18n/runtime-translator", () => ({
+  getRuntimeTranslator: jest.fn(async (namespace: string) => {
+    if (namespace !== "workflows.approvals") throw new Error(`Unexpected namespace: ${namespace}`)
+    const { getSettings } = await import("@/lib/db/settings")
+    const locale = (await getSettings())?.language === "zh-CN" ? "zh-CN" : "en"
+    const messages = jest.requireActual(`@/i18n/messages/${locale}/workflows/approvals.json`)
+    return (key: string, values?: Record<string, unknown>) => {
+      const template = key.split(".").reduce((value, part) => value[part], messages)
+      return template.replace(/\{(\w+)\}/g, (_: string, name: string) =>
+        String(values?.[name] ?? "")
+      )
+    }
+  }),
+}))
+
 import { getEditorStore, listEditorStores } from "@/lib/workflow/editor/store-registry"
 import { useProposalStore } from "@/lib/workflow/editor/proposal-store"
 import { autoLayout, applyAutoLayoutPositions } from "@/lib/workflow/editor/auto-layout"
@@ -29,6 +45,26 @@ import {
 import { recordCallbackBinding } from "@/lib/connectors/adapters/_shared/a2ui-mapper"
 import { buildApprovalSurface } from "@/lib/connectors/a2ui-bridge/workflow-to-a2ui"
 import { createWorkflowWaitEvent, emitWorkflowWaitEvent } from "@/lib/db/workflow-waitpoints"
+import { holdWorkflowDispatchForApproval } from "@/lib/connectors/hitl/workflow-run-approval"
+
+import { enqueueGoverned } from "@/lib/connectors/delivery-gateway"
+import { getSettings } from "@/lib/db/settings"
+
+jest.mock("@/lib/connectors/delivery-gateway", () => ({
+  enqueueGoverned: jest.fn(async () => ({})),
+}))
+jest.mock("@/lib/db/settings", () => ({ getSettings: jest.fn(async () => ({ language: "en" })) }))
+
+jest.mock("@/lib/connectors/hitl/workflow-run-approval", () => ({
+  holdWorkflowDispatchForApproval: jest.fn(),
+}))
+jest.mock("@/lib/db/adapter-instances", () => ({
+  getAdapterInstance: jest.fn(async () => ({ id: "ad" })),
+}))
+jest.mock("@/lib/db/conversation-overrides", () => ({ readForResolution: jest.fn() }))
+jest.mock("@/lib/connectors/im-permission-ceiling", () => ({
+  buildImPermissionCeiling: jest.fn(async () => ({})),
+}))
 
 jest.mock("@/lib/workflow/editor/store-registry", () => ({
   getEditorStore: jest.fn(),
@@ -140,6 +176,174 @@ beforeEach(() => {
   jest.clearAllMocks()
   mockGetEditorStore.mockReturnValue(null)
   mockListEditorStores.mockReturnValue([])
+  jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValue({
+    source: "im",
+    sessionId: "root",
+    adapterId: "ad",
+    conversationKey: "lark:ad:chat",
+    initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
+  })
+})
+
+it("asks the host hold to deliver the card to its IM conversation and reports success only after delivery", async () => {
+  jest.mocked(holdWorkflowDispatchForApproval).mockResolvedValue({
+    held: true,
+    surfaceId: "workflow:prepared",
+    workflowName: "Daily",
+    surface: {} as never,
+  })
+  const input = {
+    workflowId: "wf",
+    triggeredFrom: {
+      source: "im" as const,
+      sessionId: "root",
+      adapterId: "ad",
+      conversationKey: "lark:ad:chat",
+    },
+  }
+  expect(await createWorkflowAuthorAPI().prepareWorkflowApproval(input)).toMatchObject({
+    sent: true,
+    surfaceId: "workflow:prepared",
+  })
+  expect(holdWorkflowDispatchForApproval).toHaveBeenCalledWith(
+    expect.objectContaining({ deliverCard: true, adapterId: "ad", conversationKey: "lark:ad:chat" })
+  )
+  jest
+    .mocked(holdWorkflowDispatchForApproval)
+    .mockResolvedValue({ held: false, reason: "card_delivery_failed", message: "hold failed" })
+  await expect(createWorkflowAuthorAPI().prepareWorkflowApproval(input)).rejects.toThrow(
+    "hold failed"
+  )
+})
+
+describe("host fan-out approval delivery", () => {
+  const input = {
+    workflowId: "wf",
+    workflowName: "Daily",
+    triggeredFrom: {
+      source: "im" as const,
+      sessionId: "root",
+      adapterId: "ad",
+      conversationKey: "lark:ad:chat",
+      initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
+    },
+  }
+
+  it("records both bindings before sending a governed notice to the triggering conversation", async () => {
+    const scope = { mode: "initiator" as const, allowedUserIds: ["requester"] }
+    jest.mocked(approvalActorScope).mockReturnValue(scope)
+    const result = await createWorkflowAuthorAPI().prepareFanoutApproval(input)
+    expect(result.sent).toBe(true)
+    const calls = jest.mocked(recordCallbackBinding).mock.calls.map(([binding]) => binding)
+    expect(calls).toHaveLength(2)
+    expect(calls.map((binding) => binding.kind)).toEqual(["wf_fanout_approve", "wf_fanout_cancel"])
+    for (const binding of calls) {
+      expect(binding).toMatchObject({
+        adapterId: "ad",
+        surfaceId: result.surfaceId,
+        conversationKey: "lark:ad:chat",
+        actorScope: scope,
+        allowedActions: ["approve", "cancel"],
+        payload: {
+          workflowId: "wf",
+          workflowName: "Daily",
+          target: { adapterId: "ad", conversationKey: "lark:ad:chat" },
+          createdBy: "claude-tool",
+        },
+      })
+      expect(result.surface.components[binding.componentId!]).toHaveProperty(
+        "value",
+        binding.actionId
+      )
+    }
+    expect(enqueueGoverned).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterId: "ad",
+        conversationKey: "lark:ad:chat",
+        source: "ai-run",
+        authorization: { kind: "system-notice", inboundConversationKey: "lark:ad:chat" },
+        request: expect.objectContaining({
+          segments: [
+            expect.objectContaining({
+              type: "a2ui",
+              surfaceId: result.surfaceId,
+              content: result.surface,
+            }),
+          ],
+        }),
+      })
+    )
+    expect(jest.mocked(recordCallbackBinding).mock.invocationCallOrder[1]).toBeLessThan(
+      jest.mocked(enqueueGoverned).mock.invocationCallOrder[0]
+    )
+  })
+
+  it.each(["prepareWorkflowApproval", "prepareFanoutApproval"] as const)(
+    "%s refuses a copied origin after the session is rebound",
+    async (method) => {
+      jest.mocked(resolveWorkflowTriggerOrigin).mockResolvedValueOnce({
+        source: "im",
+        sessionId: "root",
+        adapterId: "other",
+        conversationKey: "lark:other:chat",
+      })
+      await expect(createWorkflowAuthorAPI()[method](input)).rejects.toThrow("no longer matches")
+      expect(enqueueGoverned).not.toHaveBeenCalled()
+      expect(holdWorkflowDispatchForApproval).not.toHaveBeenCalled()
+      expect(recordCallbackBinding).not.toHaveBeenCalled()
+    }
+  )
+
+  it("uses only the Host's live initiator for both card types", async () => {
+    const forged = {
+      ...input,
+      triggeredFrom: {
+        ...input.triggeredFrom,
+        initiator: { platformIdentityId: "forged", remoteUserId: "forged" },
+      },
+    }
+    await createWorkflowAuthorAPI().prepareFanoutApproval(forged)
+    expect(approvalActorScope).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        initiator: { platformIdentityId: "requester", remoteUserId: "requester" },
+      })
+    )
+    jest.mocked(holdWorkflowDispatchForApproval).mockResolvedValueOnce({
+      held: true,
+      surfaceId: "sent",
+      workflowName: "Daily",
+      surface: {} as never,
+    })
+    await createWorkflowAuthorAPI().prepareWorkflowApproval(forged)
+    expect(holdWorkflowDispatchForApproval).toHaveBeenLastCalledWith(
+      expect.objectContaining({ initiatorUserId: "requester" })
+    )
+  })
+
+  it("does not claim success if governed delivery fails", async () => {
+    jest.mocked(enqueueGoverned).mockRejectedValueOnce(new Error("delivery refused"))
+    await expect(createWorkflowAuthorAPI().prepareFanoutApproval(input)).rejects.toThrow(
+      "delivery refused"
+    )
+  })
+
+  it.each([{ source: "ui" as const }, { source: "im" as const, adapterId: "ad" }])(
+    "refuses an origin without an IM conversation: %j",
+    async (triggeredFrom) => {
+      await expect(
+        createWorkflowAuthorAPI().prepareFanoutApproval({ ...input, triggeredFrom })
+      ).rejects.toThrow("requires an IM origin")
+      expect(enqueueGoverned).not.toHaveBeenCalled()
+      expect(recordCallbackBinding).not.toHaveBeenCalled()
+    }
+  )
+
+  it("uses Chinese host copy when selected", async () => {
+    jest.mocked(getSettings).mockResolvedValueOnce({ language: "zh-CN" } as never)
+    const result = await createWorkflowAuthorAPI().prepareFanoutApproval(input)
+    expect(result.surface.title).toBe("订阅「Daily」")
+    expect(result.surface.widget?.fallbackText).toContain("回复 1 同意 / 2 取消")
+  })
 })
 
 describe("createWorkflowAuthorAPI", () => {
@@ -351,7 +555,7 @@ it("pins host-resolved publications for plugin-created workflow approval binding
   mockPinPublication.mockResolvedValue(lock)
   const input = {
     adapterId: "ad",
-    actionId: "approve",
+    actionId: "wfapp:approve",
     surfaceId: "s",
     kind: "wf_approve" as const,
     actorScope: { mode: "operators" as const },
@@ -363,4 +567,20 @@ it("pins host-resolved publications for plugin-created workflow approval binding
     ...input,
     payload: { ...input.payload, lockedDependency: lock },
   })
+})
+
+it("refuses plugin registration of dispatcher-only skill confirmations", async () => {
+  await expect(
+    createWorkflowAuthorAPI().recordCallbackBinding({
+      adapterId: "ad",
+      actionId: "skill_invoke:test.skill:0123456789abcdef0123456789abcdef",
+      kind: "skill_invoke",
+      surfaceId: "spoofed",
+      conversationKey: "lark:ad:chat",
+      payload: { skillId: "test.skill", sessionId: "root" },
+      actorScope: { mode: "anyone" },
+      skillConfirmationNonce: "0123456789abcdef0123456789abcdef",
+    } as never)
+  ).rejects.toThrow("Only the built-in skill dispatcher")
+  expect(recordCallbackBinding).not.toHaveBeenCalled()
 })

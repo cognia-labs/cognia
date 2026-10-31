@@ -336,6 +336,102 @@ describe("ConnectorBus.dispatchConnectorCallback", () => {
 
 // ── ADR-0026 — skill_invoke binding kind ─────────────────────────────
 describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
+  it("executes a child-issued confirmation after its ephemeral session and approval route end", async () => {
+    const { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } =
+      await import("@/lib/skills/built-in/registry")
+    const { runBuiltInSkill } = await import("@/lib/skills/built-in/dispatcher")
+    const { resolveBuiltInSkillContext } = await import("@/lib/skills/built-in/context")
+    const { registerSubagentApprovalRoute, clearSubagentApprovalRoute } =
+      await import("@/lib/claude/agents/subagent-approval-routes")
+    const { z } = await import("zod")
+    __resetSharedBuiltInSkillRegistry()
+    await seedUnguardedAdapter()
+    const root = {
+      id: "confirmation-root",
+      title: "Root",
+      createdAt: 1,
+      updatedAt: 1,
+      platformBinding: {
+        platform: "telegram",
+        adapterId: "adp_tg",
+        conversationKey: "telegram:adp_tg:c1",
+        conversationRef: { platform: "telegram", adapterId: "adp_tg" },
+      },
+    }
+    await getDb().sessions.put(root as never)
+    await getDb().sessions.put({
+      id: "ephemeral-child",
+      title: "Child",
+      createdAt: 1,
+      updatedAt: 1,
+      parentSessionId: root.id,
+      kind: "subagent",
+    } as never)
+    registerSubagentApprovalRoute("ephemeral-child", {
+      parentSessionId: root.id,
+      subagentId: "test-child",
+      runId: "child-run",
+      backgrounded: false,
+    })
+    const execute = jest.fn(async () => ({ ok: true }))
+    registerBuiltInSkill({
+      id: "test.child_confirmation",
+      family: "test",
+      label: { en: "Test", "zh-CN": "测试" },
+      description: { en: "Test", "zh-CN": "测试" },
+      platforms: "any",
+      mutation: "write",
+      imAccess: "always",
+      mcpToolName: "test_child_confirmation",
+      inputSchema: z.object({ value: z.string() }),
+      execute,
+      hitlSurface: () => ({
+        rootId: "child-confirmation",
+        dataModel: {},
+        components: {
+          "child-confirmation": { component: "Card", children: ["btn_confirm", "btn_cancel"] },
+        },
+      }),
+    })
+    try {
+      expect(
+        await runBuiltInSkill(
+          "test.child_confirmation",
+          { value: "original" },
+          await resolveBuiltInSkillContext("ephemeral-child")
+        )
+      ).toMatchObject({ status: "pending_hitl" })
+      const binding = (await getDb().connectorCallbackBindings.toArray()).find((row) =>
+        row.actionId.startsWith("skill_invoke:")
+      )!
+      expect(binding.payload?.sessionId).toBe(root.id)
+      clearSubagentApprovalRoute("ephemeral-child")
+      await getDb().sessions.delete("ephemeral-child")
+      expect(await getDb().sessions.get("ephemeral-child")).toBeUndefined()
+      await getBus().dispatchConnectorCallback(
+        makeEvent({
+          triggerId: binding.actionId,
+          value: "approve",
+          user: { ...sender, remoteUserId: "clicker" },
+        })
+      )
+      expect(execute).toHaveBeenCalledWith(
+        { value: "original" },
+        expect.objectContaining({
+          sessionId: root.id,
+          imBinding: expect.objectContaining({
+            conversationKey: root.platformBinding.conversationKey,
+          }),
+          actingSenders: [{ remoteUserId: "clicker" }],
+          hitlBypass: true,
+        })
+      )
+    } finally {
+      clearSubagentApprovalRoute("ephemeral-child")
+      __resetSharedBuiltInSkillRegistry()
+    }
+  })
+
   it("routes Confirm click to the built-in skill dispatcher with hitlBypass=true", async () => {
     // Register a trivial test skill that records its invocation.
     const { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } =
@@ -382,8 +478,9 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
     } as never)
     await recordCallbackBinding({
       adapterId: "adp_tg",
-      actionId: "trig_skill_confirm",
+      actionId: `skill_invoke:test.skill:0123456789abcdef0123456789abcdef`,
       kind: "skill_invoke",
+      skillConfirmationNonce: "0123456789abcdef0123456789abcdef",
       surfaceId: "sfc_t",
       conversationKey: "telegram:adp_tg:c1",
       payload: { skillId: "test.skill", args: { x: "hi" }, sessionId: "skill-session" },
@@ -394,7 +491,10 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
     bus.callbackHandler = handler
 
     await bus.dispatchConnectorCallback(
-      makeEvent({ triggerId: "trig_skill_confirm", value: "confirm" })
+      makeEvent({
+        triggerId: `skill_invoke:test.skill:0123456789abcdef0123456789abcdef`,
+        value: "confirm",
+      })
     )
 
     expect(executed).toBe(true)
@@ -409,16 +509,21 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
   it("audits builtin_skill_hitl_rejected on Cancel click", async () => {
     await recordCallbackBinding({
       adapterId: "adp_tg",
-      actionId: "trig_skill_cancel",
+      actionId: `skill_cancel:anything:0123456789abcdef0123456789abcdef`,
       kind: "skill_invoke",
+      skillConfirmationNonce: "0123456789abcdef0123456789abcdef",
       surfaceId: "sfc_t",
+      conversationKey: "telegram:adp_tg:c1",
       payload: { skillId: "anything", args: {} },
     })
     const bus = getBus()
     const handler = jest.fn<ReturnType<CallbackHandler>, Parameters<CallbackHandler>>()
     bus.callbackHandler = handler
     await bus.dispatchConnectorCallback(
-      makeEvent({ triggerId: "trig_skill_cancel", value: "cancel" })
+      makeEvent({
+        triggerId: `skill_cancel:anything:0123456789abcdef0123456789abcdef`,
+        value: "cancel",
+      })
     )
     expect(handler).not.toHaveBeenCalled()
     const audit = await getDb().connectorAudit.toArray()
@@ -452,15 +557,20 @@ describe("ConnectorBus.dispatchConnectorCallback — skill_invoke kind", () => {
 
     await recordCallbackBinding({
       adapterId: "adp_tg",
-      actionId: "trig_skill_boom",
+      actionId: `skill_invoke:test.boom:0123456789abcdef0123456789abcdef`,
       kind: "skill_invoke",
+      skillConfirmationNonce: "0123456789abcdef0123456789abcdef",
       surfaceId: "sfc_t",
+      conversationKey: "telegram:adp_tg:c1",
       payload: { skillId: "test.boom", args: {} },
     })
 
     const bus = getBus()
     await bus.dispatchConnectorCallback(
-      makeEvent({ triggerId: "trig_skill_boom", value: "confirm" })
+      makeEvent({
+        triggerId: `skill_invoke:test.boom:0123456789abcdef0123456789abcdef`,
+        value: "confirm",
+      })
     )
     const audit = await getDb().connectorAudit.toArray()
     // The dispatcher itself wrote builtin_skill_failed; the bus

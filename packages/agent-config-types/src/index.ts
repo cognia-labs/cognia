@@ -2634,6 +2634,8 @@ export interface ChatSession {
    * `key` scopes a caller further (e.g. one Bot installation). Non-indexed.
    */
   agentTurnOwner?: { kind: "plugin" | "bot"; id: string; key?: string }
+  /** Host-stamped programmatic creator. Non-indexed; grants no agent-turn ownership. */
+  programmaticCreator?: string
   /**
    * Owning workspace (Project) id — Workspace isolation column (Dexie v86).
    * Stamped on create via `resolveScopeProjectId`; the v86 upgrade backfills

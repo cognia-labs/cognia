@@ -18,9 +18,9 @@ const okAuth: LarkAuthBridgeResult = {
   adapterId: "lark-1",
   identity: "user",
   env: {
-    LARK_APP_ID: "cli_x",
-    LARK_APP_SECRET: "s-x",
-    LARK_USER_ACCESS_TOKEN: "uat-x",
+    LARKSUITE_CLI_APP_ID: "cli_x",
+    LARKSUITE_CLI_APP_SECRET: "s-x",
+    LARKSUITE_CLI_USER_ACCESS_TOKEN: "uat-x",
   },
 }
 
@@ -82,6 +82,44 @@ describe("execLarkCli — happy path", () => {
 })
 
 describe("execLarkCli — argv composition", () => {
+  it.each([
+    ["--as", "bot"],
+    ["--as=bot"],
+    ["--as", "auto"],
+    ["--as", "user", "--as=user"],
+    ["--profile", "work"],
+    ["--profile=work"],
+    ["sheets", "+cells-search", "--match-case", "--profile=work"],
+    ["task", "+get-my-tasks", "--complete", "--as=bot"],
+  ])("rejects conflicting or independent identity selectors: %j", async (...args) => {
+    mockProcessRunner.mockResolvedValue({ stdout: "{}", stderr: "" })
+    const result = await execLarkCli({ args, __authOverride: okAuth })
+    expect(result).toMatchObject({ status: "error", reason: "invalid_account_selection" })
+    expect(mockProcessRunner).not.toHaveBeenCalled()
+  })
+
+  it.each(["--profile", "--as=bot"])(
+    "keeps selector-like document content as data: %s",
+    async (content) => {
+      mockProcessRunner.mockResolvedValue({ stdout: "{}", stderr: "" })
+      await execLarkCli({ args: ["docs", "+create", "--content", content], __authOverride: okAuth })
+      expect(mockProcessRunner.mock.calls[0][1]).toEqual([
+        "--as",
+        "user",
+        "docs",
+        "+create",
+        "--content",
+        content,
+      ])
+    }
+  )
+
+  it("normalizes a matching equals-form identity to one canonical flag", async () => {
+    mockProcessRunner.mockResolvedValue({ stdout: "{}", stderr: "" })
+    await execLarkCli({ args: ["calendar", "+agenda", "--as=user"], __authOverride: okAuth })
+    expect(mockProcessRunner.mock.calls[0][1]).toEqual(["--as", "user", "calendar", "+agenda"])
+  })
+
   it("prepends --as <identity> when caller omitted it", async () => {
     mockProcessRunner.mockResolvedValue({ stdout: "{}", stderr: "" })
     await execLarkCli({
@@ -96,7 +134,7 @@ describe("execLarkCli — argv composition", () => {
   it("does not duplicate --as when caller already supplied it", async () => {
     mockProcessRunner.mockResolvedValue({ stdout: "{}", stderr: "" })
     await execLarkCli({
-      args: ["--as", "bot", "calendar", "+list-events"],
+      args: ["--as", "user", "calendar", "+list-events"],
       __authOverride: okAuth,
     })
     const argv = mockProcessRunner.mock.calls[0][1] as string[]
@@ -127,9 +165,9 @@ describe("execLarkCli — env injection", () => {
     mockProcessRunner.mockResolvedValue({ stdout: "{}", stderr: "" })
     await execLarkCli({ args: ["calendar"], __authOverride: okAuth })
     const opts = mockProcessRunner.mock.calls[0][2] as { env: Record<string, string> }
-    expect(opts.env.LARK_APP_ID).toBe("cli_x")
-    expect(opts.env.LARK_USER_ACCESS_TOKEN).toBe("uat-x")
-    expect(opts.env.LARK_APP_SECRET).toBe("s-x")
+    expect(opts.env.LARKSUITE_CLI_APP_ID).toBe("cli_x")
+    expect(opts.env.LARKSUITE_CLI_USER_ACCESS_TOKEN).toBe("uat-x")
+    expect(opts.env.LARKSUITE_CLI_APP_SECRET).toBe("s-x")
   })
 })
 

@@ -39,7 +39,7 @@ export async function startSeededSession(
 ): Promise<PluginSeededSessionResult> {
   const { seedUserMessage, ...seed } = input
   const { startNewSession } = await import("@/lib/chat/start-session")
-  const session = await startNewSession(seed)
+  const session = await startNewSession({ ...seed, programmaticCreator: "plugin-seed" })
 
   if (seedUserMessage?.trim()) {
     const [{ persistMessages }, { makeUserMessage }] = await Promise.all([

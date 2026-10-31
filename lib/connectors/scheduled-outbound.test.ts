@@ -20,6 +20,7 @@ import {
 import { PiiGateBlocked } from "@/lib/connectors/ai-loop/safe-send-prompt"
 import { getConnectorDeliveryGateway } from "./delivery-gateway"
 import { getBus, __resetBusForTesting } from "./bus"
+import { buildApprovalSurface } from "./a2ui-bridge/workflow-to-a2ui"
 
 // ── module mocks (hoisted) ──────────────────────────────────────────────────
 
@@ -1030,6 +1031,50 @@ describe("connection:scheduled:digest executor — full AI loop", () => {
     expect(a2ui.surfaceId).toBe("sfc1")
     expect(a2ui.plainTextMirror).toBe("# Daily")
   })
+
+  it.each(["valid", "other-surface", "consumed", "expired", "missing", "other-adapter"])(
+    "strips scheduled model-relayed workflow values regardless of binding (%s)",
+    async (state) => {
+      const surface = buildApprovalSurface({ bindingId: "scheduled-relay", workflowName: "Daily" })
+      const result = { surfaceId: "scheduled:relay", surface }
+      __setDigestSendPromptForTesting(async () => {
+        if (state !== "missing") {
+          const adapterId = state === "other-adapter" ? "another-adapter" : "adp_discord"
+          await getDb().connectorCallbackBindings.add({
+            id: `${adapterId}:wfapp:scheduled-relay`,
+            adapterId,
+            actionId: "wfapp:scheduled-relay",
+            kind: "wf_approve",
+            surfaceId: state === "other-surface" ? "another-surface" : result.surfaceId,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + (state === "expired" ? -1 : 60_000),
+            ...(state === "consumed" ? { consumedAt: 0 } : {}),
+          })
+        }
+        return {
+          text: JSON.stringify(result),
+          messageId: "scheduled-relay",
+          a2uiSurfaces: {},
+          a2uiSurfaceOrder: [],
+        }
+      })
+      await callExecutor(
+        "connection:scheduled:digest",
+        makeTask(),
+        makeExecution({
+          adapterId: "adp_discord",
+          conversationKey: "discord:adp_discord:ch_test",
+          characterId: "char_001",
+          prompt: "x",
+        })
+      )
+      const [job] = await getDb().outboundQueue.toArray()
+      const [segment] = job.request.segments
+      if (segment.type !== "a2ui") throw new Error("Missing surface")
+      expect(segment.content.components.approve).not.toHaveProperty("value")
+      expect(segment.content.components.cancel).not.toHaveProperty("value")
+    }
+  )
 
   it("fails loud when no ChatSession is bound to the conversationKey", async () => {
     sessionLookup = jest.fn(async () => undefined)

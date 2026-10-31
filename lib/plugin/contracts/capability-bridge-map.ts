@@ -127,6 +127,8 @@ import {
   unregisterViewContainersByPlugin,
 } from "@/lib/plugin/registries/view-container-registry"
 import {
+  claimAuthProviderOwnership,
+  getProvider,
   registerAuthenticationProvider,
   unregisterProvidersByPlugin,
 } from "@/lib/plugin/auth/auth-provider-registry"
@@ -515,13 +517,18 @@ export const OVERLAY_REGISTRY_CAPABILITIES = {
   }),
   "auth-provider": defineOverlayCapability<PluginAuthProviderDef>({
     // C1. The declarative `authProviders[]` entries are metadata (id + label
-    // for validation / consent UI). On enable we pre-register a PLACEHOLDER
-    // provider keyed by id; the plugin's activation replaces it (same id) with
-    // the live object via `ctx.auth.registerProvider`. The placeholder makes
-    // the declared provider visible immediately and ensures cleanup removes it
-    // even if the plugin never activates the real one.
+    // for validation / consent UI). Activation can run before contributions:
+    // preserve its same-owner live provider instead of replacing it with metadata.
     manifestField: "authProviders",
     registerEntry: (def, ctx) => {
+      const existing = getProvider(def.id)
+      if (existing) {
+        if (existing.pluginId !== ctx.pluginId) {
+          throw new Error(`Auth provider "${def.id}" is owned by another plugin.`)
+        }
+        claimAuthProviderOwnership(def.id, ctx.pluginId)
+        return
+      }
       registerAuthenticationProvider({
         id: def.id,
         label: def.label,

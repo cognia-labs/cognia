@@ -371,6 +371,7 @@ export async function admitBackgroundDispatch(
       await db.sessions.add({
         id: recovery.executionSessionId,
         title: row.label ?? row.subagentId,
+        programmaticCreator: "background-task",
         kind: "subagent",
         visibility: "embedded",
         parentSessionId: parent.id,

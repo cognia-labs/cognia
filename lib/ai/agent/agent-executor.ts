@@ -554,6 +554,7 @@ async function runToolEnabledStandalone(
     existingRow ??
     (await sessionsDb.createSession({
       title: "Plugin Agent",
+      programmaticCreator: "plugin-agent-executor",
       characterId: character.id,
       ...(config.cwd ? { workingDir: config.cwd } : {}),
     }))

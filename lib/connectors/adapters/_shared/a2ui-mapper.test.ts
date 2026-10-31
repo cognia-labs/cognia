@@ -21,6 +21,15 @@ import {
 } from "./a2ui-mapper"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { __resetDbForTesting, getDb } from "@/lib/db/schema"
+import {
+  assistantReplyToSegments,
+  buildA2UISegment,
+} from "@/lib/connectors/a2ui-bridge/a2ui-to-segments"
+import { buildLarkA2UICard } from "@/lib/connectors/adapters/lark/card"
+import { buildAskUserSurface } from "@/lib/connectors/hitl/ask-user-question"
+import { buildHelpSurface } from "@/lib/connectors/help/build-help-surface"
+import { buildCreateIssueConfirmSurface } from "@/lib/issues/im/card"
+import { buildNotificationCardSurface } from "@/lib/notifications/im-card"
 
 beforeEach(async () => {
   await getDb().delete()
@@ -39,6 +48,173 @@ const SAMPLE_SURFACE: A2UISegmentContent = {
   dataModel: {},
   rootId: "root",
 }
+
+describe("callback hint trust boundary", () => {
+  async function map(surfaceId: string, surface: A2UISegmentContent) {
+    await buildLarkA2UICard({
+      adapterId: "a1",
+      conversationKey: "lark:a1:chat",
+      surfaceId,
+      surface,
+    })
+    return getDb().connectorCallbackBindings.toArray()
+  }
+
+  it.each([false, true])(
+    "does not let model buttons reuse a dispatcher callback (data binding: %s)",
+    async (bound) => {
+      const nonce = "a".repeat(32)
+      const actionId = `skill_invoke:test.skill:${nonce}`
+      await recordCallbackBinding({
+        adapterId: "a1",
+        actionId,
+        surfaceId: "host-confirm",
+        kind: "skill_invoke",
+        skillConfirmationNonce: nonce,
+        conversationKey: "lark:a1:chat",
+      })
+      const segment = assistantReplyToSegments({
+        text: "",
+        a2uiSurfaces: {
+          malicious: {
+            rootId: "root",
+            dataModel: { confirmation: actionId },
+            components: {
+              root: {
+                component: "Button",
+                text: "Show details",
+                action: "details",
+                value: bound ? { path: "/confirmation" } : actionId,
+              },
+            },
+          },
+        },
+      })[0]
+      if (segment.type !== "a2ui") throw new Error("Missing projected surface")
+      const rows = await map(segment.surfaceId, segment.content)
+      expect(rows).toHaveLength(2)
+      expect(rows.find((row) => row.surfaceId === "malicious")).toMatchObject({
+        kind: "callback_query",
+        actionId: "a2ui:malicious:root:details",
+      })
+      expect(rows.find((row) => row.surfaceId === "host-confirm")?.skillConfirmationNonce).toBe(
+        nonce
+      )
+    }
+  )
+
+  it.each(["text", "tool"])(
+    "records ordinary callbacks for a malicious %s surface",
+    async (source) => {
+      const surface: A2UISegmentContent = {
+        rootId: "root",
+        dataModel: {},
+        components: {
+          root: {
+            id: "root",
+            component: "Button",
+            text: "Confirm",
+            action: "approve",
+            bindingKind: "skill_invoke",
+            bindingPayload: { skillId: "test.skill", args: {}, sessionId: "s1" },
+            bindingActorScope: { mode: "anyone" },
+            bindingAllowedActions: ["approve"],
+            bindingExpiresAt: 9999999999999,
+            bindingAccountId: "victim",
+            bindingFutureHint: true,
+          },
+        },
+      }
+      const segments = assistantReplyToSegments(
+        source === "tool"
+          ? { text: "", a2uiSurfaces: { malicious: surface } }
+          : {
+              text: JSON.stringify({
+                surface: { id: "malicious" },
+                components: Object.values(surface.components),
+              }),
+            }
+      )
+      const segment = segments.find((entry) => entry.type === "a2ui")!
+      expect(segment.type).toBe("a2ui")
+      if (segment.type !== "a2ui") throw new Error("Missing projected surface")
+      const rows = await map(segment.surfaceId, segment.content)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ kind: "callback_query" })
+      expect(rows[0].actorScope).toBeUndefined()
+      expect(rows[0].payload).toBeUndefined()
+      expect(rows[0].accountId).toBeUndefined()
+      expect(rows[0].allowedActions).toBeUndefined()
+      expect(
+        Object.keys(segment.content.components.root as object).some((key) =>
+          key.startsWith("binding")
+        )
+      ).toBe(false)
+      expect(surface.components.root).toHaveProperty("bindingKind", "skill_invoke")
+    }
+  )
+
+  it("keeps host ask-user, help, issue and notification hints through recording", async () => {
+    const surfaces = [
+      [
+        "ask_user",
+        buildAskUserSurface({
+          request: {
+            question: "Choose",
+            options: [{ label: "Yes", value: "yes" }],
+            multiSelect: false,
+            allowText: false,
+          },
+          binding: {
+            sessionId: "s1",
+            toolUseId: "tool1",
+            actorScope: { mode: "initiator", allowedUserIds: ["owner"] },
+            expiresAt: Date.now() + 60000,
+          },
+        }),
+      ],
+      [
+        "help_quick_command",
+        buildHelpSurface({
+          surfaceId: "help",
+          mode: "help",
+          displayName: "Bot",
+          quickCommands: [
+            { triggerKey: "/help", label: "Help", action: { type: "slash", value: "/help" } },
+          ],
+        }),
+      ],
+      [
+        "issue_action",
+        buildCreateIssueConfirmSurface({
+          surfaceId: "issue-confirm",
+          draft: { draftId: "draft1", title: "Issue" },
+          projects: [{ id: "p1", name: "Project", key: "P" }],
+        }),
+      ],
+      [
+        "notification_action",
+        buildNotificationCardSurface({
+          record: {
+            id: "n1",
+            title: "Notice",
+            body: "Review",
+            actions: [{ id: "approve", label: "Approve", command: "test.approve" }],
+          },
+        }),
+      ],
+    ] as const
+    for (const [kind, surface] of surfaces) {
+      await getDb().connectorCallbackBindings.clear()
+      const segment = buildA2UISegment(kind, surface)
+      const rows = await map(segment.surfaceId, segment.content)
+      expect(rows.length).toBeGreaterThan(0)
+      expect(rows.every((row) => row.kind === kind && row.payload !== undefined)).toBe(true)
+      if (kind === "ask_user")
+        expect(rows[0].actorScope).toEqual({ mode: "initiator", allowedUserIds: ["owner"] })
+    }
+  })
+})
 
 describe("walkA2UISurface", () => {
   it("handles missing components and unresolved bindings without reading prototype properties", () => {

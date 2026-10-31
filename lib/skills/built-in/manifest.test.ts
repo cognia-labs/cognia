@@ -49,8 +49,8 @@ function mkOverride(fields: Partial<ConversationOverrideRow> = {}): Conversation
 beforeEach(() => {
   __resetSharedBuiltInSkillRegistry()
   __setLarkCliCapabilityDiagnosticsForTests({
-    certifiedVersion: "1.0.83",
-    detectedVersion: "1.0.83",
+    certifiedVersion: "1.0.98",
+    detectedVersion: "1.0.98",
     ready: true,
     missingCommands: [],
     missingFlags: {},
@@ -61,8 +61,8 @@ beforeEach(() => {
 describe("buildBuiltInSkillManifest — platform filter", () => {
   it("fails closed for certified Lark skills when the CLI capability probe is blocked", () => {
     __setLarkCliCapabilityDiagnosticsForTests({
-      certifiedVersion: "1.0.83",
-      detectedVersion: "1.0.84",
+      certifiedVersion: "1.0.98",
+      detectedVersion: "1.0.99",
       ready: false,
       missingCommands: [],
       missingFlags: {},
@@ -394,6 +394,28 @@ describe("buildBuiltInSkillManifest · families", () => {
       // Control: without the family filter the same Lark skill does reach it.
       manifest.buildBuiltInSkillManifest({})
       expect(probe).toHaveBeenCalled()
+    })
+    jest.dontMock("./lark/capabilities")
+  })
+
+  it("never consults the Lark CLI for a platform it cannot serve", () => {
+    const probe = jest.fn()
+    jest.isolateModules(() => {
+      jest.doMock("./lark/capabilities", () => ({
+        ...jest.requireActual<typeof import("./lark/capabilities")>("./lark/capabilities"),
+        getCachedLarkCliCapabilityDiagnostics: () => null,
+        probeLarkCliCapabilities: probe,
+      }))
+      const manifest = jest.requireActual<typeof import("./manifest")>("./manifest")
+      const registry = jest.requireActual<typeof import("./registry")>("./registry")
+      registry.registerBuiltInSkill(mkSkill())
+
+      expect(
+        manifest.buildBuiltInSkillManifest({
+          imBinding: { platform: "telegram", adapterId: "tg-1", conversationKey: "k" },
+        })
+      ).toEqual([])
+      expect(probe).not.toHaveBeenCalled()
     })
     jest.dontMock("./lark/capabilities")
   })

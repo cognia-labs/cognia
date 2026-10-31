@@ -5,21 +5,33 @@ jest.mock("@/lib/execution/acting-authority", () => ({
 import { observeActingAuthority, snapshotActingAuthority } from "@/lib/execution/acting-authority"
 jest.mock("@/lib/db/schema", () => ({ getDb: jest.fn() }))
 jest.mock("@/lib/db/adapter-instances", () => ({ getAdapterInstance: jest.fn() }))
-jest.mock("../context", () => ({ resolveBuiltInSkillTurnActors: jest.fn() }))
-jest.mock("@/lib/connectors/tauri/commands", () => ({ connectorsLarkUserAuth: jest.fn() }))
+jest.mock("../context", () => ({
+  ...jest.requireActual("../context"),
+  resolveBuiltInSkillTurnActors: jest.fn(),
+}))
+jest.mock("@/lib/connectors/tauri/commands", () => ({
+  connectorsLarkUserAuth: jest.fn(),
+  connectorsHttpRequest: jest.fn(),
+}))
 
 import { getDb } from "@/lib/db/schema"
 import { getAdapterInstance } from "@/lib/db/adapter-instances"
 import { resolveBuiltInSkillTurnActors } from "../context"
 import { assertLarkActingIdentity } from "./acting-identity"
 import type { BuiltInSkillActingSenders } from "../types"
-import { connectorsLarkUserAuth } from "@/lib/connectors/tauri/commands"
+import { connectorsLarkUserAuth, connectorsHttpRequest } from "@/lib/connectors/tauri/commands"
+import { larkUserRequest } from "@/lib/connectors/adapters/lark/http"
+import {
+  registerSubagentApprovalRoute,
+  __clearAllSubagentApprovalRoutesForTesting,
+} from "@/lib/claude/agents/subagent-approval-routes"
 
 const sessionGet = jest.fn()
 const binding = { platform: "lark", adapterId: "a1", conversationKey: "chat" }
 
 beforeEach(() => {
   jest.clearAllMocks()
+  __clearAllSubagentApprovalRoutesForTesting()
   jest.mocked(connectorsLarkUserAuth).mockResolvedValue({
     configured: true,
     accessToken: "owner-token",
@@ -190,6 +202,82 @@ it("allows local sessions without a platform binding", async () => {
   await expect(assertLarkActingIdentity("a1", { sessionId: "s1" })).resolves.toBeUndefined()
   expect(getAdapterInstance).not.toHaveBeenCalled()
   expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+})
+
+it("refuses an absent context before reading the personal authorization", async () => {
+  await expect(assertLarkActingIdentity("a1")).rejects.toMatchObject({
+    name: "LarkActingIdentityError",
+  })
+  expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+})
+
+it("checks the root's live senders for a hidden child, including newly steered non-owners", async () => {
+  sessionGet.mockImplementation(async (id) =>
+    id === "child"
+      ? { parentSessionId: "s1", kind: "subagent", visibility: "embedded" }
+      : { platformBinding: binding }
+  )
+  await expect(assertLarkActingIdentity("a1", { sessionId: "child" })).resolves.toMatchObject({
+    accessToken: "owner-token",
+  })
+  expect(resolveBuiltInSkillTurnActors).toHaveBeenCalledWith("chat", "a1", "s1")
+  jest
+    .mocked(resolveBuiltInSkillTurnActors)
+    .mockResolvedValue({ actingSenders: [{ remoteUserId: "other" }] })
+  await expect(assertLarkActingIdentity("a1", { sessionId: "child" })).rejects.toMatchObject({
+    reason: "sender_not_token_owner",
+  })
+})
+
+it.each(["cycle", "missing", "depth"])(
+  "refuses invalid hidden-child ancestry: %s",
+  async (reason) => {
+    sessionGet.mockImplementation(async (id) => {
+      if (reason === "cycle") return { parentSessionId: id }
+      if (reason === "depth") return { parentSessionId: `${id}:next` }
+      return id === "child" ? { parentSessionId: "gone" } : undefined
+    })
+    await expect(assertLarkActingIdentity("a1", { sessionId: "child" })).rejects.toMatchObject({
+      reason: "sender_not_token_owner",
+    })
+    expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  }
+)
+
+it("refuses a row-less session without lineage in both personal entrypoints", async () => {
+  sessionGet.mockResolvedValue(undefined)
+  await expect(
+    assertLarkActingIdentity("a1", { sessionId: "dispatch:placeholder" })
+  ).rejects.toMatchObject({ reason: "sender_not_token_owner" })
+  await expect(
+    larkUserRequest("a1", { appId: "app", appSecret: "secret" }, "GET", "/test", undefined, {
+      sessionId: "workflow:run",
+    })
+  ).rejects.toMatchObject({ reason: "sender_not_token_owner" })
+  expect(connectorsLarkUserAuth).not.toHaveBeenCalled()
+  expect(connectorsHttpRequest).not.toHaveBeenCalled()
+})
+
+it("checks the root owner for a row-less foreground child with host lineage", async () => {
+  registerSubagentApprovalRoute("foreground", {
+    parentSessionId: "s1",
+    runId: "run",
+    subagentId: "agent",
+    backgrounded: false,
+  })
+  sessionGet.mockImplementation(async (id) =>
+    id === "s1" ? { platformBinding: binding } : undefined
+  )
+  await expect(assertLarkActingIdentity("a1", { sessionId: "foreground" })).resolves.toMatchObject({
+    accessToken: "owner-token",
+  })
+  expect(resolveBuiltInSkillTurnActors).toHaveBeenCalledWith("chat", "a1", "s1")
+  jest
+    .mocked(resolveBuiltInSkillTurnActors)
+    .mockResolvedValue({ actingSenders: [{ remoteUserId: "other" }] })
+  await expect(assertLarkActingIdentity("a1", { sessionId: "foreground" })).rejects.toMatchObject({
+    reason: "sender_not_token_owner",
+  })
 })
 
 it("uses the explicit verified clicker on confirmation, never the running job", async () => {

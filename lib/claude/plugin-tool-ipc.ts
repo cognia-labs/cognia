@@ -1004,7 +1004,10 @@ async function runPluginToolExec(
         }
         try {
           const result = await tool.execute(request.args, context)
-          return { ...baseResponse, result: assertSafePluginToolResult(result) }
+          return {
+            ...baseResponse,
+            result: assertSafePluginToolResult(result),
+          }
         } finally {
           invocationProject.dispose()
         }
@@ -1041,7 +1044,10 @@ async function runPluginToolExec(
             reason: `chat:plugin_tool_exec:${request.name}`,
             project: invocationProject.api,
           })
-          return { ...baseResponse, result: assertSafePluginToolResult(result) }
+          return {
+            ...baseResponse,
+            result: assertSafePluginToolResult(result),
+          }
         } finally {
           invocationProject.dispose()
         }

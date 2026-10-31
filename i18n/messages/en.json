@@ -34469,6 +34469,7 @@
         "failedDetail": "The provider returned an error: {error} ({description})",
         "failedHint": "You can close this window and try again from the plugin.",
         "missing": "No authorization response arrived. Close this window and start sign-in again from the plugin.",
+        "returnToApp": "Return to Cognia",
         "working": "Completing sign-in…"
       }
     },
@@ -65882,6 +65883,15 @@
     "send": "Send"
   },
   "workflows": {
+    "approvals": {
+      "fanout": {
+        "approve": "Approve",
+        "cancel": "Cancel",
+        "replyHint": "Reply 1 to approve / 2 to cancel",
+        "summary": "Mirror this workflow's run progress into this conversation.",
+        "title": "Subscribe to “{name}”"
+      }
+    },
     "canvasToast": {
       "completed": "Workflow completed",
       "exported": "Workflow JSON downloaded",

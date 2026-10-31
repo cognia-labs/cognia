@@ -955,6 +955,9 @@ describe("executeAgent", () => {
       const result = await executeAgent("do work", { toolsEnabled: true, systemPrompt: "be terse" })
       expect(result.channel).toBe("sidecar")
       expect(result.toolsAvailable).toBe(true)
+      expect(mockCreateSession).toHaveBeenCalledWith(
+        expect.objectContaining({ programmaticCreator: "plugin-agent-executor" })
+      )
       expect(result.text).toBe("tool-enabled reply")
       expect(mockResolveSendOptions).toHaveBeenCalled()
       expect(mockRunAndCapture).toHaveBeenCalledWith(

@@ -735,6 +735,7 @@ describe("executeChatTask", () => {
     expect(createSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         projectId: "proj-task",
+        programmaticCreator: "scheduler",
         origin: { kind: "scheduled-task", taskId: "task-1", taskName: "Test", runId: "exec-1" },
       })
     )

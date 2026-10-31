@@ -177,6 +177,7 @@ export async function runProbe(input: ProbeInput, deps: ProbeRunnerDeps): Promis
 
   const session = await deps.createSession({
     title: `Harness probe ${label}`,
+    programmaticCreator: "harness-probe",
     characterId: input.baseCharacter.id,
     memoryLearn: false,
     visibility: "embedded",
@@ -451,6 +452,7 @@ export async function discoverProbeToolSurface(
   const { probePluginToolDenials } = await import("./probe-policy")
   const session = await deps.createSession({
     title: "Harness probe surface",
+    programmaticCreator: "harness-probe",
     characterId: input.baseCharacter.id,
     memoryLearn: false,
     visibility: "embedded",

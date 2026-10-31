@@ -1915,6 +1915,9 @@ export type PluginToolRegistration = Omit<PluginTool, "pluginId"> & {
  * Context passed to tool execution
  */
 export interface PluginToolContext {
+  /** Host-generated logical call identity, stable across this invocation's retries. */
+  invocationId?: string
+
   /** Current session ID */
   sessionId?: string
 

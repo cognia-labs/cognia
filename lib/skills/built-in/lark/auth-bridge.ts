@@ -7,10 +7,9 @@
  * force users to run `lark-cli config init` / `auth login` again.
  *
  * Resolution order:
- *   1. Caller-supplied adapterId (skill ctx)
- *   2. First enabled Lark adapter instance (single-Lark default)
- *   3. Any Lark adapter row even if disabled (so onboarding surfaces a
- *      precise "Lark adapter is disabled — enable it" error)
+ *   1. The authoritative root IM session's Lark adapter (cannot be overridden)
+ *   2. An explicitly selected adapter in a local session
+ *   3. The sole enabled Lark adapter; multiple accounts require a selection
  *
  * Reads:
  *   - keyring `<adapterId>:appId` (where the settings form and the OAuth
@@ -28,6 +27,8 @@ import { getAdapterInstance, listAdapterInstancesByType } from "@/lib/db/adapter
 import { connectorsKeyringGet } from "@/lib/connectors/tauri/commands"
 import { getTenantToken } from "@/lib/connectors/adapters/lark/auth"
 import { observeTenantServiceData } from "@/lib/execution/acting-authority"
+import type { AdapterInstanceRow } from "@/lib/db/connector-types"
+import { resolveBuiltInSkillSessionBinding } from "../context"
 import { assertLarkActingIdentity, LarkActingIdentityError } from "./acting-identity"
 import type { BuiltInSkillContext } from "../types"
 
@@ -40,28 +41,18 @@ export interface LarkAuthBridgeOk {
   /** Identity the env will run lark-cli as. */
   identity: LarkAuthIdentity
   /**
-   * Env-var overlay to pass to lark-cli. Caller merges this onto
-   * `process.env` before `execFile` — see `exec-lark-cli.ts`.
-   *
-   * Variables:
-   *   - `LARK_APP_ID`              app id (cli_...)
-   *   - `LARK_APP_SECRET`          app secret (kept in keyring; passed
-   *                                ephemerally as env, never written to
-   *                                disk by us)
-   *   - `LARK_USER_ACCESS_TOKEN`   present only when `identity === "user"`
-   *   - `LARK_TENANT_ACCESS_TOKEN` present only when `identity === "bot"`
-   *
-   * Note: lark-cli reads its own config at `~/.lark-cli/config.json` by
-   * default. The env-var path is documented as a fallback in
-   * lark-shared SKILL.md; v1 ships env-only. If a deployment env
-   * doesn't honour the env-var path, the auth bridge falls back to
-   * writing an ephemeral config — wired in v2.
+   * CLI 1.0.98 environment credentials. Explicit empty values override
+   * inherited profile, auth-proxy and alternate-token selectors in the
+   * desktop process bridge. Credentials stay ephemeral; no CLI profile is
+   * created or changed. The selected environment provider owns the account.
    */
   env: Record<string, string>
 }
 
 export type LarkAuthBridgeError =
   | { ok: false; reason: "no_adapter"; message: string }
+  | { ok: false; reason: "ambiguous_adapter" | "adapter_mismatch"; message: string }
+  | { ok: false; reason: "invalid_adapter"; message: string; adapterId: string }
   | { ok: false; reason: "adapter_disabled"; message: string; adapterId: string }
   | { ok: false; reason: "missing_app_id"; message: string; adapterId: string }
   | { ok: false; reason: "missing_app_secret"; message: string; adapterId: string }
@@ -78,9 +69,8 @@ export type LarkAuthBridgeResult = LarkAuthBridgeOk | LarkAuthBridgeError
 export interface ResolveLarkAuthInput {
   context?: BuiltInSkillContext
   /**
-   * Specific adapter to resolve. When omitted, the bridge picks the
-   * first enabled Lark adapter (sufficient for the common single-Lark
-   * setup).
+   * Specific Cognia connection, never a local CLI profile. IM sessions
+   * cannot select a different adapter; local multi-account calls must select.
    */
   adapterId?: string
   /**
@@ -96,23 +86,9 @@ export interface ResolveLarkAuthInput {
 export async function resolveLarkAuth(
   input: ResolveLarkAuthInput = {}
 ): Promise<LarkAuthBridgeResult> {
-  const adapter = await pickAdapter(input.adapterId).catch(() => undefined)
-  if (!adapter) {
-    return {
-      ok: false,
-      reason: "no_adapter",
-      message:
-        "No Lark adapter configured. Connect Lark via Settings → Connectors before invoking Lark skills.",
-    }
-  }
-  if (!adapter.enabled) {
-    return {
-      ok: false,
-      reason: "adapter_disabled",
-      message: `Lark adapter "${adapter.displayName}" is disabled. Enable it via Settings → Connectors.`,
-      adapterId: adapter.id,
-    }
-  }
+  const selection = await resolveLarkAdapter(input)
+  if (!selection.ok) return selection
+  const { adapter } = selection
 
   const appId =
     (await safeKeyringGet(adapter.id, "appId"))?.trim() ||
@@ -151,11 +127,7 @@ export async function resolveLarkAuth(
         ok: true,
         adapterId: adapter.id,
         identity: "user",
-        env: {
-          LARK_APP_ID: appId,
-          LARK_APP_SECRET: appSecret,
-          LARK_USER_ACCESS_TOKEN: userToken,
-        },
+        env: larkCliEnv(appId, appSecret, "user", userToken),
       }
     }
     return {
@@ -183,11 +155,7 @@ export async function resolveLarkAuth(
       ok: true,
       adapterId: adapter.id,
       identity: "bot",
-      env: {
-        LARK_APP_ID: appId,
-        LARK_APP_SECRET: appSecret,
-        LARK_TENANT_ACCESS_TOKEN: tenantToken,
-      },
+      env: larkCliEnv(appId, appSecret, "bot", tenantToken),
     }
   } catch (err) {
     return {
@@ -206,15 +174,117 @@ export async function resolveLarkAuth(
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function pickAdapter(adapterId: string | undefined) {
-  if (adapterId) {
-    return getAdapterInstance(adapterId)
+/** Select without accessing credentials, so preflight can pin the account before approval. */
+export async function resolveLarkAdapter(
+  input: Pick<ResolveLarkAuthInput, "adapterId" | "context"> = {}
+): Promise<{ ok: true; adapter: AdapterInstanceRow } | LarkAuthBridgeError> {
+  const contextId = input.context?.larkAdapterId
+  let selectedId = input.adapterId ?? contextId
+  if (input.adapterId && contextId && input.adapterId !== contextId) {
+    return { ok: false, reason: "adapter_mismatch", message: "Lark account selections disagree." }
   }
-  const all = await listAdapterInstancesByType("lark")
-  // Prefer enabled rows; fall back to any row so the caller's error
-  // message can be precise ("disabled" vs "not configured").
-  const enabled = all.find((r) => r.enabled)
-  return enabled ?? all[0]
+  if (input.context) {
+    try {
+      const { binding } = await resolveBuiltInSkillSessionBinding(input.context.sessionId)
+      const supplied = input.context.imBinding
+      if (
+        (binding &&
+          (binding.platform !== "lark" ||
+            !binding.adapterId ||
+            !binding.conversationKey ||
+            (selectedId !== undefined && selectedId !== binding.adapterId))) ||
+        (supplied &&
+          (!binding ||
+            supplied.platform !== binding.platform ||
+            supplied.adapterId !== binding.adapterId ||
+            supplied.conversationKey !== binding.conversationKey))
+      ) {
+        return {
+          ok: false,
+          reason: "adapter_mismatch",
+          message: "Lark actions must use the connection bound to this conversation.",
+        }
+      }
+      if (binding) selectedId = binding.adapterId
+    } catch {
+      return {
+        ok: false,
+        reason: "adapter_mismatch",
+        message: "Lark conversation account binding could not be verified.",
+      }
+    }
+  }
+  try {
+    let adapter: AdapterInstanceRow | undefined
+    if (selectedId !== undefined) {
+      adapter = await getAdapterInstance(selectedId)
+    } else {
+      const all = await listAdapterInstancesByType("lark")
+      const enabled = all.filter((row) => row.enabled)
+      if (enabled.length > 1) {
+        return {
+          ok: false,
+          reason: "ambiguous_adapter",
+          message:
+            "Multiple Lark connections are enabled. Choose the intended connection explicitly with adapterId.",
+        }
+      }
+      adapter = enabled[0] ?? (all.length === 1 ? all[0] : undefined)
+    }
+    if (!adapter) {
+      return {
+        ok: false,
+        reason: "no_adapter",
+        message:
+          "No Lark adapter configured for this selection. Connect Lark via Settings → Connectors before invoking Lark skills.",
+      }
+    }
+    if (adapter.type !== "lark") {
+      return {
+        ok: false,
+        reason: "invalid_adapter",
+        message: "The selected connection is not a Lark adapter.",
+        adapterId: adapter.id,
+      }
+    }
+    if (!adapter.enabled) {
+      return {
+        ok: false,
+        reason: "adapter_disabled",
+        message: `Lark adapter "${adapter.displayName}" is disabled. Enable it via Settings → Connectors.`,
+        adapterId: adapter.id,
+      }
+    }
+    return { ok: true, adapter }
+  } catch {
+    return {
+      ok: false,
+      reason: "no_adapter",
+      message: "No Lark adapter could be resolved. Check the configured Lark connection.",
+    }
+  }
+}
+
+function larkCliEnv(
+  appId: string,
+  appSecret: string,
+  identity: LarkAuthIdentity,
+  token: string
+): Record<string, string> {
+  return {
+    LARKSUITE_CLI_APP_ID: appId,
+    LARKSUITE_CLI_APP_SECRET: appSecret,
+    LARKSUITE_CLI_BRAND: "feishu",
+    LARKSUITE_CLI_USER_ACCESS_TOKEN: identity === "user" ? token : "",
+    LARKSUITE_CLI_TENANT_ACCESS_TOKEN: identity === "bot" ? token : "",
+    LARKSUITE_CLI_DEFAULT_AS: identity,
+    LARKSUITE_CLI_STRICT_MODE: identity,
+    LARKSUITE_CLI_PROFILE: "",
+    LARKSUITE_CLI_CONFIG_DIR: "",
+    LARKSUITE_CLI_AUTH_PROXY: "",
+    LARKSUITE_CLI_PROXY_KEY: "",
+    LARKSUITE_CLI_TENANT_ACCESS_TOKEN_SOURCE: "",
+  }
 }
 
 async function safeKeyringGet(adapterId: string, key: string): Promise<string | undefined> {

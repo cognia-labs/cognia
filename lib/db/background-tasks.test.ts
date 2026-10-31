@@ -254,6 +254,7 @@ describe("durable background admission", () => {
   it("commits a persistent owned child with its admission and marks before dispatch", async () => {
     const handle = await admitBackgroundDispatch(admissionRow())
     expect(await getDb().sessions.get("child-bg-1")).toMatchObject({
+      programmaticCreator: "background-task",
       kind: "subagent",
       parentSessionId: "ses_1",
       attachedChild: { lifecycleOwnerSessionId: "ses_1" },

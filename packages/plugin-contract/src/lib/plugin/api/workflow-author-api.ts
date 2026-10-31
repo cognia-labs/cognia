@@ -156,7 +156,13 @@ export interface PluginWorkflowAuthorAPI {
     workflowId: string
     runParams?: Record<string, unknown>
     triggeredFrom: WorkflowTriggeredFrom
-  }): Promise<{ surfaceId: string; workflowName: string; surface: A2UISegmentContent }>
+  }): Promise<{ sent: true; surfaceId: string; workflowName: string; surface: A2UISegmentContent }>
+  /** The host sends both workflow approval cards; callers must not re-emit them. */
+  prepareFanoutApproval(input: {
+    workflowId: string
+    workflowName: string
+    triggeredFrom: WorkflowTriggeredFrom
+  }): Promise<{ sent: true; surfaceId: string; workflowName: string; surface: A2UISegmentContent }>
   recordCallbackBinding(input: RecordPluginWorkflowCallbackInput): Promise<void>
   buildApprovalSurface(input: {
     bindingId: string

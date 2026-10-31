@@ -1067,6 +1067,7 @@ async function persistBusinessProjection(
       const seed = sessionSeed
       await db.sessions.add({
         id: action.sessionId,
+        programmaticCreator: "host-state",
         title: action.action.title?.trim() || "New conversation",
         titleAuto: !action.action.title,
         transcriptRevision: 0,
@@ -1116,6 +1117,7 @@ async function persistBusinessProjection(
       }
       await db.sessions.add({
         id: action.sessionId,
+        programmaticCreator: "host-state",
         ...(handoff
           ? {
               handoffLock: {

@@ -2833,6 +2833,9 @@ export const PLUGIN_API_RESOURCE_EFFECTS = {
   "ctx.workflow.prepareWorkflowApproval": {
     kind: "none",
   },
+  "ctx.workflow.prepareFanoutApproval": {
+    kind: "none",
+  },
   "ctx.workspace.acquire": {
     kind: "returned-handle",
     disposeMethod: "release",

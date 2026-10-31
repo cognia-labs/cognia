@@ -1,7 +1,8 @@
-import { assistantReplyToSegments, buildA2UISegment } from "./a2ui-to-segments"
+import { assistantReplyToSegments, buildA2UISegment, readA2UISurface } from "./a2ui-to-segments"
 import type { A2UISegmentContent } from "@/types/connectors/segment"
 import { trackInboxEvent } from "@/lib/telemetry/inbox-events"
-
+import { CALLBACK_PREFIXES } from "@/lib/connectors/hitl/callback-prefixes"
+import { buildApprovalSurface } from "./workflow-to-a2ui"
 jest.mock("@/lib/telemetry/inbox-events", () => ({ trackInboxEvent: jest.fn() }))
 
 const SURFACE: A2UISegmentContent = {
@@ -54,6 +55,120 @@ describe("buildA2UISegment", () => {
 })
 
 describe("assistantReplyToSegments", () => {
+  it.each(["text", "generic-tool", "wire"])(
+    "strips a model-relayed workflow card from %s",
+    (source) => {
+      const surface = buildApprovalSurface({ bindingId: "relay", workflowName: "Daily" })
+      const result = { surfaceId: "workflow:relay", surface }
+      const wire = {
+        surface: { id: result.surfaceId },
+        components: Object.entries(surface.components).map(([id, component]) => ({
+          ...(component as object),
+          id,
+        })),
+        dataModel: surface.dataModel,
+      }
+      const [segment] = assistantReplyToSegments({
+        text: source === "generic-tool" ? "" : fence(source === "wire" ? wire : result),
+        ...(source === "generic-tool" ? { a2uiSurfaces: { [result.surfaceId]: surface } } : {}),
+      })
+      if (segment.type !== "a2ui") throw new Error("Missing surface")
+      expect(segment.content.components.approve).not.toHaveProperty("value")
+      expect(segment.content.components.cancel).not.toHaveProperty("value")
+      // The trusted host builder remains usable for direct delivery.
+      expect(buildA2UISegment(result.surfaceId, surface).content.components.approve).toHaveProperty(
+        "value",
+        "wfapp:relay"
+      )
+    }
+  )
+
+  it.each(["future_callback:existing", "help:existing", "issue:existing", "notification:existing"])(
+    "strips unknown callback namespaces as well: %s",
+    (value) => {
+      const surface = {
+        rootId: "button",
+        components: { button: { component: "Button", value } },
+        dataModel: {},
+      }
+      const [projected] = assistantReplyToSegments({ text: "", a2uiSurfaces: { s: surface } })
+      if (projected.type !== "a2ui") throw new Error("Missing surface")
+      expect(projected.content.components.button).not.toHaveProperty("value")
+      expect(buildA2UISegment("s", surface).content.components.button).toHaveProperty(
+        "value",
+        value
+      )
+    }
+  )
+
+  it("preserves ordinary button values while dropping host confirmation references", () => {
+    const components = {
+      root: { component: "Column", children: ["ordinary", "workflow", "host"] },
+      ordinary: { component: "Button", value: "choice-1", text: "Choose" },
+      workflow: { component: "Button", value: "wfapp:existing-workflow-binding", text: "Review" },
+      host: { component: "Button", value: "skill_invoke:skill:nonce", text: "More" },
+    }
+    const projected = assistantReplyToSegments({
+      text: "",
+      a2uiSurfaces: { s1: { rootId: "root", components, dataModel: {} } },
+    })[0]
+    if (projected.type !== "a2ui") throw new Error("Missing surface")
+    expect(projected.content.components.ordinary).toHaveProperty("value", "choice-1")
+    expect(projected.content.components.workflow).not.toHaveProperty("value")
+    expect(projected.content.components.host).not.toHaveProperty("value")
+    expect(components.host.value).toBe("skill_invoke:skill:nonce")
+  })
+
+  it.each(
+    CALLBACK_PREFIXES.flatMap((prefix) =>
+      [false, true].flatMap((bound) =>
+        ["text", "generic-tool"].map((source) => ({ prefix, bound, source }))
+      )
+    )
+  )("strips every host callback namespace: %j", ({ prefix, bound, source }) => {
+    const components = {
+      root: {
+        id: "root",
+        component: "Button",
+        text: "View details",
+        value: bound ? { path: "/callback" } : `${prefix}pending`,
+      },
+    }
+    const dataModel = { callback: `${prefix}pending` }
+    const projected = assistantReplyToSegments(
+      source === "text"
+        ? {
+            text: fence({
+              surface: { id: "s1" },
+              components: Object.values(components),
+              dataModel,
+            }),
+          }
+        : { text: "", a2uiSurfaces: { s1: { rootId: "root", components, dataModel } } }
+    )[0]
+    if (projected.type !== "a2ui") throw new Error("Missing surface")
+    expect(projected.content.components.root).not.toHaveProperty("value")
+    expect(components.root).toHaveProperty("value")
+  })
+
+  it("strips all current and future binding hints even from unreachable components", () => {
+    const components = {
+      ...SURFACE.components,
+      hidden: { component: "Button", bindingKind: "skill_invoke", bindingFuture: true },
+    }
+    const projected = assistantReplyToSegments({
+      text: "",
+      a2uiSurfaces: { s1: { ...SURFACE, components } },
+    })[0]
+    expect(projected).toMatchObject({
+      type: "a2ui",
+      content: { components: { hidden: { component: "Button" } } },
+    })
+    if (projected.type !== "a2ui") throw new Error("Missing surface")
+    expect(projected.content.components.hidden).not.toHaveProperty("bindingFuture")
+    expect(components.hidden.bindingKind).toBe("skill_invoke")
+  })
+
   it.each(["a2ui", "A2UI", "json", ""])("extracts %s fences", (language) => {
     expect(assistantReplyToSegments({ text: fence(payload(), language) })[0]).toMatchObject({
       type: "a2ui",
@@ -275,5 +390,41 @@ describe("assistantReplyToSegments", () => {
       a2uiSurfaceOrder: ["missing", "s1"],
     })
     expect(out.filter((s) => s.type === "a2ui")).toHaveLength(1)
+  })
+})
+
+describe("host/plugin surface envelopes", () => {
+  const envelope = { surfaceId: "host:surface", surface: SURFACE }
+  it("accepts the direct and wrapped content shapes", () => {
+    expect(readA2UISurface(envelope)).toEqual({ surfaceId: envelope.surfaceId, content: SURFACE })
+    expect(readA2UISurface({ surfaceId: envelope.surfaceId, ...SURFACE })).toEqual({
+      surfaceId: envelope.surfaceId,
+      content: SURFACE,
+    })
+  })
+  it.each([
+    null,
+    [],
+    { ...envelope, surfaceId: "" },
+    { ...envelope, surfaceId: "__proto__" },
+    { ...envelope, surfaceId: "a2ui-preview:test" },
+    ...[
+      { rootId: "missing" },
+      { rootId: 1 },
+      { components: [] },
+      { dataModel: [] },
+      { surfaceType: "unknown" },
+      { title: 1 },
+      { catalogId: false },
+      { widget: [] },
+      { computed: [] },
+      { components: { root: { component: "Column", children: ["missing"] } } },
+      { components: { root: { component: "Column", children: ["root"] } } },
+      { components: { root: { id: "mismatch", component: "Text" } } },
+      { components: { root: { component: "" } } },
+      { components: { root: null } },
+    ].map((patch) => ({ ...envelope, surface: { ...SURFACE, ...patch } })),
+  ])("rejects an invalid host envelope: %j", (input) => {
+    expect(readA2UISurface(input)).toBeNull()
   })
 })

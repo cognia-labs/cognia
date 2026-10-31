@@ -1,6 +1,6 @@
 import { runLarkCliProcess } from "./process"
 
-export const CERTIFIED_LARK_CLI_VERSION = "1.0.83"
+export const CERTIFIED_LARK_CLI_VERSION = "1.0.98"
 
 export const LARK_CLI_CAPABILITY_MANIFEST = {
   "lark.base.search": ["base", "+title-resolve"],

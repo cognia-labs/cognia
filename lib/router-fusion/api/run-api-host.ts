@@ -139,6 +139,7 @@ export function sessionPort(): SessionPort {
       createSession({
         title,
         titleAuto: true,
+        programmaticCreator: "run-api",
         origin: { kind: "gateway-api", keyId: actor.keyId ?? "local", keyName: actor.keyName },
       }),
     messages: async (sessionId) => visibleMessages(await listMessages(sessionId)),

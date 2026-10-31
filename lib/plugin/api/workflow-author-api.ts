@@ -1,8 +1,13 @@
+import { getRuntimeTranslator } from "@/lib/i18n/runtime-translator"
+import {
+  WF_FANOUT_APPROVE_PREFIX,
+  WF_FANOUT_CANCEL_PREFIX,
+} from "@/lib/connectors/hitl/callback-prefixes"
 /** Host-governed workflow authoring and execution façade for plugins. */
 
 import { getResolvedPermissionCeiling } from "@/lib/claude/agents/dispatch-context-registry"
 import { deriveExternalSessionPermission } from "@/lib/ai/agent/external/policy/permission-cascade"
-import type { WorkflowNodeKind } from "@/types/workflow/visual"
+import type { WorkflowTriggeredFrom, WorkflowNodeKind } from "@/types/workflow/visual"
 import type { NodeCatalogEntry } from "@/lib/workflow/nodes/catalog"
 
 import { getEditorStore, listEditorStores } from "@/lib/workflow/editor/store-registry"
@@ -74,6 +79,39 @@ function requireEditor(workflowId: string) {
   const store = getEditorStore(workflowId)
   if (!store) throw new Error(`Workflow editor for "${workflowId}" is not open.`)
   return store
+}
+
+async function resolveApprovalOrigin(requested: WorkflowTriggeredFrom): Promise<
+  WorkflowTriggeredFrom & {
+    source: "im"
+    sessionId: string
+    adapterId: string
+    conversationKey: string
+  }
+> {
+  if (
+    requested.source !== "im" ||
+    !requested.sessionId ||
+    !requested.adapterId ||
+    !requested.conversationKey
+  )
+    throw new Error("Workflow approval requires an IM origin with a session")
+  const resolved = await resolveWorkflowTriggerOrigin(requested.sessionId)
+  if (
+    !resolved ||
+    resolved.source !== "im" ||
+    resolved.adapterId !== requested.adapterId ||
+    resolved.conversationKey !== requested.conversationKey
+  )
+    throw new Error("Workflow approval origin no longer matches its IM session")
+  // The Host's live sender and conversation are authoritative, never a plugin's copy.
+  return {
+    ...resolved,
+    source: "im",
+    sessionId: requested.sessionId,
+    adapterId: requested.adapterId,
+    conversationKey: requested.conversationKey,
+  }
 }
 
 export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
@@ -194,7 +232,8 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
     findWorkflowById,
     resolveTriggerOrigin: resolveWorkflowTriggerOrigin,
     approvalActorScope,
-    prepareWorkflowApproval: async ({ workflowId, runParams, triggeredFrom }) => {
+    prepareWorkflowApproval: async ({ workflowId, runParams, triggeredFrom: requestedOrigin }) => {
+      const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
       const [
         { holdWorkflowDispatchForApproval },
         { getAdapterInstance },
@@ -208,12 +247,6 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
         import("@/lib/connectors/im-permission-ceiling"),
         import("@/types/connectors/event"),
       ])
-      if (
-        triggeredFrom.source !== "im" ||
-        !triggeredFrom.adapterId ||
-        !triggeredFrom.conversationKey
-      )
-        throw new Error("Workflow approval requires an IM origin")
       const adapter = await getAdapterInstance(triggeredFrom.adapterId)
       if (!adapter) throw new Error("Workflow approval adapter not found")
       const override = (await readForResolution(triggeredFrom.conversationKey)) ?? null
@@ -237,16 +270,102 @@ export function createWorkflowAuthorAPI(): PluginWorkflowAuthorAPI {
         conversationRef: { platform, adapterId: adapter.id },
         initiatorUserId: triggeredFrom.initiator?.remoteUserId,
         permissionCeiling,
-        deliverCard: false,
+        deliverCard: true,
       })
       if (!result.held) throw new Error(result.message)
       return {
+        sent: true,
         surfaceId: result.surfaceId,
         workflowName: result.workflowName,
         surface: result.surface,
       }
     },
+    prepareFanoutApproval: async ({ workflowId, workflowName, triggeredFrom: requestedOrigin }) => {
+      const triggeredFrom = await resolveApprovalOrigin(requestedOrigin)
+      const { adapterId, conversationKey } = triggeredFrom
+      const [{ enqueueGoverned }, { buildA2UISegment }, { parseConversationKey }] =
+        await Promise.all([
+          import("@/lib/connectors/delivery-gateway"),
+          import("@/lib/connectors/a2ui-bridge/a2ui-to-segments"),
+          import("@/types/connectors/event"),
+        ])
+      const { platform } = parseConversationKey(conversationKey)
+      const bindingId = crypto.randomUUID()
+      const surfaceId = `wffanout:${bindingId}`
+      const payload = {
+        workflowId,
+        workflowName,
+        target: { adapterId, conversationKey },
+        createdBy: "claude-tool",
+      }
+      for (const [prefix, kind, componentId] of [
+        [WF_FANOUT_APPROVE_PREFIX, "wf_fanout_approve", "approve"],
+        [WF_FANOUT_CANCEL_PREFIX, "wf_fanout_cancel", "cancel"],
+      ] as const) {
+        await recordCallbackBinding({
+          adapterId,
+          actionId: prefix + bindingId,
+          kind,
+          surfaceId,
+          componentId,
+          conversationKey,
+          payload,
+          actorScope: approvalActorScope(triggeredFrom),
+          allowedActions: ["approve", "cancel"],
+        })
+      }
+      const t = await getRuntimeTranslator("workflows.approvals")
+      const title = t("fanout.title", { name: workflowName })
+      const summary = t("fanout.summary")
+      const approve = t("fanout.approve")
+      const cancel = t("fanout.cancel")
+      const surface = {
+        rootId: "root",
+        surfaceType: "inline" as const,
+        title,
+        dataModel: {},
+        components: {
+          root: { component: "Card", title, children: ["summary", "actions"] },
+          summary: { component: "Text", text: summary },
+          actions: { component: "Row", children: ["approve", "cancel"] },
+          approve: {
+            component: "Button",
+            text: approve,
+            action: "approve",
+            value: WF_FANOUT_APPROVE_PREFIX + bindingId,
+          },
+          cancel: {
+            component: "Button",
+            text: cancel,
+            action: "cancel",
+            value: WF_FANOUT_CANCEL_PREFIX + bindingId,
+          },
+        },
+        widget: {
+          fallbackText: [
+            `# ${title}`,
+            summary,
+            `[${approve}] [${cancel}]`,
+            t("fanout.replyHint"),
+          ].join("\n"),
+        },
+      }
+      await enqueueGoverned({
+        adapterId,
+        conversationKey,
+        source: "ai-run",
+        authorization: { kind: "system-notice", inboundConversationKey: conversationKey },
+        request: {
+          conversationRef: { platform, adapterId },
+          segments: [buildA2UISegment(surfaceId, surface)],
+          metadata: { idempotencyKey: surfaceId },
+        },
+      })
+      return { sent: true, surfaceId, workflowName, surface }
+    },
     recordCallbackBinding: async (input) => {
+      if (input.kind === "skill_invoke")
+        throw new Error("Only the built-in skill dispatcher can issue skill confirmations")
       if (
         (input.kind === "wf_approve" || input.kind === "wf_cancel") &&
         typeof input.payload?.workflowId === "string"

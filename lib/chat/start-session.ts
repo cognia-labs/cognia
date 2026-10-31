@@ -61,6 +61,7 @@ type SessionSeed = Partial<
     | "executionContext"
     | "sdkSessionId"
     | "sdkSessionStorage"
+    | "programmaticCreator"
   >
 >
 

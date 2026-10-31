@@ -61,6 +61,7 @@ import {
 import { useUIStore } from "@/stores/ui"
 import { getPluginConsentBroker } from "../security/consent-broker"
 import { createElement } from "react"
+import { createWorkflowAuthorAPI } from "../api/workflow-author-api"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { Dialog, DialogContent } from "@/components/ui/dialog"
 import * as pluginPiiGate from "@/lib/plugin/api/plugin-pii-gate"
@@ -69,6 +70,11 @@ import {
   __makeSession,
   getSession as getRegistrySession,
 } from "@/lib/plugin/auth/auth-provider-registry"
+
+jest.mock("../api/workflow-author-api", () => {
+  const actual = jest.requireActual("../api/workflow-author-api")
+  return { ...actual, createWorkflowAuthorAPI: jest.fn(actual.createWorkflowAuthorAPI) }
+})
 
 // Keep the real sanitizer while exposing a mutable call-through spy seam.
 jest.mock("@/lib/plugin/api/plugin-pii-gate", () => ({
@@ -571,6 +577,14 @@ describe("createPluginContext", () => {
 
     afterEach(() => {
       __resetPluginCatalogForTesting()
+    })
+
+    it("constructs the host workflow author API without plugin-scoped relay state", () => {
+      createPluginContext(
+        createMockPlugin({ manifest: { ...mockManifest, id: "workflow-owner" } }),
+        mockManager
+      )
+      expect(createWorkflowAuthorAPI).toHaveBeenLastCalledWith()
     })
 
     it("surfaces plugin node default params on the hot-merged catalog entry", () => {
@@ -2675,10 +2689,11 @@ describe("createFullPluginContext", () => {
       name: "office_test",
       pluginId: "spoofed-owner",
       definition: { name: "office_test", description: "test", parametersSchema: {} },
-      execute: jest.fn(),
+      execute: jest.fn(async () => ({ ok: true })),
     })
 
     expect(registry.getTool("office_test")?.pluginId).toBe("test-plugin")
+    expect(await registry.getTool("office_test")?.execute({}, { config: {} })).toEqual({ ok: true })
     const report = await scope.dispose()
     expect(report.failures).toEqual([])
     expect(registry.getTool("office_test")).toBeUndefined()
@@ -2706,7 +2721,10 @@ describe("createFullPluginContext", () => {
       execute: secondExecute,
     })
     await first()
-    expect(registry.getTool("replaceable")?.execute).toBe(secondExecute)
+    const replacement = registry.getTool("replaceable")
+    expect(replacement).toBeDefined()
+    await replacement!.execute({}, { config: {} })
+    expect(secondExecute).toHaveBeenCalledTimes(1)
     await second()
     expect(registry.getTool("replaceable")).toBeUndefined()
   })
@@ -3715,6 +3733,7 @@ describe("ctx → catalog parity", () => {
         "hooks.listOwn",
         "sandbox.fileOperation",
         "workflow.prepareWorkflowApproval",
+        "workflow.prepareFanoutApproval",
       ])
     )
     expect(paths.filter((path) => !catalogMethodIds.has(path))).toEqual([])

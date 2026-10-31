@@ -13,10 +13,15 @@
 
 import { z } from "zod"
 
-import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillMutation } from "../types"
 import type { BuiltInSkillImAccess } from "../types"
-import { argsToFlags, buildConfirmSurface, larkAdapterIdFromCtx, runLarkCli } from "./_helpers"
+import {
+  argsToFlags,
+  buildConfirmSurface,
+  larkAdapterIdFromCtx,
+  registerLarkSkill,
+  runLarkCli,
+} from "./_helpers"
 
 const FAMILY = "lark.task"
 const PLATFORMS = ["lark"] as const
@@ -86,7 +91,7 @@ function mk<S extends z.ZodTypeAny>(input: {
   return skill
 }
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.list_my_tasks",
     mcpToolName: "lark_task_list_my_tasks",
@@ -116,7 +121,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.get_task",
     mcpToolName: "lark_task_get_task",
@@ -132,7 +137,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.search_tasklists",
     mcpToolName: "lark_task_search_tasklists",
@@ -159,7 +164,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.create",
     mcpToolName: "lark_task_create",
@@ -205,7 +210,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.complete",
     mcpToolName: "lark_task_complete",
@@ -226,7 +231,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.update",
     mcpToolName: "lark_task_update",
@@ -258,7 +263,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.assign",
     mcpToolName: "lark_task_assign",
@@ -283,7 +288,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.task.add_to_tasklist",
     mcpToolName: "lark_task_add_to_tasklist",

@@ -77,6 +77,7 @@ describe("shared chat synchronization", () => {
       session.orgId,
       session.id
     )
+    expect((await getDb().sessions.toArray())[0].programmaticCreator).toBe("shared-chat")
     const messages = await getDb().messages.toArray()
     expect(messages.find((message) => message.role === "user")?.metadata).toMatchObject(metadata)
   })

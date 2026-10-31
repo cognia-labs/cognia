@@ -3396,9 +3396,26 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       // should not pay for that at module load.
       const { capabilityFingerprint, effectiveCapabilities, effectiveCapabilitiesForRow } =
         await import("@/lib/connectors/effective-capabilities")
+      let larkCliCapabilityKey = "not-applicable"
+      if (
+        builtInSkillsRequested &&
+        (!session?.platformBinding?.adapterId || session.platformBinding.platform === "lark")
+      ) {
+        const { probeLarkCliCapabilities } = await import("@/lib/skills/built-in/lark/capabilities")
+        // The manifest is synchronous: wait for its CLI prerequisite before
+        // caching the first result, otherwise a cold probe caches no Lark tools.
+        const diagnostics = await probeLarkCliCapabilities()
+        larkCliCapabilityKey = JSON.stringify({
+          certifiedVersion: diagnostics.certifiedVersion,
+          detectedVersion: diagnostics.detectedVersion,
+          ready: diagnostics.ready,
+          affectedSkillIds: [...diagnostics.affectedSkillIds].sort(),
+        })
+      }
       // Memo key: every input that shapes the manifest. Platform + isImSession
       // gate the platform/access/requires filters; the override's `updatedAt`
-      // bumps whenever its `allowedBuiltInSkillIds` change.
+      // bumps whenever its `allowedBuiltInSkillIds` change. CLI diagnostics
+      // keep a refreshed capability result from reusing an unavailable manifest.
       //
       // Channel capabilities used to be static per platform and were left out
       // of the key on that basis. They are per-INSTANCE now — a Slack grant
@@ -3418,7 +3435,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         session?.platformBinding?.adapterId
       )}:${imOverrideRow?.id ?? "none"}:${imOverrideRow?.updatedAt ?? 0}:${capabilityKey}:${
         schedulerFamilyOnly ? "family:schedule" : "all"
-      }`
+      }:${larkCliCapabilityKey}`
       const cachedManifest = builtInSkillsManifestCache.get(skillsCacheKey)
       if (cachedManifest !== undefined) {
         builtInSkillsManifest = cachedManifest
@@ -4202,7 +4219,7 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         // Side-effect import registers the family before the manifest walk.
         await import("@/lib/skills/built-in")
         const { buildBuiltInSkillManifest } = await import("@/lib/skills/built-in/manifest")
-        const conversionEntries = buildBuiltInSkillManifest({})
+        const conversionEntries = buildBuiltInSkillManifest({ families: ["plugin.conversion"] })
           .filter((entry) => entry.skillId.startsWith("plugin.conversion."))
           .map((entry) => ({
             name: entry.name,

@@ -1,0 +1,9 @@
+{
+  "fanout": {
+    "title": "Subscribe to “{name}”",
+    "summary": "Mirror this workflow's run progress into this conversation.",
+    "approve": "Approve",
+    "cancel": "Cancel",
+    "replyHint": "Reply 1 to approve / 2 to cancel"
+  }
+}

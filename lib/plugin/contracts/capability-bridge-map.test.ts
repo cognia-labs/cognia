@@ -33,22 +33,39 @@ import { getPluginPromptEntry } from "@/lib/prompts/plugin-prompts"
 import type { PluginCapability, PluginManifest } from "@/types/plugin"
 import { getProvider, unregisterProvidersByPlugin } from "@/lib/plugin/auth/auth-provider-registry"
 
-describe("auth-provider ownership", () => {
-  afterEach(() => unregisterProvidersByPlugin("auth-order-test"))
+;(registerAuthenticationProvider,
+  describe("auth-provider activation ordering", () => {
+    afterEach(() => unregisterProvidersByPlugin("auth-order-test"))
 
-  it("reserves declarative provider ownership until uninstall", () => {
-    const capability = OVERLAY_REGISTRY_CAPABILITIES["auth-provider"]
-    const def = { id: "declarative-owner-test", label: "Provider" }
-    capability.registerEntry(def, { pluginId: "auth-order-test" })
-    capability.unregisterAllByPlugin("auth-order-test")
-    expect(() => capability.registerEntry(def, { pluginId: "squatter" })).toThrow(
-      /owned by another plugin/
-    )
-    expect(getProvider(def.id)).toBeUndefined()
-  })
-})
+    it("reserves declarative provider ownership until uninstall", () => {
+      const capability = OVERLAY_REGISTRY_CAPABILITIES["auth-provider"]
+      const def = { id: "declarative-owner-test", label: "Provider" }
+      capability.registerEntry(def, { pluginId: "auth-order-test" })
+      capability.unregisterAllByPlugin("auth-order-test")
+      expect(() => capability.registerEntry(def, { pluginId: "squatter" })).toThrow(
+        /owned by another plugin/
+      )
+      expect(getProvider(def.id)).toBeUndefined()
+    })
+  }))
 
 describe("OVERLAY_REGISTRY_CAPABILITIES (PR-D)", () => {
+  it("preserves the live provider registered before manifest contributions", () => {
+    const provider = {
+      id: "auth-order-provider",
+      label: "Live provider",
+      pluginId: "auth-order-test",
+      getSessions: async () => [],
+      createSession: jest.fn(),
+      removeSession: async () => {},
+    }
+    registerAuthenticationProvider(provider)
+    OVERLAY_REGISTRY_CAPABILITIES["auth-provider"].registerEntry(
+      { id: provider.id, label: "Declared provider" },
+      { pluginId: provider.pluginId }
+    )
+    expect(getProvider(provider.id)).toBe(provider)
+  })
   it("covers exactly the capabilities the dispatch loop expects", () => {
     expect(OVERLAY_REGISTRY_CAPABILITY_KEYS).toEqual(
       expect.arrayContaining([

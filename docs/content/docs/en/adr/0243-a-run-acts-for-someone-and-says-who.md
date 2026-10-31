@@ -259,3 +259,79 @@ Phase 1A records acting identity and resolved run authority on `ExecutionRun` in
 New identities name their `rootRunId`; children keep historical identity snapshots while live observations and requester absorption use the root. Metadata recording leaves `updatedAt` unchanged, skips unchanged values, and reaches other devices with the run's next real update. Automatic sources without known human provenance record `external-event`.
 
 Phase 1B labels every tenant-token use by purpose (`transport`, `service-data`, or `adapter-admin`), without changing credential selection or request behavior.
+
+Phase 2-0 closes the child-binding and model-minted-binding holes: child skills inherit root IM rules, model/tool surfaces lose callback binding hints, only dispatcher-issued bindings confirm skills, and conversation-scoped callbacks require matching keys on both sides. Personal Lark access requires a verified local desktop session root or the existing IM owner check; session-less Squad runs retain non-personal skills with unverified personal authority. Phase 3 will restore personal access for locally started Squads through persisted run identity.
+
+
+### Phase 2-0 fix 6 — host cards and session creation audit (2026-10-31)
+
+Workflow run and fan-out approval cards are sent by the Host through governed in-thread delivery after their bindings are recorded. Both APIs re-read the named session's IM origin, reject target mismatches, and use only the Host's live initiator. Workflow-ai supplies its current tool session; the existing `connectors:send` plugin capability remains the boundary for selecting a stored IM session. The workflow-ai tools return `sent: true` acknowledgements without a `surface`, and instruct the model not to re-emit the card. `prepareWorkflowApproval` retains its existing surface fields for contract compatibility. There is no model-relay registry, issuance window or asynchronous projection. Model/tool projection removes every `binding*` hint and every namespace-shaped callback value, including prefixes unknown to the Host. Direct Host builders keep their callbacks. Plugins cannot register dispatcher-only `skill_invoke` bindings.
+
+A confirmation stores the durable root session id; a click after child cleanup hydrates that root and uses the clicker's sender identity. A persisted local team root has the same personal-lane proof as a direct desktop conversation. Session-less Squad runtime remains unverified. The new `programmaticCreator` field is non-indexed and needs no Dexie version change; it never grants `runPluginAgentTurn` ownership.
+
+The audit below enumerates chat-session `createSession` / `sessions.add` callers under `lib/`, `hooks/` and `components/`, plus lifecycle adapters and the shared/Host row projections encountered while tracing them. Classification is about the entry, not its display title; a child follows durable root ancestry before personal authority is decided.
+
+| Entry point | Classification | Durable proof / delegation |
+| --- | --- | --- |
+| `lib/plugin/agent-sdk/session.ts` — `createPluginAgentSession` / resume | programmatic, marked | `plugin-agent-sdk`; resume stamps legacy rows before another send |
+| `lib/ai/agent/agent-executor.ts` — temporary tool session | programmatic, marked | `plugin-agent-executor` |
+| `lib/plugin/api/session-api.ts` — `ctx.session.createSession` | programmatic, marked | `plugin:<id>`; awaited durable row and cache use the same id |
+| `lib/plugin/api/session-seed.ts` — `startSeededSession` | programmatic, marked | `plugin-seed`, including workflow session nodes |
+| `lib/plugin/api/agent-turn.ts` — owned agent turn | programmatic, marked | Existing `agentTurnOwner`; creator markers grant no adoption rights |
+| `lib/workflow/nodes/teams/index.ts` — character-send session | programmatic, marked | `workflow` |
+| `lib/ai/agent/team/teammate/dispatch-teammate.ts` — tool-enabled teammate | programmatic, marked | `team-teammate`; registered run ancestry still resolves the root |
+| `lib/ai/eval/targets/chat.ts` — default evaluation dependency | programmatic, marked | `evaluation` |
+| `lib/agent/composition/verified-fresh-agent.ts` — verification session and DB adapter | programmatic, marked | `verification-agent`; adapter forwards the seed |
+| `lib/harness/runtime/editor-runner.ts` — agentic editor | programmatic, marked | `harness-editor` |
+| `lib/harness/runtime/probe-runner.ts` — probe, surface discovery, DB adapter | programmatic, marked | `harness-probe`; adapter forwards the seed |
+| `lib/best-of-n/runtime.ts` — candidate rows / `sessions.add` | programmatic, marked | `best-of-n` on the shared native/external candidate row |
+| `lib/scheduler/executors/index.ts` — scheduled chat/team | programmatic, marked | `scheduler` |
+| `lib/scheduler/executors/goal-executor.ts` — scheduled goal | programmatic, marked | `scheduler-goal` |
+| `lib/integrations/events.ts` — projected inbox thread | programmatic, marked | `integration-event` and existing `integrationBinding` |
+| `lib/connectors/session-bindings.ts` — `createPlatformSession` / `sessions.add` | programmatic, marked | `connector` and existing `platformBinding` |
+| `lib/connectors/commands/dispatch.ts` — both command creation branches | programmatic, marked | Delegates to `createPlatformSession` |
+| `lib/db/background-tasks.ts` — admitted persistent child / `sessions.add` | programmatic, marked | `background-task` plus parent/attached-child ancestry |
+| `lib/sync/host-state-store.ts` — `session.create` and `session.import` / `sessions.add` | programmatic, marked | `host-state` on both rows |
+| `lib/browser-companion/service.ts` — agent/session creation branches | programmatic, marked | `browser-companion` |
+| `lib/browser-companion/host-dispatch.ts` — production session adapter | programmatic, marked | Stamps `browser-companion` at the Host boundary |
+| `lib/files-library/remote/host-dispatch.ts` — new attachment conversation | programmatic, marked | `remote-files` |
+| `lib/router-fusion/api/run-api-host.ts` — session port | programmatic, marked | `run-api` and existing gateway `origin` |
+| `lib/skills/recording/controller.ts` — controlled trial | programmatic, marked | `skill-trial` |
+| `lib/dev/expose-test-globals.tsx` — anchor/performance and staged fixtures | programmatic, marked | `dev-fixture` on both creation branches |
+| `lib/project-coordinator/thread-session.ts` — thread creation adapter | programmatic, marked | `project-thread`, then attached-child ancestry |
+| `lib/db/sessions.ts` — `createSession` | trusted desktop UI entry / programmatic, marked | Shared persistence primitive; retains the caller seed verbatim |
+| `lib/db/sessions.ts` — `forkSessionFromParent` | trusted desktop UI entry / programmatic, marked | Inherits creator/owner/origin/integration provenance; legacy IM/shared/default-plugin forks get `nonlocal-fork` |
+| `lib/chat/start-session.ts` — `startNewSession` | trusted desktop UI entry / programmatic, marked | Shared lifecycle owner; preserves `programmaticCreator` |
+| `hooks/chat/use-sessions.ts` — `create` | trusted desktop UI entry | Forwards the explicit new-conversation seed |
+| `components/desktop/desktop-chat-workspace.tsx` — New Team Conversation | trusted desktop UI entry | Persisted unbound `kind: team` root; member ids decode to it |
+| `components/goal/goal-quick-create-dialog.tsx` | trusted desktop UI entry | User submits a goal |
+| `components/onboarding/flow.tsx` | trusted desktop UI entry | User selects the first task |
+| `components/settings/chat-templates-section.tsx` | trusted desktop UI entry | User chooses a template |
+| `lib/files-library/use-in-chat.ts` — `resolveUseInChatTarget` | trusted desktop UI entry | User sends a selected file to chat |
+| `lib/pet/chat/seed-main-chat.ts` | trusted desktop UI entry | User hands pet text to the main-chat draft |
+| `lib/shell/start-guild-conversation.ts` — both new-conversation branches | trusted desktop UI entry | Explicit shell agent/team conversation actions |
+| `components/workspace/workspace-recent-conversations.tsx` | trusted desktop UI entry | Workspace new-chat action |
+| `components/providers/initializers/selection-toolbar-initializer.tsx` — both branches | trusted desktop UI entry | Selection-toolbar handoff |
+| `components/settings/data/webdav-sync-card.tsx` | trusted desktop UI entry | User requests setup help |
+| `components/data/export/schedule-card.tsx` | trusted desktop UI entry | User requests cloud setup help |
+| `components/settings/agent-runtime/sdk-session-manager.tsx` | trusted desktop UI entry | User explicitly continues a native SDK conversation |
+| `lib/ai/agent/external/session/open-native-session-in-chat.ts` — chat adapter | trusted desktop UI entry | User explicitly continues a selected native agent session |
+| `components/providers/initializers/tray-panel-initializer.tsx` | trusted desktop UI entry | Tray handoff |
+| `components/providers/tauri-provider.tsx` | trusted desktop UI entry | Launch new-chat action |
+| `hooks/system/use-tauri-events.ts` | trusted desktop UI entry | Native new-chat menu event |
+| `hooks/agents/use-start-agent-chat.ts` | trusted desktop UI entry | User starts an agent chat |
+| `hooks/codeserver/use-code-server-chat-bridge.ts` — staging session | trusted desktop UI entry | Editor handoff stages selected diagnostics/files |
+| `components/chat/message-im-actions.tsx` | trusted desktop UI entry | Continue quoted IM text locally, staged for the operator |
+| `components/chat/composer.tsx` and `components/chat/composer/bottom-toolbar.tsx` | trusted desktop UI entry | Composer launch/runtime choices |
+| `components/agents/builder/agent-builder-setup.tsx` — session adapter | trusted desktop UI entry | User opens the agent builder |
+| `lib/project-coordinator/coordinator-session.ts` | trusted desktop UI entry | User enables/opens the workspace coordinator |
+| `lib/slash-commands/actions/issue.ts` | trusted desktop UI entry | User opens an issue conversation and stages its prompt |
+| `lib/slash-commands/actions/sessions.ts` and `lib/slash-commands/builtin.ts` | trusted desktop UI entry | New-chat actions delegate to the host UI callback |
+| `lib/collab/shared-chat-sync.ts` — shared row projection | programmatic, marked | `shared-chat`; legacy `collaboration` also refuses local personal authority |
+| `lib/sync/host-state-service.ts` — new summary rows | programmatic, marked | `host-state`; existing rows retain their original provenance |
+
+The similarly named calls in `lib/browser/{agent-engine,document-viewer-session,local-client,shared-local-browser}.ts`, `hooks/browser/use-local-browser-session.ts`, `lib/ai/agent/external/manager.ts`, `hooks/agent/use-external-agent.ts`, `lib/canvas/collaboration/crdt-store.ts`, `lib/plugin/api/canvas-api.ts`, `hooks/canvas/use-collaborative-session.ts`, `lib/plugin/api/external-agent-api.ts` and `lib/integrations/github-auth.ts` create browser, external-engine, CRDT or OAuth sessions, not `ChatSession` rows. The `sessions.add` calls under `lib/usage/` and the external manager are `Set.add`. Branches/asides use their existing `parentSessionId` / session `surfaceBinding` lineage; editor/resource workbenches are desktop UI entry points. Import/restore writers were not changed by this creator-field audit.
+
+**Residual risk.** Legacy plugin rows with default titles, `agentTurnOwner`, `origin` or `integrationBinding` are refused without a migration. Resuming through the plugin agent SDK stamps missing provenance before execution, and SDK forks preserve known nonlocal provenance. A legacy plugin-created session with a custom/renamed title and no surviving provenance remains indistinguishable from a desktop row until it is resumed through that SDK; this audit does not infer ownership from arbitrary titles or blanket-relabel existing sessions. Local queue/binding tests do not prove live IM provider delivery.
+
+**Generated contract.** `scripts/plugin/generate-contract.mjs` owns the Rust CLI catalog, Python contract, TypeScript resource effects, plugin-point catalog and plugin-dev API reference. The sandbox blocks the tsx CLI's IPC socket, so generation/check invoke the same exported `generate` function with child tsx execution routed through `node --import tsx`. `pnpm i18n:build` includes the codeserver extension NLS outputs. `crates/cognia-cli/assets/author-types.json` is owned by another session and was not regenerated; its staged declaration has no `prepareFanoutApproval`, so a later `pnpm author-types:bundle` must add that method (and the `sent` result field).

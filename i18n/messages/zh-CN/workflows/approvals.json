@@ -1,0 +1,9 @@
+{
+  "fanout": {
+    "title": "订阅「{name}」",
+    "summary": "把这个 workflow 的运行进度同步到当前会话。",
+    "approve": "同意",
+    "cancel": "取消",
+    "replyHint": "回复 1 同意 / 2 取消"
+  }
+}

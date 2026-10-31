@@ -79,6 +79,14 @@ beforeEach(async () => {
 afterAll(dbFixture.dispose)
 
 describe("startNewSession", () => {
+  it("persists a programmatic caller's creator marker", async () => {
+    const session = await startNewSession({
+      title: "Machine-started",
+      programmaticCreator: "plugin-seed",
+    })
+    expect((await getSession(session.id))?.programmaticCreator).toBe("plugin-seed")
+  })
+
   it("persists the session and makes it the active one", async () => {
     const session = await startNewSession()
 

@@ -317,6 +317,8 @@ export interface ConnectorCallbackBindingRow {
    * `modal_open` two-hop).
    */
   payload?: Record<string, unknown>
+  /** Host dispatcher provenance for skill confirmations; never read from A2UI hints. */
+  skillConfirmationNonce?: string
   // ── Callback authorization guard fields (plan 2026-07-24 Phase 2) ────
   // All optional and absent on every pre-existing row: `&id`-keyed table, so
   // no Dexie version is needed. The guard applies deterministic per-kind

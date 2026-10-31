@@ -133,7 +133,11 @@ export function createBrowserCompanionDeps(
     listWorkspaces: listHostWorkspaces,
     appearance: hostAppearance,
     createSession: async ({ title, projectId }) => {
-      const session = await startNewSession({ title, projectId })
+      const session = await startNewSession({
+        title,
+        projectId,
+        programmaticCreator: "browser-companion",
+      })
       return { id: session.id }
     },
     enqueueMessage: (input) => enqueueOnHostAuthority(payload, resolveHostState, input),

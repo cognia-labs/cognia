@@ -356,9 +356,16 @@ describe("ConnectorBus callback decisions", () => {
       const finish = deferred()
       const onDecision = jest.fn()
       const action = kind === "wf_cancel" ? "cancel" : "approve"
-      jest
-        .mocked(resolveCallbackBinding)
-        .mockResolvedValue(binding(kind, { skillId: "skill", sessionId: "skill-session" }))
+      jest.mocked(resolveCallbackBinding).mockResolvedValue({
+        ...binding(kind, { skillId: "skill", sessionId: "skill-session" }),
+        // A real skill confirmation carries the dispatcher-issued nonce.
+        ...(kind === "skill_invoke"
+          ? {
+              actionId: "skill_invoke:skill:0123456789abcdef0123456789abcdef",
+              skillConfirmationNonce: "0123456789abcdef0123456789abcdef",
+            }
+          : {}),
+      })
       const handler = async () => {
         entered.resolve()
         await finish.promise

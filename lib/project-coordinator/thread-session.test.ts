@@ -111,6 +111,7 @@ describe("createThreadSession", () => {
     )
     expect(startNewSession).toHaveBeenCalledWith(
       expect.objectContaining({
+        programmaticCreator: "project-thread",
         projectId: "p1",
         title: brief.title,
         activate: false,
@@ -160,6 +161,7 @@ describe("createThreadSession", () => {
     )
     expect(startNewSession).toHaveBeenCalledWith(
       expect.objectContaining({
+        programmaticCreator: "project-thread",
         executionLocation: "local",
         rootId: "docs",
         model: "claude-haiku-4-5-20251001",

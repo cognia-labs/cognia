@@ -3858,6 +3858,25 @@ export class ConnectorBus {
     // normal chat-loop on its own.
     if (resolvedBinding?.kind === "skill_invoke") {
       const skillId = String(resolvedBinding.payload?.["skillId"] ?? "")
+      const nonce = resolvedBinding.skillConfirmationNonce
+      if (
+        typeof nonce !== "string" ||
+        !/^[a-f0-9]{32}$/.test(nonce) ||
+        !["skill_invoke:", "skill_cancel:"].some(
+          (prefix) => resolvedBinding.actionId === `${prefix}${skillId}:${nonce}`
+        )
+      ) {
+        decide({ status: "failed" })
+        await appendAudit({
+          adapterId: event.adapterId,
+          kind: "builtin_skill_hitl_rejected",
+          at: Date.now(),
+          conversationKey: resolvedConversationKey ?? undefined,
+          reason: "skill_confirmation_not_dispatcher_issued",
+          fields: { triggerId: event.triggerId },
+        })
+        return true
+      }
       const skillArgs = resolvedBinding.payload?.["args"]
       const value = (event.value ?? "").toLowerCase()
       const cancelled = value === "cancel" || event.actionType === "dismiss"

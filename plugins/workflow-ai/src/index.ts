@@ -23,7 +23,7 @@ import { buildReadTools } from "./tools/read-tools"
 import { buildMutateTools } from "./tools/mutate-tools"
 import { buildLayoutTools } from "./tools/layout-tools"
 import { buildRunTools } from "./tools/run-tools"
-import { buildRunByNameTools, type WorkflowAiTranslate } from "./tools/run-by-name-tools"
+import { buildRunByNameTools } from "./tools/run-by-name-tools"
 import { buildRunTypedTools } from "./tools/run-typed-tools"
 import { buildProposeTools } from "./tools/propose-tools"
 import { buildTemplateTools } from "./tools/template-tools"
@@ -38,7 +38,7 @@ export const manifest = definePluginManifest(manifestJson)
 export function buildWorkflowAiTools(
   workflow: PluginContext["workflow"],
   resources: PluginContext["resources"],
-  t: WorkflowAiTranslate
+  _t?: (key: string, params?: Record<string, string | number>) => string
 ): PluginToolRegistration[] {
   configureWorkflowApi(workflow)
   return [
@@ -48,7 +48,7 @@ export function buildWorkflowAiTools(
     ...buildTemplateTools(),
     ...buildLayoutTools(),
     ...buildRunTools(),
-    ...buildRunByNameTools(t),
+    ...buildRunByNameTools(),
     ...buildRunTypedTools(),
     ...buildResourceTools(resources),
     ...buildNodeKindTools(),

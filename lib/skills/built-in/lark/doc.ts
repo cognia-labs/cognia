@@ -11,10 +11,15 @@
 
 import { z } from "zod"
 
-import { registerBuiltInSkill } from "../registry"
 import type { BuiltInSkill, BuiltInSkillMutation } from "../types"
 import type { BuiltInSkillImAccess } from "../types"
-import { argsToFlags, buildConfirmSurface, larkAdapterIdFromCtx, runLarkCli } from "./_helpers"
+import {
+  argsToFlags,
+  buildConfirmSurface,
+  larkAdapterIdFromCtx,
+  registerLarkSkill,
+  runLarkCli,
+} from "./_helpers"
 
 const FAMILY = "lark.doc"
 const PLATFORMS = ["lark"] as const
@@ -228,7 +233,7 @@ function mk<S extends z.ZodTypeAny>(input: {
   return skill
 }
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.doc.search",
     mcpToolName: "lark_doc_search",
@@ -254,7 +259,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.doc.fetch",
     mcpToolName: "lark_doc_fetch",
@@ -282,7 +287,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.doc.create",
     mcpToolName: "lark_doc_create",
@@ -321,7 +326,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.doc.update",
     mcpToolName: "lark_doc_update",
@@ -362,7 +367,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.doc.upload_image",
     mcpToolName: "lark_doc_upload_image",
@@ -471,7 +476,7 @@ registerBuiltInSkill(
   })
 )
 
-registerBuiltInSkill(
+registerLarkSkill(
   mk({
     id: "lark.doc.delete",
     mcpToolName: "lark_doc_delete",

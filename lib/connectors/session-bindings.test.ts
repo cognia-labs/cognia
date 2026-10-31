@@ -79,6 +79,7 @@ describe("session-bindings", () => {
     expect(session.platformBinding?.deliveryTarget?.sourceMessageId).toBe("m1")
     const stored = await getDb().sessions.get(session.id)
     expect(stored?.platformConversationKey).toBe(KEY)
+    expect(stored?.programmaticCreator).toBe("connector")
   })
 
   it("refreshes the delivery anchor on every later inbound message", async () => {

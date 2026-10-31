@@ -77,6 +77,8 @@ export type BuiltInSkillActingSenders = readonly BuiltInSkillActingSender[] | "u
 export interface BuiltInSkillContext {
   /** The chat session this invocation belongs to. */
   sessionId: string
+  /** Hydrated lineage hint only; personal-token gates must re-resolve host evidence. */
+  personalLane?: "local-session" | "unverified"
   /** Human contributors to this turn; confirmation re-fires carry the verified clicker. */
   actingSenders?: BuiltInSkillActingSenders
   /** Host-owned cancellation; never serialized into persisted confirmation bindings. */
@@ -92,6 +94,12 @@ export interface BuiltInSkillContext {
     platform: PlatformKind
     conversationKey: string
   }
+  /**
+   * Explicit Lark connection selected by a skill argument. This is a routing
+   * request, not authority: the auth bridge still enforces the session's
+   * authoritative IM binding and rejects conflicting account selections.
+   */
+  larkAdapterId?: string
   /** Per-conversation override row, if any — drives HITL / allowlist gates. */
   imOverrideRow?: ConversationOverrideRow
   /** Adapter-level skill ceiling and write-HITL default for IM sessions. */

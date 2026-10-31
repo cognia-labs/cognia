@@ -137,6 +137,7 @@ export async function createThreadSession(
         deps.startNewSession({
           projectId: input.projectId,
           title: input.brief.title,
+          programmaticCreator: "project-thread",
           activate: false,
           rememberChoice: false,
           executionLocation: location,

@@ -56,10 +56,16 @@ const SKILL_INVOKE_TTL_MS = 7 * 24 * 3600 * 1000
  * bystanders in a group.
  */
 async function skillInvokeActorScope(
-  conversationKey: string
+  conversationKey: string,
+  adapterId: string,
+  rootSessionId: string
 ): Promise<import("@/types/connectors/interaction").CallbackActorScope> {
   try {
-    const { initiatorUserId: initiatorId } = await resolveBuiltInSkillTurnActors(conversationKey)
+    const { initiatorUserId: initiatorId } = await resolveBuiltInSkillTurnActors(
+      conversationKey,
+      adapterId,
+      rootSessionId
+    )
     return initiatorId
       ? { mode: "initiator", allowedUserIds: [initiatorId] }
       : { mode: "operators" }
@@ -268,12 +274,19 @@ export async function runBuiltInSkill(
       const { getImElicitationContext } =
         await import("@/lib/connectors/hitl/im-elicitation-context")
       const { getDb } = await import("@/lib/db/schema")
-      const live = getImElicitationContext(ctx.sessionId)
+      const { resolveBuiltInSkillSessionBinding } = await import("./context")
+      let resolved: Awaited<ReturnType<typeof resolveBuiltInSkillSessionBinding>>
+      try {
+        resolved = await resolveBuiltInSkillSessionBinding(ctx.sessionId)
+      } catch {
+        return { status: "error", message: "Confirmation session binding could not be resolved" }
+      }
+      const { binding: stored, rootSessionId } = resolved
+      const live = getImElicitationContext(rootSessionId)
       const signal =
         ctx.signal && live?.signal
           ? AbortSignal.any([ctx.signal, live.signal])
           : (ctx.signal ?? live?.signal)
-      const stored = (await getDb().sessions.get(ctx.sessionId))?.platformBinding
       const target = live ?? stored
       if (
         !target ||
@@ -294,7 +307,11 @@ export async function runBuiltInSkill(
         live?.actorScope ??
         (live?.initiatorUserId
           ? { mode: "initiator" as const, allowedUserIds: [live.initiatorUserId] }
-          : await skillInvokeActorScope(ctx.imBinding.conversationKey))
+          : await skillInvokeActorScope(
+              ctx.imBinding.conversationKey,
+              ctx.imBinding.adapterId,
+              rootSessionId
+            ))
       for (const [componentId, value, action] of [
         ["btn_confirm", actionId, "approve"],
         ["btn_cancel", cancelId, "cancel"],
@@ -328,7 +345,8 @@ export async function runBuiltInSkill(
             conversationKey: ctx.imBinding.conversationKey,
             createdAt: now,
             expiresAt: now + SKILL_INVOKE_TTL_MS,
-            payload: { skillId: skill.id, args: validArgs as never, sessionId: ctx.sessionId },
+            payload: { skillId: skill.id, args: validArgs as never, sessionId: rootSessionId },
+            skillConfirmationNonce: value.slice(value.lastIndexOf(":") + 1),
             actorScope: scope,
             allowedActions: [action],
           })
@@ -581,11 +599,9 @@ function safeStringify(value: unknown): string {
 }
 
 function cryptoRandomId(): string {
-  // Avoid `crypto.randomUUID()` here so test environments without webcrypto
-  // (older fake-indexeddb) still work — `Math.random` is fine for an
-  // action-id namespace where the only requirement is uniqueness within
-  // a TTL window.
-  return Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10)
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("")
 }
 
 async function safeAppendAudit(entry: Parameters<typeof appendAudit>[0]): Promise<void> {

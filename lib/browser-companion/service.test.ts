@@ -26,7 +26,7 @@ const APPEARANCE = {
 interface Harness {
   deps: BrowserCompanionDeps
   rows: Map<string, BrowserSubmissionRow>
-  createdSessions: { title: string; projectId: string }[]
+  createdSessions: { title: string; projectId: string; programmaticCreator: string }[]
   enqueued: { sessionId: string; messageId: string; text: string }[]
   statuses: Map<string, BrowserSubmissionRow["status"]>
   sessionStatusThrows: boolean
@@ -242,7 +242,13 @@ describe("submitBrowserContext", () => {
   it("creates the session in the chosen workspace and enqueues one message", async () => {
     const h = harness()
     const receipt = await submitBrowserContext(h.deps, "browser-a", payload())
-    expect(h.createdSessions).toEqual([{ title: "Summarise the pricing", projectId: "ws-default" }])
+    expect(h.createdSessions).toEqual([
+      {
+        title: "Summarise the pricing",
+        projectId: "ws-default",
+        programmaticCreator: "browser-companion",
+      },
+    ])
     expect(h.enqueued).toHaveLength(1)
     expect(receipt).toMatchObject({
       submissionId: "sub-1",

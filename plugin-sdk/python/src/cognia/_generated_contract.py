@@ -18325,6 +18325,20 @@ API_NAMESPACE_CONTRACTS = [
                     "kind": "none",
                 },
             },
+            {
+                "id": "workflow.prepareFanoutApproval",
+                "name": "prepareFanoutApproval",
+                "requiredPermissions": [
+                    "connectors:send",
+                ],
+                "consentTier": "confirm",
+                "risk": "high",
+                "idempotent": False,
+                "cancellable": False,
+                "resourceEffect": {
+                    "kind": "none",
+                },
+            },
         ],
     },
     {

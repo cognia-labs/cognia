@@ -1198,7 +1198,11 @@ describe("dispatchTeammate — tool-enabled sidecar path", () => {
     // Task Workspace is GA: the teammate session is bound to the ISOLATED
     // execution root, not to the raw repository the team was pointed at.
     expect(createSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "team", workingDir: "/registry/task-run-default" })
+      expect.objectContaining({
+        kind: "team",
+        workingDir: "/registry/task-run-default",
+        programmaticCreator: "team-teammate",
+      })
     )
     expect(resolveSendOptionsMock).toHaveBeenCalledTimes(1)
     // The dispatch names the turn so a lifecycle hook can scope to teammates:

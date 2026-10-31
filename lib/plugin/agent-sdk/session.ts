@@ -144,6 +144,7 @@ export async function createPluginAgentSession(
   const sessionsDb = await import("@/lib/db/sessions")
   const session = await sessionsDb.createSession({
     title: options.title ?? "Plugin Agent Session",
+    programmaticCreator: "plugin-agent-sdk",
     ...(options.characterId ? { characterId: options.characterId } : {}),
     ...(options.cwd ? { workingDir: options.cwd } : {}),
   })
@@ -170,6 +171,9 @@ export async function resumePluginAgentSession(sessionId: string): Promise<Plugi
   const row = await sessionsDb.getSession(sessionId)
   if (!row) {
     throw new Error(`resumeSession: session "${sessionId}" not found`)
+  }
+  if (row.programmaticCreator === undefined) {
+    await sessionsDb.updateSession(row.id, { programmaticCreator: "plugin-agent-sdk" })
   }
   return buildSession(row.id, {
     ...(row.characterId ? { characterId: row.characterId } : {}),

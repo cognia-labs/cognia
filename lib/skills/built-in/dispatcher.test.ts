@@ -29,6 +29,7 @@ import { registerBuiltInSkill, __resetSharedBuiltInSkillRegistry } from "./regis
 import type { BuiltInSkill, BuiltInSkillContext } from "./types"
 import type { ConversationOverrideRow } from "@/lib/db/connector-types"
 import { __resetDbForTesting, getDb, whenSeeded } from "@/lib/db/schema"
+import { resolveBuiltInSkillContext } from "./context"
 
 const hitlSurface = () =>
   buildConfirmSurface({
@@ -95,6 +96,88 @@ beforeEach(async () => {
   __resetDbForTesting()
   getDb()
   await whenSeeded()
+  await getDb().sessions.put({
+    id: "s_x",
+    title: "Root chat",
+    createdAt: 0,
+    updatedAt: 0,
+    platformBinding: {
+      ...imBinding,
+      conversationRef: { platform: "lark", adapterId: "lark-1", channelId: "oc_x" },
+    },
+  })
+})
+
+describe("hidden children inherit dispatcher IM gates", () => {
+  it("runs a non-personal skill for a row-less workflow run with a bare context", async () => {
+    const execute = jest.fn(async () => ({ value: "non-personal-result" }))
+    registerBuiltInSkill(
+      mkSkill({ id: "im.test_read", family: "im", platforms: ["telegram"], execute })
+    )
+    const ctx = await resolveBuiltInSkillContext("workflow:run")
+    expect(ctx).toEqual({ sessionId: "workflow:run" })
+    expect(await runBuiltInSkill("im.test_read", { calendarId: "cal_1" }, ctx)).toMatchObject({
+      status: "ok",
+      data: { value: "non-personal-result" },
+    })
+    expect(execute).toHaveBeenCalledTimes(1)
+  })
+
+  async function childContext() {
+    await getDb().sessions.put({
+      id: "child",
+      title: "Child",
+      kind: "subagent",
+      visibility: "embedded",
+      parentSessionId: "s_x",
+      createdAt: 0,
+      updatedAt: 0,
+    })
+    return resolveBuiltInSkillContext("child")
+  }
+
+  it("applies imAccess and the root conversation allowlist", async () => {
+    const execute = jest.fn()
+    registerBuiltInSkill(mkSkill({ imAccess: "blocked", execute }))
+    expect(
+      await runBuiltInSkill(
+        "lark.calendar.list_events",
+        { calendarId: "cal_1" },
+        await childContext()
+      )
+    ).toMatchObject({ status: "denied" })
+    expect(execute).not.toHaveBeenCalled()
+    __resetSharedBuiltInSkillRegistry()
+    registerBuiltInSkill(mkSkill({ execute }))
+    const ctx = await childContext()
+    ctx.imOverrideRow = mkOverride({ allowedBuiltInSkillIds: [] })
+    expect(
+      await runBuiltInSkill("lark.calendar.list_events", { calendarId: "cal_1" }, ctx)
+    ).toMatchObject({ status: "denied" })
+    expect(execute).not.toHaveBeenCalled()
+  })
+
+  it("routes a child's pending confirmation through the root's live target and stamps its bindings", async () => {
+    const execute = jest.fn()
+    registerBuiltInSkill(mkSkill({ mutation: "write", hitlSurface, execute }))
+    expect(
+      await runBuiltInSkill(
+        "lark.calendar.list_events",
+        { calendarId: "cal_1" },
+        await childContext()
+      )
+    ).toMatchObject({ status: "pending_hitl" })
+    expect(getImElicitationContext).toHaveBeenCalledWith("s_x")
+    expect(execute).not.toHaveBeenCalled()
+    const rows = await getDb().connectorCallbackBindings.toArray()
+    expect(rows).toHaveLength(2)
+    for (const row of rows) {
+      expect(row.skillConfirmationNonce).toMatch(/^[a-f0-9]{32}$/)
+      expect(row.actionId.endsWith(`:${row.skillConfirmationNonce}`)).toBe(true)
+      expect(row.payload?.sessionId).toBe("s_x")
+      expect(row.conversationKey).toBe(imBinding.conversationKey)
+    }
+  })
 })
 
 describe("runBuiltInSkill — unknown skill", () => {
