@@ -7,6 +7,7 @@ description: "Agent 启动的 shell job 或 monitor 完成后，结果送回启�
 
 **状态：** 提议中
 **日期：** 2026-11-01
+**修订：** 2026-11-01，对抗性审查之后
 **相关：** [ADR-0247](./0247-long-lived-work-carries-a-mandate-and-follows-its-threads)（轮次边界送达）、[ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background)（后台保持）、[ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings)（常驻 Host）、[ADR-0248](./0248-a-person-is-never-queued-behind-automated-work)（唤醒属于派生启动）。调研：`docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`。
 
 ## 背景
@@ -26,7 +27,9 @@ DeepSeek 的文章描述了异步（"全双工"）工具：耗时工具先返回
 
 ## 决策
 
-1. **job 和 monitor 都是后台任务。** `BackgroundTaskKind` 新增 `shell-job` 和 `monitor`。监管器接受从 Agent 会话启动的后台 shell，或布置一个 monitor 时，写入一条日志项，以 job 或 monitor 的 id 为键，关联到该会话和运行。`jobs://exited` 和 `jobs://monitor-fired` 负责结算这条日志项；转给调度器的那一路保持不变。
+1. **job 和 monitor 都是后台任务，记录时要防竞态。** `BackgroundTaskKind` 新增 `shell-job` 和 `monitor`，以 job 或 monitor 的 id 为键，关联到启动它的会话和运行。转给调度器的那一路保持不变。
+   - **用幂等 upsert，不用 insert。** 监管器在返回 job 记录之前就已经启动了退出监听（`crates/cognia-jobs/src/supervisor.rs:249-326`），而 sidecar 要等 RPC 返回才拿到 id（`sidecar/src/tools/state/host-background-shells.ts:171-183`）。所以运行很快的 job，可能在日志项创建之前就已经退出。日志项按 job id 做幂等 upsert，并允许终态先到：先看到退出、后看到启动记录时，先建一条已结算的日志项，启动记录到达后只补上会话关联。
+   - **关联标识。** 会话和运行在启动调用时就传进去，这样监管器发出的退出事件本身就带着它们。
 2. **只有一条送达路径。** 已结算的日志项走现有的完成送达机制：正在流式输出的会话在下一个轮次边界接收，多次结算合并成一轮带框输入。框内包含：
    - 类型和 id；
    - 退出码或触发原因；
@@ -39,7 +42,11 @@ DeepSeek 的文章描述了异步（"全双工"）工具：耗时工具先返回
    - **超过上限时，** 结算结果排队等待会话因其他原因开始的下一轮，并发一条通知说明有结果在等。
    - **计入预算。** 唤醒通过现有台账计入运行预算，预算耗尽的会话不再被唤醒。
 5. **Agent 可以逐个 job 选择。** `run_in_background` 新增 `notify: "on_exit" | "none"`，默认 `on_exit`。Agent 用 `kill_shell` 自己停掉的 job 不会唤醒它。已经在调用中内联返回结果的阻塞式 `Monitor` 调用，事后不会再送一次。
-6. **每个运行 Agent 会话的外壳都要有消费者。** 包括桌面聊天 hooks、无头 brain 和 TUI。Host 的 job 监管器必须发出同样的两个事件，第 1 阶段在 Host 上验证这一点之后才在 Host 上发布。在 Host 上确认这两个事件之前，工具结果会如实报告 `notify` 不可用，而不是悄悄忽略。
+6. **每个运行 Agent 会话的外壳都要有消费者**：桌面聊天 hooks、无头 brain 和 TUI。Host 已经会发布这两个事件（`crates/cognia-server/src/main.rs:2797,2806`），所以 Host 上缺的是消费者，不是事件。
+7. **事件可能丢失，所以要对账。** WebView 重载、brain 重启、连接断开期间，事件都可能丢失。消费者每次启动和重连时，都向监管器查询持久化的 jobs 和 monitors（`cognia-jobs` 的 SQLite）：日志里仍是 `running`、但 job 已经结束的，予以结算；已经结束、日志却从没记录过的 job，补建日志项。
+   - **只送达一次。** 沿用现有的批次预留标识，保证送达恰好一次。
+   - **内联结果不重发。** 阻塞式 `Monitor` 调用已经内联返回的结果，标记为已送达，对账时不再重复发送。
+   - **验收用例：** job 在启动 ACK 之前退出；job 运行中消费者重载；同一事件到达两次；同一个 monitor 既内联返回、又异步送达。
 
 ## 实现位置
 
@@ -49,6 +56,7 @@ DeepSeek 的文章描述了异步（"全双工"）工具：耗时工具先返回
 | 结算 | `hooks/system/use-tauri-events.ts`（与调度器转发并行结算）、无头 brain 的事件接线、`cli/src/tui/components/app/use-background-results.ts` |
 | 工具 | `sidecar/src/tools/builtin/core-files/bash.ts`（`notify`）、`monitor.ts`（描述与行为一致）、`sidecar/src/tools/state/host-background-shells.ts` |
 | 唤醒策略 | `hooks/chat/background-result-runtime.ts`（保持中会话与 Host 会话的空闲唤醒、上限、合并、预算检查） |
+| 对账 | 消费者启动与重连时查询 `cognia-jobs` 持久化的 jobs 与 monitors；启动调用携带会话与运行 id |
 
 每个改动到的模块都带同目录测试（规则 3），sidecar 测试套件在 `pnpm sidecar:test` 下运行，通知文案接入 i18n（规则 4）。
 

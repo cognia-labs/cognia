@@ -7,6 +7,7 @@ description: "在常驻 Host 上由外部发起的工作是一项承诺，而不
 
 **状态：** 提议中
 **日期：** 2026-11-01
+**修订：** 2026-11-01，对抗性审查之后
 **相关：** [ADR-0137](./0137-delegation-runtime)（delegation 运行，T0/T1/T2）、[ADR-0132](./0132-issue-tracker)（Issue、Issue 运行与 wakeup）、[ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background)（协调器线程）、[ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings)（常驻 Host）、[ADR-0243](./0243-a-run-acts-for-someone-and-says-who)（代理身份）、[ADR-0244](./0244-a-remote-run-has-stopped-only-when-its-worker-says-so)（停止证明）、[ADR-0239](./0239-an-outbound-action-is-authorized-by-the-request)（外发授权）、[ADR-0198](./0198-a-runs-capabilities-are-granted-not-patched)（能力授予）、[ADR-0131](./0131-cross-shell-inbox-relay)（入站只按规则路由）、[ADR-0194](./0194-a-judgment-is-a-provider-not-a-prompt)（决策执行器）、[ADR-0248](./0248-a-person-is-never-queued-behind-automated-work)、[ADR-0249](./0249-a-background-jobs-completion-reaches-the-agent)。调研：`docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`。
 
 ## 背景
@@ -124,10 +125,12 @@ interface CommitmentMandateV1 {
   - `pr_comment`：被跟随拉取请求或 Issue 上的对话评论。
 
   `pr_state_changed` 和 `pr_checks_changed` 保留。每条记录都带跟随模式、行为者和一个确定性的 `sourceEventId`。
-- **IM。**
-  - 连接器总线对消息去重（总线第 1 步 `ensureConnectorInboundJob`）并准入之后，查找跟随 `im-thread:<conversationKey>` 的承诺。
-  - 在 owner 跟随的话题里，人发的消息会作为 `thread_message` 追加。
-  - 绑定的会话照旧看到这条消息。变化在于承诺现在也能看到，所以会话空闲或已不存在时，承诺也能被唤醒。
+- **IM：每条消息只有一个执行者。**
+  - 连接器总线对消息去重（总线第 1 步 `ensureConnectorInboundJob`）并准入之后，查找以 **owner** 身份跟随 `im-thread:<conversationKey>` 的承诺。
+  - **有这样的承诺**：总线把消息交给该承诺投递，自己不再排入 route-handler 轮次，也不再直接 live-steer。
+  - **承诺投递**（§6）是执行这条消息的唯一路径：steer 承诺的活跃 run、续接上次的会话，或者启动一个 run。人发的消息仍然即时送达，因为投递会把它 live-steer 进去（§6.2）。
+  - **话题没有被任何承诺跟随**：沿用今天的会话路径，不做改动。
+  - **回执**：每次移交都在追加时间线条目的同一个事务里，写入一份以 `(commitmentId, sourceEventId)` 为键的持久化接收回执。崩溃后重放时，发现回执已存在就什么也不做。正是这份回执保证不会有两个消费者对同一条消息动手。
 - **GitHub。**
   - 来自集成的事件（`lib/integrations/events.ts`；App webhook 见 `github-webhook.ts`，个人令牌 webhook 见 `github-repo-webhook.ts`）只要涉及被跟随的 `github-pr` 或 `github-issue`，就立即追加为活动。
   - 拉取请求的状态和检查结果直接从载荷调用 `recordIssuePullRequestState` / `recordIssuePullRequestChecks` 写入。它们只写引用的 `meta`，从不碰镜像水位线。
@@ -136,21 +139,24 @@ interface CommitmentMandateV1 {
 - **轮询降为对账兜底。** 15 分钟同步、`ProjectPrWatch` 和 `PrFeedbackController` 继续运行，但只按同一个 `sourceEventId` 补上 webhook 漏掉的事件。
 - **系统 wakeup 规则。** 提升时安装一条系统 wakeup 规则：匹配来自 owner 跟随的 `thread_message | pr_review | pr_comment | pr_state_changed | pr_checks_changed`，并用 `actorKinds` 排除 Agent 自己。系统规则本来就不受链路访问上限约束，每小时频率上限照常生效。
 - **context 跟随的事件** 只追加到时间线，并且只作为上下文送进正在运行的 run，从不触发 wakeup。
-- **提升之前**，delegation 只跟随它的来源话题：此时它还没有拉取请求，否则早就提升了。来源话题的消息本来就送到绑定的会话，所以 Issue 活动这条路径从提升时开始。丢失会话的 T1 delegation，提升后由同一条规则唤醒；提升前只能由提出请求的人唤醒。
+- **提升之前**，delegation 只跟随它的来源话题：此时它还没有拉取请求，否则早就提升了。总线以同样的方式把该话题的消息交给 delegation：delegation 的投递负责 steer 或续接它的会话，并使用同一种回执。Issue 活动时间线和系统 wakeup 从提升时才开始。
 
 ### 6. 送达与续接
 
 wakeup 执行器现有的三种送达方式不变，只有三处改动：
 
 1. **合并。** 同一承诺的 owner 事件，在一个短窗口内（默认 30 秒，可按工作区设置）到达的，合并成一份 brief（对串联输入调用 `buildWakeupBrief`）。连续五条评审评论只唤醒一轮。
-2. **在轮次边界加入。** 活跃 run 按 steer 队列规则接收 brief，ADR-0249 送达 job 完成结果用的也是这条规则：run 还在流式输出时先排队，这一轮结束后再取出。人的停止或追问仍走 live steer，永不合并。
+2. **事件在轮次边界加入，人的消息即时送达。** 活跃 run 按 steer 队列规则接收事件 brief（评审、CI、评论），ADR-0249 送达 job 完成结果用的也是这条规则：run 还在流式输出时先排队，这一轮结束后再取出。人在 owner 跟随话题里发的消息，以及任何停止请求，都直接 live-steer，从不合并。这样，总线改为把人的消息交给承诺之后，人原先从绑定会话得到的即时性不会丢失。
 3. **续接而不是重开。** 没有活跃 run 时，`startIssueRun` 会拿到 `continueSessionId`，也就是最近一次运行最新的会话（`issueRunSessionIds`）。前提是这个会话仍存在、未归档、且所在运行时支持恢复。只有不满足时，才用 Issue 摘要开一个新会话。
 
 ### 7. 恢复时重新评估授权凭据
 
 每次派生启动（§1）之前，Host 都确定性地重新评估三件事：
 
-- 请求者是否仍有权限：用 `checkActingAuthority` 对照记录下的 `authorityRevision`；
+- **请求者是否仍有权限，并做实时检查。** 不能只比较版本号：
+  - `checkActingAuthority` 只检查身份是否存在、`authorityRevision` 有没有递增（`packages/plugin-contract/src/types/execution/acting-identity.ts:132-139`），而凭据或绑定被撤销时 revision 不一定变化。
+  - 实时权限解析器要读取：当前凭据的授权代际；对绑定个人的运行，还要读取当前的绑定和同意版本。这正是 ADR-0243 §2 对每次调用已经提出的实时检查要求（"快照本身从不授予权限"）。
+  - revision 比较保留，作为一项独立的快照检查；
 - 来源话题的准入规则是否仍接纳该请求者；
 - 范围是否仍在当前上限之内：工作区、根目录、当前策略的 RunAuthority 上限，以及引用的授予。
 
@@ -160,6 +166,11 @@ wakeup 执行器现有的三种送达方式不变，只有三处改动：
 - **不通过**：承诺暂停。delegation 发起一个中断，Issue 暂存它的 wakeup 输入（ADR-0132 已经保证这些输入永不丢弃）。一张卡片发给请求者，有协调器时发给协调器，说明哪一项已经不成立。
 - **人停止过的承诺**（运行被取消、Issue 被移到 `canceled`）永不被事件恢复。输入会被暂存并展示出来。
 - **人撤销时**（撤销凭据、移除跟随、收回请求者的授予）：活跃 run 经 ADR-0244 的停止路径停下。拿到停止证明之前，承诺不显示为已停止。
+
+**本节的验收用例**包括：
+- revision 未变但凭据已撤销；
+- revision 未变但绑定已收回；
+- 人已停止承诺之后又有事件到达。
 
 **上线方式是先 shadow，再 enforce**，和 ADR-0239、ADR-0243 同一模式。
 

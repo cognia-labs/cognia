@@ -64,11 +64,13 @@ Cognia 不需要另起一个 Super-agent 层，因为部件大多已经存在：
 | Effects + Outbox     | 受治理外发队列（`outbound-jobs.ts`、`outbound-runner.ts`），带 `delivery_unknown`；聊天受理（ADR-0125）和通知（ADR-0190）把状态与副作用放在同一事务；router-fusion outbox           | IM 回复的状态变更与入队不在同一事务；`outboundQueue.idempotencyKey` 不唯一。收益递减，本轮不处理                           |
 | Chain of Recall      | `project_history_search`（按消息 id 展开）                                                                                                                                          | 没有跨任务、PR、话题统一的 ID 读取；`artifact_read` 在 8000 字符处截断且不能分页。本轮不处理                               |
 
-## 3. Cognia 已经更强、不应倒退的地方
+## 3. Cognia 设计上更强、但部分尚未生效的地方
 
-- **外发授权在出口强制执行**（ADR-0239）。DeepSeek 的自动合并条件只写在提示词里。
-- **外发不确定时不盲目重发**（`delivery_unknown`）。DeepSeek 允许消息在前序失败三次后越过它。
-- **策略变化时更保守。** 撤销会收窄权限，只有 Worker 自己确认才算停止（ADR-0243、ADR-0244）。DeepSeek 在策略变更时只通知运行中的 Ticket。
+> 修订（第二轮审查）：第一版把下面几条写成了"已经在生效的保证"，这是错误的。这里把"已经存在的机制""按类别可开启的强制""实际已强制的路径""尚待实现的 ADR 保证"分开写。
+
+- **外发授权：机制已在，默认没有强制。** ADR-0239 在出口处做规划，比 DeepSeek 只写在提示词里的合并条件更好；但 `lib/policy/action-review/policy.ts:79-94` 对所有没有显式设为 enforce 的类别都返回 shadow，而 shadow 不改变行为。所以今天它是**观察**，不是**拦截**，覆盖率也没有门禁（见架构审计 §5.2）。
+- **外发不确定时不盲目重发**（`delivery_unknown`）：这一条已经生效。DeepSeek 允许消息在前序失败三次后越过它。
+- **授权收窄与停止证明：设计上更保守，部分仍只做审计。** ADR-0243 规定权限只会收窄，ADR-0244 规定只有 Worker 确认才算停止；但 `observeActingAuthority` 仍是 observe-only，恢复执行时不会拦截（`lib/execution/acting-authority.ts:347-373`），ADR-0244 状态是 Proposed。DeepSeek 在策略变更时只通知运行中的 Ticket。
 - **执行隔离。** Cognia 有沙箱池和工作区边界（ADR-0182/0183、ADR-0227）。DeepSeek 原型的 Router 和 Worker 都是 `danger-full-access`，并能访问运行用户的主目录。
 
 ## 4. 决策与不采纳
@@ -97,9 +99,9 @@ Cognia 不需要另起一个 Super-agent 层，因为部件大多已经存在：
 | 对所有入站消息做 LLM 路由      | ADR-0131 仍然有效。Cognia 的用户群包括单人桌面，多人组织模式还在建设中，先收集证据           |
 | 新建独立的 Ticket 实体         | 已有 delegation、Issue、Agent 任务、目标、计划、团队运行，新实体会成为第七种，进一步分散归属 |
 | 原型的 Effects/Outbox 引擎     | 现有外发队列和事务化受理已经覆盖关键路径，剩余的原子性缺口收益递减                           |
-| 只靠提示词的合并规则           | 与 ADR-0239 的出口强制原则相悖                                                               |
+| 只靠提示词的合并规则           | 与 ADR-0239 的出口规划原则相悖（注意：Cognia 的出口强制目前默认仍是 shadow）                 |
 | "失败三次后放行后续消息"的排序 | 会让读者看到乱序的结论                                                                       |
-| 策略变更只通知                 | 与 ADR-0243"权限只会收窄"的原则相悖                                                          |
+| 策略变更只通知                 | 与 ADR-0243"权限只会收窄"的原则相悖（该原则在恢复路径上尚未强制，见 ADR-0247 §7）            |
 | 统一的 Chain of Recall         | 本轮痛点没有选它，留作后续单独评估                                                           |
 
 ## 5. 验收场景（来自原文，按 Cognia 的决策改写）

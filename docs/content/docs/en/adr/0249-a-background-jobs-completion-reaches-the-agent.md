@@ -7,6 +7,7 @@ description: "A shell job or a monitor the agent started reports its completion 
 
 **Status:** Proposed
 **Date:** 2026-11-01
+**Revised:** 2026-11-01 after adversarial review
 **Related:** [ADR-0247](./0247-long-lived-work-carries-a-mandate-and-follows-its-threads) (turn-boundary delivery), [ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background) (background holds), [ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings) (always-on host), [ADR-0248](./0248-a-person-is-never-queued-behind-automated-work) (wakes are derived). Research: `docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`.
 
 ## Context
@@ -26,7 +27,9 @@ DeepSeek's article describes asynchronous ("full-duplex") tools: a long tool ret
 
 ## Decision
 
-1. **Jobs and monitors are background tasks.** `BackgroundTaskKind` gains `shell-job` and `monitor`. When the supervisor accepts a background shell or arms a monitor started from an agent session, a journal entry is written, keyed by job or monitor id and linked to that session and run. `jobs://exited` and `jobs://monitor-fired` settle the entry; the scheduler relay stays as it is.
+1. **Jobs and monitors are background tasks, recorded race-safely.** `BackgroundTaskKind` gains `shell-job` and `monitor`, keyed by job or monitor id and linked to the session and run that started them. The scheduler relay stays as it is.
+   - **Upsert, not insert.** The supervisor starts its exit listener before it returns the job record (`crates/cognia-jobs/src/supervisor.rs:249-326`), and the sidecar only learns the id when the RPC returns (`sidecar/src/tools/state/host-background-shells.ts:171-183`). A fast job can therefore exit before the journal entry exists. The entry is written as an idempotent upsert keyed by job id that accepts a terminal state arriving first: an exit seen before the start record creates a settled entry, and the later start record only fills in the session link.
+   - **Correlation id.** The session and run are passed into the start call itself, so the supervisor's exit event already carries them.
 2. **One delivery path.** Settled entries use the existing completion delivery. A streaming session takes them at its next turn boundary, and several settlements are merged into one framed turn. The frame carries:
    - kind and id;
    - exit code or fire reason;
@@ -39,7 +42,11 @@ DeepSeek's article describes asynchronous ("full-duplex") tools: a long tool ret
    - **Over the cap.** Settlements queue for the next turn the session takes for any other reason, and one notification says results are waiting.
    - **Budget.** Wakes are charged to the run's budget through the existing ledger. A session whose budget is exhausted is not woken.
 5. **The agent chooses per job.** `run_in_background` gains `notify: "on_exit" | "none"`, default `on_exit`. A job the agent stops itself with `kill_shell` does not wake it. A blocking `Monitor` call that returns its outcome inline does not also deliver it later.
-6. **Every shell that runs agent sessions has a consumer.** That means the desktop chat hooks, the headless brain and the TUI. The host's job supervisor must emit the same two events. Phase 1 verifies that on the host before this ships there. Until the events are confirmed there, `notify` is reported as unavailable in the tool result, never silently ignored.
+6. **Every shell that runs agent sessions has a consumer**: the desktop chat hooks, the headless brain and the TUI. The host already publishes both events (`crates/cognia-server/src/main.rs:2797,2806`), so the gap there is the consumer, not the event.
+7. **Events can be missed, so the state is reconciled.** Events are lost across a WebView reload, a brain restart or a dropped connection. On every consumer start and reconnect, the consumer queries the supervisor's persisted jobs and monitors (SQLite in `cognia-jobs`). It settles every journal entry still `running` whose job has ended, and creates entries for ended jobs the journal never saw.
+   - **Delivered once.** Delivery stays exactly-once through the existing reserved batch identity.
+   - **Inline results.** A result a blocking `Monitor` call already returned inline is marked delivered, so reconciliation never sends it again.
+   - **Acceptance cases:** a job exits before the start ACK; the consumer reloads mid-job; an event arrives twice; inline and asynchronous delivery of the same monitor.
 
 ## Implementation surfaces
 
@@ -49,6 +56,7 @@ DeepSeek's article describes asynchronous ("full-duplex") tools: a long tool ret
 | Settlement | `hooks/system/use-tauri-events.ts` (settle alongside the scheduler relay), headless brain event wiring, `cli/src/tui/components/app/use-background-results.ts` |
 | Tools | `sidecar/src/tools/builtin/core-files/bash.ts` (`notify`), `monitor.ts` (description matches behaviour), `sidecar/src/tools/state/host-background-shells.ts` |
 | Wake policy | `hooks/chat/background-result-runtime.ts` (wake-when-idle for held/host sessions, cap, coalescing, budget check) |
+| Reconciliation | consumer start/reconnect query of `cognia-jobs` persisted jobs and monitors; start call carries session and run ids |
 
 Co-located tests for every touched module (Rule 3), sidecar suites under `pnpm sidecar:test`, i18n for the notification text (Rule 4).
 

@@ -7,6 +7,7 @@ description: "Work that something outside started on an always-on host is a comm
 
 **Status:** Proposed
 **Date:** 2026-11-01
+**Revised:** 2026-11-01 after adversarial review
 **Related:** [ADR-0137](./0137-delegation-runtime) (delegation runs, T0/T1/T2), [ADR-0132](./0132-issue-tracker) (issues, issue runs, wakeups), [ADR-0204](./0204-a-project-coordinator-runs-threads-in-the-background) (coordinator threads), [ADR-0224](./0224-an-always-on-host-is-a-peer-the-user-brings) (always-on host), [ADR-0243](./0243-a-run-acts-for-someone-and-says-who) (acting identity), [ADR-0244](./0244-a-remote-run-has-stopped-only-when-its-worker-says-so) (stop proof), [ADR-0239](./0239-an-outbound-action-is-authorized-by-the-request) (outbound authorization), [ADR-0198](./0198-a-runs-capabilities-are-granted-not-patched) (capability grants), [ADR-0131](./0131-cross-shell-inbox-relay) (rule-only inbound routing), [ADR-0194](./0194-a-judgment-is-a-provider-not-a-prompt) (decision runner), [ADR-0248](./0248-a-person-is-never-queued-behind-automated-work), [ADR-0249](./0249-a-background-jobs-completion-reaches-the-agent). Research: `docs/research/deepseek-superagent-harness-comparison-2026-11-01.md`.
 
 ## Context
@@ -97,26 +98,35 @@ interface CommitmentMandateV1 {
   - `pr_comment`: a conversation comment on a followed pull request or issue.
   
   `pr_state_changed` and `pr_checks_changed` stay. Each entry records the follow mode, the actor and a deterministic `sourceEventId`.
-- **IM.** After the connector bus has deduplicated a message (bus Step 1, `ensureConnectorInboundJob`) and admitted it, it looks up commitments following `im-thread:<conversationKey>`. A message from a person in an owner-followed thread is appended as `thread_message`. The bound session still sees the message as it does today. What changes is that the commitment now sees it too, so it can wake when the session is idle or gone.
+- **IM: one executor per message.**
+  - After the connector bus has deduplicated a message (bus Step 1, `ensureConnectorInboundJob`) and admitted it, it looks up commitments following `im-thread:<conversationKey>` as **owner**.
+  - **If one does,** the bus hands the message to that commitment's delivery and does not also enqueue a route-handler turn or live-steer it itself.
+  - **Commitment delivery** (§6) is then the only path that executes it: it steers the commitment's active run, continues its last session, or starts a run. A person's message still arrives immediately, because delivery steers it live (§6.2).
+  - **If no commitment follows the thread,** today's session path is unchanged.
+  - **Receipt.** Every hand-off writes a durable acceptance receipt keyed by `(commitmentId, sourceEventId)` in the same transaction as the trail entry. A replay after a crash finds the receipt and does nothing. That is what keeps two consumers from acting on one message.
 - **GitHub.** An integration event for a followed `github-pr` or `github-issue` (`lib/integrations/events.ts`; App webhooks in `github-webhook.ts`, personal-token webhooks in `github-repo-webhook.ts`) is appended as activity right away. For pull request state and checks, it calls `recordIssuePullRequestState` / `recordIssuePullRequestChecks` from the payload, which write only the ref's `meta` and never the mirror watermark. It still schedules the mirror refresh `github-event-refresh.ts` already schedules. Duplicates collapse on the integration event's `[accountId+deliveryId]` and on `sourceEventId`.
 - **Polling becomes reconciliation.** The 15-minute sync, `ProjectPrWatch` and `PrFeedbackController` keep running and append only what webhooks missed, keyed by the same `sourceEventId`.
 - **System wakeup rule.** Promotion installs one system wakeup rule matching `thread_message | pr_review | pr_comment | pr_state_changed | pr_checks_changed` from owner follows, with `actorKinds` excluding the agent itself. System rules are already exempt from the chain-visit cap. The hourly rate cap applies.
 - **Context-follow events** are appended to the trail and delivered only into an active run, as context. They never fire a wakeup.
-- **Before promotion** a delegation follows only its origin thread (it has no pull request yet, or it would have been promoted). That thread's messages already reach the bound session, so the issue-activity path starts at promotion. A T1 delegation that loses its session is woken by the same rule once promoted, and until then by the person who asked.
+- **Before promotion** a delegation follows only its origin thread (it has no pull request yet, or it would have been promoted). The bus hands that thread's messages to the delegation in the same way: the delegation's delivery steers or continues its session, keyed by the same receipt. The issue-activity trail and the system wakeup start at promotion.
 
 ### 6. Delivery and continuation
 
 The wakeup executor's existing three-way delivery stands, with three changes:
 
 1. **Coalescing.** Owner events for one commitment that arrive within a short window (default 30 s, settable per workspace) fold into one brief (`buildWakeupBrief` over the chained inputs). Five review comments wake one turn.
-2. **Join at a turn boundary.** An active run takes the brief through the steer-queue rule, the same rule ADR-0249 uses for job completions: while the run streams it is queued, and it drains when the turn settles. A person's stop or follow-up still goes through live steer and is never coalesced.
+2. **Join at a turn boundary, people live.** An active run takes event briefs (reviews, CI, comments) through the steer-queue rule, the same rule ADR-0249 uses for job completions: while the run streams the brief is queued, and it drains when the turn settles. A person's message in an owner-followed thread, and any stop, is steered live and never coalesced. That preserves what the bound session gave people before the bus started handing their messages to the commitment.
 3. **Continue, do not restart.** With no active run, `startIssueRun` is given `continueSessionId`, the newest session of the latest run (`issueRunSessionIds`), when that session still exists, is not archived and its runtime can resume. Only otherwise does it start a new session seeded with the issue summary.
 
 ### 7. Resume re-evaluates the mandate
 
 Before every derived start (§1), the host re-evaluates deterministically:
 
-- whether the requester still holds authority (`checkActingAuthority` against the recorded `authorityRevision`);
+- **whether the requester still holds authority, checked live.** This is not the revision comparison alone. `checkActingAuthority` only checks that the identity exists and that `authorityRevision` has not advanced (`packages/plugin-contract/src/types/execution/acting-identity.ts:132-139`), and a revoked credential or binding does not advance it. A live authority resolver reads:
+  - the current credential authorization epoch;
+  - for a bound person, the current binding and consent revision.
+  
+  These are the live checks ADR-0243 §2 already requires of every call ("the snapshot never grants on its own"). The revision comparison stays as a separate snapshot check;
 - whether the origin thread's admission still admits that requester;
 - whether the scope still fits the current ceilings (workspace, roots, the RunAuthority ceiling of the current policy, the grants referenced).
 
@@ -126,6 +136,11 @@ The outcomes:
 - **Fail.** The commitment parks: the delegation raises an interrupt and the issue holds its wakeup inputs, which ADR-0132 already guarantees are never dropped. A card goes to the requester, or to the coordinator when there is one, saying what no longer holds.
 - **A person stopped it.** A commitment a person stopped (cancelled run, issue moved to `canceled`) is never resumed by an event. Inputs are held and shown.
 - **A person revokes it** (mandate revoked, follow removed, the requester's grant withdrawn). The active run is stopped through the ADR-0244 stop path, and the commitment does not show as stopped before stop proof.
+
+**Acceptance cases** for this section include:
+- the revision is unchanged but the credential was revoked;
+- the revision is unchanged but the binding was withdrawn;
+- a person stopped the commitment and an event arrives afterwards.
 
 **Rollout is shadow first**, the same pattern as ADR-0239 and ADR-0243. Setting `agentPermissions.mandateEnforcement: "shadow" | "enforce"` defaults to `shadow`. In shadow, a failing check writes a `mandate.would_park` receipt, the run proceeds, and the shadow report lists them. Enforcement is switched on per workspace, once the report shows the check parks what it should and nothing else. Under `enforce`, `observeActingAuthority` is replaced at the `unattended-resume` and `child-launch` sites by a check callers branch on. The shadow state is documented on the setting's type, labelled in the settings UI and pinned by a test.
 
