@@ -21,7 +21,7 @@
 // Every file in the set is listed in `plugin-artifacts.json` with its SHA-256,
 // and the consumer verifies each one before staging it.
 
-export const PLUGIN_ARTIFACT_SCHEMA = 1
+export const PLUGIN_ARTIFACT_SCHEMA = 2
 
 /** The set's own manifest, at the root of the set directory. */
 export const PLUGIN_ARTIFACT_MANIFEST = "plugin-artifacts.json"

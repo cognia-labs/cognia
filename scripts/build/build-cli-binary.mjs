@@ -48,11 +48,13 @@ import { createPreferEsmEntryPlugin } from "./lib/prefer-esm-entry-plugin.mjs"
 import {
   BUILTIN_PLUGIN_ASSET_DIR,
   stageBuiltinPluginAssets,
+  prepareBuiltinPluginAssets,
 } from "./lib/stage-builtin-plugin-assets.mjs"
 
 import { sidecarVersionDefines } from "./lib/sidecar-version-info.mjs"
 
-const root = path.dirname(fileURLToPath(import.meta.url)) + "/../.."
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const pluginArtifacts = await prepareBuiltinPluginAssets({ root })
 const cliEntry = path.join(root, "cli/src/cli/entry.ts")
 const sidecarEntry = path.join(root, "sidecar/claude-host.mjs")
 const mcpRelayEntry = path.join(root, "sidecar/mcp-stdio-relay.mjs")
@@ -422,7 +424,7 @@ console.log(
 // the Node reader resolves them against the layout directory; without the tree
 // all five refuse to enable on a CLI or brain host.
 stageAstGrep({ outDir: binDir })
-const stagedBuiltinPlugins = stageBuiltinPluginAssets({ root, outDir: binDir })
+const stagedBuiltinPlugins = stageBuiltinPluginAssets({ root, outDir: binDir, artifactSha256: pluginArtifacts.artifactSha256 })
 console.log(
   `build-cli-binary: staged ${stagedBuiltinPlugins.pluginIds.length} built-in plugin chunk(s) → ${path.relative(root, stagedBuiltinPlugins.dir)}`
 )

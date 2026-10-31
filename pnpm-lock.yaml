@@ -294,6 +294,9 @@ importers:
       '@cognia/provider-routing':
         specifier: workspace:*
         version: link:packages/provider-routing
+      '@cognia/brand-assets':
+        specifier: workspace:*
+        version: link:packages/brand-assets
       '@cognia/provider-types':
         specifier: workspace:*
         version: link:packages/provider-types
@@ -1947,6 +1950,8 @@ importers:
         specifier: workspace:*
         version: link:../agent-contracts
 
+  packages/brand-assets: {}
+
   packages/agent-trace: {}
 
   packages/companion-client: {}
@@ -2005,6 +2010,10 @@ importers:
         version: link:../logging
 
   packages/eval-core:
+    dependencies:
+      '@cognia/primitives':
+        specifier: workspace:*
+        version: link:../primitives
     devDependencies:
       zod:
         specifier: 'catalog:'
@@ -2085,6 +2094,9 @@ importers:
       '@cognia/agent-config-types':
         specifier: workspace:*
         version: link:../agent-config-types
+      '@cognia/agent-runtime-kit':
+        specifier: workspace:*
+        version: link:../agent-runtime-kit
       '@cognia/ocr':
         specifier: workspace:*
         version: link:../ocr
@@ -2294,6 +2306,10 @@ importers:
         version: 8.5.1(@swc/core@1.16.13(@swc/helpers@0.5.23))(@typescript/typescript6@6.0.2)(jiti@2.7.0)(postcss@8.5.29)(supports-color@8.1.1)(tsx@4.23.15)(yaml@2.9.1)
 
   packages/provider-types:
+    dependencies:
+      '@cognia/brand-assets':
+        specifier: workspace:*
+        version: link:../brand-assets
     devDependencies:
       zod:
         specifier: 'catalog:'

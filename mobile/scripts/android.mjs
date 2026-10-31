@@ -311,9 +311,10 @@ async function ensurePortAvailable(port) {
 export async function startDevServer(root, env, options, signal, log = console.log) {
   await ensurePortAvailable(options.port)
   const child = spawnCommand(
-    "pnpm",
+    process.execPath,
     [
-      "exec",
+      "scripts/build/with-plugin-artifacts.mjs",
+      "--",
       "next",
       "dev",
       `--${options.bundler}`,
@@ -567,7 +568,7 @@ export async function runAndroid(options, overrides = {}) {
   if (options.mode !== "native") {
     await run("pnpm", ["run", "mobile:prepare"])
     const before = await fingerprint()
-    await run("pnpm", ["exec", "next", "build", "--webpack"])
+    await run(process.execPath, ["scripts/build/with-plugin-artifacts.mjs", "--", "next", "build", "--webpack"])
     await run("pnpm", ["run", "postbuild"])
     if ((await fingerprint()) !== before)
       throw new Error(

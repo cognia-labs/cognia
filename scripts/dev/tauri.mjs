@@ -6,6 +6,7 @@ import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { buildCogniaCli } from "./ensure-cognia-cli.mjs"
+import { runWithPluginArtifacts } from "../build/with-plugin-artifacts.mjs"
 
 export function withFailFastDev(args) {
   if (args[0] !== "dev") return args
@@ -204,6 +205,12 @@ export async function runTauri(args, { env = process.env } = {}) {
 
   const require = createRequire(import.meta.url)
   const tauriCli = require.resolve("@tauri-apps/cli/tauri.js")
+  if (["dev", "build"].includes(args[0]))
+    return runWithPluginArtifacts({
+      root,
+      args: [process.execPath, tauriCli, ...withFailFastDev(withDefaultFeatures(args))],
+      env,
+    })
   // The wrapper runs the installed CLI; launching must not trigger pnpm's implicit install.
   const child = spawn(process.execPath, [tauriCli, ...withFailFastDev(withDefaultFeatures(args))], {
     cwd: root,

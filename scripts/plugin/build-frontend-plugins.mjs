@@ -14,18 +14,71 @@ import {
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createRequire } from "node:module"
+import { execFileSync } from "node:child_process"
 import { build } from "esbuild"
+import { createPluginCompilerContract } from "../build/plugin-compiler-contract.mjs"
+import { compilePluginUtilityCss, createPluginStyleContract } from "./plugin-styles.mjs"
 import { register } from "tsx/cjs/api"
 import JSZip from "jszip"
-import { writeIfChanged } from "../build/esbuild-input-cache.mjs"
+import {
+  writeIfChanged,
+  readBuildCache,
+  isBuildCacheFresh,
+  saveBuildCache,
+} from "../build/esbuild-input-cache.mjs"
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 export const NODE_RUNTIME_SOURCE_MAX_BYTES = 1024 * 1024
 register()
-const requireSource = createRequire(import.meta.url)
-const catalog = JSON.parse(
-  await readFile(path.join(repository, "packages/plugin-contract/contract/catalog.json"), "utf8")
-)
+const authoringPreparations = new Map()
+
+async function prepareAuthoringHelpers(root) {
+  const owner = path.join(root, "packages/github-bot-kit")
+  if (!(await exists(path.join(owner, "tsup.config.ts")))) return
+  if (authoringPreparations.has(root)) return authoringPreparations.get(root)
+  const preparation = (async () => {
+    const collect = async (directory) =>
+      (
+        await Promise.all(
+          (await readdir(directory, { withFileTypes: true })).map((entry) =>
+            entry.isDirectory()
+              ? collect(path.join(directory, entry.name))
+              : [path.join(directory, entry.name)]
+          )
+        )
+      ).flat()
+    const inputs = (await collect(path.join(owner, "src"))).filter((file) => !/\.test\./.test(file))
+    const cacheFile = path.join(root, ".cache/plugin-toolchain/github-bot-kit.json")
+    const key = JSON.stringify({
+      build: JSON.parse(await readFile(path.join(owner, "package.json"), "utf8")).scripts.build,
+    })
+    const required = [
+      "index.js",
+      "index.cjs",
+      "index.d.ts",
+      "testing.js",
+      "testing.cjs",
+      "testing.d.ts",
+    ].map((file) => path.join(owner, "dist", file))
+    if (isBuildCacheFresh(readBuildCache(cacheFile), root, key, required)) return
+    const startedAt = performance.timeOrigin + performance.now()
+    execFileSync("pnpm", ["--dir", owner, "run", "build"], { cwd: root, stdio: "inherit" })
+    saveBuildCache(cacheFile, {
+      root,
+      key,
+      inputs,
+      extraFiles: [path.join(owner, "tsup.config.ts"), path.join(owner, "package.json")],
+      outputs: await collect(path.join(owner, "dist")),
+      startedAt,
+    })
+  })()
+  authoringPreparations.set(root, preparation)
+  try {
+    return await preparation
+  } finally {
+    authoringPreparations.delete(root)
+  }
+}
 export const SHARED_MODULES = [
   "react",
   "react/jsx-runtime",
@@ -174,7 +227,7 @@ async function sourceEntry(pluginRoot, manifest) {
 /**
  * Build one frontend plugin package. `root` is the toolchain root (esbuild's
  * working directory, `node_modules`, the SDK contract catalog and the
- * `public/plugins/<id>` mirror); `pluginsRoot` is where plugin sources live,
+ * style compiler); `pluginsRoot` is where plugin sources and resources live,
  * `<root>/plugins` by default.
  */
 export async function buildFrontendPlugin({
@@ -184,8 +237,27 @@ export async function buildFrontendPlugin({
   bundle = build,
   pdfWorkerUrl,
   moduleManifest,
+  contractCatalog,
+  styleContract,
+  compilerContract,
 } = {}) {
+  const catalog =
+    contractCatalog ??
+    JSON.parse(
+      await readFile(
+        path.join(repository, "packages/plugin-contract/contract/catalog.json"),
+        "utf8"
+      )
+    )
+  const compiler = compilerContract ?? createPluginCompilerContract(repository)
+  if (
+    compiler.schema !== 1 ||
+    compiler.target !== "es2022" ||
+    typeof compiler.compilerOptions?.useDefineForClassFields !== "boolean"
+  )
+    throw new Error("A valid plugin compiler contract is required")
   root = path.resolve(root)
+  await prepareAuthoringHelpers(root)
   const pluginRoot = path.join(
     path.resolve(pluginsRoot ?? path.join(root, "plugins")),
     relativePath(directory)
@@ -193,23 +265,88 @@ export async function buildFrontendPlugin({
   const base = JSON.parse(await readFile(path.join(pluginRoot, "plugin.json"), "utf8"))
   validateIdentity(base)
   const source = await sourceEntry(pluginRoot, base)
+  let scope = path.dirname(source),
+    sourcePackageType = "commonjs"
+  while (true) {
+    if (await exists(path.join(scope, "package.json"))) {
+      sourcePackageType =
+        JSON.parse(await readFile(path.join(scope, "package.json"), "utf8")).type ?? "commonjs"
+      break
+    }
+    if (path.dirname(scope) === scope) break
+    scope = path.dirname(scope)
+  }
+  if (
+    sourcePackageType !== compiler.packageType &&
+    scope !== pluginRoot &&
+    !scope.startsWith(`${pluginRoot}${path.sep}`)
+  )
+    throw new Error(
+      `Plugin source package type differs from the pinned compiler contract (${directory}: ${sourcePackageType} != ${compiler.packageType}); preserve its CommonJS/ESM interop mode`
+    )
   let moduleStyles
+  const metadataInputs = []
   if (!moduleManifest) {
-    for (const cached of Object.keys(requireSource.cache)) {
-      if (cached.startsWith(`${pluginRoot}${path.sep}`)) delete requireSource.cache[cached]
-    }
-    // CSS side effects belong to the compiled release, not metadata discovery.
-    const previousCssLoader = requireSource.extensions[".css"]
-    let imported
-    try {
-      requireSource.extensions[".css"] = (module) => {
-        module.exports = {}
+    // Evaluate the same class-field/JSX semantics as the release. Bare package
+    // imports use the real SDK/helpers; activation is never run.
+    const metadata = await build({
+      absWorkingDir: root,
+      entryPoints: [source],
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      target: compiler.target,
+      tsconfigRaw: { compilerOptions: compiler.compilerOptions },
+      packages: "external",
+      write: false,
+      metafile: true,
+      loader: { ".css": "empty" },
+      define: { "process.env.NODE_ENV": JSON.stringify("production") },
+      plugins: [
+        {
+          name: "reject-private-metadata-imports",
+          setup(api) {
+            // The helper is inlined in the release too. Bundle it afresh here
+            // so a long-lived builder cannot reuse stale Node module exports.
+            api.onResolve({ filter: /^@cognia\/github-bot-kit(?:\/|$)/ }, (args) => ({
+              path: createRequire(path.join(root, "package.json")).resolve(args.path),
+            }))
+            api.onResolve({ filter: /^@\// }, (args) => ({
+              errors: [
+                { text: `Plugin imports host-private module ${args.path}; use the public SDK.` },
+              ],
+            }))
+          },
+        },
+      ],
+    })
+    metadataInputs.push(
+      ...Object.keys(metadata.metafile.inputs).map((file) => path.resolve(root, file))
+    )
+    const sourceRequire = createRequire(source),
+      toolRequire = createRequire(path.join(root, "package.json"))
+    const metadataRequire = (specifier) => {
+      if (/^@cognia\/(?:plugin-sdk|plugin-ui|github-bot-kit)(?:\/|$)/.test(specifier))
+        return toolRequire(specifier)
+      let resolved
+      try {
+        resolved = sourceRequire.resolve(specifier)
+      } catch (error) {
+        if (error.code !== "MODULE_NOT_FOUND") throw error
+        return toolRequire(specifier)
       }
-      imported = requireSource(source)
-    } finally {
-      if (previousCssLoader) requireSource.extensions[".css"] = previousCssLoader
-      else delete requireSource.extensions[".css"]
+      return sourceRequire(resolved)
     }
+    const metadataModule = { exports: {} }
+    new Function(
+      "module",
+      "exports",
+      "require",
+      "__filename",
+      "__dirname",
+      metadata.outputFiles[0].text
+    )(metadataModule, metadataModule.exports, metadataRequire, source, path.dirname(source))
+    const imported = metadataModule.exports
     const definition = imported.default?.default ?? imported.default ?? imported.plugin ?? imported
     moduleManifest = definition.manifest ?? imported.manifest ?? base
     moduleStyles = imported.styles
@@ -220,7 +357,30 @@ export async function buildFrontendPlugin({
   const originalManifest = structuredClone(manifest)
   const files = new Map()
   const fileModes = new Map()
-  const inputs = new Set([path.join(pluginRoot, "plugin.json"), source])
+  const inputs = new Set([
+    pluginRoot,
+    path.join(pluginRoot, "plugin.json"),
+    source,
+    ...metadataInputs,
+  ])
+  for (const input of [
+    ...(compiler.inputs ?? []),
+    fileURLToPath(new URL("../build/plugin-compiler-contract.mjs", import.meta.url)),
+  ])
+    inputs.add(input)
+  const sourceMapFile = path.join(pluginRoot, "build-entries.json")
+  const sourceEntries = (await exists(sourceMapFile))
+    ? JSON.parse(await readFile(sourceMapFile, "utf8"))
+    : {}
+  if (!sourceEntries || typeof sourceEntries !== "object" || Array.isArray(sourceEntries))
+    throw new Error("Invalid plugin build entry map")
+  if (await exists(sourceMapFile)) inputs.add(sourceMapFile)
+  for (const [output, entry] of Object.entries(sourceEntries)) {
+    relativePath(output)
+    relativePath(entry)
+    if (!output.startsWith("dist/") || !/\.[cm]?js$/.test(output) || !/\.[cm]?[jt]sx?$/.test(entry))
+      throw new Error("Invalid plugin build entry map")
+  }
   const nodeRuntime = await collectNodeRuntimeSources(pluginRoot, manifest.nodeRuntime)
   for (const [relative, bytes] of nodeRuntime.files) files.set(relative, bytes)
   for (const input of nodeRuntime.inputs) inputs.add(input)
@@ -236,6 +396,11 @@ export async function buildFrontendPlugin({
       if (contract.sentinels?.includes(value)) continue
       const relative = relativePath(value)
       if (mapping[value]) continue
+      if (sourceEntries[value]) {
+        mapping[value] = value
+        entries.set(path.join(pluginRoot, sourceEntries[value]), value)
+        continue
+      }
       const extension = libraryEntries.has(value) ? "cjs" : "js"
       const output = `dist/entries/${relative.replace(/\.[cm]?[jt]sx?$/, "")}.${extension}`
       mapping[value] = output
@@ -256,6 +421,31 @@ export async function buildFrontendPlugin({
     files.set(relativePath(manifest.styles), Buffer.from(moduleStyles))
   async function collect(relative, required = true, origin = pluginRoot) {
     relative = relativePath(relative)
+    const localState =
+      relative
+        .split("/")
+        .some((part) =>
+          [
+            "node_modules",
+            ".git",
+            ".cache",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            "target",
+          ].includes(part)
+        ) ||
+      [
+        "vendor/runtime/toolchain",
+        "vendor/runtime/render",
+        ".latexwb",
+        ".latexwb-materialize",
+      ].some((prefix) => relative === prefix || relative.startsWith(`${prefix}/`))
+    if (localState) {
+      if (required) throw new Error(`Plugin shipping path names local-only state: ${relative}`)
+      return
+    }
     // Even bundle_include or the public mirror cannot bypass the runtime source allowlist.
     if (
       manifest.nodeRuntime &&
@@ -266,9 +456,9 @@ export async function buildFrontendPlugin({
     const sourceFile = path.join(origin, relative)
     if (!(await exists(sourceFile))) {
       if (files.has(relative)) return
-      const mirror = path.join(root, "public/plugins", manifest.id)
-      if (origin === pluginRoot && (await exists(path.join(mirror, relative))))
-        return collect(relative, required, mirror)
+      const resources = path.join(pluginRoot, "resources")
+      if (origin === pluginRoot && (await exists(path.join(resources, relative))))
+        return collect(relative, required, resources)
       if (!required) return
       throw new Error(`Missing plugin resource ${directory}/${relative}`)
     }
@@ -279,9 +469,24 @@ export async function buildFrontendPlugin({
     const info = await lstat(sourceFile)
     if (info.isSymbolicLink()) throw new Error(`Unsafe plugin path (symlink): ${relative}`)
     if (info.isDirectory()) {
+      inputs.add(sourceFile)
       for (const child of (await readdir(sourceFile)).sort()) {
-        if (["node_modules", ".git", "__pycache__"].includes(child)) continue
-        await collect(`${relative}/${child}`, true, origin)
+        const candidate = `${relative}/${child}`
+        if (
+          [
+            "node_modules",
+            ".git",
+            ".cache",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            "target",
+          ].includes(child)
+        )
+          continue
+        if (["vendor/runtime/toolchain", "vendor/runtime/render"].includes(candidate)) continue
+        await collect(candidate, true, origin)
       }
     } else {
       inputs.add(sourceFile)
@@ -289,8 +494,17 @@ export async function buildFrontendPlugin({
       if (!files.has(relative)) files.set(relative, await readFile(sourceFile))
     }
   }
-  for (const name of ["assets", "public", "locales", "skills", "vendor", "pi", "bin"])
-    await collect(name, false)
+  if (
+    manifest.bundle_include !== undefined &&
+    (!Array.isArray(manifest.bundle_include) ||
+      manifest.bundle_include.some((entry) => typeof entry !== "string"))
+  )
+    throw new Error("bundle_include must be an array of shipping paths")
+  // An explicit allowlist is authoritative. In particular a vendored snapshot
+  // must not make provisioned toolchains or other unlisted local state ship.
+  if (manifest.bundle_include === undefined)
+    for (const name of ["assets", "public", "locales", "skills", "vendor", "pi", "bin"])
+      await collect(name, false)
   for (const contract of catalog.pathFields.filter(
     (field) => field.runtime === "asset" && field.kind !== "contained-only"
   )) {
@@ -306,12 +520,13 @@ export async function buildFrontendPlugin({
   for (const value of manifest.bundle_include ?? []) await collect(value)
   if (manifest.styles && typeof moduleStyles === "string")
     files.set(relativePath(manifest.styles), Buffer.from(moduleStyles))
-  // Older first-party themes keep their package data in the public mirror.
-  const mirror = path.join(root, "public/plugins", manifest.id)
-  if (await exists(mirror))
-    for (const child of await readdir(mirror)) {
+  // Resource inputs belong to the plugin even when their runtime path is dist/.
+  const resources = path.join(pluginRoot, "resources")
+  if (await exists(resources)) inputs.add(resources)
+  if (manifest.bundle_include === undefined && (await exists(resources)))
+    for (const child of await readdir(resources)) {
       if (["dist", "plugin.json"].includes(child)) continue
-      await collect(child, true, mirror)
+      await collect(child, true, resources)
     }
   const define = {}
   if (manifest.id === "cognia-pdf") {
@@ -333,7 +548,8 @@ export async function buildFrontendPlugin({
       bundle: true,
       platform: "browser",
       format: "cjs",
-      target: "es2022",
+      target: compiler.target,
+      tsconfigRaw: { compilerOptions: compiler.compilerOptions },
       minify: true,
       sourcemap: false,
       metafile: true,
@@ -379,16 +595,31 @@ export async function buildFrontendPlugin({
       files.set(name, bytes)
     }
   }
-  if (emittedStyles.length) {
+  const utilities = await compilePluginUtilityCss({
+    root,
+    javascript: [...files]
+      .filter(([name]) => /\.[cm]?js$/.test(name))
+      .map(([, bytes]) => bytes.toString())
+      .join("\n"),
+    contract: styleContract ?? createPluginStyleContract(repository),
+  })
+  for (const input of [
+    ...utilities.inputs,
+    ...(styleContract?.inputs ?? [path.join(repository, "app/globals.css")]),
+    fileURLToPath(new URL("./plugin-styles.mjs", import.meta.url)),
+  ])
+    inputs.add(input)
+  if (utilities.css || emittedStyles.length) {
     const authored = packaged.styles ? files.get(packaged.styles) : undefined
     packaged.styles = "dist/plugin.css"
     files.set(
       packaged.styles,
       Buffer.concat(
-        [...(authored ? [authored] : []), ...emittedStyles].flatMap((bytes) => [
-          bytes,
-          Buffer.from("\n"),
-        ])
+        [
+          ...(utilities.css ? [Buffer.from(utilities.css)] : []),
+          ...(authored ? [authored] : []),
+          ...emittedStyles,
+        ].flatMap((bytes) => [bytes, Buffer.from("\n")])
       )
     )
   }

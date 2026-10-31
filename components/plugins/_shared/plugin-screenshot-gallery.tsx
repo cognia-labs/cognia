@@ -17,6 +17,7 @@ import { ScrollShadowRow } from "@/components/plugins/scroll-shadow-row"
 import { usePluginFileSrcConverter } from "@/hooks/plugins/use-plugin-icon-src"
 import { resolvePluginIcon } from "@/lib/plugin/utils/icon"
 import { pluginIconRender, type FileSrcConverter } from "@/lib/plugin/utils/icon-src"
+import { publicBuiltinScreenshotUrl } from "@/lib/plugin/bridge/plugin-file-path"
 import { cn } from "@/lib/utils"
 
 export interface PluginScreenshotGalleryProps {
@@ -39,7 +40,15 @@ export function PluginScreenshotGallery({
     () =>
       (Array.isArray(screenshots) ? screenshots : [])
         .filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
-        .map((entry) => resolvePluginIcon({ icon: entry, pluginRoot })),
+        .map((entry) => {
+          const resolved = resolvePluginIcon({ icon: entry, pluginRoot })
+          if (resolved?.kind !== "image" || !pluginRoot?.startsWith("builtin://")) return resolved
+          const src = publicBuiltinScreenshotUrl(
+            pluginRoot.slice("builtin://".length),
+            resolved.original
+          )
+          return src ? { ...resolved, src, transport: "public" as const } : undefined
+        }),
     [screenshots, pluginRoot]
   )
   const needsConverter = resolved.some(

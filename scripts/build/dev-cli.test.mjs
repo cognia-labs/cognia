@@ -56,6 +56,49 @@ test("CLI source resolution retains workspace aliases and the shared host module
   }
 })
 
+test("CLI Provider metadata compiles without prebuilt brand assets", () => {
+  const root = fileURLToPath(new URL("../../", import.meta.url))
+  const cliRoot = path.join(root, "cli")
+  const config = ts.readConfigFile(path.join(cliRoot, "tsconfig.json"), ts.sys.readFile)
+  assert.equal(config.error, undefined)
+  const parsed = ts.parseJsonConfigFileContent(
+    config.config,
+    { ...ts.sys, readDirectory: () => [] },
+    cliRoot
+  )
+  const options = {
+    ...parsed.options,
+    incremental: false,
+    tsBuildInfoFile: undefined,
+    noEmit: true,
+  }
+  const host = ts.createCompilerHost(options)
+  const fileExists = host.fileExists.bind(host)
+  const brandDist = path.join(root, "packages/brand-assets/dist") + path.sep
+  // Model a fresh checkout without renaming the real dist shared by other tasks.
+  host.fileExists = (file) =>
+    fileExists(file) && !path.resolve(ts.sys.realpath?.(file) ?? file).startsWith(brandDist)
+  const metadataSource = path.join(root, "packages/provider-types/src/provider-icons.ts")
+  assert.equal(
+    ts.resolveModuleName("@cognia/brand-assets", metadataSource, options, host)
+      .resolvedModule?.resolvedFileName,
+    path.join(root, "packages/brand-assets/src/index.ts")
+  )
+  const program = ts.createProgram([metadataSource], options, host)
+  const errors = ts.getPreEmitDiagnostics(program).filter(
+    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error
+  )
+  assert.equal(
+    errors.length,
+    0,
+    ts.formatDiagnosticsWithColorAndContext(errors, {
+      getCurrentDirectory: () => root,
+      getCanonicalFileName: (file) => file,
+      getNewLine: () => "\n",
+    })
+  )
+})
+
 // Copy the real runner into an isolated tree; build is a no-op and the child
 // models the CLI consuming terminal SIGINT while an interactive command exits.
 for (const launcher of ["node", "pnpm", "interruptible-parent"])

@@ -194,6 +194,7 @@ jobs:
           APPLE_PASSWORD: ${{ inputs.tagName != '' && runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ inputs.tagName != '' && runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
+          tauriScript: node scripts/dev/tauri.mjs
           args: --target ${{ matrix.target }}
           tagName: ${{ inputs.tagName }}
           releaseName: ${{ inputs.tagName }}

@@ -12,6 +12,39 @@ import { render, screen } from "@testing-library/react"
 import { PluginScreenshotGallery } from "./plugin-screenshot-gallery"
 
 describe("PluginScreenshotGallery", () => {
+  it("loads a builtin screenshot from packaged resources instead of the legacy or identity-icon mirror", () => {
+    render(
+      <PluginScreenshotGallery
+        screenshots={["/plugins/cognia-azur-lane-theme/assets/one.png", "shots/two.png"]}
+        pluginRoot="builtin://cognia-azur-lane-theme"
+      />
+    )
+    const images = screen.getAllByRole("img")
+    expect(images[0]).toHaveAttribute(
+      "src",
+      "/_cognia/builtin-plugins/cognia-azur-lane-theme/resources/assets/one.png"
+    )
+    expect(images[1]).toHaveAttribute(
+      "src",
+      "/_cognia/builtin-plugins/cognia-azur-lane-theme/resources/shots/two.png"
+    )
+  })
+
+  it("preserves the normalized URL when rewriting builtin screenshots", () => {
+    render(
+      <PluginScreenshotGallery
+        screenshots={[" https://example.test/one.png ", " shots/two.png "]}
+        pluginRoot="builtin://cognia-azur-lane-theme"
+      />
+    )
+    const images = screen.getAllByRole("img")
+    expect(images[0]).toHaveAttribute("src", "https://example.test/one.png")
+    expect(images[1]).toHaveAttribute(
+      "src",
+      "/_cognia/builtin-plugins/cognia-azur-lane-theme/resources/shots/two.png"
+    )
+  })
+
   it("renders nothing without screenshots", () => {
     const { container } = render(<PluginScreenshotGallery screenshots={undefined} />)
     expect(container).toBeEmptyDOMElement()

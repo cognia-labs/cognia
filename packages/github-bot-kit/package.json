@@ -5,19 +5,27 @@
   "description": "Cognia GitHub Bot building blocks shared by first-party Bot plugins and the host: a repository-scoped reader over a Bot binding, CI selection, mention-command parsing, output markers, context budgeting, author authorization and review-thread grouping. Stateless and dependency-free (not even the SDK's types), so each plugin bundles its own copy.",
   "type": "module",
   "sideEffects": false,
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "cognia-source": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
     },
     "./testing": {
       "cognia-source": "./src/testing.ts",
-      "default": "./src/testing.ts"
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "require": "./dist/testing.cjs",
+      "default": "./dist/testing.js"
     }
   },
   "scripts": {
+    "build": "tsup",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

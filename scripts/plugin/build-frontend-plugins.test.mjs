@@ -1,12 +1,168 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { mkdtemp, mkdir, readFile, rm, writeFile, stat } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, writeFile, stat, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import JSZip from "jszip"
 import { execFileSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { buildFrontendPlugin, writeFrontendPackage } from "./build-frontend-plugins.mjs"
+
+test("a long-lived builder refreshes helper metadata and runtime after owning source changes", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "plugin-helper-refresh-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const helper = "packages/github-bot-kit"
+  const manifest = { id: "example", version: "1.0.0", type: "frontend", main: "src/index.ts" }
+  const files = {
+    "package.json": '{"type":"commonjs"}',
+    [`${helper}/package.json`]: JSON.stringify({
+      name: "@cognia/github-bot-kit",
+      type: "module",
+      exports: { ".": { import: "./dist/index.js", require: "./dist/index.cjs" } },
+      scripts: { build: "node build.cjs" },
+    }),
+    [`${helper}/tsup.config.ts`]: "export default {}",
+    [`${helper}/src/index.js`]: "export const value = 'A'",
+    [`${helper}/build.cjs`]: `const fs=require('node:fs');const source=fs.readFileSync('src/index.js','utf8');fs.mkdirSync('dist',{recursive:true});for(const entry of ['index','testing']){fs.writeFileSync('dist/'+entry+'.js',source);fs.writeFileSync('dist/'+entry+'.cjs',source.replace('export const value =','exports.value ='));fs.writeFileSync('dist/'+entry+'.d.ts','export declare const value: string')}`,
+    "plugins/example/plugin.json": JSON.stringify(manifest),
+    "plugins/example/src/index.ts": `import {value} from '@cognia/github-bot-kit'; export const runtimeName=value;export default {manifest:{...${JSON.stringify(manifest)},name:value}}`,
+    "check.mjs": `import assert from 'node:assert/strict';import fs from 'node:fs';import {buildFrontendPlugin} from ${JSON.stringify(new URL("./build-frontend-plugins.mjs", import.meta.url).href)};for(const value of ['A','B']){fs.writeFileSync('${helper}/src/index.js',"export const value = '"+value+"'");const result=await buildFrontendPlugin({root:process.cwd(),directory:'example'});const m={exports:{}};new Function('module','exports',result.files.get('dist/index.js').toString())(m,m.exports);assert.equal(result.manifest.name,value);assert.equal(m.exports.runtimeName,value)}`,
+  }
+  for (const [file, bytes] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(root, file)), { recursive: true })
+    await writeFile(path.join(root, file), bytes)
+  }
+  await mkdir(path.join(root, "node_modules/@cognia"), { recursive: true })
+  await symlink(
+    path.join(root, helper),
+    path.join(root, "node_modules/@cognia/github-bot-kit"),
+    "junction"
+  )
+  execFileSync(process.execPath, ["check.mjs"], { cwd: root, stdio: "pipe" })
+})
+
+test("declared release entries build from an explicit source map in a clean checkout", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "plugin-entry-map-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const pluginRoot = path.join(root, "plugins/example")
+  const manifest = {
+    id: "example",
+    version: "1.0.0",
+    type: "frontend",
+    main: "dist/index.js",
+    externalAgentAdapters: [{ id: "demo", entry: "dist/adapter.js", export: "create" }],
+  }
+  await mkdir(path.join(pluginRoot, "src"), { recursive: true })
+  await writeFile(path.join(pluginRoot, "plugin.json"), JSON.stringify(manifest))
+  await writeFile(
+    path.join(pluginRoot, "build-entries.json"),
+    JSON.stringify({ "dist/adapter.js": "src/adapter.ts" })
+  )
+  await writeFile(
+    path.join(pluginRoot, "src/index.ts"),
+    `export default {manifest:${JSON.stringify(manifest)}}`
+  )
+  await writeFile(path.join(pluginRoot, "src/adapter.ts"), "export const create = () => 42")
+  const result = await buildFrontendPlugin({ root, directory: "example" })
+  assert.equal(result.manifest.externalAgentAdapters[0].entry, "dist/adapter.js")
+  const pluginModule = { exports: {} }
+  new Function("module", "exports", result.files.get("dist/adapter.js").toString())(
+    pluginModule,
+    pluginModule.exports
+  )
+  assert.equal(pluginModule.exports.create(), 42)
+  assert.ok(result.inputs.includes(path.join(pluginRoot, "build-entries.json")))
+})
+
+test("the ZIP owns responsive utility CSS and authored CSS in the same release stylesheet", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "plugin-release-styles-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const pluginRoot = path.join(root, "plugins/example")
+  const manifest = {
+    id: "example",
+    version: "1.0.0",
+    type: "frontend",
+    main: "src/index.ts",
+    styles: "styles.css",
+  }
+  await mkdir(path.join(pluginRoot, "src"), { recursive: true })
+  await writeFile(path.join(pluginRoot, "plugin.json"), JSON.stringify(manifest))
+  await writeFile(path.join(pluginRoot, "styles.css"), ".authored { color: red }")
+  await writeFile(
+    path.join(pluginRoot, "src/index.ts"),
+    `export const classes = "sm:px-2 focus-visible:underline animate-spin"; export default { manifest: ${JSON.stringify(manifest)}, activate() {} }`
+  )
+  const result = await buildFrontendPlugin({ root, directory: "example" })
+  const css = result.files.get(result.manifest.styles).toString()
+  assert.match(css, /\.sm\\:px-2/)
+  assert.match(css, /focus-visible/)
+  assert.match(css, /@keyframes spin/)
+  assert.ok(css.indexOf(".authored") > css.indexOf(".sm\\:px-2"))
+  const zip = await JSZip.loadAsync(
+    await readFile(await writeFrontendPackage(result, path.join(root, "out")))
+  )
+  assert.equal(await zip.file(result.manifest.styles).async("string"), css)
+})
+
+test("packages legacy runtime paths from plugin-owned resources without a Host public mirror", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "owned-plugin-resources-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const pluginRoot = path.join(root, "plugins/example")
+  const manifest = {
+    id: "example",
+    version: "1.0.0",
+    type: "frontend",
+    main: "src/index.ts",
+    vscodeIconThemes: [{ id: "theme", path: "dist/icons.json" }],
+  }
+  for (const [file, content] of Object.entries({
+    "plugin.json": JSON.stringify(manifest),
+    "src/index.ts": `export default { manifest: ${JSON.stringify(manifest)}, activate() {} }`,
+    "resources/dist/icons.json": '{"iconDefinitions":{}}',
+    "resources/assets/preview.png": "preview",
+  })) {
+    await mkdir(path.dirname(path.join(pluginRoot, file)), { recursive: true })
+    await writeFile(path.join(pluginRoot, file), content)
+  }
+  const result = await buildFrontendPlugin({ root, directory: "example" })
+  assert.equal(result.files.get("dist/icons.json").toString(), '{"iconDefinitions":{}}')
+  assert.equal(result.files.get("assets/preview.png").toString(), "preview")
+  assert.ok(!result.inputs.some((file) => file.includes("public/plugins")))
+})
+
+test("an explicit shipping allowlist excludes local vendor toolchains from both packages", async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), "plugin-shipping-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const pluginRoot = path.join(root, "plugins/example")
+  const manifest = {
+    id: "example",
+    version: "1.0.0",
+    type: "frontend",
+    main: "src/index.ts",
+    bundle_include: ["vendor/source.mjs"],
+  }
+  for (const [file, content] of Object.entries({
+    "plugin.json": JSON.stringify(manifest),
+    "src/index.ts": `export default { manifest: ${JSON.stringify(manifest)}, activate() {} }`,
+    "vendor/source.mjs": "export const value = 42",
+    "vendor/runtime/toolchain/bundle.tar": "LOCAL TOOLCHAIN MUST NOT SHIP",
+    "vendor/runtime/render/helper": "LOCAL RENDER MUST NOT SHIP",
+    "vendor/.venv/secret.txt": "LOCAL ENVIRONMENT MUST NOT SHIP",
+  })) {
+    await mkdir(path.dirname(path.join(pluginRoot, file)), { recursive: true })
+    await writeFile(path.join(pluginRoot, file), content)
+  }
+  const result = await buildFrontendPlugin({ root, directory: "example" })
+  assert.equal(result.files.get("vendor/source.mjs").toString(), "export const value = 42")
+  assert.ok(![...result.files.keys()].some((file) => /toolchain|runtime\/render|\.venv/.test(file)))
+  const archive = await JSZip.loadAsync(
+    await readFile(await writeFrontendPackage(result, path.join(root, "out")))
+  )
+  assert.ok(archive.file("vendor/source.mjs"))
+  assert.ok(
+    !Object.keys(archive.files).some((file) => /toolchain|runtime\/render|\.venv/.test(file))
+  )
+})
 
 test("packages keyed library entries as independent CJS bundles with transitive state", async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), "library-plugin-"))

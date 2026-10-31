@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { afterEach, test } from "node:test"
 
 import { buildLinkedPackages, isPackageBuildFresh } from "./build-linked-packages.mjs"
@@ -43,6 +43,27 @@ test("a root build input (tsup.config.ts) newer than dist makes it stale", () =>
   writeFileSync(join(pkg, "tsup.config.ts"), "export default {}\n")
   utimesSync(join(pkg, "tsup.config.ts"), 3_000, 3_000)
   assert.equal(isPackageBuildFresh(pkg), false)
+})
+
+test("a bundled brand-assets edit invalidates provider-types and schedules a rebuild", () => {
+  const pkg = fakePackage("provider-types", { srcAt: 1_000, distAt: 2_000 })
+  const brandDir = join(dirname(pkg), "brand-assets")
+  mkdirSync(join(brandDir, "src"), { recursive: true })
+  const brandSource = join(brandDir, "src", "index.ts")
+  writeFileSync(brandSource, "export const brand = 1\n")
+  utimesSync(brandSource, 1_000, 1_000)
+  assert.equal(isPackageBuildFresh(pkg), true)
+
+  utimesSync(brandSource, 3_000, 3_000)
+  assert.equal(isPackageBuildFresh(pkg), false)
+  const calls = []
+  buildLinkedPackages([pkg], {
+    label: "brand",
+    repoRoot: "/repo",
+    run: (cmd, args) => calls.push([cmd, args]),
+    write: () => {},
+  })
+  assert.deepEqual(calls, [["pnpm", ["--filter", "@cognia/provider-types", "run", "build"]]])
 })
 
 test("buildLinkedPackages builds only the stale packages, through pnpm --filter", () => {

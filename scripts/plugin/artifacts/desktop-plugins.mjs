@@ -143,20 +143,25 @@ export async function stageBundledPlugins({
   fsImpl = fs,
   root = ROOT,
   pluginsRoot,
+  profile,
+  contractCatalog,
+  styleContract,
+  compilerContract,
   buildFrontend = buildFrontendPlugin,
 } = {}) {
   if (!outDir && !(stagedDir && catalogFile))
     throw new Error("stageBundledPlugins: `outDir` (or `stagedDir` and `catalogFile`) is required")
   const target = stagedDir ?? path.join(outDir, PLUGIN_ARTIFACT_SECTIONS.desktopPlugins.set)
   pluginsRoot ??= path.join(root, "plugins")
-  const { bundled = {} } = readDistribution(fsImpl, root)
-  const browserBuiltins = JSON.parse(
-    fsImpl.readFileSync(path.join(root, PLUGIN_CURATION_FILES.browserBuiltins), "utf8")
-  )
+  const bundled = profile?.desktop ?? readDistribution(fsImpl, root).bundled
+  const browserBuiltins =
+    profile?.browser.map((entry) => entry.directory) ??
+    JSON.parse(fsImpl.readFileSync(path.join(root, PLUGIN_CURATION_FILES.browserBuiltins), "utf8"))
 
   // Everything is collected first and written last: a failing include leaves
   // the previous stage intact, and an unchanged stage is not rewritten.
   const pending = new Map()
+  const modes = new Map()
   const catalog = { entries: {} }
   for (const [dir, entry] of Object.entries(bundled)) {
     if (!/^[a-z0-9][a-z0-9._-]*$/.test(dir))
@@ -198,6 +203,7 @@ export async function stageBundledPlugins({
       const from = path.join(source, relative)
       const bytes = fsImpl.readFileSync(from)
       pending.set(`${dir}/${relative}`, bytes)
+      modes.set(`${dir}/${relative}`, fsImpl.statSync(from).mode & 0o111 ? 0o755 : 0o644)
       staged.push({
         path: relative,
         bytes: bytes.length,
@@ -223,7 +229,14 @@ export async function stageBundledPlugins({
     const manifest = JSON.parse(fsImpl.readFileSync(path.join(source, "plugin.json"), "utf8"))
     if (manifest.type !== "frontend" || !manifest.nodeRuntime) continue
     if (catalog.entries[dir]) throw new Error(`Duplicate bundled plugin directory: ${dir}`)
-    const built = await buildFrontend({ root, pluginsRoot, directory: dir })
+    const built = await buildFrontend({
+      root,
+      pluginsRoot,
+      directory: dir,
+      contractCatalog,
+      styleContract,
+      compilerContract,
+    })
     const staged = []
     for (const [relative, bytes] of [...built.files].sort(([left], [right]) =>
       left.localeCompare(right)
@@ -237,6 +250,7 @@ export async function stageBundledPlugins({
       )
         throw new Error(`Unsafe built plugin path: ${relative}`)
       pending.set(`${dir}/${relative}`, Buffer.from(bytes))
+      modes.set(`${dir}/${relative}`, built.fileModes?.get(relative) ?? 0o644)
       staged.push({
         path: relative,
         bytes: bytes.length,
@@ -248,7 +262,14 @@ export async function stageBundledPlugins({
 
   // An unchanged section is left alone, so the consumer's own unchanged-tree
   // check (which keeps `tauri dev` from restarting) sees stable mtimes too.
-  const changed = !stagedTreeMatches(target, pending, fsImpl)
+  const changed =
+    !stagedTreeMatches(target, pending, fsImpl) ||
+    [...modes].some(
+      ([relative, mode]) =>
+        process.platform !== "win32" &&
+        fsImpl.existsSync(path.join(target, relative)) &&
+        (fsImpl.statSync(path.join(target, relative)).mode & 0o777) !== mode
+    )
   if (changed) {
     fsImpl.rmSync(target, { recursive: true, force: true })
     fsImpl.mkdirSync(target, { recursive: true })
@@ -256,6 +277,7 @@ export async function stageBundledPlugins({
       const to = path.join(target, ...relative.split("/"))
       fsImpl.mkdirSync(path.dirname(to), { recursive: true })
       fsImpl.writeFileSync(to, bytes)
+      fsImpl.chmodSync(to, modes.get(relative))
     }
   }
 

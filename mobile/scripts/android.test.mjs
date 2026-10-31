@@ -5,6 +5,7 @@ import path from "node:path"
 import test from "node:test"
 import net from "node:net"
 import { setTimeout as delay } from "node:timers/promises"
+import { activePluginArtifactLeases, withPluginArtifactLock } from "../../scripts/build/plugin-artifact-lease.mjs"
 
 import {
   parseArgs,
@@ -57,6 +58,19 @@ for (const scenario of ["timeout", "early-exit", "later-exit", "abort-pending", 
         }).listen(Number(process.argv.at(-1)), '127.0.0.1');
       `
       )
+      // Exercise the real compiler wrapper and reader lifetime; only the
+      // frontend executable and artifact-preparation boundary are fixtures.
+      const launcher = path.join(root, "scripts/build/with-plugin-artifacts.mjs")
+      await mkdir(path.dirname(launcher), { recursive: true })
+      const wrapperUrl = new URL("../../scripts/build/with-plugin-artifacts.mjs", import.meta.url).href
+      const leaseUrl = new URL("../../scripts/build/plugin-artifact-lease.mjs", import.meta.url).href
+      await writeFile(launcher, `
+        import {runWithPluginArtifacts} from ${JSON.stringify(wrapperUrl)};
+        import {withPluginArtifactLock,createPluginArtifactLease} from ${JSON.stringify(leaseUrl)};
+        const result = await runWithPluginArtifacts({root:process.cwd(),args:[process.execPath,${JSON.stringify(script)},...process.argv.slice(4)],
+          prepare:async()=>withPluginArtifactLock(process.cwd(),directory=>({release:createPluginArtifactLease(directory,'a'.repeat(64))}))});
+        if(result.signal)process.kill(process.pid,result.signal);else process.exitCode=result.code;
+      `)
       const pending = startDevServer(
         root,
         {
@@ -90,6 +104,7 @@ for (const scenario of ["timeout", "early-exit", "later-exit", "abort-pending", 
       }
       const pid = Number(await readFile(path.join(root, "child.pid"), "utf8"))
       assert.throws(() => process.kill(pid, 0), { code: "ESRCH" })
+      assert.deepEqual(await withPluginArtifactLock(root, (directory) => activePluginArtifactLeases(directory)), [])
       const probe = net.createServer()
       await new Promise((resolve, reject) => {
         probe.once("error", reject)
@@ -103,7 +118,7 @@ for (const scenario of ["timeout", "early-exit", "later-exit", "abort-pending", 
     }
   })
 }
-import ts from "typescript"
+import { transformSync } from "esbuild"
 import vm from "node:vm"
 import { readFile } from "node:fs/promises"
 
@@ -585,13 +600,11 @@ test("toolchain discovers explicit JDK and SDK on macOS, Linux and Windows", asy
 
 test("Capacitor configuration strictly validates dev flags and loopback URLs", async () => {
   const source = await readFile(new URL("../capacitor.config.ts", import.meta.url), "utf8")
-  const js = ts.transpileModule(source, {
-    compilerOptions: { module: ts.ModuleKind.CommonJS },
-  }).outputText
+  const js = transformSync(source, { loader: "ts", format: "cjs" }).code
   const config = (env) => {
-    const exports = {}
-    vm.runInNewContext(js, { exports, process: { env }, URL })
-    return exports.default
+    const configModule = { exports: {} }
+    vm.runInNewContext(js, { module: configModule, exports: configModule.exports, process: { env }, URL })
+    return configModule.exports.default
   }
   assert.equal(config({ COGNIA_MOBILE_DEV: "0" }).server.url, undefined)
   assert.equal(config({ COGNIA_MOBILE_DEV: "1" }).server.url, "http://localhost:3002")

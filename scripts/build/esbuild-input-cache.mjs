@@ -6,12 +6,16 @@ import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { parse } from "jsonc-parser"
 import writeFileAtomic from "write-file-atomic"
-import { sha256, hashSources } from "./build-artifact-runtime.mjs"
+import { sha256, hashSources } from "./source-fingerprint.mjs"
 
 const self = fileURLToPath(import.meta.url)
 const require = createRequire(import.meta.url)
 const compilerPackage = require.resolve("esbuild/package.json")
-const artifactHelpers = fileURLToPath(new URL("./build-artifact-runtime.mjs", import.meta.url))
+const artifactHelpers = fileURLToPath(new URL("./source-fingerprint.mjs", import.meta.url))
+const fileMode = (file) => {
+  const info = statSync(file, { throwIfNoEntry: false })
+  return info?.isFile() ? (info.mode & 0o111 ? 0o755 : 0o644) : null
+}
 
 export function readOptional(file) {
   try {
@@ -115,7 +119,8 @@ export function captureBuildInputs(root, inputs, extraFiles) {
   const directories = new Set()
   for (const input of inputs) {
     const file = path.resolve(root, input)
-    files.add(file)
+    if (statSync(file, { throwIfNoEntry: false })?.isDirectory()) directories.add(file)
+    else files.add(file)
     // Detect a new sibling that changes extension/index resolution even when
     // the previously resolved file itself has not changed.
     if (!file.includes(`${path.sep}node_modules${path.sep}`)) directories.add(path.dirname(file))
@@ -130,6 +135,7 @@ export function captureBuildInputs(root, inputs, extraFiles) {
   configFiles(path.join(root, "tsconfig.json"), files)
   return {
     files: hashSources([...files], readFingerprint),
+    modes: Object.fromEntries([...files].map((file) => [file, fileMode(file)])),
     directories: Object.fromEntries(
       [...directories].sort().map((directory) => [directory, directoryEntries(directory)])
     ),
@@ -138,7 +144,7 @@ export function captureBuildInputs(root, inputs, extraFiles) {
 
 export function isBuildCacheFresh(cache, root, key, requiredOutputs) {
   if (cache?.schema !== 1 || cache.root !== root || cache.key !== key) return false
-  if (!cache.inputs?.files || !cache.inputs?.directories || !cache.outputs) return false
+  if (!cache.inputs?.files || !cache.inputs?.directories || !cache.inputs?.modes || !cache.outputModes || !cache.outputs) return false
   if (
     Object.keys(cache.inputs.files).length === 0 ||
     requiredOutputs.some((file) => typeof cache.outputs[file] !== "string")
@@ -151,9 +157,11 @@ export function isBuildCacheFresh(cache, root, key, requiredOutputs) {
   for (const [directory, entries] of Object.entries(cache.inputs.directories)) {
     if (JSON.stringify(directoryEntries(directory)) !== JSON.stringify(entries)) return false
   }
+  for (const [file, mode] of Object.entries(cache.inputs.modes)) if (fileMode(file) !== mode) return false
   for (const [file, digest] of Object.entries(cache.outputs)) {
     const bytes = readOptional(file)
     if (!bytes || sha256(bytes) !== digest) return false
+    if (fileMode(file) !== cache.outputModes[file]) return false
   }
   return true
 }
@@ -171,7 +179,7 @@ export function saveBuildCache(file, { root, key, inputs, extraFiles, outputs, s
   writeIfChanged(
     file,
     JSON.stringify(
-      { schema: 1, root, key, inputs: snapshot, outputs: hashSources(outputs, readOptional) },
+      { schema: 1, root, key, inputs: snapshot, outputs: hashSources(outputs, readOptional), outputModes: Object.fromEntries(outputs.map((file) => [file, fileMode(file)])) },
       null,
       2
     ) + "\n"

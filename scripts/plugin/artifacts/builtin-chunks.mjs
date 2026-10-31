@@ -6,6 +6,7 @@
 // finished set.
 
 import { createHash } from "node:crypto"
+import { chmodSync } from "node:fs"
 import { readFile, readdir, rm } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -29,8 +30,6 @@ const repoRoot = path.resolve(path.dirname(generatorFile), "../../..")
 export async function readBrowserBuiltinIds(root = repoRoot) {
   return JSON.parse(await readFile(path.join(root, PLUGIN_CURATION_FILES.browserBuiltins), "utf8"))
 }
-
-export const BROWSER_BUILTIN_PLUGIN_IDS = await readBrowserBuiltinIds()
 
 /**
  * Manifest fields the host reads before the plugin manager boots. Database boot
@@ -108,11 +107,37 @@ async function preparePdfWorker(root, chunksRoot) {
   const digest = sha256(contents)
   const output = path.join(chunksRoot, "_shared", `pdf.worker.${digest}.mjs`)
   writeIfChanged(output, contents)
-  return { source, output, url: `${BUILTIN_CHUNK_URL_PREFIX}/_shared/pdf.worker.${digest}.mjs` }
+  return {
+    source,
+    output,
+    sha256: digest,
+    url: `${BUILTIN_CHUNK_URL_PREFIX}/_shared/pdf.worker.${digest}.mjs`,
+  }
 }
 
-async function buildPlugin(directory, { root, pluginsRoot, chunksRoot, pdfWorkerUrl, bundle }) {
-  const result = await buildFrontendPlugin({ root, pluginsRoot, directory, pdfWorkerUrl, bundle })
+async function buildPlugin(
+  directory,
+  {
+    root,
+    pluginsRoot,
+    chunksRoot,
+    pdfWorkerUrl,
+    bundle,
+    contractCatalog,
+    styleContract,
+    compilerContract,
+  }
+) {
+  const result = await buildFrontendPlugin({
+    root,
+    pluginsRoot,
+    directory,
+    pdfWorkerUrl,
+    bundle,
+    contractCatalog,
+    styleContract,
+    compilerContract,
+  })
   const { manifest } = result
   const javascript = result.files.get(manifest.main)
   const digest = sha256(javascript)
@@ -124,6 +149,7 @@ async function buildPlugin(directory, { root, pluginsRoot, chunksRoot, pdfWorker
   for (const [relative, contents] of result.files) {
     const output = path.join(pluginOutputRoot, "resources", relative)
     writeIfChanged(output, contents)
+    chmodSync(output, result.fileModes.get(relative) ?? 0o644)
     outputs.push(output)
   }
   const stylesheet = manifest.styles ? result.files.get(manifest.styles) : undefined
@@ -181,6 +207,11 @@ export async function buildBrowserBuiltinPlugins({
   pluginIds,
   bundle,
   outDir,
+  contractCatalog,
+  styleContract,
+  compilerContract,
+  authoring,
+  profile,
 } = {}) {
   if (!outDir) throw new Error("buildBrowserBuiltinPlugins: `outDir` is required")
   root = path.resolve(root)
@@ -199,7 +230,16 @@ export async function buildBrowserBuiltinPlugins({
   const generatedIndexPath = path.join(outDir, PLUGIN_ARTIFACT_SECTIONS.builtinIndex.set)
   const prebootPath = path.join(outDir, PLUGIN_ARTIFACT_SECTIONS.prebootManifests.set)
   const cachePath = path.join(root, ".cache/build/browser-builtin-plugins.json")
-  const key = JSON.stringify({ pluginIds, pluginsRoot, outDir })
+  const key = JSON.stringify({
+    pluginIds,
+    pluginsRoot,
+    outDir,
+    contractCatalog,
+    styleContract,
+    compilerContract,
+    authoring,
+    profile,
+  })
   const cache = readBuildCache(cachePath)
   if (isBuildCacheFresh(cache, root, key, [generatedIndexPath, prebootPath])) {
     await pruneStaleOutputs(chunksRoot, new Set(Object.keys(cache.outputs)))
@@ -219,6 +259,9 @@ export async function buildBrowserBuiltinPlugins({
       chunksRoot,
       pdfWorkerUrl: pdfWorker.url,
       bundle: build,
+      contractCatalog,
+      styleContract,
+      compilerContract,
     })
     entries[result.entry.manifest.id] = result.entry
     inputs.push(...result.inputs)
@@ -227,7 +270,10 @@ export async function buildBrowserBuiltinPlugins({
 
   // Publish the index only after every new content-addressed asset is durable.
   // On failure the previous index and its assets remain usable.
-  writeIfChanged(generatedIndexPath, `${JSON.stringify({ version: 1, entries }, null, 2)}\n`)
+  writeIfChanged(
+    generatedIndexPath,
+    `${JSON.stringify({ version: 1, sharedResources: { pdfWorker: { url: pdfWorker.url, sha256: pdfWorker.sha256 } }, entries }, null, 2)}\n`
+  )
   writeIfChanged(prebootPath, `${JSON.stringify(prebootManifestSnapshot(entries), null, 2)}\n`)
   await pruneStaleOutputs(chunksRoot, new Set(outputs))
   saveBuildCache(cachePath, {
@@ -239,7 +285,8 @@ export async function buildBrowserBuiltinPlugins({
     extraFiles: [
       generatorFile,
       fileURLToPath(new URL("../build-frontend-plugins.mjs", import.meta.url)),
-      path.join(root, PLUGIN_CURATION_FILES.browserBuiltins),
+      fileURLToPath(new URL("../plugin-styles.mjs", import.meta.url)),
+      ...(!profile ? [path.join(root, PLUGIN_CURATION_FILES.browserBuiltins)] : []),
       pdfWorker.source,
       ...pluginIds.map((id) => path.join(pluginsRoot, id, "plugin.json")),
     ],

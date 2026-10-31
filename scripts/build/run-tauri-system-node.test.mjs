@@ -41,7 +41,7 @@ test("system-node profile rejects a base config without the bundled runtime", ()
 })
 
 test("package scripts expose explicit bundled and system-node desktop profiles", () => {
-  assert.equal(packageJson.scripts["tauri:build:bundled"], "tauri build")
+  assert.equal(packageJson.scripts["tauri:build:bundled"], "node scripts/dev/tauri.mjs build")
   assert.equal(
     packageJson.scripts["tauri:build:system-node"],
     "node scripts/build/run-tauri-system-node.mjs build"

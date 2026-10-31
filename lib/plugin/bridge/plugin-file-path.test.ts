@@ -16,11 +16,33 @@ import {
   isUnsafeRelativePath,
   joinPluginPath,
   publicBuiltinAssetUrl,
+  publicBuiltinScreenshotUrl,
   readContainedPluginAsset,
   readContainedPluginFile,
 } from "./plugin-file-path"
 
 describe("plugin-file-path", () => {
+  it("uses package resources for builtin screenshots and rejects foreign or encoded escaping paths", () => {
+    const id = "cognia-azur-lane-theme"
+    expect(publicBuiltinScreenshotUrl(id, `/plugins/${id}/assets/one.png`)).toBe(
+      `/_cognia/builtin-plugins/${id}/resources/assets/one.png`
+    )
+    expect(publicBuiltinScreenshotUrl(id, "shots/space%20name.png")).toBe(
+      `/_cognia/builtin-plugins/${id}/resources/shots/space%20name.png`
+    )
+    for (const candidate of [
+      "/plugins/other/image.png",
+      "../outside.png",
+      "%2e%2e/outside.png",
+      "%252e%252e/outside.png",
+      "bad%ZZ.png",
+    ]) {
+      expect(publicBuiltinScreenshotUrl(id, candidate)).toBeUndefined()
+    }
+    expect(publicBuiltinScreenshotUrl(id, "https://example.test/image.png")).toBe(
+      "https://example.test/image.png"
+    )
+  })
   beforeEach(() => {
     jest.clearAllMocks()
     mockIsTauri.mockReturnValue(false)

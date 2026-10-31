@@ -233,13 +233,18 @@
         },
         {
           "path": "dist/index.js",
-          "bytes": 1812848,
-          "sha256": "d523f72b54e44d14be3438ced4ca16eaecc2906e8a2e1faad25432d58f1e8429"
+          "bytes": 1812953,
+          "sha256": "ceec3afdbaf534d1b8022958bc70f06d0cb6cad9d3b49024d1f5856e3a38dcd6"
+        },
+        {
+          "path": "dist/plugin.css",
+          "bytes": 8117,
+          "sha256": "2af987c50a2f7d7b87652740151eedf797b052ae23dac23b90d36d25f04e23d4"
         },
         {
           "path": "plugin.json",
-          "bytes": 14141,
-          "sha256": "b75e0417a6f04aae45d6c2c9babca416fb9bce6156eb8d2e7a6026ef819f036d"
+          "bytes": 14172,
+          "sha256": "0195cb8bca15f1aab43a96ea84449167036877ffdc28aa06659fb4eed75591a8"
         },
         {
           "path": "runtime/package.json",

@@ -24,6 +24,7 @@
     ],
     "paths": {
       "@/*": ["./*"],
+      "@cognia/brand-assets": ["./packages/brand-assets/src/index.ts"],
       "@cognia/eval-core": ["./packages/eval-core/src/index.ts"],
       "@cognia/eval-core/*": ["./packages/eval-core/src/*"],
       "@cognia/router-fusion": ["./packages/router-fusion/src/index.ts"],

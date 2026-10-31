@@ -1,0 +1,284 @@
+{
+  "schema": 1,
+  "name": "first-party",
+  "browser": [
+    {
+      "directory": "agent-team-examples",
+      "id": "cognia-agent-team-examples"
+    },
+    {
+      "directory": "anthropic-skills",
+      "id": "cognia-anthropic-skills"
+    },
+    {
+      "directory": "browser-tools",
+      "id": "cognia-browser-tools"
+    },
+    {
+      "directory": "clipboard-history",
+      "id": "cognia-clipboard-history"
+    },
+    {
+      "directory": "clipboard-tools",
+      "id": "cognia-clipboard-tools"
+    },
+    {
+      "directory": "cognia-anime-effort",
+      "id": "cognia-anime-effort"
+    },
+    {
+      "directory": "cognia-appearance-demo",
+      "id": "cognia-appearance-demo"
+    },
+    {
+      "directory": "cognia-arknights-theme",
+      "id": "cognia-arknights-theme"
+    },
+    {
+      "directory": "cognia-azur-lane-theme",
+      "id": "cognia-azur-lane-theme"
+    },
+    {
+      "directory": "cognia-backend-refactor",
+      "id": "cognia-backend-refactor"
+    },
+    {
+      "directory": "cognia-builtin-characters",
+      "id": "cognia-builtin-characters"
+    },
+    {
+      "directory": "cognia-documents",
+      "id": "cognia-documents"
+    },
+    {
+      "directory": "cognia-game-worlds-theme",
+      "id": "cognia-game-worlds-theme"
+    },
+    {
+      "directory": "cognia-genshin-theme",
+      "id": "cognia-genshin-theme"
+    },
+    {
+      "directory": "cognia-glance-example",
+      "id": "cognia-glance-example"
+    },
+    {
+      "directory": "cognia-goal-insights",
+      "id": "cognia-goal-insights"
+    },
+    {
+      "directory": "cognia-honkai-star-rail-theme",
+      "id": "cognia-honkai-star-rail-theme"
+    },
+    {
+      "directory": "cognia-material-icon-theme",
+      "id": "cognia-material-icon-theme"
+    },
+    {
+      "directory": "cognia-office",
+      "id": "cognia-office"
+    },
+    {
+      "directory": "cognia-pdf",
+      "id": "cognia-pdf"
+    },
+    {
+      "directory": "cognia-presentations",
+      "id": "cognia-presentations"
+    },
+    {
+      "directory": "cognia-sandboxed-tools",
+      "id": "cognia-sandboxed-tools"
+    },
+    {
+      "directory": "cognia-scheduler-tools",
+      "id": "cognia-scheduler-tools"
+    },
+    {
+      "directory": "cognia-scheduling-demo",
+      "id": "cognia-scheduling-demo"
+    },
+    {
+      "directory": "cognia-share-watch",
+      "id": "cognia-share-watch"
+    },
+    {
+      "directory": "cognia-visualize",
+      "id": "cognia-visualize"
+    },
+    {
+      "directory": "cognia-work-mode",
+      "id": "cognia-work-mode"
+    },
+    {
+      "directory": "cognia-zenless-zone-zero-theme",
+      "id": "cognia-zenless-zone-zero-theme"
+    },
+    {
+      "directory": "computer-use",
+      "id": "cognia-computer-use"
+    },
+    {
+      "directory": "config-governance",
+      "id": "cognia-config-governance"
+    },
+    {
+      "directory": "context-inspector",
+      "id": "cognia-context-inspector"
+    },
+    {
+      "directory": "deep-research",
+      "id": "cognia-deep-research"
+    },
+    {
+      "directory": "e2b-sandbox",
+      "id": "cognia-e2b-sandbox"
+    },
+    {
+      "directory": "eval",
+      "id": "cognia-eval"
+    },
+    {
+      "directory": "feishu-auth",
+      "id": "feishu-auth"
+    },
+    {
+      "directory": "feishu-calendar",
+      "id": "feishu-calendar"
+    },
+    {
+      "directory": "figma-external-service",
+      "id": "figma-external-service"
+    },
+    {
+      "directory": "github-comment-bot",
+      "id": "github-comment-bot"
+    },
+    {
+      "directory": "github-delivery",
+      "id": "github-delivery"
+    },
+    {
+      "directory": "github-devin-bot",
+      "id": "github-devin-bot"
+    },
+    {
+      "directory": "ocr",
+      "id": "cognia-ocr"
+    },
+    {
+      "directory": "pagerduty",
+      "id": "pagerduty"
+    },
+    {
+      "directory": "pet-daily-quests",
+      "id": "pet-daily-quests"
+    },
+    {
+      "directory": "playwright-mcp",
+      "id": "cognia-playwright-mcp"
+    },
+    {
+      "directory": "prompt-templates",
+      "id": "cognia-prompt-templates"
+    },
+    {
+      "directory": "remote-desktop-rustdesk",
+      "id": "cognia-remote-desktop-rustdesk"
+    },
+    {
+      "directory": "remote-desktop-vnc",
+      "id": "cognia-remote-desktop-vnc"
+    },
+    {
+      "directory": "remote-desktop-web-console",
+      "id": "cognia-remote-desktop-web-console"
+    },
+    {
+      "directory": "ripgrep-tools",
+      "id": "ripgrep-tools"
+    },
+    {
+      "directory": "screenshot",
+      "id": "cognia-screenshot"
+    },
+    {
+      "directory": "skill-recorder",
+      "id": "cognia-skill-recorder"
+    },
+    {
+      "directory": "sre-agent",
+      "id": "sre-agent"
+    },
+    {
+      "directory": "stagehand-mcp",
+      "id": "cognia-stagehand-mcp"
+    },
+    {
+      "directory": "strix-security",
+      "id": "strix-security"
+    },
+    {
+      "directory": "ui-surface-reference",
+      "id": "ui-surface-reference"
+    },
+    {
+      "directory": "web-clone",
+      "id": "cognia-web-clone"
+    },
+    {
+      "directory": "web-tools",
+      "id": "cognia-web-tools"
+    },
+    {
+      "directory": "workflow-ai",
+      "id": "cognia-workflow-ai"
+    },
+    {
+      "directory": "workspace-tools",
+      "id": "cognia-workspace-tools"
+    },
+    {
+      "directory": "zhihu-content-pipeline",
+      "id": "zhihu-content-pipeline"
+    }
+  ],
+  "desktop": {
+    "repowiki": {
+      "id": "cognia-repowiki",
+      "reason": "ADR-0146 product subsystem: repository wiki generation, dependency graph, cited search. Its 326-case pytest suite ships as source in the repo, not in the installer.",
+      "include": [
+        "plugin.json",
+        "assets/icon.png",
+        "main.py",
+        "pyproject.toml",
+        "README.md",
+        "LICENSE.upstream",
+        "repowiki/**/*.py"
+      ]
+    },
+    "cognia-laya-guard": {
+      "id": "cognia-laya-guard",
+      "reason": "ADR-0194 decision provider: Settings → Conversation → Decision provider lists \"Laya (local)\", and the inbound IM moderation hook ships with it. Seeded but manual-enable only, because activation provisions a Python venv and downloads the laya checkpoint. Calibration tools and the pytest suite stay in the repo.",
+      "include": [
+        "plugin.json",
+        "assets/icon.png",
+        "main.py",
+        "pyproject.toml",
+        "README.md",
+        "layaguard/**/*.py"
+      ]
+    }
+  },
+  "companions": [
+    {
+      "directory": "cognia-office",
+      "id": "cognia-office"
+    }
+  ],
+  "devOnly": {
+    "cognia-python-demo": "Author reference: the smallest possible Python plugin. Copy-paste template, not a default.",
+    "cognia-python-runtime-demo": "Author reference for the Python reverse-RPC surface (ADR-0145). Exercises the contract rather than doing user-facing work.",
+    "wasm-example-formatter": "Author reference for the WASM component ABI. Its artifact is built by `cargo component` on demand and is not checked in, so there is nothing stable to stage."
+  }
+}

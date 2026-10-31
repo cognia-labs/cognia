@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process"
 import { readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -39,7 +38,6 @@ async function run(subcommand, forwardedArgs) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
   const config = JSON.parse(readFileSync(resolve(root, "src-tauri/tauri.conf.json"), "utf8"))
   const override = createSystemNodeOverride(config)
-  const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm"
   const args = [
     subcommand,
     "--features",
@@ -49,21 +47,9 @@ async function run(subcommand, forwardedArgs) {
     ...forwardedArgs,
   ]
 
-  if (subcommand === "dev") {
-    const result = await runTauri(args)
-    if (result.signal) process.kill(process.pid, result.signal)
-    process.exitCode = result.code ?? 1
-    return
-  }
-
-  await new Promise((resolveRun, reject) => {
-    const child = spawn(pnpm, ["exec", "tauri", ...args], { cwd: root, stdio: "inherit" })
-    child.once("error", reject)
-    child.once("exit", (code, signal) => {
-      if (code === 0) resolveRun()
-      else reject(new Error(`Tauri system-node ${subcommand} failed (${signal ?? code})`))
-    })
-  })
+  const result = await runTauri(args)
+  if (result.signal) process.kill(process.pid, result.signal)
+  process.exitCode = result.code ?? 1
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

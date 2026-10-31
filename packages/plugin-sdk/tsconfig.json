@@ -6,6 +6,7 @@
     "ignoreDeprecations": "6.0",
     "paths": {
       "@/*": ["../../*"],
+      "@cognia/brand-assets": ["../brand-assets/src/index.ts"],
       "@cognia/provider-types": ["../provider-types/src/index.ts"],
       "@cognia/provider-types/*": ["../../packages/provider-types/src/*"],
       "@cognia/provider-core": ["../provider-core/src/index.ts"],

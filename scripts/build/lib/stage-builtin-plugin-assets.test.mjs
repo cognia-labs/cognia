@@ -46,6 +46,14 @@ test("stages the chunk tree under the URL path the loader resolves", () => {
   assert.equal(readFileSync(join(outDir, URL_PATH.slice(1)), "utf8"), CHUNK)
 })
 
+test("an explicit artifact is prepared even when an old public tree exists", () => {
+  const root = makeRoot()
+  const outDir = mkdtempSync(join(tmpdir(), "explicit-builtin-plugins-"))
+  let calls = 0
+  stageBuiltinPluginAssets({ root, outDir, env: { COGNIA_PLUGIN_ARTIFACTS: "selected-B" }, buildChunks: () => { calls += 1 } })
+  assert.equal(calls, 1)
+})
+
 test("builds the tree when a clean checkout has none", () => {
   const root = makeRoot({ writeChunk: false })
   const outDir = mkdtempSync(join(tmpdir(), "stage-builtin-plugins-out-"))

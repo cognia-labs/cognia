@@ -1,4 +1,5 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { build } from "esbuild"
@@ -11,10 +12,7 @@ const pluginRoot = dirname(fileURLToPath(import.meta.url))
  * `dist/index.js`; the lazy factory the manifest names by `entry` is its own
  * bundle, because the host imports it separately on enable.
  */
-export const ENTRIES = {
-  "dist/index.js": "src/index.ts",
-  "dist/context-provider.js": "src/context-provider.ts",
-}
+export const ENTRIES = JSON.parse(readFileSync(resolve(pluginRoot, "build-entries.json"), "utf8"))
 
 /**
  * Build the standalone CommonJS entries and the install ZIP.

@@ -2,14 +2,15 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 
 import {
-  BROWSER_BUILTIN_PLUGIN_IDS,
+  readBrowserBuiltinIds,
   PREBOOT_MANIFEST_FIELDS,
   buildBrowserBuiltinPlugins,
   prebootManifestSnapshot,
   stageBuiltinPluginIcons,
 } from "./builtin-chunks.mjs"
 
-test("curates every builtin as an independent asset", () => {
+test("curates every builtin as an independent asset", async () => {
+  const BROWSER_BUILTIN_PLUGIN_IDS = await readBrowserBuiltinIds()
   assert.equal(BROWSER_BUILTIN_PLUGIN_IDS.length, 58)
   assert.equal(new Set(BROWSER_BUILTIN_PLUGIN_IDS).size, BROWSER_BUILTIN_PLUGIN_IDS.length)
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("github-comment-bot"))
@@ -21,8 +22,43 @@ test("curates every builtin as an independent asset", () => {
   assert.ok(BROWSER_BUILTIN_PLUGIN_IDS.includes("remote-desktop-web-console"))
 })
 
+test("a new resource under a previously empty directory invalidates the warm cache", async (t) => {
+  const f = await fixture(t)
+  const images = path.join(f.root, "plugins/cognia-pdf/resources/images")
+  await mkdir(images, { recursive: true })
+  await f.run()
+  await writeFile(path.join(images, "new.svg"), "<svg/>")
+  const entries = await f.run()
+  const relative = entries["cognia-pdf"].asset.resourcesUrl.replace("/_cognia/", "")
+  assert.equal(await readFile(path.join(f.outDir, relative, "images/new.svg"), "utf8"), "<svg/>")
+})
+
+test(
+  "an executable mode change invalidates the warm cache without changing source bytes",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const f = await fixture(t)
+    const plugin = path.join(f.root, "plugins/cognia-pdf")
+    const manifest = JSON.parse(await readFile(path.join(plugin, "plugin.json"), "utf8"))
+    manifest.bundle_include = ["bin/run.sh"]
+    await writeFile(path.join(plugin, "plugin.json"), JSON.stringify(manifest))
+    await mkdir(path.join(plugin, "bin"), { recursive: true })
+    const binary = path.join(plugin, "bin/run.sh")
+    await writeFile(binary, "#!/bin/sh\necho ready\n", { mode: 0o644 })
+    await f.run()
+    await chmod(binary, 0o755)
+    await f.run()
+    assert.equal(
+      (await stat(path.join(f.outDir, "builtin-plugins/cognia-pdf/resources/bin/run.sh"))).mode &
+        0o777,
+      0o755
+    )
+  }
+)
+
 import {
   cp,
+  chmod,
   mkdtemp,
   mkdir,
   readFile,
@@ -106,6 +142,14 @@ test("a verified cache hit preserves bundle, worker and index mtimes", async (t)
   const bundle = f.chunk(entries["cognia-pdf"].asset.url)
   const workerDir = path.join(f.outDir, "builtin-plugins/_shared")
   const worker = path.join(workerDir, (await readdir(workerDir))[0])
+  const catalog = JSON.parse(await readFile(index, "utf8"))
+  assert.equal(f.chunk(catalog.sharedResources.pdfWorker.url), worker)
+  assert.equal(
+    catalog.sharedResources.pdfWorker.sha256,
+    createHash("sha256")
+      .update(await readFile(worker))
+      .digest("hex")
+  )
   const files = [index, bundle, worker]
   for (const file of files) await utimes(file, 1000, 1000)
   assert.deepEqual(await f.run(), entries)

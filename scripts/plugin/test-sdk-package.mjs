@@ -24,6 +24,28 @@ const catalog = JSON.parse(
 )
 const workDir = mkdtempSync(join(tmpdir(), "cognia-plugin-sdk-pack-"))
 
+// Run identical behavior through the installed ESM and CJS SDK entry points.
+// Source aliases must not hide a missing runtime-kit dependency or stale bundle.
+const adapterRuntimeSmoke = `
+  const timestamp = new Date("2026-10-30T00:00:00Z")
+  class ProbeAdapter extends BaseProtocolAdapter {
+    generateMessageId() { return "author-message" }
+    async *prompt() {
+      yield { type: "usage_update", timestamp, used: 50000, size: 200000,
+        tokenUsage: { promptTokens: 100, completionTokens: 20, totalTokens: 120, cacheReadTokens: 30 } }
+      yield { type: "artifact_update", timestamp, artifactId: "a", complete: true,
+        blocks: [{ type: "resource", resource: { uri: "probe:file", blob: "AAEC", mimeType: "application/octet-stream" } }] }
+      yield { type: "done", timestamp, success: true }
+    }
+  }
+  const result = await new ProbeAdapter().execute("s", { id: "m", role: "user", content: [], timestamp })
+  if (!result.success || result.tokenUsage?.totalTokens !== 120 || result.tokenUsage?.cacheReadTokens !== 30)
+    throw new Error("packed adapter lost detailed usage")
+  const assistant = result.messages.at(-1)
+  if (result.finalResponse !== "[file: probe:file]" || assistant?.id !== "author-message" || assistant.content[0]?.resource?.blob !== "AAEC")
+    throw new Error("packed adapter lost artifacts or the author message-id override")
+`
+
 function installedVersion(packageName) {
   for (const root of [repoRoot, packageRoot]) {
     const manifestPath = join(root, "node_modules", packageName, "package.json")
@@ -156,6 +178,7 @@ try {
       'import { SystemEvents } from "@cognia/plugin-sdk/events";',
       'import { CANONICAL_EXTENSION_POINTS } from "@cognia/plugin-sdk/extensions";',
       'import { defineContextPanel } from "@cognia/plugin-sdk/api/context-panel";',
+      'import { BaseProtocolAdapter } from "@cognia/plugin-sdk/api/external-agent-adapter";',
       'import { PLUGIN_CONTRACT_VERSION, PLUGIN_API_NAMESPACE_CONTRACTS, AUTHOR_PLUGIN_POINT_CONTRACTS } from "@cognia/plugin-sdk/contracts";',
       `if (PLUGIN_CONTRACT_VERSION !== ${JSON.stringify(catalog.contractVersion)}) process.exit(1);`,
       "if (!PLUGIN_API_NAMESPACE_CONTRACTS.length || !AUTHOR_PLUGIN_POINT_CONTRACTS.length) process.exit(1);",
@@ -163,6 +186,7 @@ try {
       'if (SystemEvents.PLUGIN_LOADED !== "system:plugin:loaded") process.exit(1);',
       'if (!CANONICAL_EXTENSION_POINTS.includes("chat.input.above")) process.exit(1);',
       'if (defineContextPanel({ id: "panel", entry: "panel.js", export: "Panel", resourceKinds: ["project-file"], activity: "inspect", labelKey: "panel", label: "Panel" }).id !== "panel") process.exit(1);',
+      adapterRuntimeSmoke,
       "",
     ].join("\n")
   )
@@ -171,7 +195,12 @@ try {
     [
       'const { defineTool } = require("@cognia/plugin-sdk/api/tool"); const probe = { name: "x" }; if (defineTool(probe) !== probe) process.exit(1);',
       'const { PLUGIN_CONTRACT_VERSION, PLUGIN_API_NAMESPACE_CONTRACTS, AUTHOR_PLUGIN_POINT_CONTRACTS } = require("@cognia/plugin-sdk/contracts");',
+      'const { BaseProtocolAdapter } = require("@cognia/plugin-sdk/api/external-agent-adapter");',
       `if (PLUGIN_CONTRACT_VERSION !== ${JSON.stringify(catalog.contractVersion)} || !PLUGIN_API_NAMESPACE_CONTRACTS.length || !AUTHOR_PLUGIN_POINT_CONTRACTS.length) process.exit(1);`,
+      "async function verifyAdapter() {",
+      adapterRuntimeSmoke,
+      "}",
+      "verifyAdapter().catch((error) => { console.error(error); process.exitCode = 1 });",
       "",
     ].join("\n")
   )
@@ -187,6 +216,17 @@ try {
       'import { definePetItem, type PluginPetItemDef } from "@cognia/plugin-sdk/api/pet";',
       'import { registerPluginI18n, type PluginI18nBundle } from "@cognia/plugin-sdk/api/i18n";',
       'import { PluginAgentTurnError, type PluginAgentTurnRequest } from "@cognia/plugin-sdk/api/agent-turn";',
+      'import { BaseProtocolAdapter, foldUsageUpdate, type ProtocolAdapter, type SessionCreateOptions, type ExternalAgentSession } from "@cognia/plugin-sdk/api/external-agent-adapter";',
+      "abstract class AuthorAdapter extends BaseProtocolAdapter {",
+      "  abstract createSession(options?: SessionCreateOptions): Promise<ExternalAgentSession>;",
+      "  abstract cancel(sessionId: string): Promise<void>;",
+      '  protected override generateMessageId(): string { return "author-message"; }',
+      "}",
+      "declare const authorAdapter: AuthorAdapter;",
+      "const adapterContract: ProtocolAdapter = authorAdapter;",
+      'const cancellation: Promise<void> = authorAdapter.cancel("s");',
+      "foldUsageUpdate(undefined, { used: 50000, size: 200000, tokenUsage: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } });",
+      "void adapterContract; void cancellation;",
       "const petHelper: (item: PluginPetItemDef) => PluginPetItemDef = definePetItem;",
       'const i18nBundle: PluginI18nBundle = { pluginId: "test", messages: { en: { hello: "Hello" } } };',
       "const i18nResult: { replaced: boolean } = registerPluginI18n(i18nBundle);",

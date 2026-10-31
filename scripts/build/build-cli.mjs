@@ -24,6 +24,7 @@ import { stageNativeAgentBridges } from "./lib/stage-native-agent-bridges.mjs"
 import {
   BUILTIN_PLUGIN_ASSET_DIR,
   stageBuiltinPluginAssets,
+  prepareBuiltinPluginAssets,
 } from "./lib/stage-builtin-plugin-assets.mjs"
 import { pruneSidecarResidue } from "./lib/prune-sidecar-residue.mjs"
 import { npmBinaryPath } from "../../sidecar/src/tools/builtin/ast-grep/binary.ts"
@@ -46,6 +47,7 @@ if (inputsIndex >= 0 && (!process.argv[inputsIndex + 1] || process.argv[inputsIn
 // uses it so the one test that runs the shipped artifact does not depend on a
 // `cargo build --release` having happened on the machine.
 const jsOnly = process.argv.includes("--js-only")
+const pluginArtifacts = await prepareBuiltinPluginAssets({ root, allowProduce: !jsOnly })
 
 if (!jsOnly) stageNativeAgentBridges({ root, sidecarOutDir: path.join(outdir, "sidecar") })
 
@@ -84,7 +86,7 @@ if (jsOnly) {
   // a missing tree means it was never run, and "--js-only" is the flag that
   // promises not to pay for a full asset build.
   if (fs.existsSync(path.join(root, "public", BUILTIN_PLUGIN_ASSET_DIR))) {
-    const staged = stageBuiltinPluginAssets({ root, outDir: outdir })
+    const staged = stageBuiltinPluginAssets({ root, outDir: outdir, artifactSha256: pluginArtifacts.artifactSha256 })
     console.log(`build-cli: staged ${staged.pluginIds.length} built-in plugin chunk(s)`)
   }
   // Local Jest consumers fingerprint the actual esbuild closure and staged
@@ -142,7 +144,7 @@ stagePiExtension({ root, sidecarOutDir: path.join(outdir, "sidecar") })
 // headless support silently lost their agent tools. Staged into `dist/` so the
 // published package ships them under the existing `files: ["dist"]` entry and
 // the runtime walk-up finds them on the first hop from the bundle directory.
-const stagedBuiltinPlugins = stageBuiltinPluginAssets({ root, outDir: outdir })
+const stagedBuiltinPlugins = stageBuiltinPluginAssets({ root, outDir: outdir, artifactSha256: pluginArtifacts.artifactSha256 })
 console.log(
   `build-cli: staged ${stagedBuiltinPlugins.pluginIds.length} built-in plugin chunk(s) → ${path.relative(root, stagedBuiltinPlugins.dir)}`
 )

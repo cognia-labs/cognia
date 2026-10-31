@@ -36,7 +36,7 @@ const GENERATOR_RELATIVE = path.join("scripts", "build", "stage-plugin-artifacts
  * Returns the staged directory and the ids staged, so the caller can log what
  * shipped.
  */
-export function stageBuiltinPluginAssets({ root, outDir, fsImpl = fs, buildChunks } = {}) {
+export function stageBuiltinPluginAssets({ root, outDir, fsImpl = fs, buildChunks, env = process.env, artifactSha256 } = {}) {
   if (!root) throw new Error("stageBuiltinPluginAssets: `root` is required")
   if (!outDir) throw new Error("stageBuiltinPluginAssets: `outDir` is required")
 
@@ -45,15 +45,20 @@ export function stageBuiltinPluginAssets({ root, outDir, fsImpl = fs, buildChunk
   // Docker brain stage) legitimately has none. Build it rather than fail: the
   // CLI build is the only consumer that would otherwise need a separate,
   // easily-forgotten ordering constraint in every pipeline.
-  if (!fsImpl.existsSync(sourceDir)) {
+  if (!fsImpl.existsSync(sourceDir) || (env.COGNIA_PLUGIN_ARTIFACTS && !artifactSha256)) {
     const build =
       buildChunks ??
       (() =>
         execFileSync(process.execPath, [path.join(root, GENERATOR_RELATIVE)], {
           cwd: root,
           stdio: "inherit",
+          env: { ...process.env, ...env },
         }))
     build()
+  }
+  if (artifactSha256) {
+    const receipt = JSON.parse(fsImpl.readFileSync(path.join(root, ".cache/plugin-artifact-access/receipt.json"), "utf8"))
+    if (receipt.artifactSha256 !== artifactSha256) throw new Error("Plugin artifact receipt changed between compilation and resource copy")
   }
   if (!fsImpl.existsSync(sourceDir)) {
     throw new Error(
@@ -99,4 +104,15 @@ export function stageBuiltinPluginAssets({ root, outDir, fsImpl = fs, buildChunk
   }
 
   return { dir: stagedDir, pluginIds }
+}
+
+/** Hold the selected set before any compiler imports its generated catalog. */
+export async function prepareBuiltinPluginAssets({ root, allowProduce = true, env = process.env, ...options } = {}) {
+  const { stagePluginArtifacts, LOCAL_ARTIFACT_DIR } = await import("../stage-plugin-artifacts.mjs")
+  let from = options.from ?? env.COGNIA_PLUGIN_ARTIFACTS
+  if (!allowProduce && !from) {
+    from = path.join(root, LOCAL_ARTIFACT_DIR)
+    if (!fs.existsSync(path.join(from, "plugin-artifacts.json"))) throw new Error("Plugin artifacts are not prepared; run pnpm plugin:builtin:build or set COGNIA_PLUGIN_ARTIFACTS before a JavaScript-only build")
+  }
+  return stagePluginArtifacts({ root, env, ...options, ...(from ? { from } : {}), hold: true })
 }

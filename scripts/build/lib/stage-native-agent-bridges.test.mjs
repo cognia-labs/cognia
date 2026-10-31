@@ -4,6 +4,8 @@ import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { test } from "node:test"
+import { fileURLToPath } from "node:url"
+import ts from "typescript"
 import { NATIVE_AGENT_BRIDGES, stageNativeAgentBridges } from "./stage-native-agent-bridges.mjs"
 
 function fixture(t) {
@@ -24,6 +26,33 @@ function fixture(t) {
   const sidecarOutDir = path.join(root, "output/sidecar")
   return { root, sidecarOutDir, sdk }
 }
+
+test("the CLI syntax target preserves the pinned native bridge class-field semantics", (t) => {
+  const args = fixture(t)
+  const configFile = path.join(args.root, "cli/tsconfig.json")
+  const source = path.join(args.root, NATIVE_AGENT_BRIDGES["hermes-probe"].source)
+  fs.writeFileSync(source, `class ProbeError extends Error {
+    constructor(readonly code: string) { super(code) }
+  }
+  console.log(new ProbeError("owned-error").code)
+  `)
+  fs.writeFileSync(configFile, JSON.stringify({ compilerOptions: { target: "ES2018" } }))
+  const pinned = stageNativeAgentBridges({ ...args, pin: true })
+  const current = ts.readConfigFile(
+    fileURLToPath(new URL("../../../cli/tsconfig.json", import.meta.url)),
+    ts.sys.readFile
+  )
+  assert.equal(current.error, undefined)
+  const { target, useDefineForClassFields } = current.config.compilerOptions
+  fs.writeFileSync(configFile, JSON.stringify({ compilerOptions: { target, useDefineForClassFields } }))
+  const ordinary = stageNativeAgentBridges(args)
+  assert.deepEqual(ordinary.manifest, pinned.manifest)
+  const executed = spawnSync(process.execPath, [path.join(ordinary.dir, "hermes-probe.cjs")], {
+    encoding: "utf8",
+  })
+  assert.equal(executed.status, 0, executed.stderr)
+  assert.equal(executed.stdout.trim(), "owned-error")
+})
 
 test("stages an isolated lazy SDK closure including assets and reproducible pins", (t) => {
   const args = fixture(t)

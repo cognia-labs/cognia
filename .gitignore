@@ -280,3 +280,11 @@ packages/agent-host-*/integrity.json
 # Reproducible native agent assets; only embedded build pins are source controlled.
 /sidecar/native-agents/*
 !/sidecar/native-agents/pins.json
+
+# Package-owned static inputs may retain a runtime dist/ path (icon themes).
+# These are source resources, not generated plugin entry bundles.
+!plugins/*/resources/dist/
+!plugins/*/resources/dist/**
+
+# Plugin extraction build cache.
+/cli/.cache/

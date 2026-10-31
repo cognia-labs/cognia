@@ -155,7 +155,7 @@ jobs:
       - name: Build offline iOS assets
         run: |
           pnpm mobile:prepare
-          pnpm exec next build --webpack
+          node scripts/build/with-plugin-artifacts.mjs -- next build --webpack
           pnpm --filter mobile run sync:ios
       - name: Validate iOS distribution signing
         id: ios-signing

@@ -31,7 +31,8 @@
  * NOTHING here may fail the build.
  */
 
-import crypto from "node:crypto"
+import { sha256, hashSources } from "./source-fingerprint.mjs"
+export { sha256, hashSources } from "./source-fingerprint.mjs"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
@@ -78,14 +79,6 @@ export const ARTIFACT_SHELL_SOURCE = "lib/artifacts/runtime/artifact-shell-entry
  * deleted hashes as `null`, which can never equal a recorded hash — so a
  * removed module forces a rebuild rather than being quietly skipped.
  */
-export function hashSources(paths, readSource) {
-  const out = {}
-  for (const rel of [...paths].sort()) {
-    const bytes = readSource(rel)
-    out[rel] = bytes ? sha256(bytes) : null
-  }
-  return out
-}
 
 /**
  * Entry source for the React bundle. `import * as ns` then unwrapping
@@ -180,9 +173,6 @@ import { installArtifactShellRuntime } from "./lib/artifacts/runtime/artifact-sh
 installArtifactShellRuntime(globalThis)
 `
 
-export function sha256(bytes) {
-  return crypto.createHash("sha256").update(bytes).digest("hex")
-}
 
 /**
  * The manifest doubles as the freshness sentinel: a rebuild is only needed

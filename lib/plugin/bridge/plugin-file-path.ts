@@ -40,6 +40,26 @@ export function publicBuiltinAssetUrl(pluginId: string, relative: string): strin
     : `/plugins/${encodeURIComponent(pluginId)}/${encodedPath}`
 }
 
+/** Resolve gallery images against package resources, keeping identity icons separate. */
+export function publicBuiltinScreenshotUrl(
+  pluginId: string,
+  candidate: string
+): string | undefined {
+  if (/^(?:https?:|data:|blob:)/i.test(candidate)) return candidate
+  const mirror = `/plugins/${encodeURIComponent(pluginId)}/`
+  if (candidate.startsWith("/plugins/") && !candidate.startsWith(mirror)) return undefined
+  if (candidate.startsWith("/") && !candidate.startsWith(mirror)) return candidate
+  try {
+    const relative = decodeURIComponent(
+      candidate.startsWith(mirror) ? candidate.slice(mirror.length) : candidate
+    )
+    if (isUnsafeRelativePath(relative)) return undefined
+    return publicBuiltinAssetUrl(pluginId, relative)
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Read a text asset of a browser built-in from its public mirror.
  *

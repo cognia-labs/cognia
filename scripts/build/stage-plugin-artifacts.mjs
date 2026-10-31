@@ -29,6 +29,8 @@ import {
   assertSetRelativePath,
 } from "./plugin-artifact-format.mjs"
 import { writeIfChanged } from "./esbuild-input-cache.mjs"
+import { assertArtifactIdentity, readProductProfile, readHostAuthoringIdentity, verifyPluginArtifactContract } from "./plugin-artifact-contract.mjs"
+import { activePluginArtifactLeases, createPluginArtifactLease, withPluginArtifactLock } from "./plugin-artifact-lease.mjs"
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 
@@ -61,7 +63,7 @@ export async function resolvePluginArtifactSet({
     const run =
       produce ??
       (await import("../plugin/artifacts/produce.mjs")).producePluginArtifacts
-    await run({ root, pluginsRoot, outDir })
+    await withPluginArtifactLock(path.join(root, ".cache/plugin-artifact-production"), () => run({ root, pluginsRoot, outDir }))
     return { dir: outDir, source: "produced" }
   }
   throw new Error(
@@ -88,17 +90,27 @@ export function readPluginArtifactSet(dir) {
   const manifestPath = path.join(dir, PLUGIN_ARTIFACT_MANIFEST)
   if (!fs.existsSync(manifestPath))
     throw new Error(`Plugin artifact set ${dir} has no ${PLUGIN_ARTIFACT_MANIFEST}`)
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+  if (fs.lstatSync(dir).isSymbolicLink() || fs.lstatSync(manifestPath).isSymbolicLink()) throw new Error("Symlink in plugin artifact set root/manifest")
+  const manifestBytes = fs.readFileSync(manifestPath)
+  const manifest = JSON.parse(manifestBytes.toString())
   if (manifest?.schema !== PLUGIN_ARTIFACT_SCHEMA)
     throw new Error(
       `Plugin artifact set ${dir} has schema ${JSON.stringify(manifest?.schema)}; this host reads schema ${PLUGIN_ARTIFACT_SCHEMA}`
     )
   const listed = manifest.files ?? {}
+  if (!manifest.modes || JSON.stringify(Object.keys(manifest.modes).sort()) !== JSON.stringify(Object.keys(listed).sort()) || Object.values(manifest.modes).some((mode) => ![0o644, 0o755].includes(mode))) throw new Error("Plugin artifact set has an invalid shipping mode inventory")
+  assertArtifactIdentity(manifest)
   const sections = Object.fromEntries(
     Object.keys(PLUGIN_ARTIFACT_SECTIONS).map((name) => [name, new Map()])
   )
+  Object.defineProperties(sections, { manifest: { value: manifest }, manifestBytes: { value: manifestBytes } })
   for (const [relative, digest] of Object.entries(listed)) {
     assertSetRelativePath(relative)
+    let contained = dir
+    for (const segment of relative.split("/")) {
+      contained = path.join(contained, segment)
+      if (fs.existsSync(contained) && fs.lstatSync(contained).isSymbolicLink()) throw new Error(`Symlink in plugin artifact set: ${relative}`)
+    }
     const owner = sectionOf(relative)
     if (!owner) throw new Error(`Plugin artifact set lists ${relative}, which belongs to no section`)
     const file = path.join(dir, ...relative.split("/"))
@@ -140,13 +152,14 @@ function listFiles(directory) {
   return files
 }
 
-function treeMatches(target, files) {
+function treeMatches(target, files, modes) {
   const present = listFiles(target)
   if (present.length !== files.size) return false
   return present.every((relative) => {
     const expected = files.get(relative)
     return (
       expected !== undefined &&
+      (!modes || process.platform === "win32" || (fs.statSync(path.join(target, relative)).mode & 0o777) === modes.get(relative)) &&
       fs.readFileSync(path.join(target, ...relative.split("/"))).equals(expected)
     )
   })
@@ -163,10 +176,14 @@ function pruneEmptyDirectories(directory) {
 }
 
 /** Mirror `files` into `target`: write what differs, remove what the set lacks. */
-function mirrorTree(target, files, { replaceWhole = false } = {}) {
-  if (treeMatches(target, files)) return false
+function mirrorTree(target, files, { replaceWhole = false, modes } = {}) {
+  if (treeMatches(target, files, modes)) return false
   if (replaceWhole) fs.rmSync(target, { recursive: true, force: true })
-  for (const [relative, bytes] of files) writeIfChanged(path.join(target, ...relative.split("/")), bytes)
+  for (const [relative, bytes] of files) {
+    const file = path.join(target, ...relative.split("/"))
+    writeIfChanged(file, bytes)
+    fs.chmodSync(file, modes?.get(relative) ?? 0o644)
+  }
   for (const relative of listFiles(target)) {
     if (!files.has(relative)) fs.rmSync(path.join(target, ...relative.split("/")), { force: true })
   }
@@ -190,10 +207,50 @@ export async function stagePluginArtifacts({
   env,
   produce,
   sections: only = Object.keys(PLUGIN_ARTIFACT_SECTIONS),
+  profile,
+  authoring,
+  contractCatalog,
+  hold = false,
 } = {}) {
   root = path.resolve(root)
   const { dir, source } = await resolvePluginArtifactSet({ root, from, env, produce })
   const sections = readPluginArtifactSet(dir)
+  const manifest = sections.manifest
+  profile ??= readProductProfile(root)
+  authoring ??= readHostAuthoringIdentity(root)
+  contractCatalog ??= JSON.parse(fs.readFileSync(path.join(root, "packages/plugin-contract/contract/catalog.json"), "utf8"))
+  verifyPluginArtifactContract({ manifest, sections, profile, authoring, contractCatalog })
+  const artifactSha256 = sha256(sections.manifestBytes)
+  const sectionModes = Object.fromEntries(Object.entries(PLUGIN_ARTIFACT_SECTIONS).map(([name, section]) => [name, new Map([...sections[name].keys()].map((relative) => [relative, manifest.modes[relative ? `${section.set}/${relative}` : section.set]]))]))
+  return withPluginArtifactLock(root, (accessDirectory) => {
+  const active = activePluginArtifactLeases(accessDirectory)
+  const needsWrite = Object.entries(PLUGIN_ARTIFACT_SECTIONS).some(([name, section]) => {
+    if (!only.includes(name)) return false
+    const target = path.join(root, ...section.host.split("/"))
+    if (section.kind === "tree") return !treeMatches(target, sections[name], sectionModes[name])
+    return !fs.existsSync(target) || !fs.readFileSync(target).equals(sections[name].get(""))
+  })
+  if (active.some((lease) => lease.artifactSha256 !== artifactSha256) || (active.length && needsWrite))
+    throw new Error("artifact_in_use: active compilation or resource copy owns the generated plugin inputs; use an isolated checkout")
+  // Freeze the exact buffers that passed admission. A subsequent producer or
+  // external writer can no longer alter the selected set during compilation.
+  const immutableDir = path.join(root, ".cache/plugin-artifact-sets", artifactSha256)
+  if (fs.existsSync(immutableDir)) {
+    const cached = readPluginArtifactSet(immutableDir)
+    if (!cached.manifestBytes.equals(sections.manifestBytes)) throw new Error("Immutable plugin artifact cache was modified")
+  } else {
+    const staged = `${immutableDir}.preparing-${process.pid}`
+    fs.mkdirSync(staged, { recursive: true })
+    try {
+      for (const [name, section] of Object.entries(PLUGIN_ARTIFACT_SECTIONS))
+        for (const [relative, bytes] of sections[name]) {
+          const file = path.join(staged, section.set, relative)
+          writeIfChanged(file, bytes); fs.chmodSync(file, sectionModes[name].get(relative))
+        }
+      writeIfChanged(path.join(staged, PLUGIN_ARTIFACT_MANIFEST), sections.manifestBytes)
+      fs.renameSync(staged, immutableDir)
+    } finally { fs.rmSync(staged, { recursive: true, force: true }) }
+  }
   const changed = []
   for (const [name, section] of Object.entries(PLUGIN_ARTIFACT_SECTIONS)) {
     if (!only.includes(name)) continue
@@ -205,11 +262,16 @@ export async function stagePluginArtifacts({
         writeIfChanged(target, bytes)
         changed.push(name)
       }
-    } else if (mirrorTree(target, sections[name], { replaceWhole: section.replaceWhole })) {
+    } else if (mirrorTree(target, sections[name], { replaceWhole: section.replaceWhole, modes: sectionModes[name] })) {
       changed.push(name)
     }
   }
-  return { dir, source, changed }
+  const receiptPath = path.join(accessDirectory, "receipt.json")
+  const previous = fs.existsSync(receiptPath) ? JSON.parse(fs.readFileSync(receiptPath, "utf8")) : undefined
+  const stagedSections = [...new Set([...(previous?.artifactSha256 === artifactSha256 ? previous.sections : []), ...only])].sort()
+  writeIfChanged(receiptPath, JSON.stringify({ schema: 1, artifactSha256, sections: stagedSections, immutableDir: path.relative(root, immutableDir).replaceAll(path.sep, "/") }) + "\n")
+  return { dir, immutableDir, source, changed, artifactSha256, ...(hold ? { release: createPluginArtifactLease(accessDirectory, artifactSha256) } : {}) }
+  })
 }
 
 function argument(name) {

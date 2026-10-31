@@ -169,6 +169,7 @@ const projectCommon: Config = {
 
   // A map from regular expressions to module names or to arrays of module names that allow to stub out resources with a single module
   moduleNameMapper: {
+    "^@cognia/brand-assets$": "<rootDir>/packages/brand-assets/src/index.ts",
     // Internal provider workspace packages (@cognia/provider-*) resolve to their
     // source tree, not dist — dev/test never depend on a build step (the dist is
     // only produced to prove each package compiles standalone). These MUST come

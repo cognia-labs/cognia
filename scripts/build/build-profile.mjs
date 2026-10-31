@@ -17,9 +17,8 @@ async function exists(target) {
 }
 
 async function runProfileBuild() {
-  const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm"
   await new Promise((resolve, reject) => {
-    const child = spawn(command, ["exec", "next", "build", "--webpack", "--profile"], {
+    const child = spawn(process.execPath, [path.join(root, "scripts/build/with-plugin-artifacts.mjs"), "--", "next", "build", "--webpack", "--profile"], {
       cwd: root,
       stdio: "inherit",
       env: {

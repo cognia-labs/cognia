@@ -1,0 +1,4 @@
+{
+  "dist/index.js": "src/index.ts",
+  "dist/demo-adapter.js": "src/demo-adapter.ts"
+}

@@ -386,7 +386,7 @@ describe("registerIconThemesForPlugin (W5.1)", () => {
       )
       expect(result).toEqual({ registered: 1, errors: [] })
       expect(fetchSpy).toHaveBeenCalledWith(
-        "/plugins/cognia-material-icon-theme/dist/material-icons.json"
+        "/_cognia/builtin-plugins/cognia-material-icon-theme/resources/dist/material-icons.json"
       )
       expect(fileOps.readTextFile).not.toHaveBeenCalled()
       expect(getActiveIconTheme()).toMatchObject({

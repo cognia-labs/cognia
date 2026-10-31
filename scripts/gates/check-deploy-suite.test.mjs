@@ -340,7 +340,7 @@ test("the web image activates bounded CI static generation inside its build cont
   )
   assert.match(
     scripts.build,
-    /^cross-env NODE_OPTIONS=--max-old-space-size=16384 next build --webpack$/
+    /^cross-env NODE_OPTIONS=--max-old-space-size=16384 node scripts\/build\/with-plugin-artifacts\.mjs -- next build --webpack$/
   )
   const config = readFileSync(new URL("../../next.config.ts", import.meta.url), "utf8")
   assert.match(

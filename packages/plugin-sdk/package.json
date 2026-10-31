@@ -356,6 +356,7 @@
   },
   "dependencies": {
     "@cognia/agent-config-types": "workspace:*",
+    "@cognia/agent-runtime-kit": "workspace:*",
     "@cognia/ocr": "workspace:*",
     "@cognia/plugin-contract": "workspace:*",
     "@cognia/provider-core": "workspace:*",

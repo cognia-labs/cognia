@@ -13,7 +13,20 @@ import { build } from "esbuild"
 
 import { PLUGIN_ARTIFACT_MANIFEST } from "../../build/plugin-artifact-format.mjs"
 import { readPluginArtifactSet, stagePluginArtifacts } from "../../build/stage-plugin-artifacts.mjs"
-import { listSetFiles, producePluginArtifacts } from "./produce.mjs"
+import { listSetFiles, producePluginArtifacts as produce } from "./produce.mjs"
+import {
+  createProductProfile,
+  readHostAuthoringIdentity,
+} from "../../build/plugin-artifact-contract.mjs"
+const AUTHORING = readHostAuthoringIdentity(process.cwd())
+const SOURCE = {
+  repository: "test/plugins",
+  revision: "1".repeat(40),
+  sourceTreeSha256: "2".repeat(64),
+  lockfileSha256: "3".repeat(64),
+}
+const producePluginArtifacts = (options) =>
+  produce({ authoring: AUTHORING, source: SOURCE, ...options })
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-artifacts-"))
@@ -81,7 +94,14 @@ test("the produced set lists every file with its digest and stages cleanly", asy
   readPluginArtifactSet(f.outDir)
   const host = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-artifacts-host-"))
   t.after(() => fs.rmSync(host, { recursive: true, force: true }))
-  await stagePluginArtifacts({ root: host, from: f.outDir, env: {} })
+  await stagePluginArtifacts({
+    root: host,
+    from: f.outDir,
+    env: {},
+    profile: createProductProfile({ root: f.root }),
+    authoring: AUTHORING,
+    contractCatalog: { pathFields: [] },
+  })
   assert.ok(fs.existsSync(path.join(host, "src-tauri/resources/plugins/snake/main.py")))
   assert.ok(fs.existsSync(path.join(host, "public", index.entries.tiny.asset.url)))
 })

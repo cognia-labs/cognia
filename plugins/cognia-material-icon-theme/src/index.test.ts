@@ -4,7 +4,7 @@
  */
 // Checked against the host's own icons bridge and `<FileTypeIcon>`, because the
 // plugin ships no code of its own: everything it does is the manifest plus the
-// public mirror, and the only proof that they line up is the real consumer.
+// package-owned resources, and the proof that they line up is the real consumer.
 import { existsSync, readFileSync } from "node:fs"
 import { join, posix } from "node:path"
 import { createElement } from "react"
@@ -21,8 +21,8 @@ import { validatePluginManifest } from "@cognia/plugin-sdk/manifest"
 import definition, { manifest as moduleManifest } from "./index"
 import manifest from "../plugin.json"
 
-const PUBLIC_ROOT = join(__dirname, "../../../public")
-const MIRROR_ROOT = join(PUBLIC_ROOT, "plugins", manifest.id)
+const MIRROR_ROOT = join(__dirname, "../resources")
+const RESOURCE_URL = `/_cognia/builtin-plugins/${manifest.id}/resources/`
 const BUILTIN_ROOT = `builtin://${manifest.id}`
 const [themeEntry] = manifest.vscodeIconThemes
 
@@ -87,8 +87,9 @@ describe("cognia-material-icon-theme", () => {
       if (!existsSync(join(MIRROR_ROOT, rel))) missing.push(`${id} → ${rel}`)
     }
     expect(missing).toEqual([])
-    // The icon manifest's own entry (plugin card avatar) is one of them.
-    expect(manifest.icon).toBe(`/plugins/${manifest.id}/icons/folder-theme.svg`)
+    // The card avatar is package-owned too; theme glyphs keep their own paths.
+    expect(manifest.icon).toBe("assets/icon.png")
+    expect(existsSync(join(__dirname, "..", manifest.icon))).toBe(true)
     expect(existsSync(join(MIRROR_ROOT, "icons/folder-theme.svg"))).toBe(true)
   })
 
@@ -99,12 +100,11 @@ describe("cognia-material-icon-theme", () => {
       // The plugin's own teardown, the same call the manager makes on disable —
       // not a host-internal reset of every theme in the registry.
       unregisterIconThemesByPlugin(manifest.id)
-      // Serve the static export exactly as the shells do: `/plugins/<id>/…`
-      // is a file under `public/` (copied to `out/`).
+      // Serve the exact package resources without reading a Host public mirror.
       fetchSpy = jest.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
         const url = String(input)
-        const file = join(PUBLIC_ROOT, decodeURIComponent(url))
-        if (!url.startsWith("/plugins/") || !existsSync(file)) {
+        const file = join(MIRROR_ROOT, decodeURIComponent(url.slice(RESOURCE_URL.length)))
+        if (!url.startsWith(RESOURCE_URL) || !existsSync(file)) {
           return new Response("not found", { status: 404 })
         }
         return new Response(readFileSync(file, "utf8"), { status: 200 })
@@ -124,7 +124,7 @@ describe("cognia-material-icon-theme", () => {
         BUILTIN_ROOT
       )
       expect(result).toEqual({ registered: 1, errors: [] })
-      expect(fetchSpy).toHaveBeenCalledWith(`/plugins/${manifest.id}/dist/material-icons.json`)
+      expect(fetchSpy).toHaveBeenCalledWith(`${RESOURCE_URL}dist/material-icons.json`)
       expect(getActiveIconTheme()?.id).toBe(`${manifest.id}.material-icon-theme`)
 
       const cases: Array<[string, string]> = [
@@ -139,7 +139,7 @@ describe("cognia-material-icon-theme", () => {
       for (const [path, icon] of cases) {
         const { container, unmount } = render(createElement(FileTypeIcon, { path }))
         const img = container.querySelector("img")
-        expect(img).toHaveAttribute("src", `/plugins/${manifest.id}/${icon}`)
+        expect(img).toHaveAttribute("src", `${RESOURCE_URL}${icon}`)
         expect(existsSync(join(MIRROR_ROOT, icon))).toBe(true)
         expect(container.querySelector("[data-file-type]")).toBeNull()
         unmount()

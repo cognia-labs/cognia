@@ -24,12 +24,13 @@ import { signCliArtifacts } from "./sign-cli-bun.mjs"
 import { stagePiExtension } from "./lib/stage-pi-extension.mjs"
 import { nativeBridgeInterpreterEnvironment, resolveNativeBridgeInterpreter } from "../../cli/src/runtime/external/native-bridges.ts"
 import { resolveClaudeRuntime } from "./lib/stage-claude-runtime.mjs"
-import { stageBuiltinPluginAssets } from "./lib/stage-builtin-plugin-assets.mjs"
+import { stageBuiltinPluginAssets, prepareBuiltinPluginAssets } from "./lib/stage-builtin-plugin-assets.mjs"
 import { BUN_SIDECAR_PATCHES, applySidecarPatch, patchFilter } from "./lib/bun-sidecar-patches.mjs"
 
 import { sidecarVersionDefines } from "./lib/sidecar-version-info.mjs"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
+const pluginArtifacts = await prepareBuiltinPluginAssets({ root })
 const entry = path.join(root, "cli/src/cli/entry.ts")
 const hostTarget = hostTargetName(process.platform, process.arch)
 const buildArgs = parseCliBuildArgs(process.argv.slice(2), hostTarget)
@@ -37,7 +38,7 @@ const buildArgs = parseCliBuildArgs(process.argv.slice(2), hostTarget)
 if (buildArgs.layoutOnly) {
   const legacyLayout = Bun.spawn(
     [resolveNativeBridgeInterpreter(), path.join(root, "scripts/build/build-cli-binary.mjs"), "--layout-only"],
-    { cwd: root, env: nativeBridgeInterpreterEnvironment(process.env), stdin: "inherit", stdout: "inherit", stderr: "inherit" }
+    { cwd: root, env: nativeBridgeInterpreterEnvironment({ ...process.env, COGNIA_PLUGIN_ARTIFACTS: pluginArtifacts.immutableDir }), stdin: "inherit", stdout: "inherit", stderr: "inherit" }
   )
   process.exit(await legacyLayout.exited)
 }
@@ -394,7 +395,7 @@ for (const variant of variants) {
   // root-relative, so the Node reader resolves them against this layout
   // directory; without the tree all five refuse to enable on this host.
   stageAstGrep({ outDir: layoutRoot, platform: target.name.split("-")[0], arch: target.name.split("-")[1] })
-  stageBuiltinPluginAssets({ root, outDir: layoutRoot })
+  stageBuiltinPluginAssets({ root, outDir: layoutRoot, artifactSha256: pluginArtifacts.artifactSha256 })
   copyRequired(
     path.join(root, "sidecar/node_modules/web-tree-sitter/tree-sitter.wasm"),
     path.join(layoutRoot, "tree-sitter.wasm")
