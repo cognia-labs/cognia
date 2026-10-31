@@ -257,7 +257,6 @@ export abstract class BaseProtocolAdapter
     options?: ExternalAgentExecutionOptions
   ): Promise<ExternalAgentResult> {
     const startTime = Date.now()
-    const events: ExternalAgentEvent[] = []
     const messages: ExternalAgentMessage[] = [message]
     const steps: ExternalAgentResult["steps"] = []
     const toolCalls: ExternalAgentResult["toolCalls"] = []
@@ -279,8 +278,6 @@ export abstract class BaseProtocolAdapter
 
     try {
       for await (const event of this.prompt(sessionId, message, options)) {
-        events.push(event)
-
         // Call event callback if provided
         options?.onEvent?.(event)
 
@@ -403,7 +400,7 @@ export abstract class BaseProtocolAdapter
       // Build final response message, retaining binary bodies and replacements.
       if (currentText || currentThinking || artifactBlocks.length) {
         messages.push({
-          id: `msg_${Date.now()}`,
+          id: this.generateMessageId(),
           role: "assistant",
           content: [
             ...(currentThinking ? [{ type: "thinking" as const, thinking: currentThinking }] : []),
