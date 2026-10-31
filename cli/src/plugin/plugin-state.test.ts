@@ -1,11 +1,12 @@
 /**
  * @jest-environment node
  */
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import nodeFs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { buildSync } from "esbuild"
+import { fileLockPath, FileLockLostError, withCliFileLockSync } from "./file-lock"
 import {
   pluginStatePath,
   createCliAuthProviderOwnershipStore,
@@ -24,6 +25,14 @@ function memFs(seed: Record<string, string> = {}): PluginStateFs {
     writeText: (p, data) => {
       files[p] = data
     },
+    rename: (from, to) => {
+      files[to] = files[from]
+      delete files[from]
+    },
+    remove: (p) => {
+      delete files[p]
+    },
+    withLock: (_home, task) => task(() => {}),
   }
 }
 
@@ -76,6 +85,140 @@ describe("plugin enable/disable state", () => {
 })
 
 describe("durable auth provider ownership", () => {
+  it("fences a plugin-state writer replaced before its atomic rename", () => {
+    const home = nodeFs.mkdtempSync(path.join(os.tmpdir(), "cognia-plugin-fence-"))
+    const original = JSON.stringify({ disabled: ["legacy"] })
+    const fs = memFs({ [pluginStatePath(home)]: original })
+    try {
+      expect(() =>
+        setPluginDisabled(home, "late", true, {
+          ...fs,
+          withLock: (home, task) => withCliFileLockSync(home, "plugin-state", task, "plugin-state"),
+          writeText: (file, data) => {
+            fs.writeText(file, data)
+            nodeFs.writeFileSync(
+              fileLockPath(home, "plugin-state", "plugin-state"),
+              JSON.stringify({ pid: process.pid, timestamp: Date.now(), token: "replacement" })
+            )
+          },
+        })
+      ).toThrow(FileLockLostError)
+      expect(fs.readText(pluginStatePath(home))).toBe(original)
+    } finally {
+      nodeFs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+  it("does not lose lifecycle, disabled, or ownership updates from concurrent Node writers", async () => {
+    const home = nodeFs.mkdtempSync(path.join(os.tmpdir(), "cognia-plugin-writers-"))
+    try {
+      const { outputFiles } = buildSync({
+        stdin: {
+          resolveDir: process.cwd(),
+          contents: `
+          import fs from "node:fs"
+          import path from "node:path"
+          import { claimAuthProviderOwnership, setAuthProviderOwnershipStore } from "./lib/plugin/auth/auth-provider-registry"
+          import { setPluginDisabled, createCliAuthProviderOwnershipStore, createCliPluginLifecycleStateAdapter } from "./cli/src/plugin/plugin-state"
+          async function run() {
+            const [home, writer] = process.argv.slice(2)
+            setAuthProviderOwnershipStore(createCliAuthProviderOwnershipStore(home))
+            fs.writeFileSync(path.join(home, "ready-" + writer), "")
+            while (!fs.existsSync(path.join(home, "go"))) await new Promise(r => setTimeout(r, 2))
+            for (let i = 0; i < 20; i++) {
+              if (writer.startsWith("owners")) claimAuthProviderOwnership(writer + "-" + i, writer)
+              else if (writer === "lifecycle") await createCliPluginLifecycleStateAdapter(home).write("worker", i, { actual: "inactive" })
+              else setPluginDisabled(home, writer + "-" + i, true)
+            }
+          }
+          run().catch(error => { console.error(error); process.exitCode = 1 })
+        `,
+        },
+        bundle: true,
+        write: false,
+        platform: "node",
+        format: "cjs",
+      })
+      const writers = ["a", "b", "owners-a", "owners-b", "lifecycle"]
+      const script = path.join(home, "writers-child.cjs")
+      nodeFs.writeFileSync(script, outputFiles![0].text)
+      const children = writers.map((writer) =>
+        spawn(process.execPath, [script, home, writer], {
+          stdio: ["ignore", "ignore", "pipe"],
+        })
+      )
+      const results = children.map(
+        (child) =>
+          new Promise<void>((resolve, reject) => {
+            let stderr = ""
+            child.stderr!.on("data", (chunk) => {
+              stderr += String(chunk)
+            })
+            const timer = setTimeout(() => {
+              child.kill()
+              reject(new Error("Concurrent writer timed out"))
+            }, 10_000)
+            child.once("error", (error) => {
+              clearTimeout(timer)
+              reject(error)
+            })
+            child.once("exit", (code) => {
+              clearTimeout(timer)
+              if (code === 0) resolve()
+              else reject(new Error(`Writer failed (${code}): ${stderr}`))
+            })
+          })
+      )
+      const completion = Promise.all(results)
+      try {
+        const deadline = Date.now() + 5000
+        while (!writers.every((writer) => nodeFs.existsSync(path.join(home, "ready-" + writer)))) {
+          if (Date.now() > deadline) throw new Error("Writers failed to start")
+          await new Promise((resolve) => setTimeout(resolve, 5))
+        }
+        nodeFs.writeFileSync(path.join(home, "go"), "")
+        await completion
+      } finally {
+        children.forEach((child) => child.kill())
+        await Promise.allSettled(results)
+      }
+      const document = readPluginState(home)
+      expect(document.disabled).toEqual(
+        writers
+          .slice(0, 2)
+          .flatMap((writer) => Array.from({ length: 20 }, (_, i) => `${writer}-${i}`))
+          .sort()
+      )
+      expect(document.lifecycle.worker.revision).toBe(20)
+      expect(JSON.parse(document.authProviderOwners!).sort()).toEqual(
+        ["owners-a", "owners-b"]
+          .flatMap((writer) => Array.from({ length: 20 }, (_, i) => [`${writer}-${i}`, writer]))
+          .sort()
+      )
+      expect(nodeFs.readdirSync(home).filter((file) => file.endsWith(".tmp"))).toEqual([])
+    } finally {
+      nodeFs.rmSync(home, { recursive: true, force: true })
+    }
+  }, 15000)
+
+  it("retains the previous plugin document when atomic replacement fails", () => {
+    const original = JSON.stringify({
+      version: 2,
+      disabled: ["legacy"],
+      lifecycle: {},
+      authProviderOwners: "[]",
+    })
+    const fs = memFs({ [pluginStatePath("/home")]: original })
+    expect(() =>
+      setPluginDisabled("/home", "next", true, {
+        ...fs,
+        rename: () => {
+          throw new Error("crash before rename")
+        },
+      })
+    ).toThrow("crash before rename")
+    expect(fs.readText(pluginStatePath("/home"))).toBe(original)
+  })
+
   it("protects ownership across Node processes until a CLI uninstall releases it", () => {
     const home = nodeFs.mkdtempSync(path.join(os.tmpdir(), "cognia-auth-processes-"))
     try {
@@ -83,14 +226,17 @@ describe("durable auth provider ownership", () => {
         stdin: {
           resolveDir: process.cwd(),
           contents: `
+            import "fake-indexeddb/auto"
             import assert from "node:assert/strict"
             import fs from "node:fs"
             import path from "node:path"
+            import { __enableDbRuntimeForTesting } from "./lib/db/schema"
             import { registerAuthenticationProvider, setAuthProviderOwnershipStore } from "./lib/plugin/auth/auth-provider-registry"
             import { createCliAuthProviderOwnershipStore } from "./cli/src/plugin/plugin-state"
             import { uninstallHostPlugin } from "./cli/src/plugin/host"
             async function run() {
-              const [home, action] = process.argv.slice(1)
+              const [home, action] = process.argv.slice(2)
+              __enableDbRuntimeForTesting()
               setAuthProviderOwnershipStore(createCliAuthProviderOwnershipStore(home))
               const provider = {
                 id: "acme", label: "Acme", pluginId: action === "claim" ? "owner" : "squatter",
@@ -116,8 +262,10 @@ describe("durable auth provider ownership", () => {
         platform: "node",
         format: "cjs",
       })
+      const script = path.join(home, "ownership-child.cjs")
+      nodeFs.writeFileSync(script, outputFiles![0].text)
       for (const action of ["claim", "reject", "uninstall", "reclaim"]) {
-        const result = spawnSync(process.execPath, ["-e", outputFiles![0].text, home, action], {
+        const result = spawnSync(process.execPath, [script, home, action], {
           encoding: "utf8",
           timeout: 10000,
         })

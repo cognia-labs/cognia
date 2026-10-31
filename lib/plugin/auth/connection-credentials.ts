@@ -32,12 +32,26 @@ export class CredentialStoreDegraded extends Error {
   }
 }
 
+export interface HostAuthBackend {
+  storeFor(namespace: string): KeyringStore
+  lock: typeof withAuthLock
+}
+
+let hostAuthBackend: HostAuthBackend | null = null
+
+/** CLI seam: install its durable Node store and cross-process lock at bootstrap.
+ * Passing null restores the platform defaults; browser/native imports stay Node-free. */
+export function setHostAuthBackend(backend: HostAuthBackend | null): void {
+  hostAuthBackend = backend
+}
+
 /** Separate IDB databases permit nested lineage → metadata → credential commits. */
 export function withAuthLock<T>(
   name: string,
   task: (assertHeld: () => void) => Promise<T>,
   category: string
 ): Promise<T> {
+  if (hostAuthBackend) return hostAuthBackend.lock(name, task, category)
   const options: NamedLockOptions = {
     databaseName: `cognia-auth-${category}-locks`,
     waitMs: category === "lineage" ? 65_000 : 5_000,
@@ -57,7 +71,8 @@ export interface HostAuthSecretOptions {
 /**
  * Native reads and CAS share lib/keyring's local IPC target. Other runtimes use
  * createKeyringStore: Browser Vault, Capacitor Keychain, or headless companion
- * RPC. lib/keyring's browser passphrase fallback has no headless RPC backend.
+ * RPC. The standalone CLI injects its file backend before creating secrets.
+ * lib/keyring's browser passphrase fallback has no headless RPC backend.
  */
 export class HostAuthSecrets {
   private readonly store: KeyringStore
@@ -82,8 +97,8 @@ export class HostAuthSecrets {
             delete: (key) => clearSecret({ namespace, key }, { strict: true }),
             isPersistent: () => true,
           }
-        : createKeyringStore(namespace))
-    this.lock = options.lock ?? withAuthLock
+        : (hostAuthBackend?.storeFor(namespace) ?? createKeyringStore(namespace)))
+    this.lock = options.lock ?? hostAuthBackend?.lock ?? withAuthLock
     this.cas = options.cas ?? compareAndSetSecret
   }
   isPersistent(): boolean {

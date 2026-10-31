@@ -5,6 +5,8 @@
  */
 import nodeFs from "node:fs"
 import path from "node:path"
+import { randomUUID } from "node:crypto"
+import { withCliFileLockSync } from "./file-lock"
 import type { AuthProviderOwnershipStore } from "@/lib/plugin/auth/auth-provider-registry"
 import {
   PluginLifecycleRevisionError,
@@ -16,6 +18,9 @@ export interface PluginStateFs {
   exists(path: string): boolean
   readText(path: string): string
   writeText(path: string, data: string): void
+  rename(from: string, to: string): void
+  remove(path: string): void
+  withLock<T>(home: string, task: (assertHeld: () => void) => T): T
 }
 
 const defaultFs: PluginStateFs = {
@@ -23,8 +28,24 @@ const defaultFs: PluginStateFs = {
   readText: (p) => nodeFs.readFileSync(p, "utf8"),
   writeText: (p, data) => {
     nodeFs.mkdirSync(path.dirname(p), { recursive: true })
-    nodeFs.writeFileSync(p, data, "utf8")
+    const fd = nodeFs.openSync(p, "wx", 0o600)
+    try {
+      nodeFs.fchmodSync(fd, 0o600)
+      nodeFs.writeFileSync(fd, data, "utf8")
+      nodeFs.fsyncSync(fd)
+    } finally {
+      nodeFs.closeSync(fd)
+    }
   },
+  rename: (from, to) => nodeFs.renameSync(from, to),
+  remove: (p) => {
+    try {
+      nodeFs.unlinkSync(p)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+    }
+  },
+  withLock: (home, task) => withCliFileLockSync(home, "plugin-state", task, "plugin-state"),
 }
 
 export function pluginStatePath(home: string): string {
@@ -84,8 +105,21 @@ export function readPluginState(
   }
 }
 
-function writePluginState(home: string, document: CliPluginStateDocument, fs: PluginStateFs): void {
-  fs.writeText(pluginStatePath(home), JSON.stringify(document, null, 2))
+function writePluginState(
+  home: string,
+  document: CliPluginStateDocument,
+  fs: PluginStateFs,
+  assertHeld: () => void
+): void {
+  const file = pluginStatePath(home)
+  const temporary = `${file}.${randomUUID()}.tmp`
+  try {
+    fs.writeText(temporary, JSON.stringify(document, null, 2))
+    assertHeld()
+    fs.rename(temporary, file)
+  } finally {
+    fs.remove(temporary)
+  }
 }
 
 /** Read through on every operation; corrupt or inaccessible ownership fails closed. */
@@ -93,19 +127,33 @@ export function createCliAuthProviderOwnershipStore(
   home: string,
   fs: PluginStateFs = defaultFs
 ): AuthProviderOwnershipStore {
+  function ownershipValue(document: CliPluginStateDocument): string | null {
+    const value = document.authProviderOwners
+    if (value === undefined) return null
+    if (typeof value !== "string") throw new Error("Auth provider ownership storage is invalid")
+    return value
+  }
   return {
     read() {
-      const value = loadPluginState(home, fs).authProviderOwners
-      if (value === undefined) return null
-      if (typeof value !== "string") {
-        throw new Error("Auth provider ownership storage is invalid")
-      }
-      return value
+      return ownershipValue(loadPluginState(home, fs))
     },
     write(value) {
-      const document = loadPluginState(home, fs)
-      document.authProviderOwners = value
-      writePluginState(home, document, fs)
+      fs.withLock(home, (assertHeld) => {
+        const document = loadPluginState(home, fs)
+        document.authProviderOwners = value
+        writePluginState(home, document, fs, assertHeld)
+      })
+    },
+    update(transform) {
+      fs.withLock(home, (assertHeld) => {
+        const document = loadPluginState(home, fs)
+        const current = ownershipValue(document)
+        const next = transform(current)
+        if (next === current) return
+        if (next === null) delete document.authProviderOwners
+        else document.authProviderOwners = next
+        writePluginState(home, document, fs, assertHeld)
+      })
     },
   }
 }
@@ -120,25 +168,27 @@ export function setPluginDisabled(
   disabled: boolean,
   fs: PluginStateFs = defaultFs
 ): Set<string> {
-  const document = loadPluginState(home, fs)
-  const set = new Set(document.disabled)
-  if (disabled) set.add(id)
-  else set.delete(id)
-  const current = document.lifecycle[id] ?? {
-    intent: "auto",
-    actual: "inactive",
-    revision: 0,
-    updatedAt: Date.now(),
-  }
-  document.disabled = [...set].sort()
-  document.lifecycle[id] = {
-    ...current,
-    intent: disabled ? "disabled" : "enabled",
-    revision: current.revision + 1,
-    updatedAt: Date.now(),
-  }
-  writePluginState(home, document, fs)
-  return set
+  return fs.withLock(home, (assertHeld) => {
+    const document = loadPluginState(home, fs)
+    const set = new Set(document.disabled)
+    if (disabled) set.add(id)
+    else set.delete(id)
+    const current = document.lifecycle[id] ?? {
+      intent: "auto",
+      actual: "inactive",
+      revision: 0,
+      updatedAt: Date.now(),
+    }
+    document.disabled = [...set].sort()
+    document.lifecycle[id] = {
+      ...current,
+      intent: disabled ? "disabled" : "enabled",
+      revision: current.revision + 1,
+      updatedAt: Date.now(),
+    }
+    writePluginState(home, document, fs, assertHeld)
+    return set
+  })
 }
 
 export function createCliPluginLifecycleStateAdapter(
@@ -158,33 +208,35 @@ export function createCliPluginLifecycleStateAdapter(
       )
     },
     async write(pluginId, expectedRevision, patch) {
-      const document = loadPluginState(home, fs)
-      const current =
-        document.lifecycle[pluginId] ??
-        ({
-          intent: document.disabled.includes(pluginId) ? "disabled" : "auto",
-          actual: "inactive",
-          revision: 0,
+      return fs.withLock(home, (assertHeld) => {
+        const document = loadPluginState(home, fs)
+        const current =
+          document.lifecycle[pluginId] ??
+          ({
+            intent: document.disabled.includes(pluginId) ? "disabled" : "auto",
+            actual: "inactive",
+            revision: 0,
+            updatedAt: Date.now(),
+          } satisfies PluginLifecycleRecord)
+        if (current.revision !== expectedRevision) {
+          throw new PluginLifecycleRevisionError(pluginId)
+        }
+        const next: PluginLifecycleRecord = {
+          ...current,
+          ...patch,
+          revision: current.revision + 1,
           updatedAt: Date.now(),
-        } satisfies PluginLifecycleRecord)
-      if (current.revision !== expectedRevision) {
-        throw new PluginLifecycleRevisionError(pluginId)
-      }
-      const next: PluginLifecycleRecord = {
-        ...current,
-        ...patch,
-        revision: current.revision + 1,
-        updatedAt: Date.now(),
-      }
-      if (patch.dirty === undefined && "dirty" in patch) delete next.dirty
-      if (patch.lastError === undefined && "lastError" in patch) delete next.lastError
-      document.lifecycle[pluginId] = next
-      const disabled = new Set(document.disabled)
-      if (next.intent === "disabled") disabled.add(pluginId)
-      else disabled.delete(pluginId)
-      document.disabled = [...disabled].sort()
-      writePluginState(home, document, fs)
-      return next
+        }
+        if (patch.dirty === undefined && "dirty" in patch) delete next.dirty
+        if (patch.lastError === undefined && "lastError" in patch) delete next.lastError
+        document.lifecycle[pluginId] = next
+        const disabled = new Set(document.disabled)
+        if (next.intent === "disabled") disabled.add(pluginId)
+        else disabled.delete(pluginId)
+        document.disabled = [...disabled].sort()
+        writePluginState(home, document, fs, assertHeld)
+        return next
+      })
     },
   }
 }

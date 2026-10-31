@@ -24,6 +24,7 @@
 import os from "node:os"
 
 import { isHeadlessHost } from "@/lib/platform/detect"
+import { setHostAuthBackend } from "@/lib/plugin/auth/connection-credentials"
 import {
   releaseAuthProviderOwnership,
   setAuthProviderOwnershipStore,
@@ -32,6 +33,8 @@ import {
 import { installFakeIndexedDb } from "../db/bootstrap"
 import { resolveHome } from "../config/load"
 import { pluginDiscoveryRoots } from "./discover-plugins"
+import { createCliAuthSecretStore } from "./auth-secret-store"
+import { createCliFileLock } from "./file-lock"
 import {
   createCliAuthProviderOwnershipStore,
   createCliPluginLifecycleStateAdapter,
@@ -143,9 +146,12 @@ export function installPluginRuntimeShims(
 ): void {
   installStorageShim(g, "localStorage")
   installStorageShim(g, "sessionStorage")
-  setAuthProviderOwnershipStore(
-    createCliAuthProviderOwnershipStore(resolveHome(process.env, os.homedir()))
-  )
+  const home = resolveHome(process.env, os.homedir())
+  setAuthProviderOwnershipStore(createCliAuthProviderOwnershipStore(home))
+  setHostAuthBackend({
+    storeFor: (namespace) => createCliAuthSecretStore(home, namespace),
+    lock: createCliFileLock(home),
+  })
   if (typeof g.CustomEvent !== "function") {
     g.CustomEvent = class {
       type: string
@@ -435,4 +441,5 @@ export function __resetPluginRuntimeForTesting(): void {
   stopObservingUninstalls?.()
   stopObservingUninstalls = null
   setAuthProviderOwnershipStore(null)
+  setHostAuthBackend(null)
 }

@@ -35,8 +35,51 @@ import {
   CredentialRevisionConflict,
   CredentialStoreDegraded,
   HostAuthSecrets,
+  setHostAuthBackend,
+  withAuthLock,
 } from "./connection-credentials"
 import { withNamedLock } from "@/lib/locks/named-lock"
+
+it("uses the CLI backend override and restores platform defaults with null", async () => {
+  const values = new Map<string, string>()
+  const storeFor = jest.fn(() => ({
+    load: async (key: string) => values.get(key) ?? null,
+    save: async (key: string, value: string) => {
+      values.set(key, value)
+    },
+    delete: async (key: string) => {
+      values.delete(key)
+    },
+    isPersistent: () => true,
+  }))
+  const lock = jest.fn((name: string, task: (assertHeld: () => void) => Promise<unknown>) =>
+    withNamedLock(name, task, { mode: "in-process" })
+  ) as jest.MockedFunction<typeof withAuthLock>
+  setHostAuthBackend({ storeFor, lock })
+  try {
+    const secrets = new HostAuthSecrets("override", { native: false })
+    await secrets.compareAndSet("key", null, "durable")
+    expect(await secrets.read("key")).toBe("durable")
+    expect(storeFor).toHaveBeenCalledWith("override")
+    await withAuthLock(
+      "direct",
+      async (assertHeld) => {
+        assertHeld()
+      },
+      "lineage"
+    )
+    expect(lock).toHaveBeenCalledWith("direct", expect.any(Function), "lineage")
+    new HostAuthSecrets("native-bypasses-override", { native: true })
+    expect(storeFor).toHaveBeenCalledTimes(1)
+  } finally {
+    setHostAuthBackend(null)
+  }
+  const calls = lock.mock.calls.length
+  await withAuthLock("default-restored", async () => {}, "test")
+  await new HostAuthSecrets("default-restored", { native: false }).read("key")
+  expect(createKeyringStore).toHaveBeenCalledWith("default-restored")
+  expect(lock).toHaveBeenCalledTimes(calls)
+})
 
 function fixture(persistent = true) {
   const rows = new Map<string, string>()

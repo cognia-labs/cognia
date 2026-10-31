@@ -1,6 +1,10 @@
 /**
  * @jest-environment node
  */
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import { HostAuthSecrets } from "@/lib/plugin/auth/connection-credentials"
 import {
   __resetPluginRuntimeForTesting,
   applyDisabledPluginsToManager,
@@ -24,6 +28,28 @@ function makeStore(statuses: Record<string, string>) {
 
 describe("installPluginRuntimeShims", () => {
   afterEach(() => __resetPluginRuntimeForTesting())
+
+  it("installs persistent Host auth storage for the resolved COGNIA_HOME", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "cognia-runtime-auth-"))
+    const previous = process.env.COGNIA_HOME
+    process.env.COGNIA_HOME = home
+    try {
+      installPluginRuntimeShims({})
+      const first = new HostAuthSecrets("runtime-test")
+      expect(first.isPersistent()).toBe(true)
+      await first.compareAndSet("credential", null, "persisted")
+      __resetPluginRuntimeForTesting()
+      installPluginRuntimeShims({})
+      expect(await new HostAuthSecrets("runtime-test").read("credential")).toBe("persisted")
+      expect(fs.readdirSync(path.join(home, "auth")).some((file) => file.endsWith(".json"))).toBe(
+        true
+      )
+    } finally {
+      if (previous === undefined) delete process.env.COGNIA_HOME
+      else process.env.COGNIA_HOME = previous
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
 
   it("installs Map-backed storages, event no-ops, and seeds the plugin policy", () => {
     const g: Record<string, unknown> = {}

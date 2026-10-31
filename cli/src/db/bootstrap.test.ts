@@ -861,6 +861,7 @@ describe("ensureCliDb", () => {
         openSpy.mockRestore()
         await first.catch(() => {})
         Object.defineProperty(process, "platform", { value: realPlatform, configurable: true })
+        await disposeOpenCliDb()
         __resetCliDbForTesting()
         fs.rmSync(home, { recursive: true, force: true })
       }
@@ -993,6 +994,7 @@ describe("ensureCliDb", () => {
       ])
       expect(fs.readFileSync(lateTableFile, "utf8")).toBe("[]")
     } finally {
+      await disposeOpenCliDb()
       __resetCliDbForTesting()
       fs.rmSync(home, { recursive: true, force: true })
     }
@@ -1037,6 +1039,7 @@ describe("ensureCliDb", () => {
       )
       expect(goals.rows).toEqual([{ id: "restored" }])
     } finally {
+      await disposeOpenCliDb()
       __resetCliDbForTesting()
       fs.rmSync(home, { recursive: true, force: true })
     }

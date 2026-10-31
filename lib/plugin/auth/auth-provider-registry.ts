@@ -28,6 +28,8 @@ const OWNER_STORAGE_KEY = "cognia-plugin-storage:__host-auth-provider-owners__"
 export interface AuthProviderOwnershipStore {
   read(): string | null
   write(value: string): void
+  /** CLI: transform the latest bindings under one cross-process transaction. */
+  update?(transform: (value: string | null) => string | null): void
 }
 
 let ownershipStore: AuthProviderOwnershipStore | null = null
@@ -37,12 +39,7 @@ export function setAuthProviderOwnershipStore(store: AuthProviderOwnershipStore 
   ownershipStore = store
 }
 
-function readOwners(): Map<string, string> {
-  const raw = ownershipStore
-    ? ownershipStore.read()
-    : typeof localStorage === "undefined"
-      ? null
-      : localStorage.getItem(OWNER_STORAGE_KEY)
+function parseOwners(raw: string | null): Map<string, string> {
   if (raw === null) return new Map()
   const entries: unknown = JSON.parse(raw)
   if (!Array.isArray(entries)) throw new Error("Auth provider ownership storage is invalid")
@@ -62,6 +59,24 @@ function readOwners(): Map<string, string> {
     owners.set(entry[0], entry[1])
   }
   return owners
+}
+
+function mutateOwners(task: (owners: Map<string, string>) => boolean): void {
+  if (ownershipStore?.update) {
+    ownershipStore.update((raw) => {
+      const owners = parseOwners(raw)
+      return task(owners) ? JSON.stringify([...owners]) : raw
+    })
+    return
+  }
+  const owners = parseOwners(
+    ownershipStore
+      ? ownershipStore.read()
+      : typeof localStorage === "undefined"
+        ? null
+        : localStorage.getItem(OWNER_STORAGE_KEY)
+  )
+  if (task(owners)) writeOwners(owners)
 }
 
 function writeOwners(owners: Map<string, string>): void {
@@ -92,15 +107,15 @@ export function registerAuthenticationProvider(provider: AuthenticationProvider)
 
 /** Declarative and imperative registration share the same persistent binding. */
 export function claimAuthProviderOwnership(providerId: string, pluginId: string | null): void {
-  const owners = readOwners()
-  const owner = owners.get(providerId)
-  if (owner !== undefined && owner !== pluginId) {
-    throw new Error(`Auth provider "${providerId}" is owned by another plugin.`)
-  }
-  if (pluginId !== null && owner === undefined) {
+  mutateOwners((owners) => {
+    const owner = owners.get(providerId)
+    if (owner !== undefined && owner !== pluginId) {
+      throw new Error(`Auth provider "${providerId}" is owned by another plugin.`)
+    }
+    if (pluginId === null || owner !== undefined) return false
     owners.set(providerId, pluginId)
-    writeOwners(owners)
-  }
+    return true
+  })
 }
 
 /** All teardown entry points reconcile connection availability. */
@@ -120,17 +135,16 @@ export function unregisterProvidersByPlugin(pluginId: string): number {
 
 /** Terminal uninstall only, independent of whether plugin tables are kept. */
 export function releaseAuthProviderOwnership(pluginId: string): void {
-  const owners = readOwners()
-  let changed = false
   const affected: string[] = []
-  for (const [providerId, owner] of owners) {
-    if (owner === pluginId) {
-      affected.push(providerId)
-      owners.delete(providerId)
-      changed = true
+  mutateOwners((owners) => {
+    for (const [providerId, owner] of owners) {
+      if (owner === pluginId) {
+        affected.push(providerId)
+        owners.delete(providerId)
+      }
     }
-  }
-  if (changed) writeOwners(owners)
+    return affected.length > 0
+  })
   unregisterProvidersByPlugin(pluginId)
   for (const id of affected) coordinateProviderAvailability(id)
 }

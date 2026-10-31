@@ -39,6 +39,17 @@ function fakeDb(tables: FakeTable[], verno = 82): DbLike {
 }
 
 describe("serializeDb", () => {
+  it("persists v250 connection and attempt metadata across a snapshot restart", async () => {
+    const tables = [
+      new FakeTable("authConnections", [{ id: "ref", credentialRevision: 2 }]),
+      new FakeTable("authAttempts", [{ state: "state", expiresAt: 1234 }]),
+    ]
+    const snapshot = await serializeDb(fakeDb(tables, 250))
+    expect(Object.keys(snapshot.tables)).toEqual(["authConnections", "authAttempts"])
+    const restored = [new FakeTable("authConnections"), new FakeTable("authAttempts")]
+    await restoreSnapshot(fakeDb(restored, 250), JSON.parse(serializeSnapshot(snapshot)))
+    expect(restored.map((table) => table.rows)).toEqual(tables.map((table) => table.rows))
+  })
   it("preserves original media, thumbnails, and typed byte slices through JSON and restore", async () => {
     const bytes = Uint8Array.from({ length: 150_000 }, (_, index) => index % 251)
     const original = new Blob([bytes], { type: "video/mp4" })

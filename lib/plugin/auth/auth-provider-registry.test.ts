@@ -13,6 +13,7 @@ import { uninstallHostPlugin } from "@/cli/src/plugin/host"
 import { isValidPluginId } from "@/lib/plugin/core/validation"
 import {
   __resetAuthRegistryForTesting,
+  claimAuthProviderOwnership,
   getProvider,
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
@@ -68,6 +69,28 @@ describe("host auth provider ownership", () => {
     } finally {
       setItem.mockRestore()
     }
+  })
+
+  it("runs complete ownership claims and release inside a durable store transaction", () => {
+    let raw: string | null = null
+    const read = jest.fn(() => {
+      throw new Error("unlocked read")
+    })
+    const write = jest.fn(() => {
+      throw new Error("unlocked write")
+    })
+    const update = jest.fn((transform: (raw: string | null) => string | null) => {
+      raw = transform(raw)
+    })
+    setAuthProviderOwnershipStore({ read, write, update })
+    claimAuthProviderOwnership("acme", "owner")
+    claimAuthProviderOwnership("other", "other-owner")
+    expect(() => claimAuthProviderOwnership("acme", "squatter")).toThrow("owned by another plugin")
+    releaseAuthProviderOwnership("owner")
+    expect(JSON.parse(raw!)).toEqual([["other", "other-owner"]])
+    expect(update).toHaveBeenCalledTimes(4)
+    expect(read).not.toHaveBeenCalled()
+    expect(write).not.toHaveBeenCalled()
   })
 
   it("fails closed when the durable index assigns one provider conflicting owners", () => {
