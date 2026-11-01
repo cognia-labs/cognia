@@ -39,6 +39,7 @@ import {
   type ServiceProviderView,
 } from "@/lib/external-services/service-view"
 import { ServiceCard } from "./service-card"
+import { ConnectionsPanel } from "./connections-panel"
 
 const INSTALL_STEPS = ["install", "connect", "discover", "validate", "enable", "manage"] as const
 
@@ -212,6 +213,8 @@ export function ExternalServicesSection() {
           </li>
         ))}
       </ol>
+
+      <ConnectionsPanel />
 
       <section className="space-y-3" aria-labelledby="external-services-heading">
         <h3 id="external-services-heading" className="text-sm font-semibold">

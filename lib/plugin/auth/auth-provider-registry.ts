@@ -163,7 +163,20 @@ export function releaseAuthProviderOwnership(pluginId: string): void {
 
 /** Registration/disposal is already a runtime seam; no second bootstrap owner. */
 const availability = new Map<string, Promise<void>>()
+const providerListeners = new Set<() => void>()
+let providerRevision = 0
+
+export const getAuthProviderRevision = () => providerRevision
+export function subscribeAuthProviders(listener: () => void): () => void {
+  providerListeners.add(listener)
+  return () => {
+    providerListeners.delete(listener)
+  }
+}
+
 function coordinateProviderAvailability(providerId: string): void {
+  providerRevision += 1
+  for (const listener of providerListeners) listener()
   const pending = (availability.get(providerId) ?? Promise.resolve())
     .then(async () => {
       const { getConnectionManager } = await import("./connection-manager")

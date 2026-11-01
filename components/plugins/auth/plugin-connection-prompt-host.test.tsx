@@ -58,6 +58,30 @@ const grant = {
   scopes: ["read"],
 }
 
+it.each([
+  ["Reconnect", "reconnect"],
+  ["Decline", "denied"],
+  ["Close", "dismissed"],
+] as const)("wires the add-scope %s decision", async (label, kind) => {
+  render(
+    <NextIntlClientProvider locale="en" messages={{ plugins: { auth: en } }}>
+      <PluginConnectionPromptHost />
+    </NextIntlClientProvider>
+  )
+  let pending!: ReturnType<typeof requestConnectionPrompt>
+  act(() => {
+    pending = requestConnectionPrompt({
+      kind: "add-scopes",
+      pluginId: "calendar",
+      pluginName: "Calendar",
+      connection,
+      scopes: ["write"],
+    })
+  })
+  await userEvent.click(screen.getByRole("button", { name: label }))
+  await expect(pending).resolves.toEqual({ kind })
+})
+
 it("queues picker and grant prompts one at a time and wires every decision", async () => {
   render(
     <NextIntlClientProvider locale="en" messages={{ plugins: { auth: en } }}>

@@ -31,6 +31,8 @@ import {
 import { AuthConnectionManager, getConnectionManager } from "./connection-manager"
 import { ConnectionCredentialStore, HostAuthSecrets } from "./connection-credentials"
 import { createAuthConnectionsAPI } from "./connections-api"
+import { connectProvider } from "./connect"
+import { revokeConsumerAccess } from "./revoke-consumer-access"
 import {
   resolveConnectionPrompt,
   subscribeConnectionPrompts,
@@ -39,6 +41,11 @@ import {
 import type { AuthConnectionRef } from "@cognia/plugin-contract/types/plugin/plugin-auth"
 
 jest.mock("@/lib/db/plugins", () => ({ getPlugin: jest.fn() }))
+jest.mock("./connect", () => ({
+  connectProvider: jest.fn((...args: Parameters<typeof connectProvider>) =>
+    jest.requireActual("./connect").connectProvider(...args)
+  ),
+}))
 jest.mock("@/lib/network/proxy-fetch", () => ({ proxyFetch: jest.fn() }))
 jest.mock("@/lib/db/connection-bindings", () => ({
   ...jest.requireActual("@/lib/db/connection-bindings"),
@@ -410,6 +417,99 @@ it("rejects unavailable scopes, invisible/missing/disconnected refs, and unknown
     granted: false,
     reason: "connection-unavailable",
   })
+})
+
+it("reconnects with the scope union, then approves operations at the new revision", async () => {
+  jest.mocked(getProvider("vendor")!.exchange!).mockResolvedValueOnce({
+    accessToken: "expanded",
+    scopes: ["read", "write", "extra"],
+    extra: { account: "Account" },
+  })
+  const kinds: string[] = []
+  const dispose = prompt((request) => {
+    kinds.push(request.kind)
+    if (request.kind === "grant") expect(request.connection.revision).toBe(2)
+    resolveConnectionPrompt(request.id, {
+      kind: request.kind === "add-scopes" ? "reconnect" : "approved",
+    })
+  })
+  try {
+    await expect(
+      api().requestGrant(ref, { operations: ["items.request.GET"], scopes: ["extra"] })
+    ).resolves.toMatchObject({ granted: true, connectionRevision: 2 })
+    expect(connectProvider).toHaveBeenCalledWith({
+      providerId: "vendor",
+      reconnect: ref,
+      scopes: ["read", "write", "extra"],
+    })
+    expect(kinds).toEqual(["add-scopes", "grant"])
+    const [projection] = await listServiceConnections({ pluginId: "consumer" })
+    expect(await listConsumerGrants(projection.id, "consumer")).toEqual([
+      expect.objectContaining({ connectionRevision: 2 }),
+    ])
+  } finally {
+    dispose()
+  }
+})
+
+it.each(["denied", "dismissed"] as const)(
+  "returns scopes-unavailable on add-scope %s",
+  async (kind) => {
+    const before = jest.mocked(connectProvider).mock.calls.length
+    const dispose = prompt((request) => {
+      expect(request.kind).toBe("add-scopes")
+      resolveConnectionPrompt(request.id, { kind })
+    })
+    try {
+      await expect(
+        api().requestGrant(ref, { operations: ["items.list"], scopes: ["extra"] })
+      ).resolves.toEqual({ granted: false, reason: "scopes-unavailable" })
+      expect(jest.mocked(connectProvider).mock.calls).toHaveLength(before)
+    } finally {
+      dispose()
+    }
+  }
+)
+
+it("does not show a grant prompt when reconnect omits requested scopes", async () => {
+  jest.mocked(getProvider("vendor")!.exchange!).mockResolvedValueOnce({
+    accessToken: "unchanged",
+    scopes: ["read", "write"],
+    extra: { account: "Account" },
+  })
+  const dispose = prompt((request) => {
+    expect(request.kind).toBe("add-scopes")
+    resolveConnectionPrompt(request.id, { kind: "reconnect" })
+  })
+  try {
+    await expect(
+      api().requestGrant(ref, { operations: ["items.list"], scopes: ["extra"] })
+    ).resolves.toEqual({ granted: false, reason: "scopes-unavailable" })
+  } finally {
+    dispose()
+  }
+})
+
+it("revoking a consumer fences later requests and preserves another consumer's grant", async () => {
+  const dispose = prompt((request) => resolveConnectionPrompt(request.id, { kind: "approved" }))
+  try {
+    await api().requestGrant(ref, { operations: ["items.request.GET"] })
+  } finally {
+    dispose()
+  }
+  const [projection] = await listServiceConnections({ pluginId: "consumer" })
+  const [grant] = await listConsumerGrants(projection.id, "consumer")
+  await getDb().capabilityGrants.put({ ...grant, id: "other", consumerPluginId: "other-consumer" })
+  const [account] = await listIntegrationAccounts("consumer")
+  await expect(authenticatedIntegrationRequest("consumer", account.id, url)).resolves.toMatchObject(
+    { status: 200 }
+  )
+  await revokeConsumerAccess(ref, "consumer")
+  expect(await listConsumerGrants(projection.id, "consumer")).toEqual([])
+  expect(await listConsumerGrants(projection.id, "other-consumer")).toHaveLength(1)
+  await expect(authenticatedIntegrationRequest("consumer", account.id, url)).rejects.toBeInstanceOf(
+    ConsumerGrantRequired
+  )
 })
 
 it.each(["denied", "dismissed"] as const)(

@@ -34476,6 +34476,8 @@
       "connections": {
         "accountLabel": "Account:",
         "accountScopes": "Available scopes: {scopes}",
+        "addScopesDescription": "{plugin} needs additional access: {scopes}. Reconnect {account} to grant it. You will then review this plugin’s access at the new connection revision.",
+        "addScopesTitle": "Additional access for {plugin}",
         "approve": "Allow access",
         "chooseAccount": "Use {account} at {issuer}",
         "decline": "Decline",
@@ -34490,6 +34492,7 @@
         "pickerDescription": "Your choice is saved for this plugin on this device.",
         "pickerTitle": "Choose an account for {plugin}",
         "readOperations": "Read operations",
+        "reconnect": "Reconnect",
         "scopesLabel": "Requested scopes",
         "signIn": "Sign in",
         "signInDescription": "{plugin} needs a connection to {provider}. Sign in to continue.",
@@ -52252,9 +52255,44 @@
         "title": "Available services"
       },
       "connections": {
+        "consumers": "Plugins with access",
+        "disconnect": "Disconnect",
+        "disconnectConfirm": "Disconnect and revoke",
+        "disconnectDescription": "Online access stops and derived data such as search indexes and cached metadata is removed. Copies you chose to keep, including attachments, snapshots and history, stay saved.",
+        "disconnectTitle": "Disconnect {account}?",
         "empty": "No external service connections yet.",
+        "failed": "The connection could not be loaded or updated. Please try again.",
+        "grantedRevision": "Granted revision: {revision}",
+        "issuer": "Issuer:",
+        "loading": "Loading connections…",
+        "needsReapproval": "Needs re-approval",
+        "noConsumers": "No plugins have been granted access.",
+        "none": "None",
+        "principal": "Principal:",
+        "principalKind": {
+          "bot": "Bot",
+          "service": "Service",
+          "user": "User"
+        },
         "provider": "Provider: {provider}",
-        "title": "Connections"
+        "readOperations": "Read operations",
+        "reconnect": "Reconnect",
+        "revision": "Connection revision: {revision}",
+        "revoke": "Revoke access",
+        "revokeConsumer": "Revoke access for {plugin}",
+        "scopes": "Scopes:",
+        "signIn": "Sign in to {provider}",
+        "status": {
+          "connected": "Connected",
+          "needs-reauth": "Sign in again",
+          "provider-unavailable": "Provider unavailable",
+          "revoked": "Revoked",
+          "tombstoned": "Disconnected"
+        },
+        "tenant": "Organization:",
+        "title": "Connections",
+        "unknownRevision": "Granted revision: unknown",
+        "writeOperations": "Write operations"
       },
       "description": "Install provider definitions separately from external accounts, then review capabilities, risk, scope, and surfaces before enabling them.",
       "flow": {

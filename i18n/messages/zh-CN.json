@@ -34476,6 +34476,8 @@
       "connections": {
         "accountLabel": "账号：",
         "accountScopes": "可用权限范围：{scopes}",
+        "addScopesDescription": "{plugin} 需要额外权限：{scopes}。请重新连接 {account} 以授予这些权限，随后将请你审核此插件在新连接修订版本下的访问权限。",
+        "addScopesTitle": "{plugin} 需要更多权限",
         "approve": "允许访问",
         "chooseAccount": "使用 {issuer} 的账号 {account}",
         "decline": "拒绝",
@@ -34490,6 +34492,7 @@
         "pickerDescription": "你的选择将为此插件保存在当前设备上。",
         "pickerTitle": "为 {plugin} 选择账号",
         "readOperations": "读取操作",
+        "reconnect": "重新连接",
         "scopesLabel": "请求的权限范围",
         "signIn": "登录",
         "signInDescription": "{plugin} 需要连接到 {provider}。请登录以继续。",
@@ -52252,9 +52255,44 @@
         "title": "可用服务"
       },
       "connections": {
+        "consumers": "已获授权的插件",
+        "disconnect": "断开连接",
+        "disconnectConfirm": "断开连接并撤销授权",
+        "disconnectDescription": "在线访问将停止，搜索索引、缓存元数据等派生数据将被移除。你选择保留的附件、快照和历史记录等副本会继续保存。",
+        "disconnectTitle": "断开 {account} 的连接？",
         "empty": "还没有外部服务连接。",
+        "failed": "无法加载或更新连接，请重试。",
+        "grantedRevision": "授权修订版本：{revision}",
+        "issuer": "签发方：",
+        "loading": "正在加载连接…",
+        "needsReapproval": "需要重新批准",
+        "noConsumers": "尚未向插件授予访问权限。",
+        "none": "无",
+        "principal": "身份类型：",
+        "principalKind": {
+          "bot": "机器人",
+          "service": "服务",
+          "user": "用户"
+        },
         "provider": "Provider：{provider}",
-        "title": "连接"
+        "readOperations": "读取操作",
+        "reconnect": "重新连接",
+        "revision": "连接修订版本：{revision}",
+        "revoke": "撤销访问权限",
+        "revokeConsumer": "撤销 {plugin} 的访问权限",
+        "scopes": "权限范围：",
+        "signIn": "登录 {provider}",
+        "status": {
+          "connected": "已连接",
+          "needs-reauth": "需要重新登录",
+          "provider-unavailable": "认证提供方不可用",
+          "revoked": "已撤销",
+          "tombstoned": "已断开"
+        },
+        "tenant": "组织：",
+        "title": "连接",
+        "unknownRevision": "授权修订版本：未知",
+        "writeOperations": "写入操作"
       },
       "description": "将 provider 定义与外部账户分开安装，并在启用前审阅能力、风险、范围和可见入口。",
       "flow": {

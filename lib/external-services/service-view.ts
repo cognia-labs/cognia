@@ -1,5 +1,5 @@
 /**
- * One row per SERVICE, with its providers and their connection state merged.
+ * One row per service/account instance, with its providers and connection state merged.
  *
  * The settings section used to render two disjoint lists and, between them,
  * lose the only thing a user came to do. "Available services" filtered out any
@@ -75,7 +75,7 @@ export interface ServiceProviderView {
 }
 
 export interface ServiceView {
-  /** `${pluginId}:${serviceId}`, the stable React key and lookup id. */
+  /** Stable service id, qualified by Host connection ref or account id when backed by an account. */
   key: string
   pluginId: string
   serviceId: string
@@ -131,46 +131,70 @@ export function buildServiceViews(
   services: readonly RegisteredExternalService[],
   connections: readonly ServiceConnection[]
 ): ServiceView[] {
-  const byProvider = new Map<string, ServiceConnection>()
-  for (const connection of connections) {
-    if (!connection.pluginId) continue
-    byProvider.set(
-      connectionKey(connection.pluginId, connection.serviceId, connection.providerId),
-      connection
+  return services.flatMap(({ pluginId, definition }) => {
+    const rows = connections.filter(
+      (row) =>
+        row.pluginId === pluginId &&
+        row.serviceId === definition.id &&
+        definition.providers.some((provider) => provider.id === row.providerId)
     )
-  }
+    const instance = (row: ServiceConnection): string | undefined => {
+      const ref = row.providerRef
+      if (ref.kind === "integration")
+        return ref.authConnectionRef
+          ? `connection:${encodeURIComponent(ref.authConnectionRef)}`
+          : `account:${encodeURIComponent(ref.accountId)}`
+      if (ref.kind === "openapi") return `account:${encodeURIComponent(ref.accountId)}`
+      return undefined
+    }
+    const instances = [...new Set(rows.map(instance).filter((id) => id !== undefined))].sort()
+    const groups: Array<string | undefined> = instances.length ? instances : [undefined]
+    if (
+      instances.length &&
+      definition.providers.some(
+        (provider) => provider.kind !== "integration" && provider.kind !== "openapi"
+      )
+    )
+      groups.unshift(undefined)
 
-  return services.map(({ pluginId, definition }) => {
-    const providers = [...definition.providers]
-      .sort((a, b) => b.priority - a.priority)
-      .map<ServiceProviderView>((provider) => {
-        const connection =
-          byProvider.get(connectionKey(pluginId, definition.id, provider.id)) ?? null
-        const availability = provider.availability ?? "supported"
-        return {
-          providerId: provider.id,
-          kind: provider.kind,
-          availability,
-          surfaces: provider.surfaces,
-          priority: provider.priority,
-          connection,
-          state: connection?.status ?? "not-connected",
-          action: resolveAction(availability, connection),
-        }
-      })
-
-    return {
-      key: `${pluginId}:${definition.id}`,
-      pluginId,
-      serviceId: definition.id,
-      label: definition.label,
-      description: definition.description,
-      icon: definition.icon,
-      skillIds: definition.skillIds ?? [],
-      providers,
-      connected: providers.some((provider) => provider.state === "connected"),
-      awaitingReview: providers.some((provider) => provider.action.kind === "review"),
-    } satisfies ServiceView
+    return groups.map((id) => {
+      const groupRows = rows.filter((row) => instance(row) === id)
+      const providers = [...definition.providers]
+        .filter(
+          (provider) =>
+            !instances.length ||
+            (id === undefined
+              ? provider.kind !== "integration" && provider.kind !== "openapi"
+              : groupRows.some((row) => row.providerId === provider.id))
+        )
+        .sort((a, b) => b.priority - a.priority)
+        .map<ServiceProviderView>((provider) => {
+          const connection = groupRows.find((row) => row.providerId === provider.id) ?? null
+          const availability = provider.availability ?? "supported"
+          return {
+            providerId: provider.id,
+            kind: provider.kind,
+            availability,
+            surfaces: provider.surfaces,
+            priority: provider.priority,
+            connection,
+            state: connection?.status ?? "not-connected",
+            action: resolveAction(availability, connection),
+          }
+        })
+      return {
+        key: `${pluginId}:${definition.id}${id === undefined ? "" : `:${id}`}`,
+        pluginId,
+        serviceId: definition.id,
+        label: definition.label,
+        description: definition.description,
+        icon: definition.icon,
+        skillIds: definition.skillIds ?? [],
+        providers,
+        connected: providers.some((provider) => provider.state === "connected"),
+        awaitingReview: providers.some((provider) => provider.action.kind === "review"),
+      } satisfies ServiceView
+    })
   })
 }
 

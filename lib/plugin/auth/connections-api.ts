@@ -222,11 +222,47 @@ export function createAuthConnectionsAPI(
         throw new AuthConnectionApiError("invalid-request", "At least one operation is required")
       const operations = [...new Set(request.operations)]
       const scopes = [...new Set(request.scopes ?? [])]
-      const connection = await connected(ref)
+      let connection = await connected(ref)
       if (!connection) return { granted: false, reason: "connection-unavailable" }
-      if (!scopes.every((scope) => connection.scopes.includes(scope)))
-        return { granted: false, reason: "scopes-unavailable" }
       const targets = targetOperations(pluginId, connection.providerId, operations)
+      if (!scopes.every((scope) => connection?.scopes.includes(scope))) {
+        const before = connection
+        const provider = getProvider(before.providerId)
+        const pluginName = await name()
+        const decision = await checked(() =>
+          requestConnectionPrompt({
+            kind: "add-scopes",
+            pluginId,
+            pluginName,
+            connection: connectionMetadata(before),
+            scopes: scopes.filter((scope) => !before.scopes.includes(scope)),
+          })
+        )
+        if (decision.kind !== "reconnect") return { granted: false, reason: "scopes-unavailable" }
+        connection = await connected(ref)
+        if (
+          !connection ||
+          connection.revision !== before.revision ||
+          !provider ||
+          getProvider(before.providerId) !== provider
+        )
+          return { granted: false, reason: "scopes-unavailable" }
+        const union = [...new Set([...before.scopes, ...scopes])]
+        const reconnected = await checked(() =>
+          connectProvider({
+            providerId: before.providerId,
+            reconnect: ref,
+            scopes: union,
+          })
+        )
+        connection = await connected(ref)
+        if (
+          reconnected !== ref ||
+          !connection ||
+          !union.every((scope) => connection?.scopes.includes(scope))
+        )
+          return { granted: false, reason: "scopes-unavailable" }
+      }
       const granted = {
         granted: true as const,
         ref,
@@ -236,12 +272,13 @@ export function createAuthConnectionsAPI(
       }
       if (connection.ownerPluginId === pluginId) return granted
       const pluginName = await name()
+      const approvedConnection = connection
       const decision = await checked(() =>
         requestConnectionPrompt({
           kind: "grant",
           pluginId,
           pluginName,
-          connection: connectionMetadata(connection),
+          connection: connectionMetadata(approvedConnection),
           operations: [...targets.values()].flat(),
           scopes,
         })

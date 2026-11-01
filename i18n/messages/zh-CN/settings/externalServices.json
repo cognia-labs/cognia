@@ -17,7 +17,42 @@
   "connections": {
     "empty": "还没有外部服务连接。",
     "provider": "Provider：{provider}",
-    "title": "连接"
+    "title": "连接",
+    "signIn": "登录 {provider}",
+    "reconnect": "重新连接",
+    "disconnect": "断开连接",
+    "disconnectConfirm": "断开连接并撤销授权",
+    "disconnectTitle": "断开 {account} 的连接？",
+    "disconnectDescription": "在线访问将停止，搜索索引、缓存元数据等派生数据将被移除。你选择保留的附件、快照和历史记录等副本会继续保存。",
+    "issuer": "签发方：",
+    "tenant": "组织：",
+    "principal": "身份类型：",
+    "scopes": "权限范围：",
+    "none": "无",
+    "revision": "连接修订版本：{revision}",
+    "consumers": "已获授权的插件",
+    "noConsumers": "尚未向插件授予访问权限。",
+    "revoke": "撤销访问权限",
+    "revokeConsumer": "撤销 {plugin} 的访问权限",
+    "grantedRevision": "授权修订版本：{revision}",
+    "unknownRevision": "授权修订版本：未知",
+    "needsReapproval": "需要重新批准",
+    "readOperations": "读取操作",
+    "writeOperations": "写入操作",
+    "failed": "无法加载或更新连接，请重试。",
+    "loading": "正在加载连接…",
+    "status": {
+      "connected": "已连接",
+      "needs-reauth": "需要重新登录",
+      "provider-unavailable": "认证提供方不可用",
+      "revoked": "已撤销",
+      "tombstoned": "已断开"
+    },
+    "principalKind": {
+      "user": "用户",
+      "bot": "机器人",
+      "service": "服务"
+    }
   },
   "description": "将 provider 定义与外部账户分开安装，并在启用前审阅能力、风险、范围和可见入口。",
   "flow": {

@@ -3,6 +3,9 @@
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
+jest.mock("./connections-panel", () => ({
+  ConnectionsPanel: () => <section aria-label="Host connections" />,
+}))
 jest.mock("dexie-react-hooks", () => ({
   useLiveQuery: () => [
     {
@@ -45,6 +48,7 @@ describe("ExternalServicesSection", () => {
     expect(screen.getByText("surface.chat")).toBeInTheDocument()
     expect(screen.getByText("flow.install")).toBeInTheDocument()
     expect(screen.getByText("flow.manage")).toBeInTheDocument()
+    expect(screen.getByRole("region", { name: "Host connections" })).toBeInTheDocument()
   })
 
   it("creates a generic website connection from reviewed domains", async () => {

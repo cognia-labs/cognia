@@ -58,6 +58,40 @@ function connection(
 }
 
 describe("buildServiceViews", () => {
+  it("keeps account keys distinct and stable across ordering, labels and status changes", () => {
+    const service: RegisteredExternalService = {
+      ...figma,
+      definition: {
+        ...figma.definition,
+        providers: [{ ...figma.definition.providers[0], kind: "integration" }],
+      },
+    }
+    const accounts: ServiceConnection[] = ["a", "b"].map((id) => ({
+      ...connection("remote", "connected"),
+      id,
+      accountLabel: id,
+      providerRef: { kind: "integration", accountId: id, authConnectionRef: `host-${id}` },
+    }))
+    const first = buildServiceViews([service], accounts)
+    expect(first).toHaveLength(2)
+    expect(new Set(first.map((view) => view.key)).size).toBe(2)
+    const changed = buildServiceViews(
+      [service],
+      accounts.toReversed().map((row) => ({
+        ...row,
+        status: "needs-auth",
+        accountLabel: "Renamed",
+      }))
+    )
+    expect(changed.map((view) => view.key).sort()).toEqual(first.map((view) => view.key).sort())
+    for (const view of first) {
+      expect(view.key).toContain(
+        view.providers[0].connection!.providerRef.kind === "integration"
+          ? `host-${view.providers[0].connection!.id}`
+          : "unreachable"
+      )
+    }
+  })
   it("keeps one entry per service rather than one per provider", () => {
     // The defect this replaces: Figma showed up as two unrelated flat rows.
     const [view] = buildServiceViews([figma], [connection("remote", "pending")])

@@ -9,6 +9,7 @@ import {
 import { ConnectionPickerDialog } from "./connection-picker-dialog"
 import { ConnectionGrantDialog } from "./connection-grant-dialog"
 import { ConnectionSignInDialog } from "./connection-sign-in-dialog"
+import { ConnectionAddScopesDialog } from "./connection-add-scopes-dialog"
 import { startHostAuthCallbackListeners } from "@/lib/plugin/auth/callback-acceptor"
 
 export function PluginConnectionPromptHost() {
@@ -20,7 +21,17 @@ export function PluginConnectionPromptHost() {
   const request = state.current
   if (!request) return null
   const onDismiss = () => resolveConnectionPrompt(request.id, { kind: "dismissed" })
-  return request.kind === "sign-in" ? (
+  return request.kind === "add-scopes" ? (
+    <ConnectionAddScopesDialog
+      key={request.id}
+      pluginName={request.pluginName}
+      accountLabel={request.connection.accountLabel}
+      scopes={request.scopes}
+      onDismiss={onDismiss}
+      onReconnect={() => resolveConnectionPrompt(request.id, { kind: "reconnect" })}
+      onDecline={() => resolveConnectionPrompt(request.id, { kind: "denied" })}
+    />
+  ) : request.kind === "sign-in" ? (
     <ConnectionSignInDialog
       key={request.id}
       pluginName={request.pluginName}

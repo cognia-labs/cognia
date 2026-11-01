@@ -12,6 +12,42 @@ it("dismisses immediately with no prompt surface", async () => {
   ).resolves.toEqual({ kind: "dismissed" })
 })
 
+it("accepts reconnect only on an add-scope prompt and dismisses it without a Host", async () => {
+  const request = {
+    kind: "add-scopes" as const,
+    pluginId: "p",
+    pluginName: "P",
+    scopes: ["write"],
+    connection: {
+      ref: "ref" as AuthConnectionRef,
+      providerId: "vendor",
+      accountLabel: "Account",
+      issuer: "https://issuer.test",
+      principalKind: "user" as const,
+      status: "connected" as const,
+      scopes: ["read"],
+      revision: 1,
+    },
+  }
+  await expect(requestConnectionPrompt(request)).resolves.toEqual({ kind: "dismissed" })
+  let state!: ConnectionPromptState
+  const stop = subscribeConnectionPrompts((value) => {
+    state = value
+  })
+  try {
+    const pending = requestConnectionPrompt(request)
+    const id = state.current!.id
+    resolveConnectionPrompt(id, { kind: "approved" })
+    expect(state.current?.id).toBe(id)
+    resolveConnectionPrompt(id, { kind: "sign-in" })
+    expect(state.current?.id).toBe(id)
+    resolveConnectionPrompt(id, { kind: "reconnect" })
+    await expect(pending).resolves.toEqual({ kind: "reconnect" })
+  } finally {
+    stop()
+  }
+})
+
 it("allows only the sign-in decision on a sign-in prompt", async () => {
   let state!: ConnectionPromptState
   const dispose = subscribeConnectionPrompts((value) => {

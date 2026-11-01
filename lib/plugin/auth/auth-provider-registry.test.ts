@@ -19,6 +19,8 @@ import {
   registerAuthenticationProvider,
   releaseAuthProviderOwnership,
   setAuthProviderOwnershipStore,
+  subscribeAuthProviders,
+  getAuthProviderRevision,
   unregisterAuthenticationProvider,
   unregisterProvidersByPlugin,
   type AuthenticationProvider,
@@ -33,6 +35,23 @@ const provider = (pluginId: string | null, id = "acme"): AuthenticationProvider 
     throw new Error("No interactive session in this fixture")
   },
   removeSession: async () => {},
+})
+
+it("notifies Settings of provider registration and removal even without connections", () => {
+  setAuthProviderOwnershipStore({ read: () => null, write: () => {} })
+  __resetAuthRegistryForTesting()
+  const listener = jest.fn()
+  const stop = subscribeAuthProviders(listener)
+  const before = getAuthProviderRevision()
+  const dispose = registerAuthenticationProvider(provider("owner", "settings"))
+  expect(getAuthProviderRevision()).toBe(before + 1)
+  dispose()
+  expect(getAuthProviderRevision()).toBe(before + 2)
+  expect(listener).toHaveBeenCalledTimes(2)
+  stop()
+  unregisterAuthenticationProvider("settings")
+  expect(listener).toHaveBeenCalledTimes(2)
+  setAuthProviderOwnershipStore(null)
 })
 
 describe("host auth provider ownership", () => {

@@ -902,6 +902,55 @@ describe("useDiscoverQuery — connection planes", () => {
   })
 
   describe("externalServices", () => {
+    it("uses account-qualified service keys as Discover ids", async () => {
+      listExternalServicesMock.mockReturnValue([
+        {
+          pluginId: "business",
+          definition: {
+            id: "items",
+            label: "Items",
+            fallbackPolicy: "never",
+            providers: [
+              {
+                id: "api",
+                kind: "integration",
+                contributionId: "items",
+                priority: 1,
+                surfaces: ["chat"],
+              },
+            ],
+          },
+        },
+      ])
+      listServiceConnectionsMock.mockResolvedValue(
+        ["a", "b"].map((id) => ({
+          id,
+          pluginId: "business",
+          serviceId: "items",
+          providerId: "api",
+          runtimeTargetId: "local",
+          status: "connected",
+          providerFingerprint: "fp",
+          accountLabel: id,
+          providerRef: { kind: "integration", accountId: id, authConnectionRef: `host-${id}` },
+          enabledSurfaces: ["chat"],
+          createdAt: "",
+          updatedAt: "",
+        }))
+      )
+      const { result, rerender } = renderHook(() => useDiscoverQuery("externalServices", ""))
+      await flush()
+      rerender()
+      expect(result.current.items.map((item) => item.id)).toEqual([
+        "business:items:connection:host-a",
+        "business:items:connection:host-b",
+      ])
+      expect(
+        result.current.items.every(
+          (item) => item.kind === "externalService" && item.id === item.data.key
+        )
+      ).toBe(true)
+    })
     it("lists one entry per service with its providers merged in", async () => {
       listExternalServicesMock.mockReturnValue([figma])
       const { result, rerender } = renderHook(() => useDiscoverQuery("externalServices", ""))

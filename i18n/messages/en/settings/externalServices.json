@@ -17,7 +17,42 @@
   "connections": {
     "empty": "No external service connections yet.",
     "provider": "Provider: {provider}",
-    "title": "Connections"
+    "title": "Connections",
+    "signIn": "Sign in to {provider}",
+    "reconnect": "Reconnect",
+    "disconnect": "Disconnect",
+    "disconnectConfirm": "Disconnect and revoke",
+    "disconnectTitle": "Disconnect {account}?",
+    "disconnectDescription": "Online access stops and derived data such as search indexes and cached metadata is removed. Copies you chose to keep, including attachments, snapshots and history, stay saved.",
+    "issuer": "Issuer:",
+    "tenant": "Organization:",
+    "principal": "Principal:",
+    "scopes": "Scopes:",
+    "none": "None",
+    "revision": "Connection revision: {revision}",
+    "consumers": "Plugins with access",
+    "noConsumers": "No plugins have been granted access.",
+    "revoke": "Revoke access",
+    "revokeConsumer": "Revoke access for {plugin}",
+    "grantedRevision": "Granted revision: {revision}",
+    "unknownRevision": "Granted revision: unknown",
+    "needsReapproval": "Needs re-approval",
+    "readOperations": "Read operations",
+    "writeOperations": "Write operations",
+    "failed": "The connection could not be loaded or updated. Please try again.",
+    "loading": "Loading connections…",
+    "status": {
+      "connected": "Connected",
+      "needs-reauth": "Sign in again",
+      "provider-unavailable": "Provider unavailable",
+      "revoked": "Revoked",
+      "tombstoned": "Disconnected"
+    },
+    "principalKind": {
+      "user": "User",
+      "bot": "Bot",
+      "service": "Service"
+    }
   },
   "description": "Install provider definitions separately from external accounts, then review capabilities, risk, scope, and surfaces before enabling them.",
   "flow": {
