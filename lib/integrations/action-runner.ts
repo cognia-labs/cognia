@@ -499,7 +499,13 @@ async function defaultAuthenticatedRequest<T>(
     signal: init.signal,
   })
   // Fence before parsing, and after body consumption: either may await the network.
-  if (connection) await getConnectionManager().getConnection(connection.id, connection.revision)
+  if (connection)
+    await authorizeAccountConnection(
+      account,
+      (init.method ?? "GET").toUpperCase(),
+      init.operation,
+      connection.revision
+    )
   const responseHeaders = Object.fromEntries(response.headers.entries())
   await updateIntegrationAccount(pluginId, connectorAccountId, {
     health: response.status === 401 || response.status === 403 ? "degraded" : "healthy",
@@ -508,7 +514,13 @@ async function defaultAuthenticatedRequest<T>(
   const data = contentType.includes("application/json")
     ? ((await response.json()) as T)
     : ((await response.text()) as T)
-  if (connection) await getConnectionManager().getConnection(connection.id, connection.revision)
+  if (connection)
+    await authorizeAccountConnection(
+      account,
+      (init.method ?? "GET").toUpperCase(),
+      init.operation,
+      connection.revision
+    )
   return { status: response.status, headers: responseHeaders, data }
 }
 

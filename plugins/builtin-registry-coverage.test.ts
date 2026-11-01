@@ -51,6 +51,11 @@ const DISTRIBUTION_FILE = join(
  * reviewed decision, not an accident. Keyed by `plugin.json` id.
  */
 const INTENTIONALLY_UNBUNDLED: Readonly<Record<string, string>> = Object.freeze({
+  "cognia-example-auth-provider": "author reference plugin, copy-paste template, not a default",
+  "cognia-example-docs-provider": "author reference plugin, copy-paste template, not a default",
+  "cognia-example-issue-sync": "author reference plugin, copy-paste template, not a default",
+  "cognia-example-backup-destination":
+    "author reference plugin, copy-paste template, not a default",
   "cognia-kimi-subscription":
     "Installable desktop subscription reference plugin — built as a local ZIP and enabled explicitly, not bundled by default.",
   "cognia-zhipu-subscription":

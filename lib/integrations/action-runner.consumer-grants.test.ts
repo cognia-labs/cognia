@@ -7,6 +7,7 @@ import {
   enqueueIntegrationActionJob,
 } from "@/lib/db/integrations"
 import {
+  invalidateCapabilityGrants,
   listServiceConnections,
   putCapabilityGrant,
   putServiceConnection,
@@ -306,6 +307,50 @@ it("drops a response when the revision changes during the network request", asyn
     ConnectionRevisionChanged
   )
 })
+
+it("drops a read revoked during fetch before consuming its body", async () => {
+  await setup()
+  await grant()
+  const result = response()
+  const parse = jest.spyOn(result, "json")
+  jest.mocked(proxyFetch).mockImplementationOnce(async () => {
+    const [projection] = await listServiceConnections({ pluginId: consumer })
+    await invalidateCapabilityGrants(projection.id)
+    return result
+  })
+  await expect(authenticatedIntegrationRequest(consumer, accountId, url)).rejects.toMatchObject({
+    name: "ConsumerGrantRequired",
+    consumerPluginId: consumer,
+    operation: "vendor.request.GET",
+  })
+  expect(parse).not.toHaveBeenCalled()
+  expect(rows.get(ref)?.revision).toBe(1)
+})
+
+it.each(["application/json", "text/plain"])(
+  "drops a read revoked during %s body parsing",
+  async (contentType) => {
+    await setup()
+    await grant()
+    const result = new Response("private response", { headers: { "content-type": contentType } })
+    const parse = async () => {
+      const [projection] = await listServiceConnections({ pluginId: consumer })
+      await invalidateCapabilityGrants(projection.id)
+      return "private response"
+    }
+    const consume = jest
+      .spyOn(result, contentType === "application/json" ? "json" : "text")
+      .mockImplementation(parse)
+    jest.mocked(proxyFetch).mockResolvedValueOnce(result)
+    await expect(authenticatedIntegrationRequest(consumer, accountId, url)).rejects.toMatchObject({
+      name: "ConsumerGrantRequired",
+      consumerPluginId: consumer,
+      operation: "vendor.request.GET",
+    })
+    expect(consume).toHaveBeenCalledTimes(1)
+    expect(rows.get(ref)?.revision).toBe(1)
+  }
+)
 
 it("drops a response when disconnect wins during body consumption", async () => {
   await setup()

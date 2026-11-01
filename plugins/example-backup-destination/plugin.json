@@ -1,0 +1,108 @@
+{
+  "id": "cognia-example-backup-destination",
+  "name": "Example Tracker Backup",
+  "description": "Ciphertext upload, listing and download through a granted Host connection.",
+  "version": "0.1.0",
+  "type": "frontend",
+  "main": "dist/index.js",
+  "author": "Cognia plugin authors",
+  "license": "MIT",
+  "minAppVersion": "0.1.0",
+  "engines": {
+    "cognia": ">=0.1.0"
+  },
+  "capabilities": ["backup-destination", "integrations", "commands"],
+  "permissions": [
+    "auth:consume",
+    "integrations:read",
+    "integrations:execute",
+    "backup:destination"
+  ],
+  "runtimeCompatibility": {
+    "tauri": {
+      "availability": "supported",
+      "entrypoint": "dist/index.js"
+    },
+    "browser": {
+      "availability": "degraded",
+      "entrypoint": "dist/index.js",
+      "reason": "Sign-in and refresh require a connected trusted Host for auth:exchange."
+    },
+    "mobile": {
+      "availability": "degraded",
+      "entrypoint": "dist/index.js",
+      "reason": "Requires a connected trusted Host and a configured OAuth callback."
+    },
+    "headless": {
+      "availability": "degraded",
+      "entrypoint": "dist/index.js",
+      "reason": "Uses an existing connection; initial PKCE sign-in needs an interactive shell."
+    }
+  },
+  "requiresServices": {
+    "auth.example-tracker": "^1.0.0"
+  },
+  "integrations": [
+    {
+      "id": "backups",
+      "label": "Example Tracker Backup",
+      "authStrategies": [
+        {
+          "id": "oauth",
+          "type": "oauth2",
+          "label": "Example Tracker user",
+          "providerId": "example-tracker",
+          "scopes": ["backups.read", "backups.write"],
+          "requestAuth": {
+            "type": "bearer"
+          }
+        }
+      ],
+      "allowedOrigins": ["https://api.example-tracker.test"],
+      "resourceKinds": [],
+      "eventTypes": [],
+      "actions": []
+    }
+  ],
+  "services": [
+    {
+      "id": "backups",
+      "label": "Example Tracker Backup",
+      "fallbackPolicy": "never",
+      "providers": [
+        {
+          "id": "api",
+          "kind": "integration",
+          "contributionId": "backups",
+          "priority": 1,
+          "surfaces": ["chat", "workflow"]
+        }
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "example-backups-connect",
+      "name": "/example-backups-connect",
+      "description": "Select a connection and request this plugin's consumer grant."
+    }
+  ],
+  "i18n": {
+    "locales": {
+      "en": {
+        "access.granted": "Connection access granted.",
+        "access.denied": "Connection access was not granted."
+      },
+      "zh-CN": {
+        "access.granted": "\u5df2\u6388\u6743\u8fde\u63a5\u8bbf\u95ee\u3002",
+        "access.denied": "\u5c1a\u672a\u6388\u6743\u8fde\u63a5\u8bbf\u95ee\u3002"
+      }
+    }
+  },
+  "backupDestinations": [
+    {
+      "id": "archive",
+      "label": "Example Tracker Backup"
+    }
+  ]
+}

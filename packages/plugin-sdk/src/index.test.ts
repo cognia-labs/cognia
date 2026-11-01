@@ -4,11 +4,42 @@ import type {
   PluginLibraryMethod,
   PluginLibraryModuleFactory,
   PluginLibrariesAPI,
+  AuthCredentialSet,
+  AuthRefreshContext,
+  AuthIdentityDescription,
+  HostManagedPluginAuthProvider,
 } from "./index"
 
 const rootBarrel = sdk as Record<string, unknown>
 
 describe("plugin-sdk root barrel", () => {
+  it("authors a Host-managed provider entirely from the SDK root", async () => {
+    expect(typeof rootBarrel.AuthRefreshRejected).toBe("function")
+    const credentials: AuthCredentialSet = { accessToken: "provider-only", scopes: ["read"] }
+    const identity: AuthIdentityDescription = {
+      issuer: "https://api.example.test",
+      clientId: "public-client",
+      principal: { id: "user", kind: "user" },
+      accountLabel: "User",
+      scopes: ["read"],
+    }
+    const provider: HostManagedPluginAuthProvider = sdk.defineAuthProvider({
+      management: "host",
+      id: "example",
+      label: "Example",
+      describe: async () => identity,
+      refresh: async (_lineage: AuthRefreshContext) => {
+        throw new sdk.AuthRefreshRejected()
+      },
+    })
+    expect(await provider.describe(credentials)).toBe(identity)
+    await expect(provider.refresh({} as AuthRefreshContext)).rejects.toMatchObject({
+      name: "AuthRefreshRejected",
+      code: "invalid_grant",
+    })
+    expect(provider).not.toHaveProperty("getSessions")
+  })
+
   it("exports the pure credential reference helper from the author root", () => {
     expect(sdk.secretRef("token", { prefix: "Bearer " })).toEqual({
       $secretRef: "token",

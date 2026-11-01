@@ -323,6 +323,23 @@ export type { ViewContainerOpenErrorCode } from "@cognia/plugin-contract/lib/plu
 export { defineTreeDataProvider, defineView } from "./define/define-view"
 export { defineWebview } from "./define/define-webview"
 export { defineAuthProvider } from "./define/define-auth-provider"
+export type {
+  AuthSession,
+  AuthSessionChangeEvent,
+  AuthSessionOptions,
+  AuthenticationProvider,
+  PkceFlowConfig,
+  PkceTokenResult,
+  CreateAuthAPIOptions,
+  PluginAuthAPI,
+  PluginAuthConnectionsAPI,
+  PluginAuthProvider,
+  LegacyPluginAuthProvider,
+  HostManagedPluginAuthProvider,
+} from "./api/auth-provider"
+export type * from "@cognia/plugin-contract/types/plugin/plugin-auth"
+export { AuthRefreshRejected } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
+export type { AuthRefreshContext } from "@cognia/plugin-contract/lib/plugin/auth/auth-provider-registry"
 export { defineUriHandler } from "./define/define-uri-handler"
 export { defineRemoteDesktopProvider } from "./define/define-remote-desktop-provider"
 export type {

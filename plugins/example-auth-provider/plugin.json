@@ -1,0 +1,74 @@
+{
+  "id": "cognia-example-auth-provider",
+  "name": "Example Tracker Authentication",
+  "description": "Host-managed OAuth PKCE provider for the fictional Example Tracker service.",
+  "version": "0.1.0",
+  "type": "frontend",
+  "main": "dist/index.js",
+  "author": "Cognia plugin authors",
+  "license": "MIT",
+  "minAppVersion": "0.1.0",
+  "engines": {
+    "cognia": ">=0.1.0"
+  },
+  "capabilities": ["auth-provider"],
+  "permissions": ["auth:provide", "network:fetch"],
+  "runtimeCompatibility": {
+    "tauri": {
+      "availability": "supported",
+      "entrypoint": "dist/index.js"
+    },
+    "browser": {
+      "availability": "degraded",
+      "entrypoint": "dist/index.js",
+      "reason": "Sign-in and refresh require a connected trusted Host for auth:exchange."
+    },
+    "mobile": {
+      "availability": "degraded",
+      "entrypoint": "dist/index.js",
+      "reason": "Requires a connected trusted Host and a configured OAuth callback."
+    },
+    "headless": {
+      "availability": "degraded",
+      "entrypoint": "dist/index.js",
+      "reason": "Uses an existing connection; initial PKCE sign-in needs an interactive shell."
+    }
+  },
+  "providesServices": {
+    "auth.example-tracker": "1.0.0"
+  },
+  "authProviders": [
+    {
+      "id": "example-tracker",
+      "label": "Example Tracker",
+      "methods": ["oauth-pkce"],
+      "principals": ["user"],
+      "issuers": ["https://api.example-tracker.test"],
+      "authorization": {
+        "clientId": "cognia-example-public-client",
+        "issuer": "https://api.example-tracker.test"
+      },
+      "tokenEndpoints": [
+        {
+          "url": "https://api.example-tracker.test/oauth/token",
+          "clientSecret": "none"
+        }
+      ]
+    }
+  ],
+  "networkAccess": {
+    "allowedDomains": ["api.example-tracker.test"],
+    "rules": [
+      {
+        "domain": "api.example-tracker.test",
+        "methods": ["POST"],
+        "paths": ["/oauth/token"]
+      },
+      {
+        "domain": "api.example-tracker.test",
+        "methods": ["GET"],
+        "paths": ["/me"]
+      }
+    ]
+  }
+}
