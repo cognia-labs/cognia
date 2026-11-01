@@ -23,6 +23,10 @@
     {
       "file": "components/shell/project-kb-worker-initializer.tsx",
       "reason": "Owns project store subscriptions and debounced knowledge ingestion independent of the visible workbench."
+    },
+    {
+      "file": "components/plugins/auth/plugin-connection-prompt-host.tsx",
+      "reason": "Mounts startHostAuthCallbackListeners, which accepts plugin OAuth callbacks posted to this window (postMessage and BroadcastChannel) and completes the exchange; added by the ADR-0246 plugin-auth work after d8e3ac4fb9."
     }
   ],
   "notRuntime": [

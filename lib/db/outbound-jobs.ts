@@ -17,11 +17,20 @@
 import Dexie, { type Table } from "dexie"
 import type { StoredMessage } from "@cognia/agent-config-types"
 import type {
+  ConnectorDraftRow,
   OutboundJobRow,
   OutboundJobSource,
   OutboundJobWorkflowSource,
 } from "./connector-types"
-import type { OutboundJobAuthorization } from "@cognia/plugin-contract/lib/db/connector-types"
+import type {
+  OutboundJobAuthorization,
+  OutboundJobAuthorizationProvenance,
+} from "@cognia/plugin-contract/lib/db/connector-types"
+import {
+  recordActionReviewReceiptInsideTransaction,
+  recordActionReviewReceiptGovernance,
+  type ActionReviewReceiptRow,
+} from "./action-review-receipts"
 import type { OutboundRequest } from "@/types/connectors/outbound"
 import type { ConnectorDeliveryStatus } from "@/types/connectors/event"
 import { recordInbound } from "./inbound-ledger"
@@ -190,6 +199,9 @@ export interface EnqueueInput {
    * after it plans the delivery; persisted verbatim.
    */
   authorizedBy?: OutboundJobAuthorization
+  authorizationProvenance?: OutboundJobAuthorizationProvenance
+  /** Written atomically with the job; receipt failure aborts the enqueue. */
+  receipt?: ActionReviewReceiptRow
 }
 
 export async function enqueueOutbound(
@@ -230,6 +242,7 @@ export async function enqueueOutboundMany(
 
     const tables: Table[] = [db.outboundQueue]
     if (inputs.some((input) => input.localMessage)) tables.push(db.messages)
+    if (inputs.some((input) => input.receipt)) tables.push(db.actionReviewReceipts)
     let abortTransaction: (() => void) | undefined
     const rows = await db
       .transaction("rw", tables, () => {
@@ -273,6 +286,9 @@ export async function enqueueOutboundMany(
                 ? { sourceWorkflow: input.sourceWorkflow }
                 : {}),
               ...(input.authorizedBy ? { authorizedBy: input.authorizedBy } : {}),
+              ...(input.authorizationProvenance
+                ? { authorizationProvenance: input.authorizationProvenance }
+                : {}),
             } satisfies OutboundJobRow
           })
           return db.outboundQueue.bulkAdd(created).then(async () => {
@@ -291,6 +307,18 @@ export async function enqueueOutboundMany(
                 : []
             )
             if (messages.length) await db.messages.bulkPut(messages)
+            // The whole batch commits together, so no receipt of it may be
+            // trimmed by a later one's write.
+            const batchReceipts = new Set(inputs.flatMap((input) => input.receipt?.id ?? []))
+            for (const input of inputs) {
+              if (input.receipt)
+                await recordActionReviewReceiptInsideTransaction(
+                  db,
+                  input.receipt,
+                  undefined,
+                  batchReceipts
+                )
+            }
             return created
           })
         })
@@ -305,11 +333,87 @@ export async function enqueueOutboundMany(
         if (abortTransaction) options.signal?.removeEventListener("abort", abortTransaction)
       })
 
+    for (const input of inputs) {
+      if (input.receipt) await recordActionReviewReceiptGovernance(input.receipt)
+    }
     await enforceQueueSoftCap(now)
     emitOutboundEnqueued()
     for (const conversationKey of conversationKeys) invalidate(conversationKey)
     return rows
   })
+}
+
+/**
+ * Whether the runner may still decide `row`'s authorization: an unclaimed row
+ * while it waits (`pending`/`failed`), or the row this runner itself claimed
+ * (`sending`, a rerouted or rate-limited job between claim and send).
+ */
+function waitingFor(row: OutboundJobRow, claimed = false): boolean {
+  return claimed ? row.status === "sending" : row.status === "pending" || row.status === "failed"
+}
+
+/** Persist a runner's fresh authorization and its receipt before claiming work. */
+export async function updateOutboundAuthorization(
+  jobId: string,
+  authorizationProvenance: OutboundJobAuthorizationProvenance,
+  authorizedBy: OutboundJobAuthorization | undefined,
+  receipt?: ActionReviewReceiptRow,
+  options: { claimed?: boolean } = {}
+): Promise<boolean> {
+  const db = getDb()
+  const tables: Table[] = [db.outboundQueue]
+  if (receipt) tables.push(db.actionReviewReceipts)
+  const updated = await db.transaction("rw", tables, async () => {
+    const row = await db.outboundQueue.get(jobId)
+    if (!row || !isLocallyDispatchable(row) || !waitingFor(row, options.claimed)) return false
+    await db.outboundQueue.update(jobId, {
+      authorizationProvenance,
+      authorizedBy,
+      updatedAt: Date.now(),
+    })
+    if (receipt) await recordActionReviewReceiptInsideTransaction(db, receipt)
+    return true
+  })
+  if (updated) {
+    if (receipt) await recordActionReviewReceiptGovernance(receipt)
+    invalidate()
+  }
+  return updated
+}
+
+/**
+ * Hold a job its authorization no longer allows: dead-letter it and, when it
+ * waits for a person, write its draft, in one transaction and only while the row
+ * is still waiting (or, with `claimed`, still this runner's claim). Two runners that re-planned the same job leave one draft
+ * (the second finds the row already held, and returns false so it records no
+ * second receipt), and a crash cannot keep the draft without the hold or the
+ * reverse.
+ */
+export async function holdOutboundForAuthorization(
+  jobId: string,
+  hold: { errorCode: string; message: string; draft?: ConnectorDraftRow; claimed?: boolean }
+): Promise<boolean> {
+  const db = getDb()
+  const tables: Table[] = [db.outboundQueue]
+  if (hold.draft) tables.push(db.connectorDrafts)
+  const held = await db.transaction("rw", tables, async () => {
+    const row = await db.outboundQueue.get(jobId)
+    if (!row || !isLocallyDispatchable(row) || row.pendingReceipt || !waitingFor(row, hold.claimed))
+      return false
+    if (hold.draft) await db.connectorDrafts.add(hold.draft)
+    await db.outboundQueue.update(jobId, {
+      status: "deadlettered",
+      lastErrorCode: hold.errorCode,
+      lastError: hold.message,
+      updatedAt: Date.now(),
+    })
+    return true
+  })
+  if (held) {
+    invalidate()
+    if (hold.draft) publishSyncInvalidate("connectorDrafts", hold.draft.conversationKey)
+  }
+  return held
 }
 
 /** Terminal outbound statuses — the job will never transition again. */
@@ -887,6 +991,35 @@ export async function markFailed(
     })
   })
   invalidate()
+}
+
+/**
+ * Defer a job this runner has not claimed. Unlike {@link markFailed}, it only
+ * moves a row that is still `pending`/`failed`: another runner may have claimed
+ * it since it was read, and rewriting that `sending` row to `failed` would let
+ * a third pass claim and send it again. Leaves `attempts` untouched.
+ */
+export async function deferUnclaimed(
+  jobId: string,
+  errorCode: string,
+  message: string,
+  nextAttemptAt: number
+): Promise<boolean> {
+  const deferred = await getDb().transaction("rw", getDb().outboundQueue, async () => {
+    const row = await getDb().outboundQueue.get(jobId)
+    if (!row || row.pendingReceipt || (row.status !== "pending" && row.status !== "failed"))
+      return false
+    await getDb().outboundQueue.update(jobId, {
+      status: "failed",
+      lastErrorCode: errorCode,
+      lastError: message,
+      nextAttemptAt,
+      updatedAt: Date.now(),
+    })
+    return true
+  })
+  if (deferred) invalidate()
+  return deferred
 }
 
 /** Ambiguous remote outcome: never retry without operator reconciliation. */

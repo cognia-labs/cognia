@@ -25,6 +25,7 @@ function effect(payload: Record<string, unknown>): FusionOutboxRow {
     attempts: 0,
     lastError: null,
     createdAt: 1,
+    nextAttemptAt: 1,
     appliedAt: null,
   }
 }

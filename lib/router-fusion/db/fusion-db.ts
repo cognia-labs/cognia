@@ -7,16 +7,18 @@
  * Created lazily: nothing opens it until a surface is switched on and a run is
  * created. The main `lib/db/schema.ts` version is never touched.
  *
- * Single-version schema in the same spirit as the main database: to change it,
- * edit `FUSION_SCHEMA` and bump `FUSION_DB_SCHEMA_VERSION`. There is no upgrade
- * chain; the fusion database holds a ledger that is rebuilt from nothing only by
- * losing history, so a bump must keep every existing store compatible.
+ * Schema bumps keep existing stores compatible so the ledger survives without
+ * losing history. Version 6 adds an explicit row upgrade: backfill outbox due
+ * times for the new index and retain exhausted retries as inspectable dead letters.
  */
 
 import Dexie, { type Table } from "dexie"
 
+import { MAX_ATTEMPTS } from "@/lib/queue/retry-policy"
+
 import { fusionDatabaseName } from "../gate/database-name"
 import { RouterFusionInfrastructureError, toInfrastructureFault } from "../gate/faults"
+import { cancelFusionOutboxWake } from "./outbox"
 import type {
   DelegateStepRow,
   FusionAcceptanceApprovalRow,
@@ -63,8 +65,11 @@ export { FUSION_DB_SUFFIX, fusionDatabaseName, isFusionDatabaseName } from "../g
  * `fusionShadowDecisions` (what the learned router WOULD have chosen, recorded
  * beside the rules decision and never acted on). Samples carry numbers only —
  * never prompt or answer text — so the training set is safe to export.
+ *
+ * v6 adds `[status+nextAttemptAt]` to the outbox and upgrades legacy rows so
+ * pending effects remain visible and exhausted retries become dead letters.
  */
-export const FUSION_DB_SCHEMA_VERSION = 5
+export const FUSION_DB_SCHEMA_VERSION = 6
 
 export const FUSION_SCHEMA = {
   fusionAccount: "&id",
@@ -77,7 +82,7 @@ export const FUSION_SCHEMA = {
   fusionLedger: "&dedupeKey, runId, attemptId, kind, createdAt",
   fusionArtifacts: "&artifactId, runId, contentSha256, expiresAt",
   fusionConfigSnapshots: "&digest, createdAt",
-  fusionOutbox: "&effectId, runId, kind, status, createdAt",
+  fusionOutbox: "&effectId, runId, kind, status, createdAt, [status+nextAttemptAt]",
   fusionIdempotency: "&scopedKey, runId, expiresAt",
   fusionFeedback: "&feedbackId, runId, createdAt",
   fusionApiSessions: "&apiSessionId, sessionId, actorKeyId",
@@ -117,7 +122,22 @@ export class FusionDB extends Dexie {
 
   constructor(name: string) {
     super(name)
-    this.version(FUSION_DB_SCHEMA_VERSION).stores(FUSION_SCHEMA)
+    this.version(FUSION_DB_SCHEMA_VERSION)
+      .stores(FUSION_SCHEMA)
+      .upgrade(async (tx) => {
+        const now = Date.now()
+        await tx
+          .table<FusionOutboxRow>("fusionOutbox")
+          .toCollection()
+          .modify((row) => {
+            if (row.nextAttemptAt === undefined) row.nextAttemptAt = row.createdAt
+            if (row.status === "pending" && row.attempts >= MAX_ATTEMPTS) {
+              row.status = "deadletter"
+              row.deadletteredAt = now
+            }
+          })
+      })
+    this.on("close", () => cancelFusionOutboxWake(this))
     // Another context needs to upgrade: step aside instead of blocking it.
     this.on("versionchange", () => {
       this.close()

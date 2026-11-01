@@ -1,6 +1,8 @@
 const mockInvoke = jest.fn()
 const mockIsTauri = jest.fn(() => true)
-jest.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => mockInvoke(...args) }))
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { call: (...args: unknown[]) => mockInvoke(...args) },
+}))
 jest.mock("@/lib/tauri", () => ({ isTauri: () => mockIsTauri() }))
 
 import { createNativeSiwcFetch, encodeSiwcReference } from "./native-fetch"

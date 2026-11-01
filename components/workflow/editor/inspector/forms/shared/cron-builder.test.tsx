@@ -5,6 +5,17 @@ import { fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { CronBuilder } from "./cron-builder"
 
+jest.mock("@/i18n/messages/en.json", () => {
+  const messages = jest.requireActual("@/i18n/messages/en.json")
+  return {
+    ...messages,
+    workflows: {
+      ...messages.workflows,
+      forms: jest.requireActual("@/i18n/messages/en/workflows/forms.json"),
+    },
+  }
+})
+
 const messages = {
   workflows: {
     forms: {
@@ -22,6 +33,7 @@ const messages = {
           },
           nextRunsLabel: "Next runs",
           invalidExpression: "Invalid cron expression",
+          unsupportedWorkflowExpression: "This schedule is not supported by workflow triggers.",
         },
       },
     },
@@ -46,7 +58,9 @@ describe("CronBuilder", () => {
 
   it("shows an error message for an invalid expression", () => {
     wrap(<CronBuilder id="cb" value="not a cron" onChange={jest.fn()} />)
-    expect(screen.getByTestId("cb-invalid")).toHaveTextContent("Invalid cron expression")
+    expect(screen.getByTestId("cb-invalid")).toHaveTextContent(
+      "This schedule is not supported by workflow triggers."
+    )
     expect(screen.queryByTestId("cb-next-runs")).not.toBeInTheDocument()
   })
 
@@ -64,3 +78,14 @@ describe("CronBuilder", () => {
     expect(onChange).toHaveBeenCalledWith("0 * * * *")
   })
 })
+
+it.each(["0 0 L * *", "0 0 * * 1#2", "@minutely"])(
+  "rejects daemon-incompatible %s without a preview",
+  (value) => {
+    wrap(<CronBuilder id="cb" value={value} onChange={jest.fn()} />)
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This schedule is not supported by workflow triggers."
+    )
+    expect(screen.queryByText("Next runs")).not.toBeInTheDocument()
+  }
+)

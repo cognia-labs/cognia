@@ -67,6 +67,7 @@ import {
 } from "@cognia/agent-config-types/action-review"
 import type {
   OutboundJobAuthorization,
+  OutboundJobAuthorizationProvenance,
   OutboundJobSource,
 } from "@cognia/plugin-contract/lib/db/connector-types"
 
@@ -99,6 +100,8 @@ import {
 import { jobAuthorizationOf, outboundReceipt, type OutboundReceipt } from "./outbound-receipt"
 import { resolveSessionRequestOrigin } from "./resolve-request-origin"
 
+export const OUTBOUND_DELIVERY_POLICY_VERSION = "adr-0239.delivery.v1"
+
 /** A reply into the conversation the request came from. */
 export interface OriginReplyAuthorization {
   kind: "origin-reply"
@@ -116,7 +119,11 @@ export interface SystemNoticeAuthorization {
 /** The outbound runner moving a job to a sibling bot of the same chat. */
 export interface ReroutedAuthorization {
   kind: "rerouted"
-  from: { conversationKey: string; authorizedBy?: OutboundJobAuthorization }
+  from: {
+    conversationKey: string
+    authorizedBy?: OutboundJobAuthorization
+    provenance?: OutboundJobAuthorizationProvenance
+  }
 }
 
 /** Authorizations the gateway only queues or refuses, never drafts. */
@@ -198,7 +205,12 @@ export type DeliveryDenyReason =
   | "unapproved"
 
 export type DeliveryDecision =
-  | { action: "send"; authorizedBy?: OutboundJobAuthorization; receipt?: DeliveryReceipt }
+  | {
+      action: "send"
+      authorizedBy?: OutboundJobAuthorization
+      receipt?: DeliveryReceipt
+      provenance: Pick<OutboundJobAuthorizationProvenance, "mode" | "plan" | "receiptId">
+    }
   | { action: "draft"; draftSessionId: string; receipt: DeliveryReceipt }
   | { action: "deny"; reason: DeliveryDenyReason; receipt: DeliveryReceipt }
 
@@ -279,6 +291,21 @@ interface PlanningEnv {
   deps: PlanDeliveryDeps
 }
 
+function sendDecision(
+  env: PlanningEnv,
+  plan: OutboundJobAuthorizationProvenance["plan"],
+  authorizedBy?: OutboundJobAuthorization,
+  receipt?: DeliveryReceipt
+): Extract<DeliveryDecision, { action: "send" }> {
+  const receiptId = receipt?.request.requestId ?? authorizedBy?.receiptId
+  return {
+    action: "send",
+    ...(authorizedBy ? { authorizedBy } : {}),
+    ...(receipt ? { receipt } : {}),
+    provenance: { mode: env.mode, plan, ...(receiptId ? { receiptId } : {}) },
+  }
+}
+
 interface ReceiptArgs {
   ownerRef?: string
   sessionId?: string
@@ -344,9 +371,11 @@ function withheld(
           ? "nothing authorized its recipient, and it cannot wait for a person"
           : "it named a conversation other than the one it answers"
   if (env.mode === "shadow") {
-    return {
-      action: "send",
-      receipt: receiptFor(env, {
+    return sendDecision(
+      env,
+      outcome,
+      undefined,
+      receiptFor(env, {
         ...args,
         plan: outcome,
         outcome: "allow",
@@ -354,8 +383,8 @@ function withheld(
         reason: `delivered: outbound authorization is in shadow mode; enforcement would have ${
           outcome === "draft" ? "held it as a draft" : "refused it"
         } (${what})`,
-      }),
-    }
+      })
+    )
   }
   if (outcome === "draft") {
     return {
@@ -421,7 +450,7 @@ async function planUnattended(
     // Under enforcement nothing was shown to authorize the recipient, so the
     // delivery waits for a person rather than going out on a failure.
     console.warn("[outbound] delivery planning failed", error)
-    if (env.mode === "shadow") return { action: "send" }
+    if (env.mode === "shadow") return sendDecision(env, "unplanned")
     return withheld(env, "draft", {
       ownerRef: unattended.ownerRef,
       ...(unattended.sessionId ? { sessionId: unattended.sessionId } : {}),
@@ -442,7 +471,7 @@ async function planUnattended(
         if (env.input.deliveryMode && env.input.deliveryMode !== "reply")
           return withheld(env, "draft", { ...receiptArgs, draftSessionId: unattended.sessionId })
         // The origin thread: needs no grant and no receipt.
-        return { action: "send", authorizedBy: { authority } }
+        return sendDecision(env, "allow", { authority })
       }
       const receipt =
         env.mode === "enforce"
@@ -455,16 +484,17 @@ async function planUnattended(
               reason: `allowed by a ${result.grant.scope} grant`,
             })
           : undefined
-      return {
-        action: "send",
-        authorizedBy: {
+      return sendDecision(
+        env,
+        "allow",
+        {
           ...(receipt ? { receiptId: receipt.request.requestId } : {}),
           authority,
           grantScope: result.grant.scope,
           ...(result.grant.policyRef ? { policyRef: result.grant.policyRef } : {}),
         },
-        ...(receipt ? { receipt } : {}),
-      }
+        receipt
+      )
     }
     case "deny":
       return withheld(env, "deny", { ...receiptArgs, denyReason: "fenced" })
@@ -542,8 +572,6 @@ export async function planDelivery(
   deps: PlanDeliveryDeps = {}
 ): Promise<DeliveryDecision> {
   const auth = input.authorization
-  if (!auth && HUMAN_SOURCES.has(input.source)) return { action: "send" }
-
   const settings = await (deps.settings ?? readAppSettings)()
   const env: PlanningEnv = {
     input,
@@ -557,6 +585,7 @@ export async function planDelivery(
     deps,
   }
 
+  if (!auth && HUMAN_SOURCES.has(input.source)) return sendDecision(env, "exempt")
   if (!auth) return planUnattended(env, { ownerRef: `source:${input.source}` })
 
   switch (auth.kind) {
@@ -565,15 +594,31 @@ export async function planDelivery(
       if (input.deliveryMode && input.deliveryMode !== "reply")
         return withheld(env, "deny", { denyReason: "unapproved" })
       return sameChat(auth.inboundConversationKey, input.conversationKey)
-        ? { action: "send", authorizedBy: { authority: "policy-default" } }
+        ? sendDecision(env, "allow", { authority: "policy-default" })
         : withheld(env, "deny", { denyReason: "conversation-mismatch" })
     case "rerouted":
       if (!sameChat(auth.from.conversationKey, input.conversationKey)) {
         return withheld(env, "deny", { denyReason: "conversation-mismatch" })
       }
-      return auth.from.authorizedBy
-        ? { action: "send", authorizedBy: auth.from.authorizedBy }
-        : { action: "send" }
+      if (auth.from.provenance) {
+        const { mode, plan, receiptId } = auth.from.provenance
+        return {
+          action: "send",
+          ...(auth.from.authorizedBy ? { authorizedBy: auth.from.authorizedBy } : {}),
+          provenance: { mode, plan, ...(receiptId ? { receiptId } : {}) },
+        }
+      }
+      if (auth.from.authorizedBy) return sendDecision(env, "allow", auth.from.authorizedBy)
+      // A person's own send (manual, an approved draft) is exempt wherever it
+      // goes; a legacy row of one carries neither provenance nor authority.
+      if (HUMAN_SOURCES.has(input.source)) return sendDecision(env, "exempt")
+      // Nothing authorized the original. Shadow keeps the old outcome on
+      // record. Enforce refuses the copy: the runner authorizes the original
+      // before rerouting, so this only happens when the mode flipped between
+      // its read and this one, and the original then waits to be planned on
+      // the next pass. Sending it as `enforce/unplanned` would never be re-planned.
+      if (env.mode === "shadow") return sendDecision(env, "unplanned")
+      return withheld(env, "deny", { denyReason: "unapproved" })
     case "human": {
       const receipt =
         env.mode === "enforce"
@@ -586,22 +631,23 @@ export async function planDelivery(
               reason: "a person confirmed this action",
             })
           : undefined
-      return {
-        action: "send",
-        authorizedBy: {
+      return sendDecision(
+        env,
+        "allow",
+        {
           ...(receipt ? { receiptId: receipt.request.requestId } : {}),
           authority: "human",
           grantScope: "once",
         },
-        ...(receipt ? { receipt } : {}),
-      }
+        receipt
+      )
     }
     case "tool-call": {
       const call = authorizedOutboundToolCall(auth.sessionId, auth.toolUseId, env.now)
       if (call && covers(call, env.targets, auth.createdConversation)) {
-        return { action: "send", authorizedBy: jobAuthorizationOf(call) }
+        return sendDecision(env, "allow", jobAuthorizationOf(call))
       }
-      if (!call && env.mode === "shadow") return { action: "send" }
+      if (!call && env.mode === "shadow") return sendDecision(env, "unplanned")
       return planUnattended(env, {
         ownerRef: `tool-call:${auth.toolUseId}`,
         sessionId: auth.sessionId,
@@ -611,7 +657,7 @@ export async function planDelivery(
       const call = runningAuthorizedToolCallsOf(`plugin:${auth.pluginId}`, env.now).find((c) =>
         covers(c, env.targets, false)
       )
-      if (call) return { action: "send", authorizedBy: jobAuthorizationOf(call) }
+      if (call) return sendDecision(env, "allow", jobAuthorizationOf(call))
       // The handler Bot run the plugin named may reach its installation's
       // recipients, inside that installation's fence.
       const bot = liveBotRun(auth.pluginId, auth.botRunId)

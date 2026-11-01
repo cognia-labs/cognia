@@ -458,8 +458,11 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
     try {
       // Shared persist path (toWorkflow → replaceWorkflow → trigger sync →
       // markSaved → revalidate); the mobile editor uses the same helper.
-      const { issueCount, publicationInvalidated } = await persistEditorWorkflow(useStore)
-      if (publicationInvalidated) {
+      const { issueCount, publicationInvalidated, triggerRegistration } =
+        await persistEditorWorkflow(useStore)
+      if (triggerRegistration && !triggerRegistration.ok) {
+        toast.error(t("triggerRegistrationFailed"))
+      } else if (publicationInvalidated) {
         toast.warning(t("publicationInvalidated"))
       } else if (issueCount > 0) {
         toast.warning(tValidation("blockedSaveTitle", { count: issueCount }))
@@ -498,7 +501,10 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
       try {
         // Save dirty changes first so the run executes against what the user sees.
         if (dirty) {
-          await persistEditorWorkflow(useStore)
+          const saved = await persistEditorWorkflow(useStore)
+          if (saved.triggerRegistration && !saved.triggerRegistration.ok) {
+            toast.error(t("triggerRegistrationFailed"))
+          }
         }
         const wf = toWorkflow()
         toastId = toast.loading(`${t("running")} ${wf.name}`)
@@ -705,7 +711,10 @@ function CanvasInner({ store, onRequestRun }: CanvasInnerProps) {
       let toastId: string | number | undefined
       try {
         if (dirty) {
-          await persistEditorWorkflow(useStore)
+          const saved = await persistEditorWorkflow(useStore)
+          if (saved.triggerRegistration && !saved.triggerRegistration.ok) {
+            toast.error(t("triggerRegistrationFailed"))
+          }
         }
         const wf = toWorkflow()
         toastId = toast.loading(`${t("running")} ${wf.name}`)

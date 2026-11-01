@@ -23,9 +23,9 @@
 import { createLogger } from "@cognia/logging"
 // Fast Refresh can dispose this module before queued work or effect cleanup
 // runs. Bind the APIs up front: a dynamic import from that old module fails.
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
-import { isTauri as isTauriDefault } from "@/lib/tauri"
+// This desktop's own transport, never the routed one: the watch roots are on
+// this machine, whichever host is selected.
+import { isTauri as isTauriDefault, localTransport } from "@/lib/tauri"
 import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
 import { collectWatchRoots, runWatchImport } from "./watch-import"
 
@@ -78,14 +78,17 @@ function enqueue(step: () => Promise<void>): Promise<void> {
 }
 
 async function defaultInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
-  return invoke(cmd, args)
+  return localTransport.call(cmd, args)
 }
 
 async function defaultListen(
   event: string,
   handler: (e: { payload?: ChangedPayload }) => void
 ): Promise<() => void> {
-  return listen<ChangedPayload>(event, handler)
+  // Resolving means attached and a failed attach rejects, as `listen` did:
+  // the native watch starts only after this, and `start` clears on failure.
+  if (!localTransport.subscribeAttached) throw new Error("session-import events are desktop-only")
+  return localTransport.subscribeAttached<ChangedPayload>(event, (payload) => handler({ payload }))
 }
 
 /** True when a watch is currently installed in this process. */

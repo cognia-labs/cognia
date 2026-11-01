@@ -70,8 +70,8 @@ test("durable observations read the owned SQLite profile without mutating it", a
     const dir = path.join(root, "native-brain/durability/account/sqlite")
     await fs.mkdir(dir, { recursive: true })
     const db = new DatabaseSync(path.join(dir, "store.sqlite"))
-    db.exec("CREATE TABLE durability_rows(table_name TEXT, value TEXT)")
-    db.prepare("INSERT INTO durability_rows VALUES (?, ?)").run(
+    db.exec("CREATE TABLE durability_rows_codec1(table_name TEXT, value TEXT)")
+    db.prepare("INSERT INTO durability_rows_codec1 VALUES (?, ?)").run(
       "integrationEvents",
       JSON.stringify({ id: "event", projectionState: "complete" })
     )

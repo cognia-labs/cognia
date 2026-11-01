@@ -267,17 +267,19 @@ describe("createWorkflow", () => {
   })
 
   it("keeps the database write when trigger projection fails", async () => {
-    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
+    const onTriggerRegistration = jest.fn()
     unsyncWorkflowTriggersMock.mockRejectedValueOnce(new Error("native runtime unavailable"))
 
-    const wf = await createWorkflow({ name: "Still persisted", nodes: [manualNode("trigger-a")] })
+    const wf = await createWorkflow(
+      { name: "Still persisted", nodes: [manualNode("trigger-a")] },
+      { onTriggerRegistration }
+    )
 
     expect((await getWorkflow(wf.id))?.name).toBe("Still persisted")
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("trigger projection failed"),
-      expect.any(Error)
-    )
-    warn.mockRestore()
+    expect(onTriggerRegistration).toHaveBeenCalledWith({
+      ok: false,
+      error: "native runtime unavailable",
+    })
   })
 })
 
@@ -320,6 +322,14 @@ describe("listTemplateWorkflows / listUserWorkflows", () => {
     expect(templates.map((w) => w.name)).toEqual(["Template one"])
     expect(userOnes.map((w) => w.name)).toEqual(["User one"])
   })
+})
+
+it("returns registration failure after committing an editor save", async () => {
+  const wf = await createWorkflow({ name: "Saved", nodes: [manualNode("t")] })
+  unsyncWorkflowTriggersMock.mockRejectedValueOnce(new Error("native runtime unavailable"))
+  const result = await replaceWorkflow({ ...wf, name: "Saved despite registration failure" })
+  expect(result.triggerRegistration).toEqual({ ok: false, error: "native runtime unavailable" })
+  expect((await getWorkflow(wf.id))?.name).toBe("Saved despite registration failure")
 })
 
 describe("updateWorkflow / replaceWorkflow", () => {
@@ -437,6 +447,21 @@ describe("deleteWorkflow", () => {
     } finally {
       skillDelete.mockRestore()
     }
+  })
+
+  // Convergence 0b B2: the delete is committed before triggers are
+  // unregistered, so a failed unregister must not skip the tombstone.
+  it("still records the tombstone when unregistering its triggers fails, then reports it", async () => {
+    const wf = await createWorkflow({ name: "A", nodes: [manualNode("n_manual")] })
+    unsyncWorkflowTriggersMock.mockRejectedValueOnce(new Error("daemon unavailable"))
+
+    await expect(deleteWorkflow(wf.id)).rejects.toThrow("daemon unavailable")
+
+    expect(await getWorkflow(wf.id)).toBeUndefined()
+    const ids = (await getDb().syncTombstones.where("table").equals("workflows").toArray()).map(
+      (t) => t.id
+    )
+    expect(ids).toContain(wf.id)
   })
 
   it("records a tombstone so the deletion mirrors to phones (v61)", async () => {
@@ -996,5 +1021,32 @@ describe("schemaVersion 2 funnel", () => {
     it("returns an empty map for no ids", async () => {
       expect((await getLastRunStatuses([])).size).toBe(0)
     })
+  })
+})
+
+it("keeps the committed save and exposes a registration chunk-load failure", async () => {
+  const wf = await createWorkflow({ name: "Before chunk failure", nodes: [manualNode("t")] })
+  jest.doMock("@/lib/workflow/runtime/reconcile-trigger-registrations", () => {
+    throw new Error("runtime chunk unavailable")
+  })
+  try {
+    const result = await replaceWorkflow({ ...wf, name: "Saved after chunk failure" })
+    expect(result.triggerRegistration).toEqual({ ok: false, error: "runtime chunk unavailable" })
+    expect((await getWorkflow(wf.id))?.name).toBe("Saved after chunk failure")
+  } finally {
+    jest.dontMock("@/lib/workflow/runtime/reconcile-trigger-registrations")
+  }
+})
+
+it("forwards a failed update projection without rolling back the authoritative patch", async () => {
+  const wf = await createWorkflow({ name: "Before update" })
+  const onTriggerRegistration = jest.fn()
+  unsyncWorkflowTriggersMock.mockRejectedValueOnce(new Error("native runtime unavailable"))
+  const result = await updateWorkflow(wf.id, { name: "After update" }, { onTriggerRegistration })
+  expect(result?.name).toBe("After update")
+  expect((await getWorkflow(wf.id))?.name).toBe("After update")
+  expect(onTriggerRegistration).toHaveBeenCalledWith({
+    ok: false,
+    error: "native runtime unavailable",
   })
 })

@@ -4393,6 +4393,33 @@
     },
     "connectors_matrix_crypto_verification": {
       "to": "connector.matrix.crypto.verification"
+    },
+    "host_installer_close": {
+      "to": "host.installer.close"
+    },
+    "host_installer_inspect": {
+      "to": "host.installer.inspect"
+    },
+    "host_installer_install": {
+      "to": "host.installer.install"
+    },
+    "host_installer_pair": {
+      "to": "host.installer.pair"
+    },
+    "host_installer_ssh_open": {
+      "to": "host.installer.ssh.open"
+    },
+    "host_installer_uninstall": {
+      "to": "host.installer.uninstall"
+    },
+    "magpie_gateway_port": {
+      "to": "magpie.gateway.port.get"
+    },
+    "network_interface_counters": {
+      "to": "network.interface_counter.get"
+    },
+    "network_latency_probe": {
+      "to": "network.latency.probe"
     }
   }
 }

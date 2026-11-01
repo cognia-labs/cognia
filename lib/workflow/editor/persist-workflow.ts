@@ -15,6 +15,7 @@
  * whose required field had just been filled in.
  */
 
+import type { WorkflowTriggerProjectionResult } from "@/lib/workflow/runtime/reconcile-trigger-registrations"
 import { replaceWorkflow } from "@/lib/db/workflows"
 import type { EditorStore } from "@/lib/workflow/editor/store"
 import { validateAllNodes } from "@/lib/workflow/nodes/validate-params"
@@ -22,6 +23,7 @@ import { validateAllNodes } from "@/lib/workflow/nodes/validate-params"
 export interface PersistEditorWorkflowResult {
   /** Nodes with at least one param error in the workflow that was written. */
   issueCount: number
+  triggerRegistration?: WorkflowTriggerProjectionResult
   publicationInvalidated: boolean
 }
 
@@ -50,6 +52,9 @@ export async function persistEditorWorkflow(
   store.getState().recomputeDiagnostics()
   return {
     issueCount: Object.keys(savedIssues).length,
+    ...(persisted.triggerRegistration
+      ? { triggerRegistration: persisted.triggerRegistration }
+      : {}),
     publicationInvalidated: persisted.publicationInvalidated,
   }
 }

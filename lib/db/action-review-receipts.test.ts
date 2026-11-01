@@ -18,6 +18,7 @@ import {
   listActionReviewReceipts,
   pruneActionReviewReceipts,
   recordActionReviewReceipt,
+  recordActionReviewReceiptInsideTransaction,
   toReceiptRow,
 } from "./action-review-receipts"
 
@@ -86,6 +87,23 @@ const dbFixture = createDbTestFixture()
 beforeAll(dbFixture.initialize)
 beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
+
+it("rolls receipt writes and cap trimming back with the caller's transaction", async () => {
+  const db = getDb()
+  await recordActionReviewReceipt(makeReceipt({ id: "old", decidedAt: 1 }))
+  await expect(
+    db.transaction("rw", db.actionReviewReceipts, async () => {
+      await recordActionReviewReceiptInsideTransaction(
+        db,
+        makeReceipt({ id: "new", decidedAt: 2 }),
+        1
+      )
+      expect(await db.actionReviewReceipts.count()).toBe(1)
+      throw new Error("cancel commit")
+    })
+  ).rejects.toThrow("cancel commit")
+  expect((await db.actionReviewReceipts.toArray()).map((row) => row.id)).toEqual(["old"])
+})
 
 describe("toReceiptRow", () => {
   it("flattens the query columns off the nested receipt", () => {
@@ -245,6 +263,39 @@ describe("outbound authorization keys (ADR-0239)", () => {
     const ids = (await getDb().actionReviewReceipts.toCollection().primaryKeys()).sort()
     expect(ids).toEqual(["fence", "plain-2", "plain-3"])
     expect(await hasActionReviewAuthKey(denyKey(FP_A), 100)).toBe(true)
+  })
+
+  it("keeps every receipt a batch wrote earlier in the same transaction", async () => {
+    await recordActionReviewReceipt(
+      makeReceipt({ id: "fence", ...outbound, outcome: "deny", authority: "human", decidedAt: 1 })
+    )
+    const db = getDb()
+    const batch = new Set(["first", "second"])
+    await db.transaction("rw", db.actionReviewReceipts, async () => {
+      await recordActionReviewReceiptInsideTransaction(
+        db,
+        makeReceipt({ id: "first", decidedAt: 2 }),
+        1,
+        batch
+      )
+      await recordActionReviewReceiptInsideTransaction(
+        db,
+        makeReceipt({ id: "second", decidedAt: 3 }),
+        1,
+        batch
+      )
+    })
+    const ids = (await db.actionReviewReceipts.toCollection().primaryKeys()).sort()
+    expect(ids).toEqual(["fence", "first", "second"])
+  })
+
+  it("never trims the receipt it has just written, even when fences fill the cap", async () => {
+    await recordActionReviewReceipt(
+      makeReceipt({ id: "fence", ...outbound, outcome: "deny", authority: "human", decidedAt: 1 })
+    )
+    await recordActionReviewReceipt(makeReceipt({ id: "delivery", decidedAt: 0 }), 1)
+    const ids = (await getDb().actionReviewReceipts.toCollection().primaryKeys()).sort()
+    expect(ids).toEqual(["delivery", "fence"])
   })
 })
 

@@ -979,7 +979,8 @@
         "monthly": "每月（1 号 9:00）",
         "weekdays": "工作日 9:00",
         "weekly": "每周（周一 9:00）"
-      }
+      },
+      "unsupportedWorkflowExpression": "工作流触发器不支持此 cron 表达式。"
     },
     "cronExpression": {
       "hint": "五字段：分钟 小时 日 月 周。* 表示任意值。",

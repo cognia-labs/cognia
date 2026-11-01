@@ -1,6 +1,10 @@
 /**
  * @jest-environment jsdom
  */
+import {
+  getWorkflowTriggerHealth,
+  resetWorkflowTriggerHealthForTest,
+} from "@/lib/workflow/runtime/trigger-registration-health"
 import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { render, waitFor } from "@testing-library/react"
@@ -68,6 +72,7 @@ jest.mock("@/lib/workflow/triggers/lifecycle", () => ({
 }))
 
 beforeEach(() => {
+  resetWorkflowTriggerHealthForTest()
   installTriggerBridgeMock.mockReset()
   listWorkflowsMock.mockReset()
   syncWorkflowTriggersMock.mockReset()
@@ -334,4 +339,27 @@ describe("WorkflowRuntimeProvider — root layout wiring", () => {
     expect(runtimeSource).not.toMatch(/<WorkflowRuntimeProvider\b/)
     expect(layoutSource).not.toMatch(/<WorkflowRuntimeProvider\b/)
   })
+})
+
+it("retains startup registration failures as health outcomes", async () => {
+  installTriggerBridgeMock.mockResolvedValue(jest.fn())
+  listWorkflowsMock.mockResolvedValue([
+    { id: "broken", nodes: [{ id: "t", type: "trigger.cron" }] },
+  ])
+  resolveWorkflowDeploymentMock.mockRejectedValue(new Error("deployment unreadable"))
+  render(
+    <WorkflowRuntimeProvider>
+      <div />
+    </WorkflowRuntimeProvider>
+  )
+  await waitFor(() =>
+    expect(getWorkflowTriggerHealth().registrations).toContainEqual(
+      expect.objectContaining({
+        workflowId: "broken",
+        triggerId: "t",
+        status: "failed",
+        error: "deployment unreadable",
+      })
+    )
+  )
 })

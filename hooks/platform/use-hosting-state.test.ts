@@ -12,8 +12,8 @@ jest.mock("@/hooks/use-host-profile", () => ({
 }))
 
 const invokeMock = jest.fn()
-jest.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { call: (...args: unknown[]) => invokeMock(...args) },
 }))
 jest.mock("@/lib/tauri", () => ({ isTauri: () => true }))
 jest.mock("@/lib/tauri/autostart", () => ({ setAutostart: jest.fn().mockResolvedValue(undefined) }))

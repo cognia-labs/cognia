@@ -3350,7 +3350,10 @@ it.each([
         text: "Hello",
       })
       const gateway = new ConnectorDeliveryGateway({
-        planDelivery: async () => ({ action: "send" }),
+        planDelivery: async () => ({
+          action: "send",
+          provenance: { mode: "enforce", plan: "allow" },
+        }),
         persistOne: enqueueOutbound,
         recordReceipt: async () => {},
         appendAudit: async () => {},

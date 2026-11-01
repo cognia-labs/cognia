@@ -18,10 +18,7 @@
  * handed straight to pairing and never rendered, logged or stored.
  */
 
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
-
-import { safeUnlisten } from "@/lib/tauri/safe-unlisten"
+import { localTransport } from "@/lib/tauri/transport-instance"
 import {
   buildForwardedConnectRequest,
   type ForwardedRequestError,
@@ -172,7 +169,9 @@ async function call<T>(
   args: Record<string, unknown>
 ): Promise<InstallerResult<T>> {
   try {
-    return { ok: true, value: await invoke<T>(command, args) }
+    // Always this desktop's IPC, never the selected remote host: the SSH
+    // credentials live in this machine's keyring.
+    return { ok: true, value: await localTransport.call<T>(command, args) }
   } catch (error) {
     return { ok: false, failure: toInstallerFailure(error) }
   }
@@ -257,8 +256,13 @@ export async function onStage(
   sessionId: string,
   handler: (event: StageEventPayload) => void
 ): Promise<() => void> {
-  const unlisten = await listen<StageEventPayload>(HOST_INSTALLER_STAGE_EVENT, (message) => {
-    if (message.payload.sessionId === sessionId) handler(message.payload)
-  })
-  return () => safeUnlisten(unlisten)
+  // Resolving means attached and a failed attach rejects: a caller starts the
+  // step only after this, so it never runs a step it cannot watch.
+  if (!localTransport.subscribeAttached) throw new Error("host installer events are desktop-only")
+  return localTransport.subscribeAttached<StageEventPayload>(
+    HOST_INSTALLER_STAGE_EVENT,
+    (payload) => {
+      if (payload.sessionId === sessionId) handler(payload)
+    }
+  )
 }

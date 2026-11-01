@@ -27,6 +27,24 @@
       ]
     },
     {
+      "id": "host-parity-local-transport",
+      "file": "scripts/gates/host-parity-local-transport.json",
+      "gate": "audit:host-parity",
+      "measures": [
+        {
+          "id": "files",
+          "kind": "length",
+          "path": "files"
+        },
+        {
+          "id": "uses",
+          "kind": "sumLength",
+          "path": "files",
+          "key": "uses"
+        }
+      ]
+    },
+    {
       "id": "rpc-semantic-parity-baseline",
       "file": "scripts/gates/rpc-semantic-parity-baseline.json",
       "gate": "audit:rpc-semantic-parity",

@@ -5,6 +5,9 @@
  * or a runtime-target switch lands on a different fusion database without any
  * bookkeeping here. Opening is lazy and every failure is an infrastructure
  * fault (ADR-0188 D38).
+ * Each store also carries a live account-pair guard: an old store or its due
+ * wake cannot drain into a newly selected account, even before its fusion
+ * database is closed. An unavailable account database makes the guard false.
  */
 
 import { getDb } from "@/lib/db/schema"
@@ -23,9 +26,10 @@ export interface StoreProviderDeps {
 }
 
 export async function currentFusionStore(deps: StoreProviderDeps = {}): Promise<FusionLedgerStore> {
+  const mainDatabaseName = deps.mainDatabaseName ?? (() => getDb().name)
   let mainName: string
   try {
-    mainName = deps.mainDatabaseName ? deps.mainDatabaseName() : getDb().name
+    mainName = mainDatabaseName()
   } catch (error) {
     throw new RouterFusionInfrastructureError(
       "db_unavailable",
@@ -36,7 +40,17 @@ export async function currentFusionStore(deps: StoreProviderDeps = {}): Promise<
   const name = fusionDatabaseName(mainName)
   const db = await openFusionDb(mainName)
   if (cached && cached.dbName === name && cached.store.db === db) return cached.store
-  const store = new FusionLedgerStore({ db, codec: fusionContentCodec(name) })
+  const store = new FusionLedgerStore({
+    db,
+    codec: fusionContentCodec(name),
+    targetMatches: () => {
+      try {
+        return db.name === fusionDatabaseName(mainDatabaseName())
+      } catch {
+        return false
+      }
+    },
+  })
   cached = { dbName: name, store }
   return store
 }

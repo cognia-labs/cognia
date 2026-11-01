@@ -1,6 +1,6 @@
 "use client"
 
-import { invoke } from "@tauri-apps/api/core"
+import { localTransport } from "@/lib/tauri/transport-instance"
 
 import { isTauri } from "@/lib/tauri"
 import { setAutostart } from "@/lib/tauri/autostart"
@@ -73,7 +73,8 @@ export function subscribeHostMode(listener: () => void): () => void {
  */
 export function refreshHostMode(): Promise<HostModeStatus> {
   if (!isTauri()) return Promise.resolve(publish(HOST_MODE_OFF))
-  pending ??= invoke<HostModeStatus>("host_mode_get")
+  pending ??= localTransport
+    .call<HostModeStatus>("host_mode_get")
     .then(publish)
     .finally(() => {
       pending = null
@@ -89,7 +90,7 @@ export function refreshHostMode(): Promise<HostModeStatus> {
  */
 export async function setHostMode(enabled: boolean): Promise<HostModeStatus> {
   if (!isTauri()) return publish(HOST_MODE_OFF)
-  const next = publish(await invoke<HostModeStatus>("host_mode_set", { enabled }))
+  const next = publish(await localTransport.call<HostModeStatus>("host_mode_set", { enabled }))
   if (enabled) {
     await setAutostart(true)
     await setCloseBehavior("tray")

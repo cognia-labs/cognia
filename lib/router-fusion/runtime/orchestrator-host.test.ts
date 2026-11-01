@@ -25,8 +25,9 @@ import {
 import { fusionContentCodec } from "../db/content-codec"
 import { FusionDB } from "../db/fusion-db"
 import { FusionLedgerStore, type CreateRunInput } from "../db/ledger-store"
-import type { OutboxAppliers } from "../db/outbox"
+import { drainFusionOutbox, type OutboxAppliers } from "../db/outbox"
 import { encodeRunInput } from "../db/run-input"
+import { applySessionMessage, type TranscriptMessage } from "../db/session-transcript"
 import { RouterFusionInfrastructureError } from "../gate/faults"
 import {
   createHostToolRuntime,
@@ -47,10 +48,10 @@ const appliers: OutboxAppliers = {
   session_message: jest.fn(async () => "applied" as const),
 }
 
-function harness() {
+function harness(now?: () => number) {
   const name = `fusion-orchestrator-test-${++dbCounter}`
   const db = new FusionDB(name)
-  const store = new FusionLedgerStore({ db, codec: fusionContentCodec(name) })
+  const store = new FusionLedgerStore({ db, codec: fusionContentCodec(name), now })
   return { db, store }
 }
 
@@ -720,6 +721,98 @@ describe("executeFusionRun: cascade and panel (B3)", () => {
     expect(effects).toEqual(
       expect.arrayContaining(["session:run-transcript:input", "session:run-transcript:answer"])
     )
+  })
+
+  it("keeps the completed run's answer behind its backed-off input without zero-delay wakes", async () => {
+    let clock = 1_000
+    const nowSpy = jest.spyOn(Date, "now").mockImplementation(() => clock)
+    const { db, store } = harness(() => clock)
+    const wakes: Array<{ delayMs: number; fire: () => void }> = []
+    const context = store.outboxContext()
+    const contextSpy = jest.spyOn(store, "outboxContext").mockImplementation(() => ({
+      ...context,
+      now: () => clock,
+      random: () => 0,
+      scheduleWake: (delayMs: number, fire: () => void) => {
+        wakes.push({ delayMs, fire })
+        return () => {}
+      },
+    }))
+    const messages = new Map<string, TranscriptMessage>()
+    const commits: string[] = []
+    let failInput = true
+    const transcriptAppliers: OutboxAppliers = {
+      ...appliers,
+      session_message: (row, ctx) =>
+        applySessionMessage(row, ctx, {
+          getSession: async (id) => ({ id }) as never,
+          getMessages: async (ids) => ids.map((id) => messages.get(id)),
+          commit: async (_sessionId, upserts) => {
+            if (failInput && upserts[0].role === "user") {
+              failInput = false
+              throw new Error("account database temporarily unavailable")
+            }
+            for (const message of upserts) {
+              commits.push(message.role)
+              messages.set(message.id, message)
+            }
+          },
+        }),
+    }
+    try {
+      const input = await store
+        .artifactStore("run-backoff")
+        .put(
+          encodeRunInput({ messages: MESSAGES, allowDegraded: false, jsonSchema: null }),
+          "application/json",
+          "runs/run-backoff/input"
+        )
+      await store.createRun(
+        runInput("run-backoff", {
+          sessionId: "session-backoff",
+          writesSessionTranscript: true,
+          inputArtifactId: input.artifactId,
+        })
+      )
+      const executor = answering()
+      const call = executor.call
+      executor.call = async (request, signal) => {
+        clock += 1_000
+        return call(request, signal)
+      }
+      const outcome = await executeFusionRun(
+        deps(store, { appliers: transcriptAppliers, executor }),
+        {
+          runId: "run-backoff",
+        }
+      )
+      expect(outcome.kind).toBe("succeeded")
+      expect(commits).toEqual([])
+      expect(await db.fusionOutbox.get("session:run-backoff:answer")).toMatchObject({
+        status: "pending",
+        attempts: 0,
+        nextAttemptAt: 16_000,
+      })
+      expect(wakes.map((wake) => wake.delayMs)).toEqual([15_000, 14_000])
+
+      clock = 16_000
+      wakes[1].fire()
+      await drainFusionOutbox(db, transcriptAppliers, store.outboxContext())
+      expect(commits).toEqual(["user", "assistant"])
+      expect(await db.fusionOutbox.get("session:run-backoff:input")).toMatchObject({
+        status: "applied",
+        attempts: 2,
+      })
+      expect(await db.fusionOutbox.get("session:run-backoff:answer")).toMatchObject({
+        status: "applied",
+        attempts: 1,
+      })
+      expect(wakes.map((wake) => wake.delayMs)).toEqual([15_000, 14_000])
+    } finally {
+      contextSpy.mockRestore()
+      nowSpy.mockRestore()
+      db.close()
+    }
   })
 
   it("refuses a delegate run without an authorized workspace, sending nothing", async () => {

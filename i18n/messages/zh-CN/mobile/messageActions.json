@@ -19,6 +19,7 @@
   "editFailed": "重新发送失败：{message}",
   "editInputAria": "编辑消息内容",
   "editResend": "重新发送",
+  "hostUnavailable": "主机当前离线，请在主机恢复后重试。",
   "longPressHint": "长按消息查看操作",
   "quote": "引用",
   "readAloud": "朗读",

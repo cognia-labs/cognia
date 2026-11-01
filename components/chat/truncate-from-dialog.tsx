@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { truncateAfter } from "@/lib/db/messages"
 import { mirrorTruncateToDesktop } from "@/lib/chat/mirror-truncate"
+import { isHostUnavailableError } from "@/lib/companion/host-unavailable"
 import { detectPlatform } from "@/hooks/use-platform"
 import { useChatStore, selectVisibleMessages } from "@/stores/chat/chat-store"
 import { createLogger } from "@cognia/logging"
@@ -90,7 +91,10 @@ export function TruncateFromDialog({ sessionId, messageId, open, onOpenChange }:
       onOpenChange(false)
     } catch (err) {
       log.error("truncate-failed", { sessionId, messageId, error: String(err) })
-      toast.error(t("error"))
+      // The host answered that its brain is away: nothing was deleted
+      // anywhere (the local truncate never ran), and the person should know
+      // it is worth retrying rather than that the delete is impossible.
+      toast.error(isHostUnavailableError(err) ? t("hostUnavailable") : t("error"))
     } finally {
       setBusy(false)
     }

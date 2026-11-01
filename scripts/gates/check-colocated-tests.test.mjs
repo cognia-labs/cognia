@@ -156,6 +156,14 @@ test("rustHasInlineTests detects the in-file test module", () => {
   assert.ok(!rustHasInlineTests("fn a() {}"))
 })
 
+test("rustHasInlineTests accepts a test module gated on a platform as well", () => {
+  assert.ok(rustHasInlineTests("#[cfg(all(test, unix))]\nmod tests { }"))
+  assert.ok(rustHasInlineTests("#[cfg(all(unix, test, not(windows)))]\nmod tests { }"))
+  assert.ok(!rustHasInlineTests("#[cfg(not(test))]\nfn real() {}"))
+  assert.ok(!rustHasInlineTests("#[cfg(all(not(test), unix))]\nfn real() {}"))
+  assert.ok(!rustHasInlineTests('#[cfg(any(test, feature = "x"))]\nmod helpers { }'))
+})
+
 test("keepExisting drops a tracked path whose working-tree copy is already gone", () => {
   // An unstaged deletion is still listed by `git ls-files`, and a file that is
   // not on disk can never gain the test the gate would demand of it.

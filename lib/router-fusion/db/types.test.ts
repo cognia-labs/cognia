@@ -9,6 +9,7 @@ import {
 import type {
   FusionAttemptState,
   FusionCallAttemptRow,
+  FusionOutboxRow,
   FusionReservationRow,
   FusionReservationState,
 } from "./types"
@@ -18,6 +19,14 @@ type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 const same = <A, B>(proof: Same<A, B>) => proof
 
 describe("fusion row types", () => {
+  it("requires a due time and admits inspectable dead letters", () => {
+    expect(same<FusionOutboxRow["nextAttemptAt"], number>(true)).toBe(true)
+    expect(
+      same<FusionOutboxRow["status"], "pending" | "applied" | "skipped" | "deadletter">(true)
+    ).toBe(true)
+    expect(same<NonNullable<FusionOutboxRow["deadletteredAt"]>, number>(true)).toBe(true)
+  })
+
   it("store exactly the engine's call-attempt states", () => {
     expect(same<FusionAttemptState, CallAttemptState>(true)).toBe(true)
     expect(same<FusionCallAttemptRow["state"], CallAttemptState>(true)).toBe(true)

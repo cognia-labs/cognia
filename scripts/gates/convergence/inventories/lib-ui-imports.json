@@ -2,12 +2,12 @@
   "inventory": "lib-ui-imports",
   "description": "Non-test lib files importing hooks or components, including type-only and dynamic dependencies. Repay by moving shared contracts and runtime logic below the UI layer.",
   "generatedAt": {
-    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
     "date": "2026-11-01"
   },
   "metrics": {
     "static": 55,
-    "all": 65,
+    "all": 66,
     "staticExcludingTypeOnly": 39
   },
   "members": [
@@ -255,6 +255,18 @@
     },
     {
       "key": "lib/claude/ipc.ts",
+      "owner": "lib/claude",
+      "note": "",
+      "imports": [
+        "dynamic"
+      ],
+      "targets": [
+        "hooks/chat/claude-chat-send-options.ts"
+      ],
+      "typeOnly": false
+    },
+    {
+      "key": "lib/claude/run-and-capture.ts",
       "owner": "lib/claude",
       "note": "",
       "imports": [

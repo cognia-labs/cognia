@@ -14,6 +14,7 @@ import {
   actionReviewInterruptId,
   projectActionReviewOpened,
   projectActionReviewSettled,
+  toDeliveryReceiptRow,
 } from "./projection"
 import { __resetActionReviewChannelsForTesting } from "./registry"
 
@@ -78,6 +79,21 @@ function makeDecision(overrides: Partial<ActionReviewDecision> = {}): ActionRevi
 
 const interruptRow = (requestId = "req-1") =>
   getDb().executionRunInterrupts.get(actionReviewInterruptId(requestId))
+
+it("maps delivery receipts exactly like the settled projection, without run interrupts", async () => {
+  const request = makeRequest({ channel: "connector-delivery", runId: undefined })
+  const decision = makeDecision()
+  const row = await toDeliveryReceiptRow({ request, decision })
+  await projectActionReviewSettled(request, decision)
+  expect(row).toEqual(await getActionReviewReceipt(request.requestId))
+  expect(await getDb().executionRunInterrupts.count()).toBe(0)
+  await expect(
+    toDeliveryReceiptRow({
+      request: { ...request, origin: { ...request.origin, runId: RUN_ID } },
+      decision,
+    })
+  ).rejects.toThrow(/interrupt/)
+})
 
 describe("projectActionReviewOpened", () => {
   it("parks the run on a pending interrupt", async () => {

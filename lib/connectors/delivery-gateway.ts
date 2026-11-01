@@ -1,5 +1,4 @@
 import { hasNoLeakingPiiDeep } from "@cognia/redact"
-import type { OutboundJobAuthorization } from "@cognia/plugin-contract/lib/db/connector-types"
 import { appendAudit, type AuditEntryInput } from "./audit"
 import { enqueueOutbound, enqueueOutboundMany, type EnqueueInput } from "@/lib/db/outbound-jobs"
 import { createDraft, type CreateDraftInput } from "@/lib/db/connector-drafts"
@@ -8,6 +7,7 @@ import { stableJson } from "@/lib/account-sync/data/stable-json"
 import {
   planDelivery,
   planUnplannedStream,
+  OUTBOUND_DELIVERY_POLICY_VERSION,
   type DeliveryDecision,
   type DeliveryDenyReason,
   type DeliveryPlanInput,
@@ -16,6 +16,7 @@ import {
   type OutboundAuthorization,
   type UnplannedStreamDecision,
 } from "@/lib/policy/action-review/plan-delivery"
+import { toDeliveryReceiptRow } from "@/lib/policy/action-review/projection"
 import { personTarget, type OutboundTarget } from "@/lib/policy/action-review/outbound-targets"
 import type {
   ForwardMessageInput,
@@ -80,7 +81,10 @@ type HumanSource = "manual" | "draft-approved"
 type AutomatedSource = Exclude<OutboundJobSource, HumanSource>
 
 /** What a caller hands the gateway. `authorizedBy` is the gateway's to write. */
-type GovernedBase = Omit<EnqueueInput, "source" | "authorizedBy">
+type GovernedBase = Omit<
+  EnqueueInput,
+  "source" | "authorizedBy" | "authorizationProvenance" | "receipt"
+>
 
 /**
  * One governed delivery. A person's own send (`manual`, `draft-approved`)
@@ -287,12 +291,24 @@ function toPlanInput(input: GovernedEnqueueInput): DeliveryPlanInput {
   }
 }
 
-function toPersisted(
+async function toPersisted(
   input: GovernedEnqueueInput,
-  authorizedBy: OutboundJobAuthorization | undefined
-): EnqueueInput {
+  decision: Extract<DeliveryDecision, { action: "send" }>,
+  plannedAt: number
+): Promise<EnqueueInput> {
   const { authorization: _authorization, ...rest } = input
-  return { ...rest, ...(authorizedBy ? { authorizedBy } : {}) }
+  return {
+    ...rest,
+    ...(decision.authorizedBy ? { authorizedBy: decision.authorizedBy } : {}),
+    authorizationProvenance: {
+      schemaVersion: 1,
+      ...decision.provenance,
+      policyVersion: OUTBOUND_DELIVERY_POLICY_VERSION,
+      plannedAt,
+      ...(input.authorization ? { authorization: structuredClone(input.authorization) } : {}),
+    },
+    ...(decision.receipt ? { receipt: await toDeliveryReceiptRow(decision.receipt) } : {}),
+  }
 }
 
 /**
@@ -607,10 +623,12 @@ export class ConnectorDeliveryGateway {
 
     const results: EnqueueGovernedResult[] = new Array(inputs.length)
     if (sends.length > 0) {
-      const persisted = sends.map((index) => {
-        const decision = decisions[index] as Extract<DeliveryDecision, { action: "send" }>
-        return toPersisted(inputs[index], decision.authorizedBy)
-      })
+      const persisted = await Promise.all(
+        sends.map((index) => {
+          const decision = decisions[index] as Extract<DeliveryDecision, { action: "send" }>
+          return toPersisted(inputs[index], decision, this.dependencies.now())
+        })
+      )
       const rows =
         inputs.length === 1
           ? [await this.dependencies.persistOne(persisted[0], ...(options ? [options] : []))]
@@ -645,7 +663,7 @@ export class ConnectorDeliveryGateway {
     }
 
     for (const decision of decisions) {
-      if (decision.action !== "deny" && decision.receipt) {
+      if (decision.action === "draft") {
         await this.recordReceipt(decision.receipt)
       }
     }
@@ -653,7 +671,8 @@ export class ConnectorDeliveryGateway {
   }
 
   private async recordReceipt(receipt: DeliveryReceipt): Promise<void> {
-    // The audit record must never be able to fail or block a delivery.
+    // Draft/deny and immediate-send projections remain observers. Queued
+    // receipts instead participate in persistence and may abort the enqueue.
     await Promise.resolve(this.dependencies.recordReceipt(receipt)).catch((error) => {
       console.warn("[outbound] delivery receipt write failed", error)
     })

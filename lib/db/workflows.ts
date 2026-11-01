@@ -7,6 +7,8 @@
  */
 
 import Dexie from "dexie"
+import { recordTriggerRegistration } from "@/lib/workflow/runtime/trigger-registration-health"
+import type { WorkflowTriggerProjectionResult } from "@/lib/workflow/runtime/reconcile-trigger-registrations"
 import type {
   VisualWorkflow,
   WorkflowRow,
@@ -27,6 +29,10 @@ import {
   type WorkflowMutationResult,
 } from "@/lib/workflow/publish/publication-lifecycle"
 
+interface WorkflowProjectionOptions {
+  onTriggerRegistration?: (result: WorkflowTriggerProjectionResult) => void
+}
+
 function newWorkflowId(): string {
   return "wf_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)
 }
@@ -40,20 +46,24 @@ function nowMs(): number {
  * authoritative: a temporarily unavailable runtime must not roll back the
  * Dexie write, and startup reconciliation will retry the projection.
  */
-async function projectPersistedWorkflowTriggers(workflow: VisualWorkflow): Promise<void> {
+async function projectPersistedWorkflowTriggers(
+  workflow: VisualWorkflow
+): Promise<WorkflowTriggerProjectionResult> {
   try {
-    const { syncWorkflowTriggers, unsyncWorkflowTriggers } =
-      await import("@/lib/workflow/runtime/webhook-bridge")
-    if (!workflow.published?.deploymentId) {
-      await unsyncWorkflowTriggers(workflow)
-      return
-    }
-    const { resolveWorkflowDeployment } = await import("./workflow-deployments")
-    const deployed = await resolveWorkflowDeployment(workflow.id)
-    if (deployed) await syncWorkflowTriggers(deployed.workflow)
-    else await unsyncWorkflowTriggers(workflow)
+    const { projectWorkflowTriggerRegistrations } =
+      await import("@/lib/workflow/runtime/reconcile-trigger-registrations")
+    return (await projectWorkflowTriggerRegistrations(workflow)) ?? { ok: true }
   } catch (error) {
-    console.warn(`Workflow ${workflow.id} trigger projection failed:`, error)
+    const message = error instanceof Error ? error.message : String(error)
+    for (const node of workflow.nodes.filter((node) => node.type.startsWith("trigger."))) {
+      recordTriggerRegistration({
+        workflowId: workflow.id,
+        triggerId: node.id,
+        status: "failed",
+        error: message,
+      })
+    }
+    return { ok: false, error: message }
   }
 }
 
@@ -102,7 +112,10 @@ export type WorkflowDraft = Pick<VisualWorkflow, "name"> &
     >
   >
 
-export async function createWorkflow(draft: WorkflowDraft): Promise<WorkflowRow> {
+export async function createWorkflow(
+  draft: WorkflowDraft,
+  options: WorkflowProjectionOptions = {}
+): Promise<WorkflowRow> {
   const now = nowMs()
   const workflow: VisualWorkflow = {
     id: newWorkflowId(),
@@ -135,7 +148,8 @@ export async function createWorkflow(draft: WorkflowDraft): Promise<WorkflowRow>
     published: undefined,
   }
   await getDb().workflows.put(workflow)
-  await projectPersistedWorkflowTriggers(workflow)
+  const triggerRegistration = await projectPersistedWorkflowTriggers(workflow)
+  options.onTriggerRegistration?.(triggerRegistration)
   return workflow
 }
 
@@ -153,11 +167,13 @@ export type WorkflowPatch = Partial<
  */
 export async function updateWorkflow(
   id: string,
-  patch: WorkflowPatch
+  patch: WorkflowPatch,
+  options: WorkflowProjectionOptions = {}
 ): Promise<WorkflowRow | undefined> {
   const result = await updateWorkflowWithPublication(id, patch, nowMs())
   if (!result) return undefined
-  await projectPersistedWorkflowTriggers(result.workflow)
+  const triggerRegistration = await projectPersistedWorkflowTriggers(result.workflow)
+  options.onTriggerRegistration?.(triggerRegistration)
   return result.workflow
 }
 
@@ -166,13 +182,15 @@ export async function updateWorkflow(
  * whole graph round-trips. Refuses to write if the id doesn't already exist
  * (use `createWorkflow` for new rows). Bumps `updatedAt`.
  */
-export async function replaceWorkflow(workflow: VisualWorkflow): Promise<WorkflowMutationResult> {
+export async function replaceWorkflow(
+  workflow: VisualWorkflow
+): Promise<WorkflowMutationResult & { triggerRegistration: WorkflowTriggerProjectionResult }> {
   const result = await replaceWorkflowWithPublication(workflow, nowMs())
   if (!result) {
     throw new Error(`Workflow ${workflow.id} not found`)
   }
-  await projectPersistedWorkflowTriggers(result.workflow)
-  return result
+  const triggerRegistration = await projectPersistedWorkflowTriggers(result.workflow)
+  return { ...result, triggerRegistration }
 }
 
 /** Query options for {@link listWorkflowRuns}. */
@@ -221,9 +239,17 @@ export async function deleteWorkflow(id: string): Promise<void> {
     throw new Error("Built-in workflows cannot be deleted. Duplicate first.")
   }
   await deleteWorkflowWithPublication(id)
+  // The delete is committed: an unregister failure must not skip the
+  // tombstone and cleanup below. It is recorded per trigger in the
+  // registration health and re-thrown once the delete has finished.
+  let unsyncError: unknown
   if (existing) {
-    const { unsyncWorkflowTriggers } = await import("@/lib/workflow/runtime/webhook-bridge")
-    await unsyncWorkflowTriggers(existing)
+    try {
+      const { unsyncWorkflowTriggers } = await import("@/lib/workflow/runtime/webhook-bridge")
+      await unsyncWorkflowTriggers(existing)
+    } catch (error) {
+      unsyncError = error
+    }
   }
   // Mirror the deletion to paired phones via the companion sync (v61).
   await recordTombstones("workflows", [id])
@@ -250,6 +276,7 @@ export async function deleteWorkflow(id: string): Promise<void> {
     // Swallow — orphan run/event rows are inert (every reader scopes by a
     // live workflow id), so a cleanup failure is non-fatal.
   }
+  if (unsyncError !== undefined) throw unsyncError
 }
 
 /**

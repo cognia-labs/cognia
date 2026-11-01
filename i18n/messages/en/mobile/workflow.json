@@ -67,6 +67,7 @@
     "orientationLock": "Lock to landscape",
     "orientationUnlock": "Allow portrait",
     "publicationInvalidated": "Workflow saved and unpublished because its callable interface changed. Publish it again to expose the new contract.",
+    "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup.",
     "redo": "Redo",
     "run": "Run",
     "runHistory": "Run history",

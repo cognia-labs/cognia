@@ -698,8 +698,28 @@
         "verification": {}
       }
     },
+    "magpie": {
+      "children": {
+        "gateway": {
+          "children": {
+            "port": {}
+          }
+        }
+      }
+    },
+    "network": {
+      "children": {
+        "interface_counter": {},
+        "latency": {}
+      }
+    },
     "host": {
       "children": {
+        "installer": {
+          "children": {
+            "ssh": {}
+          }
+        },
         "admin_lease": {},
         "capabilities": {},
         "consent": {},

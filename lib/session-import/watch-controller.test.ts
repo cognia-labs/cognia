@@ -3,6 +3,15 @@ import { join } from "node:path"
 import { runInNewContext } from "node:vm"
 import { ModuleKind, ScriptTarget, transpileModule } from "typescript"
 
+const mockAttach = jest.fn()
+jest.mock("@/lib/tauri", () => ({
+  isTauri: () => true,
+  localTransport: {
+    call: jest.fn(),
+    subscribeAttached: (...args: unknown[]) => mockAttach(...args),
+  },
+}))
+
 import {
   __resetSessionImportWatchForTesting,
   isSessionImportWatchActive,
@@ -38,12 +47,32 @@ function makeDeps(over: Partial<SessionImportWatchDeps> = {}) {
   }
 }
 
+/** `localTransport` over the deps' invoke/listen: `subscribeAttached` is `listen`. */
+function localTransportOver(deps: SessionImportWatchDeps) {
+  return {
+    call: deps.invoke,
+    subscribeAttached: (event: string, handler: (payload: unknown) => void) =>
+      deps.listen!(event, (e) => handler(e.payload)),
+  }
+}
+
 afterEach(() => {
   __resetSessionImportWatchForTesting()
   jest.restoreAllMocks()
 })
 
 describe("session-import watch controller", () => {
+  it("fails the start and stays inactive when this desktop's listener cannot attach", async () => {
+    // The default listen path: a rejected attach must not leave live sync
+    // marked running with nothing listening.
+    mockAttach.mockRejectedValueOnce(new Error("listen failed"))
+    const { deps } = makeDeps()
+    delete deps.listen
+    await expect(startSessionImportWatch({ deps })).rejects.toThrow("listen failed")
+    expect(isSessionImportWatchActive()).toBe(false)
+    expect(deps.invoke).not.toHaveBeenCalledWith("session_import_watch_start", expect.anything())
+  })
+
   it.each(["inactive", "active", "starting"] as const)(
     "stops after HMR disposal without loading modules (watch: %s)",
     async (state) => {
@@ -67,11 +96,9 @@ describe("session-import watch controller", () => {
       let disposed = false
       const modules: Record<string, unknown> = {
         "@cognia/logging": { createLogger: () => ({ warn, error: jest.fn() }) },
-        "@/lib/tauri": { isTauri: deps.isTauri },
+        "@/lib/tauri": { isTauri: deps.isTauri, localTransport: localTransportOver(deps) },
         "@/lib/tauri/safe-unlisten": jest.requireActual("@/lib/tauri/safe-unlisten"),
         "./watch-import": deps,
-        "@tauri-apps/api/core": { invoke: deps.invoke },
-        "@tauri-apps/api/event": { listen: deps.listen },
       }
       const controller = {} as typeof import("./watch-controller")
       runInNewContext(outputText, {

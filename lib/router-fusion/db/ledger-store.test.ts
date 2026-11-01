@@ -917,6 +917,9 @@ describe("FusionLedgerStore (fake-indexeddb)", () => {
     })
     const effects = await db.fusionOutbox.where("kind").equals("session_message").toArray()
     expect(effects.map((row) => row.effectId)).toEqual(["session:chat-run-1:answer"])
+    for (const row of await db.fusionOutbox.toArray()) {
+      expect(row.nextAttemptAt).toBe(row.createdAt)
+    }
     expect(effects[0].payload).toMatchObject({
       phase: "answer",
       origin: "chat",
@@ -960,6 +963,17 @@ describe("FusionLedgerStore (fake-indexeddb)", () => {
     const context = store.outboxContext()
     await expect(context.readArtifact(stored.artifactId)).resolves.toBe("secret text")
     await expect(context.readArtifact("00000000-0000-4000-8000-000000000000")).resolves.toBeNull()
+  })
+
+  it("carries the injected target guard without resolving account state itself", () => {
+    const { db } = harness()
+    const targetMatches = jest.fn(() => false)
+    const store = new FusionLedgerStore({ db, codec: fusionContentCodec(db.name), targetMatches })
+    const context = store.outboxContext()
+    expect(context.targetMatches).toBe(targetMatches)
+    expect(targetMatches).not.toHaveBeenCalled()
+    expect(context.targetMatches?.()).toBe(false)
+    db.close()
   })
 
   describe("execution run projection", () => {
@@ -1065,38 +1079,41 @@ describe("FusionLedgerStore (fake-indexeddb)", () => {
       })
     })
 
-    it("keeps the session busy until the previous run's transcript is written", async () => {
-      const { store, db } = harness()
-      const input = await store
-        .artifactStore("gw-3")
-        .put("[]", "application/json", "runs/gw-3/input")
-      const token = await running(store, "gw-3", {
-        surface: "gatewayRuns",
-        origin: "gateway",
-        sessionId: "session-gw3",
-        inputArtifactId: input.artifactId,
-        writesSessionTranscript: true,
-      })
-      await store.finalizeRun("gw-3", token, {
-        status: "succeeded",
-        resultArtifactId: input.artifactId,
-      })
-      // The lock is gone, but the answer is not in the session yet.
-      expect(await db.fusionSessionLocks.get("session-gw3")).toBeUndefined()
-      await expect(
-        store.createRun(runInput("gw-4", { sessionId: "session-gw3" }))
-      ).resolves.toMatchObject({
-        ok: false,
-        code: "SESSION_BUSY",
-        activeRunId: "gw-3",
-      })
-      await db.fusionOutbox.where("kind").equals("session_message").modify({ status: "applied" })
-      await expect(
-        store.createRun(runInput("gw-4", { sessionId: "session-gw3" }))
-      ).resolves.toMatchObject({
-        ok: true,
-      })
-    })
+    it.each(["applied", "deadletter"] as const)(
+      "releases a busy session when its transcript is %s",
+      async (status) => {
+        const { store, db } = harness()
+        const input = await store
+          .artifactStore("gw-3")
+          .put("[]", "application/json", "runs/gw-3/input")
+        const token = await running(store, "gw-3", {
+          surface: "gatewayRuns",
+          origin: "gateway",
+          sessionId: "session-gw3",
+          inputArtifactId: input.artifactId,
+          writesSessionTranscript: true,
+        })
+        await store.finalizeRun("gw-3", token, {
+          status: "succeeded",
+          resultArtifactId: input.artifactId,
+        })
+        // The lock is gone, but the answer is not in the session yet.
+        expect(await db.fusionSessionLocks.get("session-gw3")).toBeUndefined()
+        await expect(
+          store.createRun(runInput("gw-4", { sessionId: "session-gw3" }))
+        ).resolves.toMatchObject({
+          ok: false,
+          code: "SESSION_BUSY",
+          activeRunId: "gw-3",
+        })
+        await db.fusionOutbox.where("kind").equals("session_message").modify({ status })
+        await expect(
+          store.createRun(runInput("gw-4", { sessionId: "session-gw3" }))
+        ).resolves.toMatchObject({
+          ok: true,
+        })
+      }
+    )
 
     it("leaves a chat turn's transcript to the chat path", async () => {
       const { store, db } = harness()

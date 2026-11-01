@@ -19,7 +19,7 @@ use super::{
 pub const CONTRACT_VERSION: u32 = 3;
 
 /// The sha256 of the Headless command catalog rendered from this contract.
-pub const CATALOG_HASH: &str = "9d345575917d757f5635cdd95c7aa9ea991ce5092ee15b49bf209b183c766aae";
+pub const CATALOG_HASH: &str = "40f11ec33e956c517daccf27aec24ce18fbae8c5547b33737540b21e8eca816a";
 
 /// Every command in the contract, in contract order.
 #[rustfmt::skip]
@@ -1810,6 +1810,15 @@ pub static WIRE_COMMANDS: &[WireCommand] = &[
     WireCommand { name: "write_text_file_confined", arm: "write_text_file_confined", resource: "fs.text_file", verb: "write_confined", target: CommandTarget::Execution, operation: CommandOperation::Write, capability: "workspace.write", risk: CommandRisk::High, approval: CommandApproval::Interactive, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Http, CommandTransport::Websocket, CommandTransport::Webrtc], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "connectors_matrix_crypto_cross_signing", arm: "connectors_matrix_crypto_cross_signing", resource: "connector.matrix.crypto", verb: "cross_signing", target: CommandTarget::Service, operation: CommandOperation::Write, capability: "service.internal", risk: CommandRisk::Critical, approval: CommandApproval::SignedPolicy, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
     WireCommand { name: "connectors_matrix_crypto_verification", arm: "connectors_matrix_crypto_verification", resource: "connector.matrix.crypto", verb: "verification", target: CommandTarget::Service, operation: CommandOperation::Write, capability: "service.internal", risk: CommandRisk::Critical, approval: CommandApproval::SignedPolicy, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "host_installer_close", arm: "host_installer_close", resource: "host.installer", verb: "close", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "host_installer_inspect", arm: "host_installer_inspect", resource: "host.installer", verb: "inspect", target: CommandTarget::Client, operation: CommandOperation::Read, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Structural, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "host_installer_install", arm: "host_installer_install", resource: "host.installer", verb: "install", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::High, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "host_installer_pair", arm: "host_installer_pair", resource: "host.installer", verb: "pair", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::High, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "host_installer_ssh_open", arm: "host_installer_ssh_open", resource: "host.installer.ssh", verb: "open", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::High, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "host_installer_uninstall", arm: "host_installer_uninstall", resource: "host.installer", verb: "uninstall", target: CommandTarget::Client, operation: CommandOperation::SideEffect, capability: "client.local", risk: CommandRisk::High, approval: CommandApproval::None, idempotency: CommandIdempotency::Required, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "magpie_gateway_port", arm: "magpie_gateway_port", resource: "magpie.gateway.port", verb: "get", target: CommandTarget::Client, operation: CommandOperation::Read, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Structural, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "network_interface_counters", arm: "network_interface_counters", resource: "network.interface_counter", verb: "get", target: CommandTarget::Client, operation: CommandOperation::Read, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Structural, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
+    WireCommand { name: "network_latency_probe", arm: "network_latency_probe", resource: "network.latency", verb: "probe", target: CommandTarget::Client, operation: CommandOperation::Read, capability: "client.local", risk: CommandRisk::Low, approval: CommandApproval::None, idempotency: CommandIdempotency::Structural, transports: &[CommandTransport::Internal], input_schema: "#/components/schemas/RpcArgs", output_schema: "#/components/schemas/RpcResult", pagination: CommandPagination::None, long_running: false },
 ];
 
 /// Old wire name to its replacement, sorted by old name.
@@ -2505,6 +2514,12 @@ pub static RENAMED_COMMANDS: &[(&str, &str)] = &[
     ("host_feature_manifest", "host.feature_manifest.get"),
     ("host_git_credential_delete", "host.secret.git.delete"),
     ("host_git_credential_set", "host.secret.git.set"),
+    ("host_installer_close", "host.installer.close"),
+    ("host_installer_inspect", "host.installer.inspect"),
+    ("host_installer_install", "host.installer.install"),
+    ("host_installer_pair", "host.installer.pair"),
+    ("host_installer_ssh_open", "host.installer.ssh.open"),
+    ("host_installer_uninstall", "host.installer.uninstall"),
     ("host_mode_get", "app.host_mode.get"),
     ("host_mode_set", "app.host_mode.set"),
     ("host_provider_credential_delete", "host.secret.provider.delete"),
@@ -2556,6 +2571,7 @@ pub static RENAMED_COMMANDS: &[(&str, &str)] = &[
     ("logs_query", "logs.query"),
     ("lsp_host_ensure", "lsp.host.ensure"),
     ("lsp_host_request", "lsp.host.request"),
+    ("magpie_gateway_port", "magpie.gateway.port.get"),
     ("mcp_oauth_authenticate", "mcp.oauth.authenticate"),
     ("mcp_oauth_clear", "mcp.oauth.clear"),
     ("mcp_oauth_load_entry", "mcp.oauth.entry.load"),
@@ -2583,6 +2599,8 @@ pub static RENAMED_COMMANDS: &[(&str, &str)] = &[
     ("native_logging_get_log_directory", "native.logging.log_directory.get"),
     ("native_logging_get_readiness", "native.logging.readiness.get"),
     ("native_logging_open_log_directory", "native.logging.log_directory.open"),
+    ("network_interface_counters", "network.interface_counter.get"),
+    ("network_latency_probe", "network.latency.probe"),
     ("ocr_cancel_model_download", "ocr.model.cancel_download"),
     ("ocr_download_model", "ocr.model.download"),
     ("ocr_extract_native", "ocr.extract_native"),

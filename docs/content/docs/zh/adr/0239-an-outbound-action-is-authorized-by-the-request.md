@@ -173,6 +173,7 @@ ADR-0070 否决了把 IM 绑定的运行当作 `external-send`：从某个线程
 - **无人值守运行在应答权限请求的地方规划**（`run-and-capture.ts` 的 `answerWithOutboundPolicy`），而不是在每个 responder 里。digest turn 的审批：定时触发时像定时任务一样停泊；由卡片点击触发时在该会话里询问；来自外部桥接时当场拒绝。
 - **通知目标不需要名单。** 受治理的通知推送直接写 job；设为主动推送的目标本身就是人的授予（记为 `policy-rule`），仅回复发起方的目标只发审批请求。
 - **`authorizedBy` 尚未包含请求人。** 请求人已用于纪元推断，但还没写到 connector job 上。
+- **排队中的 job 保留它当时的规划方式**（收敛 0b，2026-11-01）。每个 job 存有 `authorizationProvenance`：模式、规划结果、策略版本、receipt id 和原始授权，与它的 receipt 在同一个入队事务中写入。runner 在领取 job 前，对以下几类 job 在强制模式下重新规划：在影子模式下规划且结果不是 allow 或 exempt 的、记录为 unplanned 的、以及既没有 provenance 也没有 `authorizedBy` 的旧 job。不再被允许的 job 转为草稿或进入死信（`authorization` / `authorization_denied`），因此打开强制模式不会把影子模式下只做了报告的投递发出去。改投的副本带着原 job 的 provenance；在强制模式下，未经授权的原 job 的副本会被拒绝，原 job 在下一轮重新规划。
 
 ### 已知缺口
 

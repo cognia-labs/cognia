@@ -2287,6 +2287,71 @@ describe("MessageList — best-effort paths that must not surface as failures", 
     expect(useChatStore.getState().sessions["ses_1"]!.messages.map((m) => m.id)).toEqual(["m2"])
   })
 
+  it("keeps the message everywhere when the host answers that its brain is away", async () => {
+    // ADR-0250 §4: the host refused the delete and wrote nothing. Deleting
+    // locally anyway would make the message vanish here and come back on the
+    // next sync, so nothing is deleted and the sheet gets a reason to show.
+    dbDeleteMock.mockClear()
+    desktopDeleteMock.mockRejectedValueOnce(
+      Object.assign(new Error("the host's brain is not connected"), {
+        code: "HOST_UNAVAILABLE",
+      })
+    )
+    renderMobile()
+
+    fireEvent.click(document.querySelector("[data-test='long-press']")!)
+    const sheet = messageActionSheetProps.at(-1) as {
+      message: UIMessage
+      onDelete: (m: UIMessage) => Promise<void>
+    }
+    let outcome: unknown
+    await act(async () => {
+      outcome = await sheet.onDelete(sheet.message).catch((error: unknown) => error)
+    })
+
+    expect(outcome).toBeInstanceOf(Error)
+    expect((outcome as Error).message).toBe("Your host is offline. Try again once it's back.")
+    expect(useChatStore.getState().sessions["ses_1"]!.messages.map((m) => m.id)).toEqual([
+      "m1",
+      "m2",
+    ])
+    expect(dbDeleteMock).not.toHaveBeenCalled()
+  })
+
+  it("keeps messages that arrive while the host delete is in flight", async () => {
+    // The removal is applied after the host answers, so it must start from
+    // the store as it is then, not from a snapshot taken before the await.
+    let releaseHost: () => void = () => undefined
+    desktopDeleteMock.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (releaseHost = () => resolve(undefined)))
+    )
+    renderMobile()
+
+    fireEvent.click(document.querySelector("[data-test='long-press']")!)
+    const sheet = messageActionSheetProps.at(-1) as {
+      message: UIMessage
+      onDelete: (m: UIMessage) => Promise<void>
+    }
+    let pending: Promise<void> = Promise.resolve()
+    act(() => {
+      pending = sheet.onDelete(sheet.message)
+    })
+    const arrived = { id: "m3", role: "assistant", parts: [{ type: "text", text: "late" }] }
+    act(() => {
+      const current = useChatStore.getState().sessions["ses_1"]!.messages
+      useChatStore.getState().setSessionMessages("ses_1", [...current, arrived as UIMessage])
+    })
+    await act(async () => {
+      releaseHost()
+      await pending
+    })
+
+    expect(useChatStore.getState().sessions["ses_1"]!.messages.map((m) => m.id)).toEqual([
+      "m2",
+      "m3",
+    ])
+  })
+
   it("disarms the action sheet when it is dismissed", () => {
     renderMobile()
     fireEvent.click(document.querySelector("[data-test='long-press']")!)

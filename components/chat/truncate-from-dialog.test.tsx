@@ -38,6 +38,7 @@ const messages = {
       confirm: "Delete permanently",
       done: "Deleted {count}.",
       error: "Couldn't delete those messages.",
+      hostUnavailable: "Your host is offline, so nothing was deleted. Try again once it's back.",
     },
   },
 }
@@ -152,5 +153,22 @@ describe("TruncateFromDialog", () => {
 
     await waitFor(() => expect(mockToastError).toHaveBeenCalled())
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it("says the host is offline when it refused the mirrored delete, and deletes nothing", async () => {
+    // ADR-0250 §4: the host answered HOST_UNAVAILABLE. The generic "couldn't
+    // delete" reads as permanent; this one tells the person to retry later.
+    mockPlatform.mockReturnValue("mobile")
+    const refused = Object.assign(new Error("refused"), { code: "HOST_UNAVAILABLE" })
+    mockMirror.mockRejectedValueOnce(new AggregateError([refused], "1 failed"))
+    renderDialog()
+    fireEvent.click(screen.getByText("Delete permanently"))
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Your host is offline, so nothing was deleted. Try again once it's back."
+      )
+    )
+    expect(mockTruncate).not.toHaveBeenCalled()
   })
 })

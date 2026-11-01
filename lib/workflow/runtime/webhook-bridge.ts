@@ -8,6 +8,7 @@
  * `safeInvoke` calls all no-op gracefully.
  */
 
+import { recordTriggerRegistration } from "./trigger-registration-health"
 import type { VisualWorkflow, WorkflowNode } from "@/types/workflow/visual"
 import { validateWorkflowCronExpression } from "@/lib/scheduler/cron-parser"
 import {
@@ -66,6 +67,25 @@ const SYNCED_TRIGGER_KINDS = new Set<WorkflowNode["type"]>([
 
 const syncedTriggersByWorkflow = new Map<string, Map<string, WorkflowNode["type"]>>()
 
+/**
+ * One sync or unsync per workflow at a time. Registrations await the native
+ * plane; an unsync that ran meanwhile would drop the projection map, and the
+ * late registration would then land in a map nothing tracks, leaving a live
+ * cron / webhook / file watch no later sync can find to remove.
+ */
+const triggerOperationQueues = new Map<string, Promise<void>>()
+
+function serializeTriggerOperation(workflowId: string, run: () => Promise<void>): Promise<void> {
+  const previous = triggerOperationQueues.get(workflowId) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(run)
+  const tail = next.catch(() => undefined)
+  triggerOperationQueues.set(workflowId, tail)
+  void tail.then(() => {
+    if (triggerOperationQueues.get(workflowId) === tail) triggerOperationQueues.delete(workflowId)
+  })
+  return next
+}
+
 interface TriggerSyncOptions {
   signal?: AbortSignal
 }
@@ -79,40 +99,83 @@ interface TriggerSyncOptions {
  * upserted. Rust restarts with the desktop process, so rebuilding this map on
  * renderer boot is sufficient; every active workflow is synced at startup.
  */
-export async function syncWorkflowTriggers(
+export function syncWorkflowTriggers(
   workflow: VisualWorkflow,
   options: TriggerSyncOptions = {}
+): Promise<void> {
+  return serializeTriggerOperation(workflow.id, () => syncWorkflowTriggersNow(workflow, options))
+}
+
+async function syncWorkflowTriggersNow(
+  workflow: VisualWorkflow,
+  options: TriggerSyncOptions
 ): Promise<void> {
   if (options.signal?.aborted) return
   const triggers =
     workflow.isTemplate || workflow.isBuiltIn
       ? []
       : workflow.nodes.filter((node) => !node.data.disabled && SYNCED_TRIGGER_KINDS.has(node.type))
-  try {
-    for (const node of triggers) validateTriggerForSync(node)
-  } catch (error) {
-    // Do not leave an older valid schedule active after the persisted node is
-    // edited into an invalid state.
-    await unsyncWorkflowTriggers(workflow)
-    throw error
+  const invalid: Array<{ node: WorkflowNode; error: unknown }> = []
+  for (const node of triggers) {
+    try {
+      validateTriggerForSync(node)
+    } catch (error) {
+      invalid.push({ node, error })
+    }
+  }
+  if (invalid.length) {
+    // Do not leave an older valid schedule active after an invalid save.
+    try {
+      await unsyncWorkflowTriggersNow(workflow)
+    } finally {
+      for (const { node, error } of invalid) {
+        recordTriggerRegistration({
+          workflowId: workflow.id,
+          triggerId: node.id,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+    throw invalid[0].error
   }
 
   const previous = syncedTriggersByWorkflow.get(workflow.id) ?? new Map()
+  syncedTriggersByWorkflow.set(workflow.id, previous)
   const desired = new Map(triggers.map((node) => [node.id, node.type]))
   const staleIds = [...previous].flatMap(([triggerId, kind]) =>
     desired.get(triggerId) === kind ? [] : [triggerId]
   )
-  await Promise.all(staleIds.map((triggerId) => unregisterTrigger(workflow.id, triggerId)))
+  await settleTriggerOperations(
+    staleIds.map((triggerId) => unregisterWithHealth(workflow.id, triggerId))
+  )
   if (options.signal?.aborted) return
 
   // A workflow with an `io.webhook.respond` node wants the receiver to hold
   // the inbound request open for a dynamic reply. Computed once and threaded
   // into every webhook trigger so the opt-in is implicit (no extra config).
   const awaitResponse = workflow.nodes.some((n) => n.type === "io.webhook.respond")
-  await Promise.all(
-    triggers.map((node) => syncOneTrigger(workflow.id, node, awaitResponse, workflow))
+  await settleTriggerOperations(
+    triggers.map(async (node) => {
+      try {
+        const registered = await syncOneTrigger(workflow.id, node, awaitResponse, workflow)
+        if (registered) previous.set(node.id, node.type)
+        recordTriggerRegistration({
+          workflowId: workflow.id,
+          triggerId: node.id,
+          status: registered ? "registered" : "skipped",
+        })
+      } catch (error) {
+        recordTriggerRegistration({
+          workflowId: workflow.id,
+          triggerId: node.id,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        })
+        throw error
+      }
+    })
   )
-  syncedTriggersByWorkflow.set(workflow.id, desired)
   if (options.signal?.aborted) return
   await syncPluginTriggerInstances(workflow)
 }
@@ -165,7 +228,7 @@ async function syncOneTrigger(
   node: WorkflowNode,
   awaitResponse: boolean,
   workflow: VisualWorkflow
-): Promise<void> {
+): Promise<boolean> {
   const baseInput = {
     workflowId,
     triggerId: node.id,
@@ -182,7 +245,7 @@ async function syncOneTrigger(
         cron: expression,
         timezone: cronParams.timezone,
       })
-      return
+      return true
     }
     case "trigger.webhook": {
       const webhookParams = params as WebhookParams
@@ -200,14 +263,14 @@ async function syncOneTrigger(
             : undefined,
         webhookDeliveryIdHeader: webhookParams.deliveryIdHeader?.trim() || undefined,
       })
-      return
+      return true
     }
     case "trigger.file.watch": {
       if (watchesTheWrongDisk(workflow)) {
         // The Host the run is pinned to installs its own watch from its own
         // boot sync. Registering here would watch this machine's disk for a
         // run that happens somewhere else.
-        return
+        return false
       }
       const watchParams = params as FileWatchParams
       await registerTrigger({
@@ -223,7 +286,7 @@ async function syncOneTrigger(
         fileWatchCatchUpOnStart: watchParams.catchUpOnStart,
         fileWatchMaxFiresPerMinute: watchParams.maxFiresPerMinute,
       })
-      return
+      return true
     }
     case "trigger.connector.inbound":
     case "trigger.connector.system":
@@ -237,9 +300,9 @@ async function syncOneTrigger(
     case "trigger.manual":
       // No Rust state for these — they ride existing TS hooks or synthesized runs.
       await registerTrigger(baseInput)
-      return
+      return true
     default:
-      return
+      return false
   }
 }
 
@@ -247,21 +310,50 @@ async function syncOneTrigger(
  * Unregister every trigger node in `workflow`. Called when a workflow is
  * deleted; idempotent for nodes not previously registered.
  */
-export async function unsyncWorkflowTriggers(workflow: VisualWorkflow): Promise<void> {
+export function unsyncWorkflowTriggers(workflow: VisualWorkflow): Promise<void> {
+  return serializeTriggerOperation(workflow.id, () => unsyncWorkflowTriggersNow(workflow))
+}
+
+async function unsyncWorkflowTriggersNow(workflow: VisualWorkflow): Promise<void> {
   const triggerIds = new Set(
     workflow.nodes.filter((node) => node.type.startsWith("trigger.")).map((node) => node.id)
   )
   for (const triggerId of syncedTriggersByWorkflow.get(workflow.id)?.keys() ?? []) {
     triggerIds.add(triggerId)
   }
-  await Promise.all([...triggerIds].map((triggerId) => unregisterTrigger(workflow.id, triggerId)))
+  await settleTriggerOperations(
+    [...triggerIds].map((triggerId) => unregisterWithHealth(workflow.id, triggerId))
+  )
   syncedTriggersByWorkflow.delete(workflow.id)
   await unsyncPluginTriggerInstances(workflow)
+}
+
+async function settleTriggerOperations(operations: Promise<void>[]): Promise<void> {
+  const results = await Promise.allSettled(operations)
+  const failed = results.find((result) => result.status === "rejected")
+  if (failed?.status === "rejected") throw failed.reason
+}
+
+async function unregisterWithHealth(workflowId: string, triggerId: string): Promise<void> {
+  try {
+    await unregisterTrigger(workflowId, triggerId)
+    syncedTriggersByWorkflow.get(workflowId)?.delete(triggerId)
+    recordTriggerRegistration({ workflowId, triggerId, status: "unregistered" })
+  } catch (error) {
+    recordTriggerRegistration({
+      workflowId,
+      triggerId,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
 }
 
 /** Test-only reset for the renderer-local registration projection. */
 export function _resetSyncedTriggerStateForTest(): void {
   syncedTriggersByWorkflow.clear()
+  triggerOperationQueues.clear()
 }
 
 /** Re-export so the inspector form can show the URL without a second hop. */

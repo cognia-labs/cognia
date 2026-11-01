@@ -31,7 +31,7 @@ import type {
   ActionReviewTier,
 } from "@cognia/agent-config-types/action-review"
 
-import { getDb } from "./schema"
+import { getDb, type CogniaDB } from "./schema"
 import {
   recordActionReviewEffectGovernance,
   recordActionReviewGovernance,
@@ -189,26 +189,50 @@ export async function recordActionReviewReceipt(
    */
   cap: number = ACTION_REVIEW_RECEIPT_CAP
 ): Promise<void> {
-  const row = toReceiptRow(receipt)
   const db = getDb()
   await db.transaction("rw", db.actionReviewReceipts, async () => {
-    await db.actionReviewReceipts.put(row)
-    const count = await db.actionReviewReceipts.count()
-    if (count > cap) {
-      const overflow = count - cap
-      // A row that carries a fence or a grant is skipped: trimming it would
-      // lift a person's refusal because unrelated reviews piled up. Those rows
-      // still leave at their own expiry, and the cap may overshoot by them.
-      const oldest = await db.actionReviewReceipts
-        .orderBy("decidedAt")
-        .filter((r) => !r.authKeys?.length)
-        .limit(overflow)
-        .primaryKeys()
-      if (oldest.length > 0) {
-        await db.actionReviewReceipts.bulkDelete(oldest as string[])
-      }
-    }
+    await recordActionReviewReceiptInsideTransaction(db, receipt, cap)
   })
+  await recordActionReviewReceiptGovernance(receipt)
+}
+
+/**
+ * Caller owns the receipt table transaction; failures abort its work too.
+ * `keep` names receipts written earlier in the same transaction (a batch of
+ * queued deliveries) that the trim must not remove either.
+ */
+export async function recordActionReviewReceiptInsideTransaction(
+  db: CogniaDB,
+  receipt: ActionReviewReceipt,
+  cap: number = ACTION_REVIEW_RECEIPT_CAP,
+  keep: ReadonlySet<string> = new Set()
+): Promise<void> {
+  const row = toReceiptRow(receipt)
+  await db.actionReviewReceipts.put(row)
+  const count = await db.actionReviewReceipts.count()
+  if (count > cap) {
+    const overflow = count - cap
+    // A row that carries a fence or a grant is skipped: trimming it would
+    // lift a person's refusal because unrelated reviews piled up. Those rows
+    // still leave at their own expiry, and the cap may overshoot by them.
+    // So is the row just written: when fences fill the cap it would be the
+    // only candidate, and a caller recording it beside a queued delivery
+    // would commit the job without the receipt it names.
+    const oldest = await db.actionReviewReceipts
+      .orderBy("decidedAt")
+      .filter((r) => !r.authKeys?.length && r.id !== row.id && !keep.has(r.id))
+      .limit(overflow)
+      .primaryKeys()
+    if (oldest.length > 0) {
+      await db.actionReviewReceipts.bulkDelete(oldest as string[])
+    }
+  }
+}
+
+/** Observers run only after the authoritative transaction commits. */
+export async function recordActionReviewReceiptGovernance(
+  receipt: ActionReviewReceipt
+): Promise<void> {
   await recordActionReviewGovernance(receipt).catch(() => undefined)
   if (receipt.effect) {
     await recordActionReviewEffectGovernance(receipt.id, receipt.effect).catch(() => undefined)

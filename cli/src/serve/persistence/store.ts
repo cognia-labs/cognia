@@ -13,13 +13,19 @@
  * has nothing to compact, and one that is hot should fold its journal on write
  * volume rather than wall clock.
  */
+import { BinaryPrefetcher, type BinaryPrefetcherOptions } from "./binary-prefetch"
 import { canonicalJson, decodeKey, encodeKey } from "./canonical"
 import {
   SNAPSHOT_DERIVED_TABLES,
   snapshotRowsForTable,
   prepareRestoredSessionLists,
 } from "../../db/snapshot"
-import { installTransactionCapture, type CaptureDexieLike, type CaptureHandle } from "./capture"
+import {
+  installTransactionCapture,
+  type CaptureDexieLike,
+  type CaptureHandle,
+  type DrainGate,
+} from "./capture"
 import {
   durabilityRoot,
   inspectDurabilityRoot,
@@ -28,6 +34,12 @@ import {
   type ResolvedBackend,
 } from "./backend"
 import { applyCommits } from "./journal"
+import {
+  decodeDurableValue,
+  encodeDurableValue,
+  formatLegacyValueFinding,
+  recordLegacyValueFindings,
+} from "./value-codec"
 import type {
   DurabilityBackendId,
   DurabilityCommit,
@@ -98,6 +110,8 @@ export interface DurabilityStoreOptions {
   compactEveryCommits?: number
   /** Injected clock (tests). */
   now?: () => number
+  /** Side-file worker pool tuning (tests model a slow disk with `fsyncDelayMs`). */
+  binaryPrefetch?: BinaryPrefetcherOptions
 }
 
 export interface DurabilityStore {
@@ -133,16 +147,25 @@ function extractByKeyPath(value: unknown, keyPath: string | string[]): unknown {
   return cursor
 }
 
-/** Dump one table into `{ encodedKey: row }`, handling outbound-key tables. */
-export async function readTableRows(table: DurabilityTableLike): Promise<Record<string, unknown>> {
+/**
+ * Dump one table into `{ encodedKey: row }`, handling outbound-key tables.
+ * Rows come back in value-codec-1 form, the form every backend persists.
+ */
+export async function readTableRows(
+  table: DurabilityTableLike,
+  encode: (value: unknown) => unknown = (value) => encodeDurableValue(value),
+  /** Runs on the rows before any is encoded (binary prefetch, so the encode never blocks). */
+  prepare?: (rows: readonly unknown[]) => Promise<void>
+): Promise<Record<string, unknown>> {
   const rows = snapshotRowsForTable(table.name, await table.toArray())
+  await prepare?.(rows)
   const keyPath = keyPathOf(table)
   const out: Record<string, unknown> = {}
   if (keyPath) {
     for (const row of rows) {
       const key = extractByKeyPath(row, keyPath)
       if (key === undefined) continue
-      out[encodeKey(key)] = row
+      out[encodeKey(key)] = encode(row)
     }
     return out
   }
@@ -150,7 +173,7 @@ export async function readTableRows(table: DurabilityTableLike): Promise<Record<
   for (let index = 0; index < rows.length; index += 1) {
     const key = keys[index]
     if (key === undefined) continue
-    out[encodeKey(key)] = rows[index]
+    out[encodeKey(key)] = encode(rows[index])
   }
   return out
 }
@@ -158,13 +181,28 @@ export async function readTableRows(table: DurabilityTableLike): Promise<Record<
 /** Materialise every included table of every source. */
 export async function readSourcesState(
   sources: readonly DurabilitySourceLike[],
-  sequence: number
+  sequence: number,
+  /** The durability root whose side-file store binary values go to. */
+  root?: string,
+  /**
+   * Writes the side files off the event loop first (`binary-prefetch.ts`);
+   * without it the encode reads Blobs and writes side files synchronously.
+   */
+  prefetcher?: BinaryPrefetcher
 ): Promise<DurabilityState> {
   const state: DurabilityState = { sequence, dbs: {} }
   for (const source of sources) {
     const tables = includedTables(source)
     const rows: Record<string, Record<string, unknown>> = {}
-    for (const table of tables) rows[table.name] = await readTableRows(table)
+    for (const table of tables) {
+      // One prefetch scope per table read: its rows are fresh clones, read once.
+      const scope = {}
+      rows[table.name] = await readTableRows(
+        table,
+        (value) => encodeDurableValue(value, root, prefetcher ? { prefetcher, scope } : undefined),
+        prefetcher ? (values) => prefetcher.settle(values, scope) : undefined
+      )
+    }
     state.dbs[source.name] = {
       schema: { version: source.db.verno, tables: tables.map((t) => t.name).sort() },
       rows,
@@ -176,7 +214,9 @@ export async function readSourcesState(
 /** Overlay persisted rows onto the (already open, already seeded) databases. */
 export async function restoreState(
   sources: readonly DurabilitySourceLike[],
-  state: DurabilityState
+  state: DurabilityState,
+  /** The durability root whose side-file store `fileRef` values come from. */
+  root?: string
 ): Promise<void> {
   for (const source of sources) {
     const entry = state.dbs[source.name]
@@ -202,7 +242,7 @@ export async function restoreState(
         (key) => table.name !== "storageLayout" || key !== encodeKey("session-list-v241")
       )
       if (encodedKeys.length === 0) continue
-      const values = encodedKeys.map((key) => rows[key])
+      const values = encodedKeys.map((key) => decodeDurableValue(rows[key], root))
       if (keyPathOf(table)) await table.bulkPut(values)
       else await table.bulkPut(values, encodedKeys.map(decodeKey))
     }
@@ -220,6 +260,9 @@ function isForwardMove(source: DurabilitySourceLike, previous: number | undefine
  * The returned handle owns the backend; `close()` compacts nothing and simply
  * releases handles — a journal that is not compacted is still complete.
  */
+/** Unfinished side-file KiB a held transaction drains to (half of it) before its commit runs. */
+const DRAIN_WINDOW_KIB = 16 * 1024
+
 export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise<DurabilityStore> {
   const now = opts.now ?? Date.now
   const compactEvery = opts.compactEveryCommits ?? 2_000
@@ -232,9 +275,55 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   let sinceCompaction = 0
   const captures: CaptureHandle[] = []
 
+  const prefetcher = new BinaryPrefetcher(root, opts.binaryPrefetch)
+
   let compacting: Promise<void> | null = null
   let compactionTail: DurabilityCommit[] | null = null
   let closing: Promise<void> | null = null
+
+  /**
+   * Start a mutation's side files while its transaction is still running, so
+   * the commit (on `complete`, synchronous) only waits for what is unfinished.
+   * Best effort: a value this misses is encoded the slow way at commit.
+   */
+  function onRecord(mutation: DurabilityMutation, trans: object): void {
+    if (mutation.value === null || !backendRef) return
+    if (
+      SNAPSHOT_DERIVED_TABLES.includes(mutation.table) ||
+      (mutation.table === "storageLayout" && mutation.key === encodeKey("session-list-v241"))
+    )
+      return
+    try {
+      prefetcher.prefetch(mutation.value, mutation, trans)
+    } catch {
+      // Falls back to the commit-time encode, which surfaces a real failure.
+    }
+  }
+
+  /**
+   * Hold a writing transaction open while more than a window of ITS side files
+   * is unfinished (by count, or by size for a few large files), until it is
+   * back to about one round of the pool: the in-memory IndexedDB finishes a
+   * transaction long before its files are on disk, and the commit
+   * (synchronous, on `complete`) would wait for all of them on the event loop.
+   * Held this way, it waits for at most the window. Transactions without
+   * pending side files are never held.
+   */
+  const drainJobs = prefetcher.parallelism * 2
+  function drain(trans: object): DrainGate | undefined {
+    const backlog = prefetcher.groupBacklog(trans)
+    if (backlog.jobs <= drainJobs && backlog.kib <= DRAIN_WINDOW_KIB) return undefined
+    return {
+      released: () => {
+        const now = prefetcher.groupBacklog(trans)
+        return now.jobs <= prefetcher.parallelism && now.kib <= DRAIN_WINDOW_KIB / 2
+      },
+      progress: () => prefetcher.groupBacklog(trans).jobs,
+      // Up to 2 ms per read, woken as soon as a worker finishes a job: the hold
+      // costs next to no CPU instead of spinning through no-op reads.
+      pause: () => prefetcher.pauseFor(trans, prefetcher.groupBacklog(trans).jobs, 2),
+    }
+  }
 
   function onCommit(mutations: DurabilityMutation[]): void {
     mutations = mutations.filter(
@@ -245,6 +334,20 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     if (mutations.length === 0) return
     const backend = backendRef
     if (!backend) return
+    // Encode at the boundary, synchronously: the backends store JSON, and a
+    // Blob or typed array handed to them raw would persist as `{}` or as its
+    // indices. A value that cannot be encoded throws here, which the capture
+    // contract turns into a brain that stops instead of one that serves on.
+    // `mutation` is the object `onRecord` prefetched under: its jobs, and no
+    // other write's, hold the bytes this write recorded.
+    mutations = mutations.map((mutation) =>
+      mutation.value === null
+        ? mutation
+        : {
+            ...mutation,
+            value: encodeDurableValue(mutation.value, root, { prefetcher, scope: mutation }),
+          }
+    )
     sequence += 1
     const commit = { sequence, committedAt: now(), mutations }
     backend.commitSync(commit)
@@ -279,7 +382,9 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       installTransactionCapture(source.db, {
         database: source.name,
         excludeTables: [...SNAPSHOT_DERIVED_TABLES, ...(source.excludeTables ?? [])],
+        onRecord,
         onCommit,
+        drain,
       })
     )
   }
@@ -292,7 +397,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
 
   // Seed the immutable generation from whatever the freshly-opened (seeded)
   // databases hold, so a first boot has a checkpoint to append against.
-  const seed = await readSourcesState(sources, 0)
+  const seed = await readSourcesState(sources, 0, root, prefetcher)
   const resolved: ResolvedBackend = await resolveBackend({
     root,
     seed,
@@ -300,6 +405,19 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
   })
   backendRef = resolved.backend
   sequence = resolved.backend.lastSequence()
+  // Rows written before value codec 1 that look like lost binary data. The
+  // report is kept before anything can compact those rows into codec 1 and
+  // erase the evidence; the bytes themselves are gone and are not invented.
+  const legacyReport = recordLegacyValueFindings(root, resolved.state.legacyValueFindings, now)
+  if (legacyReport) {
+    console.warn(
+      `[durability] ${resolved.state.legacyValueFindings!.length} field path(s) hold values written ` +
+        "before value codec 1 that look like lost binary data; `cognia-agent durability verify` lists them:\n" +
+        resolved.state
+          .legacyValueFindings!.map((finding) => `  ${formatLegacyValueFinding(finding)}`)
+          .join("\n")
+    )
+  }
 
   await withAllSuppressed(captures, async () => {
     if (opts.prepareDynamicSchema) {
@@ -313,16 +431,20 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
         )
       )
     }
-    await restoreState(sources, resolved.state)
+    await restoreState(sources, resolved.state, root)
     await prepareRestoredSessionLists(sources)
     // Pin a forward move once; future boots need not reinterpret an older
-    // checkpoint version. Restore/rebuild remains capture-suppressed.
+    // checkpoint version. A generation written before value codec 1 is
+    // rewritten the same way, before any commit can be appended to it (the
+    // journal refuses that), now that its findings are on record above.
+    // Restore/rebuild remains capture-suppressed.
     if (
+      resolved.legacyValueCodec ||
       sources.some((source) =>
         isForwardMove(source, resolved.state.dbs[source.name]?.schema.version)
       )
     ) {
-      await resolved.backend.compact(await readSourcesState(sources, sequence))
+      await resolved.backend.compact(await readSourcesState(sources, sequence, root, prefetcher))
     }
   })
 
@@ -350,7 +472,8 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       // Runtime plugin registration can add tables after the backend opened.
       // Keep the previous schema-repinning behavior for that exceptional path;
       // replaying the captured tail also makes these live reads consistent.
-      if (schemaChanged) checkpoint = await readSourcesState(sources, checkpoint.sequence)
+      if (schemaChanged)
+        checkpoint = await readSourcesState(sources, checkpoint.sequence, root, prefetcher)
       applyCommits(
         checkpoint,
         compactionTail.filter((commit) => commit.sequence > checkpoint.sequence)
@@ -373,6 +496,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
       if (compacting) await compacting.catch(() => {})
       await resolved.backend.close()
       backendRef = null
+      await prefetcher.close()
     })()
     return closing
   }
@@ -383,7 +507,7 @@ export async function openDurabilityStore(opts: DurabilityStoreOptions): Promise
     sequence: () => sequence,
     commitCount: () => commits,
     compact,
-    readLiveState: () => readSourcesState(sources, sequence),
+    readLiveState: () => readSourcesState(sources, sequence, root, prefetcher),
     close,
   }
 }

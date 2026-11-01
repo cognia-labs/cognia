@@ -11002,6 +11002,7 @@
       "description": "{count, plural, =1 {This message will be permanently deleted.} other {These # messages will be permanently deleted.}} Branch variants hanging off them go too. This can't be undone.",
       "done": "{count, plural, =1 {Deleted 1 message.} other {Deleted # messages.}}",
       "error": "Couldn't delete those messages.",
+      "hostUnavailable": "Your host is offline, so nothing was deleted. Try again once it's back.",
       "title": "Delete from this message on?"
     },
     "turnAdmission": {
@@ -29514,6 +29515,7 @@
       "editFailed": "Resend failed: {message}",
       "editInputAria": "Edit message text",
       "editResend": "Resend",
+      "hostUnavailable": "Your host is offline. Try again once it's back.",
       "longPressHint": "Long-press a message for actions",
       "quote": "Quote",
       "readAloud": "Read aloud",
@@ -30671,6 +30673,7 @@
         "selectMode": "Select multiple nodes",
         "snapOff": "Snap to grid: off",
         "snapOn": "Snap to grid: on",
+        "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup.",
         "undo": "Undo"
       },
       "empty": "No workflows yet",
@@ -65985,7 +65988,8 @@
       "running": "Running…",
       "saveFailed": "Failed to save workflow",
       "savedOk": "Workflow saved",
-      "startFailed": "Failed to start run"
+      "startFailed": "Failed to start run",
+      "triggerRegistrationFailed": "Workflow saved, but trigger registration failed. It will be retried at startup."
     },
     "capabilities": {
       "names": {
@@ -67405,7 +67409,8 @@
             "monthly": "Monthly (1st, 9:00)",
             "weekdays": "Weekdays at 9:00",
             "weekly": "Weekly (Mon 9:00)"
-          }
+          },
+          "unsupportedWorkflowExpression": "This schedule is not supported by workflow triggers."
         },
         "cronExpression": {
           "hint": "Five fields: minute hour day month weekday. Use *  for any value.",

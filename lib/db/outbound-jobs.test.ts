@@ -5,6 +5,7 @@
 import {
   enqueueOutbound,
   enqueueOutboundMany,
+  updateOutboundAuthorization,
   listDueNow,
   pickNextDue,
   peekNextWakeAt,
@@ -13,6 +14,8 @@ import {
   markSending,
   markSent,
   markFailed,
+  deferUnclaimed,
+  holdOutboundForAuthorization,
   markDeliveryUnknown,
   markAwaitingDeliveryReceipt,
   recordOutboundDeliveryStatus,
@@ -35,7 +38,10 @@ import {
 import { getDb } from "./schema"
 import { saveSettings } from "./settings"
 import { createDbTestFixture } from "./test-fixture"
+import { prepareDraftRow } from "./connector-drafts"
 import type { OutboundRequest } from "@/types/connectors/outbound"
+import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
+import { toDeliveryReceiptRow } from "@/lib/policy/action-review/projection"
 
 const dbFixture = createDbTestFixture()
 
@@ -43,7 +49,7 @@ beforeAll(dbFixture.initialize, 60_000)
 beforeEach(dbFixture.restore)
 afterAll(dbFixture.dispose)
 
-function makeRequest(idempotencyKey = crypto.randomUUID()): OutboundRequest {
+function makeRequest(idempotencyKey: string = crypto.randomUUID()): OutboundRequest {
   return {
     conversationRef: { platform: "telegram", adapterId: "adp_1" },
     segments: [{ type: "text", text: "hello" }],
@@ -59,7 +65,221 @@ function enqueue(input: Omit<EnqueueInput, "source"> & { source?: EnqueueInput["
   return enqueueOutbound({ source: "ai-run", ...input })
 }
 
+describe("unclaimed runner transitions", () => {
+  const job = () =>
+    enqueue({ adapterId: "a", conversationKey: "telegram:a:chat", request: makeRequest() })
+
+  it("defers a waiting job but never rewrites another runner's sending claim", async () => {
+    const waiting = await job()
+    expect(await deferUnclaimed(waiting.id, "rate_limited", "empty", 99)).toBe(true)
+    expect(await getDb().outboundQueue.get(waiting.id)).toMatchObject({
+      status: "failed",
+      lastErrorCode: "rate_limited",
+      nextAttemptAt: 99,
+      attempts: 0,
+    })
+
+    const claimed = await job()
+    expect(await markSending(claimed.id)).toBe(true)
+    expect(await deferUnclaimed(claimed.id, "rate_limited", "empty", 99)).toBe(false)
+    expect(await getDb().outboundQueue.get(claimed.id)).toMatchObject({
+      status: "sending",
+      attempts: 1,
+    })
+    // The lost race leaves the row with its claimant: nobody can claim it twice.
+    expect(await markSending(claimed.id)).toBe(false)
+  })
+
+  it("holds a job with its draft once, atomically, and only while it waits", async () => {
+    const waiting = await job()
+    const draftFor = () =>
+      prepareDraftRow({
+        conversationKey: waiting.conversationKey,
+        sessionId: "workflow:w1",
+        segments: waiting.request.segments,
+      })
+    const [first, second] = await Promise.all([
+      draftFor().then((draft) =>
+        holdOutboundForAuthorization(waiting.id, {
+          errorCode: "authorization",
+          message: "a",
+          draft,
+        })
+      ),
+      draftFor().then((draft) =>
+        holdOutboundForAuthorization(waiting.id, {
+          errorCode: "authorization",
+          message: "b",
+          draft,
+        })
+      ),
+    ])
+    expect([first, second].filter(Boolean)).toHaveLength(1)
+    expect(await getDb().connectorDrafts.count()).toBe(1)
+    expect(await getDb().outboundQueue.get(waiting.id)).toMatchObject({
+      status: "deadlettered",
+      lastErrorCode: "authorization",
+    })
+
+    const claimed = await job()
+    await markSending(claimed.id)
+    expect(
+      await holdOutboundForAuthorization(claimed.id, {
+        errorCode: "authorization_denied",
+        message: "denied",
+      })
+    ).toBe(false)
+    expect((await getDb().outboundQueue.get(claimed.id))?.status).toBe("sending")
+  })
+
+  it("lets the runner that holds the claim decide its own sending row, and no one else", async () => {
+    const claimed = await job()
+    await markSending(claimed.id)
+    const provenance = {
+      schemaVersion: 1 as const,
+      mode: "enforce" as const,
+      plan: "allow" as const,
+      policyVersion: "adr-0239.delivery.v1",
+      plannedAt: 1,
+    }
+    expect(await updateOutboundAuthorization(claimed.id, provenance, undefined)).toBe(false)
+    expect(
+      await updateOutboundAuthorization(claimed.id, provenance, undefined, undefined, {
+        claimed: true,
+      })
+    ).toBe(true)
+    expect(
+      await holdOutboundForAuthorization(claimed.id, {
+        errorCode: "authorization_denied",
+        message: "denied",
+        claimed: true,
+      })
+    ).toBe(true)
+    expect((await getDb().outboundQueue.get(claimed.id))?.status).toBe("deadlettered")
+
+    const waiting = await job()
+    expect(
+      await holdOutboundForAuthorization(waiting.id, {
+        errorCode: "authorization_denied",
+        message: "denied",
+        claimed: true,
+      })
+    ).toBe(false)
+    expect((await getDb().outboundQueue.get(waiting.id))?.status).toBe("pending")
+  })
+
+  it("rolls the hold back when its draft cannot be written", async () => {
+    const waiting = await job()
+    const draft = await prepareDraftRow({
+      conversationKey: waiting.conversationKey,
+      sessionId: "workflow:w1",
+      segments: waiting.request.segments,
+    })
+    const fail = () => {
+      throw new Error("draft write failed")
+    }
+    getDb().connectorDrafts.hook("creating", fail)
+    try {
+      await expect(
+        holdOutboundForAuthorization(waiting.id, {
+          errorCode: "authorization",
+          message: "x",
+          draft,
+        })
+      ).rejects.toThrow("draft write failed")
+    } finally {
+      getDb().connectorDrafts.hook("creating").unsubscribe(fail)
+    }
+    expect((await getDb().outboundQueue.get(waiting.id))?.status).toBe("pending")
+    expect(await getDb().connectorDrafts.count()).toBe(0)
+  })
+})
+
 describe("outbound-jobs", () => {
+  it("rolls back a runner authorization update when its receipt cannot be written", async () => {
+    const job = await enqueue({
+      adapterId: "a",
+      conversationKey: "telegram:a:chat",
+      request: makeRequest(),
+    })
+    const decision = await planDelivery(
+      {
+        adapterId: "a",
+        conversationKey: job.conversationKey,
+        source: "workflow",
+        authorization: { kind: "human", actor: "local-user" },
+      },
+      { settings: () => ({ agentPermissions: { outboundAuthorization: "enforce" } }) }
+    )
+    if (decision.action !== "send" || !decision.receipt) throw new Error("Expected allowed receipt")
+    const receipt = await toDeliveryReceiptRow(decision.receipt)
+    const provenance = {
+      schemaVersion: 1 as const,
+      ...decision.provenance,
+      plannedAt: 1,
+      policyVersion: "adr-0239.delivery.v1",
+    }
+    const fail = () => {
+      throw new Error("update receipt failed")
+    }
+    getDb().actionReviewReceipts.hook("creating", fail)
+    try {
+      await expect(
+        updateOutboundAuthorization(job.id, provenance, decision.authorizedBy, receipt)
+      ).rejects.toThrow("update receipt failed")
+      const unchanged = await getDb().outboundQueue.get(job.id)
+      expect(unchanged?.authorizationProvenance).toBeUndefined()
+      expect(unchanged?.authorizedBy).toBeUndefined()
+      expect(await getDb().actionReviewReceipts.get(receipt.id)).toBeUndefined()
+    } finally {
+      getDb().actionReviewReceipts.hook("creating").unsubscribe(fail)
+    }
+    expect(
+      await updateOutboundAuthorization(job.id, provenance, decision.authorizedBy, receipt)
+    ).toBe(true)
+    expect((await getDb().outboundQueue.get(job.id))?.authorizationProvenance).toEqual(provenance)
+    await markSending(job.id)
+    expect(await updateOutboundAuthorization(job.id, provenance, undefined)).toBe(false)
+    expect((await getDb().outboundQueue.get(job.id))?.authorizedBy).toEqual(decision.authorizedBy)
+  })
+  it("commits the authorization receipt with the queue row and rolls back the batch on receipt failure", async () => {
+    const decision = await planDelivery(
+      { adapterId: "adp_1", conversationKey: "telegram:adp_1:chat", source: "workflow" },
+      {
+        settings: () => ({}),
+        configuredGrants: async () => [],
+        listAuthKeys: async () => [],
+      }
+    )
+    if (decision.action !== "send" || !decision.receipt) throw new Error("Expected shadow receipt")
+    const receipt = await toDeliveryReceiptRow(decision.receipt)
+    const value = {
+      adapterId: "adp_1",
+      conversationKey: "telegram:adp_1:chat",
+      source: "workflow" as const,
+      request: makeRequest(),
+      receipt,
+    }
+    const row = await enqueueOutbound(value)
+    expect(await getDb().actionReviewReceipts.get(receipt.id)).toEqual(receipt)
+    await getDb().outboundQueue.delete(row.id)
+    const fail = () => {
+      throw new Error("receipt storage failed")
+    }
+    getDb().actionReviewReceipts.hook("creating", fail)
+    try {
+      await expect(
+        enqueueOutboundMany([
+          { ...value, receipt: { ...receipt, id: "new" } },
+          { ...value, receipt: undefined },
+        ])
+      ).rejects.toThrow("receipt storage failed")
+      expect(await getDb().outboundQueue.count()).toBe(0)
+      expect(await getDb().actionReviewReceipts.get("new")).toBeUndefined()
+    } finally {
+      getDb().actionReviewReceipts.hook("creating").unsubscribe(fail)
+    }
+  })
   describe("shared asynchronous delivery receipts", () => {
     it("keeps a provider-reviewed rejection out of replay and preserves its evidence", async () => {
       const row = await sending()

@@ -62,6 +62,29 @@ describe("TauriTransport", () => {
     })
   })
 
+  describe("subscribeAttached", () => {
+    it("resolves once attached, delivers payloads and unsubscribes once", async () => {
+      const nativeOff = jest.fn()
+      let deliver!: (event: { payload: unknown }) => void
+      mockedListen.mockImplementationOnce((async (_event: string, cb: typeof deliver) => {
+        deliver = cb
+        return nativeOff
+      }) as unknown as typeof listen)
+      const handler = jest.fn()
+      const off = await transport.subscribeAttached("session-import://changed", handler)
+      deliver({ payload: { path: "a" } })
+      expect(handler).toHaveBeenCalledWith({ path: "a" })
+      off()
+      off()
+      expect(nativeOff).toHaveBeenCalledTimes(1)
+    })
+
+    it("rejects when the native listener cannot attach", async () => {
+      mockedListen.mockRejectedValueOnce(new Error("listen failed"))
+      await expect(transport.subscribeAttached("x://y", jest.fn())).rejects.toThrow("listen failed")
+    })
+  })
+
   describe("subscribe", () => {
     it("keeps readiness pending while an injected native listener registration is delayed", async () => {
       let release!: () => void

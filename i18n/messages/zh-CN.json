@@ -11002,6 +11002,7 @@
       "description": "{count, plural, =1 {将永久删除这条消息。} other {将永久删除这 # 条消息。}} 挂在它们下面的分支变体也会一并删除。此操作不可撤销。",
       "done": "{count, plural, other {已删除 # 条消息。}}",
       "error": "无法删除这些消息。",
+      "hostUnavailable": "主机当前离线，没有删除任何内容。请在主机恢复后重试。",
       "title": "从这条消息起全部删除？"
     },
     "turnAdmission": {
@@ -29514,6 +29515,7 @@
       "editFailed": "重新发送失败：{message}",
       "editInputAria": "编辑消息内容",
       "editResend": "重新发送",
+      "hostUnavailable": "主机当前离线，请在主机恢复后重试。",
       "longPressHint": "长按消息查看操作",
       "quote": "引用",
       "readAloud": "朗读",
@@ -30671,6 +30673,7 @@
         "selectMode": "多选节点",
         "snapOff": "网格吸附：关",
         "snapOn": "网格吸附：开",
+        "triggerRegistrationFailed": "工作流已保存，但触发器注册失败。启动时将重新尝试注册。",
         "undo": "撤销"
       },
       "empty": "还没有工作流",
@@ -65985,7 +65988,8 @@
       "running": "运行中…",
       "saveFailed": "保存工作流失败",
       "savedOk": "工作流已保存",
-      "startFailed": "启动运行失败"
+      "startFailed": "启动运行失败",
+      "triggerRegistrationFailed": "工作流已保存，但触发器注册失败。启动时将重新尝试注册。"
     },
     "capabilities": {
       "names": {
@@ -67405,7 +67409,8 @@
             "monthly": "每月（1 号 9:00）",
             "weekdays": "工作日 9:00",
             "weekly": "每周（周一 9:00）"
-          }
+          },
+          "unsupportedWorkflowExpression": "工作流触发器不支持此 cron 表达式。"
         },
         "cronExpression": {
           "hint": "五字段：分钟 小时 日 月 周。* 表示任意值。",

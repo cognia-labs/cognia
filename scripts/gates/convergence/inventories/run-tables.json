@@ -2,7 +2,7 @@
   "inventory": "run-tables",
   "description": "Run-like Dexie tables by name or row lifecycle fields, with their syntactically verified reference to executionRuns. Repay missing and name-only references through the shared ledger; retain real references or explained exclusions in the inventory.",
   "generatedAt": {
-    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
     "date": "2026-11-01"
   },
   "metrics": {
@@ -599,7 +599,7 @@
         "lib/db/bot-event-deliveries.ts#replayBotDelivery",
         "lib/db/bot-installations.ts#setBotInstallationPaused"
       ],
-      "evidence": "e416607890950612"
+      "evidence": "ab900e783b48f97e"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/calibrationRuns",
@@ -814,7 +814,7 @@
         "lib/db/connector-inbound-jobs.ts#stampConnectorInboundJobPrincipal",
         "lib/db/connector-inbound-jobs.ts#updateConnectorInboundJobPayload"
       ],
-      "evidence": "badb888702095ca3"
+      "evidence": "37694ddf77b87bbf"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/evalOnlineQueue",
@@ -1307,6 +1307,7 @@
         "lib/db/integrations.ts#listIntegrationActionJobs",
         "lib/db/integrations.ts#listRunnableIntegrationActionJobs",
         "lib/db/integrations.ts#removeIntegrationAccount",
+        "lib/integrations/action-runner.ts#cancelIntegrationActionJobsForAccounts",
         "lib/issues/run/install.ts#engineChangeSignature"
       ],
       "unlinkedWriters": [
@@ -1316,7 +1317,7 @@
         "lib/db/integrations.ts#enqueueIntegrationActionJob",
         "lib/db/integrations.ts#updateIntegrationActionJob"
       ],
-      "evidence": "0e8391b93524400b"
+      "evidence": "2474681d6b5c8a2b"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/issueRuns",
@@ -1666,7 +1667,7 @@
         "components/mobile/workflow/use-pending-triggers.ts#usePendingWorkflowTriggers::rows",
         "components/providers/companion-outbound-runner-provider.tsx#subscribeToPendingJobs::subscription",
         "components/router-fusion/companion/companion-fusion-run-view.tsx#CompanionFusionRunView::row",
-        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::send",
+        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
         "lib/bot/control-writes/pending-installations.ts#pendingBotInstallationIds",
         "lib/chat/phantom-run-runtime.ts#probeHostStateRun",
         "lib/connectors/inbox-writes/pending-overrides.ts#pendingOverrideConversationKeys",
@@ -1708,7 +1709,7 @@
         "lib/db/mobile-step-receipts.ts#persistMobileStepResult",
         "lib/db/mobile-step-receipts.ts#recoverInterruptedMobileSteps"
       ],
-      "evidence": "8fed6e4eb6d4f12b"
+      "evidence": "6f3ec80a03144a11"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/outboundQueue",
@@ -1721,6 +1722,7 @@
       "rowFields": [
         "adapterId",
         "attempts",
+        "authorizationProvenance",
         "authorizedBy",
         "claimedAt",
         "conversationKey",
@@ -1767,8 +1769,10 @@
         "components/inbox/outbound-status-pill.tsx#OutboundStatusPill",
         "components/settings/connections/tabs/outbound-tab.tsx#OutboundTab",
         "lib/connectors/outbound-runner.ts#startOutboundRunner",
+        "lib/db/outbound-jobs.ts#deferUnclaimed",
         "lib/db/outbound-jobs.ts#enqueueOutbound",
         "lib/db/outbound-jobs.ts#enqueueOutboundMany",
+        "lib/db/outbound-jobs.ts#holdOutboundForAuthorization",
         "lib/db/outbound-jobs.ts#markAwaitingDeliveryReceipt",
         "lib/db/outbound-jobs.ts#markDeadlettered",
         "lib/db/outbound-jobs.ts#markDeliveryUnknown",
@@ -1778,6 +1782,7 @@
         "lib/db/outbound-jobs.ts#recoverStaleSendingJobs",
         "lib/db/outbound-jobs.ts#replayDeadlettered",
         "lib/db/outbound-jobs.ts#unclaimSending",
+        "lib/db/outbound-jobs.ts#updateOutboundAuthorization",
         "lib/dev/expose-test-globals.tsx#ExposeTestGlobals::seed",
         "lib/notifications/delivery/governed.ts#persistGovernedNotificationInsideTransaction"
       ],
@@ -1818,8 +1823,10 @@
         "components/inbox/outbound-status-pill.tsx#OutboundStatusPill",
         "components/settings/connections/tabs/outbound-tab.tsx#OutboundTab",
         "lib/connectors/outbound-runner.ts#startOutboundRunner",
+        "lib/db/outbound-jobs.ts#deferUnclaimed",
         "lib/db/outbound-jobs.ts#enqueueOutbound",
         "lib/db/outbound-jobs.ts#enqueueOutboundMany",
+        "lib/db/outbound-jobs.ts#holdOutboundForAuthorization",
         "lib/db/outbound-jobs.ts#markAwaitingDeliveryReceipt",
         "lib/db/outbound-jobs.ts#markDeadlettered",
         "lib/db/outbound-jobs.ts#markDeliveryUnknown",
@@ -1829,10 +1836,11 @@
         "lib/db/outbound-jobs.ts#recoverStaleSendingJobs",
         "lib/db/outbound-jobs.ts#replayDeadlettered",
         "lib/db/outbound-jobs.ts#unclaimSending",
+        "lib/db/outbound-jobs.ts#updateOutboundAuthorization",
         "lib/dev/expose-test-globals.tsx#ExposeTestGlobals::seed",
         "lib/notifications/delivery/governed.ts#persistGovernedNotificationInsideTransaction"
       ],
-      "evidence": "dc6d18199ae1556e"
+      "evidence": "c8d941f7bea5ee0d"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/projectMiningRuns",
@@ -2513,7 +2521,7 @@
         "lib/workflow/runtime/run-lease.ts#startLeaseHeartbeat",
         "lib/workflow/runtime/run-title.ts#generateWorkflowRunTitle::persist"
       ],
-      "evidence": "2444f7ee6ab6d1a5"
+      "evidence": "56f0b9fb8833598b"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/workSubmissions",
@@ -2575,7 +2583,8 @@
         "lib/work-submission/service.ts#settleWorkSubmission"
       ],
       "consumerFunctions": [
-        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::send",
+        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
+        "lib/chat/auto-archive-schedule.ts#readKernelRunningSessionIds",
         "lib/db/work-submissions.ts#countOpenWorkSubmissions",
         "lib/db/work-submissions.ts#findWorkSubmissionByIdempotencyKey",
         "lib/db/work-submissions.ts#getWorkSubmission",
@@ -2590,7 +2599,7 @@
         "lib/db/work-submissions.ts#renewWorkSubmissionLease",
         "lib/db/work-submissions.ts#settleWorkSubmissionRow"
       ],
-      "evidence": "cae2cf72d6e7314f"
+      "evidence": "cd2a7011b467e60c"
     },
     {
       "key": "dexie:FusionDB@lib/router-fusion/db/fusion-db.ts/fusionRuns",
@@ -2744,7 +2753,7 @@
         "lib/router-fusion/db/ledger-store.ts#FusionLedgerStore::settleOrphanedAttempts",
         "lib/router-fusion/db/ledger-store.ts#FusionLedgerStore::startRun"
       ],
-      "evidence": "f7b354d4f77c4f4c"
+      "evidence": "6fbda5da20542711"
     }
   ],
   "excluded": [
@@ -3497,7 +3506,6 @@
         "lib/agent-team/legacy-run-history.ts",
         "lib/ai/agent/team/squad/squad-run-records.ts",
         "lib/bot/runtime/run.ts",
-        "lib/execution/acting-authority.ts",
         "lib/execution/delegation.ts",
         "lib/execution/managed-desktop-results.ts",
         "lib/execution/run-control.ts",
@@ -3527,7 +3535,7 @@
       ],
       "consumerFunctions": [
         "hooks/agent-runs/use-agent-runs.ts#resolveSelectedRun",
-        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::send",
+        "hooks/chat/use-claude-chat-controller.ts#useClaudeChat::sendUnexcluded",
         "hooks/squads/use-squad-latest-run.ts#readSquadLatestRun",
         "lib/ai/agent/recovery/reconcile-crashed-runs.ts#reconcileCrashedAgentRuns",
         "lib/ai/agent/team/squad/watch-squad-run.ts#watchSquadRunSettlement::subscription",
@@ -3537,6 +3545,7 @@
         "lib/automation/managed-desktop-result-deletion.ts#prepareManagedDesktopSessionDeletion",
         "lib/bot/installation-snapshot.ts#publicationReferences",
         "lib/bot/runtime/executors/squad.ts#createSquadBotExecutor::isSettled",
+        "lib/chat/auto-archive-schedule.ts#readKernelRunningSessionIds",
         "lib/cli-bridge/handlers/agent-team.ts#agentTeamRunStatus",
         "lib/connectors/run-presentation/runner.ts#projectLatest::projection",
         "lib/connectors/run-presentation/runner.ts#runHeartbeatExecutionRunBinding",
@@ -3570,9 +3579,10 @@
         "lib/db/execution-runs.ts#runEventJournal::append",
         "lib/db/execution-runs.ts#runEventJournal::appendBatch",
         "lib/execution/acting-authority.ts#recordAbsorbedRequester",
-        "lib/execution/acting-authority.ts#recordRunAuthority"
+        "lib/execution/acting-authority.ts#recordRunAuthority",
+        "lib/execution/acting-authority.ts#startToolExecutionRun"
       ],
-      "evidence": "76569926e530fa72"
+      "evidence": "ed0bcbb5fb5af51e"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/harnessEvolutionSteps",
@@ -3828,7 +3838,7 @@
         "lib/db/labels.ts#deleteLabel",
         "lib/identity/reconcile-user-id.ts#reconcileUserId"
       ],
-      "evidence": "9bf7958098d7df03"
+      "evidence": "af2565095043a6a8"
     },
     {
       "key": "dexie:CogniaDB@lib/db/schema.ts/loops",
@@ -4772,7 +4782,7 @@
         "lib/router-fusion/db/ledger-store.ts#FusionLedgerStore::settleCall",
         "lib/router-fusion/db/ledger-store.ts#FusionLedgerStore::settleOrphanedAttempts"
       ],
-      "evidence": "c32bfc36b686661f"
+      "evidence": "8145e0b6122d7da4"
     },
     {
       "key": "dexie:legacy@lib/scheduler/legacy-db-migration.ts/executions",

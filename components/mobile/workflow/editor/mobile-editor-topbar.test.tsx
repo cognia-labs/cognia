@@ -30,10 +30,18 @@ jest.mock("sonner", () => ({
 
 jest.mock("@/lib/capacitor/haptics", () => ({ impact: jest.fn(async () => ({ kind: "ok" })) }))
 
-const persistEditorWorkflow = jest.fn(async (..._a: unknown[]) => ({
-  issueCount: 0,
-  publicationInvalidated: false,
-}))
+const persistEditorWorkflow = jest.fn(
+  async (
+    ..._a: unknown[]
+  ): Promise<{
+    issueCount: number
+    publicationInvalidated: boolean
+    triggerRegistration?: { ok: true } | { ok: false; error: string }
+  }> => ({
+    issueCount: 0,
+    publicationInvalidated: false,
+  })
+)
 jest.mock("@/lib/workflow/editor/persist-workflow", () => ({
   persistEditorWorkflow: (...a: unknown[]) => persistEditorWorkflow(...a),
 }))
@@ -288,6 +296,24 @@ describe("<MobileEditorTopbar />", () => {
     await user.click(screen.getByTestId("mobile-editor-save"))
 
     await waitFor(() => expect(toastWarning).toHaveBeenCalledWith("publicationInvalidated"))
+    expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  // Convergence 0b B2: a save whose trigger registration failed is not a
+  // silent success on the phone either.
+  it("reports a save whose trigger registration failed", async () => {
+    const user = userEvent.setup()
+    const { store } = renderTopbar()
+    act(() => store.getState().setName("Edited"))
+    persistEditorWorkflow.mockResolvedValueOnce({
+      issueCount: 0,
+      publicationInvalidated: false,
+      triggerRegistration: { ok: false, error: "daemon refused" },
+    })
+
+    await user.click(screen.getByTestId("mobile-editor-save"))
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("triggerRegistrationFailed"))
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 

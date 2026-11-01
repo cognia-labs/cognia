@@ -24,7 +24,14 @@ import {
 import { journalFile, replayJournal, applyCommits } from "./journal"
 import { manifestFile, readManifest, writeManifest, type BackendManifest } from "./manifest"
 import { formatParityReport, verifyParity, type ParityReport } from "./parity"
-import { sqliteFile } from "./sqlite"
+import { collectBinaryReferences, pruneBinaries } from "./binary-store"
+import { collectSqliteBinaryReferences, sqliteFile } from "./sqlite"
+import {
+  LegacyValueReport,
+  readLegacyValueReport,
+  recordLegacyValueFindings,
+  type LegacyValueFinding,
+} from "./value-codec"
 import {
   DurabilityFault,
   emptyDurabilityState,
@@ -48,6 +55,12 @@ export interface DurabilityStatus {
   sqliteSequence: number | null
   faults: Array<{ code: string; message: string; sequence: number | null }>
   parity: ParityReport | null
+  /**
+   * Values written before value codec 1 that look like lost binary data: the
+   * persisted report merged with what this verify read. Not a fault — the
+   * store is intact; those rows simply never held their bytes.
+   */
+  legacyValueLoss: LegacyValueFinding[]
 }
 
 function recordFault(status: DurabilityStatus, error: unknown): void {
@@ -83,18 +96,20 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
     sqliteSequence: null,
     faults: [],
     parity: null,
+    legacyValueLoss: [],
   }
+  const legacy = new LegacyValueReport()
 
   let journalState: DurabilityState | null = null
   try {
     status.generations = listGenerations(root)
     status.latestGeneration = latestGeneration(root)
     if (status.latestGeneration) {
-      const checkpoint = readCheckpoint(root, status.latestGeneration)
+      const checkpoint = readCheckpoint(root, status.latestGeneration, legacy)
       status.checkpointSequence = checkpoint.sequence
       const file = journalFile(root, status.latestGeneration)
       if (fs.existsSync(file)) {
-        const replay = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence)
+        const replay = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence, legacy)
         status.journalCommits = replay.commits.length
         status.journalDiscardedBytes = replay.discardedBytes
         applyCommits(checkpoint, replay.commits)
@@ -113,6 +128,7 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
       backend = openBackend("sqlite-v5", root)
       sqliteState = await backend.load()
       status.sqliteSequence = sqliteState.sequence
+      for (const finding of sqliteState.legacyValueFindings ?? []) legacy.merge(finding)
     } catch (error) {
       recordFault(status, error)
     } finally {
@@ -130,6 +146,13 @@ export async function verifyDurability(root: string): Promise<DurabilityStatus> 
       })
     }
   }
+
+  try {
+    for (const finding of readLegacyValueReport(root)?.findings ?? []) legacy.merge(finding)
+  } catch (error) {
+    recordFault(status, error)
+  }
+  status.legacyValueLoss = legacy.findings()
 
   return status
 }
@@ -154,12 +177,15 @@ function readManifestSafely(root: string): BackendManifest {
 export function readJournalState(root: string): DurabilityState {
   const generation = latestGeneration(root)
   if (!generation) return emptyDurabilityState()
-  const state = readCheckpoint(root, generation)
+  const report = new LegacyValueReport()
+  const state = readCheckpoint(root, generation, report)
   const file = journalFile(root, generation)
   if (fs.existsSync(file)) {
-    const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence)
+    const { commits } = replayJournal(fs.readFileSync(file, "utf8"), state.sequence, report)
     applyCommits(state, commits)
   }
+  const findings = report.findings()
+  if (findings.length > 0) state.legacyValueFindings = findings
   return state
 }
 
@@ -287,6 +313,8 @@ export async function migrateDurability(
   } finally {
     await sourceBackend.close()
   }
+  // The target is written in codec 1; keep the evidence of lossy codec-0 rows.
+  recordLegacyValueFindings(root, sourceState.legacyValueFindings, now)
 
   const targetBackend = openBackend(to, root)
   let parity: ParityReport
@@ -348,6 +376,7 @@ export async function recoverDurability(
   }
   candidates.sort((a, b) => b.state.sequence - a.state.sequence)
   const chosen = candidates[0]
+  recordLegacyValueFindings(root, chosen.state.legacyValueFindings, now)
 
   const generation = nextGeneration(root)
   writeCheckpoint(root, generation, chosen.state)
@@ -383,7 +412,11 @@ async function collectRecoveryCandidates(
     const generation = latestGeneration(root)
     if (generation) {
       try {
-        out.push({ source: "snapshot", state: readCheckpoint(root, generation) })
+        const report = new LegacyValueReport()
+        const state = readCheckpoint(root, generation, report)
+        const findings = report.findings()
+        if (findings.length > 0) state.legacyValueFindings = findings
+        out.push({ source: "snapshot", state })
       } catch (error) {
         if (from !== "auto") throw error
       }
@@ -436,7 +469,12 @@ export function rollbackDurability(
   if (!fs.existsSync(path.join(generationDir(root, generation), "checkpoint.json"))) {
     throw new DurabilityFault("checkpoint-corrupt", `generation ${generation} is not on disk`)
   }
-  const state = readCheckpoint(root, generation)
+  // The target is usually older than the current generation, so it may predate
+  // value codec 1. Re-cutting it below rewrites its rows as codec 1, after which
+  // nothing on disk says they were lossy: record the report first.
+  const report = new LegacyValueReport()
+  const state = readCheckpoint(root, generation, report)
+  recordLegacyValueFindings(root, report.findings(), now)
   writeRollbackBundle(root, `rollback -> ${generation}`, now)
 
   // Re-cut the target as the newest generation so the journal appends against
@@ -461,6 +499,8 @@ export function rollbackDurability(
 export interface FinalizeResult {
   keptGenerations: string[]
   prunedGenerations: string[]
+  /** Unreferenced binary side files removed (`binary-store.ts`). */
+  prunedBinaries: string[]
   rollbackWatermark: string
   manifest: BackendManifest
 }
@@ -510,9 +550,30 @@ export function finalizeDurability(
     rollbackWatermark: generation,
   }
   writeManifest(root, next, now)
+
+  // Side files nothing kept still names: every remaining generation (its
+  // checkpoint and its journal) and every SQLite row, whichever backend is
+  // active, since any of them can be rolled back to.
+  const kept = listGenerations(root)
+  const references = new Set<string>()
+  for (const candidate of kept) {
+    const checkpoint = readCheckpoint(root, candidate)
+    for (const entry of Object.values(checkpoint.dbs)) {
+      for (const rows of Object.values(entry.rows)) collectBinaryReferences(rows, references)
+    }
+    const file = journalFile(root, candidate)
+    if (fs.existsSync(file)) {
+      const { commits } = replayJournal(fs.readFileSync(file, "utf8"), checkpoint.sequence)
+      for (const commit of commits) collectBinaryReferences(commit.mutations, references)
+    }
+  }
+  collectSqliteBinaryReferences(root, references)
+  const prunedBinaries = pruneBinaries(root, references, now())
+
   return {
-    keptGenerations: listGenerations(root),
+    keptGenerations: kept,
     prunedGenerations: pruned,
+    prunedBinaries,
     rollbackWatermark: generation,
     manifest: next,
   }

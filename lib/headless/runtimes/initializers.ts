@@ -77,9 +77,7 @@ registerHeadlessRuntime({
       { initIssueEventTrigger, disposeIssueEventTrigger },
       { initPlanEventTrigger, disposePlanEventTrigger },
       { initMemoryWrittenTrigger, disposeMemoryWrittenTrigger },
-      { listWorkflows },
-      { resolveWorkflowDeployment },
-      { syncWorkflowTriggers, unsyncWorkflowTriggers },
+      { reconcileWorkflowTriggerRegistrations },
       { resumeInFlightRuns },
       { initPluginTriggerLifecycle, disposePluginTriggerLifecycle },
       { reconcilePendingGoalVerifications },
@@ -92,9 +90,7 @@ registerHeadlessRuntime({
       import("@/lib/workflow/runtime/issue-event-trigger"),
       import("@/lib/workflow/runtime/plan-event-trigger"),
       import("@/lib/workflow/runtime/memory-written-trigger"),
-      import("@/lib/db/workflows"),
-      import("@/lib/db/workflow-deployments"),
-      import("@/lib/workflow/runtime/webhook-bridge"),
+      import("@/lib/workflow/runtime/reconcile-trigger-registrations"),
       import("@/lib/workflow/runtime/resume-controller"),
       import("@/lib/workflow/triggers/lifecycle"),
       import("@/lib/goal/verification"),
@@ -136,21 +132,7 @@ registerHeadlessRuntime({
       cleanups.push(disposePluginTriggerLifecycle)
       initPluginTriggerLifecycle()
       try {
-        const all = await listWorkflows()
-        await Promise.allSettled(
-          all.map(async (workflow) => {
-            try {
-              const deployed = await resolveWorkflowDeployment(workflow.id)
-              if (deployed) await syncWorkflowTriggers(deployed.workflow)
-              else await unsyncWorkflowTriggers(workflow)
-            } catch (error) {
-              ctx.log(
-                "warn",
-                `workflow trigger sync failed for ${workflow.id}: ${error instanceof Error ? error.message : String(error)}`
-              )
-            }
-          })
-        )
+        await reconcileWorkflowTriggerRegistrations({ log: ctx.log })
       } catch (error) {
         ctx.log(
           "warn",

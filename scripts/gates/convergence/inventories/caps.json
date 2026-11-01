@@ -2,7 +2,7 @@
   "inventory": "caps",
   "description": "Numeric concurrency and admission caps plus limiter construction sites in shipped TypeScript and Rust. Repay business caps through the admission limiter; classify native backpressure with the real protected resource and its owner.",
   "generatedAt": {
-    "commit": "458971062624e8ec6d14902f3b167c8bd4470198",
+    "commit": "78bf6fe81eadcfd78ee6fb63141371c308a8104e",
     "date": "2026-11-01"
   },
   "metrics": {
@@ -533,7 +533,7 @@
       "file": "lib/claude/agents/dispatch-run.ts",
       "symbol": "loadNesting::try/maxConcurrent",
       "value": null,
-      "line": 132,
+      "line": 138,
       "language": "typescript",
       "evidence": "08190ed398567825",
       "segment": "business"
@@ -559,7 +559,7 @@
       "symbol": "AUDIT_WRITE_CONCURRENCY",
       "value": 16,
       "language": "typescript",
-      "line": 34,
+      "line": 35,
       "segment": "native",
       "resource": "audit database write transactions",
       "evidence": "5a46b7c2296e9d6e"
@@ -571,7 +571,7 @@
       "file": "lib/connectors/outbound-runner.ts",
       "symbol": "startOutboundRunner::getAdapterState::state::bucket/createTokenBucket",
       "value": null,
-      "line": 533,
+      "line": 642,
       "language": "typescript",
       "segment": "business",
       "evidence": "b746b82a717eb363"
@@ -583,7 +583,7 @@
       "file": "lib/connectors/outbound-runner.ts",
       "symbol": "startOutboundRunner::sendSemaphore/PlatformSendSemaphore",
       "value": null,
-      "line": 473,
+      "line": 582,
       "language": "typescript",
       "segment": "business",
       "evidence": "8dbecc496cf90149"
@@ -646,7 +646,7 @@
       "symbol": "MAX_ACCOUNT_CONCURRENCY",
       "value": 4,
       "language": "typescript",
-      "line": 185,
+      "line": 301,
       "segment": "business",
       "evidence": "e41ae87e50211d13"
     },
@@ -932,7 +932,7 @@
       "file": "lib/workflow/runtime/orchestrator.ts",
       "symbol": "runWorkflow/concurrency",
       "value": null,
-      "line": 434,
+      "line": 446,
       "language": "typescript",
       "evidence": "3645a7afdff05154",
       "segment": "business"
@@ -1682,7 +1682,7 @@
       "file": "lib/claude/agents/dispatch-run.ts",
       "symbol": "loadNesting::catch/maxConcurrent",
       "value": 0,
-      "line": 140,
+      "line": 146,
       "language": "typescript",
       "evidence": "b13c0f191f5b689b",
       "reason": "The catch fallback maxConcurrent=0 at lib/claude/agents/dispatch-run.ts:140 means unlimited fan-out; resolveDispatchWidth returns Infinity for zero at lib/claude/agents/dispatch-agent-handler.ts:51, so this fallback does not impose a cap."
@@ -1693,7 +1693,7 @@
       "file": "lib/claude/agents/dispatch-run.ts",
       "symbol": "resolveCaller::default/maxConcurrent",
       "value": null,
-      "line": 223,
+      "line": 229,
       "language": "typescript",
       "evidence": "c25b80e1cf497697",
       "reason": "resolveCaller copies settings.maxConcurrent into the root caller context at lib/claude/agents/dispatch-run.ts:223; the loadNesting policy is already kept and resolveDispatchWidth at lib/claude/agents/dispatch-agent-handler.ts:51 is its consumer."
@@ -1704,7 +1704,7 @@
       "file": "lib/claude/agents/dispatch-run.ts",
       "symbol": "resolveCaller::if(ctx)/maxConcurrent",
       "value": null,
-      "line": 209,
+      "line": 215,
       "language": "typescript",
       "evidence": "c25b80e1cf497697",
       "reason": "The nested caller context copies the same global settings.maxConcurrent at lib/claude/agents/dispatch-run.ts:209; it introduces no independent value beyond the kept loadNesting policy consumed by resolveDispatchWidth."
@@ -1716,7 +1716,7 @@
       "symbol": "MAX_ACTIVE_PLATFORM_SENDS",
       "value": 16,
       "language": "typescript",
-      "line": 203,
+      "line": 219,
       "reason": "lib/connectors/outbound-runner.ts:203: Only supplies the default for the listed startOutboundRunner::sendSemaphore/PlatformSendSemaphore cap; counting the declaration again would duplicate that limiter.",
       "evidence": "b7768299893fa2e6"
     },
@@ -2152,7 +2152,7 @@
       "file": "lib/workflow/runtime/orchestrator.ts",
       "symbol": "runWorkflow::concurrency/maxConcurrency",
       "value": null,
-      "line": 436,
+      "line": 448,
       "language": "typescript",
       "evidence": "284d106b64e58361",
       "reason": "The validated.settings.maxConcurrency fallback at lib/workflow/runtime/orchestrator.ts:436 is part of the enclosing concurrency binding kept at lib/workflow/runtime/orchestrator.ts:434; both describe the same per-run node controller."

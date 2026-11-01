@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/rpc-semantic-parity-baseline.json",
+  "measure": "findings",
+  "allowGrowth": 5,
+  "owner": "lib/companion",
+  "repaymentPhase": "1",
+  "reason": "Convergence 0b B9 fixed the gate's early return on the response-schema ceiling, which had hidden five pre-existing RPC-versus-Tauri gaps present at d8e3ac4fb9: best_of_n_select (refused remotely by design), plugin_media_get_video_frame drops animation_sheet, and secret_store_set drops its compare-and-set condition on the remote plane. They are newly visible, not new; the secret_store_set and video-frame gaps are real defects to repay (0b ledger D15, X14)."
+}

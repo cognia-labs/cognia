@@ -614,9 +614,11 @@ export interface FusionOutboxRow {
   runId: string
   kind: FusionOutboxKind
   payload: Record<string, unknown>
-  status: "pending" | "applied" | "skipped"
+  status: "pending" | "applied" | "skipped" | "deadletter"
   attempts: number
   lastError: string | null
   createdAt: number
+  nextAttemptAt: number
   appliedAt: number | null
+  deadletteredAt?: number | null
 }

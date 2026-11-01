@@ -35,8 +35,14 @@ export interface CreateDraftInput {
   outboundPreview?: OutboundRequest
 }
 
-export async function createDraft(input: CreateDraftInput): Promise<ConnectorDraftRow> {
-  const row: ConnectorDraftRow = {
+/**
+ * Build the row {@link createDraft} would write, without writing it. For a
+ * caller that adds the draft inside its own transaction (the outbound runner
+ * holds a job and writes its draft atomically); the project lookup reads the
+ * session table, so it runs here, before that transaction.
+ */
+export async function prepareDraftRow(input: CreateDraftInput): Promise<ConnectorDraftRow> {
+  return {
     id: newId(),
     conversationKey: input.conversationKey,
     sessionId: input.sessionId,
@@ -50,6 +56,10 @@ export async function createDraft(input: CreateDraftInput): Promise<ConnectorDra
     sourceMessageId: input.sourceMessageId,
     outboundPreview: input.outboundPreview,
   }
+}
+
+export async function createDraft(input: CreateDraftInput): Promise<ConnectorDraftRow> {
+  const row = await prepareDraftRow(input)
   await getDb().connectorDrafts.add(row)
   invalidate(input.conversationKey)
   return row

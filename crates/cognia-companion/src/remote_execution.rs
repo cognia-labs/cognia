@@ -664,6 +664,21 @@ async fn execute_receipted_request(
                 replayed: false,
             })
         }
+        Err(mut error) if error.code == crate::data_plane::HOST_UNAVAILABLE => {
+            // Refused before anything was written (ADR-0250 §4). Completing
+            // the operation with this refusal would replay it to the retry it
+            // invites, so the operation is given back for that retry instead.
+            store
+                .release_unexecuted_operation(
+                    &request.principal.tenant_id,
+                    &request.principal.device_id,
+                    &idempotency_key,
+                    unix_time_secs(),
+                )
+                .map_err(|store_error| map_store_error(&request.request_id, store_error))?;
+            error.operation_id = Some(operation_id);
+            Err(error)
+        }
         Err(mut error) => {
             let receipt = json!({ "httpStatus": error.status, "error": error });
             store
@@ -1526,6 +1541,92 @@ mod tests {
             .operation_person_account("tenant-a", "device-a", &id)
             .unwrap()
             .is_none());
+    }
+
+    /// ADR-0250 §4: a write a degraded host refused (`HOST_UNAVAILABLE`)
+    /// wrote nothing, so its retry under the same idempotency key must run
+    /// again once the brain is back, not replay the refusal. The key still
+    /// refuses a different request.
+    #[tokio::test]
+    async fn a_host_unavailable_refusal_is_not_replayed_to_the_retry_it_invites() {
+        let store = SecurityStore::in_memory().unwrap();
+        let mut request = execution_request("device", None);
+        request.command = "message_send".into();
+        request.idempotency_key = Some(Uuid::new_v4().to_string());
+
+        let refused =
+            execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+                Err(problem(
+                    "req",
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    crate::data_plane::HOST_UNAVAILABLE,
+                    "the host's brain is not connected; nothing was written",
+                )
+                .retryable(true))
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, crate::data_plane::HOST_UNAVAILABLE);
+        let refused_id = refused.operation_id.clone().expect("operation id");
+
+        let conflicting =
+            execute_receipted_request(&store, &request, "other-hash", unix_time_secs(), async {
+                panic!("a different request under the same key must not run")
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(conflicting.status_code(), StatusCode::CONFLICT);
+
+        let retried =
+            execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+                Ok(json!({ "message_id": "m1" }))
+            })
+            .await
+            .unwrap();
+        assert!(
+            matches!(&retried, ExecutionOutcome::Completed { operation_id: Some(id), replayed: false, .. } if *id == refused_id),
+            "the retry runs again under the same operation: {retried:?}"
+        );
+
+        let replay = execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+            panic!("a completed success replays")
+        })
+        .await
+        .unwrap();
+        assert!(matches!(
+            replay,
+            ExecutionOutcome::Completed { replayed: true, .. }
+        ));
+    }
+
+    /// Any other failure stays a completed receipt, replayed to the retry.
+    #[tokio::test]
+    async fn other_failures_still_complete_and_replay() {
+        let store = SecurityStore::in_memory().unwrap();
+        let mut request = execution_request("device", None);
+        request.command = "message_send".into();
+        request.idempotency_key = Some(Uuid::new_v4().to_string());
+        let first = execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+            Err(problem(
+                "req",
+                StatusCode::BAD_REQUEST,
+                "SESSION_NOT_FOUND",
+                "no such session",
+            ))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(first.code, "SESSION_NOT_FOUND");
+        let replayed =
+            execute_receipted_request(&store, &request, "hash", unix_time_secs(), async {
+                panic!("a completed failure replays")
+            })
+            .await;
+        assert!(
+            matches!(&replayed, Err(problem) if problem.code == "SESSION_NOT_FOUND"
+                && problem.operation_id == first.operation_id),
+            "a completed failure replays as the same refusal: {replayed:?}"
+        );
     }
 
     #[tokio::test]

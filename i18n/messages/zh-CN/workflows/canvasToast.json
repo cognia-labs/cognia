@@ -12,5 +12,6 @@
   "running": "运行中…",
   "saveFailed": "保存工作流失败",
   "savedOk": "工作流已保存",
-  "startFailed": "启动运行失败"
+  "startFailed": "启动运行失败",
+  "triggerRegistrationFailed": "工作流已保存，但触发器注册失败。启动时将重新尝试注册。"
 }

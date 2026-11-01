@@ -108,7 +108,6 @@ mod parse;
 mod perf;
 mod pet_window;
 mod pi_extension;
-mod native_agent_bridge;
 mod pi_sessions;
 // ADR-0067 Tier B — extracted to `crates/cognia-plugin-runtime` (isolates
 // wasmtime/cranelift); re-aliased so `crate::plugin_api::…` (companion_api,
@@ -1292,7 +1291,7 @@ pub fn run() {
             external_agent::commands::external_agent_probe_runtime_version,
             external_agent::commands::external_agent_detect_runtimes,
             pi_extension::resolve_pi_extension,
-            native_agent_bridge::resolve_bundled_agent_bridge,
+            claude::native_agent_bridge::resolve_bundled_agent_bridge,
             pi_sessions::list_pi_sessions,
             logging::commands::native_logging_get_readiness,
             logging::commands::native_logging_get_log_directory,

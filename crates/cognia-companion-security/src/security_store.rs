@@ -1806,16 +1806,36 @@ impl SecurityStore {
     }
 
     /// Remove terminal receipts older than the retry window. A missing receipt
-    /// means `InProgress` to `begin_idempotent_operation`, regardless of age.
+    /// means `InProgress` to `begin_idempotent_operation`, regardless of age,
+    /// except on a released record (`release_unexecuted_operation`): that one
+    /// wrote nothing, so once its retry window passes it goes with its run.
     pub fn purge_completed_idempotency_records(
         &self,
         now: i64,
     ) -> Result<usize, SecurityStoreError> {
-        Ok(self.conn.lock().execute(
+        let cutoff = now.saturating_sub(IDEMPOTENCY_RETENTION_SECS);
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let released = "SELECT operation_id FROM idempotency_records
+             WHERE status = 'released' AND updated_at < ?1";
+        for table in ["artifacts", "run_events"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE run_id IN ({released})"),
+                [cutoff],
+            )?;
+        }
+        tx.execute(
+            &format!("DELETE FROM runs WHERE status = 'released' AND id IN ({released})"),
+            [cutoff],
+        )?;
+        let count = tx.execute(
             "DELETE FROM idempotency_records
-             WHERE (receipt_json IS NOT NULL OR receipt_cipher IS NOT NULL OR status = 'host-semantic') AND updated_at < ?1",
-            [now.saturating_sub(IDEMPOTENCY_RETENTION_SECS)],
-        )?)
+             WHERE (receipt_json IS NOT NULL OR receipt_cipher IS NOT NULL
+                    OR status IN ('host-semantic', 'released')) AND updated_at < ?1",
+            [cutoff],
+        )?;
+        tx.commit()?;
+        Ok(count)
     }
 
     /// Reserve only an opaque request hash. The owning Host domain implements
@@ -1851,7 +1871,7 @@ impl SecurityStore {
                     "UPDATE runs SET status='failed', updated_at=?4
                      WHERE tenant_id=?1 AND id=(SELECT operation_id FROM idempotency_records
                          WHERE tenant_id=?1 AND device_id=?2 AND idempotency_key=?3)
-                       AND status IN ('queued','running','recovering')",
+                       AND status IN ('queued','running','recovering','released')",
                     params![tenant_id, device_id, idempotency_key, now],
                 )?;
                 tx.execute(
@@ -1980,6 +2000,37 @@ impl SecurityStore {
             };
             if status == "host-semantic" && receipt_json.is_none() {
                 return Err(SecurityStoreError::ReceiptUnavailable);
+            }
+            if status == "released" && receipt_json.is_none() {
+                // The earlier attempt was refused before it wrote anything
+                // (see `release_unexecuted_operation`): the same request runs
+                // again under the same operation id. The hash check above
+                // still refuses different parameters under this key.
+                tx.execute(
+                    "UPDATE idempotency_records SET status = 'running', updated_at = ?4
+                     WHERE tenant_id = ?1 AND device_id = ?2 AND idempotency_key = ?3",
+                    params![tenant_id, device_id, idempotency_key, now],
+                )?;
+                let requeued = tx.execute(
+                    "UPDATE runs SET status = 'queued', updated_at = ?3
+                     WHERE tenant_id = ?1 AND id = ?2 AND status = 'released'",
+                    params![tenant_id, operation_id, now],
+                )?;
+                if requeued != 1 {
+                    // Dropping the transaction rolls the record back too, so
+                    // the key is not left running with no run to finish it.
+                    return Err(SecurityStoreError::InvalidRunTransition);
+                }
+                insert_audit(
+                    &tx,
+                    tenant_id,
+                    device_id,
+                    "run.requeued",
+                    &operation_id,
+                    now,
+                )?;
+                tx.commit()?;
+                return Ok(IdempotencyDecision::Started { operation_id });
             }
             let decision = match receipt_json {
                 Some(receipt_json) => IdempotencyDecision::Completed {
@@ -2141,6 +2192,59 @@ impl SecurityStore {
         let count = tx.execute("DELETE FROM idempotency_records WHERE substr(idempotency_key, 1, length(?1)) = ?1", [&prefix])?;
         tx.commit()?;
         Ok(count)
+    }
+
+    /// Give back an operation the host refused before it wrote anything (a
+    /// `HOST_UNAVAILABLE` from a degraded data plane, ADR-0250 §4), instead of
+    /// completing it with that refusal as its receipt. A completed failure is
+    /// replayed to every retry under the same key, so the retry the refusal
+    /// invites would keep getting the old answer after the brain was back.
+    ///
+    /// The record keeps its request hash, so the key still refuses different
+    /// parameters; the next attempt with the same request starts the same
+    /// operation again (`begin_operation`).
+    pub fn release_unexecuted_operation(
+        &self,
+        tenant_id: &str,
+        device_id: &str,
+        idempotency_key: &str,
+        now: i64,
+    ) -> Result<(), SecurityStoreError> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = tx.execute(
+            "UPDATE idempotency_records SET status = 'released', updated_at = ?1
+             WHERE tenant_id = ?2 AND device_id = ?3 AND idempotency_key = ?4
+               AND receipt_json IS NULL AND receipt_cipher IS NULL AND status = 'running'",
+            params![now, tenant_id, device_id, idempotency_key],
+        )?;
+        if updated != 1 {
+            return Err(SecurityStoreError::IdempotencyConflict);
+        }
+        let operation_id: String = tx.query_row(
+            "SELECT operation_id FROM idempotency_records
+             WHERE tenant_id = ?1 AND device_id = ?2 AND idempotency_key = ?3",
+            params![tenant_id, device_id, idempotency_key],
+            |row| row.get(0),
+        )?;
+        let run_updated = tx.execute(
+            "UPDATE runs SET status = 'released', updated_at = ?1
+             WHERE tenant_id = ?2 AND id = ?3 AND status = 'running'",
+            params![now, tenant_id, operation_id],
+        )?;
+        if run_updated != 1 {
+            return Err(SecurityStoreError::InvalidRunTransition);
+        }
+        insert_audit(
+            &tx,
+            tenant_id,
+            device_id,
+            "run.released",
+            &operation_id,
+            now,
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn complete_idempotent_operation(
@@ -7836,6 +7940,162 @@ CREATE TABLE devices (
             )
             .unwrap();
         operation_id
+    }
+
+    /// A released operation (refused before it wrote anything) starts again
+    /// under the same key and operation id, and still refuses payload drift.
+    #[test]
+    fn a_released_operation_starts_again_for_the_same_request_only() {
+        let store = SecurityStore::in_memory().unwrap();
+        let operation_id = match store
+            .begin_idempotent_operation("tenant-a", "device-a", "host-a", "key-r", "hash-r", 100)
+            .unwrap()
+        {
+            IdempotencyDecision::Started { operation_id } => operation_id,
+            other => panic!("unexpected decision: {other:?}"),
+        };
+        let run_status = || {
+            store
+                .conn
+                .lock()
+                .query_row(
+                    "SELECT status FROM runs WHERE id = ?1",
+                    [&operation_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        };
+        // A queued run has not been dispatched: nothing to give back, and the
+        // refused release rolls back, leaving both rows as they were.
+        assert!(
+            matches!(
+                store.release_unexecuted_operation("tenant-a", "device-a", "key-r", 101),
+                Err(SecurityStoreError::InvalidRunTransition)
+            ),
+            "only a running operation can be released"
+        );
+        assert_eq!(run_status(), "queued");
+        store
+            .mark_operation_running("tenant-a", &operation_id, 101)
+            .unwrap();
+        store
+            .release_unexecuted_operation("tenant-a", "device-a", "key-r", 102)
+            .unwrap();
+        assert_eq!(run_status(), "released");
+        assert!(matches!(
+            store.begin_idempotent_operation(
+                "tenant-a", "device-a", "host-a", "key-r", "drift", 103
+            ),
+            Err(SecurityStoreError::IdempotencyConflict)
+        ));
+        assert_eq!(
+            store
+                .begin_idempotent_operation(
+                    "tenant-a", "device-a", "host-a", "key-r", "hash-r", 104
+                )
+                .unwrap(),
+            IdempotencyDecision::Started {
+                operation_id: operation_id.clone()
+            }
+        );
+        assert_eq!(run_status(), "queued");
+        store
+            .mark_operation_running("tenant-a", &operation_id, 105)
+            .unwrap();
+        store
+            .complete_idempotent_operation(
+                "tenant-a",
+                "device-a",
+                "key-r",
+                r#"{"httpStatus":200,"result":null}"#,
+                true,
+                106,
+            )
+            .unwrap();
+        assert!(matches!(
+            store
+                .begin_idempotent_operation(
+                    "tenant-a", "device-a", "host-a", "key-r", "hash-r", 107
+                )
+                .unwrap(),
+            IdempotencyDecision::Completed { .. }
+        ));
+    }
+
+    fn released_operation(store: &SecurityStore, key: &str, at: i64) -> String {
+        let IdempotencyDecision::Started { operation_id } = store
+            .begin_idempotent_operation("tenant-a", "device-a", "host-a", key, "hash-r", at)
+            .unwrap()
+        else {
+            panic!("expected a new operation")
+        };
+        store
+            .mark_operation_running("tenant-a", &operation_id, at)
+            .unwrap();
+        store
+            .release_unexecuted_operation("tenant-a", "device-a", key, at)
+            .unwrap();
+        operation_id
+    }
+
+    fn count_rows(store: &SecurityStore, sql: &str, id: &str) -> i64 {
+        store
+            .conn
+            .lock()
+            .query_row(sql, [id], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// A released record has no receipt but wrote nothing: once its retry
+    /// window passes it is purged with its run, not kept forever.
+    #[test]
+    fn a_released_operation_is_purged_with_its_run_after_the_retry_window() {
+        let store = SecurityStore::in_memory().unwrap();
+        let old = released_operation(&store, "key-old", 100);
+        let recent_at = 100 + IDEMPOTENCY_RETENTION_SECS;
+        let recent = released_operation(&store, "key-recent", recent_at);
+        store
+            .purge_completed_idempotency_records(100 + IDEMPOTENCY_RETENTION_SECS + 1)
+            .unwrap();
+        let records = "SELECT COUNT(*) FROM idempotency_records WHERE operation_id = ?1";
+        let runs = "SELECT COUNT(*) FROM runs WHERE id = ?1";
+        assert_eq!(count_rows(&store, records, &old), 0);
+        assert_eq!(count_rows(&store, runs, &old), 0);
+        assert_eq!(
+            count_rows(&store, records, &recent),
+            1,
+            "inside the window it stays"
+        );
+        assert_eq!(count_rows(&store, runs, &recent), 1);
+    }
+
+    /// Restarting a released record whose run is gone must not leave the key
+    /// running with no run to finish it: the whole restart rolls back.
+    #[test]
+    fn restarting_a_released_operation_without_its_run_rolls_back() {
+        let store = SecurityStore::in_memory().unwrap();
+        let operation_id = released_operation(&store, "key-gone", 100);
+        store
+            .conn
+            .lock()
+            .execute("DELETE FROM runs WHERE id = ?1", [&operation_id])
+            .unwrap();
+        assert!(matches!(
+            store.begin_idempotent_operation(
+                "tenant-a", "device-a", "host-a", "key-gone", "hash-r", 101
+            ),
+            Err(SecurityStoreError::InvalidRunTransition)
+        ));
+        let status: String = store
+            .conn
+            .lock()
+            .query_row(
+                "SELECT status FROM idempotency_records WHERE operation_id = ?1",
+                [&operation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "released");
     }
 
     #[test]

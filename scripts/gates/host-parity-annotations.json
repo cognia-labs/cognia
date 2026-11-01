@@ -5,8 +5,16 @@
     "app/global-error.tsx": {
       "classification": "ui-assumption"
     },
+    "app/me": {
+      "classification": "ui-assumption",
+      "note": "One `usePlatform()` in page.tsx feeds `isMeEntryOffered` (components/mobile/me/me-entries.ts): on `tauri` every host-operation-gated entry is offered unchecked, elsewhere only when the paired host's runtime snapshot advertises the route's operation. The desktop half should read the same snapshot."
+    },
     "app/page.tsx": {
       "classification": "ui-assumption"
+    },
+    "components/account": {
+      "classification": "ui-assumption",
+      "note": "`usePlatform()` in account-lock-screen.tsx only picks the runtime badge text (OS keychain, mobile secure storage, Browser Vault). Unlocking is the same on every host."
     },
     "components/app-shell-mobile.tsx": {
       "classification": "ui-assumption"
@@ -54,6 +62,10 @@
     "components/editor": {
       "classification": "ui-assumption"
     },
+    "components/filespace": {
+      "classification": "ui-assumption",
+      "note": "`isTauri()` in conversation-files-panel.tsx picks the copied link format: a `cognia://session/\u2026?view=files` deep link on the desktop, a web URL elsewhere. It gates no files behaviour."
+    },
     "components/fleet": {
       "classification": "ui-assumption"
     },
@@ -84,6 +96,14 @@
     "components/rag": {
       "classification": "ui-assumption"
     },
+    "components/remote-desktop": {
+      "classification": "physically-impossible",
+      "note": "remote-desktop-viewer-page.tsx: `access === \"web-console\"` embeds RemoteConsoleView, a native child webview over the page that needs Tauri's multi-webview; a link without a remote host needs a Host of the renderer's own. Every other shell falls back to LaunchNotice (open externally)."
+    },
+    "components/runtime": {
+      "classification": "ui-assumption",
+      "note": "`usePlatform()` in surface-availability-boundary.tsx goes to `resolveRuntimeRecovery` to pick per-shell recovery copy and actions. Availability itself comes from the runtime snapshot; the platform only changes the remedy shown."
+    },
     "components/selection-toolbar": {
       "classification": "physically-impossible",
       "note": "ADR-0093/0095 \u2014 needs a visible desktop and screen-recording permission."
@@ -113,6 +133,10 @@
     "components/terminal": {
       "classification": "ui-assumption"
     },
+    "components/thread-handoff": {
+      "classification": "physically-impossible",
+      "note": "handed-off-banner and thread-handoff-source-dialog pass `isDesktop: isTauri()` to continueOnHostRefusal/bringBackRefusal (lib/remote-host/code-supply), which refuse with \"not-desktop\": the source side snapshots this machine's working tree and issues a host-admin lease from this desktop. A phone or browser holds no working tree to hand over or bring back."
+    },
     "components/twin": {
       "classification": "ui-assumption"
     },
@@ -133,8 +157,16 @@
     "hooks/agent": {
       "classification": "ui-assumption"
     },
+    "hooks/agents": {
+      "classification": "ui-assumption",
+      "note": "`isTauri()` in use-agent-actions.ts picks how an exported character pack is saved: native save dialog plus plugin-fs write on the desktop, a Blob download elsewhere. Same body either way."
+    },
     "hooks/artifacts": {
       "classification": "ui-assumption"
+    },
+    "hooks/automation": {
+      "classification": "physically-impossible",
+      "note": "use-automation-host-status reads this desktop's AX / screen-recording / UIA permissions and native automation capabilities (ADR-0020). use-session-sandbox-desktop passes `isTauri()` as `lifecycleHostAvailable`, offering the sandbox GUI viewer only on the desktop: that half is a ui-assumption to split out when paying down."
     },
     "hooks/browser": {
       "classification": "ui-assumption"
@@ -171,9 +203,17 @@
     "hooks/git": {
       "classification": "ui-assumption"
     },
+    "hooks/glance": {
+      "classification": "unmigrated",
+      "note": "use-glance-quota gates vault enumeration, local-login discovery and per-account limit refresh on `isTauri()` because the subscription vault is a Tauri command family. A brain's subscription accounts and quotas are host-neutral data; this follows lib/subscription. The tray glance windows themselves are physical (lib/tauri/glance.ts)."
+    },
     "hooks/global-search": {
       "classification": "ui-assumption",
       "note": "`isTauri()` around the open-folder and check-updates palette actions, each falling back to a localized \"desktop only\" toast rather than failing silently, plus one `usePlatform()` for context assembly. Honest degradation, not a hidden gap."
+    },
+    "hooks/goal": {
+      "classification": "ui-assumption",
+      "note": "use-goal-controls, use-goal-create and use-goal-verifier-options read `usePlatform() === \"mobile\"` as \"remote\" (writes through the paired host's control grant, verifier catalog from the host). A browser paired to a cloud host is also remote but reads as local and writes its own Dexie; the decision should key off the runtime snapshot's target."
     },
     "hooks/mcp": {
       "classification": "ui-assumption"
@@ -181,8 +221,16 @@
     "hooks/memory": {
       "classification": "ui-assumption"
     },
+    "hooks/pet": {
+      "classification": "physically-impossible",
+      "note": "`usePlatform()` in use-pet-console-mode feeds resolvePetAvailability for the local pet overlay window (ADR-0058). Remote care is already decided by the active host's `pet.remote-care` capability."
+    },
     "hooks/plugins": {
       "classification": "ui-assumption"
+    },
+    "hooks/prompts": {
+      "classification": "ui-assumption",
+      "note": "use-effective-chat-preview reports project instructions as `omitted: \"no-filesystem\"` off Tauri. A turn sent from a paired client runs on a host that has a filesystem, so the preview misstates what the run gets; it should ask the execution host or follow its capability."
     },
     "hooks/provider": {
       "classification": "ui-assumption"
@@ -204,6 +252,10 @@
     "hooks/skills": {
       "classification": "ui-assumption"
     },
+    "hooks/squads": {
+      "classification": "ui-assumption",
+      "note": "`usePlatform()` in use-squad-templates maps the shell to a TemplatePlatform that applySquadTemplate uses to filter template compatibility. Catalog filtering, not a backend restriction."
+    },
     "hooks/system": {
       "classification": "ui-assumption"
     },
@@ -222,6 +274,10 @@
     },
     "lib/a2ui": {
       "classification": "unmigrated"
+    },
+    "lib/account-sync": {
+      "classification": "seam-infrastructure",
+      "note": "enrollment/platform.ts `currentDevicePlatform()` maps the shell to the registry's DevicePlatform recorded at enrollment; naming the device kind is its job. The headless brain enrolls through cli/src/account-sync and never calls it."
     },
     "lib/accounts": {
       "classification": "unmigrated"
@@ -245,12 +301,32 @@
       "classification": "physically-impossible",
       "note": "AX/UIA against a real desktop. Consent is NOT in this category \u2014 see ADR-0059: it routes to a paired device via notifications.remote."
     },
+    "lib/background-tasks": {
+      "classification": "unmigrated",
+      "note": "redispatch.ts reads Claude settings hooks through `readClaudeEffectiveSettings` only on `isTauri()`. On a brain `nativeLifecycleHooks` stays \"uninspected-host\", so every recovery record is stamped non-idempotent and auto-resume is more conservative than needed. Reading the brain's own settings is host-neutral work behind the Tauri-only lib/claude/settings path; it degrades safely but is not physical."
+    },
+    "lib/best-of-n": {
+      "classification": "unmigrated",
+      "note": "projection.ts `canManageBestOfNRuns()` is `isTauri() && !isRemoteHostActive()`, so a headless brain, itself the executing host, is cast as a `pairedObserver` and team-api / the /best-of-n action refuse to start or manage runs. The best_of_n_* arms are host-neutral (rpc/filesystem.rs \u2192 cognia_task_workspace_host); the guard hides work the brain could do."
+    },
     "lib/biometric": {
       "classification": "physically-impossible"
     },
     "lib/browser": {
       "classification": "unmigrated",
       "note": "`installSnapshotInvalidation` gates on `isTauri()` because the snapshot-dirty event arrives on the Tauri event plane. The code already degrades honestly (the cache stays conservative and `fresh` bypasses it), so this is a missed optimisation on a cloud host rather than a broken feature \u2014 it clears when the browser events move onto the swappable seam."
+    },
+    "lib/browser-companion": {
+      "classification": "seam-infrastructure",
+      "note": "host-transport.ts picks how this process reaches its own `/ws/browser-companion` sockets: localTransport on the desktop, the brain's service-plane transport headless, nothing on a phone or tab (`hostServesBrowserSockets`). Both hosts are complete."
+    },
+    "lib/browser/local-client.ts": {
+      "classification": "physically-impossible",
+      "note": "Only the screencast frame stream uses Tauri IPC directly: `browser_local_frames_subscribe` passes a `Channel` that Rust fills with raw ArrayBuffers (InvokeResponseBody::Raw), and its paired unsubscribe. The Transport contract has no per-call binary channel. The family is client.local (the local Chromium on this desktop); remote hosts stream through browser.remote instead. Every other call here goes through `transport`.",
+      "physicalSeam": {
+        "imports": ["Channel", "invoke"],
+        "invokes": ["browser_local_frames_subscribe", "browser_local_frames_unsubscribe"]
+      }
     },
     "lib/canvas": {
       "classification": "unmigrated"
@@ -301,6 +377,10 @@
       "classification": "seam-infrastructure",
       "confidence": "low"
     },
+    "lib/devices": {
+      "classification": "ui-assumption",
+      "note": "pair-entry.ts sends \"Pair a device\" to Settings \u2192 Companion (native QR) on the desktop and to the surface contract's standalone remedy route elsewhere. Navigation only."
+    },
     "lib/docs-providers": {
       "classification": "seam-infrastructure",
       "note": "This IS the host-support declaration for the cloud-document providers. `listAvailableDocsProviders` and `isDocsProviderHostSupported` filter a registry by each provider's own `hosts` list, which is the registry's job and the reason a mobile user sees WHY a provider is missing instead of an empty picker. The one `isTauri()` outside that, in `providers/google/http.ts`, picks the Tauri transport over `fetch` and is the same seam question."
@@ -314,8 +394,20 @@
     "lib/files": {
       "classification": "unmigrated"
     },
+    "lib/files-library": {
+      "classification": "ui-assumption",
+      "note": "workspace-files-io `hasLocalWorkspaceFiles()` returns `isTauri()`: only the desktop renderer lists its own task-workspace ledger, and a paired device shows the host's. The ledger (cognia-task-workspace resource_index) is host-neutral; the guard answers \"is this renderer co-located with a ledger\" by shell rather than capability."
+    },
+    "lib/filespace": {
+      "classification": "seam-infrastructure",
+      "note": "grants-client `fileShareTransport()` pins the desktop's own file-share host to localTransport so it never follows a selected remote host, and routes everything else through `transport`; the brain passes its transport through FileShareTarget. Both hosts serve the file_* surface."
+    },
     "lib/fleet": {
       "classification": "unmigrated"
+    },
+    "lib/gateway": {
+      "classification": "unmigrated",
+      "note": "mint-session-ticket `prepareExternalAgentGatewayRoute` sends a headless brain to `prepareHostGatewayRoute` (a host task lease, credentials from the host-owned snapshot); the desktop builds the route from renderer settings and subscription credentials. Both hosts work: the guard marks two credential authorities ADR-0250 phase 2 should collapse onto the host-owned path."
     },
     "lib/git": {
       "classification": "unmigrated",
@@ -327,6 +419,10 @@
     },
     "lib/goal": {
       "classification": "unmigrated"
+    },
+    "lib/host-secrets": {
+      "classification": "seam-infrastructure",
+      "note": "provider-key-overlay `defaultHostProviderKeyDeps()` loads sealed provider keys from each host's own store: service-plane `transport` on a brain, the desktop's own command and event on Tauri (never the routed transport), none elsewhere. Equivalent by construction."
     },
     "lib/integrations": {
       "classification": "unmigrated"
@@ -347,6 +443,14 @@
     },
     "lib/lsp": {
       "classification": "unmigrated"
+    },
+    "lib/magpie": {
+      "classification": "unmigrated",
+      "note": "client.ts reads the Magpie gateway port with `magpie_gateway_port` only on `isTauri()` and otherwise assumes 3425. The port comes from the tauri-free cognia_ccswitch::magpie behind a desktop-only command, so a brain probing its own machine gets the default instead of the configured port. Follows lib/ccswitch."
+    },
+    "lib/mcp": {
+      "classification": "unmigrated",
+      "note": "run-server-map `buildRunMcpServerMap` injects OAuth bearer headers and refresh for remote MCP servers only on `isTauri()`; brain-run turns (build-options, ACP children) resolve SecretRefs only. Headless already serves `mcp_oauth_load_entry`, so OAuth-protected MCP servers fail on brain runs for no physical reason."
     },
     "lib/memory": {
       "classification": "unmigrated"
@@ -398,6 +502,10 @@
     "lib/rag": {
       "classification": "unmigrated"
     },
+    "lib/remote-desktop": {
+      "classification": "ui-assumption",
+      "note": "launch.ts `remoteDesktopClientKind()` picks desktop/phone/web to choose the launch mechanism (app-link open, native phone handoff or in-app browser, tab). Client presentation of one launch decision."
+    },
     "lib/reply-copilot": {
       "classification": "physically-impossible",
       "note": "screen/overlay-client guards the local nonactivating chat-copilot desktop window, its placement and inter-window events. Clipboard writes have a browser fallback; the guarded overlay requires a visible OS desktop."
@@ -405,6 +513,10 @@
     "lib/router-fusion": {
       "classification": "unmigrated",
       "note": "verify/acceptance-profiles defaults onWeb to !isTauri before evaluating workspace trust. The host is injectable, but a headless host should not inherently be treated as a browser; this remains a default-host capability migration."
+    },
+    "lib/sandbox": {
+      "classification": "unmigrated",
+      "note": "Reversed asymmetry: `isHeadlessHost()` enables always-on-Host behaviour the desktop lacks: the container shell tier (container-exec-adapter \u2192 service-only `environment_task_shell_exec`, an ungated arm), dispatched-agent placement (host-agent-placement) and scratch workspaces (task-shell-placement). A desktop in host mode has no physical reason to go without them. delivery-source-hosts additionally pins local vs remote transport for cleanup, which is seam work."
     },
     "lib/scheduler": {
       "classification": "unmigrated"
@@ -419,6 +531,10 @@
     "lib/shell": {
       "classification": "unmigrated",
       "note": "headless holds the `shell` capability."
+    },
+    "lib/shell-intelligence": {
+      "classification": "unmigrated",
+      "note": "shell-job-run `defaultCanLongPoll()` is `isTauri() && !isRemoteHostActive()` because `background_job_wait` is classified `client` and never follows a remote host; elsewhere it sleep-polls. The jobs supervisor (cognia_jobs) is host-neutral; reclassifying the wait as execution removes the guard."
     },
     "lib/shortcuts": {
       "classification": "physically-impossible",
@@ -453,6 +569,14 @@
     },
     "lib/tauri.ts": {
       "classification": "seam-infrastructure"
+    },
+    "lib/tauri/glance.ts": {
+      "classification": "physically-impossible",
+      "note": "Inter-window channel between the desktop main window and its tray-panel/pet/island/dock webviews (ADR-0225 \u00a77). Every event is sent with `emitTo(windowLabel)` because those windows share one root layout; Transport has no emit and no window addressing, and a headless host has no second window. The phone glance travels on lib/glance/remote/. Same footing as lib/island and lib/usage-dock.",
+      "physicalSeam": {
+        "imports": ["emitTo", "listen"],
+        "events": ["glance://request", "glance://result", "glance://snapshot", "glance://subscribe"]
+      }
     },
     "lib/terminal": {
       "classification": "unmigrated",

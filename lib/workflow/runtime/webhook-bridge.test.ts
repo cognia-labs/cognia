@@ -1,6 +1,10 @@
 /**
  * @jest-environment jsdom
  */
+import {
+  getWorkflowTriggerHealth,
+  resetWorkflowTriggerHealthForTest,
+} from "./trigger-registration-health"
 import type { VisualWorkflow, WorkflowNode } from "@/types/workflow/visual"
 
 // Mock the tauri-bridge module at hoist time so the bridge under test
@@ -31,6 +35,7 @@ import {
 } from "./webhook-bridge"
 
 beforeEach(() => {
+  resetWorkflowTriggerHealthForTest()
   _resetSyncedTriggerStateForTest()
   mockRegister.mockClear()
   mockUnregister.mockClear()
@@ -71,6 +76,34 @@ function workflow(nodes: WorkflowNode[]): VisualWorkflow {
     },
   }
 }
+
+describe("sync and unsync of one workflow are serialized", () => {
+  // Convergence 0b B2 review: an unsync that ran while a registration was in
+  // flight dropped the projection, and the late registration was then never
+  // unregistered by a later sync.
+  it("unregisters a registration that completed after a concurrent unsync", async () => {
+    let finishRegistration: () => void = () => undefined
+    mockRegister.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRegistration = resolve
+        })
+    )
+    const wf = workflow([node("t_manual", "trigger.manual")])
+    const syncing = syncWorkflowTriggers(wf)
+    const unsyncing = unsyncWorkflowTriggers(workflow([]))
+    const resyncing = syncWorkflowTriggers(workflow([]))
+    while (mockRegister.mock.calls.length === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    finishRegistration()
+    await Promise.all([syncing, unsyncing, resyncing])
+
+    // The unsync ran after the registration finished, so it saw and removed it.
+    expect(mockRegister).toHaveBeenCalledTimes(1)
+    expect(mockUnregister).toHaveBeenCalledWith("wf_a", "t_manual")
+  })
+})
 
 describe("syncWorkflowTriggers", () => {
   it("registers nothing when the workflow has no trigger nodes", async () => {
@@ -264,17 +297,22 @@ describe("syncWorkflowTriggers", () => {
 
   it("does not start plugin sources when startup sync is aborted during native registration", async () => {
     let resolveRegister!: () => void
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
     mockRegister.mockImplementationOnce(
       () =>
         new Promise<void>((resolve) => {
           resolveRegister = resolve
+          markStarted()
         })
     )
     const controller = new AbortController()
     const pending = syncWorkflowTriggers(workflow([node("a", "trigger.manual")]), {
       signal: controller.signal,
     })
-    await Promise.resolve()
+    await started
 
     controller.abort()
     resolveRegister()
@@ -350,6 +388,9 @@ describe("trigger.file.watch", () => {
       settings: { ...wf.settings, runOn: { mode: "pinned", ref: "host_other" } },
     })
     expect(mockRegister).not.toHaveBeenCalled()
+    expect(getWorkflowTriggerHealth().registrations).toContainEqual(
+      expect.objectContaining({ workflowId: wf.id, triggerId: "t1", status: "skipped" })
+    )
   })
 
   it("still watches for colocate and auto, which both mean wherever this runs", async () => {
@@ -397,4 +438,56 @@ describe("getWebhookUrl re-export", () => {
     expect(mockGetUrl).toHaveBeenCalledWith("wf_a", "trg")
     expect(url).toBe("http://127.0.0.1:9999/webhook/x")
   })
+})
+
+it("records all trigger outcomes even when one native registration fails", async () => {
+  mockRegister.mockImplementation(async (input) => {
+    if (input.triggerId === "bad") throw new Error("host rejected")
+  })
+  try {
+    await expect(
+      syncWorkflowTriggers(
+        workflow([
+          node("bad", "trigger.cron", { cron: "@daily" }),
+          node("good", "trigger.cron", { cron: "@hourly" }),
+        ])
+      )
+    ).rejects.toThrow("host rejected")
+    expect(getWorkflowTriggerHealth().registrations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ triggerId: "bad", status: "failed", error: "host rejected" }),
+        expect.objectContaining({ triggerId: "good", status: "registered" }),
+      ])
+    )
+  } finally {
+    mockRegister.mockReset().mockResolvedValue(undefined)
+  }
+})
+
+it("records validation rejection and unregisters the invalid persisted schedule", async () => {
+  await expect(
+    syncWorkflowTriggers(workflow([node("bad", "trigger.cron", { cron: "0 0 L * *" })]))
+  ).rejects.toThrow()
+  expect(getWorkflowTriggerHealth().registrations).toContainEqual(
+    expect.objectContaining({ triggerId: "bad", status: "failed" })
+  )
+  expect(mockUnregister).toHaveBeenCalledWith("wf_a", "bad")
+})
+
+it("removes a successfully registered sibling after a partial sync failure", async () => {
+  mockRegister.mockImplementation(async (input) => {
+    if (input.triggerId === "bad") throw new Error("rejected")
+  })
+  try {
+    await expect(
+      syncWorkflowTriggers(
+        workflow([node("good", "trigger.manual"), node("bad", "trigger.manual")])
+      )
+    ).rejects.toThrow("rejected")
+    mockRegister.mockResolvedValue(undefined)
+    await syncWorkflowTriggers(workflow([node("bad", "trigger.manual")]))
+    expect(mockUnregister).toHaveBeenCalledWith("wf_a", "good")
+  } finally {
+    mockRegister.mockReset().mockResolvedValue(undefined)
+  }
 })

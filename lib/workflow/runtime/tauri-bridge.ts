@@ -61,6 +61,33 @@ function hasNativeWorkflowPlane(): boolean {
   return profile === "desktop" || profile === "headless"
 }
 
+/** A required native operation failed on a host that owns workflow state. */
+export class WorkflowNativeCallError extends Error {
+  readonly command: string
+
+  constructor(command: string, cause: unknown) {
+    super(
+      `Workflow native call ${command} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause }
+    )
+    this.name = "WorkflowNativeCallError"
+    this.command = command
+  }
+}
+
+async function requiredInvoke<T>(
+  name: string,
+  payload?: Record<string, unknown>
+): Promise<T | null> {
+  if (!hasNativeWorkflowPlane()) return null
+  try {
+    const { transport } = await import("@/lib/tauri")
+    return await transport.call<T>(name, payload)
+  } catch (error) {
+    throw new WorkflowNativeCallError(name, error)
+  }
+}
+
 /** Commands whose failure has already been reported once in this process. */
 const reportedFailures = new Set<string>()
 
@@ -92,22 +119,25 @@ export async function persistRunState(input: PersistRunStateInput): Promise<void
   // `{ input }`, not the bare object: Tauri reads each command argument by
   // name out of the payload, and `workflow_persist_run_state` takes a single
   // argument called `input`. The bare object was refused on every call.
-  await safeInvoke("workflow_persist_run_state", { input })
-  // ADR 0061 P2 — fan the transition out to paired devices (live WS frame,
-  // sync invalidate on terminal, push policy). Fire-and-forget: companion
-  // delivery must never block or fail the orchestrator's persistence path.
-  void notifyCompanionsOfRunState(input)
+  try {
+    await requiredInvoke("workflow_persist_run_state", { input })
+  } finally {
+    // ADR 0061 P2 — fan the transition out to paired devices (live WS frame,
+    // sync invalidate on terminal, push policy). Fire-and-forget: companion
+    // delivery must never block or fail the orchestrator's persistence path.
+    void notifyCompanionsOfRunState(input)
+  }
 }
 
 /** Register / update a trigger row. Causes the Rust daemon to reload its schedule. */
 export async function registerTrigger(input: RegisterTriggerInput): Promise<void> {
   // Same `{ input }` wrapping as `persistRunState`: the daemon never saw a
   // cron, webhook or file-watch registration while this sent the bare object.
-  await safeInvoke("workflow_register_trigger", { input })
+  await requiredInvoke("workflow_register_trigger", { input })
 }
 
 export async function unregisterTrigger(workflowId: string, triggerId: string): Promise<void> {
-  await safeInvoke("workflow_unregister_trigger", { workflowId, triggerId })
+  await requiredInvoke("workflow_unregister_trigger", { workflowId, triggerId })
 }
 
 /**
@@ -120,6 +150,7 @@ export async function unregisterTrigger(workflowId: string, triggerId: string): 
  * stuck trigger.
  */
 export async function ackFileWatch(workflowId: string, triggerId: string): Promise<void> {
+  // The daemon mute timeout re-arms a watch even if this acknowledgement is lost.
   await safeInvoke("workflow_file_watch_ack", { workflowId, triggerId })
 }
 
@@ -128,12 +159,13 @@ export async function ackFileWatch(workflowId: string, triggerId: string): Promi
  * so the TS orchestrator can resume them from the durable Dexie event log.
  */
 export async function reloadInFlightRuns(): Promise<InFlightRunRow[]> {
-  const result = await safeInvoke<InFlightRunRow[]>("workflow_reload_in_flight_runs")
+  const result = await requiredInvoke<InFlightRunRow[]>("workflow_reload_in_flight_runs")
   return result ?? []
 }
 
 /** Called when a run terminates successfully so Rust can drop the mirror row. */
 export async function ackRunCompleted(runId: string): Promise<void> {
+  // Resume checks the authoritative terminal row before replaying a stale mirror.
   await safeInvoke("workflow_ack_completed", { runId })
 }
 
@@ -153,22 +185,22 @@ function terminalStatus(resolution: WorkflowWaitpointResolution): WorkflowWaitpo
 export function createNativeWorkflowWaitpoint(
   waitpoint: WorkflowWaitpoint
 ): Promise<WorkflowWaitpoint | null> {
-  return safeInvoke<WorkflowWaitpoint>("workflow_waitpoint_create", { waitpoint })
+  return requiredInvoke<WorkflowWaitpoint>("workflow_waitpoint_create", { waitpoint })
 }
 
 export function getNativeWorkflowWaitpoint(id: string): Promise<WorkflowWaitpoint | null> {
-  return safeInvoke<WorkflowWaitpoint | null>("workflow_waitpoint_get", { waitpointId: id })
+  return requiredInvoke<WorkflowWaitpoint | null>("workflow_waitpoint_get", { waitpointId: id })
 }
 
 export function listNativePendingWorkflowWaitpoints(): Promise<WorkflowWaitpoint[] | null> {
-  return safeInvoke<WorkflowWaitpoint[]>("workflow_waitpoint_list_pending")
+  return requiredInvoke<WorkflowWaitpoint[]>("workflow_waitpoint_list_pending")
 }
 
 export function decideNativeWorkflowWaitpoint(
   id: string,
   resolution: WorkflowWaitpointResolution
 ): Promise<boolean | null> {
-  return safeInvoke<boolean>("workflow_waitpoint_decide", {
+  return requiredInvoke<boolean>("workflow_waitpoint_decide", {
     input: {
       id,
       status: terminalStatus(resolution),
@@ -179,10 +211,11 @@ export function decideNativeWorkflowWaitpoint(
 }
 
 export async function persistNativeWorkflowWaitEvent(event: WorkflowWaitEvent): Promise<void> {
-  await safeInvoke("workflow_wait_event_persist", { event })
+  await requiredInvoke("workflow_wait_event_persist", { event })
 }
 
 export function pruneNativeWorkflowWaitEvents(now: number): Promise<number | null> {
+  // Expired events are ignored by consumers; pruning only reclaims storage.
   return safeInvoke<number>("workflow_wait_event_prune", { now })
 }
 
@@ -195,6 +228,7 @@ export function pruneNativeWorkflowWaitEvents(now: number): Promise<number | nul
  * a "desktop-only" hint in that case.
  */
 export async function getWebhookUrl(workflowId: string, triggerId: string): Promise<string | null> {
+  // The inspector can show an unavailable URL without changing registration.
   const result = await safeInvoke<string | null>("workflow_get_webhook_url", {
     workflowId,
     triggerId,
@@ -259,7 +293,7 @@ export async function respondToWebhook(
   correlationId: string,
   response: { status: number; body: string; headers?: Record<string, string> }
 ): Promise<boolean> {
-  const ok = await safeInvoke<boolean>("workflow_webhook_respond", {
+  const ok = await requiredInvoke<boolean>("workflow_webhook_respond", {
     correlationId,
     status: response.status,
     body: response.body,

@@ -7,10 +7,11 @@
 //
 // Two modes, one tool. Short waits block and answer inline. Past
 // `BLOCKING_THRESHOLD_MS` the tool stops blocking and hands back a monitorId:
-// the watch is durable on the host, survives a restart, and delivers its result
-// later through the normal background-result path. The model does not choose
-// the mode — it states how long it is willing to wait and the tool degrades on
-// its own, so a bad guess costs neither a stalled turn nor a wasted round-trip.
+// the watch is durable on the host and survives a restart, and its outcome is
+// read back with `monitor_list`. Nothing delivers it to the session when it
+// fires yet (see `MONITOR_FIRE_DELIVERY`). The model does not choose the mode
+// — it states how long it is willing to wait and the tool degrades on its own,
+// so a bad guess costs neither a stalled turn nor a wasted round-trip.
 
 import { z } from "zod"
 
@@ -20,8 +21,17 @@ import { resolveShellInvocation } from "./bash.ts"
 import { HOST_RPC_TIMEOUT_MARGIN_MS } from "../../../platform/host-rpc.ts"
 import type { CoreFileToolContext } from "./context.ts"
 
-/** Past this, stop blocking and let the durable watch deliver. */
+/** Past this, stop blocking and leave a durable watch to read back later. */
 export const BLOCKING_THRESHOLD_MS = 5 * 60_000
+
+/**
+ * How a background watch's outcome reaches the session when it fires: not at
+ * all, yet. The host emits `jobs://monitor-fired`, but only the scheduler
+ * listens; delivering it to the agent is ADR-0249's job. Until that lands the
+ * outcome is read with `monitor_list`, and no tool text may promise that the
+ * model will be told (dormant on purpose — pinned by `monitor.test.ts`).
+ */
+export const MONITOR_FIRE_DELIVERY = "none" as const
 
 /** Longest a single `monitors.wait` round-trip blocks host-side. */
 const WAIT_CHUNK_MS = 30_000
@@ -68,7 +78,7 @@ export const monitorShape = {
     .max(MAX_TIMEOUT_MS)
     .optional()
     .describe(
-      `How long you are willing to wait in total (default ${BLOCKING_THRESHOLD_MS}). Up to ${BLOCKING_THRESHOLD_MS} ms this call blocks and returns the outcome; beyond that it returns a monitorId immediately and the result is delivered when it fires.`
+      `How long you are willing to wait in total (default ${BLOCKING_THRESHOLD_MS}). Up to ${BLOCKING_THRESHOLD_MS} ms this call blocks and returns the outcome; beyond that it returns a monitorId and the watch keeps running in the background. Check its outcome later with monitor_list.`
     ),
   label: z.string().optional().describe("Short human-readable label shown in the Job Center."),
 }
@@ -228,13 +238,13 @@ export function createMonitorTool({
     // — a silent "still waiting" reads like a failure.
     return toolText(
       `Still waiting after ${Math.round(willBlock / 1000)}s, so this is now a background watch (monitor ${record.id}, waiting for ${describeCondition(args)}). ` +
-        `You will be told when it fires; carry on with other work. Stop it with monitor_cancel({ monitorId: "${record.id}" }).`
+        `Nothing will interrupt you when it fires: carry on with other work and check its outcome with monitor_list. Stop it with monitor_cancel({ monitorId: "${record.id}" }).`
     )
   }
 
   return tool(
     "Monitor",
-    "Wait until a condition holds: a background shell exits, its output matches a pattern, a predicate command exits 0, or an upstream subagent/scheduled task completes. Blocks and answers inline for short waits; past a few minutes it converts to a background watch and tells you when it fires, so a long wait costs no polling.",
+    "Wait until a condition holds: a background shell exits, its output matches a pattern, a predicate command exits 0, or an upstream subagent/scheduled task completes. Blocks and answers inline for short waits; past a few minutes it converts to a background watch that keeps running on the host, and you read its outcome later with monitor_list.",
     monitorShape,
     execMonitor
   )
@@ -292,7 +302,7 @@ export function createMonitorListTool({ hostRpc, sessionId }: CoreFileToolContex
 
   return tool(
     "monitor_list",
-    "List this session's monitors, including background watches that have not fired yet.",
+    "List this session's monitors with their status and outcome: background watches still waiting, and the ones that have fired, expired or been cancelled.",
     {},
     execList
   )

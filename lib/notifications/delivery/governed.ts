@@ -34,6 +34,10 @@ import type { NotificationRenderedPayload } from "@/types/notifications/result"
 import type { NotificationPurpose, NotificationCategory } from "@/types/notifications/decision"
 import { getNotificationTarget } from "@/lib/db/notification-targets"
 import { getNotificationSubscription } from "@/lib/db/notification-subscriptions"
+import Dexie from "dexie"
+import { readAppSettings } from "@/lib/policy/action-review/plan-context"
+import { readOutboundAuthorizationMode } from "@/lib/policy/action-review/policy"
+import { OUTBOUND_DELIVERY_POLICY_VERSION } from "@/lib/policy/action-review/plan-delivery"
 
 /** What the prepare phase freezes — everything the commit trusts. */
 export interface PreparedNotificationDelivery {
@@ -244,6 +248,9 @@ export async function persistGovernedNotificationInsideTransaction(
   prepared: PreparedNotificationDelivery
 ): Promise<{ intentId: string; outboundJobId: string }> {
   const now = Date.now()
+  // Settings may lazy-load their store. Keep the caller's transaction alive
+  // while reading them; the target's consent remains the sending authority.
+  const mode = readOutboundAuthorizationMode(await Dexie.waitFor(readAppSettings()))
 
   // 1. Revalidate the target version — a moved/deleted target between prepare
   //    and commit stops the send (the planner replans on the fresh version).
@@ -308,6 +315,13 @@ export async function persistGovernedNotificationInsideTransaction(
     source: "notification",
     notificationOperationKey: prepared.operationKey,
     authorizedBy: prepared.authorizedBy,
+    authorizationProvenance: {
+      schemaVersion: 1,
+      mode,
+      plan: "allow",
+      policyVersion: OUTBOUND_DELIVERY_POLICY_VERSION,
+      plannedAt: now,
+    },
   }
   try {
     await txDb.outboundQueue.add(job)

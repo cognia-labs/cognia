@@ -87,6 +87,15 @@ export interface Transport {
   subscribe<T = unknown>(event: string, handler: (payload: T) => void): () => void
 
   /**
+   * Subscribe and resolve once the listener is attached, or reject when it
+   * cannot be: for a caller whose success means "now watching" (a native
+   * watcher started next to it), where `subscribe`'s diagnostic-only failure
+   * would leave it believing it listens. Optional: only a transport whose
+   * attach can fail implements it (Tauri). The returned function is idempotent.
+   */
+  subscribeAttached?<T = unknown>(event: string, handler: (payload: T) => void): Promise<() => void>
+
+  /**
    * Read a bounded binary resource without expanding it through JSON/base64.
    * Optional for legacy/local transports; callers capability-detect it and
    * retain the existing message URL path when unavailable.

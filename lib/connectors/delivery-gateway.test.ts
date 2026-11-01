@@ -1,5 +1,9 @@
+import { createDbTestFixture } from "@/lib/db/test-fixture"
+import { getDb } from "@/lib/db/schema"
+import { planDelivery } from "@/lib/policy/action-review/plan-delivery"
+import { outboundReceipt } from "@/lib/policy/action-review/outbound-receipt"
 import type { ConnectorDraftRow, OutboundJobRow } from "@/lib/db/connector-types"
-import type { EnqueueInput } from "@/lib/db/outbound-jobs"
+import { subscribeOutboundEnqueued, type EnqueueInput } from "@/lib/db/outbound-jobs"
 import type {
   DeliveryDecision,
   DeliveryReceipt,
@@ -19,6 +23,11 @@ import {
   type GovernedEnqueueInput,
   type InThreadEnqueueInput,
 } from "./delivery-gateway"
+
+const dbFixture = createDbTestFixture({ seeded: false })
+beforeAll(dbFixture.initialize)
+beforeEach(dbFixture.restore)
+afterAll(dbFixture.dispose)
 
 const unattended: OutboundAuthorization = { kind: "unattended", ownerRef: "task:t1" }
 
@@ -52,15 +61,25 @@ function rowFor(value: EnqueueInput, sequence = 1): OutboundJobRow {
     idempotencyKey: value.request.metadata.idempotencyKey,
     source: value.source,
     orderSeq: sequence,
+    ...(value.authorizationProvenance
+      ? { authorizationProvenance: value.authorizationProvenance }
+      : {}),
     ...(value.authorizedBy ? { authorizedBy: value.authorizedBy } : {}),
   }
 }
 
 function receipt(id: string): DeliveryReceipt {
-  return {
-    request: { requestId: id } as DeliveryReceipt["request"],
-    decision: { requestId: id } as DeliveryReceipt["decision"],
-  }
+  return outboundReceipt({
+    requestId: id,
+    origin: { channel: "connector-delivery", scope: "connector", headless: true },
+    subject: { kind: "connector-delivery", ref: "workflow" },
+    plan: "draft",
+    enforced: false,
+    outcome: "allow",
+    authority: "policy-default",
+    reason: "shadow",
+    now: 1_000,
+  })
 }
 
 function gatewayWith(overrides: Partial<ConnectorDeliveryGatewayDependencies> = {}) {
@@ -72,7 +91,10 @@ function gatewayWith(overrides: Partial<ConnectorDeliveryGatewayDependencies> = 
     getAdapter: jest.fn(),
     piiGate: () => true,
     appendAudit: jest.fn(async () => undefined),
-    planDelivery: jest.fn(async (): Promise<DeliveryDecision> => ({ action: "send" })),
+    planDelivery: jest.fn(async (): Promise<DeliveryDecision> => ({
+      action: "send",
+      provenance: { mode: "shadow", plan: "allow" },
+    })),
     createDraft: jest.fn(
       async (value) =>
         ({
@@ -141,7 +163,7 @@ describe("ConnectorDeliveryGateway", () => {
       source: "ai-run",
       authorization,
     })
-    // The claim is the gateway's to read, never persisted.
+    // The original claim belongs in the provenance, not at the queue row root.
     expect(deps.persistOne).toHaveBeenCalledWith(
       expect.not.objectContaining({ authorization: expect.anything() })
     )
@@ -172,7 +194,7 @@ describe("ConnectorDeliveryGateway", () => {
     const pending = gateway.enqueueAuthorized(value)
     value.request.sendOptions.mode = "proactive"
     value.request.segments = [{ type: "text", text: "changed" }]
-    resolve({ action: "send" })
+    resolve({ action: "send", provenance: { mode: "shadow", plan: "allow" } })
     await pending
     expect(deps.persistOne).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -188,6 +210,7 @@ describe("ConnectorDeliveryGateway", () => {
     const { gateway, deps } = gatewayWith({
       planDelivery: jest.fn(async () => ({
         action: "send" as const,
+        provenance: { mode: "shadow" as const, plan: "allow" as const },
         authorizedBy: {
           receiptId: "req_1",
           authority: "human" as const,
@@ -288,7 +311,7 @@ describe("ConnectorDeliveryGateway", () => {
   it("refuses the whole batch when one delivery is denied", async () => {
     const planDelivery = jest
       .fn<Promise<DeliveryDecision>, []>()
-      .mockResolvedValueOnce({ action: "send" })
+      .mockResolvedValueOnce({ action: "send", provenance: { mode: "shadow", plan: "allow" } })
       .mockResolvedValueOnce({
         action: "deny",
         reason: "fenced",
@@ -310,7 +333,11 @@ describe("ConnectorDeliveryGateway", () => {
         draftSessionId: "s1",
         receipt: receipt("delivery:4"),
       })
-      .mockResolvedValueOnce({ action: "send", authorizedBy: { authority: "policy-default" } })
+      .mockResolvedValueOnce({
+        action: "send",
+        provenance: { mode: "shadow", plan: "allow" },
+        authorizedBy: { authority: "policy-default" },
+      })
     const { gateway, deps } = gatewayWith({ planDelivery })
 
     const results = await gateway.enqueueMany([
@@ -331,6 +358,7 @@ describe("ConnectorDeliveryGateway", () => {
     const { gateway, deps } = gatewayWith({
       planDelivery: jest.fn(async () => ({
         action: "send" as const,
+        provenance: { mode: "shadow" as const, plan: "allow" as const },
         receipt: receipt("delivery:5"),
       })),
     })
@@ -338,14 +366,18 @@ describe("ConnectorDeliveryGateway", () => {
     await expect(gateway.enqueueAuthorized(input("workflow"))).resolves.toMatchObject({
       kind: "queued",
     })
-    expect(deps.recordReceipt).toHaveBeenCalledWith(receipt("delivery:5"))
+    expect(deps.persistOne).toHaveBeenCalledWith(
+      expect.objectContaining({ receipt: expect.objectContaining({ id: "delivery:5" }) })
+    )
+    expect(deps.recordReceipt).not.toHaveBeenCalled()
   })
 
-  it("never lets a failed receipt write fail the delivery", async () => {
+  it("keeps draft receipt projection best-effort after the draft is created", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined)
     const { gateway } = gatewayWith({
       planDelivery: jest.fn(async () => ({
-        action: "send" as const,
+        action: "draft" as const,
+        draftSessionId: "workflow:w1",
         receipt: receipt("delivery:6"),
       })),
       recordReceipt: jest.fn(async () => {
@@ -354,7 +386,7 @@ describe("ConnectorDeliveryGateway", () => {
     })
 
     await expect(gateway.enqueueAuthorized(input("workflow"))).resolves.toMatchObject({
-      kind: "queued",
+      kind: "drafted",
     })
     warn.mockRestore()
   })
@@ -370,7 +402,17 @@ describe("ConnectorDeliveryGateway", () => {
     expect(piiGate).toHaveBeenCalledTimes(2)
     expect(deps.persistMany).toHaveBeenCalledTimes(1)
     expect(deps.persistMany).toHaveBeenCalledWith(
-      values.map(({ authorization: _authorization, ...rest }) => rest)
+      values.map(({ authorization, ...rest }) => ({
+        ...rest,
+        authorizationProvenance: {
+          schemaVersion: 1,
+          mode: "shadow",
+          plan: "allow",
+          policyVersion: "adr-0239.delivery.v1",
+          plannedAt: 1_000,
+          authorization,
+        },
+      }))
     )
   })
 
@@ -436,6 +478,7 @@ describe("ConnectorDeliveryGateway.sendNow (ADR-0239)", () => {
     const { gateway, deps } = gatewayWith({
       planDelivery: jest.fn(async (): Promise<DeliveryDecision> => ({
         action: "send",
+        provenance: { mode: "shadow", plan: "allow" },
         authorizedBy: { authority: "policy-rule", receiptId: "r1", grantScope: "policy" },
         receipt: receipt("r1"),
       })),
@@ -780,7 +823,10 @@ it("cancels a voice delivery while planning and keeps the signal outside the dur
   const { gateway, deps } = gatewayWith({
     planDelivery: jest.fn(async () => {
       controller.abort()
-      return { action: "send" as const }
+      return {
+        action: "send" as const,
+        provenance: { mode: "shadow" as const, plan: "allow" as const },
+      }
     }),
   })
   await expect(
@@ -793,5 +839,80 @@ it("cancels a voice delivery while planning and keeps the signal outside the dur
   await next.gateway.enqueueAuthorized(input("skill"), { signal })
   expect(next.deps.persistOne).toHaveBeenCalledWith(expect.not.objectContaining({ signal }), {
     signal,
+  })
+})
+
+describe("gateway atomic authorization provenance", () => {
+  const makeGateway = () =>
+    new ConnectorDeliveryGateway({
+      planDelivery: (value) =>
+        planDelivery(value, {
+          settings: () => ({}),
+          configuredGrants: async () => [],
+          listAuthKeys: async () => [],
+        }),
+      now: () => 2_000,
+    })
+
+  it("persists a shadow draft decision and the caller authorization with its receipt", async () => {
+    const result = await makeGateway().enqueueAuthorized(input("workflow"))
+    const row = queuedJob(result)!
+    expect(row.authorizationProvenance).toEqual({
+      schemaVersion: 1,
+      mode: "shadow",
+      plan: "draft",
+      policyVersion: "adr-0239.delivery.v1",
+      plannedAt: 2_000,
+      receiptId: expect.any(String),
+      authorization: unattended,
+    })
+    expect(
+      await getDb().actionReviewReceipts.get(row.authorizationProvenance!.receiptId!)
+    ).toMatchObject({
+      request: expect.objectContaining({ plan: { outcome: "draft", enforced: false } }),
+    })
+  })
+
+  it("does not leave an outbound row or wake on receipt-write failure", async () => {
+    const wake = jest.fn()
+    const unsubscribe = subscribeOutboundEnqueued(wake)
+    const fail = () => {
+      throw new Error("receipt disk full")
+    }
+    getDb().actionReviewReceipts.hook("creating", fail)
+    try {
+      await expect(makeGateway().enqueueAuthorized(input("workflow"))).rejects.toThrow(
+        "receipt disk full"
+      )
+      expect(await getDb().outboundQueue.count()).toBe(0)
+      expect(wake).not.toHaveBeenCalled()
+    } finally {
+      unsubscribe()
+      getDb().actionReviewReceipts.hook("creating").unsubscribe(fail)
+    }
+  })
+
+  it.each(["manual", "draft-approved"] as const)("records %s as exempt", async (source) => {
+    const row = queuedJob(await makeGateway().enqueueAuthorized(input(source)))!
+    expect(row.authorizationProvenance).toEqual({
+      schemaVersion: 1,
+      mode: "shadow",
+      plan: "exempt",
+      policyVersion: "adr-0239.delivery.v1",
+      plannedAt: 2_000,
+    })
+  })
+
+  it("records an allowed in-thread send", async () => {
+    const value = input("ai-run", {
+      kind: "origin-reply",
+      inboundConversationKey: "slack:adapter-1:C1",
+    })
+    const row = queuedJob(await makeGateway().enqueueAuthorized(value))!
+    expect(row.authorizationProvenance).toMatchObject({
+      mode: "shadow",
+      plan: "allow",
+      authorization: value.authorization,
+    })
   })
 })

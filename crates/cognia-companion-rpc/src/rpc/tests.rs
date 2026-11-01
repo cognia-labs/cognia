@@ -759,6 +759,68 @@ async fn headless_dispatch_serves_the_data_plane_from_the_store() {
     cognia_companion::data_plane::install_headless_store(None);
 }
 
+/// ADR-0250 §4: with no brain connected, a headless host refuses message
+/// writes with a retryable `HOST_UNAVAILABLE` 503 and writes nothing, while
+/// reads keep answering from its store.
+#[tokio::test]
+async fn headless_dispatch_refuses_message_writes_while_the_brain_is_away() {
+    use cognia_companion::store::AppStore;
+    let _guard = cognia_companion::ws_bridge::test_support::lock_slot().await;
+    cognia_companion::ws_bridge::test_support::clear_socket_for_testing();
+    let store = cognia_companion::store::sqlite::SqliteAppStore::in_memory().expect("open");
+    store.upsert_session("s1", "Hello", "direct").await.unwrap();
+    let seeded = store.create_message("s1", "before", "user").await.unwrap();
+    cognia_companion::data_plane::install_headless_store(Some(store.clone() as Arc<dyn AppStore>));
+
+    let state = test_state();
+    for (command, args) in [
+        (
+            "message_send",
+            json!({ "session_id": "s1", "content": "hi" }),
+        ),
+        (
+            "message_update",
+            json!({ "session_id": "s1", "message_id": seeded.id, "updates": { "content": "x" } }),
+        ),
+        (
+            "message_delete",
+            json!({ "session_id": "s1", "message_id": seeded.id }),
+        ),
+    ] {
+        let refused = dispatch(
+            command,
+            args,
+            &state,
+            &headless_host(),
+            "dev1",
+            Some(ACCOUNT_ID),
+            Some("service"),
+        )
+        .await
+        .expect_err("a degraded host must refuse writes");
+        assert_eq!(refused.0, StatusCode::SERVICE_UNAVAILABLE, "{command}");
+        assert_eq!(refused.1 .0.code, "HOST_UNAVAILABLE", "{command}");
+        assert!(refused.1 .0.retryable, "{command}");
+    }
+
+    let page = dispatch(
+        "message_get_by_session",
+        json!({ "session_id": "s1", "pageSize": 10 }),
+        &state,
+        &headless_host(),
+        "dev1",
+        Some(ACCOUNT_ID),
+        Some("service"),
+    )
+    .await
+    .expect("reads keep answering");
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["content"], "before");
+
+    cognia_companion::data_plane::install_headless_store(None);
+}
+
 /// Process-owned service status is available without a WebView. A fresh
 /// headless registry reports the same stopped state as a fresh desktop
 /// `McpServerState`.

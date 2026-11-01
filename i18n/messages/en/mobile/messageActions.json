@@ -19,6 +19,7 @@
   "editFailed": "Resend failed: {message}",
   "editInputAria": "Edit message text",
   "editResend": "Resend",
+  "hostUnavailable": "Your host is offline. Try again once it's back.",
   "longPressHint": "Long-press a message for actions",
   "quote": "Quote",
   "readAloud": "Read aloud",

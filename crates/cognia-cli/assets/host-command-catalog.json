@@ -10949,15 +10949,43 @@
       },
       "outputSchemaSource": "contract",
       "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
+        "x-cognia-wire-source": "services/workspace-runtime/src/browser-service.mjs BrowserService.recordingControl: null for start/resume/stop, normalizeRecordingSteps for drain.",
+        "oneOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "array",
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "required": [
+                "act",
+                "at"
+              ],
+              "properties": {
+                "act": {
+                  "enum": [
+                    "click",
+                    "double_click",
+                    "hover",
+                    "fill",
+                    "select",
+                    "press_key",
+                    "navigate",
+                    "wait_for",
+                    "scroll"
+                  ]
+                },
+                "at": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": true,
+              "x-cognia-opaque-reason": "The per-act fields (target, value, key, url, text, direction, amount, modifiers, secret) are validated by normalizeRecordingSteps and consumed by lib/skills/recording; the step envelope is typed here."
+            }
+          }
         ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
         "x-cognia-schema-owner": "browser"
       },
       "outputTyped": true
@@ -11607,16 +11635,21 @@
       },
       "outputSchemaSource": "contract",
       "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
+        "type": "object",
+        "x-cognia-wire-source": "services/workspace-runtime/src/browser-service.mjs BrowserService.configureSubmissionGuard (the mode it set).",
+        "required": [
+          "mode"
         ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "browser"
+        "properties": {
+          "mode": {
+            "enum": [
+              "off",
+              "observe",
+              "hold"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "outputTyped": true
     },
@@ -11657,16 +11690,65 @@
       },
       "outputSchemaSource": "contract",
       "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
+        "type": "object",
+        "x-cognia-wire-source": "services/workspace-runtime/src/browser-service.mjs BrowserService.drainSubmissions over SubmissionGuard.drain; mirrored by lib/browser/protocol.ts BrowserSubmissionDrain.",
+        "required": [
+          "pageId",
+          "reports",
+          "windowOpen",
+          "unguarded"
         ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "browser"
+        "properties": {
+          "pageId": {
+            "type": "string"
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "url",
+                "method",
+                "resourceType",
+                "navigation",
+                "held",
+                "at"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": "string"
+                },
+                "resourceType": {
+                  "type": "string"
+                },
+                "navigation": {
+                  "type": "boolean"
+                },
+                "held": {
+                  "type": "boolean"
+                },
+                "at": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "windowOpen": {
+            "type": "boolean"
+          },
+          "unguarded": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       },
       "outputTyped": true
     },
@@ -11712,16 +11794,24 @@
       },
       "outputSchemaSource": "contract",
       "outputSchema": {
-        "type": [
-          "object",
-          "array",
-          "string",
-          "number",
-          "boolean",
-          "null"
+        "type": "object",
+        "x-cognia-wire-source": "services/workspace-runtime/src/submission-guard.mjs SubmissionGuard.resolve. An unknown or timed-out hold arrives as an error, never as a result.",
+        "required": [
+          "id",
+          "decision"
         ],
-        "x-cognia-opaque-reason": "The legacy dispatch seam intentionally carries provider-, plugin-, or bridge-defined JSON. The command remains contract-covered at the JSON value boundary until its owning domain publishes a narrower stable wire type.",
-        "x-cognia-schema-owner": "browser"
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "refuse"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "outputTyped": true
     },
@@ -110365,5 +110455,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "9d345575917d757f5635cdd95c7aa9ea991ce5092ee15b49bf209b183c766aae"
+  "catalogHash": "40f11ec33e956c517daccf27aec24ce18fbae8c5547b33737540b21e8eca816a"
 }

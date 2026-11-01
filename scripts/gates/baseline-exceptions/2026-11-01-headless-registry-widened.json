@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/headless-registry-exclusions.json",
+  "measure": "excludedSymbols",
+  "allowGrowth": 83,
+  "owner": "lib/headless",
+  "repaymentPhase": "2",
+  "reason": "Convergence 0b B6 widened the headless-registry gate from install/start/register-named symbols to every @/lib symbol an initializer calls in an effect, so the exclusion list now names symbols the old gate never saw. Each row is a reviewed physical or host-split boundary; host-neutral debt is tracked separately under pending with its ceiling. This establishes the baseline rather than adding debt; phase 2 moves or removes the remaining rows."
+}

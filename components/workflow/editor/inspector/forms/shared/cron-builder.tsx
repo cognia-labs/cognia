@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { getNextCronTimes, validateCronExpression } from "@/lib/scheduler/cron-parser"
+import { getNextCronTimes, validateWorkflowCronExpression } from "@/lib/scheduler/cron-parser"
 
 const CRON_PRESETS: Array<{ id: string; expr: string; labelKey: string }> = [
   { id: "every-minute", expr: "* * * * *", labelKey: "everyMinute" },
@@ -50,9 +50,12 @@ export function CronBuilder({ id, value, onChange, timezone }: CronBuilderProps)
     () => CRON_PRESETS.find((p) => p.expr && p.expr === value.trim())?.id ?? "custom",
     [value]
   )
-  const validation = useMemo(() => validateCronExpression(value), [value])
+  const validation = useMemo(() => validateWorkflowCronExpression(value), [value])
   const nextRuns = useMemo(
-    () => (validation.valid ? getNextCronTimes(value, 3, new Date(), timezone) : []),
+    () =>
+      validation.valid
+        ? getNextCronTimes(value, 3, new Date(), timezone, undefined, "workflow")
+        : [],
     [value, validation.valid, timezone]
   )
 
@@ -94,8 +97,8 @@ export function CronBuilder({ id, value, onChange, timezone }: CronBuilderProps)
           </div>
         ) : null
       ) : (
-        <p className="text-xs text-destructive" data-testid={`${id}-invalid`}>
-          {t("invalidExpression")}
+        <p role="alert" className="text-xs text-destructive" data-testid={`${id}-invalid`}>
+          {t("unsupportedWorkflowExpression")}
         </p>
       )}
     </div>
