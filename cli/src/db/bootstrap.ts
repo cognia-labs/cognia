@@ -322,8 +322,15 @@ interface TableStoreWriter {
   writtenAt: number
 }
 
+/**
+ * Table-store manifest format. 4 holds value-codec-1 rows (`encodeSnapshotRows`),
+ * which a build that accepts only 3 refuses as corrupt and preserves instead of
+ * misreading; 3 is still read.
+ */
+const TABLE_STORE_FORMAT = 4 as const
+
 interface TableStoreManifest {
-  snapshotFormat: 3
+  snapshotFormat: typeof TABLE_STORE_FORMAT
   dbs: Record<string, { version: number; tables: string[] }>
   /** Diagnostics about the process that last flushed. Never load-bearing. */
   writer?: TableStoreWriter
@@ -474,7 +481,12 @@ function parseTableStoreManifest(text: string): TableStoreManifest | null {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
   const root = parsed as Record<string, unknown>
-  if (root.snapshotFormat !== 3 || !root.dbs || typeof root.dbs !== "object") return null
+  if (
+    (root.snapshotFormat !== 3 && root.snapshotFormat !== TABLE_STORE_FORMAT) ||
+    !root.dbs ||
+    typeof root.dbs !== "object"
+  )
+    return null
   const dbs: TableStoreManifest["dbs"] = {}
   for (const [databaseName, raw] of Object.entries(root.dbs as Record<string, unknown>)) {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null
@@ -511,7 +523,7 @@ function parseTableStoreManifest(text: string): TableStoreManifest | null {
       }
     }
   }
-  return { snapshotFormat: 3, dbs, writer }
+  return { snapshotFormat: TABLE_STORE_FORMAT, dbs, writer }
 }
 
 interface TableStoreRestore {
@@ -657,7 +669,7 @@ async function flushDirtyTables(
   await writeSnapshotAtomicallyAsync(
     manifestFile,
     JSON.stringify({
-      snapshotFormat: 3,
+      snapshotFormat: TABLE_STORE_FORMAT,
       dbs,
       writer: {
         pid: process.pid,

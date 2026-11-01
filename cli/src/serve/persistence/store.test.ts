@@ -1048,6 +1048,216 @@ describe("binary and Date values", () => {
   )
 })
 
+describe("capturing a blob-heavy transaction", () => {
+  // S1 X8: a pet media pack is one transaction of thousands of Blobs, and the
+  // capture used to write each side file with two synchronous fsyncs on the
+  // commit path, stalling the brain's event loop for the whole capture.
+  it("holds the transaction while side files drain, so the commit never stalls the loop for them", async () => {
+    const home = tempHome()
+    const name = `BlobHeavy-${path.basename(home)}`
+    await installFakeIndexedDb()
+    const db = new Dexie(name)
+    db.version(1).stores({ media: "id" })
+    const count = 40
+    const fsyncDelayMs = 25
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "journal-v4",
+      getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+      binaryPrefetch: { poolSize: 4, fsyncDelayMs },
+    })
+    const fsyncSync = jest.spyOn(fs, "fsyncSync")
+    try {
+      const rows = Array.from({ length: count }, (_, index) => ({
+        id: `m${index}`,
+        // Distinct contents past the inline limit: one side file each.
+        blob: new Blob([new Uint8Array(32 * 1024).fill(index)], { type: "image/png" }),
+      }))
+      let longestGap = 0
+      let last = performance.now()
+      const ticker = setInterval(() => {
+        const at = performance.now()
+        longestGap = Math.max(longestGap, at - last)
+        last = at
+      }, 1)
+      const started = performance.now()
+      await db.table("media").bulkPut(rows)
+      const elapsed = performance.now() - started
+      clearInterval(ticker)
+      longestGap = Math.max(longestGap, performance.now() - last)
+
+      expect(store.sequence()).toBe(1)
+      // Main thread: the journal append and one binary-directory fsync. The
+      // per-file fsyncs ran in the worker pool (two per file used to run here).
+      expect(fsyncSync.mock.calls.length).toBeLessThanOrEqual(2)
+      const root = durabilityRoot(home, "acct")
+      expect(
+        fs.readdirSync(path.join(root, "binary")).filter((n) => !n.startsWith("."))
+      ).toHaveLength(count)
+      // Serially the modelled fsyncs alone are count × delay = 1000 ms, and
+      // waiting for them all at commit stalled the loop for count × delay /
+      // pool = 250 ms. The capture now holds the transaction open until the
+      // backlog is down to one round of the pool, so the commit waits for at
+      // most about one file's time; the whole write still overlaps in the pool.
+      expect(longestGap).toBeLessThan(fsyncDelayMs * 3)
+      expect(elapsed).toBeLessThan((count * fsyncDelayMs) / 2)
+
+      // And the rows still come back from the record and its side files.
+      await store.close()
+      await db.delete()
+      const reopened = new Dexie(name)
+      reopened.version(1).stores({ media: "id" })
+      const again = await openDurabilityStore({
+        home,
+        accountId: "acct",
+        getSources: async () => [{ name, db: reopened as unknown as DurabilityDbLike }],
+      })
+      const back = (await reopened.table("media").get("m7")) as { blob: Blob }
+      expect(new Uint8Array(await back.blob.arrayBuffer())[0]).toBe(7)
+      await again.close()
+      await reopened.delete()
+    } finally {
+      fsyncSync.mockRestore()
+      await store.close()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it("holds only the transaction whose side files are pending, and drains one large file before its commit", async () => {
+    const home = tempHome()
+    const name = `BlobGate-${path.basename(home)}`
+    await installFakeIndexedDb()
+    const db = new Dexie(name)
+    db.version(1).stores({ media: "id", notes: "id" })
+    const fsyncDelayMs = 150
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "journal-v4",
+      getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+      binaryPrefetch: { poolSize: 2, fsyncDelayMs },
+    })
+    try {
+      let longestGap = 0
+      let last = performance.now()
+      const ticker = setInterval(() => {
+        const at = performance.now()
+        longestGap = Math.max(longestGap, at - last)
+        last = at
+      }, 1)
+      // One file past the 16 MiB window: few jobs, but the commit would block
+      // on its fsync, so its transaction is held until the file is done.
+      const big = db
+        .table("media")
+        .put({ id: "big", blob: new Blob([new Uint8Array(20 * 1024 * 1024).fill(5)]) })
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      const started = performance.now()
+      await db.table("notes").put({ id: "n1", text: "unrelated" })
+      const unrelatedMs = performance.now() - started
+      await big
+      clearInterval(ticker)
+      longestGap = Math.max(longestGap, performance.now() - last)
+      // The unrelated transaction has no side files and is never held.
+      expect(unrelatedMs).toBeLessThan(fsyncDelayMs)
+      // The large file's commit found it finished: no fsync-long stall.
+      expect(longestGap).toBeLessThan(fsyncDelayMs)
+      expect(store.sequence()).toBe(2)
+    } finally {
+      await store.close()
+      await db.delete()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it("restores a buffer transferred away right after its put", async () => {
+    const home = tempHome()
+    const name = `BlobTransfer-${path.basename(home)}`
+    await installFakeIndexedDb()
+    const db = new Dexie(name)
+    db.version(1).stores({ media: "id" })
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "journal-v4",
+      getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+    })
+    try {
+      const buffer = new Uint8Array(40_000).fill(4).buffer
+      const written = db.table("media").put({ id: "t", buffer })
+      // The caller hands the buffer to a worker before the commit runs.
+      structuredClone(buffer, { transfer: [buffer] })
+      await written
+      await store.close()
+      await db.delete()
+      const reopened = new Dexie(name)
+      reopened.version(1).stores({ media: "id" })
+      const again = await openDurabilityStore({
+        home,
+        accountId: "acct",
+        getSources: async () => [{ name, db: reopened as unknown as DurabilityDbLike }],
+      })
+      const row = (await reopened.table("media").get("t")) as { buffer: ArrayBuffer }
+      expect(row.buffer.byteLength).toBe(40_000)
+      expect(new Uint8Array(row.buffer)[39_999]).toBe(4)
+      await again.close()
+      await reopened.delete()
+    } finally {
+      await store.close()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+
+  it("journals the bytes of each write, even for a buffer reused after an aborted transaction", async () => {
+    const home = tempHome()
+    const name = `BlobReuse-${path.basename(home)}`
+    await installFakeIndexedDb()
+    const db = new Dexie(name)
+    db.version(1).stores({ media: "id" })
+    const store = await openDurabilityStore({
+      home,
+      accountId: "acct",
+      backend: "journal-v4",
+      getSources: async () => [{ name, db: db as unknown as DurabilityDbLike }],
+    })
+    try {
+      // Past the 16 KiB inline limit, so it goes through a side file.
+      const buffer = new Uint8Array(32 * 1024).fill(1)
+      await expect(
+        db.transaction("rw", "media", async () => {
+          await db.table("media").put({ id: "a", buffer })
+          throw new Error("abort")
+        })
+      ).rejects.toThrow("abort")
+      buffer.fill(2)
+      await db.table("media").put({ id: "a", buffer })
+      // Two writes of one buffer in one transaction: each keeps its own bytes.
+      await db.transaction("rw", "media", async () => {
+        await db.table("media").put({ id: "b", buffer })
+        buffer.fill(3)
+        await db.table("media").put({ id: "c", buffer })
+      })
+      await store.close()
+      await db.delete()
+      const reopened = new Dexie(name)
+      reopened.version(1).stores({ media: "id" })
+      const again = await openDurabilityStore({
+        home,
+        accountId: "acct",
+        getSources: async () => [{ name, db: reopened as unknown as DurabilityDbLike }],
+      })
+      const first = async (id: string) =>
+        ((await reopened.table("media").get(id)) as { buffer: Uint8Array }).buffer[0]
+      expect([await first("a"), await first("b"), await first("c")]).toEqual([2, 2, 3])
+      await again.close()
+      await reopened.delete()
+    } finally {
+      await store.close()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("values written before value codec 1", () => {
   let home: string
   beforeEach(() => {

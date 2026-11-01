@@ -39,6 +39,17 @@ describe("binary side files", () => {
     expect(fs.statSync(file).mtimeMs).toBeGreaterThan(old.getTime())
   })
 
+  it("makes a reused file's name durable too: it may be another writer's unsynced rename", () => {
+    writeBinarySync(root, bytes)
+    const fsyncSync = jest.spyOn(fs, "fsyncSync")
+    try {
+      writeBinarySync(root, Uint8Array.from(bytes))
+      expect(fsyncSync).toHaveBeenCalledTimes(1)
+    } finally {
+      fsyncSync.mockRestore()
+    }
+  })
+
   it("refuses a missing, short, altered or malformed reference", () => {
     expect(() => readBinarySync(root, sha, 4)).toThrow(/missing/)
     writeBinarySync(root, bytes)

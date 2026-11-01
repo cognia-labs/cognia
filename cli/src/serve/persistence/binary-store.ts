@@ -46,6 +46,10 @@ export function writeBinarySync(root: string, bytes: Uint8Array): string {
     // young files, cannot prune it between here and the line that names it.
     const at = new Date()
     fs.utimesSync(file, at, at)
+    // The file may be another writer's (a prefetch worker's) rename whose
+    // directory entry is not durable yet; the record about to name it must
+    // not outlive it.
+    syncDirectory(dir)
     return reference
   }
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 })

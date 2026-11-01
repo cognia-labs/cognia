@@ -82,7 +82,48 @@ export interface CaptureOptions {
    * keep serving as if it could.
    */
   onCommit: (mutations: DurabilityMutation[]) => void
+  /**
+   * Called as each mutation is recorded, while its transaction still runs and
+   * so ahead of `onCommit`: where work the commit will need can start early
+   * (the binary prefetch). `trans` is the transaction it belongs to. Must not
+   * throw; it is not called while suppressed.
+   */
+  onRecord?: (mutation: DurabilityMutation, trans: object) => void
+  /**
+   * Asked after each write request on `trans` succeeds. A gate means "keep
+   * this transaction open until `released()`": the capture keeps issuing a
+   * no-op read on it (what `Dexie.waitFor` does) so it cannot commit, and
+   * resolves the write once released. The event loop stays free meanwhile;
+   * work the commit would otherwise wait for synchronously finishes first.
+   */
+  drain?: (trans: object) => DrainGate | undefined
+  /** Test hook: overrides {@link DRAIN_HOLD_LIMIT_MS}. */
+  drainHoldLimitMs?: number
 }
+
+/** See {@link CaptureOptions.drain}. */
+export interface DrainGate {
+  released: () => boolean
+  /** A value that changes whenever the held work advances; the hold limit restarts on each change. */
+  progress?: () => number
+  /** Wait briefly (a few ms) for the work to advance, between two no-op reads. */
+  pause?: () => void
+}
+
+/** The raw transaction DBCore hands the middleware (an `IDBTransaction`). */
+interface HoldableTransaction {
+  objectStoreNames: ArrayLike<string>
+  objectStore(name: string): {
+    get(key: unknown): { onsuccess: unknown; onerror: unknown; error?: unknown }
+  }
+}
+
+/**
+ * Longest a transaction is held without its gate making progress; the commit
+ * then waits (or fails) as before. While the work advances the hold goes on,
+ * since releasing it would only move the same wait onto the event loop.
+ */
+const DRAIN_HOLD_LIMIT_MS = 60_000
 
 export interface CaptureHandle {
   /**
@@ -107,6 +148,8 @@ export function installTransactionCapture(
 ): CaptureHandle {
   const excluded = new Set(opts.excludeTables ?? [])
   const pending = new WeakMap<object, DurabilityMutation[]>()
+  /** Transactions currently held open by a drain gate. */
+  const holds = new WeakMap<object, Promise<void>>()
   let suppressed = 0
 
   function record(trans: object, mutation: DurabilityMutation): void {
@@ -114,6 +157,7 @@ export function installTransactionCapture(
     const list = pending.get(trans)
     if (list) list.push(mutation)
     else pending.set(trans, [mutation])
+    opts.onRecord?.(mutation, trans)
   }
 
   function flush(trans: object): void {
@@ -170,6 +214,50 @@ export function installTransactionCapture(
     }
   }
 
+  /**
+   * Resolve with `response` once the drain gate (if any) is released, keeping
+   * `trans` alive meanwhile with a chain of no-op reads. Each read's success
+   * either issues the next or resolves, so the caller's continuation still
+   * runs while the transaction is active.
+   */
+  function afterDrain<T>(trans: object, response: T): Promise<T> | T {
+    // One hold per transaction: other writes on it wait for the same release
+    // instead of each running its own chain of reads.
+    const active = holds.get(trans)
+    if (active) return active.then(() => response)
+    const gate = suppressed > 0 ? undefined : opts.drain?.(trans)
+    if (!gate) return response
+    const tx = trans as HoldableTransaction
+    const store = tx.objectStore(tx.objectStoreNames[0])
+    const limit = opts.drainHoldLimitMs ?? DRAIN_HOLD_LIMIT_MS
+    let deadline = Date.now() + limit
+    let progress = gate.progress?.()
+    const hold = new Promise<void>((resolve, reject) => {
+      const spin = () => {
+        const now = gate.progress?.()
+        if (now !== progress) {
+          progress = now
+          deadline = Date.now() + limit
+        }
+        if (gate.released() || Date.now() > deadline) {
+          holds.delete(trans)
+          resolve()
+          return
+        }
+        gate.pause?.()
+        const request = store.get(-Infinity)
+        request.onsuccess = spin
+        request.onerror = () => {
+          holds.delete(trans)
+          reject(request.error)
+        }
+      }
+      spin()
+    })
+    holds.set(trans, hold)
+    return hold.then(() => response)
+  }
+
   function mutateWrite(
     table: CaptureTableLike,
     name: string,
@@ -191,7 +279,7 @@ export function installTransactionCapture(
           value: values[index] ?? null,
         })
       }
-      return table.mutate(req)
+      return table.mutate(req).then((response) => afterDrain(req.trans, response))
     }
 
     // Auto-generated keys: ask DBCore to return them, then record from the
@@ -210,7 +298,7 @@ export function installTransactionCapture(
           value: values[index] ?? null,
         })
       }
-      return response
+      return afterDrain(req.trans, response)
     })
   }
 

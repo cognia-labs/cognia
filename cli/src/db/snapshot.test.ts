@@ -271,7 +271,7 @@ describe("serializeSources", () => {
         excludeTables: ["executions"],
       },
     ])
-    expect(snap.snapshotFormat).toBe(2)
+    expect(snap.snapshotFormat).toBe(3)
     expect(snap.dbs.CogniaDB).toEqual({ version: 82, tables: { goals: [{ id: "g" }] } })
     expect(snap.dbs.CogniaSchedulerDB).toEqual({ version: 2, tables: { tasks: [{ id: "t" }] } })
   })
@@ -287,7 +287,7 @@ describe("restoreMultiSnapshot", () => {
         { name: "CogniaSchedulerDB", db: fakeDb([tasks], 2) },
       ],
       {
-        snapshotFormat: 2,
+        snapshotFormat: 3,
         dbs: {
           CogniaDB: { version: 82, tables: { goals: [{ id: "g" }] } },
           CogniaSchedulerDB: { version: 2, tables: { tasks: [{ id: "t" }] } },
@@ -301,7 +301,7 @@ describe("restoreMultiSnapshot", () => {
   it("skips a database the envelope omits, leaving its rows untouched", async () => {
     const tasks = new FakeTable("tasks", [{ id: "kept" }])
     await restoreMultiSnapshot([{ name: "CogniaSchedulerDB", db: fakeDb([tasks], 2) }], {
-      snapshotFormat: 2,
+      snapshotFormat: 3,
       dbs: { CogniaDB: { version: 82, tables: {} } },
     })
     expect(tasks.rows).toEqual([{ id: "kept" }])
@@ -311,7 +311,7 @@ describe("restoreMultiSnapshot", () => {
     const tasks = new FakeTable("tasks", [])
     await expect(
       restoreMultiSnapshot([{ name: "CogniaSchedulerDB", db: fakeDb([tasks], 2) }], {
-        snapshotFormat: 2,
+        snapshotFormat: 3,
         dbs: { CogniaSchedulerDB: { version: 3, tables: { tasks: [] } } },
       })
     ).rejects.toThrow("database CogniaSchedulerDB")
@@ -322,7 +322,7 @@ describe("parseMultiSnapshot", () => {
   it("normalises a legacy single-database snapshot onto the primary name", () => {
     expect(parseMultiSnapshot('{"version":82,"tables":{"goals":[]}}', "CogniaDB")).toEqual({
       kind: "valid",
-      snapshot: { snapshotFormat: 2, dbs: { CogniaDB: { version: 82, tables: { goals: [] } } } },
+      snapshot: { snapshotFormat: 3, dbs: { CogniaDB: { version: 82, tables: { goals: [] } } } },
     })
   })
 
@@ -331,10 +331,11 @@ describe("parseMultiSnapshot", () => {
       snapshotFormat: 2,
       dbs: { CogniaSchedulerDB: { version: 2, tables: { tasks: [{ id: "t" }] } } },
     })
+    // Format 2 is still read, and normalised to the current envelope.
     expect(parseMultiSnapshot(text, "CogniaDB")).toEqual({
       kind: "valid",
       snapshot: {
-        snapshotFormat: 2,
+        snapshotFormat: 3,
         dbs: { CogniaSchedulerDB: { version: 2, tables: { tasks: [{ id: "t" }] } } },
       },
     })
@@ -357,9 +358,9 @@ describe("parseMultiSnapshot", () => {
     expect(parseMultiSnapshot("[1,2]", "CogniaDB")).toMatchObject({ kind: "corrupt" })
     // Legacy path still validated by parseSnapshot's rules.
     expect(parseMultiSnapshot('{"version":1}', "CogniaDB")).toMatchObject({ kind: "corrupt" })
-    expect(parseMultiSnapshot('{"snapshotFormat":3,"dbs":{}}', "CogniaDB")).toMatchObject({
+    expect(parseMultiSnapshot('{"snapshotFormat":4,"dbs":{}}', "CogniaDB")).toMatchObject({
       kind: "corrupt",
-      reason: "unsupported snapshot format 3",
+      reason: "unsupported snapshot format 4",
     })
     expect(parseMultiSnapshot('{"snapshotFormat":2,"dbs":[]}', "CogniaDB")).toMatchObject({
       kind: "corrupt",
@@ -446,6 +447,42 @@ describe("encodeSnapshotValueSync", () => {
     expect((decoded.map as Map<number, string>).get(1)).toBe("a")
     expect((decoded.set as Set<string>).has("x")).toBe(true)
     expect(decoded.big).toBe(BigInt("-7"))
+  })
+
+  it("reads a value's type from its internal slots, not from Symbol.toStringTag", () => {
+    const roundTrip = (value: unknown) =>
+      decodeSnapshotRows(
+        JSON.parse(JSON.stringify([encodeSnapshotValueSync(value, { readBlob })]))
+      )[0]
+    // A Map subclass, whatever its tag, is a Map (what structuredClone keeps).
+    class Lru extends Map<string, number> {
+      get [Symbol.toStringTag]() {
+        return "Lru"
+      }
+    }
+    const lru = roundTrip(new Lru([["k", 1]])) as Map<string, number>
+    expect(tag(lru)).toBe("[object Map]")
+    expect(lru.get("k")).toBe(1)
+    // An object that only claims a built-in type is an ordinary object.
+    const claims = (name: string) => ({ own: 1, [Symbol.toStringTag]: name })
+    for (const name of ["Map", "Date", "ArrayBuffer", "Uint16Array", "Error"]) {
+      expect(roundTrip(claims(name))).toEqual({ own: 1 })
+    }
+    // A Blob or File that only claims to be one (a jsdom or polyfill Blob)
+    // has no bytes this codec can read: refused, never stored as `{}`.
+    expect(() => encodeSnapshotValueSync(claims("Blob"), { readBlob })).toThrow(
+      "Cannot durably encode a Blob value"
+    )
+    // A real platform type the codec does not know is still refused.
+    expect(() => encodeSnapshotValueSync(new WeakMap(), { readBlob })).toThrow(
+      "Cannot durably encode a WeakMap value"
+    )
+  })
+
+  it("refuses a function, which no IndexedDB row can hold", () => {
+    expect(() => encodeSnapshotValueSync({ toJSON: () => ({ key: "x" }) }, { readBlob })).toThrow(
+      /function/
+    )
   })
 
   it("uses readBlob for Blob bytes", () => {

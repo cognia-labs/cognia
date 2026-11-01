@@ -21,7 +21,7 @@ import {
 } from "./bootstrap"
 import { readBlobBytesSync, stopBlobReader } from "../serve/persistence/blob-sync"
 import { acquireStoreLock, releaseStoreLock } from "./store-lock"
-import type { DbLike } from "./snapshot"
+import { encodeSnapshotRows, type DbLike } from "./snapshot"
 
 class FakeTable {
   rows: unknown[]
@@ -307,6 +307,7 @@ describe("ensureCliDb", () => {
     null,
     [],
     { snapshotFormat: 2, dbs: {} },
+    { snapshotFormat: 5, dbs: {} },
     { snapshotFormat: 3, dbs: null },
     { snapshotFormat: 3, dbs: { CogniaDB: [] } },
     { snapshotFormat: 3, dbs: { CogniaDB: { version: "82", tables: [] } } },
@@ -565,7 +566,7 @@ describe("ensureCliDb", () => {
     await handle.flush()
     expect(h.writes[0].path).toBe(path.join("/home", "db.json"))
     const written = JSON.parse(h.writes[0].data)
-    expect(written.snapshotFormat).toBe(2)
+    expect(written.snapshotFormat).toBe(3)
     expect(written.dbs.CogniaDB.tables.goals).toEqual([{ id: "g1" }, { id: "g2" }])
   })
 
@@ -587,7 +588,8 @@ describe("ensureCliDb", () => {
 
       const tableDir = path.join(home, "db.json.tables")
       const manifest = JSON.parse(fs.readFileSync(path.join(tableDir, "manifest.json"), "utf8"))
-      expect(manifest.snapshotFormat).toBe(3)
+      // Format 4: value-codec-1 rows, refused by builds that accept only 3.
+      expect(manifest.snapshotFormat).toBe(4)
       expect(manifest.dbs.CogniaDB).toEqual({
         version: 82,
         tables: ["goals", "sessions"],
@@ -811,16 +813,7 @@ describe("ensureCliDb", () => {
       await handle.flush()
       const file = path.join(home, "db.json.tables", "CogniaDB--goals.json")
       const initial = fs.readFileSync(file, "utf8")
-      const firstRows = [
-        { id: "first", text: "会话 🔐" },
-        undefined,
-        new Date(0),
-        {
-          toJSON(key: string) {
-            return { key }
-          },
-        },
-      ]
+      const firstRows = [{ id: "first", text: "会话 🔐" }, undefined, new Date(0)]
       goals.rows = firstRows
       handle.scheduleTableFlush("CogniaDB", "goals")
 
@@ -853,7 +846,9 @@ describe("ensureCliDb", () => {
         const second = handle.flush()
         release()
         await Promise.all([first, second])
-        expect(fs.readFileSync(`${file}.bak`, "utf8")).toBe(JSON.stringify(firstRows))
+        expect(fs.readFileSync(`${file}.bak`, "utf8")).toBe(
+          JSON.stringify(await encodeSnapshotRows(firstRows))
+        )
         expect(fs.readFileSync(file, "utf8")).toBe(JSON.stringify(goals.rows))
         expect(fs.existsSync(`${file}.tmp`)).toBe(false)
         expect(fs.existsSync(`${file}.bak.tmp`)).toBe(false)
@@ -1099,7 +1094,7 @@ describe("ensureCliDb", () => {
     try {
       await handle.flush()
       const written = JSON.parse(writes[0].data)
-      expect(written.snapshotFormat).toBe(2)
+      expect(written.snapshotFormat).toBe(3)
       // One database now. The key is the live CogniaDB name, which is
       // per-account rather than hardcoded.
       expect(Object.keys(written.dbs)).toHaveLength(1)
@@ -1220,7 +1215,7 @@ describe("ensureCliDb — multiple databases", () => {
     const handle = await ensureCliDb(opts)
     await handle.flush()
     const written = JSON.parse(h.writes[0].data)
-    expect(written.snapshotFormat).toBe(2)
+    expect(written.snapshotFormat).toBe(3)
     expect(written.dbs.CogniaDB).toEqual({ version: 82, tables: { goals: [{ id: "g1" }] } })
     expect(written.dbs.CogniaSchedulerDB.version).toBe(2)
     expect(written.dbs.CogniaSchedulerDB.tables.tasks).toEqual([{ id: "t1" }])

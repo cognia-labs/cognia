@@ -1,3 +1,7 @@
+import Dexie from "dexie"
+
+import { installFakeIndexedDb } from "@/lib/headless/node-indexeddb"
+
 import { encodeKey } from "./canonical"
 import {
   installTransactionCapture,
@@ -352,5 +356,84 @@ describe("installTransactionCapture", () => {
       { database: "CogniaDB", onCommit: () => commits.push([]) }
     )
     expect(() => core!.transaction(["sessions"], "readwrite")).not.toThrow()
+  })
+})
+
+describe("the drain gate", () => {
+  let counter = 0
+  async function open(
+    drain: (trans: object) => import("./capture").DrainGate | undefined,
+    limit = 100
+  ) {
+    await installFakeIndexedDb()
+    counter += 1
+    const db = new Dexie(`DrainGate-${process.pid}-${counter}`)
+    db.version(1).stores({ rows: "id", other: "id" })
+    installTransactionCapture(db as unknown as CaptureDexieLike, {
+      database: "drain",
+      onCommit: () => {},
+      drain,
+      drainHoldLimitMs: limit,
+    })
+    await db.open()
+    return db
+  }
+
+  it("keeps holding past the limit while the held work advances", async () => {
+    const started = Date.now()
+    const db = await open(() => ({
+      released: () => Date.now() - started >= 300,
+      progress: () => Math.floor((Date.now() - started) / 20),
+    }))
+    try {
+      const at = Date.now()
+      await db.table("rows").put({ id: "a" })
+      expect(Date.now() - at).toBeGreaterThanOrEqual(250)
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+
+  it("lets go after the limit when the held work makes no progress", async () => {
+    const db = await open(() => ({ released: () => false, progress: () => 0 }))
+    try {
+      const at = Date.now()
+      await db.table("rows").put({ id: "a" })
+      const held = Date.now() - at
+      expect(held).toBeGreaterThanOrEqual(90)
+      expect(held).toBeLessThan(1000)
+    } finally {
+      db.close()
+      await db.delete()
+    }
+  })
+
+  it("holds a transaction once for all its writes, pausing between reads, and keeps it usable", async () => {
+    let asked = 0
+    let pauses = 0
+    const started = Date.now()
+    const db = await open(() => {
+      asked += 1
+      return {
+        released: () => Date.now() - started >= 150,
+        pause: () => {
+          pauses += 1
+        },
+      }
+    }, 5000)
+    try {
+      await db.transaction("rw", "rows", async () => {
+        await Promise.all([1, 2, 3].map((n) => db.table("rows").put({ id: `r${n}` })))
+        // Still the same, active transaction after the hold.
+        await db.table("rows").put({ id: "after" })
+      })
+      expect(asked).toBe(2)
+      expect(pauses).toBeGreaterThan(0)
+      expect(await db.table("rows").count()).toBe(4)
+    } finally {
+      db.close()
+      await db.delete()
+    }
   })
 })

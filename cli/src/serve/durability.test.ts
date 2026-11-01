@@ -201,7 +201,7 @@ describe("startDurability", () => {
       const manifest = JSON.parse(
         fs.readFileSync(path.join(tableDirectory, "manifest.json"), "utf8")
       )
-      expect(manifest.snapshotFormat).toBe(3)
+      expect(manifest.snapshotFormat).toBe(4)
       const [primaryTables] = Object.values(manifest.dbs) as [{ tables: string[] }]
       expect(primaryTables.tables).toContain("scheduledTasks")
       expect(primaryTables.tables).not.toContain("scheduledTaskRuns")
@@ -470,4 +470,104 @@ describe("resolveDurabilityBackend", () => {
       resolveDurabilityBackend(home, "acct", { COGNIA_DURABILITY_BACKEND: "journal-v4" })
     ).toBe("journal-v4")
   })
+})
+
+describe("value codec 1 on every rung", () => {
+  // Value codec 1 on every rung the brain can run: what IndexedDB keeps for a
+  // row (structured clone) must be what a restart hands back.
+  it.each(["snapshot-v3", "journal-v4", "sqlite-v5"] as const)(
+    "%s round-trips every structured-clone type across a restart",
+    async (backend) => {
+      const [{ installFakeIndexedDb }, { __resetDbForTesting }] = await Promise.all([
+        import("@/lib/headless/node-indexeddb"),
+        import("@/lib/db/schema"),
+      ])
+      await installFakeIndexedDb()
+      __resetCliDbForTesting()
+      __resetDbForTesting()
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), `cognia-serve-codec-${backend}-`))
+      const accountId = `acct_codec_${backend.replace(/[^a-z0-9]/g, "")}`
+      const large = Uint8Array.from({ length: 40_000 }, (_, index) => index % 251)
+      const holes = [1, , 3]
+      const row = {
+        id: "pack-1",
+        displayName: "Pack",
+        createdAt: 1,
+        large: new Blob([large], { type: "video/mp4" }),
+        small: new Blob([Uint8Array.from([1, 2, 3])], { type: "image/png" }),
+        file: new File([Uint8Array.from([9])], "a.txt", { type: "text/plain", lastModified: 5 }),
+        u16: Uint16Array.from([1, 65535]),
+        f64: Float64Array.from([Math.PI]),
+        buffer: Uint8Array.from([7, 8]).buffer,
+        view: new DataView(Uint8Array.from([4, 5]).buffer),
+        at: new Date("2026-11-01T00:00:00.000Z"),
+        map: new Map<string, unknown>([["k", new Date(0)]]),
+        set: new Set([1, "two"]),
+        pattern: /ab+/gi,
+        failure: new RangeError("boom"),
+        special: [Number.NaN, -0, Infinity],
+        big: BigInt("12345678901234567890"),
+        gone: undefined,
+        holes,
+      }
+      const tag = (value: unknown) => Object.prototype.toString.call(value)
+      let second: Awaited<ReturnType<typeof startDurability>> | undefined
+      try {
+        const first = await startDurability({ home, accountId, backend })
+        await getDb().table("petMediaPacks").put(row)
+        await first.db?.flush().catch(() => {})
+        await first.dispose()
+        // Restart: a fresh in-memory database, restored from disk alone.
+        await getDb().delete()
+        __resetDbForTesting()
+        __resetCliDbForTesting()
+
+        second = await startDurability({ home, accountId, backend })
+        const back = (await getDb().table("petMediaPacks").get("pack-1")) as typeof row & {
+          view: DataView
+        }
+        expect(back).toBeDefined()
+        expect(tag(back.large)).toBe("[object Blob]")
+        expect(back.large.type).toBe("video/mp4")
+        expect(new Uint8Array(await back.large.arrayBuffer())).toEqual(large)
+        expect(Array.from(new Uint8Array(await back.small.arrayBuffer()))).toEqual([1, 2, 3])
+        expect(tag(back.file)).toBe("[object File]")
+        expect([back.file.name, back.file.lastModified, back.file.type]).toEqual([
+          "a.txt",
+          5,
+          "text/plain",
+        ])
+        expect(tag(back.u16)).toBe("[object Uint16Array]")
+        expect(Array.from(back.u16)).toEqual([1, 65535])
+        expect(tag(back.f64)).toBe("[object Float64Array]")
+        expect(tag(back.buffer)).toBe("[object ArrayBuffer]")
+        expect(Array.from(new Uint8Array(back.buffer))).toEqual([7, 8])
+        expect(tag(back.view)).toBe("[object DataView]")
+        expect(back.view.getUint8(1)).toBe(5)
+        expect(tag(back.at)).toBe("[object Date]")
+        expect(back.at.toISOString()).toBe("2026-11-01T00:00:00.000Z")
+        expect(tag(back.map)).toBe("[object Map]")
+        expect(tag(back.map.get("k"))).toBe("[object Date]")
+        expect([...back.set]).toEqual([1, "two"])
+        expect(String(back.pattern)).toBe("/ab+/gi")
+        expect([back.failure.name, back.failure.message]).toEqual(["RangeError", "boom"])
+        expect(back.special[0]).toBeNaN()
+        expect(Object.is(back.special[1], -0)).toBe(true)
+        expect(back.special[2]).toBe(Infinity)
+        expect(back.big).toBe(BigInt("12345678901234567890"))
+        expect(Object.hasOwn(back, "gone")).toBe(true)
+        expect(back.holes).toHaveLength(3)
+        expect(Object.hasOwn(back.holes, 1)).toBe(false)
+        await second.dispose()
+      } finally {
+        await second?.db?.flush().catch(() => {})
+        await getDb()
+          .delete()
+          .catch(() => {})
+        __resetDbForTesting()
+        __resetCliDbForTesting()
+        fs.rmSync(home, { recursive: true, force: true })
+      }
+    }
+  )
 })

@@ -21,6 +21,7 @@ import path from "node:path"
 
 import { decodeSnapshotRows, encodeSnapshotValueSync } from "../../db/snapshot"
 import { INLINE_BINARY_LIMIT, readBinarySync, writeBinarySync } from "./binary-store"
+import type { BinaryPrefetcher } from "./binary-prefetch"
 import { readBlobBytesSync } from "./blob-sync"
 
 /** Wire format: written into journal lines, checkpoint manifests and SQLite rows. */
@@ -34,11 +35,20 @@ const ENVELOPE_KEY = "$cogniaSnapshotValue"
  * runs on the commit path. With a durability `root`, binary values above
  * {@link INLINE_BINARY_LIMIT} are written to its side-file store first
  * (`binary-store.ts`); without one (parity tooling, tests) everything stays
- * inline.
+ * inline. A `prefetched` scope whose side files a prefetcher already started
+ * (`binary-prefetch.ts`; the scope is the recorded mutation, or one table
+ * read) supplies them, so the encode only waits for the ones still unfinished.
  */
-export function encodeDurableValue(value: unknown, root?: string): unknown {
+export function encodeDurableValue(
+  value: unknown,
+  root?: string,
+  prefetched?: { prefetcher: BinaryPrefetcher; scope: object }
+): unknown {
   return encodeSnapshotValueSync(value, {
     readBlob: readBlobBytesSync,
+    ...(prefetched
+      ? { prepared: (binary: object) => prefetched.prefetcher.resolve(binary, prefetched.scope) }
+      : {}),
     ...(root === undefined
       ? {}
       : {
