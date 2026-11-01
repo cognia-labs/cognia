@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core"
+import { localTransport } from "@/lib/tauri/transport-instance"
 import { isTauri } from "@/lib/tauri"
 import {
   createSiwcFetch,
@@ -21,7 +21,7 @@ export function createNativeSiwcFetch(baseURL: string | undefined): typeof globa
     }
     const command = commands[method]
     if (!command) return Promise.reject(new Error("Unsupported SIWC native operation"))
-    return invoke(command, params)
+    return localTransport.call(command, params)
   }
   return createSiwcFetch(ref, call)
 }

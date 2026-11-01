@@ -1,6 +1,8 @@
-import { invoke } from "@tauri-apps/api/core"
-import { listen } from "@tauri-apps/api/event"
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { call: jest.fn(), subscribeAttached: jest.fn() },
+}))
 
+import { localTransport } from "@/lib/tauri/transport-instance"
 import type { SshHostProfile } from "@/lib/terminal/ssh-profiles"
 
 import {
@@ -17,12 +19,12 @@ import {
   type StageEventPayload,
 } from "./client"
 
-const mockInvoke = invoke as jest.Mock
-const mockListen = listen as jest.Mock
+const mockInvoke = localTransport.call as jest.Mock
+const mockSubscribe = localTransport.subscribeAttached as jest.Mock
 
 beforeEach(() => {
   mockInvoke.mockReset()
-  mockListen.mockReset()
+  mockSubscribe.mockReset()
 })
 
 const profile: SshHostProfile = {
@@ -145,26 +147,40 @@ describe("toInstallerFailure", () => {
 })
 
 describe("onStage", () => {
-  it("delivers only its own session's stage events and unsubscribes", async () => {
-    const unlisten = jest.fn()
-    mockListen.mockResolvedValue(unlisten)
+  it("delivers only its own session's stage events, waits to attach, and unsubscribes", async () => {
+    const unsubscribe = jest.fn()
+    let attached!: (off: () => void) => void
+    mockSubscribe.mockReturnValue(new Promise<() => void>((resolve) => (attached = resolve)))
     const handler = jest.fn()
 
-    const stop = await onStage("hi-1", handler)
-    expect(mockListen).toHaveBeenCalledWith(HOST_INSTALLER_STAGE_EVENT, expect.any(Function))
-    const deliver = mockListen.mock.calls[0][1] as (message: { payload: StageEventPayload }) => void
+    let resolved = false
+    const pending = onStage("hi-1", handler).then((stop) => {
+      resolved = true
+      return stop
+    })
+    await Promise.resolve()
+    expect(resolved).toBe(false)
+    attached(unsubscribe)
+    const stop = await pending
+    expect(mockSubscribe).toHaveBeenCalledWith(HOST_INSTALLER_STAGE_EVENT, expect.any(Function))
+    const deliver = mockSubscribe.mock.calls[0][1] as (payload: StageEventPayload) => void
     const mine: StageEventPayload = {
       sessionId: "hi-1",
       operationId: "inst-1",
       stage: "upload",
       outcome: null,
     }
-    deliver({ payload: mine })
-    deliver({ payload: { ...mine, sessionId: "hi-2" } })
+    deliver(mine)
+    deliver({ ...mine, sessionId: "hi-2" })
     expect(handler).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledWith(mine)
 
     stop()
-    expect(unlisten).toHaveBeenCalledTimes(1)
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it("rejects when the listener cannot attach, so no step starts unwatched", async () => {
+    mockSubscribe.mockRejectedValue(new Error("listen failed"))
+    await expect(onStage("hi-1", jest.fn())).rejects.toThrow("listen failed")
   })
 })

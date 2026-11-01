@@ -76,6 +76,19 @@ export class TauriTransport implements Transport {
     return invoke<T>(local.command, local.args)
   }
 
+  async subscribeAttached<T = unknown>(
+    event: string,
+    handler: (payload: T) => void
+  ): Promise<() => void> {
+    const unlisten = await this.listenEvent<T>(event, (e) => handler(e.payload))
+    let done = false
+    return () => {
+      if (done) return
+      done = true
+      safeUnlisten(unlisten)
+    }
+  }
+
   subscribe<T = unknown>(event: string, handler: (payload: T) => void): () => void {
     let cancelled = false
     let unlisten: UnlistenFn | null = null

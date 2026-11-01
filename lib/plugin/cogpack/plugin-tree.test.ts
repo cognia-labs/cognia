@@ -3,7 +3,9 @@
  */
 
 const invoke = jest.fn()
-jest.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invoke(...args) }))
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { call: (...args: unknown[]) => invoke(...args) },
+}))
 let tauri = true
 jest.mock("@/lib/tauri", () => ({ isTauri: () => tauri }))
 const dispatchPluginError = jest.fn()

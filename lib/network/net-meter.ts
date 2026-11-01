@@ -20,7 +20,7 @@
  * and sends no credentials — any HTTP answer is a measurement.
  */
 
-import { invoke } from "@tauri-apps/api/core"
+import { localTransport } from "@/lib/tauri/transport-instance"
 
 import { restBaseOf } from "@/lib/ai/operations/handlers/http"
 import type { ProviderResolution } from "@/lib/ai/provider-consumption"
@@ -65,11 +65,11 @@ export interface Throughput {
 }
 
 export function readNetworkCounters(): Promise<NetworkCounters> {
-  return invoke<NetworkCounters>("network_interface_counters")
+  return localTransport.call<NetworkCounters>("network_interface_counters")
 }
 
 export function probeLatency(url: string, timeoutMs?: number): Promise<LatencySample> {
-  return invoke<LatencySample>("network_latency_probe", {
+  return localTransport.call<LatencySample>("network_latency_probe", {
     input: timeoutMs === undefined ? { url } : { url, timeoutMs },
   })
 }

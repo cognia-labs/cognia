@@ -8,7 +8,7 @@
  * webview's file-system scope cannot reach a staging directory.
  */
 
-import { invoke } from "@tauri-apps/api/core"
+import { localTransport } from "@/lib/tauri/transport-instance"
 
 import { decodeBase64, encodeBase64 } from "@/lib/share/encoding"
 import { dispatchPluginError } from "@/lib/plugin/error-bus"
@@ -27,7 +27,7 @@ interface ExportedTreeResponse {
 /** The files of an installed plugin, relative to its root. Desktop only. */
 export async function readInstalledPluginTree(pluginId: string): Promise<EmbeddedPluginFile[]> {
   if (!isTauri()) throw new Error("Reading a plugin's files needs the desktop app")
-  const tree = await invoke<ExportedTreeResponse>("plugin_export_tree", { pluginId })
+  const tree = await localTransport.call<ExportedTreeResponse>("plugin_export_tree", { pluginId })
   return tree.files.map((file) => ({ path: file.path, bytes: decodeBase64(file.base64) }))
 }
 
@@ -53,7 +53,7 @@ export async function installEmbeddedPlugin(
     base64: encodeBase64(bytes),
   }))
   try {
-    const receipt = await invoke<{ pluginId: string; warnings?: string[] }>(
+    const receipt = await localTransport.call<{ pluginId: string; warnings?: string[] }>(
       "plugin_install_from_files",
       { pluginId: options.pluginId, files: payload }
     )

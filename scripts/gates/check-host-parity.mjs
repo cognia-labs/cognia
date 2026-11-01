@@ -126,7 +126,17 @@ export const SEAM_OWNERS = Object.freeze([
   "lib/connectors/events.ts",
 ])
 
-const TAURI_IMPORT_RE = /from\s+["']@tauri-apps\/api\/(core|event)["']/
+/**
+ * A runtime import only. `import type { UnlistenFn } from "@tauri-apps/api/event"`
+ * is erased at compile time and calls nothing, so it bypasses no seam; flagging
+ * it sent lib/browser/downloads-client.ts (all of whose calls go through
+ * `transport`) into the inventory as a host-parity gap.
+ *
+ * The clause between `import` and `from` is limited to binding syntax so a match
+ * cannot start at one import and end at the next (the repo omits semicolons).
+ */
+const TAURI_IMPORT_RE =
+  /^\s*(?:import|export)\s+(?!type\b)[\w\s{},*$]*?from\s+["']@tauri-apps\/api\/(core|event)["']/m
 /**
  * `id: "x"` … `desktopOnly: true` within the SAME entry. The span forbids a
  * second `id:`, otherwise a lazy match happily reaches past the end of its own
@@ -139,7 +149,8 @@ const DESKTOP_ONLY_RE =
  * Matching only `"name" =>` silently drops every name but the last, and there
  * are 9 such arms in `rpc/` — each one a command that would look ungated.
  */
-const RUST_ARM_RE = /((?:"[a-z][a-z0-9_]*"\s*\|\s*)*"[a-z][a-z0-9_]*")\s*=>/g
+const RUST_ARM_RE =
+  /((?:"[a-z][a-z0-9_]*"\s*\|\s*)*"[a-z][a-z0-9_]*")(?:\s+if\b[^{};]{0,400}?)?\s*=>/g
 
 /**
  * Two idioms mean "this arm needs the desktop", and they read almost alike:
@@ -173,7 +184,16 @@ const RUST_ARM_RE = /((?:"[a-z][a-z0-9_]*"\s*\|\s*)*"[a-z][a-z0-9_]*")\s*=>/g
  */
 const H = String.raw`host\s*\.\s*`
 const TAURI_APP_GATE_RE = new RegExp(`${H}tauri_app\\s*\\(`, "g")
-const HEADLESS_REJECT_RE = new RegExp(`${H}headless\\s*\\(\\)\\s*\\.\\s*is_some\\s*\\(\\)`, "g")
+/**
+ * The rejection itself, not any mention of `is_some()`: `with_gateway` in
+ * rpc/gateway_plane.rs reads it to label the host kind, and data_sync.rs passes
+ * it into a match guard. Matching the bare call marked all 13 gateway commands
+ * (served on both hosts) and `background_monitor_register_scheduled` desktop-only.
+ */
+const HEADLESS_REJECT_RE = new RegExp(
+  `if\\s+${H}headless\\s*\\(\\)\\s*\\.\\s*is_some\\s*\\(\\)\\s*\\{\\s*return\\s+Err\\(`,
+  "g"
+)
 const HEADLESS_GATE_RE = new RegExp(
   `${H}headless\\s*\\(\\)\\s*\\.\\s*ok_or_else\\s*\\(\\s*\\|\\|\\s*RpcError::` +
     `(?:headless_unsupported|headless_host_required)`,
@@ -318,6 +338,12 @@ export function parseHostGatedArms(source) {
   ]
 }
 
+/** @param {{ transports?: string[] } | undefined} entry */
+function isInternalOnly(entry) {
+  const transports = entry?.transports ?? []
+  return transports.length > 0 && transports.every((t) => t === "internal")
+}
+
 /**
  * `"name" =>` also matches things that are not dispatch arms — `rpc.rs:2519`
  * maps error codes to HTTP status the same way (`"spawn_failed" | … =>`), and
@@ -346,11 +372,18 @@ export function findOneSidedArms(modules, manifest, knownCommands = new Set()) {
   for (const [side, commands] of bySide) {
     for (const command of commands) {
       if (!isRealCommand(command)) continue
+      const entry = manifest.get(command)
+      if (side === "headless-only" && knownCommands.has(command) && isInternalOnly(entry)) {
+        // The brain's service-plane route to a capability the desktop serves
+        // over its own Tauri command of the same name (e.g.
+        // connectors_matrix_crypto_* through lib/connectors/tauri/commands.ts).
+        // No paired device can reach the arm, so both hosts have the command.
+        continue
+      }
       findings.push(`C:${command}:${side}`)
       // A headless-only arm that a paired device can address over the wire is
       // not bookkeeping — the remote client gets a 503 whose message names the
       // opposite host.
-      const entry = manifest.get(command)
       const remote = (entry?.transports ?? []).some((t) =>
         ["http", "websocket", "webrtc"].includes(t)
       )
@@ -545,6 +578,145 @@ export function classifyDesktopContracts(findings, contracts, io) {
   return { findings: findings.filter((key) => !intentional.has(key)), classified, errors }
 }
 
+/**
+ * What a file binds at runtime from `@tauri-apps/api/{core,event}`: the
+ * imported names (`{ Channel, invoke as call }` → Channel, invoke; `* as t` or
+ * `export *` → `*`; a default import → `default`) and, per imported name, the
+ * local names it is called by. Inline `type` specifiers are erased and not
+ * counted.
+ *
+ * @param {string} source
+ * @returns {{ names: Set<string>, locals: Map<string, Set<string>>, namespaces: Set<string> }}
+ */
+export function tauriRuntimeBindings(source) {
+  const re =
+    /^\s*(import|export)\s+(?!type\b)([\w\s{},*$]*?)\s*from\s+["']@tauri-apps\/api\/(?:core|event)["']/gm
+  const names = new Set()
+  const locals = new Map()
+  const namespaces = new Set()
+  for (const match of stripComments(source).matchAll(re)) {
+    const clause = match[2]
+    const braces = clause.match(/\{([\s\S]*)\}/)
+    for (const spec of (braces?.[1] ?? "").split(",")) {
+      const [name, local = name] = spec
+        .trim()
+        .split(/\s+as\s+/)
+        .map((part) => part.trim())
+      if (!name || /^type\s/.test(name)) continue
+      names.add(name)
+      if (match[1] === "import") {
+        if (!locals.has(name)) locals.set(name, new Set())
+        locals.get(name).add(local)
+      }
+    }
+    const outside = clause
+      .replace(/\{[\s\S]*\}/, "")
+      .replace(/,\s*$/, "")
+      .trim()
+    const namespace = outside.match(/\*\s*(?:as\s+([A-Za-z_$][\w$]*))?/)
+    if (namespace) {
+      names.add("*")
+      if (namespace[1] && match[1] === "import") namespaces.add(namespace[1])
+    } else if (/^[A-Za-z_$][\w$]*/.test(outside)) names.add("default")
+  }
+  return { names, locals, namespaces }
+}
+
+/** The runtime names a file imports from Tauri (see {@link tauriRuntimeBindings}). */
+export function tauriRuntimeImports(source) {
+  return [...tauriRuntimeBindings(source).names].sort()
+}
+
+/**
+ * The first string argument of every call of `invoke`, under any local alias
+ * (`invoke as call` → `call(`) or through a namespace (`t.invoke(`).
+ */
+function invokedCommands(source, bindings) {
+  const callees = [...(bindings.locals.get("invoke") ?? [])].map((local) =>
+    local.replace(/\$/g, "\\$")
+  )
+  for (const ns of bindings.namespaces) callees.push(`${ns.replace(/\$/g, "\\$")}\\s*\\.\\s*invoke`)
+  if (callees.length === 0) return []
+  const call = new RegExp(
+    `(?<![\\w$.])(?:${callees.join("|")})\\s*(?:<[^>()]*>)?\\s*\\(\\s*(["'\`])?([^"'\`,)\\s]*)`,
+    "g"
+  )
+  const code = stripComments(source).replace(
+    // Binding syntax only, as in tauriRuntimeBindings: an `export const` that
+    // runs code is not an import statement.
+    /^\s*(?:import|export)\s+(?:type\s+)?[\w\s{},*$]*?\s*from\s+["'][^"']+["']/gm,
+    ""
+  )
+  const out = []
+  for (const m of code.matchAll(call)) out.push(m[1] ? m[2] : "<dynamic>")
+  // Handing `invoke` on as a value (`const f = invoke`) would let any command
+  // through the pin, so a use that is not a call fails as well.
+  const reference = new RegExp(
+    `(?<![\\w$.])(?:${callees.join("|")})(?![\\w$])(?!\\s*(?:<[^>()]*>)?\\s*\\()`,
+    "g"
+  )
+  for (const _ of code.matchAll(reference)) out.push("<reference>")
+  return out
+}
+
+/**
+ * A Class A finding a file annotation proves physical: the file is the one place
+ * a desktop-only primitive the Transport contract cannot express is used (a
+ * Tauri `Channel` carrying raw frames, `emitTo` addressing one webview window).
+ * The annotation pins the exact runtime imports (`physicalSeam.imports`) and,
+ * when it imports `invoke`, the exact commands (`physicalSeam.invokes`); any
+ * other import or command fails rather than riding on the judgment. Like
+ * {@link classifyDesktopContracts}, the finding stays visible but is not
+ * counted as a gap.
+ *
+ * @param {string[]} findings
+ * @param {Record<string, any>} annotations
+ * @param {{ read: (p: string) => string }} io
+ */
+export function classifyPhysicalSeams(findings, annotations, io) {
+  const known = new Set(findings)
+  const classified = []
+  const errors = []
+  for (const [path, row] of Object.entries(annotations)) {
+    if (!isFileAnnotation(path) || row?.physicalSeam === undefined) continue
+    const seam = row.physicalSeam
+    const key = `A:${path}`
+    if (
+      row.classification !== "physically-impossible" ||
+      !row.note?.trim() ||
+      !Array.isArray(seam?.imports) ||
+      seam.imports.length === 0
+    ) {
+      errors.push(`${path}: invalid physical seam annotation`)
+      continue
+    }
+    if (!known.has(key)) {
+      errors.push(`${path}: stale physical seam (the file no longer imports Tauri directly)`)
+      continue
+    }
+    const source = io.read(path)
+    const bindings = tauriRuntimeBindings(source)
+    const extra = [...bindings.names].sort().filter((name) => !seam.imports.includes(name))
+    if (extra.length) {
+      errors.push(`${path}: imports ${extra.join(", ")} beyond its physical seam`)
+      continue
+    }
+    if (seam.imports.includes("invoke")) {
+      const allowed = Array.isArray(seam.invokes) ? seam.invokes : []
+      const stray = invokedCommands(source, bindings).filter(
+        (command) => !allowed.includes(command)
+      )
+      if (stray.length) {
+        errors.push(`${path}: invokes ${stray.join(", ")} beyond its physical seam`)
+        continue
+      }
+    }
+    classified.push(key)
+  }
+  const physical = new Set(classified)
+  return { findings: findings.filter((key) => !physical.has(key)), classified, errors }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -638,18 +810,25 @@ export function main(argv = []) {
   const files = trackedFiles()
   const { findings: collectedFindings, census, remotelyReachable } = collect(files, io)
   const annotationDocument = JSON.parse(io.read("scripts/gates/host-parity-annotations.json"))
-  const { findings, classified, errors } = classifyDesktopContracts(
+  const contracts = classifyDesktopContracts(
     collectedFindings,
     annotationDocument.desktopContracts ?? {},
     io
   )
+  const seams = classifyPhysicalSeams(contracts.findings, annotationDocument.subsystems ?? {}, io)
+  const { findings } = seams
+  const errors = [...contracts.errors, ...seams.errors]
   if (errors.length) {
     for (const error of errors) console.error(`[host-parity] ${error}`)
     return 1
   }
-  if (classified.length) {
-    console.log(`[host-parity] ${classified.length} verified physical desktop contracts:`)
-    for (const key of classified) console.log(`    ${key}`)
+  if (contracts.classified.length) {
+    console.log(`[host-parity] ${contracts.classified.length} verified physical desktop contracts:`)
+    for (const key of contracts.classified) console.log(`    ${key}`)
+  }
+  if (seams.classified.length) {
+    console.log(`[host-parity] ${seams.classified.length} verified physical seam file(s):`)
+    for (const key of seams.classified) console.log(`    ${key}`)
   }
 
   if (argv.includes("--write-baseline")) {

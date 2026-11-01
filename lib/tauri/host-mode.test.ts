@@ -1,6 +1,6 @@
 const invokeMock = jest.fn()
-jest.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { call: (...args: unknown[]) => invokeMock(...args) },
 }))
 
 const isTauriMock = jest.fn(() => true)

@@ -30,6 +30,10 @@ const invoke = jest.fn()
 jest.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invoke(...args),
 }))
+// host-mode reads its state through this desktop's own transport.
+jest.mock("@/lib/tauri/transport-instance", () => ({
+  localTransport: { call: (...args: unknown[]) => invoke(...args) },
+}))
 
 import { __resetHostModeForTests } from "@/lib/tauri/host-mode"
 import { WindowShowInitializer } from "./window-show-initializer"

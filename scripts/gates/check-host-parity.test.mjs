@@ -9,6 +9,7 @@ import {
   censusRuntimeGuards,
   checkAnnotations,
   classifyDesktopContracts,
+  classifyPhysicalSeams,
   diffAgainstBaseline,
   findCapabilityMisreports,
   findDesktopOnlySections,
@@ -19,6 +20,7 @@ import {
   parseHostFeatures,
   parseHostGatedArms,
   subsystemOf,
+  tauriRuntimeImports,
 } from "./check-host-parity.mjs"
 
 const io = (files) => ({ read: (p) => files[p] ?? "" })
@@ -69,6 +71,20 @@ describe("class A — transport-seam bypass", () => {
     assert.deepEqual(findSeamBypasses(Object.keys(files), io(files)), [])
   })
 
+  it("ignores type-only imports, which are erased and call nothing", () => {
+    const files = {
+      "lib/x/a.ts": 'import type { UnlistenFn } from "@tauri-apps/api/event"',
+      "lib/x/b.ts":
+        'import { transport } from "@/lib/tauri"\nimport type { UnlistenFn } from "@tauri-apps/api/event"',
+      "lib/x/c.ts": 'import {\n  invoke,\n  type InvokeArgs,\n} from "@tauri-apps/api/core"',
+      "lib/x/d.ts": 'export { invoke } from "@tauri-apps/api/core"',
+    }
+    assert.deepEqual(findSeamBypasses(Object.keys(files), io(files)), [
+      "A:lib/x/c.ts",
+      "A:lib/x/d.ts",
+    ])
+  })
+
   it("ignores tests and stories, which never ship as a host path", () => {
     const files = {
       "lib/x/a.test.ts": 'import { invoke } from "@tauri-apps/api/core"',
@@ -115,6 +131,31 @@ describe("class C — one-sided RPC arms", () => {
     }`
     const sides = parseHostGatedArms(src).map((g) => g.side)
     assert.deepEqual([...new Set(sides)], ["desktop-only"])
+  })
+
+  it("does not read a host-kind label or a match guard as a rejection", () => {
+    // gateway_plane.rs `with_gateway` labels the host; data_sync.rs passes
+    // `is_some()` into the next arm's guard. Neither refuses a headless host.
+    const label = `fn with_gateway() { f(g, if host.headless().is_some() { "headless" } else { "desktop" }) }
+      match name { "gateway_status" => with_gateway(), "gateway_list_models" => with_gateway() }`
+    assert.deepEqual(parseHostGatedArms(label), [])
+    const guard = `"background_monitor_register_scheduled" => { run().await }
+      "workflow_approval_list" | "workflow_approval_respond"
+          if needs_ts_authority(
+              name,
+              host.headless().is_some(),
+          ) =>
+      { bridge() }`
+    assert.deepEqual(parseHostGatedArms(guard), [])
+  })
+
+  it("attributes a gate inside a guarded arm to that arm", () => {
+    const src = `"a_cmd" => { ok() }
+      "b_cmd" | "c_cmd" if wants(name) => { let app = host.tauri_app(name)?; }`
+    assert.deepEqual(parseHostGatedArms(src), [
+      { command: "b_cmd", side: "desktop-only" },
+      { command: "c_cmd", side: "desktop-only" },
+    ])
   })
 
   it("reads the headless-only idiom across rustfmt's line breaks", () => {
@@ -164,6 +205,29 @@ describe("class C — one-sided RPC arms", () => {
     const { findings, remotelyReachable } = findOneSidedArms(modules, manifest)
     assert.deepEqual(findings, ["C:spawn_external_agent:headless-only"])
     assert.deepEqual(remotelyReachable, ["spawn_external_agent"])
+  })
+
+  it("skips an internal-only headless arm the desktop serves as its own command", () => {
+    // connectors_matrix_crypto_*: the brain's service-plane route to what the
+    // desktop runs as a Tauri command of the same name.
+    const gate = `host.headless().ok_or_else(|| RpcError::headless_host_required(name))?;`
+    const modules = [
+      {
+        path: "rpc/service_plane.rs",
+        source: `"crypto_backup" => { ${gate} } "only_headless" => { ${gate} } "remote_cmd" => { ${gate} }`,
+      },
+    ]
+    const manifest = new Map([
+      ["crypto_backup", { target: "service", transports: ["internal"] }],
+      ["only_headless", { target: "service", transports: ["internal"] }],
+      ["remote_cmd", { target: "execution", transports: ["internal", "http"] }],
+    ])
+    const { findings } = findOneSidedArms(
+      modules,
+      manifest,
+      new Set(["crypto_backup", "remote_cmd"])
+    )
+    assert.deepEqual(findings, ["C:only_headless:headless-only", "C:remote_cmd:headless-only"])
   })
 
   it("does not flag an internal-only headless arm as remotely reachable", () => {
@@ -427,6 +491,107 @@ describe("exact physical desktop contracts", () => {
         source
       ).errors.length,
       1
+    )
+  })
+})
+
+describe("class A — verified physical seams", () => {
+  it("lists the runtime names a file binds from Tauri", () => {
+    assert.deepEqual(
+      tauriRuntimeImports(
+        'import { Channel, invoke as call, type InvokeArgs } from "@tauri-apps/api/core"\n' +
+          'import type { UnlistenFn } from "@tauri-apps/api/event"\n' +
+          'import * as events from "@tauri-apps/api/event"'
+      ),
+      ["*", "Channel", "invoke"]
+    )
+  })
+
+  const note = "a Channel carries raw frames"
+  const files = {
+    "lib/x/seam.ts":
+      'import { Channel, invoke } from "@tauri-apps/api/core"\n' +
+      'invoke("frames_subscribe", { channel: new Channel() })',
+  }
+  const annotate = (physicalSeam, extra = {}) => ({
+    "lib/x/seam.ts": { classification: "physically-impossible", note, physicalSeam, ...extra },
+  })
+
+  it("classifies a finding whose imports and commands match its pin", () => {
+    const result = classifyPhysicalSeams(
+      ["A:lib/x/seam.ts", "A:lib/x/other.ts"],
+      annotate({ imports: ["Channel", "invoke"], invokes: ["frames_subscribe"] }),
+      io(files)
+    )
+    assert.deepEqual(result, {
+      findings: ["A:lib/x/other.ts"],
+      classified: ["A:lib/x/seam.ts"],
+      errors: [],
+    })
+  })
+
+  it("fails on an import or a command beyond the pin", () => {
+    const narrower = classifyPhysicalSeams(
+      ["A:lib/x/seam.ts"],
+      annotate({ imports: ["Channel"] }),
+      io(files)
+    )
+    assert.deepEqual(narrower.errors, ["lib/x/seam.ts: imports invoke beyond its physical seam"])
+    const commands = classifyPhysicalSeams(
+      ["A:lib/x/seam.ts"],
+      annotate({ imports: ["Channel", "invoke"], invokes: [] }),
+      io(files)
+    )
+    assert.deepEqual(commands.errors, [
+      "lib/x/seam.ts: invokes frames_subscribe beyond its physical seam",
+    ])
+    assert.deepEqual(commands.findings, ["A:lib/x/seam.ts"])
+  })
+
+  it("follows aliases, namespaces and values of invoke, and counts star re-exports", () => {
+    const pin = annotate({ imports: ["Channel", "invoke"], invokes: ["frames_subscribe"] })
+    const run = (extra) =>
+      classifyPhysicalSeams(
+        ["A:lib/x/seam.ts"],
+        pin,
+        io({ "lib/x/seam.ts": files["lib/x/seam.ts"] + extra })
+      ).errors
+    assert.deepEqual(
+      run('\nimport { invoke as direct } from "@tauri-apps/api/core"\ndirect("other_cmd")'),
+      ["lib/x/seam.ts: invokes other_cmd beyond its physical seam"]
+    )
+    assert.deepEqual(run('\nconst f = invoke\nf("other_cmd")'), [
+      "lib/x/seam.ts: invokes <reference> beyond its physical seam",
+    ])
+    assert.deepEqual(run('\nexport * from "@tauri-apps/api/core"'), [
+      "lib/x/seam.ts: imports * beyond its physical seam",
+    ])
+    assert.deepEqual(
+      run('\nimport * as tauri from "@tauri-apps/api/core"\ntauri.invoke("other_cmd")'),
+      ["lib/x/seam.ts: imports * beyond its physical seam"]
+    )
+    assert.deepEqual(run('\ninvoke<string>("frames_subscribe", {})'), [])
+    assert.deepEqual(
+      run(
+        '\nexport const unpinned = () => invoke("other_cmd")\n' +
+          'export type { Summary } from "@/lib/browser/session-types"'
+      ),
+      ["lib/x/seam.ts: invokes other_cmd beyond its physical seam"]
+    )
+  })
+
+  it("rejects a pin on a non-physical or stale annotation", () => {
+    assert.deepEqual(
+      classifyPhysicalSeams(
+        ["A:lib/x/seam.ts"],
+        annotate({ imports: ["Channel", "invoke"] }, { classification: "unmigrated" }),
+        io(files)
+      ).errors,
+      ["lib/x/seam.ts: invalid physical seam annotation"]
+    )
+    assert.deepEqual(
+      classifyPhysicalSeams([], annotate({ imports: ["Channel", "invoke"] }), io(files)).errors,
+      ["lib/x/seam.ts: stale physical seam (the file no longer imports Tauri directly)"]
     )
   })
 })
