@@ -1,6 +1,6 @@
 # Extract the documentation site into cognia-docs
 
-Status: Implementing
+Status: Code published; main migration in draft review; Cloudflare upload awaits environment configuration
 
 Date: 2026-11-01
 

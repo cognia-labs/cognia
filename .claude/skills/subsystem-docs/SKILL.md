@@ -5,12 +5,11 @@ description: Write or renovate a bilingual multi-page Fumadocs subsystem section
 
 > Repository ownership: public documentation moved to cognia-labs/cognia-docs. Resolve an explicit docs checkout and read its AGENTS.md before editing product pages. Public-page paths below that previously began docs/content/docs/ now mean content/docs/ in that checkout. ADRs, API contracts, research and evidence keep their existing main-repository paths. Do not recreate migrated product pages here. Run pnpm check in cognia-docs; use pnpm docs:check plus ADR/link gates in the product repository.
 
-
 # Subsystem Docs (bilingual Fumadocs canvas section)
 
 The repeatable workflow for replacing a stale single page with a multi-page,
 implementation-accurate, bilingual docs section. Pages live under
-`docs/content/docs/en/<area>/<name>/` and `docs/content/docs/zh/<area>/<name>/`
+`content/docs/en/<area>/<name>/` and `content/docs/zh/<area>/<name>/` in cognia-docs
 (e.g. `subsystems/ocr/`), each side with its own `meta.json`.
 
 ## Workflow
@@ -27,12 +26,12 @@ implementation-accurate, bilingual docs section. Pages live under
 3. **Structure.** `index.mdx` (overview + mermaid of the whole subsystem) plus
    one page per plane/topic. Add every page to `meta.json` on **both** language
    sides. Preserve existing slugs when replacing a page so inbound links
-   survive; otherwise grep all of `docs/content/` for the old slug and rewire.
+   survive; otherwise grep all of `content/` in the docs checkout for the old slug and rewire.
 4. **Translate.** zh pages are full translations, not summaries. Keep code
    blocks, identifiers, and paths in English.
 5. **Verify.** `rtk pnpm docs:build` is the ONLY gate that catches MDX
    prerender errors. Record the page count and confirm it grew by the expected
-   number. `docs/.source/` is auto-generated — never edit it.
+   number. `.source/` is auto-generated — never edit it.
 
 ## MDX build traps (every one of these has burned a session)
 
@@ -42,15 +41,14 @@ implementation-accurate, bilingual docs section. Pages live under
   `next build` explodes during /api/search page-data collection with
   "Status is not defined". Put the JSX on its own line below the heading.
 - **`{...}` inside `<Status>` children** and pipe-in-table-with-backtick
-  combos: MDX prerender ReferenceError. Only `docs:build` catches these.
+  combos: MDX prerender ReferenceError. Only `pnpm build` in cognia-docs catches these.
 - **Subagent output leakage**: translation agents have leaked literal
   `</content>` tags into MDX. Always `tail` each generated file and run
-  `docs:build` before claiming done.
+  `pnpm build` in cognia-docs before claiming done.
 - **mermaid erDiagram**: entity attributes must each be on their own line.
 
-## Import conventions (docs workspace)
+## Import conventions (cognia-docs checkout)
 
 - `@/lib/source` (NOT `@/app/source`); `collections/server` (tsconfig alias →
   `.source/`); `fumadocs-ui/provider/next`.
-- If TS can't resolve `collections/server`, run `pnpm docs:dev` or
-  `pnpm docs:build` once to regenerate `docs/.source/`.
+- If TS can't resolve `collections/server`, run `pnpm typecheck` in cognia-docs to regenerate `.source/`.

@@ -18,7 +18,7 @@ Local frozen-lockfile install, peer checks, formatting, lint, strict typecheck, 
 The GitHub CI performs its own clean installation and full static production build, then browser journeys, a real Wrangler Pages runtime smoke check and export artifact upload:
 
 - https://github.com/cognia-labs/cognia-docs/actions/runs/41306287648 — clean install, complete quality checks, production build and all 12 browser journeys passed. Pages startup exposed an unsupported compatibility date; corrected by sharing a pinned Wrangler configuration for preview and deployment.
-- https://github.com/cognia-labs/cognia-docs/actions/runs/41306858996 — verification of the corrected Pages configuration is pending at record creation.
+- https://github.com/cognia-labs/cognia-docs/actions/runs/41306858996 — passed end to end: clean install, format/lint/types, 35 script tests, 106 Jest tests, full production export, 12 Chromium journeys, actual Pages redirects/assets/search smoke, packaged export and browser diagnostic uploads.
 - https://github.com/cognia-labs/cognia-docs/actions/runs/41305030911 — staging deployment dry run passed. This verifies the missing-configuration report and performs no upload.
 
 The browser matrix covers localized home/guide/shared pages, page ownership, Markdown/language links, compressed search, custom 404, legacy ADR redirects, sitemap, robots and LLM output. Pages smoke uses the actual exported search Worker and compressed index. The static preview refuses a missing or stale deployed Worker rather than masking the export with an unrelated source copy.
@@ -50,6 +50,8 @@ Each diagnostic owner and its relevant type definition were checked byte for byt
 pnpm lint:static-export reports 14 Node-only imports in packages/agent-codebuff/src/native-process.ts, packages/agent-codebuff/src/node-bridge.ts and packages/agent-crush/src/node-bridge.ts. These files and the gate itself match the baseline byte for byte. The gate and its policy were not weakened.
 
 A separate prerequisite test fix restores the missing registerAuthenticationProvider import and removes the accidental comma expression around describe. It reproduced as ReferenceError before repair, then all 121 focused tests and full lint passed. No plugin production behavior was changed.
+
+Main migration review: https://github.com/cognia-labs/cognia/pull/4 (draft). The new repository is published; the main switch remains reviewable until cutover.
 
 ## Deployment remaining
 
