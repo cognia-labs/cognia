@@ -38,13 +38,14 @@ describe("managed desktop placement", () => {
     sandboxEnabled: false,
     computerUseEnabled: true,
   }
-  function managedRow(): SandboxConnectionRow {
+  function managedRow(overrides: { operationsQualified?: boolean } = {}): SandboxConnectionRow {
     return {
       ...runningConnection(),
       id: "managed:desktop:2",
       provider: "e2b",
       config: {
         provider: "e2b",
+        ...overrides,
         target: { kind: "local" },
         providerConfigId: "config",
         desktopId: "desktop",
@@ -169,8 +170,7 @@ describe("managed desktop placement", () => {
 
   it("serves normal agent file writes through typed managed transfers with frozen grantee and hash", async () => {
     const deps = createDeps()
-    const source = managedRow()
-    source.config = { ...source.config, operationsQualified: true }
+    const source = managedRow({ operationsQualified: true })
     source.capabilities = { ...source.capabilities, workspaceExec: true, workspaceRead: true }
     deps.getConnection.mockResolvedValue(source)
     const runtime = new SandboxSessionRuntime(deps)
@@ -239,7 +239,7 @@ describe("managed desktop placement", () => {
     expect(localTransport.call).not.toHaveBeenCalled()
     deps.getConnection.mockResolvedValue({
       ...source,
-      config: { ...source.config, operationsQualified: false },
+      config: managedRow({ operationsQualified: false }).config,
     })
     await expect(
       runtime.fileOperation(ref, { kind: "write", path: metadata.path, content: "abc" })
@@ -258,8 +258,7 @@ describe("managed desktop placement", () => {
   })
   it("enforces frozen read and write ceilings even when a typed file caller skips clampRequest", async () => {
     const deps = createDeps()
-    const row = managedRow()
-    row.config = { ...row.config, operationsQualified: true }
+    const row = managedRow({ operationsQualified: true })
     row.capabilities = { ...row.capabilities, workspaceRead: true, workspaceExec: true }
     deps.getConnection.mockResolvedValue(row)
     const runtime = new SandboxSessionRuntime(deps)

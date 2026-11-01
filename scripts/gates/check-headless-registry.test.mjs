@@ -531,6 +531,36 @@ describe("reconcile: pending debt", () => {
     assert.deepEqual(result.doubleBooked, [{ file: "a.tsx", symbols: ["refreshOne"] }])
   })
 
+  it("accepts pending debt with or without blockedBy, but not a blockedBy that names nothing", () => {
+    const row = (extra) => ({
+      symbols: ["refreshOne"],
+      phase: "phase 2",
+      reason: "r".repeat(30),
+      ...extra,
+    })
+    const ok = reconcile(
+      findings,
+      {},
+      {
+        pending: { "a.tsx": row({ blockedBy: "the subscription-vault decision" }) },
+        pendingCeiling: 1,
+      }
+    )
+    assert.deepEqual(ok.vagueBlockedBy, [])
+    assert.deepEqual(
+      reconcile(findings, {}, { pending: { "a.tsx": row({}) }, pendingCeiling: 1 }).vagueBlockedBy,
+      []
+    )
+    for (const blockedBy of ["", "tbd", 7]) {
+      assert.deepEqual(
+        reconcile(findings, {}, { pending: { "a.tsx": row({ blockedBy }) }, pendingCeiling: 1 })
+          .vagueBlockedBy,
+        ["a.tsx"],
+        String(blockedBy)
+      )
+    }
+  })
+
   it("flags a uiOnly symbol no initializer leaves dormant any more", () => {
     const { staleUiOnly } = reconcile(
       [],

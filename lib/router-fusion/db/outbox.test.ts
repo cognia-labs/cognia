@@ -309,6 +309,33 @@ describe("drainFusionOutbox", () => {
     expect(wakes).toHaveLength(1)
   })
 
+  it("names the later session messages that proceed once an input dead-letters", async () => {
+    const db = freshDb()
+    await db.fusionOutbox.bulkAdd([
+      { ...effect("input", 1, "session_message"), payload: { sessionId: "s1" } },
+      { ...effect("answer", 2, "session_message"), payload: { sessionId: "s1" } },
+      { ...effect("other", 3, "session_message"), payload: { sessionId: "s2" } },
+    ])
+    await db.fusionOutbox.update("input", { attempts: MAX_ATTEMPTS - 1 })
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {})
+    const appliers = {
+      ...success,
+      session_message: jest.fn(async (row: FusionOutboxRow) => {
+        if (row.effectId === "input") throw new Error("account database rejected the message")
+        return "applied" as const
+      }),
+    }
+    await drainFusionOutbox(db, appliers, options)
+    expect((await db.fusionOutbox.get("input"))?.status).toBe("deadletter")
+    expect(warn).toHaveBeenCalledWith(
+      "[router-fusion] outbox effect dead-lettered",
+      expect.objectContaining({
+        effectId: "input",
+        sessionMessagesProceedingWithoutIt: ["answer"],
+      })
+    )
+  })
+
   it("does not spin a wake behind a predecessor waiting for an artifact reader", async () => {
     const db = freshDb()
     await db.fusionOutbox.bulkAdd([

@@ -1,11 +1,7 @@
 {
   "version": 2,
-  "note": "Provider-initializer runtime effects the headless brain does not run (ADR-0059, ADR-0250 B6). Since B6 the gate checks every @/lib symbol an initializer calls inside an effect, whatever its name. `initializers` are DECISIONS: rows name SYMBOLS, never whole files (one initializer routinely mixes brain work with a renderer-bound effect, and a file-level excuse would silence both), and every reason says WHY the brain is the wrong host: a physical boundary, or a host-split pair whose brain half is registered in lib/headless/runtimes/. 'Not ported yet' is not a reason. `uiOnly` names, by module, symbols that only paint, listen to or lay out the renderer; a module that imports only React/DOM and touches React or the DOM is recognised without a row. `pending` is DEBT: host-neutral work the brain should run and does not yet, with the ADR-0250 phase that moves it. `pendingCeiling` is its symbol count; the gate fails when pending grows above it, and when it shrinks until the ceiling is lowered to match.",
+  "note": "Provider-initializer runtime effects the headless brain does not run (ADR-0059, ADR-0250 B6). Since B6 the gate checks every @/lib symbol an initializer calls inside an effect, whatever its name. `initializers` are DECISIONS: rows name SYMBOLS, never whole files (one initializer routinely mixes brain work with a renderer-bound effect, and a file-level excuse would silence both), and every reason says WHY the brain is the wrong host: a physical boundary, or a host-split pair whose brain half is registered in lib/headless/runtimes/. 'Not ported yet' is not a reason. `uiOnly` names, by module, symbols that only paint, listen to or lay out the renderer; a module that imports only React/DOM and touches React or the DOM is recognised without a row. `pending` is DEBT: host-neutral work the brain should run and does not yet, with the ADR-0250 phase that moves it and, when a decision must land first, `blockedBy` naming that decision. `pendingCeiling` is its symbol count; the gate fails when pending grows above it, and when it shrinks until the ceiling is lowered to match. The 25 → 31 rise on 2026-11-01 reclassified six rows mislabelled as decisions (their dependency is client-local today); it set the baseline and added no debt.",
   "initializers": {
-    "components/providers/initializers/anthropic-usage-scheduler-initializer.tsx": {
-      "symbols": ["startUsageScheduler"],
-      "reason": "Polls Anthropic quota through lib/subscription/core/transport, whose whole command family (subscription_get_active, subscription_get_account, ...) is target:client / transports:[\"internal\"] in protocol/companion-commands.json and local-only in protocol/headless-command-dispositions.json. The brain does not read that vault at all: its provider credentials arrive through the claude_set_* arms (R7), which is why lib/headless/runtimes/initializers.ts already excludes subscription-initializer for the same reason. Exposing quota probing to the brain is a subscription-vault decision, not a wiring one."
-    },
     "components/providers/initializers/approval-journal-initializer.tsx": {
       "symbols": ["unannouncedInterrupted"],
       "reason": "Boot notice in the main app window for tool approvals whose sidecar waiter died with the previous page load. The journal (stores/agent/approval-journal-store) is this renderer's persisted record of the asks it showed; a brain shows no asks and has no page load to survive."
@@ -40,14 +36,6 @@
     "components/providers/initializers/cloud-identity-initializer.tsx": {
       "symbols": ["discardLegacyGlobalLogtoSession"],
       "reason": "Deletes the pre-ADR-0149 global Logto blob from the desktop keyring (lib/logto/session-store.ts LEGACY_LOGTO_KEYRING). Only a desktop profile upgraded from that era ever held it. lib/headless/runtimes/index.ts already records cloud-identity-initializer as renderer keyring hygiene: the brain keeps its own file-backed session in cli/src/serve/collab-reader.ts and never had the legacy key."
-    },
-    "components/providers/initializers/code-adoption-tracker-initializer.tsx": {
-      "symbols": ["startCodeAdoptionTracker"],
-      "reason": "The tracker persists through lib/code-adoption/client.ts, whose code_adoption_turn_begin / code_adoption_turn_end are target:client, capability:client.local, transports:[\"internal\"] in the command manifest and local-only in the dispositions ledger — write attribution is measured against the local working tree the desktop edits. Wiring the brain to it would first require reclassifying those two commands, which is a protocol decision (D7 makes the manifest authoritative), not a registration."
-    },
-    "components/providers/initializers/codex-usage-scheduler-initializer.tsx": {
-      "symbols": ["startCodexUsageScheduler"],
-      "reason": "The Codex half of the same decision as anthropic-usage-scheduler-initializer: it resolves the active account through subscription_get_active, which is target:client / internal-transport and local-only in the dispositions ledger. The brain's Codex credentials come from the server secret store via claude_set_*, not from the interactive desktop vault this loop probes."
     },
     "components/providers/initializers/connector-host-writes-initializer.tsx": {
       "symbols": ["createHostAdapterInstanceWriter", "setAdapterInstanceRemoteWriter"],
@@ -124,10 +112,6 @@
       "symbols": ["startVideoJobReconciler"],
       "reason": "ADR-0205 deliberately separates the renderer's durable Dexie video queue from the caller-driven CLI/headless API. videos.get / videos.content pass an explicit provider snapshot to the in-memory engine (lib/ai/operations/handlers/video-job-bridge.ts); the default VideoJobHost.getSnapshot throws because this host has no implicit provider settings. This renderer sweeper calls engine.poll without a snapshot, which would settle generating headless jobs as failed, not advance them. The renderer installs its own snapshot, asset and Dexie adapters before sweeping; the brain must retain the explicit-request polling contract recorded in lib/headless/runtimes/index.ts."
     },
-    "components/providers/initializers/online-eval-initializer.tsx": {
-      "symbols": ["startOnlineEvalScheduler"],
-      "reason": "Drains the online-evaluation queue that the `eval-online` log transport fills. That transport exists only once `bootstrapLogger` configures the renderer transport graph, which the headless roster deliberately does not do. The producer is therefore absent in the brain, and the worker additionally reads spans back out of the Dexie `agentTraces` table that the renderer-side agent-trace transport populates. Registering the consumer alone would start a worker with nothing to consume and no span store to read. Register it together with a headless span feed, never before."
-    },
     "components/providers/initializers/plugin-runtime-initializer.tsx": {
       "symbols": ["resolvePluginRuntimeBootstrap"],
       "reason": "Resolves the renderer's plugin runtime profile (browser, mobile or Tauri main window; secondary windows such as pet and tray are refused) from the WebView's window label and appDataDir (lib/plugin/core/bootstrap.ts). Host-split pair: the brain boots the canonical Node PluginManager through createNodePluginRuntimeAdapter (cli/src/serve/plugin-runtime-adapter.ts) and ensurePluginRuntime, registered as plugin-runtime in lib/headless/runtimes/plugin-runtime.ts."
@@ -160,10 +144,6 @@
     "components/providers/initializers/renderer-perf-initializer.tsx": {
       "symbols": ["subscribePerformanceSecurityBarrier"],
       "reason": "These subscriptions scope the document's RendererPerformanceCollector and browser OperationPerformanceRecorder to the renderer's active routing target and synchronously clear its measurements on account lock/switch. They own WebView sampling and browser-local performance storage, not host execution or security policy. A brain has no document or renderer routing surface to sample or clear; its process metrics are registered separately as performance-runtime."
-    },
-    "components/providers/initializers/router-fusion-initializer.tsx": {
-      "symbols": ["startBreakerPersistence"],
-      "reason": "Persists Router + Fusion breaker trips (ADR-0188) through lib/router-fusion/settings/save-router-fusion-settings.ts, which writes via the settings store's save path, and announces them through the window's notification center. The brain never loads that store, so running it there would write through an empty store. A trip the brain records still takes the surface out for the life of the brain process; it just does not survive a restart. Recovery and retention, the initializer's other two jobs, ARE registered for the brain in lib/headless/runtimes/router-fusion.ts, reading the account row directly, because since B2 the brain hosts Run API, passthrough and workflow runs of its own."
     },
     "components/providers/initializers/selection-toolbar-initializer.tsx": {
       "symbols": [
@@ -210,8 +190,8 @@
       "reason": "Owns the paired renderer client: subscriptions track its visible/open chat panes, local Dexie cache, window focus and document visibility, and restart when that client changes its paired endpoint. The authoritative collab service owns shared sessions and run queues; a headless brain has no pane selection or browser endpoint to mirror and must not duplicate the renderer stream owner. The same paired-renderer client as subscribeCollabConnection. Discovery is gated on document.visibilityState and the renderer's active workspace. Streams are opened per open or retained pane. recover/suspend only fence and republish shared-run leases this device's renderer took: activeRuns are populated solely by hooks/chat/use-claude-chat-controller.ts (lib/collab/shared-run-coordinator.ts). The brain pulls collab caches via collab-refresh and collab-runtime in lib/headless/runtimes/."
     },
     "components/providers/initializers/sites-initializer.tsx": {
-      "symbols": ["bootSites", "installSiteNotificationCommands"],
-      "reason": "bootSites is host-neutral by construction and lives in lib/sites/boot.ts precisely so a headless host could run it, but CloudflareSitesService reaches its provider tokens through createLocalKeyringStore (lib/credentials/keyring-store.ts:242), which THROWS off Tauri rather than degrading. Running it in a brain would throw once per owned Site and recover none of them. Giving KeyringStore a headless implementation is a credentials decision about where a cloud install's provider tokens live, not a registration, and it must land before this does. installSiteNotificationCommands is the `site.open` twin of the issue tracker's exclusion above: its whole body is a Next App Router router.push, and navigation acts on a UI surface the brain does not have."
+      "symbols": ["installSiteNotificationCommands"],
+      "reason": "installSiteNotificationCommands is the `site.open` twin of the issue tracker's exclusion: its whole body is a Next App Router router.push, and navigation acts on a UI surface the brain does not have. (bootSites is pending debt, below.)"
     },
     "components/providers/initializers/storage-persistence-initializer.tsx": {
       "symbols": ["requestPersistentStorage"],
@@ -309,8 +289,14 @@
       "reason": "Reads how a conversation left its right-rail dock (ADR-0214 D9) so a conversation switch restores it. Renderer layout state with no host work."
     }
   },
-  "pendingCeiling": 25,
+  "pendingCeiling": 31,
   "pending": {
+    "components/providers/initializers/anthropic-usage-scheduler-initializer.tsx": {
+      "symbols": ["startUsageScheduler"],
+      "phase": "phase 2",
+      "blockedBy": "the subscription-vault decision: whether a brain reads the subscription_* family, today target:client and local-only in protocol/headless-command-dispositions.json",
+      "reason": "Polls Anthropic quota through lib/subscription/core/transport. A brain that serves Anthropic-subscription turns has the same quota to watch, but the subscription_* command family it would read is target:client / transports:[\"internal\"] in protocol/companion-commands.json, and the brain's credentials arrive through the claude_set_* arms (R7), not the vault. Debt until that vault decision lands, not a physical boundary."
+    },
     "components/providers/initializers/background-task-initializer.tsx": {
       "symbols": ["setRendererBackgroundSettleListener"],
       "phase": "phase 2",
@@ -325,6 +311,18 @@
       "symbols": ["setChatMiddlewareExecutionEnabled"],
       "phase": "phase 1",
       "reason": "lib/claude/run-and-capture.ts consults isChatMiddlewareExecutionEnabled on every headless turn the brain runs (scheduler goal runner, bots, Run API). Nothing seeds the flag in the brain, so a user who enabled AppSettings.developer.chatMiddlewareExecution gets around-middlewares skipped on brain-hosted turns. The brain needs a runtime that reads the account settings row and keeps the flag in sync."
+    },
+    "components/providers/initializers/code-adoption-tracker-initializer.tsx": {
+      "symbols": ["startCodeAdoptionTracker"],
+      "phase": "phase 2",
+      "blockedBy": "reclassifying code_adoption_turn_begin / code_adoption_turn_end, today target:client / client.local / internal-only in the command manifest (D7 makes the manifest authoritative)",
+      "reason": "Measures write attribution for agent turns against the working tree they edit (lib/code-adoption/client.ts). A brain runs agent turns against its own workspaces too, so the measurement is host-neutral; what keeps it out is that its two persistence commands are classified client-local. Debt behind a protocol decision, not a physical boundary."
+    },
+    "components/providers/initializers/codex-usage-scheduler-initializer.tsx": {
+      "symbols": ["startCodexUsageScheduler"],
+      "phase": "phase 2",
+      "blockedBy": "the subscription-vault decision (same as anthropic-usage-scheduler-initializer)",
+      "reason": "The Codex half of the Anthropic usage scheduler: it resolves the active account through subscription_get_active, target:client and local-only today. A brain serving Codex turns has the quota to watch; it waits on the same subscription-vault decision."
     },
     "components/providers/initializers/deferred-boot-initializers-impl.tsx": {
       "symbols": ["ensurePlanStepRecovery"],
@@ -358,6 +356,12 @@
       "phase": "phase 1",
       "reason": "Seeds the bundled models.dev snapshot into the account database and refreshes it when older than 7 days (lib/ai/providers/models-dev-sync.ts). This is host-neutral catalog maintenance. A cloud brain with no desktop ever attached keeps an empty or stale provider catalog for the models it routes."
     },
+    "components/providers/initializers/online-eval-initializer.tsx": {
+      "symbols": ["startOnlineEvalScheduler"],
+      "phase": "phase 2",
+      "blockedBy": "a headless span feed: the eval-online log transport and the agentTraces writer, neither of which the headless roster configures",
+      "reason": "Drains the online-evaluation queue. The brain runs turns whose spans should be evaluated too, but its producer (the eval-online transport bootstrapLogger configures for the renderer) and its span store (the Dexie agentTraces table the renderer-side trace transport fills) do not exist there. Register the consumer together with a headless span feed, never before."
+    },
     "components/providers/initializers/openrouter-catalog-initializer.tsx": {
       "symbols": ["refreshOpenRouterCatalogIfStale"],
       "phase": "phase 1",
@@ -373,10 +377,22 @@
       "phase": "phase 1",
       "reason": "The brain's provider-cost-mirror runtime (lib/headless/runtimes/initializers.ts) only hydrates the mirror once. It never installs the usage-ledger budget sink, so after the first committed turn the routing engine's dailyCostBudget check reads stale totals. It also never runs the one-time providerCostDaily projection rebuild (ADR-0165), whose marker lives in renderer localStorage, so the brain needs a durable marker."
     },
+    "components/providers/initializers/router-fusion-initializer.tsx": {
+      "symbols": ["startBreakerPersistence"],
+      "phase": "phase 2",
+      "blockedBy": "a brain-side writer for router-fusion settings: the persistence path goes through the settings store, which the brain never loads",
+      "reason": "Persists Router + Fusion breaker trips (ADR-0188). The brain hosts Run API, passthrough and workflow runs of its own since B2, so its trips are real; today they take the surface out only for the life of the brain process and do not survive a restart. A real gap: recovery and retention are already registered in lib/headless/runtimes/router-fusion.ts."
+    },
     "components/providers/initializers/routing-runtime-initializer.tsx": {
       "symbols": ["rebuildCompatibilityProjection", "installDesktopCertificationRuntime"],
       "phase": "phase 1",
       "reason": "The brain's routing-runtime registration installs only the adapters. It never hydrates the agent certification store from its CLI home (installCertificationRuntime has no caller under cli/src or lib/headless) and never rebuilds the agentCompatibilityRecords projection. Engine certification gates on brain-hosted runs therefore see no evidence, even though the brain is itself a CLI process with that home. installDesktopCertificationRuntime is the desktop half of that pair (it reads the CLI home through the desktop shell); it stays pending with the brain half rather than excluded, because the brain half is not registered yet."
+    },
+    "components/providers/initializers/sites-initializer.tsx": {
+      "symbols": ["bootSites"],
+      "phase": "phase 2",
+      "blockedBy": "a headless KeyringStore: where a cloud install's provider tokens live (createLocalKeyringStore throws off Tauri)",
+      "reason": "bootSites is host-neutral by construction (lib/sites/boot.ts), so a brain should recover the Sites it owns. CloudflareSitesService reaches its provider tokens through createLocalKeyringStore (lib/credentials/keyring-store.ts:242), which throws off Tauri, so running it now would throw once per owned Site. Debt behind a credentials decision."
     },
     "components/providers/initializers/template-platform-initializer.tsx": {
       "symbols": [

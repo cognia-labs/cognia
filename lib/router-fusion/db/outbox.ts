@@ -15,7 +15,9 @@
  * Every drain and applier call checks the injected target guard: a different
  * active account leaves the remaining rows untouched and stops the wake chain.
  * Session messages wait behind older pending messages for the same session,
- * inheriting their due time without spending an attempt. Dead letters do not block.
+ * inheriting their due time without spending an attempt. Dead letters do not
+ * block: the dead-letter diagnostic lists the later messages of that session
+ * that will apply without it.
  */
 
 import Dexie from "dexie"
@@ -132,6 +134,31 @@ export function drainFusionOutbox(
   return run
 }
 
+/**
+ * Pending session messages of `row`'s session created after it, in creation
+ * order: the turns that apply without `row` once it dead-letters. Some may
+ * still wait behind another pending row. Diagnostic only, so a read failure
+ * yields an empty list rather than escaping the drain.
+ */
+async function laterSessionMessages(db: FusionDB, row: FusionOutboxRow): Promise<string[]> {
+  if (row.kind !== "session_message" || typeof row.payload.sessionId !== "string") return []
+  try {
+    const later = await db.fusionOutbox
+      .where("[status+nextAttemptAt]")
+      .between(["pending", Dexie.minKey], ["pending", Dexie.maxKey], true, true)
+      .filter(
+        (other) =>
+          other.kind === "session_message" &&
+          other.payload.sessionId === row.payload.sessionId &&
+          compareCreation(row, other) < 0
+      )
+      .toArray()
+    return later.sort(compareCreation).map((other) => other.effectId)
+  } catch {
+    return []
+  }
+}
+
 async function drainOnce(
   db: FusionDB,
   appliers: OutboxAppliers,
@@ -226,12 +253,18 @@ async function drainOnce(
         deadletteredAt: deadlettered ? failedAt : null,
       })
       if (deadlettered) {
+        // A dead letter stops holding up its session (it never applies, and
+        // waiting on it forever would stall the transcript), so the session's
+        // later messages now apply without it. Name them: the transcript has
+        // a gap where this one was, and these are the turns that follow it.
+        const proceeding = await laterSessionMessages(db, row)
         console.warn("[router-fusion] outbox effect dead-lettered", {
           effectId: row.effectId,
           runId: row.runId,
           kind: row.kind,
           attempts: decision.attempts,
           lastError: decision.lastError,
+          ...(proceeding.length > 0 ? { sessionMessagesProceedingWithoutIt: proceeding } : {}),
         })
       }
     }

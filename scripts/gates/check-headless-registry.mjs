@@ -578,7 +578,7 @@ export function calledInBrain(symbol, corpus) {
  * @returns {{
  *   initializers: Record<string, { symbols: string[], reason: string }>,
  *   uiOnly?: Record<string, { symbols: string[], reason: string }>,
- *   pending?: Record<string, { symbols: string[], phase: string, reason: string }>,
+ *   pending?: Record<string, { symbols: string[], phase: string, blockedBy?: string, reason: string }>,
  *   pendingCeiling?: number,
  * }}
  */
@@ -642,7 +642,7 @@ export function pendingCount(pending) {
  * @param {Array<{ file: string, symbols: string[] }>} findings
  * @param {Record<string, { symbols?: string[], reason?: string }>} exclusions
  * @param {{
- *   pending?: Record<string, { symbols?: string[], phase?: string, reason?: string }>,
+ *   pending?: Record<string, { symbols?: string[], phase?: string, blockedBy?: string, reason?: string }>,
  *   pendingCeiling?: number,
  *   uiOnly?: Record<string, { symbols?: string[], reason?: string }>,
  *   uiOnlyUsed?: Set<string>,
@@ -710,6 +710,15 @@ export function reconcile(findings, exclusions, ledger = {}) {
   const phaseless = Object.entries(pending)
     .filter(([, v]) => !v.phase || !v.phase.trim())
     .map(([file]) => file)
+  // `blockedBy` is optional (most debt waits on nothing but the work), but a
+  // row that has one must name the decision, not leave a placeholder.
+  const vagueBlockedBy = Object.entries(pending)
+    .filter(
+      ([, v]) =>
+        v.blockedBy !== undefined &&
+        (typeof v.blockedBy !== "string" || v.blockedBy.trim().length < MIN_REASON_LENGTH)
+    )
+    .map(([file]) => file)
 
   const count = pendingCount(pending)
   const ceiling = ledger.pendingCeiling ?? 0
@@ -730,6 +739,7 @@ export function reconcile(findings, exclusions, ledger = {}) {
     unreasoned,
     symbolless,
     phaseless,
+    vagueBlockedBy,
     ceilingDrift,
     ceilingRaised,
   }
@@ -842,6 +852,10 @@ function main(argv) {
   report(
     result.phaseless,
     `${result.phaseless.length} pending row(s) name no phase — pending debt says which ADR-0250 phase moves it:`
+  )
+  report(
+    result.vagueBlockedBy,
+    `${result.vagueBlockedBy.length} pending row(s) carry a blockedBy that names no decision (minimum ${MIN_REASON_LENGTH} characters):`
   )
   report(
     result.doubleBooked,

@@ -61,6 +61,7 @@ function nativeFrames() {
   })
   const stream: NativeFrameStream = {
     close,
+    input: jest.fn(),
     [Symbol.asyncIterator]: () => ({
       next: () =>
         queued.length
